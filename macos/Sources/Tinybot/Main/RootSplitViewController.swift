@@ -12,7 +12,7 @@ final class RootSplitViewController: NSSplitViewController {
 
     private var userWantsInspector = true
     private var chatController: ChatViewController?
-    private let computerController = ComputerViewController()
+    private let deviceController = DeviceViewController()
     private let offlineController = OfflineViewController()
     private let placeholderController = PlaceholderViewController()
 
@@ -60,8 +60,8 @@ final class RootSplitViewController: NSSplitViewController {
         sidebar.onDoubleClick = { [weak self] selection in
             if case .chat = selection { self?.renameChat(nil) }
         }
-        inspector.onOpenComputer = { [weak self] computerID in
-            self?.select(.computer(computerID))
+        inspector.onOpenDevice = { [weak self] deviceID in
+            self?.select(.device(deviceID))
         }
         inspector.onRemoveBot = { [weak self] botID in
             guard case let .chat(chatID) = self?.selection else { return }
@@ -97,14 +97,14 @@ final class RootSplitViewController: NSSplitViewController {
     private func exists(_ selection: Selection) -> Bool {
         switch selection {
         case let .chat(id): store.chat(id) != nil
-        case let .computer(id): store.computer(id) != nil
+        case let .device(id): store.device(id) != nil
         }
     }
 
     private func encode(_ selection: Selection?) -> String? {
         switch selection {
         case let .chat(id): "chat:\(id)"
-        case let .computer(id): "computer:\(id)"
+        case let .device(id): "device:\(id)"
         case nil: nil
         }
     }
@@ -114,7 +114,7 @@ final class RootSplitViewController: NSSplitViewController {
         guard parts.count == 2 else { return nil }
         switch parts[0] {
         case "chat": return .chat(parts[1])
-        case "computer": return .computer(parts[1])
+        case "device": return .device(parts[1])
         default: return nil
         }
     }
@@ -173,12 +173,12 @@ final class RootSplitViewController: NSSplitViewController {
             inspector.show(selection: .chat(chat.id))
             setInspector(visible: userWantsInspector)
 
-        case let .computer(id):
-            computerController.show(computerID: id)
-            computerController.onOpenChat = { [weak self] chatID in
+        case let .device(id):
+            deviceController.show(deviceID: id)
+            deviceController.onOpenChat = { [weak self] chatID in
                 self?.select(.chat(chatID))
             }
-            content.show(computerController)
+            content.show(deviceController)
             setInspector(visible: false)
 
         case nil:
@@ -296,7 +296,7 @@ final class RootSplitViewController: NSSplitViewController {
         }
         let alert = NSAlert()
         alert.messageText = "Delete \"\(store.title(for: chat))\"?"
-        alert.informativeText = "The transcript is removed from this Computer and from paired Computers."
+        alert.informativeText = "The transcript is removed from this Device and from paired Devices."
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Delete")
         alert.addButton(withTitle: "Cancel")

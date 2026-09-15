@@ -1,18 +1,18 @@
 import AppKit
 
-final class ComputerViewController: NSViewController {
+final class DeviceViewController: NSViewController {
     private let store = AppStore.shared
 
     private let scrollView = NSScrollView()
     private let column = Build.stack([], spacing: 22)
-    private let header = ComputerHeaderView()
+    private let header = DeviceHeaderView()
     private let botsSection = SectionView(title: "Bots assigned here")
     private let providersSection = SectionView(title: "Provider credentials")
     private let machineSection = SectionView(title: "Machine")
     private let note = Build.label(
         "", font: Theme.Font.caption, color: .tertiaryLabelColor, lines: 0)
 
-    private var computerID: Computer.ID?
+    private var deviceID: Device.ID?
 
     var onOpenChat: ((Chat.ID) -> Void)?
 
@@ -70,8 +70,8 @@ final class ComputerViewController: NSViewController {
         }
     }
 
-    func show(computerID newID: Computer.ID) {
-        computerID = newID
+    func show(deviceID newID: Device.ID) {
+        deviceID = newID
         guard isViewLoaded else { return }
         reload()
         scrollView.contentView.scroll(to: .zero)
@@ -83,73 +83,85 @@ final class ComputerViewController: NSViewController {
     }
 
     private func reload() {
-        guard let computerID, let computer = store.computer(computerID) else { return }
+        guard let deviceID, let device = store.device(deviceID) else { return }
 
-        header.configure(computer: computer)
+        header.configure(device: device)
 
-        let bots = store.bots(on: computer.id)
-        if bots.isEmpty {
-            let empty = KeyValueRow(key: "No bots assigned", value: "")
-            botsSection.setRows([empty])
-        } else {
-            botsSection.setRows(
-                bots.map { bot in
-                    let row = BotRow()
+        botsSection.isHidden = !device.isRunner
+        providersSection.isHidden = !device.isRunner
+
+        if device.isRunner {
+            let bots = store.bots(on: device.id)
+            if bots.isEmpty {
+                let empty = KeyValueRow(key: "No bots assigned", value: "")
+                botsSection.setRows([empty])
+            } else {
+                botsSection.setRows(
+                    bots.map { bot in
+                        let row = BotRow()
+                        row.configure(
+                            bot: bot,
+                            detailText: "\(bot.tagline) · \(bot.provider.rawValue)",
+                            accessorySymbol: "bubble.left",
+                            tooltip: "Open chat"
+                        )
+                        row.onAccessory = { [weak self] in self?.openChat(with: bot) }
+                        row.onClick = { [weak self] in self?.openChat(with: bot) }
+                        return row
+                    })
+            }
+
+            providersSection.setRows(
+                device.providers.map { credential in
+                    let row = StatusRow()
                     row.configure(
-                        bot: bot,
-                        detailText: "\(bot.tagline) · \(bot.provider.rawValue)",
-                        accessorySymbol: "bubble.left",
-                        tooltip: "Open chat"
+                        symbol: credential.kind.symbolName,
+                        title: credential.kind.rawValue,
+                        subtitle: "\(credential.kind.subtitle) · \(credential.detail)",
+                        state: credential.isConnected ? "Connected" : nil,
+                        stateColor: .systemGreen,
+                        actionTitle: credential.isConnected ? nil : "Connect…"
                     )
-                    row.onAccessory = { [weak self] in self?.openChat(with: bot) }
-                    row.onClick = { [weak self] in self?.openChat(with: bot) }
+                    row.onAction = { [weak self] in self?.explainProviderSetup(on: device) }
                     return row
                 })
         }
 
-        providersSection.setRows(
-            computer.providers.map { credential in
-                let row = StatusRow()
-                row.configure(
-                    symbol: credential.kind.symbolName,
-                    title: credential.kind.rawValue,
-                    subtitle: "\(credential.kind.subtitle) · \(credential.detail)",
-                    state: credential.isConnected ? "Connected" : nil,
-                    stateColor: .systemGreen,
-                    actionTitle: credential.isConnected ? nil : "Connect…"
-                )
-                row.onAction = { [weak self] in self?.explainProviderSetup(on: computer) }
-                return row
-            })
-
         machineSection.setRows([
-            KeyValueRow(key: "Machine key", value: computer.machineKey, monospaced: true),
-            KeyValueRow(key: "System", value: computer.osVersion),
+            KeyValueRow(key: "Machine key", value: device.machineKey, monospaced: true),
+            KeyValueRow(key: "OS", value: "\(device.os.rawValue) · \(device.osVersion)"),
+            KeyValueRow(
+                key: "Role",
+                value: device.isRunner ? "Runner · runs bots with its own credentials" : "Device · never runs bots"),
             KeyValueRow(
                 key: "Last seen",
-                value: computer.status == .online ? "Active now" : Format.lastSeen(computer.lastSeen)),
+                value: device.status == .online ? "Active now" : Format.lastSeen(device.lastSeen)),
             KeyValueRow(key: "Relay", value: Preferences.relayURL, monospaced: true),
         ])
 
         note.stringValue =
-            computer.isThisComputer
-            ? "Keys for this Computer live in the CLI on this Mac. Connecting a provider here never leaves the machine."
-            : "Provider credentials live on \(computer.name). Connect DeepSeek or ChatGPT from the Tinybot app running there — this Mac only sends encrypted job envelopes."
+            if !device.isRunner {
+                "\(device.os.displayName) Devices hold your keys and chats but never run a bot. Assign bots to a Runner: a Device running macOS, Linux, or Windows."
+            } else if device.isThisDevice {
+                "Keys for this Runner live in the CLI on this Mac. Connecting a provider here never leaves the machine."
+            } else {
+                "Provider credentials live on \(device.name). Connect DeepSeek or ChatGPT from the Tinybot app running there — this Mac only sends encrypted job envelopes."
+            }
     }
 
     private func openChat(with bot: Bot) {
         onOpenChat?(store.dm(with: bot.id))
     }
 
-    private func explainProviderSetup(on computer: Computer) {
+    private func explainProviderSetup(on device: Device) {
         let alert = NSAlert()
         alert.messageText =
-            computer.isThisComputer
-            ? "Connect a provider on this Mac" : "Connect it on \(computer.name)"
+            device.isThisDevice
+            ? "Connect a provider on this Mac" : "Connect it on \(device.name)"
         alert.informativeText =
-            computer.isThisComputer
-            ? "The CLI stores the key in the keychain on this Computer. Bots assigned here use it directly."
-            : "Credentials never sync. Open Tinybot on \(computer.name) and connect the provider there; bots assigned to it pick it up on the next turn."
+            device.isThisDevice
+            ? "The CLI stores the key in the keychain on this Runner. Bots assigned here use it directly."
+            : "Credentials never sync. Open Tinybot on \(device.name) and connect the provider there; bots assigned to it pick it up on the next turn."
         alert.addButton(withTitle: "OK")
         if let window = view.window {
             alert.beginSheetModal(for: window)
@@ -159,7 +171,7 @@ final class ComputerViewController: NSViewController {
     }
 }
 
-final class ComputerHeaderView: NSView {
+final class DeviceHeaderView: NSView {
     private let icon = NSImageView()
     private let name = Build.label("", font: .systemFont(ofSize: 22, weight: .semibold))
     private let model = Build.label("", font: .systemFont(ofSize: 12.5), color: .secondaryLabelColor)
@@ -194,22 +206,30 @@ final class ComputerHeaderView: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(computer: Computer) {
-        icon.image = NSImage(systemSymbolName: computer.symbolName, accessibilityDescription: nil)
+    func configure(device: Device) {
+        icon.image = NSImage(systemSymbolName: device.symbolName, accessibilityDescription: nil)
         icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 34, weight: .regular)
-        name.stringValue = computer.name
-        model.stringValue = "\(computer.model) · \(computer.osVersion)"
-        dot.status = computer.status
+        name.stringValue = device.name
+        model.stringValue = "\(device.model) · \(device.osVersion)"
+        dot.status = device.status
 
-        switch computer.status {
+        switch device.status {
         case .online:
-            status.stringValue = computer.isThisComputer ? "This Mac · CLI running" : "Online · paired"
+            status.stringValue =
+                if device.isThisDevice {
+                    "This Mac · CLI running"
+                } else if device.isRunner {
+                    "Online · paired"
+                } else {
+                    "Online · paired · not a Runner"
+                }
             status.textColor = .systemGreen
         case .pairing:
             status.stringValue = "Pairing…"
             status.textColor = .systemOrange
         case .offline:
-            status.stringValue = Format.lastSeen(computer.lastSeen) + " · jobs wait on the relay"
+            status.stringValue =
+                Format.lastSeen(device.lastSeen) + (device.isRunner ? " · jobs wait on the relay" : "")
             status.textColor = .secondaryLabelColor
         }
     }

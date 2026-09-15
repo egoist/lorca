@@ -114,7 +114,7 @@ final class OnboardingViewController: NSViewController {
 
         let create = primaryButton("Create a New Identity", action: #selector(goCreate))
         let restore = secondaryButton("Restore from Backup Phrase", action: #selector(goRestore))
-        let pair = secondaryButton("Pair with Another Computer", action: #selector(goPair))
+        let pair = secondaryButton("Pair with Another Device", action: #selector(goPair))
 
         let buttons = Build.stack([create, restore, pair], spacing: 10)
         buttons.alignment = .centerX
@@ -209,7 +209,7 @@ final class OnboardingViewController: NSViewController {
     private func pairView() -> NSView {
         let title = Build.label("Pair with another Mac", font: .systemFont(ofSize: 22, weight: .semibold))
         let subtitle = Build.label(
-            "On the Mac that already has your identity, choose File › Pair a Computer and scan this code.",
+            "On the Mac that already has your identity, choose File › Pair a Device and scan this code.",
             font: .systemFont(ofSize: 12.5), color: .secondaryLabelColor, lines: 0
         )
 
@@ -222,7 +222,7 @@ final class OnboardingViewController: NSViewController {
         frame.addSubview(qr)
 
         let status = Build.label(
-            isPaired ? "Paired. Account key unwrapped." : "Waiting for the other Computer…",
+            isPaired ? "Paired. Account key unwrapped." : "Waiting for the other Device…",
             font: .systemFont(ofSize: 12),
             color: isPaired ? .systemGreen : .secondaryLabelColor)
 
@@ -263,7 +263,7 @@ final class OnboardingViewController: NSViewController {
         icon.translatesAutoresizingMaskIntoConstraints = false
 
         let title = Build.label(
-            "This Mac is your first Computer", font: .systemFont(ofSize: 22, weight: .semibold),
+            "This Mac is your first Device", font: .systemFont(ofSize: 22, weight: .semibold),
             alignment: .center)
         let subtitle = Build.label(
             """

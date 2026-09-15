@@ -127,7 +127,7 @@ final class MentionPanel {
         }
 
         for (index, bot) in bots.enumerated() {
-            rows[index].configure(bot: bot, computerName: AppStore.shared.computer(bot.computerID)?.name ?? "")
+            rows[index].configure(bot: bot, runnerName: AppStore.shared.device(bot.runnerID)?.name ?? "")
         }
         syncSelection()
     }
@@ -177,10 +177,10 @@ final class MentionRowView: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(bot: Bot, computerName: String) {
+    func configure(bot: Bot, runnerName: String) {
         avatar.content = .bot(symbolName: bot.symbolName, accent: bot.accent)
         name.stringValue = bot.name
-        detail.stringValue = computerName.isEmpty ? bot.tagline : "on \(computerName)"
+        detail.stringValue = runnerName.isEmpty ? bot.tagline : "on \(runnerName)"
     }
 
     override var allowsVibrancy: Bool { false }

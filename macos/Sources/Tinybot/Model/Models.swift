@@ -1,6 +1,6 @@
 import Foundation
 
-// MARK: - Computer
+// MARK: - Device
 
 struct ProviderCredential: Hashable, Identifiable {
     enum Kind: String, Hashable, CaseIterable {
@@ -28,7 +28,37 @@ struct ProviderCredential: Hashable, Identifiable {
     var detail: String
 }
 
-struct Computer: Identifiable, Hashable {
+/// A paired machine or phone. Its `os` decides whether it is a Runner: only desktop
+/// systems run the CLI, hold provider credentials, and get bots assigned.
+struct Device: Identifiable, Hashable {
+    enum OS: String, Hashable, CaseIterable {
+        case macos
+        case linux
+        case windows
+        case ios
+        case ipados
+        case android
+
+        var displayName: String {
+            switch self {
+            case .macos: "macOS"
+            case .linux: "Linux"
+            case .windows: "Windows"
+            case .ios: "iOS"
+            case .ipados: "iPadOS"
+            case .android: "Android"
+            }
+        }
+
+        /// Desktop systems run the agent loop. Phones and tablets never do.
+        var isDesktop: Bool {
+            switch self {
+            case .macos, .linux, .windows: true
+            case .ios, .ipados, .android: false
+            }
+        }
+    }
+
     enum Status: Hashable {
         case online
         case offline
@@ -46,12 +76,18 @@ struct Computer: Identifiable, Hashable {
     let id: String
     var name: String
     var model: String
+    var os: OS
     var osVersion: String
-    var isThisComputer: Bool
+    var isThisDevice: Bool
     var status: Status
     var lastSeen: Date
     var machineKey: String
     var providers: [ProviderCredential]
+
+    /// Derived from `os` alone: a desktop Device is a Runner and can be assigned bots.
+    var isRunner: Bool { os.isDesktop }
+
+    var roleLabel: String { isRunner ? "Runner" : "Device" }
 
     var connectedProviders: [ProviderCredential] {
         providers.filter(\.isConnected)
@@ -70,7 +106,7 @@ struct Bot: Identifiable, Hashable {
     var tagline: String
     var symbolName: String
     var accent: Accent
-    var computerID: Computer.ID
+    var runnerID: Device.ID
     var provider: ProviderCredential.Kind
     var instructions: String
     var createdAt: Date

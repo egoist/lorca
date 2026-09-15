@@ -11,7 +11,7 @@ enum Glyph {
     }
 }
 
-/// Circular gradient badge with the bot's SF Symbol. Also renders "you" and computers.
+/// Circular gradient badge with the bot's SF Symbol. Also renders "you" and devices.
 final class AvatarView: NSView {
     enum Content: Equatable {
         case bot(symbolName: String, accent: Accent)

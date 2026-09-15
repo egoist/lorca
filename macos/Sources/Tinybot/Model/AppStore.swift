@@ -14,14 +14,14 @@ enum StoreEvent {
 
 enum Selection: Hashable {
     case chat(Chat.ID)
-    case computer(Computer.ID)
+    case device(Device.ID)
 }
 
 @MainActor
 final class AppStore {
     static let shared = AppStore()
 
-    private(set) var computers: [Computer] = MockData.computers()
+    private(set) var devices: [Device] = MockData.devices()
     private(set) var bots: [Bot] = MockData.bots()
     private(set) var chats: [Chat] = MockData.chats()
 
@@ -59,8 +59,13 @@ final class AppStore {
         bots.first { $0.id == id }
     }
 
-    func computer(_ id: Computer.ID) -> Computer? {
-        computers.first { $0.id == id }
+    func device(_ id: Device.ID) -> Device? {
+        devices.first { $0.id == id }
+    }
+
+    /// Devices that can be assigned bots: those with a desktop `os`.
+    var runners: [Device] {
+        devices.filter(\.isRunner)
     }
 
     func chat(_ id: Chat.ID) -> Chat? {
@@ -71,12 +76,12 @@ final class AppStore {
         chat.botIDs.compactMap(bot)
     }
 
-    func bots(on computerID: Computer.ID) -> [Bot] {
-        bots.filter { $0.computerID == computerID }
+    func bots(on runnerID: Device.ID) -> [Bot] {
+        bots.filter { $0.runnerID == runnerID }
     }
 
-    var thisComputer: Computer? {
-        computers.first(where: \.isThisComputer)
+    var thisDevice: Device? {
+        devices.first(where: \.isThisDevice)
     }
 
     func title(for chat: Chat) -> String {
@@ -88,13 +93,13 @@ final class AppStore {
     func subtitle(for chat: Chat) -> String {
         let members = bots(in: chat)
         if chat.isDM, let only = members.first {
-            let host = computer(only.computerID)?.name ?? "unassigned"
+            let host = device(only.runnerID)?.name ?? "unassigned"
             return "\(only.provider.rawValue) on \(host)"
         }
-        let hosts = Set(members.compactMap { computer($0.computerID)?.name })
-        let computerLabel = hosts.count == 1 ? (hosts.first ?? "") : "\(hosts.count) Computers"
+        let hosts = Set(members.compactMap { device($0.runnerID)?.name })
+        let runnerLabel = hosts.count == 1 ? (hosts.first ?? "") : "\(hosts.count) Runners"
         let botLabel = members.count == 1 ? "1 bot" : "\(members.count) bots"
-        return "Group · \(botLabel) · \(computerLabel)"
+        return "Group · \(botLabel) · \(runnerLabel)"
     }
 
     func preview(for chat: Chat) -> String {
@@ -172,7 +177,7 @@ final class AppStore {
         tagline: String,
         symbolName: String,
         accent: Accent,
-        computerID: Computer.ID,
+        runnerID: Device.ID,
         provider: ProviderCredential.Kind
     ) -> Bot.ID {
         let bot = Bot(
@@ -181,7 +186,7 @@ final class AppStore {
             tagline: tagline,
             symbolName: symbolName,
             accent: accent,
-            computerID: computerID,
+            runnerID: runnerID,
             provider: provider,
             instructions: "",
             createdAt: Date()
@@ -288,7 +293,7 @@ final class AppStore {
     /// Replays the seeded conversations so the demo can be restarted from the Debug menu.
     func resetMockData() {
         for chat in chats { replyEngine?.cancel(chatID: chat.id) }
-        computers = MockData.computers()
+        devices = MockData.devices()
         bots = MockData.bots()
         chats = MockData.chats()
         sortChats()

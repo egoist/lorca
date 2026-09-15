@@ -59,6 +59,28 @@ enum Theme {
         dark: { NSColor(calibratedWhite: 1, alpha: 0.07) }
     )
 
+    static let composerBorder = dynamic(
+        light: { NSColor(calibratedWhite: 0, alpha: 0.12) },
+        dark: { NSColor(calibratedWhite: 1, alpha: 0.14) }
+    )
+
+    /// Secondary composer control (the attach button): a quiet disc.
+    static let composerControl = dynamic(
+        light: { NSColor(calibratedWhite: 0, alpha: 0.07) },
+        dark: { NSColor(calibratedWhite: 1, alpha: 0.12) }
+    )
+
+    /// Primary composer control (send, or dictate while the field is empty): a solid disc.
+    static let composerPrimary = dynamic(
+        light: { NSColor(calibratedWhite: 0, alpha: 1) },
+        dark: { NSColor(calibratedWhite: 1, alpha: 1) }
+    )
+
+    static let composerPrimaryContent = dynamic(
+        light: { NSColor(calibratedWhite: 1, alpha: 1) },
+        dark: { NSColor(calibratedWhite: 0, alpha: 1) }
+    )
+
     static let transcriptBackground = dynamic(
         light: { NSColor(calibratedWhite: 1, alpha: 1) },
         dark: { NSColor(calibratedWhite: 0.11, alpha: 1) }

@@ -1,6 +1,6 @@
 import AppKit
 
-/// Titled card used by the inspector and the Computer pane.
+/// Titled card used by the inspector and the Device pane.
 final class SectionView: NSView {
     private let header: NSTextField
     private let card = BackgroundView()
@@ -103,7 +103,7 @@ final class KeyValueRow: NSView {
     required init?(coder: NSCoder) { fatalError() }
 }
 
-/// Bot line used in the inspector, the Computer pane and pickers.
+/// Bot line used in the inspector, the Device pane and pickers.
 final class BotRow: NSView {
     private let avatar = AvatarView(diameter: 28)
     private let name = Build.label("", font: .systemFont(ofSize: 13, weight: .medium))

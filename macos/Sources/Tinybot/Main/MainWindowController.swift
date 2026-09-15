@@ -97,10 +97,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             guard let chat = AppStore.shared.chat(id) else { return }
             window.title = AppStore.shared.title(for: chat)
             window.subtitle = AppStore.shared.subtitle(for: chat)
-        case let .computer(id):
-            guard let computer = AppStore.shared.computer(id) else { return }
-            window.title = computer.name
-            window.subtitle = computer.model
+        case let .device(id):
+            guard let device = AppStore.shared.device(id) else { return }
+            window.title = device.name
+            window.subtitle = device.model
         case nil:
             window.title = "Tinybot"
             window.subtitle = ""

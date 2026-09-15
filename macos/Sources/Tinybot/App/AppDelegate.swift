@@ -74,7 +74,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mainWindowController?.root.presentNewBot()
     }
 
-    @objc func pairComputer(_ sender: Any?) {
+    @objc func pairDevice(_ sender: Any?) {
         showMainWindow()
         mainWindowController?.root.presentPairing()
     }
@@ -101,10 +101,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func showHelp(_ sender: Any?) {
         presentNote(
-            title: "Tinybot runs on Computers you own",
+            title: "Tinybot runs on Devices you own",
             body: """
-                Every bot is assigned to a Computer. That machine's CLI runs the turn with that machine's \
-                provider credentials, so a bot on an offline Computer waits until it reconnects.
+                Every bot is assigned to a Runner: a Device running macOS, Linux, or Windows. That machine's CLI \
+                runs the turn with that machine's provider credentials, so a bot on an offline Runner waits \
+                until it reconnects. Phones and tablets pair as Devices but never run bots.
 
                 This build renders mock data. The chrome, events and shapes match what the local CLI \
                 will send over 127.0.0.1:\(Preferences.cliPort).

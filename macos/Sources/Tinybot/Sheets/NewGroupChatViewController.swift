@@ -31,7 +31,7 @@ final class NewGroupChatViewController: SheetViewController {
         let list = SectionView(title: "Bots")
         list.setRows(
             store.bots.map { bot in
-                let host = store.computer(bot.computerID)
+                let host = store.device(bot.runnerID)
                 let row = SelectableBotRow()
                 row.configure(
                     bot: bot,
@@ -107,7 +107,7 @@ final class BotPickerViewController: SheetViewController {
         let list = SectionView(title: "Available")
         list.setRows(
             bots.map { bot in
-                let host = store.computer(bot.computerID)
+                let host = store.device(bot.runnerID)
                 let row = SelectableBotRow()
                 row.configure(
                     bot: bot,

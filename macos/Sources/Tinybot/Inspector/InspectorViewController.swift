@@ -12,7 +12,7 @@ final class InspectorViewController: NSViewController {
 
     private var selection: Selection?
 
-    var onOpenComputer: ((Computer.ID) -> Void)?
+    var onOpenDevice: ((Device.ID) -> Void)?
     var onRemoveBot: ((Bot.ID) -> Void)?
     var onAddBot: (() -> Void)?
 
@@ -96,7 +96,7 @@ final class InspectorViewController: NSViewController {
 
         participants.setRows(
             members.map { bot in
-                let host = store.computer(bot.computerID)
+                let host = store.device(bot.runnerID)
                 let row = BotRow()
                 row.configure(
                     bot: bot,
@@ -112,22 +112,22 @@ final class InspectorViewController: NSViewController {
         addButton.isHidden = chat.isDM
         addButton.isEnabled = chat.canAddBot && members.count < store.bots.count
 
-        let hosts = Dictionary(grouping: members, by: \.computerID)
+        let hosts = Dictionary(grouping: members, by: \.runnerID)
         routing.setRows(
-            hosts.keys.sorted().compactMap { computerID in
-                guard let computer = store.computer(computerID) else { return nil }
-                let botNames = (hosts[computerID] ?? []).map(\.name).joined(separator: ", ")
+            hosts.keys.sorted().compactMap { runnerID in
+                guard let runner = store.device(runnerID) else { return nil }
+                let botNames = (hosts[runnerID] ?? []).map(\.name).joined(separator: ", ")
                 let row = StatusRow()
                 row.configure(
-                    symbol: computer.symbolName,
-                    title: computer.name,
+                    symbol: runner.symbolName,
+                    title: runner.name,
                     subtitle: botNames,
-                    state: computer.status == .online ? "Online" : Format.lastSeen(computer.lastSeen),
-                    stateColor: computer.status == .online ? .systemGreen : .secondaryLabelColor
+                    state: runner.status == .online ? "Online" : Format.lastSeen(runner.lastSeen),
+                    stateColor: runner.status == .online ? .systemGreen : .secondaryLabelColor
                 )
-                let click = NSClickGestureRecognizer(target: self, action: #selector(openComputer(_:)))
+                let click = NSClickGestureRecognizer(target: self, action: #selector(openDevice(_:)))
                 row.addGestureRecognizer(click)
-                row.identifier = NSUserInterfaceItemIdentifier(computer.id)
+                row.identifier = NSUserInterfaceItemIdentifier(runner.id)
                 return row
             })
 
@@ -142,8 +142,8 @@ final class InspectorViewController: NSViewController {
         onAddBot?()
     }
 
-    @objc private func openComputer(_ sender: NSClickGestureRecognizer) {
+    @objc private func openDevice(_ sender: NSClickGestureRecognizer) {
         guard let id = sender.view?.identifier?.rawValue else { return }
-        onOpenComputer?(id)
+        onOpenDevice?(id)
     }
 }

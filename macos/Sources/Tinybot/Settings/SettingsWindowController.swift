@@ -7,7 +7,7 @@ final class SettingsWindowController: NSWindowController {
 
         let tabs: [(NSViewController, String, String)] = [
             (GeneralSettingsViewController(), "General", "gearshape"),
-            (ComputersSettingsViewController(), "Computers", "laptopcomputer"),
+            (DevicesSettingsViewController(), "Devices", "laptopcomputer"),
             (ProvidersSettingsViewController(), "Providers", "key"),
             (AdvancedSettingsViewController(), "Advanced", "slider.horizontal.3"),
         ]
@@ -108,7 +108,7 @@ final class GeneralSettingsViewController: SettingsPaneViewController {
         column.addArrangedSubview(appearanceRow)
         column.setCustomSpacing(8, after: sendOnReturn)
         addFootnote(
-            "Tinybot talks only to the CLI on this Mac. Nothing here is synced; each Computer keeps its own settings."
+            "Tinybot talks only to the CLI on this Mac. Nothing here is synced; each Device keeps its own settings."
         )
     }
 
@@ -136,32 +136,34 @@ final class GeneralSettingsViewController: SettingsPaneViewController {
     }
 }
 
-// MARK: - Computers
+// MARK: - Devices
 
-final class ComputersSettingsViewController: SettingsPaneViewController {
+final class DevicesSettingsViewController: SettingsPaneViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
-        title = "Computers"
+        title = "Devices"
 
         let store = AppStore.shared
-        let section = SectionView(title: "Paired Computers")
+        let section = SectionView(title: "Paired Devices")
         section.setRows(
-            store.computers.map { computer in
+            store.devices.map { device in
                 let row = StatusRow()
                 row.configure(
-                    symbol: computer.symbolName,
-                    title: computer.isThisComputer ? "\(computer.name) (this Mac)" : computer.name,
-                    subtitle: "\(computer.model) · \(store.bots(on: computer.id).count) bots",
-                    state: computer.status == .online ? "Online" : Format.lastSeen(computer.lastSeen),
-                    stateColor: computer.status == .online ? .systemGreen : .secondaryLabelColor
+                    symbol: device.symbolName,
+                    title: device.isThisDevice ? "\(device.name) (this Mac)" : device.name,
+                    subtitle: device.isRunner
+                        ? "\(device.model) · \(store.bots(on: device.id).count) bots"
+                        : "\(device.model) · \(device.os.displayName) · not a Runner",
+                    state: device.status == .online ? "Online" : Format.lastSeen(device.lastSeen),
+                    stateColor: device.status == .online ? .systemGreen : .secondaryLabelColor
                 )
                 return row
             })
         addSection(section)
 
         let pair = NSButton(
-            title: "Pair a Computer…", target: NSApp.delegate,
-            action: #selector(AppDelegate.pairComputer(_:)))
+            title: "Pair a Device…", target: NSApp.delegate,
+            action: #selector(AppDelegate.pairDevice(_:)))
         pair.bezelStyle = .rounded
         column.addArrangedSubview(pair)
 
@@ -179,11 +181,11 @@ final class ProvidersSettingsViewController: SettingsPaneViewController {
         title = "Providers"
 
         let store = AppStore.shared
-        guard let computer = store.thisComputer else { return }
+        guard let device = store.thisDevice else { return }
 
-        let section = SectionView(title: "Credentials on \(computer.name)")
+        let section = SectionView(title: "Credentials on \(device.name)")
         section.setRows(
-            computer.providers.map { credential in
+            device.providers.map { credential in
                 let row = StatusRow()
                 row.configure(
                     symbol: credential.kind.symbolName,
@@ -199,8 +201,8 @@ final class ProvidersSettingsViewController: SettingsPaneViewController {
 
         addFootnote(
             """
-            Keys stay on the Computer they were entered on, in the keychain. A bot assigned to another \
-            Mac uses that machine's credentials — this one never sees them.
+            Keys stay on the Runner they were entered on, in the keychain. A bot assigned to another \
+            Runner uses that machine's credentials — this one never sees them.
             """
         )
     }

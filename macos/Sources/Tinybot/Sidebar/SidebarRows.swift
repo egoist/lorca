@@ -1,11 +1,19 @@
 import AppKit
 
-extension Computer {
+extension Device {
     var symbolName: String {
-        if model.contains("MacBook") { return "laptopcomputer" }
-        if model.contains("Studio") { return "macstudio" }
-        if model.contains("mini") { return "macmini" }
-        return "desktopcomputer"
+        switch os {
+        case .macos:
+            if model.contains("MacBook") { return "laptopcomputer" }
+            if model.contains("Studio") { return "macstudio" }
+            if model.contains("mini") { return "macmini" }
+            return "desktopcomputer"
+        case .linux: return "server.rack"
+        case .windows: return "pc"
+        case .ios: return "iphone"
+        case .ipados: return "ipad"
+        case .android: return "smartphone"
+        }
     }
 }
 
@@ -13,7 +21,7 @@ final class SidebarNode: NSObject {
     enum Kind: Hashable {
         case header(String)
         case chat(Chat.ID)
-        case computer(Computer.ID)
+        case device(Device.ID)
     }
 
     let kind: Kind
@@ -27,7 +35,7 @@ final class SidebarNode: NSObject {
         switch kind {
         case .header: nil
         case let .chat(id): .chat(id)
-        case let .computer(id): .computer(id)
+        case let .device(id): .device(id)
         }
     }
 
@@ -37,7 +45,7 @@ final class SidebarNode: NSObject {
     }
 }
 
-/// Shared column geometry. Chat and computer rows use the same leading inset and
+/// Shared column geometry. Chat and device rows use the same leading inset and
 /// icon slot so their titles line up down the whole sidebar.
 enum SidebarMetric {
     static let inset: CGFloat = 8
@@ -192,10 +200,10 @@ final class SidebarChatCell: NSTableCellView {
     }
 }
 
-// MARK: - Computer row
+// MARK: - Device row
 
-final class SidebarComputerCell: NSTableCellView {
-    static let identifier = NSUserInterfaceItemIdentifier("SidebarComputerCell")
+final class SidebarDeviceCell: NSTableCellView {
+    static let identifier = NSUserInterfaceItemIdentifier("SidebarDeviceCell")
 
     private let icon = NSImageView()
     private let title = Build.label("", font: .systemFont(ofSize: 13))
@@ -234,13 +242,20 @@ final class SidebarComputerCell: NSTableCellView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(computer: Computer, store: AppStore) {
-        icon.image = NSImage(systemSymbolName: computer.symbolName, accessibilityDescription: nil)
+    func configure(device: Device, store: AppStore) {
+        icon.image = NSImage(systemSymbolName: device.symbolName, accessibilityDescription: nil)
         icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
-        title.stringValue = computer.name
-        let count = store.bots(on: computer.id).count
-        detail.stringValue = computer.isThisComputer ? "This Mac" : "\(count) bot\(count == 1 ? "" : "s")"
-        dot.status = computer.status
+        title.stringValue = device.name
+        let count = store.bots(on: device.id).count
+        detail.stringValue =
+            if device.isThisDevice {
+                "This Mac"
+            } else if device.isRunner {
+                "\(count) bot\(count == 1 ? "" : "s")"
+            } else {
+                device.os.displayName
+            }
+        dot.status = device.status
         applyBackgroundStyle()
     }
 

@@ -20,7 +20,7 @@ final class NewBotViewController: SheetViewController {
     private let store = AppStore.shared
     private let nameField = NSTextField()
     private let taglineField = NSTextField()
-    private let computerPopup = NSPopUpButton()
+    private let runnerPopup = NSPopUpButton()
     private let providerPopup = NSPopUpButton()
     private let lookRow = Build.stack([], orientation: .horizontal, spacing: 8)
     private let note = Build.label("", font: Theme.Font.caption, color: .tertiaryLabelColor, lines: 0)
@@ -34,7 +34,7 @@ final class NewBotViewController: SheetViewController {
         self.onCreate = onCreate
         super.init(
             title: "New Bot",
-            subtitle: "A bot runs on one Computer and uses that machine's credentials.",
+            subtitle: "A bot runs on one Runner and uses that machine's credentials. Phones and tablets are not Runners.",
             width: 440
         )
     }
@@ -52,14 +52,14 @@ final class NewBotViewController: SheetViewController {
             field.delegate = self
         }
 
-        computerPopup.translatesAutoresizingMaskIntoConstraints = false
-        for computer in store.computers {
+        runnerPopup.translatesAutoresizingMaskIntoConstraints = false
+        for device in store.runners {
             let title =
-                computer.isThisComputer ? "\(computer.name) (this Mac)" : computer.name
-            computerPopup.addItem(withTitle: title)
+                device.isThisDevice ? "\(device.name) (this Mac)" : device.name
+            runnerPopup.addItem(withTitle: title)
         }
-        computerPopup.target = self
-        computerPopup.action = #selector(computerChanged)
+        runnerPopup.target = self
+        runnerPopup.action = #selector(runnerChanged)
 
         providerPopup.translatesAutoresizingMaskIntoConstraints = false
         for kind in ProviderCredential.Kind.allCases {
@@ -72,7 +72,7 @@ final class NewBotViewController: SheetViewController {
             labeled("Name", nameField),
             labeled("Tagline", taglineField),
             labeled("Look", lookRow),
-            labeled("Computer", computerPopup),
+            labeled("Runner", runnerPopup),
             labeled("Provider", providerPopup),
             note,
         ]
@@ -84,7 +84,7 @@ final class NewBotViewController: SheetViewController {
 
         setButtons(confirm: "Create Bot")
         confirmButton.isEnabled = false
-        computerChanged()
+        runnerChanged()
     }
 
     private func labeled(_ title: String, _ control: NSView) -> NSView {
@@ -145,15 +145,22 @@ final class NewBotViewController: SheetViewController {
         }
     }
 
-    @objc private func computerChanged() {
-        let computer = store.computers[computerPopup.indexOfSelectedItem]
-        if computer.connectedProviders.isEmpty {
+    @objc private func runnerChanged() {
+        let runners = store.runners
+        guard runners.indices.contains(runnerPopup.indexOfSelectedItem) else {
+            note.stringValue = "No Runner is paired. Bots run on a Device with macOS, Linux, or Windows."
+            note.textColor = .systemOrange
+            confirmButton.isEnabled = false
+            return
+        }
+        let runner = runners[runnerPopup.indexOfSelectedItem]
+        if runner.connectedProviders.isEmpty {
             note.stringValue =
-                "\(computer.name) has no provider connected yet. The bot is created now and its first turn waits until you connect one there."
+                "\(runner.name) has no provider connected yet. The bot is created now and its first turn waits until you connect one there."
             note.textColor = .systemOrange
         } else {
-            let names = computer.connectedProviders.map(\.kind.rawValue).joined(separator: " and ")
-            note.stringValue = "\(computer.name) has \(names) connected. Turns run there."
+            let names = runner.connectedProviders.map(\.kind.rawValue).joined(separator: " and ")
+            note.stringValue = "\(runner.name) has \(names) connected. Turns run there."
             note.textColor = .tertiaryLabelColor
         }
     }
@@ -169,7 +176,7 @@ final class NewBotViewController: SheetViewController {
             tagline: tagline.isEmpty ? "New bot" : tagline,
             symbolName: look.symbolName,
             accent: look.accent,
-            computerID: store.computers[computerPopup.indexOfSelectedItem].id,
+            runnerID: store.runners[runnerPopup.indexOfSelectedItem].id,
             provider: ProviderCredential.Kind.allCases[providerPopup.indexOfSelectedItem]
         )
         dismiss(nil)
@@ -189,16 +196,16 @@ extension NewBotViewController: NSTextFieldDelegate {
 final class PairingSheetViewController: SheetViewController {
     private let pairingString = MockData.pairingString()
     private let statusLabel = Build.label(
-        "Waiting for the other Computer…", font: .systemFont(ofSize: 12),
+        "Waiting for the other Device…", font: .systemFont(ofSize: 12),
         color: .secondaryLabelColor)
     private let spinner = NSProgressIndicator()
     private var task: Task<Void, Never>?
 
     init() {
         super.init(
-            title: "Pair a Computer",
+            title: "Pair a Device",
             subtitle:
-                "Open Tinybot on the other Mac and scan this code. The two machines run a handshake; the relay only carries the ciphertext.",
+                "Open Tinybot on the other Device and scan this code. The two Devices run a handshake; the relay only carries the ciphertext.",
             width: 400
         )
     }

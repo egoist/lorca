@@ -144,13 +144,13 @@ final class ReplyEngine {
         let responders = everyone ? members : (mentioned.isEmpty ? [members[0]] : mentioned)
         guard let lead = responders.first else { return [] }
 
-        // A bot on an offline Computer cannot run its turn; the envelope waits on the relay.
-        if let host = store.computer(lead.computerID), host.status == .offline {
+        // A bot on an offline Runner cannot run its turn; the envelope waits on the relay.
+        if let host = store.device(lead.runnerID), host.status == .offline {
             return [
                 .think(lead.id, seconds: 0.5),
                 .say(
                     lead.id,
-                    "I'm queued on the relay — \(host.name) is offline, so this turn runs when that Computer reconnects."
+                    "I'm queued on the relay — \(host.name) is offline, so this turn runs when that Runner reconnects."
                 ),
             ]
         }
@@ -158,7 +158,7 @@ final class ReplyEngine {
         var script: [Step] = [.think(lead.id, seconds: Double.random(in: 0.5...1.1))]
 
         let wantsWork = prompt.count > 46 || prompt.contains("?") == false
-        let candidate = members.first { $0.id != lead.id && store.computer($0.computerID)?.status != .offline }
+        let candidate = members.first { $0.id != lead.id && store.device($0.runnerID)?.status != .offline }
 
         if chat.isGroup, wantsWork, let helper = candidate, turnCount % 2 == 0 {
             script.append(
@@ -192,10 +192,10 @@ final class ReplyEngine {
 
     private func teammateDetail(_ members: [Bot]) -> String {
         let rows = members.map { bot -> String in
-            let host = store.computer(bot.computerID)
+            let host = store.device(bot.runnerID)
             let status = host?.status == .offline ? "offline" : bot.provider.rawValue
             return
-                "  { \"name\": \"\(bot.name)\", \"computer\": \"\(host?.name ?? "?")\", \"provider\": \"\(status)\" }"
+                "  { \"name\": \"\(bot.name)\", \"runner\": \"\(host?.name ?? "?")\", \"provider\": \"\(status)\" }"
         }
         return "{\n  \"teammates\": [\n\(rows.joined(separator: ",\n"))\n  ]\n}"
     }
@@ -213,7 +213,7 @@ final class ReplyEngine {
     private func summary(from bot: Bot) -> String {
         [
             "That matches what I expected from \(bot.name). I'll keep the thread here until you say otherwise.",
-            "\(bot.name) has it. Tell me if you want that turned into a task on another Computer.",
+            "\(bot.name) has it. Tell me if you want that turned into a task on another Runner.",
             "Good — that closes the loop. Anything you want me to push back on?",
         ].randomElement() ?? ""
     }
@@ -272,7 +272,7 @@ final class ReplyEngine {
         case "bot-quill":
             pool = [
                 """
-                Draft: "Your bots run on your Macs. Assign one to a Computer, and it works there with that machine's key. The relay carries ciphertext and nothing else."
+                Draft: "Your bots run on your Macs. Assign one to a Runner, and it works there with that machine's key. The relay carries ciphertext and nothing else."
 
                 Three sentences, no adjectives doing work they haven't earned.
                 """,
@@ -297,7 +297,7 @@ final class ReplyEngine {
                 Want me to hand the first piece to Patch?
                 """,
                 """
-                The constraint that decides this is **provider credentials live on the assigned Computer**. Anything that needs a key has to run there, so the answer is a job envelope, not a call from here.
+                The constraint that decides this is **provider credentials live on the assigned Runner**. Anything that needs a key has to run there, so the answer is a job envelope, not a call from here.
                 """,
                 "Short answer: yes. Longer answer: yes, but not until pairing works on two machines, because that is where this gets interesting.",
             ]

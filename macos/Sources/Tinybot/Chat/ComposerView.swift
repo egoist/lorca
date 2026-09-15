@@ -26,25 +26,111 @@ final class ComposerTextView: NSTextView {
     }
 }
 
+/// Round symbol button for the composer: a solid disc for the primary action,
+/// a quiet disc for secondary ones, or bare glyph that only fills under the pointer.
+final class ComposerButton: NSButton {
+    enum Style { case primary, secondary, plain }
+
+    var style: Style = .plain {
+        didSet { needsDisplay = true }
+    }
+
+    private let diameter: CGFloat = 28
+    private var tracking: NSTrackingArea?
+    private var isHovered = false { didSet { needsDisplay = true } }
+
+    init(symbol: String, pointSize: CGFloat, weight: NSFont.Weight, tooltip: String, target: AnyObject?, action: Selector) {
+        super.init(frame: .zero)
+        image = NSImage(systemSymbolName: symbol, accessibilityDescription: tooltip)
+        symbolConfiguration = NSImage.SymbolConfiguration(pointSize: pointSize, weight: weight)
+        imagePosition = .imageOnly
+        isBordered = false
+        toolTip = tooltip
+        self.target = target
+        self.action = action
+        translatesAutoresizingMaskIntoConstraints = false
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var intrinsicContentSize: NSSize { NSSize(width: diameter, height: diameter) }
+    override var alignmentRectInsets: NSEdgeInsets { NSEdgeInsets() }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        let area = NSTrackingArea(
+            rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow], owner: self)
+        addTrackingArea(area)
+        tracking = area
+    }
+
+    override func mouseEntered(with event: NSEvent) { isHovered = true }
+    override func mouseExited(with event: NSEvent) { isHovered = false }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let fill: NSColor?
+        switch style {
+        case .primary:
+            fill = Theme.composerPrimary.withAlphaComponent(isHighlighted ? 0.8 : 1)
+            contentTintColor = Theme.composerPrimaryContent
+        case .secondary:
+            fill = Theme.composerControl.withAlphaComponent(isHighlighted || isHovered ? 0.18 : 0.1)
+            contentTintColor = .labelColor
+        case .plain:
+            fill = isHighlighted || isHovered ? Theme.composerControl : nil
+            contentTintColor = .secondaryLabelColor
+        }
+        if let fill {
+            fill.setFill()
+            NSBezierPath(ovalIn: bounds).fill()
+        }
+        super.draw(dirtyRect)
+    }
+}
+
 final class ComposerView: NSView {
     private let field = BackgroundView()
     private let scrollView = NSScrollView()
     private let textView: ComposerTextView
-    private let sendButton = NSButton()
-    private let stopButton = NSButton()
-    private let hint = Build.label("", font: Theme.Font.caption, color: .tertiaryLabelColor)
+    private let attachButton: ComposerButton
+    private let voiceButton: ComposerButton
+    private let sendButton: ComposerButton
+    private let stopButton: ComposerButton
+    private let trailing: NSStackView
     private let mentions = MentionPanel()
 
+    /// Single line: controls sit beside the text in a pill.
+    /// Expanded: text spans the field with the controls in a row underneath.
+    private enum Mode { case compact, expanded }
+    private var mode: Mode = .compact
+    private var compactConstraints: [NSLayoutConstraint] = []
+    private var expandedConstraints: [NSLayoutConstraint] = []
     private var heightConstraint: NSLayoutConstraint!
-    private let minHeight: CGFloat = 34
-    private let maxHeight: CGFloat = 168
+
+    private let controlSize: CGFloat = 28
+    private let controlInset: CGFloat = 8
+    private let controlSpacing: CGFloat = 4
+    private let textInset: CGFloat = 8
+    private let expandedTextInset: CGFloat = 12
+    private let maxTextHeight: CGFloat = 168
+    private var lineHeight: CGFloat {
+        ceil(textView.layoutManager?.defaultLineHeight(for: Theme.Font.message) ?? 17)
+    }
+    private var minTextHeight: CGFloat { lineHeight + textView.textContainerInset.height * 2 }
 
     var onSend: ((String) -> Void)?
     var onStop: (() -> Void)?
+    var onAttach: (() -> Void)?
+    var onVoice: (() -> Void)?
     var mentionableBots: [Bot] = []
 
     var isResponding = false {
-        didSet { updateButtons() }
+        didSet {
+            updateButtons()
+            updateLayout()
+        }
     }
 
     var text: String {
@@ -65,16 +151,36 @@ final class ComposerView: NSView {
         layoutManager.addTextContainer(container)
         textView = ComposerTextView(frame: .zero, textContainer: container)
 
+        attachButton = ComposerButton(
+            symbol: "plus", pointSize: 14, weight: .medium, tooltip: "Attach",
+            target: nil, action: #selector(attach))
+        voiceButton = ComposerButton(
+            symbol: "mic.fill", pointSize: 13, weight: .medium, tooltip: "Dictate",
+            target: nil, action: #selector(voice))
+        sendButton = ComposerButton(
+            symbol: "arrow.up", pointSize: 13, weight: .bold, tooltip: "Send",
+            target: nil, action: #selector(send))
+        stopButton = ComposerButton(
+            symbol: "stop.fill", pointSize: 11, weight: .bold, tooltip: "Stop responding (⌘.)",
+            target: nil, action: #selector(stop))
+        trailing = Build.stack([voiceButton, sendButton, stopButton], orientation: .horizontal, spacing: 4)
+
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
 
         configureTextView()
-        configureButtons()
+        for button in [attachButton, voiceButton, sendButton, stopButton] {
+            button.target = self
+        }
+        attachButton.style = .secondary
+        sendButton.style = .primary
+        stopButton.style = .primary
+        trailing.spacing = controlSpacing
 
-        field.cornerRadius = 10
+        field.cornerRadius = (controlSize + controlInset * 2) / 2
         field.fillColor = Theme.composerField
-        field.borderColor = .separatorColor
+        field.borderColor = Theme.composerBorder
 
         scrollView.documentView = textView
         scrollView.drawsBackground = false
@@ -82,50 +188,50 @@ final class ComposerView: NSView {
         scrollView.verticalScrollElasticity = .none
         scrollView.translatesAutoresizingMaskIntoConstraints = false
 
-        let divider = HairlineView()
-
-        addSubview(divider)
         addSubview(field)
         field.addSubview(scrollView)
-        field.addSubview(sendButton)
-        field.addSubview(stopButton)
-        addSubview(hint)
+        field.addSubview(attachButton)
+        field.addSubview(trailing)
 
-        heightConstraint = scrollView.heightAnchor.constraint(equalToConstant: minHeight)
+        heightConstraint = scrollView.heightAnchor.constraint(equalToConstant: minTextHeight)
 
         NSLayoutConstraint.activate([
-            divider.topAnchor.constraint(equalTo: topAnchor),
-            divider.leadingAnchor.constraint(equalTo: leadingAnchor),
-            divider.trailingAnchor.constraint(equalTo: trailingAnchor),
-
-            field.topAnchor.constraint(equalTo: topAnchor, constant: 12),
+            field.topAnchor.constraint(equalTo: topAnchor, constant: 8),
             field.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
             field.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -20),
+            field.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -14),
 
-            scrollView.topAnchor.constraint(equalTo: field.topAnchor, constant: 6),
-            scrollView.leadingAnchor.constraint(equalTo: field.leadingAnchor, constant: 6),
-            scrollView.trailingAnchor.constraint(equalTo: sendButton.leadingAnchor, constant: -6),
-            scrollView.bottomAnchor.constraint(equalTo: field.bottomAnchor, constant: -6),
+            attachButton.leadingAnchor.constraint(equalTo: field.leadingAnchor, constant: controlInset),
+            attachButton.widthAnchor.constraint(equalToConstant: controlSize),
+            attachButton.heightAnchor.constraint(equalToConstant: controlSize),
+
+            trailing.trailingAnchor.constraint(equalTo: field.trailingAnchor, constant: -controlInset),
+            trailing.heightAnchor.constraint(equalToConstant: controlSize),
+            trailing.centerYAnchor.constraint(equalTo: attachButton.centerYAnchor),
+
             heightConstraint,
-
-            sendButton.trailingAnchor.constraint(equalTo: field.trailingAnchor, constant: -6),
-            sendButton.bottomAnchor.constraint(equalTo: field.bottomAnchor, constant: -6),
-            sendButton.widthAnchor.constraint(equalToConstant: 26),
-            sendButton.heightAnchor.constraint(equalToConstant: 26),
-
-            stopButton.trailingAnchor.constraint(equalTo: sendButton.trailingAnchor),
-            stopButton.bottomAnchor.constraint(equalTo: sendButton.bottomAnchor),
-            stopButton.widthAnchor.constraint(equalToConstant: 26),
-            stopButton.heightAnchor.constraint(equalToConstant: 26),
-
-            hint.topAnchor.constraint(equalTo: field.bottomAnchor, constant: 6),
-            hint.leadingAnchor.constraint(equalTo: field.leadingAnchor, constant: 4),
-            hint.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
         ])
+
+        compactConstraints = [
+            attachButton.centerYAnchor.constraint(equalTo: field.centerYAnchor),
+            attachButton.topAnchor.constraint(equalTo: field.topAnchor, constant: controlInset),
+            scrollView.leadingAnchor.constraint(equalTo: attachButton.trailingAnchor, constant: textInset),
+            scrollView.trailingAnchor.constraint(equalTo: trailing.leadingAnchor, constant: -textInset),
+            scrollView.centerYAnchor.constraint(equalTo: field.centerYAnchor),
+        ]
+
+        expandedConstraints = [
+            scrollView.topAnchor.constraint(equalTo: field.topAnchor, constant: expandedTextInset),
+            scrollView.leadingAnchor.constraint(equalTo: field.leadingAnchor, constant: expandedTextInset),
+            scrollView.trailingAnchor.constraint(equalTo: field.trailingAnchor, constant: -expandedTextInset),
+            attachButton.topAnchor.constraint(equalTo: scrollView.bottomAnchor, constant: 6),
+            attachButton.bottomAnchor.constraint(equalTo: field.bottomAnchor, constant: -controlInset),
+        ]
+
+        NSLayoutConstraint.activate(compactConstraints)
 
         mentions.onPick = { [weak self] bot in self?.insertMention(bot) }
         updateButtons()
-        updateHint()
     }
 
     @available(*, unavailable)
@@ -150,29 +256,6 @@ final class ComposerView: NSView {
         }
     }
 
-    private func configureButtons() {
-        sendButton.image = NSImage(systemSymbolName: "arrow.up", accessibilityDescription: "Send")
-        sendButton.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 12, weight: .bold)
-        sendButton.bezelStyle = .circular
-        sendButton.isBordered = true
-        sendButton.contentTintColor = .white
-        sendButton.bezelColor = .controlAccentColor
-        sendButton.target = self
-        sendButton.action = #selector(send)
-        sendButton.toolTip = "Send (Return)"
-        sendButton.translatesAutoresizingMaskIntoConstraints = false
-
-        stopButton.image = NSImage(systemSymbolName: "stop.fill", accessibilityDescription: "Stop")
-        stopButton.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 10, weight: .bold)
-        stopButton.bezelStyle = .circular
-        stopButton.isBordered = true
-        stopButton.target = self
-        stopButton.action = #selector(stop)
-        stopButton.toolTip = "Stop responding (⌘.)"
-        stopButton.isHidden = true
-        stopButton.translatesAutoresizingMaskIntoConstraints = false
-    }
-
     // MARK: - Focus
 
     func focus() {
@@ -182,7 +265,7 @@ final class ComposerView: NSView {
     func configure(placeholder: String, bots: [Bot]) {
         textView.placeholder = placeholder
         mentionableBots = bots
-        updateHint()
+        updateButtons()
     }
 
     // MARK: - Actions
@@ -198,6 +281,14 @@ final class ComposerView: NSView {
 
     @objc private func stop() {
         onStop?()
+    }
+
+    @objc private func attach() {
+        onAttach?()
+    }
+
+    @objc private func voice() {
+        onVoice?()
     }
 
     private func handle(_ selector: Selector) -> Bool {
@@ -222,6 +313,8 @@ final class ComposerView: NSView {
 
         guard selector == #selector(NSResponder.insertNewline(_:)) else { return false }
 
+        // Shift-Return always breaks the line; plain Return sends unless the
+        // preference reserves sending for ⌘Return.
         let shift = NSApp.currentEvent?.modifierFlags.contains(.shift) ?? false
         if Preferences.sendOnReturn {
             if shift { return false }
@@ -238,31 +331,65 @@ final class ComposerView: NSView {
 
     // MARK: - Layout
 
-    private func updateHeight() {
+    override func layout() {
+        super.layout()
+        // Width changes can wrap a line that fit, or fit one that wrapped.
+        updateLayout()
+    }
+
+    /// Text width available beside the controls in the pill.
+    private var compactTextWidth: CGFloat {
+        let visible = CGFloat(trailing.arrangedSubviews.filter { !$0.isHidden }.count)
+        let trailingWidth = visible * controlSize + max(0, visible - 1) * controlSpacing
+        let chrome = controlInset * 2 + controlSize + textInset * 2 + trailingWidth
+        let containerPadding = (textView.textContainer?.lineFragmentPadding ?? 5) * 2
+        return field.bounds.width - chrome - textView.textContainerInset.width * 2 - containerPadding
+    }
+
+    private func updateLayout() {
         guard let layoutManager = textView.layoutManager, let container = textView.textContainer
         else { return }
         layoutManager.ensureLayout(for: container)
-        let used = layoutManager.usedRect(for: container).height + textView.textContainerInset.height * 2
-        let clamped = min(maxHeight, max(minHeight, ceil(used)))
-        guard abs(clamped - heightConstraint.constant) > 0.5 else { return }
-        heightConstraint.constant = clamped
-        scrollView.hasVerticalScroller = clamped >= maxHeight
+        let used = layoutManager.usedRect(for: container)
+
+        let wanted: Mode
+        if textView.string.contains("\n") || used.height > lineHeight * 1.5 {
+            wanted = .expanded
+        } else if mode == .expanded, used.width > compactTextWidth - 12 {
+            // One line in the wide layout that would wrap beside the controls.
+            wanted = .expanded
+        } else {
+            wanted = .compact
+        }
+
+        if wanted != mode {
+            mode = wanted
+            NSLayoutConstraint.deactivate(wanted == .compact ? expandedConstraints : compactConstraints)
+            NSLayoutConstraint.activate(wanted == .compact ? compactConstraints : expandedConstraints)
+            // Re-measure at the new width before sizing the text.
+            layoutSubtreeIfNeeded()
+            layoutManager.ensureLayout(for: container)
+        }
+
+        let textHeight = layoutManager.usedRect(for: container).height + textView.textContainerInset.height * 2
+        let clamped = min(maxTextHeight, max(minTextHeight, ceil(textHeight)))
+        if abs(clamped - heightConstraint.constant) > 0.5 {
+            heightConstraint.constant = clamped
+            scrollView.hasVerticalScroller = clamped >= maxTextHeight
+        }
     }
 
     private func updateButtons() {
         let hasText = !textView.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        sendButton.isEnabled = hasText && !isResponding
-        sendButton.isHidden = isResponding
-        sendButton.alphaValue = hasText ? 1 : 0.45
+        sendButton.isHidden = isResponding || !hasText
         stopButton.isHidden = !isResponding
-    }
-
-    private func updateHint() {
+        // Dictation is the primary action only while nothing else is.
+        voiceButton.style = sendButton.isHidden && stopButton.isHidden ? .primary : .plain
         let mentionHint = mentionableBots.count > 1 ? " · @ to mention" : ""
-        hint.stringValue =
+        sendButton.toolTip =
             Preferences.sendOnReturn
-            ? "Return to send · Shift-Return for a new line\(mentionHint)"
-            : "⌘Return to send\(mentionHint)"
+            ? "Send (Return) · Shift-Return for a new line\(mentionHint)"
+            : "Send (⌘Return)\(mentionHint)"
     }
 
     // MARK: - Mentions
@@ -353,8 +480,8 @@ extension ComposerView: NSTextViewDelegate {
 
     private func handleTextChange() {
         highlightMentions()
-        updateHeight()
         updateButtons()
+        updateLayout()
         updateMentions()
         textView.needsDisplay = true
     }

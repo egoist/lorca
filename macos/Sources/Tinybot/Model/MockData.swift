@@ -6,14 +6,15 @@ enum MockData {
         Date(timeIntervalSinceNow: -minutes * 60)
     }
 
-    static func computers() -> [Computer] {
+    static func devices() -> [Device] {
         [
-            Computer(
-                id: "cmp-studio-local",
+            Device(
+                id: "dev-workbench",
                 name: "Workbench",
                 model: "MacBook Pro (M4 Pro)",
+                os: .macos,
                 osVersion: "macOS 27.0",
-                isThisComputer: true,
+                isThisDevice: true,
                 status: .online,
                 lastSeen: Date(),
                 machineKey: "mk_7c41…a09f",
@@ -23,12 +24,13 @@ enum MockData {
                         kind: .chatgpt, isConnected: true, detail: "you@tinybot.dev"),
                 ]
             ),
-            Computer(
-                id: "cmp-studio",
+            Device(
+                id: "dev-studio",
                 name: "Studio",
                 model: "Mac Studio (M3 Ultra)",
+                os: .macos,
                 osVersion: "macOS 27.0",
-                isThisComputer: false,
+                isThisDevice: false,
                 status: .online,
                 lastSeen: minutesAgo(1),
                 machineKey: "mk_1f88…23bd",
@@ -37,12 +39,13 @@ enum MockData {
                     ProviderCredential(kind: .chatgpt, isConnected: false, detail: "Not connected"),
                 ]
             ),
-            Computer(
-                id: "cmp-closet",
+            Device(
+                id: "dev-closet",
                 name: "Closet mini",
                 model: "Mac mini (M2)",
+                os: .macos,
                 osVersion: "macOS 26.4",
-                isThisComputer: false,
+                isThisDevice: false,
                 status: .offline,
                 lastSeen: minutesAgo(184),
                 machineKey: "mk_c052…77e1",
@@ -50,6 +53,18 @@ enum MockData {
                     ProviderCredential(kind: .deepseek, isConnected: false, detail: "Not connected"),
                     ProviderCredential(kind: .chatgpt, isConnected: false, detail: "Not connected"),
                 ]
+            ),
+            Device(
+                id: "dev-phone",
+                name: "iPhone",
+                model: "iPhone 17 Pro",
+                os: .ios,
+                osVersion: "iOS 27.0",
+                isThisDevice: false,
+                status: .online,
+                lastSeen: minutesAgo(12),
+                machineKey: "mk_9e3d…51c8",
+                providers: []
             ),
         ]
     }
@@ -62,7 +77,7 @@ enum MockData {
                 tagline: "Generalist · plans and delegates",
                 symbolName: "sparkles",
                 accent: .indigo,
-                computerID: "cmp-studio-local",
+                runnerID: "dev-workbench",
                 provider: .chatgpt,
                 instructions:
                     "You coordinate the other bots. Break work down, hand off with message_bot, and summarize what came back.",
@@ -74,7 +89,7 @@ enum MockData {
                 tagline: "Rust and Swift · writes the diff",
                 symbolName: "chevron.left.forwardslash.chevron.right",
                 accent: .blue,
-                computerID: "cmp-studio",
+                runnerID: "dev-studio",
                 provider: .deepseek,
                 instructions:
                     "You implement changes. Prefer small diffs, explain the tradeoff in one line, never invent APIs.",
@@ -86,7 +101,7 @@ enum MockData {
                 tagline: "Research · reads before it answers",
                 symbolName: "binoculars.fill",
                 accent: .teal,
-                computerID: "cmp-studio",
+                runnerID: "dev-studio",
                 provider: .deepseek,
                 instructions: "You gather context and cite where it came from. Say when you are unsure.",
                 createdAt: minutesAgo(60 * 24 * 12)
@@ -97,7 +112,7 @@ enum MockData {
                 tagline: "Writing · docs, copy, release notes",
                 symbolName: "pencil.and.scribble",
                 accent: .pink,
-                computerID: "cmp-studio-local",
+                runnerID: "dev-workbench",
                 provider: .deepseek,
                 instructions: "You write plainly. Short sentences. No filler, no exclamation marks.",
                 createdAt: minutesAgo(60 * 24 * 9)
@@ -108,7 +123,7 @@ enum MockData {
                 tagline: "Ops · deploys and watches the relay",
                 symbolName: "bolt.horizontal.fill",
                 accent: .orange,
-                computerID: "cmp-closet",
+                runnerID: "dev-closet",
                 provider: .deepseek,
                 instructions: "You handle deploys and incident triage. Always state the blast radius first.",
                 createdAt: minutesAgo(60 * 24 * 4)
@@ -196,10 +211,10 @@ enum MockData {
                         detail: """
                             {
                               "teammates": [
-                                { "name": "Patch",  "computer": "Studio",      "provider": "DeepSeek" },
-                                { "name": "Scout",  "computer": "Studio",      "provider": "DeepSeek" },
-                                { "name": "Quill",  "computer": "Workbench",   "provider": "DeepSeek" },
-                                { "name": "Ember",  "computer": "Closet mini", "provider": "offline" }
+                                { "name": "Patch",  "runner": "Studio",      "provider": "DeepSeek" },
+                                { "name": "Scout",  "runner": "Studio",      "provider": "DeepSeek" },
+                                { "name": "Quill",  "runner": "Workbench",   "provider": "DeepSeek" },
+                                { "name": "Ember",  "runner": "Closet mini", "provider": "offline" }
                               ]
                             }
                             """,
@@ -256,7 +271,7 @@ enum MockData {
             ),
             Message(
                 author: .you,
-                body: .text("Does that break computers that are still offline?"),
+                body: .text("Does that break Runners that are still offline?"),
                 createdAt: minutesAgo(40)
             ),
             Message(
@@ -343,7 +358,7 @@ enum MockData {
                 author: .bot("bot-quill"),
                 body: .text(
                     """
-                    Tinybot runs your bots on computers you own. Create a bot, give it a job, and it works on the Mac you assigned it to — with that machine's API key, not ours. Bots can hand work to each other. Everything that crosses the network is encrypted before it leaves the device, and the relay only ever sees ciphertext.
+                    Tinybot runs your bots on machines you own. Create a bot, give it a job, and it works on the Mac you assigned it to — with that machine's API key, not ours. Bots can hand work to each other. Everything that crosses the network is encrypted before it leaves the device, and the relay only ever sees ciphertext.
                     """),
                 createdAt: minutesAgo(698)
             ),
@@ -370,7 +385,7 @@ enum MockData {
             Message(
                 author: .system,
                 body: .notice(
-                    "Closet mini went offline. Ember's turn is queued on the relay and will run when that Computer reconnects."
+                    "Closet mini went offline. Ember's turn is queued on the relay and will run when that Runner reconnects."
                 ),
                 createdAt: minutesAgo(60 * 3 + 4)
             ),

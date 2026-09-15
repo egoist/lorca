@@ -35,9 +35,9 @@ final class SidebarViewController: NSViewController {
         }
 
         footer.onClick = { [weak self] in
-            guard let id = self?.store.thisComputer?.id else { return }
-            self?.onSelect?(.computer(id))
-            self?.setSelection(.computer(id))
+            guard let id = self?.store.thisDevice?.id else { return }
+            self?.onSelect?(.device(id))
+            self?.setSelection(.device(id))
         }
 
         let divider = HairlineView()
@@ -82,7 +82,6 @@ final class SidebarViewController: NSViewController {
         outlineView.outlineTableColumn = column
         outlineView.headerView = nil
         outlineView.style = .sourceList
-        outlineView.selectionHighlightStyle = .sourceList
         outlineView.rowSizeStyle = .custom
         outlineView.indentationPerLevel = 0
         outlineView.floatsGroupRows = false
@@ -117,10 +116,10 @@ final class SidebarViewController: NSViewController {
         let chatsHeader = SidebarNode(.header("Chats"))
         chatsHeader.children = filteredChats().map { SidebarNode(.chat($0.id)) }
 
-        let computersHeader = SidebarNode(.header("Computers"))
-        computersHeader.children = filteredComputers().map { SidebarNode(.computer($0.id)) }
+        let devicesHeader = SidebarNode(.header("Devices"))
+        devicesHeader.children = filteredDevices().map { SidebarNode(.device($0.id)) }
 
-        let fresh = [chatsHeader, computersHeader].filter { !$0.children.isEmpty || searchQuery.isEmpty }
+        let fresh = [chatsHeader, devicesHeader].filter { !$0.children.isEmpty || searchQuery.isEmpty }
 
         if shape(of: fresh) == shape(of: nodes) {
             // Same rows in the same order (an unread count cleared, a pin toggled): update the
@@ -153,9 +152,9 @@ final class SidebarViewController: NSViewController {
             switch (node.kind, cell) {
             case let (.chat(id), cell as SidebarChatCell):
                 if let chat = store.chat(id) { cell.configure(chat: chat, store: store) }
-            case let (.computer(id), cell as SidebarComputerCell):
-                if let computer = store.computer(id) {
-                    cell.configure(computer: computer, store: store)
+            case let (.device(id), cell as SidebarDeviceCell):
+                if let device = store.device(id) {
+                    cell.configure(device: device, store: store)
                 }
             default:
                 break
@@ -175,9 +174,9 @@ final class SidebarViewController: NSViewController {
         }
     }
 
-    private func filteredComputers() -> [Computer] {
-        guard !searchQuery.isEmpty else { return store.computers }
-        return store.computers.filter {
+    private func filteredDevices() -> [Device] {
+        guard !searchQuery.isEmpty else { return store.devices }
+        return store.devices.filter {
             $0.name.localizedCaseInsensitiveContains(searchQuery)
                 || $0.model.localizedCaseInsensitiveContains(searchQuery)
         }
@@ -263,7 +262,7 @@ extension SidebarViewController: NSOutlineViewDelegate {
         switch node.kind {
         case .header: return 28
         case .chat: return 54
-        case .computer: return 32
+        case .device: return 32
         }
     }
 
@@ -296,16 +295,16 @@ extension SidebarViewController: NSOutlineViewDelegate {
             cell.configure(chat: chat, store: store)
             return cell
 
-        case let .computer(id):
-            guard let computer = store.computer(id) else { return nil }
+        case let .device(id):
+            guard let device = store.device(id) else { return nil }
             let cell =
-                outlineView.makeView(withIdentifier: SidebarComputerCell.identifier, owner: self)
-                as? SidebarComputerCell ?? {
-                    let new = SidebarComputerCell()
-                    new.identifier = SidebarComputerCell.identifier
+                outlineView.makeView(withIdentifier: SidebarDeviceCell.identifier, owner: self)
+                as? SidebarDeviceCell ?? {
+                    let new = SidebarDeviceCell()
+                    new.identifier = SidebarDeviceCell.identifier
                     return new
                 }()
-            cell.configure(computer: computer, store: store)
+            cell.configure(device: device, store: store)
             return cell
         }
     }
@@ -347,8 +346,8 @@ extension SidebarViewController: NSMenuDelegate {
             menu.addItem(.separator())
             menu.addItem(item("Delete", #selector(RootSplitViewController.deleteChat(_:))))
 
-        case .computer:
-            menu.addItem(item("Pair a Computer…", #selector(AppDelegate.pairComputer(_:))))
+        case .device:
+            menu.addItem(item("Pair a Device…", #selector(AppDelegate.pairDevice(_:))))
 
         case .header:
             break
@@ -498,7 +497,7 @@ final class SidebarFooterView: NSView {
         let store = AppStore.shared
         let connected = store.isConnected
         dot.status = connected ? .online : .offline
-        label.stringValue = store.thisComputer?.name ?? "This Mac"
+        label.stringValue = store.thisDevice?.name ?? "This Mac"
         detail.stringValue =
             connected
             ? "CLI on 127.0.0.1:\(Preferences.cliPort)"

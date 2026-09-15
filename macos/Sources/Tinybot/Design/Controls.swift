@@ -152,7 +152,7 @@ final class HairlineView: NSView {
 
 /// Small colored dot for presence.
 final class StatusDotView: NSView {
-    var status: Computer.Status = .offline { didSet { needsDisplay = true } }
+    var status: Device.Status = .offline { didSet { needsDisplay = true } }
     private let size: CGFloat
 
     init(size: CGFloat = 7) {
