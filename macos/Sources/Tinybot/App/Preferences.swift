@@ -38,8 +38,12 @@ enum Preferences {
         set { defaults.set(newValue, forKey: Key.relayURL) }
     }
 
+    /// `TINYBOT_PORT` wins, so a second app instance can run against its own CLI.
     static var cliPort: Int {
         get {
+            if let raw = ProcessInfo.processInfo.environment["TINYBOT_PORT"], let port = Int(raw), port > 0 {
+                return port
+            }
             let stored = defaults.integer(forKey: Key.cliPort)
             return stored == 0 ? 4862 : stored
         }

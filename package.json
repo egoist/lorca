@@ -3,7 +3,10 @@
   "private": true,
   "scripts": {
     "dev": "bun run scripts/dev.ts",
-    "build": "bun run scripts/build.ts"
+    "build": "bun run scripts/build.ts",
+    "cli": "cargo run -q -p tinybot -- serve",
+    "reset": "bun run scripts/reset.ts",
+    "relay": "cargo run -q -p tinybot-relay --"
   },
   "devDependencies": {
     "@types/bun": "latest"

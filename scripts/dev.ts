@@ -2,6 +2,7 @@ import { watch } from "node:fs"
 import { join } from "node:path"
 import {
   APP_NAME,
+  CRATES_DIR,
   PACKAGE_DIR,
   SOURCES_DIR,
   buildApp,
@@ -109,12 +110,13 @@ function watchSources() {
   let timer: ReturnType<typeof setTimeout> | null = null
   const onChange = (_event: string, filename: string | null) => {
     if (!filename) return
-    if (!filename.endsWith(".swift")) return
+    if (!filename.endsWith(".swift") && !filename.endsWith(".rs") && !filename.endsWith("Cargo.toml")) return
     if (timer) clearTimeout(timer)
     timer = setTimeout(() => void cycle(filename), DEBOUNCE_MS)
   }
 
   watch(SOURCES_DIR, { recursive: true }, onChange)
+  watch(CRATES_DIR, { recursive: true }, onChange)
   watch(join(PACKAGE_DIR, "Package.swift"), () => void cycle("Package.swift"))
 }
 

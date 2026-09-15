@@ -139,12 +139,35 @@ final class GeneralSettingsViewController: SettingsPaneViewController {
 // MARK: - Devices
 
 final class DevicesSettingsViewController: SettingsPaneViewController {
+    private let section = SectionView(title: "Paired Devices")
+
     override func viewDidLoad() {
         super.viewDidLoad()
         title = "Devices"
 
+        reload()
+        addSection(section)
+
+        let pair = NSButton(
+            title: "Pair a Device…", target: NSApp.delegate,
+            action: #selector(AppDelegate.pairDevice(_:)))
+        pair.bezelStyle = .rounded
+        column.addArrangedSubview(pair)
+
+        addFootnote(
+            "Pairing wraps the account key to the other machine's public key. The relay stores only public keys and ciphertext."
+        )
+
+        AppStore.shared.observe(self) { [weak self] event in
+            switch event {
+            case .rosterChanged, .snapshotReplaced: self?.reload()
+            default: break
+            }
+        }
+    }
+
+    private func reload() {
         let store = AppStore.shared
-        let section = SectionView(title: "Paired Devices")
         section.setRows(
             store.devices.map { device in
                 let row = StatusRow()
@@ -159,31 +182,41 @@ final class DevicesSettingsViewController: SettingsPaneViewController {
                 )
                 return row
             })
-        addSection(section)
-
-        let pair = NSButton(
-            title: "Pair a Device…", target: NSApp.delegate,
-            action: #selector(AppDelegate.pairDevice(_:)))
-        pair.bezelStyle = .rounded
-        column.addArrangedSubview(pair)
-
-        addFootnote(
-            "Pairing wraps the account key to the other machine's public key. The relay stores only public keys and ciphertext."
-        )
     }
 }
 
 // MARK: - Providers
 
 final class ProvidersSettingsViewController: SettingsPaneViewController {
+    private let section = SectionView(title: "Credentials on this Mac")
+
     override func viewDidLoad() {
         super.viewDidLoad()
         title = "Providers"
 
-        let store = AppStore.shared
-        guard let device = store.thisDevice else { return }
+        reload()
+        addSection(section)
+        AppStore.shared.observe(self) { [weak self] event in
+            switch event {
+            case .rosterChanged, .snapshotReplaced: self?.reload()
+            default: break
+            }
+        }
 
-        let section = SectionView(title: "Credentials on \(device.name)")
+        addFootnote(
+            """
+            Keys stay on the Runner they were entered on, in the CLI's credential file. A bot assigned to another \
+            Runner uses that machine's credentials — this one never sees them.
+            """
+        )
+    }
+
+    private func reload() {
+        let store = AppStore.shared
+        guard let device = store.thisDevice else {
+            section.setRows([KeyValueRow(key: "Waiting for the CLI", value: "")])
+            return
+        }
         section.setRows(
             device.providers.map { credential in
                 let row = StatusRow()
@@ -193,18 +226,18 @@ final class ProvidersSettingsViewController: SettingsPaneViewController {
                     subtitle: "\(credential.kind.subtitle) · \(credential.detail)",
                     state: credential.isConnected ? "Connected" : nil,
                     stateColor: .systemGreen,
-                    actionTitle: credential.isConnected ? nil : "Connect…"
+                    actionTitle: credential.isConnected ? "Disconnect" : "Connect…"
                 )
+                row.onAction = { [weak self] in
+                    guard let self else { return }
+                    if credential.isConnected {
+                        Task { try? await store.disconnectProvider(credential.kind) }
+                    } else {
+                        self.presentAsSheet(ConnectProviderViewController(kind: credential.kind))
+                    }
+                }
                 return row
             })
-        addSection(section)
-
-        addFootnote(
-            """
-            Keys stay on the Runner they were entered on, in the keychain. A bot assigned to another \
-            Runner uses that machine's credentials — this one never sees them.
-            """
-        )
     }
 }
 
@@ -218,7 +251,8 @@ final class AdvancedSettingsViewController: SettingsPaneViewController {
         super.viewDidLoad()
         title = "Advanced"
 
-        relayField.stringValue = Preferences.relayURL
+        relayField.stringValue = AppStore.shared.relayURL ?? Preferences.relayURL
+        relayField.placeholderString = "https://relay.example.com"
         relayField.delegate = self
         portField.stringValue = "\(Preferences.cliPort)"
         portField.delegate = self
@@ -233,7 +267,7 @@ final class AdvancedSettingsViewController: SettingsPaneViewController {
         column.addArrangedSubview(reset)
 
         addFootnote(
-            "Self-hosting the relay is a URL change: clients sign their requests and upload ciphertext, so the Worker has nothing to trust."
+            "Self-hosting the relay is a URL change: clients sign their requests and upload ciphertext, so the relay has nothing to trust. Leave it empty to run on this Mac alone."
         )
     }
 
@@ -263,9 +297,16 @@ final class AdvancedSettingsViewController: SettingsPaneViewController {
 
 extension AdvancedSettingsViewController: NSTextFieldDelegate {
     func controlTextDidEndEditing(_ obj: Notification) {
-        Preferences.relayURL = relayField.stringValue
+        let relay = relayField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if relay != (AppStore.shared.relayURL ?? "") {
+            Preferences.relayURL = relay
+            AppStore.shared.setRelayURL(relay)
+        }
         if let port = Int(portField.stringValue), port > 0, port < 65536 {
-            Preferences.cliPort = port
+            if port != Preferences.cliPort {
+                Preferences.cliPort = port
+                AppStore.shared.reconnect()
+            }
         } else {
             portField.stringValue = "\(Preferences.cliPort)"
         }

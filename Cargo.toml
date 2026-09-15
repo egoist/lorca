@@ -1,0 +1,42 @@
+[workspace]
+resolver = "2"
+members = ["crates/agent", "crates/relay", "crates/cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+anyhow = "1"
+async-trait = "0.1"
+axum = { version = "0.8", features = ["ws", "json"] }
+base64 = "0.22"
+bytes = "1"
+chacha20poly1305 = "0.10"
+clap = { version = "4", features = ["derive", "env"] }
+crypto_box = { version = "0.9", features = ["seal", "chacha20"] }
+data-encoding = "2"
+dirs = "6"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+futures = "0.3"
+globset = "0.4"
+ignore = "0.4"
+libc = "0.2"
+regex = "1"
+hkdf = "0.12"
+hmac = "0.12"
+open = "5"
+rand = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "gzip"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4"] }
+x25519-dalek = { version = "2", features = ["static_secrets"] }

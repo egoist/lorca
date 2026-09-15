@@ -5,6 +5,9 @@ export const ROOT = resolve(import.meta.dir, "..")
 export const PACKAGE_DIR = join(ROOT, "macos")
 export const SOURCES_DIR = join(PACKAGE_DIR, "Sources")
 
+export const CRATES_DIR = join(ROOT, "crates")
+export const CLI_NAME = "tinybot"
+
 export const APP_NAME = "Tinybot"
 export const BUNDLE_ID = "dev.tinybot.app"
 export const VERSION = "0.1.0"
@@ -84,9 +87,22 @@ async function run(cmd: string[], opts: { cwd?: string; capture?: boolean } = {}
   return { exitCode, stdout }
 }
 
-/** Compile the SPM target and lay the product out as a launchable .app bundle. */
+/** Compile the Rust CLI the app bundles and launches. */
+export async function buildCLI(config: Config): Promise<{ ok: boolean; path: string }> {
+  const args = ["build", "-q", "-p", CLI_NAME]
+  if (config === "release") args.push("--release")
+  const build = await run(["cargo", ...args], { cwd: ROOT })
+  return { ok: build.exitCode === 0, path: join(ROOT, "target", config, CLI_NAME) }
+}
+
+/** Compile the SPM target and lay the product out as a launchable .app bundle with the CLI inside. */
 export async function buildApp(config: Config): Promise<{ ok: boolean; ms: number }> {
   const started = performance.now()
+
+  const cli = await buildCLI(config)
+  if (!cli.ok) {
+    return { ok: false, ms: performance.now() - started }
+  }
 
   const build = await run(["swift", "build", "-c", config])
   if (build.exitCode !== 0) {
@@ -108,6 +124,15 @@ export async function buildApp(config: Config): Promise<{ ok: boolean; ms: numbe
   await rm(destination, { force: true })
   await Bun.write(destination, Bun.file(source))
   await chmod(destination, 0o755)
+
+  // The app launches this binary as `tinybot serve`. It lives under Resources/bin: on a
+  // case-insensitive volume, MacOS/tinybot would be the same file as MacOS/Tinybot.
+  const cliBinDir = join(bundle, "Contents", "Resources", "bin")
+  await mkdir(cliBinDir, { recursive: true })
+  const cliDestination = join(cliBinDir, CLI_NAME)
+  await rm(cliDestination, { force: true })
+  await Bun.write(cliDestination, Bun.file(cli.path))
+  await chmod(cliDestination, 0o755)
 
   const sign = await run(
     ["codesign", "--force", "--sign", "-", "--identifier", BUNDLE_ID, bundle],

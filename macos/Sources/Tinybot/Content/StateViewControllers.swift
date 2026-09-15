@@ -5,6 +5,11 @@ final class OfflineViewController: NSViewController {
     var onRetry: (() -> Void)?
 
     private let command = "tinybot serve"
+    private let hint = Build.label("", font: Theme.Font.caption, color: .tertiaryLabelColor, lines: 0, alignment: .center)
+
+    func refreshHint() {
+        hint.stringValue = "\(AppStore.shared.offlineStatus) · 127.0.0.1:\(Preferences.cliPort)"
+    }
 
     override func loadView() {
         let container = BackgroundView()
@@ -18,12 +23,12 @@ final class OfflineViewController: NSViewController {
         icon.translatesAutoresizingMaskIntoConstraints = false
 
         let title = Build.label(
-            "The Tinybot CLI isn't running", font: .systemFont(ofSize: 18, weight: .semibold),
+            "The Tinybot CLI isn't answering", font: .systemFont(ofSize: 18, weight: .semibold),
             alignment: .center)
         let body = Build.label(
             """
-            Your bots, keys and transcripts live in the CLI on this Mac. \
-            Start it and this window reconnects on its own.
+            Your bots, keys and transcripts live in the CLI on this Mac. The app starts it on its own; \
+            you can also run it from a terminal, and this window reconnects either way.
             """,
             font: .systemFont(ofSize: 12.5), color: .secondaryLabelColor, lines: 0, alignment: .center
         )
@@ -45,9 +50,12 @@ final class OfflineViewController: NSViewController {
         retry.controlSize = .large
         retry.translatesAutoresizingMaskIntoConstraints = false
 
-        let hint = Build.label(
-            "Looking for 127.0.0.1:\(Preferences.cliPort)", font: Theme.Font.caption,
-            color: .tertiaryLabelColor, alignment: .center)
+        hint.font = Theme.Font.caption
+        hint.textColor = .tertiaryLabelColor
+        hint.alignment = .center
+        hint.lineBreakMode = .byWordWrapping
+        hint.maximumNumberOfLines = 0
+        refreshHint()
 
         let column = Build.stack([icon, title, body, commandBox, retry, hint], spacing: 12)
         column.alignment = .centerX
@@ -61,6 +69,7 @@ final class OfflineViewController: NSViewController {
             column.centerYAnchor.constraint(equalTo: container.centerYAnchor),
             column.widthAnchor.constraint(equalToConstant: 420),
             body.widthAnchor.constraint(equalToConstant: 380),
+            hint.widthAnchor.constraint(equalToConstant: 380),
 
             commandLabel.leadingAnchor.constraint(equalTo: commandBox.leadingAnchor, constant: 12),
             commandLabel.topAnchor.constraint(equalTo: commandBox.topAnchor, constant: 9),
@@ -71,6 +80,9 @@ final class OfflineViewController: NSViewController {
         ])
 
         view = container
+        AppStore.shared.observe(self) { [weak self] event in
+            if case .connectionChanged = event { self?.refreshHint() }
+        }
     }
 
     @objc private func copyCommand() {

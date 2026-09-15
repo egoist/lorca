@@ -1,0 +1,104 @@
+import AppKit
+
+/// Connects a provider on this Runner. DeepSeek takes an API key; ChatGPT signs in through the
+/// browser, driven by the CLI. Credentials never leave this Mac.
+final class ConnectProviderViewController: SheetViewController {
+    private let store = AppStore.shared
+    private let kind: ProviderCredential.Kind
+    private let keyField = NSSecureTextField()
+    private let status = Build.label("", font: Theme.Font.caption, color: .secondaryLabelColor, lines: 0)
+    private let spinner = NSProgressIndicator()
+    private var task: Task<Void, Never>?
+
+    private let onDone: () -> Void
+
+    init(kind: ProviderCredential.Kind, onDone: @escaping () -> Void = {}) {
+        self.kind = kind
+        self.onDone = onDone
+        let subtitle: String
+        switch kind {
+        case .deepseek:
+            subtitle = "The key is checked against DeepSeek, then stored in the CLI on this Mac with mode 0600. Bots assigned here use it directly."
+        case .chatgpt:
+            subtitle = "Your browser opens a ChatGPT sign-in. The CLI on this Mac keeps the resulting tokens; nothing is sent to a Tinybot server."
+        }
+        super.init(title: "Connect \(kind.rawValue)", subtitle: subtitle, width: 420)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func loadView() {
+        super.loadView()
+
+        spinner.style = .spinning
+        spinner.controlSize = .small
+        spinner.isDisplayedWhenStopped = false
+        spinner.translatesAutoresizingMaskIntoConstraints = false
+
+        let statusRow = Build.stack([spinner, status], orientation: .horizontal, spacing: 8)
+        statusRow.alignment = .centerY
+
+        switch kind {
+        case .deepseek:
+            keyField.placeholderString = "sk-…"
+            keyField.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+            keyField.translatesAutoresizingMaskIntoConstraints = false
+            keyField.delegate = self
+            contentStack.addArrangedSubview(keyField)
+            keyField.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
+            setButtons(confirm: "Connect")
+            confirmButton.isEnabled = false
+        case .chatgpt:
+            let note = Build.label(
+                "Sign-in uses the same OAuth flow as the Codex CLI. It needs a ChatGPT subscription.",
+                font: Theme.Font.caption, color: .tertiaryLabelColor, lines: 0)
+            contentStack.addArrangedSubview(note)
+            note.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
+            setButtons(confirm: "Sign in with ChatGPT…")
+        }
+
+        contentStack.addArrangedSubview(statusRow)
+        statusRow.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
+    }
+
+    override func confirmTapped() {
+        confirmButton.isEnabled = false
+        spinner.startAnimation(nil)
+        status.textColor = .secondaryLabelColor
+        status.stringValue = kind == .deepseek ? "Checking the key with DeepSeek…" : "Waiting for the browser…"
+
+        let key = keyField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        task = Task { [weak self] in
+            guard let self else { return }
+            do {
+                switch self.kind {
+                case .deepseek: try await self.store.connectDeepSeek(apiKey: key)
+                case .chatgpt: try await self.store.connectChatGPT()
+                }
+                self.spinner.stopAnimation(nil)
+                self.status.textColor = .systemGreen
+                self.status.stringValue = "\(self.kind.rawValue) connected on this Mac."
+                try? await Task.sleep(nanoseconds: 600_000_000)
+                self.dismiss(nil)
+                self.onDone()
+            } catch {
+                self.spinner.stopAnimation(nil)
+                self.status.textColor = .systemRed
+                self.status.stringValue = error.localizedDescription
+                self.confirmButton.isEnabled = true
+            }
+        }
+    }
+
+    override func dismissSheet() {
+        task?.cancel()
+        super.dismissSheet()
+    }
+}
+
+extension ConnectProviderViewController: NSTextFieldDelegate {
+    func controlTextDidChange(_ obj: Notification) {
+        confirmButton.isEnabled = !keyField.stringValue.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+}

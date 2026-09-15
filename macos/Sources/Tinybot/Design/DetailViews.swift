@@ -268,3 +268,97 @@ final class StatusRow: NSView {
         onAction?()
     }
 }
+
+
+/// Label on the left, a pop-up on the right. Used for settings inside a section card.
+final class PopUpRow: NSView {
+    private let key: NSTextField
+    let popUp = NSPopUpButton()
+    var onChange: ((Int) -> Void)?
+
+    init(key keyText: String, items: [String], selected: Int) {
+        key = Build.label(keyText, font: .systemFont(ofSize: 12), color: .secondaryLabelColor)
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+
+        popUp.translatesAutoresizingMaskIntoConstraints = false
+        popUp.controlSize = .small
+        popUp.font = .systemFont(ofSize: 11)
+        popUp.addItems(withTitles: items)
+        if items.indices.contains(selected) { popUp.selectItem(at: selected) }
+        popUp.target = self
+        popUp.action = #selector(changed)
+        popUp.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        popUp.lineBreakMode = .byTruncatingTail
+        key.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        addSubview(key)
+        addSubview(popUp)
+        NSLayoutConstraint.activate([
+            heightAnchor.constraint(greaterThanOrEqualToConstant: 34),
+            key.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            key.centerYAnchor.constraint(equalTo: centerYAnchor),
+            popUp.leadingAnchor.constraint(greaterThanOrEqualTo: key.trailingAnchor, constant: 10),
+            popUp.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            popUp.centerYAnchor.constraint(equalTo: centerYAnchor),
+            popUp.widthAnchor.constraint(equalToConstant: 150),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    @objc private func changed() {
+        onChange?(popUp.indexOfSelectedItem)
+    }
+}
+
+
+/// Key on the left, a status value on the right, and an inline text action after it.
+final class ActionRow: NSView {
+    private let key: NSTextField
+    private let value: NSTextField
+    private let button = NSButton()
+    var onAction: (() -> Void)?
+
+    init(key keyText: String, value valueText: String, tint: NSColor, actionTitle: String?) {
+        key = Build.label(keyText, font: .systemFont(ofSize: 12), color: .secondaryLabelColor)
+        value = Build.label(valueText, font: .systemFont(ofSize: 12), color: tint, alignment: .right)
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+
+        key.setContentCompressionResistancePriority(.required, for: .horizontal)
+        value.lineBreakMode = .byTruncatingTail
+
+        button.title = actionTitle ?? ""
+        button.isBordered = false
+        button.font = .systemFont(ofSize: 12, weight: .medium)
+        button.contentTintColor = .controlAccentColor
+        button.target = self
+        button.action = #selector(tapped)
+        button.isHidden = actionTitle == nil
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        addSubview(key)
+        addSubview(value)
+        addSubview(button)
+        NSLayoutConstraint.activate([
+            heightAnchor.constraint(greaterThanOrEqualToConstant: 32),
+            key.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            key.centerYAnchor.constraint(equalTo: centerYAnchor),
+            value.leadingAnchor.constraint(greaterThanOrEqualTo: key.trailingAnchor, constant: 10),
+            value.centerYAnchor.constraint(equalTo: centerYAnchor),
+            button.leadingAnchor.constraint(equalTo: value.trailingAnchor, constant: actionTitle == nil ? 0 : 8),
+            button.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            button.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    @objc private func tapped() {
+        onAction?()
+    }
+}

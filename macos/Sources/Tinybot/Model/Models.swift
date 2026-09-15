@@ -20,6 +20,42 @@ struct ProviderCredential: Hashable, Identifiable {
             case .chatgpt: "Subscription"
             }
         }
+
+        /// The identifier the CLI uses on the wire.
+        var wireValue: String {
+            switch self {
+            case .deepseek: "deepseek"
+            case .chatgpt: "chatgpt"
+            }
+        }
+
+        init?(wireValue: String) {
+            switch wireValue {
+            case "deepseek": self = .deepseek
+            case "chatgpt": self = .chatgpt
+            default: return nil
+            }
+        }
+
+        /// Model ids this provider accepts, first is the default the CLI uses.
+        var models: [(id: String, label: String)] {
+            switch self {
+            case .deepseek:
+                [
+                    ("deepseek-flash", "V4.1 Flash"),
+                    ("deepseek-v4-pro", "V4 Pro (reasoning)"),
+                ]
+            case .chatgpt:
+                [
+                    ("gpt-5.6-terra", "GPT-5.6 Terra"),
+                    ("gpt-6-astra", "GPT-6 Astra"),
+                    ("gpt-5.6-sol", "GPT-5.6 Sol"),
+                    ("gpt-5.6-luna", "GPT-5.6 Luna"),
+                    ("gpt-5.5", "GPT-5.5"),
+                    ("gpt-5.3-codex-spark", "Codex Spark (Pro)"),
+                ]
+            }
+        }
     }
 
     var id: Kind { kind }
@@ -108,6 +144,8 @@ struct Bot: Identifiable, Hashable {
     var accent: Accent
     var runnerID: Device.ID
     var provider: ProviderCredential.Kind
+    /// nil means the provider's default model.
+    var model: String? = nil
     var instructions: String
     var createdAt: Date
 }
@@ -124,6 +162,14 @@ struct ToolInvocation: Hashable {
         switch name {
         case "message_bot": "arrow.triangle.turn.up.right.diamond.fill"
         case "list_teammates": "person.2.fill"
+        case "create_bot": "person.badge.plus"
+        case "read": "doc.text"
+        case "write": "square.and.pencil"
+        case "edit": "pencil.line"
+        case "bash": "terminal"
+        case "grep": "text.magnifyingglass"
+        case "find": "magnifyingglass"
+        case "ls": "folder"
         default: "wrench.and.screwdriver.fill"
         }
     }
@@ -157,14 +203,14 @@ struct Message: Identifiable, Hashable {
         case failed(String)
     }
 
-    let id: UUID
+    let id: String
     var author: Author
     var body: Body
     var state: State
     var createdAt: Date
 
     init(
-        id: UUID = UUID(),
+        id: String = "msg-\(UUID().uuidString.lowercased())",
         author: Author,
         body: Body,
         state: State = .complete,

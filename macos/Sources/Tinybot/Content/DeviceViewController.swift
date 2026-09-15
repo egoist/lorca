@@ -62,7 +62,7 @@ final class DeviceViewController: NSViewController {
         super.viewDidLoad()
         store.observe(self) { [weak self] event in
             switch event {
-            case .snapshotReplaced, .chatsChanged:
+            case .snapshotReplaced, .chatsChanged, .rosterChanged:
                 self?.reload()
             default:
                 break
@@ -122,7 +122,7 @@ final class DeviceViewController: NSViewController {
                         stateColor: .systemGreen,
                         actionTitle: credential.isConnected ? nil : "Connect…"
                     )
-                    row.onAction = { [weak self] in self?.explainProviderSetup(on: device) }
+                    row.onAction = { [weak self] in self?.connectProvider(credential.kind, on: device) }
                     return row
                 })
         }
@@ -136,7 +136,10 @@ final class DeviceViewController: NSViewController {
             KeyValueRow(
                 key: "Last seen",
                 value: device.status == .online ? "Active now" : Format.lastSeen(device.lastSeen)),
-            KeyValueRow(key: "Relay", value: Preferences.relayURL, monospaced: true),
+            KeyValueRow(
+                key: "Relay",
+                value: store.relayURL.map { store.relayConnected ? $0 : "\($0) · offline" } ?? "Not configured",
+                monospaced: true),
         ])
 
         note.stringValue =
@@ -151,6 +154,14 @@ final class DeviceViewController: NSViewController {
 
     private func openChat(with bot: Bot) {
         onOpenChat?(store.dm(with: bot.id))
+    }
+
+    private func connectProvider(_ kind: ProviderCredential.Kind, on device: Device) {
+        guard device.isThisDevice else {
+            explainProviderSetup(on: device)
+            return
+        }
+        presentAsSheet(ConnectProviderViewController(kind: kind))
     }
 
     private func explainProviderSetup(on device: Device) {

@@ -6,6 +6,7 @@ final class InspectorViewController: NSViewController {
     private let scrollView = NSScrollView()
     private let column = Build.stack([], spacing: 20)
     private let participants = SectionView(title: "Bots in this chat")
+    private let runtime = SectionView(title: "Runs with")
     private let routing = SectionView(title: "Where turns run")
     private let security = SectionView(title: "Encryption")
     private let addButton = NSButton()
@@ -32,6 +33,7 @@ final class InspectorViewController: NSViewController {
 
         column.addArrangedSubview(participants)
         column.addArrangedSubview(addButton)
+        column.addArrangedSubview(runtime)
         column.addArrangedSubview(routing)
         column.addArrangedSubview(security)
         column.setCustomSpacing(10, after: participants)
@@ -63,6 +65,7 @@ final class InspectorViewController: NSViewController {
             column.trailingAnchor.constraint(equalTo: documentView.trailingAnchor),
             column.bottomAnchor.constraint(equalTo: documentView.bottomAnchor),
             participants.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
+            runtime.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             routing.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             security.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
         ])
@@ -112,6 +115,12 @@ final class InspectorViewController: NSViewController {
         addButton.isHidden = chat.isDM
         addButton.isEnabled = chat.canAddBot && members.count < store.bots.count
 
+        // A direct chat is one bot, so its provider and model are edited right here.
+        runtime.isHidden = !(chat.isDM && members.count == 1)
+        if chat.isDM, let bot = members.first {
+            runtime.setRows(runtimeRows(for: bot))
+        }
+
         let hosts = Dictionary(grouping: members, by: \.runnerID)
         routing.setRows(
             hosts.keys.sorted().compactMap { runnerID in
@@ -136,6 +145,47 @@ final class InspectorViewController: NSViewController {
             KeyValueRow(key: "Relay sees", value: "Ciphertext only", tint: .systemGreen),
             KeyValueRow(key: "Chat blob", value: "chat · seq \(chat.messages.count)", monospaced: true),
         ])
+    }
+
+    private func runtimeRows(for bot: Bot) -> [NSView] {
+        let kinds = ProviderCredential.Kind.allCases
+        let providerRow = PopUpRow(
+            key: "Provider",
+            items: kinds.map(\.rawValue),
+            selected: kinds.firstIndex(of: bot.provider) ?? 0)
+        providerRow.onChange = { [weak self] index in
+            guard let self, kinds.indices.contains(index), kinds[index] != bot.provider else { return }
+            // A new provider starts on its default model.
+            self.store.setBotRuntime(bot.id, provider: kinds[index], model: nil)
+        }
+
+        let models = bot.provider.models
+        let modelItems = ["Default (\(models.first?.label ?? ""))"] + models.map(\.label)
+        let selectedModel = bot.model.flatMap { id in models.firstIndex { $0.id == id } }.map { $0 + 1 } ?? 0
+        let modelRow = PopUpRow(key: "Model", items: modelItems, selected: selectedModel)
+        modelRow.onChange = { [weak self] index in
+            guard let self else { return }
+            let model: String? = index == 0 ? nil : models[index - 1].id
+            guard model != bot.model else { return }
+            self.store.setBotRuntime(bot.id, provider: bot.provider, model: model)
+        }
+
+        let runner = store.device(bot.runnerID)
+        let credential = runner?.credential(for: bot.provider)
+        let connected = credential?.isConnected ?? false
+        let isHere = runner?.isThisDevice ?? false
+        // Connected: the masked key and a Change link. Not connected: just the Connect link.
+        let status = ActionRow(
+            key: "Credential",
+            value: connected ? (credential?.detail ?? "Connected") : (isHere ? "" : "Connect on \(runner?.name ?? "its Runner")"),
+            tint: connected ? .labelColor : .secondaryLabelColor,
+            actionTitle: isHere ? (connected ? "Change" : "Connect") : nil
+        )
+        status.onAction = { [weak self] in
+            self?.presentAsSheet(ConnectProviderViewController(kind: bot.provider))
+        }
+
+        return [providerRow, modelRow, status]
     }
 
     @objc private func addBot() {

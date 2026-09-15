@@ -1,0 +1,27 @@
+[package]
+name = "tinybot-relay"
+description = "Zero-knowledge store-and-forward relay for Tinybot"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "tinybot-relay"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+base64.workspace = true
+clap.workspace = true
+ed25519-dalek.workspace = true
+hmac.workspace = true
+rand.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true

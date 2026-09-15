@@ -71,7 +71,7 @@ final class RootSplitViewController: NSSplitViewController {
             self?.addBotToChat(nil)
         }
         offlineController.onRetry = { [weak self] in
-            self?.store.setConnected(true)
+            self?.store.reconnect()
         }
         placeholderController.onNewBot = { [weak self] in
             self?.presentNewBot()

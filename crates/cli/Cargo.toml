@@ -1,0 +1,39 @@
+[package]
+name = "tinybot"
+description = "Tinybot CLI: keys, local websocket, agent loop, relay sync"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "tinybot"
+path = "src/main.rs"
+
+[dependencies]
+tinybot-agent = { path = "../agent" }
+anyhow.workspace = true
+async-trait.workspace = true
+axum.workspace = true
+base64.workspace = true
+chacha20poly1305.workspace = true
+clap.workspace = true
+crypto_box.workspace = true
+data-encoding.workspace = true
+dirs.workspace = true
+ed25519-dalek.workspace = true
+futures.workspace = true
+hkdf.workspace = true
+libc.workspace = true
+open.workspace = true
+rand.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+x25519-dalek.workspace = true

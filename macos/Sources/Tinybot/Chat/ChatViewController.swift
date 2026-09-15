@@ -224,6 +224,16 @@ final class ChatViewController: NSViewController {
             updateRow(for: messageID)
             composer.isResponding = store.isResponding(in: chatID)
 
+        case let .messageRemoved(id, messageID) where id == chatID:
+            layout.invalidate(messageID)
+            rebuildRows()
+            tableView.reloadData()
+            emptyState.isHidden = !(store.chat(chatID)?.messages.isEmpty ?? true)
+            if isPinnedToBottom { scrollToBottom(animated: false) }
+
+        case let .respondingChanged(id) where id == chatID:
+            composer.isResponding = store.isResponding(in: chatID)
+
         case let .chatChanged(id) where id == chatID:
             guard let chat = store.chat(chatID) else { return }
             composer.configure(placeholder: placeholder(for: chat), bots: store.bots(in: chat))

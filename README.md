@@ -1,6 +1,6 @@
 # Tinybot
 
-Tinybot is a Grok bot alternative: a native macOS AppKit app and a Rust CLI. The CLI is a localhost websocket service and the agent loop; the app is the UI for that CLI.
+Tinybot is a Grok bot alternative: a native macOS AppKit app and a Rust CLI. The CLI is a localhost websocket service and the agent loop; the app is the UI for that CLI and launches it from its own bundle.
 
 You create bots, talk to them 1:1, or put them in a group chat. Bots can hand work to each other and orchestrate, in the same spirit as Grok Bot.
 
@@ -10,11 +10,20 @@ Identity is a local key pair. Devices pair to each other. Traffic to the network
 
 ## Stack
 
-- macOS app: AppKit, SPM
-- CLI: Rust websocket service
-  - agent loop after vercel-labs/fx, opencode, pi-agent, and Grok-style bot orchestration
-  - identity, pairing, E2E (NaCl-style key pairs + DEKs); signed requests and opaque blobs to the relay
-- website / relay: TanStack Start/Query, TailwindCSS, shadcn/ui, Cloudflare Worker, Drizzle ORM, Drizzle Kit
+- macOS app: AppKit, SPM (`macos/`)
+- CLI: Rust websocket service (`crates/cli`)
+  - agent loop after pi-agent-core (`crates/agent`), with Grok-style bot orchestration
+  - identity, pairing, E2E (X25519/Ed25519 key pairs + XChaCha20-Poly1305 DEK); signed requests and opaque blobs to the relay
+- relay: Rust, axum, SQLite (`crates/relay`)
+
+## Run it
+
+```bash
+bun run dev          # builds the CLI and the app, launches the app, rebuilds on change
+bun run relay        # a local relay on 127.0.0.1:8787 (set TINYBOT_RELAY_URL to use it)
+cargo test           # agent loop, crypto, and SSE tests
+bun run reset        # stop everything and wipe identity, credentials, chats, prefs (-y, --build, --relay)
+```
 
 ## AI services
 

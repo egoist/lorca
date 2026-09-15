@@ -12,22 +12,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.appearance = nil
         NSApp.applicationIconImage = AppIcon.make()
         NSApp.mainMenu = MainMenu.build()
+        installSignalHandlers()
 
-        if Preferences.hasOnboarded {
-            showMainWindow()
-        } else {
-            presentOnboarding()
+        // No window until the CLI answers `hello`: a Device with an identity gets the main
+        // window, one without gets onboarding. If the CLI stays silent, the main window shows
+        // its offline state after a grace period instead of flashing before onboarding.
+        store.observe(self) { [weak self] event in
+            if case .identityChanged = event { self?.identityStateChanged() }
         }
+        store.start()
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            guard let self, self.store.hasIdentity == nil, self.onboardingWindowController == nil else { return }
+            self.showMainWindow()
+        }
+    }
 
+    /// Activation happens when a window exists to bring forward. Activating at launch, before
+    /// the CLI has answered, leaves the window that appears later behind other apps.
+    private func activate() {
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// Onboarding closes itself through `onFinish`, so the phrase step is never yanked away by
+    /// the `identity.changed` event that precedes the create response.
+    private func identityStateChanged() {
+        switch store.hasIdentity {
+        case .some(true):
+            if onboardingWindowController == nil { showMainWindow() }
+        case .some(false):
+            guard onboardingWindowController == nil else { return }
+            mainWindowController?.close()
+            mainWindowController = nil
+            presentOnboarding()
+        case .none:
+            break
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
     }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        store.stop()
+    }
+
+    /// A SIGTERM (the dev loop, `kill`) should stop the CLI child too, not just this process.
+    private var termSource: DispatchSourceSignal?
+    private func installSignalHandlers() {
+        signal(SIGTERM, SIG_IGN)
+        let source = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+        source.setEventHandler { [weak self] in
+            self?.store.stop()
+            exit(0)
+        }
+        source.resume()
+        termSource = source
+    }
+
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if !flag, Preferences.hasOnboarded { showMainWindow() }
+        if !flag, store.hasIdentity != false { showMainWindow() }
         return true
     }
 
@@ -39,6 +84,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         mainWindowController?.showWindow(nil)
         mainWindowController?.window?.makeKeyAndOrderFront(nil)
+        activate()
     }
 
     private func presentOnboarding() {
@@ -52,6 +98,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controller.showWindow(nil)
         controller.window?.center()
         controller.window?.makeKeyAndOrderFront(nil)
+        activate()
     }
 
     // MARK: - Actions
@@ -85,7 +132,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func toggleCLIConnection(_ sender: Any?) {
-        store.setConnected(!store.isConnected)
+        if store.isMock {
+            store.setConnected(!store.isConnected)
+        } else {
+            store.reconnect()
+        }
     }
 
     @objc func resetMockData(_ sender: Any?) {
@@ -107,8 +158,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 runs the turn with that machine's provider credentials, so a bot on an offline Runner waits \
                 until it reconnects. Phones and tablets pair as Devices but never run bots.
 
-                This build renders mock data. The chrome, events and shapes match what the local CLI \
-                will send over 127.0.0.1:\(Preferences.cliPort).
+                The app talks only to the local CLI on 127.0.0.1:\(Preferences.cliPort). Start it with \
+                `tinybot serve`; the CLI holds your keys and provider credentials.
                 """
         )
     }
@@ -143,7 +194,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.tag == MenuTag.simulateOffline {
-            menuItem.state = store.isConnected ? .off : .on
+            menuItem.title = store.isMock ? "Simulate CLI Offline" : "Reconnect to CLI"
+            menuItem.state = store.isMock && !store.isConnected ? .on : .off
+        }
+        if menuItem.tag == MenuTag.replayMock {
+            return store.isMock
         }
         return true
     }

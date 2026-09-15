@@ -152,7 +152,7 @@ enum MainMenu {
         add(
             menu, "Simulate CLI Offline", #selector(AppDelegate.toggleCLIConnection(_:)), "d",
             modifiers: [.command, .control], tag: MenuTag.simulateOffline)
-        add(menu, "Replay Mock Data", #selector(AppDelegate.resetMockData(_:)))
+        add(menu, "Replay Mock Data", #selector(AppDelegate.resetMockData(_:)), tag: MenuTag.replayMock)
         menu.addItem(.separator())
         add(menu, "Show Onboarding", #selector(AppDelegate.showOnboarding(_:)))
         return menu
@@ -168,4 +168,5 @@ enum MainMenu {
 
 enum MenuTag {
     static let simulateOffline = 8001
+    static let replayMock = 8002
 }

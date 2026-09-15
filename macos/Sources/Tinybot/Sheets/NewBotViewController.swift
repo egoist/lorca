@@ -22,6 +22,7 @@ final class NewBotViewController: SheetViewController {
     private let taglineField = NSTextField()
     private let runnerPopup = NSPopUpButton()
     private let providerPopup = NSPopUpButton()
+    private let modelPopup = NSPopUpButton()
     private let lookRow = Build.stack([], orientation: .horizontal, spacing: 8)
     private let note = Build.label("", font: Theme.Font.caption, color: .tertiaryLabelColor, lines: 0)
 
@@ -65,6 +66,10 @@ final class NewBotViewController: SheetViewController {
         for kind in ProviderCredential.Kind.allCases {
             providerPopup.addItem(withTitle: "\(kind.rawValue) (\(kind.subtitle))")
         }
+        providerPopup.target = self
+        providerPopup.action = #selector(providerChanged)
+        modelPopup.translatesAutoresizingMaskIntoConstraints = false
+        reloadModels()
 
         buildLookRow()
 
@@ -74,6 +79,7 @@ final class NewBotViewController: SheetViewController {
             labeled("Look", lookRow),
             labeled("Runner", runnerPopup),
             labeled("Provider", providerPopup),
+            labeled("Model", modelPopup),
             note,
         ]
         // Width constraints need a common ancestor, so they go on after each row joins the stack.
@@ -145,6 +151,30 @@ final class NewBotViewController: SheetViewController {
         }
     }
 
+    private var selectedProvider: ProviderCredential.Kind {
+        ProviderCredential.Kind.allCases[max(0, providerPopup.indexOfSelectedItem)]
+    }
+
+    /// nil means the provider's default model.
+    private var selectedModel: String? {
+        let models = selectedProvider.models
+        let index = modelPopup.indexOfSelectedItem
+        return index <= 0 || index > models.count ? nil : models[index - 1].id
+    }
+
+    @objc private func providerChanged() {
+        reloadModels()
+        runnerChanged()
+    }
+
+    private func reloadModels() {
+        let models = selectedProvider.models
+        modelPopup.removeAllItems()
+        modelPopup.addItem(withTitle: "Default (\(models.first?.label ?? ""))")
+        for model in models { modelPopup.addItem(withTitle: model.label) }
+        modelPopup.selectItem(at: 0)
+    }
+
     @objc private func runnerChanged() {
         let runners = store.runners
         guard runners.indices.contains(runnerPopup.indexOfSelectedItem) else {
@@ -154,14 +184,14 @@ final class NewBotViewController: SheetViewController {
             return
         }
         let runner = runners[runnerPopup.indexOfSelectedItem]
-        if runner.connectedProviders.isEmpty {
-            note.stringValue =
-                "\(runner.name) has no provider connected yet. The bot is created now and its first turn waits until you connect one there."
-            note.textColor = .systemOrange
-        } else {
-            let names = runner.connectedProviders.map(\.kind.rawValue).joined(separator: " and ")
-            note.stringValue = "\(runner.name) has \(names) connected. Turns run there."
+        let provider = selectedProvider
+        if runner.credential(for: provider)?.isConnected == true {
+            note.stringValue = "\(runner.name) has \(provider.rawValue) connected. Turns run there."
             note.textColor = .tertiaryLabelColor
+        } else {
+            note.stringValue =
+                "\(runner.name) has no \(provider.rawValue) credential yet. The bot is created now and its first turn waits until you connect one there."
+            note.textColor = .systemOrange
         }
     }
 
@@ -177,7 +207,8 @@ final class NewBotViewController: SheetViewController {
             symbolName: look.symbolName,
             accent: look.accent,
             runnerID: store.runners[runnerPopup.indexOfSelectedItem].id,
-            provider: ProviderCredential.Kind.allCases[providerPopup.indexOfSelectedItem]
+            provider: selectedProvider,
+            model: selectedModel
         )
         dismiss(nil)
         onCreate(botID)
@@ -193,11 +224,19 @@ extension NewBotViewController: NSTextFieldDelegate {
 
 // MARK: - Pairing
 
+/// Shows a pairing string for another Device to paste. The CLI runs the handshake and wraps the
+/// account key to the joining machine; this sheet only polls for the outcome.
 final class PairingSheetViewController: SheetViewController {
-    private let pairingString = MockData.pairingString()
+    private let store = AppStore.shared
+    private var pairingString = ""
+    private var nonce: String?
+    private let qr = NSImageView()
+    private let code = Build.label(
+        "Asking the CLI for a pairing code…", font: .monospacedSystemFont(ofSize: 10, weight: .regular),
+        color: .secondaryLabelColor, lines: 3)
     private let statusLabel = Build.label(
         "Waiting for the other Device…", font: .systemFont(ofSize: 12),
-        color: .secondaryLabelColor)
+        color: .secondaryLabelColor, lines: 0)
     private let spinner = NSProgressIndicator()
     private var task: Task<Void, Never>?
 
@@ -205,7 +244,7 @@ final class PairingSheetViewController: SheetViewController {
         super.init(
             title: "Pair a Device",
             subtitle:
-                "Open Tinybot on the other Device and scan this code. The two Devices run a handshake; the relay only carries the ciphertext.",
+                "On the other Device, choose Pair in onboarding (or run `tinybot pair <code>`) and paste this code. The Devices run a handshake; the relay only carries ciphertext.",
             width: 400
         )
     }
@@ -220,18 +259,14 @@ final class PairingSheetViewController: SheetViewController {
         let frame = BackgroundView()
         frame.cornerRadius = 12
         frame.fillColor = .white
-        let qr = NSImageView()
-        qr.image = QRCode.image(for: pairingString, size: 180)
         qr.translatesAutoresizingMaskIntoConstraints = false
         frame.addSubview(qr)
 
         let codeBox = BackgroundView()
         codeBox.cornerRadius = 8
         codeBox.fillColor = Theme.codeBackground
-        let code = Build.label(
-            pairingString, font: .monospacedSystemFont(ofSize: 10, weight: .regular),
-            color: .secondaryLabelColor, lines: 2)
         code.isSelectable = true
+        code.lineBreakMode = .byCharWrapping
         let copy = Build.imageButton(
             symbol: "doc.on.doc", pointSize: 11, tooltip: "Copy pairing string", target: self,
             action: #selector(copyPairingString))
@@ -264,20 +299,51 @@ final class PairingSheetViewController: SheetViewController {
             copy.leadingAnchor.constraint(equalTo: code.trailingAnchor, constant: 8),
             copy.trailingAnchor.constraint(equalTo: codeBox.trailingAnchor, constant: -8),
             copy.centerYAnchor.constraint(equalTo: codeBox.centerYAnchor),
+            status.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
         ])
 
         setButtons(confirm: "Done")
-        simulateHandshake()
+        begin()
     }
 
-    private func simulateHandshake() {
+    private func begin() {
+        if store.isMock {
+            pairingString = MockData.pairingString()
+            qr.image = QRCode.image(for: pairingString, size: 180)
+            code.stringValue = pairingString
+            return
+        }
         task = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 3_400_000_000)
-            guard let self, !Task.isCancelled else { return }
-            self.spinner.stopAnimation(nil)
-            self.spinner.isHidden = true
-            self.statusLabel.stringValue = "Paired. The account key is wrapped to that machine."
-            self.statusLabel.textColor = .systemGreen
+            guard let self else { return }
+            do {
+                let started = try await self.store.startPairing()
+                self.nonce = started.nonce
+                self.pairingString = started.pairingString
+                self.qr.image = QRCode.image(for: started.pairingString, size: 180)
+                self.code.stringValue = started.pairingString
+                while !Task.isCancelled {
+                    try await Task.sleep(nanoseconds: 1_500_000_000)
+                    let status = try await self.store.pairingStatus(nonce: started.nonce)
+                    switch status.state {
+                    case "completed":
+                        self.spinner.stopAnimation(nil)
+                        self.spinner.isHidden = true
+                        self.statusLabel.stringValue = "Paired. The account key is wrapped to that machine."
+                        self.statusLabel.textColor = .systemGreen
+                        return
+                    case "failed":
+                        throw CLIClient.RequestError(message: status.error ?? "Pairing failed")
+                    default:
+                        continue
+                    }
+                }
+            } catch is CancellationError {
+            } catch {
+                self.spinner.stopAnimation(nil)
+                self.spinner.isHidden = true
+                self.statusLabel.stringValue = error.localizedDescription
+                self.statusLabel.textColor = .systemRed
+            }
         }
     }
 
@@ -286,13 +352,20 @@ final class PairingSheetViewController: SheetViewController {
         NSPasteboard.general.setString(pairingString, forType: .string)
     }
 
-    override func dismissSheet() {
+    private func finish() {
         task?.cancel()
+        if let nonce, statusLabel.textColor != .systemGreen {
+            store.cancelPairing(nonce: nonce)
+        }
+    }
+
+    override func dismissSheet() {
+        finish()
         super.dismissSheet()
     }
 
     override func confirmTapped() {
-        task?.cancel()
+        finish()
         dismiss(nil)
     }
 }
