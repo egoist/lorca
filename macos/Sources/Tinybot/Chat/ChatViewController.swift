@@ -127,7 +127,13 @@ final class ChatViewController: NSViewController {
 
     override func viewDidAppear() {
         super.viewDidAppear()
-        composer.focus()
+        // Take the cursor only when nothing else holds it. Arriving from the sidebar (a click
+        // or arrow keys) leaves focus there, so its selection keeps the emphasized highlight.
+        guard let window = view.window else { return }
+        let responder = window.firstResponder
+        let heldElsewhere = responder != nil && responder !== window
+            && (responder as? NSView)?.isDescendant(of: view) != true
+        if !heldElsewhere { composer.focus() }
     }
 
     // MARK: - Content

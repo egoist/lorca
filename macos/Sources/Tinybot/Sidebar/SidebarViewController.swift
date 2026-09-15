@@ -11,6 +11,7 @@ final class SidebarViewController: NSViewController {
     private var nodes: [SidebarNode] = []
     private var searchQuery = ""
     private var isApplyingSelection = false
+    private var isNotifyingSelection = false
 
     var onSelect: ((Selection?) -> Void)?
     var onDoubleClick: ((Selection) -> Void)?
@@ -113,21 +114,53 @@ final class SidebarViewController: NSViewController {
     // MARK: - Data
 
     private func rebuild() {
-        let previous = currentSelection()
-
         let chatsHeader = SidebarNode(.header("Chats"))
         chatsHeader.children = filteredChats().map { SidebarNode(.chat($0.id)) }
 
         let computersHeader = SidebarNode(.header("Computers"))
         computersHeader.children = filteredComputers().map { SidebarNode(.computer($0.id)) }
 
-        nodes = [chatsHeader, computersHeader].filter { !$0.children.isEmpty || searchQuery.isEmpty }
+        let fresh = [chatsHeader, computersHeader].filter { !$0.children.isEmpty || searchQuery.isEmpty }
 
-        outlineView.reloadData()
-        for node in nodes { outlineView.expandItem(node) }
-
-        if let previous { setSelection(previous) }
+        if shape(of: fresh) == shape(of: nodes) {
+            // Same rows in the same order (an unread count cleared, a pin toggled): update the
+            // cells in place. A full reload replaces the row views, and a row view built while
+            // the outline view is still handling the click that selected it draws its selection
+            // unemphasized (gray) until the next selection change.
+            refreshVisibleCells()
+        } else if isNotifyingSelection {
+            DispatchQueue.main.async { [weak self] in self?.rebuild() }
+            return
+        } else {
+            let previous = currentSelection()
+            nodes = fresh
+            outlineView.reloadData()
+            for node in nodes { outlineView.expandItem(node) }
+            if let previous { setSelection(previous) }
+        }
         footer.update()
+    }
+
+    private func shape(of nodes: [SidebarNode]) -> [[SidebarNode.Kind]] {
+        nodes.map { [$0.kind] + $0.children.map(\.kind) }
+    }
+
+    private func refreshVisibleCells() {
+        for row in 0..<outlineView.numberOfRows {
+            guard let node = outlineView.item(atRow: row) as? SidebarNode,
+                let cell = outlineView.view(atColumn: 0, row: row, makeIfNecessary: false)
+            else { continue }
+            switch (node.kind, cell) {
+            case let (.chat(id), cell as SidebarChatCell):
+                if let chat = store.chat(id) { cell.configure(chat: chat, store: store) }
+            case let (.computer(id), cell as SidebarComputerCell):
+                if let computer = store.computer(id) {
+                    cell.configure(computer: computer, store: store)
+                }
+            default:
+                break
+            }
+        }
     }
 
     private func filteredChats() -> [Chat] {
@@ -279,6 +312,8 @@ extension SidebarViewController: NSOutlineViewDelegate {
 
     func outlineViewSelectionDidChange(_ notification: Notification) {
         guard !isApplyingSelection else { return }
+        isNotifyingSelection = true
+        defer { isNotifyingSelection = false }
         onSelect?(currentSelection())
     }
 }
