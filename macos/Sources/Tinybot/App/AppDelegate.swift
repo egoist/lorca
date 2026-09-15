@@ -64,9 +64,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsWindowController?.window?.makeKeyAndOrderFront(nil)
     }
 
-    @objc func newChat(_ sender: Any?) {
+    @objc func newGroupChat(_ sender: Any?) {
         showMainWindow()
-        mainWindowController?.root.presentNewChat()
+        mainWindowController?.root.presentNewGroupChat()
     }
 
     @objc func newBot(_ sender: Any?) {

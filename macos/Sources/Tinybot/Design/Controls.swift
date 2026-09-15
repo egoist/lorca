@@ -228,6 +228,17 @@ final class HoverButton: NSButton {
     override func mouseEntered(with event: NSEvent) { isHovered = true }
     override func mouseExited(with event: NSEvent) { isHovered = false }
 
+    // With a menu attached the button is a pull-down: the menu opens on press, its top-left corner
+    // at the button's bottom-left. NSButton is flipped, so the bottom edge is at bounds.maxY.
+    override func mouseDown(with event: NSEvent) {
+        guard let menu else { return super.mouseDown(with: event) }
+        isHighlighted = true
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: bounds.maxY), in: self)
+        isHighlighted = false
+        // Menu tracking swallows the exit event when the pointer leaves while the menu is open.
+        isHovered = window.map { bounds.contains(convert($0.mouseLocationOutsideOfEventStream, from: nil)) } ?? false
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         if isHovered || isHighlighted {
             NSColor.labelColor.withAlphaComponent(isHighlighted ? 0.14 : 0.08).setFill()

@@ -30,14 +30,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
         // The sidebar buttons form a leading titlebar accessory, so they keep their place beside
         // the traffic lights when the sidebar collapses.
+        let createButton = HoverButton(
+            symbol: "plus", tooltip: "Create", target: nil, action: #selector(AppDelegate.newBot(_:)))
+        createButton.menu = Self.createMenu()
         window.addTitlebarAccessoryViewController(
             Self.leadingAccessory([
                 HoverButton(
                     symbol: "sidebar.leading", tooltip: "Toggle Sidebar (⌃⌘S)", target: root,
                     action: #selector(NSSplitViewController.toggleSidebar(_:))),
-                HoverButton(
-                    symbol: "plus", tooltip: "New Chat (⌘N)", target: self,
-                    action: #selector(newChatFromTitlebar(_:))),
+                createButton,
             ]))
 
         root.onSelectionChange = { [weak self] in self?.updateTitle() }
@@ -72,8 +73,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         return accessory
     }
 
-    @objc private func newChatFromTitlebar(_ sender: Any?) {
-        root.presentNewChat()
+    /// A new bot opens its own direct chat, so the menu offers only bots and groups. Items go
+    /// through the responder chain to the same actions as the File menu.
+    private static func createMenu() -> NSMenu {
+        let menu = NSMenu()
+        menu.addItem(withTitle: "Create New Bot…", action: #selector(AppDelegate.newBot(_:)), keyEquivalent: "")
+        menu.addItem(
+            withTitle: "Create Group Chat…", action: #selector(AppDelegate.newGroupChat(_:)), keyEquivalent: "")
+        return menu
     }
 
     @available(*, unavailable)

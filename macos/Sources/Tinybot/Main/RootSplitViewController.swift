@@ -73,8 +73,8 @@ final class RootSplitViewController: NSSplitViewController {
         offlineController.onRetry = { [weak self] in
             self?.store.setConnected(true)
         }
-        placeholderController.onNewChat = { [weak self] in
-            self?.presentNewChat()
+        placeholderController.onNewBot = { [weak self] in
+            self?.presentNewBot()
         }
 
         store.observe(self) { [weak self] event in
@@ -204,23 +204,26 @@ final class RootSplitViewController: NSSplitViewController {
         sidebar.focusSearch()
     }
 
-    func presentNewChat() {
-        let sheet = NewChatViewController { [weak self] kind, botIDs, title in
-            guard let self, let first = botIDs.first else { return }
-            let id: Chat.ID
-            switch kind {
-            case .dm: id = self.store.dm(with: first)
-            case .group: id = self.store.createChat(kind: .group, with: botIDs, title: title)
-            }
-            self.select(.chat(id))
-            self.chatController?.focusComposer()
+    func presentNewGroupChat() {
+        let sheet = NewGroupChatViewController { [weak self] botIDs, title in
+            guard let self else { return }
+            self.open(self.store.createChat(kind: .group, with: botIDs, title: title))
         }
         presentAsSheet(sheet)
     }
 
+    /// Every bot has a direct chat, so creating one lands in that chat right away.
     func presentNewBot() {
-        let sheet = NewBotViewController()
+        let sheet = NewBotViewController { [weak self] botID in
+            guard let self else { return }
+            self.open(self.store.dm(with: botID))
+        }
         presentAsSheet(sheet)
+    }
+
+    private func open(_ chatID: Chat.ID) {
+        select(.chat(chatID))
+        chatController?.focusComposer()
     }
 
     func presentPairing() {

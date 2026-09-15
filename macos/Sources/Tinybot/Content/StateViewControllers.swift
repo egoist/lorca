@@ -85,7 +85,7 @@ final class OfflineViewController: NSViewController {
 
 /// Shown when nothing is selected in the sidebar.
 final class PlaceholderViewController: NSViewController {
-    var onNewChat: (() -> Void)?
+    var onNewBot: (() -> Void)?
 
     override func loadView() {
         let container = BackgroundView()
@@ -104,7 +104,7 @@ final class PlaceholderViewController: NSViewController {
             "Pick a conversation in the sidebar, or start a new one.",
             font: .systemFont(ofSize: 12.5), color: .secondaryLabelColor, alignment: .center)
 
-        let button = NSButton(title: "New Chat", target: self, action: #selector(newChat))
+        let button = NSButton(title: "New Bot…", target: self, action: #selector(newBot))
         button.bezelStyle = .rounded
         button.controlSize = .large
 
@@ -122,7 +122,7 @@ final class PlaceholderViewController: NSViewController {
         view = container
     }
 
-    @objc private func newChat() {
-        onNewChat?()
+    @objc private func newBot() {
+        onNewBot?()
     }
 }

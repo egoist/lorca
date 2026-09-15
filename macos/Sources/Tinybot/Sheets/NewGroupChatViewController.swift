@@ -1,23 +1,20 @@
 import AppKit
 
-/// Bot picker for a new chat. A DM pins one bot for good; a group starts with one to six bots
-/// and can change members later.
-final class NewChatViewController: SheetViewController {
+/// Bot picker for a new group chat: one to six bots, with members changeable later. Direct chats
+/// need no picker because every bot gets one when it is created.
+final class NewGroupChatViewController: SheetViewController {
     private let store = AppStore.shared
-    private let kindControl = NSSegmentedControl(
-        labels: ["Direct Message", "Group Chat"], trackingMode: .selectOne, target: nil, action: nil)
     private let nameField = NSTextField()
-    private var kind: Chat.Kind = .dm
     private var selected: [Bot.ID] = []
     private var rows: [Bot.ID: SelectableBotRow] = [:]
 
-    private let onCreate: (Chat.Kind, [Bot.ID], String?) -> Void
+    private let onCreate: ([Bot.ID], String?) -> Void
 
-    init(onCreate: @escaping (Chat.Kind, [Bot.ID], String?) -> Void) {
+    init(onCreate: @escaping ([Bot.ID], String?) -> Void) {
         self.onCreate = onCreate
         super.init(
-            title: "New Chat",
-            subtitle: "Message one bot directly, or start a group of up to six.",
+            title: "New Group Chat",
+            subtitle: "Pick up to six bots to talk with together.",
             width: 440
         )
     }
@@ -28,15 +25,8 @@ final class NewChatViewController: SheetViewController {
     override func loadView() {
         super.loadView()
 
-        kindControl.segmentDistribution = .fillEqually
-        kindControl.selectedSegment = 0
-        kindControl.target = self
-        kindControl.action = #selector(kindChanged)
-        kindControl.translatesAutoresizingMaskIntoConstraints = false
-
         nameField.placeholderString = "Group name (optional)"
         nameField.translatesAutoresizingMaskIntoConstraints = false
-        nameField.isHidden = true
 
         let list = SectionView(title: "Bots")
         list.setRows(
@@ -53,61 +43,43 @@ final class NewChatViewController: SheetViewController {
                 return row
             })
 
-        contentStack.addArrangedSubview(kindControl)
         contentStack.addArrangedSubview(list)
         contentStack.addArrangedSubview(nameField)
-        contentStack.setCustomSpacing(16, after: kindControl)
 
         NSLayoutConstraint.activate([
-            kindControl.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
             list.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
             nameField.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
         ])
 
-        setButtons(confirm: "Open")
+        setButtons(confirm: "Create")
         if let first = store.bots.first { toggle(first.id) }
         updateState()
     }
 
-    @objc private func kindChanged() {
-        kind = kindControl.selectedSegment == 0 ? .dm : .group
-        // A DM has exactly one bot; keep the first pick when narrowing from a group.
-        if kind == .dm, selected.count > 1 { selected = [selected[0]] }
-        updateState()
-    }
-
     private func toggle(_ id: Bot.ID) {
-        switch kind {
-        case .dm:
-            selected = [id]
-        case .group:
-            if let index = selected.firstIndex(of: id) {
-                selected.remove(at: index)
-            } else if selected.count < Chat.maxGroupBots {
-                selected.append(id)
-            } else {
-                NSSound.beep()
-            }
+        if let index = selected.firstIndex(of: id) {
+            selected.remove(at: index)
+        } else if selected.count < Chat.maxGroupBots {
+            selected.append(id)
+        } else {
+            NSSound.beep()
         }
         updateState()
     }
 
     private func updateState() {
-        let roomLeft = kind == .dm || selected.count < Chat.maxGroupBots
+        let roomLeft = selected.count < Chat.maxGroupBots
         for (id, row) in rows {
             row.isSelected = selected.contains(id)
             row.isEnabled = selected.contains(id) || roomLeft
         }
-
-        nameField.isHidden = kind == .dm
         confirmButton.isEnabled = !selected.isEmpty
-        fitSheetToContent()
     }
 
     override func confirmTapped() {
         guard !selected.isEmpty else { return }
         let name = nameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        onCreate(kind, selected, kind == .group && !name.isEmpty ? name : nil)
+        onCreate(selected, name.isEmpty ? nil : name)
         dismiss(nil)
     }
 }

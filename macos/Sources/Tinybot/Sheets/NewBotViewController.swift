@@ -28,7 +28,10 @@ final class NewBotViewController: SheetViewController {
     private var lookButtons: [NSButton] = []
     private var selectedLook = 0
 
-    init() {
+    private let onCreate: (Bot.ID) -> Void
+
+    init(onCreate: @escaping (Bot.ID) -> Void) {
+        self.onCreate = onCreate
         super.init(
             title: "New Bot",
             subtitle: "A bot runs on one Computer and uses that machine's credentials.",
@@ -65,13 +68,19 @@ final class NewBotViewController: SheetViewController {
 
         buildLookRow()
 
-        contentStack.addArrangedSubview(labeled("Name", nameField))
-        contentStack.addArrangedSubview(labeled("Tagline", taglineField))
-        contentStack.addArrangedSubview(labeled("Look", lookRow))
-        contentStack.addArrangedSubview(labeled("Computer", computerPopup))
-        contentStack.addArrangedSubview(labeled("Provider", providerPopup))
-        contentStack.addArrangedSubview(note)
-        note.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
+        let rows = [
+            labeled("Name", nameField),
+            labeled("Tagline", taglineField),
+            labeled("Look", lookRow),
+            labeled("Computer", computerPopup),
+            labeled("Provider", providerPopup),
+            note,
+        ]
+        // Width constraints need a common ancestor, so they go on after each row joins the stack.
+        for row in rows {
+            contentStack.addArrangedSubview(row)
+            row.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
+        }
 
         setButtons(confirm: "Create Bot")
         confirmButton.isEnabled = false
@@ -96,7 +105,6 @@ final class NewBotViewController: SheetViewController {
         if control is NSTextField || control is NSPopUpButton {
             control.trailingAnchor.constraint(equalTo: container.trailingAnchor).isActive = true
         }
-        container.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
         return container
     }
 
@@ -156,7 +164,7 @@ final class NewBotViewController: SheetViewController {
         let look = Self.looks[selectedLook]
         let tagline = taglineField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        store.createBot(
+        let botID = store.createBot(
             name: name,
             tagline: tagline.isEmpty ? "New bot" : tagline,
             symbolName: look.symbolName,
@@ -165,6 +173,7 @@ final class NewBotViewController: SheetViewController {
             provider: ProviderCredential.Kind.allCases[providerPopup.indexOfSelectedItem]
         )
         dismiss(nil)
+        onCreate(botID)
     }
 }
 
