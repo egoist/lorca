@@ -1,4 +1,10 @@
 {
+  "name": "tinybot",
+  "private": true,
+  "scripts": {
+    "dev": "bun run scripts/dev.ts",
+    "build": "bun run scripts/build.ts"
+  },
   "devDependencies": {
     "@types/bun": "latest"
   }

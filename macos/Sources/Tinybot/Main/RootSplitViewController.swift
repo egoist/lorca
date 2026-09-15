@@ -1,0 +1,322 @@
+import AppKit
+
+final class RootSplitViewController: NSSplitViewController {
+    private let store = AppStore.shared
+
+    private let sidebar = SidebarViewController()
+    private let content = ContentContainerViewController()
+    private let inspector = InspectorViewController()
+
+    private var sidebarItem: NSSplitViewItem!
+    private var inspectorItem: NSSplitViewItem!
+
+    private var userWantsInspector = true
+    private var chatController: ChatViewController?
+    private let computerController = ComputerViewController()
+    private let offlineController = OfflineViewController()
+    private let placeholderController = PlaceholderViewController()
+
+    var onSelectionChange: (() -> Void)?
+
+    private(set) var selection: Selection? {
+        didSet {
+            guard selection != oldValue else { return }
+            Preferences.selection = encode(selection)
+            updateContent()
+            onSelectionChange?()
+        }
+    }
+
+    // MARK: - Lifecycle
+
+    override func loadView() {
+        super.loadView()
+        view.frame = NSRect(x: 0, y: 0, width: 1180, height: 760)
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+
+        sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebar)
+        sidebarItem.minimumThickness = 232
+        sidebarItem.maximumThickness = 340
+        sidebarItem.canCollapse = true
+
+        let contentItem = NSSplitViewItem(viewController: content)
+        contentItem.minimumThickness = 460
+        contentItem.canCollapse = false
+
+        inspectorItem = NSSplitViewItem(inspectorWithViewController: inspector)
+        inspectorItem.minimumThickness = 268
+        inspectorItem.maximumThickness = 320
+
+        addSplitViewItem(sidebarItem)
+        addSplitViewItem(contentItem)
+        addSplitViewItem(inspectorItem)
+
+        sidebar.onSelect = { [weak self] selection in
+            self?.select(selection)
+        }
+        sidebar.onDoubleClick = { [weak self] selection in
+            if case .chat = selection { self?.renameChat(nil) }
+        }
+        inspector.onOpenComputer = { [weak self] computerID in
+            self?.select(.computer(computerID))
+        }
+        inspector.onRemoveBot = { [weak self] botID in
+            guard case let .chat(chatID) = self?.selection else { return }
+            self?.store.removeBot(botID, from: chatID)
+        }
+        inspector.onAddBot = { [weak self] in
+            self?.addBotToChat(nil)
+        }
+        offlineController.onRetry = { [weak self] in
+            self?.store.setConnected(true)
+        }
+        placeholderController.onNewChat = { [weak self] in
+            self?.presentNewChat()
+        }
+
+        store.observe(self) { [weak self] event in
+            self?.handle(event)
+        }
+
+        restoreSelection()
+        updateContent()
+    }
+
+    private func restoreSelection() {
+        if let encoded = Preferences.selection, let decoded = decode(encoded), exists(decoded) {
+            selection = decoded
+        } else {
+            selection = store.chats.first.map { .chat($0.id) }
+        }
+        sidebar.setSelection(selection)
+    }
+
+    private func exists(_ selection: Selection) -> Bool {
+        switch selection {
+        case let .chat(id): store.chat(id) != nil
+        case let .computer(id): store.computer(id) != nil
+        }
+    }
+
+    private func encode(_ selection: Selection?) -> String? {
+        switch selection {
+        case let .chat(id): "chat:\(id)"
+        case let .computer(id): "computer:\(id)"
+        case nil: nil
+        }
+    }
+
+    private func decode(_ raw: String) -> Selection? {
+        let parts = raw.split(separator: ":", maxSplits: 1).map(String.init)
+        guard parts.count == 2 else { return nil }
+        switch parts[0] {
+        case "chat": return .chat(parts[1])
+        case "computer": return .computer(parts[1])
+        default: return nil
+        }
+    }
+
+    // MARK: - Selection
+
+    func select(_ newSelection: Selection?) {
+        selection = newSelection
+        if case let .chat(id) = newSelection {
+            store.markRead(id)
+        }
+        sidebar.setSelection(newSelection)
+    }
+
+    func windowBecameKey() {
+        if case let .chat(id) = selection { store.markRead(id) }
+    }
+
+    private func handle(_ event: StoreEvent) {
+        switch event {
+        case .connectionChanged:
+            updateContent()
+        case .snapshotReplaced:
+            restoreSelection()
+            updateContent()
+        case .chatsChanged:
+            if case let .chat(id) = selection, store.chat(id) == nil {
+                select(store.chats.first.map { .chat($0.id) })
+            }
+        case let .chatChanged(id):
+            if case .chat(id) = selection {
+                inspector.reload()
+                onSelectionChange?()
+            }
+        default:
+            break
+        }
+    }
+
+    private func updateContent() {
+        guard isViewLoaded else { return }
+
+        guard store.isConnected else {
+            content.show(offlineController)
+            setInspector(visible: false)
+            return
+        }
+
+        switch selection {
+        case let .chat(id):
+            guard let chat = store.chat(id) else { return }
+            let controller = chatController ?? ChatViewController()
+            chatController = controller
+            controller.show(chatID: chat.id)
+            content.show(controller)
+            inspector.show(selection: .chat(chat.id))
+            setInspector(visible: userWantsInspector)
+
+        case let .computer(id):
+            computerController.show(computerID: id)
+            computerController.onOpenChat = { [weak self] chatID in
+                self?.select(.chat(chatID))
+            }
+            content.show(computerController)
+            setInspector(visible: false)
+
+        case nil:
+            content.show(placeholderController)
+            setInspector(visible: false)
+        }
+    }
+
+    private func setInspector(visible: Bool) {
+        guard inspectorItem.isCollapsed == visible else { return }
+        inspectorItem.animator().isCollapsed = !visible
+    }
+
+    // MARK: - Actions
+
+    override func toggleInspector(_ sender: Any?) {
+        guard case .chat = selection, store.isConnected else { NSSound.beep(); return }
+        userWantsInspector = inspectorItem.isCollapsed
+        super.toggleInspector(sender)
+    }
+
+    func focusSearch() {
+        sidebar.focusSearch()
+    }
+
+    func presentNewChat() {
+        let sheet = NewChatViewController { [weak self] botIDs, title in
+            guard let self, !botIDs.isEmpty else { return }
+            let id = self.store.createChat(with: botIDs, title: title)
+            self.select(.chat(id))
+            self.chatController?.focusComposer()
+        }
+        presentAsSheet(sheet)
+    }
+
+    func presentNewBot() {
+        let sheet = NewBotViewController()
+        presentAsSheet(sheet)
+    }
+
+    func presentPairing() {
+        let sheet = PairingSheetViewController()
+        presentAsSheet(sheet)
+    }
+
+    @objc func addBotToChat(_ sender: Any?) {
+        guard case let .chat(chatID) = selection, let chat = store.chat(chatID) else {
+            NSSound.beep()
+            return
+        }
+        let available = store.bots.filter { !chat.botIDs.contains($0.id) }
+        guard !available.isEmpty, chat.botIDs.count < 6 else {
+            NSSound.beep()
+            return
+        }
+        let sheet = BotPickerViewController(
+            title: "Add a bot to \(store.title(for: chat))",
+            bots: available
+        ) { [weak self] botID in
+            self?.store.addBot(botID, to: chatID)
+        }
+        presentAsSheet(sheet)
+    }
+
+    @objc func renameChat(_ sender: Any?) {
+        guard case let .chat(chatID) = selection, let chat = store.chat(chatID) else {
+            NSSound.beep()
+            return
+        }
+        let alert = NSAlert()
+        alert.messageText = "Rename Chat"
+        alert.informativeText = "Chat names live inside the encrypted roster blob, never on the relay."
+        alert.addButton(withTitle: "Rename")
+        alert.addButton(withTitle: "Cancel")
+
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        field.stringValue = store.title(for: chat)
+        field.placeholderString = "Chat name"
+        alert.accessoryView = field
+
+        guard let window = view.window else { return }
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn else { return }
+            self?.store.rename(chatID, to: field.stringValue)
+        }
+        // The accessory view only becomes first responder once the sheet exists.
+        DispatchQueue.main.async { alert.window.makeFirstResponder(field) }
+    }
+
+    @objc func togglePinChat(_ sender: Any?) {
+        guard case let .chat(chatID) = selection else { return }
+        store.togglePin(chatID)
+    }
+
+    @objc func deleteChat(_ sender: Any?) {
+        guard case let .chat(chatID) = selection, let chat = store.chat(chatID),
+            let window = view.window
+        else {
+            NSSound.beep()
+            return
+        }
+        let alert = NSAlert()
+        alert.messageText = "Delete \"\(store.title(for: chat))\"?"
+        alert.informativeText = "The transcript is removed from this Computer and from paired Computers."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons.first?.hasDestructiveAction = true
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn else { return }
+            self?.store.deleteChat(chatID)
+        }
+    }
+}
+
+// MARK: - Content container
+
+final class ContentContainerViewController: NSViewController {
+    private var current: NSViewController?
+
+    override func loadView() {
+        let container = NSView()
+        container.wantsLayer = true
+        view = container
+    }
+
+    func show(_ controller: NSViewController) {
+        guard current !== controller else { return }
+
+        if let current {
+            current.view.removeFromSuperview()
+            current.removeFromParent()
+        }
+
+        addChild(controller)
+        controller.view.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(controller.view)
+        controller.view.pin(to: view)
+        current = controller
+    }
+}
