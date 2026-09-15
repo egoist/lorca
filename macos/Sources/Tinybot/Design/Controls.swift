@@ -185,6 +185,58 @@ final class StatusDotView: NSView {
     }
 }
 
+/// Borderless symbol button that fills a rounded rect under the pointer.
+final class HoverButton: NSButton {
+    private var tracking: NSTrackingArea?
+    private var isHovered = false { didSet { needsDisplay = true } }
+
+    init(symbol: String, pointSize: CGFloat = 15, tooltip: String, target: AnyObject?, action: Selector) {
+        super.init(frame: .zero)
+        image = NSImage(systemSymbolName: symbol, accessibilityDescription: tooltip)
+        symbolConfiguration = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .regular)
+        imagePosition = .imageOnly
+        isBordered = false
+        contentTintColor = .secondaryLabelColor
+        toolTip = tooltip
+        self.target = target
+        self.action = action
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var intrinsicContentSize: NSSize { NSSize(width: 28, height: 28) }
+
+    // The push bezel's layout padding would stretch the square hover fill into a rectangle.
+    override var alignmentRectInsets: NSEdgeInsets { NSEdgeInsets() }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        let area = NSTrackingArea(
+            rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow], owner: self)
+        addTrackingArea(area)
+        tracking = area
+        // A button hidden mid-hover (a collapsed sidebar) never gets its exit event.
+        if let window {
+            isHovered =
+                window.isKeyWindow
+                && bounds.contains(convert(window.mouseLocationOutsideOfEventStream, from: nil))
+        }
+    }
+
+    override func mouseEntered(with event: NSEvent) { isHovered = true }
+    override func mouseExited(with event: NSEvent) { isHovered = false }
+
+    override func draw(_ dirtyRect: NSRect) {
+        if isHovered || isHighlighted {
+            NSColor.labelColor.withAlphaComponent(isHighlighted ? 0.14 : 0.08).setFill()
+            NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6).fill()
+        }
+        super.draw(dirtyRect)
+    }
+}
+
 extension NSView {
     /// Opts a subview out of Auto Layout so its parent can position it in `layout()`.
     /// Without this, a constraint-less subview keeps the window asking for more

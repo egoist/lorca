@@ -112,6 +112,13 @@ final class ChatViewController: NSViewController {
 
     override func viewDidLayout() {
         super.viewDidLayout()
+        // The transcript runs under the titlebar, so its first row rests just below it rather than
+        // blurred behind it.
+        let topInset = view.safeAreaInsets.top + 8
+        if scrollView.contentInsets.top != topInset {
+            scrollView.contentInsets.top = topInset
+            if isPinnedToBottom { scrollToBottom(animated: false) }
+        }
         let width = tableView.bounds.width
         guard abs(width - lastWidth) > 0.5 else { return }
         lastWidth = width

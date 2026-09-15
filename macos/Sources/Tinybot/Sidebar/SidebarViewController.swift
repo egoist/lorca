@@ -325,8 +325,14 @@ extension SidebarViewController: NSMenuDelegate {
 
 // MARK: - Search
 
-final class SidebarSearchBar: NSView {
+/// Flat search field: a tinted rounded rect with a magnifier and a clear button.
+final class SidebarSearchBar: NSView, NSSearchFieldDelegate {
     let field = NSSearchField()
+    private let background = BackgroundView()
+    private let icon = NSImageView()
+    private lazy var clearButton = Build.imageButton(
+        symbol: "xmark.circle.fill", pointSize: 11, tooltip: "Clear search", target: self,
+        action: #selector(clear))
 
     var onQueryChange: ((String) -> Void)?
 
@@ -334,28 +340,85 @@ final class SidebarSearchBar: NSView {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
 
-        field.placeholderString = "Search"
-        field.sendsWholeSearchString = false
-        field.sendsSearchStringImmediately = true
-        field.translatesAutoresizingMaskIntoConstraints = false
-        field.target = self
-        field.action = #selector(searchChanged)
-        field.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        background.fillColor = Theme.chipBackground
+        background.cornerRadius = 7
 
-        addSubview(field)
+        icon.image = NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: nil)
+        icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 12, weight: .regular)
+        icon.contentTintColor = .secondaryLabelColor
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        icon.setContentHuggingPriority(.required, for: .horizontal)
+
+        field.placeholderString = "Search"
+        field.font = .systemFont(ofSize: 13)
+        field.isBezeled = false
+        field.isBordered = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        // The bar draws its own magnifier and clear button.
+        if let cell = field.cell as? NSSearchFieldCell {
+            cell.searchButtonCell = nil
+            cell.cancelButtonCell = nil
+        }
+        field.usesSingleLineMode = true
+        field.cell?.isScrollable = true
+        field.delegate = self
+        field.translatesAutoresizingMaskIntoConstraints = false
+        field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        clearButton.contentTintColor = .tertiaryLabelColor
+        clearButton.isHidden = true
+
+        addSubview(background)
+        background.addSubview(icon)
+        background.addSubview(field)
+        background.addSubview(clearButton)
 
         NSLayoutConstraint.activate([
             heightAnchor.constraint(equalToConstant: 36),
-            field.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
-            field.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
-            field.centerYAnchor.constraint(equalTo: centerYAnchor),
+            background.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            background.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            background.centerYAnchor.constraint(equalTo: centerYAnchor),
+            background.heightAnchor.constraint(equalToConstant: 28),
+
+            icon.leadingAnchor.constraint(equalTo: background.leadingAnchor, constant: 8),
+            icon.centerYAnchor.constraint(equalTo: background.centerYAnchor),
+
+            field.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 6),
+            field.trailingAnchor.constraint(equalTo: clearButton.leadingAnchor, constant: -4),
+            field.centerYAnchor.constraint(equalTo: background.centerYAnchor),
+
+            clearButton.trailingAnchor.constraint(equalTo: background.trailingAnchor, constant: -6),
+            clearButton.centerYAnchor.constraint(equalTo: background.centerYAnchor),
         ])
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    @objc private func searchChanged() { onQueryChange?(field.stringValue) }
+    // Clicking the magnifier or padding focuses the field.
+    override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(field)
+    }
+
+    func controlTextDidChange(_ obj: Notification) { queryChanged() }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        guard commandSelector == #selector(NSResponder.cancelOperation(_:)), !field.stringValue.isEmpty
+        else { return false }
+        clear()
+        return true
+    }
+
+    @objc private func clear() {
+        field.stringValue = ""
+        queryChanged()
+    }
+
+    private func queryChanged() {
+        clearButton.isHidden = field.stringValue.isEmpty
+        onQueryChange?(field.stringValue)
+    }
 }
 
 // MARK: - Footer

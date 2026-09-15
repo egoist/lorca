@@ -28,8 +28,52 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         toolbar.allowsUserCustomization = false
         window.toolbar = toolbar
 
+        // The sidebar buttons form a leading titlebar accessory, so they keep their place beside
+        // the traffic lights when the sidebar collapses.
+        window.addTitlebarAccessoryViewController(
+            Self.leadingAccessory([
+                HoverButton(
+                    symbol: "sidebar.leading", tooltip: "Toggle Sidebar (⌃⌘S)", target: root,
+                    action: #selector(NSSplitViewController.toggleSidebar(_:))),
+                HoverButton(
+                    symbol: "plus", tooltip: "New Chat (⌘N)", target: self,
+                    action: #selector(newChatFromTitlebar(_:))),
+            ]))
+
         root.onSelectionChange = { [weak self] in self?.updateTitle() }
         updateTitle()
+    }
+
+    /// Lays square plain buttons out as a leading titlebar accessory, just past the traffic lights.
+    private static func leadingAccessory(_ buttons: [HoverButton]) -> NSTitlebarAccessoryViewController {
+        let inset: CGFloat = 8
+        let spacing: CGFloat = 4
+        let side = buttons.first?.intrinsicContentSize.width ?? 0
+        let width = inset + CGFloat(buttons.count) * side + CGFloat(max(buttons.count - 1, 0)) * spacing
+        // The accessory takes its width from the view's frame and fills the titlebar's height.
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: width, height: side))
+        var previous: NSView?
+        for button in buttons {
+            button.translatesAutoresizingMaskIntoConstraints = false
+            container.addSubview(button)
+            NSLayoutConstraint.activate([
+                button.leadingAnchor.constraint(
+                    equalTo: previous?.trailingAnchor ?? container.leadingAnchor,
+                    constant: previous == nil ? inset : spacing),
+                button.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+                button.widthAnchor.constraint(equalToConstant: side),
+                button.heightAnchor.constraint(equalToConstant: side),
+            ])
+            previous = button
+        }
+        let accessory = NSTitlebarAccessoryViewController()
+        accessory.view = container
+        accessory.layoutAttribute = .leading
+        return accessory
+    }
+
+    @objc private func newChatFromTitlebar(_ sender: Any?) {
+        root.presentNewChat()
     }
 
     @available(*, unavailable)
@@ -64,20 +108,20 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 // MARK: - Toolbar
 
 extension NSToolbarItem.Identifier {
-    static let newChat = NSToolbarItem.Identifier("tinybot.newChat")
-    static let sidebar = NSToolbarItem.Identifier("tinybot.sidebar")
+    static let inspectorToggle = NSToolbarItem.Identifier("tinybot.inspectorToggle")
 }
 
+// Standard toolbar items sit on glass platters; a borderless custom-view item doesn't. AppKit moves
+// the inspector toggle between the inspector's section and the window's trailing edge as the
+// inspector opens and closes.
 extension MainWindowController: NSToolbarDelegate {
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         [
-            .flexibleSpace,
-            .newChat,
-            .sidebar,
             .sidebarTrackingSeparator,
             .flexibleSpace,
             .inspectorTrackingSeparator,
-            .toggleInspector,
+            .flexibleSpace,
+            .inspectorToggle,
         ]
     }
 
@@ -90,51 +134,13 @@ extension MainWindowController: NSToolbarDelegate {
         itemForItemIdentifier identifier: NSToolbarItem.Identifier,
         willBeInsertedIntoToolbar flag: Bool
     ) -> NSToolbarItem? {
-        switch identifier {
-        case .newChat:
-            return borderedItem(
-                identifier,
-                symbol: "square.and.pencil",
-                label: "New Chat",
-                tooltip: "New Chat (⌘N)",
-                action: #selector(newChatFromToolbar(_:))
-            )
-        case .sidebar:
-            return borderedItem(
-                identifier,
-                symbol: "sidebar.leading",
-                label: "Hide Sidebar",
-                tooltip: "Hide or show the sidebar",
-                action: #selector(toggleSidebarFromToolbar(_:))
-            )
-        default:
-            return nil
-        }
-    }
-
-    private func borderedItem(
-        _ identifier: NSToolbarItem.Identifier,
-        symbol: String,
-        label: String,
-        tooltip: String,
-        action: Selector
-    ) -> NSToolbarItem {
+        guard identifier == .inspectorToggle else { return nil }
         let item = NSToolbarItem(itemIdentifier: identifier)
-        item.label = label
-        item.paletteLabel = label
-        item.toolTip = tooltip
-        item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
-        item.isBordered = true
-        item.target = self
-        item.action = action
+        item.label = "Inspector"
+        item.view = HoverButton(
+            symbol: "sidebar.trailing", tooltip: "Toggle Inspector (⌥⌘I)", target: root,
+            action: #selector(RootSplitViewController.toggleInspector(_:)))
+        item.isBordered = false
         return item
-    }
-
-    @objc private func newChatFromToolbar(_ sender: Any?) {
-        root.presentNewChat()
-    }
-
-    @objc private func toggleSidebarFromToolbar(_ sender: Any?) {
-        root.toggleSidebar(sender)
     }
 }
