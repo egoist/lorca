@@ -37,13 +37,17 @@ final class ChatEmptyStateView: NSView {
         avatars.configure(with: bots)
         title.stringValue = store.title(for: chat)
 
-        if bots.count == 1, let only = bots.first {
+        if chat.isDM, let only = bots.first {
             let host = store.computer(only.computerID)
             subtitle.stringValue =
                 "\(only.tagline)\nRuns on \(host?.name ?? "an unassigned Computer") with \(only.provider.rawValue)"
-        } else {
+        } else if bots.count > 1 {
             let names = bots.map(\.name).joined(separator: ", ")
             subtitle.stringValue = "\(names)\nAddress one with @, or say @everyone to hear from all of them."
+        } else if let only = bots.first {
+            subtitle.stringValue = "\(only.tagline)\nA group of one for now. Add bots from the inspector."
+        } else {
+            subtitle.stringValue = "No bots in this group yet."
         }
 
         rebuildSuggestions(for: bots)

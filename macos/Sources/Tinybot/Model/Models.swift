@@ -159,7 +159,17 @@ struct Message: Identifiable, Hashable {
 // MARK: - Chat
 
 struct Chat: Identifiable, Hashable {
+    /// A DM is a fixed one-to-one thread with a single bot. A group holds one to six bots and
+    /// can gain or lose members after it is created.
+    enum Kind: String, Hashable {
+        case dm
+        case group
+    }
+
+    static let maxGroupBots = 6
+
     let id: String
+    var kind: Kind
     var customTitle: String?
     var botIDs: [Bot.ID]
     var messages: [Message]
@@ -167,7 +177,14 @@ struct Chat: Identifiable, Hashable {
     var isPinned: Bool
     var createdAt: Date
 
-    var isGroup: Bool { botIDs.count > 1 }
+    var isGroup: Bool { kind == .group }
+    var isDM: Bool { kind == .dm }
+
+    /// Whether another bot may join. Only groups grow, and never past the cap.
+    var canAddBot: Bool { isGroup && botIDs.count < Self.maxGroupBots }
+
+    /// Whether a bot may leave. Groups keep at least one bot; DMs never change.
+    var canRemoveBot: Bool { isGroup && botIDs.count > 1 }
 
     var lastActivity: Date {
         messages.last?.createdAt ?? createdAt

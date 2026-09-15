@@ -87,13 +87,14 @@ final class AppStore {
 
     func subtitle(for chat: Chat) -> String {
         let members = bots(in: chat)
-        if members.count == 1, let only = members.first {
+        if chat.isDM, let only = members.first {
             let host = computer(only.computerID)?.name ?? "unassigned"
             return "\(only.provider.rawValue) on \(host)"
         }
         let hosts = Set(members.compactMap { computer($0.computerID)?.name })
         let computerLabel = hosts.count == 1 ? (hosts.first ?? "") : "\(hosts.count) Computers"
-        return "\(members.count) bots · \(computerLabel)"
+        let botLabel = members.count == 1 ? "1 bot" : "\(members.count) bots"
+        return "Group · \(botLabel) · \(computerLabel)"
     }
 
     func preview(for chat: Chat) -> String {
@@ -136,11 +137,23 @@ final class AppStore {
         }
     }
 
+    /// The one DM with this bot, created on first use. DMs are keyed by the bot, so opening one
+    /// twice lands in the same thread.
     @discardableResult
-    func createChat(with botIDs: [Bot.ID], title: String?) -> Chat.ID {
+    func dm(with botID: Bot.ID) -> Chat.ID {
+        if let existing = chats.first(where: { $0.isDM && $0.botIDs == [botID] }) {
+            return existing.id
+        }
+        return createChat(kind: .dm, with: [botID], title: nil)
+    }
+
+    @discardableResult
+    func createChat(kind: Chat.Kind, with botIDs: [Bot.ID], title: String?) -> Chat.ID {
+        let botIDs: [Bot.ID] = kind == .dm ? Array(botIDs.prefix(1)) : Array(botIDs.prefix(Chat.maxGroupBots))
         let chat = Chat(
             id: "chat-\(UUID().uuidString.prefix(8))",
-            customTitle: title,
+            kind: kind,
+            customTitle: kind == .group ? title : nil,
             botIDs: botIDs,
             messages: [],
             unreadCount: 0,
@@ -208,8 +221,8 @@ final class AppStore {
 
     func addBot(_ botID: Bot.ID, to chatID: Chat.ID) {
         guard let index = chats.firstIndex(where: { $0.id == chatID }),
-            !chats[index].botIDs.contains(botID),
-            chats[index].botIDs.count < 6
+            chats[index].canAddBot,
+            !chats[index].botIDs.contains(botID)
         else { return }
         chats[index].botIDs.append(botID)
         let name = bot(botID)?.name ?? "A bot"
@@ -223,7 +236,7 @@ final class AppStore {
 
     func removeBot(_ botID: Bot.ID, from chatID: Chat.ID) {
         guard let index = chats.firstIndex(where: { $0.id == chatID }),
-            chats[index].botIDs.count > 1
+            chats[index].canRemoveBot
         else { return }
         chats[index].botIDs.removeAll { $0 == botID }
         emit(.chatChanged(chatID))

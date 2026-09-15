@@ -85,7 +85,7 @@ Plaintext lives **on devices**:
 ```
 Identity 1──* Computer 1──* Bot
 Identity 1──* Chat
-Chat      *──* Bot          (1 bot = DM, 2–6 bots = group)
+Chat      *──* Bot          (kind dm: exactly 1 bot, fixed · kind group: 1–6 bots, members change)
 Chat      1──* Message
 Bot       1──* Job          (a turn on the bot's Computer)
 ```
@@ -165,7 +165,7 @@ Encrypt transcripts before upload.
 - `message_bot` — handoff, visible in the transcript. Job envelope goes to the **target bot’s Computer**.
 - `list_teammates` — decrypted local roster.
 
-Group chats: `@BotName` / `@everyone`; otherwise one owner; max 6 bots. Orchestration is bots messaging bots.
+A chat has a `kind`. A DM is one bot and never gains or loses members; there is one DM per bot. A group holds one to six bots and can add or remove them after creation. Group chats: `@BotName` / `@everyone`; otherwise one owner. Orchestration is bots messaging bots.
 
 ### Providers
 

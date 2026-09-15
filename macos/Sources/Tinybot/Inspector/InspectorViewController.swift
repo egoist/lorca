@@ -94,14 +94,16 @@ final class InspectorViewController: NSViewController {
                 row.configure(
                     bot: bot,
                     detailText: "\(bot.provider.rawValue) · \(host?.name ?? "unassigned")",
-                    accessorySymbol: members.count > 1 ? "minus.circle" : nil,
+                    accessorySymbol: chat.canRemoveBot ? "minus.circle" : nil,
                     tooltip: "Remove from chat"
                 )
                 row.onAccessory = { [weak self] in self?.onRemoveBot?(bot.id) }
                 return row
             })
 
-        addButton.isEnabled = members.count < 6 && members.count < store.bots.count
+        // A DM never takes another bot; a group does until it is full or every bot is in it.
+        addButton.isHidden = chat.isDM
+        addButton.isEnabled = chat.canAddBot && members.count < store.bots.count
 
         let hosts = Dictionary(grouping: members, by: \.computerID)
         routing.setRows(

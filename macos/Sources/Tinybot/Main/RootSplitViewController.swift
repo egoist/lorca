@@ -205,9 +205,13 @@ final class RootSplitViewController: NSSplitViewController {
     }
 
     func presentNewChat() {
-        let sheet = NewChatViewController { [weak self] botIDs, title in
-            guard let self, !botIDs.isEmpty else { return }
-            let id = self.store.createChat(with: botIDs, title: title)
+        let sheet = NewChatViewController { [weak self] kind, botIDs, title in
+            guard let self, let first = botIDs.first else { return }
+            let id: Chat.ID
+            switch kind {
+            case .dm: id = self.store.dm(with: first)
+            case .group: id = self.store.createChat(kind: .group, with: botIDs, title: title)
+            }
             self.select(.chat(id))
             self.chatController?.focusComposer()
         }
@@ -224,13 +228,20 @@ final class RootSplitViewController: NSSplitViewController {
         presentAsSheet(sheet)
     }
 
+    /// Bots that could still join the selected chat. Empty for a DM, a full group, or when every
+    /// bot is already in it.
+    private func botsAvailableToAdd(to chat: Chat) -> [Bot] {
+        guard chat.canAddBot else { return [] }
+        return store.bots.filter { !chat.botIDs.contains($0.id) }
+    }
+
     @objc func addBotToChat(_ sender: Any?) {
         guard case let .chat(chatID) = selection, let chat = store.chat(chatID) else {
             NSSound.beep()
             return
         }
-        let available = store.bots.filter { !chat.botIDs.contains($0.id) }
-        guard !available.isEmpty, chat.botIDs.count < 6 else {
+        let available = botsAvailableToAdd(to: chat)
+        guard !available.isEmpty else {
             NSSound.beep()
             return
         }
@@ -318,5 +329,17 @@ final class ContentContainerViewController: NSViewController {
         view.addSubview(controller.view)
         controller.view.pin(to: view)
         current = controller
+    }
+}
+
+// MARK: - Menu state
+
+extension RootSplitViewController: NSMenuItemValidation {
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(addBotToChat(_:)) {
+            guard case let .chat(id) = selection, let chat = store.chat(id) else { return false }
+            return !botsAvailableToAdd(to: chat).isEmpty
+        }
+        return true
     }
 }

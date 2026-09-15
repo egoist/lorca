@@ -120,6 +120,7 @@ enum MockData {
         [
             Chat(
                 id: "chat-relay",
+                kind: .group,
                 customTitle: "Ship the relay",
                 botIDs: ["bot-nova", "bot-patch", "bot-scout"],
                 messages: relayThread(),
@@ -129,6 +130,7 @@ enum MockData {
             ),
             Chat(
                 id: "chat-nova",
+                kind: .dm,
                 customTitle: nil,
                 botIDs: ["bot-nova"],
                 messages: novaThread(),
@@ -138,6 +140,7 @@ enum MockData {
             ),
             Chat(
                 id: "chat-patch",
+                kind: .dm,
                 customTitle: nil,
                 botIDs: ["bot-patch"],
                 messages: patchThread(),
@@ -147,6 +150,7 @@ enum MockData {
             ),
             Chat(
                 id: "chat-launch",
+                kind: .group,
                 customTitle: "Launch copy",
                 botIDs: ["bot-quill", "bot-nova"],
                 messages: launchThread(),
@@ -156,6 +160,7 @@ enum MockData {
             ),
             Chat(
                 id: "chat-ember",
+                kind: .dm,
                 customTitle: nil,
                 botIDs: ["bot-ember"],
                 messages: emberThread(),

@@ -138,12 +138,7 @@ final class ComputerViewController: NSViewController {
     }
 
     private func openChat(with bot: Bot) {
-        if let existing = store.chats.first(where: { $0.botIDs == [bot.id] }) {
-            onOpenChat?(existing.id)
-        } else {
-            let id = store.createChat(with: [bot.id], title: nil)
-            onOpenChat?(id)
-        }
+        onOpenChat?(store.dm(with: bot.id))
     }
 
     private func explainProviderSetup(on computer: Computer) {

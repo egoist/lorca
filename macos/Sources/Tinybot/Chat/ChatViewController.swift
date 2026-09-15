@@ -166,10 +166,11 @@ final class ChatViewController: NSViewController {
 
     private func placeholder(for chat: Chat) -> String {
         let members = store.bots(in: chat)
-        if members.count == 1, let only = members.first {
+        if chat.isDM, let only = members.first {
             return "Message \(only.name)"
         }
-        return "Message \(store.title(for: chat)) — @ to address one bot"
+        let title = store.title(for: chat)
+        return members.count > 1 ? "Message \(title) — @ to address one bot" : "Message \(title)"
     }
 
     private func rebuildRows() {

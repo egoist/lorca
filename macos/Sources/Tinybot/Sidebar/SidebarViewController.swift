@@ -335,11 +335,15 @@ extension SidebarViewController: NSMenuDelegate {
 
         switch node.kind {
         case let .chat(id):
-            let pinned = store.chat(id)?.isPinned ?? false
+            let chat = store.chat(id)
+            let pinned = chat?.isPinned ?? false
             menu.addItem(
                 item(pinned ? "Unpin" : "Pin", #selector(RootSplitViewController.togglePinChat(_:))))
             menu.addItem(item("Rename…", #selector(RootSplitViewController.renameChat(_:))))
-            menu.addItem(item("Add Bot…", #selector(RootSplitViewController.addBotToChat(_:))))
+            // Only groups take new members; a DM is fixed to its one bot.
+            if chat?.isGroup == true {
+                menu.addItem(item("Add Bot…", #selector(RootSplitViewController.addBotToChat(_:))))
+            }
             menu.addItem(.separator())
             menu.addItem(item("Delete", #selector(RootSplitViewController.deleteChat(_:))))
 

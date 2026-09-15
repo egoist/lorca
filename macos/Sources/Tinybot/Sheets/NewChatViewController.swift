@@ -1,21 +1,25 @@
 import AppKit
 
-/// Multi-select bot picker. One bot is a DM; two to six is a group.
+/// Bot picker for a new chat. A DM pins one bot for good; a group starts with one to six bots
+/// and can change members later.
 final class NewChatViewController: SheetViewController {
     private let store = AppStore.shared
+    private let kindControl = NSSegmentedControl(
+        labels: ["Direct Message", "Group Chat"], trackingMode: .selectOne, target: nil, action: nil)
     private let nameField = NSTextField()
     private let footnote = Build.label(
         "", font: Theme.Font.caption, color: .tertiaryLabelColor, lines: 0)
+    private var kind: Chat.Kind = .dm
     private var selected: [Bot.ID] = []
     private var rows: [Bot.ID: SelectableBotRow] = [:]
 
-    private let onCreate: ([Bot.ID], String?) -> Void
+    private let onCreate: (Chat.Kind, [Bot.ID], String?) -> Void
 
-    init(onCreate: @escaping ([Bot.ID], String?) -> Void) {
+    init(onCreate: @escaping (Chat.Kind, [Bot.ID], String?) -> Void) {
         self.onCreate = onCreate
         super.init(
             title: "New Chat",
-            subtitle: "Pick one bot for a DM, or up to six for a group.",
+            subtitle: "Message one bot directly, or start a group of up to six.",
             width: 440
         )
     }
@@ -26,7 +30,13 @@ final class NewChatViewController: SheetViewController {
     override func loadView() {
         super.loadView()
 
-        nameField.placeholderString = "Chat name (optional)"
+        kindControl.segmentDistribution = .fillEqually
+        kindControl.selectedSegment = 0
+        kindControl.target = self
+        kindControl.action = #selector(kindChanged)
+        kindControl.translatesAutoresizingMaskIntoConstraints = false
+
+        nameField.placeholderString = "Group name (optional)"
         nameField.translatesAutoresizingMaskIntoConstraints = false
         nameField.isHidden = true
 
@@ -45,11 +55,14 @@ final class NewChatViewController: SheetViewController {
                 return row
             })
 
+        contentStack.addArrangedSubview(kindControl)
         contentStack.addArrangedSubview(list)
         contentStack.addArrangedSubview(nameField)
         contentStack.addArrangedSubview(footnote)
+        contentStack.setCustomSpacing(16, after: kindControl)
 
         NSLayoutConstraint.activate([
+            kindControl.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
             list.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
             nameField.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
             footnote.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
@@ -60,46 +73,74 @@ final class NewChatViewController: SheetViewController {
         updateState()
     }
 
+    @objc private func kindChanged() {
+        kind = kindControl.selectedSegment == 0 ? .dm : .group
+        // A DM has exactly one bot; keep the first pick when narrowing from a group.
+        if kind == .dm, selected.count > 1 { selected = [selected[0]] }
+        updateState()
+    }
+
     private func toggle(_ id: Bot.ID) {
-        if let index = selected.firstIndex(of: id) {
-            selected.remove(at: index)
-        } else if selected.count < 6 {
-            selected.append(id)
-        } else {
-            NSSound.beep()
+        switch kind {
+        case .dm:
+            selected = [id]
+        case .group:
+            if let index = selected.firstIndex(of: id) {
+                selected.remove(at: index)
+            } else if selected.count < Chat.maxGroupBots {
+                selected.append(id)
+            } else {
+                NSSound.beep()
+            }
         }
         updateState()
     }
 
+    /// The DM that already exists for the single selected bot, if any.
+    private var existingDM: Chat? {
+        guard kind == .dm, selected.count == 1 else { return nil }
+        return store.chats.first { $0.isDM && $0.botIDs == selected }
+    }
+
     private func updateState() {
+        let roomLeft = kind == .dm || selected.count < Chat.maxGroupBots
         for (id, row) in rows {
             row.isSelected = selected.contains(id)
-            row.isEnabled = selected.contains(id) || selected.count < 6
+            row.isEnabled = selected.contains(id) || roomLeft
         }
 
-        let isGroup = selected.count > 1
-        nameField.isHidden = !isGroup
+        nameField.isHidden = kind == .dm
         confirmButton.isEnabled = !selected.isEmpty
+        confirmButton.title = existingDM == nil ? "Create" : "Open"
 
-        switch selected.count {
-        case 0:
-            footnote.stringValue = "Select at least one bot."
-        case 1:
+        switch (kind, selected.count) {
+        case (.dm, 0):
+            footnote.stringValue = "Pick a bot to message."
+        case (.dm, _):
             let bot = selected.first.flatMap(store.bot)
             let host = bot.flatMap { store.computer($0.computerID) }
             footnote.stringValue =
-                "Turns run on \(host?.name ?? "its Computer") with that machine's \(bot?.provider.rawValue ?? "provider") credentials."
-        default:
+                existingDM != nil
+                ? "You already have a direct message with \(bot?.name ?? "this bot"). Open goes to that thread."
+                : "Turns run on \(host?.name ?? "its Computer") with that machine's \(bot?.provider.rawValue ?? "provider") credentials. A DM stays one-to-one."
+        case (.group, 0):
+            footnote.stringValue = "Pick at least one bot. You can add more later."
+        case (.group, 1):
+            let bot = selected.first.flatMap(store.bot)
+            let host = bot.flatMap { store.computer($0.computerID) }
+            footnote.stringValue =
+                "A group of one on \(host?.name ?? "its Computer"). Add bots any time from the inspector."
+        case (.group, let count):
             let hosts = Set(selected.compactMap { store.bot($0)?.computerID })
             footnote.stringValue =
-                "\(selected.count) bots across \(hosts.count) Computer\(hosts.count == 1 ? "" : "s"). Address one with @Name, or all of them with @everyone."
+                "\(count) bots across \(hosts.count) Computer\(hosts.count == 1 ? "" : "s"). Address one with @Name, or all of them with @everyone."
         }
     }
 
     override func confirmTapped() {
         guard !selected.isEmpty else { return }
         let name = nameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        onCreate(selected, selected.count > 1 && !name.isEmpty ? name : nil)
+        onCreate(kind, selected, kind == .group && !name.isEmpty ? name : nil)
         dismiss(nil)
     }
 }
