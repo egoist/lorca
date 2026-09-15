@@ -45,16 +45,16 @@ An identity is keys you hold.
 
 Mac-first, after Happy’s layering. Until a phone exists, the first Device is the identity device.
 
-| Layer | What | Where |
-| --- | --- | --- |
-| Master secret (32 bytes) | Root. Backup as a base32 phrase. | Keychain / `~/.tinybot/`. Stays on the identity device. |
-| Content keypair | Derived from master (HKDF). Secret unwraps DEKs. Public key wraps DEKs. | Secret on Devices that have the master. Public key may sit on the relay. |
-| Identity signing key | Ed25519 (or NaCl equivalent). | Private local. Public key is the identity id (`hash(pubkey)`). |
-| Account DEK | Random AES-256-GCM (or XChaCha20-Poly1305). Encrypts roster, bots, chats, messages. | Made locally. On the relay **wrapped** to the content public key and each paired machine public key. |
-| Machine keypair | One per Device. | Private local. Public key on the relay. |
-| Machine DEK | Encrypts that Device’s metadata: `name`, `os`, presence. | Wrapped to the content public key; relay stores ciphertext. |
-| Chat/job envelopes | Symmetric DEK or sealed box to a machine public key. | Relay stores ciphertext. |
-| Ephemeral pairing key | One handshake. | Devices; discarded after pairing. |
+| Layer                    | What                                                                                | Where                                                                                                |
+| ------------------------ | ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Master secret (32 bytes) | Root. Backup as a base32 phrase.                                                    | Keychain / `~/.tinybot/`. Stays on the identity device.                                              |
+| Content keypair          | Derived from master (HKDF). Secret unwraps DEKs. Public key wraps DEKs.             | Secret on Devices that have the master. Public key may sit on the relay.                             |
+| Identity signing key     | Ed25519 (or NaCl equivalent).                                                       | Private local. Public key is the identity id (`hash(pubkey)`).                                       |
+| Account DEK              | Random AES-256-GCM (or XChaCha20-Poly1305). Encrypts roster, bots, chats, messages. | Made locally. On the relay **wrapped** to the content public key and each paired machine public key. |
+| Machine keypair          | One per Device.                                                                     | Private local. Public key on the relay.                                                              |
+| Machine DEK              | Encrypts that Device’s metadata: `name`, `os`, presence.                            | Wrapped to the content public key; relay stores ciphertext.                                          |
+| Chat/job envelopes       | Symmetric DEK or sealed box to a machine public key.                                | Relay stores ciphertext.                                                                             |
+| Ephemeral pairing key    | One handshake.                                                                      | Devices; discarded after pairing.                                                                    |
 
 Recovery: restore the master secret from the backup phrase → re-derive content keys → unwrap DEKs from the relay. The backup phrase is the identity.
 
@@ -74,10 +74,10 @@ Every Device writes its `os` into its machine metadata blob. Values: `macos`, `l
 
 `os` decides the Device’s role:
 
-| `os` | Role | Can |
-| --- | --- | --- |
+| `os`                        | Role       | Can                                                                                      |
+| --------------------------- | ---------- | ---------------------------------------------------------------------------------------- |
 | `macos`, `linux`, `windows` | **Runner** | Everything a Device can, plus hold provider credentials, be assigned bots, and run Jobs. |
-| `ios`, `ipados`, `android` | Device | Hold keys, read and write chats, create bots for Runners, pair other Devices. |
+| `ios`, `ipados`, `android`  | Device     | Hold keys, read and write chats, create bots for Runners, pair other Devices.            |
 
 Runner status is derived from `os` alone. There is no flag to opt a phone in or a desktop out. Peers read `os` from the decrypted metadata blob, so the relay never learns which Devices are Runners.
 
@@ -105,14 +105,14 @@ Chat     1──* Message
 Bot      1──* Job          (a turn on the bot's Runner)
 ```
 
-| Entity | Device | Relay |
-| --- | --- | --- |
-| Identity | Master + content + signing keys | Public key |
-| Device | Machine keypair, `os`, local provider creds (Runner only) | Machine public key + encrypted metadata blob |
-| Bot | Decrypted profile | Inside encrypted roster blobs |
-| ProviderCredential | Assigned Runner’s keychain | — |
-| Chat / Message | Account/chat DEK | Encrypted blobs |
-| Job | Any paired Device may create; the assigned Runner runs it | Encrypted envelope to that Runner’s machine public key |
+| Entity             | Device                                                    | Relay                                                  |
+| ------------------ | --------------------------------------------------------- | ------------------------------------------------------ |
+| Identity           | Master + content + signing keys                           | Public key                                             |
+| Device             | Machine keypair, `os`, local provider creds (Runner only) | Machine public key + encrypted metadata blob           |
+| Bot                | Decrypted profile                                         | Inside encrypted roster blobs                          |
+| ProviderCredential | Assigned Runner’s keychain                                | —                                                      |
+| Chat / Message     | Account/chat DEK                                          | Encrypted blobs                                        |
+| Job                | Any paired Device may create; the assigned Runner runs it | Encrypted envelope to that Runner’s machine public key |
 
 Creating a bot for Runner B from Device A: A writes an encrypted bot profile into the roster (paired Devices can read it) and pins B’s machine id. Bot create rejects a target whose `os` is not desktop. Turns are job envelopes addressed to B. B decrypts the job, runs the loop with B’s provider credentials, and uploads encrypted replies.
 
@@ -148,7 +148,7 @@ A CLI lists blobs for its identity and envelopes for its machine public key (pol
 
 ## CLI (runtime)
 
-Rust. Tokio. Local websocket for the app. HTTPS to the relay. libsodium-compatible NaCl box + AEAD.
+Rust. Local HTTP API for the app. libsodium-compatible NaCl box + AEAD.
 
 Commands:
 
