@@ -45,11 +45,18 @@ final class InspectorViewController: NSViewController {
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
         scrollView.translatesAutoresizingMaskIntoConstraints = false
+        // Kept below the header rather than under it: a scroll view that runs under the glass
+        // header gets AppKit's scroll pocket, which draws a hard edge line whenever the pointer
+        // rests on the header.
+        scrollView.automaticallyAdjustsContentInsets = false
 
         container.addSubview(scrollView)
-        scrollView.pin(to: container)
 
         NSLayoutConstraint.activate([
+            scrollView.topAnchor.constraint(equalTo: container.safeAreaLayoutGuide.topAnchor),
+            scrollView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
             documentView.widthAnchor.constraint(equalTo: scrollView.widthAnchor),
             column.topAnchor.constraint(equalTo: documentView.topAnchor),
             column.leadingAnchor.constraint(equalTo: documentView.leadingAnchor),
