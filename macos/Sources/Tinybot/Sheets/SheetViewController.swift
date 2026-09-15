@@ -68,6 +68,14 @@ class SheetViewController: NSViewController {
         buttonRow.addArrangedSubview(confirmButton)
     }
 
+    /// AppKit sizes a presented sheet once and afterwards only lets it grow with its content.
+    /// Hiding content leaves slack that the row stacks pour into their first row, so shrink the
+    /// sheet explicitly after showing or hiding anything.
+    func fitSheetToContent() {
+        view.layoutSubtreeIfNeeded()
+        preferredContentSize = view.fittingSize
+    }
+
     @objc func dismissSheet() {
         dismiss(nil)
     }

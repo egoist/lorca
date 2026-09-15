@@ -7,8 +7,6 @@ final class NewChatViewController: SheetViewController {
     private let kindControl = NSSegmentedControl(
         labels: ["Direct Message", "Group Chat"], trackingMode: .selectOne, target: nil, action: nil)
     private let nameField = NSTextField()
-    private let footnote = Build.label(
-        "", font: Theme.Font.caption, color: .tertiaryLabelColor, lines: 0)
     private var kind: Chat.Kind = .dm
     private var selected: [Bot.ID] = []
     private var rows: [Bot.ID: SelectableBotRow] = [:]
@@ -58,17 +56,15 @@ final class NewChatViewController: SheetViewController {
         contentStack.addArrangedSubview(kindControl)
         contentStack.addArrangedSubview(list)
         contentStack.addArrangedSubview(nameField)
-        contentStack.addArrangedSubview(footnote)
         contentStack.setCustomSpacing(16, after: kindControl)
 
         NSLayoutConstraint.activate([
             kindControl.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
             list.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
             nameField.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
-            footnote.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
         ])
 
-        setButtons(confirm: "Create")
+        setButtons(confirm: "Open")
         if let first = store.bots.first { toggle(first.id) }
         updateState()
     }
@@ -96,12 +92,6 @@ final class NewChatViewController: SheetViewController {
         updateState()
     }
 
-    /// The DM that already exists for the single selected bot, if any.
-    private var existingDM: Chat? {
-        guard kind == .dm, selected.count == 1 else { return nil }
-        return store.chats.first { $0.isDM && $0.botIDs == selected }
-    }
-
     private func updateState() {
         let roomLeft = kind == .dm || selected.count < Chat.maxGroupBots
         for (id, row) in rows {
@@ -111,30 +101,7 @@ final class NewChatViewController: SheetViewController {
 
         nameField.isHidden = kind == .dm
         confirmButton.isEnabled = !selected.isEmpty
-        confirmButton.title = existingDM == nil ? "Create" : "Open"
-
-        switch (kind, selected.count) {
-        case (.dm, 0):
-            footnote.stringValue = "Pick a bot to message."
-        case (.dm, _):
-            let bot = selected.first.flatMap(store.bot)
-            let host = bot.flatMap { store.computer($0.computerID) }
-            footnote.stringValue =
-                existingDM != nil
-                ? "You already have a direct message with \(bot?.name ?? "this bot"). Open goes to that thread."
-                : "Turns run on \(host?.name ?? "its Computer") with that machine's \(bot?.provider.rawValue ?? "provider") credentials. A DM stays one-to-one."
-        case (.group, 0):
-            footnote.stringValue = "Pick at least one bot. You can add more later."
-        case (.group, 1):
-            let bot = selected.first.flatMap(store.bot)
-            let host = bot.flatMap { store.computer($0.computerID) }
-            footnote.stringValue =
-                "A group of one on \(host?.name ?? "its Computer"). Add bots any time from the inspector."
-        case (.group, let count):
-            let hosts = Set(selected.compactMap { store.bot($0)?.computerID })
-            footnote.stringValue =
-                "\(count) bots across \(hosts.count) Computer\(hosts.count == 1 ? "" : "s"). Address one with @Name, or all of them with @everyone."
-        }
+        fitSheetToContent()
     }
 
     override func confirmTapped() {

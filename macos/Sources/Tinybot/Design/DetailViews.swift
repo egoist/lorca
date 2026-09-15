@@ -13,13 +13,19 @@ final class SectionView: NSView {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
 
-        card.cornerRadius = 9
+        let cornerRadius: CGFloat = 9
+        card.cornerRadius = cornerRadius
         card.fillColor = Theme.botBubble
         card.borderColor = Theme.botBubbleBorder
 
         rows.orientation = .vertical
         rows.alignment = .leading
         rows.distribution = .fill
+        // Row hover fills are plain rectangles; the stack fills the card, so clipping it to the
+        // same radius keeps them inside the corners.
+        rows.wantsLayer = true
+        rows.layer?.cornerRadius = cornerRadius
+        rows.layer?.masksToBounds = true
 
         addSubview(header)
         addSubview(card)
