@@ -1,24 +1,28 @@
 # Tinybot
 
-Tinybot is a Grok bot alternative, implemented as a fully native macOS app using AppKit, and a CLI written in pure Rust providing a websocket service and handles agent loop, the app is just a UI for the CLI.
+Tinybot is a Grok bot alternative: a native macOS AppKit app and a Rust CLI. The CLI is a localhost websocket service and the agent loop; the app is the UI for that CLI.
 
-Basically it's a beautiful and native-look chat ui like Grok bot, you can create bots and talk to them directly or create a group chat to talk with many bots, bots can also delegate works to other bots, and bot orchestration and what not, basically match Grok bot features.
+You create bots, talk to them 1:1, or put them in a group chat. Bots can hand work to each other and orchestrate, in the same spirit as Grok Bot.
 
-It's focused on performance, written fully in AppKit, NO SwiftUI. And the app strikes to feel native, with careful and elegant UX design, extrodinary user experience.
+The UI is AppKit (SPM), built to feel like a Mac app: materials, density, keyboard, and motion.
 
-It needs an account system, and the app needs logged in. Every computer the app is running on will be registered as a Computer, and user can create a bot running on any registered computer.
+Identity is a local key pair. Computers pair to each other. Traffic to the network is end-to-end encrypted; the website is a [Happy](https://happy.engineering/docs/security/)-style relay for ciphertext. Each machine running the app is a Computer. You can create a bot for any paired Computer; that bot’s DeepSeek key or ChatGPT subscription lives on the assigned Computer.
 
 ## Stack
 
-- macOS app: AppKit, no Swift UI, SPM
-- websocket service: Rust CLI
-- website: Tanstack Start/Query, TailwindCSS, Shadcn UI, Cloudflare Worker, Better Auth
+- macOS app: AppKit, SPM
+- CLI: Rust websocket service
+  - agent loop after vercel-labs/fx, opencode, pi-agent, and Grok-style bot orchestration
+  - identity, pairing, E2E (NaCl-style key pairs + DEKs); signed requests and opaque blobs to the relay
+- website / relay: TanStack Start/Query, TailwindCSS, shadcn/ui, Cloudflare Worker, Drizzle ORM, Drizzle Kit
 
-## Support AI services
+## AI services
 
 - API key: DeepSeek
 - Subscription: ChatGPT
 
-## Future plan
+Architecture: [ARCHITECTURE.md](./ARCHITECTURE.md). Read it before implementing.
+
+## Later
 
 - A mobile app
