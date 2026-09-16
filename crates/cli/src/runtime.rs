@@ -377,6 +377,7 @@ async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken) -> TurnOu
         chat_id: chat.meta.id.clone(),
         bot_id: bot.id.clone(),
         current: None,
+        done_parts: 0,
         tool_messages: Vec::new(),
         sent: false,
         failed: false,
@@ -431,6 +432,18 @@ fn room_turn_cue(chat: &Chat, bot: &Bot, job: &Job) -> String {
     cue
 }
 
+/// The text blocks of a reply, in order, skipping thinking and tool calls.
+fn text_parts(assistant: &AssistantMessage) -> Vec<&str> {
+    assistant
+        .content
+        .iter()
+        .filter_map(|part| match part {
+            AssistantPart::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
 /// `PASS`, alone, is how a member stays silent on its turn.
 fn is_pass(text: &str) -> bool {
     let cleaned: String = text.chars().filter(|c| c.is_alphanumeric()).collect();
@@ -459,8 +472,11 @@ struct TurnState {
     app: Arc<App>,
     chat_id: String,
     bot_id: String,
-    /// The assistant message being streamed, as the app sees it.
+    /// The transcript message showing the text part being streamed. Each text part of a
+    /// reply is its own message, so text on either side of a tool call reads as two bubbles.
     current: Option<Message>,
+    /// How many text parts of the reply being generated are already complete messages.
+    done_parts: usize,
     /// (tool call id, message id)
     tool_messages: Vec<(String, String)>,
     /// A text message reached the chat.
@@ -509,25 +525,34 @@ impl TurnState {
             // at a sentence boundary once a while has passed, never mid-word. A turn that ends
             // in PASS never shows up at all.
             AgentEvent::MessageStart { message: AgentMessage::Assistant(_) } => {
-                let message = Message::new(&self.chat_id, Author::Bot { bot_id: self.bot_id.clone() }, Body::text(String::new()));
-                self.current = Some(message);
+                self.current = None;
+                self.done_parts = 0;
                 self.shown_len = 0;
                 self.last_flush = std::time::Instant::now();
             }
             AgentEvent::MessageUpdate { message: AgentMessage::Assistant(assistant), .. } => {
-                let text = assistant.text();
-                if "PASS".starts_with(text.trim()) {
+                if "PASS".starts_with(assistant.text().trim()) {
                     return;
                 }
-                let Some(cut) = chunk_boundary(&text, self.shown_len, self.last_flush.elapsed()) else { return };
-                if let Some(current) = self.current.as_mut() {
-                    current.body = Body::text(text[..cut].trim_end());
-                    current.state = MessageState::Streaming;
-                    // Uploaded too, so every paired Device watches the reply grow.
-                    self.app.upsert_message(current.clone(), true);
-                    self.shown_len = cut;
-                    self.last_flush = std::time::Instant::now();
+                let parts = text_parts(&assistant);
+                let Some((last, earlier)) = parts.split_last() else { return };
+                // A tool call (or thinking) closed the part before this one: it is a bubble of
+                // its own, shown whole.
+                for text in &earlier[self.done_parts.min(earlier.len())..] {
+                    let message = self.current.take().unwrap_or_else(|| self.new_text_message());
+                    self.complete(message, text);
+                    self.done_parts += 1;
+                    self.shown_len = 0;
                 }
+                let Some(cut) = chunk_boundary(last, self.shown_len, self.last_flush.elapsed()) else { return };
+                let mut current = self.current.take().unwrap_or_else(|| self.new_text_message());
+                current.body = Body::text(last[..cut].trim_end());
+                current.state = MessageState::Streaming;
+                // Uploaded too, so every paired Device watches the reply grow.
+                self.app.upsert_message(current.clone(), true);
+                self.current = Some(current);
+                self.shown_len = cut;
+                self.last_flush = std::time::Instant::now();
             }
             AgentEvent::MessageEnd { message: AgentMessage::Assistant(assistant) } => {
                 self.end_assistant(&assistant);
@@ -573,14 +598,38 @@ impl TurnState {
         }
     }
 
+    fn new_text_message(&self) -> Message {
+        Message::new(&self.chat_id, Author::Bot { bot_id: self.bot_id.clone() }, Body::text(String::new()))
+    }
+
+    /// A finished text part: a bubble unless it is empty or a pass.
+    fn complete(&mut self, mut message: Message, text: &str) {
+        let text = text.trim();
+        if text.is_empty() || is_pass(text) {
+            return;
+        }
+        message.created_at = now_secs();
+        message.body = Body::text(text);
+        message.state = MessageState::Complete;
+        self.app.upsert_message(message, true);
+        self.sent = true;
+    }
+
     fn end_assistant(&mut self, assistant: &AssistantMessage) {
-        let Some(mut current) = self.current.take() else { return };
-        current.created_at = now_secs();
-        let text = assistant.text();
+        let parts = text_parts(assistant);
+        let whole = assistant.text();
         match assistant.stop_reason {
             StopReason::Error => {
+                // Earlier parts stand; the last one (or a fresh bubble) carries the error.
+                let (last, earlier) = parts.split_last().map(|(l, e)| (*l, e)).unwrap_or(("", &[]));
+                for text in &earlier[self.done_parts.min(earlier.len())..] {
+                    let message = self.current.take().unwrap_or_else(|| self.new_text_message());
+                    self.complete(message, text);
+                }
                 let error = assistant.error_message.clone().unwrap_or_else(|| "The provider returned an error".into());
-                current.body = Body::text(if text.is_empty() { error.clone() } else { text });
+                let mut current = self.current.take().unwrap_or_else(|| self.new_text_message());
+                current.created_at = now_secs();
+                current.body = Body::text(if last.trim().is_empty() { error.clone() } else { last.trim().to_string() });
                 current.state = MessageState::Failed { error };
                 self.app.upsert_message(current, true);
                 self.failed = true;
@@ -588,14 +637,18 @@ impl TurnState {
             _ => {
                 // An empty text is a tool-only turn; a pass says nothing. A stopped reply keeps
                 // the text so far.
-                if !text.is_empty() && !is_pass(&text) {
-                    current.body = Body::text(text);
-                    current.state = MessageState::Complete;
-                    self.app.upsert_message(current, true);
-                    self.sent = true;
+                if is_pass(&whole) {
+                    self.current = None;
+                    return;
                 }
+                for text in &parts[self.done_parts.min(parts.len())..] {
+                    let message = self.current.take().unwrap_or_else(|| self.new_text_message());
+                    self.complete(message, text);
+                }
+                self.current = None;
             }
         }
+        self.done_parts = parts.len();
     }
 
     fn finish(&mut self) {
