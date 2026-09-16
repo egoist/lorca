@@ -4,6 +4,7 @@ import {
   APP_NAME,
   CRATES_DIR,
   PACKAGE_DIR,
+  ROOT,
   SOURCES_DIR,
   buildApp,
   color,
@@ -15,6 +16,7 @@ const CONFIG = "debug" as const
 const DEBOUNCE_MS = 80
 
 let app: Bun.Subprocess | null = null
+let relay: Bun.Subprocess | null = null
 let building = false
 let queued = false
 let stopping = false
@@ -65,6 +67,48 @@ async function stopApp() {
   }
 }
 
+const RELAY_PORT = 8787
+
+async function relayAnswers(): Promise<boolean> {
+  try {
+    return (await fetch(`http://127.0.0.1:${RELAY_PORT}/v1/health`)).ok
+  } catch {
+    return false
+  }
+}
+
+/** A local relay on every interface, so a phone on this network can pair through it. The dev
+ * app (TINYBOT_DEV=1) defaults its relay URL to this Mac's LAN IP on this port. */
+async function startRelay() {
+  if (relay) return
+  if (await relayAnswers()) {
+    log(`${color.green("relay")} ${color.dim(`already listening on ${RELAY_PORT}`)}`)
+    return
+  }
+  relay = Bun.spawn(
+    ["cargo", "run", "-q", "-p", "tinybot-relay", "--", "--bind", `0.0.0.0:${RELAY_PORT}`, "--db", join(ROOT, "target", "tinybot-relay.db")],
+    {
+      cwd: ROOT,
+      stdin: "ignore",
+      stdout: "inherit",
+      stderr: "inherit",
+      env: { ...process.env },
+      onExit(_proc, exitCode, signal) {
+        if (stopping || relay === null) return
+        relay = null
+        log(color.yellow(`relay exited (${signal ? `signal ${signal}` : `code ${exitCode}`})`))
+      },
+    },
+  )
+  log(`${color.green("relay")} ${color.dim(`0.0.0.0:${RELAY_PORT} · pairing codes carry this Mac's LAN IP`)}`)
+}
+
+function stopRelay() {
+  const current = relay
+  relay = null
+  current?.kill()
+}
+
 function startApp() {
   const bin = executablePath(CONFIG)
   app = Bun.spawn([bin], {
@@ -112,7 +156,13 @@ function watchSources() {
     if (!filename) return
     if (!filename.endsWith(".swift") && !filename.endsWith(".rs") && !filename.endsWith("Cargo.toml")) return
     if (timer) clearTimeout(timer)
-    timer = setTimeout(() => void cycle(filename), DEBOUNCE_MS)
+    timer = setTimeout(() => {
+      if (filename.startsWith("relay/")) {
+        stopRelay()
+        void startRelay()
+      }
+      void cycle(filename)
+    }, DEBOUNCE_MS)
   }
 
   watch(SOURCES_DIR, { recursive: true }, onChange)
@@ -136,6 +186,7 @@ async function shutdown() {
   if (stopping) return
   stopping = true
   await stopApp()
+  stopRelay()
   process.exit(0)
 }
 
@@ -144,6 +195,7 @@ process.on("SIGTERM", () => void shutdown())
 
 console.log()
 log(`${color.bold(APP_NAME)} dev — ${color.dim("r relaunch · b rebuild · q quit")}`)
+await startRelay()
 await cycle("initial build")
 watchSources()
 watchKeys()

@@ -20,6 +20,11 @@ impl RelayError {
     pub fn is_unauthorized(&self) -> bool {
         self.status == Some(401)
     }
+    /// The relay does not know this machine: a different relay (or a reset one) than the one
+    /// that attested it.
+    pub fn is_unknown_machine(&self) -> bool {
+        self.status == Some(404)
+    }
     pub fn is_client_error(&self) -> bool {
         matches!(self.status, Some(400..=499))
     }
@@ -163,6 +168,16 @@ impl RelayClient {
         .await?;
         let blobs: Vec<BlobIn> = serde_json::from_value(value["blobs"].clone()).unwrap_or_default();
         Ok((blobs, value["seq"].as_i64().unwrap_or(since)))
+    }
+
+    /// One blob by id; `None` when the relay has no such blob for this identity.
+    pub async fn get_blob(&self, url: &str, token: &str, id: &str) -> RelayResult<Option<BlobIn>> {
+        let response = self.http.get(format!("{url}/v1/blobs/{id}")).bearer_auth(token).send().await?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        let value = Self::check(response).await?;
+        Ok(serde_json::from_value(value).ok())
     }
 
     pub async fn delete_blob(&self, url: &str, token: &str, id: &str) -> RelayResult<()> {

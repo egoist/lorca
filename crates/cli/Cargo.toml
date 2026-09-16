@@ -37,3 +37,4 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
 x25519-dalek.workspace = true
+if-addrs = "0.15.0"

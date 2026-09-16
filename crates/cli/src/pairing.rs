@@ -82,7 +82,7 @@ pub async fn start(app: Arc<App>) -> anyhow::Result<(String, String)> {
     if !machine_file.registered {
         crate::sync::ensure_registered(&app, &url).await.map_err(|e| anyhow::anyhow!("{e}"))?;
     }
-    let token = app.relay.token(&url, &machine).await.map_err(|e| anyhow::anyhow!("{e}"))?;
+    let token = crate::sync::token_or_register(&app, &url, &machine).await.map_err(|e| anyhow::anyhow!("{e}"))?;
     let nonce = app.relay.pair_create(&url, &token).await.map_err(|e| anyhow::anyhow!("{e}"))?;
 
     let ephemeral = crypto_box::SecretKey::generate(&mut rand::rngs::OsRng);
@@ -125,7 +125,7 @@ async fn wait_for_request(app: &Arc<App>, url: &str, nonce: &str) -> Result<Valu
     let machine_file = app.machine_file().ok_or("no machine")?;
     let machine = machine_file.machine().map_err(|e| e.to_string())?;
     loop {
-        let token = app.relay.token(url, &machine).await.map_err(|e| e.to_string())?;
+        let token = crate::sync::token_or_register(app, url, &machine).await.map_err(|e| e.to_string())?;
         let request = match app.relay.pair_get_request(url, &token, nonce).await {
             Ok(request) => request,
             Err(error) if error.is_unauthorized() => {
@@ -167,7 +167,10 @@ async fn wait_for_request(app: &Arc<App>, url: &str, nonce: &str) -> Result<Valu
             let mut state = app.state.lock().unwrap();
             upsert_device(&mut state.devices, device.clone());
             state.device_seen.insert(device.id.clone(), now_unix());
+            // The new Device needs this machine's metadata, whatever the relay already holds.
+            state.machine_blob_hash = None;
         }
+        app.push_machine_blob_if_changed();
         app.roster_changed(true);
         let out = json!({ "id": device.id, "name": device.name, "os": device.os, "model": device.model });
         app.emit(Event::PairCompleted { nonce: nonce.to_string(), device: out.clone() });

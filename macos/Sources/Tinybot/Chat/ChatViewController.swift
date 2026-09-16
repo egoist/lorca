@@ -44,7 +44,7 @@ final class ChatViewController: NSViewController {
         jumpButton.isHidden = true
         jumpButton.translatesAutoresizingMaskIntoConstraints = false
 
-        composer.onSend = { [weak self] text in self?.send(text) }
+        composer.onSend = { [weak self] text, attachments in self?.send(text, attachments: attachments) }
         composer.onStop = { [weak self] in self?.stopResponding(nil) }
 
         emptyState.isHidden = true
@@ -354,10 +354,10 @@ final class ChatViewController: NSViewController {
     /// Set by the split view so a message that moves to a new group chat opens it.
     var onRedirect: ((Chat.ID) -> Void)?
 
-    private func send(_ text: String) {
+    private func send(_ text: String, attachments: [OutgoingAttachment]) {
         guard let chatID else { return }
         isPinnedToBottom = true
-        let destination = store.send(text, in: chatID)
+        let destination = store.send(text, attachments: attachments, in: chatID)
         composer.isResponding = store.isResponding(in: chatID)
         if destination != chatID { onRedirect?(destination) }
     }
@@ -464,9 +464,13 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
 
         case let .working(botIDs):
             guard let chatID, let chat = store.chat(chatID) else { return }
+            // The activity is the bot's latest tool, running or just finished: between two
+            // commands the line keeps reading "Running commands…" instead of flashing back to
+            // the name every time a call ends. It reverts once the bot says something, or
+            // after a sent message, whose marker already tells the story.
             var activity: String?
             if botIDs.count == 1, let last = chat.messages.last, last.author == .bot(botIDs[0]),
-                case let .tool(tool) = last.body, tool.isRunning
+                case let .tool(tool) = last.body, !tool.isSentMessage
             {
                 let target = store.bots.first { tool.detail.localizedCaseInsensitiveContains("\"bot\": \"\($0.name)\"") }
                 activity = WorkingCellView.activity(for: tool, targetName: target?.name)
@@ -495,6 +499,16 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
                     name = ""
                     nameColor = .secondaryLabelColor
                 }
+                let metrics = layout.metrics(
+                    for: message,
+                    showsName: showsName,
+                    tableWidth: max(tableView.bounds.width, 320))
+                let items = zip(message.attachments, metrics.attachmentFrames).map { attachment, frame in
+                    AttachmentsView.Item(
+                        attachment: attachment,
+                        url: store.localURL(for: attachment, in: chatID, messageID: message.id),
+                        frame: frame)
+                }
                 messageCell.configure(
                     message: message,
                     groupStart: groupStart,
@@ -502,10 +516,8 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
                     nameColor: nameColor,
                     avatarContent: AvatarView.content(for: message.author, store: store),
                     segments: layout.rendered(for: message).segments,
-                    metrics: layout.metrics(
-                        for: message,
-                        showsName: showsName,
-                        tableWidth: max(tableView.bounds.width, 320))
+                    attachments: items,
+                    metrics: metrics
                 )
 
             case let .tool(invocation):

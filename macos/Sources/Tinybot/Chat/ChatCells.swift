@@ -106,6 +106,7 @@ final class MessageCellView: NSTableCellView {
     private let author = Build.label("", font: Theme.Font.author)
     private let stamp = Build.label("", font: Theme.Font.caption, alignment: .right)
     private let content = SegmentedTextView()
+    private let attachments = AttachmentsView()
 
     private var isUser = false
     private var groupStart = true
@@ -122,6 +123,7 @@ final class MessageCellView: NSTableCellView {
         addSubview(author.framePositioned())
         addSubview(bubble.framePositioned())
         bubble.addSubview(stamp.framePositioned())
+        bubble.addSubview(attachments.framePositioned())
         bubble.addSubview(content.framePositioned())
     }
 
@@ -137,11 +139,15 @@ final class MessageCellView: NSTableCellView {
         nameColor: NSColor,
         avatarContent: AvatarView.Content,
         segments: [MessageSegment],
+        attachments items: [AttachmentsView.Item],
         metrics: BubbleMetrics
     ) {
         isUser = message.author.isYou
         self.groupStart = groupStart
         self.metrics = metrics
+
+        attachments.configure(items, onUserBubble: isUser)
+        attachments.isHidden = items.isEmpty
 
         avatar.content = avatarContent
         avatar.isHidden = isUser || !metrics.showsName || !groupStart
@@ -164,7 +170,8 @@ final class MessageCellView: NSTableCellView {
             stamp.textColor = .tertiaryLabelColor
         }
 
-        setAccessibilityLabel("\(authorName): \(message.text)")
+        let spoken = message.text.isEmpty ? Attachment.summary(message.attachments) : message.text
+        setAccessibilityLabel("\(authorName): \(spoken)")
         needsLayout = true
     }
 
@@ -187,13 +194,16 @@ final class MessageCellView: NSTableCellView {
         )
 
         let inner = bubble.bounds.insetBy(dx: ChatMetrics.bubblePadX, dy: ChatMetrics.bubblePadY)
+        attachments.frame = NSRect(
+            x: inner.minX, y: inner.minY, width: metrics.attachmentsSize.width, height: metrics.attachmentsSize.height)
+        let textY = inner.minY + metrics.attachmentsBlockHeight
         content.frame = NSRect(
-            x: inner.minX, y: inner.minY, width: metrics.textWidth, height: metrics.textHeight)
+            x: inner.minX, y: textY, width: metrics.textWidth, height: metrics.textHeight)
 
         let stampWidth = metrics.timeWidth
         stamp.frame = NSRect(
             x: inner.maxX - stampWidth,
-            y: inner.minY + max(0, metrics.textHeight - ChatMetrics.timeLineHeight),
+            y: textY + max(0, metrics.textHeight - ChatMetrics.timeLineHeight),
             width: stampWidth,
             height: ChatMetrics.timeLineHeight)
     }

@@ -15,12 +15,14 @@ Identity is a local key pair. Devices pair to each other. Traffic to the network
   - agent loop after pi-agent-core (`crates/agent`), with Grok-style bot orchestration
   - identity, pairing, E2E (X25519/Ed25519 key pairs + XChaCha20-Poly1305 DEK); signed requests and opaque blobs to the relay
 - relay: Rust, axum, SQLite (`crates/relay`)
+- phone app: Expo (React Native, expo-router) for iOS and Android (`mobile/`); pairs as a Device and speaks the relay protocol itself
 
 ## Run it
 
 ```bash
-bun run dev          # builds the CLI and the app, launches the app, rebuilds on change
-bun run relay        # a local relay on 127.0.0.1:8787 (set TINYBOT_RELAY_URL to use it)
+bun run dev          # builds the CLI and the app, launches the app, rebuilds on change; runs a relay on 0.0.0.0:8787
+bun run mobile       # Expo dev server for the phone app (bun run mobile:ios builds the dev client)
+bun run relay        # a local relay on 0.0.0.0:8787 (set TINYBOT_RELAY_URL to use it)
 cargo test           # agent loop, crypto, and SSE tests
 bun run reset        # stop everything and wipe identity, credentials, chats, prefs (-y, --build, --relay)
 ```
@@ -32,9 +34,14 @@ bun run reset        # stop everything and wipe identity, credentials, chats, pr
 
 Architecture: [ARCHITECTURE.md](./ARCHITECTURE.md). Read it before implementing.
 
-## Later
+## Phone app
 
-- A mobile app (a Device, not a Runner)
+`mobile/` is an Expo app for iOS and Android. It pairs with your Mac by scanning the pairing code and then talks to the relay directly: the same keys, envelopes, and jobs as the CLI, ported to TypeScript. A phone is a Device, never a Runner: it reads and writes chats, attaches photos and files, dictates messages, creates bots for your Runners, and starts turns; the bots keep running on your machines.
+
+```bash
+bun run mobile       # Metro for the dev client
+bun run mobile:ios   # build and run on the iOS simulator (Xcode)
+```
 
 ## Website
 

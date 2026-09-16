@@ -318,7 +318,7 @@ final class AppStore {
         guard let last = shown else { return "No messages yet" }
         let body: String
         switch last.body {
-        case let .text(value): body = value
+        case let .text(value): body = value.isEmpty ? Attachment.summary(last.attachments) : value
         case let .tool(tool): body = "Messaged \(tool.recipientName): \(tool.detail)"
         case let .handoff(from, to, reason):
             body = !chat.isGroup && chat.botIDs.contains(to)
@@ -562,11 +562,13 @@ final class AppStore {
     /// Sends the message and returns the chat it landed in. Mentions are references the chat's
     /// bot acts on (it can message that bot); the message itself stays here.
     @discardableResult
-    func send(_ text: String, in chatID: Chat.ID) -> Chat.ID {
+    func send(_ text: String, attachments: [OutgoingAttachment] = [], in chatID: Chat.ID) -> Chat.ID {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, let chat = chat(chatID) else { return chatID }
+        guard !trimmed.isEmpty || !attachments.isEmpty, let chat = chat(chatID) else { return chatID }
 
-        let message = Message(author: .you, body: .text(trimmed))
+        // The files are known here already; the CLI keeps the ids the bubble shows.
+        for outgoing in attachments { attachmentURLs[outgoing.attachment.id] = outgoing.url }
+        let message = Message(author: .you, body: .text(trimmed), attachments: attachments.map(\.attachment))
         append(message, to: chatID)
 
         if isMock {
@@ -590,8 +592,48 @@ final class AppStore {
                 self.emit(.chatsChanged)
             }
         }
-        perform("chats.send", ["chat_id": chatID, "text": trimmed, "message_id": message.id])
+        perform(
+            "chats.send",
+            [
+                "chat_id": chatID, "text": trimmed, "message_id": message.id,
+                "attachments": attachments.map { outgoing in
+                    [
+                        "id": outgoing.attachment.id, "path": outgoing.url.path, "name": outgoing.attachment.name,
+                        "mime": outgoing.attachment.mime, "width": outgoing.attachment.width as Any,
+                        "height": outgoing.attachment.height as Any,
+                    ]
+                },
+            ])
         return chatID
+    }
+
+    // MARK: - Attachments
+
+    /// Where an attachment's bytes are on this Mac. A file sent from here is known at once; one
+    /// sent from another Device is fetched through the CLI, and the message reloads when it lands.
+    private var attachmentURLs: [Attachment.ID: URL] = [:]
+    private var fetchingAttachments: Set<Attachment.ID> = []
+
+    func localURL(for attachment: Attachment, in chatID: Chat.ID, messageID: Message.ID) -> URL? {
+        if let url = attachmentURLs[attachment.id] { return url }
+        guard !isMock, !fetchingAttachments.contains(attachment.id) else { return nil }
+        fetchingAttachments.insert(attachment.id)
+        Task { [weak self] in
+            let params: [String: Any] = [
+                "attachment": ["id": attachment.id, "name": attachment.name, "mime": attachment.mime, "size": attachment.size]
+            ]
+            guard let self else { return }
+            do {
+                let reply = try await client.request("files.path", params, as: Wire.FilePath.self)
+                attachmentURLs[attachment.id] = URL(fileURLWithPath: reply.path)
+                emit(.messageChanged(chatID, messageID))
+            } catch {
+                // Left in the fetching set: the relay does not have it, and every scroll would
+                // ask again. A relaunch retries.
+                NSLog("fetching \(attachment.name) failed: \(error.localizedDescription)")
+            }
+        }
+        return nil
     }
 
     func isResponding(in chatID: Chat.ID) -> Bool {

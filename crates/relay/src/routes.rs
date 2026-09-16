@@ -1,4 +1,4 @@
-use axum::extract::{Path, Query, State};
+use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -13,6 +13,10 @@ use crate::db::{self, now};
 use crate::AppState;
 
 const MAX_BLOB_BYTES: usize = 4 * 1024 * 1024;
+/// `file` blobs carry attachments: an encrypted photo or document a Device sent with a message.
+const MAX_FILE_BLOB_BYTES: usize = 24 * 1024 * 1024;
+/// Room for a `file` blob as base64url inside its JSON body.
+const MAX_BODY_BYTES: usize = 40 * 1024 * 1024;
 const CHALLENGE_TTL: i64 = 120;
 const PAIRING_TTL: i64 = 10 * 60;
 const MAX_WAIT_SECONDS: u64 = 30;
@@ -64,10 +68,11 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/auth/verify", post(auth_verify))
         .route("/v1/machines", get(list_machines))
         .route("/v1/blobs", get(list_blobs).put(put_blob))
-        .route("/v1/blobs/{id}", axum::routing::delete(delete_blob))
+        .route("/v1/blobs/{id}", get(get_blob).delete(delete_blob))
         .route("/v1/pair", post(create_pairing))
         .route("/v1/pair/{nonce}/request", post(post_pair_request).get(get_pair_request))
         .route("/v1/pair/{nonce}/reply", post(post_pair_reply).get(get_pair_reply))
+        .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .with_state(state)
 }
 
@@ -222,7 +227,8 @@ async fn put_blob(State(state): State<AppState>, auth: Auth, Json(body): Json<Pu
         return Err(ApiError::bad_request("Unknown blob kind"));
     }
     let ciphertext = b64url_decode(&body.ciphertext)?;
-    if ciphertext.is_empty() || ciphertext.len() > MAX_BLOB_BYTES {
+    let max = if body.kind == "file" { MAX_FILE_BLOB_BYTES } else { MAX_BLOB_BYTES };
+    if ciphertext.is_empty() || ciphertext.len() > max {
         return Err(ApiError::bad_request("Ciphertext size out of range"));
     }
     let id = body.id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
@@ -320,6 +326,39 @@ async fn list_blobs(State(state): State<AppState>, auth: Auth, Query(query): Que
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         let _ = tokio::time::timeout(remaining.min(std::time::Duration::from_secs(2)), state.notify.notified()).await;
     }
+}
+
+/// One blob by id, for kinds a Device does not take in its poll: a `file` is fetched when a
+/// transcript needs it, by the Runner that runs the turn and by Devices that show it.
+async fn get_blob(State(state): State<AppState>, auth: Auth, Path(id): Path<String>) -> ApiResult<Json<BlobOut>> {
+    let db = state.db.lock().unwrap();
+    let row = db
+        .query_row(
+            "SELECT id, kind, recipient_machine_pubkey, seq, ciphertext, created_at FROM blobs
+             WHERE id = ?1 AND identity_pubkey = ?2
+               AND (recipient_machine_pubkey IS NULL OR recipient_machine_pubkey = ?3)",
+            params![id, auth.identity_pubkey, auth.machine_pubkey],
+            |row| {
+                Ok(db::BlobRow {
+                    id: row.get(0)?,
+                    kind: row.get(1)?,
+                    recipient_machine_pubkey: row.get(2)?,
+                    seq: row.get(3)?,
+                    ciphertext: row.get(4)?,
+                    created_at: row.get(5)?,
+                })
+            },
+        )
+        .optional()?;
+    let Some(row) = row else { return Err(ApiError::not_found("No such blob")) };
+    Ok(Json(BlobOut {
+        id: row.id,
+        kind: row.kind,
+        recipient_machine_pubkey: row.recipient_machine_pubkey,
+        seq: row.seq,
+        ciphertext: b64url_encode(&row.ciphertext),
+        created_at: row.created_at,
+    }))
 }
 
 async fn delete_blob(State(state): State<AppState>, auth: Auth, Path(id): Path<String>) -> ApiResult<StatusCode> {

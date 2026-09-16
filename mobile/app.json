@@ -1,0 +1,69 @@
+{
+  "expo": {
+    "name": "Tinybot",
+    "slug": "tinybot",
+    "version": "1.0.0",
+    "scheme": "tinybot",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#3d85f0"
+    },
+    "ios": {
+      "bundleIdentifier": "dev.tinybot.app",
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "Tinybot scans the pairing code your Mac shows.",
+        "NSMicrophoneUsageDescription": "Tinybot listens while you dictate a message.",
+        "NSSpeechRecognitionUsageDescription": "Tinybot turns what you say into the message text.",
+        "NSPhotoLibraryUsageDescription": "Tinybot attaches photos you pick to a message."
+      },
+      "buildNumber": "1"
+    },
+    "android": {
+      "package": "dev.tinybot.app",
+      "adaptiveIcon": {
+        "backgroundImage": "./assets/android-icon-background.png",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": true,
+      "versionCode": 1
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      "expo-system-ui",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Tinybot scans the pairing code your Mac shows."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Tinybot attaches photos you pick to a message.",
+          "cameraPermission": "Tinybot attaches photos you take to a message."
+        }
+      ],
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Tinybot listens while you dictate a message.",
+          "speechRecognitionPermission": "Tinybot turns what you say into the message text."
+        }
+      ],
+      "expo-image",
+      "expo-localization"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}

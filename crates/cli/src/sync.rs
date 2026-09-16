@@ -12,6 +12,10 @@ use crate::relay::{BlobIn, RelayError};
 
 const POLL_WAIT_SECS: u64 = 25;
 
+/// What the poll takes. `file` blobs are left out: a transcript fetches them by id when it
+/// needs them, so a photo sent to one bot is not downloaded by every Device.
+pub const POLL_KINDS: &str = "roster,chat,machine,job,job_result";
+
 pub async fn run(app: Arc<App>) {
     let mut failures: u32 = 0;
     loop {
@@ -54,7 +58,7 @@ async fn cycle(app: &Arc<App>) -> Result<(), RelayError> {
         ensure_registered(app, &url).await?;
     }
 
-    let token = app.relay.token(&url, &machine).await?;
+    let token = token_or_register(app, &url, &machine).await?;
     if !app.relay_connected.swap(true, Ordering::Relaxed) {
         app.emit(Event::RelayStatus { connected: true, url: Some(url.clone()) });
     }
@@ -64,7 +68,7 @@ async fn cycle(app: &Arc<App>) -> Result<(), RelayError> {
     refresh_presence(app, &url, &token).await?;
 
     let since = app.state.lock().unwrap().last_seq;
-    let poll = app.relay.list_blobs(&url, &token, since, "", POLL_WAIT_SECS);
+    let poll = app.relay.list_blobs(&url, &token, since, POLL_KINDS, POLL_WAIT_SECS);
     let (blobs, _head) = tokio::select! {
         result = poll => result?,
         _ = app.outbox_notify.notified() => return Ok(()),
@@ -77,6 +81,20 @@ async fn cycle(app: &Arc<App>) -> Result<(), RelayError> {
     }
     app.save_state();
     Ok(())
+}
+
+/// A bearer for this machine. When the relay does not know the machine (a relay other than
+/// the one that attested it, or a reset one) and this Device holds the identity, it attests
+/// itself again and retries.
+pub async fn token_or_register(app: &Arc<App>, url: &str, machine: &crate::keys::Machine) -> Result<String, RelayError> {
+    match app.relay.token(url, machine).await {
+        Err(error) if error.is_unknown_machine() && app.is_identity_device() => {
+            tracing::info!(url, "relay does not know this machine; attesting it again");
+            ensure_registered(app, url).await?;
+            app.relay.token(url, machine).await
+        }
+        result => result,
+    }
 }
 
 /// Registers this machine with the relay. Only an identity device can sign that.
@@ -93,6 +111,8 @@ pub async fn ensure_registered(app: &Arc<App>, url: &str) -> Result<(), RelayErr
     if let Some(file) = app.machine.lock().unwrap().as_mut() {
         file.registered = true;
     }
+    // A relay that had to be told about this machine has none of its blobs either.
+    app.state.lock().unwrap().machine_blob_hash = None;
     app.save_machine().map_err(|e| RelayError { status: None, message: e.to_string() })?;
     Ok(())
 }

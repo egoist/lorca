@@ -186,6 +186,32 @@ struct ToolInvocation: Hashable {
     }
 }
 
+/// A file sent with a message. The bytes live under `~/.tinybot/files/<id>` once this Device
+/// has them; `width` and `height` size an image's thumbnail before the file arrives.
+struct Attachment: Hashable, Identifiable {
+    let id: String
+    var name: String
+    var mime: String
+    var size: Int
+    var width: Int?
+    var height: Int?
+
+    var isImage: Bool { mime.hasPrefix("image/") }
+
+    /// "Photo", "3 photos", "report.pdf", "2 files": the preview of a message with no text.
+    static func summary(_ attachments: [Attachment]) -> String {
+        guard let first = attachments.first else { return "" }
+        if attachments.count == 1 { return first.isImage ? "Photo" : first.name }
+        return attachments.allSatisfy(\.isImage) ? "\(attachments.count) photos" : "\(attachments.count) files"
+    }
+
+    static func sizeText(_ bytes: Int) -> String {
+        if bytes < 1024 { return "\(bytes) B" }
+        if bytes < 1024 * 1024 { return "\(Int((Double(bytes) / 1024).rounded())) KB" }
+        return String(format: "%.1f MB", Double(bytes) / 1024 / 1024)
+    }
+}
+
 struct Message: Identifiable, Hashable {
     enum Author: Hashable {
         case you
@@ -219,19 +245,23 @@ struct Message: Identifiable, Hashable {
     var body: Body
     var state: State
     var createdAt: Date
+    /// Files sent with a text body; other bodies carry none.
+    var attachments: [Attachment]
 
     init(
         id: String = "msg-\(UUID().uuidString.lowercased())",
         author: Author,
         body: Body,
         state: State = .complete,
-        createdAt: Date = Date()
+        createdAt: Date = Date(),
+        attachments: [Attachment] = []
     ) {
         self.id = id
         self.author = author
         self.body = body
         self.state = state
         self.createdAt = createdAt
+        self.attachments = attachments
     }
 
     var text: String {

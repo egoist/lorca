@@ -72,6 +72,7 @@ class SettingsPaneViewController: NSViewController {
 
 final class GeneralSettingsViewController: SettingsPaneViewController {
     private let appearance = NSPopUpButton()
+    private let dictationLanguage = NSPopUpButton()
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -103,9 +104,40 @@ final class GeneralSettingsViewController: SettingsPaneViewController {
             appearance.widthAnchor.constraint(equalToConstant: 140),
         ])
 
+        // The language the Dictate button listens in. Automatic follows the keyboard input
+        // source, then the system languages.
+        dictationLanguage.addItem(withTitle: "Automatic (\(Dictation.displayName(Dictation.automaticLocale())))")
+        dictationLanguage.menu?.addItem(.separator())
+        for locale in Dictation.supportedLocales {
+            dictationLanguage.addItem(withTitle: Dictation.displayName(locale))
+            dictationLanguage.lastItem?.representedObject = locale.identifier
+        }
+        if let chosen = Preferences.dictationLanguage,
+            let item = dictationLanguage.itemArray.first(where: { $0.representedObject as? String == chosen })
+        {
+            dictationLanguage.select(item)
+        }
+        dictationLanguage.target = self
+        dictationLanguage.action = #selector(changeDictationLanguage)
+        dictationLanguage.translatesAutoresizingMaskIntoConstraints = false
+        let dictationRow = NSView()
+        dictationRow.translatesAutoresizingMaskIntoConstraints = false
+        let dictationLabel = Build.label("Dictation", font: .systemFont(ofSize: 12), color: .secondaryLabelColor)
+        dictationRow.addSubview(dictationLabel)
+        dictationRow.addSubview(dictationLanguage)
+        NSLayoutConstraint.activate([
+            dictationLabel.leadingAnchor.constraint(equalTo: dictationRow.leadingAnchor),
+            dictationLabel.centerYAnchor.constraint(equalTo: dictationLanguage.centerYAnchor),
+            dictationLanguage.leadingAnchor.constraint(equalTo: dictationLabel.trailingAnchor, constant: 12),
+            dictationLanguage.topAnchor.constraint(equalTo: dictationRow.topAnchor),
+            dictationLanguage.bottomAnchor.constraint(equalTo: dictationRow.bottomAnchor),
+            dictationLanguage.widthAnchor.constraint(equalToConstant: 220),
+        ])
+
         column.addArrangedSubview(sendOnReturn)
         column.addArrangedSubview(timestamps)
         column.addArrangedSubview(appearanceRow)
+        column.addArrangedSubview(dictationRow)
         column.setCustomSpacing(8, after: sendOnReturn)
         addFootnote(
             "Tinybot talks only to the CLI on this Mac. Nothing here is synced; each Device keeps its own settings."
@@ -125,6 +157,10 @@ final class GeneralSettingsViewController: SettingsPaneViewController {
 
     @objc private func toggleTimestamps(_ sender: NSButton) {
         Preferences.showTimestamps = sender.state == .on
+    }
+
+    @objc private func changeDictationLanguage() {
+        Preferences.dictationLanguage = dictationLanguage.selectedItem?.representedObject as? String
     }
 
     @objc private func changeAppearance() {

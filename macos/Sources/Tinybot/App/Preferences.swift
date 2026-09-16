@@ -8,6 +8,7 @@ enum Preferences {
         static let relayURL = "tinybot.relayURL"
         static let cliPort = "tinybot.cliPort"
         static let showTimestamps = "tinybot.showTimestamps"
+        static let dictationLanguage = "tinybot.dictationLanguage"
     }
 
     private static let defaults = UserDefaults.standard
@@ -31,6 +32,12 @@ enum Preferences {
     static var showTimestamps: Bool {
         get { defaults.object(forKey: Key.showTimestamps) as? Bool ?? true }
         set { defaults.set(newValue, forKey: Key.showTimestamps) }
+    }
+
+    /// Speech recognizer locale identifier; nil follows the system's preferred languages.
+    static var dictationLanguage: String? {
+        get { defaults.string(forKey: Key.dictationLanguage) }
+        set { defaults.set(newValue, forKey: Key.dictationLanguage) }
     }
 
     static var relayURL: String {

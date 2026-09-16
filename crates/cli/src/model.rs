@@ -75,11 +75,33 @@ pub enum Author {
     System,
 }
 
+/// A file sent with a message. Its bytes travel as a `file` blob whose id is this id,
+/// encrypted with the account key; Devices keep a copy under `~/.tinybot/files/<id>`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Attachment {
+    pub id: String,
+    pub name: String,
+    pub mime: String,
+    pub size: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+}
+
+impl Attachment {
+    pub fn is_image(&self) -> bool {
+        self.mime.starts_with("image/")
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Body {
     Text {
         text: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        attachments: Vec<Attachment>,
     },
     Tool {
         name: String,
@@ -103,6 +125,12 @@ pub enum Body {
     Notice {
         text: String,
     },
+}
+
+impl Body {
+    pub fn text(text: impl Into<String>) -> Self {
+        Body::Text { text: text.into(), attachments: Vec::new() }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

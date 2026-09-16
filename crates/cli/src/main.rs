@@ -4,6 +4,7 @@ mod app;
 mod config;
 mod crypto;
 mod events;
+mod files;
 mod identity;
 mod keys;
 mod model;

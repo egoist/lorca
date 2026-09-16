@@ -2,6 +2,10 @@ import AppKit
 
 final class ComposerTextView: NSTextView {
     var onKeyCommand: ((Selector) -> Bool)?
+    /// Files or an image on the pasteboard become attachments instead of text. Return true when
+    /// the paste was taken.
+    var onPasteFiles: (([URL]) -> Bool)?
+    var onPasteImage: ((Data) -> Bool)?
     var placeholder: String = "" {
         didSet { needsDisplay = true }
     }
@@ -9,6 +13,24 @@ final class ComposerTextView: NSTextView {
     override func doCommand(by selector: Selector) {
         if onKeyCommand?(selector) == true { return }
         super.doCommand(by: selector)
+    }
+
+    override func paste(_ sender: Any?) {
+        let pasteboard = NSPasteboard.general
+        if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
+            !urls.isEmpty, onPasteFiles?(urls) == true
+        {
+            return
+        }
+        // An image with no text beside it (a screenshot, a copied picture) is an attachment.
+        let hasText = pasteboard.types?.contains(.string) ?? false
+        if !hasText, let image = NSImage(pasteboard: pasteboard), let tiff = image.tiffRepresentation,
+            let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]),
+            onPasteImage?(png) == true
+        {
+            return
+        }
+        super.paste(sender)
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -28,11 +50,15 @@ final class ComposerTextView: NSTextView {
 
 /// Round symbol button for the composer: a solid disc for the primary action,
 /// a quiet disc for secondary ones, or bare glyph that only fills under the pointer.
+/// `listening` is the Dictate button while it records: red, breathing.
 final class ComposerButton: NSButton {
-    enum Style { case primary, secondary, plain }
+    enum Style { case primary, secondary, plain, listening }
 
     var style: Style = .plain {
-        didSet { needsDisplay = true }
+        didSet {
+            needsDisplay = true
+            if style == .listening { startPulse() } else { stopPulse() }
+        }
     }
 
     private let diameter: CGFloat = 28
@@ -49,6 +75,7 @@ final class ComposerButton: NSButton {
         self.target = target
         self.action = action
         translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
     }
 
     @available(*, unavailable)
@@ -56,6 +83,11 @@ final class ComposerButton: NSButton {
 
     override var intrinsicContentSize: NSSize { NSSize(width: diameter, height: diameter) }
     override var alignmentRectInsets: NSEdgeInsets { NSEdgeInsets() }
+
+    func setSymbol(_ name: String, pointSize: CGFloat, weight: NSFont.Weight) {
+        image = NSImage(systemSymbolName: name, accessibilityDescription: toolTip)
+        symbolConfiguration = NSImage.SymbolConfiguration(pointSize: pointSize, weight: weight)
+    }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -69,6 +101,21 @@ final class ComposerButton: NSButton {
     override func mouseEntered(with event: NSEvent) { isHovered = true }
     override func mouseExited(with event: NSEvent) { isHovered = false }
 
+    private func startPulse() {
+        let pulse = CABasicAnimation(keyPath: "opacity")
+        pulse.fromValue = 1
+        pulse.toValue = 0.55
+        pulse.duration = 0.9
+        pulse.autoreverses = true
+        pulse.repeatCount = .infinity
+        pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        layer?.add(pulse, forKey: "pulse")
+    }
+
+    private func stopPulse() {
+        layer?.removeAnimation(forKey: "pulse")
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         let fill: NSColor?
         switch style {
@@ -81,6 +128,9 @@ final class ComposerButton: NSButton {
         case .plain:
             fill = isHighlighted || isHovered ? Theme.composerControl : nil
             contentTintColor = .secondaryLabelColor
+        case .listening:
+            fill = NSColor.systemRed.withAlphaComponent(isHighlighted ? 0.8 : 1)
+            contentTintColor = .white
         }
         if let fill {
             fill.setFill()
@@ -94,20 +144,25 @@ final class ComposerView: NSView {
     private let field = BackgroundView()
     private let scrollView = NSScrollView()
     private let textView: ComposerTextView
+    private let strip = ComposerAttachmentStrip()
     private let attachButton: ComposerButton
     private let voiceButton: ComposerButton
     private let sendButton: ComposerButton
     private let stopButton: ComposerButton
     private let trailing: NSStackView
     private let mentions = MentionPanel()
+    private let dictation = Dictation()
 
     /// Single line: controls sit beside the text in a pill.
-    /// Expanded: text spans the field with the controls in a row underneath.
+    /// Expanded: text spans the field with the controls in a row underneath. Attachments
+    /// always expand the field, with their chips above the text.
     private enum Mode { case compact, expanded }
     private var mode: Mode = .compact
     private var compactConstraints: [NSLayoutConstraint] = []
     private var expandedConstraints: [NSLayoutConstraint] = []
     private var heightConstraint: NSLayoutConstraint!
+    private var stripTopConstraint: NSLayoutConstraint!
+    private var stripHeightConstraint: NSLayoutConstraint!
 
     private let controlSize: CGFloat = 28
     private let controlInset: CGFloat = 8
@@ -120,10 +175,21 @@ final class ComposerView: NSView {
     }
     private var minTextHeight: CGFloat { lineHeight + textView.textContainerInset.height * 2 }
 
-    var onSend: ((String) -> Void)?
+    private(set) var attachments: [OutgoingAttachment] = []
+    /// While listening the field shows the pill; the transcript lands at this caret location
+    /// when the user stops or sends, the way Grok Bot commits a recording.
+    private let pill = RecordingPill()
+    private var dictationLocation = 0
+    private var dictationTranscript = ""
+    private var pendingSend = false
+    private var dictationTimer: Timer?
+    /// Escape while recording, wherever focus is: the text view is hidden then, so key
+    /// commands would not reach it.
+    private var escapeMonitor: Any?
+    private var placeholder = ""
+
+    var onSend: ((String, [OutgoingAttachment]) -> Void)?
     var onStop: (() -> Void)?
-    var onAttach: (() -> Void)?
-    var onVoice: (() -> Void)?
     var mentionableBots: [Bot] = []
 
     var isResponding = false {
@@ -152,10 +218,10 @@ final class ComposerView: NSView {
         textView = ComposerTextView(frame: .zero, textContainer: container)
 
         attachButton = ComposerButton(
-            symbol: "plus", pointSize: 14, weight: .medium, tooltip: "Attach",
+            symbol: "plus", pointSize: 14, weight: .medium, tooltip: "Attach files",
             target: nil, action: #selector(attach))
         voiceButton = ComposerButton(
-            symbol: "mic.fill", pointSize: 13, weight: .medium, tooltip: "Dictate",
+            symbol: "mic.fill", pointSize: 13, weight: .medium, tooltip: "Dictate · right-click for the language",
             target: nil, action: #selector(voice))
         sendButton = ComposerButton(
             symbol: "arrow.up", pointSize: 13, weight: .bold, tooltip: "Send",
@@ -168,6 +234,7 @@ final class ComposerView: NSView {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
+        registerForDraggedTypes([.fileURL])
 
         configureTextView()
         for button in [attachButton, voiceButton, sendButton, stopButton] {
@@ -189,17 +256,28 @@ final class ComposerView: NSView {
         scrollView.translatesAutoresizingMaskIntoConstraints = false
 
         addSubview(field)
+        field.addSubview(strip)
         field.addSubview(scrollView)
+        field.addSubview(pill)
         field.addSubview(attachButton)
         field.addSubview(trailing)
+        pill.isHidden = true
+        pill.onStop = { [weak self] in self?.dictation.stop() }
 
         heightConstraint = scrollView.heightAnchor.constraint(equalToConstant: minTextHeight)
+        stripTopConstraint = strip.topAnchor.constraint(equalTo: field.topAnchor)
+        stripHeightConstraint = strip.heightAnchor.constraint(equalToConstant: 0)
 
         NSLayoutConstraint.activate([
             field.topAnchor.constraint(equalTo: topAnchor, constant: 8),
             field.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
             field.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -20),
             field.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -14),
+
+            strip.leadingAnchor.constraint(equalTo: field.leadingAnchor, constant: expandedTextInset),
+            strip.trailingAnchor.constraint(equalTo: field.trailingAnchor, constant: -expandedTextInset),
+            stripTopConstraint,
+            stripHeightConstraint,
 
             attachButton.leadingAnchor.constraint(equalTo: field.leadingAnchor, constant: controlInset),
             attachButton.widthAnchor.constraint(equalToConstant: controlSize),
@@ -208,6 +286,12 @@ final class ComposerView: NSView {
             trailing.trailingAnchor.constraint(equalTo: field.trailingAnchor, constant: -controlInset),
             trailing.heightAnchor.constraint(equalToConstant: controlSize),
             trailing.centerYAnchor.constraint(equalTo: attachButton.centerYAnchor),
+
+            // The recording pill sits at the right, beside Send, where Grok Bot puts it.
+            pill.trailingAnchor.constraint(equalTo: trailing.leadingAnchor, constant: -textInset),
+            pill.leadingAnchor.constraint(greaterThanOrEqualTo: scrollView.leadingAnchor),
+            pill.centerYAnchor.constraint(equalTo: trailing.centerYAnchor),
+            pill.heightAnchor.constraint(equalToConstant: controlSize),
 
             heightConstraint,
         ])
@@ -221,7 +305,7 @@ final class ComposerView: NSView {
         ]
 
         expandedConstraints = [
-            scrollView.topAnchor.constraint(equalTo: field.topAnchor, constant: expandedTextInset),
+            scrollView.topAnchor.constraint(equalTo: strip.bottomAnchor, constant: expandedTextInset),
             scrollView.leadingAnchor.constraint(equalTo: field.leadingAnchor, constant: expandedTextInset),
             scrollView.trailingAnchor.constraint(equalTo: field.trailingAnchor, constant: -expandedTextInset),
             attachButton.topAnchor.constraint(equalTo: scrollView.bottomAnchor, constant: 6),
@@ -231,6 +315,13 @@ final class ComposerView: NSView {
         NSLayoutConstraint.activate(compactConstraints)
 
         mentions.onPick = { [weak self] bot in self?.insertMention(bot) }
+        strip.onRemove = { [weak self] index in self?.removeAttachment(at: index) }
+        textView.onPasteFiles = { [weak self] urls in self?.addFiles(urls) ?? false }
+        textView.onPasteImage = { [weak self] png in self?.addPastedImage(png) ?? false }
+        configureDictation()
+        let languages = NSMenu()
+        languages.delegate = self
+        voiceButton.menu = languages
         updateButtons()
     }
 
@@ -263,20 +354,34 @@ final class ComposerView: NSView {
     }
 
     func configure(placeholder: String, bots: [Bot]) {
-        textView.placeholder = placeholder
+        self.placeholder = placeholder
+        if !dictation.isListening { textView.placeholder = placeholder }
         mentionableBots = bots
         updateButtons()
     }
 
     // MARK: - Actions
 
+    private var hasContent: Bool {
+        !textView.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty
+    }
+
     @objc private func send() {
+        if dictation.isListening {
+            // The recording ends, its words land in the field, and the message goes.
+            pendingSend = true
+            dictation.stop()
+            return
+        }
+        guard hasContent else { return }
         let value = textView.string.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !value.isEmpty else { return }
+        let files = attachments
         textView.string = ""
+        attachments = []
         mentions.dismiss()
+        updateAttachments()
         handleTextChange()
-        onSend?(value)
+        onSend?(value, files)
     }
 
     @objc private func stop() {
@@ -284,11 +389,194 @@ final class ComposerView: NSView {
     }
 
     @objc private func attach() {
-        onAttach?()
+        guard let window else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        panel.message = "Attach files to your message"
+        panel.prompt = "Attach"
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard response == .OK, let self else { return }
+            _ = addFiles(panel.urls)
+            focus()
+        }
+    }
+
+    // MARK: - Attachments
+
+    /// Adds the files it can; the rest get one alert. True when any were taken.
+    @discardableResult
+    func addFiles(_ urls: [URL]) -> Bool {
+        var problems: [String] = []
+        var added = false
+        for url in urls {
+            if attachments.count >= OutgoingAttachment.maxCount {
+                problems.append("At most \(OutgoingAttachment.maxCount) files per message.")
+                break
+            }
+            do {
+                attachments.append(try OutgoingAttachment.make(url: url))
+                added = true
+            } catch {
+                problems.append(error.localizedDescription)
+            }
+        }
+        if added { updateAttachments() }
+        if !problems.isEmpty, let window {
+            let alert = NSAlert()
+            alert.messageText = "Some files were not attached"
+            alert.informativeText = problems.joined(separator: "\n")
+            alert.beginSheetModal(for: window)
+        }
+        return added || !problems.isEmpty
+    }
+
+    private func addPastedImage(_ png: Data) -> Bool {
+        guard attachments.count < OutgoingAttachment.maxCount, let outgoing = try? OutgoingAttachment.make(pastedPNG: png) else {
+            return false
+        }
+        attachments.append(outgoing)
+        updateAttachments()
+        return true
+    }
+
+    private func removeAttachment(at index: Int) {
+        guard attachments.indices.contains(index) else { return }
+        attachments.remove(at: index)
+        updateAttachments()
+        focus()
+    }
+
+    private func updateAttachments() {
+        strip.configure(attachments)
+        let width = field.bounds.width - expandedTextInset * 2
+        stripTopConstraint.constant = attachments.isEmpty ? 0 : 10
+        stripHeightConstraint.constant = attachments.isEmpty ? 0 : strip.heightThatFits(width: max(120, width))
+        strip.isHidden = attachments.isEmpty
+        updateButtons()
+        updateLayout()
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        sender.draggingPasteboard.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) ? .copy : []
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard let urls = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] else {
+            return false
+        }
+        return addFiles(urls)
+    }
+
+    // MARK: - Dictation
+
+    private func configureDictation() {
+        dictation.onTranscript = { [weak self] transcript, _ in
+            self?.dictationTranscript = transcript
+        }
+        dictation.onLevel = { [weak self] level in
+            self?.pill.level = level
+        }
+        dictation.onEnd = { [weak self] failure in
+            guard let self else { return }
+            dictationTimer?.invalidate()
+            dictationTimer = nil
+            if let escapeMonitor { NSEvent.removeMonitor(escapeMonitor) }
+            escapeMonitor = nil
+            pill.isHidden = true
+            scrollView.isHidden = false
+            commitDictation()
+            updateButtons()
+            updateLayout()
+            focus()
+            if let failure {
+                pendingSend = false
+                report(failure)
+            } else if pendingSend {
+                pendingSend = false
+                send()
+            }
+        }
     }
 
     @objc private func voice() {
-        onVoice?()
+        if dictation.isListening {
+            dictation.stop()
+            return
+        }
+        focus()
+        // The words go where the caret is, after a space when they follow other text.
+        let caret = textView.selectedRange()
+        if caret.length > 0 {
+            textView.insertText("", replacementRange: caret)
+        }
+        dictationLocation = textView.selectedRange().location
+        dictationTranscript = ""
+        pendingSend = false
+        pill.reset()
+        pill.isHidden = false
+        scrollView.isHidden = true
+        dictationTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, let startedAt = self.dictation.startedAt else { return }
+                self.pill.setElapsed(Date().timeIntervalSince(startedAt))
+            }
+        }
+        dictation.start()
+        escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self, event.keyCode == 53, event.window == window else { return event }
+            cancelDictation()
+            return nil
+        }
+        // Now that listening is on, Send takes the microphone's place beside the pill.
+        updateButtons()
+        updateLayout()
+    }
+
+    /// Drops the recording and its words.
+    private func cancelDictation() {
+        dictationTranscript = ""
+        pendingSend = false
+        dictation.cancel()
+    }
+
+    private func commitDictation() {
+        let transcript = dictationTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+        dictationTranscript = ""
+        guard !transcript.isEmpty else { return }
+        let text = textView.string as NSString
+        let location = min(dictationLocation, text.length)
+        var replacement = transcript
+        if location > 0, let scalar = UnicodeScalar(text.character(at: location - 1)),
+            !CharacterSet.whitespacesAndNewlines.contains(scalar)
+        {
+            replacement = " " + transcript
+        }
+        textView.insertText(replacement, replacementRange: NSRange(location: location, length: 0))
+        handleTextChange()
+    }
+
+    private func report(_ failure: Dictation.Failure) {
+        guard let window else { return }
+        let alert = NSAlert()
+        alert.messageText = "Dictation could not start"
+        alert.informativeText = failure.localizedDescription
+        alert.addButton(withTitle: "OK")
+        if failure.settingsPane != nil {
+            alert.addButton(withTitle: "Open System Settings")
+        }
+        alert.beginSheetModal(for: window) { response in
+            if response == .alertSecondButtonReturn, let pane = failure.settingsPane,
+                let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)")
+            {
+                NSWorkspace.shared.open(url)
+            }
+        }
+    }
+
+    @objc private func chooseLanguage(_ sender: NSMenuItem) {
+        Preferences.dictationLanguage = sender.representedObject as? String
     }
 
     private func handle(_ selector: Selector) -> Bool {
@@ -309,6 +597,11 @@ final class ComposerView: NSView {
             default:
                 break
             }
+        }
+
+        if selector == #selector(NSResponder.cancelOperation(_:)), dictation.isListening {
+            cancelDictation()
+            return true
         }
 
         guard selector == #selector(NSResponder.insertNewline(_:)) else { return false }
@@ -333,7 +626,11 @@ final class ComposerView: NSView {
 
     override func layout() {
         super.layout()
-        // Width changes can wrap a line that fit, or fit one that wrapped.
+        // Width changes can wrap a line that fit, or fit one that wrapped, and reflow the chips.
+        if !attachments.isEmpty {
+            let height = strip.heightThatFits(width: max(120, field.bounds.width - expandedTextInset * 2))
+            if abs(height - stripHeightConstraint.constant) > 0.5 { stripHeightConstraint.constant = height }
+        }
         updateLayout()
     }
 
@@ -353,7 +650,7 @@ final class ComposerView: NSView {
         let used = layoutManager.usedRect(for: container)
 
         let wanted: Mode
-        if textView.string.contains("\n") || used.height > lineHeight * 1.5 {
+        if !attachments.isEmpty || textView.string.contains("\n") || used.height > lineHeight * 1.5 {
             wanted = .expanded
         } else if mode == .expanded, used.width > compactTextWidth - 12 {
             // One line in the wide layout that would wrap beside the controls.
@@ -380,9 +677,11 @@ final class ComposerView: NSView {
     }
 
     private func updateButtons() {
-        let hasText = !textView.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        sendButton.isHidden = isResponding || !hasText
+        let listening = dictation.isListening
+        // While recording, Send stays: it commits the words and sends them.
+        sendButton.isHidden = isResponding || (!hasContent && !listening)
         stopButton.isHidden = !isResponding
+        voiceButton.isHidden = listening
         // Dictation is the primary action only while nothing else is.
         voiceButton.style = sendButton.isHidden && stopButton.isHidden ? .primary : .plain
         let mentionHint = mentionableBots.count > 1 ? " · @ to mention" : ""
@@ -489,5 +788,137 @@ extension ComposerView: NSTextViewDelegate {
 
     func textViewDidChangeSelection(_ notification: Notification) {
         updateMentions()
+    }
+}
+
+extension ComposerView: NSMenuDelegate {
+    /// The Dictate button's right-click menu: the language the recognizer listens in.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+        let chosen = Preferences.dictationLanguage
+        let automatic = NSMenuItem(
+            title: "Automatic (\(Dictation.displayName(Dictation.automaticLocale())))", action: #selector(chooseLanguage(_:)), keyEquivalent: "")
+        automatic.target = self
+        automatic.state = chosen == nil ? .on : .off
+        menu.addItem(automatic)
+        menu.addItem(.separator())
+        for locale in Dictation.supportedLocales {
+            let item = NSMenuItem(title: Dictation.displayName(locale), action: #selector(chooseLanguage(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = locale.identifier
+            item.state = chosen == locale.identifier ? .on : .off
+            menu.addItem(item)
+        }
+    }
+}
+
+/// The recording state, after Grok Bot: a stop square, the elapsed time, and bars that follow
+/// the microphone. The whole pill is the stop button.
+final class RecordingPill: BackgroundView {
+    var onStop: (() -> Void)?
+    var level: Float = 0 {
+        didSet { bars.level = level }
+    }
+
+    private let stop = NSImageView()
+    private let elapsed = Build.label("0:00", font: .monospacedDigitSystemFont(ofSize: 13, weight: .regular))
+    private let bars = LevelBarsView()
+    private var isHovered = false {
+        didSet { fillColor = Theme.composerControl.withAlphaComponent(isHovered ? 0.18 : 0.1) }
+    }
+
+    override init() {
+        super.init()
+        cornerRadius = 14
+        fillColor = Theme.composerControl.withAlphaComponent(0.1)
+        stop.image = Glyph.symbol("stop.fill", pointSize: 10, weight: .bold, color: .labelColor)
+        stop.translatesAutoresizingMaskIntoConstraints = false
+        toolTip = "Stop recording"
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+        setAccessibilityLabel("Stop recording")
+        elapsed.textColor = .labelColor
+        elapsed.setContentCompressionResistancePriority(.required, for: .horizontal)
+        let stack = Build.stack([stop, elapsed, bars], orientation: .horizontal, spacing: 6)
+        addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            stack.centerYAnchor.constraint(equalTo: centerYAnchor),
+            stop.widthAnchor.constraint(equalToConstant: 22),
+            stop.heightAnchor.constraint(equalToConstant: 22),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    func reset() {
+        level = 0
+        bars.clear()
+        elapsed.stringValue = "0:00"
+    }
+
+    func setElapsed(_ seconds: TimeInterval) {
+        let whole = Int(seconds)
+        elapsed.stringValue = String(format: "%d:%02d", whole / 60, whole % 60)
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas { removeTrackingArea(area) }
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow], owner: self))
+    }
+
+    override func mouseEntered(with event: NSEvent) { isHovered = true }
+    override func mouseExited(with event: NSEvent) { isHovered = false }
+
+    override func mouseDown(with event: NSEvent) {
+        onStop?()
+    }
+
+    override func accessibilityPerformPress() -> Bool {
+        onStop?()
+        return true
+    }
+}
+
+/// Five bars, dots at rest, that grow with the recent input levels.
+final class LevelBarsView: NSView {
+    private var history: [Float] = Array(repeating: 0, count: 5)
+
+    var level: Float = 0 {
+        didSet {
+            history.removeFirst()
+            history.append(level)
+            needsDisplay = true
+        }
+    }
+
+    init() {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var intrinsicContentSize: NSSize { NSSize(width: 24, height: 14) }
+
+    func clear() {
+        history = Array(repeating: 0, count: 5)
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let width: CGFloat = 3
+        let gap: CGFloat = 2.25
+        NSColor.labelColor.withAlphaComponent(0.85).setFill()
+        for (index, value) in history.enumerated() {
+            let height = 3 + CGFloat(min(1, max(0, value))) * (bounds.height - 3)
+            let x = CGFloat(index) * (width + gap)
+            let rect = NSRect(x: x, y: (bounds.height - height) / 2, width: width, height: height)
+            NSBezierPath(roundedRect: rect, xRadius: width / 2, yRadius: width / 2).fill()
+        }
     }
 }

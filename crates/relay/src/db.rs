@@ -1,6 +1,6 @@
 use rusqlite::{params, Connection, OptionalExtension};
 
-pub const KINDS: &[&str] = &["roster", "chat", "job", "job_result", "machine", "key"];
+pub const KINDS: &[&str] = &["roster", "chat", "job", "job_result", "machine", "key", "file"];
 
 pub fn now() -> i64 {
     std::time::SystemTime::now()

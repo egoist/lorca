@@ -6,10 +6,13 @@
     "build": "bun run scripts/build.ts",
     "cli": "cargo run -q -p tinybot -- serve",
     "reset": "bun run scripts/reset.ts",
-    "relay": "cargo run -q -p tinybot-relay --",
+    "relay": "cargo run -q -p tinybot-relay -- --bind 0.0.0.0:8787 --db target/tinybot-relay.db",
     "web": "bun run --cwd web dev",
     "web:build": "bun run --cwd web build",
-    "web:deploy": "bun run --cwd web deploy"
+    "web:deploy": "bun run --cwd web deploy",
+    "mobile": "bun run --cwd mobile start",
+    "mobile:ios": "bun run --cwd mobile ios",
+    "mobile:android": "bun run --cwd mobile android"
   },
   "devDependencies": {
     "@types/bun": "latest"

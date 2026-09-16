@@ -124,6 +124,20 @@ If B is offline or still connecting a provider, the envelope waits on the relay 
 
 `web/` is the app's site: TanStack Start (React, file routes under `web/src/routes`), Tailwind and shadcn/ui components, built with Vite and served by a Cloudflare Worker (`web/wrangler.jsonc`, `@cloudflare/vite-plugin`, static assets alongside the SSR entry). One page: hero, screenshots of the app in `TINYBOT_MOCK=1` mode (`web/public/screens`), features, how it works, privacy, FAQ. `bun run web` serves it locally on port 3000; `bun run web:deploy` builds and runs `wrangler deploy`.
 
+## Phone app
+
+`mobile/` is an Expo app (React Native, expo-router, TypeScript) for iOS and Android. A phone has no CLI, so the app speaks the relay protocol itself: `mobile/src/core` is a TypeScript port of the CLI's Device role, byte-compatible with `crates/cli` (a test in `crypto.rs` checks vectors the port produced).
+
+- **Keys and crypto** (`keys.ts`, `crypto.ts`): the machine secret in the secure store (Keychain / Keystore); HKDF to the Ed25519 signing key and X25519 box key; XChaCha20-Poly1305 envelopes keyed by the account DEK with the blob kind as associated data; libsodium sealed boxes for jobs, pairing, and job results.
+- **Pairing** (`pairing.ts`): the phone scans the QR code the Mac shows (or pastes the string), posts a request sealed to the ephemeral key, polls for the reply sealed to its box key, and keeps the account DEK and relay URL in the secure store. Its `os` is `ios`, `ipados`, or `android`.
+- **Sync** (`engine.ts`): the CLI's relay loop, in the app: bearer from the signature challenge, outbox, presence, a 25 s long-poll, blobs applied in sequence order (roster, chat ops, machine metadata, job results). Plaintext state lives in one JSON file in the app's documents directory, like the CLI's `state.json`. The loop pauses in the background and resumes on foreground.
+- **Attachments**: the composer's `+` offers the photo library, the camera, and the file picker. A picked file is read into the app's `files/` directory, encrypted with the account DEK as a `file` blob under the attachment's id (ciphertext waits on disk beside the outbox, not inside state.json), and uploaded ahead of the message that names it. The poll leaves `file` blobs out; a bubble that shows an attachment this phone does not have fetches it by id. Images render as thumbnails sized from the width and height in the message (full screen on tap); other files as a name-and-size card.
+- **Dictation**: the primary disc is Dictate while the field is empty (a small microphone sits inside the field once there is text). While recording, the field shows Grok Bot's pill: a stop square, the elapsed time, and bars that follow the microphone, with Send still beside it. The words land in the field after whatever was typed when the user taps the square, or go out at once when the user taps Send. The recognizer (`expo-speech-recognition`) listens in the first of the phone's preferred languages it supports (`src/ui/dictation.ts`; a Chinese speaker on an English-region phone gets zh-CN), or the language chosen in Settings or by a long press on the microphone.
+- **Turns**: sending in a DM uploads the message and a `turn` Job sealed to the bot's Runner; a group message runs the room exchange from the phone, exactly as `run_room` does: `room_turn` Jobs in order, mentions first, rounds while anyone spoke, winding down on the fourth. The Runner answers every Job the phone requested with a `job_result` sealed to the phone, which is how the phone knows a turn ended (and shows "Chef stopped without replying" when nothing was said). A later message in the same group waits for the running exchange, the chat lock a Runner holds. There is no Stop control, as in Grok Bot: a turn runs to its end.
+- **Roster edits**: new bots (for a paired Runner), groups, rename, pin, members, delete are written as roster blobs, like the CLI.
+
+The UI is native: a native stack with large titles, search, and toolbar items; a composer after Grok Bot's phone app, a liquid-glass `+` button and glass pill (`expo-glass-effect`, a filled pill where glass is unavailable) floating over the transcript with the Dictate or Send disc inside the pill's right edge; form sheets for chat info, new bot, new group, and settings; Link previews and context menus on chat rows; SF Symbols (Material Symbols on Android); system colors; haptics. The transcript follows the Mac app: bubbles with the bot's name above and its avatar beside the bubble's bottom edge in a group, neither in a DM; "Today 4:13 AM" separators after fifteen minutes; the "is working" row and the breathing green dot on avatars; "Message from ◉ X" and "Messaged ◉ X" markers; tool calls never shown; sidebar-style previews and stamps.
+
 ## Credential locality
 
 - **Provider setup** on that Runner (keychain or `~/.tinybot/credentials`, mode `0600`).
@@ -148,17 +162,17 @@ Tables:
 - `blobs(id, identity_pubkey, kind, recipient_machine_pubkey nullable, seq, ciphertext, size, created_at)`
 - `sequences(identity_pubkey, seq)`, `challenges`, `pairings(nonce, identity_pubkey, request, reply, expires_at)`
 
-`kind` is `roster` | `chat` | `job` | `job_result` | `machine` | `key`. Ciphertext is bytes; the nonce sits inside it. `seq` increases per identity. A Device’s `name` and `os` are inside its `machine` blob, not columns.
+`kind` is `roster` | `chat` | `job` | `job_result` | `machine` | `key` | `file`. Ciphertext is bytes; the nonce sits inside it. `seq` increases per identity. A Device’s `name` and `os` are inside its `machine` blob, not columns. A `file` blob is an attachment's bytes under the attachment's id, up to 24 MB of ciphertext (other kinds 4 MB); Devices poll with an explicit kinds list that leaves `file` out and fetch one by id when a transcript needs it.
 
-Blob API: `PUT /v1/blobs` (client-chosen id, idempotent), `GET /v1/blobs?since=<seq>&kinds=&wait=25` (long-poll; returns blobs for the identity that are unaddressed or addressed to the caller’s machine), `DELETE /v1/blobs/{id}`, `GET /v1/machines` (presence).
+Blob API: `PUT /v1/blobs` (client-chosen id, idempotent), `GET /v1/blobs?since=<seq>&kinds=&wait=25` (long-poll; returns blobs for the identity that are unaddressed or addressed to the caller’s machine), `GET /v1/blobs/{id}` (one blob, same visibility), `DELETE /v1/blobs/{id}`, `GET /v1/machines` (presence).
 
-Clients set `TINYBOT_RELAY_URL` or the relay URL in Settings › Advanced. Without a relay the CLI works on one Device alone.
+Clients set `TINYBOT_RELAY_URL` or the relay URL in Settings › Advanced. Without a relay the CLI works on one Device alone. In dev (`bun run dev` sets `TINYBOT_DEV=1` and runs a relay on `0.0.0.0:8787`), a Device with no relay configured defaults to `http://<this Mac's LAN IP>:8787`, so Pair a Device shows a code a phone on the same network can use.
 
 A CLI lists blobs for its identity and envelopes for its machine public key (long-poll), decrypts, and emits events to the app on localhost.
 
 ## CLI (runtime)
 
-`crates/cli`, binary `tinybot`. Local websocket for the app. Files under `~/.tinybot/` (override with `TINYBOT_HOME`), all mode 0600: `identity.json` (master secret, identity devices only), `machine.json` (machine secret, identity and content public keys, account DEK, `name`, `os`), `credentials.json` (this Runner’s providers), `settings.json` (relay URL), `state.json` (plaintext roster, chats, sync cursor, outbox).
+`crates/cli`, binary `tinybot`. Local websocket for the app. Files under `~/.tinybot/` (override with `TINYBOT_HOME`), all mode 0600: `identity.json` (master secret, identity devices only), `machine.json` (machine secret, identity and content public keys, account DEK, `name`, `os`), `credentials.json` (this Runner’s providers), `settings.json` (relay URL), `state.json` (plaintext roster, chats, sync cursor, outbox), `files/<attachment id>` (attachment bytes, sent from here or fetched from the relay).
 
 Commands:
 
@@ -181,7 +195,8 @@ on decrypted Job:
     events → job.started / job.finished (chat, bot) → local app WS, which shows the bot at work
            → a reply grows in chunks, not tokens: the text so far is re-sent at paragraph ends,
              or at a sentence end after 1.5 s of silence, never mid-word; the end sends it complete
-           → completed messages encrypted with the account DEK → relay
+           → every chunk and every completed message is encrypted with the account DEK → relay,
+             so a paired phone watches the reply grow the way the local app does
     tool calls execute
 ```
 
@@ -213,6 +228,7 @@ A chat has a `kind`. A DM is one bot and never gains or loses members; there is 
 Who answers, after Grok Bot's rooms:
 
 - **DM:** its bot, always. An `@Name` is a reference the bot acts on: it calls `message_bot`, which delivers the message into that bot's own DM with the user, where that bot answers (and can message back).
+- **Attachments:** a user message can carry files. Their bytes travel as `file` blobs; before a turn the Runner fetches any it lacks (`files::prefetch`), copies each into the bot's workspace at `attachments/<attachment id>/<name>` (a stable path, so every turn names the same file), and the transcript's user message gets a line per file naming that path, plus the pixels as an image content part for an image up to 5 MB, so a vision-capable model sees it and any model can open it with its tools.
 - **Group:** a room exchange (`run_room`). The Device that received the user's message offers every member a turn, one at a time, in chat order with the members the message names by `@` first. A member's turn is a `room_turn` Job with the whole transcript plus an ephemeral cue (round number, how many messages are new to it); the member replies to the group or answers `PASS`, which never becomes a bubble. A round with at least one reply is followed by another, offered only to members who have heard something new; the exchange ends after a silent round or after the fourth round, which is marked winding down so members add only what is essential. The user's next message in that chat waits for the exchange (the chat lock); `chats.stop` cancels it. A member on another Runner gets its job through the relay and reports back with a `job_result` blob (`sent`, `pass`, `error`) sealed to the requesting Device; the room waits up to five minutes for it and skips an offline Runner.
 - **Bot to bot:** `message_bot` from any chat to a bot outside it; the message lands in the target's DM. Each hop carries `hops`; after eight bot-to-bot hops without a user message the tool refuses, so two bots cannot loop. Members of one group talk to each other in the group.
 
@@ -236,7 +252,9 @@ First run: the CLI answers `hello` with `has_identity: false`, and the app shows
 
 Chrome: split view, vibrancy, bubbles, `@` mentions. The app renders CLI events and applies its own edits optimistically; `TINYBOT_MOCK=1` runs the seeded demo instead. Keys stay in the CLI.
 
-Working state, after Grok Bot: the CLI's `job.started` / `job.finished` events (and `running_turns` in the snapshot) name the chat and bot of every turn in flight, including a turn sent to another Runner. From them the app shows a breathing green dot on the bot's avatar in the sidebar, an "is working" row after the last message (the avatar alone in a DM, "Chef is working…" or the running tool's activity such as "Running commands…" in a group), the Stop button, and "Chef stopped without replying" when a turn ends with nothing said. Replies arrive in chunks: the bubble appears with the first completed paragraph (or sentence, after 1.5 s) and grows by paragraphs, the way Grok Bot's server re-sends a message as it grows. Tool calls never appear in the transcript, as in Grok Bot: the CLI keeps them as `tool` messages so a later turn can rebuild its context, and the app renders none of them, leaving the "is working" row (with the running tool's activity) and whatever the bot says before and after its work. The one exception is a sent `message_bot`, shown as the "Messaged ◉ X" marker. Sidebar rows carry a blue unread dot, a preview without a "You:" prefix (a bot's name only in groups; "Messaged X" and "Message from X: …" for bot-to-bot messages), and a stamp that is the time today, "Yesterday", the weekday within a week, then the date. A transcript inserts "Today 4:13 AM" separators after fifteen minutes of silence; in a group a bot's name sits above its bubble with its avatar beside the bubble's bottom edge, and a DM shows neither.
+Composer: the `+` button opens a file panel; files dropped on the composer or pasted (file URLs, or an image with no text beside it, written to a temporary PNG) attach the same way. Chips above the text show a thumbnail or the file's name and size, each with a remove button; a message can be attachments alone. The app mints the attachment ids and hands the CLI paths (`chats.send { attachments: [{ id, path, name, mime, width, height }] }`), so the bubble it shows at once matches the message the CLI echoes back. In a bubble, images are thumbnails sized from the width and height in the message and files are cards; a click opens the file. An attachment from another Device is fetched through `files.path`, which pulls the `file` blob from the relay into `~/.tinybot/files/` and answers with the path; the bubble reloads when it lands. The Dictate button (`mic.fill`, the primary disc while the field is empty) starts Apple's speech recognizer (`Speech` + `AVAudioEngine`, `Dictation.swift`). While recording, the text gives way to Grok Bot's pill: a stop square, the elapsed time, and bars that follow the input level, with Send still beside it. The transcript accumulates and lands at the caret when the square is clicked; Send commits it and sends in one go; Escape discards it. The recognizer listens in the language of the keyboard input source in use (a Pinyin input method means zh-CN, whatever the system language), else the first of the system's preferred languages it supports (matched on language and region, so "zh-Hans-CN" finds "zh-CN"), or the language chosen in Settings › General or the button's right-click menu (`Preferences.dictationLanguage`). The bundle declares `NSMicrophoneUsageDescription` and `NSSpeechRecognitionUsageDescription`.
+
+Working state, after Grok Bot: the CLI's `job.started` / `job.finished` events (and `running_turns` in the snapshot) name the chat and bot of every turn in flight, including a turn sent to another Runner. From them the app shows a breathing green dot on the bot's avatar in the sidebar, an "is working" row after the last message (the avatar alone in a DM, "Chef is working…" or the bot's latest tool as an activity such as "Running commands…", kept between calls so it does not flash, in a group), the Stop button, and "Chef stopped without replying" when a turn ends with nothing said. Replies arrive in chunks: the bubble appears with the first completed paragraph (or sentence, after 1.5 s) and grows by paragraphs, the way Grok Bot's server re-sends a message as it grows. Tool calls never appear in the transcript, as in Grok Bot: the CLI keeps them as `tool` messages so a later turn can rebuild its context, and the app renders none of them, leaving the "is working" row (with the running tool's activity) and whatever the bot says before and after its work. The one exception is a sent `message_bot`, shown as the "Messaged ◉ X" marker. Sidebar rows carry a blue unread dot, a preview without a "You:" prefix (a bot's name only in groups; "Messaged X" and "Message from X: …" for bot-to-bot messages), and a stamp that is the time today, "Yesterday", the weekday within a week, then the date. A transcript inserts "Today 4:13 AM" separators after fifteen minutes of silence; in a group a bot's name sits above its bubble with its avatar beside the bubble's bottom edge, and a DM shows neither.
 
 ## Protocols
 
@@ -275,8 +293,12 @@ tinybot/
   crates/cli/          # tinybot: keys, local WS, jobs, relay sync
   crates/relay/        # tinybot-relay: axum + SQLite
   macos/               # AppKit SPM app; the build bundles the CLI
+  mobile/              # Expo app for iOS and Android: a paired Device speaking the relay protocol itself
+  web/                 # the site
   scripts/             # bun scripts: dev loop, bundle build
 ```
+
+`bun run mobile` starts the Expo dev server; `bun run mobile:ios` / `mobile:android` build and run the dev client.
 
 `bun run dev` rebuilds the CLI and the app on Rust or Swift changes and relaunches the app. `bun run build` produces a release bundle. `bun run relay` runs a local relay.
 
@@ -284,9 +306,9 @@ tinybot/
 
 Done: crypto and blob protocol, relay, CLI (identity, pairing, restore, local WS, DeepSeek, ChatGPT OAuth adapter, agent loop, encrypt-before-upload, group chats, cross-Runner jobs and handoffs, stop), app wiring and the bundled CLI launcher.
 
-Next: context compaction, steering mid-turn, keychain storage, relay blob GC, streaming partial messages to other Devices.
+Next: context compaction, steering mid-turn, keychain storage, relay blob GC.
 
-Mobile can later hold the master secret the way Happy’s phone does. A phone or tablet pairs as a Device with `os` `ios`, `ipados`, or `android`; it is never a Runner. Until then the first Mac is the identity device.
+The phone app (`mobile/`) pairs as a Device with `os` `ios`, `ipados`, or `android`; it is never a Runner and does not hold the master secret. The first Mac is the identity device.
 
 ## Open points
 

@@ -65,6 +65,10 @@ function infoPlist() {
 	<string>14.0</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Tinybot listens while you dictate a message.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Tinybot turns what you say into the message text.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 	<key>NSSupportsAutomaticTermination</key>

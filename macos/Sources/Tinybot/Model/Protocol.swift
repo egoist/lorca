@@ -86,9 +86,23 @@ enum Wire {
         var botId: String?
     }
 
+    struct Attachment: Decodable {
+        var id: String
+        var name: String
+        var mime: String
+        var size: Int
+        var width: Int?
+        var height: Int?
+    }
+
+    struct FilePath: Decodable {
+        var path: String
+    }
+
     struct Body: Decodable {
         var kind: String
         var text: String?
+        var attachments: [Attachment]?
         var name: String?
         var summary: String?
         var detail: String?
@@ -256,7 +270,10 @@ extension Wire.Message {
 
         return Message(
             id: id, author: author, body: body, state: state,
-            createdAt: Date(timeIntervalSince1970: createdAt))
+            createdAt: Date(timeIntervalSince1970: createdAt),
+            attachments: (self.body.attachments ?? []).map {
+                Attachment(id: $0.id, name: $0.name, mime: $0.mime, size: $0.size, width: $0.width, height: $0.height)
+            })
     }
 }
 

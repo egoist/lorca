@@ -89,6 +89,17 @@ impl TokenSource for AppTokenSource {
 }
 
 /// Builds the provider for a bot from this Runner's credentials.
+/// Whether the model takes image content parts. A text-only model rejects the whole request,
+/// so a Runner sends it the attachment's path alone.
+pub fn supports_vision(kind: &str, model: Option<&str>) -> bool {
+    let model = model.unwrap_or_default().to_ascii_lowercase();
+    match kind {
+        "chatgpt" => true,
+        "deepseek" => model.contains("vl") || model.contains("vision"),
+        _ => false,
+    }
+}
+
 pub fn provider_for(app: &Arc<App>, kind: &str, model: Option<&str>) -> Result<Arc<dyn Provider>, String> {
     let model = model.map(str::trim).filter(|m| !m.is_empty()).map(str::to_string);
     match kind {

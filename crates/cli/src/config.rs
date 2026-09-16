@@ -40,6 +40,11 @@ impl Config {
         self.home.join("settings.json")
     }
 
+    /// Attachment bytes by id, sent from here or fetched from the relay.
+    pub fn files_dir(&self) -> PathBuf {
+        self.home.join("files")
+    }
+
     pub fn ensure_home(&self) -> anyhow::Result<()> {
         std::fs::create_dir_all(&self.home)?;
         set_private(&self.home)?;
@@ -71,6 +76,51 @@ impl Settings {
             .or_else(|| self.relay_url.clone())
             .map(|url| url.trim().trim_end_matches('/').to_string())
             .filter(|url| !url.is_empty())
+    }
+}
+
+/// The relay port `bun run dev` and `bun run relay` listen on.
+pub const DEV_RELAY_PORT: u16 = 8787;
+
+/// In dev (`TINYBOT_DEV=1`, set by the dev loop), a Device with no relay configured uses the
+/// relay the dev loop runs on this machine, addressed by this Mac's LAN IP so a phone on the
+/// same network can reach it through the pairing code.
+pub fn dev_relay_url() -> Option<String> {
+    if std::env::var("TINYBOT_DEV").ok().filter(|v| !v.is_empty() && v != "0").is_none() {
+        return None;
+    }
+    let host = lan_ip().map(|ip| ip.to_string()).unwrap_or_else(|| "127.0.0.1".into());
+    Some(format!("http://{host}:{DEV_RELAY_PORT}"))
+}
+
+/// This machine's address on the local network: a private IPv4 on a real interface (Wi-Fi or
+/// Ethernet), never a VPN tunnel, which a default route would pick. Falls back to the source
+/// address of a route to a public host.
+pub fn lan_ip() -> Option<std::net::IpAddr> {
+    let mut candidates: Vec<(u8, std::net::Ipv4Addr)> = Vec::new();
+    for iface in if_addrs::get_if_addrs().unwrap_or_default() {
+        let std::net::IpAddr::V4(ip) = iface.ip() else { continue };
+        if ip.is_loopback() || ip.is_link_local() || ip.is_unspecified() {
+            continue;
+        }
+        let name = iface.name.to_lowercase();
+        if ["utun", "tun", "tap", "bridge", "docker", "vmnet", "awdl", "llw", "ipsec", "ppp", "wg", "zt"].iter().any(|p| name.starts_with(p)) {
+            continue;
+        }
+        let rank = if ip.is_private() { 0 } else { 1 };
+        candidates.push((rank, ip));
+    }
+    candidates.sort();
+    if let Some((_, ip)) = candidates.first() {
+        return Some(std::net::IpAddr::V4(*ip));
+    }
+    let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("1.1.1.1:80").ok()?;
+    let ip = socket.local_addr().ok()?.ip();
+    if ip.is_loopback() || ip.is_unspecified() {
+        None
+    } else {
+        Some(ip)
     }
 }
 

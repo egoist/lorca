@@ -92,7 +92,10 @@ impl App {
         let identity: Option<IdentityFile> = config::read_json(&config.identity_path());
         let machine: Option<MachineFile> = config::read_json(&config.machine_path());
         let credentials = Credentials::load(&config);
-        let state: State = config::read_json(&config.state_path()).unwrap_or_default();
+        let mut state: State = config::read_json(&config.state_path()).unwrap_or_default();
+        // Upload this Device's metadata once per launch: a relay that changed or was reset
+        // since the last upload has no copy, and every newly paired Device needs one.
+        state.machine_blob_hash = None;
         let (events, _) = broadcast::channel(512);
         let http = reqwest::Client::builder().timeout(std::time::Duration::from_secs(60)).build()?;
 
@@ -171,11 +174,14 @@ impl App {
         self.machine_file().and_then(|m| m.dek().ok())
     }
 
+    /// Settings, then `TINYBOT_RELAY_URL`, then the URL pairing handed this Device, then, in
+    /// dev, the relay the dev loop runs on this machine.
     pub fn relay_url(&self) -> Option<String> {
         let from_settings = self.settings.lock().unwrap().effective_relay_url();
-        from_settings.or_else(|| {
-            std::env::var("TINYBOT_RELAY_URL").ok().filter(|s| !s.is_empty()).or_else(|| self.machine_file().and_then(|m| m.relay_url))
-        })
+        from_settings
+            .or_else(|| std::env::var("TINYBOT_RELAY_URL").ok().filter(|s| !s.is_empty()))
+            .or_else(|| self.machine_file().and_then(|m| m.relay_url))
+            .or_else(config::dev_relay_url)
     }
 
     pub fn set_relay_url(&self, url: Option<String>) -> anyhow::Result<()> {
@@ -207,7 +213,12 @@ impl App {
     // MARK: - Outbox
 
     pub fn push_blob(&self, kind: &str, recipient: Option<String>, ciphertext: Vec<u8>) -> String {
-        let id = uuid::Uuid::new_v4().to_string();
+        self.push_blob_as(uuid::Uuid::new_v4().to_string(), kind, recipient, ciphertext)
+    }
+
+    /// Queues a blob under a chosen id: a `file` blob carries its attachment's id so any
+    /// Device can fetch it by that id later.
+    pub fn push_blob_as(&self, id: String, kind: &str, recipient: Option<String>, ciphertext: Vec<u8>) -> String {
         {
             let mut state = self.state.lock().unwrap();
             state.outbox.push(OutboxItem { id: id.clone(), kind: kind.to_string(), recipient, ciphertext: keys::b64(&ciphertext) });

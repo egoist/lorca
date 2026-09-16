@@ -224,9 +224,22 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
         }
         "chats.send" => {
             runtime::prime_names(app);
-            let message = runtime::send_user_message(app.clone(), &string(&params, "chat_id")?, &string(&params, "text")?, opt_string(&params, "message_id"))
+            let files: Vec<crate::files::OutgoingFile> = serde_json::from_value(params["attachments"].clone()).unwrap_or_default();
+            let mut attachments = Vec::new();
+            for file in &files {
+                attachments.push(crate::files::store(app, file).map_err(|e| e.to_string())?);
+            }
+            let text = opt_string(&params, "text").unwrap_or_default();
+            let message = runtime::send_user_message(app.clone(), &string(&params, "chat_id")?, &text, opt_string(&params, "message_id"), attachments)
                 .map_err(|e| e.to_string())?;
             Ok(json!({ "message": message }))
+        }
+        "files.path" => {
+            // Where the attachment's bytes are on this machine, fetched from the relay first
+            // when another Device sent it.
+            let attachment: Attachment = serde_json::from_value(params["attachment"].clone()).map_err(|e| e.to_string())?;
+            let path = crate::files::ensure_local(app, &attachment).await.map_err(|e| e.to_string())?;
+            Ok(json!({ "path": path }))
         }
         "chats.stop" => {
             app.cancel_chat(&string(&params, "chat_id")?);

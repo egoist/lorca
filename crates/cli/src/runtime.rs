@@ -27,13 +27,19 @@ const MAX_CONTEXT_MESSAGES: usize = 80;
 ///
 /// A direct chat's bot always answers. A group runs a room exchange: every member is offered a
 /// turn in order and sends or passes, in rounds, until a round goes by with nobody speaking.
-pub fn send_user_message(app: Arc<App>, chat_id: &str, text: &str, message_id: Option<String>) -> anyhow::Result<Message> {
+pub fn send_user_message(app: Arc<App>, chat_id: &str, text: &str, message_id: Option<String>, attachments: Vec<Attachment>) -> anyhow::Result<Message> {
     let text = text.trim();
-    if text.is_empty() {
+    if text.is_empty() && attachments.is_empty() {
         anyhow::bail!("Empty message");
     }
     let chat = app.chat(chat_id).ok_or_else(|| anyhow::anyhow!("Unknown chat"))?;
-    let mut message = Message::new(chat_id, Author::You, Body::Text { text: text.to_string() });
+    // The bytes go out ahead of the message that names them.
+    for attachment in &attachments {
+        if let Err(error) = crate::files::push_blob(&app, attachment) {
+            tracing::warn!(%error, name = %attachment.name, "uploading an attachment");
+        }
+    }
+    let mut message = Message::new(chat_id, Author::You, Body::Text { text: text.to_string(), attachments });
     if let Some(id) = message_id.filter(|id| !id.is_empty()) {
         message.id = id;
     }
@@ -331,17 +337,30 @@ async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken) -> TurnOu
         }
     };
 
+    let workdir = bot.working_directory(&app.config.home);
+    if let Err(error) = std::fs::create_dir_all(&workdir) {
+        tracing::warn!(%error, dir = %workdir.display(), "creating the bot's working directory");
+    }
+    // Attachments another Device sent are fetched before the transcript names them.
+    let attachments: Vec<Attachment> = chat
+        .messages
+        .iter()
+        .rev()
+        .take(MAX_CONTEXT_MESSAGES)
+        .filter_map(|m| match (&m.author, &m.body) {
+            (Author::You, Body::Text { attachments, .. }) => Some(attachments.clone()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    crate::files::prefetch(app, &attachments).await;
+
     let system_prompt = system_prompt(app, &chat, &bot, job);
-    let mut messages = transcript_for(&chat, &bot);
+    let mut messages = transcript_for(app, &chat, &bot, &workdir);
     if job.kind == "room_turn" {
         messages.push(AgentMessage::User(UserMessage::text(room_turn_cue(&chat, &bot, job))));
     } else if messages.last().map(AgentMessage::is_assistant).unwrap_or(true) {
         messages.push(AgentMessage::User(UserMessage::text("Continue.")));
-    }
-
-    let workdir = bot.working_directory(&app.config.home);
-    if let Err(error) = std::fs::create_dir_all(&workdir) {
-        tracing::warn!(%error, dir = %workdir.display(), "creating the bot's working directory");
     }
     let mut tools: Vec<Arc<dyn Tool>> = vec![
         Arc::new(ListTeammates { app: app.clone(), chat_id: chat.meta.id.clone() }),
@@ -489,7 +508,7 @@ impl TurnState {
             // at a sentence boundary once a while has passed, never mid-word. A turn that ends
             // in PASS never shows up at all.
             AgentEvent::MessageStart { message: AgentMessage::Assistant(_) } => {
-                let message = Message::new(&self.chat_id, Author::Bot { bot_id: self.bot_id.clone() }, Body::Text { text: String::new() });
+                let message = Message::new(&self.chat_id, Author::Bot { bot_id: self.bot_id.clone() }, Body::text(String::new()));
                 self.current = Some(message);
                 self.shown_len = 0;
                 self.last_flush = std::time::Instant::now();
@@ -501,9 +520,10 @@ impl TurnState {
                 }
                 let Some(cut) = chunk_boundary(&text, self.shown_len, self.last_flush.elapsed()) else { return };
                 if let Some(current) = self.current.as_mut() {
-                    current.body = Body::Text { text: text[..cut].trim_end().to_string() };
+                    current.body = Body::text(text[..cut].trim_end());
                     current.state = MessageState::Streaming;
-                    self.app.upsert_message(current.clone(), false);
+                    // Uploaded too, so every paired Device watches the reply grow.
+                    self.app.upsert_message(current.clone(), true);
                     self.shown_len = cut;
                     self.last_flush = std::time::Instant::now();
                 }
@@ -559,7 +579,7 @@ impl TurnState {
         match assistant.stop_reason {
             StopReason::Error => {
                 let error = assistant.error_message.clone().unwrap_or_else(|| "The provider returned an error".into());
-                current.body = Body::Text { text: if text.is_empty() { error.clone() } else { text } };
+                current.body = Body::text(if text.is_empty() { error.clone() } else { text });
                 current.state = MessageState::Failed { error };
                 self.app.upsert_message(current, true);
                 self.failed = true;
@@ -568,7 +588,7 @@ impl TurnState {
                 // An empty text is a tool-only turn; a pass says nothing. A stopped reply keeps
                 // the text so far.
                 if !text.is_empty() && !is_pass(&text) {
-                    current.body = Body::Text { text };
+                    current.body = Body::text(text);
                     current.state = MessageState::Complete;
                     self.app.upsert_message(current, true);
                     self.sent = true;
@@ -700,8 +720,9 @@ fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job) -> String {
 
 /// The chat as `bot` should see it. Other bots' text becomes user messages tagged with their
 /// name; this bot's tool rows become tool call and tool result pairs.
-pub fn transcript_for(chat: &Chat, bot: &Bot) -> Vec<AgentMessage> {
+pub fn transcript_for(app: &App, chat: &Chat, bot: &Bot, workdir: &std::path::Path) -> Vec<AgentMessage> {
     let mut out = Vec::new();
+    let pixels = providers::supports_vision(&bot.provider, bot.model.as_deref());
     let start = chat.messages.len().saturating_sub(MAX_CONTEXT_MESSAGES);
     for message in &chat.messages[start..] {
         if !message.is_complete() {
@@ -712,14 +733,25 @@ pub fn transcript_for(chat: &Chat, bot: &Bot) -> Vec<AgentMessage> {
         }
         let timestamp = (message.created_at * 1000.0) as u64;
         match (&message.author, &message.body) {
-            (Author::You, Body::Text { text }) => out.push(user(text, timestamp)),
-            (Author::Bot { bot_id }, Body::Text { text }) if bot_id == &bot.id => {
+            (Author::You, Body::Text { text, attachments }) if attachments.is_empty() => out.push(user(text, timestamp)),
+            (Author::You, Body::Text { text, attachments }) => {
+                // A file is named by its path in the workspace; an image is shown as well.
+                let mut content = Vec::new();
+                if !text.is_empty() {
+                    content.push(ContentPart::text(text));
+                }
+                for attachment in attachments {
+                    content.extend(crate::files::content_parts(app, attachment, workdir, pixels));
+                }
+                out.push(AgentMessage::User(UserMessage { content, timestamp }));
+            }
+            (Author::Bot { bot_id }, Body::Text { text, .. }) if bot_id == &bot.id => {
                 let mut assistant = AssistantMessage::empty("", "");
                 assistant.content = vec![AssistantPart::Text { text: text.clone() }];
                 assistant.timestamp = timestamp;
                 out.push(AgentMessage::Assistant(assistant));
             }
-            (Author::Bot { bot_id }, Body::Text { text }) => {
+            (Author::Bot { bot_id }, Body::Text { text, .. }) => {
                 out.push(user(&format!("[{}]: {text}", name_of(chat, bot_id)), timestamp));
             }
             (Author::Bot { bot_id }, Body::Tool { name, call_id, arguments, result, is_error, .. }) if bot_id == &bot.id => {

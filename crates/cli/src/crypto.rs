@@ -80,4 +80,25 @@ mod tests {
         let other = crate::keys::Machine::generate();
         assert!(unseal(&other.box_secret, &sealed).is_err());
     }
+
+    /// Vectors produced by the phone's TypeScript port (`mobile/src/core`). Both sides must keep
+    /// deriving the same keys and opening each other's envelopes.
+    #[test]
+    fn phone_port_vectors() {
+        let machine = crate::keys::Machine::from_secret(crate::keys::unb64_32("AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA").unwrap());
+        assert_eq!(machine.pubkey(), "KXfnobZE_H5jKjoU2vzdWTx9SYlxt-JNBapkeKQzUVo");
+        assert_eq!(machine.box_pubkey(), "l4G7NMHlyHxj-9EQh-izsFceTPBys8oFzbLOJwhfJ08");
+        assert_eq!(crate::keys::identity_id(&machine.pubkey()), "958263b260940c07");
+        let signature = crate::keys::unb64("ivX9SkcoNZytd0MycLoFlmVgia78qGJjxEHbX78veJKN0Q7hcfegZoECSb37u-K4RrMsWQRd9Yspe4mqdRbXCw").unwrap();
+        let signature = ed25519_dalek::Signature::from_slice(&signature).unwrap();
+        ed25519_dalek::Verifier::verify(&crate::keys::verifying_key(&machine.pubkey()).unwrap(), b"abc", &signature).unwrap();
+
+        let dek = crate::keys::unb64_32("yMfGxcTDwsHAv769vLu6ubi3trW0s7KxsK-urayrqqk").unwrap();
+        let envelope = crate::keys::unb64("YCLl5HooW12UVqhC4FvGBPGHxdZ1HlLcuJpi4z4e5vVejV1CXWlnSW6aFNC_5dDj6dSkBRgTnws7XwnW").unwrap();
+        assert_eq!(decrypt(&dek, "chat", &envelope).unwrap(), b"hello from the phone");
+        assert!(decrypt(&dek, "roster", &envelope).is_err());
+
+        let sealed = crate::keys::unb64("5GykOdJhJA8j4qUzTlAwPOLgkw4lM0TQOKeNt9iNUngUg5gbHFd_uzIfl3KpE3kIWPbYqBqxqto-Y4rhVykVkoqu").unwrap();
+        assert_eq!(unseal(&machine.box_secret, &sealed).unwrap(), b"job for the runner");
+    }
 }
