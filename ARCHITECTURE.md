@@ -145,7 +145,9 @@ The UI is native: a native stack with large titles, search, and toolbar items; a
 
 ## Relay
 
-`crates/relay`: Rust, axum, rusqlite (bundled SQLite). `tinybot-relay --bind 127.0.0.1:8787 --db tinybot-relay.db`; `TINYBOT_RELAY_SECRET` signs bearer tokens (random per boot when unset).
+`crates/relay`: Rust, axum, rusqlite (bundled SQLite). `tinybot-relay --bind 127.0.0.1:8787 --db tinybot-relay.db`; `TINYBOT_RELAY_SECRET` signs bearer tokens (random per boot when unset); `--quota-bytes` (`TINYBOT_RELAY_QUOTA_BYTES`) caps stored ciphertext per identity, 0 for none.
+
+Storage is one WAL database (`synchronous = NORMAL`) behind a single writer connection and a pool of reader connections, one per core; every query runs on tokio's blocking pool. All SQL lives in `db.rs`; `routes.rs` only decides what to ask for. A blob write wakes the long-polls of its identity alone (a `Notify` per identity, armed before each query so nothing is missed between the query and the wait). `last_seen` is written at most every 30 s per machine. The hosted relay is one process; a second instance would need a shared store and a shared wakeup, which is when a Postgres backend replaces this one.
 
 Auth is per machine:
 
@@ -159,12 +161,12 @@ Tables:
 
 - `identities(pubkey, content_pubkey, created_at)`
 - `machines(machine_pubkey, identity_pubkey, box_pubkey, attestation, last_seen, created_at)`
-- `blobs(id, identity_pubkey, kind, recipient_machine_pubkey nullable, seq, ciphertext, size, created_at)`
-- `sequences(identity_pubkey, seq)`, `challenges`, `pairings(nonce, identity_pubkey, request, reply, expires_at)`
+- `blobs(identity_pubkey, id, kind, recipient_machine_pubkey nullable, seq, ciphertext, size, created_at)`, keyed on `(identity_pubkey, id)`
+- `sequences(identity_pubkey, seq)`, `usage(identity_pubkey, bytes)`, `challenges`, `pairings(nonce, identity_pubkey, request, reply, expires_at)`
 
 `kind` is `roster` | `chat` | `job` | `job_result` | `machine` | `key` | `file`. Ciphertext is bytes; the nonce sits inside it. `seq` increases per identity. A Device’s `name` and `os` are inside its `machine` blob, not columns. A `file` blob is an attachment's bytes under the attachment's id, up to 24 MB of ciphertext (other kinds 4 MB); Devices poll with an explicit kinds list that leaves `file` out and fetch one by id when a transcript needs it.
 
-Blob API: `PUT /v1/blobs` (client-chosen id, idempotent), `GET /v1/blobs?since=<seq>&kinds=&wait=25` (long-poll; returns blobs for the identity that are unaddressed or addressed to the caller’s machine), `GET /v1/blobs/{id}` (one blob, same visibility), `DELETE /v1/blobs/{id}`, `GET /v1/machines` (presence).
+Blob API: `PUT /v1/blobs` (client-chosen id, idempotent; 413 over quota), `GET /v1/blobs?since=<seq>&kinds=&wait=25` (long-poll; returns blobs for the identity that are unaddressed or addressed to the caller’s machine, filtered by kind in the query), `GET /v1/blobs/{id}` (one blob, same visibility), `DELETE /v1/blobs/{id}`, `GET /v1/machines` (presence).
 
 Clients set `TINYBOT_RELAY_URL` or the relay URL in Settings › Advanced. Without a relay the CLI works on one Device alone. In dev (`bun run dev` sets `TINYBOT_DEV=1` and runs a relay on `0.0.0.0:8787`), a Device with no relay configured defaults to `http://<this Mac's LAN IP>:8787`, so Pair a Device shows a code a phone on the same network can use.
 

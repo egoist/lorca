@@ -9,11 +9,10 @@ mod db;
 mod routes;
 
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use clap::Parser;
 use rand::RngCore;
-use tokio::sync::Notify;
 
 #[derive(Parser, Debug)]
 #[command(name = "tinybot-relay", about = "Tinybot relay server")]
@@ -30,14 +29,21 @@ struct Args {
     /// client out on restart.
     #[arg(long, env = "TINYBOT_RELAY_SECRET")]
     secret: Option<String>,
+
+    /// Stored ciphertext allowed per identity, in bytes. 0 means no limit.
+    #[arg(long, env = "TINYBOT_RELAY_QUOTA_BYTES", default_value_t = 0)]
+    quota_bytes: u64,
 }
 
 #[derive(Clone)]
 pub struct AppState {
-    pub db: Arc<Mutex<rusqlite::Connection>>,
+    pub db: Arc<db::Db>,
     pub secret: Arc<[u8; 32]>,
-    /// Woken on every blob write so long-polls return early.
-    pub notify: Arc<Notify>,
+    /// Woken per identity on every blob write so its long-polls return early.
+    pub wakers: Arc<db::Wakers>,
+    /// Throttles `last_seen` writes.
+    pub presence: Arc<db::Presence>,
+    pub quota_bytes: u64,
 }
 
 #[tokio::main]
@@ -47,7 +53,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let args = Args::parse();
-    let connection = db::open(&args.db)?;
+    let db = Arc::new(db::Db::open(&args.db)?);
 
     let mut secret = [0u8; 32];
     match args.secret {
@@ -58,11 +64,27 @@ async fn main() -> anyhow::Result<()> {
         None => rand::thread_rng().fill_bytes(&mut secret),
     }
 
-    let state = AppState { db: Arc::new(Mutex::new(connection)), secret: Arc::new(secret), notify: Arc::new(Notify::new()) };
+    let state = AppState {
+        db: db.clone(),
+        secret: Arc::new(secret),
+        wakers: Arc::new(db::Wakers::default()),
+        presence: Arc::new(db::Presence::default()),
+        quota_bytes: args.quota_bytes,
+    };
+
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
+        loop {
+            tick.tick().await;
+            if let Err(error) = db.write(|db| Ok(db::expire(db)?)).await {
+                tracing::warn!(?error, "expiring challenges and pairings");
+            }
+        }
+    });
 
     let app = routes::router(state);
     let listener = tokio::net::TcpListener::bind(args.bind).await?;
-    tracing::info!(bind = %args.bind, db = %args.db, "tinybot-relay listening");
+    tracing::info!(bind = %args.bind, db = %args.db, quota_bytes = args.quota_bytes, "tinybot-relay listening");
     axum::serve(listener, app).await?;
     Ok(())
 }

@@ -92,7 +92,8 @@ pub fn parse_token(secret: &[u8; 32], token: &str) -> Result<Auth, ApiError> {
     Ok(Auth { identity_pubkey, machine_pubkey })
 }
 
-/// The authenticated machine. Extracting it also bumps the machine's `last_seen`.
+/// The authenticated machine. Extracting it also bumps the machine's `last_seen`, at most
+/// once every `db::TOUCH_INTERVAL` seconds per machine.
 #[derive(Debug, Clone)]
 pub struct Auth {
     pub identity_pubkey: String,
@@ -110,8 +111,10 @@ impl FromRequestParts<AppState> for Auth {
             .ok_or_else(|| ApiError::unauthorized("Missing bearer token"))?;
         let token = header.strip_prefix("Bearer ").ok_or_else(|| ApiError::unauthorized("Missing bearer token"))?;
         let auth = parse_token(&state.secret, token)?;
-        let db = state.db.lock().unwrap();
-        crate::db::touch_machine(&db, &auth.machine_pubkey).map_err(ApiError::from)?;
+        if state.presence.due(&auth.machine_pubkey) {
+            let machine_pubkey = auth.machine_pubkey.clone();
+            state.db.write(move |db| Ok(crate::db::touch_machine(db, &machine_pubkey)?)).await?;
+        }
         Ok(auth)
     }
 }
