@@ -17,6 +17,7 @@ clap.workspace = true
 ed25519-dalek.workspace = true
 hmac.workspace = true
 rand.workspace = true
+reqwest.workspace = true
 rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true

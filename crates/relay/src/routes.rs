@@ -235,13 +235,22 @@ struct PutBlob {
     ciphertext: String,
 }
 
+/// Ids are client-chosen (uuids, `msg-<uuid>`) and become object keys, so only a plain charset.
+fn valid_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && id != "."
+        && id != ".."
+        && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.')
+}
+
 async fn put_blob(State(state): State<AppState>, auth: Auth, Json(body): Json<PutBlob>) -> ApiResult<Json<Value>> {
     if !db::KINDS.contains(&body.kind.as_str()) {
         return Err(ApiError::bad_request("Unknown blob kind"));
     }
     let id = body.id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    if id.len() > 64 {
-        return Err(ApiError::bad_request("Blob id too long"));
+    if !valid_id(&id) {
+        return Err(ApiError::bad_request("Blob id must be 1–64 characters of [A-Za-z0-9._-]"));
     }
     let max = if body.kind == "file" { MAX_FILE_BLOB_BYTES } else { MAX_BLOB_BYTES };
     // Decoding a 24 MB attachment is work for the blocking pool, and it happens before the
@@ -254,17 +263,81 @@ async fn put_blob(State(state): State<AppState>, auth: Auth, Json(body): Json<Pu
     let identity = auth.identity_pubkey.clone();
     let stored_id = id.clone();
     let quota = state.quota_bytes;
-    let inserted = state
-        .db
-        .write(move |db| {
-            db::insert_blob(db, &identity, &stored_id, &body.kind, body.recipient_machine_pubkey.as_deref(), &ciphertext, quota)
-        })
-        .await?;
+    let kind = body.kind.clone();
+    let recipient = body.recipient_machine_pubkey.clone();
+
+    let store = state.file_store.as_ref().filter(|_| body.kind == "file");
+    let inserted = match store {
+        None => {
+            state
+                .db
+                .write(move |db| {
+                    db::insert_blob(db, &identity, &stored_id, &kind, recipient.as_deref(), db::Payload::Inline(&ciphertext), quota)
+                })
+                .await?
+        }
+        Some(store) => {
+            // The object goes up before the row, outside the writer. A cheap check first
+            // saves an upload the row would refuse; the transaction decides for real.
+            let size = ciphertext.len() as i64;
+            let (precheck_identity, precheck_id) = (identity.clone(), stored_id.clone());
+            let refused = state
+                .db
+                .read(move |db| {
+                    if let Some(seq) = db::blob_seq(db, &precheck_identity, &precheck_id)? {
+                        return Ok(Some(db::Inserted { seq, existing: true }));
+                    }
+                    if quota > 0 && (db::usage(db, &precheck_identity)? + size) as u64 > quota {
+                        return Err(ApiError::too_large("Storage quota exceeded"));
+                    }
+                    Ok(None)
+                })
+                .await?;
+            if let Some(existing) = refused {
+                return Ok(Json(json!({ "id": id, "seq": existing.seq, "existing": true })));
+            }
+            let key = crate::store::key(&identity, &stored_id);
+            store.put(&key, ciphertext).await?;
+            let inserted = state
+                .db
+                .write(move |db| {
+                    db::insert_blob(db, &identity, &stored_id, &kind, recipient.as_deref(), db::Payload::External { size }, quota)
+                })
+                .await;
+            match inserted {
+                Ok(inserted) => inserted,
+                Err(error) => {
+                    // The row was refused, so the object is an orphan. A concurrent put of the
+                    // same id would have returned `existing` instead, so it is only ours.
+                    if let Err(cleanup) = store.delete(&key).await {
+                        tracing::warn!(?cleanup, key, "removing an orphaned file object");
+                    }
+                    return Err(error);
+                }
+            }
+        }
+    };
     if inserted.existing {
         return Ok(Json(json!({ "id": id, "seq": inserted.seq, "existing": true })));
     }
     state.wakers.wake(&auth.identity_pubkey);
     Ok(Json(json!({ "id": id, "seq": inserted.seq })))
+}
+
+/// Fills in the bytes of rows whose ciphertext lives in the file store.
+async fn load_external(state: &AppState, identity_pubkey: &str, rows: &mut [db::BlobRow]) -> ApiResult<()> {
+    for row in rows.iter_mut().filter(|row| row.external) {
+        let key = crate::store::key(identity_pubkey, &row.id);
+        let Some(store) = state.file_store.as_ref() else {
+            tracing::error!(key, "external blob but no file store is configured");
+            return Err(ApiError::internal("File storage is not configured"));
+        };
+        row.ciphertext = store.get(&key).await?.ok_or_else(|| {
+            tracing::error!(key, "external blob's object is missing");
+            ApiError::internal("File object missing")
+        })?;
+    }
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]
@@ -329,14 +402,15 @@ async fn list_blobs(State(state): State<AppState>, auth: Auth, Query(query): Que
 
         let (identity, machine, kinds) = (auth.identity_pubkey.clone(), auth.machine_pubkey.clone(), kinds.clone());
         let since = query.since;
-        let (blobs, head) = state
+        let (mut rows, head) = state
             .db
             .read(move |db| {
                 let rows = db::blobs_since(db, &identity, &machine, since, &kinds, limit)?;
-                let blobs: Vec<BlobOut> = rows.into_iter().map(BlobOut::from).collect();
-                Ok((blobs, db::current_seq(db, &identity)?))
+                Ok((rows, db::current_seq(db, &identity)?))
             })
             .await?;
+        load_external(&state, &auth.identity_pubkey, &mut rows).await?;
+        let blobs: Vec<BlobOut> = rows.into_iter().map(BlobOut::from).collect();
         let timed_out = tokio::time::Instant::now() >= deadline;
         if !blobs.is_empty() || wait == 0 || timed_out {
             return Ok(Json(json!({ "blobs": blobs, "seq": head })));
@@ -350,17 +424,27 @@ async fn list_blobs(State(state): State<AppState>, auth: Auth, Query(query): Que
 /// One blob by id, for kinds a Device does not take in its poll: a `file` is fetched when a
 /// transcript needs it, by the Runner that runs the turn and by Devices that show it.
 async fn get_blob(State(state): State<AppState>, auth: Auth, Path(id): Path<String>) -> ApiResult<Json<BlobOut>> {
-    let row = state
-        .db
-        .read(move |db| Ok(db::blob(db, &auth.identity_pubkey, &auth.machine_pubkey, &id)?.map(BlobOut::from)))
-        .await?;
-    row.map(Json).ok_or_else(|| ApiError::not_found("No such blob"))
+    let (identity, machine) = (auth.identity_pubkey.clone(), auth.machine_pubkey.clone());
+    let row = state.db.read(move |db| Ok(db::blob(db, &identity, &machine, &id)?)).await?;
+    let Some(row) = row else { return Err(ApiError::not_found("No such blob")) };
+    let mut rows = [row];
+    load_external(&state, &auth.identity_pubkey, &mut rows).await?;
+    let [row] = rows;
+    Ok(Json(BlobOut::from(row)))
 }
 
 async fn delete_blob(State(state): State<AppState>, auth: Auth, Path(id): Path<String>) -> ApiResult<StatusCode> {
-    let deleted = state.db.write(move |db| Ok(db::delete_blob(db, &auth.identity_pubkey, &id)?)).await?;
-    if !deleted {
-        return Err(ApiError::not_found("No such blob"));
+    let (identity, row_id) = (auth.identity_pubkey.clone(), id.clone());
+    let deleted = state.db.write(move |db| Ok(db::delete_blob(db, &identity, &row_id)?)).await?;
+    let Some(deleted) = deleted else { return Err(ApiError::not_found("No such blob")) };
+    if deleted.external {
+        // The row is gone either way; a leftover object is logged, not surfaced.
+        if let Some(store) = state.file_store.as_ref() {
+            let key = crate::store::key(&auth.identity_pubkey, &id);
+            if let Err(error) = store.delete(&key).await {
+                tracing::warn!(?error, key, "deleting a file object");
+            }
+        }
     }
     Ok(StatusCode::NO_CONTENT)
 }

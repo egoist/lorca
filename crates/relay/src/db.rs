@@ -50,6 +50,7 @@ const SCHEMA: &str = "
         ciphertext BLOB NOT NULL,
         size INTEGER NOT NULL,
         created_at INTEGER NOT NULL,
+        external INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (identity_pubkey, id)
     );
     CREATE INDEX IF NOT EXISTS blobs_identity_seq ON blobs(identity_pubkey, seq);
@@ -86,6 +87,7 @@ impl Db {
         let writer = Connection::open(path)?;
         migrate_blob_key(&writer)?;
         writer.execute_batch(SCHEMA)?;
+        migrate_external_column(&writer)?;
         // A database from before the usage table gets its totals once.
         let usage_rows: i64 = writer.query_row("SELECT COUNT(*) FROM usage", [], |row| row.get(0))?;
         if usage_rows == 0 {
@@ -170,6 +172,18 @@ fn migrate_blob_key(connection: &Connection) -> rusqlite::Result<()> {
          ALTER TABLE blobs_v2 RENAME TO blobs;
          COMMIT;",
     )
+}
+
+/// `external` marks a `file` blob whose ciphertext lives in the file store, not the row.
+fn migrate_external_column(connection: &Connection) -> rusqlite::Result<()> {
+    let present = connection
+        .prepare("PRAGMA table_info(blobs)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .any(|name| name.is_ok_and(|name| name == "external"));
+    if !present {
+        connection.execute_batch("ALTER TABLE blobs ADD COLUMN external INTEGER NOT NULL DEFAULT 0")?;
+    }
+    Ok(())
 }
 
 /// Runs CPU- or disk-bound work off the async workers.
@@ -377,9 +391,13 @@ pub struct BlobRow {
     pub kind: String,
     pub recipient_machine_pubkey: Option<String>,
     pub seq: i64,
+    /// Empty when `external`: the bytes are in the file store under `store::key`.
     pub ciphertext: Vec<u8>,
     pub created_at: i64,
+    pub external: bool,
 }
+
+const BLOB_COLUMNS: &str = "id, kind, recipient_machine_pubkey, seq, ciphertext, created_at, external";
 
 fn blob_row(row: &rusqlite::Row) -> rusqlite::Result<BlobRow> {
     Ok(BlobRow {
@@ -389,12 +407,35 @@ fn blob_row(row: &rusqlite::Row) -> rusqlite::Result<BlobRow> {
         seq: row.get(3)?,
         ciphertext: row.get(4)?,
         created_at: row.get(5)?,
+        external: row.get::<_, i64>(6)? != 0,
     })
 }
 
 pub struct Inserted {
     pub seq: i64,
     pub existing: bool,
+}
+
+/// The seq a blob id already has under this identity, if any.
+pub fn blob_seq(connection: &Connection, identity_pubkey: &str, id: &str) -> rusqlite::Result<Option<i64>> {
+    connection
+        .prepare_cached("SELECT seq FROM blobs WHERE id = ?1 AND identity_pubkey = ?2")?
+        .query_row(params![id, identity_pubkey], |row| row.get(0))
+        .optional()
+}
+
+pub fn usage(connection: &Connection, identity_pubkey: &str) -> rusqlite::Result<i64> {
+    Ok(connection
+        .prepare_cached("SELECT bytes FROM usage WHERE identity_pubkey = ?1")?
+        .query_row(params![identity_pubkey], |row| row.get(0))
+        .optional()?
+        .unwrap_or(0))
+}
+
+/// Where a blob's bytes go: in the row, or in the file store with only the size recorded.
+pub enum Payload<'a> {
+    Inline(&'a [u8]),
+    External { size: i64 },
 }
 
 /// Stores a blob under the identity's next sequence number. A known id returns its existing
@@ -405,9 +446,13 @@ pub fn insert_blob(
     id: &str,
     kind: &str,
     recipient_machine_pubkey: Option<&str>,
-    ciphertext: &[u8],
+    payload: Payload<'_>,
     quota_bytes: u64,
 ) -> ApiResult<Inserted> {
+    let (ciphertext, size, external): (&[u8], i64, bool) = match payload {
+        Payload::Inline(bytes) => (bytes, bytes.len() as i64, false),
+        Payload::External { size } => (&[], size, true),
+    };
     let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     if let Some(recipient) = recipient_machine_pubkey {
         match machine(&tx, recipient)? {
@@ -415,23 +460,11 @@ pub fn insert_blob(
             _ => return Err(ApiError::bad_request("Recipient is not a machine of this identity")),
         }
     }
-    let existing: Option<i64> = tx
-        .prepare_cached("SELECT seq FROM blobs WHERE id = ?1 AND identity_pubkey = ?2")?
-        .query_row(params![id, identity_pubkey], |row| row.get(0))
-        .optional()?;
-    if let Some(seq) = existing {
+    if let Some(seq) = blob_seq(&tx, identity_pubkey, id)? {
         return Ok(Inserted { seq, existing: true });
     }
-    let size = ciphertext.len() as i64;
-    if quota_bytes > 0 {
-        let used: i64 = tx
-            .prepare_cached("SELECT bytes FROM usage WHERE identity_pubkey = ?1")?
-            .query_row(params![identity_pubkey], |row| row.get(0))
-            .optional()?
-            .unwrap_or(0);
-        if (used + size) as u64 > quota_bytes {
-            return Err(ApiError::too_large("Storage quota exceeded"));
-        }
+    if quota_bytes > 0 && (usage(&tx, identity_pubkey)? + size) as u64 > quota_bytes {
+        return Err(ApiError::too_large("Storage quota exceeded"));
     }
     tx.prepare_cached(
         "INSERT INTO sequences (identity_pubkey, seq) VALUES (?1, 1)
@@ -442,10 +475,10 @@ pub fn insert_blob(
         .prepare_cached("SELECT seq FROM sequences WHERE identity_pubkey = ?1")?
         .query_row(params![identity_pubkey], |row| row.get(0))?;
     tx.prepare_cached(
-        "INSERT INTO blobs (id, identity_pubkey, kind, recipient_machine_pubkey, seq, ciphertext, size, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        "INSERT INTO blobs (id, identity_pubkey, kind, recipient_machine_pubkey, seq, ciphertext, size, created_at, external)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
     )?
-    .execute(params![id, identity_pubkey, kind, recipient_machine_pubkey, seq, ciphertext, size, now()])?;
+    .execute(params![id, identity_pubkey, kind, recipient_machine_pubkey, seq, ciphertext, size, now(), external as i64])?;
     tx.prepare_cached(
         "INSERT INTO usage (identity_pubkey, bytes) VALUES (?1, ?2)
          ON CONFLICT(identity_pubkey) DO UPDATE SET bytes = bytes + excluded.bytes",
@@ -473,10 +506,10 @@ pub fn blobs_since(
     kinds: &[String],
     limit: i64,
 ) -> rusqlite::Result<Vec<BlobRow>> {
-    let mut sql = String::from(
-        "SELECT id, kind, recipient_machine_pubkey, seq, ciphertext, created_at FROM blobs
+    let mut sql = format!(
+        "SELECT {BLOB_COLUMNS} FROM blobs
          WHERE identity_pubkey = ?1 AND seq > ?2
-           AND (recipient_machine_pubkey IS NULL OR recipient_machine_pubkey = ?3)",
+           AND (recipient_machine_pubkey IS NULL OR recipient_machine_pubkey = ?3)"
     );
     if !kinds.is_empty() {
         let marks: Vec<String> = (0..kinds.len()).map(|i| format!("?{}", i + 5)).collect();
@@ -491,27 +524,32 @@ pub fn blobs_since(
 
 pub fn blob(connection: &Connection, identity_pubkey: &str, machine_pubkey: &str, id: &str) -> rusqlite::Result<Option<BlobRow>> {
     connection
-        .prepare_cached(
-            "SELECT id, kind, recipient_machine_pubkey, seq, ciphertext, created_at FROM blobs
+        .prepare_cached(&format!(
+            "SELECT {BLOB_COLUMNS} FROM blobs
              WHERE id = ?1 AND identity_pubkey = ?2
-               AND (recipient_machine_pubkey IS NULL OR recipient_machine_pubkey = ?3)",
-        )?
+               AND (recipient_machine_pubkey IS NULL OR recipient_machine_pubkey = ?3)"
+        ))?
         .query_row(params![id, identity_pubkey, machine_pubkey], blob_row)
         .optional()
 }
 
-/// Deletes a blob and gives its bytes back to the identity's usage. False when there was none.
-pub fn delete_blob(connection: &mut Connection, identity_pubkey: &str, id: &str) -> rusqlite::Result<bool> {
+pub struct Deleted {
+    pub external: bool,
+}
+
+/// Deletes a blob's row and gives its bytes back to the identity's usage. `None` when there
+/// was none; the caller removes an external object afterwards.
+pub fn delete_blob(connection: &mut Connection, identity_pubkey: &str, id: &str) -> rusqlite::Result<Option<Deleted>> {
     let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let size: Option<i64> = tx
-        .prepare_cached("DELETE FROM blobs WHERE id = ?1 AND identity_pubkey = ?2 RETURNING size")?
-        .query_row(params![id, identity_pubkey], |row| row.get(0))
+    let row: Option<(i64, i64)> = tx
+        .prepare_cached("DELETE FROM blobs WHERE id = ?1 AND identity_pubkey = ?2 RETURNING size, external")?
+        .query_row(params![id, identity_pubkey], |row| Ok((row.get(0)?, row.get(1)?)))
         .optional()?;
-    let Some(size) = size else { return Ok(false) };
+    let Some((size, external)) = row else { return Ok(None) };
     tx.prepare_cached("UPDATE usage SET bytes = MAX(bytes - ?1, 0) WHERE identity_pubkey = ?2")?
         .execute(params![size, identity_pubkey])?;
     tx.commit()?;
-    Ok(true)
+    Ok(Some(Deleted { external: external != 0 }))
 }
 
 // MARK: - Pairing mailbox

@@ -8,6 +8,7 @@ mod auth;
 mod db;
 mod limit;
 mod routes;
+mod store;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -49,6 +50,61 @@ struct Args {
     /// that overwrites that header.
     #[arg(long, env = "TINYBOT_RELAY_TRUST_PROXY", default_value_t = false)]
     trust_proxy: bool,
+
+    /// Keep `file` ciphertext in this directory instead of the database.
+    #[arg(long, env = "TINYBOT_RELAY_FILES_DIR", conflicts_with = "s3_bucket")]
+    files_dir: Option<std::path::PathBuf>,
+
+    /// Keep `file` ciphertext in this S3-compatible bucket (AWS, R2, MinIO) instead of the
+    /// database. Needs --s3-endpoint and the access keys.
+    #[arg(long, env = "TINYBOT_RELAY_S3_BUCKET", requires = "s3_endpoint")]
+    s3_bucket: Option<String>,
+
+    /// `https://<account>.r2.cloudflarestorage.com`, `https://s3.us-east-1.amazonaws.com`, …
+    #[arg(long, env = "TINYBOT_RELAY_S3_ENDPOINT")]
+    s3_endpoint: Option<String>,
+
+    /// SigV4 region. R2 takes `auto`.
+    #[arg(long, env = "TINYBOT_RELAY_S3_REGION", default_value = "auto")]
+    s3_region: String,
+
+    /// Key prefix inside the bucket.
+    #[arg(long, env = "TINYBOT_RELAY_S3_PREFIX", default_value = "")]
+    s3_prefix: String,
+
+    /// Falls back to AWS_ACCESS_KEY_ID.
+    #[arg(long, env = "TINYBOT_RELAY_S3_ACCESS_KEY", hide_env_values = true)]
+    s3_access_key: Option<String>,
+
+    /// Falls back to AWS_SECRET_ACCESS_KEY.
+    #[arg(long, env = "TINYBOT_RELAY_S3_SECRET_KEY", hide_env_values = true)]
+    s3_secret_key: Option<String>,
+}
+
+fn file_store(args: &Args) -> anyhow::Result<Option<store::FileStore>> {
+    if let Some(dir) = &args.files_dir {
+        std::fs::create_dir_all(dir)?;
+        return Ok(Some(store::FileStore::Local { dir: dir.clone() }));
+    }
+    let Some(bucket) = &args.s3_bucket else { return Ok(None) };
+    let access_key = args
+        .s3_access_key
+        .clone()
+        .or_else(|| std::env::var("AWS_ACCESS_KEY_ID").ok())
+        .ok_or_else(|| anyhow::anyhow!("--s3-bucket needs TINYBOT_RELAY_S3_ACCESS_KEY or AWS_ACCESS_KEY_ID"))?;
+    let secret_key = args
+        .s3_secret_key
+        .clone()
+        .or_else(|| std::env::var("AWS_SECRET_ACCESS_KEY").ok())
+        .ok_or_else(|| anyhow::anyhow!("--s3-bucket needs TINYBOT_RELAY_S3_SECRET_KEY or AWS_SECRET_ACCESS_KEY"))?;
+    Ok(Some(store::FileStore::S3(store::S3::new(
+        args.s3_endpoint.clone().expect("clap requires the endpoint"),
+        bucket.clone(),
+        args.s3_region.clone(),
+        args.s3_prefix.clone(),
+        access_key,
+        secret_key,
+    ))))
 }
 
 #[derive(Clone)]
@@ -63,6 +119,8 @@ pub struct AppState {
     pub ip_limiter: Arc<limit::RateLimiter>,
     pub identity_limiter: Arc<limit::RateLimiter>,
     pub trust_proxy: bool,
+    /// Where `file` ciphertext goes; `None` keeps it in the database.
+    pub file_store: Option<Arc<store::FileStore>>,
 }
 
 #[tokio::main]
@@ -73,6 +131,7 @@ async fn main() -> anyhow::Result<()> {
 
     let args = Args::parse();
     let db = Arc::new(db::Db::open(&args.db)?);
+    let file_store = file_store(&args)?.map(Arc::new);
 
     let mut secret = [0u8; 32];
     match args.secret {
@@ -95,6 +154,7 @@ async fn main() -> anyhow::Result<()> {
             args.identity_per_second.saturating_mul(10),
         )),
         trust_proxy: args.trust_proxy,
+        file_store: file_store.clone(),
     };
 
     tokio::spawn(async move {
@@ -109,7 +169,13 @@ async fn main() -> anyhow::Result<()> {
 
     let app = routes::router(state);
     let listener = tokio::net::TcpListener::bind(args.bind).await?;
-    tracing::info!(bind = %args.bind, db = %args.db, quota_bytes = args.quota_bytes, "tinybot-relay listening");
+    tracing::info!(
+        bind = %args.bind,
+        db = %args.db,
+        quota_bytes = args.quota_bytes,
+        files = %file_store.as_ref().map(|s| s.describe()).unwrap_or_else(|| "database".into()),
+        "tinybot-relay listening"
+    );
     axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await?;
     Ok(())
 }
