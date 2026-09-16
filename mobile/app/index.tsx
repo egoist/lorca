@@ -12,8 +12,6 @@ import { lastActivity } from "../src/ui/format";
 import { Symbol } from "../src/ui/Symbol";
 import { Font, usePalette } from "../src/ui/theme";
 
-type Item = { type: "header"; key: string; title: string } | { type: "chat"; key: string; chat: Chat };
-
 export default function ChatsScreen() {
   const p = usePalette();
   const router = useRouter();
@@ -29,16 +27,7 @@ export default function ChatsScreen() {
     const visible = chats
       .filter((c) => !q || chatTitle(c).toLowerCase().includes(q) || c.bot_ids.some((id) => bots.get(id)?.name.toLowerCase().includes(q)))
       .sort((a, b) => lastActivity(b) - lastActivity(a));
-    const pinned = visible.filter((c) => c.is_pinned);
-    const rest = visible.filter((c) => !c.is_pinned);
-    const out: Item[] = [];
-    if (pinned.length) {
-      out.push({ type: "header", key: "h-pinned", title: "Pinned" });
-      for (const chat of pinned) out.push({ type: "chat", key: chat.id, chat });
-      if (rest.length) out.push({ type: "header", key: "h-chats", title: "Chats" });
-    }
-    for (const chat of rest) out.push({ type: "chat", key: chat.id, chat });
-    return out;
+    return [...visible.filter((c) => c.is_pinned), ...visible.filter((c) => !c.is_pinned)];
   }, [chats, bots, query]);
 
   function isWorking(chat: Chat): boolean {
@@ -70,8 +59,7 @@ export default function ChatsScreen() {
       </Stack.Toolbar>
       <FlashList
         data={items}
-        keyExtractor={(item) => item.key}
-        getItemType={(item) => item.type}
+        keyExtractor={(chat) => chat.id}
         contentInsetAdjustmentBehavior="automatic"
         keyboardDismissMode="on-drag"
         contentContainerStyle={{ paddingBottom: 24 }}
@@ -90,13 +78,7 @@ export default function ChatsScreen() {
             <Text style={[styles.emptyText, { color: p.secondaryLabel }]}>{query ? "Try another name." : "Your bots and their chats sync from the relay once this phone hears from your Runner."}</Text>
           </View>
         }
-        renderItem={({ item }) => {
-          if (item.type === "header") {
-            return (
-              <Text style={[styles.header, { color: p.secondaryLabel }]}>{item.title}</Text>
-            );
-          }
-          const { chat } = item;
+        renderItem={({ item: chat }) => {
           const title = chatTitle(chat);
           const row = <ChatRow chat={chat} bots={bots} title={title} working={isWorking(chat)} onPress={() => router.push(`/chat/${chat.id}`)} />;
           if (Platform.OS !== "ios") return row;
@@ -134,8 +116,7 @@ export default function ChatsScreen() {
 }
 
 const styles = StyleSheet.create({
-  header: { fontSize: 13, fontWeight: "600", textTransform: "uppercase", letterSpacing: 0.3, paddingHorizontal: 20, paddingTop: 16, paddingBottom: 4 },
-  separator: { height: StyleSheet.hairlineWidth, marginLeft: 82 },
+  separator: { height: StyleSheet.hairlineWidth, marginLeft: 78 },
   banner: { flexDirection: "row", alignItems: "center", gap: 8, marginHorizontal: 16, marginTop: 4, marginBottom: 6, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10 },
   bannerText: { fontSize: Font.small },
   empty: { alignItems: "center", paddingTop: 120, paddingHorizontal: 40, gap: 8 },

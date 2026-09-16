@@ -15,13 +15,16 @@ export const ChatRow = memo(function ChatRow({ chat, bots, title, working, onPre
   const unread = chat.unread_count > 0;
   return (
     <Pressable onPress={onPress} style={({ pressed }) => [styles.row, { backgroundColor: pressed ? p.fill : "transparent" }]}>
-      <View style={styles.unreadColumn}>{unread && <View style={[styles.unread, { backgroundColor: p.tint }]} />}</View>
+      {unread && <View style={[styles.unread, { backgroundColor: p.tint }]} />}
       <AvatarCluster bots={members} size={50} working={working} />
       <View style={styles.text}>
         <View style={styles.titleLine}>
-          <Text style={[styles.title, { color: p.label }]} numberOfLines={1}>
-            {title}
-          </Text>
+          <View style={styles.titleGroup}>
+            <Text style={[styles.title, { color: p.label }]} numberOfLines={1}>
+              {title}
+            </Text>
+            {chat.is_pinned && <Symbol name="pin.fill" size={12} color={p.tertiaryLabel} />}
+          </View>
           <View style={styles.stampLine}>
             <Text style={[styles.stamp, { color: p.secondaryLabel }]}>{stamp(new Date(lastActivity(chat) * 1000))}</Text>
             <Symbol name="chevron.right" size={11} color={p.tertiaryLabel} weight="semibold" />
@@ -36,11 +39,12 @@ export const ChatRow = memo(function ChatRow({ chat, bots, title, working, onPre
 });
 
 const styles = StyleSheet.create({
-  row: { flexDirection: "row", alignItems: "center", paddingRight: 16, paddingVertical: 9, gap: 12 },
-  unreadColumn: { width: 20, alignItems: "center" },
-  unread: { width: 10, height: 10, borderRadius: 5 },
+  // The avatar's left edge lines up with the toolbar buttons (16pt); the unread dot sits in that gutter.
+  row: { flexDirection: "row", alignItems: "center", paddingLeft: 16, paddingRight: 16, paddingVertical: 9, gap: 12 },
+  unread: { position: "absolute", left: 3, width: 10, height: 10, borderRadius: 5 },
   text: { flex: 1, gap: 2 },
   titleLine: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 },
+  titleGroup: { flexDirection: "row", alignItems: "center", gap: 5, flexShrink: 1 },
   title: { fontSize: Font.body, fontWeight: "600", flexShrink: 1 },
   stampLine: { flexDirection: "row", alignItems: "center", gap: 4 },
   stamp: { fontSize: 15 },
