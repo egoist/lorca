@@ -3,10 +3,19 @@ import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useHeaderHeight } from "expo-router/react-navigation";
-import { forwardRef, useCallback, useEffect, useMemo, useRef } from "react";
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   ActionSheetIOS,
   Alert,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
   Platform,
   Pressable,
   type ScrollViewProps,
@@ -69,32 +78,125 @@ export default function ChatScreen() {
   const composerBlank = useSharedValue(composerGuess);
   const composerExtra = useSharedValue(composerGuess - insets.bottom);
   // Opening a chat: FlashList lays the last rows out from the bottom, but their measured heights,
-  // the composer's inset and the header inset all land over the next few frames, each of which
-  // can leave the last lines under the composer. Until the user drags (or the list has been
-  // quiet for a moment after its first load), every such change re-pins the list to the end.
+  // the composer's inset and the header inset all land over the next few frames, and the composer
+  // inset reaches the native scroll view a frame after JS sets it. So the end is computed here
+  // from the content height, the viewport and the composer inset rather than read from the
+  // scroll view, and the list stays invisible until a scroll event confirms it sits there.
+  // Until the user drags (or the list has been quiet for a moment after its first load), every
+  // change re-pins it; `settled` also keeps FlashList's own catch-up scrolls instant meanwhile.
   const settling = useRef(true);
+  const pinQueued = useRef(false);
+  const pinIssued = useRef(false);
+  const loaded = useRef(false);
+  // True while the last thing that happened was a scroll event landing on the computed end.
+  const confirmed = useRef(false);
+  const lastOffset = useRef<number | null>(null);
+  const [settled, setSettled] = useState(false);
+  const [revealed, setRevealed] = useState(false);
   const settleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pinToBottom = useCallback(() => {
-    if (!settling.current) return;
-    requestAnimationFrame(() => {
-      if (settling.current) listRef.current?.scrollToEnd({ animated: false });
-    });
+  const revealTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const layoutHeight = useRef(0);
+  const contentHeight = useRef(0);
+  const topInset = Platform.OS === "ios" ? headerHeight : 0;
+  const topInsetRef = useRef(topInset);
+  topInsetRef.current = topInset;
+  const endOffset = useCallback(
+    () =>
+      Math.max(
+        -topInsetRef.current,
+        contentHeight.current + composerBlank.value - layoutHeight.current,
+      ),
+    [composerBlank],
+  );
+  // Shows the list once it has been quiet for a few frames after a confirmed pin: FlashList
+  // can re-lay the content out under an offset that was right an instant earlier.
+  const scheduleReveal = useCallback(() => {
+    if (revealTimer.current) clearTimeout(revealTimer.current);
+    revealTimer.current = setTimeout(() => {
+      revealTimer.current = null;
+      if (confirmed.current && loaded.current) setRevealed(true);
+    }, 50);
   }, []);
+  const confirm = useCallback(() => {
+    confirmed.current = true;
+    scheduleReveal();
+  }, [scheduleReveal]);
+  const unconfirm = useCallback(() => {
+    confirmed.current = false;
+    if (revealTimer.current) clearTimeout(revealTimer.current);
+    revealTimer.current = null;
+  }, []);
+  const pinToBottom = useCallback(() => {
+    if (!settling.current || pinQueued.current) return;
+    pinQueued.current = true;
+    requestAnimationFrame(() => {
+      pinQueued.current = false;
+      if (!settling.current) return;
+      if (Platform.OS === "ios") {
+        if (layoutHeight.current === 0 || contentHeight.current === 0) return;
+        pinIssued.current = true;
+        const offset = endOffset();
+        // Already there: the native side skips the no-op scroll, so no event will confirm it.
+        const already =
+          lastOffset.current !== null &&
+          Math.abs(lastOffset.current - offset) <= 1;
+        if (already) confirm();
+        else unconfirm();
+        listRef.current?.scrollToOffset({ offset, animated: false });
+      } else {
+        listRef.current?.scrollToEnd({ animated: false });
+      }
+    });
+  }, [confirm, endOffset, unconfirm]);
   const stopSettling = useCallback(() => {
     settling.current = false;
+    setSettled(true);
+    setRevealed(true);
     if (settleTimer.current) clearTimeout(settleTimer.current);
     settleTimer.current = null;
+    if (revealTimer.current) clearTimeout(revealTimer.current);
+    revealTimer.current = null;
   }, []);
   useEffect(() => {
     settling.current = true;
-    return stopSettling;
+    pinIssued.current = false;
+    loaded.current = false;
+    confirmed.current = false;
+    lastOffset.current = null;
+    setSettled(false);
+    setRevealed(false);
+    // A chat with nothing to measure (or a load that never reports) still has to show up.
+    const fallback = setTimeout(() => setRevealed(true), 800);
+    return () => {
+      clearTimeout(fallback);
+      stopSettling();
+    };
   }, [id, stopSettling]);
-  useEffect(() => pinToBottom(), [headerHeight, pinToBottom]);
+  const onScroll = useCallback(
+    (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+      if (Platform.OS !== "ios") return;
+      lastOffset.current = e.nativeEvent.contentOffset.y;
+      if (!settling.current) return;
+      // Only a pin can confirm: the list's own first scroll can sit at the computed end by
+      // coincidence while the content height is still unknown.
+      if (!pinIssued.current) return;
+      if (Math.abs(e.nativeEvent.contentOffset.y - endOffset()) <= 1) {
+        confirm();
+      } else {
+        unconfirm();
+        pinToBottom();
+      }
+    },
+    [confirm, endOffset, pinToBottom, unconfirm],
+  );
+  useEffect(() => {
+    unconfirm();
+    pinToBottom();
+  }, [headerHeight, pinToBottom, unconfirm]);
   // The transcript runs under the transparent header on iOS, so it starts below it. The insets
   // are explicit rather than iOS's automatic ones: the automatic behavior would add the home
   // indicator's safe area under the composer's inset, which already covers it, leaving a strip
   // of dead scroll past the last message that the native scroll-to-end never reaches.
-  const topInset = Platform.OS === "ios" ? headerHeight : 0;
   const ChatScroll = useMemo(
     () =>
       forwardRef<any, ScrollViewProps>(function ChatScroll(props, ref) {
@@ -203,53 +305,76 @@ export default function ChatScreen() {
         />
       </Stack.Toolbar>
       <View style={{ flex: 1 }}>
-        <FlashList
-          renderScrollComponent={ChatScroll}
-          ref={listRef}
-          data={rows}
-          keyExtractor={(row) => row.key}
-          getItemType={(row) => row.type}
-          contentInsetAdjustmentBehavior="never"
-          contentInset={{ top: topInset }}
-          scrollIndicatorInsets={{ top: topInset }}
-          keyboardDismissMode="interactive"
-          maintainVisibleContentPosition={{
-            startRenderingFromBottom: true,
-            autoscrollToBottomThreshold: 0.25,
-            animateAutoScrollToBottom: true,
-          }}
-          contentContainerStyle={{ paddingTop: Platform.OS === "ios" ? 0 : 8 }}
-          onLoad={() => {
+        <View
+          style={{ flex: 1, opacity: revealed ? 1 : 0 }}
+          onLayout={(e) => {
+            if (e.nativeEvent.layout.height !== layoutHeight.current)
+              unconfirm();
+            layoutHeight.current = e.nativeEvent.layout.height;
             pinToBottom();
-            if (settleTimer.current) clearTimeout(settleTimer.current);
-            settleTimer.current = setTimeout(stopSettling, 1500);
           }}
-          onContentSizeChange={pinToBottom}
-          onScrollBeginDrag={stopSettling}
-          renderItem={({ item }) => {
-            switch (item.type) {
-              case "day":
-                return <DayRow at={item.at} />;
-              case "message":
-                return (
-                  <MessageRow
-                    row={item}
-                    bots={bots}
-                    isGroup={isGroup}
-                    onLongPress={onLongPress}
-                  />
-                );
-              case "marker":
-                return <MarkerRow row={item} />;
-              case "notice":
-                return <NoticeRow row={item} />;
-              case "working":
-                return <WorkingRow bots={item.bots} isGroup={isGroup} />;
-              case "status":
-                return <StatusRow text={item.text} />;
-            }
-          }}
-        />
+        >
+          <FlashList
+            renderScrollComponent={ChatScroll}
+            ref={listRef}
+            data={rows}
+            keyExtractor={(row) => row.key}
+            getItemType={(row) => row.type}
+            contentInsetAdjustmentBehavior="never"
+            contentInset={{ top: topInset }}
+            scrollIndicatorInsets={{ top: topInset }}
+            keyboardDismissMode="interactive"
+            maintainVisibleContentPosition={{
+              startRenderingFromBottom: true,
+              autoscrollToBottomThreshold: 0.25,
+              animateAutoScrollToBottom: settled,
+            }}
+            contentContainerStyle={{
+              paddingTop: Platform.OS === "ios" ? 0 : 8,
+            }}
+            onLoad={() => {
+              loaded.current = true;
+              pinToBottom();
+              if (confirmed.current) scheduleReveal();
+              // Android has no confirming scroll event: the pin is a frame away, so show then.
+              if (Platform.OS !== "ios")
+                setTimeout(() => setRevealed(true), 50);
+              if (settleTimer.current) clearTimeout(settleTimer.current);
+              settleTimer.current = setTimeout(stopSettling, 1500);
+            }}
+            onContentSizeChange={(_w, h) => {
+              if (h !== contentHeight.current) unconfirm();
+              contentHeight.current = h;
+              pinToBottom();
+            }}
+            onScroll={onScroll}
+            scrollEventThrottle={16}
+            onScrollBeginDrag={stopSettling}
+            renderItem={({ item }) => {
+              switch (item.type) {
+                case "day":
+                  return <DayRow at={item.at} />;
+                case "message":
+                  return (
+                    <MessageRow
+                      row={item}
+                      bots={bots}
+                      isGroup={isGroup}
+                      onLongPress={onLongPress}
+                    />
+                  );
+                case "marker":
+                  return <MarkerRow row={item} />;
+                case "notice":
+                  return <NoticeRow row={item} />;
+                case "working":
+                  return <WorkingRow bots={item.bots} isGroup={isGroup} />;
+                case "status":
+                  return <StatusRow text={item.text} />;
+              }
+            }}
+          />
+        </View>
         <KeyboardStickyView
           style={[
             styles.composer,
@@ -258,9 +383,10 @@ export default function ChatScreen() {
           // Open, the composer's home-indicator padding is not needed: it sits on the keys.
           offset={{ closed: 0, opened: insets.bottom }}
           onLayout={(e) => {
-            composerBlank.value = e.nativeEvent.layout.height + COMPOSER_GAP;
-            composerExtra.value =
-              e.nativeEvent.layout.height + COMPOSER_GAP - insets.bottom;
+            const blank = e.nativeEvent.layout.height + COMPOSER_GAP;
+            if (blank !== composerBlank.value) unconfirm();
+            composerBlank.value = blank;
+            composerExtra.value = blank - insets.bottom;
             pinToBottom();
           }}
           pointerEvents="box-none"
