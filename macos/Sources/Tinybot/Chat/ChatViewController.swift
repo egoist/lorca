@@ -124,6 +124,8 @@ final class ChatViewController: NSViewController {
         guard abs(width - lastWidth) > 0.5 else { return }
         lastWidth = width
         reloadHeights()
+        // Re-measured heights move the end of the document; a pinned transcript follows it.
+        if isPinnedToBottom { scrollToBottom(animated: false) }
     }
 
     override func viewDidAppear() {
@@ -333,18 +335,27 @@ final class ChatViewController: NSViewController {
         jumpButton.isHidden = isPinnedToBottom || rows.isEmpty
     }
 
+    /// Scrolls the clip view to the end of the document itself rather than to the last row:
+    /// `scrollRowToVisible` aligns a row taller than the viewport to its top, so a long final
+    /// reply opened with its tail out of view, and it leaves the bottom inset unscrolled.
     private func scrollToBottom(animated: Bool) {
         guard !rows.isEmpty else { return }
-        let lastRow = rows.count - 1
+        // Forces the row positions so the document height is the laid-out one.
+        let documentHeight = tableView.rect(ofRow: rows.count - 1).maxY
+        let clip = scrollView.contentView
+        let insets = scrollView.contentInsets
+        let bottom = max(-insets.top, documentHeight + insets.bottom - clip.bounds.height)
+        let origin = NSPoint(x: clip.bounds.origin.x, y: bottom)
         if animated {
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.18
                 context.allowsImplicitAnimation = true
-                tableView.scrollRowToVisible(lastRow)
+                clip.animator().setBoundsOrigin(origin)
             }
         } else {
-            tableView.scrollRowToVisible(lastRow)
+            clip.scroll(to: origin)
         }
+        scrollView.reflectScrolledClipView(clip)
         isPinnedToBottom = true
         jumpButton.isHidden = true
     }

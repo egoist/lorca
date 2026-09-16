@@ -2,6 +2,7 @@ import { FlashList, type FlashListRef } from "@shopify/flash-list";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
+import { useHeaderHeight } from "expo-router/react-navigation";
 import { forwardRef, useCallback, useEffect, useMemo, useRef } from "react";
 import {
   ActionSheetIOS,
@@ -43,11 +44,15 @@ import {
   type Row,
 } from "../../src/ui/transcript";
 
+/// Breathing room between the last message and the composer, as on the Mac.
+const COMPOSER_GAP = 14;
+
 export default function ChatScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const p = usePalette();
   const insets = useSafeAreaInsets();
+  const headerHeight = useHeaderHeight();
   const chat = useChat(id);
   const bots = useBotMap();
   const workingBotIds = useWorkingBots(id);
@@ -59,8 +64,37 @@ export default function ChatScreen() {
   // the keyboard's height to it frame by frame, lifting the last messages with the keys.
   // `blankSpace` is the inset with the keyboard closed (the composer with its home-indicator
   // padding); `extraContentPadding` is the composer's height above the keys once it is open.
-  const composerBlank = useSharedValue(70);
-  const composerExtra = useSharedValue(70 - insets.bottom);
+  // Composer bar (46) + its wrap padding (8) + home-indicator padding + the gap, as in onLayout.
+  const composerGuess = 54 + COMPOSER_GAP + Math.max(insets.bottom, 8);
+  const composerBlank = useSharedValue(composerGuess);
+  const composerExtra = useSharedValue(composerGuess - insets.bottom);
+  // Opening a chat: FlashList lays the last rows out from the bottom, but their measured heights,
+  // the composer's inset and the header inset all land over the next few frames, each of which
+  // can leave the last lines under the composer. Until the user drags (or the list has been
+  // quiet for a moment after its first load), every such change re-pins the list to the end.
+  const settling = useRef(true);
+  const settleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pinToBottom = useCallback(() => {
+    if (!settling.current) return;
+    requestAnimationFrame(() => {
+      if (settling.current) listRef.current?.scrollToEnd({ animated: false });
+    });
+  }, []);
+  const stopSettling = useCallback(() => {
+    settling.current = false;
+    if (settleTimer.current) clearTimeout(settleTimer.current);
+    settleTimer.current = null;
+  }, []);
+  useEffect(() => {
+    settling.current = true;
+    return stopSettling;
+  }, [id, stopSettling]);
+  useEffect(() => pinToBottom(), [headerHeight, pinToBottom]);
+  // The transcript runs under the transparent header on iOS, so it starts below it. The insets
+  // are explicit rather than iOS's automatic ones: the automatic behavior would add the home
+  // indicator's safe area under the composer's inset, which already covers it, leaving a strip
+  // of dead scroll past the last message that the native scroll-to-end never reaches.
+  const topInset = Platform.OS === "ios" ? headerHeight : 0;
   const ChatScroll = useMemo(
     () =>
       forwardRef<any, ScrollViewProps>(function ChatScroll(props, ref) {
@@ -175,7 +209,9 @@ export default function ChatScreen() {
           data={rows}
           keyExtractor={(row) => row.key}
           getItemType={(row) => row.type}
-          contentInsetAdjustmentBehavior="automatic"
+          contentInsetAdjustmentBehavior="never"
+          contentInset={{ top: topInset }}
+          scrollIndicatorInsets={{ top: topInset }}
           keyboardDismissMode="interactive"
           maintainVisibleContentPosition={{
             startRenderingFromBottom: true,
@@ -183,6 +219,13 @@ export default function ChatScreen() {
             animateAutoScrollToBottom: true,
           }}
           contentContainerStyle={{ paddingTop: Platform.OS === "ios" ? 0 : 8 }}
+          onLoad={() => {
+            pinToBottom();
+            if (settleTimer.current) clearTimeout(settleTimer.current);
+            settleTimer.current = setTimeout(stopSettling, 1500);
+          }}
+          onContentSizeChange={pinToBottom}
+          onScrollBeginDrag={stopSettling}
           renderItem={({ item }) => {
             switch (item.type) {
               case "day":
@@ -215,9 +258,10 @@ export default function ChatScreen() {
           // Open, the composer's home-indicator padding is not needed: it sits on the keys.
           offset={{ closed: 0, opened: insets.bottom }}
           onLayout={(e) => {
-            composerBlank.value = e.nativeEvent.layout.height + 6;
+            composerBlank.value = e.nativeEvent.layout.height + COMPOSER_GAP;
             composerExtra.value =
-              e.nativeEvent.layout.height + 6 - insets.bottom;
+              e.nativeEvent.layout.height + COMPOSER_GAP - insets.bottom;
+            pinToBottom();
           }}
           pointerEvents="box-none"
         >
