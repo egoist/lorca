@@ -239,7 +239,7 @@ Every bot keeps its own memory (`workspaces/<id>/MEMORY.md`, written by the `rem
 
 **DeepSeek** — API key on this Runner, OpenAI-compatible streaming Completions (`providers::openai_compat`). `TINYBOT_DEEPSEEK_MODEL` and `TINYBOT_DEEPSEEK_BASE_URL` override the model and endpoint.
 
-**ChatGPT** — subscription OAuth on this Runner (`providers::chatgpt`, isolated): authorization code with PKCE, the localhost:1455 callback the Codex CLI uses, tokens refreshed by the adapter, and the Codex responses backend for streaming. `TINYBOT_CHATGPT_MODEL` overrides the model.
+**ChatGPT** — subscription OAuth on this Runner (`providers::chatgpt`, isolated): authorization code with PKCE, the localhost:1455 callback the Codex CLI uses, tokens refreshed by the adapter, and the Codex responses backend for streaming. `TINYBOT_CHATGPT_MODEL` overrides the model. Every request carries the backend's built-in `web_search` tool, which searches and reads pages server-side; its `web_search_call` items stream back as `ServerToolStart` / `ServerToolEnd` events (`web_search` with the query, `web_fetch` with the URL for an `open_page`), which the Runner records as tool rows so the status line reads "Searching the web…" or "Reading the web…", and which `build_context` never replays to the model.
 
 The encrypted bot profile carries `provider` as a label; the Runner resolves it against its own credentials at turn time.
 

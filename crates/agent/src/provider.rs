@@ -40,11 +40,26 @@ pub enum AssistantEvent {
     ToolCallStart { index: usize, id: String, name: String },
     ToolCallDelta { index: usize, delta: String },
     ToolCallEnd { index: usize },
+    /// A tool the provider ran on its side (web search, page reads): not a block of the message
+    /// and never executed by the loop; shown as the bot's activity while it runs.
+    ServerToolStart { id: String, name: String, detail: String },
+    ServerToolEnd { id: String, name: String, detail: String, summary: String },
     Done { stop_reason: StopReason, usage: Usage },
     Error { message: String, aborted: bool },
 }
 
 pub type AssistantEventStream = Pin<Box<dyn Stream<Item = AssistantEvent> + Send>>;
+
+/// Names of the tools a provider runs on its side, reported through
+/// [`AssistantEvent::ServerToolStart`] / [`AssistantEvent::ServerToolEnd`].
+pub const WEB_SEARCH_TOOL: &str = "web_search";
+pub const WEB_FETCH_TOOL: &str = "web_fetch";
+
+/// Whether a tool name is one the provider runs itself, so a transcript row for it is a record
+/// of activity and never a call for the loop to execute or replay.
+pub fn is_server_tool(name: &str) -> bool {
+    matches!(name, WEB_SEARCH_TOOL | WEB_FETCH_TOOL)
+}
 
 /// A model adapter.
 ///
@@ -128,6 +143,7 @@ impl AssistantAccumulator {
             AssistantEvent::ToolCallEnd { index } => {
                 self.finish_tool_call(*index);
             }
+            AssistantEvent::ServerToolStart { .. } | AssistantEvent::ServerToolEnd { .. } => {}
             AssistantEvent::Done { stop_reason, usage } => {
                 self.message.stop_reason = *stop_reason;
                 self.message.usage = usage.clone();

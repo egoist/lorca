@@ -6,6 +6,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use tinybot_agent::agent_loop::{run_agent_loop_continue, AgentContext, AgentLoopConfig, EventSink, ToolExecutionMode};
+use tinybot_agent::provider::{is_server_tool, AssistantEvent, WEB_FETCH_TOOL};
 use tinybot_agent::{
     AgentEvent, AgentMessage, AssistantMessage, AssistantPart, ContentPart, StopReason, Tool, ToolCall, ToolError,
     ToolResult, ToolResultMessage, ToolUpdateFn, UserMessage,
@@ -530,6 +531,42 @@ impl TurnState {
                 self.shown_len = 0;
                 self.last_flush = std::time::Instant::now();
             }
+            // A tool the provider ran on its side (ChatGPT's web search): a tool row like any
+            // other, so the status line reads "Searching the web…" while it runs, but it is
+            // activity only and never replayed to the model.
+            AgentEvent::MessageUpdate { assistant_message_event: AssistantEvent::ServerToolStart { id, name, detail }, .. } => {
+                let mut message = Message::new(
+                    &self.chat_id,
+                    Author::Bot { bot_id: self.bot_id.clone() },
+                    Body::Tool {
+                        name: name.clone(),
+                        summary: format!("{}…", server_tool_label(&name)),
+                        detail: detail.clone(),
+                        is_running: true,
+                        call_id: id.clone(),
+                        arguments: json!({ "detail": detail }),
+                        result: None,
+                        is_error: false,
+                    },
+                );
+                message.state = MessageState::Streaming;
+                self.app.upsert_message(message.clone(), false);
+                self.tool_messages.push((id, message.id));
+            }
+            AgentEvent::MessageUpdate { assistant_message_event: AssistantEvent::ServerToolEnd { id, name, detail, summary }, .. } => {
+                let Some((_, message_id)) = self.tool_messages.iter().find(|(call, _)| *call == id).cloned() else { return };
+                let Some(mut message) = self.app.message(&self.chat_id, &message_id) else { return };
+                if let Body::Tool { name: n, summary: s, detail: d, is_running, arguments, result, .. } = &mut message.body {
+                    *n = name;
+                    *s = summary.clone();
+                    *d = detail.clone();
+                    *is_running = false;
+                    *arguments = json!({ "detail": detail });
+                    *result = Some(summary);
+                }
+                message.state = MessageState::Complete;
+                self.app.upsert_message(message, true);
+            }
             AgentEvent::MessageUpdate { message: AgentMessage::Assistant(assistant), .. } => {
                 if "PASS".starts_with(assistant.text().trim()) {
                     return;
@@ -666,6 +703,15 @@ impl TurnState {
                 }
             }
         }
+    }
+}
+
+/// The status line for a server-side tool while it runs, in Grok Bot's words.
+fn server_tool_label(name: &str) -> &str {
+    if name == WEB_FETCH_TOOL {
+        "Reading the web"
+    } else {
+        "Searching the web"
     }
 }
 
@@ -812,6 +858,8 @@ pub fn transcript_for(app: &App, chat: &Chat, bot: &Bot, workdir: &std::path::Pa
             (Author::Bot { bot_id }, Body::Text { text, .. }) => {
                 out.push(user(&format!("[{}]: {text}", name_of(chat, bot_id)), timestamp));
             }
+            // Server-side tool rows are a record of activity, not calls to replay.
+            (Author::Bot { .. }, Body::Tool { name, .. }) if is_server_tool(name) => {}
             (Author::Bot { bot_id }, Body::Tool { name, call_id, arguments, result, is_error, .. }) if bot_id == &bot.id => {
                 let call_id = if call_id.is_empty() { message.id.clone() } else { call_id.clone() };
                 let mut assistant = AssistantMessage::empty("", "");

@@ -259,6 +259,8 @@ final class WorkingCellView: NSTableCellView {
         case "read": return "Reading a file"
         case "write", "edit": return "Drafting a file"
         case "bash": return "Running commands"
+        case "web_search": return "Searching the web"
+        case "web_fetch": return "Reading the web"
         case "grep", "find", "ls": return "Searching files"
         case "message_bot": return targetName.map { "Messaging \($0)" } ?? "Messaging another bot"
         case "list_teammates": return "Checking the team"

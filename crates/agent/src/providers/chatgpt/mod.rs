@@ -9,11 +9,13 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use crate::provider::{channel_stream, AssistantEvent, AssistantEventStream, ModelRequest, Provider};
+use crate::provider::{
+    channel_stream, AssistantEvent, AssistantEventStream, ModelRequest, Provider, WEB_FETCH_TOOL, WEB_SEARCH_TOOL,
+};
 use crate::sse::SseParser;
 use crate::types::{AssistantPart, ContentPart, LlmMessage, StopReason, Usage};
 
@@ -127,19 +129,18 @@ impl ChatGptProvider {
             }
         }
 
-        let tools: Vec<Value> = request
-            .tools
-            .iter()
-            .map(|tool| {
-                json!({
-                    "type": "function",
-                    "name": tool.name,
-                    "description": tool.description,
-                    "parameters": tool.parameters,
-                    "strict": false,
-                })
+        // The backend's own web search: it searches and reads pages server-side and streams
+        // `web_search_call` items, which become server-tool events here.
+        let mut tools = vec![json!({ "type": "web_search" })];
+        tools.extend(request.tools.iter().map(|tool| {
+            json!({
+                "type": "function",
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": tool.parameters,
+                "strict": false,
             })
-            .collect();
+        }));
 
         json!({
             "model": self.model,
@@ -158,6 +159,8 @@ impl ChatGptProvider {
 struct ResponsesState {
     next_index: usize,
     items: HashMap<String, usize>,
+    /// `web_search_call` item ids in flight, reported as server tools rather than blocks.
+    web_calls: HashSet<String>,
     text_item: Option<usize>,
     thinking_item: Option<usize>,
     tool_deltas_seen: HashMap<usize, bool>,
@@ -199,6 +202,11 @@ impl ResponsesState {
                         self.thinking_item = Some(index);
                         let _ = tx.send(AssistantEvent::ThinkingStart { index }).await;
                     }
+                    "web_search_call" => {
+                        self.web_calls.insert(item_id.clone());
+                        let (name, detail, _) = web_call_action(&item["action"]);
+                        let _ = tx.send(AssistantEvent::ServerToolStart { id: item_id, name, detail }).await;
+                    }
                     _ => {}
                 }
             }
@@ -222,6 +230,14 @@ impl ResponsesState {
             }
             "response.output_item.done" => {
                 let item = &value["item"];
+                if item["type"].as_str() == Some("web_search_call") {
+                    let item_id = item["id"].as_str().unwrap_or("").to_string();
+                    if self.web_calls.remove(&item_id) {
+                        let (name, detail, summary) = web_call_action(&item["action"]);
+                        let _ = tx.send(AssistantEvent::ServerToolEnd { id: item_id, name, detail, summary }).await;
+                    }
+                    return Ok(false);
+                }
                 let Some(index) = self.index_for(&item["id"]) else { return Ok(false) };
                 match item["type"].as_str().unwrap_or("") {
                     "function_call" => {
@@ -276,6 +292,24 @@ impl ResponsesState {
 
     fn index_for(&self, item_id: &Value) -> Option<usize> {
         item_id.as_str().and_then(|id| self.items.get(id).copied())
+    }
+}
+
+/// What a `web_search_call` did, from its `action`: the tool name it counts as, the detail to
+/// keep (query or URL), and a one-line summary for the finished row. A `search` (or `find`
+/// within a page) is a search; `open_page` is a read of one page.
+fn web_call_action(action: &Value) -> (String, String, String) {
+    let query = action["query"].as_str().unwrap_or("").trim();
+    let url = action["url"].as_str().unwrap_or("").trim();
+    match action["type"].as_str().unwrap_or("search") {
+        "open_page" if !url.is_empty() => (WEB_FETCH_TOOL.into(), url.into(), format!("Read {url}")),
+        "find" if !url.is_empty() => {
+            let pattern = action["pattern"].as_str().unwrap_or("").trim();
+            let detail = if pattern.is_empty() { url.to_string() } else { format!("{pattern} in {url}") };
+            (WEB_FETCH_TOOL.into(), detail, format!("Searched {url}"))
+        }
+        _ if !query.is_empty() => (WEB_SEARCH_TOOL.into(), query.into(), format!("Searched the web for “{query}”")),
+        _ => (WEB_SEARCH_TOOL.into(), String::new(), "Searched the web".into()),
     }
 }
 
@@ -385,5 +419,78 @@ impl Provider for ChatGptProvider {
         });
 
         channel_stream(rx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::provider::ToolSpec;
+
+    struct StaticTokens;
+
+    #[async_trait]
+    impl TokenSource for StaticTokens {
+        async fn tokens(&self) -> Result<ChatGptTokens, String> {
+            Err("unused".into())
+        }
+        async fn store(&self, _tokens: ChatGptTokens) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn the_request_carries_the_backend_web_search_before_the_functions() {
+        let provider = ChatGptProvider::new(Arc::new(StaticTokens), None);
+        let request = ModelRequest {
+            system_prompt: "be brief".into(),
+            messages: vec![LlmMessage::User(crate::types::UserMessage::text("hi"))],
+            tools: vec![ToolSpec { name: "read".into(), description: "read a file".into(), parameters: json!({ "type": "object" }) }],
+        };
+        let body = provider.body(&request);
+        let tools = body["tools"].as_array().unwrap();
+        assert_eq!(tools[0], json!({ "type": "web_search" }));
+        assert_eq!(tools[1]["type"], "function");
+        assert_eq!(tools[1]["name"], "read");
+    }
+
+    #[tokio::test]
+    async fn web_search_calls_stream_as_server_tools_and_never_as_blocks() {
+        let (tx, mut rx) = mpsc::channel(16);
+        let mut state = ResponsesState::new();
+        let added = json!({ "item": { "type": "web_search_call", "id": "ws_1", "status": "in_progress" } });
+        assert_eq!(state.apply("response.output_item.added", &added, &tx).await, Ok(false));
+        let done = json!({ "item": {
+            "type": "web_search_call", "id": "ws_1", "status": "completed",
+            "action": { "type": "search", "query": "tinybot relay" },
+        } });
+        assert_eq!(state.apply("response.output_item.done", &done, &tx).await, Ok(false));
+        let page = json!({ "item": { "type": "web_search_call", "id": "ws_2", "action": { "type": "open_page", "url": "https://example.com/a" } } });
+        assert_eq!(state.apply("response.output_item.added", &page, &tx).await, Ok(false));
+        assert_eq!(state.apply("response.output_item.done", &page, &tx).await, Ok(false));
+        // A message after the searches is still block 0: the searches took no index.
+        let message = json!({ "item": { "type": "message", "id": "msg_1" } });
+        assert_eq!(state.apply("response.output_item.added", &message, &tx).await, Ok(false));
+        drop(tx);
+
+        let mut events = Vec::new();
+        while let Some(event) = rx.recv().await {
+            events.push(event);
+        }
+        assert!(matches!(&events[0], AssistantEvent::ServerToolStart { id, name, detail } if id == "ws_1" && name == WEB_SEARCH_TOOL && detail.is_empty()));
+        assert!(matches!(&events[1], AssistantEvent::ServerToolEnd { id, name, detail, summary }
+            if id == "ws_1" && name == WEB_SEARCH_TOOL && detail == "tinybot relay" && summary == "Searched the web for “tinybot relay”"));
+        assert!(matches!(&events[2], AssistantEvent::ServerToolStart { name, detail, .. } if name == WEB_FETCH_TOOL && detail == "https://example.com/a"));
+        assert!(matches!(&events[3], AssistantEvent::ServerToolEnd { name, summary, .. } if name == WEB_FETCH_TOOL && summary == "Read https://example.com/a"));
+        assert!(matches!(&events[4], AssistantEvent::TextStart { index: 0 }));
+        assert_eq!(state.stop_reason, StopReason::Stop);
+    }
+
+    #[test]
+    fn a_find_inside_a_page_counts_as_a_read() {
+        let (name, detail, summary) = web_call_action(&json!({ "type": "find", "url": "https://x.dev", "pattern": "pricing" }));
+        assert_eq!((name.as_str(), detail.as_str(), summary.as_str()), (WEB_FETCH_TOOL, "pricing in https://x.dev", "Searched https://x.dev"));
+        let (name, _, summary) = web_call_action(&json!({}));
+        assert_eq!((name.as_str(), summary.as_str()), (WEB_SEARCH_TOOL, "Searched the web"));
     }
 }
