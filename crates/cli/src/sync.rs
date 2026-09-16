@@ -197,6 +197,13 @@ pub fn apply_blob(app: &Arc<App>, machine_file: &crate::keys::MachineFile, blob:
                 Err(error) => tracing::warn!(%error, "job envelope"),
             }
         }
+        "job_result" => {
+            let Ok(machine) = machine_file.machine() else { return };
+            match crate::crypto::unseal_json::<JobResult>(&machine.box_secret, &ciphertext) {
+                Ok(result) => crate::runtime::deliver_job_result(app, result),
+                Err(error) => tracing::warn!(%error, "job result envelope"),
+            }
+        }
         _ => {}
     }
 }
@@ -236,7 +243,7 @@ fn apply_chat_op(app: &Arc<App>, op: ChatBlob) {
                 if !state.chats.iter().any(|c| c.meta.id == message.chat_id) {
                     // Roster not here yet: keep the message under a placeholder until it is.
                     state.chats.push(Chat {
-                        meta: ChatMeta { id: message.chat_id.clone(), kind: "group".into(), title: Some("Chat".into()), bot_ids: vec![], is_pinned: false, created_at: message.created_at },
+                        meta: ChatMeta { id: message.chat_id.clone(), kind: "group".into(), title: Some("Chat".into()), bot_ids: vec![], owner_bot_id: None, is_pinned: false, created_at: message.created_at },
                         messages: Vec::new(),
                         unread_count: 0,
                     });

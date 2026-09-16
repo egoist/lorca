@@ -35,3 +35,12 @@ Architecture: [ARCHITECTURE.md](./ARCHITECTURE.md). Read it before implementing.
 ## Later
 
 - A mobile app (a Device, not a Runner)
+
+## Website
+
+The landing page lives in `web/` (TanStack Start on a Cloudflare Worker, shadcn/ui).
+
+```bash
+bun run web          # dev server on http://localhost:3000
+bun run web:deploy   # build and wrangler deploy
+```

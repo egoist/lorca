@@ -12,7 +12,8 @@ final class ChatViewController: NSViewController {
 
     private var chatID: Chat.ID?
     private var rows: [ChatRow] = []
-    private var expandedTools: Set<Message.ID> = []
+    /// Shown after the last message when a turn ended without a reply; cleared by the next message.
+    private var stoppedNotice: String?
     private var isPinnedToBottom = true
     private var lastWidth: CGFloat = 0
 
@@ -143,13 +144,13 @@ final class ChatViewController: NSViewController {
         chatID = newChatID
         guard let chat = store.chat(newChatID) else { return }
 
+        if !isSameChat { stoppedNotice = nil }
         layout.invalidateAll()
-        expandedTools.removeAll()
         rebuildRows()
         tableView.reloadData()
 
         let members = store.bots(in: chat)
-        composer.configure(placeholder: placeholder(for: chat), bots: members)
+        composer.configure(placeholder: placeholder(for: chat), bots: mentionable(in: chat))
         composer.isResponding = store.isResponding(in: newChatID)
 
         emptyState.isHidden = !chat.messages.isEmpty
@@ -162,6 +163,13 @@ final class ChatViewController: NSViewController {
 
     func focusComposer() {
         composer.focus()
+    }
+
+    /// Who `@` can address: members first, then every other bot. In a group an outsider joins
+    /// when the message is sent; in a DM the message moves to a new group with both bots.
+    private func mentionable(in chat: Chat) -> [Bot] {
+        let members = store.bots(in: chat)
+        return members + store.bots.filter { bot in !members.contains { $0.id == bot.id } }
     }
 
     private func placeholder(for chat: Chat) -> String {
@@ -181,22 +189,33 @@ final class ChatViewController: NSViewController {
         var previousDate: Date?
 
         for message in chat.messages {
-            if previousDate.map({ !Format.isSameDay($0, message.createdAt) }) ?? true {
+            // Tool calls are the bot's business; only a sent message leaves a marker.
+            if case let .tool(tool) = message.body, !tool.isSentMessage { continue }
+            let silence = previousDate.map { message.createdAt.timeIntervalSince($0) } ?? .infinity
+            if silence > ChatMetrics.separatorGap
+                || previousDate.map({ !Format.isSameDay($0, message.createdAt) }) ?? true
+            {
                 rows.append(.day(message.createdAt))
                 previousAuthor = nil
             }
 
             let sameAuthor = previousAuthor == message.author
-            let gap = previousDate.map { message.createdAt.timeIntervalSince($0) > 300 } ?? true
             let isChrome: Bool
             switch message.body {
             case .text: isChrome = false
             default: isChrome = true
             }
 
-            rows.append(.message(id: message.id, groupStart: isChrome || !sameAuthor || gap))
+            rows.append(.message(id: message.id, groupStart: isChrome || !sameAuthor))
             previousAuthor = isChrome ? nil : message.author
             previousDate = message.createdAt
+        }
+
+        let working = store.workingBots(in: chat.id)
+        if !working.isEmpty {
+            rows.append(.working(working))
+        } else if let stoppedNotice {
+            rows.append(.status(stoppedNotice))
         }
     }
 
@@ -213,6 +232,7 @@ final class ChatViewController: NSViewController {
         switch event {
         case let .messageAdded(id, _) where id == chatID:
             let wasPinned = isPinnedToBottom
+            stoppedNotice = nil
             rebuildRows()
             tableView.reloadData()
             emptyState.isHidden = true
@@ -222,6 +242,11 @@ final class ChatViewController: NSViewController {
         case let .messageChanged(id, messageID) where id == chatID:
             layout.invalidate(messageID)
             updateRow(for: messageID)
+            if let index = rows.firstIndex(where: { if case .working = $0 { return true } else { return false } }),
+                let cell = tableView.view(atColumn: 0, row: index, makeIfNecessary: false)
+            {
+                configure(cell: cell, row: rows[index])
+            }
             composer.isResponding = store.isResponding(in: chatID)
 
         case let .messageRemoved(id, messageID) where id == chatID:
@@ -233,10 +258,27 @@ final class ChatViewController: NSViewController {
 
         case let .respondingChanged(id) where id == chatID:
             composer.isResponding = store.isResponding(in: chatID)
+            if !store.isResponding(in: chatID), let chat = store.chat(chatID),
+                case .you = chat.messages.last?.author
+            {
+                stoppedNotice = "\(store.title(for: chat)) stopped without replying"
+            }
+            let wasPinned = isPinnedToBottom
+            rebuildRows()
+            tableView.reloadData()
+            // Turns hand over quickly (one member finishes as the next starts), so the pin
+            // is re-applied once the table has laid out the new last row.
+            if wasPinned {
+                scrollToBottom(animated: false)
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.isPinnedToBottom else { return }
+                    self.scrollToBottom(animated: false)
+                }
+            }
 
         case let .chatChanged(id) where id == chatID:
             guard let chat = store.chat(chatID) else { return }
-            composer.configure(placeholder: placeholder(for: chat), bots: store.bots(in: chat))
+            composer.configure(placeholder: placeholder(for: chat), bots: mentionable(in: chat))
 
         case .snapshotReplaced:
             show(chatID: chatID)
@@ -309,11 +351,15 @@ final class ChatViewController: NSViewController {
 
     // MARK: - Actions
 
+    /// Set by the split view so a message that moves to a new group chat opens it.
+    var onRedirect: ((Chat.ID) -> Void)?
+
     private func send(_ text: String) {
         guard let chatID else { return }
         isPinnedToBottom = true
-        store.send(text, in: chatID)
+        let destination = store.send(text, in: chatID)
         composer.isResponding = store.isResponding(in: chatID)
+        if destination != chatID { onRedirect?(destination) }
     }
 
     @objc func scrollToLatest(_ sender: Any?) {
@@ -338,21 +384,13 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
         guard rows.indices.contains(row) else { return 1 }
         let chatRow = rows[row]
         let message = chatRow.messageID.flatMap(message(for:))
-        let expanded = chatRow.messageID.map(expandedTools.contains) ?? false
-        let isGroup = chatID.flatMap(store.chat)?.isGroup ?? false
-        let showsName: Bool = {
-            guard isGroup, let message, case .bot = message.author, case .text = message.body else {
-                return false
-            }
-            return true
-        }()
+        let showsName = showsName(for: message)
         return max(
             1,
             layout.height(
                 for: chatRow,
                 message: message,
                 tableWidth: max(tableView.bounds.width, 320),
-                expanded: expanded,
                 showsName: showsName
             ))
     }
@@ -372,6 +410,16 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
             configure(cell: cell, row: chatRow)
             return cell
 
+        case .working:
+            let cell = dequeue(WorkingCellView.identifier) { WorkingCellView() }
+            configure(cell: cell, row: chatRow)
+            return cell
+
+        case .status:
+            let cell = dequeue(StatusCellView.identifier) { StatusCellView() }
+            configure(cell: cell, row: chatRow)
+            return cell
+
         case let .message(id, _):
             guard let message = message(for: id) else { return nil }
             let identifier: NSUserInterfaceItemIdentifier
@@ -380,10 +428,7 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
             case .text:
                 identifier = MessageCellView.identifier
                 cell = dequeue(identifier) { MessageCellView() }
-            case .tool:
-                identifier = ToolCellView.identifier
-                cell = dequeue(identifier) { ToolCellView() }
-            case .handoff:
+            case .tool, .handoff:
                 identifier = HandoffCellView.identifier
                 cell = dequeue(identifier) { HandoffCellView() }
             case .notice:
@@ -404,10 +449,33 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
         return view
     }
 
+    /// A bot's text in a group carries its name and avatar; a DM's bot needs neither.
+    private func showsName(for message: Message?) -> Bool {
+        guard let chatID, store.chat(chatID)?.isGroup == true, let message,
+            case .bot = message.author, case .text = message.body
+        else { return false }
+        return true
+    }
+
     private func configure(cell: NSView, row: ChatRow) {
         switch row {
         case let .day(date):
             (cell as? DayCellView)?.configure(date)
+
+        case let .working(botIDs):
+            guard let chatID, let chat = store.chat(chatID) else { return }
+            var activity: String?
+            if botIDs.count == 1, let last = chat.messages.last, last.author == .bot(botIDs[0]),
+                case let .tool(tool) = last.body, tool.isRunning
+            {
+                let target = store.bots.first { tool.detail.localizedCaseInsensitiveContains("\"bot\": \"\($0.name)\"") }
+                activity = WorkingCellView.activity(for: tool, targetName: target?.name)
+            }
+            (cell as? WorkingCellView)?.configure(
+                bots: botIDs.compactMap(store.bot), activity: activity, showsName: chat.isGroup)
+
+        case let .status(text):
+            (cell as? StatusCellView)?.configure(text)
 
         case let .message(id, groupStart):
             guard let message = message(for: id), let chatID, let chat = store.chat(chatID) else {
@@ -417,9 +485,10 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
             switch message.body {
             case .text:
                 guard let messageCell = cell as? MessageCellView else { return }
+                let showsName = showsName(for: message)
                 let name: String
                 let nameColor: NSColor
-                if chat.isGroup, case let .bot(botID) = message.author {
+                if showsName, case let .bot(botID) = message.author {
                     name = store.bot(botID)?.name ?? "Bot"
                     nameColor = store.bot(botID)?.accent.color ?? .secondaryLabelColor
                 } else {
@@ -435,20 +504,20 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
                     segments: layout.rendered(for: message).segments,
                     metrics: layout.metrics(
                         for: message,
-                        authorName: name,
+                        showsName: showsName,
                         tableWidth: max(tableView.bounds.width, 320))
                 )
 
             case let .tool(invocation):
-                guard let toolCell = cell as? ToolCellView else { return }
-                toolCell.configure(
-                    invocation: invocation, groupStart: groupStart,
-                    expanded: expandedTools.contains(id))
-                toolCell.onToggle = { [weak self] in self?.toggleTool(id) }
+                let recipient = store.bots.first { $0.name.caseInsensitiveCompare(invocation.recipientName) == .orderedSame }
+                (cell as? HandoffCellView)?.configure(
+                    mode: .outgoing(to: recipient), reason: invocation.detail, groupStart: groupStart)
 
             case let .handoff(from, to, reason):
+                let incoming = !chat.isGroup && chat.botIDs.contains(to)
                 (cell as? HandoffCellView)?.configure(
-                    from: store.bot(from), to: store.bot(to), reason: reason, groupStart: groupStart)
+                    mode: incoming ? .incoming(from: store.bot(from)) : .handoff(from: store.bot(from), to: store.bot(to)),
+                    reason: reason, groupStart: groupStart)
 
             case let .notice(text):
                 (cell as? NoticeCellView)?.configure(
@@ -462,18 +531,6 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
         }
     }
 
-    private func toggleTool(_ id: Message.ID) {
-        if expandedTools.contains(id) {
-            expandedTools.remove(id)
-        } else {
-            expandedTools.insert(id)
-        }
-        guard let index = rows.firstIndex(where: { $0.messageID == id }) else { return }
-        if let cell = tableView.view(atColumn: 0, row: index, makeIfNecessary: false) {
-            configure(cell: cell, row: rows[index])
-        }
-        tableView.noteHeightOfRows(withIndexesChanged: IndexSet(integer: index))
-    }
 }
 
 final class TransparentRowView: NSTableRowView {

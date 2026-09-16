@@ -6,7 +6,10 @@
     "build": "bun run scripts/build.ts",
     "cli": "cargo run -q -p tinybot -- serve",
     "reset": "bun run scripts/reset.ts",
-    "relay": "cargo run -q -p tinybot-relay --"
+    "relay": "cargo run -q -p tinybot-relay --",
+    "web": "bun run --cwd web dev",
+    "web:build": "bun run --cwd web build",
+    "web:deploy": "bun run --cwd web deploy"
   },
   "devDependencies": {
     "@types/bun": "latest"

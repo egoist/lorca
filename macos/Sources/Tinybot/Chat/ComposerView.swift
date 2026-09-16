@@ -422,7 +422,8 @@ final class ComposerView: NSView {
     }
 
     private func updateMentions() {
-        guard mentionableBots.count > 1, let range = mentionRange() else {
+        // Any chat with a bot completes `@`; a direct chat just offers its one bot.
+        guard !mentionableBots.isEmpty, let range = mentionRange() else {
             mentions.dismiss()
             return
         }

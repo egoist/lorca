@@ -209,6 +209,7 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
                     id: opt_string(&params, "id").unwrap_or_default(),
                     kind,
                     title: opt_string(&params, "title"),
+                    owner_bot_id: opt_string(&params, "owner_bot_id").or_else(|| bot_ids.first().cloned()),
                     bot_ids,
                     is_pinned: false,
                     created_at: 0.0,
@@ -223,7 +224,7 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
         }
         "chats.send" => {
             runtime::prime_names(app);
-            let message = runtime::send_user_message(app, &string(&params, "chat_id")?, &string(&params, "text")?, opt_string(&params, "message_id"))
+            let message = runtime::send_user_message(app.clone(), &string(&params, "chat_id")?, &string(&params, "text")?, opt_string(&params, "message_id"))
                 .map_err(|e| e.to_string())?;
             Ok(json!({ "message": message }))
         }
@@ -264,6 +265,20 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             app.update_chat_meta(&chat_id, |meta| {
                 if meta.is_group() && meta.bot_ids.len() > 1 {
                     meta.bot_ids.retain(|id| id != &bot_id);
+                    if meta.owner_bot_id.as_deref() == Some(bot_id.as_str()) {
+                        meta.owner_bot_id = meta.bot_ids.first().cloned();
+                    }
+                }
+            })
+            .map_err(|e| e.to_string())?;
+            Ok(Value::Null)
+        }
+        "chats.set_owner" => {
+            let chat_id = string(&params, "chat_id")?;
+            let bot_id = string(&params, "bot_id")?;
+            app.update_chat_meta(&chat_id, |meta| {
+                if meta.bot_ids.contains(&bot_id) {
+                    meta.owner_bot_id = Some(bot_id.clone());
                 }
             })
             .map_err(|e| e.to_string())?;

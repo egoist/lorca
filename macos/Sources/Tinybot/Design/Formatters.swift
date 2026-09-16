@@ -9,45 +9,50 @@ enum Format {
 
     private static let weekdayFormatter: DateFormatter = {
         let formatter = DateFormatter()
-        formatter.dateFormat = "EEE"
+        formatter.dateFormat = "EEEE"
         return formatter
     }()
 
     private static let shortDateFormatter: DateFormatter = {
         let formatter = DateFormatter()
+        formatter.dateFormat = "M/d"
+        return formatter
+    }()
+
+    private static let shortDateYearFormatter: DateFormatter = {
+        let formatter = DateFormatter()
         formatter.dateFormat = "M/d/yy"
         return formatter
     }()
 
-    private static let longDateFormatter: DateFormatter = {
+    private static let dateTimeFormatter: DateFormatter = {
         let formatter = DateFormatter()
-        formatter.dateFormat = "EEEE, MMMM d"
+        formatter.dateFormat = "EEE, MMM d h:mm a"
         return formatter
     }()
 
-    /// Compact stamp for sidebar rows: "now", "12m", "3h", "Tue", "9/2/26".
+    /// Stamp for sidebar rows: the time today, "Yesterday", the weekday within a week, "9/2"
+    /// this year, "9/2/25" before that.
     static func stamp(_ date: Date) -> String {
-        let elapsed = Date().timeIntervalSince(date)
-        if elapsed < 60 { return "now" }
-        if elapsed < 3600 { return "\(Int(elapsed / 60))m" }
-
         let calendar = Calendar.current
-        if calendar.isDateInToday(date) { return "\(Int(elapsed / 3600))h" }
+        if calendar.isDateInToday(date) { return time(date) }
         if calendar.isDateInYesterday(date) { return "Yesterday" }
-        if elapsed < 60 * 60 * 24 * 7 { return weekdayFormatter.string(from: date) }
-        return shortDateFormatter.string(from: date)
+        if Date().timeIntervalSince(date) < 60 * 60 * 24 * 7 { return weekdayFormatter.string(from: date) }
+        if calendar.isDate(date, equalTo: Date(), toGranularity: .year) { return shortDateFormatter.string(from: date) }
+        return shortDateYearFormatter.string(from: date)
     }
 
     static func time(_ date: Date) -> String {
         timeFormatter.string(from: date)
     }
 
-    /// Header shown between days in a transcript.
+    /// Separator before a cluster of messages: "Today 4:13 AM", "Yesterday 9:55 AM",
+    /// "Thu, Sep 10 9:48 AM".
     static func daySeparator(_ date: Date) -> String {
         let calendar = Calendar.current
-        if calendar.isDateInToday(date) { return "Today" }
-        if calendar.isDateInYesterday(date) { return "Yesterday" }
-        return longDateFormatter.string(from: date)
+        if calendar.isDateInToday(date) { return "Today \(time(date))" }
+        if calendar.isDateInYesterday(date) { return "Yesterday \(time(date))" }
+        return dateTimeFormatter.string(from: date)
     }
 
     static func lastSeen(_ date: Date) -> String {

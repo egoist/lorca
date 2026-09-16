@@ -114,11 +114,15 @@ Bot      1──* Job          (a turn on the bot's Runner)
 | Bot                | Decrypted profile                                         | Inside encrypted roster blobs                          |
 | ProviderCredential | Assigned Runner’s keychain                                | —                                                      |
 | Chat / Message     | Account/chat DEK                                          | Encrypted blobs                                        |
-| Job                | Any paired Device may create; the assigned Runner runs it | Sealed envelope to that Runner’s machine box key; deleted once run |
+| Job                | Any paired Device may create; the assigned Runner runs it | Sealed envelope to that Runner’s machine box key; deleted once run. A `room_turn` answers with a `job_result` sealed to the requesting Device |
 
 Creating a bot for Runner B from Device A: A writes an encrypted bot profile into the roster (paired Devices can read it) and pins B’s machine id. Bot create rejects a target whose `os` is not desktop. Turns are job envelopes addressed to B. B decrypts the job, runs the loop with B’s provider credentials, and uploads encrypted replies.
 
 If B is offline or still connecting a provider, the envelope waits on the relay until B fetches it. The UI infers that from decrypted roster state.
+
+## Website
+
+`web/` is the app's site: TanStack Start (React, file routes under `web/src/routes`), Tailwind and shadcn/ui components, built with Vite and served by a Cloudflare Worker (`web/wrangler.jsonc`, `@cloudflare/vite-plugin`, static assets alongside the SSR entry). One page: hero, screenshots of the app in `TINYBOT_MOCK=1` mode (`web/public/screens`), features, how it works, privacy, FAQ. `bun run web` serves it locally on port 3000; `bun run web:deploy` builds and runs `wrangler deploy`.
 
 ## Credential locality
 
@@ -144,7 +148,7 @@ Tables:
 - `blobs(id, identity_pubkey, kind, recipient_machine_pubkey nullable, seq, ciphertext, size, created_at)`
 - `sequences(identity_pubkey, seq)`, `challenges`, `pairings(nonce, identity_pubkey, request, reply, expires_at)`
 
-`kind` is `roster` | `chat` | `job` | `machine` | `key`. Ciphertext is bytes; the nonce sits inside it. `seq` increases per identity. A Device’s `name` and `os` are inside its `machine` blob, not columns.
+`kind` is `roster` | `chat` | `job` | `job_result` | `machine` | `key`. Ciphertext is bytes; the nonce sits inside it. `seq` increases per identity. A Device’s `name` and `os` are inside its `machine` blob, not columns.
 
 Blob API: `PUT /v1/blobs` (client-chosen id, idempotent), `GET /v1/blobs?since=<seq>&kinds=&wait=25` (long-poll; returns blobs for the identity that are unaddressed or addressed to the caller’s machine), `DELETE /v1/blobs/{id}`, `GET /v1/machines` (presence).
 
@@ -174,19 +178,22 @@ on decrypted Job:
   build context from the chat (this bot's turns are assistant, other bots' text is user "[Name]: …",
                                this bot's tool rows become tool_call + tool_result pairs)
   run_agent_loop_continue(context, provider = this Runner's creds, tools, sink)
-    events → transcript messages (thinking → streaming → complete) → local app WS
+    events → job.started / job.finished (chat, bot) → local app WS, which shows the bot at work
+           → a reply grows in chunks, not tokens: the text so far is re-sent at paragraph ends,
+             or at a sentence end after 1.5 s of silence, never mid-word; the end sends it complete
            → completed messages encrypted with the account DEK → relay
-    tool calls execute; message_bot terminates the batch
+    tool calls execute
 ```
 
-Turns in one chat run one at a time on a Runner. `chats.stop` cancels the running turn.
+Turns in one chat run one at a time on a Runner. `chats.stop` cancels the running turn (and the room exchange it belongs to).
 
 ### Tools
 
 Team tools (the CLI):
 
-- `message_bot { bot, message }` — handoff, visible in the transcript as a handoff row. Creates a `handoff` Job for the target bot; the envelope goes to the **target bot’s Runner**. The calling bot’s turn ends.
+- `message_bot { bot, message }` — a message to a bot outside the current chat. The caller's chat shows a "Messaged ◉ X" marker; the target's own DM gets a "Message from ◉ X" marker and a `message` Job (with `from_bot_id` and `hops`) whose envelope goes to the **target bot’s Runner**. The tool refuses a member of the same group: they read that chat and take their own turn.
 - `list_teammates` — decrypted local roster with Runner and online state.
+- `remember { note }` — appends to the bot’s memory file.
 - `create_bot { name, tagline, instructions, provider?, workdir? }` — a new teammate on the caller’s Runner with its own DM; in a group chat it joins that chat. This is how a lead bot builds its team.
 
 Coding tools (`tinybot_agent::tools`, ports of pi’s built-ins, same schemas and truncation rules: 2000 lines / 50KB, whichever first):
@@ -201,7 +208,15 @@ Every bot has a working directory on its Runner (`workdir`, default `~/.tinybot/
 
 A new identity starts with one bot, **Chef**, a chief of staff on the first Mac: an ordinary bot with a default profile whose instructions are to learn the user’s work, propose a small team of one-job bots, create them with `create_bot`, and route work with `message_bot`. Nothing about it is privileged; rename or delete it like any bot.
 
-A chat has a `kind`. A DM is one bot and never gains or loses members; there is one DM per bot. A group holds one to six bots and can add or remove them after creation. Group chats: `@BotName` / `@everyone`; otherwise one owner. Orchestration is bots messaging bots.
+A chat has a `kind`. A DM is one bot and never gains or loses members; there is one DM per bot. A group holds one to six bots, can add or remove them after creation, and has an `owner_bot_id` (the bot holding the work; defaults to the first member, `chats.set_owner` changes it).
+
+Who answers, after Grok Bot's rooms:
+
+- **DM:** its bot, always. An `@Name` is a reference the bot acts on: it calls `message_bot`, which delivers the message into that bot's own DM with the user, where that bot answers (and can message back).
+- **Group:** a room exchange (`run_room`). The Device that received the user's message offers every member a turn, one at a time, in chat order with the members the message names by `@` first. A member's turn is a `room_turn` Job with the whole transcript plus an ephemeral cue (round number, how many messages are new to it); the member replies to the group or answers `PASS`, which never becomes a bubble. A round with at least one reply is followed by another, offered only to members who have heard something new; the exchange ends after a silent round or after the fourth round, which is marked winding down so members add only what is essential. The user's next message in that chat waits for the exchange (the chat lock); `chats.stop` cancels it. A member on another Runner gets its job through the relay and reports back with a `job_result` blob (`sent`, `pass`, `error`) sealed to the requesting Device; the room waits up to five minutes for it and skips an offline Runner.
+- **Bot to bot:** `message_bot` from any chat to a bot outside it; the message lands in the target's DM. Each hop carries `hops`; after eight bot-to-bot hops without a user message the tool refuses, so two bots cannot loop. Members of one group talk to each other in the group.
+
+Every bot keeps its own memory (`workspaces/<id>/MEMORY.md`, written by the `remember` tool, shown at the start of every turn), separate from any chat.
 
 ### Providers
 
@@ -220,6 +235,8 @@ The app starts the bundled `tinybot` (Contents/MacOS/tinybot; `TINYBOT_CLI` over
 First run: the CLI answers `hello` with `has_identity: false`, and the app shows onboarding: create (the CLI returns the phrase), restore (phrase → relay), or pair (paste the string from the identity Mac). After create, the user names the first bot (the CLI's default Chef, edited through `bots.update`), then connects a provider on this Mac (DeepSeek key or ChatGPT sign-in, skippable). Restore and pair go straight to the provider step, since the roster syncs.
 
 Chrome: split view, vibrancy, bubbles, `@` mentions. The app renders CLI events and applies its own edits optimistically; `TINYBOT_MOCK=1` runs the seeded demo instead. Keys stay in the CLI.
+
+Working state, after Grok Bot: the CLI's `job.started` / `job.finished` events (and `running_turns` in the snapshot) name the chat and bot of every turn in flight, including a turn sent to another Runner. From them the app shows a breathing green dot on the bot's avatar in the sidebar, an "is working" row after the last message (the avatar alone in a DM, "Chef is working…" or the running tool's activity such as "Running commands…" in a group), the Stop button, and "Chef stopped without replying" when a turn ends with nothing said. Replies arrive in chunks: the bubble appears with the first completed paragraph (or sentence, after 1.5 s) and grows by paragraphs, the way Grok Bot's server re-sends a message as it grows. Tool calls never appear in the transcript, as in Grok Bot: the CLI keeps them as `tool` messages so a later turn can rebuild its context, and the app renders none of them, leaving the "is working" row (with the running tool's activity) and whatever the bot says before and after its work. The one exception is a sent `message_bot`, shown as the "Messaged ◉ X" marker. Sidebar rows carry a blue unread dot, a preview without a "You:" prefix (a bot's name only in groups; "Messaged X" and "Message from X: …" for bot-to-bot messages), and a stamp that is the time today, "Yesterday", the weekday within a week, then the date. A transcript inserts "Today 4:13 AM" separators after fifteen minutes of silence; in a group a bot's name sits above its bubble with its avatar beside the bubble's bottom edge, and a DM shows neither.
 
 ## Protocols
 

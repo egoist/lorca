@@ -158,6 +158,17 @@ struct ToolInvocation: Hashable {
     var detail: String
     var isRunning: Bool
 
+    /// A finished message_bot call: the one tool the transcript shows, as "Messaged ◉ Name".
+    /// Everything else a bot does with tools stays behind the "is working" row.
+    var isSentMessage: Bool {
+        name == "message_bot" && !isRunning && summary.hasPrefix("Messaged ")
+    }
+
+    /// The recipient's name from a "Messaged Name" summary.
+    var recipientName: String {
+        String(summary.dropFirst("Messaged ".count))
+    }
+
     var symbolName: String {
         switch name {
         case "message_bot": "arrow.triangle.turn.up.right.diamond.fill"

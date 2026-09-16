@@ -167,6 +167,7 @@ final class RootSplitViewController: NSSplitViewController {
         case let .chat(id):
             guard let chat = store.chat(id) else { return }
             let controller = chatController ?? ChatViewController()
+            controller.onRedirect = { [weak self] chatID in self?.select(.chat(chatID)) }
             chatController = controller
             controller.show(chatID: chat.id)
             content.show(controller)

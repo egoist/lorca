@@ -29,6 +29,13 @@ enum Wire {
         var bots: [Bot]
         var chats: [Chat]
         var runningChatIds: [String]
+        var runningTurns: [RunningTurn]?
+    }
+
+    struct RunningTurn: Decodable {
+        var jobId: String
+        var chatId: String
+        var botId: String
     }
 
     struct Provider: Decodable {

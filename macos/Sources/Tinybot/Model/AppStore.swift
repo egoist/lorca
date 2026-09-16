@@ -44,7 +44,9 @@ final class AppStore {
     private(set) var relayConnected = false
     private(set) var relayURL: String?
 
-    private var runningChats: Set<Chat.ID> = []
+    /// Turns in flight, by job id: the chat and the bot (empty while a group exchange is between
+    /// member turns). Drives the "is working" row and the presence dot on avatars.
+    private var runningJobs: [(id: String, chatID: Chat.ID, botID: Bot.ID)] = []
     private var replyEngine: ReplyEngine?
     private var started = false
 
@@ -84,7 +86,7 @@ final class AppStore {
             case .disconnected, .connecting:
                 if self.isConnected {
                     self.isConnected = false
-                    self.runningChats.removeAll()
+                    self.runningJobs.removeAll()
                     self.emit(.connectionChanged)
                 }
                 // The CLI went away (a stale instance stopped, or it crashed): start ours.
@@ -146,7 +148,10 @@ final class AppStore {
         devices = snapshot.devices.map { $0.toModel() }
         bots = snapshot.bots.map { $0.toModel() }
         chats = snapshot.chats.map { $0.toModel() }
-        runningChats = Set(snapshot.runningChatIds)
+        runningJobs = (snapshot.runningTurns ?? []).map { ($0.jobId, $0.chatId, $0.botId) }
+        for id in snapshot.runningChatIds where !runningJobs.contains(where: { $0.chatID == id }) {
+            runningJobs.append(("chat:\(id)", id, ""))
+        }
         sortChats()
         emit(.snapshotReplaced)
     }
@@ -196,18 +201,21 @@ final class AppStore {
         case "chat.removed":
             guard let payload = decode(Wire.ChatRemoved.self) else { return }
             chats.removeAll { $0.id == payload.chatId }
-            runningChats.remove(payload.chatId)
+            runningJobs.removeAll { $0.chatID == payload.chatId }
             emit(.chatsChanged)
 
         case "job.started":
             guard let job = decode(Wire.JobEvent.self) else { return }
-            runningChats.insert(job.chatId)
+            runningJobs.removeAll { $0.id == "pending:\(job.chatId)" }
+            runningJobs.append((job.jobId, job.chatId, job.botId))
             emit(.respondingChanged(job.chatId))
+            emit(.chatsChanged)
 
         case "job.finished":
             guard let job = decode(Wire.JobEvent.self) else { return }
-            runningChats.remove(job.chatId)
+            runningJobs.removeAll { $0.id == job.jobId }
             emit(.respondingChanged(job.chatId))
+            emit(.chatsChanged)
 
         case "relay.status":
             guard let status = decode(Wire.RelayStatus.self) else { return }
@@ -302,12 +310,20 @@ final class AppStore {
     }
 
     func preview(for chat: Chat) -> String {
-        guard let last = chat.messages.last else { return "No messages yet" }
+        // The last thing worth previewing: tool calls never are, except a sent message.
+        let shown = chat.messages.last { message in
+            if case let .tool(tool) = message.body { return tool.isSentMessage }
+            return true
+        }
+        guard let last = shown else { return "No messages yet" }
         let body: String
         switch last.body {
         case let .text(value): body = value
-        case let .tool(tool): body = tool.summary
-        case let .handoff(_, to, _): body = "Handed off to \(bot(to)?.name ?? "a teammate")"
+        case let .tool(tool): body = "Messaged \(tool.recipientName): \(tool.detail)"
+        case let .handoff(from, to, reason):
+            body = !chat.isGroup && chat.botIDs.contains(to)
+                ? "Message from \(bot(from)?.name ?? "a teammate"): \(reason)"
+                : "Handed off to \(bot(to)?.name ?? "a teammate")"
         case let .notice(value): body = value
         }
 
@@ -317,11 +333,10 @@ final class AppStore {
             .replacingOccurrences(of: "`", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
-        switch last.author {
-        case .you: return "You: \(flattened)"
-        case let .bot(id): return chat.isGroup ? "\(bot(id)?.name ?? ""): \(flattened)" : flattened
-        case .system: return flattened
+        if chat.isGroup, case let .bot(id) = last.author, case .text = last.body {
+            return "\(bot(id)?.name ?? "Bot"): \(flattened)"
         }
+        return flattened
     }
 
     // MARK: - Connection
@@ -463,7 +478,7 @@ final class AppStore {
     func deleteChat(_ id: Chat.ID) {
         replyEngine?.cancel(chatID: id)
         chats.removeAll { $0.id == id }
-        runningChats.remove(id)
+        runningJobs.removeAll { $0.chatID == id }
         emit(.chatsChanged)
         perform("chats.delete", ["chat_id": id])
     }
@@ -544,38 +559,66 @@ final class AppStore {
         emit(.chatsChanged)
     }
 
-    func send(_ text: String, in chatID: Chat.ID) {
+    /// Sends the message and returns the chat it landed in. Mentions are references the chat's
+    /// bot acts on (it can message that bot); the message itself stays here.
+    @discardableResult
+    func send(_ text: String, in chatID: Chat.ID) -> Chat.ID {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, let chat = chat(chatID) else { return }
+        guard !trimmed.isEmpty, let chat = chat(chatID) else { return chatID }
 
         let message = Message(author: .you, body: .text(trimmed))
         append(message, to: chatID)
 
         if isMock {
             replyEngine?.respond(to: trimmed, in: chat)
-            return
+            return chatID
         }
 
-        // Expect a turn to start; the CLI's job events confirm or clear this.
+        // Expect a turn to start; the CLI's job events confirm or clear this. A DM names its
+        // bot right away so the working row appears with the send.
         if !chat.botIDs.isEmpty {
-            runningChats.insert(chatID)
+            let pendingID = "pending:\(chatID)"
+            runningJobs.append((pendingID, chatID, chat.isDM ? chat.botIDs[0] : ""))
             emit(.respondingChanged(chatID))
+            emit(.chatsChanged)
             Task { [weak self] in
                 try? await Task.sleep(nanoseconds: 4_000_000_000)
-                guard let self else { return }
-                // Nothing started (no Runner answered); stop showing the stop button.
-                if self.runningChats.contains(chatID), self.chat(chatID)?.messages.last?.id == message.id {
-                    self.runningChats.remove(chatID)
-                    self.emit(.respondingChanged(chatID))
-                }
+                guard let self, self.runningJobs.contains(where: { $0.id == pendingID }) else { return }
+                // Nothing started (no Runner answered); stop showing the bot at work.
+                self.runningJobs.removeAll { $0.id == pendingID }
+                self.emit(.respondingChanged(chatID))
+                self.emit(.chatsChanged)
             }
         }
         perform("chats.send", ["chat_id": chatID, "text": trimmed, "message_id": message.id])
+        return chatID
     }
 
     func isResponding(in chatID: Chat.ID) -> Bool {
-        if isMock { return replyEngine?.isRunning(chatID: chatID) ?? false }
-        return runningChats.contains(chatID)
+        runningJobs.contains { $0.chatID == chatID }
+    }
+
+    /// Bots with a turn running in this chat, in the order they started.
+    func workingBots(in chatID: Chat.ID) -> [Bot.ID] {
+        var seen: [Bot.ID] = []
+        for job in runningJobs where job.chatID == chatID && !job.botID.isEmpty && !seen.contains(job.botID) {
+            seen.append(job.botID)
+        }
+        return seen
+    }
+
+    /// Whether the bot has a turn running anywhere: the green dot on its avatar.
+    func isWorking(_ botID: Bot.ID) -> Bool {
+        runningJobs.contains { $0.botID == botID }
+    }
+
+    /// The mock reply engine's turns, so the demo shows the same working state as the CLI.
+    func setMockWorking(_ botID: Bot.ID, in chatID: Chat.ID, _ working: Bool) {
+        let id = "mock:\(chatID):\(botID)"
+        runningJobs.removeAll { $0.id == id }
+        if working { runningJobs.append((id, chatID, botID)) }
+        emit(.respondingChanged(chatID))
+        emit(.chatsChanged)
     }
 
     func stopResponding(in chatID: Chat.ID) {

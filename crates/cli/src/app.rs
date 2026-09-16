@@ -80,6 +80,8 @@ pub struct App {
     /// job id → (chat id, cancel)
     pub running_jobs: Mutex<HashMap<String, (String, String, CancellationToken)>>,
     pub chat_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// `room_turn` jobs sent to other Runners, waiting for their `job_result`.
+    pub pending_results: Mutex<HashMap<String, tokio::sync::oneshot::Sender<String>>>,
     pub http: reqwest::Client,
 }
 
@@ -108,6 +110,7 @@ impl App {
             pairings: Mutex::new(HashMap::new()),
             running_jobs: Mutex::new(HashMap::new()),
             chat_locks: Mutex::new(HashMap::new()),
+            pending_results: Mutex::new(HashMap::new()),
             http,
         }))
     }
@@ -298,6 +301,17 @@ impl App {
         self.chat_locks.lock().unwrap().entry(chat_id.to_string()).or_default().clone()
     }
 
+    /// Every turn in flight, for the app's working indicators: `(chat id, bot id)`; a group
+    /// exchange between member turns has an empty bot id.
+    pub fn running_turns(&self) -> Vec<Value> {
+        self.running_jobs
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(job_id, (chat, bot, _))| json!({ "job_id": job_id, "chat_id": chat, "bot_id": bot }))
+            .collect()
+    }
+
     pub fn running_chat_ids(&self) -> Vec<String> {
         let mut ids: Vec<String> = self.running_jobs.lock().unwrap().values().map(|(chat, _, _)| chat.clone()).collect();
         ids.sort();
@@ -370,6 +384,9 @@ impl App {
         if meta.bot_ids.is_empty() {
             anyhow::bail!("A chat needs at least one bot");
         }
+        if meta.owner_bot_id.as_ref().map(|id| !meta.bot_ids.contains(id)).unwrap_or(true) {
+            meta.owner_bot_id = meta.bot_ids.first().cloned();
+        }
         {
             let state = self.state.lock().unwrap();
             for id in &meta.bot_ids {
@@ -408,6 +425,7 @@ impl App {
             kind: "dm".into(),
             title: None,
             bot_ids: vec![bot_id.to_string()],
+            owner_bot_id: Some(bot_id.to_string()),
             is_pinned: false,
             created_at: 0.0,
         })
@@ -580,6 +598,7 @@ impl App {
             "bots": state.bots,
             "chats": state.chats,
             "running_chat_ids": self.running_chat_ids(),
+            "running_turns": self.running_turns(),
         })
     }
 }

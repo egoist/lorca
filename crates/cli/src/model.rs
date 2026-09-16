@@ -151,6 +151,10 @@ pub struct ChatMeta {
     #[serde(default)]
     pub title: Option<String>,
     pub bot_ids: Vec<String>,
+    /// The bot that owns the work in this chat right now. Unaddressed messages go to it; a
+    /// handoff can pass it on. Empty means the members decide.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_bot_id: Option<String>,
     #[serde(default)]
     pub is_pinned: bool,
     pub created_at: f64,
@@ -204,11 +208,38 @@ pub struct Job {
     pub id: String,
     pub chat_id: String,
     pub bot_id: String,
-    /// `turn` for a user message, `handoff` for a teammate's message_bot.
+    /// `turn` for a user message in a DM, `room_turn` for one member's turn in a group,
+    /// `message` for a teammate's message_bot.
     pub kind: String,
     pub trigger_message_id: String,
+    /// The Device that created the job; a `room_turn` result goes back to it.
     pub requested_by: String,
+    /// The bot that sent a `message` job, so the recipient knows who to answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_bot_id: Option<String>,
+    /// Bot-to-bot hops since the last user message. Bounded so two bots cannot loop.
+    #[serde(default)]
+    pub hops: u32,
+    /// `room_turn`: which round of the group exchange this is, from 1.
+    #[serde(default)]
+    pub round: u32,
+    /// `room_turn`: the last round; the member should only add what is essential.
+    #[serde(default)]
+    pub is_winding_down: bool,
     pub created_at: f64,
+}
+
+pub const MAX_BOT_HOPS: u32 = 8;
+
+/// `kind = job_result`, sealed to the requesting Device's box key: how a `room_turn` ended, so
+/// the Device running the group exchange can offer the next turn.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct JobResult {
+    pub job_id: String,
+    pub chat_id: String,
+    pub bot_id: String,
+    /// `sent`, `pass`, or `error`.
+    pub outcome: String,
 }
 
 /// Pairing handshake payloads (sealed boxes).

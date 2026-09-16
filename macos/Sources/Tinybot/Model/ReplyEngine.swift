@@ -1,11 +1,12 @@
 import Foundation
 
-/// Stands in for the CLI's agent loop: streams tokens, runs fake tools, hands off between bots.
+/// Stands in for the CLI's agent loop: bots work for a moment, run fake tools, hand off between
+/// each other, and post whole replies.
 @MainActor
 final class ReplyEngine {
     private unowned let store: AppStore
     private var tasks: [Chat.ID: Task<Void, Never>] = [:]
-    private var pendingThinkingID: [Chat.ID: Message.ID] = [:]
+    private var working: [Chat.ID: Bot.ID] = [:]
     private var turnCount = 0
 
     init(store: AppStore) {
@@ -19,6 +20,15 @@ final class ReplyEngine {
     func cancel(chatID: Chat.ID) {
         tasks[chatID]?.cancel()
         tasks[chatID] = nil
+        setWorking(nil, in: chatID)
+    }
+
+    private func setWorking(_ botID: Bot.ID?, in chatID: Chat.ID) {
+        if let previous = working[chatID], previous != botID {
+            store.setMockWorking(previous, in: chatID, false)
+        }
+        working[chatID] = botID
+        if let botID { store.setMockWorking(botID, in: chatID, true) }
     }
 
     func respond(to prompt: String, in chat: Chat) {
@@ -39,9 +49,7 @@ final class ReplyEngine {
 
     private func finish(chatID: Chat.ID) {
         tasks[chatID] = nil
-        if let orphan = pendingThinkingID.removeValue(forKey: chatID) {
-            store.update(orphan, in: chatID) { $0.state = .complete }
-        }
+        setWorking(nil, in: chatID)
     }
 
     // MARK: - Steps
@@ -56,40 +64,18 @@ final class ReplyEngine {
     private func run(_ step: Step, in chatID: Chat.ID) async {
         switch step {
         case let .think(botID, seconds):
-            guard let id = store.append(
-                Message(author: .bot(botID), body: .text(""), state: .thinking), to: chatID)
-            else { return }
-            pendingThinkingID[chatID] = id
+            setWorking(botID, in: chatID)
             await sleep(seconds)
 
         case let .say(botID, text):
-            let existing = pendingThinkingID.removeValue(forKey: chatID)
-            let messageID: Message.ID
-            if let existing {
-                messageID = existing
-                store.update(existing, in: chatID) { $0.state = .streaming }
-            } else {
-                guard let id = store.append(
-                    Message(author: .bot(botID), body: .text(""), state: .streaming), to: chatID)
-                else { return }
-                messageID = id
-            }
-
-            var rendered = ""
-            for token in tokenize(text) {
-                if Task.isCancelled {
-                    store.update(messageID, in: chatID) { $0.state = .complete }
-                    return
-                }
-                rendered += token
-                store.update(messageID, in: chatID) { $0.body = .text(rendered) }
-                await sleep(Double.random(in: 0.016...0.042))
-            }
-            store.update(messageID, in: chatID) { $0.state = .complete }
-            store.refreshChatList()
+            setWorking(botID, in: chatID)
+            await sleep(Double(text.count) * 0.004)
+            if Task.isCancelled { return }
+            store.append(Message(author: .bot(botID), body: .text(text)), to: chatID)
+            setWorking(nil, in: chatID)
 
         case let .tool(botID, invocation, seconds):
-            pendingThinkingID.removeValue(forKey: chatID)
+            setWorking(botID, in: chatID)
             var running = invocation
             running.isRunning = true
             guard let id = store.append(
@@ -105,7 +91,6 @@ final class ReplyEngine {
             store.refreshChatList()
 
         case let .handoff(from, to, reason):
-            pendingThinkingID.removeValue(forKey: chatID)
             store.append(
                 Message(author: .bot(from), body: .handoff(from: from, to: to, reason: reason)),
                 to: chatID)
@@ -115,20 +100,6 @@ final class ReplyEngine {
 
     private func sleep(_ seconds: Double) async {
         try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-    }
-
-    private func tokenize(_ text: String) -> [String] {
-        var tokens: [String] = []
-        var current = ""
-        for character in text {
-            current.append(character)
-            if character == " " || character == "\n" {
-                tokens.append(current)
-                current = ""
-            }
-        }
-        if !current.isEmpty { tokens.append(current) }
-        return tokens
     }
 
     // MARK: - Script

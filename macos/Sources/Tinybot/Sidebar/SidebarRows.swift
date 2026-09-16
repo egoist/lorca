@@ -93,9 +93,8 @@ final class SidebarChatCell: NSTableCellView {
     private let stamp = Build.label(
         "", font: Theme.Font.caption, color: .tertiaryLabelColor, alignment: .right)
     private let pin = NSImageView()
+    /// Unread activity: a dot, not a count.
     private let badge = BackgroundView()
-    private let badgeLabel = Build.label(
-        "", font: .systemFont(ofSize: 10, weight: .semibold), color: .white, alignment: .center)
 
     // Hidden views still occupy their intrinsic width in Auto Layout, so the title
     // and preview claim the reclaimed space by switching which view they stop at.
@@ -117,8 +116,7 @@ final class SidebarChatCell: NSTableCellView {
         pin.translatesAutoresizingMaskIntoConstraints = false
         pin.isHidden = true
 
-        badge.cornerRadius = 8
-        badge.addSubview(badgeLabel)
+        badge.cornerRadius = 4
         badge.isHidden = true
 
         for tight in [stamp, pin, badge] as [NSView] {
@@ -148,15 +146,10 @@ final class SidebarChatCell: NSTableCellView {
             preview.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 2),
 
             badge.trailingAnchor.constraint(
-                equalTo: trailingAnchor, constant: -SidebarMetric.trailingInset),
+                equalTo: trailingAnchor, constant: -SidebarMetric.trailingInset - 2),
             badge.centerYAnchor.constraint(equalTo: preview.centerYAnchor),
-            badge.heightAnchor.constraint(equalToConstant: 16),
-            badge.widthAnchor.constraint(greaterThanOrEqualToConstant: 18),
-
-            badgeLabel.centerXAnchor.constraint(equalTo: badge.centerXAnchor),
-            badgeLabel.centerYAnchor.constraint(equalTo: badge.centerYAnchor),
-            badgeLabel.leadingAnchor.constraint(equalTo: badge.leadingAnchor, constant: 5),
-            badgeLabel.trailingAnchor.constraint(equalTo: badge.trailingAnchor, constant: -5),
+            badge.heightAnchor.constraint(equalToConstant: 8),
+            badge.widthAnchor.constraint(equalToConstant: 8),
         ])
 
         textField = title
@@ -167,6 +160,7 @@ final class SidebarChatCell: NSTableCellView {
 
     func configure(chat: Chat, store: AppStore) {
         avatars.configure(with: store.bots(in: chat))
+        avatars.isWorking = chat.botIDs.contains { store.isWorking($0) }
         title.stringValue = store.title(for: chat)
         preview.stringValue = store.preview(for: chat)
         stamp.stringValue = Format.stamp(chat.lastActivity)
@@ -177,12 +171,12 @@ final class SidebarChatCell: NSTableCellView {
 
         let unread = chat.unreadCount
         badge.isHidden = unread == 0
-        badge.fillColor = .controlAccentColor
-        badgeLabel.stringValue = unread > 99 ? "99+" : "\(unread)"
+        badge.setAccessibilityLabel(unread > 0 ? "Unread activity" : nil)
         previewBeforeBadge.isActive = unread > 0
         previewBeforeEdge.isActive = unread == 0
-
-        title.font = unread > 0 ? .systemFont(ofSize: 13, weight: .semibold) : Theme.Font.sidebarTitle
+        setAccessibilityLabel(
+            [title.stringValue, unread > 0 ? "Unread activity" : nil, avatars.isWorking ? "Working" : nil]
+                .compactMap { $0 }.joined(separator: ", "))
         applyBackgroundStyle()
     }
 
@@ -196,7 +190,6 @@ final class SidebarChatCell: NSTableCellView {
         stamp.textColor = emphasized ? NSColor.white.withAlphaComponent(0.65) : .tertiaryLabelColor
         pin.contentTintColor = emphasized ? NSColor.white.withAlphaComponent(0.7) : .tertiaryLabelColor
         badge.fillColor = emphasized ? NSColor.white.withAlphaComponent(0.9) : .controlAccentColor
-        badgeLabel.textColor = emphasized ? .controlAccentColor : .white
     }
 }
 

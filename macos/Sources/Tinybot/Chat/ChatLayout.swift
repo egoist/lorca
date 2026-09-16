@@ -15,8 +15,10 @@ enum ChatMetrics {
     static let maxBubbleWidth: CGFloat = 580
     static let userLeftGutter: CGFloat = 72
     static let dayRowHeight: CGFloat = 42
-    static let thinkingBubbleHeight: CGFloat = 22
-    static let chipHeight: CGFloat = 30
+    static let workingRowHeight: CGFloat = 44
+    static let statusRowHeight: CGFloat = 30
+    /// A new "Today 4:13 AM" separator after this much silence.
+    static let separatorGap: TimeInterval = 15 * 60
     static let noticeMaxWidth: CGFloat = 460
     static let noticePadX: CGFloat = 10
     static let noticePadY: CGFloat = 8
@@ -25,18 +27,16 @@ enum ChatMetrics {
 
     static var bubbleIndent: CGFloat { horizontalInset + avatarSize + avatarGutter }
 
-    /// Expanded tool detail box; the row height and `ToolCellView` both size it from here.
-    static func toolDetailWidth(tableWidth: CGFloat) -> CGFloat {
-        max(200, min(520, tableWidth - bubbleIndent - horizontalInset))
-    }
 }
 
+/// The name sits above the bubble (group chats only); the bubble holds the text and the stamp.
 struct BubbleMetrics {
     var textWidth: CGFloat
     var textHeight: CGFloat
-    var nameWidth: CGFloat
     var timeWidth: CGFloat
     var showsName: Bool
+    /// Where the bubble starts: after the avatar column in a group, at the inset in a DM.
+    var indent: CGFloat
 
     var timeGutter: CGFloat {
         timeWidth > 0 ? ChatMetrics.timeGap + timeWidth : 0
@@ -46,11 +46,12 @@ struct BubbleMetrics {
         showsName ? ChatMetrics.headerLineHeight + ChatMetrics.headerToBody : 0
     }
 
-    var innerWidth: CGFloat { max(nameWidth, textWidth + timeGutter) }
+    var innerWidth: CGFloat { textWidth + timeGutter }
     var bubbleWidth: CGFloat { innerWidth + ChatMetrics.bubblePadX * 2 }
     var bubbleHeight: CGFloat {
-        ChatMetrics.bubblePadY + headerHeight + textHeight + ChatMetrics.bubblePadY
+        ChatMetrics.bubblePadY + textHeight + ChatMetrics.bubblePadY
     }
+    var rowHeight: CGFloat { headerHeight + bubbleHeight }
 }
 
 /// Notice box size, with icon and label frames in box coordinates (y grows downward).
@@ -63,6 +64,10 @@ struct NoticeMetrics {
 enum ChatRow: Equatable {
     case day(Date)
     case message(id: Message.ID, groupStart: Bool)
+    /// Bots with a turn running, shown after the last message.
+    case working([Bot.ID])
+    /// A one-line note after the last message, such as "Chef stopped without replying".
+    case status(String)
 
     var messageID: Message.ID? {
         if case let .message(id, _) = self { return id }
@@ -100,16 +105,18 @@ final class ChatLayout {
         cache.removeAll()
     }
 
-    func availableBubbleWidth(for message: Message, tableWidth: CGFloat) -> CGFloat {
+    func availableBubbleWidth(for message: Message, indent: CGFloat, tableWidth: CGFloat) -> CGFloat {
         let reserved =
             message.author.isYou
             ? ChatMetrics.horizontalInset * 2 + ChatMetrics.userLeftGutter
-            : ChatMetrics.bubbleIndent + ChatMetrics.horizontalInset
+            : indent + ChatMetrics.horizontalInset
         return max(140, min(ChatMetrics.maxBubbleWidth, tableWidth - reserved))
     }
 
-    func metrics(for message: Message, authorName: String, tableWidth: CGFloat) -> BubbleMetrics {
-        let maxBubble = availableBubbleWidth(for: message, tableWidth: tableWidth)
+    /// `showsName` is a group chat's bot message: name above, avatar beside the bubble.
+    func metrics(for message: Message, showsName: Bool, tableWidth: CGFloat) -> BubbleMetrics {
+        let indent = showsName ? ChatMetrics.bubbleIndent : ChatMetrics.horizontalInset
+        let maxBubble = availableBubbleWidth(for: message, indent: indent, tableWidth: tableWidth)
         let maxInner = maxBubble - ChatMetrics.bubblePadX * 2
         let timeWidth: CGFloat = {
             guard Preferences.showTimestamps else { return 0 }
@@ -126,22 +133,12 @@ final class ChatLayout {
         let textHeight = max(
             ChatMetrics.timeLineHeight,
             content.height(forWidth: textWidth) + 1)
-        let showsName = !authorName.isEmpty
-        let nameWidth =
-            showsName
-            ? min(
-                TextMeasure.labelSize(
-                    of: NSAttributedString(
-                        string: authorName, attributes: [.font: Theme.Font.author])
-                ).width,
-                maxInner)
-            : 0
         return BubbleMetrics(
             textWidth: textWidth,
             textHeight: textHeight,
-            nameWidth: nameWidth,
             timeWidth: timeWidth,
-            showsName: showsName
+            showsName: showsName,
+            indent: indent
         )
     }
 
@@ -172,11 +169,17 @@ final class ChatLayout {
     }
 
     func height(
-        for row: ChatRow, message: Message?, tableWidth: CGFloat, expanded: Bool, showsName: Bool
+        for row: ChatRow, message: Message?, tableWidth: CGFloat, showsName: Bool
     ) -> CGFloat {
         switch row {
         case .day:
             return ChatMetrics.dayRowHeight
+
+        case .working:
+            return ChatMetrics.workingRowHeight
+
+        case .status:
+            return ChatMetrics.statusRowHeight
 
         case let .message(_, groupStart):
             guard let message else { return 0 }
@@ -184,27 +187,11 @@ final class ChatLayout {
 
             switch message.body {
             case .text:
-                let metrics = metrics(
-                    for: message,
-                    authorName: showsName ? "Bot" : "",
-                    tableWidth: tableWidth)
-                if message.state == .thinking {
-                    return top + ChatMetrics.bubblePadY + metrics.headerHeight
-                        + ChatMetrics.thinkingBubbleHeight + ChatMetrics.bubblePadY
-                }
-                return top + metrics.bubbleHeight
+                let metrics = metrics(for: message, showsName: showsName, tableWidth: tableWidth)
+                return top + metrics.rowHeight
 
-            case let .tool(invocation):
-                guard expanded else { return top + ChatMetrics.chipHeight }
-                let width = ChatMetrics.toolDetailWidth(tableWidth: tableWidth) - 24
-                let detail = NSAttributedString(
-                    string: invocation.detail,
-                    attributes: [.font: Theme.Font.code, .foregroundColor: NSColor.labelColor]
-                )
-                let detailHeight = TextMeasure.labelSize(of: detail, width: width).height
-                return top + ChatMetrics.chipHeight + detailHeight + 22
-
-            case .handoff:
+            // Tool calls never show; only a message_bot row reaches here, as a marker.
+            case .tool, .handoff:
                 return top + 34
 
             case let .notice(text):

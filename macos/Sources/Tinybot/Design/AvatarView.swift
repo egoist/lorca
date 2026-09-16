@@ -23,6 +23,29 @@ final class AvatarView: NSView {
         didSet { if content != oldValue { needsDisplay = true } }
     }
 
+    /// Green dot at the bottom right while the bot has a turn running.
+    var isWorking = false {
+        didSet {
+            if isWorking != oldValue {
+                needsDisplay = true
+                syncPresence()
+            }
+        }
+    }
+
+    private let presence = PresenceLayer()
+
+    private func syncPresence() {
+        let box = NSRect(x: 0, y: 0, width: diameter, height: diameter)
+            .offsetBy(dx: (bounds.width - diameter) / 2, dy: (bounds.height - diameter) / 2)
+        presence.sync(isWorking: isWorking, in: box, on: layer, flipped: isFlipped)
+    }
+
+    override func layout() {
+        super.layout()
+        syncPresence()
+    }
+
     var diameter: CGFloat {
         didSet {
             if diameter != oldValue {
@@ -52,6 +75,22 @@ final class AvatarView: NSView {
         let box = NSRect(x: 0, y: 0, width: diameter, height: diameter)
             .offsetBy(dx: (bounds.width - diameter) / 2, dy: (bounds.height - diameter) / 2)
         AvatarView.render(content, in: box)
+        if isWorking { AvatarView.clearPresenceRing(in: box) }
+    }
+
+    /// Where the working dot sits: over the bottom-right edge of the avatar.
+    static func presenceRect(in box: NSRect) -> NSRect {
+        let size = max(7, (box.width * 0.28).rounded())
+        return NSRect(x: box.maxX - size + 1, y: box.minY - 1, width: size, height: size)
+    }
+
+    /// Clears a ring under the dot so it reads as sitting on top whatever the background is.
+    static func clearPresenceRing(in box: NSRect) {
+        guard let context = NSGraphicsContext.current else { return }
+        context.compositingOperation = .clear
+        NSColor.black.setFill()
+        NSBezierPath(ovalIn: presenceRect(in: box).insetBy(dx: -2, dy: -2)).fill()
+        context.compositingOperation = .sourceOver
     }
 
     /// Draws one avatar into the current context. Shared with `AvatarClusterView`,
@@ -106,6 +145,27 @@ final class AvatarClusterView: NSView {
     private var contents: [AvatarView.Content] = []
     private let slot: CGFloat
     private let ring: CGFloat = 1
+
+    var isWorking = false {
+        didSet {
+            if isWorking != oldValue {
+                needsDisplay = true
+                syncPresence()
+            }
+        }
+    }
+
+    private let presence = PresenceLayer()
+
+    private func syncPresence() {
+        guard let box = boxes().last else { return }
+        presence.sync(isWorking: isWorking, in: box, on: layer, flipped: isFlipped)
+    }
+
+    override func layout() {
+        super.layout()
+        syncPresence()
+    }
 
     init(slot: CGFloat) {
         self.slot = slot
@@ -176,6 +236,53 @@ final class AvatarClusterView: NSView {
                 context.compositingOperation = .sourceOver
             }
             AvatarView.render(contents[index], in: box)
+        }
+        if isWorking, let last = boxes.last { AvatarView.clearPresenceRing(in: last) }
+    }
+}
+
+/// The green working dot: a layer so it can breathe (scale 1 → 0.8 over 2.4 s) while the
+/// avatar underneath stays a plain drawing.
+final class PresenceLayer: CALayer {
+    override init() {
+        super.init()
+        backgroundColor = NSColor.systemGreen.cgColor
+        isHidden = true
+    }
+
+    override init(layer: Any) {
+        super.init(layer: layer)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    func sync(isWorking: Bool, in box: NSRect, on host: CALayer?, flipped: Bool) {
+        guard let host else { return }
+        if superlayer !== host { host.addSublayer(self) }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        var rect = AvatarView.presenceRect(in: box)
+        if flipped { rect.origin.y = box.maxY - rect.maxY + box.minY }
+        bounds = CGRect(origin: .zero, size: rect.size)
+        position = CGPoint(x: rect.midX, y: rect.midY)
+        cornerRadius = rect.width / 2
+        backgroundColor = NSColor.systemGreen.cgColor
+        isHidden = !isWorking
+        CATransaction.commit()
+        if isWorking {
+            if animation(forKey: "breathe") == nil {
+                let pulse = CABasicAnimation(keyPath: "transform.scale")
+                pulse.fromValue = 1
+                pulse.toValue = 0.8
+                pulse.duration = 1.2
+                pulse.autoreverses = true
+                pulse.repeatCount = .infinity
+                pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                add(pulse, forKey: "breathe")
+            }
+        } else {
+            removeAnimation(forKey: "breathe")
         }
     }
 }
