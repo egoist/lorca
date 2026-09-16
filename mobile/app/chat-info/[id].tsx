@@ -2,7 +2,7 @@ import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useState } from "react";
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { chatTitle, engine } from "../../src/core/engine";
-import { isRunner, providerLabel, type Bot } from "../../src/core/model";
+import { isRunner, providerLabel, thinkingLabel, type Bot } from "../../src/core/model";
 import { deviceIsOnline, useBotMap, useChat, useStore, useWorkingBotIds } from "../../src/core/store";
 import { AvatarCluster, BotAvatar } from "../../src/ui/Avatar";
 import { CheckRow, FieldRow, Row, Section, ToggleRow } from "../../src/ui/forms";
@@ -83,6 +83,7 @@ export default function ChatInfoScreen() {
             }
           />
           <Row title="Provider" detail={`${providerLabel(bot.provider)}${bot.model ? ` · ${bot.model}` : ""}`} />
+          <Row title="Thinking" detail={bot.thinking ? thinkingLabel(bot.thinking) : "Default"} />
         </Section>
       )}
 

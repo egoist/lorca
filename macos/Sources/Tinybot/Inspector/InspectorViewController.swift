@@ -136,7 +136,7 @@ final class InspectorViewController: NSViewController {
             nameRow.onCommit = commit
             labelRow.onCommit = commit
             descriptionRow.onCommit = commit
-            runtime.setRows(runtimeRows(for: bot))
+            runtime.setRows(runtimeRows(for: bot, in: chat))
         }
 
         let hosts = Dictionary(grouping: members, by: \.runnerID)
@@ -178,7 +178,7 @@ final class InspectorViewController: NSViewController {
         store.updateBot(id, name: name, label: label, description: description)
     }
 
-    private func runtimeRows(for bot: Bot) -> [NSView] {
+    private func runtimeRows(for bot: Bot, in chat: Chat) -> [NSView] {
         let kinds = ProviderCredential.Kind.allCases
         let providerRow = PopUpRow(
             key: "Provider",
@@ -186,8 +186,8 @@ final class InspectorViewController: NSViewController {
             selected: kinds.firstIndex(of: bot.provider) ?? 0)
         providerRow.onChange = { [weak self] index in
             guard let self, kinds.indices.contains(index), kinds[index] != bot.provider else { return }
-            // A new provider starts on its default model.
-            self.store.setBotRuntime(bot.id, provider: kinds[index], model: nil)
+            // A new provider starts on its default model and thinking level.
+            self.store.setBotRuntime(bot.id, provider: kinds[index], model: nil, thinking: nil)
         }
 
         let models = bot.provider.models
@@ -198,7 +198,27 @@ final class InspectorViewController: NSViewController {
             guard let self else { return }
             let model: String? = index == 0 ? nil : models[index - 1].id
             guard model != bot.model else { return }
-            self.store.setBotRuntime(bot.id, provider: bot.provider, model: model)
+            self.store.setBotRuntime(bot.id, provider: bot.provider, model: model, thinking: bot.thinking)
+        }
+
+        let levels = bot.provider.thinkingLevels
+        let thinkingItems = ["Default"] + levels.map(\.label)
+        let selectedThinking = bot.thinking.flatMap { id in levels.firstIndex { $0.id == id } }.map { $0 + 1 } ?? 0
+        let thinkingRow = PopUpRow(key: "Thinking", items: thinkingItems, selected: selectedThinking)
+        thinkingRow.onChange = { [weak self] index in
+            guard let self else { return }
+            let thinking: String? = index == 0 ? nil : levels[index - 1].id
+            guard thinking != bot.thinking else { return }
+            self.store.setBotRuntime(bot.id, provider: bot.provider, model: bot.model, thinking: thinking)
+        }
+
+        // What the turns here have used, and a way to shorten the context by hand.
+        var usageRows: [NSView] = []
+        if let usage = chat.usage {
+            let context = ActionRow(key: "Context", value: usage.contextSummary, tint: .labelColor, actionTitle: "Compact")
+            context.onAction = { [weak self] in self?.store.compactChat(chat.id) }
+            usageRows.append(context)
+            usageRows.append(KeyValueRow(key: "Spent", value: usage.spendSummary))
         }
 
         let runner = store.device(bot.runnerID)
@@ -216,7 +236,7 @@ final class InspectorViewController: NSViewController {
             self?.presentAsSheet(ConnectProviderViewController(kind: bot.provider))
         }
 
-        return [providerRow, modelRow, status]
+        return [providerRow, modelRow, thinkingRow, status] + usageRows
     }
 
     @objc private func addBot() {

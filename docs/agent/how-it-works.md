@@ -14,8 +14,9 @@ pub enum AgentMessage {
 ```
 
 - `ContentPart` is `Text { text }` or `Image { data, mime_type }` (base64 data).
-- `AssistantPart` is `Text { text }`, `Thinking { thinking }`, or `ToolCall(ToolCall { id, name, arguments })`.
+- `AssistantPart` is `Text { text }`, `Thinking { thinking, signature }`, `ToolCall(ToolCall { id, name, arguments })`, or `ServerBlock { block }`. A signature is the provider's seal on its thinking; a server block is something the provider ran on its side (a web search and its results) that goes back to it verbatim when the turn continues. Both are the provider's own: another provider gets the thinking as plain text and no server blocks.
 - `Custom` holds anything your application wants in the transcript: notes, UI markers, summaries. The model never sees it unless a hook rewrites it (see [Hooks](hooks.md)).
+- An assistant message's `usage` counts input, output, cache reads and writes, reasoning tokens when reported, and `cost` in dollars when the model is in [the catalog](providers.md#the-model-catalog-and-cost).
 
 A model only understands `LlmMessage` (`User`, `Assistant`, `ToolResult`). The loop keeps `AgentMessage`s throughout and converts right before each model call, with two hooks:
 
@@ -47,10 +48,13 @@ run
 └─ loop
    ├─ while the last turn made tool calls, or steering messages are pending:
    │    turn
+   │    ├─ after the first turn: prepare_next_turn (may replace the context or provider),
+   │    │    poll steering again if nothing is pending
    │    ├─ append pending steering messages
    │    ├─ stream one assistant message from the provider
    │    │    stop_reason error or aborted → end the run
    │    ├─ execute its tool calls, append one tool result per call
+   │    │    stop_reason length → every call fails without running (its arguments may be cut off)
    │    ├─ should_stop_after_turn? → end the run
    │    └─ poll steering queue
    └─ poll follow-up queue
@@ -80,6 +84,7 @@ A run emits `AgentEvent`s, each tagged with `type` when serialized:
 | `tool_execution_update` | `tool_call_id`, `tool_name`, `args`, `partial_result` | A tool reported progress. |
 | `tool_execution_end` | `tool_call_id`, `tool_name`, `result`, `is_error` | A tool call finished. |
 | `turn_end` | `message`, `tool_results` | The assistant message and its tool results are in. |
+| `retry` | `attempt`, `max_attempts`, `delay_ms`, `error` | A model call failed before streaming in a way worth another try; the loop waits, then asks again. The failed attempt leaves no message. |
 | `agent_end` | `messages` | The run is over; `messages` are the ones it added. |
 
 One prompt, one tool call, then an answer:
@@ -108,7 +113,7 @@ agent_end
 
 A consumer that appends every `message_end` message to a list rebuilds the transcript exactly. `Agent` does this.
 
-`message_update` carries the raw `AssistantEvent`: `TextDelta`, `ThinkingDelta`, `ToolCallStart`, `ToolCallDelta`, and so on. It also carries `ServerToolStart` and `ServerToolEnd` for tools the provider runs on its side, such as web search. Those are activity to show and never part of the message content.
+`message_update` carries the raw `AssistantEvent`: `TextDelta`, `ThinkingDelta`, `ThinkingSignature`, `ToolCallStart`, `ToolCallDelta`, and so on. It also carries `ServerToolStart` and `ServerToolEnd` for tools the provider runs on its side, such as web search. Those are activity to show, never part of the message content; a provider that needs the call and result back later also sends `ServerBlock`, which does become a part.
 
 ### Tool execution order
 
@@ -131,7 +136,8 @@ The loop awaits delivery of each event before it moves on. An `EventSink` sees t
 Nothing in a run returns `Err` for a model or tool failure. Failures become messages the transcript keeps:
 
 - **Provider failures** (network, HTTP status, auth, a stream that ends early) become an assistant message with `stop_reason` `Error` and an `error_message`. The run emits `turn_end` and `agent_end` and stops.
-- **Tool failures** become a tool result with `is_error: true` and the error text as content, and the model sees it on the next turn. This covers a tool returning `Err`, an unknown tool name (`Tool <name> not found`), arguments that are not a JSON object, and a call blocked by `before_tool_call`.
+- **Tool failures** become a tool result with `is_error: true` and the error text as content, and the model sees it on the next turn. This covers a tool returning `Err`, an unknown tool name (`Tool <name> not found`), arguments that fail the tool's schema (`Validation failed for tool "…"`, with each field's problem and the arguments as received), a call in a message the token limit cut off (`… was not executed: the response hit the output token limit`), a call blocked by `before_tool_call`, and a call still waiting when the run is cancelled (`Operation aborted`).
+- **Transient request failures** (408, 409, 429, 5xx, a connection that drops) are retried by the built-in providers before the stream starts, twice by default, waiting what the server asks (`retry-after`) or a backoff from half a second up to eight. With a `RetryPolicy` on the loop config (`AgentLoopConfig::with_retry`, `AgentOptions::retry`; the default policy is three retries from one second, doubling, capped at a minute), a failure that still reads as transient and streamed nothing is retried by the loop too, announced by a `retry` event. A failure that outlasts the retries is an assistant message like any other. `agent::retry::is_context_overflow` tells a harness when that message means the context no longer fits; see [Compaction](compaction.md).
 
 The functions that start a run fail only on a precondition. `run_agent_loop_continue` needs a non-empty transcript that does not end with an assistant message, and `Agent::prompt` refuses to start while a run is active.
 
@@ -142,4 +148,4 @@ Every run takes a `CancellationToken` (for `Agent`, `AgentHandle::abort` cancels
 - A provider that sees it ends its stream with `Error { aborted: true }`. A stream that simply stops after cancellation counts as aborted too. The assistant message gets `stop_reason` `Aborted`, and the run ends.
 - A tool that sees it returns early. The built-in `bash` kills the command's whole process group.
 
-If cancellation arrives while tools run, those tools finish or bail out, their results are appended, and the run ends no later than its next model call.
+If cancellation arrives while tools run, the tools already running finish or bail out and their results are appended; calls not yet started get an `Operation aborted` error result instead of running (a sequential batch stops after the current call). The run ends no later than its next model call.

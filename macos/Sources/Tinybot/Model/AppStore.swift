@@ -189,6 +189,10 @@ final class AppStore {
 
         case "message.added", "message.updated":
             guard let payload = decode(Wire.MessageEvent.self) else { return }
+            if retryNotes[payload.chatId] != nil {
+                retryNotes[payload.chatId] = nil
+                emit(.respondingChanged(payload.chatId))
+            }
             upsert(payload.message.toModel(), in: payload.chatId)
 
         case "message.removed":
@@ -214,8 +218,22 @@ final class AppStore {
         case "job.finished":
             guard let job = decode(Wire.JobEvent.self) else { return }
             runningJobs.removeAll { $0.id == job.jobId }
+            retryNotes[job.chatId] = nil
             emit(.respondingChanged(job.chatId))
             emit(.chatsChanged)
+
+        case "job.retry":
+            guard let retry = decode(Wire.JobRetry.self) else { return }
+            let seconds = max(1, Int((Double(retry.delayMs) / 1000).rounded()))
+            retryNotes[retry.chatId] = "Retrying (\(retry.attempt) of \(retry.maxAttempts)) in \(seconds) s"
+            emit(.respondingChanged(retry.chatId))
+
+        case "chat.usage":
+            guard let payload = decode(Wire.ChatUsageEvent.self),
+                let index = chats.firstIndex(where: { $0.id == payload.chatId })
+            else { return }
+            chats[index].usage = payload.usage.toModel()
+            emit(.chatChanged(payload.chatId))
 
         case "relay.status":
             guard let status = decode(Wire.RelayStatus.self) else { return }
@@ -415,7 +433,8 @@ final class AppStore {
         accent: Accent,
         runnerID: Device.ID,
         provider: ProviderCredential.Kind,
-        model: String? = nil
+        model: String? = nil,
+        thinking: String? = nil
     ) -> Bot.ID {
         let bot = Bot(
             id: "bot-\(UUID().uuidString.lowercased().prefix(8))",
@@ -448,7 +467,7 @@ final class AppStore {
                 [
                     "id": bot.id, "name": name, "label": label, "description": description, "symbol_name": symbolName,
                     "accent": accent.rawValue, "runner_id": runnerID, "provider": provider.wireValue,
-                    "model": model ?? "", "chat_id": chatID,
+                    "model": model ?? "", "thinking": thinking ?? "", "chat_id": chatID,
                 ])
         }
         return bot.id
@@ -468,15 +487,28 @@ final class AppStore {
         perform("bots.update", params)
     }
 
-    /// Provider and model a bot runs with. nil model means the provider's default.
-    func setBotRuntime(_ id: Bot.ID, provider: ProviderCredential.Kind, model: String?) {
+    /// Provider, model, and thinking level a bot runs with. nil means the provider's default.
+    func setBotRuntime(_ id: Bot.ID, provider: ProviderCredential.Kind, model: String?, thinking: String?) {
         guard let index = bots.firstIndex(where: { $0.id == id }) else { return }
         bots[index].provider = provider
         bots[index].model = model
+        bots[index].thinking = thinking
         emit(.rosterChanged)
         emit(.chatsChanged)
         for chat in chats where chat.botIDs.contains(id) { emit(.chatChanged(chat.id)) }
-        perform("bots.update", ["id": id, "provider": provider.wireValue, "model": model ?? ""])
+        perform("bots.update", ["id": id, "provider": provider.wireValue, "model": model ?? "", "thinking": thinking ?? ""])
+    }
+
+    /// Summarizes the chat's older part for its bot now, on the Runner.
+    func compactChat(_ id: Chat.ID) {
+        perform("chats.compact", ["chat_id": id])
+    }
+
+    /// "Retrying (2 of 3) in 4 s", while a turn's model call waits to be asked again.
+    private var retryNotes: [Chat.ID: String] = [:]
+
+    func retryNote(for chatID: Chat.ID) -> String? {
+        retryNotes[chatID]
     }
 
     func deleteChat(_ id: Chat.ID) {
@@ -713,8 +745,14 @@ final class AppStore {
     }
 
     /// Connects an API-key provider (`providers.connect_deepseek`, `providers.connect_anthropic`).
-    func connectAPIKey(_ kind: ProviderCredential.Kind, apiKey: String) async throws {
-        _ = try await client.request("providers.connect_\(kind.wireValue)", ["api_key": apiKey])
+    /// An empty `baseURL` means the provider's own API.
+    func connectAPIKey(_ kind: ProviderCredential.Kind, apiKey: String, baseURL: String = "") async throws {
+        var params: [String: Any] = ["api_key": apiKey]
+        let trimmed = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            params["base_url"] = trimmed
+        }
+        _ = try await client.request("providers.connect_\(kind.wireValue)", params)
     }
 
     func connectChatGPT() async throws {

@@ -10,6 +10,9 @@ pub struct ProviderStatus {
     pub kind: String,
     pub is_connected: bool,
     pub detail: String,
+    /// A custom API base URL, when the credential has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
 }
 
 /// A paired machine or phone. `os` decides whether it is a Runner.
@@ -50,6 +53,10 @@ pub struct Bot {
     /// Model id for the provider. `None` means the provider's default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// How much the model thinks: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`.
+    /// `None` means the provider's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<String>,
     pub instructions: String,
     /// Working directory for the coding tools on the Runner. Defaults to
     /// `<TINYBOT_HOME>/workspaces/<bot id>`.
@@ -205,6 +212,39 @@ pub struct Chat {
     pub messages: Vec<Message>,
     #[serde(default)]
     pub unread_count: u32,
+    /// What the turns run here used. Kept on this Runner, never synced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<ChatUsage>,
+    /// Summaries standing in for the older part of the chat, one per bot. Kept on this Runner.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub compactions: Vec<Compaction>,
+}
+
+/// The tokens and money the turns in a chat used. `context_tokens` and `context_window` are
+/// the last turn's; the rest accumulate.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct ChatUsage {
+    pub context_tokens: u64,
+    pub context_window: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cost_usd: f64,
+    pub turns: u64,
+    /// The model of the last turn.
+    pub model: String,
+    pub updated_at: f64,
+}
+
+/// A summary that stands in for everything a bot saw in the chat up to and including
+/// `after_message_id`; the bot's context starts with it, then the messages after that one.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Compaction {
+    pub bot_id: String,
+    pub summary: String,
+    pub after_message_id: String,
+    pub tokens_before: u64,
+    pub created_at: f64,
 }
 
 // MARK: - Blob payloads

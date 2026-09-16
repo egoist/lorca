@@ -24,3 +24,4 @@ tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
 uuid.workspace = true
+jsonschema = { version = "0.56", default-features = false }

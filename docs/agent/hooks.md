@@ -12,6 +12,7 @@ pub trait LoopHooks: Send + Sync {
     async fn before_tool_call(&self, ctx: BeforeToolCallContext<'_>) -> Option<BeforeToolCallResult>;
     async fn after_tool_call(&self, ctx: AfterToolCallContext<'_>) -> Option<AfterToolCallResult>;
     async fn should_stop_after_turn(&self, ctx: ShouldStopAfterTurnContext<'_>) -> bool;
+    async fn prepare_next_turn(&self, ctx: PrepareNextTurnContext<'_>) -> Option<TurnUpdate>;
 }
 ```
 
@@ -105,7 +106,7 @@ Both are polled once per point in the run, so a hook that returns one message pe
 
 ### `before_tool_call`
 
-Called for each tool call after the tool is found and its arguments pass the object check, before `execute`. Return `BeforeToolCallResult { block: true, reason }` to skip the call; the reason (or `Tool execution was blocked`) becomes an error result the model sees.
+Called for each tool call after the tool is found and its arguments pass the schema check, before `execute`. Return `BeforeToolCallResult { block: true, reason, terminate, .. }` to skip the call, or `args: Some(...)` to run it with other arguments; the reason (or `Tool execution was blocked`) becomes an error result the model sees, and `terminate: true` makes that result count toward ending the run after the batch, like a tool's own `terminate`.
 
 ```rust
 use agent::{BeforeToolCallContext, BeforeToolCallResult, LoopHooks};
@@ -118,7 +119,7 @@ impl LoopHooks for Guard {
     async fn before_tool_call(&self, ctx: BeforeToolCallContext<'_>) -> Option<BeforeToolCallResult> {
         let command = ctx.args["command"].as_str().unwrap_or_default();
         if ctx.tool_call.name == "bash" && command.contains("rm -rf") {
-            return Some(BeforeToolCallResult { block: true, reason: Some("rm -rf is not allowed here".into()) });
+            return Some(BeforeToolCallResult { block: true, reason: Some("rm -rf is not allowed here".into()), args: None, terminate: false });
         }
         None
     }
@@ -127,7 +128,7 @@ impl LoopHooks for Guard {
 
 The hook is async, so it can wait for a person to approve the call.
 
-`BeforeToolCallContext` has `assistant_message`, `tool_call`, `args` (the checked arguments), and `context` (the loop's `AgentContext`).
+`BeforeToolCallContext` has `assistant_message`, `tool_call`, `args` (the arguments after coercion and validation, which is what the tool will run with), and `context` (the loop's `AgentContext`). A run cancelled while the hook waits gets an `Operation aborted` result for the call.
 
 ### `after_tool_call`
 
@@ -192,3 +193,30 @@ impl LoopHooks for Budget {
 `ShouldStopAfterTurnContext` has `message` (the turn's assistant message), `tool_results`, `context`, and `new_messages` (everything the run has added so far).
 
 A turn that stops this way can leave tool results without a following assistant message. `continue_run` picks up from there.
+
+## Between turns
+
+### `prepare_next_turn`
+
+Called after `turn_end` when the run goes on, right before the next turn starts. It sees the same `PrepareNextTurnContext` as `should_stop_after_turn` (`message`, `tool_results`, `context`, `new_messages`). Return a `TurnUpdate` to replace the context or the provider for the turns that follow; `None` keeps both.
+
+```rust
+use agent::{LoopHooks, PrepareNextTurnContext, TurnUpdate};
+use async_trait::async_trait;
+
+struct Compact;
+
+#[async_trait]
+impl LoopHooks for Compact {
+    async fn prepare_next_turn(&self, ctx: PrepareNextTurnContext<'_>) -> Option<TurnUpdate> {
+        if ctx.context.messages.len() < 200 {
+            return None;
+        }
+        let mut context = ctx.context.clone();
+        context.messages = summarize(&context.messages).await;
+        Some(TurnUpdate { context: Some(context), provider: None })
+    }
+}
+```
+
+Unlike `transform_context`, a replacement context here is the loop's context from then on: the messages the run returns are still only the ones it added, but the next turns build on what you handed back. Steering queued while the hook ran is picked up right after it, unless a message was already pending.

@@ -486,6 +486,10 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
                 let target = store.bots.first { tool.detail.localizedCaseInsensitiveContains("\"bot\": \"\($0.name)\"") }
                 activity = WorkingCellView.activity(for: tool, targetName: target?.name)
             }
+            // A model call being asked again outranks the last tool: the bot is waiting, not working.
+            if let note = store.retryNote(for: chatID) {
+                activity = note
+            }
             (cell as? WorkingCellView)?.configure(
                 bots: botIDs.compactMap(store.bot), activity: activity, showsName: chat.isGroup)
 

@@ -25,6 +25,15 @@ struct ProviderCredential: Hashable, Identifiable {
         /// Connects with a pasted API key; ChatGPT signs in through the browser instead.
         var usesAPIKey: Bool { self != .chatgpt }
 
+        /// The API root the CLI calls unless the credential names another.
+        var defaultBaseURL: String {
+            switch self {
+            case .deepseek: "https://api.deepseek.com"
+            case .anthropic: "https://api.anthropic.com"
+            case .chatgpt: ""
+            }
+        }
+
         /// Placeholder for the key field, naming where the key comes from.
         var keyPlaceholder: String {
             switch self {
@@ -50,6 +59,22 @@ struct ProviderCredential: Hashable, Identifiable {
             case "chatgpt": self = .chatgpt
             default: return nil
             }
+        }
+
+        /// The thinking levels this provider's models take, lowest first. nil on a bot means
+        /// the provider's default.
+        var thinkingLevels: [(id: String, label: String)] {
+            let ids: [String] =
+                switch self {
+                case .deepseek: ["off", "low", "medium", "high", "xhigh", "max"]
+                case .anthropic: ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
+                case .chatgpt: ["low", "medium", "high", "xhigh"]
+                }
+            return ids.map { ($0, Self.thinkingLabel($0)) }
+        }
+
+        static func thinkingLabel(_ level: String) -> String {
+            level == "xhigh" ? "Extra high" : level.prefix(1).uppercased() + level.dropFirst()
         }
 
         /// Model ids this provider accepts, first is the default the CLI uses.
@@ -85,6 +110,8 @@ struct ProviderCredential: Hashable, Identifiable {
     var kind: Kind
     var isConnected: Bool
     var detail: String
+    /// A custom API root, when the credential on the Runner has one.
+    var baseURL: String? = nil
 }
 
 /// A paired machine or phone. Its `os` decides whether it is a Runner: only desktop
@@ -172,6 +199,8 @@ struct Bot: Identifiable, Hashable {
     var provider: ProviderCredential.Kind
     /// nil means the provider's default model.
     var model: String? = nil
+    /// How much the model thinks; nil means the provider's default.
+    var thinking: String? = nil
     var instructions: String
     var createdAt: Date
 }
@@ -326,6 +355,8 @@ struct Chat: Identifiable, Hashable {
     var unreadCount: Int
     var isPinned: Bool
     var createdAt: Date
+    /// What the turns run in this chat used, from the Runner that ran them.
+    var usage: ChatUsage? = nil
 
     var isGroup: Bool { kind == .group }
     var isDM: Bool { kind == .dm }
@@ -342,5 +373,43 @@ struct Chat: Identifiable, Hashable {
 
     func index(of messageID: Message.ID) -> Int? {
         messages.firstIndex { $0.id == messageID }
+    }
+}
+
+
+// MARK: - Usage
+
+/// Tokens and money the turns in a chat used. `contextTokens` and `contextWindow` are the last
+/// turn's; the rest accumulate.
+struct ChatUsage: Hashable {
+    var contextTokens: Int
+    var contextWindow: Int
+    var inputTokens: Int
+    var outputTokens: Int
+    var cacheReadTokens: Int
+    var costUSD: Double
+    var turns: Int
+    var model: String
+
+    /// "128k of 1M · 13%", or "128k" when the window is unknown.
+    var contextSummary: String {
+        guard contextWindow > 0 else { return Format.tokens(contextTokens) }
+        let percent = Int((Double(contextTokens) / Double(contextWindow) * 100).rounded())
+        return "\(Format.tokens(contextTokens)) of \(Format.tokens(contextWindow)) · \(percent)%"
+    }
+
+    /// "$0.42 · 18 turns"
+    var spendSummary: String {
+        let dollars = costUSD < 0.01 && costUSD > 0 ? "<$0.01" : String(format: "$%.2f", costUSD)
+        return "\(dollars) · \(turns) \(turns == 1 ? "turn" : "turns")"
+    }
+}
+
+extension Format {
+    /// "950", "12k", "1.2M"
+    static func tokens(_ count: Int) -> String {
+        if count >= 1_000_000 { return String(format: "%.1fM", Double(count) / 1_000_000) }
+        if count >= 1_000 { return "\(count / 1_000)k" }
+        return "\(count)"
     }
 }

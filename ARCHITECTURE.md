@@ -185,14 +185,15 @@ Bind: `127.0.0.1:4862` (`--port`, `TINYBOT_PORT`). Relay: `TINYBOT_RELAY_URL`. I
 
 ### Agent loop
 
-`crates/agent` (`tinybot-agent`) is a port of pi-agent-core: `run_agent_loop` / `run_agent_loop_continue`, the same event sequence (`agent_start`, `turn_start`, `message_start/update/end`, `tool_execution_start/update/end`, `turn_end`, `agent_end`), steering and follow-up queues, `before_tool_call` / `after_tool_call` / `should_stop_after_turn` hooks, sequential or parallel tool execution, and `terminate` hints from tools. A `Provider` turns a request into a stream of assistant events and never fails: errors become an assistant message with `stop_reason` `error` or `aborted`.
+`crates/agent` (`tinybot-agent`) is a port of pi-agent-core: `run_agent_loop` / `run_agent_loop_continue`, the same event sequence (`agent_start`, `turn_start`, `message_start/update/end`, `tool_execution_start/update/end`, `turn_end`, `agent_end`), steering and follow-up queues, `before_tool_call` / `after_tool_call` / `should_stop_after_turn` hooks, sequential or parallel tool execution, and `terminate` hints from tools, plus pi's harness behaviors: a model catalog with rates and windows, thinking levels, cost on every message, compaction, and turn-level retry. Tool arguments are salvaged from cut-off JSON, coerced and checked against the tool's schema before a call runs (a failure is an error result the model reads), and never run from a message the token limit cut off; a `prepare_next_turn` hook can swap the context or provider between turns. Every adapter puts the transcript through the same transform first (another model's thinking as text, failed turns left out, a result for every call, images downgraded for a text-only model) and retries a request that fails before it streams. A `Provider` turns a request into a stream of assistant events and never fails: errors become an assistant message with `stop_reason` `error` or `aborted`. The crate also ships `agent::harness::AgentHarness`, a general agent over the loop for hosts other than Tinybot (model switching through a provider factory, skills and prompt templates, queues, hooks, events, an example chat), with persistence left to the host; the Tinybot CLI uses the loop directly. `docs/agent/` is the crate's own documentation.
 
 ```
 on decrypted Job:
   build context from the chat (this bot's turns are assistant, other bots' text is user "[Name]: …",
                                this bot's tool rows become tool_call + tool_result pairs)
   run_agent_loop_continue(context, provider = this Runner's creds, tools, sink)
-    events → job.started / job.finished (chat, bot) → local app WS, which shows the bot at work
+    events → job.started / job.finished / job.retry (chat, bot) → local app WS, which shows the bot at work
+           → each finished turn's usage → chat.usage (context size, cost so far)
            → a reply grows in chunks, not tokens: the text so far is re-sent at paragraph ends,
              or at a sentence end after 1.5 s of silence, never mid-word; the end sends it complete
            → every chunk and every completed message is encrypted with the account DEK → relay,
@@ -237,17 +238,25 @@ Every bot keeps its own memory (`workspaces/<id>/MEMORY.md`, written by the `rem
 
 ### Providers
 
-**DeepSeek** — API key on this Runner, streamed through DeepSeek's Anthropic-compatible endpoint (`https://api.deepseek.com/anthropic`, `providers::anthropic`), the one that runs DeepSeek's web search on the server: every request declares Anthropic's `web_search_20250305` tool, and the model's searches stream back as `server_tool_use` and `web_search_tool_result` blocks. `TINYBOT_DEEPSEEK_MODEL` overrides the model; `TINYBOT_DEEPSEEK_BASE_URL` is the API root a proxy stands in for (the key check calls its `/models`, bots its `/anthropic`).
+**DeepSeek** — API key on this Runner, streamed through DeepSeek's Anthropic-compatible endpoint (`https://api.deepseek.com/anthropic`, `providers::anthropic`), the one that runs DeepSeek's web search on the server: every request declares Anthropic's `web_search_20250305` tool, and the model's searches stream back as `server_tool_use` and `web_search_tool_result` blocks. `TINYBOT_DEEPSEEK_MODEL` overrides the model. The API root is the credential's own base URL when the user set one, else `TINYBOT_DEEPSEEK_BASE_URL`, else DeepSeek's (the key check calls its `/models`, bots its `/anthropic`; a root given with `/anthropic` already is used as is).
 
-**Anthropic** — API key on this Runner, the Messages API (`providers::anthropic`): `claude-opus-5` by default with adaptive thinking, and Anthropic's `web_search_20260209` and `web_fetch_20260209` tools on every request (the basic variants and no thinking parameter for Haiku 4.5 and the 4.5 generation). `TINYBOT_ANTHROPIC_MODEL` and `TINYBOT_ANTHROPIC_BASE_URL` override the model and endpoint.
+**Anthropic** — API key on this Runner, the Messages API (`providers::anthropic`): `claude-opus-5` by default with adaptive thinking, and Anthropic's `web_search_20260209` and `web_fetch_20260209` tools on every request (the basic variants and no thinking parameter for Haiku 4.5 and the 4.5 generation). `TINYBOT_ANTHROPIC_MODEL` overrides the model; the API root is the credential's base URL, else `TINYBOT_ANTHROPIC_BASE_URL`, else Anthropic's.
 
-Both stream the same way: text, thinking (with its `signature`), `tool_use` blocks, and the server tools' own blocks. A server tool call becomes a `ServerToolStart` / `ServerToolEnd` pair for the Runner's activity rows, and the raw `server_tool_use` and `*_tool_result` blocks stay in the assistant message as `ServerBlock` parts, so when the same turn continues after a function call the model gets its searches, their results, and its sealed thinking back verbatim. A later turn's context is rebuilt from the chat and carries none of it.
+An API-key credential (`credentials.json`: `api_key`, `base_url?`, `connected_at`) can name a custom API root, for a proxy or a compatible server: `providers.connect_deepseek` / `providers.connect_anthropic` take `base_url` beside `api_key`, check the key against that root, and store both. The Connect sheet has the field, prefilled from the Runner's current credential; `providers[].base_url` and a `key · url` detail report it.
+
+Both stream the same way, with the conversation prefix marked for caching (`cache_control` on the system prompt, the last tool, and the last user block), tool arguments streamed eagerly, and a request that fails before it streams retried twice: text, thinking (with its `signature`), `tool_use` blocks, and the server tools' own blocks. A server tool call becomes a `ServerToolStart` / `ServerToolEnd` pair for the Runner's activity rows, and the raw `server_tool_use` and `*_tool_result` blocks stay in the assistant message as `ServerBlock` parts, so when the same turn continues after a function call the model gets its searches, their results, and its sealed thinking back verbatim. A later turn's context is rebuilt from the chat and carries none of it.
 
 **ChatGPT** — subscription OAuth on this Runner (`providers::chatgpt`, isolated): authorization code with PKCE, the localhost:1455 callback the Codex CLI uses, tokens refreshed by the adapter, and the Codex responses backend for streaming. `TINYBOT_CHATGPT_MODEL` overrides the model. Every request carries the backend's built-in `web_search` tool, which searches and reads pages server-side; its `web_search_call` items stream back as `ServerToolStart` / `ServerToolEnd` events (`web_search` with the query, `web_fetch` with the URL for an `open_page`).
 
 Server tool events from any provider become tool rows on the Runner, so the status line reads "Searching the web…" or "Reading the web…" while one runs; `build_context` never replays those rows to the model.
 
-The encrypted bot profile carries `provider` as a label; the Runner resolves it against its own credentials at turn time.
+The encrypted bot profile carries `provider`, `model`, and `thinking` as labels; the Runner resolves them against its own credentials and the model catalog at turn time. `thinking` is one of `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` (or unset for the provider's default) and is mapped to what the model takes: an `output_config.effort` with adaptive thinking on DeepSeek and current Claude models (Fable cannot turn thinking off, so `off` becomes its lowest level), a `budget_tokens` on Haiku 4.5, `reasoning.effort` on ChatGPT. Every bot tool that creates or edits a teammate takes `thinking` too.
+
+**The model catalog** (`tinybot_agent::models`, a snapshot of models.dev) knows each offered model's context window, output cap, image support, thinking levels, and rates. Every assistant message carries `usage.cost` in dollars from those rates (ChatGPT sign-ins are not billed per token; their cost is what the work would cost at API rates). The Runner adds each turn to the chat's `usage` (`context_tokens` and `context_window` of the last turn, totals of tokens, cost, and turns), kept in `state.json` and never synced; the app gets it in the snapshot, in `roster.changed`, and as `chat.usage` events, and the DM inspector shows "Context 128k of 1M · 13%" and "Spent $0.42 · 18 turns".
+
+**Compaction** keeps a long chat inside the window (`tinybot_agent::compaction`, pi's prompts and cut rule; `TINYBOT_COMPACTION=0` turns it off): when the transcript a turn rebuilds is estimated above `window - 16k` tokens, or a turn's own context grows past it between model calls (the loop's `prepare_next_turn` hook), or the provider answers that the prompt is too long, the older part is summarized by the same model into a structured checkpoint (goal, progress, decisions, next steps, files touched), about 20k tokens of recent messages stay as they are, and a `Compaction { bot_id, summary, after_message_id }` on the chat (local, per bot) makes every later turn start from the summary and the messages after that one. The inspector's Compact button (`chats.compact`) does it by hand. A notice in the chat says what was compacted.
+
+**Retries**: a model call that fails before it streams in a way that reads as transient (overloaded, rate limited, 5xx, a dropped connection) is asked again after a backoff, three times at most on top of the adapters' own HTTP retries; the app hears `job.retry` and the working row reads "Retrying (2 of 3) in 4 s…". A failure that outlasts the retries is the bot's failed bubble, as before.
 
 ## macOS app
 
@@ -269,9 +278,9 @@ Working state, after Grok Bot: the CLI's `job.started` / `job.finished` events (
 
 JSON on `ws://127.0.0.1:4862/ws`. Requests are `{ id, method, params }` and get `{ id, result }` or `{ id, error: { message } }`; events are `{ event, data }`.
 
-App → CLI: `hello`, `bootstrap`, `identity.create`, `identity.restore`, `pair.start` / `pair.status` / `pair.cancel` / `pair.accept`, `config.set`, `bots.create` (`runner_id` may be another Device; it must be a Runner) / `bots.update`, `chats.create` / `chats.dm` / `chats.send` / `chats.stop` / `chats.delete` / `chats.rename` / `chats.pin` / `chats.add_bot` / `chats.remove_bot` / `chats.mark_read`, `providers.connect_deepseek` / `providers.connect_anthropic` / `providers.connect_chatgpt` / `providers.disconnect` (this Runner).
+App → CLI: `hello`, `bootstrap`, `identity.create`, `identity.restore`, `pair.start` / `pair.status` / `pair.cancel` / `pair.accept`, `config.set`, `bots.create` (`runner_id` may be another Device; it must be a Runner) / `bots.update`, `chats.create` / `chats.dm` / `chats.send` / `chats.stop` / `chats.delete` / `chats.rename` / `chats.pin` / `chats.add_bot` / `chats.remove_bot` / `chats.mark_read` / `chats.compact`, `providers.connect_deepseek` / `providers.connect_anthropic` / `providers.connect_chatgpt` / `providers.disconnect` (this Runner).
 
-CLI → App: `snapshot`, `roster.changed`, `message.added` / `message.updated` / `message.removed`, `chat.removed`, `job.started` / `job.finished`, `relay.status`, `pair.completed`, `identity.changed`.
+CLI → App: `snapshot`, `roster.changed`, `message.added` / `message.updated` / `message.removed`, `chat.removed`, `job.started` / `job.finished` / `job.retry`, `chat.usage`, `relay.status`, `pair.completed`, `identity.changed`.
 
 The app may choose ids (`bots.create.id`, `chats.create.id`, `chats.send.message_id`) so its optimistic rows match the CLI’s events.
 
@@ -313,14 +322,14 @@ tinybot/
 
 Done: crypto and blob protocol, relay, CLI (identity, pairing, restore, local WS, DeepSeek and Anthropic keys, ChatGPT OAuth adapter, server-side web search, agent loop, encrypt-before-upload, group chats, cross-Runner jobs and handoffs, stop), app wiring and the bundled CLI launcher.
 
-Next: context compaction, steering mid-turn, keychain storage, relay blob GC.
+Next: steering mid-turn, keychain storage, relay blob GC, a cost budget per chat.
 
 The phone app (`mobile/`) pairs as a Device with `os` `ios`, `ipados`, or `android`; it is never a Runner and does not hold the master secret. The first Mac is the identity device.
 
 ## Open points
 
 - Relay blob compaction / GC
-- Model ids move: DeepSeek defaults to `deepseek-flash` (`deepseek-v4-pro` for reasoning), Anthropic to `claude-opus-5` (`claude-sonnet-5`, `claude-fable-5-1`, `claude-opus-4-8`, `claude-haiku-4-5` offered), ChatGPT sign-ins default to `gpt-5.6-terra` (`gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-luna`, `gpt-5.5` also accepted; `*-codex` ids are rejected for ChatGPT accounts). Each bot carries an optional `model` (New Bot sheet, and the DM inspector's "Runs with" section); `TINYBOT_DEEPSEEK_MODEL` / `TINYBOT_ANTHROPIC_MODEL` / `TINYBOT_CHATGPT_MODEL` override the defaults for bots without one
+- Model ids move: DeepSeek defaults to `deepseek-flash` (`deepseek-v4-pro` for reasoning), Anthropic to `claude-opus-5` (`claude-sonnet-5`, `claude-fable-5-1`, `claude-opus-4-8`, `claude-haiku-4-5` offered), ChatGPT sign-ins default to `gpt-5.6-terra` (`gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-luna`, `gpt-5.5` also accepted; `*-codex` ids are rejected for ChatGPT accounts). Each bot carries an optional `model` and `thinking` level (New Bot sheet, and the DM inspector's "Runs with" section); `TINYBOT_DEEPSEEK_MODEL` / `TINYBOT_ANTHROPIC_MODEL` / `TINYBOT_CHATGPT_MODEL` override the defaults for bots without one
 - Keychain instead of 0600 files for the master secret and credentials
 
 When those are chosen, update this file.

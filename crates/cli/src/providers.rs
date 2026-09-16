@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tinybot_agent::providers::anthropic::{ANTHROPIC_BASE_URL, ANTHROPIC_VERSION};
 use tinybot_agent::providers::{AnthropicProvider, ChatGptProvider, ChatGptTokens, TokenSource};
-use tinybot_agent::Provider;
+use tinybot_agent::{models, Provider, ThinkingLevel};
 
 use crate::app::App;
 use crate::config::{self, Config};
@@ -18,6 +18,9 @@ pub const PROVIDER_KINDS: [&str; 3] = ["deepseek", "anthropic", "chatgpt"];
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiKeyCredential {
     pub api_key: String,
+    /// The API root to call instead of the provider's own: a proxy or a compatible server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
     pub connected_at: i64,
 }
 
@@ -59,12 +62,16 @@ impl Credentials {
                 let detail = if *kind == "chatgpt" {
                     self.chatgpt.as_ref().map(|t| t.email.clone().unwrap_or_else(|| "Signed in".into()))
                 } else {
-                    self.api_key(kind).map(|c| mask_key(&c.api_key))
+                    self.api_key(kind).map(|c| match &c.base_url {
+                        Some(base_url) => format!("{} · {base_url}", mask_key(&c.api_key)),
+                        None => mask_key(&c.api_key),
+                    })
                 };
                 ProviderStatus {
                     kind: kind.to_string(),
                     is_connected: detail.is_some(),
                     detail: detail.unwrap_or_else(|| "Not connected".into()),
+                    base_url: self.api_key(kind).and_then(|c| c.base_url.clone()),
                 }
             })
             .collect()
@@ -98,7 +105,11 @@ impl TokenSource for AppTokenSource {
 /// Whether the model takes image content parts. A text-only model rejects the whole request,
 /// so a Runner sends it the attachment's path alone.
 pub fn supports_vision(kind: &str, model: Option<&str>) -> bool {
-    let model = model.unwrap_or_default().to_ascii_lowercase();
+    let model = model.map(str::trim).filter(|m| !m.is_empty()).unwrap_or_else(|| default_model(kind));
+    if let Some(info) = models::find(kind, model) {
+        return info.images;
+    }
+    let model = model.to_ascii_lowercase();
     match kind {
         "chatgpt" | "anthropic" => true,
         "deepseek" => model.contains("vl") || model.contains("vision"),
@@ -106,7 +117,22 @@ pub fn supports_vision(kind: &str, model: Option<&str>) -> bool {
     }
 }
 
-pub fn provider_for(app: &Arc<App>, kind: &str, model: Option<&str>) -> Result<Arc<dyn Provider>, String> {
+/// The model a bot of `kind` runs without one of its own.
+pub fn default_model(kind: &str) -> &'static str {
+    match kind {
+        "deepseek" => tinybot_agent::providers::openai_compat::DEEPSEEK_DEFAULT_MODEL,
+        "anthropic" => tinybot_agent::providers::anthropic::ANTHROPIC_DEFAULT_MODEL,
+        "chatgpt" => tinybot_agent::providers::chatgpt::CHATGPT_DEFAULT_MODEL,
+        _ => "",
+    }
+}
+
+/// A bot's thinking level as stored, or nothing for the provider's default.
+pub fn thinking_level(bot: &crate::model::Bot) -> Option<ThinkingLevel> {
+    bot.thinking.as_deref().and_then(|s| s.parse().ok())
+}
+
+pub fn provider_for(app: &Arc<App>, kind: &str, model: Option<&str>, thinking: Option<ThinkingLevel>) -> Result<Arc<dyn Provider>, String> {
     let model = model.map(str::trim).filter(|m| !m.is_empty()).map(str::to_string);
     match kind {
         "deepseek" => {
@@ -119,8 +145,8 @@ pub fn provider_for(app: &Arc<App>, kind: &str, model: Option<&str>) -> Result<A
                 .ok_or_else(|| "DeepSeek is not connected on this Runner".to_string())?;
             let model = model.or_else(|| std::env::var("TINYBOT_DEEPSEEK_MODEL").ok());
             // The Anthropic-compatible endpoint: the one with DeepSeek's server-side web search.
-            let base_url = format!("{}/anthropic", deepseek_base_url());
-            Ok(Arc::new(AnthropicProvider::deepseek(&key.api_key, model.as_deref()).with_base_url(&base_url)))
+            let base_url = deepseek_anthropic_url(&key.base_url.clone().unwrap_or_else(deepseek_base_url));
+            Ok(Arc::new(AnthropicProvider::deepseek(&key.api_key, model.as_deref()).with_base_url(&base_url).with_thinking(thinking)))
         }
         "anthropic" => {
             let key = app
@@ -131,26 +157,39 @@ pub fn provider_for(app: &Arc<App>, kind: &str, model: Option<&str>) -> Result<A
                 .clone()
                 .ok_or_else(|| "Anthropic is not connected on this Runner".to_string())?;
             let model = model.or_else(|| std::env::var("TINYBOT_ANTHROPIC_MODEL").ok());
-            Ok(Arc::new(AnthropicProvider::anthropic(&key.api_key, model.as_deref()).with_base_url(&anthropic_base_url())))
+            let base_url = key.base_url.clone().unwrap_or_else(anthropic_base_url);
+            Ok(Arc::new(AnthropicProvider::anthropic(&key.api_key, model.as_deref()).with_base_url(&base_url).with_thinking(thinking)))
         }
         "chatgpt" => {
             if app.credentials.lock().unwrap().chatgpt.is_none() {
                 return Err("ChatGPT is not connected on this Runner".into());
             }
             let model = model.or_else(|| std::env::var("TINYBOT_CHATGPT_MODEL").ok());
-            Ok(Arc::new(ChatGptProvider::new(Arc::new(AppTokenSource(app.clone())), model.as_deref())))
+            Ok(Arc::new(ChatGptProvider::new(Arc::new(AppTokenSource(app.clone())), model.as_deref()).with_thinking(thinking)))
         }
         other => Err(format!("Unknown provider {other}")),
     }
 }
 
-/// `TINYBOT_DEEPSEEK_BASE_URL` points at a proxy or a test server: DeepSeek's API root, whose
-/// `/anthropic` path is the endpoint bots use.
+/// DeepSeek's API root when the credential has none: `TINYBOT_DEEPSEEK_BASE_URL` (a proxy or a
+/// test server) or DeepSeek itself.
 fn deepseek_base_url() -> String {
     env_url("TINYBOT_DEEPSEEK_BASE_URL").unwrap_or_else(|| tinybot_agent::providers::openai_compat::DEEPSEEK_BASE_URL.to_string())
 }
 
-/// `TINYBOT_ANTHROPIC_BASE_URL` points at a proxy or a test server.
+/// The Anthropic-compatible endpoint under a DeepSeek API root. A root given with its
+/// `/anthropic` path already is used as is.
+fn deepseek_anthropic_url(root: &str) -> String {
+    let root = root.trim_end_matches('/');
+    if root.ends_with("/anthropic") {
+        root.to_string()
+    } else {
+        format!("{root}/anthropic")
+    }
+}
+
+/// Anthropic's API root when the credential has none: `TINYBOT_ANTHROPIC_BASE_URL` or
+/// Anthropic itself.
 fn anthropic_base_url() -> String {
     env_url("TINYBOT_ANTHROPIC_BASE_URL").unwrap_or_else(|| ANTHROPIC_BASE_URL.to_string())
 }
@@ -159,30 +198,40 @@ fn env_url(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|s| !s.trim().is_empty()).map(|s| s.trim_end_matches('/').to_string())
 }
 
-/// Checks a DeepSeek key against the API before saving it.
-pub async fn connect_deepseek(app: &Arc<App>, api_key: &str) -> Result<(), String> {
+/// A base URL the user typed: blank means the default; otherwise an http(s) root without a
+/// trailing slash.
+fn custom_base_url(base_url: Option<&str>) -> Result<Option<String>, String> {
+    let Some(url) = base_url.map(str::trim).filter(|u| !u.is_empty()) else { return Ok(None) };
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return Err("The base URL must start with http:// or https://".into());
+    }
+    Ok(Some(url.trim_end_matches('/').to_string()))
+}
+
+/// Checks a DeepSeek key against the API (the given root, or DeepSeek's) before saving both.
+pub async fn connect_deepseek(app: &Arc<App>, api_key: &str, base_url: Option<&str>) -> Result<(), String> {
     let key = api_key.trim();
     if key.is_empty() {
         return Err("Paste a DeepSeek API key".into());
     }
-    let request = app.http.get(format!("{}/models", deepseek_base_url())).bearer_auth(key);
+    let base_url = custom_base_url(base_url)?;
+    let root = base_url.clone().unwrap_or_else(deepseek_base_url);
+    let request = app.http.get(format!("{}/models", root.trim_end_matches("/anthropic"))).bearer_auth(key);
     check_key("DeepSeek", request).await?;
-    save_api_key(app, "deepseek", key)
+    save_api_key(app, "deepseek", key, base_url)
 }
 
-/// Checks an Anthropic key against the API before saving it.
-pub async fn connect_anthropic(app: &Arc<App>, api_key: &str) -> Result<(), String> {
+/// Checks an Anthropic key against the API (the given root, or Anthropic's) before saving both.
+pub async fn connect_anthropic(app: &Arc<App>, api_key: &str, base_url: Option<&str>) -> Result<(), String> {
     let key = api_key.trim();
     if key.is_empty() {
         return Err("Paste an Anthropic API key".into());
     }
-    let request = app
-        .http
-        .get(format!("{}/v1/models", anthropic_base_url()))
-        .header("x-api-key", key)
-        .header("anthropic-version", ANTHROPIC_VERSION);
+    let base_url = custom_base_url(base_url)?;
+    let root = base_url.clone().unwrap_or_else(anthropic_base_url);
+    let request = app.http.get(format!("{root}/v1/models")).header("x-api-key", key).header("anthropic-version", ANTHROPIC_VERSION);
     check_key("Anthropic", request).await?;
-    save_api_key(app, "anthropic", key)
+    save_api_key(app, "anthropic", key, base_url)
 }
 
 async fn check_key(name: &str, request: reqwest::RequestBuilder) -> Result<(), String> {
@@ -194,8 +243,8 @@ async fn check_key(name: &str, request: reqwest::RequestBuilder) -> Result<(), S
     }
 }
 
-fn save_api_key(app: &Arc<App>, kind: &str, key: &str) -> Result<(), String> {
-    let credential = Some(ApiKeyCredential { api_key: key.to_string(), connected_at: config::now_unix() });
+fn save_api_key(app: &Arc<App>, kind: &str, key: &str, base_url: Option<String>) -> Result<(), String> {
+    let credential = Some(ApiKeyCredential { api_key: key.to_string(), base_url, connected_at: config::now_unix() });
     {
         let mut credentials = app.credentials.lock().unwrap();
         match kind {

@@ -38,19 +38,14 @@ let (tx, rx) = tokio::sync::mpsc::channel(256);
 let added = agent.prompt("Summarize README.md", tx).await?;
 ```
 
-`prompt` accepts a `&str`, a `String`, one `AgentMessage`, or a `Vec<AgentMessage>`. Send an image by building the message yourself:
+`prompt` accepts a `&str`, a `String`, a `Vec<ContentPart>`, one `AgentMessage`, or a `Vec<AgentMessage>`. Send text with images through `PromptInput::with_images`:
 
 ```rust
-use agent::{AgentMessage, ContentPart, UserMessage};
+use agent::agent::PromptInput;
+use agent::ContentPart;
 
-let message = AgentMessage::User(UserMessage {
-    content: vec![
-        ContentPart::text("What is in this screenshot?"),
-        ContentPart::Image { data: base64_png, mime_type: "image/png".into() },
-    ],
-    timestamp: agent::now_ms(),
-});
-agent.prompt(message, tx).await?;
+let images = vec![ContentPart::Image { data: base64_png, mime_type: "image/png".into() }];
+agent.prompt(PromptInput::with_images("What is in this screenshot?", images), tx).await?;
 ```
 
 Events arrive on the receiver while the run is in flight; the agent applies each one to its own state before forwarding it. `prompt` resolves once the run has settled, with the messages it added; `agent.messages` has them too.

@@ -42,6 +42,7 @@ enum Wire {
         var kind: String
         var isConnected: Bool
         var detail: String
+        var baseUrl: String?
     }
 
     struct Device: Decodable {
@@ -67,6 +68,7 @@ enum Wire {
         var runnerId: String
         var provider: String
         var model: String?
+        var thinking: String?
         var instructions: String
         var createdAt: Double
     }
@@ -80,6 +82,32 @@ enum Wire {
         var createdAt: Double
         var messages: [Message]?
         var unreadCount: Int?
+        var usage: ChatUsage?
+    }
+
+    struct ChatUsage: Decodable {
+        var contextTokens: Int
+        var contextWindow: Int
+        var inputTokens: Int
+        var outputTokens: Int
+        var cacheReadTokens: Int
+        var costUsd: Double
+        var turns: Int
+        var model: String
+    }
+
+    struct JobRetry: Decodable {
+        var chatId: String
+        var botId: String
+        var attempt: Int
+        var maxAttempts: Int
+        var delayMs: Int
+        var error: String
+    }
+
+    struct ChatUsageEvent: Decodable {
+        var chatId: String
+        var usage: ChatUsage
     }
 
     struct Author: Decodable {
@@ -211,7 +239,7 @@ extension Wire.Device {
             machineKey: machineKey,
             providers: providers.compactMap { provider in
                 guard let kind = ProviderCredential.Kind(wireValue: provider.kind) else { return nil }
-                return ProviderCredential(kind: kind, isConnected: provider.isConnected, detail: provider.detail)
+                return ProviderCredential(kind: kind, isConnected: provider.isConnected, detail: provider.detail, baseURL: provider.baseUrl)
             }
         )
     }
@@ -229,6 +257,7 @@ extension Wire.Bot {
             runnerID: runnerId,
             provider: ProviderCredential.Kind(wireValue: provider) ?? .deepseek,
             model: model,
+            thinking: thinking,
             instructions: instructions,
             createdAt: Date(timeIntervalSince1970: createdAt)
         )
@@ -289,7 +318,16 @@ extension Wire.Chat {
             messages: messages.map { $0.map { $0.toModel() } } ?? existingMessages ?? [],
             unreadCount: unreadCount ?? existingUnread,
             isPinned: isPinned,
-            createdAt: Date(timeIntervalSince1970: createdAt)
+            createdAt: Date(timeIntervalSince1970: createdAt),
+            usage: usage?.toModel()
         )
+    }
+}
+
+extension Wire.ChatUsage {
+    func toModel() -> ChatUsage {
+        ChatUsage(
+            contextTokens: contextTokens, contextWindow: contextWindow, inputTokens: inputTokens, outputTokens: outputTokens,
+            cacheReadTokens: cacheReadTokens, costUSD: costUsd, turns: turns, model: model)
     }
 }

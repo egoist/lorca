@@ -78,6 +78,7 @@ fn create_lead_bot(app: &Arc<App>) {
         runner_id,
         provider: "deepseek".into(),
         model: None,
+        thinking: None,
         instructions: "You are the user's chief of staff and the bot they talk to most. Start by learning what they work on and \
             what keeps coming back. Propose a small team of specialist bots, one clear job each, and create them with create_bot \
             once the user agrees, and refine any bot's profile with edit_bot when the user asks. In group chats, route work to the right teammate with message_bot and keep the user informed. \

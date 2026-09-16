@@ -2,12 +2,13 @@
 
 `agent` is an agent runtime for Rust, modeled on [pi](https://github.com/badlogic/pi-mono)'s `pi-agent-core`. It runs the loop that sits between a language model and your code: it streams an assistant message, executes the tool calls in it, feeds the results back, and repeats until the model stops. Every step is reported as an event.
 
-It has four parts:
+It has five parts:
 
 - **The loop** (`agent_loop`, `run_agent_loop`, `run_agent_loop_continue`): a stateless function over a context. It streams turns, runs tools, drains steering and follow-up queues, and emits `AgentEvent`s.
 - **`Agent`**: a stateful wrapper that owns the transcript between runs and exposes steering, follow-ups, and abort through a cloneable `AgentHandle`.
 - **`Provider`**: a model adapter that turns a request into a stream of `AssistantEvent`s. Three ship with the crate: Anthropic's Messages API (Anthropic, and DeepSeek through its Anthropic-compatible endpoint, both with server-side web search), OpenAI-compatible chat completions, and ChatGPT subscription sign-in.
 - **`Tool`**: something the model can call. Seven coding tools ship with the crate: `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`.
+- **`AgentHarness`**: a general agent over all of it, after pi's coding-agent harness: a switchable model, skills and prompt templates, compaction, retry, queues, hooks, and events, with the transcript left to the host to keep.
 
 ## Install
 
@@ -77,6 +78,8 @@ Read events on a separate task, as above. The run waits for the channel to accep
 - [The `Agent`](agent.md): prompting, continuing, steering, follow-ups, abort, persistence
 - [Tools](tools.md): writing a tool, streaming updates, terminating a run, the built-in coding tools
 - [Providers](providers.md): the provider contract, the Anthropic Messages, OpenAI-compatible, and ChatGPT adapters, writing your own
-- [Hooks](hooks.md): context transforms, custom messages, tool-call gates, stopping early
+- [Hooks](hooks.md): context transforms, custom messages, tool-call gates, stopping early, preparing the next turn
+- [Compaction](compaction.md): keeping a long conversation inside the window, estimating context size
+- [The harness](harness.md): a general agent with model switching, skills, prompt templates, queues, hooks, and events
 - [The low-level loop](loop.md): running the loop without `Agent`, event sinks
 - [Coming from pi](coming-from-pi.md): how `pi-agent-core` concepts map here

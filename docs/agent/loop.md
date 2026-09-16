@@ -16,13 +16,15 @@ pub struct AgentLoopConfig {
     pub hooks: Arc<dyn LoopHooks>,             // default NoHooks
     pub tool_execution: ToolExecutionMode,     // default Parallel
     pub sink: Option<Arc<dyn EventSink>>,      // default None
+    pub retry: Option<RetryPolicy>,            // default None: one try per model call
 }
 ```
 
 ```rust
 let config = AgentLoopConfig::new(provider)
     .with_hooks(Arc::new(MyHooks))
-    .with_sink(Arc::new(MySink));
+    .with_sink(Arc::new(MySink))
+    .with_retry(RetryPolicy::default());
 
 let config = AgentLoopConfig {
     tool_execution: ToolExecutionMode::Sequential,

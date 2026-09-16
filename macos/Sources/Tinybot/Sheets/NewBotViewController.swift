@@ -24,6 +24,7 @@ final class NewBotViewController: SheetViewController {
     private let runnerPopup = NSPopUpButton()
     private let providerPopup = NSPopUpButton()
     private let modelPopup = NSPopUpButton()
+    private let thinkingPopup = NSPopUpButton()
     private let lookRow = Build.stack([], orientation: .horizontal, spacing: 8)
     private let note = Build.label("", font: Theme.Font.caption, color: .tertiaryLabelColor, lines: 0)
 
@@ -71,6 +72,7 @@ final class NewBotViewController: SheetViewController {
         providerPopup.target = self
         providerPopup.action = #selector(providerChanged)
         modelPopup.translatesAutoresizingMaskIntoConstraints = false
+        thinkingPopup.translatesAutoresizingMaskIntoConstraints = false
         reloadModels()
 
         buildLookRow()
@@ -83,6 +85,7 @@ final class NewBotViewController: SheetViewController {
             labeled("Runner", runnerPopup),
             labeled("Provider", providerPopup),
             labeled("Model", modelPopup),
+            labeled("Thinking", thinkingPopup),
             note,
         ]
         // Width constraints need a common ancestor, so they go on after each row joins the stack.
@@ -165,6 +168,13 @@ final class NewBotViewController: SheetViewController {
         return index <= 0 || index > models.count ? nil : models[index - 1].id
     }
 
+    /// nil means the provider's default thinking level.
+    private var selectedThinking: String? {
+        let levels = selectedProvider.thinkingLevels
+        let index = thinkingPopup.indexOfSelectedItem
+        return index <= 0 || index > levels.count ? nil : levels[index - 1].id
+    }
+
     @objc private func providerChanged() {
         reloadModels()
         runnerChanged()
@@ -176,6 +186,10 @@ final class NewBotViewController: SheetViewController {
         modelPopup.addItem(withTitle: "Default (\(models.first?.label ?? ""))")
         for model in models { modelPopup.addItem(withTitle: model.label) }
         modelPopup.selectItem(at: 0)
+        thinkingPopup.removeAllItems()
+        thinkingPopup.addItem(withTitle: "Default")
+        for level in selectedProvider.thinkingLevels { thinkingPopup.addItem(withTitle: level.label) }
+        thinkingPopup.selectItem(at: 0)
     }
 
     @objc private func runnerChanged() {
@@ -213,7 +227,8 @@ final class NewBotViewController: SheetViewController {
             accent: look.accent,
             runnerID: store.runners[runnerPopup.indexOfSelectedItem].id,
             provider: selectedProvider,
-            model: selectedModel
+            model: selectedModel,
+            thinking: selectedThinking
         )
         dismiss(nil)
         onCreate(botID)

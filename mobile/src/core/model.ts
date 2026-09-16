@@ -34,6 +34,8 @@ export interface Bot {
   runner_id: string;
   provider: string;
   model?: string;
+  /** How much the model thinks: off, minimal, low, medium, high, xhigh, max. */
+  thinking?: string;
   instructions: string;
   workdir?: string;
   created_at: number;
@@ -196,4 +198,15 @@ export const PROVIDER_LABELS: Record<string, string> = {
 
 export function providerLabel(kind: string): string {
   return PROVIDER_LABELS[kind] ?? kind;
+}
+
+/** The thinking levels a provider's models take, lowest first. */
+export const THINKING_LEVELS: Record<string, string[]> = {
+  deepseek: ["off", "low", "medium", "high", "xhigh", "max"],
+  anthropic: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+  chatgpt: ["low", "medium", "high", "xhigh"],
+};
+
+export function thinkingLabel(level: string): string {
+  return level === "xhigh" ? "Extra high" : level.charAt(0).toUpperCase() + level.slice(1);
 }

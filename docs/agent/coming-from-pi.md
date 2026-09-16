@@ -25,7 +25,26 @@ The runtime follows `pi-agent-core`'s design: the same message model, the same e
 | `transformContext(messages, signal)` | `LoopHooks::transform_context(messages, &cancel)` |
 | `beforeToolCall`, `afterToolCall` | `LoopHooks::before_tool_call`, `after_tool_call` |
 | `shouldStopAfterTurn` | `LoopHooks::should_stop_after_turn` |
-| `AgentTool { name, label, description, parameters, executionMode, execute }` | `impl Tool` with the same methods |
+| `prepareNextTurn` returning `{ context, model }` | `LoopHooks::prepare_next_turn` returning `TurnUpdate { context, provider }` |
+| `prompt(text, images)` | `agent.prompt(PromptInput::with_images(text, images), tx)` |
+| `AgentTool { name, label, description, parameters, executionMode, prepareArguments, execute }` | `impl Tool` with the same methods |
+| `validateToolArguments` (coercion, then the schema) | Built into the loop, before `before_tool_call`; `agent::schema::validate_tool_arguments` on its own |
+| `BeforeToolCallResult { block, reason, terminate }` | The same fields |
+| A `length` stop failing its tool calls | The same |
+| `transformMessages` (`pi-ai`) | `agent::transform::transform_messages` |
+| `parseStreamingJson`, `parseJsonWithRepair` (`pi-ai`) | `agent::json::parse_streaming_json`, `parse_json_with_repair` |
+| `retryProviderRequest` (`pi-ai`) | `agent::retry::send_with_retry`, inside every built-in adapter |
+| `RetryPolicy`, `isRetryableAssistantError`, `isContextOverflow` (`pi-ai`) | `agent::retry::{RetryPolicy, is_retryable_assistant_error, is_context_overflow}` |
+| The harness's turn retry (`retry_scheduled`) | `AgentLoopConfig::with_retry`, the `retry` event |
+| `ThinkingLevel`, `reasoning` in stream options | `ThinkingLevel` and `with_thinking(level)` on each adapter |
+| `Model` (cost, context window, compat), `calculateCost` | `agent::models::{ModelInfo, find}`, `Provider::model_info`, `Usage.cost` |
+| `estimateContextTokens`, `shouldCompact`, `compact`, the summarization prompts | `agent::estimate` and `agent::compaction` |
+| `AgentHarness` (`prompt`, `skill`, `promptFromTemplate`, `compact`, `steer`, `followUp`, `nextRun`, `abort`, `setModel`, `setThinkingLevel`, `hooks`, `events`) | `agent::harness::AgentHarness` with the same operations; no session, the host keeps the transcript |
+| `Session`, `SessionRepo`, branches, `navigateTree`, branch summaries | Not here: persistence and branching are the host's |
+| `loadSkills`, `formatSkillsForSystemPrompt`, `formatSkillInvocation` | `agent::harness::{load_skills, format_skills_for_system_prompt, format_skill_invocation}` |
+| `loadPromptTemplates`, `parseCommandArgs`, `substituteArgs` | `agent::harness::{load_prompt_templates, parse_command_args, substitute_args}` |
+| `Models` + `getApiKey` | `ProviderFactory` (`EnvProviderFactory` reads the environment) and `RequestHooks::api_key` per call |
+| `onPayload`, `onResponse`, `sessionId`, `headers`, `timeoutMs` | `RequestOptions` and `RequestHooks` on every model call |
 | `execute(toolCallId, params, signal, onUpdate)` | `execute(tool_call_id, args, cancel, on_update)` |
 | Throwing from `execute` | Returning `Err(ToolError)` |
 | `terminate: true` in a tool result | `ToolResult::terminating()` |
@@ -47,4 +66,6 @@ The runtime follows `pi-agent-core`'s design: the same message model, the same e
 
 **Context size is managed in `transform_context`.** Window, summarize, or drop old turns there; the stored transcript stays whole. Transcripts serialize with serde for storage.
 
-**Provider failures are messages.** As in pi, a failed request ends the run with an assistant message whose `stop_reason` is `Error` or `Aborted`, rather than an `Err` from `prompt`.
+**Provider failures are messages.** As in pi, a failed request ends the run with an assistant message whose `stop_reason` is `Error` or `Aborted`, rather than an `Err` from `prompt`. A run that fails outside the loop emits that message's `message_start`, `message_end`, `turn_end`, and `agent_end`, as pi's `Agent` does.
+
+**Not here.** Sessions, branches, branch summaries, and the durable operation state of pi's coding agent: persistence is the host's job. The harness keeps its transcript in memory, hands it back through `messages()`, and tells the host everything through events. Telemetry is `tracing`; the execution-environment abstraction (a pluggable filesystem and shell) is the real filesystem.

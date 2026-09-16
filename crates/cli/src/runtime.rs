@@ -5,8 +5,14 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use tinybot_agent::agent_loop::{run_agent_loop_continue, AgentContext, AgentLoopConfig, EventSink, ToolExecutionMode};
+use tinybot_agent::agent_loop::{
+    run_agent_loop_continue, AgentContext, AgentLoopConfig, EventSink, LoopHooks, PrepareNextTurnContext, ToolExecutionMode, TurnUpdate,
+};
+use tinybot_agent::compaction::{self, CompactionSettings};
+use tinybot_agent::estimate::{context_tokens, estimate_context_tokens, estimate_text_tokens};
 use tinybot_agent::provider::{is_server_tool, AssistantEvent, WEB_FETCH_TOOL};
+use tinybot_agent::retry::{is_context_overflow, RetryPolicy};
+use tinybot_agent::{LlmMessage, Provider};
 use tinybot_agent::{
     AgentEvent, AgentMessage, AssistantMessage, AssistantPart, ContentPart, StopReason, Tool, ToolCall, ToolError,
     ToolResult, ToolResultMessage, ToolUpdateFn, UserMessage,
@@ -20,7 +26,17 @@ use crate::events::Event;
 use crate::model::*;
 use crate::providers;
 
-const MAX_CONTEXT_MESSAGES: usize = 80;
+/// The most chat messages a turn rebuilds when no compaction summary stands in for the rest.
+const MAX_CONTEXT_MESSAGES: usize = 400;
+
+/// Compaction as configured on this Runner: pi's defaults, off with `TINYBOT_COMPACTION=0`.
+fn compaction_settings() -> CompactionSettings {
+    let mut settings = CompactionSettings::default();
+    if std::env::var("TINYBOT_COMPACTION").ok().as_deref() == Some("0") {
+        settings.enabled = false;
+    }
+    settings
+}
 
 // MARK: - Sending
 
@@ -329,7 +345,7 @@ async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken) -> TurnOu
     let Some(bot) = app.bot(&job.bot_id) else { return TurnOutcome::Skipped };
     let Some(chat) = app.chat(&job.chat_id) else { return TurnOutcome::Skipped };
 
-    let provider = match providers::provider_for(app, &bot.provider, bot.model.as_deref()) {
+    let provider = match providers::provider_for(app, &bot.provider, bot.model.as_deref(), providers::thinking_level(&bot)) {
         Ok(provider) => provider,
         Err(reason) => {
             let runner = app.device(&bot.runner_id).map(|d| d.name).unwrap_or_else(|| "its Runner".into());
@@ -356,8 +372,28 @@ async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken) -> TurnOu
         .collect();
     crate::files::prefetch(app, &attachments).await;
 
+    let settings = compaction_settings();
+    let window = provider.model_info().map(|i| i.context_window).unwrap_or(0);
     let system_prompt = system_prompt(app, &chat, &bot, job);
+
+    // A transcript that no longer fits is summarized before the turn starts, from the chat,
+    // so the model never sees the overflow.
+    let mut chat = chat;
     let mut messages = transcript_for(app, &chat, &bot, &workdir);
+    if window > 0 {
+        let size = estimate_context_tokens(&messages).tokens + estimate_text_tokens(&system_prompt);
+        if compaction::should_compact(size, window, &settings) {
+            match compact_chat(app, &chat, &bot, provider.as_ref(), &settings, &cancel).await {
+                Ok(Some(tokens_before)) => {
+                    app.notice(&chat.meta.id, format!("Compacted {}'s context: {} tokens summarized.", bot.name, format_tokens(tokens_before)));
+                    chat = app.chat(&job.chat_id).unwrap_or(chat);
+                    messages = transcript_for(app, &chat, &bot, &workdir);
+                }
+                Ok(None) => {}
+                Err(error) => tracing::warn!(%error, "compacting before the turn"),
+            }
+        }
+    }
     if job.kind == "room_turn" {
         messages.push(AgentMessage::User(UserMessage::text(room_turn_cue(&chat, &bot, job))));
     } else if messages.last().map(AgentMessage::is_assistant).unwrap_or(true) {
@@ -370,35 +406,84 @@ async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken) -> TurnOu
         Arc::new(EditBot { app: app.clone(), bot: bot.clone() }),
         Arc::new(Remember { path: workdir.join("MEMORY.md") }),
     ];
-    tools.extend(tinybot_agent::tools::coding_tools(workdir));
+    tools.extend(tinybot_agent::tools::coding_tools(workdir.clone()));
 
-    let context = AgentContext { system_prompt, messages, tools };
     let sink = Arc::new(TurnSink(std::sync::Mutex::new(TurnState {
         app: app.clone(),
         chat_id: chat.meta.id.clone(),
         bot_id: bot.id.clone(),
+        model: provider.model_id().to_string(),
+        window,
         current: None,
         done_parts: 0,
         tool_messages: Vec::new(),
         sent: false,
         failed: false,
+        last_error: None,
         shown_len: 0,
         last_flush: std::time::Instant::now(),
     })));
+    let hooks = Arc::new(TurnHooks {
+        app: app.clone(),
+        chat_id: chat.meta.id.clone(),
+        bot: bot.clone(),
+        provider: provider.clone(),
+        window,
+        settings: settings.clone(),
+    });
     let config = AgentLoopConfig {
-        provider,
-        hooks: Arc::new(tinybot_agent::NoHooks),
+        provider: provider.clone(),
+        hooks,
         tool_execution: ToolExecutionMode::Sequential,
         sink: Some(sink.clone()),
+        retry: Some(RetryPolicy::default()),
+        request: Default::default(),
     };
 
     // Events reach the transcript through the sink, in order with the tools' own writes.
     let (tx, _rx) = mpsc::channel::<AgentEvent>(1);
     drop(_rx);
     let mut failed = false;
-    if let Err(error) = run_agent_loop_continue(context, &config, &tx, cancel).await {
-        tracing::error!(%error, "agent loop");
-        failed = true;
+    let mut recovered = false;
+    loop {
+        let context = AgentContext { system_prompt: system_prompt.clone(), messages: messages.clone(), tools: tools.clone() };
+        if let Err(error) = run_agent_loop_continue(context, &config, &tx, cancel.clone()).await {
+            tracing::error!(%error, "agent loop");
+            failed = true;
+        }
+        // The model said the context no longer fits: summarize the chat and try the turn once
+        // more from the shorter transcript.
+        let overflow = {
+            let state = sink.0.lock().unwrap();
+            state.failed && state.last_error.as_deref().is_some_and(|e| {
+                let mut probe = AssistantMessage::empty("", "");
+                probe.stop_reason = StopReason::Error;
+                probe.error_message = Some(e.to_string());
+                is_context_overflow(&probe, None)
+            })
+        };
+        if overflow && !recovered && settings.enabled && !cancel.is_cancelled() {
+            recovered = true;
+            let latest = app.chat(&job.chat_id).unwrap_or(chat.clone());
+            match compact_chat(app, &latest, &bot, provider.as_ref(), &settings, &cancel).await {
+                Ok(Some(tokens_before)) => {
+                    app.notice(&chat.meta.id, format!("The context overflowed; compacted {} tokens and retried.", format_tokens(tokens_before)));
+                    let latest = app.chat(&job.chat_id).unwrap_or(latest);
+                    messages = transcript_for(app, &latest, &bot, &workdir);
+                    if messages.last().map(AgentMessage::is_assistant).unwrap_or(true) {
+                        messages.push(AgentMessage::User(UserMessage::text("Continue.")));
+                    }
+                    let mut state = sink.0.lock().unwrap();
+                    state.failed = false;
+                    state.last_error = None;
+                    drop(state);
+                    continue;
+                }
+                Ok(None) => {}
+                Err(error) => tracing::warn!(%error, "compacting after an overflow"),
+            }
+        }
+        break;
     }
     let mut state = sink.0.lock().unwrap();
     state.finish();
@@ -409,6 +494,136 @@ async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken) -> TurnOu
     } else {
         TurnOutcome::Pass
     }
+}
+
+/// "12k", "1.2M": a token count for a notice.
+fn format_tokens(tokens: u64) -> String {
+    if tokens >= 1_000_000 {
+        format!("{:.1}M", tokens as f64 / 1_000_000.0)
+    } else if tokens >= 1_000 {
+        format!("{}k", tokens / 1_000)
+    } else {
+        tokens.to_string()
+    }
+}
+
+/// The hooks of one turn: the compaction summary reaches the model as a user message, and a
+/// turn whose context outgrows the window is compacted in place between its model calls.
+struct TurnHooks {
+    app: Arc<App>,
+    chat_id: String,
+    bot: Bot,
+    provider: Arc<dyn Provider>,
+    window: u64,
+    settings: CompactionSettings,
+}
+
+#[async_trait]
+impl LoopHooks for TurnHooks {
+    fn convert_to_llm(&self, messages: &[AgentMessage]) -> Vec<LlmMessage> {
+        messages
+            .iter()
+            .filter_map(|message| match message {
+                AgentMessage::Custom { kind, data, timestamp } if kind == "compaction" => Some(compaction::summary_as_llm(data, *timestamp)),
+                other => other.as_llm(),
+            })
+            .collect()
+    }
+
+    async fn prepare_next_turn(&self, ctx: PrepareNextTurnContext<'_>) -> Option<TurnUpdate> {
+        if self.window == 0 || !self.settings.enabled {
+            return None;
+        }
+        let size = estimate_context_tokens(&ctx.context.messages).tokens + estimate_text_tokens(&ctx.context.system_prompt);
+        if !compaction::should_compact(size, self.window, &self.settings) {
+            return None;
+        }
+        let cancel = CancellationToken::new();
+        match compact_messages(&self.app, &self.chat_id, &self.bot, self.provider.as_ref(), &ctx.context.messages, &self.settings, &cancel).await {
+            Ok(Some((messages, tokens_before))) => {
+                self.app.notice(&self.chat_id, format!("Compacted {}'s context mid-turn: {} tokens summarized.", self.bot.name, format_tokens(tokens_before)));
+                let mut context = ctx.context.clone();
+                context.messages = messages;
+                Some(TurnUpdate { context: Some(context), provider: None })
+            }
+            Ok(None) => None,
+            Err(error) => {
+                tracing::warn!(%error, "compacting mid-turn");
+                None
+            }
+        }
+    }
+}
+
+/// Summarizes the older part of `messages` (a transcript as the loop holds it, possibly
+/// starting with an earlier summary), records the summary on the chat for the bot's next turns,
+/// and returns the messages the turn goes on with and the size before.
+async fn compact_messages(
+    app: &Arc<App>,
+    chat_id: &str,
+    bot: &Bot,
+    provider: &dyn Provider,
+    messages: &[AgentMessage],
+    settings: &CompactionSettings,
+    cancel: &CancellationToken,
+) -> Result<Option<(Vec<AgentMessage>, u64)>, String> {
+    let (previous, skip) = match messages.first() {
+        Some(AgentMessage::Custom { kind, data, .. }) if kind == "compaction" => (data["summary"].as_str().map(str::to_string), 1),
+        _ => (None, 0),
+    };
+    let Some(result) = compaction::compact(provider, &messages[skip..], previous.as_deref(), settings, None, &Default::default(), cancel).await? else { return Ok(None) };
+    let first_kept = skip + result.first_kept;
+    // The summary stands in for every chat message up to the last one it covers, found by
+    // its time: a rebuilt message carries its chat message's time, a message made during this
+    // turn the time it was made, and the chat rows follow the same order.
+    let covered_until = messages[..first_kept].iter().map(AgentMessage::timestamp).max().unwrap_or(0);
+    if let Some(chat) = app.chat(chat_id) {
+        let after = chat.messages.iter().rev().find(|m| (m.created_at * 1000.0) as u64 <= covered_until).map(|m| m.id.clone());
+        if let Some(after_message_id) = after {
+            app.set_compaction(
+                chat_id,
+                &bot.id,
+                Some(Compaction { bot_id: bot.id.clone(), summary: result.summary.clone(), after_message_id, tokens_before: result.tokens_before, created_at: now_secs() }),
+            );
+        }
+    }
+    let mut kept = vec![compaction::summary_message(&result.summary, result.tokens_before)];
+    kept.extend(messages[first_kept..].iter().cloned());
+    Ok(Some((kept, result.tokens_before)))
+}
+
+/// Compacts a bot's view of the chat as stored, for the next turn. `Ok(None)` when there is
+/// nothing to summarize.
+async fn compact_chat(app: &Arc<App>, chat: &Chat, bot: &Bot, provider: &dyn Provider, settings: &CompactionSettings, cancel: &CancellationToken) -> Result<Option<u64>, String> {
+    let workdir = bot.working_directory(&app.config.home);
+    let messages = transcript_for(app, chat, bot, &workdir);
+    Ok(compact_messages(app, &chat.meta.id, bot, provider, &messages, settings, cancel).await?.map(|(_, tokens_before)| tokens_before))
+}
+
+/// `chats.compact`: summarizes the chat for one bot now (the DM's bot, the group's owner, or
+/// the bot named), waiting for a running turn first. Returns the size before.
+pub async fn compact_now(app: &Arc<App>, chat_id: &str, bot_id: Option<&str>) -> Result<u64, String> {
+    let chat = app.chat(chat_id).ok_or("Unknown chat")?;
+    let bot_id = bot_id
+        .map(str::to_string)
+        .or_else(|| chat.meta.owner_bot_id.clone())
+        .or_else(|| chat.meta.bot_ids.first().cloned())
+        .ok_or("The chat has no bot")?;
+    let bot = app.bot(&bot_id).ok_or("Unknown bot")?;
+    if app.this_device_id().as_deref() != Some(bot.runner_id.as_str()) {
+        return Err(format!("{} runs on another Runner; compact it there", bot.name));
+    }
+    let provider = providers::provider_for(app, &bot.provider, bot.model.as_deref(), providers::thinking_level(&bot))?;
+    let lock = app.chat_lock(chat_id);
+    let _guard = lock.lock().await;
+    let chat = app.chat(chat_id).ok_or("Unknown chat")?;
+    let mut settings = compaction_settings();
+    settings.enabled = true;
+    let tokens_before = compact_chat(app, &chat, &bot, provider.as_ref(), &settings, &CancellationToken::new())
+        .await?
+        .ok_or_else(|| "Nothing to compact yet".to_string())?;
+    app.notice(chat_id, format!("Compacted {}'s context: {} tokens summarized.", bot.name, format_tokens(tokens_before)));
+    Ok(tokens_before)
 }
 
 /// The ephemeral note that opens a member's turn in a group. It is not stored, so the next
@@ -463,6 +678,7 @@ impl EventSink for TurnSink {
 fn provider_label(kind: &str) -> &str {
     match kind {
         "deepseek" => "DeepSeek",
+        "anthropic" => "Anthropic",
         "chatgpt" => "ChatGPT",
         other => other,
     }
@@ -473,6 +689,10 @@ struct TurnState {
     app: Arc<App>,
     chat_id: String,
     bot_id: String,
+    /// The model answering, for the usage record.
+    model: String,
+    /// Its context window, 0 when unknown.
+    window: u64,
     /// The transcript message showing the text part being streamed. Each text part of a
     /// reply is its own message, so text on either side of a tool call reads as two bubbles.
     current: Option<Message>,
@@ -484,6 +704,8 @@ struct TurnState {
     sent: bool,
     /// The provider or loop reported an error.
     failed: bool,
+    /// What the last failed model call said.
+    last_error: Option<String>,
     /// How much of the reply being generated the chat already shows.
     shown_len: usize,
     last_flush: std::time::Instant,
@@ -592,7 +814,13 @@ impl TurnState {
                 self.last_flush = std::time::Instant::now();
             }
             AgentEvent::MessageEnd { message: AgentMessage::Assistant(assistant) } => {
+                if !matches!(assistant.stop_reason, StopReason::Error | StopReason::Aborted) && context_tokens(&assistant.usage) > 0 {
+                    self.app.record_usage(&self.chat_id, &self.model, &assistant.usage, self.window);
+                }
                 self.end_assistant(&assistant);
+            }
+            AgentEvent::Retry { attempt, max_attempts, delay_ms, error } => {
+                self.app.emit(Event::JobRetry { chat_id: self.chat_id.clone(), bot_id: self.bot_id.clone(), attempt, max_attempts, delay_ms, error });
             }
             AgentEvent::ToolExecutionStart { tool_call_id, tool_name, args } => {
                 let mut message = Message::new(
@@ -664,6 +892,7 @@ impl TurnState {
                     self.complete(message, text);
                 }
                 let error = assistant.error_message.clone().unwrap_or_else(|| "The provider returned an error".into());
+                self.last_error = Some(error.clone());
                 let mut current = self.current.take().unwrap_or_else(|| self.new_text_message());
                 current.created_at = now_secs();
                 current.body = Body::text(if last.trim().is_empty() { error.clone() } else { last.trim().to_string() });
@@ -827,7 +1056,17 @@ fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job) -> String {
 pub fn transcript_for(app: &App, chat: &Chat, bot: &Bot, workdir: &std::path::Path) -> Vec<AgentMessage> {
     let mut out = Vec::new();
     let pixels = providers::supports_vision(&bot.provider, bot.model.as_deref());
-    let start = chat.messages.len().saturating_sub(MAX_CONTEXT_MESSAGES);
+    // A compaction summary stands in for everything up to its message; without one, a window
+    // of recent messages.
+    let compaction = chat.compactions.iter().find(|c| c.bot_id == bot.id);
+    let covered = compaction.and_then(|c| chat.messages.iter().position(|m| m.id == c.after_message_id));
+    let start = match (compaction, covered) {
+        (Some(c), Some(index)) => {
+            out.push(compaction::summary_message(&c.summary, c.tokens_before));
+            index + 1
+        }
+        _ => chat.messages.len().saturating_sub(MAX_CONTEXT_MESSAGES),
+    };
     for message in &chat.messages[start..] {
         if !message.is_complete() {
             if let MessageState::Failed { .. } = message.state {
@@ -888,8 +1127,9 @@ pub fn transcript_for(app: &App, chat: &Chat, bot: &Bot, workdir: &std::path::Pa
         }
     }
     // Drop a leading tool result with no call, which a truncated window can produce.
-    while matches!(out.first(), Some(AgentMessage::ToolResult(_))) {
-        out.remove(0);
+    let base = usize::from(matches!(out.first(), Some(AgentMessage::Custom { .. })));
+    while matches!(out.get(base), Some(AgentMessage::ToolResult(_))) {
+        out.remove(base);
     }
     out
 }
@@ -1108,7 +1348,8 @@ impl Tool for CreateBot {
                 "label": { "type": "string", "description": "One short line under the name: what it is for" },
                 "description": { "type": "string", "description": "A sentence or two about what it does, shown in its profile" },
                 "instructions": { "type": "string", "description": "How it should work: scope, tone, what to ask before acting" },
-                "provider": { "type": "string", "enum": ["deepseek", "chatgpt"], "description": "Defaults to your own provider" },
+                "provider": { "type": "string", "enum": ["deepseek", "anthropic", "chatgpt"], "description": "Defaults to your own provider" },
+                "thinking": { "type": "string", "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "max"], "description": "How much the model thinks. Defaults to the provider's default" },
                 "workdir": { "type": "string", "description": "Working directory for its tools. Defaults to a private workspace under the CLI home; give it your own path to share files" }
             },
             "required": ["name", "label", "instructions"],
@@ -1144,6 +1385,7 @@ impl Tool for CreateBot {
             runner_id: self.bot.runner_id.clone(),
             provider,
             model: None,
+            thinking: args["thinking"].as_str().map(|t| t.trim().to_string()).filter(|t| !t.is_empty()),
             instructions,
             workdir: args["workdir"].as_str().map(|w| w.trim().to_string()).filter(|w| !w.is_empty()),
             created_at: 0.0,
@@ -1205,7 +1447,8 @@ impl Tool for EditBot {
                 "label": { "type": "string", "description": "New short line under the name: what it is for" },
                 "description": { "type": "string", "description": "New sentence or two about what it does" },
                 "instructions": { "type": "string", "description": "New instructions, complete: they replace the old ones" },
-                "provider": { "type": "string", "enum": ["deepseek", "chatgpt"] },
+                "provider": { "type": "string", "enum": ["deepseek", "anthropic", "chatgpt"] },
+                "thinking": { "type": "string", "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "max"], "description": "How much the model thinks" },
                 "workdir": { "type": "string", "description": "New working directory for its tools" }
             },
             "required": ["bot"],
@@ -1233,6 +1476,7 @@ impl Tool for EditBot {
         let description = field("description");
         let instructions = field("instructions");
         let provider = field("provider");
+        let thinking = field("thinking");
         let workdir = field("workdir");
         if let Some(n) = &new_name {
             if n.chars().count() > 24 {
@@ -1243,8 +1487,8 @@ impl Tool for EditBot {
             }
         }
         if let Some(p) = &provider {
-            if !matches!(p.as_str(), "deepseek" | "chatgpt") {
-                return Err(ToolError(format!("Unknown provider {p}. Use deepseek or chatgpt.")));
+            if !matches!(p.as_str(), "deepseek" | "anthropic" | "chatgpt") {
+                return Err(ToolError(format!("Unknown provider {p}. Use deepseek, anthropic, or chatgpt.")));
             }
         }
         let changed: Vec<&str> = [
@@ -1253,13 +1497,14 @@ impl Tool for EditBot {
             ("description", description.is_some()),
             ("instructions", instructions.is_some()),
             ("provider", provider.is_some()),
+            ("thinking", thinking.is_some()),
             ("working directory", workdir.is_some()),
         ]
         .into_iter()
         .filter_map(|(label, set)| set.then_some(label))
         .collect();
         if changed.is_empty() {
-            return Err("Pass at least one field to change: name, label, description, instructions, provider, or workdir".into());
+            return Err("Pass at least one field to change: name, label, description, instructions, provider, thinking, or workdir".into());
         }
 
         let updated = self
@@ -1279,6 +1524,9 @@ impl Tool for EditBot {
                 }
                 if let Some(v) = provider {
                     bot.provider = v;
+                }
+                if let Some(v) = thinking {
+                    bot.thinking = Some(v);
                 }
                 if let Some(v) = workdir {
                     bot.workdir = Some(v);

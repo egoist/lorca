@@ -23,6 +23,10 @@ pub struct ModelRequest {
     pub system_prompt: String,
     pub messages: Vec<LlmMessage>,
     pub tools: Vec<ToolSpec>,
+    /// A cap on the reply for this call, instead of the provider's own.
+    pub max_tokens: Option<u64>,
+    /// Headers, timeout, session affinity, metadata, and hooks for this call.
+    pub options: crate::request::RequestOptions,
 }
 
 /// Streaming events a provider emits for one assistant message. `index` is the position of the
@@ -76,6 +80,14 @@ pub fn is_server_tool(name: &str) -> bool {
 pub trait Provider: Send + Sync {
     fn provider_id(&self) -> &str;
     fn model_id(&self) -> &str;
+    /// Whether the model takes images. A provider that does not replaces them with a note.
+    fn supports_images(&self) -> bool {
+        true
+    }
+    /// What the catalog knows about the model: window, output cap, rates, thinking levels.
+    fn model_info(&self) -> Option<&'static crate::models::ModelInfo> {
+        None
+    }
     async fn stream(&self, request: ModelRequest, cancel: CancellationToken) -> AssistantEventStream;
 }
 
@@ -178,12 +190,9 @@ impl AssistantAccumulator {
     fn finish_tool_call(&mut self, index: usize) {
         let Some(raw) = self.buffers.remove(&index) else { return };
         if let Some(AssistantPart::ToolCall(call)) = self.message.content.get_mut(index) {
-            let trimmed = raw.trim();
-            call.arguments = if trimmed.is_empty() {
-                Value::Object(Default::default())
-            } else {
-                serde_json::from_str(trimmed).unwrap_or_else(|_| serde_json::json!({ "_raw": raw }))
-            };
+            // Repaired when a string carries raw control characters, salvaged when the output
+            // was cut off; the loop fails a call from a `Length` stop before it runs.
+            call.arguments = crate::json::parse_streaming_json(&raw);
         }
     }
 

@@ -41,23 +41,55 @@ let provider = AnthropicProvider::new("proxy", "https://llm.example.com", &api_k
     .with_base_url("http://localhost:8080");
 ```
 
-`server_tools`, `thinking`, and `max_tokens` are public fields. `anthropic()` declares `web_search_20260209` and `web_fetch_20260209` and sends `thinking: { type: "adaptive" }` (the basic `web_search_20250305` / `web_fetch_20250910` and no `thinking` for Haiku 4.5 and the 4.5 generation and earlier); `deepseek()` declares `web_search_20250305`, the tool DeepSeek's endpoint runs. DeepSeek's OpenAI-compatible endpoint has no web search: it takes only `function` tools.
+`server_tools`, `thinking`, `max_tokens`, `supports_images`, `cache`, `eager_tool_streaming`, `max_retries`, and `max_retry_delay_ms` are public fields. `anthropic()` declares `web_search_20260209` and `web_fetch_20260209` and sends `thinking: { type: "adaptive" }` (the basic `web_search_20250305` / `web_fetch_20250910` and no `thinking` for Haiku 4.5 and the 4.5 generation and earlier); `deepseek()` declares `web_search_20250305`, the tool DeepSeek's endpoint runs, and takes images only on a vision model. DeepSeek's OpenAI-compatible endpoint has no web search: it takes only `function` tools.
+
+By default every request marks the system prompt, the last function tool, and the last user block with `cache_control: ephemeral`, so the conversation so far is the cached prefix of the next turn (DeepSeek's endpoint honors it too: the second turn of a search reads its whole prefix from cache); sets `eager_input_streaming` on function tools, so arguments stream as they are generated; and is retried twice before it streams when the server answers 408, 409, 429, or 5xx or the connection fails, waiting what `retry-after` asks (a wait above `max_retry_delay_ms`, 60 s by default, fails instead) or a backoff from half a second to eight.
 
 | Transcript | Request |
 | --- | --- |
 | System prompt | `system`, when not blank. |
 | User text and images | `text` and base64 `image` blocks. |
 | Assistant text and tool calls | `text` and `tool_use` blocks. |
-| Assistant thinking | A `thinking` block with its `signature`, when the message came from this provider and carries one; dropped otherwise. |
-| Assistant server blocks | Verbatim, when the message came from this provider; dropped otherwise. |
-| Tool result | A `tool_result` block with the result's text and `is_error`. |
+| Assistant thinking | A `thinking` block with its `signature`; thinking without one (a stream that was cut off) goes as text. |
+| Assistant server blocks | Verbatim. |
+| Tool result | A `tool_result` block: the result's text as a string, or `text` and `image` blocks when it holds images (`(see attached image)` when images only), and `is_error`. |
 | Tools | The server tools first, then `input_schema` tools. |
 
-Consecutive same-role messages are merged into one, so a tool result always follows its call in the next message. Assistant messages that end up empty are left out.
+The transcript goes through the [shared transform](#before-conversion) first, so seals and server blocks here are this provider's own and tool call ids from another model have the `^[a-zA-Z0-9_-]{1,64}$` shape this API wants. Consecutive same-role messages are merged into one, so a tool result always follows its call in the next message. Assistant messages that end up empty are left out.
 
-From the stream it reads `text_delta`, `thinking_delta`, `signature_delta` (as `ThinkingSignature`), and `input_json_delta` for `tool_use` blocks. A `server_tool_use` block becomes a `ServerToolStart` once its input is complete (`web_search` with the query, `web_fetch` with the URL) and a `ServerBlock`; its `*_tool_result` block becomes the matching `ServerToolEnd` (a result whose content is an error object, or a list holding one, names the error code in the summary) and another `ServerBlock`. Any other block type is kept as a `ServerBlock` too. `message_delta` gives the stop reason (`max_tokens` as `Length`, `tool_use` as `ToolUse`, anything else as `Stop`) and usage, `cache_read_input_tokens` as `cache_read` and `cache_creation_input_tokens` as `cache_write`. An `error` event and HTTP errors become an error message with the server's `error.message`.
+From the stream it reads `text_delta`, `thinking_delta`, `signature_delta` (as `ThinkingSignature`), and `input_json_delta` for `tool_use` blocks. A `server_tool_use` block becomes a `ServerToolStart` once its input is complete (`web_search` with the query, `web_fetch` with the URL) and a `ServerBlock`; its `*_tool_result` block becomes the matching `ServerToolEnd` (a result whose content is an error object, or a list holding one, names the error code in the summary) and another `ServerBlock`. Any other block type is kept as a `ServerBlock` too, except a `fallback` block, which is fine before any output and an error after some. `message_delta` gives the stop reason and usage (`cache_read_input_tokens` as `cache_read`, `cache_creation_input_tokens` as `cache_write`, `output_tokens_details.thinking_tokens` as `reasoning`).
+
+| `stop_reason` | Becomes |
+| --- | --- |
+| `end_turn`, `stop_sequence`, `pause_turn` | `Stop` |
+| `max_tokens` | `Length` |
+| `tool_use` | `ToolUse` |
+| `refusal` | `Error`, with `stop_details.explanation` |
+| `sensitive`, anything unknown | `Error`, naming the reason |
+| none before `message_stop` | `Error` |
+
+An `error` event and HTTP errors become an error message with the server's `error.message`.
 
 `DEEPSEEK_API_KEY=… cargo test -p tinybot-agent live_deepseek -- --ignored --nocapture` runs a search followed by a function call and continues the turn with the seals and server blocks replayed.
+
+### Thinking levels
+
+`with_thinking(Some(level))` on any built-in adapter asks for a `ThinkingLevel`: `Off`, `Minimal`, `Low`, `Medium`, `High`, `XHigh`, or `Max` (they parse from and print as those words). The adapter maps it to what the model takes, from the catalog entry:
+
+| Model | Sent |
+| --- | --- |
+| Adaptive (Opus 5, Sonnet 5, Opus 4.8, Fable 5.1, DeepSeek) | `thinking: { type: "adaptive" }` and `output_config: { effort }` (`minimal` counts as `low`); `Off` is `{ type: "disabled" }`. A model that cannot stop thinking (Fable) runs `Off` at its lowest level. |
+| Budget (Haiku 4.5) | `thinking: { type: "enabled", budget_tokens }` with 1024, 2048, 8192, or 16384 tokens and an output cap that leaves 1024 for the answer; `Off` sends no thinking. |
+| OpenAI-compatible | `reasoning_effort`; `Off` sends nothing. |
+| ChatGPT | `reasoning: { effort, summary: "auto" }` with `low`, `medium`, `high`, or `xhigh`; `Off` sends nothing. |
+
+A level the model does not have becomes the nearest higher one it has. With no level set, the Anthropic adapter sends its `thinking` field as before and the others send nothing.
+
+### The model catalog and cost
+
+`agent::models` is a snapshot of [models.dev](https://models.dev) for the models the adapters offer: `ModelInfo { id, name, provider, context_window, max_output, reasoning, images, rates, tiers, thinking, levels }`. `models::find(provider, id)` looks one up (dated Anthropic ids match their base entry); `models::for_provider(provider)` lists a provider's, default first. Every built-in adapter resolves its entry at construction and reports it through `Provider::model_info`, so a harness can read the window and the levels; an unlisted model runs with none.
+
+When the entry is known, the `Usage` of every message carries `cost` in dollars: input, output, cache reads, and cache writes at the model's rates, at the long-context tier when the request's input is above it. `Usage::add` sums usages and costs. ChatGPT sign-ins are not billed per token; their cost is what the work would cost at API rates.
 
 ### OpenAI-compatible chat completions
 
@@ -81,10 +113,10 @@ It posts to `{base_url}/chat/completions` with bearer auth, `stream: true`, and 
 | User text | `content` as a string. |
 | User text and images | `content` parts; images as `data:` URLs. |
 | Assistant text and tool calls | `content` and `tool_calls`. Thinking and server blocks are not sent back. |
-| Tool result | A `tool` message with the result's text. |
+| Tool result | A `tool` message with the result's text (`(see attached image)` or `(no tool output)` when there is none), then a `user` message with the images, if any. |
 | Tools | `function` tools. |
 
-From the stream it reads `content` deltas as text, `reasoning_content` deltas as thinking, `tool_calls` deltas as tool calls, `finish_reason` as the stop reason (`length`, `tool_calls`, anything else as stop), and `usage` including `prompt_cache_hit_tokens` as `cache_read`. HTTP errors become an error message with the status and the server's `error.message`.
+The transcript goes through the [shared transform](#before-conversion) first. `supports_images` (true by default), `max_retries` (2), and `max_retry_delay_ms` are public fields. From the stream it reads `content` deltas as text, `reasoning_content` deltas as thinking, `tool_calls` deltas as tool calls, `finish_reason` as the stop reason (`length`, `tool_calls`, anything else as stop), and `usage`: `prompt_cache_hit_tokens` or `prompt_tokens_details.cached_tokens` as `cache_read`, `completion_tokens_details.reasoning_tokens` as `reasoning`. HTTP errors become an error message with the status and the server's `error.message`, after the same retries as the Anthropic adapter.
 
 ### ChatGPT subscription
 
@@ -145,7 +177,34 @@ Models: the default is `gpt-5.6-terra`; `gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-l
 
 Requests carry the backend's own `web_search` tool ahead of your function tools. The model searches and opens pages on the server side; each search or page read arrives as `ServerToolStart` and `ServerToolEnd` events (named `web_search` or `web_fetch`, with the query or URL as `detail` and a one-line `summary`). They show up in `message_update` and never enter the message content.
 
-Reasoning summaries stream as thinking. User images are sent as `input_image`; tool results are sent as text. An incomplete response ends with `stop_reason` `Length`.
+Reasoning summaries stream as thinking. User images are sent as `input_image`; tool results are sent as text. An incomplete response ends with `stop_reason` `Length`. The transcript goes through the [shared transform](#before-conversion) first, and a request that fails before it streams is retried like the others.
+
+## Before conversion
+
+`agent::transform::transform_messages` is what every built-in adapter does to the transcript before converting it, after pi's `transformMessages`. Use it in your own:
+
+```rust
+use agent::transform::{transform_messages, TransformOptions};
+
+let messages = transform_messages(&request.messages, &TransformOptions {
+    provider: self.provider_id(),
+    model: self.model_id(),
+    supports_images: false,
+    normalize_tool_call_id: Some(|id| id.replace('|', "_")),
+});
+```
+
+- **Images** in user messages and tool results become one `(image omitted: model does not support images)` note when `supports_images` is false.
+- **Another model's thinking** becomes plain text; its seals and server blocks are dropped. A message is the adapter's own when its `provider` and `model` match. Own thinking keeps its signature; empty thinking without one goes.
+- **Tool call ids** from another model pass through `normalize_tool_call_id`, and their results are renamed to match.
+- **Failed and aborted turns** (`stop_reason` `Error` or `Aborted`) are left out: they are incomplete, and replaying them is what makes APIs reject a request.
+- **A call without a result** gets a `No result provided` error result before the next assistant turn, the next user message, or the end, so every `tool_use` has its `tool_result`.
+
+## Retries and error classes
+
+`agent::retry::send_with_retry(build, max_retries, max_delay_ms, &cancel)` sends the request `build` makes and repeats it on 408, 409, 429, 5xx, or a transport failure, honoring `x-should-retry`, `retry-after-ms`, and `retry-after`, with an exponential backoff (half a second doubling to eight, with jitter) otherwise. The sleep ends with cancellation. It answers `RequestFailure::Aborted`, `Transport`, or `Status { status, body }`; `failure.message()` is the text for the error event, with the server's `error.message` pulled out of a JSON body.
+
+For a harness that restarts whole turns: `RetryPolicy` (enabled, `max_retries` 3, `base_delay_ms` 1000, capped at 60 s by default) with `delay_ms(attempt)`, `is_retryable_error(&str)` for messages that read like a transient failure (overloaded, rate limited, 5xx, a dropped connection, a stream that ended early) and never quota or billing exhaustion, `is_context_overflow(&message, context_window)` for the many ways providers say the prompt no longer fits (plus a reply whose input exceeds the window, or a `Length` stop with nothing generated, when the window is given), and `is_recoverable_length`.
 
 ## Writing a provider
 
@@ -189,6 +248,10 @@ impl Provider for Canned {
 }
 ```
 
+### Request options
+
+Every `ModelRequest` carries `options: RequestOptions`, from `AgentLoopConfig::request` (or `AgentOptions::request`): extra `headers`, a `timeout` for the whole request, a `session_id` (sent as `x-session-affinity`, and as `prompt_cache_key` on the OpenAI-compatible adapter) so providers that route by session reuse their prompt cache, `metadata` (the Anthropic adapter forwards `user_id`), and `hooks`: a `RequestHooks` whose `api_key` can hand over a fresh key for this call (for tokens that expire), whose `before_payload` sees the body right before it is sent, and whose `after_response` sees the status and headers. `RequestOptionsPatch` changes options field by field. An adapter of your own applies them with `options.apply_to(request_builder)`, `options.before_payload(&mut body)`, `options.api_key(&own).await`, and `options.report(&response)`.
+
 ### The contract
 
 **`stream` never fails.** Network errors, bad status codes, auth problems, and malformed responses are all reported in the stream as `Error { message, aborted: false }`. The loop turns that into an assistant message with `stop_reason` `Error`. Cancellation is `Error { aborted: true }`.
@@ -205,7 +268,7 @@ impl Provider for Canned {
 
 **Block indices** are positions in the assistant message's `content`. Start at `0` and give each new block the next number, in the order the blocks start. Deltas for different open blocks may interleave.
 
-**Tool call arguments** stream as raw JSON text in `ToolCallDelta`s and are parsed at `ToolCallEnd`. Empty text becomes `{}`.
+**Tool call arguments** stream as raw JSON text in `ToolCallDelta`s and are parsed at `ToolCallEnd` with `agent::json::parse_streaming_json`: repaired when a string carries raw control characters or a bad escape, salvaged when the text was cut off, `{}` when nothing parses. The loop checks them against the tool's schema before the tool runs.
 
 **Server-side tools** (tools the model's host runs, like web search) are reported with `ServerToolStart { id, name, detail }` and `ServerToolEnd { id, name, detail, summary }`. They take no index and the loop never executes them. `agent::provider::is_server_tool` recognizes the shared names `web_search` and `web_fetch`. A provider that needs the call and result back when the turn continues (Anthropic's Messages API) also records them as `ServerBlock`s, which do take an index and become `AssistantPart::ServerBlock` parts of the message; providers that do not (ChatGPT) send only the events.
 

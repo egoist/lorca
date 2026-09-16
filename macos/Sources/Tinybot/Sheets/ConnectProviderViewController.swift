@@ -6,14 +6,18 @@ final class ConnectProviderViewController: SheetViewController {
     private let store = AppStore.shared
     private let kind: ProviderCredential.Kind
     private let keyField = NSSecureTextField()
+    private let baseURLField = NSTextField()
+    private let initialBaseURL: String?
     private let status = Build.label("", font: Theme.Font.caption, color: .secondaryLabelColor, lines: 0)
     private let spinner = NSProgressIndicator()
     private var task: Task<Void, Never>?
 
     private let onDone: () -> Void
 
-    init(kind: ProviderCredential.Kind, onDone: @escaping () -> Void = {}) {
+    /// `baseURL` is the custom API root the Runner already uses for this provider, if any.
+    init(kind: ProviderCredential.Kind, baseURL: String? = nil, onDone: @escaping () -> Void = {}) {
         self.kind = kind
+        self.initialBaseURL = baseURL
         self.onDone = onDone
         let subtitle =
             if kind.usesAPIKey {
@@ -45,6 +49,19 @@ final class ConnectProviderViewController: SheetViewController {
             keyField.delegate = self
             contentStack.addArrangedSubview(keyField)
             keyField.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
+
+            baseURLField.placeholderString = kind.defaultBaseURL
+            baseURLField.stringValue = initialBaseURL ?? ""
+            baseURLField.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+            baseURLField.translatesAutoresizingMaskIntoConstraints = false
+            let baseURLNote = Build.label(
+                "API base URL. Leave it empty for \(kind.rawValue); set it for a proxy or a compatible server.",
+                font: Theme.Font.caption, color: .tertiaryLabelColor, lines: 0)
+            contentStack.addArrangedSubview(baseURLField)
+            contentStack.addArrangedSubview(baseURLNote)
+            contentStack.setCustomSpacing(4, after: baseURLField)
+            baseURLField.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
+            baseURLNote.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
             setButtons(confirm: "Connect")
             confirmButton.isEnabled = false
         } else {
@@ -71,7 +88,7 @@ final class ConnectProviderViewController: SheetViewController {
             guard let self else { return }
             do {
                 if self.kind.usesAPIKey {
-                    try await self.store.connectAPIKey(self.kind, apiKey: key)
+                    try await self.store.connectAPIKey(self.kind, apiKey: key, baseURL: self.baseURLField.stringValue)
                 } else {
                     try await self.store.connectChatGPT()
                 }

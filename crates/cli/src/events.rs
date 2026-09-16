@@ -3,7 +3,7 @@
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::model::{Bot, ChatMeta, Message};
+use crate::model::{Bot, ChatMeta, ChatUsage, Message};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "event", content = "data")]
@@ -24,6 +24,12 @@ pub enum Event {
     JobStarted { chat_id: String, bot_id: String, job_id: String },
     #[serde(rename = "job.finished")]
     JobFinished { chat_id: String, bot_id: String, job_id: String },
+    /// A model call failed in a way worth another try; the turn waits `delay_ms` and asks again.
+    #[serde(rename = "job.retry")]
+    JobRetry { chat_id: String, bot_id: String, attempt: u32, max_attempts: u32, delay_ms: u64, error: String },
+    /// A turn finished and the chat's usage moved.
+    #[serde(rename = "chat.usage")]
+    ChatUsageChanged { chat_id: String, usage: ChatUsage },
     #[serde(rename = "relay.status")]
     RelayStatus { connected: bool, url: Option<String> },
     #[serde(rename = "pair.completed")]
@@ -38,4 +44,6 @@ pub struct ChatSummary {
     #[serde(flatten)]
     pub meta: ChatMeta,
     pub unread_count: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<ChatUsage>,
 }

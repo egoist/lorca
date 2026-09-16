@@ -88,6 +88,12 @@ pub trait Tool: Send + Sync {
         None
     }
 
+    /// A shim over the raw arguments before they are checked against `parameters`, for a tool
+    /// that accepts an older or looser shape. Returns the arguments to validate.
+    fn prepare_arguments(&self, args: Value) -> Value {
+        args
+    }
+
     async fn execute(
         &self,
         tool_call_id: &str,

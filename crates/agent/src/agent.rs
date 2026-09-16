@@ -13,12 +13,12 @@ use tokio_util::sync::CancellationToken;
 
 use crate::agent_loop::{
     run_agent_loop, run_agent_loop_continue, AfterToolCallContext, AfterToolCallResult, AgentContext,
-    AgentLoopConfig, BeforeToolCallContext, BeforeToolCallResult, LoopHooks, NoHooks,
-    ShouldStopAfterTurnContext, ToolExecutionMode,
+    AgentLoopConfig, BeforeToolCallContext, BeforeToolCallResult, LoopHooks, NoHooks, PrepareNextTurnContext,
+    ShouldStopAfterTurnContext, ToolExecutionMode, TurnUpdate,
 };
 use crate::provider::Provider;
 use crate::tool::Tool;
-use crate::types::{AgentEvent, AgentMessage, AssistantMessage, LlmMessage, StopReason, UserMessage};
+use crate::types::{AgentEvent, AgentMessage, AssistantMessage, ContentPart, LlmMessage, StopReason, UserMessage};
 
 /// How a queue drains: one message per poll, or everything queued.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -134,6 +134,10 @@ impl LoopHooks for AgentHooks {
     async fn should_stop_after_turn(&self, ctx: ShouldStopAfterTurnContext<'_>) -> bool {
         self.inner.should_stop_after_turn(ctx).await
     }
+
+    async fn prepare_next_turn(&self, ctx: PrepareNextTurnContext<'_>) -> Option<TurnUpdate> {
+        self.inner.prepare_next_turn(ctx).await
+    }
 }
 
 pub struct AgentOptions {
@@ -145,6 +149,10 @@ pub struct AgentOptions {
     pub steering_mode: QueueMode,
     pub follow_up_mode: QueueMode,
     pub tool_execution: ToolExecutionMode,
+    /// Retries of a model call that fails before it streams anything.
+    pub retry: Option<crate::retry::RetryPolicy>,
+    /// Headers, timeout, session affinity, metadata, and hooks for every model call.
+    pub request: crate::request::RequestOptions,
 }
 
 impl AgentOptions {
@@ -158,6 +166,8 @@ impl AgentOptions {
             steering_mode: QueueMode::OneAtATime,
             follow_up_mode: QueueMode::OneAtATime,
             tool_execution: ToolExecutionMode::Parallel,
+            retry: None,
+            request: Default::default(),
         }
     }
 }
@@ -180,6 +190,8 @@ pub struct Agent {
     pub tools: Vec<Arc<dyn Tool>>,
     pub messages: Vec<AgentMessage>,
     pub tool_execution: ToolExecutionMode,
+    pub retry: Option<crate::retry::RetryPolicy>,
+    pub request: crate::request::RequestOptions,
     hooks: Arc<dyn LoopHooks>,
     queues: Arc<Queues>,
     active: Arc<Mutex<Option<CancellationToken>>>,
@@ -196,6 +208,8 @@ impl Agent {
             tools: options.tools,
             messages: options.messages,
             tool_execution: options.tool_execution,
+            retry: options.retry,
+            request: options.request,
             hooks: options.hooks,
             queues: Arc::new(Queues {
                 steering: Mutex::new(PendingQueue { mode: options.steering_mode, messages: VecDeque::new() }),
@@ -304,6 +318,8 @@ impl Agent {
             }),
             tool_execution: self.tool_execution,
             sink: None,
+            retry: self.retry.clone(),
+            request: self.request.clone(),
         };
 
         let (tx, mut rx) = mpsc::channel::<AgentEvent>(256);
@@ -343,14 +359,22 @@ impl Agent {
         outcome
     }
 
+    /// A run that failed outside the loop's own event sequence still ends like one: the
+    /// failure is an assistant message with its own start, end, turn end, and agent end.
     async fn handle_run_failure(&mut self, message: String, aborted: bool, events: &mpsc::Sender<AgentEvent>) {
         let mut failure = AssistantMessage::empty(self.provider.provider_id(), self.provider.model_id());
         failure.stop_reason = if aborted { StopReason::Aborted } else { StopReason::Error };
-        failure.error_message = Some(message.clone());
+        failure.error_message = Some(message);
         let wrapped = AgentMessage::Assistant(failure);
-        self.messages.push(wrapped.clone());
-        self.error_message = Some(message);
-        let _ = events.send(AgentEvent::AgentEnd { messages: vec![wrapped] }).await;
+        for event in [
+            AgentEvent::MessageStart { message: wrapped.clone() },
+            AgentEvent::MessageEnd { message: wrapped.clone() },
+            AgentEvent::TurnEnd { message: wrapped.clone(), tool_results: vec![] },
+            AgentEvent::AgentEnd { messages: vec![wrapped] },
+        ] {
+            self.process_event(&event);
+            let _ = events.send(event).await;
+        }
     }
 
     fn process_event(&mut self, event: &AgentEvent) {
@@ -383,20 +407,36 @@ impl Agent {
     }
 }
 
-/// What `prompt` accepts: a string, one message, or several.
+/// What `prompt` accepts: a string, text with images, one message, or several.
 pub enum PromptInput {
     Text(String),
+    /// A user message of text and image parts.
+    Content(Vec<ContentPart>),
     Message(AgentMessage),
     Messages(Vec<AgentMessage>),
 }
 
 impl PromptInput {
-    fn into_messages(self) -> Vec<AgentMessage> {
+    /// Text followed by images, as one user message.
+    pub fn with_images(text: impl Into<String>, images: Vec<ContentPart>) -> Self {
+        let mut content = vec![ContentPart::text(text)];
+        content.extend(images);
+        PromptInput::Content(content)
+    }
+
+    pub fn into_messages(self) -> Vec<AgentMessage> {
         match self {
             PromptInput::Text(text) => vec![AgentMessage::User(UserMessage::text(text))],
+            PromptInput::Content(content) => vec![AgentMessage::User(UserMessage { content, timestamp: crate::now_ms() })],
             PromptInput::Message(message) => vec![message],
             PromptInput::Messages(messages) => messages,
         }
+    }
+}
+
+impl From<Vec<ContentPart>> for PromptInput {
+    fn from(value: Vec<ContentPart>) -> Self {
+        PromptInput::Content(value)
     }
 }
 

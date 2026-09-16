@@ -161,7 +161,8 @@ final class DeviceViewController: NSViewController {
             explainProviderSetup(on: device)
             return
         }
-        presentAsSheet(ConnectProviderViewController(kind: kind))
+        let current = device.providers.first { $0.kind == kind }
+        presentAsSheet(ConnectProviderViewController(kind: kind, baseURL: current?.baseURL))
     }
 
     private func explainProviderSetup(on device: Device) {

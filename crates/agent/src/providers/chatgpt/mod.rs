@@ -16,8 +16,11 @@ use tokio_util::sync::CancellationToken;
 use crate::provider::{
     channel_stream, AssistantEvent, AssistantEventStream, ModelRequest, Provider, WEB_FETCH_TOOL, WEB_SEARCH_TOOL,
 };
+use crate::models::{self, ModelInfo};
+use crate::retry::{send_with_retry, RequestFailure, DEFAULT_MAX_RETRY_DELAY_MS};
 use crate::sse::SseParser;
-use crate::types::{AssistantPart, ContentPart, LlmMessage, StopReason, Usage};
+use crate::transform::{transform_messages, TransformOptions};
+use crate::types::{AssistantPart, ContentPart, LlmMessage, StopReason, ThinkingLevel, Usage};
 
 pub const CHATGPT_RESPONSES_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
 /// The balanced everyday model Codex offers to ChatGPT sign-ins. Others accepted with a
@@ -59,16 +62,28 @@ pub trait TokenSource: Send + Sync {
 pub struct ChatGptProvider {
     tokens: Arc<dyn TokenSource>,
     model: String,
+    /// Sent as `reasoning.effort` (`Off` sends nothing).
+    pub thinking_level: Option<ThinkingLevel>,
+    /// The catalog entry for the model, when it has one.
+    pub info: Option<&'static ModelInfo>,
     client: reqwest::Client,
 }
 
 impl ChatGptProvider {
     pub fn new(tokens: Arc<dyn TokenSource>, model: Option<&str>) -> Self {
+        let model = model.unwrap_or(CHATGPT_DEFAULT_MODEL);
         ChatGptProvider {
             tokens,
-            model: model.unwrap_or(CHATGPT_DEFAULT_MODEL).to_string(),
+            model: model.to_string(),
+            thinking_level: None,
+            info: models::find("chatgpt", model),
             client: reqwest::Client::new(),
         }
+    }
+
+    pub fn with_thinking(mut self, level: Option<ThinkingLevel>) -> Self {
+        self.thinking_level = level;
+        self
     }
 
     async fn fresh_tokens(&self) -> Result<ChatGptTokens, String> {
@@ -82,8 +97,12 @@ impl ChatGptProvider {
     }
 
     fn body(&self, request: &ModelRequest) -> Value {
+        let transformed = transform_messages(
+            &request.messages,
+            &TransformOptions { provider: "chatgpt", model: &self.model, supports_images: true, normalize_tool_call_id: None },
+        );
         let mut input = Vec::new();
-        for message in &request.messages {
+        for message in &transformed {
             match message {
                 LlmMessage::User(user) => {
                     let content: Vec<Value> = user
@@ -142,7 +161,7 @@ impl ChatGptProvider {
             })
         }));
 
-        json!({
+        let mut body = json!({
             "model": self.model,
             "instructions": request.system_prompt,
             "input": input,
@@ -151,7 +170,21 @@ impl ChatGptProvider {
             "parallel_tool_calls": true,
             "store": false,
             "stream": true,
-        })
+        });
+        if let Some(max_tokens) = request.max_tokens {
+            body["max_output_tokens"] = Value::from(max_tokens);
+        }
+        let effort = match self.thinking_level {
+            None | Some(ThinkingLevel::Off) => None,
+            Some(ThinkingLevel::Minimal | ThinkingLevel::Low) => Some("low"),
+            Some(ThinkingLevel::Medium) => Some("medium"),
+            Some(ThinkingLevel::High) => Some("high"),
+            Some(ThinkingLevel::XHigh | ThinkingLevel::Max) => Some("xhigh"),
+        };
+        if let Some(effort) = effort {
+            body["reasoning"] = json!({ "effort": effort, "summary": "auto" });
+        }
+        body
     }
 }
 
@@ -262,6 +295,8 @@ impl ResponsesState {
             "response.completed" | "response.done" => {
                 let usage = &value["response"]["usage"];
                 self.usage = Usage {
+                    reasoning: None,
+                    cost: Default::default(),
                     input: usage["input_tokens"].as_u64().unwrap_or(0),
                     output: usage["output_tokens"].as_u64().unwrap_or(0),
                     cache_read: usage["input_tokens_details"]["cached_tokens"].as_u64().unwrap_or(0),
@@ -323,10 +358,17 @@ impl Provider for ChatGptProvider {
         &self.model
     }
 
+    fn model_info(&self) -> Option<&'static ModelInfo> {
+        self.info
+    }
+
     async fn stream(&self, request: ModelRequest, cancel: CancellationToken) -> AssistantEventStream {
         let (tx, rx) = mpsc::channel(64);
-        let body = self.body(&request);
+        let mut body = self.body(&request);
+        let options = request.options.clone();
+        options.before_payload(&mut body);
         let client = self.client.clone();
+        let info = self.info;
         let tokens = match self.fresh_tokens().await {
             Ok(tokens) => tokens,
             Err(message) => {
@@ -338,40 +380,27 @@ impl Provider for ChatGptProvider {
         };
 
         tokio::spawn(async move {
-            let send = client
-                .post(CHATGPT_RESPONSES_URL)
-                .bearer_auth(&tokens.access_token)
-                .header("chatgpt-account-id", &tokens.account_id)
-                .header("OpenAI-Beta", "responses=experimental")
-                .header("originator", "codex_cli_rs")
-                .header("Accept", "text/event-stream")
-                .json(&body)
-                .send();
-
-            let response = tokio::select! {
-                _ = cancel.cancelled() => {
-                    let _ = tx.send(AssistantEvent::Error { message: "Request aborted".into(), aborted: true }).await;
-                    return;
-                }
-                response = send => response,
+            let build = || {
+                let request = client
+                    .post(CHATGPT_RESPONSES_URL)
+                    .bearer_auth(&tokens.access_token)
+                    .header("chatgpt-account-id", &tokens.account_id)
+                    .header("OpenAI-Beta", "responses=experimental")
+                    .header("originator", "codex_cli_rs")
+                    .header("Accept", "text/event-stream");
+                options.apply_to(request).json(&body)
             };
-            let response = match response {
-                Ok(response) => response,
-                Err(error) => {
-                    let _ = tx.send(AssistantEvent::Error { message: format!("Request failed: {error}"), aborted: false }).await;
+            let response = match send_with_retry(build, 2, DEFAULT_MAX_RETRY_DELAY_MS, &cancel).await {
+                Ok(response) => {
+                    options.report(&response);
+                    response
+                }
+                Err(failure) => {
+                    let aborted = matches!(failure, RequestFailure::Aborted);
+                    let _ = tx.send(AssistantEvent::Error { message: failure.message(), aborted }).await;
                     return;
                 }
             };
-            if !response.status().is_success() {
-                let status = response.status();
-                let text = response.text().await.unwrap_or_default();
-                let summary = serde_json::from_str::<Value>(&text)
-                    .ok()
-                    .and_then(|v| v["error"]["message"].as_str().map(str::to_string))
-                    .unwrap_or_else(|| text.chars().take(300).collect());
-                let _ = tx.send(AssistantEvent::Error { message: format!("{status}: {summary}"), aborted: false }).await;
-                return;
-            }
 
             let _ = tx.send(AssistantEvent::Start).await;
             let mut parser = SseParser::new();
@@ -415,7 +444,11 @@ impl Provider for ChatGptProvider {
             if !completed {
                 tracing::debug!("chatgpt stream ended without response.completed");
             }
-            let _ = tx.send(AssistantEvent::Done { stop_reason: state.stop_reason, usage: state.usage.clone() }).await;
+            let mut usage = state.usage.clone();
+            if let Some(info) = info {
+                usage.cost = info.cost_of(&usage);
+            }
+            let _ = tx.send(AssistantEvent::Done { stop_reason: state.stop_reason, usage }).await;
         });
 
         channel_stream(rx)
@@ -446,6 +479,8 @@ mod tests {
             system_prompt: "be brief".into(),
             messages: vec![LlmMessage::User(crate::types::UserMessage::text("hi"))],
             tools: vec![ToolSpec { name: "read".into(), description: "read a file".into(), parameters: json!({ "type": "object" }) }],
+            max_tokens: None,
+            options: Default::default(),
         };
         let body = provider.body(&request);
         let tools = body["tools"].as_array().unwrap();

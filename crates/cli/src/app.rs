@@ -337,7 +337,7 @@ impl App {
         Event::RosterChanged {
             devices: self.devices_out(&state),
             bots: state.bots.clone(),
-            chats: state.chats.iter().map(|c| ChatSummary { meta: c.meta.clone(), unread_count: c.unread_count }).collect(),
+            chats: state.chats.iter().map(|c| ChatSummary { meta: c.meta.clone(), unread_count: c.unread_count, usage: c.usage.clone() }).collect(),
         }
     }
 
@@ -420,7 +420,7 @@ impl App {
                 }
             }
         }
-        let chat = Chat { meta, messages: Vec::new(), unread_count: 0 };
+        let chat = Chat { meta, messages: Vec::new(), unread_count: 0, usage: None, compactions: Vec::new() };
         {
             let mut state = self.state.lock().unwrap();
             if let Some(existing) = state.chats.iter().find(|c| c.meta.id == chat.meta.id) {
@@ -550,6 +550,40 @@ impl App {
         self.upsert_message(message, true);
     }
 
+    /// Adds a finished turn's usage to the chat's and tells the app.
+    pub fn record_usage(&self, chat_id: &str, model: &str, usage: &tinybot_agent::Usage, context_window: u64) {
+        let updated = {
+            let mut state = self.state.lock().unwrap();
+            let Some(chat) = state.chats.iter_mut().find(|c| c.meta.id == chat_id) else { return };
+            let entry = chat.usage.get_or_insert_with(ChatUsage::default);
+            entry.context_tokens = tinybot_agent::estimate::context_tokens(usage);
+            entry.context_window = context_window;
+            entry.input_tokens += usage.input + usage.cache_read + usage.cache_write;
+            entry.output_tokens += usage.output;
+            entry.cache_read_tokens += usage.cache_read;
+            entry.cost_usd += usage.cost.total;
+            entry.turns += 1;
+            entry.model = model.to_string();
+            entry.updated_at = crate::config::now_secs();
+            entry.clone()
+        };
+        self.save_state();
+        self.emit(Event::ChatUsageChanged { chat_id: chat_id.to_string(), usage: updated });
+    }
+
+    /// Replaces the bot's summary of the chat so far, or clears it.
+    pub fn set_compaction(&self, chat_id: &str, bot_id: &str, compaction: Option<Compaction>) {
+        {
+            let mut state = self.state.lock().unwrap();
+            let Some(chat) = state.chats.iter_mut().find(|c| c.meta.id == chat_id) else { return };
+            chat.compactions.retain(|c| c.bot_id != bot_id);
+            if let Some(compaction) = compaction {
+                chat.compactions.push(compaction);
+            }
+        }
+        self.save_state();
+    }
+
     // MARK: - Jobs
 
     pub fn cancel_chat(&self, chat_id: &str) {
@@ -587,6 +621,7 @@ impl App {
                             } else {
                                 "Not connected".into()
                             },
+                            base_url: None,
                         })
                         .collect()
                 } else {

@@ -8,9 +8,12 @@ use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+use crate::models::{self, ModelInfo};
 use crate::provider::{channel_stream, AssistantEvent, AssistantEventStream, ModelRequest, Provider};
+use crate::retry::{send_with_retry, RequestFailure, DEFAULT_MAX_RETRY_DELAY_MS};
 use crate::sse::SseParser;
-use crate::types::{AssistantPart, ContentPart, LlmMessage, StopReason, Usage};
+use crate::transform::{transform_messages, TransformOptions};
+use crate::types::{AssistantPart, ContentPart, LlmMessage, StopReason, ThinkingLevel, Usage};
 
 pub const DEEPSEEK_BASE_URL: &str = "https://api.deepseek.com";
 /// DeepSeek V4.1 Flash. `deepseek-v4-pro` is the reasoning-heavy option; the legacy
@@ -22,6 +25,15 @@ pub struct OpenAiCompatProvider {
     pub base_url: String,
     pub api_key: String,
     pub model: String,
+    /// Whether the model takes images; a text-only model gets a note in their place.
+    pub supports_images: bool,
+    /// Retries of a request that fails before it streams (408, 409, 429, 5xx, transport).
+    pub max_retries: u32,
+    pub max_retry_delay_ms: u64,
+    /// Sent as `reasoning_effort` (`Off` sends nothing).
+    pub thinking_level: Option<ThinkingLevel>,
+    /// The catalog entry for the model, when it has one.
+    pub info: Option<&'static ModelInfo>,
     client: reqwest::Client,
 }
 
@@ -32,8 +44,18 @@ impl OpenAiCompatProvider {
             base_url: base_url.trim_end_matches('/').to_string(),
             api_key: api_key.to_string(),
             model: model.to_string(),
+            supports_images: true,
+            max_retries: 2,
+            max_retry_delay_ms: DEFAULT_MAX_RETRY_DELAY_MS,
+            thinking_level: None,
+            info: models::find(provider_id, model),
             client: reqwest::Client::new(),
         }
+    }
+
+    pub fn with_thinking(mut self, level: Option<ThinkingLevel>) -> Self {
+        self.thinking_level = level;
+        self
     }
 
     pub fn deepseek(api_key: &str, model: Option<&str>) -> Self {
@@ -41,12 +63,16 @@ impl OpenAiCompatProvider {
     }
 
     fn body(&self, request: &ModelRequest) -> Value {
+        let transformed = transform_messages(
+            &request.messages,
+            &TransformOptions { provider: &self.provider_id, model: &self.model, supports_images: self.supports_images, normalize_tool_call_id: None },
+        );
         let mut messages = Vec::new();
         if !request.system_prompt.trim().is_empty() {
             messages.push(json!({ "role": "system", "content": request.system_prompt }));
         }
-        for message in &request.messages {
-            messages.push(convert_message(message));
+        for message in &transformed {
+            messages.extend(convert_message(message));
         }
 
         let mut body = json!({
@@ -55,6 +81,22 @@ impl OpenAiCompatProvider {
             "stream": true,
             "stream_options": { "include_usage": true },
         });
+        if let Some(max_tokens) = request.max_tokens {
+            body["max_tokens"] = Value::from(max_tokens);
+        }
+        if let Some(session_id) = &request.options.session_id {
+            body["prompt_cache_key"] = Value::String(session_id.clone());
+        }
+        let effort = match self.thinking_level {
+            None | Some(ThinkingLevel::Off) => None,
+            Some(ThinkingLevel::Minimal) => Some("minimal"),
+            Some(ThinkingLevel::Low) => Some("low"),
+            Some(ThinkingLevel::Medium) => Some("medium"),
+            Some(ThinkingLevel::High | ThinkingLevel::XHigh | ThinkingLevel::Max) => Some("high"),
+        };
+        if let Some(effort) = effort {
+            body["reasoning_effort"] = Value::String(effort.into());
+        }
         if !request.tools.is_empty() {
             body["tools"] = Value::Array(
                 request
@@ -77,26 +119,25 @@ impl OpenAiCompatProvider {
     }
 }
 
-fn convert_message(message: &LlmMessage) -> Value {
+/// One transcript message as the request messages it becomes: one, or a tool message followed
+/// by a user message carrying the images a tool returned, which tool messages cannot hold.
+fn convert_message(message: &LlmMessage) -> Vec<Value> {
     match message {
         LlmMessage::User(user) => {
             let only_text = user.content.iter().all(|part| matches!(part, ContentPart::Text { .. }));
             if only_text {
                 let text = user.content.iter().filter_map(ContentPart::as_text).collect::<Vec<_>>().join("\n");
-                json!({ "role": "user", "content": text })
+                vec![json!({ "role": "user", "content": text })]
             } else {
                 let parts: Vec<Value> = user
                     .content
                     .iter()
                     .map(|part| match part {
                         ContentPart::Text { text } => json!({ "type": "text", "text": text }),
-                        ContentPart::Image { data, mime_type } => json!({
-                            "type": "image_url",
-                            "image_url": { "url": format!("data:{mime_type};base64,{data}") }
-                        }),
+                        ContentPart::Image { data, mime_type } => image_part(data, mime_type),
                     })
                     .collect();
-                json!({ "role": "user", "content": parts })
+                vec![json!({ "role": "user", "content": parts })]
             }
         }
         LlmMessage::Assistant(assistant) => {
@@ -121,14 +162,38 @@ fn convert_message(message: &LlmMessage) -> Value {
             if !tool_calls.is_empty() {
                 value["tool_calls"] = Value::Array(tool_calls);
             }
-            value
+            vec![value]
         }
-        LlmMessage::ToolResult(result) => json!({
-            "role": "tool",
-            "tool_call_id": result.tool_call_id,
-            "content": result.text(),
-        }),
+        LlmMessage::ToolResult(result) => {
+            let text = result.text();
+            let images: Vec<Value> = result
+                .content
+                .iter()
+                .filter_map(|part| match part {
+                    ContentPart::Image { data, mime_type } => Some(image_part(data, mime_type)),
+                    ContentPart::Text { .. } => None,
+                })
+                .collect();
+            let content = if !text.is_empty() {
+                text
+            } else if !images.is_empty() {
+                "(see attached image)".into()
+            } else {
+                "(no tool output)".into()
+            };
+            let mut out = vec![json!({ "role": "tool", "tool_call_id": result.tool_call_id, "content": content })];
+            if !images.is_empty() {
+                let mut parts = vec![json!({ "type": "text", "text": format!("Images from the {} tool result:", result.tool_name) })];
+                parts.extend(images);
+                out.push(json!({ "role": "user", "content": parts }));
+            }
+            out
+        }
     }
+}
+
+fn image_part(data: &str, mime_type: &str) -> Value {
+    json!({ "type": "image_url", "image_url": { "url": format!("data:{mime_type};base64,{data}") } })
 }
 
 /// Tracks which content block each delta belongs to.
@@ -167,9 +232,14 @@ impl StreamState {
             self.usage = Usage {
                 input: usage["prompt_tokens"].as_u64().unwrap_or(0),
                 output: usage["completion_tokens"].as_u64().unwrap_or(0),
-                cache_read: usage["prompt_cache_hit_tokens"].as_u64().unwrap_or(0),
+                cache_read: usage["prompt_cache_hit_tokens"]
+                    .as_u64()
+                    .or_else(|| usage["prompt_tokens_details"]["cached_tokens"].as_u64())
+                    .unwrap_or(0),
                 cache_write: 0,
+                reasoning: usage["completion_tokens_details"]["reasoning_tokens"].as_u64(),
                 total_tokens: usage["total_tokens"].as_u64().unwrap_or(0),
+                cost: Default::default(),
             };
         }
 
@@ -250,38 +320,38 @@ impl Provider for OpenAiCompatProvider {
         &self.model
     }
 
+    fn supports_images(&self) -> bool {
+        self.supports_images
+    }
+
+    fn model_info(&self) -> Option<&'static ModelInfo> {
+        self.info
+    }
+
     async fn stream(&self, request: ModelRequest, cancel: CancellationToken) -> AssistantEventStream {
         let (tx, rx) = mpsc::channel(64);
-        let body = self.body(&request);
+        let mut body = self.body(&request);
+        let options = request.options.clone();
+        options.before_payload(&mut body);
+        let api_key = options.api_key(&self.api_key).await;
         let url = format!("{}/chat/completions", self.base_url);
         let client = self.client.clone();
-        let api_key = self.api_key.clone();
+        let (max_retries, max_retry_delay_ms) = (self.max_retries, self.max_retry_delay_ms);
+        let info = self.info;
 
         tokio::spawn(async move {
-            let response = tokio::select! {
-                _ = cancel.cancelled() => {
-                    let _ = tx.send(AssistantEvent::Error { message: "Request aborted".into(), aborted: true }).await;
-                    return;
+            let build = || options.apply_to(client.post(&url).bearer_auth(&api_key)).json(&body);
+            let response = match send_with_retry(build, max_retries, max_retry_delay_ms, &cancel).await {
+                Ok(response) => {
+                    options.report(&response);
+                    response
                 }
-                response = client.post(&url).bearer_auth(&api_key).json(&body).send() => response,
-            };
-
-            let response = match response {
-                Ok(response) => response,
-                Err(error) => {
-                    let _ = tx.send(AssistantEvent::Error { message: format!("Request failed: {error}"), aborted: false }).await;
+                Err(failure) => {
+                    let aborted = matches!(failure, RequestFailure::Aborted);
+                    let _ = tx.send(AssistantEvent::Error { message: failure.message(), aborted }).await;
                     return;
                 }
             };
-
-            if !response.status().is_success() {
-                let status = response.status();
-                let text = response.text().await.unwrap_or_default();
-                let _ = tx
-                    .send(AssistantEvent::Error { message: format!("{status}: {}", summarize_error(&text)), aborted: false })
-                    .await;
-                return;
-            }
 
             let _ = tx.send(AssistantEvent::Start).await;
             let mut parser = SseParser::new();
@@ -308,7 +378,7 @@ impl Provider for OpenAiCompatProvider {
                     if event.data.trim() == "[DONE]" {
                         continue;
                     }
-                    match serde_json::from_str::<Value>(&event.data) {
+                    match crate::json::parse_json_with_repair(&event.data) {
                         Ok(value) => {
                             if let Some(error) = value.get("error") {
                                 let message = error["message"].as_str().unwrap_or("Provider error").to_string();
@@ -326,23 +396,15 @@ impl Provider for OpenAiCompatProvider {
             state.close_thinking(&tx).await;
             state.close_tool_calls(&tx).await;
             let stop_reason = state.stop_reason.unwrap_or(StopReason::Stop);
-            let _ = tx.send(AssistantEvent::Done { stop_reason, usage: state.usage.clone() }).await;
+            let mut usage = state.usage.clone();
+            if let Some(info) = info {
+                usage.cost = info.cost_of(&usage);
+            }
+            let _ = tx.send(AssistantEvent::Done { stop_reason, usage }).await;
         });
 
         channel_stream(rx)
     }
 }
 
-fn summarize_error(text: &str) -> String {
-    if let Ok(value) = serde_json::from_str::<Value>(text) {
-        if let Some(message) = value["error"]["message"].as_str() {
-            return message.to_string();
-        }
-    }
-    let trimmed = text.trim();
-    if trimmed.len() > 300 {
-        format!("{}…", &trimmed[..300])
-    } else {
-        trimmed.to_string()
-    }
-}
+

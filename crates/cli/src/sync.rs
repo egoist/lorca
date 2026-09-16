@@ -241,7 +241,7 @@ fn apply_roster(app: &Arc<App>, roster: RosterBlob) {
         for meta in roster.chats {
             match state.chats.iter_mut().find(|c| c.meta.id == meta.id) {
                 Some(chat) => chat.meta = meta,
-                None => state.chats.push(Chat { meta, messages: Vec::new(), unread_count: 0 }),
+                None => state.chats.push(Chat { meta, messages: Vec::new(), unread_count: 0, usage: None, compactions: Vec::new() }),
             }
         }
     }
@@ -266,6 +266,8 @@ fn apply_chat_op(app: &Arc<App>, op: ChatBlob) {
                         meta: ChatMeta { id: message.chat_id.clone(), kind: "group".into(), title: Some("Chat".into()), bot_ids: vec![], owner_bot_id: None, is_pinned: false, created_at: message.created_at },
                         messages: Vec::new(),
                         unread_count: 0,
+                        usage: None,
+                        compactions: Vec::new(),
                     });
                 }
                 let chat = state.chats.iter_mut().find(|c| c.meta.id == message.chat_id).unwrap();

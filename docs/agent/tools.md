@@ -78,20 +78,39 @@ options.tools = vec![Arc::new(Weather)];
 | `description()` | What the model reads to decide when to call the tool. |
 | `parameters()` | JSON Schema for the arguments object. |
 | `execution_mode()` | `Some(ToolExecutionMode::Sequential)` makes any batch containing this tool run one call at a time. Defaults to `None`. |
+| `prepare_arguments(args)` | A shim over the raw arguments before the schema check, for a tool that accepts an older or looser shape. Defaults to returning them as they are. |
 | `execute(tool_call_id, args, cancel, on_update)` | Runs the call. |
 | `spec()` | The `ToolSpec` sent to the provider. Built from the methods above. |
 
 ### Arguments
 
-`args` is always a JSON object. The loop checks only that: a JSON string holding an object is parsed, `null` becomes `{}`, and anything else fails the call before `execute` runs. Validate against your schema by deserializing, as above. `ToolError` converts from `serde_json::Error`, so `?` reports `Invalid arguments: …` to the model.
+`args` is a JSON object that already passed `parameters()`. Before `execute` runs, the loop:
 
-If the model streams arguments that are not valid JSON, the tool receives `{ "_raw": "<the text>" }`, and deserializing into your type fails with a message the model can act on.
+1. Parses the streamed argument text. A string with raw control characters or a stray backslash is repaired; text cut off mid-value keeps the members that were complete. Anything else is `{}`.
+2. Hands the object to `prepare_arguments`.
+3. Coerces the values the way models get them wrong: `"3"` becomes `3` for an integer field, `"true"` becomes `true`, a number becomes its string for a string field, and `null` for an optional field that does not take null is dropped as "not given".
+4. Validates against the schema. A failure becomes an error result the model sees, listing each field's problem and the arguments as received, and `execute` is not called:
+
+```
+Validation failed for tool "read":
+  - path: "path" is a required property
+  - limit: "lots" is not of type "integer"
+
+Received arguments:
+{
+  "limit": "lots"
+}
+```
+
+Deserialize into your type inside `execute` as above; with the schema enforced first, that only fails for shapes the schema does not describe. `ToolError` converts from `serde_json::Error`, so `?` reports `Invalid arguments: …` to the model.
+
+A message the model's output limit cut off (`stop_reason` `Length`) never runs its tool calls at all: each gets an error result asking the model to re-issue the call with complete arguments.
 
 ### Results
 
 `ToolResult` has three fields:
 
-- `content: Vec<ContentPart>`: what the model sees. Text parts reach every provider; image parts reach only providers that send images in tool results (the built-in providers send tool results as text).
+- `content: Vec<ContentPart>`: what the model sees. Text parts reach every provider. Image parts reach the Anthropic Messages adapter as image blocks of the tool result, and the OpenAI-compatible adapter as a user message right after the tool message; a model that does not take images gets a note in their place.
 - `details: Value`: structured data for your logs or UI. The model never sees it; it travels on `tool_execution_end` and in the `ToolResultMessage`.
 - `terminate: bool`: a hint that the run should stop after this batch (see below).
 

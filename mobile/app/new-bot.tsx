@@ -3,7 +3,7 @@ import { useMemo, useState } from "react";
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { engine } from "../src/core/engine";
-import { isRunner, providerLabel } from "../src/core/model";
+import { isRunner, providerLabel, THINKING_LEVELS, thinkingLabel } from "../src/core/model";
 import { deviceIsOnline, useStore } from "../src/core/store";
 import { CheckRow, FieldRow, Section } from "../src/ui/forms";
 import { BOT_SYMBOLS, Symbol } from "../src/ui/Symbol";
@@ -47,12 +47,13 @@ export default function NewBotScreen() {
   const providers = runner?.providers_connected.length ? runner.providers_connected : ["deepseek", "anthropic", "chatgpt"];
   const [provider, setProvider] = useState<string>(providers[0]);
   const [model, setModel] = useState<string | undefined>(undefined);
+  const [thinking, setThinking] = useState<string | undefined>(undefined);
   const effectiveProvider = providers.includes(provider) ? provider : providers[0];
   const canSave = name.trim().length > 0 && !!runnerId;
 
   function save() {
     try {
-      const { chat } = engine.createBot({ name, label, description, instructions, symbol_name: symbol, accent, runner_id: runnerId, provider: effectiveProvider, model });
+      const { chat } = engine.createBot({ name, label, description, instructions, symbol_name: symbol, accent, runner_id: runnerId, provider: effectiveProvider, model, thinking });
       router.dismiss();
       router.push(`/chat/${chat.id}`);
     } catch (error) {
@@ -116,7 +117,7 @@ export default function NewBotScreen() {
         {runner && (
           <Section title="Provider" footer={runner.providers_connected.length ? undefined : `${runner.name} has no provider connected yet; connect one there before this bot answers.`}>
             {providers.map((kind) => (
-              <CheckRow key={kind} title={providerLabel(kind)} checked={kind === effectiveProvider} onPress={() => { setProvider(kind); setModel(undefined); }} />
+              <CheckRow key={kind} title={providerLabel(kind)} checked={kind === effectiveProvider} onPress={() => { setProvider(kind); setModel(undefined); setThinking(undefined); }} />
             ))}
           </Section>
         )}
@@ -125,6 +126,14 @@ export default function NewBotScreen() {
             <CheckRow title="Default" subtitle={MODELS[effectiveProvider][0].label} checked={!model} onPress={() => setModel(undefined)} />
             {MODELS[effectiveProvider].slice(1).map((m) => (
               <CheckRow key={m.id} title={m.label} subtitle={m.id} checked={model === m.id} onPress={() => setModel(m.id)} />
+            ))}
+          </Section>
+        )}
+        {runner && THINKING_LEVELS[effectiveProvider] && (
+          <Section title="Thinking" footer="How much the model reasons before it answers. Higher levels are slower and cost more.">
+            <CheckRow title="Default" checked={!thinking} onPress={() => setThinking(undefined)} />
+            {THINKING_LEVELS[effectiveProvider].map((level) => (
+              <CheckRow key={level} title={thinkingLabel(level)} checked={thinking === level} onPress={() => setThinking(level)} />
             ))}
           </Section>
         )}
