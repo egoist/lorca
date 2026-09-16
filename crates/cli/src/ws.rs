@@ -165,7 +165,8 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             let bot = Bot {
                 id: opt_string(&params, "id").unwrap_or_default(),
                 name: string(&params, "name")?,
-                tagline: opt_string(&params, "tagline").unwrap_or_else(|| "New bot".into()),
+                label: opt_string(&params, "label").unwrap_or_else(|| "New bot".into()),
+                description: opt_string(&params, "description").unwrap_or_default(),
                 symbol_name: opt_string(&params, "symbol_name").unwrap_or_else(|| "sparkles".into()),
                 accent: opt_string(&params, "accent").unwrap_or_else(|| "indigo".into()),
                 runner_id: string(&params, "runner_id")?,
@@ -182,19 +183,17 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
         }
         "bots.update" => {
             let id = string(&params, "id")?;
-            {
-                let mut state = app.state.lock().unwrap();
-                let bot = state.bots.iter_mut().find(|b| b.id == id).ok_or("Unknown bot")?;
+            app.update_bot(&id, |bot| {
                 if let Some(v) = opt_string(&params, "name") { bot.name = v; }
-                if let Some(v) = opt_string(&params, "tagline") { bot.tagline = v; }
+                if let Some(v) = opt_string(&params, "label") { bot.label = v; }
+                if let Some(v) = params["description"].as_str() { bot.description = v.trim().to_string(); }
                 if let Some(v) = params["instructions"].as_str() { bot.instructions = v.to_string(); }
                 if let Some(v) = opt_string(&params, "provider") { bot.provider = v; }
                 if let Some(v) = params["model"].as_str() { bot.model = Some(v.trim().to_string()).filter(|m| !m.is_empty()); }
                 if let Some(v) = opt_string(&params, "runner_id") { bot.runner_id = v; }
                 if let Some(v) = params["workdir"].as_str() { bot.workdir = Some(v.to_string()).filter(|w| !w.trim().is_empty()); }
-            }
-            app.roster_changed(true);
-            runtime::prime_names(app);
+            })
+            .map_err(|e| e.to_string())?;
             Ok(Value::Null)
         }
 

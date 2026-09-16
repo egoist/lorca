@@ -19,7 +19,8 @@ final class NewBotViewController: SheetViewController {
 
     private let store = AppStore.shared
     private let nameField = NSTextField()
-    private let taglineField = NSTextField()
+    private let labelField = NSTextField()
+    private let descriptionField = NSTextField()
     private let runnerPopup = NSPopUpButton()
     private let providerPopup = NSPopUpButton()
     private let modelPopup = NSPopUpButton()
@@ -47,8 +48,9 @@ final class NewBotViewController: SheetViewController {
         super.loadView()
 
         nameField.placeholderString = "Name"
-        taglineField.placeholderString = "What it is good at"
-        for field in [nameField, taglineField] {
+        labelField.placeholderString = "What it is for"
+        descriptionField.placeholderString = "A sentence or two about what it does"
+        for field in [nameField, labelField, descriptionField] {
             field.translatesAutoresizingMaskIntoConstraints = false
             field.delegate = self
         }
@@ -75,7 +77,8 @@ final class NewBotViewController: SheetViewController {
 
         let rows = [
             labeled("Name", nameField),
-            labeled("Tagline", taglineField),
+            labeled("Label", labelField),
+            labeled("Description", descriptionField),
             labeled("Look", lookRow),
             labeled("Runner", runnerPopup),
             labeled("Provider", providerPopup),
@@ -199,11 +202,13 @@ final class NewBotViewController: SheetViewController {
         let name = nameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return }
         let look = Self.looks[selectedLook]
-        let tagline = taglineField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let label = labelField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let description = descriptionField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
 
         let botID = store.createBot(
             name: name,
-            tagline: tagline.isEmpty ? "New bot" : tagline,
+            label: label.isEmpty ? "New bot" : label,
+            description: description,
             symbolName: look.symbolName,
             accent: look.accent,
             runnerID: store.runners[runnerPopup.indexOfSelectedItem].id,

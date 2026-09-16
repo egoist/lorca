@@ -180,7 +180,7 @@ final class MentionRowView: NSView {
     func configure(bot: Bot, runnerName: String) {
         avatar.content = .bot(symbolName: bot.symbolName, accent: bot.accent)
         name.stringValue = bot.name
-        detail.stringValue = runnerName.isEmpty ? bot.tagline : "on \(runnerName)"
+        detail.stringValue = runnerName.isEmpty ? bot.label : "on \(runnerName)"
     }
 
     override var allowsVibrancy: Bool { false }

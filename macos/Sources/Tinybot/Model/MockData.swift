@@ -74,7 +74,8 @@ enum MockData {
             Bot(
                 id: "bot-nova",
                 name: "Nova",
-                tagline: "Generalist · plans and delegates",
+                label: "Generalist",
+                description: "Plans the work and delegates it to the team.",
                 symbolName: "sparkles",
                 accent: .indigo,
                 runnerID: "dev-workbench",
@@ -86,7 +87,8 @@ enum MockData {
             Bot(
                 id: "bot-patch",
                 name: "Patch",
-                tagline: "Rust and Swift · writes the diff",
+                label: "Rust and Swift",
+                description: "Writes the diff, one small change at a time.",
                 symbolName: "chevron.left.forwardslash.chevron.right",
                 accent: .blue,
                 runnerID: "dev-studio",
@@ -98,7 +100,8 @@ enum MockData {
             Bot(
                 id: "bot-scout",
                 name: "Scout",
-                tagline: "Research · reads before it answers",
+                label: "Research",
+                description: "Reads the sources before it answers and cites them.",
                 symbolName: "binoculars.fill",
                 accent: .teal,
                 runnerID: "dev-studio",
@@ -109,7 +112,8 @@ enum MockData {
             Bot(
                 id: "bot-quill",
                 name: "Quill",
-                tagline: "Writing · docs, copy, release notes",
+                label: "Writing",
+                description: "Docs, copy, and release notes in plain language.",
                 symbolName: "pencil.and.scribble",
                 accent: .pink,
                 runnerID: "dev-workbench",
@@ -120,7 +124,8 @@ enum MockData {
             Bot(
                 id: "bot-ember",
                 name: "Ember",
-                tagline: "Ops · deploys and watches the relay",
+                label: "Ops",
+                description: "Deploys and watches the relay.",
                 symbolName: "bolt.horizontal.fill",
                 accent: .orange,
                 runnerID: "dev-closet",

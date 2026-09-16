@@ -263,6 +263,7 @@ final class WorkingCellView: NSTableCellView {
         case "message_bot": return targetName.map { "Messaging \($0)" } ?? "Messaging another bot"
         case "list_teammates": return "Checking the team"
         case "create_bot": return "Creating a bot"
+        case "edit_bot": return "Updating a bot"
         case "remember": return "Taking a note"
         default: return "Working"
         }

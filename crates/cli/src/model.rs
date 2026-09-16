@@ -39,7 +39,10 @@ impl Device {
 pub struct Bot {
     pub id: String,
     pub name: String,
-    pub tagline: String,
+    /// One short line under the name: what the bot is for.
+    pub label: String,
+    /// A sentence or two about the bot, shown in its profile and its prompt.
+    pub description: String,
     pub symbol_name: String,
     pub accent: String,
     pub runner_id: String,

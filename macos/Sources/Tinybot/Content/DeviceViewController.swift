@@ -101,7 +101,7 @@ final class DeviceViewController: NSViewController {
                         let row = BotRow()
                         row.configure(
                             bot: bot,
-                            detailText: "\(bot.tagline) · \(bot.provider.rawValue)",
+                            detailText: "\(bot.label) · \(bot.provider.rawValue)",
                             accessorySymbol: "bubble.left",
                             tooltip: "Open chat"
                         )

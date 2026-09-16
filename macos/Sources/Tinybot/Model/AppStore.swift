@@ -409,7 +409,8 @@ final class AppStore {
     @discardableResult
     func createBot(
         name: String,
-        tagline: String,
+        label: String,
+        description: String = "",
         symbolName: String,
         accent: Accent,
         runnerID: Device.ID,
@@ -419,7 +420,8 @@ final class AppStore {
         let bot = Bot(
             id: "bot-\(UUID().uuidString.lowercased().prefix(8))",
             name: name,
-            tagline: tagline,
+            label: label,
+            description: description,
             symbolName: symbolName,
             accent: accent,
             runnerID: runnerID,
@@ -444,7 +446,7 @@ final class AppStore {
             perform(
                 "bots.create",
                 [
-                    "id": bot.id, "name": name, "tagline": tagline, "symbol_name": symbolName,
+                    "id": bot.id, "name": name, "label": label, "description": description, "symbol_name": symbolName,
                     "accent": accent.rawValue, "runner_id": runnerID, "provider": provider.wireValue,
                     "model": model ?? "", "chat_id": chatID,
                 ])
@@ -452,14 +454,16 @@ final class AppStore {
         return bot.id
     }
 
-    func updateBot(_ id: Bot.ID, name: String, tagline: String, provider: ProviderCredential.Kind? = nil) {
+    func updateBot(_ id: Bot.ID, name: String, label: String, description: String? = nil, provider: ProviderCredential.Kind? = nil) {
         guard let index = bots.firstIndex(where: { $0.id == id }) else { return }
         bots[index].name = name
-        bots[index].tagline = tagline
+        bots[index].label = label
+        if let description { bots[index].description = description }
         if let provider { bots[index].provider = provider }
         emit(.rosterChanged)
         emit(.chatsChanged)
-        var params: [String: Any] = ["id": id, "name": name, "tagline": tagline]
+        var params: [String: Any] = ["id": id, "name": name, "label": label]
+        if let description { params["description"] = description }
         if let provider { params["provider"] = provider.wireValue }
         perform("bots.update", params)
     }

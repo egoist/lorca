@@ -139,7 +139,10 @@ struct Device: Identifiable, Hashable {
 struct Bot: Identifiable, Hashable {
     let id: String
     var name: String
-    var tagline: String
+    /// One short line under the name: what the bot is for.
+    var label: String
+    /// A sentence or two about the bot.
+    var description: String
     var symbolName: String
     var accent: Accent
     var runnerID: Device.ID
@@ -174,6 +177,7 @@ struct ToolInvocation: Hashable {
         case "message_bot": "arrow.triangle.turn.up.right.diamond.fill"
         case "list_teammates": "person.2.fill"
         case "create_bot": "person.badge.plus"
+        case "edit_bot": "person.text.rectangle"
         case "read": "doc.text"
         case "write": "square.and.pencil"
         case "edit": "pencil.line"

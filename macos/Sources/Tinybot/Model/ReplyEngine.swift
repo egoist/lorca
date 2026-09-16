@@ -193,7 +193,7 @@ final class ReplyEngine {
         let lowered = prompt.lowercased()
 
         if lowered.contains("hello") || lowered.contains("hi ") || lowered == "hi" {
-            return "Here. \(bot.tagline.split(separator: "·").last.map(String.init)?.trimmingCharacters(in: .whitespaces) ?? "Ready when you are")."
+            return "Here. \(bot.label.split(separator: "·").last.map(String.init)?.trimmingCharacters(in: .whitespaces) ?? "Ready when you are")."
         }
 
         let pool: [String]

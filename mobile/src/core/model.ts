@@ -25,7 +25,10 @@ export type Accent = "indigo" | "blue" | "teal" | "green" | "orange" | "pink" | 
 export interface Bot {
   id: string;
   name: string;
-  tagline: string;
+  /** One short line under the name: what the bot is for. */
+  label: string;
+  /** A sentence or two about the bot. */
+  description: string;
   symbol_name: string;
   accent: Accent | string;
   runner_id: string;

@@ -209,7 +209,8 @@ Team tools (the CLI):
 - `message_bot { bot, message }` — a message to a bot outside the current chat. The caller's chat shows a "Messaged ◉ X" marker; the target's own DM gets a "Message from ◉ X" marker and a `message` Job (with `from_bot_id` and `hops`) whose envelope goes to the **target bot’s Runner**. The tool refuses a member of the same group: they read that chat and take their own turn.
 - `list_teammates` — decrypted local roster with Runner and online state.
 - `remember { note }` — appends to the bot’s memory file.
-- `create_bot { name, tagline, instructions, provider?, workdir? }` — a new teammate on the caller’s Runner with its own DM; in a group chat it joins that chat. This is how a lead bot builds its team.
+- `create_bot { name, label, description?, instructions, provider?, workdir? }` — a new teammate on the caller’s Runner with its own DM; in a group chat it joins that chat. This is how a lead bot builds its team.
+- `edit_bot { bot, name?, label?, description?, instructions?, provider?, workdir? }` — changes a teammate’s profile, or the caller’s own. Only the passed fields change and instructions replace in full; the new profile applies from that bot’s next turn.
 
 Coding tools (`tinybot_agent::tools`, ports of pi’s built-ins, same schemas and truncation rules: 2000 lines / 50KB, whichever first):
 

@@ -44,7 +44,7 @@ export default function NewGroupScreen() {
         </Section>
         <Section title={`Members · ${selected.length} of ${MAX_GROUP_BOTS}`} footer="Members take turns after every message; the first one you pick owns the work.">
           {bots.map((bot) => (
-            <CheckRow key={bot.id} title={bot.name} subtitle={bot.tagline} checked={selected.includes(bot.id)} onPress={() => toggle(bot.id)} leading={<BotAvatar bot={bot} size={36} />} />
+            <CheckRow key={bot.id} title={bot.name} subtitle={bot.label} checked={selected.includes(bot.id)} onPress={() => toggle(bot.id)} leading={<BotAvatar bot={bot} size={36} />} />
           ))}
         </Section>
       </ScrollView>

@@ -362,3 +362,86 @@ final class ActionRow: NSView {
         onAction?()
     }
 }
+
+
+/// Key on the left, an editable value on the right. Looks like a value until it is clicked;
+/// commits when editing ends (Return, Tab, or focus leaving the field).
+final class EditableRow: NSView, NSTextFieldDelegate {
+    private let key: NSTextField
+    let field: NSTextField
+    var onCommit: (() -> Void)?
+
+    var value: String {
+        field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    init(key keyText: String, placeholder: String, multiline: Bool = false) {
+        key = Build.label(keyText, font: .systemFont(ofSize: 12), color: .secondaryLabelColor)
+        field = multiline ? WrappingTextField() : NSTextField()
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+
+        field.translatesAutoresizingMaskIntoConstraints = false
+        field.isBordered = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        field.font = .systemFont(ofSize: 12)
+        field.textColor = .labelColor
+        field.placeholderString = placeholder
+        field.delegate = self
+        field.usesSingleLineMode = !multiline
+        field.maximumNumberOfLines = multiline ? 0 : 1
+        field.lineBreakMode = multiline ? .byWordWrapping : .byTruncatingTail
+        field.cell?.wraps = multiline
+        field.cell?.isScrollable = !multiline
+        field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        key.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        addSubview(key)
+        addSubview(field)
+        NSLayoutConstraint.activate([
+            heightAnchor.constraint(greaterThanOrEqualToConstant: 32),
+            key.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            key.widthAnchor.constraint(equalToConstant: 76),
+            key.firstBaselineAnchor.constraint(equalTo: field.firstBaselineAnchor),
+            field.leadingAnchor.constraint(equalTo: key.trailingAnchor, constant: 10),
+            field.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            field.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+            field.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    /// Shows a value from the model unless the user is typing in the field right now.
+    func setValue(_ text: String) {
+        guard field.currentEditor() == nil, field.stringValue != text else { return }
+        field.stringValue = text
+    }
+
+    func controlTextDidEndEditing(_ obj: Notification) {
+        onCommit?()
+    }
+}
+
+/// Editable text field whose height follows its wrapped text at the width Auto Layout gave it,
+/// including while the user types.
+final class WrappingTextField: NSTextField {
+    override var intrinsicContentSize: NSSize {
+        guard let cell, bounds.width > 0 else { return super.intrinsicContentSize }
+        let bounds = NSRect(x: 0, y: 0, width: bounds.width, height: .greatestFiniteMagnitude)
+        return NSSize(width: NSView.noIntrinsicMetric, height: ceil(cell.cellSize(forBounds: bounds).height))
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        let widthChanged = newSize.width != frame.width
+        super.setFrameSize(newSize)
+        if widthChanged { invalidateIntrinsicContentSize() }
+    }
+
+    override func textDidChange(_ notification: Notification) {
+        super.textDidChange(notification)
+        invalidateIntrinsicContentSize()
+    }
+}

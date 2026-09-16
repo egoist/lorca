@@ -357,6 +357,20 @@ impl App {
         Ok((bot, chat))
     }
 
+    /// Applies a change to a bot's profile and publishes the roster. The next turn of that bot
+    /// reads the new profile.
+    pub fn update_bot(&self, id: &str, update: impl FnOnce(&mut Bot)) -> anyhow::Result<Bot> {
+        let bot = {
+            let mut state = self.state.lock().unwrap();
+            let bot = state.bots.iter_mut().find(|b| b.id == id).ok_or_else(|| anyhow::anyhow!("Unknown bot"))?;
+            update(bot);
+            bot.clone()
+        };
+        self.roster_changed(true);
+        crate::runtime::prime_names(self);
+        Ok(bot)
+    }
+
     fn insert_bot(&self, mut bot: Bot) -> anyhow::Result<Bot> {
         let runner = self.device(&bot.runner_id).ok_or_else(|| anyhow::anyhow!("Unknown Runner"))?;
         if !runner.is_runner() {

@@ -283,15 +283,20 @@ final class OnboardingViewController: NSViewController {
         nameField.stringValue = firstBot?.name ?? "Chef"
         nameField.placeholderString = "Name"
         nameField.identifier = NSUserInterfaceItemIdentifier("botName")
-        let taglineField = NSTextField()
-        taglineField.stringValue = firstBot?.tagline ?? "Chief of staff · plans, delegates, builds the team"
-        taglineField.placeholderString = "What it is good at"
-        taglineField.identifier = NSUserInterfaceItemIdentifier("botTagline")
+        let labelField = NSTextField()
+        labelField.stringValue = firstBot?.label ?? "Chief of staff"
+        labelField.placeholderString = "What it is for"
+        labelField.identifier = NSUserInterfaceItemIdentifier("botLabel")
+        let descriptionField = NSTextField()
+        descriptionField.stringValue = firstBot?.description ?? "Learns what you work on, proposes a small team of one-job bots, and routes work to them."
+        descriptionField.placeholderString = "A sentence or two about what it does"
+        descriptionField.identifier = NSUserInterfaceItemIdentifier("botDescription")
 
         let grid = formGrid([
             ("", avatar),
             ("Name", nameField),
-            ("Tagline", taglineField),
+            ("Label", labelField),
+            ("Description", descriptionField),
         ] + providerRows())
 
         let back = secondaryButton("Back", action: #selector(goWelcome))
@@ -576,14 +581,15 @@ final class OnboardingViewController: NSViewController {
             return
         }
         let name = find(NSTextField.self, "botName")?.stringValue.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let tagline = find(NSTextField.self, "botTagline")?.stringValue.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let label = find(NSTextField.self, "botLabel")?.stringValue.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let description = find(NSTextField.self, "botDescription")?.stringValue.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !name.isEmpty else {
             setStatus("Give the bot a name.", color: .systemRed)
             return
         }
         // The bot runs with the provider chosen here, not the CLI's default.
-        if name != bot.name || tagline != bot.tagline || providerKind != bot.provider {
-            store.updateBot(bot.id, name: name, tagline: tagline.isEmpty ? bot.tagline : tagline, provider: providerKind)
+        if name != bot.name || label != bot.label || description != bot.description || providerKind != bot.provider {
+            store.updateBot(bot.id, name: name, label: label.isEmpty ? bot.label : label, description: description, provider: providerKind)
         }
         connectProvider()
     }

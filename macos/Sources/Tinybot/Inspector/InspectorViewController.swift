@@ -6,6 +6,10 @@ final class InspectorViewController: NSViewController {
     private let scrollView = NSScrollView()
     private let column = Build.stack([], spacing: 20)
     private let participants = SectionView(title: "Bots in this chat")
+    private let profile = SectionView(title: "Profile")
+    private let nameRow = EditableRow(key: "Name", placeholder: "Name")
+    private let labelRow = EditableRow(key: "Label", placeholder: "What it is for")
+    private let descriptionRow = EditableRow(key: "Description", placeholder: "A sentence or two about what it does", multiline: true)
     private let runtime = SectionView(title: "Runs with")
     private let routing = SectionView(title: "Where turns run")
     private let security = SectionView(title: "Encryption")
@@ -31,14 +35,18 @@ final class InspectorViewController: NSViewController {
         addButton.action = #selector(addBot)
         addButton.translatesAutoresizingMaskIntoConstraints = false
 
+        profile.setRows([nameRow, labelRow, descriptionRow])
+
         column.addArrangedSubview(participants)
         column.addArrangedSubview(addButton)
+        column.addArrangedSubview(profile)
         column.addArrangedSubview(runtime)
         column.addArrangedSubview(routing)
         column.addArrangedSubview(security)
         column.setCustomSpacing(10, after: participants)
 
-        let documentView = NSView()
+        // Flipped so short content sits at the top of the pane, not the bottom.
+        let documentView = FlippedView()
         documentView.translatesAutoresizingMaskIntoConstraints = false
         documentView.addSubview(column)
 
@@ -65,6 +73,7 @@ final class InspectorViewController: NSViewController {
             column.trailingAnchor.constraint(equalTo: documentView.trailingAnchor),
             column.bottomAnchor.constraint(equalTo: documentView.bottomAnchor),
             participants.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
+            profile.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             runtime.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             routing.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             security.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
@@ -115,9 +124,18 @@ final class InspectorViewController: NSViewController {
         addButton.isHidden = chat.isDM
         addButton.isEnabled = chat.canAddBot && members.count < store.bots.count
 
-        // A direct chat is one bot, so its provider and model are edited right here.
-        runtime.isHidden = !(chat.isDM && members.count == 1)
-        if chat.isDM, let bot = members.first {
+        // A direct chat is one bot, so its profile, provider, and model are edited right here.
+        let single = chat.isDM && members.count == 1
+        profile.isHidden = !single
+        runtime.isHidden = !single
+        if single, let bot = members.first {
+            nameRow.setValue(bot.name)
+            labelRow.setValue(bot.label)
+            descriptionRow.setValue(bot.description)
+            let commit: () -> Void = { [weak self] in self?.commitProfile(of: bot.id) }
+            nameRow.onCommit = commit
+            labelRow.onCommit = commit
+            descriptionRow.onCommit = commit
             runtime.setRows(runtimeRows(for: bot))
         }
 
@@ -145,6 +163,19 @@ final class InspectorViewController: NSViewController {
             KeyValueRow(key: "Relay sees", value: "Ciphertext only", tint: .systemGreen),
             KeyValueRow(key: "Chat blob", value: "chat · seq \(chat.messages.count)", monospaced: true),
         ])
+    }
+
+    /// Saves the profile rows when one of them finishes editing. An emptied name or label keeps
+    /// the old value; the description may be cleared.
+    private func commitProfile(of id: Bot.ID) {
+        guard let bot = store.bot(id) else { return }
+        let name = nameRow.value.isEmpty ? bot.name : nameRow.value
+        let label = labelRow.value.isEmpty ? bot.label : labelRow.value
+        let description = descriptionRow.value
+        nameRow.setValue(name)
+        labelRow.setValue(label)
+        guard name != bot.name || label != bot.label || description != bot.description else { return }
+        store.updateBot(id, name: name, label: label, description: description)
     }
 
     private func runtimeRows(for bot: Bot) -> [NSView] {
@@ -196,4 +227,9 @@ final class InspectorViewController: NSViewController {
         guard let id = sender.view?.identifier?.rawValue else { return }
         onOpenDevice?(id)
     }
+}
+
+/// Plain container whose y grows downward, for scroll views whose content is shorter than the pane.
+private final class FlippedView: NSView {
+    override var isFlipped: Bool { true }
 }

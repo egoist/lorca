@@ -35,7 +35,7 @@ final class NewGroupChatViewController: SheetViewController {
                 let row = SelectableBotRow()
                 row.configure(
                     bot: bot,
-                    detail: "\(bot.tagline) · \(host?.name ?? "unassigned")",
+                    detail: "\(bot.label) · \(host?.name ?? "unassigned")",
                     isOffline: host?.status == .offline
                 )
                 row.onToggle = { [weak self] in self?.toggle(bot.id) }
@@ -111,7 +111,7 @@ final class BotPickerViewController: SheetViewController {
                 let row = SelectableBotRow()
                 row.configure(
                     bot: bot,
-                    detail: "\(bot.tagline) · \(host?.name ?? "unassigned")",
+                    detail: "\(bot.label) · \(host?.name ?? "unassigned")",
                     isOffline: host?.status == .offline
                 )
                 row.onToggle = { [weak self] in self?.select(bot.id) }

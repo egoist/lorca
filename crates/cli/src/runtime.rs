@@ -366,6 +366,7 @@ async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken) -> TurnOu
         Arc::new(ListTeammates { app: app.clone(), chat_id: chat.meta.id.clone() }),
         Arc::new(MessageBot { app: app.clone(), chat_id: chat.meta.id.clone(), bot: bot.clone(), hops: job.hops }),
         Arc::new(CreateBot { app: app.clone(), chat_id: chat.meta.id.clone(), bot: bot.clone() }),
+        Arc::new(EditBot { app: app.clone(), bot: bot.clone() }),
         Arc::new(Remember { path: workdir.join("MEMORY.md") }),
     ];
     tools.extend(tinybot_agent::tools::coding_tools(workdir));
@@ -638,7 +639,10 @@ fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job) -> String {
     let runner = app.device(&bot.runner_id);
     let workdir = bot.working_directory(&app.config.home);
     let mut prompt = String::new();
-    prompt.push_str(&format!("You are {}, a bot in Tinybot. {}\n", bot.name, bot.tagline));
+    prompt.push_str(&format!("You are {}, a bot in Tinybot. {}\n", bot.name, bot.label));
+    if !bot.description.trim().is_empty() {
+        prompt.push_str(&format!("{}\n", bot.description.trim()));
+    }
     if !bot.instructions.trim().is_empty() {
         prompt.push_str(&format!("\nInstructions from your owner:\n{}\n", bot.instructions.trim()));
     }
@@ -650,7 +654,7 @@ fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job) -> String {
             let host = app.device(&member.runner_id).map(|d| d.name).unwrap_or_else(|| "unassigned".into());
             let marker = if member.id == bot.id { " (you)" } else { "" };
             let owner = if chat.meta.owner_bot_id.as_deref() == Some(member.id.as_str()) { " · owner" } else { "" };
-            prompt.push_str(&format!("- {}{marker}{owner}: {} · runs on {host}\n", member.name, member.tagline));
+            prompt.push_str(&format!("- {}{marker}{owner}: {} · runs on {host}\n", member.name, member.label));
         }
         prompt.push_str(
             "\nEveryone here, including the user, reads every message. After each new message the bots take turns in that \
@@ -683,7 +687,8 @@ fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job) -> String {
 
     prompt.push_str(
         "\nTeam: call list_teammates to see every bot. If the right teammate does not exist yet, propose one and create it \
-         with create_bot once the user agrees; keep every bot to one clear job.\n",
+         with create_bot once the user agrees; keep every bot to one clear job. When the user wants a bot, including you, \
+         to behave differently, change its profile with edit_bot.\n",
     );
     prompt.push_str(
         "\nMemory: call remember for stable facts, preferences, and summaries worth keeping across chats. Do not store \
@@ -802,7 +807,7 @@ static NAME_CACHE: std::sync::LazyLock<std::sync::RwLock<std::collections::HashM
     std::sync::LazyLock::new(|| std::sync::RwLock::new(std::collections::HashMap::new()));
 
 /// Refreshes the bot-name lookup used while building transcripts.
-pub fn prime_names(app: &Arc<App>) {
+pub fn prime_names(app: &App) {
     let names: std::collections::HashMap<String, String> =
         app.state.lock().unwrap().bots.iter().map(|b| (b.id.clone(), b.name.clone())).collect();
     *NAME_CACHE.write().unwrap() = names;
@@ -835,7 +840,8 @@ impl Tool for ListTeammates {
                 let runner = self.app.device(&bot.runner_id);
                 json!({
                     "name": bot.name,
-                    "tagline": bot.tagline,
+                    "label": bot.label,
+                    "description": bot.description,
                     "runner": runner.as_ref().map(|d| d.name.clone()).unwrap_or_else(|| "unassigned".into()),
                     "provider": bot.provider,
                     "online": self.app.device_is_online(&bot.runner_id),
@@ -998,12 +1004,13 @@ impl Tool for CreateBot {
             "type": "object",
             "properties": {
                 "name": { "type": "string", "description": "Short name, one or two words" },
-                "tagline": { "type": "string", "description": "One line: what it is good at" },
+                "label": { "type": "string", "description": "One short line under the name: what it is for" },
+                "description": { "type": "string", "description": "A sentence or two about what it does, shown in its profile" },
                 "instructions": { "type": "string", "description": "How it should work: scope, tone, what to ask before acting" },
                 "provider": { "type": "string", "enum": ["deepseek", "chatgpt"], "description": "Defaults to your own provider" },
                 "workdir": { "type": "string", "description": "Working directory for its tools. Defaults to a private workspace under the CLI home; give it your own path to share files" }
             },
-            "required": ["name", "tagline", "instructions"],
+            "required": ["name", "label", "instructions"],
             "additionalProperties": false
         })
     }
@@ -1012,10 +1019,11 @@ impl Tool for CreateBot {
     }
     async fn execute(&self, _id: &str, args: Value, _cancel: CancellationToken, _on_update: ToolUpdateFn) -> Result<ToolResult, ToolError> {
         let name = args["name"].as_str().unwrap_or("").trim().trim_start_matches('@').to_string();
-        let tagline = args["tagline"].as_str().unwrap_or("").trim().to_string();
+        let label = args["label"].as_str().unwrap_or("").trim().to_string();
+        let description = args["description"].as_str().unwrap_or("").trim().to_string();
         let instructions = args["instructions"].as_str().unwrap_or("").trim().to_string();
-        if name.is_empty() || tagline.is_empty() {
-            return Err("name and tagline are required".into());
+        if name.is_empty() || label.is_empty() {
+            return Err("name and label are required".into());
         }
         if name.chars().count() > 24 {
             return Err("Keep the name under 24 characters".into());
@@ -1028,7 +1036,8 @@ impl Tool for CreateBot {
         let bot = Bot {
             id: String::new(),
             name: name.clone(),
-            tagline,
+            label,
+            description,
             symbol_name,
             accent,
             runner_id: self.bot.runner_id.clone(),
@@ -1067,6 +1076,122 @@ impl Tool for CreateBot {
             )
         };
         Ok(ToolResult::text(text).with_details(json!({ "summary": format!("Created {}", created.name), "bot_id": created.id })))
+    }
+}
+
+/// Changes a teammate's profile (or the caller's own). The new profile applies from that bot's next turn.
+struct EditBot {
+    app: Arc<App>,
+    bot: Bot,
+}
+
+#[async_trait]
+impl Tool for EditBot {
+    fn name(&self) -> &str {
+        "edit_bot"
+    }
+    fn description(&self) -> &str {
+        "Change a teammate's profile: name, label, description, instructions, provider, or working directory. Only the fields you \
+         pass change. Instructions replace the old ones in full, so include everything the bot should keep. You can edit \
+         yourself. Changes apply from that bot's next turn. Edit only when the user asks or agrees."
+    }
+    fn parameters(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "bot": { "type": "string", "description": "The teammate's current name" },
+                "name": { "type": "string", "description": "New name, one or two words" },
+                "label": { "type": "string", "description": "New short line under the name: what it is for" },
+                "description": { "type": "string", "description": "New sentence or two about what it does" },
+                "instructions": { "type": "string", "description": "New instructions, complete: they replace the old ones" },
+                "provider": { "type": "string", "enum": ["deepseek", "chatgpt"] },
+                "workdir": { "type": "string", "description": "New working directory for its tools" }
+            },
+            "required": ["bot"],
+            "additionalProperties": false
+        })
+    }
+    fn execution_mode(&self) -> Option<ToolExecutionMode> {
+        Some(ToolExecutionMode::Sequential)
+    }
+    async fn execute(&self, _id: &str, args: Value, _cancel: CancellationToken, _on_update: ToolUpdateFn) -> Result<ToolResult, ToolError> {
+        let name = args["bot"].as_str().unwrap_or("").trim().trim_start_matches('@').to_string();
+        if name.is_empty() {
+            return Err("bot is required".into());
+        }
+        let all: Vec<Bot> = self.app.state.lock().unwrap().bots.clone();
+        let target = all
+            .iter()
+            .find(|b| b.name.eq_ignore_ascii_case(&name))
+            .cloned()
+            .ok_or_else(|| ToolError(format!("No bot named {name}. Bots: {}", all.iter().map(|b| b.name.clone()).collect::<Vec<_>>().join(", "))))?;
+
+        let field = |key: &str| args[key].as_str().map(str::trim).filter(|v| !v.is_empty()).map(str::to_string);
+        let new_name = field("name").map(|n| n.trim_start_matches('@').to_string());
+        let label = field("label");
+        let description = field("description");
+        let instructions = field("instructions");
+        let provider = field("provider");
+        let workdir = field("workdir");
+        if let Some(n) = &new_name {
+            if n.chars().count() > 24 {
+                return Err("Keep the name under 24 characters".into());
+            }
+            if all.iter().any(|b| b.id != target.id && b.name.eq_ignore_ascii_case(n)) {
+                return Err(ToolError(format!("A bot named {n} already exists. Pick another name.")));
+            }
+        }
+        if let Some(p) = &provider {
+            if !matches!(p.as_str(), "deepseek" | "chatgpt") {
+                return Err(ToolError(format!("Unknown provider {p}. Use deepseek or chatgpt.")));
+            }
+        }
+        let changed: Vec<&str> = [
+            ("name", new_name.is_some()),
+            ("label", label.is_some()),
+            ("description", description.is_some()),
+            ("instructions", instructions.is_some()),
+            ("provider", provider.is_some()),
+            ("working directory", workdir.is_some()),
+        ]
+        .into_iter()
+        .filter_map(|(label, set)| set.then_some(label))
+        .collect();
+        if changed.is_empty() {
+            return Err("Pass at least one field to change: name, label, description, instructions, provider, or workdir".into());
+        }
+
+        let updated = self
+            .app
+            .update_bot(&target.id, |bot| {
+                if let Some(v) = new_name {
+                    bot.name = v;
+                }
+                if let Some(v) = label {
+                    bot.label = v;
+                }
+                if let Some(v) = description {
+                    bot.description = v;
+                }
+                if let Some(v) = instructions {
+                    bot.instructions = v;
+                }
+                if let Some(v) = provider {
+                    bot.provider = v;
+                }
+                if let Some(v) = workdir {
+                    bot.workdir = Some(v);
+                }
+            })
+            .map_err(|e| ToolError(e.to_string()))?;
+
+        let what = changed.join(", ");
+        let text = if target.id == self.bot.id {
+            format!("Updated your own profile ({what}). The new profile applies from your next turn; finish this one as you are.")
+        } else {
+            format!("Updated {} ({what}). The new profile applies from their next turn.", updated.name)
+        };
+        Ok(ToolResult::text(text).with_details(json!({ "summary": format!("Updated {}", updated.name), "bot_id": updated.id, "changed": changed })))
     }
 }
 

@@ -576,14 +576,15 @@ class Engine {
 
   // MARK: - Roster edits
 
-  createBot(input: { name: string; tagline: string; instructions: string; symbol_name: string; accent: string; runner_id: string; provider: string; model?: string }): { bot: Bot; chat: Chat } {
+  createBot(input: { name: string; label: string; description?: string; instructions: string; symbol_name: string; accent: string; runner_id: string; provider: string; model?: string }): { bot: Bot; chat: Chat } {
     const runner = deviceById(input.runner_id);
     if (!runner) throw new Error("Unknown Runner");
     if (!isRunner(runner)) throw new Error(`${runner.name} runs ${runner.os} and cannot run bots`);
     const bot: Bot = {
       id: `bot-${uuid().slice(0, 8)}`,
       name: input.name.trim(),
-      tagline: input.tagline.trim() || "New bot",
+      label: input.label.trim() || "New bot",
+      description: (input.description ?? "").trim(),
       symbol_name: input.symbol_name,
       accent: input.accent,
       runner_id: input.runner_id,

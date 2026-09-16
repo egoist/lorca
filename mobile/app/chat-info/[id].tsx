@@ -61,7 +61,7 @@ export default function ChatInfoScreen() {
       <View style={styles.hero}>
         <AvatarCluster bots={members} size={72} working={members.some((m) => working.has(m.id))} />
         <Text style={[styles.heroTitle, { color: p.label }]}>{chatTitle(chat)}</Text>
-        {bot ? <Text style={[styles.heroSubtitle, { color: p.secondaryLabel }]}>{bot.tagline}</Text> : <Text style={[styles.heroSubtitle, { color: p.secondaryLabel }]}>{members.length} {members.length === 1 ? "bot" : "bots"}</Text>}
+        {bot ? <Text style={[styles.heroSubtitle, { color: p.secondaryLabel }]}>{bot.label}</Text> : <Text style={[styles.heroSubtitle, { color: p.secondaryLabel }]}>{members.length} {members.length === 1 ? "bot" : "bots"}</Text>}
       </View>
 
       {isGroup && (
@@ -100,7 +100,7 @@ export default function ChatInfoScreen() {
             <Row
               key={member.id}
               title={member.name}
-              subtitle={member.tagline}
+              subtitle={member.label}
               leading={<BotAvatar bot={member} size={36} working={working.has(member.id)} />}
               accessory={
                 chat.owner_bot_id === member.id ? (
@@ -124,7 +124,7 @@ export default function ChatInfoScreen() {
             <CheckRow
               key={candidate.id}
               title={candidate.name}
-              subtitle={candidate.tagline}
+              subtitle={candidate.label}
               checked={false}
               leading={<BotAvatar bot={candidate} size={36} />}
               onPress={() => {
