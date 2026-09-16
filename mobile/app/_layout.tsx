@@ -1,4 +1,4 @@
-import { Stack } from "expo-router";
+import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { useEffect } from "react";
 import { Platform, useColorScheme } from "react-native";
@@ -35,30 +35,33 @@ export default function RootLayout() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <KeyboardProvider>
         <StatusBar style={scheme === "dark" ? "light" : "dark"} />
-        <Stack
-          screenOptions={{
-            headerTintColor: p.tint as any,
-            headerTitleStyle: { color: p.label as any },
-            headerBackButtonDisplayMode: "minimal",
-            contentStyle: { backgroundColor: p.background },
-          }}
-        >
-          <Stack.Protected guard={paired}>
-            <Stack.Screen name="index" options={{ title: "Chats", headerTitle: "", headerLargeTitle: false, headerShadowVisible: false, headerTransparent: Platform.OS === "ios" }} />
-            <Stack.Screen name="chat/[id]" options={{ headerTransparent: Platform.OS === "ios" }} />
-            <Stack.Screen name="chat-info/[id]" options={{ ...sheet, sheetAllowedDetents: [0.7, 1], sheetGrabberVisible: true }} />
-            <Stack.Screen name="new-bot" options={sheet} />
-            <Stack.Screen name="new-group" options={sheet} />
-            <Stack.Screen name="settings" options={sheet} />
-            <Stack.Screen
-              name="attachment/[id]"
-              options={{ presentation: "fullScreenModal", headerShown: true, headerStyle: { backgroundColor: "#000000" }, headerTintColor: "#FFFFFF", headerTitleStyle: { color: "#FFFFFF" }, contentStyle: { backgroundColor: "#000000" } }}
-            />
-          </Stack.Protected>
-          <Stack.Protected guard={!paired}>
-            <Stack.Screen name="pair" options={{ headerShown: false, gestureEnabled: false }} />
-          </Stack.Protected>
-        </Stack>
+        {/* The native bar takes its light/dark appearance from the navigation theme, not the OS. */}
+        <ThemeProvider value={p.dark ? DarkTheme : DefaultTheme}>
+          <Stack
+            screenOptions={{
+              headerTintColor: p.tint as any,
+              headerTitleStyle: { color: p.label as any },
+              headerBackButtonDisplayMode: "minimal",
+              contentStyle: { backgroundColor: p.background },
+            }}
+          >
+            <Stack.Protected guard={paired}>
+              <Stack.Screen name="index" options={{ title: "Chats", headerTitle: "", headerLargeTitle: false, headerShadowVisible: false, headerTransparent: Platform.OS === "ios" }} />
+              <Stack.Screen name="chat/[id]" options={{ headerTransparent: Platform.OS === "ios" }} />
+              <Stack.Screen name="chat-info/[id]" options={{ ...sheet, sheetAllowedDetents: [0.7, 1], sheetGrabberVisible: true }} />
+              <Stack.Screen name="new-bot" options={sheet} />
+              <Stack.Screen name="new-group" options={sheet} />
+              <Stack.Screen name="settings" options={sheet} />
+              <Stack.Screen
+                name="attachment/[id]"
+                options={{ presentation: "fullScreenModal", headerShown: true, headerStyle: { backgroundColor: "#000000" }, headerTintColor: "#FFFFFF", headerTitleStyle: { color: "#FFFFFF" }, contentStyle: { backgroundColor: "#000000" } }}
+              />
+            </Stack.Protected>
+            <Stack.Protected guard={!paired}>
+              <Stack.Screen name="pair" options={{ headerShown: false, gestureEnabled: false }} />
+            </Stack.Protected>
+          </Stack>
+        </ThemeProvider>
       </KeyboardProvider>
     </GestureHandlerRootView>
   );
