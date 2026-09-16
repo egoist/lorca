@@ -22,15 +22,21 @@ export default function PairScreen() {
   const [scanning, setScanning] = useState(false);
   const [permission, requestPermission] = useCameraPermissions();
   const cancel = useRef<AbortController | null>(null);
+  /// Set the moment a pairing starts. The camera reports the same code on every frame until
+  /// it unmounts, and state updates land later than the next frame, so a ref is what keeps a
+  /// second request (which the relay refuses as "already has a request") from going out.
+  const inFlight = useRef(false);
   const busy = phase !== "idle";
 
   async function pair(text: string) {
+    if (inFlight.current) return;
     try {
       parsePairingString(text);
     } catch (error) {
       Alert.alert("Not a pairing code", error instanceof Error ? error.message : String(error));
       return;
     }
+    inFlight.current = true;
     cancel.current = new AbortController();
     setPhase("posting");
     try {
@@ -40,6 +46,8 @@ export default function PairScreen() {
       setPhase("idle");
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       Alert.alert("Pairing failed", error instanceof Error ? error.message : String(error));
+    } finally {
+      inFlight.current = false;
     }
   }
 
@@ -133,7 +141,7 @@ export default function PairScreen() {
             facing="back"
             barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
             onBarcodeScanned={({ data }) => {
-              if (!data.includes("pair?")) return;
+              if (!data.includes("pair?") || inFlight.current) return;
               setScanning(false);
               void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
               setCode(data);
