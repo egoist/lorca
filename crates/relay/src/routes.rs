@@ -266,19 +266,11 @@ async fn put_blob(State(state): State<AppState>, auth: Auth, Json(body): Json<Pu
     let kind = body.kind.clone();
     let recipient = body.recipient_machine_pubkey.clone();
 
-    let store = state.file_store.as_ref().filter(|_| body.kind == "file");
-    let inserted = match store {
-        None => {
-            state
-                .db
-                .write(move |db| {
-                    db::insert_blob(db, &identity, &stored_id, &kind, recipient.as_deref(), db::Payload::Inline(&ciphertext), quota)
-                })
-                .await?
-        }
-        Some(store) => {
+    let inserted = match body.kind.as_str() {
+        "file" => {
             // The object goes up before the row, outside the writer. A cheap check first
             // saves an upload the row would refuse; the transaction decides for real.
+            let store = &state.file_store;
             let size = ciphertext.len() as i64;
             let (precheck_identity, precheck_id) = (identity.clone(), stored_id.clone());
             let refused = state
@@ -316,6 +308,14 @@ async fn put_blob(State(state): State<AppState>, auth: Auth, Json(body): Json<Pu
                 }
             }
         }
+        _ => {
+            state
+                .db
+                .write(move |db| {
+                    db::insert_blob(db, &identity, &stored_id, &kind, recipient.as_deref(), db::Payload::Inline(&ciphertext), quota)
+                })
+                .await?
+        }
     };
     if inserted.existing {
         return Ok(Json(json!({ "id": id, "seq": inserted.seq, "existing": true })));
@@ -328,11 +328,7 @@ async fn put_blob(State(state): State<AppState>, auth: Auth, Json(body): Json<Pu
 async fn load_external(state: &AppState, identity_pubkey: &str, rows: &mut [db::BlobRow]) -> ApiResult<()> {
     for row in rows.iter_mut().filter(|row| row.external) {
         let key = crate::store::key(identity_pubkey, &row.id);
-        let Some(store) = state.file_store.as_ref() else {
-            tracing::error!(key, "external blob but no file store is configured");
-            return Err(ApiError::internal("File storage is not configured"));
-        };
-        row.ciphertext = store.get(&key).await?.ok_or_else(|| {
+        row.ciphertext = state.file_store.get(&key).await?.ok_or_else(|| {
             tracing::error!(key, "external blob's object is missing");
             ApiError::internal("File object missing")
         })?;
@@ -439,11 +435,9 @@ async fn delete_blob(State(state): State<AppState>, auth: Auth, Path(id): Path<S
     let Some(deleted) = deleted else { return Err(ApiError::not_found("No such blob")) };
     if deleted.external {
         // The row is gone either way; a leftover object is logged, not surfaced.
-        if let Some(store) = state.file_store.as_ref() {
-            let key = crate::store::key(&auth.identity_pubkey, &id);
-            if let Err(error) = store.delete(&key).await {
-                tracing::warn!(?error, key, "deleting a file object");
-            }
+        let key = crate::store::key(&auth.identity_pubkey, &id);
+        if let Err(error) = state.file_store.delete(&key).await {
+            tracing::warn!(?error, key, "deleting a file object");
         }
     }
     Ok(StatusCode::NO_CONTENT)

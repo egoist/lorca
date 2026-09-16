@@ -18,9 +18,10 @@ const logs = join(homedir(), "Library", "Logs", APP_NAME)
 const targets: { path: string; what: string; on: boolean }[] = [
   { path: home, what: "identity, keys, credentials, chats", on: true },
   { path: logs, what: "CLI logs", on: true },
-  { path: join(ROOT, "tinybot-relay.db"), what: "local relay database", on: wipeRelay },
-  { path: join(ROOT, "tinybot-relay.db-wal"), what: "local relay database", on: wipeRelay },
-  { path: join(ROOT, "tinybot-relay.db-shm"), what: "local relay database", on: wipeRelay },
+  { path: join(ROOT, "target", "tinybot-relay.db"), what: "local relay database", on: wipeRelay },
+  { path: join(ROOT, "target", "tinybot-relay.db-wal"), what: "local relay database", on: wipeRelay },
+  { path: join(ROOT, "target", "tinybot-relay.db-shm"), what: "local relay database", on: wipeRelay },
+  { path: join(ROOT, "target", "tinybot-relay.files"), what: "local relay attachments", on: wipeRelay },
   { path: join(ROOT, "target"), what: "Rust build output", on: wipeBuild },
   { path: join(PACKAGE_DIR, ".build"), what: "Swift build output", on: wipeBuild },
 ]

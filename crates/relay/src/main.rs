@@ -51,12 +51,13 @@ struct Args {
     #[arg(long, env = "TINYBOT_RELAY_TRUST_PROXY", default_value_t = false)]
     trust_proxy: bool,
 
-    /// Keep `file` ciphertext in this directory instead of the database.
+    /// Directory for `file` ciphertext. Defaults to the database path with a `.files`
+    /// extension (`tinybot-relay.files`).
     #[arg(long, env = "TINYBOT_RELAY_FILES_DIR", conflicts_with = "s3_bucket")]
     files_dir: Option<std::path::PathBuf>,
 
-    /// Keep `file` ciphertext in this S3-compatible bucket (AWS, R2, MinIO) instead of the
-    /// database. Needs --s3-endpoint and the access keys.
+    /// Keep `file` ciphertext in this S3-compatible bucket (AWS, R2, MinIO) instead of a
+    /// directory. Needs --s3-endpoint and the access keys.
     #[arg(long, env = "TINYBOT_RELAY_S3_BUCKET", requires = "s3_endpoint")]
     s3_bucket: Option<String>,
 
@@ -81,12 +82,12 @@ struct Args {
     s3_secret_key: Option<String>,
 }
 
-fn file_store(args: &Args) -> anyhow::Result<Option<store::FileStore>> {
-    if let Some(dir) = &args.files_dir {
-        std::fs::create_dir_all(dir)?;
-        return Ok(Some(store::FileStore::Local { dir: dir.clone() }));
-    }
-    let Some(bucket) = &args.s3_bucket else { return Ok(None) };
+fn file_store(args: &Args) -> anyhow::Result<store::FileStore> {
+    let Some(bucket) = &args.s3_bucket else {
+        let dir = args.files_dir.clone().unwrap_or_else(|| std::path::PathBuf::from(&args.db).with_extension("files"));
+        std::fs::create_dir_all(&dir)?;
+        return Ok(store::FileStore::Local { dir });
+    };
     let access_key = args
         .s3_access_key
         .clone()
@@ -97,14 +98,14 @@ fn file_store(args: &Args) -> anyhow::Result<Option<store::FileStore>> {
         .clone()
         .or_else(|| std::env::var("AWS_SECRET_ACCESS_KEY").ok())
         .ok_or_else(|| anyhow::anyhow!("--s3-bucket needs TINYBOT_RELAY_S3_SECRET_KEY or AWS_SECRET_ACCESS_KEY"))?;
-    Ok(Some(store::FileStore::S3(store::S3::new(
+    Ok(store::FileStore::S3(store::S3::new(
         args.s3_endpoint.clone().expect("clap requires the endpoint"),
         bucket.clone(),
         args.s3_region.clone(),
         args.s3_prefix.clone(),
         access_key,
         secret_key,
-    ))))
+    )))
 }
 
 #[derive(Clone)]
@@ -119,8 +120,8 @@ pub struct AppState {
     pub ip_limiter: Arc<limit::RateLimiter>,
     pub identity_limiter: Arc<limit::RateLimiter>,
     pub trust_proxy: bool,
-    /// Where `file` ciphertext goes; `None` keeps it in the database.
-    pub file_store: Option<Arc<store::FileStore>>,
+    /// Where `file` ciphertext goes. The database holds only the row.
+    pub file_store: Arc<store::FileStore>,
 }
 
 #[tokio::main]
@@ -131,7 +132,7 @@ async fn main() -> anyhow::Result<()> {
 
     let args = Args::parse();
     let db = Arc::new(db::Db::open(&args.db)?);
-    let file_store = file_store(&args)?.map(Arc::new);
+    let file_store = Arc::new(file_store(&args)?);
 
     let mut secret = [0u8; 32];
     match args.secret {
@@ -173,7 +174,7 @@ async fn main() -> anyhow::Result<()> {
         bind = %args.bind,
         db = %args.db,
         quota_bytes = args.quota_bytes,
-        files = %file_store.as_ref().map(|s| s.describe()).unwrap_or_else(|| "database".into()),
+        files = %file_store.describe(),
         "tinybot-relay listening"
     );
     axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await?;
