@@ -1,6 +1,9 @@
 {
   "name": "tinybot",
   "private": true,
+  "workspaces": [
+    "web"
+  ],
   "scripts": {
     "dev": "bun run scripts/dev.ts",
     "build": "bun run scripts/build.ts",
