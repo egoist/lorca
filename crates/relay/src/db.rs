@@ -50,7 +50,6 @@ const SCHEMA: &str = "
         ciphertext BLOB NOT NULL,
         size INTEGER NOT NULL,
         created_at INTEGER NOT NULL,
-        external INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (identity_pubkey, id)
     );
     CREATE INDEX IF NOT EXISTS blobs_identity_seq ON blobs(identity_pubkey, seq);
@@ -85,18 +84,7 @@ pub struct Db {
 impl Db {
     pub fn open(path: &str) -> anyhow::Result<Db> {
         let writer = Connection::open(path)?;
-        migrate_blob_key(&writer)?;
         writer.execute_batch(SCHEMA)?;
-        migrate_external_column(&writer)?;
-        // A database from before the usage table gets its totals once.
-        let usage_rows: i64 = writer.query_row("SELECT COUNT(*) FROM usage", [], |row| row.get(0))?;
-        if usage_rows == 0 {
-            writer.execute(
-                "INSERT INTO usage (identity_pubkey, bytes)
-                 SELECT identity_pubkey, COALESCE(SUM(size), 0) FROM blobs GROUP BY identity_pubkey",
-                [],
-            )?;
-        }
 
         let count = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(4, 16);
         let mut readers = Vec::with_capacity(count);
@@ -142,48 +130,6 @@ impl Db {
         })
         .await
     }
-}
-
-/// Blob ids are client-chosen and scoped to an identity. A database whose `blobs` table keyed
-/// on `id` alone is rebuilt with the `(identity_pubkey, id)` key.
-fn migrate_blob_key(connection: &Connection) -> rusqlite::Result<()> {
-    let old: Option<String> = connection
-        .query_row("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'blobs'", [], |row| row.get(0))
-        .optional()?;
-    if !old.is_some_and(|sql| sql.contains("id TEXT PRIMARY KEY")) {
-        return Ok(());
-    }
-    tracing::info!("migrating blobs to a per-identity primary key");
-    connection.execute_batch(
-        "BEGIN IMMEDIATE;
-         CREATE TABLE blobs_v2 (
-             identity_pubkey TEXT NOT NULL,
-             id TEXT NOT NULL,
-             kind TEXT NOT NULL,
-             recipient_machine_pubkey TEXT,
-             seq INTEGER NOT NULL,
-             ciphertext BLOB NOT NULL,
-             size INTEGER NOT NULL,
-             created_at INTEGER NOT NULL,
-             PRIMARY KEY (identity_pubkey, id)
-         );
-         INSERT INTO blobs_v2 SELECT identity_pubkey, id, kind, recipient_machine_pubkey, seq, ciphertext, size, created_at FROM blobs;
-         DROP TABLE blobs;
-         ALTER TABLE blobs_v2 RENAME TO blobs;
-         COMMIT;",
-    )
-}
-
-/// `external` marks a `file` blob whose ciphertext lives in the file store, not the row.
-fn migrate_external_column(connection: &Connection) -> rusqlite::Result<()> {
-    let present = connection
-        .prepare("PRAGMA table_info(blobs)")?
-        .query_map([], |row| row.get::<_, String>(1))?
-        .any(|name| name.is_ok_and(|name| name == "external"));
-    if !present {
-        connection.execute_batch("ALTER TABLE blobs ADD COLUMN external INTEGER NOT NULL DEFAULT 0")?;
-    }
-    Ok(())
 }
 
 /// Runs CPU- or disk-bound work off the async workers.
@@ -391,13 +337,18 @@ pub struct BlobRow {
     pub kind: String,
     pub recipient_machine_pubkey: Option<String>,
     pub seq: i64,
-    /// Empty when `external`: the bytes are in the file store under `store::key`.
+    /// Empty for a `file`: its bytes are in the file store under `store::key`.
     pub ciphertext: Vec<u8>,
     pub created_at: i64,
-    pub external: bool,
 }
 
-const BLOB_COLUMNS: &str = "id, kind, recipient_machine_pubkey, seq, ciphertext, created_at, external";
+impl BlobRow {
+    pub fn in_file_store(&self) -> bool {
+        self.kind == "file"
+    }
+}
+
+const BLOB_COLUMNS: &str = "id, kind, recipient_machine_pubkey, seq, ciphertext, created_at";
 
 fn blob_row(row: &rusqlite::Row) -> rusqlite::Result<BlobRow> {
     Ok(BlobRow {
@@ -407,7 +358,6 @@ fn blob_row(row: &rusqlite::Row) -> rusqlite::Result<BlobRow> {
         seq: row.get(3)?,
         ciphertext: row.get(4)?,
         created_at: row.get(5)?,
-        external: row.get::<_, i64>(6)? != 0,
     })
 }
 
@@ -432,10 +382,10 @@ pub fn usage(connection: &Connection, identity_pubkey: &str) -> rusqlite::Result
         .unwrap_or(0))
 }
 
-/// Where a blob's bytes go: in the row, or in the file store with only the size recorded.
+/// A blob's bytes: in the row, or (a `file`) in the file store with only the size recorded.
 pub enum Payload<'a> {
     Inline(&'a [u8]),
-    External { size: i64 },
+    InFileStore { size: i64 },
 }
 
 /// Stores a blob under the identity's next sequence number. A known id returns its existing
@@ -449,9 +399,9 @@ pub fn insert_blob(
     payload: Payload<'_>,
     quota_bytes: u64,
 ) -> ApiResult<Inserted> {
-    let (ciphertext, size, external): (&[u8], i64, bool) = match payload {
-        Payload::Inline(bytes) => (bytes, bytes.len() as i64, false),
-        Payload::External { size } => (&[], size, true),
+    let (ciphertext, size): (&[u8], i64) = match payload {
+        Payload::Inline(bytes) => (bytes, bytes.len() as i64),
+        Payload::InFileStore { size } => (&[], size),
     };
     let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     if let Some(recipient) = recipient_machine_pubkey {
@@ -475,10 +425,10 @@ pub fn insert_blob(
         .prepare_cached("SELECT seq FROM sequences WHERE identity_pubkey = ?1")?
         .query_row(params![identity_pubkey], |row| row.get(0))?;
     tx.prepare_cached(
-        "INSERT INTO blobs (id, identity_pubkey, kind, recipient_machine_pubkey, seq, ciphertext, size, created_at, external)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        "INSERT INTO blobs (id, identity_pubkey, kind, recipient_machine_pubkey, seq, ciphertext, size, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
     )?
-    .execute(params![id, identity_pubkey, kind, recipient_machine_pubkey, seq, ciphertext, size, now(), external as i64])?;
+    .execute(params![id, identity_pubkey, kind, recipient_machine_pubkey, seq, ciphertext, size, now()])?;
     tx.prepare_cached(
         "INSERT INTO usage (identity_pubkey, bytes) VALUES (?1, ?2)
          ON CONFLICT(identity_pubkey) DO UPDATE SET bytes = bytes + excluded.bytes",
@@ -533,23 +483,19 @@ pub fn blob(connection: &Connection, identity_pubkey: &str, machine_pubkey: &str
         .optional()
 }
 
-pub struct Deleted {
-    pub external: bool,
-}
-
-/// Deletes a blob's row and gives its bytes back to the identity's usage. `None` when there
-/// was none; the caller removes an external object afterwards.
-pub fn delete_blob(connection: &mut Connection, identity_pubkey: &str, id: &str) -> rusqlite::Result<Option<Deleted>> {
+/// Deletes a blob's row and gives its bytes back to the identity's usage. Returns the blob's
+/// kind, or `None` when there was none; the caller removes a `file`'s object afterwards.
+pub fn delete_blob(connection: &mut Connection, identity_pubkey: &str, id: &str) -> rusqlite::Result<Option<String>> {
     let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let row: Option<(i64, i64)> = tx
-        .prepare_cached("DELETE FROM blobs WHERE id = ?1 AND identity_pubkey = ?2 RETURNING size, external")?
+    let row: Option<(i64, String)> = tx
+        .prepare_cached("DELETE FROM blobs WHERE id = ?1 AND identity_pubkey = ?2 RETURNING size, kind")?
         .query_row(params![id, identity_pubkey], |row| Ok((row.get(0)?, row.get(1)?)))
         .optional()?;
-    let Some((size, external)) = row else { return Ok(None) };
+    let Some((size, kind)) = row else { return Ok(None) };
     tx.prepare_cached("UPDATE usage SET bytes = MAX(bytes - ?1, 0) WHERE identity_pubkey = ?2")?
         .execute(params![size, identity_pubkey])?;
     tx.commit()?;
-    Ok(Some(Deleted { external: external != 0 }))
+    Ok(Some(kind))
 }
 
 // MARK: - Pairing mailbox

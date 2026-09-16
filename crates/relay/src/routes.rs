@@ -293,7 +293,7 @@ async fn put_blob(State(state): State<AppState>, auth: Auth, Json(body): Json<Pu
             let inserted = state
                 .db
                 .write(move |db| {
-                    db::insert_blob(db, &identity, &stored_id, &kind, recipient.as_deref(), db::Payload::External { size }, quota)
+                    db::insert_blob(db, &identity, &stored_id, &kind, recipient.as_deref(), db::Payload::InFileStore { size }, quota)
                 })
                 .await;
             match inserted {
@@ -324,12 +324,12 @@ async fn put_blob(State(state): State<AppState>, auth: Auth, Json(body): Json<Pu
     Ok(Json(json!({ "id": id, "seq": inserted.seq })))
 }
 
-/// Fills in the bytes of rows whose ciphertext lives in the file store.
-async fn load_external(state: &AppState, identity_pubkey: &str, rows: &mut [db::BlobRow]) -> ApiResult<()> {
-    for row in rows.iter_mut().filter(|row| row.external) {
+/// Fills in the bytes of `file` rows from the file store.
+async fn load_files(state: &AppState, identity_pubkey: &str, rows: &mut [db::BlobRow]) -> ApiResult<()> {
+    for row in rows.iter_mut().filter(|row| row.in_file_store()) {
         let key = crate::store::key(identity_pubkey, &row.id);
         row.ciphertext = state.file_store.get(&key).await?.ok_or_else(|| {
-            tracing::error!(key, "external blob's object is missing");
+            tracing::error!(key, "file blob's object is missing");
             ApiError::internal("File object missing")
         })?;
     }
@@ -405,7 +405,7 @@ async fn list_blobs(State(state): State<AppState>, auth: Auth, Query(query): Que
                 Ok((rows, db::current_seq(db, &identity)?))
             })
             .await?;
-        load_external(&state, &auth.identity_pubkey, &mut rows).await?;
+        load_files(&state, &auth.identity_pubkey, &mut rows).await?;
         let blobs: Vec<BlobOut> = rows.into_iter().map(BlobOut::from).collect();
         let timed_out = tokio::time::Instant::now() >= deadline;
         if !blobs.is_empty() || wait == 0 || timed_out {
@@ -424,7 +424,7 @@ async fn get_blob(State(state): State<AppState>, auth: Auth, Path(id): Path<Stri
     let row = state.db.read(move |db| Ok(db::blob(db, &identity, &machine, &id)?)).await?;
     let Some(row) = row else { return Err(ApiError::not_found("No such blob")) };
     let mut rows = [row];
-    load_external(&state, &auth.identity_pubkey, &mut rows).await?;
+    load_files(&state, &auth.identity_pubkey, &mut rows).await?;
     let [row] = rows;
     Ok(Json(BlobOut::from(row)))
 }
@@ -432,8 +432,8 @@ async fn get_blob(State(state): State<AppState>, auth: Auth, Path(id): Path<Stri
 async fn delete_blob(State(state): State<AppState>, auth: Auth, Path(id): Path<String>) -> ApiResult<StatusCode> {
     let (identity, row_id) = (auth.identity_pubkey.clone(), id.clone());
     let deleted = state.db.write(move |db| Ok(db::delete_blob(db, &identity, &row_id)?)).await?;
-    let Some(deleted) = deleted else { return Err(ApiError::not_found("No such blob")) };
-    if deleted.external {
+    let Some(kind) = deleted else { return Err(ApiError::not_found("No such blob")) };
+    if kind == "file" {
         // The row is gone either way; a leftover object is logged, not surfaced.
         let key = crate::store::key(&auth.identity_pubkey, &id);
         if let Err(error) = state.file_store.delete(&key).await {

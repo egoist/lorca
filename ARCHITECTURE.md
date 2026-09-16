@@ -149,7 +149,7 @@ The UI is native: a native stack with large titles, search, and toolbar items; a
 
 Storage is one WAL database (`synchronous = NORMAL`) behind a single writer connection and a pool of reader connections, one per core; every query runs on tokio's blocking pool. All SQL lives in `db.rs`; `routes.rs` only decides what to ask for. A blob write wakes the long-polls of its identity alone (a `Notify` per identity, armed before each query so nothing is missed between the query and the wait). `last_seen` is written at most every 30 s per machine. The hosted relay is one process; a second instance would need a shared store and a shared wakeup, which is when a Postgres backend replaces this one.
 
-`file` ciphertext never enters the database (`store.rs`): it goes to a directory (`--files-dir`, default `tinybot-relay.files` beside the database) or, with `--s3-bucket` and `--s3-endpoint` (access keys from `TINYBOT_RELAY_S3_*` or `AWS_*`), to an S3-compatible bucket (AWS, R2, MinIO) over SigV4 with path-style URLs. Objects are keyed `<identity pubkey>/<blob id>`; the row keeps the metadata with `external = 1` and an empty `ciphertext`. The object goes up before the row and is removed when the row is refused or deleted.
+`file` ciphertext never enters the database (`store.rs`): it goes to a directory (`--files-dir`, default `tinybot-relay.files` beside the database) or, with `--s3-bucket` and `--s3-endpoint` (access keys from `TINYBOT_RELAY_S3_*` or `AWS_*`), to an S3-compatible bucket (AWS, R2, MinIO) over SigV4 with path-style URLs. Objects are keyed `<identity pubkey>/<blob id>`; the row keeps the metadata with an empty `ciphertext`. The object goes up before the row and is removed when the row is refused or deleted.
 
 Rate limits (`limit.rs`) are token buckets in memory: per client IP on the routes that need no token (registration, auth, the pairing mailbox; `--ip-per-minute`, default 60, `--trust-proxy` to read `X-Forwarded-For`), and per identity on everything behind a bearer (`--identity-per-second`, default 50, burst ten times that). Over the limit is 429 with `Retry-After`.
 
@@ -165,7 +165,7 @@ Tables:
 
 - `identities(pubkey, content_pubkey, created_at)`
 - `machines(machine_pubkey, identity_pubkey, box_pubkey, attestation, last_seen, created_at)`
-- `blobs(identity_pubkey, id, kind, recipient_machine_pubkey nullable, seq, ciphertext, size, created_at, external)`, keyed on `(identity_pubkey, id)`
+- `blobs(identity_pubkey, id, kind, recipient_machine_pubkey nullable, seq, ciphertext, size, created_at)`, keyed on `(identity_pubkey, id)`
 - `sequences(identity_pubkey, seq)`, `usage(identity_pubkey, bytes)`, `challenges`, `pairings(nonce, identity_pubkey, request, reply, expires_at)`
 
 `kind` is `roster` | `chat` | `job` | `job_result` | `machine` | `key` | `file`. Ciphertext is bytes; the nonce sits inside it. `seq` increases per identity. A Device’s `name` and `os` are inside its `machine` blob, not columns. A `file` blob is an attachment's bytes under the attachment's id, up to 24 MB of ciphertext (other kinds 4 MB); Devices poll with an explicit kinds list that leaves `file` out and fetch one by id when a transcript needs it.
