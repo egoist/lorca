@@ -111,6 +111,9 @@ impl FromRequestParts<AppState> for Auth {
             .ok_or_else(|| ApiError::unauthorized("Missing bearer token"))?;
         let token = header.strip_prefix("Bearer ").ok_or_else(|| ApiError::unauthorized("Missing bearer token"))?;
         let auth = parse_token(&state.secret, token)?;
+        if let Err(retry_after) = state.identity_limiter.check(&auth.identity_pubkey) {
+            return Err(ApiError::too_many(retry_after));
+        }
         if state.presence.due(&auth.machine_pubkey) {
             let machine_pubkey = auth.machine_pubkey.clone();
             state.db.write(move |db| Ok(crate::db::touch_machine(db, &machine_pubkey)?)).await?;

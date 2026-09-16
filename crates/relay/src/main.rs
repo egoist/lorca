@@ -6,6 +6,7 @@
 
 mod auth;
 mod db;
+mod limit;
 mod routes;
 
 use std::net::SocketAddr;
@@ -33,6 +34,21 @@ struct Args {
     /// Stored ciphertext allowed per identity, in bytes. 0 means no limit.
     #[arg(long, env = "TINYBOT_RELAY_QUOTA_BYTES", default_value_t = 0)]
     quota_bytes: u64,
+
+    /// Requests per minute one IP may make to the routes that need no token (registration,
+    /// auth, pairing mailbox), with a burst of the same size. 0 disables the limit.
+    #[arg(long, env = "TINYBOT_RELAY_IP_PER_MINUTE", default_value_t = 60)]
+    ip_per_minute: u32,
+
+    /// Requests per second one identity may make with a bearer token, across all its
+    /// machines, with a burst of ten times that. 0 disables the limit.
+    #[arg(long, env = "TINYBOT_RELAY_IDENTITY_PER_SECOND", default_value_t = 50)]
+    identity_per_second: u32,
+
+    /// Take the client IP from the last `X-Forwarded-For` hop. Set it only behind a proxy
+    /// that overwrites that header.
+    #[arg(long, env = "TINYBOT_RELAY_TRUST_PROXY", default_value_t = false)]
+    trust_proxy: bool,
 }
 
 #[derive(Clone)]
@@ -44,6 +60,9 @@ pub struct AppState {
     /// Throttles `last_seen` writes.
     pub presence: Arc<db::Presence>,
     pub quota_bytes: u64,
+    pub ip_limiter: Arc<limit::RateLimiter>,
+    pub identity_limiter: Arc<limit::RateLimiter>,
+    pub trust_proxy: bool,
 }
 
 #[tokio::main]
@@ -70,6 +89,12 @@ async fn main() -> anyhow::Result<()> {
         wakers: Arc::new(db::Wakers::default()),
         presence: Arc::new(db::Presence::default()),
         quota_bytes: args.quota_bytes,
+        ip_limiter: Arc::new(limit::RateLimiter::new(args.ip_per_minute as f64 / 60.0, args.ip_per_minute)),
+        identity_limiter: Arc::new(limit::RateLimiter::new(
+            args.identity_per_second as f64,
+            args.identity_per_second.saturating_mul(10),
+        )),
+        trust_proxy: args.trust_proxy,
     };
 
     tokio::spawn(async move {
@@ -85,6 +110,6 @@ async fn main() -> anyhow::Result<()> {
     let app = routes::router(state);
     let listener = tokio::net::TcpListener::bind(args.bind).await?;
     tracing::info!(bind = %args.bind, db = %args.db, quota_bytes = args.quota_bytes, "tinybot-relay listening");
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await?;
     Ok(())
 }

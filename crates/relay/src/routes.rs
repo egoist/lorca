@@ -24,29 +24,37 @@ const MAX_WAIT_SECONDS: u64 = 30;
 pub struct ApiError {
     status: StatusCode,
     message: String,
+    /// Seconds a rate-limited caller should wait; becomes the `Retry-After` header.
+    retry_after: Option<u64>,
 }
 
 impl ApiError {
+    fn new(status: StatusCode, message: &str) -> Self {
+        ApiError { status, message: message.into(), retry_after: None }
+    }
     pub fn bad_request(message: &str) -> Self {
-        ApiError { status: StatusCode::BAD_REQUEST, message: message.into() }
+        Self::new(StatusCode::BAD_REQUEST, message)
     }
     pub fn unauthorized(message: &str) -> Self {
-        ApiError { status: StatusCode::UNAUTHORIZED, message: message.into() }
+        Self::new(StatusCode::UNAUTHORIZED, message)
     }
     pub fn forbidden(message: &str) -> Self {
-        ApiError { status: StatusCode::FORBIDDEN, message: message.into() }
+        Self::new(StatusCode::FORBIDDEN, message)
     }
     pub fn not_found(message: &str) -> Self {
-        ApiError { status: StatusCode::NOT_FOUND, message: message.into() }
+        Self::new(StatusCode::NOT_FOUND, message)
     }
     pub fn conflict(message: &str) -> Self {
-        ApiError { status: StatusCode::CONFLICT, message: message.into() }
+        Self::new(StatusCode::CONFLICT, message)
     }
     pub fn too_large(message: &str) -> Self {
-        ApiError { status: StatusCode::PAYLOAD_TOO_LARGE, message: message.into() }
+        Self::new(StatusCode::PAYLOAD_TOO_LARGE, message)
+    }
+    pub fn too_many(retry_after: u64) -> Self {
+        ApiError { retry_after: Some(retry_after), ..Self::new(StatusCode::TOO_MANY_REQUESTS, "Too many requests") }
     }
     pub fn internal(message: &str) -> Self {
-        ApiError { status: StatusCode::INTERNAL_SERVER_ERROR, message: message.into() }
+        Self::new(StatusCode::INTERNAL_SERVER_ERROR, message)
     }
 }
 
@@ -59,24 +67,34 @@ impl From<rusqlite::Error> for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (self.status, Json(json!({ "error": self.message }))).into_response()
+        let mut response = (self.status, Json(json!({ "error": self.message }))).into_response();
+        if let Some(seconds) = self.retry_after {
+            response.headers_mut().insert(axum::http::header::RETRY_AFTER, seconds.into());
+        }
+        response
     }
 }
 
 pub type ApiResult<T> = Result<T, ApiError>;
 
 pub fn router(state: AppState) -> Router {
-    Router::new()
-        .route("/v1/health", get(health))
+    // Routes anyone can call are limited per IP; the rest are limited per identity in `Auth`.
+    let public = Router::new()
         .route("/v1/identities", post(register_identity))
         .route("/v1/auth/challenge", post(auth_challenge))
         .route("/v1/auth/verify", post(auth_verify))
+        .route("/v1/pair/{nonce}/request", post(post_pair_request))
+        .route("/v1/pair/{nonce}/reply", get(get_pair_reply))
+        .route_layer(axum::middleware::from_fn_with_state(state.clone(), crate::limit::per_ip));
+    Router::new()
+        .route("/v1/health", get(health))
         .route("/v1/machines", get(list_machines))
         .route("/v1/blobs", get(list_blobs).put(put_blob))
         .route("/v1/blobs/{id}", get(get_blob).delete(delete_blob))
         .route("/v1/pair", post(create_pairing))
-        .route("/v1/pair/{nonce}/request", post(post_pair_request).get(get_pair_request))
-        .route("/v1/pair/{nonce}/reply", post(post_pair_reply).get(get_pair_reply))
+        .route("/v1/pair/{nonce}/request", get(get_pair_request))
+        .route("/v1/pair/{nonce}/reply", post(post_pair_reply))
+        .merge(public)
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .with_state(state)
 }
