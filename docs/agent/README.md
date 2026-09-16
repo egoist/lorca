@@ -6,7 +6,7 @@ It has four parts:
 
 - **The loop** (`agent_loop`, `run_agent_loop`, `run_agent_loop_continue`): a stateless function over a context. It streams turns, runs tools, drains steering and follow-up queues, and emits `AgentEvent`s.
 - **`Agent`**: a stateful wrapper that owns the transcript between runs and exposes steering, follow-ups, and abort through a cloneable `AgentHandle`.
-- **`Provider`**: a model adapter that turns a request into a stream of `AssistantEvent`s. Two ship with the crate: OpenAI-compatible chat completions, and ChatGPT subscription sign-in.
+- **`Provider`**: a model adapter that turns a request into a stream of `AssistantEvent`s. Three ship with the crate: Anthropic's Messages API (Anthropic, and DeepSeek through its Anthropic-compatible endpoint, both with server-side web search), OpenAI-compatible chat completions, and ChatGPT subscription sign-in.
 - **`Tool`**: something the model can call. Seven coding tools ship with the crate: `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`.
 
 ## Install
@@ -31,7 +31,7 @@ A coding assistant over the current directory, printing the reply as it streams:
 use std::io::Write;
 use std::sync::Arc;
 
-use agent::providers::OpenAiCompatProvider;
+use agent::providers::AnthropicProvider;
 use agent::tools::coding_tools;
 use agent::{Agent, AgentEvent, AgentOptions, AssistantEvent};
 use tokio::sync::mpsc;
@@ -39,7 +39,7 @@ use tokio::sync::mpsc;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let api_key = std::env::var("DEEPSEEK_API_KEY")?;
-    let provider = OpenAiCompatProvider::deepseek(&api_key, None);
+    let provider = AnthropicProvider::deepseek(&api_key, None);
 
     let mut options = AgentOptions::new(Arc::new(provider));
     options.system_prompt = "You are a concise coding assistant.".into();
@@ -76,7 +76,7 @@ Read events on a separate task, as above. The run waits for the channel to accep
 - [How it works](how-it-works.md): messages, the turn loop, event order, errors, cancellation
 - [The `Agent`](agent.md): prompting, continuing, steering, follow-ups, abort, persistence
 - [Tools](tools.md): writing a tool, streaming updates, terminating a run, the built-in coding tools
-- [Providers](providers.md): the provider contract, the OpenAI-compatible and ChatGPT adapters, writing your own
+- [Providers](providers.md): the provider contract, the Anthropic Messages, OpenAI-compatible, and ChatGPT adapters, writing your own
 - [Hooks](hooks.md): context transforms, custom messages, tool-call gates, stopping early
 - [The low-level loop](loop.md): running the loop without `Agent`, event sinks
 - [Coming from pi](coming-from-pi.md): how `pi-agent-core` concepts map here

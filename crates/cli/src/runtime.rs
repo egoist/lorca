@@ -531,9 +531,9 @@ impl TurnState {
                 self.shown_len = 0;
                 self.last_flush = std::time::Instant::now();
             }
-            // A tool the provider ran on its side (ChatGPT's web search): a tool row like any
-            // other, so the status line reads "Searching the web…" while it runs, but it is
-            // activity only and never replayed to the model.
+            // A tool the provider ran on its side (web search): a tool row like any other, so
+            // the status line reads "Searching the web…" while it runs, but it is activity only
+            // and never rebuilt into a later turn's context.
             AgentEvent::MessageUpdate { assistant_message_event: AssistantEvent::ServerToolStart { id, name, detail }, .. } => {
                 let mut message = Message::new(
                     &self.chat_id,

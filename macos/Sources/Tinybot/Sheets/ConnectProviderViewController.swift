@@ -1,7 +1,7 @@
 import AppKit
 
-/// Connects a provider on this Runner. DeepSeek takes an API key; ChatGPT signs in through the
-/// browser, driven by the CLI. Credentials never leave this Mac.
+/// Connects a provider on this Runner. DeepSeek and Anthropic take an API key; ChatGPT signs in
+/// through the browser, driven by the CLI. Credentials never leave this Mac.
 final class ConnectProviderViewController: SheetViewController {
     private let store = AppStore.shared
     private let kind: ProviderCredential.Kind
@@ -15,13 +15,12 @@ final class ConnectProviderViewController: SheetViewController {
     init(kind: ProviderCredential.Kind, onDone: @escaping () -> Void = {}) {
         self.kind = kind
         self.onDone = onDone
-        let subtitle: String
-        switch kind {
-        case .deepseek:
-            subtitle = "The key is checked against DeepSeek, then stored in the CLI on this Mac with mode 0600. Bots assigned here use it directly."
-        case .chatgpt:
-            subtitle = "Your browser opens a ChatGPT sign-in. The CLI on this Mac keeps the resulting tokens; nothing is sent to a Tinybot server."
-        }
+        let subtitle =
+            if kind.usesAPIKey {
+                "The key is checked against \(kind.rawValue), then stored in the CLI on this Mac with mode 0600. Bots assigned here use it directly."
+            } else {
+                "Your browser opens a ChatGPT sign-in. The CLI on this Mac keeps the resulting tokens; nothing is sent to a Tinybot server."
+            }
         super.init(title: "Connect \(kind.rawValue)", subtitle: subtitle, width: 420)
     }
 
@@ -39,9 +38,8 @@ final class ConnectProviderViewController: SheetViewController {
         let statusRow = Build.stack([spinner, status], orientation: .horizontal, spacing: 8)
         statusRow.alignment = .centerY
 
-        switch kind {
-        case .deepseek:
-            keyField.placeholderString = "sk-…"
+        if kind.usesAPIKey {
+            keyField.placeholderString = kind.keyPlaceholder
             keyField.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
             keyField.translatesAutoresizingMaskIntoConstraints = false
             keyField.delegate = self
@@ -49,7 +47,7 @@ final class ConnectProviderViewController: SheetViewController {
             keyField.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
             setButtons(confirm: "Connect")
             confirmButton.isEnabled = false
-        case .chatgpt:
+        } else {
             let note = Build.label(
                 "Sign-in uses the same OAuth flow as the Codex CLI. It needs a ChatGPT subscription.",
                 font: Theme.Font.caption, color: .tertiaryLabelColor, lines: 0)
@@ -66,15 +64,16 @@ final class ConnectProviderViewController: SheetViewController {
         confirmButton.isEnabled = false
         spinner.startAnimation(nil)
         status.textColor = .secondaryLabelColor
-        status.stringValue = kind == .deepseek ? "Checking the key with DeepSeek…" : "Waiting for the browser…"
+        status.stringValue = kind.usesAPIKey ? "Checking the key with \(kind.rawValue)…" : "Waiting for the browser…"
 
         let key = keyField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         task = Task { [weak self] in
             guard let self else { return }
             do {
-                switch self.kind {
-                case .deepseek: try await self.store.connectDeepSeek(apiKey: key)
-                case .chatgpt: try await self.store.connectChatGPT()
+                if self.kind.usesAPIKey {
+                    try await self.store.connectAPIKey(self.kind, apiKey: key)
+                } else {
+                    try await self.store.connectChatGPT()
                 }
                 self.spinner.stopAnimation(nil)
                 self.status.textColor = .systemGreen

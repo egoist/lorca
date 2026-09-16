@@ -350,15 +350,14 @@ final class OnboardingViewController: NSViewController {
         for subview in host.subviews { subview.removeFromSuperview() }
 
         let control: NSView
-        switch providerKind {
-        case .deepseek:
+        if providerKind.usesAPIKey {
             let keyField = NSSecureTextField()
-            keyField.placeholderString = "sk-… from platform.deepseek.com"
+            keyField.placeholderString = providerKind.keyPlaceholder
             keyField.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
             keyField.identifier = NSUserInterfaceItemIdentifier("apiKey")
             keyField.delegate = self
             control = keyField
-        case .chatgpt:
+        } else {
             control = Build.label(
                 "Your browser opens a ChatGPT sign-in when you continue. Needs a ChatGPT subscription.",
                 font: .systemFont(ofSize: 12), color: .secondaryLabelColor, lines: 0)
@@ -367,15 +366,15 @@ final class OnboardingViewController: NSViewController {
         host.addSubview(control)
         control.pin(to: host)
 
-        credentialLabel?.stringValue = providerKind == .deepseek ? "API key" : "Account"
+        credentialLabel?.stringValue = providerKind.usesAPIKey ? "API key" : "Account"
         setStatus(
-            providerKind == .deepseek
-                ? "The key is checked against DeepSeek and kept in the CLI's credential file on this Mac."
+            providerKind.usesAPIKey
+                ? "The key is checked against \(providerKind.rawValue) and kept in the CLI's credential file on this Mac."
                 : "Tokens from the sign-in stay in the CLI's credential file on this Mac.",
             color: .tertiaryLabelColor)
         if let button = findContinueButton() {
-            button.title = providerKind == .deepseek ? "Continue" : "Sign in with ChatGPT"
-            button.isEnabled = providerKind == .chatgpt
+            button.title = providerKind.usesAPIKey ? "Continue" : "Sign in with ChatGPT"
+            button.isEnabled = !providerKind.usesAPIKey
         }
     }
 
@@ -601,19 +600,20 @@ final class OnboardingViewController: NSViewController {
             return
         }
         let key = find(NSTextField.self, "apiKey")?.stringValue.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if providerKind == .deepseek, key.isEmpty {
-            setStatus("Paste a DeepSeek API key to continue.", color: .systemRed)
+        if providerKind.usesAPIKey, key.isEmpty {
+            setStatus("Paste \(providerKind == .anthropic ? "an" : "a") \(providerKind.rawValue) API key to continue.", color: .systemRed)
             return
         }
         busy = true
-        setStatus(providerKind == .deepseek ? "Checking the key with DeepSeek…" : "Waiting for the browser…", color: .secondaryLabelColor)
+        setStatus(providerKind.usesAPIKey ? "Checking the key with \(providerKind.rawValue)…" : "Waiting for the browser…", color: .secondaryLabelColor)
         Task { [weak self] in
             guard let self else { return }
             defer { self.busy = false }
             do {
-                switch self.providerKind {
-                case .deepseek: try await self.store.connectDeepSeek(apiKey: key)
-                case .chatgpt: try await self.store.connectChatGPT()
+                if self.providerKind.usesAPIKey {
+                    try await self.store.connectAPIKey(self.providerKind, apiKey: key)
+                } else {
+                    try await self.store.connectChatGPT()
                 }
                 self.transition(to: .done)
             } catch {

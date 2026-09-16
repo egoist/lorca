@@ -305,6 +305,10 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             providers::connect_deepseek(app, &string(&params, "api_key")?).await?;
             Ok(json!({ "providers": app.credentials.lock().unwrap().statuses() }))
         }
+        "providers.connect_anthropic" => {
+            providers::connect_anthropic(app, &string(&params, "api_key")?).await?;
+            Ok(json!({ "providers": app.credentials.lock().unwrap().statuses() }))
+        }
         "providers.connect_chatgpt" => {
             let tokens = providers::connect_chatgpt(app).await?;
             Ok(json!({ "email": tokens.email, "providers": app.credentials.lock().unwrap().statuses() }))

@@ -5,7 +5,8 @@
 //! - [`Agent`]: a stateful wrapper that owns the transcript and the queues.
 //! - [`Provider`]: a model adapter that turns a request into a stream of [`AssistantEvent`]s.
 //! - [`Tool`]: something the model can call.
-//! - `providers`: DeepSeek (OpenAI-compatible completions) and ChatGPT (subscription OAuth).
+//! - `providers`: Anthropic Messages (Anthropic and DeepSeek, with server-side web search),
+//!   OpenAI-compatible completions, and ChatGPT (subscription OAuth).
 
 pub mod agent;
 pub mod agent_loop;

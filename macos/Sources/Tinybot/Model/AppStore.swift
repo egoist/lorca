@@ -712,8 +712,9 @@ final class AppStore {
         emit(.identityChanged)
     }
 
-    func connectDeepSeek(apiKey: String) async throws {
-        _ = try await client.request("providers.connect_deepseek", ["api_key": apiKey])
+    /// Connects an API-key provider (`providers.connect_deepseek`, `providers.connect_anthropic`).
+    func connectAPIKey(_ kind: ProviderCredential.Kind, apiKey: String) async throws {
+        _ = try await client.request("providers.connect_\(kind.wireValue)", ["api_key": apiKey])
     }
 
     func connectChatGPT() async throws {

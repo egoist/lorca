@@ -5,19 +5,32 @@ import Foundation
 struct ProviderCredential: Hashable, Identifiable {
     enum Kind: String, Hashable, CaseIterable {
         case deepseek = "DeepSeek"
+        case anthropic = "Anthropic"
         case chatgpt = "ChatGPT"
 
         var symbolName: String {
             switch self {
-            case .deepseek: "key.fill"
+            case .deepseek, .anthropic: "key.fill"
             case .chatgpt: "person.badge.key.fill"
             }
         }
 
         var subtitle: String {
             switch self {
-            case .deepseek: "API key"
+            case .deepseek, .anthropic: "API key"
             case .chatgpt: "Subscription"
+            }
+        }
+
+        /// Connects with a pasted API key; ChatGPT signs in through the browser instead.
+        var usesAPIKey: Bool { self != .chatgpt }
+
+        /// Placeholder for the key field, naming where the key comes from.
+        var keyPlaceholder: String {
+            switch self {
+            case .deepseek: "sk-… from platform.deepseek.com"
+            case .anthropic: "sk-ant-… from console.anthropic.com"
+            case .chatgpt: ""
             }
         }
 
@@ -25,6 +38,7 @@ struct ProviderCredential: Hashable, Identifiable {
         var wireValue: String {
             switch self {
             case .deepseek: "deepseek"
+            case .anthropic: "anthropic"
             case .chatgpt: "chatgpt"
             }
         }
@@ -32,6 +46,7 @@ struct ProviderCredential: Hashable, Identifiable {
         init?(wireValue: String) {
             switch wireValue {
             case "deepseek": self = .deepseek
+            case "anthropic": self = .anthropic
             case "chatgpt": self = .chatgpt
             default: return nil
             }
@@ -44,6 +59,14 @@ struct ProviderCredential: Hashable, Identifiable {
                 [
                     ("deepseek-flash", "V4.1 Flash"),
                     ("deepseek-v4-pro", "V4 Pro (reasoning)"),
+                ]
+            case .anthropic:
+                [
+                    ("claude-opus-5", "Opus 5"),
+                    ("claude-sonnet-5", "Sonnet 5"),
+                    ("claude-fable-5-1", "Fable 5.1"),
+                    ("claude-opus-4-8", "Opus 4.8"),
+                    ("claude-haiku-4-5", "Haiku 4.5"),
                 ]
             case .chatgpt:
                 [

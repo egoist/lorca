@@ -20,6 +20,7 @@ enum MockData {
                 machineKey: "mk_7c41…a09f",
                 providers: [
                     ProviderCredential(kind: .deepseek, isConnected: true, detail: "sk-live…4f2c"),
+                    ProviderCredential(kind: .anthropic, isConnected: false, detail: "Not connected"),
                     ProviderCredential(
                         kind: .chatgpt, isConnected: true, detail: "you@tinybot.dev"),
                 ]
@@ -36,6 +37,7 @@ enum MockData {
                 machineKey: "mk_1f88…23bd",
                 providers: [
                     ProviderCredential(kind: .deepseek, isConnected: true, detail: "sk-live…8b17"),
+                    ProviderCredential(kind: .anthropic, isConnected: false, detail: "Not connected"),
                     ProviderCredential(kind: .chatgpt, isConnected: false, detail: "Not connected"),
                 ]
             ),
@@ -51,6 +53,7 @@ enum MockData {
                 machineKey: "mk_c052…77e1",
                 providers: [
                     ProviderCredential(kind: .deepseek, isConnected: false, detail: "Not connected"),
+                    ProviderCredential(kind: .anthropic, isConnected: false, detail: "Not connected"),
                     ProviderCredential(kind: .chatgpt, isConnected: false, detail: "Not connected"),
                 ]
             ),

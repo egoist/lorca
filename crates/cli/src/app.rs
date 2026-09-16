@@ -577,7 +577,7 @@ impl App {
                 let providers: Vec<ProviderStatus> = if is_this {
                     self.credentials.lock().unwrap().statuses()
                 } else if device.is_runner() {
-                    ["deepseek", "chatgpt"]
+                    crate::providers::PROVIDER_KINDS
                         .iter()
                         .map(|kind| ProviderStatus {
                             kind: kind.to_string(),

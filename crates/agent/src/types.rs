@@ -37,8 +37,18 @@ pub struct ToolCall {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AssistantPart {
     Text { text: String },
-    Thinking { thinking: String },
+    /// `signature` is the provider's seal on the thinking, sent back when the turn continues
+    /// with a tool result so the provider accepts the message as its own.
+    Thinking {
+        thinking: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        signature: Option<String>,
+    },
     ToolCall(ToolCall),
+    /// A block the provider produced on its side and wants back verbatim when the turn
+    /// continues: a server tool call, its result, redacted thinking. Never text of the reply;
+    /// other providers leave it out.
+    ServerBlock { block: Value },
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]

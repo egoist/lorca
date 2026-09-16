@@ -13,7 +13,7 @@ Identity is a **key pair**. Devices pair. The relay stores public keys and ciphe
 3. **The CLI owns the agent loop:** inference, tools, streaming, cancellation, orchestration.
 4. **The relay is zero-knowledge:** opaque blobs and public keys. Auth is a signature challenge.
 5. **Every Device records its `os`.** A Device with a desktop `os` (`macos`, `linux`, `windows`) is a **Runner**. Phones and tablets (`ios`, `ipados`, `android`) are Devices, never Runners.
-6. **Provider credentials live on the Runner the bot is assigned to.** You can create a bot for any paired Runner. DeepSeek keys and ChatGPT tokens stay on that assigned machine.
+6. **Provider credentials live on the Runner the bot is assigned to.** You can create a bot for any paired Runner. DeepSeek and Anthropic keys and ChatGPT tokens stay on that assigned machine.
 7. **A bot runs on one Runner:** that Device’s CLI.
 
 ## Three processes
@@ -65,7 +65,7 @@ Recovery: restore the master secret from the backup phrase → re-derive content
 2. Device B pastes it (onboarding, or `tinybot pair <string>`). B generates its machine keys and posts a request sealed to `ek` into the relay’s pairing mailbox (`POST /v1/pair/{nonce}/request`, no auth): its machine public key, box public key, `name`, `os`.
 3. A polls the mailbox, unseals the request, attests B on the relay with an identity-signed `POST /v1/identities`, and posts a reply sealed to B’s box key: identity public key, content public key, the **account DEK**, and the relay URL. Provider credentials stay on each Runner.
 4. B unseals the reply, saves `machine.json`, authenticates with the challenge, and uploads its `machine` blob (`name`, `os`, connected provider kinds).
-5. B syncs the roster and chats and shows up in the Device list. If B is a Runner, connecting DeepSeek or ChatGPT on B happens on B.
+5. B syncs the roster and chats and shows up in the Device list. If B is a Runner, connecting a provider on B happens on B.
 
 App ↔ CLI on one machine uses `127.0.0.1`; those keys are already local.
 
@@ -237,9 +237,15 @@ Every bot keeps its own memory (`workspaces/<id>/MEMORY.md`, written by the `rem
 
 ### Providers
 
-**DeepSeek** — API key on this Runner, OpenAI-compatible streaming Completions (`providers::openai_compat`). `TINYBOT_DEEPSEEK_MODEL` and `TINYBOT_DEEPSEEK_BASE_URL` override the model and endpoint.
+**DeepSeek** — API key on this Runner, streamed through DeepSeek's Anthropic-compatible endpoint (`https://api.deepseek.com/anthropic`, `providers::anthropic`), the one that runs DeepSeek's web search on the server: every request declares Anthropic's `web_search_20250305` tool, and the model's searches stream back as `server_tool_use` and `web_search_tool_result` blocks. `TINYBOT_DEEPSEEK_MODEL` overrides the model; `TINYBOT_DEEPSEEK_BASE_URL` is the API root a proxy stands in for (the key check calls its `/models`, bots its `/anthropic`).
 
-**ChatGPT** — subscription OAuth on this Runner (`providers::chatgpt`, isolated): authorization code with PKCE, the localhost:1455 callback the Codex CLI uses, tokens refreshed by the adapter, and the Codex responses backend for streaming. `TINYBOT_CHATGPT_MODEL` overrides the model. Every request carries the backend's built-in `web_search` tool, which searches and reads pages server-side; its `web_search_call` items stream back as `ServerToolStart` / `ServerToolEnd` events (`web_search` with the query, `web_fetch` with the URL for an `open_page`), which the Runner records as tool rows so the status line reads "Searching the web…" or "Reading the web…", and which `build_context` never replays to the model.
+**Anthropic** — API key on this Runner, the Messages API (`providers::anthropic`): `claude-opus-5` by default with adaptive thinking, and Anthropic's `web_search_20260209` and `web_fetch_20260209` tools on every request (the basic variants and no thinking parameter for Haiku 4.5 and the 4.5 generation). `TINYBOT_ANTHROPIC_MODEL` and `TINYBOT_ANTHROPIC_BASE_URL` override the model and endpoint.
+
+Both stream the same way: text, thinking (with its `signature`), `tool_use` blocks, and the server tools' own blocks. A server tool call becomes a `ServerToolStart` / `ServerToolEnd` pair for the Runner's activity rows, and the raw `server_tool_use` and `*_tool_result` blocks stay in the assistant message as `ServerBlock` parts, so when the same turn continues after a function call the model gets its searches, their results, and its sealed thinking back verbatim. A later turn's context is rebuilt from the chat and carries none of it.
+
+**ChatGPT** — subscription OAuth on this Runner (`providers::chatgpt`, isolated): authorization code with PKCE, the localhost:1455 callback the Codex CLI uses, tokens refreshed by the adapter, and the Codex responses backend for streaming. `TINYBOT_CHATGPT_MODEL` overrides the model. Every request carries the backend's built-in `web_search` tool, which searches and reads pages server-side; its `web_search_call` items stream back as `ServerToolStart` / `ServerToolEnd` events (`web_search` with the query, `web_fetch` with the URL for an `open_page`).
+
+Server tool events from any provider become tool rows on the Runner, so the status line reads "Searching the web…" or "Reading the web…" while one runs; `build_context` never replays those rows to the model.
 
 The encrypted bot profile carries `provider` as a label; the Runner resolves it against its own credentials at turn time.
 
@@ -249,7 +255,7 @@ SPM `Tinybot.app`, AppKit.
 
 The app starts the bundled `tinybot` (Contents/MacOS/tinybot; `TINYBOT_CLI` overrides, PATH is the fallback) as `tinybot serve --port <port>`, logs it to `~/Library/Logs/Tinybot/cli.log`, and restarts it if it exits. If something already listens on the port, that instance is used.
 
-First run: the CLI answers `hello` with `has_identity: false`, and the app shows onboarding: create (the CLI returns the phrase), restore (phrase → relay), or pair (paste the string from the identity Mac). After create, the user names the first bot (the CLI's default Chef, edited through `bots.update`), then connects a provider on this Mac (DeepSeek key or ChatGPT sign-in, skippable). Restore and pair go straight to the provider step, since the roster syncs.
+First run: the CLI answers `hello` with `has_identity: false`, and the app shows onboarding: create (the CLI returns the phrase), restore (phrase → relay), or pair (paste the string from the identity Mac). After create, the user names the first bot (the CLI's default Chef, edited through `bots.update`), then connects a provider on this Mac (a DeepSeek or Anthropic key, or a ChatGPT sign-in; skippable). Restore and pair go straight to the provider step, since the roster syncs.
 
 Chrome: split view, vibrancy, bubbles, `@` mentions. The app renders CLI events and applies its own edits optimistically; `TINYBOT_MOCK=1` runs the seeded demo instead. Keys stay in the CLI.
 
@@ -263,7 +269,7 @@ Working state, after Grok Bot: the CLI's `job.started` / `job.finished` events (
 
 JSON on `ws://127.0.0.1:4862/ws`. Requests are `{ id, method, params }` and get `{ id, result }` or `{ id, error: { message } }`; events are `{ event, data }`.
 
-App → CLI: `hello`, `bootstrap`, `identity.create`, `identity.restore`, `pair.start` / `pair.status` / `pair.cancel` / `pair.accept`, `config.set`, `bots.create` (`runner_id` may be another Device; it must be a Runner) / `bots.update`, `chats.create` / `chats.dm` / `chats.send` / `chats.stop` / `chats.delete` / `chats.rename` / `chats.pin` / `chats.add_bot` / `chats.remove_bot` / `chats.mark_read`, `providers.connect_deepseek` / `providers.connect_chatgpt` / `providers.disconnect` (this Runner).
+App → CLI: `hello`, `bootstrap`, `identity.create`, `identity.restore`, `pair.start` / `pair.status` / `pair.cancel` / `pair.accept`, `config.set`, `bots.create` (`runner_id` may be another Device; it must be a Runner) / `bots.update`, `chats.create` / `chats.dm` / `chats.send` / `chats.stop` / `chats.delete` / `chats.rename` / `chats.pin` / `chats.add_bot` / `chats.remove_bot` / `chats.mark_read`, `providers.connect_deepseek` / `providers.connect_anthropic` / `providers.connect_chatgpt` / `providers.disconnect` (this Runner).
 
 CLI → App: `snapshot`, `roster.changed`, `message.added` / `message.updated` / `message.removed`, `chat.removed`, `job.started` / `job.finished`, `relay.status`, `pair.completed`, `identity.changed`.
 
@@ -290,7 +296,7 @@ tinybot/
   ARCHITECTURE.md
   README.md
   Cargo.toml           # workspace
-  crates/agent/        # tinybot-agent: loop, tools, providers (DeepSeek, ChatGPT)
+  crates/agent/        # tinybot-agent: loop, tools, providers (Anthropic Messages for DeepSeek and Anthropic, ChatGPT)
   crates/cli/          # tinybot: keys, local WS, jobs, relay sync
   crates/relay/        # tinybot-relay: axum + SQLite
   macos/               # AppKit SPM app; the build bundles the CLI
@@ -305,7 +311,7 @@ tinybot/
 
 ## Status
 
-Done: crypto and blob protocol, relay, CLI (identity, pairing, restore, local WS, DeepSeek, ChatGPT OAuth adapter, agent loop, encrypt-before-upload, group chats, cross-Runner jobs and handoffs, stop), app wiring and the bundled CLI launcher.
+Done: crypto and blob protocol, relay, CLI (identity, pairing, restore, local WS, DeepSeek and Anthropic keys, ChatGPT OAuth adapter, server-side web search, agent loop, encrypt-before-upload, group chats, cross-Runner jobs and handoffs, stop), app wiring and the bundled CLI launcher.
 
 Next: context compaction, steering mid-turn, keychain storage, relay blob GC.
 
@@ -314,7 +320,7 @@ The phone app (`mobile/`) pairs as a Device with `os` `ios`, `ipados`, or `andro
 ## Open points
 
 - Relay blob compaction / GC
-- Model ids move: DeepSeek defaults to `deepseek-flash` (`deepseek-v4-pro` for reasoning), ChatGPT sign-ins default to `gpt-5.6-terra` (`gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-luna`, `gpt-5.5` also accepted; `*-codex` ids are rejected for ChatGPT accounts). Each bot carries an optional `model` (New Bot sheet, and the DM inspector's "Runs with" section); `TINYBOT_DEEPSEEK_MODEL` / `TINYBOT_CHATGPT_MODEL` override the defaults for bots without one
+- Model ids move: DeepSeek defaults to `deepseek-flash` (`deepseek-v4-pro` for reasoning), Anthropic to `claude-opus-5` (`claude-sonnet-5`, `claude-fable-5-1`, `claude-opus-4-8`, `claude-haiku-4-5` offered), ChatGPT sign-ins default to `gpt-5.6-terra` (`gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-luna`, `gpt-5.5` also accepted; `*-codex` ids are rejected for ChatGPT accounts). Each bot carries an optional `model` (New Bot sheet, and the DM inspector's "Runs with" section); `TINYBOT_DEEPSEEK_MODEL` / `TINYBOT_ANTHROPIC_MODEL` / `TINYBOT_CHATGPT_MODEL` override the defaults for bots without one
 - Keychain instead of 0600 files for the master secret and credentials
 
 When those are chosen, update this file.

@@ -21,6 +21,44 @@ pub struct ModelRequest {
 
 ## Built-in providers
 
+### Anthropic Messages
+
+`AnthropicProvider` speaks the streaming Messages API (`POST {base_url}/v1/messages`, `x-api-key` auth, `anthropic-version: 2023-06-01`). Two servers implement it:
+
+```rust
+use agent::providers::AnthropicProvider;
+
+// Anthropic: claude-opus-5 unless told otherwise, adaptive thinking, web search and web fetch
+let provider = AnthropicProvider::anthropic(&api_key, None);
+let provider = AnthropicProvider::anthropic(&api_key, Some("claude-sonnet-5"));
+
+// DeepSeek through its Anthropic-compatible endpoint, with its web search (deepseek-flash by default)
+let provider = AnthropicProvider::deepseek(&api_key, None);
+let provider = AnthropicProvider::deepseek(&api_key, Some("deepseek-v4-pro"));
+
+// Any other Messages API server: provider id, base URL, API key, model; no server tools
+let provider = AnthropicProvider::new("proxy", "https://llm.example.com", &api_key, "claude-opus-5")
+    .with_base_url("http://localhost:8080");
+```
+
+`server_tools`, `thinking`, and `max_tokens` are public fields. `anthropic()` declares `web_search_20260209` and `web_fetch_20260209` and sends `thinking: { type: "adaptive" }` (the basic `web_search_20250305` / `web_fetch_20250910` and no `thinking` for Haiku 4.5 and the 4.5 generation and earlier); `deepseek()` declares `web_search_20250305`, the tool DeepSeek's endpoint runs. DeepSeek's OpenAI-compatible endpoint has no web search: it takes only `function` tools.
+
+| Transcript | Request |
+| --- | --- |
+| System prompt | `system`, when not blank. |
+| User text and images | `text` and base64 `image` blocks. |
+| Assistant text and tool calls | `text` and `tool_use` blocks. |
+| Assistant thinking | A `thinking` block with its `signature`, when the message came from this provider and carries one; dropped otherwise. |
+| Assistant server blocks | Verbatim, when the message came from this provider; dropped otherwise. |
+| Tool result | A `tool_result` block with the result's text and `is_error`. |
+| Tools | The server tools first, then `input_schema` tools. |
+
+Consecutive same-role messages are merged into one, so a tool result always follows its call in the next message. Assistant messages that end up empty are left out.
+
+From the stream it reads `text_delta`, `thinking_delta`, `signature_delta` (as `ThinkingSignature`), and `input_json_delta` for `tool_use` blocks. A `server_tool_use` block becomes a `ServerToolStart` once its input is complete (`web_search` with the query, `web_fetch` with the URL) and a `ServerBlock`; its `*_tool_result` block becomes the matching `ServerToolEnd` (a result whose content is an error object, or a list holding one, names the error code in the summary) and another `ServerBlock`. Any other block type is kept as a `ServerBlock` too. `message_delta` gives the stop reason (`max_tokens` as `Length`, `tool_use` as `ToolUse`, anything else as `Stop`) and usage, `cache_read_input_tokens` as `cache_read` and `cache_creation_input_tokens` as `cache_write`. An `error` event and HTTP errors become an error message with the server's `error.message`.
+
+`DEEPSEEK_API_KEY=… cargo test -p tinybot-agent live_deepseek -- --ignored --nocapture` runs a search followed by a function call and continues the turn with the seals and server blocks replayed.
+
 ### OpenAI-compatible chat completions
 
 `OpenAiCompatProvider` speaks the streaming `/chat/completions` API. It works with any server that implements it.
@@ -31,9 +69,8 @@ use agent::providers::OpenAiCompatProvider;
 // provider id, base URL, API key, model
 let provider = OpenAiCompatProvider::new("ollama", "http://localhost:11434/v1", "ollama", "llama3.2");
 
-// DeepSeek, with its base URL and default model (deepseek-flash)
+// DeepSeek's OpenAI-compatible endpoint (deepseek-flash by default): no web search here
 let provider = OpenAiCompatProvider::deepseek(&api_key, None);
-let provider = OpenAiCompatProvider::deepseek(&api_key, Some("deepseek-v4-pro"));
 ```
 
 It posts to `{base_url}/chat/completions` with bearer auth, `stream: true`, and usage reporting on.
@@ -43,7 +80,7 @@ It posts to `{base_url}/chat/completions` with bearer auth, `stream: true`, and 
 | System prompt | A `system` message, when not blank. |
 | User text | `content` as a string. |
 | User text and images | `content` parts; images as `data:` URLs. |
-| Assistant text and tool calls | `content` and `tool_calls`. Thinking is not sent back. |
+| Assistant text and tool calls | `content` and `tool_calls`. Thinking and server blocks are not sent back. |
 | Tool result | A `tool` message with the result's text. |
 | Tools | `function` tools. |
 
@@ -161,15 +198,16 @@ impl Provider for Canned {
 1. `Start` once, when the response begins. The loop emits `message_start` here. Send it after the request succeeds, so a failed request produces only the error.
 2. Content blocks, each opened, filled, and closed:
    - `TextStart { index }`, `TextDelta { index, delta }`, `TextEnd { index }`
-   - `ThinkingStart { index }`, `ThinkingDelta { index, delta }`, `ThinkingEnd { index }`
+   - `ThinkingStart { index }`, `ThinkingDelta { index, delta }`, `ThinkingEnd { index }`, and `ThinkingSignature { index, signature }` for a provider that seals its thinking
    - `ToolCallStart { index, id, name }`, `ToolCallDelta { index, delta }`, `ToolCallEnd { index }`
+   - `ServerBlock { index, block }` for a block the provider owns (a server tool call, its result); sending it again for the same index replaces the block
 3. Exactly one terminal event: `Done { stop_reason, usage }` or `Error { message, aborted }`. The loop stops reading after it.
 
 **Block indices** are positions in the assistant message's `content`. Start at `0` and give each new block the next number, in the order the blocks start. Deltas for different open blocks may interleave.
 
 **Tool call arguments** stream as raw JSON text in `ToolCallDelta`s and are parsed at `ToolCallEnd`. Empty text becomes `{}`.
 
-**Server-side tools** (tools the model's host runs, like web search) are reported with `ServerToolStart { id, name, detail }` and `ServerToolEnd { id, name, detail, summary }`. They take no index and the loop never executes them. `agent::provider::is_server_tool` recognizes the shared names `web_search` and `web_fetch`.
+**Server-side tools** (tools the model's host runs, like web search) are reported with `ServerToolStart { id, name, detail }` and `ServerToolEnd { id, name, detail, summary }`. They take no index and the loop never executes them. `agent::provider::is_server_tool` recognizes the shared names `web_search` and `web_fetch`. A provider that needs the call and result back when the turn continues (Anthropic's Messages API) also records them as `ServerBlock`s, which do take an index and become `AssistantPart::ServerBlock` parts of the message; providers that do not (ChatGPT) send only the events.
 
 The loop is forgiving at the edges:
 
@@ -184,7 +222,7 @@ The loop is forgiving at the edges:
 `request.messages` is already filtered to `LlmMessage`s. Map each one to your API's format:
 
 - `LlmMessage::User`: text and image parts.
-- `LlmMessage::Assistant`: text, thinking, and tool calls. `assistant.text()` joins the text parts and `assistant.tool_calls()` lists the calls.
+- `LlmMessage::Assistant`: text, thinking (with an optional `signature`), tool calls, and server blocks. `assistant.text()` joins the text parts and `assistant.tool_calls()` lists the calls. Send seals and server blocks back only when the message is your own (`assistant.provider`); skip them otherwise.
 - `LlmMessage::ToolResult`: `tool_call_id`, `content`, `is_error`. `result.text()` joins the text parts.
 
 The transcript may hold assistant messages from another provider or model. `provider` and `model` on each message tell you where it came from, for APIs that only accept their own reasoning or signatures.

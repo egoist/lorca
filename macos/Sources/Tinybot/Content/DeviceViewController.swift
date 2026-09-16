@@ -148,7 +148,7 @@ final class DeviceViewController: NSViewController {
             } else if device.isThisDevice {
                 "Keys for this Runner live in the CLI on this Mac. Connecting a provider here never leaves the machine."
             } else {
-                "Provider credentials live on \(device.name). Connect DeepSeek or ChatGPT from the Tinybot app running there — this Mac only sends encrypted job envelopes."
+                "Provider credentials live on \(device.name). Connect DeepSeek, Anthropic, or ChatGPT from the Tinybot app running there — this Mac only sends encrypted job envelopes."
             }
     }
 

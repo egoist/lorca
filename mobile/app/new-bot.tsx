@@ -15,6 +15,13 @@ const MODELS: Record<string, { id: string; label: string }[]> = {
     { id: "deepseek-flash", label: "V4.1 Flash" },
     { id: "deepseek-v4-pro", label: "V4 Pro (reasoning)" },
   ],
+  anthropic: [
+    { id: "claude-opus-5", label: "Opus 5" },
+    { id: "claude-sonnet-5", label: "Sonnet 5" },
+    { id: "claude-fable-5-1", label: "Fable 5.1" },
+    { id: "claude-opus-4-8", label: "Opus 4.8" },
+    { id: "claude-haiku-4-5", label: "Haiku 4.5" },
+  ],
   chatgpt: [
     { id: "gpt-5.6-terra", label: "GPT-5.6 Terra" },
     { id: "gpt-6-astra", label: "GPT-6 Astra" },
@@ -37,7 +44,7 @@ export default function NewBotScreen() {
   const [accent, setAccent] = useState("indigo");
   const [runnerId, setRunnerId] = useState<string>(() => runners.find((r) => deviceIsOnline(r.id))?.id ?? runners[0]?.id ?? "");
   const runner = runners.find((r) => r.id === runnerId);
-  const providers = runner?.providers_connected.length ? runner.providers_connected : ["deepseek", "chatgpt"];
+  const providers = runner?.providers_connected.length ? runner.providers_connected : ["deepseek", "anthropic", "chatgpt"];
   const [provider, setProvider] = useState<string>(providers[0]);
   const [model, setModel] = useState<string | undefined>(undefined);
   const effectiveProvider = providers.includes(provider) ? provider : providers[0];

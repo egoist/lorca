@@ -37,6 +37,8 @@ pub enum AssistantEvent {
     ThinkingStart { index: usize },
     ThinkingDelta { index: usize, delta: String },
     ThinkingEnd { index: usize },
+    /// The provider's seal on a thinking block, kept on the part for replay.
+    ThinkingSignature { index: usize, signature: String },
     ToolCallStart { index: usize, id: String, name: String },
     ToolCallDelta { index: usize, delta: String },
     ToolCallEnd { index: usize },
@@ -44,6 +46,10 @@ pub enum AssistantEvent {
     /// and never executed by the loop; shown as the bot's activity while it runs.
     ServerToolStart { id: String, name: String, detail: String },
     ServerToolEnd { id: String, name: String, detail: String, summary: String },
+    /// A block of the message the provider owns (a server tool call, its result): recorded as
+    /// [`AssistantPart::ServerBlock`] at `index` so the turn can continue with it, and replaced
+    /// when it arrives again with more of its content.
+    ServerBlock { index: usize, block: Value },
     Done { stop_reason: StopReason, usage: Usage },
     Error { message: String, aborted: bool },
 }
@@ -117,15 +123,21 @@ impl AssistantAccumulator {
             }
             AssistantEvent::TextEnd { .. } => {}
             AssistantEvent::ThinkingStart { index } => {
-                self.ensure(*index, AssistantPart::Thinking { thinking: String::new() });
+                self.ensure(*index, AssistantPart::Thinking { thinking: String::new(), signature: None });
             }
             AssistantEvent::ThinkingDelta { index, delta } => {
-                self.ensure(*index, AssistantPart::Thinking { thinking: String::new() });
-                if let Some(AssistantPart::Thinking { thinking }) = self.message.content.get_mut(*index) {
+                self.ensure(*index, AssistantPart::Thinking { thinking: String::new(), signature: None });
+                if let Some(AssistantPart::Thinking { thinking, .. }) = self.message.content.get_mut(*index) {
                     thinking.push_str(delta);
                 }
             }
             AssistantEvent::ThinkingEnd { .. } => {}
+            AssistantEvent::ThinkingSignature { index, signature } => {
+                self.ensure(*index, AssistantPart::Thinking { thinking: String::new(), signature: None });
+                if let Some(AssistantPart::Thinking { signature: seal, .. }) = self.message.content.get_mut(*index) {
+                    *seal = Some(signature.clone());
+                }
+            }
             AssistantEvent::ToolCallStart { index, id, name } => {
                 self.ensure(
                     *index,
@@ -144,6 +156,12 @@ impl AssistantAccumulator {
                 self.finish_tool_call(*index);
             }
             AssistantEvent::ServerToolStart { .. } | AssistantEvent::ServerToolEnd { .. } => {}
+            AssistantEvent::ServerBlock { index, block } => {
+                self.ensure(*index, AssistantPart::ServerBlock { block: block.clone() });
+                if let Some(part) = self.message.content.get_mut(*index) {
+                    *part = AssistantPart::ServerBlock { block: block.clone() };
+                }
+            }
             AssistantEvent::Done { stop_reason, usage } => {
                 self.message.stop_reason = *stop_reason;
                 self.message.usage = usage.clone();

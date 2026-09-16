@@ -190,6 +190,7 @@ export interface PairReply {
 
 export const PROVIDER_LABELS: Record<string, string> = {
   deepseek: "DeepSeek",
+  anthropic: "Anthropic",
   chatgpt: "ChatGPT",
 };
 
