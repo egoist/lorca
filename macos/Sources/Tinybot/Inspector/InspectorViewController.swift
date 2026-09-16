@@ -11,11 +11,16 @@ final class InspectorViewController: NSViewController {
     private let labelRow = EditableRow(key: "Label", placeholder: "What it is for")
     private let descriptionRow = EditableRow(key: "Description", placeholder: "A sentence or two about what it does", multiline: true)
     private let runtime = SectionView(title: "Runs with")
+    private let memory = SectionView(title: "Memory")
     private let routing = SectionView(title: "Where turns run")
     private let security = SectionView(title: "Encryption")
     private let addButton = NSButton()
 
     private var selection: Selection?
+    /// What each bot's Runner last said about its memory; refreshed when the pane opens on a
+    /// chat and after every turn in it.
+    private var memoryByBot: [Bot.ID: BotMemory] = [:]
+    private var memoryFetches: Set<Bot.ID> = []
 
     var onOpenDevice: ((Device.ID) -> Void)?
     var onRemoveBot: ((Bot.ID) -> Void)?
@@ -41,6 +46,7 @@ final class InspectorViewController: NSViewController {
         column.addArrangedSubview(addButton)
         column.addArrangedSubview(profile)
         column.addArrangedSubview(runtime)
+        column.addArrangedSubview(memory)
         column.addArrangedSubview(routing)
         column.addArrangedSubview(security)
         column.setCustomSpacing(10, after: participants)
@@ -75,6 +81,7 @@ final class InspectorViewController: NSViewController {
             participants.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             profile.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             runtime.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
+            memory.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             routing.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             security.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
         ])
@@ -88,6 +95,12 @@ final class InspectorViewController: NSViewController {
             switch event {
             case .chatChanged, .chatsChanged, .snapshotReplaced:
                 self?.reload()
+            case let .respondingChanged(chatID):
+                // A turn ended (or started): what the bot remembers may have moved.
+                guard let self, case .chat(chatID) = self.selection, let chat = self.store.chat(chatID), chat.isDM,
+                    let bot = self.store.bots(in: chat).first, !self.store.isResponding(in: chatID)
+                else { return }
+                self.refreshMemory(of: bot.id)
             default:
                 break
             }
@@ -97,6 +110,25 @@ final class InspectorViewController: NSViewController {
     func show(selection newSelection: Selection) {
         selection = newSelection
         reload()
+        if case let .chat(chatID) = newSelection, let chat = store.chat(chatID), chat.isDM, let bot = store.bots(in: chat).first {
+            refreshMemory(of: bot.id)
+        }
+    }
+
+    /// Asks the CLI for the bot's memory and redraws the section when it answers.
+    private func refreshMemory(of botID: Bot.ID) {
+        guard !store.isMock || memoryByBot[botID] == nil, memoryFetches.insert(botID).inserted else { return }
+        Task { [weak self] in
+            defer { self?.memoryFetches.remove(botID) }
+            do {
+                let memory = try await self?.store.botMemory(botID)
+                guard let self, let memory else { return }
+                self.memoryByBot[botID] = memory
+                self.reload()
+            } catch {
+                NSLog("bots.memory failed: \(error.localizedDescription)")
+            }
+        }
     }
 
     func reload() {
@@ -128,7 +160,9 @@ final class InspectorViewController: NSViewController {
         let single = chat.isDM && members.count == 1
         profile.isHidden = !single
         runtime.isHidden = !single
+        memory.isHidden = !single
         if single, let bot = members.first {
+            memory.setRows(memoryRows(for: bot))
             nameRow.setValue(bot.name)
             labelRow.setValue(bot.label)
             descriptionRow.setValue(bot.description)
@@ -237,6 +271,39 @@ final class InspectorViewController: NSViewController {
         }
 
         return [providerRow, modelRow, thinkingRow, status] + usageRows
+    }
+
+    /// What the bot remembers, as its Runner reports it: the index against its load budget with
+    /// an editor, and the folder of topic files and daily logs.
+    private func memoryRows(for bot: Bot) -> [NSView] {
+        guard let memory = memoryByBot[bot.id] else {
+            return [KeyValueRow(key: "Notes", value: memoryFetches.contains(bot.id) ? "Loading…" : "", tint: .secondaryLabelColor)]
+        }
+        guard memory.here else {
+            return [KeyValueRow(key: "Notes", value: "On \(memory.runner)", tint: .secondaryLabelColor)]
+        }
+        let notes = ActionRow(
+            key: "Notes",
+            value: memory.budgetSummary,
+            tint: memory.truncated ? .systemOrange : .labelColor,
+            actionTitle: "Edit…"
+        )
+        notes.toolTip = memory.truncated
+            ? "Only the first \(memory.maxLines) lines or \(Format.kilobytes(memory.maxBytes)) open each turn; the rest is not read."
+            : "MEMORY.md opens at the start of every turn."
+        notes.onAction = { [weak self] in
+            guard let self else { return }
+            let editor = MemoryViewController(bot: bot, memory: memory)
+            editor.onSaved = { [weak self] in self?.refreshMemory(of: bot.id) }
+            self.presentAsSheet(editor)
+        }
+        let folder = ActionRow(key: "Folder", value: memory.filesSummary, tint: .secondaryLabelColor, actionTitle: "Show")
+        folder.toolTip = memory.path
+        folder.onAction = {
+            let url = URL(fileURLWithPath: memory.path).appendingPathComponent("MEMORY.md")
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        }
+        return [notes, folder]
     }
 
     @objc private func addBot() {

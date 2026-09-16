@@ -96,6 +96,37 @@ enum Wire {
         var model: String
     }
 
+    struct BotMemory: Decodable {
+        struct Index: Decodable {
+            var text: String
+            var hash: String
+            var lines: Int
+            var bytes: Int
+            var truncated: Bool
+            var maxLines: Int
+            var maxBytes: Int
+        }
+        var botId: String
+        var here: Bool
+        var runner: String
+        var path: String?
+        var index: Index?
+        var topics: [String]?
+        var logs: [String]?
+
+        func toModel() -> Tinybot.BotMemory {
+            Tinybot.BotMemory(
+                botID: botId, here: here, runner: runner, path: path ?? "",
+                text: index?.text ?? "", hash: index?.hash ?? "", lines: index?.lines ?? 0, bytes: index?.bytes ?? 0,
+                truncated: index?.truncated ?? false, maxLines: index?.maxLines ?? 200, maxBytes: index?.maxBytes ?? 24_000,
+                topics: topics ?? [], logs: logs ?? [])
+        }
+    }
+
+    struct MemoryWritten: Decodable {
+        var hash: String
+    }
+
     struct JobRetry: Decodable {
         var chatId: String
         var botId: String

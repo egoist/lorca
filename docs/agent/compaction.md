@@ -13,7 +13,7 @@ The window comes from the catalog: `provider.model_info().map(|m| m.context_wind
 ```rust
 use agent::compaction::{should_compact, CompactionSettings};
 
-let settings = CompactionSettings::default(); // enabled, reserve 16,384 tokens, keep 20,000 recent
+let settings = CompactionSettings::default(); // enabled, reserve 16,384 tokens, keep 20,000 recent, no request limit
 if should_compact(estimate.tokens, window, &settings) { /* compact */ }
 ```
 
@@ -32,7 +32,7 @@ if let Some(result) = result {
 }
 ```
 
-`compact` finds the cut that keeps about `keep_recent_tokens` of recent messages (a cut falls before a user or assistant message, never between a call and its result), asks the model for a summary of everything before it, and answers with the summary, where the kept part starts, the size before, and the summarization requests' usage. The prompt asks for a fixed shape: goal, constraints, progress (done, in progress, blocked), key decisions, next steps, critical context; files the built-in coding tools read or modified are listed at the end. With a `previous_summary` from an earlier compaction the model updates it instead of starting over. When the cut falls inside a turn (one turn is bigger than the recent budget), the turn's prefix gets its own short summary so the kept suffix makes sense. `Ok(None)` means nothing is older than the recent part.
+`compact` finds the cut that keeps about `keep_recent_tokens` of recent messages (a cut falls before a user or assistant message, never between a call and its result), asks the model for a summary of everything before it, and answers with the summary, where the kept part starts, the size before, and the summarization requests' usage. The prompt asks for a fixed shape: goal, constraints, progress (done, in progress, blocked), key decisions, next steps, critical context; files the built-in coding tools read or modified are listed at the end. With a `previous_summary` from an earlier compaction the model updates it instead of starting over. When the cut falls inside a turn (one turn is bigger than the recent budget), the turn's prefix gets its own short summary so the kept suffix makes sense. `Ok(None)` means nothing is older than the recent part. With `max_input_tokens` set (a host passes the model's window less twice the reserve), a history longer than one request may carry is summarized in pieces, `chunk_by_tokens` cutting between turns and never between a call and its result, each piece updating the summary of the ones before it.
 
 `summary_message` is the `AgentMessage::Custom { kind: "compaction" }` that carries a summary in a transcript; a `convert_to_llm` hook turns it into what the model reads with `summary_as_llm`, a user message that says the conversation before it was compacted.
 

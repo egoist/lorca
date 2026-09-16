@@ -504,6 +504,28 @@ final class AppStore {
         perform("chats.compact", ["chat_id": id])
     }
 
+    /// A bot's memory, read from its Runner. Answers with `here == false` when the bot runs on
+    /// another Device, whose disk this Mac cannot read.
+    func botMemory(_ id: Bot.ID) async throws -> BotMemory {
+        if isMock {
+            return BotMemory(
+                botID: id, here: true, runner: "This Mac", path: "~/.tinybot/workspaces/\(id)",
+                text: "- 2026-09-10 · from your chat with the user · the user prefers short replies\n- 2026-09-12 · invoices are reconciled on Mondays\n",
+                hash: "mock", lines: 2, bytes: 128, truncated: false, maxLines: 200, maxBytes: 24_000,
+                topics: ["clients.md"], logs: ["2026-09-12", "2026-09-15"])
+        }
+        return try await client.request("bots.memory", ["bot_id": id], as: Wire.BotMemory.self).toModel()
+    }
+
+    /// Replaces the bot's MEMORY.md. With `expectedHash`, the write is refused when the file
+    /// changed since it was read, so an edit never silently overwrites what the bot wrote.
+    func writeBotMemory(_ id: Bot.ID, text: String, expectedHash: String?) async throws -> String {
+        guard !isMock else { return "mock" }
+        var params: [String: Any] = ["bot_id": id, "text": text]
+        if let expectedHash { params["expected_hash"] = expectedHash }
+        return try await client.request("bots.memory.write", params, as: Wire.MemoryWritten.self).hash
+    }
+
     /// "Retrying (2 of 3) in 4 s", while a turn's model call waits to be asked again.
     private var retryNotes: [Chat.ID: String] = [:]
 

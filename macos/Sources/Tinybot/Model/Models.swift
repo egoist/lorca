@@ -205,6 +205,38 @@ struct Bot: Identifiable, Hashable {
     var createdAt: Date
 }
 
+/// A bot's memory as its Runner reports it: the curated index with its load budget, and the
+/// other files by name. `here` is false when the bot runs elsewhere and only `runner` is known.
+struct BotMemory {
+    var botID: Bot.ID
+    var here: Bool
+    var runner: String
+    var path: String
+    var text: String
+    var hash: String
+    var lines: Int
+    var bytes: Int
+    var truncated: Bool
+    var maxLines: Int
+    var maxBytes: Int
+    var topics: [String]
+    var logs: [String]
+
+    /// "12 lines · 1.2 KB of 24 KB", or "Empty".
+    var budgetSummary: String {
+        guard lines > 0 else { return "Empty" }
+        return "\(lines) \(lines == 1 ? "line" : "lines") · \(Format.kilobytes(bytes)) of \(Format.kilobytes(maxBytes))"
+    }
+
+    /// "2 topics · 5 days of logs"
+    var filesSummary: String {
+        var parts: [String] = []
+        if !topics.isEmpty { parts.append("\(topics.count) \(topics.count == 1 ? "topic" : "topics")") }
+        if !logs.isEmpty { parts.append("\(logs.count) \(logs.count == 1 ? "day" : "days") of logs") }
+        return parts.isEmpty ? "No other notes yet" : parts.joined(separator: " · ")
+    }
+}
+
 // MARK: - Message
 
 struct ToolInvocation: Hashable {
@@ -406,6 +438,12 @@ struct ChatUsage: Hashable {
 }
 
 extension Format {
+    /// "1.2 KB", "24 KB"
+    static func kilobytes(_ bytes: Int) -> String {
+        let kb = Double(bytes) / 1000
+        return kb >= 10 || kb == kb.rounded() ? "\(Int(kb.rounded())) KB" : String(format: "%.1f KB", kb)
+    }
+
     /// "950", "12k", "1.2M"
     static func tokens(_ count: Int) -> String {
         if count >= 1_000_000 { return String(format: "%.1fM", Double(count) / 1_000_000) }

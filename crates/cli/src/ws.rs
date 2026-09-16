@@ -251,6 +251,32 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             let tokens_before = runtime::compact_now(app, &chat_id, opt_string(&params, "bot_id").as_deref()).await?;
             Ok(json!({ "tokens_before": tokens_before }))
         }
+        // A bot's memory lives on its Runner; this Device answers for the bots it runs and names
+        // the Runner for the others.
+        "bots.memory" => {
+            let bot = app.bot(&string(&params, "bot_id")?).ok_or("Unknown bot")?;
+            let runner = app.device(&bot.runner_id).map(|d| d.name).unwrap_or_else(|| "its Runner".into());
+            if app.this_device_id().as_deref() != Some(bot.runner_id.as_str()) {
+                return Ok(json!({ "bot_id": bot.id, "here": false, "runner": runner }));
+            }
+            let store = crate::memory::MemoryStore::for_bot(&app.config.home, &bot);
+            let mut overview = store.overview();
+            overview["bot_id"] = json!(bot.id);
+            overview["here"] = json!(true);
+            overview["runner"] = json!(runner);
+            Ok(overview)
+        }
+        "bots.memory.write" => {
+            let bot = app.bot(&string(&params, "bot_id")?).ok_or("Unknown bot")?;
+            if app.this_device_id().as_deref() != Some(bot.runner_id.as_str()) {
+                let runner = app.device(&bot.runner_id).map(|d| d.name).unwrap_or_else(|| "its Runner".into());
+                return Err(format!("{} runs on {runner}; edit its memory there", bot.name));
+            }
+            let store = crate::memory::MemoryStore::for_bot(&app.config.home, &bot);
+            let text = params["text"].as_str().ok_or("missing text")?;
+            let hash = store.write_index(text, opt_string(&params, "expected_hash").as_deref()).map_err(|e| e.to_string())?;
+            Ok(json!({ "hash": hash }))
+        }
         "chats.delete" => {
             app.delete_chat(&string(&params, "chat_id")?);
             Ok(Value::Null)

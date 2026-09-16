@@ -22,12 +22,38 @@ pub struct CompactionSettings {
     pub reserve_tokens: u64,
     /// About this many tokens of recent messages stay as they are.
     pub keep_recent_tokens: u64,
+    /// The most history one summarization request carries; a longer history is summarized in
+    /// pieces, each updating the summary of the ones before. 0 means no limit.
+    #[serde(default)]
+    pub max_input_tokens: u64,
 }
 
 impl Default for CompactionSettings {
     fn default() -> Self {
-        CompactionSettings { enabled: true, reserve_tokens: 16_384, keep_recent_tokens: 20_000 }
+        CompactionSettings { enabled: true, reserve_tokens: 16_384, keep_recent_tokens: 20_000, max_input_tokens: 0 }
     }
+}
+
+/// Splits `messages` into runs of at most `max_tokens` (estimated), never between a call and
+/// its result. A single message over the limit is a run of its own.
+pub fn chunk_by_tokens(messages: &[AgentMessage], max_tokens: u64) -> Vec<&[AgentMessage]> {
+    if max_tokens == 0 || messages.is_empty() {
+        return vec![messages];
+    }
+    let mut chunks = Vec::new();
+    let mut start = 0;
+    let mut accumulated = 0u64;
+    for (i, message) in messages.iter().enumerate() {
+        let size = estimate_message_tokens(message);
+        if i > start && accumulated + size > max_tokens && is_cut_point(message) {
+            chunks.push(&messages[start..i]);
+            start = i;
+            accumulated = 0;
+        }
+        accumulated += size;
+    }
+    chunks.push(&messages[start..]);
+    chunks
 }
 
 /// Whether a context of `context_tokens` in a `context_window` should be compacted.
@@ -356,9 +382,15 @@ pub async fn compact(
     let mut summary = if history.is_empty() {
         previous_summary.map(str::to_string).unwrap_or_else(|| "No prior history.".into())
     } else {
-        let result = generate_summary(provider, history, previous_summary, settings.reserve_tokens, custom_instructions, options, cancel).await?;
-        usage.add(&result.usage);
-        result.text
+        // A history longer than one request may carry is summarized piece by piece, each piece
+        // updating the summary of the ones before it.
+        let mut running: Option<String> = previous_summary.map(str::to_string);
+        for chunk in chunk_by_tokens(history, settings.max_input_tokens) {
+            let result = generate_summary(provider, chunk, running.as_deref(), settings.reserve_tokens, custom_instructions, options, cancel).await?;
+            usage.add(&result.usage);
+            running = Some(result.text);
+        }
+        running.unwrap_or_default()
     };
 
     let split_turn = cut.turn_start.is_some();
@@ -477,7 +509,7 @@ mod tests {
     async fn compact_summarizes_the_older_part_and_keeps_the_recent_one() {
         let messages = vec![user("first"), assistant(&"a".repeat(400)), user("second"), call("edit", "x.rs"), result("ok"), assistant(&"b".repeat(400)), user("third"), assistant("c")];
         let summarizer = Summarizer(Default::default());
-        let settings = CompactionSettings { enabled: true, reserve_tokens: 4096, keep_recent_tokens: 50 };
+        let settings = CompactionSettings { enabled: true, reserve_tokens: 4096, keep_recent_tokens: 50, max_input_tokens: 0 };
         let result = compact(&summarizer, &messages, None, &settings, None, &RequestOptions::default(), &CancellationToken::new()).await.unwrap().unwrap();
         // The recent budget is reached inside the second turn: its long reply stays, the turn's
         // start and tool work before it become a prefix summary.
@@ -522,6 +554,44 @@ mod tests {
         eprintln!("{}\n\nusage {:?}", summary.text, summary.usage);
         assert!(summary.text.contains("## Goal"));
         assert!(summary.text.contains("main.rs"));
+    }
+
+    #[tokio::test]
+    async fn a_long_history_is_summarized_in_pieces() {
+        // ~100 tokens per assistant message; a 250-token limit cuts the history into pieces
+        // that never separate a call from its result.
+        let messages = vec![
+            user("one"),
+            assistant(&"a".repeat(400)),
+            user("two"),
+            call("read", "x.rs"),
+            result(&"r".repeat(400)),
+            assistant(&"b".repeat(400)),
+            user("three"),
+            assistant(&"c".repeat(400)),
+            user("four"),
+            assistant("done"),
+        ];
+        let chunks = chunk_by_tokens(&messages[..8], 250);
+        let sizes: Vec<usize> = chunks.iter().map(|c| c.len()).collect();
+        assert_eq!(sizes, vec![5, 3], "{sizes:?}");
+        assert!(matches!(&chunks[1][0], AgentMessage::Assistant(m) if m.text().starts_with('b')), "a piece ends after a result, never between a call and its result");
+        assert_eq!(chunk_by_tokens(&messages, 0).len(), 1);
+
+        let summarizer = Summarizer(Default::default());
+        let settings = CompactionSettings { enabled: true, reserve_tokens: 4096, keep_recent_tokens: 10, max_input_tokens: 250 };
+        let result = compact(&summarizer, &messages, None, &settings, None, &RequestOptions::default(), &CancellationToken::new()).await.unwrap().unwrap();
+        // The recent budget is met inside the fourth turn: its reply stays, its start becomes a
+        // prefix summary, and the six messages before it are the history.
+        assert_eq!(result.first_kept, 7);
+        assert!(result.split_turn);
+        let prompts = summarizer.0.lock().unwrap();
+        // Two pieces of history, then the split turn's prefix.
+        assert_eq!(prompts.len(), 3, "{prompts:#?}");
+        assert!(prompts[0].ends_with(SUMMARIZATION_PROMPT) && prompts[0].contains("[User]\ntwo") && !prompts[0].contains("bbb"));
+        assert!(prompts[1].contains("<previous-summary>\n## Goal\nShip it\n</previous-summary>") && prompts[1].ends_with(UPDATE_SUMMARIZATION_PROMPT));
+        assert!(prompts[1].contains("bbb") && !prompts[1].contains("three"));
+        assert!(prompts[2].contains("[User]\nthree") && prompts[2].ends_with(TURN_PREFIX_SUMMARIZATION_PROMPT));
     }
 
     #[test]

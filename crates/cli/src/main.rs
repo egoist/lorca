@@ -7,6 +7,7 @@ mod events;
 mod files;
 mod identity;
 mod keys;
+mod memory;
 mod model;
 mod pairing;
 mod providers;

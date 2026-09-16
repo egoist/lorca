@@ -2313,6 +2313,7 @@ dependencies = [
  "libc",
  "open",
  "rand 0.8.8",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",
