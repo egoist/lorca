@@ -109,8 +109,15 @@ async function startRelay() {
     killPid(stray, "SIGTERM")
     for (let attempt = 0; attempt < 40 && (await relayAnswers()); attempt++) await Bun.sleep(50)
   }
+  // Build, then run the binary itself. Through `cargo run` the stop signal reaches cargo and
+  // not the relay, which lives on orphaned and is what the next loop finds "already listening".
+  const build = Bun.spawn(["cargo", "build", "-q", "-p", "tinybot-relay"], { cwd: ROOT, stdin: "ignore", stdout: "inherit", stderr: "inherit" })
+  if ((await build.exited) !== 0) {
+    log(color.red("relay build failed — not started"))
+    return
+  }
   relay = Bun.spawn(
-    ["cargo", "run", "-q", "-p", "tinybot-relay", "--", "--bind", `0.0.0.0:${RELAY_PORT}`, "--db", join(ROOT, "target", "tinybot-relay.db")],
+    [join(ROOT, "target", "debug", "tinybot-relay"), "--bind", `0.0.0.0:${RELAY_PORT}`, "--db", join(ROOT, "target", "tinybot-relay.db")],
     {
       cwd: ROOT,
       stdin: "ignore",
