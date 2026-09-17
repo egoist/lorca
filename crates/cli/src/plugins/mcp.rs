@@ -1,6 +1,6 @@
 //! The MCP side of plugins on this Runner: a pool of connected servers (`rmcp`, stdio or
 //! streamable HTTP), the OAuth sign-in for a remote server, and the tools a turn gets from a
-//! plugins installed on its Runner, each behind the permission gate: a read-only tool runs, anything
+//! plugins installed on its Runner, each behind Auto-review (`review.rs`) and the permission gate: a read-only tool runs, anything
 //! else asks the user in the chat first, after Grok Bot.
 
 use std::collections::{BTreeMap, HashMap};
@@ -253,6 +253,7 @@ pub fn post_sign_in_card(app: &Arc<App>, chat_id: &str, bot_id: &str, plugin_id:
             summary: format!("Sign in to {name}; the browser opens on {runner}."),
             arguments: Value::Null,
             decision: "pending".into(),
+            reason: None,
             link: None,
             code: None,
         },
@@ -652,18 +653,22 @@ impl Tool for PluginTool {
     }
     async fn execute(&self, _id: &str, args: Value, cancel: CancellationToken, _on_update: ToolUpdateFn) -> Result<ToolResult, ToolError> {
         let tool = self.tool.name.to_string();
-        if !self.read_only && !is_allowed(&self.app, &self.bot_id, &self.plugin_id, &tool) {
-            if self.unattended {
-                return Err(ToolError(format!(
-                    "{tool} changes something and needs the user's permission, and nobody is here to give it. Report what you would do; the user can allow {} tools always from a chat.",
-                    self.plugin_name
-                )));
-            }
-            let summary = call_summary(&tool, &args);
-            match ask(&self.app, &self.chat_id, &self.bot_id, &self.plugin_id, &self.plugin_name, &tool, &summary, args.clone(), &cancel).await {
-                Decision::Allowed | Decision::Always => {}
-                Decision::Denied => return Err(ToolError(format!("The user did not allow {tool}. Do not retry it; ask what they want instead."))),
-                Decision::Expired => return Err(ToolError(format!("Nobody answered the permission request for {tool} in time. Say what you needed and stop."))),
+        if !self.read_only {
+            let bot = self.app.bot(&self.bot_id).ok_or_else(|| ToolError("The bot is gone".into()))?;
+            let outcome = super::review::decide(&self.app, &bot, &self.chat_id, &self.plugin_id, &self.plugin_name, &tool, &self.description, &args, &cancel).await;
+            if let super::review::Outcome::Ask { reason } = outcome {
+                if self.unattended {
+                    return Err(ToolError(format!(
+                        "{tool} needs the user's permission ({}), and nobody is here to give it. Report what you would do; the user can add an Auto-review rule allowing it.",
+                        reason.as_deref().unwrap_or("Auto-review is off, so every change asks")
+                    )));
+                }
+                let summary = call_summary(&tool, &args);
+                match ask(&self.app, &self.chat_id, &self.bot_id, &self.plugin_id, &self.plugin_name, &tool, &summary, args.clone(), reason, &cancel).await {
+                    Decision::Allowed | Decision::Always => {}
+                    Decision::Denied => return Err(ToolError(format!("The user did not allow {tool}. Do not retry it; ask what they want instead."))),
+                    Decision::Expired => return Err(ToolError(format!("Nobody answered the permission request for {tool} in time. Say what you needed and stop."))),
+                }
             }
         }
         let mut params = CallToolRequestParams::default();
@@ -789,16 +794,11 @@ impl Decision {
     }
 }
 
-/// Whether the bot's rules let this tool run without asking.
-pub fn is_allowed(app: &App, bot_id: &str, plugin_id: &str, tool: &str) -> bool {
-    let Some(bot) = app.bot(bot_id) else { return false };
-    bot.allow_rules.iter().any(|rule| rule == &format!("{plugin_id}/*") || rule == &format!("{plugin_id}/{tool}"))
-}
-
 /// Posts a permission card in the chat and waits for the user's answer, from this Device or
-/// any paired one. `always` adds a rule to the bot before answering.
+/// any paired one. `reason` is why Auto-review paused the action. `always` adds an
+/// Auto-review rule for the exact tool before answering.
 #[allow(clippy::too_many_arguments)]
-pub async fn ask(app: &Arc<App>, chat_id: &str, bot_id: &str, plugin_id: &str, plugin_name: &str, tool: &str, summary: &str, arguments: Value, cancel: &CancellationToken) -> Decision {
+pub async fn ask(app: &Arc<App>, chat_id: &str, bot_id: &str, plugin_id: &str, plugin_name: &str, tool: &str, summary: &str, arguments: Value, reason: Option<String>, cancel: &CancellationToken) -> Decision {
     let message = Message::new(
         chat_id,
         Author::Bot { bot_id: bot_id.to_string() },
@@ -809,6 +809,7 @@ pub async fn ask(app: &Arc<App>, chat_id: &str, bot_id: &str, plugin_id: &str, p
             summary: summary.to_string(),
             arguments,
             decision: "pending".into(),
+            reason,
             link: None,
             code: None,
         },
@@ -823,11 +824,11 @@ pub async fn ask(app: &Arc<App>, chat_id: &str, bot_id: &str, plugin_id: &str, p
     };
     app.pending_permissions.lock().unwrap().remove(&message.id);
     if decision == Decision::Always && tool != "install" {
-        let rule = format!("{plugin_id}/{tool}");
-        let _ = app.update_bot(bot_id, |bot| {
-            if !bot.allow_rules.contains(&rule) {
-                bot.allow_rules.push(rule.clone());
-            }
+        app.add_auto_review_rule(AutoReviewRule {
+            id: uuid::Uuid::new_v4().to_string(),
+            text: format!("use {plugin_name} {tool}"),
+            behavior: "allow".into(),
+            tool: Some(format!("{plugin_id}/{tool}")),
         });
     }
     if let Some(mut message) = app.message(chat_id, &message.id) {

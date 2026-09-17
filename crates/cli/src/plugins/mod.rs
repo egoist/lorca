@@ -6,6 +6,8 @@
 
 #[cfg(feature = "runner")]
 pub mod mcp;
+#[cfg(feature = "runner")]
+pub mod review;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -473,9 +475,10 @@ pub fn uninstall(app: &Arc<App>, id: &str) -> Result<(), String> {
         let _ = std::fs::remove_dir_all(&dir);
     }
     let prefix = format!("{id}/");
-    let bots: Vec<String> = app.state.lock().unwrap().bots.iter().filter(|b| b.allow_rules.iter().any(|r| r.starts_with(&prefix))).map(|b| b.id.clone()).collect();
-    for bot_id in bots {
-        let _ = app.update_bot(&bot_id, |bot| bot.allow_rules.retain(|r| !r.starts_with(&prefix)));
+    let mut auto_review = app.auto_review();
+    if auto_review.rules.iter().any(|r| r.tool.as_deref().is_some_and(|t| t.starts_with(&prefix))) {
+        auto_review.rules.retain(|r| !r.tool.as_deref().is_some_and(|t| t.starts_with(&prefix)));
+        app.set_auto_review(auto_review);
     }
     announce(app);
     Ok(())

@@ -86,10 +86,44 @@ pub struct Bot {
     /// `<TINYBOT_HOME>/workspaces/<bot id>`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workdir: Option<String>,
-    /// Plugin tools the user always allows, as `plugin/tool` (`plugin/*` for every tool).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub allow_rules: Vec<String>,
     pub created_at: f64,
+}
+
+/// One Auto-review rule: what a bot wants to do, in the user's words, and whether that runs
+/// on its own or asks first. A rule made from a card's Always allow also carries the exact
+/// `plugin/tool`, matched without a review.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AutoReviewRule {
+    pub id: String,
+    pub text: String,
+    /// `allow` (runs automatically) or `ask` (asks first; wins when rules conflict).
+    pub behavior: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+}
+
+/// Auto-review, after Grok Bot: with it on, a Runner checks each plugin action that changes
+/// something before it runs and asks the user only when needed; off, every such action asks.
+/// Shared by every Device through the roster.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AutoReview {
+    pub is_enabled: bool,
+    #[serde(default)]
+    pub rules: Vec<AutoReviewRule>,
+}
+
+impl Default for AutoReview {
+    fn default() -> Self {
+        AutoReview { is_enabled: true, rules: Vec::new() }
+    }
+}
+
+impl AutoReview {
+    /// The rule made for this exact tool, if any.
+    pub fn rule_for(&self, plugin_id: &str, tool: &str) -> Option<&AutoReviewRule> {
+        let key = format!("{plugin_id}/{tool}");
+        self.rules.iter().find(|r| r.tool.as_deref() == Some(&key))
+    }
 }
 
 impl Bot {
@@ -177,6 +211,9 @@ pub enum Body {
         #[serde(default)]
         arguments: serde_json::Value,
         decision: String,
+        /// Why Auto-review paused the action, when it did.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
         /// A sign-in card mid-flow: where to go and the code to enter there (device flow).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         link: Option<String>,
@@ -346,6 +383,8 @@ pub struct RosterBlob {
     pub chats: Vec<ChatMeta>,
     #[serde(default)]
     pub routines: Vec<Routine>,
+    #[serde(default)]
+    pub auto_review: AutoReview,
     pub updated_at: f64,
 }
 

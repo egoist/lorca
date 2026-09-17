@@ -205,9 +205,32 @@ struct Bot: Identifiable, Hashable {
     /// How much the model thinks; nil means the provider's default.
     var thinking: String? = nil
     var instructions: String
-    /// Plugin tools the user always allows, as `plugin/tool`.
-    var allowRules: [String] = []
     var createdAt: Date
+}
+
+// MARK: - Auto-review
+
+/// One Auto-review rule: what a bot wants to do, in the user's words, and whether that runs on
+/// its own or asks first. A rule from a card's Always allow also names the exact `plugin/tool`.
+struct AutoReviewRule: Hashable, Identifiable {
+    enum Behavior: String, Hashable {
+        case allow
+        case ask
+
+        var title: String { self == .allow ? "Allow automatically" : "Ask first" }
+    }
+
+    var id: String
+    var text: String
+    var behavior: Behavior
+    var tool: String? = nil
+}
+
+/// The check on plugin actions that change something, shared by every Device through the
+/// roster: on, the bot's model checks each one and asks only when needed; off, every one asks.
+struct AutoReview: Hashable {
+    var isEnabled: Bool = true
+    var rules: [AutoReviewRule] = []
 }
 
 // MARK: - Plugins
@@ -306,6 +329,8 @@ struct PermissionRequest: Hashable {
     /// A sign-in mid-flow: where to go and the code to enter there.
     var link: String? = nil
     var code: String? = nil
+    /// Why Auto-review paused the action, when it did.
+    var reason: String? = nil
 
     var isPending: Bool { decision == .pending }
     var isInstall: Bool { tool == "install" }

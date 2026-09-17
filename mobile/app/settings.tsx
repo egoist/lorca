@@ -5,7 +5,7 @@ import { Alert, ScrollView, StyleSheet, Text, View } from "react-native";
 import { engine } from "../src/core/engine";
 import { connectedProviders, isRunner, providerLabel } from "../src/core/model";
 import { deviceIsOnline, useStore } from "../src/core/store";
-import { FieldRow, Row, Section } from "../src/ui/forms";
+import { FieldRow, Row, Section, ToggleRow } from "../src/ui/forms";
 import { lastSeen } from "../src/ui/format";
 import { Symbol } from "../src/ui/Symbol";
 import { usePalette } from "../src/ui/theme";
@@ -20,6 +20,7 @@ export default function SettingsScreen() {
   const relayConnected = useStore((s) => s.relayConnected);
   const relayUrl = useStore((s) => s.relayUrl);
   const identity = useStore((s) => s.identityId);
+  const autoReview = useStore((s) => s.auto_review);
   const thisDevice = devices.find((d) => d.is_this_device);
   const [name, setName] = useState(thisDevice?.name ?? "");
   const dictation = useDictationLanguage();
@@ -28,6 +29,31 @@ export default function SettingsScreen() {
 
   function commitName() {
     if (thisDevice && name.trim() && name.trim() !== thisDevice.name) void engine.renameDevice(name);
+  }
+
+  function addRule() {
+    Alert.prompt("New rule", "When a bot wants to…", [
+      { text: "Cancel", style: "cancel" },
+      { text: "Allow automatically", onPress: (text?: string) => saveRule(text, "allow") },
+      { text: "Ask first", onPress: (text?: string) => saveRule(text, "ask") },
+    ]);
+  }
+
+  function saveRule(text: string | undefined, behavior: "allow" | "ask") {
+    const trimmed = (text ?? "").trim();
+    if (!trimmed) return;
+    engine.setAutoReview({ ...autoReview, rules: [...autoReview.rules, { id: "", text: trimmed, behavior }] });
+  }
+
+  function editRule(id: string) {
+    const rule = autoReview.rules.find((r) => r.id === id);
+    if (!rule) return;
+    const flipped: "allow" | "ask" = rule.behavior === "allow" ? "ask" : "allow";
+    Alert.alert(rule.text, rule.behavior === "allow" ? "Allow automatically" : "Ask first", [
+      { text: "Cancel", style: "cancel" },
+      { text: flipped === "allow" ? "Allow automatically" : "Ask first", onPress: () => engine.setAutoReview({ ...autoReview, rules: autoReview.rules.map((r) => (r.id === id ? { ...r, behavior: flipped } : r)) }) },
+      { text: "Delete", style: "destructive", onPress: () => engine.setAutoReview({ ...autoReview, rules: autoReview.rules.filter((r) => r.id !== id) }) },
+    ]);
   }
 
   function confirmUnpair() {
@@ -61,6 +87,14 @@ export default function SettingsScreen() {
         <Section title="Account">
           <Row title="Identity" detail={identity ?? "—"} />
           <Row title="Relay" detail={relayUrl?.replace(/^https?:\/\//, "") ?? "—"} subtitle={relayConnected ? "Connected" : "Connecting…"} />
+        </Section>
+
+        <Section title="Auto-review" footer={autoReview.is_enabled ? "Tinybot checks each plugin action before it runs and asks you first when needed. Add rules to customize what bots can do automatically; \"Ask first\" wins if rules conflict. Built-in safety checks always apply." : "Off: every plugin action that changes something asks you first."}>
+          <ToggleRow title="Check actions before they run" value={autoReview.is_enabled} onValueChange={(v) => engine.setAutoReview({ ...autoReview, is_enabled: v })} />
+          {autoReview.rules.map((rule) => (
+            <Row key={rule.id} title={rule.text} detail={rule.behavior === "allow" ? "Allow automatically" : "Ask first"} onPress={() => editRule(rule.id)} />
+          ))}
+          <Row title="Add rule…" onPress={addRule} />
         </Section>
 
         <Section title="Devices" footer="Desktop Devices are Runners: they run bots with their own provider credentials. Phones and tablets read and write chats.">

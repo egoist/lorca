@@ -39,6 +39,8 @@ pub struct State {
     #[serde(default)]
     pub routines: Vec<Routine>,
     #[serde(default)]
+    pub auto_review: AutoReview,
+    #[serde(default)]
     pub last_seq: i64,
     #[serde(default)]
     pub outbox: Vec<OutboxItem>,
@@ -321,6 +323,7 @@ impl App {
                 bots: state.bots.clone(),
                 chats: state.chats.iter().map(|c| c.meta.clone()).collect(),
                 routines: state.routines.clone(),
+                auto_review: state.auto_review.clone(),
                 updated_at: config::now_secs(),
             }
         };
@@ -446,7 +449,30 @@ impl App {
             bots: state.bots.clone(),
             chats: state.chats.iter().map(|c| ChatSummary { meta: c.meta.clone(), unread_count: c.unread_count, usage: c.usage.clone() }).collect(),
             routines: self.routines_out(&state),
+            auto_review: state.auto_review.clone(),
         }
+    }
+
+    pub fn auto_review(&self) -> AutoReview {
+        self.state.lock().unwrap().auto_review.clone()
+    }
+
+    /// Replaces the Auto-review setting and publishes the roster.
+    pub fn set_auto_review(&self, auto_review: AutoReview) {
+        self.state.lock().unwrap().auto_review = auto_review;
+        self.roster_changed(true);
+    }
+
+    /// Adds a rule, replacing one for the same exact tool.
+    pub fn add_auto_review_rule(&self, rule: AutoReviewRule) {
+        {
+            let mut state = self.state.lock().unwrap();
+            if let Some(tool) = &rule.tool {
+                state.auto_review.rules.retain(|r| r.tool.as_deref() != Some(tool.as_str()));
+            }
+            state.auto_review.rules.push(rule);
+        }
+        self.roster_changed(true);
     }
 
     pub fn roster_changed(&self, upload: bool) {
@@ -835,6 +861,7 @@ impl App {
             "bots": state.bots,
             "chats": state.chats,
             "routines": self.routines_out(&state),
+            "auto_review": state.auto_review,
             "running_chat_ids": self.running_chat_ids(),
             "running_turns": self.running_turns(),
         })

@@ -36,6 +36,8 @@ final class AppStore {
     private(set) var chats: [Chat] = []
     /// Every bot's routines, from the roster.
     private(set) var routines: [Routine] = []
+    /// Auto-review, shared through the roster.
+    private(set) var autoReview = AutoReview()
 
     /// True when the CLI answers on localhost (mock: toggled from the Debug menu).
     private(set) var isConnected = false
@@ -152,6 +154,7 @@ final class AppStore {
         bots = snapshot.bots.map { $0.toModel() }
         chats = snapshot.chats.map { $0.toModel() }
         routines = (snapshot.routines ?? []).map { $0.toModel() }
+        autoReview = snapshot.autoReview?.toModel() ?? AutoReview()
         runningJobs = (snapshot.runningTurns ?? []).map { ($0.jobId, $0.chatId, $0.botId, $0.routineId) }
         for id in snapshot.runningChatIds where !runningJobs.contains(where: { $0.chatID == id }) {
             runningJobs.append(("chat:\(id)", id, "", nil))
@@ -176,6 +179,7 @@ final class AppStore {
             devices = roster.devices.map { $0.toModel() }
             bots = roster.bots.map { $0.toModel() }
             if let incoming = roster.routines { routines = incoming.map { $0.toModel() } }
+            if let incoming = roster.autoReview { autoReview = incoming.toModel() }
             var merged: [Chat] = []
             var changed: [Chat.ID] = []
             for summary in roster.chats {
@@ -572,12 +576,17 @@ final class AppStore {
         return try await client.request("plugins.connect", ["runner_id": runnerID, "plugin_id": pluginID], as: Wire.PluginConnected.self).message
     }
 
-    /// Replaces a bot's always-allow rules, as the plugin sheet's Reset does.
-    func setBotAllowRules(_ id: Bot.ID, rules: [String]) {
-        guard let index = bots.firstIndex(where: { $0.id == id }) else { return }
-        bots[index].allowRules = rules
+    /// Replaces Auto-review (the switch and the rules); the change shows at once and the CLI's
+    /// roster event confirms it. A new rule gets its id from the CLI.
+    func setAutoReview(_ value: AutoReview) {
+        autoReview = value
         emit(.rosterChanged)
-        perform("bots.set_allow_rules", ["id": id, "allow_rules": rules])
+        let rules: [[String: Any]] = value.rules.map { rule in
+            var row: [String: Any] = ["id": rule.id, "text": rule.text, "behavior": rule.behavior.rawValue]
+            if let tool = rule.tool { row["tool"] = tool }
+            return row
+        }
+        perform("auto_review.set", ["is_enabled": value.isEnabled, "rules": rules])
     }
 
     /// Answers a permission card: `allow`, `always`, or `deny`. The CLI confirms with the
@@ -912,6 +921,7 @@ final class AppStore {
         bots = MockData.bots()
         chats = MockData.chats()
         routines = MockData.routines()
+        autoReview = MockData.autoReview()
         sortChats()
         emit(.snapshotReplaced)
     }

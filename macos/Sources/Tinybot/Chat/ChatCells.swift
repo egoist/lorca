@@ -556,8 +556,10 @@ final class PermissionCellView: NSTableCellView {
     static let width: CGFloat = 420
 
     /// A decided card is one line; a long answer (a sign-in failure with advice) gets two more,
-    /// and a card showing a code to enter has a button row like a pending one.
-    static func height(pending: Bool, summary: String, hasCode: Bool = false) -> CGFloat {
+    /// and a card showing a code to enter has a button row like a pending one. A pending card
+    /// with Auto-review's reason has a second line above the buttons.
+    static func height(pending: Bool, summary: String, hasCode: Bool = false, hasReason: Bool = false) -> CGFloat {
+        if pending && hasReason { return 106 }
         if pending || hasCode { return 90 }
         return summary.count > 70 ? 86 : 58
     }
@@ -575,6 +577,7 @@ final class PermissionCellView: NSTableCellView {
     private var pending = true
     private var summaryText = ""
     private var hasCode = false
+    private var hasReason = false
     private var link: String?
     private var code: String?
 
@@ -637,8 +640,9 @@ final class PermissionCellView: NSTableCellView {
         hasCode = request.decision == .allowed && request.code != nil
         link = request.link
         code = request.code
+        hasReason = request.isPending && request.reason != nil
         summaryText = request.isPending ? request.summary : (hasCode ? "Enter this code at \(URL(string: request.link ?? "")?.host ?? "the link"), then come back." : "\(request.decisionText) · \(request.summary)")
-        summary.stringValue = summaryText
+        summary.stringValue = hasReason ? "\(summaryText)\nAuto-review: \(request.reason ?? "")" : summaryText
         summary.toolTip = request.summary
         codeLabel.stringValue = request.code ?? ""
         codeLabel.isHidden = !hasCode
@@ -668,11 +672,12 @@ final class PermissionCellView: NSTableCellView {
         let width = min(Self.width, bounds.width - ChatMetrics.horizontalInset * 2)
         let x = ChatMetrics.horizontalInset
         // `height` is the box alone; the row adds `top` above it.
-        let height = Self.height(pending: pending, summary: summaryText, hasCode: hasCode)
+        let height = Self.height(pending: pending, summary: summaryText, hasCode: hasCode, hasReason: hasReason)
         box.frame = NSRect(x: x, y: top, width: width, height: height)
         icon.frame = NSRect(x: x + 12, y: top + 12, width: 18, height: 18)
         title.frame = NSRect(x: x + 38, y: top + 11, width: width - 50, height: 17)
-        summary.frame = NSRect(x: x + 38, y: top + 30, width: width - 50, height: pending || hasCode ? 16 : height - 30 - 10)
+        summary.frame = NSRect(x: x + 38, y: top + 30, width: width - 50, height: hasReason ? 32 : (pending || hasCode ? 16 : height - 30 - 10))
+        let buttonY = top + (hasReason ? 70 : 54)
         if hasCode {
             let codeSize = codeLabel.intrinsicContentSize
             codeLabel.frame = NSRect(x: x + 38, y: top + 52, width: codeSize.width + 4, height: 24)
@@ -682,7 +687,7 @@ final class PermissionCellView: NSTableCellView {
         var buttonX = x + 36
         for button in [allowButton, alwaysButton, denyButton] where !button.isHidden {
             let size = button.intrinsicContentSize
-            button.frame = NSRect(x: buttonX, y: top + 54, width: size.width + 4, height: 22)
+            button.frame = NSRect(x: buttonX, y: buttonY, width: size.width + 4, height: 22)
             buttonX += size.width + 12
         }
     }

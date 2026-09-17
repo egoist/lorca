@@ -9,6 +9,7 @@ final class SettingsWindowController: NSWindowController {
             (GeneralSettingsViewController(), "General", "gearshape"),
             (DevicesSettingsViewController(), "Devices", "laptopcomputer"),
             (ProvidersSettingsViewController(), "Providers", "key"),
+            (AutoReviewSettingsViewController(), "Auto-review", "checkmark.shield"),
             (AdvancedSettingsViewController(), "Advanced", "slider.horizontal.3"),
         ]
 

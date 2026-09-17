@@ -250,6 +250,7 @@ fn apply_roster(app: &Arc<App>, roster: RosterBlob) {
         let _ = local_updated;
         state.bots = roster.bots;
         state.routines = roster.routines;
+        state.auto_review = roster.auto_review;
         let incoming_ids: Vec<String> = roster.chats.iter().map(|c| c.id.clone()).collect();
         removed = state.chats.iter().filter(|c| !incoming_ids.contains(&c.meta.id)).map(|c| c.meta.id.clone()).collect();
         state.chats.retain(|c| incoming_ids.contains(&c.meta.id));

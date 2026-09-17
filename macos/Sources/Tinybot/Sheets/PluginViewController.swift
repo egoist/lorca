@@ -2,7 +2,7 @@ import AppKit
 
 /// One installed plugin on a Runner: its state, the sign-in for a remote server, its
 /// variables (a secret is written, never read back), the skills it brought, and Remove. From a
-/// DM's inspector it also shows that bot's always-allow rules.
+/// DM's inspector it also shows the Always allowed rules for its tools.
 final class PluginViewController: SheetViewController {
     private let store = AppStore.shared
     private let pluginID: String
@@ -100,18 +100,17 @@ final class PluginViewController: SheetViewController {
 
     private func render(_ detail: PluginDetail) {
         var statusRows: [NSView] = [KeyValueRow(key: "State", value: detail.status.detail, tint: detail.status.stateColor)]
-        if let bot {
-            let rules = (store.bot(bot.id)?.allowRules ?? []).filter { $0.hasPrefix("\(pluginID)/") }
-            if !rules.isEmpty {
-                let always = ActionRow(key: "Always allowed", value: rules.map { String($0.dropFirst(pluginID.count + 1)) }.joined(separator: ", "), tint: .labelColor, actionTitle: "Reset")
-                always.onAction = { [weak self] in
-                    guard let self, let current = self.store.bot(bot.id) else { return }
-                    let kept = current.allowRules.filter { !$0.hasPrefix("\(self.pluginID)/") }
-                    self.store.setBotAllowRules(bot.id, rules: kept)
-                    self.render(detail)
-                }
-                statusRows.append(always)
+        let rules = store.autoReview.rules.filter { $0.tool?.hasPrefix("\(pluginID)/") == true }
+        if !rules.isEmpty {
+            let always = ActionRow(key: "Always allowed", value: rules.map { String(($0.tool ?? "").dropFirst(pluginID.count + 1)) }.joined(separator: ", "), tint: .labelColor, actionTitle: "Reset")
+            always.onAction = { [weak self] in
+                guard let self else { return }
+                var review = self.store.autoReview
+                review.rules.removeAll { $0.tool?.hasPrefix("\(self.pluginID)/") == true }
+                self.store.setAutoReview(review)
+                self.render(detail)
             }
+            statusRows.append(always)
         }
         if let homepage = detail.homepage, let url = URL(string: homepage) {
             let site = ActionRow(key: "Site", value: url.host ?? homepage, tint: .secondaryLabelColor, actionTitle: "Open")

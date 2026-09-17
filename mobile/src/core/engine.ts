@@ -6,7 +6,7 @@
 import { AppState, type AppStateStatus } from "react-native";
 import * as core from "../../modules/tinybot-core";
 import { hostFacts } from "./host";
-import type { Attachment, Bot, Chat, ChatMeta, ChatUsage, Message } from "./model";
+import type { Attachment, AutoReview, Bot, Chat, ChatMeta, ChatUsage, Message } from "./model";
 import { coreHome, loadPrefs, pathOf, wipePrefs } from "./prefs";
 import {
   applyRoster,
@@ -198,6 +198,15 @@ class Engine {
 
   setOwner(chatId: string, botId: string) {
     void core.request("chats.set_owner", { chat_id: chatId, bot_id: botId });
+  }
+
+  // MARK: - Auto-review
+
+  /// Replaces Auto-review (the switch and the rules); the core's roster event confirms it and
+  /// gives a new rule its id.
+  setAutoReview(value: AutoReview) {
+    useStore.setState({ auto_review: value });
+    void core.request("auto_review.set", { is_enabled: value.is_enabled, rules: value.rules });
   }
 
   // MARK: - Plugins

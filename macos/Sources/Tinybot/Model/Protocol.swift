@@ -29,8 +29,29 @@ enum Wire {
         var bots: [Bot]
         var chats: [Chat]
         var routines: [Routine]?
+        var autoReview: AutoReview?
         var runningChatIds: [String]
         var runningTurns: [RunningTurn]?
+    }
+
+    struct AutoReviewRule: Decodable {
+        var id: String
+        var text: String
+        var behavior: String
+        var tool: String?
+
+        func toModel() -> Tinybot.AutoReviewRule {
+            Tinybot.AutoReviewRule(id: id, text: text, behavior: behavior == "ask" ? .ask : .allow, tool: tool)
+        }
+    }
+
+    struct AutoReview: Decodable {
+        var isEnabled: Bool
+        var rules: [AutoReviewRule]?
+
+        func toModel() -> Tinybot.AutoReview {
+            Tinybot.AutoReview(isEnabled: isEnabled, rules: (rules ?? []).map { $0.toModel() })
+        }
     }
 
     struct RunningTurn: Decodable {
@@ -193,7 +214,6 @@ enum Wire {
         var model: String?
         var thinking: String?
         var instructions: String
-        var allowRules: [String]?
         var createdAt: Double
     }
 
@@ -321,6 +341,7 @@ enum Wire {
         var bots: [Bot]
         var chats: [Chat]
         var routines: [Routine]?
+        var autoReview: AutoReview?
     }
 
     struct MessageEvent: Decodable {
@@ -423,7 +444,6 @@ extension Wire.Bot {
             model: model,
             thinking: thinking,
             instructions: instructions,
-            allowRules: allowRules ?? [],
             createdAt: Date(timeIntervalSince1970: createdAt)
         )
     }
@@ -457,7 +477,7 @@ extension Wire.Message {
                 PermissionRequest(
                     pluginID: self.body.pluginId ?? "", pluginName: self.body.pluginName ?? "", tool: self.body.tool ?? "",
                     summary: self.body.summary ?? "", decision: PermissionRequest.Decision(rawValue: self.body.decision ?? "") ?? .pending,
-                    link: self.body.link, code: self.body.code))
+                    link: self.body.link, code: self.body.code, reason: self.body.reason))
         default:
             body = .text(self.body.text ?? "")
         }

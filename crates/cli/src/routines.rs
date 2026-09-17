@@ -298,7 +298,6 @@ mod tests {
                 thinking: None,
                 instructions: String::new(),
                 workdir: None,
-                allow_rules: Vec::new(),
                 created_at: 0.0,
             });
         }

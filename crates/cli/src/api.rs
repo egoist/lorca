@@ -101,7 +101,6 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
                 thinking: opt_string(&params, "thinking"),
                 instructions: opt_string(&params, "instructions").unwrap_or_default(),
                 workdir: opt_string(&params, "workdir"),
-                allow_rules: Vec::new(),
                 created_at: 0.0,
             };
             // Every bot has one direct chat; both land in a single roster change.
@@ -348,11 +347,33 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             let runner_id = string(&params, "runner_id")?;
             crate::plugins::on_runner(app, &runner_id, "plugins.detail", json!({ "plugin_id": string(&params, "plugin_id")? })).await
         }
-        "bots.set_allow_rules" => {
-            let id = string(&params, "id")?;
-            let rules: Vec<String> = serde_json::from_value(params["allow_rules"].clone()).map_err(|e| e.to_string())?;
-            let bot = app.update_bot(&id, |bot| bot.allow_rules = rules.clone()).map_err(|e| e.to_string())?;
-            Ok(json!({ "bot": bot }))
+        // Auto-review: the check on plugin actions and its rules, shared through the roster.
+        // `rules` replaces the list; a rule without an id gets one.
+        "auto_review.set" => {
+            let mut auto_review = app.auto_review();
+            if let Some(enabled) = params["is_enabled"].as_bool() {
+                auto_review.is_enabled = enabled;
+            }
+            if let Some(rules) = params["rules"].as_array() {
+                auto_review.rules = rules
+                    .iter()
+                    .filter_map(|r| {
+                        let text = r["text"].as_str()?.trim().to_string();
+                        if text.is_empty() {
+                            return None;
+                        }
+                        let behavior = if r["behavior"].as_str() == Some("ask") { "ask" } else { "allow" };
+                        Some(AutoReviewRule {
+                            id: r["id"].as_str().filter(|s| !s.is_empty()).map(str::to_string).unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+                            text,
+                            behavior: behavior.into(),
+                            tool: r["tool"].as_str().map(str::to_string),
+                        })
+                    })
+                    .collect();
+            }
+            app.set_auto_review(auto_review.clone());
+            Ok(json!({ "auto_review": auto_review }))
         }
         // The user answered a permission card: here when the bot runs here, else sealed to
         // its Runner.

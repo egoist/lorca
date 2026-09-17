@@ -89,6 +89,13 @@ enum MockData {
         ]
     }
 
+    static func autoReview() -> AutoReview {
+        AutoReview(isEnabled: true, rules: [
+            AutoReviewRule(id: "ar-1", text: "use GitHub create_issue", behavior: .allow, tool: "github/create_issue"),
+            AutoReviewRule(id: "ar-2", text: "comment on a pull request", behavior: .ask),
+        ])
+    }
+
     static func routines() -> [Routine] {
         [
             Routine(
@@ -368,7 +375,8 @@ enum MockData {
                 body: .permission(
                     PermissionRequest(
                         pluginID: "github", pluginName: "GitHub", tool: "create_issue",
-                        summary: "create_issue · repo: tinybot, title: Relay stores plaintext chat titles", decision: .pending)),
+                        summary: "create_issue · repo: tinybot, title: Relay stores plaintext chat titles", decision: .pending,
+                        reason: "The issue is public on the repo.")),
                 createdAt: minutesAgo(2)
             ),
         ]

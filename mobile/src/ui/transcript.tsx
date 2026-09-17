@@ -209,6 +209,11 @@ export function PermissionRow({ row, onDecide }: { row: Extract<Row, { type: "pe
         <Text style={[styles.caption, { color: p.secondaryLabel }]} numberOfLines={3}>
           {pending ? row.body.summary : `${decided[row.body.decision] ?? row.body.decision} · ${row.body.summary}`}
         </Text>
+        {pending && row.body.reason ? (
+          <Text style={[styles.caption, { color: p.secondaryLabel }]} numberOfLines={2}>
+            Auto-review: {row.body.reason}
+          </Text>
+        ) : null}
         {row.body.decision === "allowed" && row.body.code ? (
           <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginTop: 4 }}>
             <Text selectable style={{ color: p.label, fontSize: 17, fontWeight: "700", fontFamily: "Menlo" }}>{row.body.code}</Text>
