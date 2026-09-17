@@ -134,10 +134,20 @@ async function startRelay() {
   log(`${color.green("relay")} ${color.dim(`0.0.0.0:${RELAY_PORT} · pairing codes carry this Mac's LAN IP`)}`)
 }
 
-function stopRelay() {
+async function stopRelay() {
   const current = relay
   relay = null
-  current?.kill()
+  if (!current) return
+  current.kill()
+  await Promise.race([current.exited, Bun.sleep(2000)])
+}
+
+/** A relay source changed: rebuild it and run the new one. The app is untouched; the CLI
+ * reconnects on its own. */
+async function restartRelay() {
+  log(`${color.bold("relay")} ${color.dim("changed — rebuilding")}`)
+  await stopRelay()
+  if (!stopping) await startRelay()
 }
 
 function startApp() {
@@ -183,16 +193,24 @@ async function cycle(reason: string) {
 
 function watchSources() {
   let timer: ReturnType<typeof setTimeout> | null = null
+  // One save often lands as a burst of events; each side remembers whether it was touched,
+  // so a relay file and an app file saved together restart the relay and rebuild the app.
+  let relayChanged = false
+  let appChanged = ""
   const onChange = (_event: string, filename: string | null) => {
     if (!filename) return
     if (!filename.endsWith(".swift") && !filename.endsWith(".rs") && !filename.endsWith("Cargo.toml")) return
+    // The relay crate stands alone: its changes rebuild the relay, not the app.
+    if (filename.startsWith("relay/")) relayChanged = true
+    else appChanged = filename
     if (timer) clearTimeout(timer)
     timer = setTimeout(() => {
-      if (filename.startsWith("relay/")) {
-        stopRelay()
-        void startRelay()
-      }
-      void cycle(filename)
+      const restart = relayChanged
+      const rebuild = appChanged
+      relayChanged = false
+      appChanged = ""
+      if (restart) void restartRelay()
+      if (rebuild) void cycle(rebuild)
     }, DEBOUNCE_MS)
   }
 
@@ -217,7 +235,7 @@ async function shutdown() {
   if (stopping) return
   stopping = true
   await stopApp()
-  stopRelay()
+  await stopRelay()
   process.exit(0)
 }
 
