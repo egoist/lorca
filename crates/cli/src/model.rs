@@ -353,8 +353,19 @@ pub struct PairReply {
     pub relay_url: String,
 }
 
-/// Machine facts for this host.
+/// Facts a host passes in when they cannot be probed: a phone names itself through the app.
+static HOST_FACTS: std::sync::OnceLock<(String, String, String, String)> = std::sync::OnceLock::new();
+
+/// Sets the name, os, os version, and model `host_facts` answers with, once per process.
+pub fn set_host_facts(name: String, os: String, os_version: String, model: String) {
+    let _ = HOST_FACTS.set((name, os, os_version, model));
+}
+
+/// Machine facts for this host: what the app set, or probed from the system.
 pub fn host_facts() -> (String, String, String, String) {
+    if let Some(facts) = HOST_FACTS.get() {
+        return facts.clone();
+    }
     let name = std::process::Command::new("scutil")
         .args(["--get", "ComputerName"])
         .output()

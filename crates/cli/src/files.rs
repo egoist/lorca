@@ -6,7 +6,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+#[cfg(feature = "runner")]
 use base64::Engine;
+#[cfg(feature = "runner")]
 use tinybot_agent::ContentPart;
 
 use crate::app::App;
@@ -14,6 +16,7 @@ use crate::model::Attachment;
 
 pub const MAX_ATTACHMENT_BYTES: u64 = 20 * 1024 * 1024;
 /// Images up to this size go to the model as pixels as well as a path.
+#[cfg(feature = "runner")]
 const MAX_IMAGE_PART_BYTES: u64 = 5 * 1024 * 1024;
 
 /// A file the app asked to send: a path on this machine, with the id the app already shows.
@@ -155,6 +158,7 @@ pub fn materialize(app: &App, attachment: &Attachment, workdir: &Path) -> Option
 
 /// What the model sees for one attachment: a line naming the file, and, when `pixels` (the
 /// model takes images), an image up to 5 MB as an image part too.
+#[cfg(feature = "runner")]
 pub fn content_parts(app: &App, attachment: &Attachment, workdir: &Path, pixels: bool) -> Vec<ContentPart> {
     let Some(path) = materialize(app, attachment, workdir) else {
         return vec![ContentPart::text(format!("[Attachment {} ({}) could not be fetched on this Runner]", attachment.name, attachment.mime))];

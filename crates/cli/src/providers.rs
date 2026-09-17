@@ -3,88 +3,16 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+
 use tinybot_agent::providers::anthropic::{ANTHROPIC_BASE_URL, ANTHROPIC_VERSION};
 use tinybot_agent::providers::{AnthropicProvider, ChatGptProvider, ChatGptTokens, TokenSource};
 use tinybot_agent::{models, Provider, ThinkingLevel};
 
 use crate::app::App;
-use crate::config::{self, Config};
-use crate::model::ProviderStatus;
+use crate::config;
 
 /// The provider kinds a Runner can hold, in the order the apps list them.
-pub const PROVIDER_KINDS: [&str; 3] = ["deepseek", "anthropic", "chatgpt"];
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ApiKeyCredential {
-    pub api_key: String,
-    /// The API root to call instead of the provider's own: a proxy or a compatible server.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub base_url: Option<String>,
-    pub connected_at: i64,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct Credentials {
-    #[serde(default)]
-    pub deepseek: Option<ApiKeyCredential>,
-    #[serde(default)]
-    pub anthropic: Option<ApiKeyCredential>,
-    #[serde(default)]
-    pub chatgpt: Option<ChatGptTokens>,
-}
-
-impl Credentials {
-    pub fn load(config: &Config) -> Self {
-        config::read_json(&config.credentials_path()).unwrap_or_default()
-    }
-
-    pub fn save(&self, config: &Config) -> anyhow::Result<()> {
-        config::write_json_private(&config.credentials_path(), self)
-    }
-
-    fn api_key(&self, kind: &str) -> Option<&ApiKeyCredential> {
-        match kind {
-            "deepseek" => self.deepseek.as_ref(),
-            "anthropic" => self.anthropic.as_ref(),
-            _ => None,
-        }
-    }
-
-    pub fn connected_kinds(&self) -> Vec<String> {
-        self.statuses().into_iter().filter(|s| s.is_connected).map(|s| s.kind).collect()
-    }
-
-    pub fn statuses(&self) -> Vec<ProviderStatus> {
-        PROVIDER_KINDS
-            .iter()
-            .map(|kind| {
-                let detail = if *kind == "chatgpt" {
-                    self.chatgpt.as_ref().map(|t| t.email.clone().unwrap_or_else(|| "Signed in".into()))
-                } else {
-                    self.api_key(kind).map(|c| match &c.base_url {
-                        Some(base_url) => format!("{} · {base_url}", mask_key(&c.api_key)),
-                        None => mask_key(&c.api_key),
-                    })
-                };
-                ProviderStatus {
-                    kind: kind.to_string(),
-                    is_connected: detail.is_some(),
-                    detail: detail.unwrap_or_else(|| "Not connected".into()),
-                    base_url: self.api_key(kind).and_then(|c| c.base_url.clone()),
-                }
-            })
-            .collect()
-    }
-}
-
-pub fn mask_key(key: &str) -> String {
-    let trimmed = key.trim();
-    if trimmed.len() <= 8 {
-        return "••••".into();
-    }
-    format!("{}…{}", &trimmed[..3], &trimmed[trimmed.len() - 4..])
-}
+pub use crate::credentials::{ApiKeyCredential, Credentials, PROVIDER_KINDS};
 
 /// Reads and refreshes ChatGPT tokens through the App's credential file.
 pub struct AppTokenSource(pub Arc<App>);

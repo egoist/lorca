@@ -5,18 +5,32 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[lib]
+name = "tinybot"
+path = "src/lib.rs"
+
 [[bin]]
 name = "tinybot"
 path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+default = ["cli"]
+# The command-line binary: everything.
+cli = ["runner", "server", "dep:clap", "dep:tracing-subscriber"]
+# Running bots: the agent loop, providers, tools. Off for a Device that only takes part.
+runner = ["dep:tinybot-agent", "dep:open"]
+# The local websocket the desktop app connects to.
+server = ["dep:axum"]
 
 [dependencies]
-tinybot-agent = { path = "../agent" }
+tinybot-agent = { path = "../agent", optional = true }
 anyhow.workspace = true
 async-trait.workspace = true
-axum.workspace = true
+axum = { workspace = true, optional = true }
 base64.workspace = true
 chacha20poly1305.workspace = true
-clap.workspace = true
+clap = { workspace = true, optional = true }
 crypto_box.workspace = true
 data-encoding.workspace = true
 dirs.workspace = true
@@ -24,7 +38,7 @@ ed25519-dalek.workspace = true
 futures.workspace = true
 hkdf.workspace = true
 libc.workspace = true
-open.workspace = true
+open = { workspace = true, optional = true }
 rand.workspace = true
 regex.workspace = true
 reqwest.workspace = true
@@ -35,7 +49,7 @@ thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
-tracing-subscriber.workspace = true
+tracing-subscriber = { workspace = true, optional = true }
 uuid.workspace = true
 x25519-dalek.workspace = true
 if-addrs = "0.15.0"

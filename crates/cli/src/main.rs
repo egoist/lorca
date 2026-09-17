@@ -1,28 +1,12 @@
 //! `tinybot`: keys, the local websocket for the app, the agent loop, and relay sync.
 
-mod app;
-mod config;
-mod crypto;
-mod events;
-mod files;
-mod identity;
-mod keys;
-mod memory;
-mod model;
-mod pairing;
-mod providers;
-mod relay;
-mod requests;
-mod runtime;
-mod sync;
-mod ws;
-
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
-use crate::app::App;
-use crate::config::Config;
+use tinybot::app::App;
+use tinybot::config::Config;
+use tinybot::{identity, keys, pairing, runtime, sync, ws};
 
 #[derive(Parser, Debug)]
 #[command(name = "tinybot", version, about = "Tinybot CLI: identity, local API, agent loop, relay sync")]

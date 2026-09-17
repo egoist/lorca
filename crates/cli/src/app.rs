@@ -13,7 +13,7 @@ use crate::config::{self, Config, Settings};
 use crate::events::{ChatSummary, Event};
 use crate::keys::{self, IdentityFile, MachineFile};
 use crate::model::*;
-use crate::providers::Credentials;
+use crate::credentials::Credentials;
 use crate::relay::RelayClient;
 
 pub const ONLINE_WINDOW_SECS: i64 = 150;
@@ -554,6 +554,7 @@ impl App {
     }
 
     /// Adds a finished turn's usage to the chat's and tells the app.
+    #[cfg(feature = "runner")]
     pub fn record_usage(&self, chat_id: &str, model: &str, usage: &tinybot_agent::Usage, context_window: u64) {
         let updated = {
             let mut state = self.state.lock().unwrap();
@@ -614,7 +615,7 @@ impl App {
                 let providers: Vec<ProviderStatus> = if is_this {
                     self.credentials.lock().unwrap().statuses()
                 } else if device.is_runner() {
-                    crate::providers::PROVIDER_KINDS
+                    crate::credentials::PROVIDER_KINDS
                         .iter()
                         .map(|kind| ProviderStatus {
                             kind: kind.to_string(),
