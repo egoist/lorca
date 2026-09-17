@@ -20,6 +20,8 @@ final class InspectorViewController: NSViewController {
     /// What each bot's Runner last said about its memory; refreshed when the pane opens on a
     /// chat and after every turn in it.
     private var memoryByBot: [Bot.ID: BotMemory] = [:]
+    /// Why the last fetch failed: the Runner is offline, or did not answer.
+    private var memoryErrors: [Bot.ID: String] = [:]
     private var memoryFetches: Set<Bot.ID> = []
 
     var onOpenDevice: ((Device.ID) -> Void)?
@@ -124,9 +126,12 @@ final class InspectorViewController: NSViewController {
                 let memory = try await self?.store.botMemory(botID)
                 guard let self, let memory else { return }
                 self.memoryByBot[botID] = memory
+                self.memoryErrors[botID] = nil
                 self.reload()
             } catch {
-                NSLog("bots.memory failed: \(error.localizedDescription)")
+                guard let self else { return }
+                self.memoryErrors[botID] = error.localizedDescription
+                self.reload()
             }
         }
     }
@@ -274,13 +279,16 @@ final class InspectorViewController: NSViewController {
     }
 
     /// What the bot remembers, as its Runner reports it: the index against its load budget with
-    /// an editor, and the folder of topic files and daily logs.
+    /// an editor, and the folder of topic files and daily logs. A bot on another Runner is
+    /// read and edited through the relay; only the folder cannot be opened from here.
     private func memoryRows(for bot: Bot) -> [NSView] {
         guard let memory = memoryByBot[bot.id] else {
+            if let error = memoryErrors[bot.id] {
+                let row = ActionRow(key: "Notes", value: error, tint: .secondaryLabelColor, actionTitle: "Retry")
+                row.onAction = { [weak self] in self?.refreshMemory(of: bot.id) }
+                return [row]
+            }
             return [KeyValueRow(key: "Notes", value: memoryFetches.contains(bot.id) ? "Loading…" : "", tint: .secondaryLabelColor)]
-        }
-        guard memory.here else {
-            return [KeyValueRow(key: "Notes", value: "On \(memory.runner)", tint: .secondaryLabelColor)]
         }
         let notes = ActionRow(
             key: "Notes",
@@ -297,7 +305,12 @@ final class InspectorViewController: NSViewController {
             editor.onSaved = { [weak self] in self?.refreshMemory(of: bot.id) }
             self.presentAsSheet(editor)
         }
-        let folder = ActionRow(key: "Folder", value: memory.filesSummary, tint: .secondaryLabelColor, actionTitle: "Show")
+        let folder = ActionRow(
+            key: "Folder",
+            value: memory.here ? memory.filesSummary : "\(memory.filesSummary) · on \(memory.runner)",
+            tint: .secondaryLabelColor,
+            actionTitle: memory.here ? "Show" : nil
+        )
         folder.toolTip = memory.path
         folder.onAction = {
             let url = URL(fileURLWithPath: memory.path).appendingPathComponent("MEMORY.md")

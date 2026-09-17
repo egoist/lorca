@@ -12,6 +12,7 @@ mod model;
 mod pairing;
 mod providers;
 mod relay;
+mod requests;
 mod runtime;
 mod sync;
 mod ws;

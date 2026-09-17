@@ -313,6 +313,30 @@ pub struct JobResult {
     pub outcome: String,
 }
 
+/// `kind = request`: a question for one Runner from another Device, sealed to the Runner's box
+/// key. The verbs read and write a bot's memory, which lives on its Runner.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Request {
+    pub id: String,
+    /// `memory.read` or `memory.write`.
+    pub verb: String,
+    /// The Device asking; the answer is sealed to it.
+    pub requested_by: String,
+    #[serde(default)]
+    pub body: serde_json::Value,
+    pub created_at: f64,
+}
+
+/// `kind = response`: the Runner's answer to a `Request`, sealed to the Device that asked.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Response {
+    pub request_id: String,
+    #[serde(default)]
+    pub body: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 /// Pairing handshake payloads (sealed boxes).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PairRequest {

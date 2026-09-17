@@ -13,7 +13,7 @@ use tokio::sync::{Notify, Semaphore};
 
 use crate::routes::{ApiError, ApiResult};
 
-pub const KINDS: &[&str] = &["roster", "chat", "job", "job_result", "machine", "key", "file"];
+pub const KINDS: &[&str] = &["roster", "chat", "job", "job_result", "request", "response", "machine", "key", "file"];
 
 pub fn now() -> i64 {
     std::time::SystemTime::now()

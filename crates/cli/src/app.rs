@@ -82,6 +82,8 @@ pub struct App {
     pub chat_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// `room_turn` jobs sent to other Runners, waiting for their `job_result`.
     pub pending_results: Mutex<HashMap<String, tokio::sync::oneshot::Sender<String>>>,
+    /// Requests sent to other Runners, waiting for their `response`.
+    pub pending_responses: Mutex<HashMap<String, tokio::sync::oneshot::Sender<Response>>>,
     pub http: reqwest::Client,
 }
 
@@ -114,6 +116,7 @@ impl App {
             running_jobs: Mutex::new(HashMap::new()),
             chat_locks: Mutex::new(HashMap::new()),
             pending_results: Mutex::new(HashMap::new()),
+            pending_responses: Mutex::new(HashMap::new()),
             http,
         }))
     }

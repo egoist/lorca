@@ -14,7 +14,7 @@ const POLL_WAIT_SECS: u64 = 25;
 
 /// What the poll takes. `file` blobs are left out: a transcript fetches them by id when it
 /// needs them, so a photo sent to one bot is not downloaded by every Device.
-pub const POLL_KINDS: &str = "roster,chat,machine,job,job_result";
+pub const POLL_KINDS: &str = "roster,chat,machine,job,job_result,request,response";
 
 pub async fn run(app: Arc<App>) {
     let mut failures: u32 = 0;
@@ -222,6 +222,20 @@ pub fn apply_blob(app: &Arc<App>, machine_file: &crate::keys::MachineFile, blob:
             match crate::crypto::unseal_json::<JobResult>(&machine.box_secret, &ciphertext) {
                 Ok(result) => crate::runtime::deliver_job_result(app, result),
                 Err(error) => tracing::warn!(%error, "job result envelope"),
+            }
+        }
+        "request" => {
+            let Ok(machine) = machine_file.machine() else { return };
+            match crate::crypto::unseal_json::<Request>(&machine.box_secret, &ciphertext) {
+                Ok(request) => crate::requests::serve(app.clone(), request, blob.id.clone()),
+                Err(error) => tracing::warn!(%error, "request envelope"),
+            }
+        }
+        "response" => {
+            let Ok(machine) = machine_file.machine() else { return };
+            match crate::crypto::unseal_json::<Response>(&machine.box_secret, &ciphertext) {
+                Ok(response) => crate::requests::deliver(app.clone(), response, blob.id.clone()),
+                Err(error) => tracing::warn!(%error, "response envelope"),
             }
         }
         _ => {}

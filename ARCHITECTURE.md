@@ -256,7 +256,7 @@ Two things keep a bot's chats from being islands, after OpenMausBot. Every turn'
 
 Before a compaction summarizes part of a chat, a silent **memory flush** turn runs over the messages about to be cut, with only `memory_update` and `memory_log` as tools and a prompt to save what is durable and not yet in memory; nothing it says reaches the chat, a failure or a two-minute timeout is logged and the compaction goes ahead (`TINYBOT_MEMORY_FLUSH=0` turns it off). This is what keeps a fact from being lost because it was only ever said in conversation.
 
-The Mac app's DM inspector shows the bot's memory (`bots.memory`): the index against its load budget, an editor (`bots.memory.write`, refused with the bot's current text when the file changed under the editor, then Reload or Overwrite), and a Show button for the folder. A bot on another Runner shows only the Runner's name; the phone, which talks to the relay and not to a Runner, shows no memory.
+The Mac app's DM inspector shows the bot's memory (`bots.memory`): the index against its load budget, an editor (`bots.memory.write`, refused with the bot's current text when the file changed under the editor, then Reload or Overwrite), and a Show button for the folder. For a bot on another Runner the CLI asks that Runner through the relay (a `request` / `response` pair, see Protocols), so the same rows read and edit it; only the folder cannot be opened, and an offline Runner shows as such with a Retry. The phone shows no memory yet.
 
 ### Providers
 
@@ -311,6 +311,7 @@ The app may choose ids (`bots.create.id`, `chats.create.id`, `chats.send.message
 - Machine bearer for blobs and presence; identity signature for registering and attesting machines.
 - PUT/GET blobs; body is ciphertext. `roster` is a whole-roster snapshot (latest wins); `chat` is one upsert or removal of a message; `machine` is a Device’s metadata; `key` is the DEK sealed to the content key.
 - Jobs: `kind=job` with `recipient_machine_pubkey`, sealed to that machine’s box key, deleted by the Runner after the turn.
+- Questions: `kind=request` sealed to one Runner (`crates/cli/src/requests.rs`: `{ id, verb, requested_by, body }`), answered with a `kind=response` sealed to the Device that asked (`{ request_id, body, error? }`); each side deletes the blob it consumed, and the asker gives up after 20 s. The verbs are `memory.read` and `memory.write`, so a bot's memory can be shown and edited from a Device that is not its Runner. A request is refused up front when the Runner is unknown or offline.
 - Every Device keeps `last_seq` and an outbox; uploads retry until the relay accepts them.
 
 ```
