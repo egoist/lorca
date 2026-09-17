@@ -10,7 +10,7 @@ import Animated, { Easing, useAnimatedStyle, useSharedValue, withDelay, withRepe
 import { isSentMessage, recipientName, type Body, type Bot, type Chat, type Message } from "../core/model";
 import { AttachmentBlock } from "./attachments";
 import { BotAvatar } from "./Avatar";
-import { daySeparator, time } from "./format";
+import { daySeparator, firstLine, time } from "./format";
 import { Markdown } from "./Markdown";
 import { Symbol } from "./Symbol";
 import { Font, usePalette } from "./theme";
@@ -152,21 +152,30 @@ export function MessageRow({ row, bots, isGroup, onLongPress }: { row: Extract<R
   );
 }
 
-export function MarkerRow({ row }: { row: Extract<Row, { type: "marker" }> }) {
+/// "Messaged ◉ Name" with the message's first line under it; a tap opens the whole message
+/// in a sheet.
+export function MarkerRow({ row, onPress }: { row: Extract<Row, { type: "marker" }>; onPress?: (row: Extract<Row, { type: "marker" }>) => void }) {
   const p = usePalette();
+  const preview = row.tooltip ? firstLine(row.tooltip) : "";
   return (
-    <View style={[styles.centered, { paddingTop: row.groupStart ? 14 : 6 }]}>
+    <Pressable
+      style={({ pressed }) => [styles.centered, { paddingTop: row.groupStart ? 14 : 6, opacity: pressed ? 0.5 : 1 }]}
+      onPress={preview ? () => onPress?.(row) : undefined}
+      disabled={!preview}
+      accessibilityRole={preview ? "button" : undefined}
+      accessibilityLabel={`${row.text} ${row.bot?.name ?? "a teammate"}${preview ? `: ${row.tooltip}` : ""}`}
+    >
       <View style={styles.markerLine}>
         <Text style={[styles.caption, { color: p.secondaryLabel }]}>{row.text} </Text>
         <BotAvatar bot={row.bot} size={14} />
         <Text style={[styles.caption, { color: p.secondaryLabel, fontWeight: "600" }]}> {row.bot?.name ?? "a teammate"}</Text>
       </View>
-      {row.tooltip ? (
-        <Text style={[styles.caption, { color: p.tertiaryLabel, marginTop: 3, maxWidth: 300, textAlign: "center" }]} numberOfLines={2}>
-          {row.tooltip}
+      {preview ? (
+        <Text style={[styles.caption, { color: p.tertiaryLabel, marginTop: 3, maxWidth: 300, textAlign: "center" }]} numberOfLines={1}>
+          {preview}
         </Text>
       ) : null}
-    </View>
+    </Pressable>
   );
 }
 

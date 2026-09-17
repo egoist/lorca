@@ -282,6 +282,15 @@ export default function ChatScreen() {
     }
   }, []);
 
+  /// The whole message behind a "Messaged ◉ Name" marker, as a sheet.
+  const openMarker = useCallback(
+    (row: Extract<Row, { type: "marker" }>) => {
+      const title = `${row.text} ${row.bot?.name ?? "a teammate"}`;
+      router.push({ pathname: "/message/[id]", params: { id: row.key, chat: id, title } });
+    },
+    [router, id],
+  );
+
   const renderItem = useCallback(
     ({ item }: { item: Row }) => {
       switch (item.type) {
@@ -297,7 +306,7 @@ export default function ChatScreen() {
             />
           );
         case "marker":
-          return <MarkerRow row={item} />;
+          return <MarkerRow row={item} onPress={openMarker} />;
         case "notice":
           return <NoticeRow row={item} />;
         case "permission":
@@ -319,7 +328,7 @@ export default function ChatScreen() {
           return <StatusRow text={item.text} />;
       }
     },
-    [bots, isGroup, onLongPress],
+    [bots, isGroup, onLongPress, openMarker],
   );
 
   if (!chat) {

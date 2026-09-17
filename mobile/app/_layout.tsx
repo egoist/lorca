@@ -49,6 +49,7 @@ export default function RootLayout() {
               <Stack.Screen name="index" options={{ title: "Chats", headerTitle: "", headerLargeTitle: false, headerShadowVisible: false, headerTransparent: Platform.OS === "ios" }} />
               <Stack.Screen name="chat/[id]" options={{ headerTransparent: Platform.OS === "ios" }} />
               <Stack.Screen name="chat-info/[id]" options={{ ...sheet, sheetAllowedDetents: [0.7, 1], sheetGrabberVisible: true }} />
+              <Stack.Screen name="message/[id]" options={{ ...sheet, sheetAllowedDetents: [0.5, 1], sheetGrabberVisible: true }} />
               <Stack.Screen name="new-bot" options={sheet} />
               <Stack.Screen name="new-group" options={sheet} />
               <Stack.Screen name="settings" options={sheet} />

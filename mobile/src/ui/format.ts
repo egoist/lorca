@@ -137,3 +137,12 @@ export function joinDictation(base: string, transcript: string): string {
   if (!base) return transcript;
   return /\s$/.test(base) ? base + transcript : `${base} ${transcript}`;
 }
+
+/// The first non-empty line of a message, fence markers skipped: what a one-line preview shows.
+export function firstLine(text: string): string {
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line && !line.startsWith("```")) return line;
+  }
+  return "";
+}
