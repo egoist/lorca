@@ -237,6 +237,51 @@ struct BotMemory {
     }
 }
 
+// MARK: - Routine
+
+/// A recurring task a bot runs on a schedule in its direct chat, as the roster carries it. The
+/// schedule's words, the next run, and the running state come from the CLI.
+struct Routine: Identifiable, Hashable {
+    let id: String
+    var botID: Bot.ID
+    var name: String
+    /// The task, written to the bot, handed to it on every run.
+    var prompt: String
+    /// `every 30m`, `every 2h`, `every 1d`, or five cron fields in the Runner's local time.
+    var schedule: String
+    /// The schedule in words: "Weekdays at 9:00 AM".
+    var scheduleText: String
+    var isEnabled: Bool
+    /// Why Tinybot paused it, when it did: "away".
+    var pausedReason: String?
+    var lastRunAt: Date?
+    /// How the last run ended: "sent", "pass", or "error".
+    var lastOutcome: String?
+    var nextRunAt: Date?
+    var isRunning: Bool
+    var createdAt: Date
+
+    /// The line under the name in the inspector: the schedule, then what is going on.
+    var detail: String {
+        if isRunning { return "\(scheduleText) · Running…" }
+        guard isEnabled else { return pausedReason == "away" ? "\(scheduleText) · Paused while you were away" : "\(scheduleText) · Paused" }
+        if let nextRunAt { return "\(scheduleText) · Next \(Format.upcoming(nextRunAt))" }
+        return scheduleText
+    }
+
+    /// "Today 9:00 AM · replied", "Never", "Yesterday 6:00 PM · nothing to report".
+    var lastRunSummary: String {
+        guard let lastRunAt else { return "Never" }
+        let when = Format.daySeparator(lastRunAt)
+        switch lastOutcome {
+        case "sent": return "\(when) · replied"
+        case "pass": return "\(when) · nothing to report"
+        case "error": return "\(when) · failed"
+        default: return when
+        }
+    }
+}
+
 // MARK: - Message
 
 struct ToolInvocation: Hashable {
@@ -438,6 +483,21 @@ struct ChatUsage: Hashable {
 }
 
 extension Format {
+    /// "today 9:00 AM", "tomorrow 9:00 AM", "Monday 9:00 AM", "Oct 1 9:00 AM": when a run is due.
+    static func upcoming(_ date: Date) -> String {
+        let calendar = Calendar.current
+        if calendar.isDateInToday(date) { return "today \(time(date))" }
+        if calendar.isDateInTomorrow(date) { return "tomorrow \(time(date))" }
+        if date.timeIntervalSinceNow < 60 * 60 * 24 * 6 {
+            let weekday = DateFormatter()
+            weekday.dateFormat = "EEEE"
+            return "\(weekday.string(from: date)) \(time(date))"
+        }
+        let day = DateFormatter()
+        day.dateFormat = "MMM d"
+        return "\(day.string(from: date)) \(time(date))"
+    }
+
     /// "1.2 KB", "24 KB"
     static func kilobytes(_ bytes: Int) -> String {
         let kb = Double(bytes) / 1000

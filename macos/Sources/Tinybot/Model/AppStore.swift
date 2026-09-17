@@ -34,6 +34,8 @@ final class AppStore {
     private(set) var devices: [Device] = []
     private(set) var bots: [Bot] = []
     private(set) var chats: [Chat] = []
+    /// Every bot's routines, from the roster.
+    private(set) var routines: [Routine] = []
 
     /// True when the CLI answers on localhost (mock: toggled from the Debug menu).
     private(set) var isConnected = false
@@ -45,8 +47,9 @@ final class AppStore {
     private(set) var relayURL: String?
 
     /// Turns in flight, by job id: the chat and the bot (empty while a group exchange is between
-    /// member turns). Drives the "is working" row and the presence dot on avatars.
-    private var runningJobs: [(id: String, chatID: Chat.ID, botID: Bot.ID)] = []
+    /// member turns), and the routine when the turn is one of its runs. Drives the "is working"
+    /// row, the presence dot on avatars, and the spinner on a routine.
+    private var runningJobs: [(id: String, chatID: Chat.ID, botID: Bot.ID, routineID: Routine.ID?)] = []
     private var replyEngine: ReplyEngine?
     private var started = false
 
@@ -148,9 +151,10 @@ final class AppStore {
         devices = snapshot.devices.map { $0.toModel() }
         bots = snapshot.bots.map { $0.toModel() }
         chats = snapshot.chats.map { $0.toModel() }
-        runningJobs = (snapshot.runningTurns ?? []).map { ($0.jobId, $0.chatId, $0.botId) }
+        routines = (snapshot.routines ?? []).map { $0.toModel() }
+        runningJobs = (snapshot.runningTurns ?? []).map { ($0.jobId, $0.chatId, $0.botId, $0.routineId) }
         for id in snapshot.runningChatIds where !runningJobs.contains(where: { $0.chatID == id }) {
-            runningJobs.append(("chat:\(id)", id, ""))
+            runningJobs.append(("chat:\(id)", id, "", nil))
         }
         sortChats()
         emit(.snapshotReplaced)
@@ -171,6 +175,7 @@ final class AppStore {
             guard let roster = decode(Wire.RosterChanged.self) else { return }
             devices = roster.devices.map { $0.toModel() }
             bots = roster.bots.map { $0.toModel() }
+            if let incoming = roster.routines { routines = incoming.map { $0.toModel() } }
             var merged: [Chat] = []
             var changed: [Chat.ID] = []
             for summary in roster.chats {
@@ -211,7 +216,7 @@ final class AppStore {
         case "job.started":
             guard let job = decode(Wire.JobEvent.self) else { return }
             runningJobs.removeAll { $0.id == "pending:\(job.chatId)" }
-            runningJobs.append((job.jobId, job.chatId, job.botId))
+            runningJobs.append((job.jobId, job.chatId, job.botId, job.routineId))
             emit(.respondingChanged(job.chatId))
             emit(.chatsChanged)
 
@@ -303,6 +308,19 @@ final class AppStore {
 
     func bots(on runnerID: Device.ID) -> [Bot] {
         bots.filter { $0.runnerID == runnerID }
+    }
+
+    func routine(_ id: Routine.ID) -> Routine? {
+        routines.first { $0.id == id }
+    }
+
+    /// A bot's routines, oldest first, with the running state from the turns in flight.
+    func routines(for botID: Bot.ID) -> [Routine] {
+        routines.filter { $0.botID == botID }.sorted { $0.createdAt < $1.createdAt }.map { routine in
+            var routine = routine
+            routine.isRunning = routine.isRunning || runningJobs.contains { $0.routineID == routine.id }
+            return routine
+        }
     }
 
     var thisDevice: Device? {
@@ -504,6 +522,32 @@ final class AppStore {
         perform("chats.compact", ["chat_id": id])
     }
 
+    // MARK: - Routines
+
+    /// Pauses or resumes a routine. A resumed schedule counts from now.
+    func setRoutineEnabled(_ id: Routine.ID, _ enabled: Bool) {
+        guard let index = routines.firstIndex(where: { $0.id == id }) else { return }
+        routines[index].isEnabled = enabled
+        routines[index].pausedReason = nil
+        if !enabled { routines[index].nextRunAt = nil }
+        emit(.rosterChanged)
+        perform("routines.update", ["id": id, "enabled": enabled])
+    }
+
+    /// Runs the routine now, on its bot's Runner.
+    func runRoutine(_ id: Routine.ID) {
+        guard let index = routines.firstIndex(where: { $0.id == id }) else { return }
+        routines[index].isRunning = true
+        emit(.rosterChanged)
+        perform("routines.run", ["id": id])
+    }
+
+    func deleteRoutine(_ id: Routine.ID) {
+        routines.removeAll { $0.id == id }
+        emit(.rosterChanged)
+        perform("routines.delete", ["id": id])
+    }
+
     /// A bot's memory, read from its Runner. Answers with `here == false` when the bot runs on
     /// another Device, whose disk this Mac cannot read.
     func botMemory(_ id: Bot.ID) async throws -> BotMemory {
@@ -638,7 +682,7 @@ final class AppStore {
         // bot right away so the working row appears with the send.
         if !chat.botIDs.isEmpty {
             let pendingID = "pending:\(chatID)"
-            runningJobs.append((pendingID, chatID, chat.isDM ? chat.botIDs[0] : ""))
+            runningJobs.append((pendingID, chatID, chat.isDM ? chat.botIDs[0] : "", nil))
             emit(.respondingChanged(chatID))
             emit(.chatsChanged)
             Task { [weak self] in
@@ -716,7 +760,7 @@ final class AppStore {
     func setMockWorking(_ botID: Bot.ID, in chatID: Chat.ID, _ working: Bool) {
         let id = "mock:\(chatID):\(botID)"
         runningJobs.removeAll { $0.id == id }
-        if working { runningJobs.append((id, chatID, botID)) }
+        if working { runningJobs.append((id, chatID, botID, nil)) }
         emit(.respondingChanged(chatID))
         emit(.chatsChanged)
     }
@@ -797,6 +841,7 @@ final class AppStore {
         devices = MockData.devices()
         bots = MockData.bots()
         chats = MockData.chats()
+        routines = MockData.routines()
         sortChats()
         emit(.snapshotReplaced)
     }

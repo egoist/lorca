@@ -1,6 +1,6 @@
 // Stamps and previews, the rules the Mac app uses (Design/Formatters.swift, AppStore.preview).
 
-import type { Bot, Chat } from "../core/model";
+import type { Bot, Chat, Routine } from "../core/model";
 import { attachmentSummary, isSentMessage, recipientName } from "../core/model";
 
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -47,6 +47,41 @@ export function daySeparator(date: Date): string {
   if (isToday(date)) return `Today ${time(date)}`;
   if (isYesterday(date)) return `Yesterday ${time(date)}`;
   return `${WEEKDAYS_SHORT[date.getDay()]}, ${MONTHS[date.getMonth()]} ${date.getDate()} ${time(date)}`;
+}
+
+/// "today 9:00 AM", "tomorrow 9:00 AM", "Monday 9:00 AM", "Oct 1 9:00 AM": when a run is due.
+export function upcoming(unix: number): string {
+  const date = new Date(unix * 1000);
+  if (isToday(date)) return `today ${time(date)}`;
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  if (isSameDay(date, tomorrow)) return `tomorrow ${time(date)}`;
+  if (date.getTime() - Date.now() < 6 * 86400_000) return `${WEEKDAYS[date.getDay()]} ${time(date)}`;
+  return `${MONTHS[date.getMonth()]} ${date.getDate()} ${time(date)}`;
+}
+
+/// The line under a routine's name: the schedule, then what is going on.
+export function routineDetail(routine: Routine): string {
+  if (routine.is_running) return `${routine.schedule_text} · Running…`;
+  if (!routine.is_enabled) return `${routine.schedule_text} · ${routine.paused_reason === "away" ? "Paused while you were away" : "Paused"}`;
+  if (routine.next_run_at) return `${routine.schedule_text} · Next ${upcoming(routine.next_run_at)}`;
+  return routine.schedule_text;
+}
+
+/// "Today 9:00 AM · replied", "Never", "Yesterday 6:00 PM · nothing to report".
+export function lastRunSummary(routine: Routine): string {
+  if (!routine.last_run_at) return "Never";
+  const when = daySeparator(new Date(routine.last_run_at * 1000));
+  switch (routine.last_outcome) {
+    case "sent":
+      return `${when} · replied`;
+    case "pass":
+      return `${when} · nothing to report`;
+    case "error":
+      return `${when} · failed`;
+    default:
+      return when;
+  }
 }
 
 export function lastSeen(seenUnix: number | undefined): string {

@@ -56,7 +56,25 @@ fn memory_flush_enabled() -> bool {
 
 pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken) -> TurnOutcome {
     let Some(bot) = app.bot(&job.bot_id) else { return TurnOutcome::Skipped };
-    let Some(chat) = app.chat(&job.chat_id) else { return TurnOutcome::Skipped };
+    if app.chat(&job.chat_id).is_none() {
+        return TurnOutcome::Skipped;
+    }
+
+    // A routine's run opens with its marker, "Routine · Name", so the chat shows what started
+    // the turn (even one that cannot run) and later turns rebuild the task from it. A routine
+    // deleted meanwhile does not run.
+    let routine = match job.routine_id.as_deref() {
+        Some(id) => match app.routine(id) {
+            Some(routine) => {
+                crate::routines::started(app, id);
+                let marker = Message::new(&job.chat_id, Author::System, Body::Notice { text: format!("Routine · {}", routine.name), routine_id: Some(id.to_string()) });
+                app.upsert_message(marker, true);
+                Some(routine)
+            }
+            None => return TurnOutcome::Skipped,
+        },
+        None => None,
+    };
 
     let provider = match providers::provider_for(app, &bot.provider, bot.model.as_deref(), providers::thinking_level(&bot)) {
         Ok(provider) => provider,
@@ -66,6 +84,7 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
             return TurnOutcome::Skipped;
         }
     };
+    let Some(chat) = app.chat(&job.chat_id) else { return TurnOutcome::Skipped };
 
     let workdir = bot.working_directory(&app.config.home);
     if let Err(error) = std::fs::create_dir_all(&workdir) {
@@ -88,7 +107,7 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
     let window = provider.model_info().map(|i| i.context_window).unwrap_or(0);
     let settings = compaction_settings(window);
     let store = MemoryStore::for_bot(&app.config.home, &bot);
-    let system_prompt = system_prompt(app, &chat, &bot, job, &store);
+    let system_prompt = system_prompt(app, &chat, &bot, job, &store, routine.as_ref());
 
     // A transcript that no longer fits, or that has outgrown what a turn rebuilds, is
     // summarized before the turn starts, from the chat, so the model never sees the overflow
@@ -122,6 +141,7 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
         Arc::new(MessageBot { app: app.clone(), chat_id: chat.meta.id.clone(), bot: bot.clone(), hops: job.hops }),
         Arc::new(CreateBot { app: app.clone(), chat_id: chat.meta.id.clone(), bot: bot.clone() }),
         Arc::new(EditBot { app: app.clone(), bot: bot.clone() }),
+        Arc::new(Routines { app: app.clone(), bot: bot.clone() }),
     ];
     tools.extend(memory_tools(&store, &chat));
     tools.push(Arc::new(Recall { app: app.clone(), store: store.clone(), bot: bot.clone() }));
@@ -219,7 +239,11 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
     // the bot's other chats can find out what happened here without the transcript.
     if let Some(line) = turn_log_line(state.last_said.as_deref(), &state.tools_used, outcome == TurnOutcome::Skipped) {
         drop(state);
-        if let Err(error) = store.append_log(&line, Some(&format!("in {}", chat_source(&chat))), now_secs() as i64) {
+        let source = match &routine {
+            Some(routine) => format!("routine \"{}\"", routine.name),
+            None => format!("in {}", chat_source(&chat)),
+        };
+        if let Err(error) = store.append_log(&line, Some(&source), now_secs() as i64) {
             tracing::warn!(%error, "writing the turn to the daily log");
         }
     }
@@ -827,7 +851,7 @@ fn first_line(text: &str, max: usize) -> Option<String> {
 
 // MARK: - Context
 
-fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job, store: &MemoryStore) -> String {
+fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job, store: &MemoryStore, routine: Option<&Routine>) -> String {
     let members: Vec<Bot> = chat.meta.bot_ids.iter().filter_map(|id| app.bot(id)).collect();
     let runner = app.device(&bot.runner_id);
     let workdir = bot.working_directory(&app.config.home);
@@ -878,11 +902,22 @@ fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job, store: &Memo
         ));
     }
 
+    if let Some(routine) = routine {
+        prompt.push_str(&format!(
+            "\nThis turn is a run of your routine \"{}\" ({}). The user is not here: nobody answers a question now. Do the \
+             task in the routine marker below on your own, then reply with what the user should know, kept short. Answer \
+             with exactly PASS when there is nothing new to report.\n",
+            routine.name,
+            schedule_words(&routine.schedule)
+        ));
+    }
+
     prompt.push_str(
         "\nTeam: call list_teammates to see every bot. If the right teammate does not exist yet, propose one and create it \
          with create_bot once the user agrees; keep every bot to one clear job. When the user wants a bot, including you, \
          to behave differently, change its profile with edit_bot.\n",
     );
+    prompt.push_str(&routines_prompt(app, bot));
     prompt.push_str(&memory_prompt(store));
     if let Some(brief) = recent_work_brief(app, bot, &chat.meta.id, now_secs() as i64) {
         prompt.push_str(&brief);
@@ -905,6 +940,35 @@ fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job, store: &Memo
     ));
     if let Some(runner) = runner {
         prompt.push_str(&format!("\nYou run on the Runner \"{}\" ({}).", runner.name, runner.os_version));
+    }
+    prompt
+}
+
+/// The schedule in words, or the raw text when it no longer parses.
+fn schedule_words(schedule: &str) -> String {
+    crate::schedule::parse(schedule).map(|s| s.describe()).unwrap_or_else(|_| schedule.to_string())
+}
+
+/// The routines part of the system prompt: what a routine is, how to set one up, and the
+/// bot's own list with each one's next run.
+fn routines_prompt(app: &App, bot: &Bot) -> String {
+    let mut prompt = String::from(
+        "\nRoutines: a routine is a task you run on a schedule in your direct chat with the user, with nobody typing: a \
+         morning brief, an hourly check, a weekly report. When the user wants something done regularly, set it up with \
+         the routines tool (a name, a schedule, and the task written as an instruction to yourself), then say the schedule \
+         back in words. Edit, pause, resume, run, or delete one when asked.\n",
+    );
+    let routines = app.routines_of(&bot.id);
+    if !routines.is_empty() {
+        let now = now_secs() as i64;
+        prompt.push_str("Your routines:\n");
+        for routine in routines {
+            let state = match routine.next_run_at() {
+                Some(next) => format!("next {}", crate::schedule::when_label(next, now)),
+                None => "paused".to_string(),
+            };
+            prompt.push_str(&format!("- {} · {} · {state}\n", routine.name, schedule_words(&routine.schedule)));
+        }
     }
     prompt
 }
@@ -1095,6 +1159,14 @@ fn transcript_bounded(app: &App, chat: &Chat, bot: &Bot, workdir: &std::path::Pa
                     timestamp,
                 }));
             }
+            // A routine's marker carries the task into the turn it opened, and into later ones.
+            (Author::System, Body::Notice { text, routine_id: Some(routine_id) }) => {
+                let task = match app.routine(routine_id) {
+                    Some(routine) => format!("[Routine \"{}\" ran on its schedule. Task: {}]", routine.name, routine.prompt.trim()),
+                    None => format!("[{} ran on its schedule]", text.trim()),
+                };
+                out.push(user(&task, timestamp));
+            }
             (Author::Bot { bot_id }, Body::Handoff { to, reason, .. }) if bot_id != &bot.id => {
                 let from = name_of(chat, bot_id);
                 if to == &bot.id {
@@ -1230,6 +1302,7 @@ impl Tool for MessageBot {
             bot_id: target.id.clone(),
             kind: "message".into(),
             trigger_message_id: incoming.id,
+            routine_id: None,
             requested_by: self.app.this_device_id().unwrap_or_default(),
             from_bot_id: Some(self.bot.id.clone()),
             hops: self.hops + 1,
@@ -1660,6 +1733,113 @@ impl Tool for EditBot {
             format!("Updated {} ({what}). The new profile applies from their next turn.", updated.name)
         };
         Ok(ToolResult::text(text).with_details(json!({ "summary": format!("Updated {}", updated.name), "bot_id": updated.id, "changed": changed })))
+    }
+}
+
+/// The bot's own routines: list, create, edit, pause, resume, run, delete.
+struct Routines {
+    app: Arc<App>,
+    bot: Bot,
+}
+
+#[async_trait]
+impl Tool for Routines {
+    fn name(&self) -> &str {
+        "routines"
+    }
+    fn description(&self) -> &str {
+        "Your routines: tasks you run on a schedule in your direct chat with the user, with nobody typing. list shows them; \
+         create takes a name, a schedule, and a prompt (the task, written as an instruction to yourself, with everything a \
+         run needs since the user is not there to answer); edit changes any of those on an existing one; pause, resume, \
+         run (a run right now), and delete take the routine's name. A schedule is every 30m, every 2h, every 1d, or five \
+         cron fields in your Runner's local time (0 9 * * 1-5 is weekdays at 9:00 AM); at most one run per five minutes. \
+         Set one up when the user asks for something regular, and tell them the schedule in words."
+    }
+    fn parameters(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "action": { "type": "string", "enum": ["list", "create", "edit", "pause", "resume", "run", "delete"] },
+                "routine": { "type": "string", "description": "The routine's name, for edit, pause, resume, run, and delete" },
+                "name": { "type": "string", "description": "A short name, for create or a rename" },
+                "schedule": { "type": "string", "description": "every 30m, every 2h, every 1d, or five cron fields like 0 9 * * 1-5" },
+                "prompt": { "type": "string", "description": "What to do on each run, as an instruction to yourself" },
+                "enabled": { "type": "boolean", "description": "create: start it on (default) or paused" }
+            },
+            "required": ["action"],
+            "additionalProperties": false
+        })
+    }
+    fn execution_mode(&self) -> Option<ToolExecutionMode> {
+        Some(ToolExecutionMode::Sequential)
+    }
+    async fn execute(&self, _id: &str, args: Value, _cancel: CancellationToken, _on_update: ToolUpdateFn) -> Result<ToolResult, ToolError> {
+        let field = |key: &str| args[key].as_str().map(str::trim).filter(|v| !v.is_empty());
+        let action = field("action").unwrap_or("");
+        let now = now_secs() as i64;
+        let line = |routine: &Routine| {
+            let state = match routine.next_run_at() {
+                Some(next) => format!("next run {}", crate::schedule::when_label(next, now)),
+                None => "paused".to_string(),
+            };
+            format!("{} · {} · {state}", routine.name, schedule_words(&routine.schedule))
+        };
+        let find = |name: &str| -> Result<Routine, ToolError> {
+            let mine = self.app.routines_of(&self.bot.id);
+            mine.iter().find(|r| r.name.eq_ignore_ascii_case(name) || r.id == name).cloned().ok_or_else(|| {
+                if mine.is_empty() {
+                    ToolError("You have no routines yet.".into())
+                } else {
+                    ToolError(format!("No routine named {name:?}. Yours: {}", mine.iter().map(|r| r.name.clone()).collect::<Vec<_>>().join(", ")))
+                }
+            })
+        };
+        match action {
+            "list" => {
+                let mine = self.app.routines_of(&self.bot.id);
+                if mine.is_empty() {
+                    return Ok(ToolResult::text("You have no routines yet.").with_details(json!({ "summary": "No routines" })));
+                }
+                let text = mine.iter().map(|r| format!("- {}\n  Task: {}", line(r), r.prompt.trim())).collect::<Vec<_>>().join("\n");
+                Ok(ToolResult::text(text).with_details(json!({ "summary": format!("Listed {} routines", mine.len()) })))
+            }
+            "create" => {
+                let name = field("name").ok_or("name is required")?;
+                let schedule = field("schedule").ok_or("schedule is required")?;
+                let prompt = field("prompt").ok_or("prompt is required")?;
+                let enabled = args["enabled"].as_bool().unwrap_or(true);
+                let routine = crate::routines::create(&self.app, &self.bot.id, name, schedule, prompt, enabled).map_err(ToolError)?;
+                let state = if routine.is_enabled { "It is on." } else { "It starts paused." };
+                Ok(ToolResult::text(format!("Created routine {}. {state} Runs post in your direct chat with the user.", line(&routine)))
+                    .with_details(json!({ "summary": format!("Created routine \"{}\"", routine.name), "routine_id": routine.id })))
+            }
+            "edit" => {
+                let target = find(field("routine").ok_or("routine is required: the routine's current name")?)?;
+                let routine = crate::routines::edit(&self.app, &target.id, field("name"), field("schedule"), field("prompt")).map_err(ToolError)?;
+                Ok(ToolResult::text(format!("Updated routine {}.", line(&routine)))
+                    .with_details(json!({ "summary": format!("Updated routine \"{}\"", routine.name), "routine_id": routine.id })))
+            }
+            "pause" | "resume" => {
+                let target = find(field("routine").ok_or("routine is required")?)?;
+                let routine = crate::routines::set_enabled(&self.app, &target.id, action == "resume").map_err(ToolError)?;
+                let verb = if routine.is_enabled { "Resumed" } else { "Paused" };
+                Ok(ToolResult::text(format!("{verb} routine {}.", line(&routine)))
+                    .with_details(json!({ "summary": format!("{verb} routine \"{}\"", routine.name), "routine_id": routine.id })))
+            }
+            "run" => {
+                let target = find(field("routine").ok_or("routine is required")?)?;
+                crate::routines::run_now(&self.app, &target.id).map_err(ToolError)?;
+                Ok(ToolResult::text(format!("Routine \"{}\" runs as soon as this turn ends, in your direct chat with the user.", target.name))
+                    .with_details(json!({ "summary": format!("Started routine \"{}\"", target.name), "routine_id": target.id })))
+            }
+            "delete" => {
+                let target = find(field("routine").ok_or("routine is required")?)?;
+                crate::routines::delete(&self.app, &target.id).map_err(ToolError)?;
+                Ok(ToolResult::text(format!("Deleted routine \"{}\".", target.name))
+                    .with_details(json!({ "summary": format!("Deleted routine \"{}\"", target.name), "routine_id": target.id })))
+            }
+            other => Err(ToolError(format!("Unknown action {other:?}. Use list, create, edit, pause, resume, run, or delete."))),
+        }
     }
 }
 

@@ -11,7 +11,7 @@ pub enum Event {
     #[serde(rename = "snapshot")]
     Snapshot(Value),
     #[serde(rename = "roster.changed")]
-    RosterChanged { devices: Vec<Value>, bots: Vec<Bot>, chats: Vec<ChatSummary> },
+    RosterChanged { devices: Vec<Value>, bots: Vec<Bot>, chats: Vec<ChatSummary>, routines: Vec<Value> },
     #[serde(rename = "message.added")]
     MessageAdded { chat_id: String, message: Message },
     #[serde(rename = "message.updated")]
@@ -20,10 +20,11 @@ pub enum Event {
     MessageRemoved { chat_id: String, message_id: String },
     #[serde(rename = "chat.removed")]
     ChatRemoved { chat_id: String },
+    /// `routine_id` is set when the turn is a run of a routine.
     #[serde(rename = "job.started")]
-    JobStarted { chat_id: String, bot_id: String, job_id: String },
+    JobStarted { chat_id: String, bot_id: String, job_id: String, #[serde(skip_serializing_if = "Option::is_none")] routine_id: Option<String> },
     #[serde(rename = "job.finished")]
-    JobFinished { chat_id: String, bot_id: String, job_id: String },
+    JobFinished { chat_id: String, bot_id: String, job_id: String, #[serde(skip_serializing_if = "Option::is_none")] routine_id: Option<String> },
     /// A model call failed in a way worth another try; the turn waits `delay_ms` and asks again.
     #[serde(rename = "job.retry")]
     JobRetry { chat_id: String, bot_id: String, attempt: u32, max_attempts: u32, delay_ms: u64, error: String },

@@ -28,6 +28,7 @@ enum Wire {
         var devices: [Device]
         var bots: [Bot]
         var chats: [Chat]
+        var routines: [Routine]?
         var runningChatIds: [String]
         var runningTurns: [RunningTurn]?
     }
@@ -36,6 +37,35 @@ enum Wire {
         var jobId: String
         var chatId: String
         var botId: String
+        var routineId: String?
+    }
+
+    struct Routine: Decodable {
+        var id: String
+        var botId: String
+        var name: String
+        var prompt: String
+        var schedule: String
+        var scheduleText: String?
+        var isEnabled: Bool
+        var pausedReason: String?
+        var lastRunAt: Double?
+        var lastOutcome: String?
+        var nextRunAt: Double?
+        var isRunning: Bool?
+        var createdAt: Double
+
+        func toModel() -> Tinybot.Routine {
+            Tinybot.Routine(
+                id: id, botID: botId, name: name, prompt: prompt, schedule: schedule, scheduleText: scheduleText ?? schedule,
+                isEnabled: isEnabled, pausedReason: pausedReason, lastRunAt: lastRunAt.map { Date(timeIntervalSince1970: $0) },
+                lastOutcome: lastOutcome, nextRunAt: nextRunAt.map { Date(timeIntervalSince1970: $0) }, isRunning: isRunning ?? false,
+                createdAt: Date(timeIntervalSince1970: createdAt))
+        }
+    }
+
+    struct RoutineChanged: Decodable {
+        var routine: Routine
     }
 
     struct Provider: Decodable {
@@ -190,6 +220,7 @@ enum Wire {
         var devices: [Device]
         var bots: [Bot]
         var chats: [Chat]
+        var routines: [Routine]?
     }
 
     struct MessageEvent: Decodable {
@@ -210,6 +241,7 @@ enum Wire {
         var chatId: String
         var botId: String
         var jobId: String
+        var routineId: String?
     }
 
     struct RelayStatus: Decodable {

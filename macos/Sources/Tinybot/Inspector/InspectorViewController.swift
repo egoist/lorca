@@ -12,6 +12,7 @@ final class InspectorViewController: NSViewController {
     private let descriptionRow = EditableRow(key: "Description", placeholder: "A sentence or two about what it does", multiline: true)
     private let runtime = SectionView(title: "Runs with")
     private let memory = SectionView(title: "Memory")
+    private let routines = SectionView(title: "Routines")
     private let routing = SectionView(title: "Where turns run")
     private let security = SectionView(title: "Encryption")
     private let addButton = NSButton()
@@ -27,6 +28,8 @@ final class InspectorViewController: NSViewController {
     var onOpenDevice: ((Device.ID) -> Void)?
     var onRemoveBot: ((Bot.ID) -> Void)?
     var onAddBot: (() -> Void)?
+    /// Puts text in the chat's composer, for "Edit in chat" on a routine.
+    var onComposePrompt: ((String) -> Void)?
 
     override func loadView() {
         let container = NSView()
@@ -49,6 +52,7 @@ final class InspectorViewController: NSViewController {
         column.addArrangedSubview(profile)
         column.addArrangedSubview(runtime)
         column.addArrangedSubview(memory)
+        column.addArrangedSubview(routines)
         column.addArrangedSubview(routing)
         column.addArrangedSubview(security)
         column.setCustomSpacing(10, after: participants)
@@ -84,6 +88,7 @@ final class InspectorViewController: NSViewController {
             profile.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             runtime.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             memory.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
+            routines.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             routing.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             security.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
         ])
@@ -166,8 +171,10 @@ final class InspectorViewController: NSViewController {
         profile.isHidden = !single
         runtime.isHidden = !single
         memory.isHidden = !single
+        routines.isHidden = !single
         if single, let bot = members.first {
             memory.setRows(memoryRows(for: bot))
+            routines.setRows(routineRows(for: bot))
             nameRow.setValue(bot.name)
             labelRow.setValue(bot.label)
             descriptionRow.setValue(bot.description)
@@ -317,6 +324,27 @@ final class InspectorViewController: NSViewController {
             NSWorkspace.shared.activateFileViewerSelecting([url])
         }
         return [notes, folder]
+    }
+
+    /// The bot's routines, after Grok Bot's panel: a row per routine with a pause switch, and
+    /// the details in a sheet. With none, the sentence that says how to get one.
+    private func routineRows(for bot: Bot) -> [NSView] {
+        let mine = store.routines(for: bot.id)
+        if mine.isEmpty {
+            return [NoteRow(text: "Routines are recurring tasks this bot runs on a schedule. Ask it in chat to set one up.")]
+        }
+        return mine.map { routine in
+            let row = RoutineRow()
+            row.configure(routine: routine)
+            row.onToggle = { [weak self] enabled in self?.store.setRoutineEnabled(routine.id, enabled) }
+            row.onClick = { [weak self] in
+                guard let self else { return }
+                let sheet = RoutineViewController(routineID: routine.id, bot: bot)
+                sheet.onEditInChat = { [weak self] text in self?.onComposePrompt?(text) }
+                self.presentAsSheet(sheet)
+            }
+            return row
+        }
     }
 
     @objc private func addBot() {

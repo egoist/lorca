@@ -134,6 +134,9 @@ pub enum Body {
     },
     Notice {
         text: String,
+        /// Set on the "Routine · Name" marker that opens a routine's run.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        routine_id: Option<String>,
     },
 }
 
@@ -247,13 +250,57 @@ pub struct Compaction {
     pub created_at: f64,
 }
 
+// MARK: - Routines
+
+/// A recurring task a bot runs on a schedule, in its direct chat: Grok Bot's routine. It lives
+/// in the roster, so every Device lists it and can pause it; the bot's Runner runs it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Routine {
+    pub id: String,
+    pub bot_id: String,
+    pub name: String,
+    /// The task, written to the bot, handed to it on every run.
+    pub prompt: String,
+    /// `every 30m`, `every 2h`, `every 1d`, or five cron fields in the Runner's local time.
+    pub schedule: String,
+    pub is_enabled: bool,
+    /// When the schedule started counting: creation, or the last resume.
+    pub enabled_at: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_run_at: Option<f64>,
+    /// How the last run ended: `sent`, `pass`, or `error`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_outcome: Option<String>,
+    /// Why Tinybot paused it, when it did: `away`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paused_reason: Option<String>,
+    pub created_at: f64,
+}
+
+impl Routine {
+    /// The time the next run counts from: the last run, else when the routine was armed.
+    pub fn anchor(&self) -> i64 {
+        self.last_run_at.unwrap_or(0.0).max(self.enabled_at) as i64
+    }
+
+    /// When the next run is due, or `None` when paused or the schedule is unreadable.
+    pub fn next_run_at(&self) -> Option<i64> {
+        if !self.is_enabled {
+            return None;
+        }
+        crate::schedule::parse(&self.schedule).ok()?.next_after(self.anchor())
+    }
+}
+
 // MARK: - Blob payloads
 
-/// `kind = roster`: bots and chat metadata. Latest wins.
+/// `kind = roster`: bots, chat metadata, and routines. Latest wins.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct RosterBlob {
     pub bots: Vec<Bot>,
     pub chats: Vec<ChatMeta>,
+    #[serde(default)]
+    pub routines: Vec<Routine>,
     pub updated_at: f64,
 }
 
@@ -280,9 +327,12 @@ pub struct Job {
     pub chat_id: String,
     pub bot_id: String,
     /// `turn` for a user message in a DM, `room_turn` for one member's turn in a group,
-    /// `message` for a teammate's message_bot.
+    /// `message` for a teammate's message_bot, `routine` for a run of a routine.
     pub kind: String,
     pub trigger_message_id: String,
+    /// `routine`: which routine is running.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routine_id: Option<String>,
     /// The Device that created the job; a `room_turn` result goes back to it.
     pub requested_by: String,
     /// The bot that sent a `message` job, so the recipient knows who to answer.

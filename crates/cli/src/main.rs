@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand};
 
 use tinybot::app::App;
 use tinybot::config::Config;
-use tinybot::{identity, keys, pairing, runtime, sync, ws};
+use tinybot::{identity, keys, pairing, routines, runtime, sync, ws};
 
 #[derive(Parser, Debug)]
 #[command(name = "tinybot", version, about = "Tinybot CLI: identity, local API, agent loop, relay sync")]
@@ -86,6 +86,7 @@ async fn main() -> anyhow::Result<()> {
                 tokio::spawn(watch_parent(pid));
             }
             tokio::spawn(sync::run(app.clone()));
+            tokio::spawn(routines::run(app.clone()));
             ws::serve(app).await
         }
         Command::Identity { command } => match command {

@@ -445,3 +445,110 @@ final class WrappingTextField: NSTextField {
         invalidateIntrinsicContentSize()
     }
 }
+
+
+/// A routine in the inspector: an icon for its state, the name over the schedule, and a switch
+/// that pauses or resumes it. Clicking the row opens its details.
+final class RoutineRow: NSView {
+    private let icon = NSImageView()
+    private let name = Build.label("", font: .systemFont(ofSize: 12.5, weight: .medium))
+    private let detail = Build.label("", font: Theme.Font.caption, color: .secondaryLabelColor)
+    private let toggle = NSSwitch()
+    private var tracking: NSTrackingArea?
+    private var isHovered = false { didSet { needsDisplay = true } }
+
+    var onToggle: ((Bool) -> Void)?
+    var onClick: (() -> Void)?
+
+    init() {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        toggle.controlSize = .mini
+        toggle.target = self
+        toggle.action = #selector(toggled)
+        toggle.translatesAutoresizingMaskIntoConstraints = false
+        toggle.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        let text = Build.stack([name, detail], spacing: 1)
+        addSubview(icon)
+        addSubview(text)
+        addSubview(toggle)
+        NSLayoutConstraint.activate([
+            heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
+            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            icon.centerYAnchor.constraint(equalTo: centerYAnchor),
+            icon.widthAnchor.constraint(equalToConstant: 18),
+            text.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 10),
+            text.centerYAnchor.constraint(equalTo: centerYAnchor),
+            text.trailingAnchor.constraint(lessThanOrEqualTo: toggle.leadingAnchor, constant: -8),
+            toggle.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            toggle.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+        // A click anywhere on the row but the switch opens the routine, labels included.
+        addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(clicked(_:))))
+    }
+
+    @objc private func clicked(_ gesture: NSClickGestureRecognizer) {
+        guard !toggle.frame.contains(gesture.location(in: self)) else { return }
+        onClick?()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    func configure(routine: Routine) {
+        let symbol = routine.isRunning ? "arrow.triangle.2.circlepath" : (routine.isEnabled ? "clock" : "pause.circle")
+        icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+        icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
+        icon.contentTintColor = routine.isRunning ? .controlAccentColor : (routine.isEnabled ? .secondaryLabelColor : .tertiaryLabelColor)
+        name.stringValue = routine.name
+        detail.stringValue = routine.detail
+        toggle.state = routine.isEnabled ? .on : .off
+        toggle.toolTip = routine.isEnabled ? "Pause \(routine.name)" : "Resume \(routine.name)"
+        toolTip = routine.prompt
+    }
+
+    @objc private func toggled() {
+        onToggle?(toggle.state == .on)
+    }
+
+    override var allowsVibrancy: Bool { false }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow], owner: self)
+        addTrackingArea(area)
+        tracking = area
+    }
+
+    override func mouseEntered(with event: NSEvent) { isHovered = onClick != nil }
+    override func mouseExited(with event: NSEvent) { isHovered = false }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard isHovered else { return }
+        NSColor.labelColor.withAlphaComponent(0.05).setFill()
+        bounds.fill()
+    }
+}
+
+/// A sentence inside a section card, for an empty state.
+final class NoteRow: NSView {
+    init(text: String) {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        let label = Build.label(text, font: Theme.Font.caption, color: .secondaryLabelColor, lines: 0)
+        addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            label.topAnchor.constraint(equalTo: topAnchor, constant: 10),
+            label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+}

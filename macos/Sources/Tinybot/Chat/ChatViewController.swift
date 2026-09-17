@@ -163,6 +163,12 @@ final class ChatViewController: NSViewController {
         DispatchQueue.main.async { [weak self] in self?.scrollToBottom(animated: false) }
     }
 
+    /// Puts text in the composer for the user to finish, as the inspector's "Edit in chat" does.
+    func prefill(_ text: String) {
+        composer.text = text
+        composer.focus()
+    }
+
     func focusComposer() {
         composer.focus()
     }

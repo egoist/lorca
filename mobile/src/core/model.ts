@@ -56,6 +56,29 @@ export interface Bot {
   created_at: number;
 }
 
+/// A recurring task a bot runs on a schedule in its direct chat, as the roster carries it, with
+/// the schedule in words, the next run, and the running state resolved by the core.
+export interface Routine {
+  id: string;
+  bot_id: string;
+  name: string;
+  /** The task, written to the bot, handed to it on every run. */
+  prompt: string;
+  /** `every 30m`, `every 2h`, `every 1d`, or five cron fields in the Runner's local time. */
+  schedule: string;
+  /** "Weekdays at 9:00 AM" */
+  schedule_text: string;
+  is_enabled: boolean;
+  /** Why Tinybot paused it, when it did: "away". */
+  paused_reason?: string;
+  last_run_at?: number;
+  /** "sent", "pass", or "error". */
+  last_outcome?: string;
+  next_run_at?: number | null;
+  is_running: boolean;
+  created_at: number;
+}
+
 export type Author = { kind: "you" } | { kind: "bot"; bot_id: string } | { kind: "system" };
 
 /// A file sent with a message. Its bytes travel as a `file` blob under this id, encrypted with
@@ -104,7 +127,7 @@ export type Body =
       is_error?: boolean;
     }
   | { kind: "handoff"; from: string; to: string; reason: string }
-  | { kind: "notice"; text: string };
+  | { kind: "notice"; text: string; routine_id?: string };
 
 export type MessageState =
   | { kind: "thinking" }

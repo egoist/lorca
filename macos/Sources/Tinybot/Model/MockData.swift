@@ -72,6 +72,24 @@ enum MockData {
         ]
     }
 
+    static func routines() -> [Routine] {
+        [
+            Routine(
+                id: "rt-brief", botID: "bot-nova", name: "Morning brief",
+                prompt: "Read the overnight messages in every chat you are in and the calendar for today, then post a five-line brief: what needs a decision, what is waiting on someone else, and what you will do first.",
+                schedule: "0 9 * * 1-5", scheduleText: "Weekdays at 9:00 AM", isEnabled: true, pausedReason: nil,
+                lastRunAt: minutesAgo(190), lastOutcome: "sent",
+                nextRunAt: Calendar.current.nextDate(after: Date(), matching: DateComponents(hour: 9, minute: 0), matchingPolicy: .nextTime),
+                isRunning: false, createdAt: minutesAgo(60 * 24 * 12)),
+            Routine(
+                id: "rt-inbox", botID: "bot-nova", name: "Invoice check",
+                prompt: "Look for invoices that landed since the last run and say which are flagged, or PASS when none did.",
+                schedule: "every 2h", scheduleText: "Every 2 hours", isEnabled: false, pausedReason: nil,
+                lastRunAt: minutesAgo(60 * 30), lastOutcome: "pass", nextRunAt: nil, isRunning: false,
+                createdAt: minutesAgo(60 * 24 * 3)),
+        ]
+    }
+
     static func bots() -> [Bot] {
         [
             Bot(

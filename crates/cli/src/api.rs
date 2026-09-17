@@ -10,7 +10,7 @@ use crate::app::App;
 use crate::model::*;
 #[cfg(feature = "runner")]
 use crate::providers;
-use crate::{identity, pairing, requests, runtime};
+use crate::{identity, pairing, requests, routines, runtime};
 
 fn string(params: &Value, key: &str) -> Result<String, String> {
     params[key].as_str().map(str::to_string).filter(|s| !s.is_empty()).ok_or_else(|| format!("missing {key}"))
@@ -260,6 +260,39 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             app.mark_read(&string(&params, "chat_id")?);
             Ok(Value::Null)
         }
+
+        // Routines live in the roster; any Device edits them, the bot's Runner runs them.
+        "routines.create" => {
+            let routine = routines::create(
+                app,
+                &string(&params, "bot_id")?,
+                &string(&params, "name")?,
+                &string(&params, "schedule")?,
+                params["prompt"].as_str().unwrap_or(""),
+                params["enabled"].as_bool().unwrap_or(true),
+            )?;
+            Ok(json!({ "routine": app.routine_out(&routine) }))
+        }
+        "routines.update" => {
+            let id = string(&params, "id")?;
+            let mut routine = app.routine(&id).ok_or("Unknown routine")?;
+            if params.get("name").is_some() || params.get("schedule").is_some() || params.get("prompt").is_some() {
+                routine = routines::edit(app, &id, opt_string(&params, "name").as_deref(), opt_string(&params, "schedule").as_deref(), params["prompt"].as_str())?;
+            }
+            if let Some(enabled) = params["enabled"].as_bool() {
+                routine = routines::set_enabled(app, &id, enabled)?;
+            }
+            Ok(json!({ "routine": app.routine_out(&routine) }))
+        }
+        "routines.delete" => {
+            routines::delete(app, &string(&params, "id")?)?;
+            Ok(Value::Null)
+        }
+        "routines.run" => {
+            routines::run_now(app, &string(&params, "id")?)?;
+            Ok(Value::Null)
+        }
+        "routines.describe" => routines::describe(&string(&params, "schedule")?),
 
         #[cfg(feature = "runner")]
         "providers.connect_deepseek" => {

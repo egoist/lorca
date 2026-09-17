@@ -37,6 +37,8 @@ pub struct State {
     #[serde(default)]
     pub chats: Vec<Chat>,
     #[serde(default)]
+    pub routines: Vec<Routine>,
+    #[serde(default)]
     pub last_seq: i64,
     #[serde(default)]
     pub outbox: Vec<OutboxItem>,
@@ -65,6 +67,17 @@ pub enum PairingStatus {
     Failed { error: String },
 }
 
+/// A turn in flight on this Device, or one it sent to another Runner and waits on.
+#[derive(Debug, Clone)]
+pub struct RunningJob {
+    pub chat_id: String,
+    /// Empty while a group exchange is between member turns.
+    pub bot_id: String,
+    /// Set when the turn is a run of a routine.
+    pub routine_id: Option<String>,
+    pub cancel: CancellationToken,
+}
+
 pub struct App {
     pub config: Config,
     pub settings: Mutex<Settings>,
@@ -79,8 +92,8 @@ pub struct App {
     pub pairings: Mutex<HashMap<String, PendingPairing>>,
     /// The pairing this Device is joining, while `pair.accept` waits for the reply.
     pub accepting: Mutex<Option<CancellationToken>>,
-    /// job id → (chat id, cancel)
-    pub running_jobs: Mutex<HashMap<String, (String, String, CancellationToken)>>,
+    /// By job id.
+    pub running_jobs: Mutex<HashMap<String, RunningJob>>,
     pub chat_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// `room_turn` jobs sent to other Runners, waiting for their `job_result`.
     pub pending_results: Mutex<HashMap<String, tokio::sync::oneshot::Sender<String>>>,
@@ -224,8 +237,8 @@ impl App {
     /// Forgets the identity on this Device: keys, credentials, and everything synced. The
     /// relay keeps the account; another Device or the backup phrase brings it back.
     pub fn forget_identity(&self) -> anyhow::Result<()> {
-        for (_, _, cancel) in self.running_jobs.lock().unwrap().values() {
-            cancel.cancel();
+        for job in self.running_jobs.lock().unwrap().values() {
+            job.cancel.cancel();
         }
         *self.identity.lock().unwrap() = None;
         *self.machine.lock().unwrap() = None;
@@ -289,6 +302,7 @@ impl App {
             RosterBlob {
                 bots: state.bots.clone(),
                 chats: state.chats.iter().map(|c| c.meta.clone()).collect(),
+                routines: state.routines.clone(),
                 updated_at: config::now_secs(),
             }
         };
@@ -353,6 +367,22 @@ impl App {
         self.state.lock().unwrap().devices.iter().find(|d| d.id == id).cloned()
     }
 
+    pub fn routine(&self, id: &str) -> Option<Routine> {
+        self.state.lock().unwrap().routines.iter().find(|r| r.id == id).cloned()
+    }
+
+    /// A bot's routines, oldest first.
+    pub fn routines_of(&self, bot_id: &str) -> Vec<Routine> {
+        let mut routines: Vec<Routine> = self.state.lock().unwrap().routines.iter().filter(|r| r.bot_id == bot_id).cloned().collect();
+        routines.sort_by(|a, b| a.created_at.partial_cmp(&b.created_at).unwrap_or(std::cmp::Ordering::Equal));
+        routines
+    }
+
+    /// The routine a running job belongs to, if any.
+    pub fn is_routine_running(&self, routine_id: &str) -> bool {
+        self.running_jobs.lock().unwrap().values().any(|job| job.routine_id.as_deref() == Some(routine_id))
+    }
+
     pub fn device_is_online(&self, id: &str) -> bool {
         if self.this_device_id().as_deref() == Some(id) {
             return true;
@@ -372,12 +402,12 @@ impl App {
             .lock()
             .unwrap()
             .iter()
-            .map(|(job_id, (chat, bot, _))| json!({ "job_id": job_id, "chat_id": chat, "bot_id": bot }))
+            .map(|(job_id, job)| json!({ "job_id": job_id, "chat_id": job.chat_id, "bot_id": job.bot_id, "routine_id": job.routine_id }))
             .collect()
     }
 
     pub fn running_chat_ids(&self) -> Vec<String> {
-        let mut ids: Vec<String> = self.running_jobs.lock().unwrap().values().map(|(chat, _, _)| chat.clone()).collect();
+        let mut ids: Vec<String> = self.running_jobs.lock().unwrap().values().map(|job| job.chat_id.clone()).collect();
         ids.sort();
         ids.dedup();
         ids
@@ -391,6 +421,7 @@ impl App {
             devices: self.devices_out(&state),
             bots: state.bots.clone(),
             chats: state.chats.iter().map(|c| ChatSummary { meta: c.meta.clone(), unread_count: c.unread_count, usage: c.usage.clone() }).collect(),
+            routines: self.routines_out(&state),
         }
     }
 
@@ -529,6 +560,73 @@ impl App {
         Ok(())
     }
 
+    // MARK: - Routines
+
+    /// Adds a routine and publishes the roster.
+    pub fn insert_routine(&self, mut routine: Routine) -> anyhow::Result<Routine> {
+        if self.bot(&routine.bot_id).is_none() {
+            anyhow::bail!("Unknown bot");
+        }
+        if routine.id.is_empty() {
+            routine.id = format!("rt-{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        }
+        let now = config::now_secs();
+        if routine.created_at == 0.0 {
+            routine.created_at = now;
+        }
+        if routine.enabled_at == 0.0 {
+            routine.enabled_at = now;
+        }
+        {
+            let mut state = self.state.lock().unwrap();
+            if state.routines.iter().any(|r| r.id == routine.id) {
+                anyhow::bail!("Routine id already exists");
+            }
+            state.routines.push(routine.clone());
+        }
+        self.roster_changed(true);
+        Ok(routine)
+    }
+
+    /// Changes a routine and publishes the roster.
+    pub fn update_routine(&self, id: &str, update: impl FnOnce(&mut Routine)) -> anyhow::Result<Routine> {
+        let routine = {
+            let mut state = self.state.lock().unwrap();
+            let routine = state.routines.iter_mut().find(|r| r.id == id).ok_or_else(|| anyhow::anyhow!("Unknown routine"))?;
+            update(routine);
+            routine.clone()
+        };
+        self.roster_changed(true);
+        Ok(routine)
+    }
+
+    pub fn delete_routine(&self, id: &str) -> anyhow::Result<()> {
+        {
+            let mut state = self.state.lock().unwrap();
+            let before = state.routines.len();
+            state.routines.retain(|r| r.id != id);
+            if state.routines.len() == before {
+                anyhow::bail!("Unknown routine");
+            }
+        }
+        self.roster_changed(true);
+        Ok(())
+    }
+
+    /// Routines as the apps see them: the stored fields plus the schedule in words, when the
+    /// next run is due, and whether a run is going on right now.
+    fn routines_out(&self, state: &State) -> Vec<Value> {
+        state.routines.iter().map(|routine| self.routine_out(routine)).collect()
+    }
+
+    pub fn routine_out(&self, routine: &Routine) -> Value {
+        let mut out = serde_json::to_value(routine).unwrap_or_default();
+        out["schedule_text"] = json!(crate::schedule::parse(&routine.schedule).map(|s| s.describe()).unwrap_or_else(|_| routine.schedule.clone()));
+        out["next_run_at"] = json!(routine.next_run_at().map(|t| t as f64));
+        out["is_running"] = json!(self.is_routine_running(&routine.id));
+        out
+    }
+
     pub fn mark_read(&self, chat_id: &str) {
         let changed = {
             let mut state = self.state.lock().unwrap();
@@ -599,7 +697,7 @@ impl App {
     }
 
     pub fn notice(&self, chat_id: &str, text: impl Into<String>) {
-        let message = Message::new(chat_id, Author::System, Body::Notice { text: text.into() });
+        let message = Message::new(chat_id, Author::System, Body::Notice { text: text.into(), routine_id: None });
         self.upsert_message(message, true);
     }
 
@@ -642,9 +740,9 @@ impl App {
 
     pub fn cancel_chat(&self, chat_id: &str) {
         let jobs = self.running_jobs.lock().unwrap();
-        for (chat, _, cancel) in jobs.values() {
-            if chat == chat_id {
-                cancel.cancel();
+        for job in jobs.values() {
+            if job.chat_id == chat_id {
+                job.cancel.cancel();
             }
         }
     }
@@ -711,6 +809,7 @@ impl App {
             "devices": self.devices_out(&state),
             "bots": state.bots,
             "chats": state.chats,
+            "routines": self.routines_out(&state),
             "running_chat_ids": self.running_chat_ids(),
             "running_turns": self.running_turns(),
         })

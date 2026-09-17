@@ -104,6 +104,7 @@ Device   1──* Bot          (only a Runner: os is macos, linux, or windows)
 Identity 1──* Chat
 Chat     *──* Bot          (kind dm: exactly 1 bot, fixed · kind group: 1–6 bots, members change)
 Chat     1──* Message
+Bot      1──* Routine      (a scheduled task, run in the bot's DM on its Runner)
 Bot      1──* Job          (a turn on the bot's Runner)
 ```
 
@@ -112,6 +113,7 @@ Bot      1──* Job          (a turn on the bot's Runner)
 | Identity           | Master + content + signing keys                           | Public key                                             |
 | Device             | Machine keypair, `os`, local provider creds (Runner only) | Machine public key + encrypted metadata blob           |
 | Bot                | Decrypted profile                                         | Inside encrypted roster blobs                          |
+| Routine            | Name, schedule, prompt, state                             | Inside encrypted roster blobs                          |
 | ProviderCredential | Assigned Runner’s keychain                                | —                                                      |
 | Chat / Message     | Account/chat DEK                                          | Encrypted blobs                                        |
 | Job                | Any paired Device may create; the assigned Runner runs it | Sealed envelope to that Runner’s machine box key; deleted once run. A `room_turn` answers with a `job_result` sealed to the requesting Device |
@@ -220,6 +222,7 @@ Team tools (the CLI):
 - `recall { query?, since?, until?, limit? }` — searches the bot’s memory files and every chat it is in, by words and by time (`24h`, `3d`, `today`, `yesterday`, a date).
 - `create_bot { name, label, description?, instructions, provider?, workdir? }` — a new teammate on the caller’s Runner with its own DM; in a group chat it joins that chat. This is how a lead bot builds its team.
 - `edit_bot { bot, name?, label?, description?, instructions?, provider?, workdir? }` — changes a teammate’s profile, or the caller’s own. Only the passed fields change and instructions replace in full; the new profile applies from that bot’s next turn.
+- `routines { action: list | create | edit | pause | resume | run | delete, routine?, name?, schedule?, prompt?, enabled? }` — the caller’s own routines (see Routines below).
 
 Coding tools (`tinybot_agent::tools`, ports of pi’s built-ins, same schemas and truncation rules: 2000 lines / 50KB, whichever first):
 
@@ -241,6 +244,20 @@ Who answers, after Grok Bot's rooms:
 - **Attachments:** a user message can carry files. Their bytes travel as `file` blobs; before a turn the Runner fetches any it lacks (`files::prefetch`), copies each into the bot's workspace at `attachments/<attachment id>/<name>` (a stable path, so every turn names the same file), and the transcript's user message gets a line per file naming that path, plus the pixels as an image content part for an image up to 5 MB, so a vision-capable model sees it and any model can open it with its tools.
 - **Group:** a room exchange (`run_room`). The Device that received the user's message offers every member a turn, one at a time, in chat order with the members the message names by `@` first. A member's turn is a `room_turn` Job with the whole transcript plus an ephemeral cue (round number, how many messages are new to it); the member replies to the group or answers `PASS`, which never becomes a bubble. A round with at least one reply is followed by another, offered only to members who have heard something new; the exchange ends after a silent round or after the fourth round, which is marked winding down so members add only what is essential. The user's next message in that chat waits for the exchange (the chat lock); `chats.stop` cancels it. A member on another Runner gets its job through the relay and reports back with a `job_result` blob (`sent`, `pass`, `error`) sealed to the requesting Device; the room waits up to five minutes for it and skips an offline Runner.
 - **Bot to bot:** `message_bot` from any chat to a bot outside it; the message lands in the target's DM. Each hop carries `hops`; after eight bot-to-bot hops without a user message the tool refuses, so two bots cannot loop. Members of one group talk to each other in the group.
+
+### Routines
+
+A routine is a task a bot runs on a schedule in its direct chat with the user, after Grok Bot's routines: a morning brief, an hourly check, a weekly report. The bot owns its routines: the user asks for one in chat and the bot sets it up with the `routines` tool (a name, a schedule, and the prompt, written as an instruction to itself), and edits, pauses, resumes, runs, or deletes it the same way. The system prompt of every turn explains routines and lists the bot's own with each one's next run.
+
+Routines live in the roster (`Routine { id, bot_id, name, prompt, schedule, is_enabled, enabled_at, last_run_at?, last_outcome?, paused_reason?, created_at }`), so every paired Device lists them and can pause, resume, run, or delete one (`routines.create` / `routines.update` / `routines.delete` / `routines.run`, and `routines.describe` to read a schedule back). The bot's Runner runs them (`crates/cli/src/routines.rs`): every half minute it starts the routines of its bots whose next run is due, at most one run per routine at a time.
+
+A schedule (`crates/cli/src/schedule.rs`) is `every 30m`, `every 2h`, `every 1d`, or five cron fields read in the Runner's local time (`0 9 * * 1-5`), never more often than every five minutes. An interval counts from the last run, or from when the routine was created or resumed; a cron fires at the next matching minute after that. The CLI says a schedule in words on the wire (`schedule_text`: "Weekdays at 9:00 AM", "Every 2 hours", "On the 1st of every month at 8:30 AM", else "Cron 5 4 * * 1-3") and gives `next_run_at` and `is_running` beside every routine.
+
+A run is a `routine` Job in the bot's DM. It opens with a "Routine · Name" marker (a system notice carrying the routine id), then the turn runs with the routine's prompt as the task and a system prompt that says nobody is typing: the bot does the work, replies with what the user should know, or answers `PASS`, which leaves only the marker. Later turns rebuild the marker as `[Routine "Name" ran on its schedule. Task: …]`, so the bot can talk about a run afterwards; the daily log names the routine as the turn's source. `job.started` / `job.finished` carry `routine_id`, so the apps show the routine as running and the bot at work. A run's outcome (`sent`, `pass`, `error`) is kept on the routine. Run Now from a Device that is not the Runner seals the job to the Runner like any turn.
+
+When the user has not written in any chat for seven days, due routines are paused instead of run (`paused_reason: away`) with a notice in the bot's DM, as Grok Bot does, so nothing keeps spending on results nobody reads; the switch turns them back on.
+
+The Mac app's DM inspector has a Routines section: a row per routine (clock, pause, or running icon; the schedule in words and the next run; a switch that pauses or resumes) that opens a sheet with the state, schedule, next and last run, the prompt, and Run Now, Pause/Resume, Edit in Chat (which puts `Edit my routine "Name": ` in the composer), and Delete. With none, the section says routines are set up by asking the bot. The phone's chat details show the same list with a switch; a tap offers Run Now and Delete.
 
 ### Memory
 
@@ -300,16 +317,16 @@ Working state, after Grok Bot: the CLI's `job.started` / `job.finished` events (
 
 JSON on `ws://127.0.0.1:4862/ws`. Requests are `{ id, method, params }` and get `{ id, result }` or `{ id, error: { message } }`; events are `{ event, data }`.
 
-App → CLI: `hello`, `bootstrap`, `identity.create`, `identity.restore`, `pair.start` / `pair.status` / `pair.cancel` / `pair.accept`, `config.set`, `bots.create` (`runner_id` may be another Device; it must be a Runner) / `bots.update`, `chats.create` / `chats.dm` / `chats.send` / `chats.stop` / `chats.delete` / `chats.rename` / `chats.pin` / `chats.add_bot` / `chats.remove_bot` / `chats.mark_read` / `chats.compact`, `bots.memory` / `bots.memory.write` (this Runner's bots), `providers.connect_deepseek` / `providers.connect_anthropic` / `providers.connect_chatgpt` / `providers.disconnect` (this Runner).
+App → CLI: `hello`, `bootstrap`, `identity.create`, `identity.restore`, `pair.start` / `pair.status` / `pair.cancel` / `pair.accept`, `config.set`, `bots.create` (`runner_id` may be another Device; it must be a Runner) / `bots.update`, `chats.create` / `chats.dm` / `chats.send` / `chats.stop` / `chats.delete` / `chats.rename` / `chats.pin` / `chats.add_bot` / `chats.remove_bot` / `chats.mark_read` / `chats.compact`, `routines.create` / `routines.update` / `routines.delete` / `routines.run` / `routines.describe`, `bots.memory` / `bots.memory.write` (this Runner's bots), `providers.connect_deepseek` / `providers.connect_anthropic` / `providers.connect_chatgpt` / `providers.disconnect` (this Runner).
 
-CLI → App: `snapshot`, `roster.changed`, `message.added` / `message.updated` / `message.removed`, `chat.removed`, `job.started` / `job.finished` / `job.retry`, `chat.usage`, `relay.status`, `pair.completed`, `identity.changed`.
+CLI → App: `snapshot`, `roster.changed` (devices, bots, chats, routines), `message.added` / `message.updated` / `message.removed`, `chat.removed`, `job.started` / `job.finished` (with `routine_id` for a routine's run) / `job.retry`, `chat.usage`, `relay.status`, `pair.completed`, `identity.changed`.
 
 The app may choose ids (`bots.create.id`, `chats.create.id`, `chats.send.message_id`) so its optimistic rows match the CLI’s events.
 
 ### CLI ↔ relay
 
 - Machine bearer for blobs and presence; identity signature for registering and attesting machines.
-- PUT/GET blobs; body is ciphertext. `roster` is a whole-roster snapshot (latest wins); `chat` is one upsert or removal of a message; `machine` is a Device’s metadata; `key` is the DEK sealed to the content key.
+- PUT/GET blobs; body is ciphertext. `roster` is a whole-roster snapshot of bots, chats, and routines (latest wins); `chat` is one upsert or removal of a message; `machine` is a Device’s metadata; `key` is the DEK sealed to the content key.
 - Jobs: `kind=job` with `recipient_machine_pubkey`, sealed to that machine’s box key, deleted by the Runner after the turn.
 - Questions: `kind=request` sealed to one Runner (`crates/cli/src/requests.rs`: `{ id, verb, requested_by, body }`), answered with a `kind=response` sealed to the Device that asked (`{ request_id, body, error? }`); each side deletes the blob it consumed, and the asker gives up after 20 s. The verbs are `memory.read` and `memory.write`, so a bot's memory can be shown and edited from a Device that is not its Runner. A request is refused up front when the Runner is unknown or offline.
 - Every Device keeps `last_seq` and an outbox; uploads retry until the relay accepts them.
@@ -344,7 +361,7 @@ tinybot/
 
 ## Status
 
-Done: crypto and blob protocol, relay, CLI (identity, pairing, restore, local WS, DeepSeek and Anthropic keys, ChatGPT OAuth adapter, server-side web search, agent loop, encrypt-before-upload, group chats, cross-Runner jobs and handoffs, stop), app wiring and the bundled CLI launcher.
+Done: crypto and blob protocol, relay, CLI (identity, pairing, restore, local WS, DeepSeek and Anthropic keys, ChatGPT OAuth adapter, server-side web search, agent loop, encrypt-before-upload, group chats, cross-Runner jobs and handoffs, stop, routines), app wiring and the bundled CLI launcher.
 
 Next: steering mid-turn, keychain storage, relay blob GC, a cost budget per chat.
 

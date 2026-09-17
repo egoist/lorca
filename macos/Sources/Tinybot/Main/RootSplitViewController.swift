@@ -70,6 +70,9 @@ final class RootSplitViewController: NSSplitViewController {
         inspector.onAddBot = { [weak self] in
             self?.addBotToChat(nil)
         }
+        inspector.onComposePrompt = { [weak self] text in
+            self?.chatController?.prefill(text)
+        }
         offlineController.onRetry = { [weak self] in
             self?.store.reconnect()
         }

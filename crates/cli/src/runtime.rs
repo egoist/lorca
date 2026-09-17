@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
 
-use crate::app::App;
+use crate::app::{App, RunningJob};
 use crate::config::now_secs;
 use crate::events::Event;
 use crate::model::*;
@@ -64,6 +64,7 @@ fn user_turn_job(app: &Arc<App>, chat_id: &str, bot_id: &str, trigger_message_id
         kind: "turn".into(),
         trigger_message_id: trigger_message_id.to_string(),
         requested_by: app.this_device_id().unwrap_or_default(),
+        routine_id: None,
         from_bot_id: None,
         hops: 0,
         round: 0,
@@ -127,8 +128,8 @@ async fn run_room(app: Arc<App>, chat_id: String, trigger: String, members: Vec<
 
     let cancel = CancellationToken::new();
     let room_id = format!("room-{}", uuid::Uuid::new_v4());
-    app.running_jobs.lock().unwrap().insert(room_id.clone(), (chat_id.clone(), String::new(), cancel.clone()));
-    app.emit(Event::JobStarted { chat_id: chat_id.clone(), bot_id: String::new(), job_id: room_id.clone() });
+    app.running_jobs.lock().unwrap().insert(room_id.clone(), RunningJob { chat_id: chat_id.clone(), bot_id: String::new(), routine_id: None, cancel: cancel.clone() });
+    app.emit(Event::JobStarted { chat_id: chat_id.clone(), bot_id: String::new(), job_id: room_id.clone(), routine_id: None });
 
     // What each member had seen from others when it last took a turn: a member with nothing
     // new is not offered another turn.
@@ -152,6 +153,7 @@ async fn run_room(app: Arc<App>, chat_id: String, trigger: String, members: Vec<
                 bot_id: bot.id.clone(),
                 kind: "room_turn".into(),
                 trigger_message_id: trigger.clone(),
+                routine_id: None,
                 requested_by: app.this_device_id().unwrap_or_default(),
                 from_bot_id: None,
                 hops: 0,
@@ -173,7 +175,7 @@ async fn run_room(app: Arc<App>, chat_id: String, trigger: String, members: Vec<
     }
 
     app.running_jobs.lock().unwrap().remove(&room_id);
-    app.emit(Event::JobFinished { chat_id, bot_id: String::new(), job_id: room_id });
+    app.emit(Event::JobFinished { chat_id, bot_id: String::new(), job_id: room_id, routine_id: None });
 }
 
 /// Messages in the chat that `bot_id` did not write itself.
@@ -203,17 +205,18 @@ async fn remote_turn(app: &Arc<App>, job: Job, cancel: CancellationToken) -> Tur
     let job_id = job.id.clone();
     let chat_id = job.chat_id.clone();
     let bot_id = job.bot_id.clone();
+    let routine_id = job.routine_id.clone();
     let outcome = match dispatch_job(app, job) {
         Dispatch::Sent => {
-            app.running_jobs.lock().unwrap().insert(job_id.clone(), (chat_id.clone(), bot_id.clone(), cancel.clone()));
-            app.emit(Event::JobStarted { chat_id: chat_id.clone(), bot_id: bot_id.clone(), job_id: job_id.clone() });
+            app.running_jobs.lock().unwrap().insert(job_id.clone(), RunningJob { chat_id: chat_id.clone(), bot_id: bot_id.clone(), routine_id: routine_id.clone(), cancel: cancel.clone() });
+            app.emit(Event::JobStarted { chat_id: chat_id.clone(), bot_id: bot_id.clone(), job_id: job_id.clone(), routine_id: routine_id.clone() });
             let outcome = tokio::select! {
                 result = rx => result.map(|text| TurnOutcome::parse(&text)).unwrap_or(TurnOutcome::Skipped),
                 _ = tokio::time::sleep(REMOTE_TURN_TIMEOUT) => TurnOutcome::Skipped,
                 _ = cancel.cancelled() => TurnOutcome::Skipped,
             };
             app.running_jobs.lock().unwrap().remove(&job_id);
-            app.emit(Event::JobFinished { chat_id, bot_id, job_id: job_id.clone() });
+            app.emit(Event::JobFinished { chat_id, bot_id, job_id: job_id.clone(), routine_id });
             outcome
         }
         Dispatch::Ran | Dispatch::Deferred => TurnOutcome::Skipped,
@@ -294,6 +297,9 @@ pub fn spawn_local_job(app: Arc<App>, job: Job, remote_blob_id: Option<String>) 
         let lock = app.chat_lock(&job.chat_id);
         let _guard = lock.lock().await;
         let outcome = run_job_here(&app, job.clone(), CancellationToken::new()).await;
+        if let Some(id) = &job.routine_id {
+            crate::routines::finished(&app, id, outcome);
+        }
         if let Some(id) = remote_blob_id {
             crate::sync::delete_remote_blob(&app, &id).await;
         }
@@ -305,8 +311,11 @@ pub fn spawn_local_job(app: Arc<App>, job: Job, remote_blob_id: Option<String>) 
 
 /// Runs a job now, registered so `chats.stop` can cancel it. The caller holds any lock needed.
 async fn run_job_here(app: &Arc<App>, job: Job, cancel: CancellationToken) -> TurnOutcome {
-    app.running_jobs.lock().unwrap().insert(job.id.clone(), (job.chat_id.clone(), job.bot_id.clone(), cancel.clone()));
-    app.emit(Event::JobStarted { chat_id: job.chat_id.clone(), bot_id: job.bot_id.clone(), job_id: job.id.clone() });
+    app.running_jobs.lock().unwrap().insert(
+        job.id.clone(),
+        RunningJob { chat_id: job.chat_id.clone(), bot_id: job.bot_id.clone(), routine_id: job.routine_id.clone(), cancel: cancel.clone() },
+    );
+    app.emit(Event::JobStarted { chat_id: job.chat_id.clone(), bot_id: job.bot_id.clone(), job_id: job.id.clone(), routine_id: job.routine_id.clone() });
     #[cfg(feature = "runner")]
     let outcome = if cancel.is_cancelled() { TurnOutcome::Skipped } else { crate::turns::run_job(app, &job, cancel).await };
     #[cfg(not(feature = "runner"))]
@@ -316,7 +325,7 @@ async fn run_job_here(app: &Arc<App>, job: Job, cancel: CancellationToken) -> Tu
         TurnOutcome::Skipped
     };
     app.running_jobs.lock().unwrap().remove(&job.id);
-    app.emit(Event::JobFinished { chat_id: job.chat_id.clone(), bot_id: job.bot_id.clone(), job_id: job.id.clone() });
+    app.emit(Event::JobFinished { chat_id: job.chat_id.clone(), bot_id: job.bot_id.clone(), job_id: job.id.clone(), routine_id: job.routine_id.clone() });
     outcome
 }
 

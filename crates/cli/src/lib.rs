@@ -19,7 +19,9 @@ pub mod pairing;
 pub mod providers;
 pub mod relay;
 pub mod requests;
+pub mod routines;
 pub mod runtime;
+pub mod schedule;
 pub mod sync;
 #[cfg(feature = "runner")]
 pub mod turns;

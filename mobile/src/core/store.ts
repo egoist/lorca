@@ -4,7 +4,7 @@
 
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
-import type { Bot, Chat, ChatMeta, ChatUsage, Device, Message } from "./model";
+import type { Bot, Chat, ChatMeta, ChatUsage, Device, Message, Routine } from "./model";
 import { savePrefs } from "./prefs";
 
 export interface Running {
@@ -27,6 +27,8 @@ export interface StoreState {
   device_seen: Record<string, number>;
   bots: Bot[];
   chats: Chat[];
+  /// Every bot's routines, from the roster.
+  routines: Routine[];
   /// Turns in flight, by job id.
   running: Record<string, Running>;
   /// "Chef stopped without replying", by chat id, after a turn ends with nothing said.
@@ -49,6 +51,7 @@ function empty(): Omit<StoreState, "ready" | "dictation_lang"> {
     device_seen: {},
     bots: [],
     chats: [],
+    routines: [],
     running: {},
     statuses: {},
     openChatId: null,
@@ -104,6 +107,7 @@ export function replaceSnapshot(snapshot: {
   devices: Device[];
   bots: Bot[];
   chats: Chat[];
+  routines?: Routine[];
   running_turns: { job_id: string; chat_id: string; bot_id: string }[];
 }) {
   const running: Record<string, Running> = {};
@@ -119,6 +123,7 @@ export function replaceSnapshot(snapshot: {
     device_seen: seenOf(snapshot.devices),
     bots: snapshot.bots,
     chats: snapshot.chats.map((c) => ({ ...c, messages: c.messages ?? [], unread_count: c.unread_count ?? 0 })),
+    routines: snapshot.routines ?? [],
     running,
   });
 }
@@ -131,7 +136,7 @@ function seenOf(devices: Device[]): Record<string, number> {
 
 /// `roster.changed`: bots replace, chat metadata merges over kept messages, chats not named
 /// are gone.
-export function applyRoster(roster: { devices: Device[]; bots: Bot[]; chats: (ChatMeta & { unread_count: number; usage?: ChatUsage })[] }): { removed: string[] } {
+export function applyRoster(roster: { devices: Device[]; bots: Bot[]; chats: (ChatMeta & { unread_count: number; usage?: ChatUsage })[]; routines?: Routine[] }): { removed: string[] } {
   const removed: string[] = [];
   useStore.setState((s) => {
     const incoming = new Set(roster.chats.map((c) => c.id));
@@ -141,9 +146,18 @@ export function applyRoster(roster: { devices: Device[]; bots: Bot[]; chats: (Ch
       const old = existing.get(meta.id);
       return { ...meta, is_pinned: meta.is_pinned ?? false, messages: old?.messages ?? [], unread_count: meta.unread_count ?? old?.unread_count ?? 0, usage: meta.usage ?? old?.usage };
     });
-    return { devices: roster.devices, device_seen: seenOf(roster.devices), bots: roster.bots, chats };
+    return { devices: roster.devices, device_seen: seenOf(roster.devices), bots: roster.bots, chats, routines: roster.routines ?? s.routines };
   });
   return { removed };
+}
+
+/// A routine as the phone shows it: the change applied before the core's roster confirms it.
+export function patchRoutine(id: string, update: (routine: Routine) => Routine) {
+  useStore.setState((s) => ({ routines: s.routines.map((r) => (r.id === id ? update(r) : r)) }));
+}
+
+export function removeRoutine(id: string) {
+  useStore.setState((s) => ({ routines: s.routines.filter((r) => r.id !== id) }));
 }
 
 export function upsertMessage(message: Message): { added: boolean } {
@@ -255,4 +269,9 @@ export function useIsWorking(chatId: string): boolean {
 
 export function useWorkingBotIds(): Set<string> {
   return useStore(useShallow((s) => new Set(Object.values(s.running).map((r) => r.botId).filter(Boolean))));
+}
+
+/// A bot's routines, oldest first.
+export function useRoutines(botId: string | undefined): Routine[] {
+  return useStore(useShallow((s) => s.routines.filter((r) => r.bot_id === botId).sort((a, b) => a.created_at - b.created_at)));
 }

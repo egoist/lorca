@@ -55,17 +55,23 @@ class SheetViewController: NSViewController {
         view = container
     }
 
-    func setButtons(confirm: String, cancel: String = "Cancel") {
-        let cancelButton = NSButton(title: cancel, target: self, action: #selector(dismissSheet))
-        cancelButton.bezelStyle = .rounded
-        cancelButton.keyEquivalent = "\u{1b}"
-
+    /// `cancel: nil` leaves only the confirm button, which then answers Escape as well.
+    func setButtons(confirm: String, cancel: String? = "Cancel") {
         confirmButton = NSButton(title: confirm, target: self, action: #selector(confirmTapped))
         confirmButton.bezelStyle = .rounded
         confirmButton.keyEquivalent = "\r"
 
-        buttonRow.addArrangedSubview(cancelButton)
+        if let cancel {
+            let cancelButton = NSButton(title: cancel, target: self, action: #selector(dismissSheet))
+            cancelButton.bezelStyle = .rounded
+            cancelButton.keyEquivalent = "\u{1b}"
+            buttonRow.addArrangedSubview(cancelButton)
+        }
         buttonRow.addArrangedSubview(confirmButton)
+    }
+
+    override func cancelOperation(_ sender: Any?) {
+        dismissSheet()
     }
 
     /// AppKit sizes a presented sheet once and afterwards only lets it grow with its content.

@@ -14,8 +14,10 @@ import {
   chatById,
   markFile,
   markRead,
+  patchRoutine,
   removeChat,
   removeMessage,
+  removeRoutine,
   replaceSnapshot,
   resetStore,
   setChatUsage,
@@ -196,6 +198,25 @@ class Engine {
 
   setOwner(chatId: string, botId: string) {
     void core.request("chats.set_owner", { chat_id: chatId, bot_id: botId });
+  }
+
+  // MARK: - Routines
+
+  /// Pauses or resumes a routine; a resumed schedule counts from now.
+  setRoutineEnabled(id: string, enabled: boolean) {
+    patchRoutine(id, (r) => ({ ...r, is_enabled: enabled, paused_reason: undefined, next_run_at: enabled ? r.next_run_at : null }));
+    void core.request("routines.update", { id, enabled });
+  }
+
+  /// Runs the routine now, on its bot's Runner.
+  runRoutine(id: string) {
+    patchRoutine(id, (r) => ({ ...r, is_running: true }));
+    void core.request("routines.run", { id });
+  }
+
+  deleteRoutine(id: string) {
+    removeRoutine(id);
+    void core.request("routines.delete", { id });
   }
 
   /// The change shows at once; the core's roster event confirms it.
