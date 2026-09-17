@@ -7,8 +7,8 @@ import {
   ROOT,
   SOURCES_DIR,
   buildApp,
+  bundlePath,
   color,
-  executablePath,
   log,
 } from "./app.ts"
 
@@ -150,13 +150,29 @@ async function restartRelay() {
   if (!stopping) await startRelay()
 }
 
-function startApp() {
-  const bin = executablePath(CONFIG)
-  app = Bun.spawn([bin], {
+/** The terminal this loop writes to, so the app launched through LaunchServices can print
+ * here too. Empty when stdout is not a terminal (piped, or a background task). */
+async function ttyPath(): Promise<string> {
+  const proc = Bun.spawn(["ps", "-o", "tty=", "-p", String(process.pid)], { stdout: "pipe", stderr: "pipe" })
+  const name = (await new Response(proc.stdout).text()).trim()
+  await proc.exited
+  return name && name !== "??" ? `/dev/${name}` : ""
+}
+
+/** Launch the bundle through LaunchServices, not by spawning its executable. A binary spawned
+ * from this script counts as the terminal's work: TCC charges microphone and speech requests
+ * to the terminal app as the responsible process and reads the usage strings from *its*
+ * Info.plist, and aborts the app when one is missing there (Kero has no speech string, so the
+ * Dictate button crashed). Through `open` the app is its own responsible process and TCC reads
+ * the bundle's own Info.plist. `open -W` exits when the app does; its environment is not
+ * inherited, so TINYBOT_DEV goes through `--env`. */
+async function startApp() {
+  const bundle = bundlePath(CONFIG)
+  const output = (await ttyPath()) || join(PACKAGE_DIR, ".build", "app.log")
+  app = Bun.spawn(["open", "-n", "-W", "--stdout", output, "--stderr", output, "--env", "TINYBOT_DEV=1", bundle], {
     stdin: "ignore",
     stdout: "inherit",
     stderr: "inherit",
-    env: { ...process.env, TINYBOT_DEV: "1" },
     onExit(_proc, exitCode, signal) {
       if (stopping || app === null) return
       app = null
@@ -164,7 +180,8 @@ function startApp() {
       log(color.yellow(`${APP_NAME} exited (${how}) — press ${color.bold("r")} to relaunch`))
     },
   })
-  log(`${color.green("running")} ${color.dim(`pid ${app.pid}`)}`)
+  const where = output.startsWith("/dev/") ? "" : ` · output in ${output}`
+  log(`${color.green("running")} ${color.dim(`via open${where}`)}`)
 }
 
 async function cycle(reason: string) {
@@ -178,7 +195,7 @@ async function cycle(reason: string) {
   await stopApp()
   const result = await buildApp(CONFIG)
   if (result.ok) {
-    if (!stopping) startApp()
+    if (!stopping) await startApp()
     log(`${color.green("ready")} ${color.dim(`in ${Math.round(result.ms)}ms`)}`)
   } else {
     log(color.red("build failed — app not relaunched"))
@@ -226,7 +243,7 @@ function watchKeys() {
   process.stdin.setEncoding("utf8")
   process.stdin.on("data", (key: string) => {
     if (key === "\u0003" || key === "q") void shutdown()
-    else if (key === "r") void (async () => (await stopApp(), startApp()))()
+    else if (key === "r") void (async () => (await stopApp(), await startApp()))()
     else if (key === "b") void cycle("manual rebuild")
   })
 }

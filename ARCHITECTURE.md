@@ -380,7 +380,7 @@ tinybot/
 
 `bun run mobile` starts the Expo dev server; `bun run mobile:ios` / `mobile:android` build and run the dev client; `cd mobile && bun run core` rebuilds the Rust core for both platforms first.
 
-`bun run dev` rebuilds the CLI and the app on Rust or Swift changes and relaunches the app. `bun run build` produces a release bundle. `bun run relay` runs a local relay.
+`bun run dev` rebuilds the CLI and the app on Rust or Swift changes and relaunches the app through `open`, so the app is its own responsible process for TCC: a binary spawned from the terminal is charged to the terminal app, whose Info.plist decides whether a microphone or speech request aborts. `bun run build` produces a release bundle. `bun run relay` runs a local relay.
 
 ## Status
 
