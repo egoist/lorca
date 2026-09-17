@@ -2,6 +2,7 @@
 // core's events (engine.ts applies them), the way the Mac app's AppStore mirrors the CLI. The
 // core keeps the truth on disk; nothing here is persisted except the phone's own prefs.
 
+import { useMemo } from "react";
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import type { AutoReview, Bot, Chat, ChatMeta, ChatUsage, Device, Message, Routine } from "./model";
@@ -252,9 +253,11 @@ export function useBots(): Bot[] {
   return useStore((s) => s.bots);
 }
 
+/// Keyed by bot id; the same Map while the roster is unchanged, so memoized rows and lists
+/// built from it (the transcript's FlashList data) keep their identity across renders.
 export function useBotMap(): Map<string, Bot> {
   const bots = useStore((s) => s.bots);
-  return new Map(bots.map((b) => [b.id, b]));
+  return useMemo(() => new Map(bots.map((b) => [b.id, b])), [bots]);
 }
 
 /// Bots with a turn running in this chat, in roster order; a room between turns yields none.

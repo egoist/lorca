@@ -214,6 +214,19 @@ export default function ChatScreen() {
     [composerBlank, composerExtra],
   );
 
+  // FlashList scrolls to the end whenever `data` changes identity while the list sits near the
+  // bottom, animated once settled. Everything it is handed is therefore kept stable across
+  // renders: the state flip on the first drag (stopSettling) re-renders this screen, and a fresh
+  // rows array or renderItem there would launch an animated scroll-to-end against the drag.
+  const maintainVisibleContentPosition = useMemo(
+    () => ({
+      startRenderingFromBottom: true,
+      autoscrollToBottomThreshold: 0.25,
+      animateAutoScrollToBottom: settled,
+    }),
+    [settled],
+  );
+
   useEffect(() => {
     useStore.setState({ openChatId: id });
     markRead(id);
@@ -268,6 +281,46 @@ export default function ChatScreen() {
       ]);
     }
   }, []);
+
+  const renderItem = useCallback(
+    ({ item }: { item: Row }) => {
+      switch (item.type) {
+        case "day":
+          return <DayRow at={item.at} />;
+        case "message":
+          return (
+            <MessageRow
+              row={item}
+              bots={bots}
+              isGroup={isGroup}
+              onLongPress={onLongPress}
+            />
+          );
+        case "marker":
+          return <MarkerRow row={item} />;
+        case "notice":
+          return <NoticeRow row={item} />;
+        case "permission":
+          return (
+            <PermissionRow
+              row={item}
+              onDecide={(decision) =>
+                engine.answerPermission(
+                  item.message.chat_id,
+                  item.message.id,
+                  decision,
+                )
+              }
+            />
+          );
+        case "working":
+          return <WorkingRow bots={item.bots} isGroup={isGroup} />;
+        case "status":
+          return <StatusRow text={item.text} />;
+      }
+    },
+    [bots, isGroup, onLongPress],
+  );
 
   if (!chat) {
     return (
@@ -325,11 +378,7 @@ export default function ChatScreen() {
             contentInset={{ top: topInset }}
             scrollIndicatorInsets={{ top: topInset }}
             keyboardDismissMode="interactive"
-            maintainVisibleContentPosition={{
-              startRenderingFromBottom: true,
-              autoscrollToBottomThreshold: 0.25,
-              animateAutoScrollToBottom: settled,
-            }}
+            maintainVisibleContentPosition={maintainVisibleContentPosition}
             contentContainerStyle={{
               paddingTop: Platform.OS === "ios" ? 0 : 8,
             }}
@@ -351,31 +400,7 @@ export default function ChatScreen() {
             onScroll={onScroll}
             scrollEventThrottle={16}
             onScrollBeginDrag={stopSettling}
-            renderItem={({ item }) => {
-              switch (item.type) {
-                case "day":
-                  return <DayRow at={item.at} />;
-                case "message":
-                  return (
-                    <MessageRow
-                      row={item}
-                      bots={bots}
-                      isGroup={isGroup}
-                      onLongPress={onLongPress}
-                    />
-                  );
-                case "marker":
-                  return <MarkerRow row={item} />;
-                case "notice":
-                  return <NoticeRow row={item} />;
-                case "permission":
-                  return <PermissionRow row={item} onDecide={(decision) => engine.answerPermission(item.message.chat_id, item.message.id, decision)} />;
-                case "working":
-                  return <WorkingRow bots={item.bots} isGroup={isGroup} />;
-                case "status":
-                  return <StatusRow text={item.text} />;
-              }
-            }}
+            renderItem={renderItem}
           />
         </View>
         <KeyboardStickyView
