@@ -209,16 +209,22 @@ class Engine {
     await core.request("device.rename", { name });
   }
 
-  /// Joins the identity the pairing string names. The core posts the request and waits for
-  /// the Mac to accept; `signal` only stops the wait on this side.
+  /// Joins the identity the pairing string names. The core posts the request (`pair.posted`
+  /// marks that) and waits for the Mac to accept; `signal` aborts the wait in the core too,
+  /// which answers "Pairing cancelled".
   async pair(pairingString: string, deviceName: string | undefined, onProgress?: (progress: PairProgress) => void, signal?: AbortSignal) {
     onProgress?.({ phase: "posting" });
-    const accepted = new Promise<unknown>((resolve, reject) => {
-      core.request("pair.accept", { pairing_string: pairingString, device_name: deviceName?.trim() || undefined }).then(resolve, reject);
-      signal?.addEventListener("abort", () => reject(new Error("Pairing cancelled")));
+    const stop = core.onEvent((frame) => {
+      if (frame.event === "pair.posted") onProgress?.({ phase: "waiting" });
     });
-    onProgress?.({ phase: "waiting" });
-    await accepted;
+    const abort = () => void core.request("pair.abort").catch(() => {});
+    signal?.addEventListener("abort", abort);
+    try {
+      await core.request("pair.accept", { pairing_string: pairingString, device_name: deviceName?.trim() || undefined });
+    } finally {
+      stop();
+      signal?.removeEventListener("abort", abort);
+    }
     replaceSnapshot(await core.request<Snapshot>("bootstrap"));
     onProgress?.({ phase: "done" });
     core.wake();

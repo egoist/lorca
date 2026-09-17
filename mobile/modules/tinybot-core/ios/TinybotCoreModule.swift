@@ -26,11 +26,14 @@ public class TinybotCoreModule: Module {
       self.core = try Core.start(home: home, name: name, os: os, osVersion: osVersion, model: model, listener: listener)
     }
 
-    // Blocks until the core answers, on the module's background queue, never the JS thread.
+    // Blocks until the core answers. On a concurrent queue, never the JS thread and never the
+    // module's serial one: a request that waits (pair.accept, up to ten minutes) must not hold
+    // every other request behind it.
     AsyncFunction("request") { (method: String, params: String) throws -> String in
       guard let core = self.core else { throw NotStartedException() }
       return core.request(method: method, params: params)
     }
+    .runOnQueue(DispatchQueue.global(qos: .userInitiated))
 
     Function("wake") {
       self.core?.wake()

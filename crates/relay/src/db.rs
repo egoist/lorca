@@ -540,6 +540,11 @@ pub fn pairing_reply(connection: &Connection, nonce: &str) -> rusqlite::Result<O
     connection.query_row("SELECT reply FROM pairings WHERE nonce = ?1", params![nonce], |row| row.get(0))
 }
 
+pub fn delete_pairing(connection: &Connection, nonce: &str) -> rusqlite::Result<()> {
+    connection.execute("DELETE FROM pairings WHERE nonce = ?1", params![nonce])?;
+    Ok(())
+}
+
 /// Drops expired challenges and pairings. A background task runs this once a minute.
 pub fn expire(connection: &Connection) -> rusqlite::Result<()> {
     let now = now();

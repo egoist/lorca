@@ -55,6 +55,8 @@ export default function PairScreen() {
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (error) {
       setPhase("idle");
+      // Cancel was tapped here: the core's "Pairing cancelled" is not news.
+      if (cancel.current?.signal.aborted) return;
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       Alert.alert("Pairing failed", error instanceof Error ? error.message : String(error));
     } finally {

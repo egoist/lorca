@@ -32,6 +32,9 @@ pub enum Event {
     ChatUsageChanged { chat_id: String, usage: ChatUsage },
     #[serde(rename = "relay.status")]
     RelayStatus { connected: bool, url: Option<String> },
+    /// This Device's pairing request reached the relay; the other Device has yet to accept.
+    #[serde(rename = "pair.posted")]
+    PairPosted { nonce: String },
     #[serde(rename = "pair.completed")]
     PairCompleted { nonce: String, device: Value },
     #[serde(rename = "identity.changed")]

@@ -1,7 +1,10 @@
 package dev.tinybot.core
 
+import expo.modules.kotlin.functions.Coroutine
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import uniffi.tinybot_mobile.Core
 import uniffi.tinybot_mobile.EventListener
 
@@ -25,10 +28,12 @@ class TinybotCoreModule : Module() {
       }
     }
 
-    // Blocks until the core answers, on the module's background thread, never the JS thread.
-    AsyncFunction("request") { method: String, params: String ->
+    // Blocks until the core answers. On the IO pool, never the JS thread and never the
+    // module's single queue thread: a request that waits (pair.accept, up to ten minutes)
+    // must not hold every other request behind it.
+    AsyncFunction("request").Coroutine { method: String, params: String ->
       val running = core ?: throw IllegalStateException("The Tinybot core has not been started")
-      running.request(method, params)
+      withContext(Dispatchers.IO) { running.request(method, params) }
     }
 
     Function("wake") {

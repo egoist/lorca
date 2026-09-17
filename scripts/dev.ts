@@ -77,13 +77,37 @@ async function relayAnswers(): Promise<boolean> {
   }
 }
 
+/** The pid of a tinybot-relay listening on the dev port that this loop did not start. */
+async function strayRelayPid(): Promise<number | null> {
+  const proc = Bun.spawn(["lsof", "-ti", `tcp:${RELAY_PORT}`, "-sTCP:LISTEN"], { stdout: "pipe", stderr: "pipe" })
+  const text = await new Response(proc.stdout).text()
+  await proc.exited
+  for (const line of text.split("\n")) {
+    const pid = Number(line.trim())
+    if (!Number.isInteger(pid) || pid <= 0) continue
+    const ps = Bun.spawn(["ps", "-o", "command=", "-p", String(pid)], { stdout: "pipe", stderr: "pipe" })
+    const command = await new Response(ps.stdout).text()
+    await ps.exited
+    if (command.includes("tinybot-relay")) return pid
+  }
+  return null
+}
+
 /** A local relay on every interface, so a phone on this network can pair through it. The dev
- * app (TINYBOT_DEV=1) defaults its relay URL to this Mac's LAN IP on this port. */
+ * app (TINYBOT_DEV=1) defaults its relay URL to this Mac's LAN IP on this port. A relay left
+ * over from an earlier loop is replaced: it may predate the blob kinds the CLI now syncs, and
+ * the CLI fails every cycle against one that rejects them. */
 async function startRelay() {
   if (relay) return
   if (await relayAnswers()) {
-    log(`${color.green("relay")} ${color.dim(`already listening on ${RELAY_PORT}`)}`)
-    return
+    const stray = await strayRelayPid()
+    if (stray === null) {
+      log(`${color.green("relay")} ${color.dim(`already listening on ${RELAY_PORT}`)}`)
+      return
+    }
+    log(`${color.yellow("relay")} ${color.dim(`replacing the one already listening (pid ${stray})`)}`)
+    killPid(stray, "SIGTERM")
+    for (let attempt = 0; attempt < 40 && (await relayAnswers()); attempt++) await Bun.sleep(50)
   }
   relay = Bun.spawn(
     ["cargo", "run", "-q", "-p", "tinybot-relay", "--", "--bind", `0.0.0.0:${RELAY_PORT}`, "--db", join(ROOT, "target", "tinybot-relay.db")],

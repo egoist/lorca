@@ -255,8 +255,8 @@ final class PairingSheetViewController: SheetViewController {
         "Asking the CLI for a pairing code…", font: .monospacedSystemFont(ofSize: 10, weight: .regular),
         color: .secondaryLabelColor, lines: 3)
     private let statusLabel = Build.label(
-        "Waiting for the other Device…", font: .systemFont(ofSize: 12),
-        color: .secondaryLabelColor, lines: 0)
+        "Waiting for the other Device… Done keeps this code good for ten minutes; Cancel retires it.",
+        font: .systemFont(ofSize: 12), color: .secondaryLabelColor, lines: 0)
     private let spinner = NSProgressIndicator()
     private var task: Task<Void, Never>?
 
@@ -372,20 +372,20 @@ final class PairingSheetViewController: SheetViewController {
         NSPasteboard.general.setString(pairingString, forType: .string)
     }
 
-    private func finish() {
+    /// Cancel retires the code: the CLI stops waiting and the relay drops the mailbox, so a
+    /// Device that pastes it afterwards is told at once.
+    override func dismissSheet() {
         task?.cancel()
         if let nonce, statusLabel.textColor != .systemGreen {
             store.cancelPairing(nonce: nonce)
         }
-    }
-
-    override func dismissSheet() {
-        finish()
         super.dismissSheet()
     }
 
+    /// Done keeps the code good: the CLI goes on waiting for ten minutes, so copying the code
+    /// and closing this sheet before pasting it on the phone is fine.
     override func confirmTapped() {
-        finish()
+        task?.cancel()
         dismiss(nil)
     }
 }

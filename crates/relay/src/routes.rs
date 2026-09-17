@@ -92,6 +92,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/blobs", get(list_blobs).put(put_blob))
         .route("/v1/blobs/{id}", get(get_blob).delete(delete_blob))
         .route("/v1/pair", post(create_pairing))
+        .route("/v1/pair/{nonce}", axum::routing::delete(delete_pairing))
         .route("/v1/pair/{nonce}/request", get(get_pair_request))
         .route("/v1/pair/{nonce}/reply", post(post_pair_reply))
         .merge(public)
@@ -451,6 +452,21 @@ async fn create_pairing(State(state): State<AppState>, auth: Auth) -> ApiResult<
     let stored = nonce.clone();
     state.db.write(move |db| Ok(db::create_pairing(db, &stored, &auth.identity_pubkey, expires_at)?)).await?;
     Ok(Json(json!({ "nonce": nonce, "expires_at": expires_at })))
+}
+
+/// The identity retires a pairing it no longer waits on. The mailbox goes, so a Device still
+/// polling it learns the code is dead instead of waiting out the TTL.
+async fn delete_pairing(State(state): State<AppState>, auth: Auth, Path(nonce): Path<String>) -> ApiResult<StatusCode> {
+    state
+        .db
+        .write(move |db| {
+            if db::pairing_owner(db, &nonce)? != auth.identity_pubkey {
+                return Err(ApiError::forbidden("Not your pairing"));
+            }
+            Ok(db::delete_pairing(db, &nonce)?)
+        })
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Debug, Deserialize)]

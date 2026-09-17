@@ -186,17 +186,51 @@ pub fn status(app: &Arc<App>, nonce: &str) -> Value {
     }
 }
 
+/// A stops waiting. The mailbox on the relay goes too, so a Device still polling it learns
+/// the code is dead instead of waiting out the TTL.
 pub fn cancel(app: &Arc<App>, nonce: &str) {
-    if let Some(pending) = app.pairings.lock().unwrap().remove(nonce) {
-        pending.cancel.cancel();
-    }
+    let Some(pending) = app.pairings.lock().unwrap().remove(nonce) else { return };
+    pending.cancel.cancel();
+    let app = app.clone();
+    let nonce = nonce.to_string();
+    tokio::spawn(async move {
+        let Some(url) = app.relay_url() else { return };
+        let Some(machine) = app.machine_file().and_then(|file| file.machine().ok()) else { return };
+        if let Ok(token) = crate::sync::token_or_register(&app, &url, &machine).await {
+            let _ = app.relay.pair_delete(&url, &token, &nonce).await;
+        }
+    });
 }
 
-/// B: join an identity with a pairing string from A.
+/// B: join an identity with a pairing string from A. Waits for A's reply; `abort` ends the
+/// wait, and a newer `accept` replaces one still waiting.
 pub async fn accept(app: Arc<App>, pairing_string: &str, device_name: Option<String>) -> anyhow::Result<Value> {
     if app.has_identity() {
         anyhow::bail!("This Device already belongs to an identity.");
     }
+    let cancel = CancellationToken::new();
+    if let Some(previous) = app.accepting.lock().unwrap().replace(cancel.clone()) {
+        previous.cancel();
+    }
+    let result = tokio::select! {
+        _ = cancel.cancelled() => Err(anyhow::anyhow!("Pairing cancelled")),
+        result = join(&app, pairing_string, device_name) => result,
+    };
+    // Cancelled means a newer accept owns the slot, or abort already emptied it.
+    if !cancel.is_cancelled() {
+        app.accepting.lock().unwrap().take();
+    }
+    result
+}
+
+/// B gives up on the pairing it is waiting on.
+pub fn abort(app: &Arc<App>) {
+    if let Some(token) = app.accepting.lock().unwrap().take() {
+        token.cancel();
+    }
+}
+
+async fn join(app: &Arc<App>, pairing_string: &str, device_name: Option<String>) -> anyhow::Result<Value> {
     let (relay_url, identity_pubkey, ek, nonce) = parse_pairing_string(pairing_string)?;
     app.relay.health(&relay_url).await.map_err(|e| anyhow::anyhow!("{e}"))?;
 
@@ -214,14 +248,23 @@ pub async fn accept(app: Arc<App>, pairing_string: &str, device_name: Option<Str
     };
     let request = PairRequest { machine_pubkey: machine.pubkey(), box_pubkey: machine.box_pubkey(), device: device.clone() };
     let sealed = crate::crypto::seal_json(&ek, &request)?;
-    app.relay.pair_post_request(&relay_url, &nonce, &sealed).await.map_err(|e| anyhow::anyhow!("{e}"))?;
+    // A mailbox that is gone means A cancelled, or the code expired.
+    let gone = |error: crate::relay::RelayError| {
+        if error.status == Some(404) {
+            anyhow::anyhow!("The other Device stopped waiting on this code. Get a fresh one from it.")
+        } else {
+            anyhow::anyhow!("{error}")
+        }
+    };
+    app.relay.pair_post_request(&relay_url, &nonce, &sealed).await.map_err(gone)?;
+    app.emit(Event::PairPosted { nonce: nonce.clone() });
 
     let reply: PairReply = tokio::time::timeout(PAIR_TIMEOUT, async {
         loop {
             match app.relay.pair_get_reply(&relay_url, &nonce).await {
                 Ok(Some(sealed)) => return crate::crypto::unseal_json::<PairReply>(&machine.box_secret, &sealed),
                 Ok(None) => tokio::time::sleep(POLL).await,
-                Err(error) => return Err(anyhow::anyhow!("{error}")),
+                Err(error) => return Err(gone(error)),
             }
         }
     })

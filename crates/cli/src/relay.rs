@@ -228,6 +228,12 @@ impl RelayClient {
         Ok(())
     }
 
+    /// The identity retires a pairing: the mailbox goes and a Device polling it gets a 404.
+    pub async fn pair_delete(&self, url: &str, token: &str, nonce: &str) -> RelayResult<()> {
+        Self::check(self.http.delete(format!("{url}/v1/pair/{nonce}")).bearer_auth(token).send().await?).await?;
+        Ok(())
+    }
+
     pub async fn pair_get_reply(&self, url: &str, nonce: &str) -> RelayResult<Option<Vec<u8>>> {
         let value = Self::check(self.http.get(format!("{url}/v1/pair/{nonce}/reply")).send().await?).await?;
         decode_optional(&value)

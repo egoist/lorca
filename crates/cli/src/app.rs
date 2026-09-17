@@ -77,6 +77,8 @@ pub struct App {
     pub outbox_notify: Notify,
     pub relay_connected: AtomicBool,
     pub pairings: Mutex<HashMap<String, PendingPairing>>,
+    /// The pairing this Device is joining, while `pair.accept` waits for the reply.
+    pub accepting: Mutex<Option<CancellationToken>>,
     /// job id → (chat id, cancel)
     pub running_jobs: Mutex<HashMap<String, (String, String, CancellationToken)>>,
     pub chat_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
@@ -113,6 +115,7 @@ impl App {
             outbox_notify: Notify::new(),
             relay_connected: AtomicBool::new(false),
             pairings: Mutex::new(HashMap::new()),
+            accepting: Mutex::new(None),
             running_jobs: Mutex::new(HashMap::new()),
             chat_locks: Mutex::new(HashMap::new()),
             pending_results: Mutex::new(HashMap::new()),
