@@ -15,7 +15,8 @@ final class PluginViewController: SheetViewController {
     private let skills = SectionView(title: "Skills")
     private let saveButton = NSButton()
     private let removeButton = NSButton()
-    private let note = Build.label("", font: Theme.Font.caption, color: .secondaryLabelColor, lines: 0)
+    private let note = Build.label(
+        "", font: Theme.Font.caption, color: .secondaryLabelColor, lines: 0)
 
     private var detail: PluginDetail?
     private var fields: [(name: String, field: NSTextField)] = []
@@ -27,7 +28,9 @@ final class PluginViewController: SheetViewController {
         let plugin = runner.plugins.first { $0.id == pluginID }
         super.init(
             title: plugin?.name ?? pluginID,
-            subtitle: [plugin?.description ?? "", "Installed on \(runner.name)."].filter { !$0.isEmpty }.joined(separator: " "),
+            subtitle: [plugin?.description ?? "", "Installed on \(runner.name)."].filter {
+                !$0.isEmpty
+            }.joined(separator: " "),
             width: 520
         )
     }
@@ -47,7 +50,8 @@ final class PluginViewController: SheetViewController {
         removeButton.action = #selector(confirmRemove)
         let spacer = NSView()
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        let actions = Build.stack([saveButton, spacer, removeButton], orientation: .horizontal, spacing: 8)
+        let actions = Build.stack(
+            [saveButton, spacer, removeButton], orientation: .horizontal, spacing: 8)
 
         for section in [status, signIn, variables, skills] {
             contentStack.addArrangedSubview(section)
@@ -65,8 +69,9 @@ final class PluginViewController: SheetViewController {
         variables.isHidden = true
         skills.isHidden = true
         saveButton.isHidden = true
-        note.stringValue = runner.isThisDevice
-            ? "Keys and sign-ins stay on this Mac."
+        note.stringValue =
+            runner.isThisDevice
+            ? "Keys and sign-ins stay on this device."
             : "Keys and sign-ins are sent sealed to \(runner.name) and stay there. A sign-in opens the browser on \(runner.name)."
         load()
     }
@@ -92,17 +97,24 @@ final class PluginViewController: SheetViewController {
                 self.detail = detail
                 self.render(detail)
             } catch {
-                self.status.setRows([KeyValueRow(key: "State", value: error.localizedDescription, tint: .systemRed)])
+                self.status.setRows([
+                    KeyValueRow(key: "State", value: error.localizedDescription, tint: .systemRed)
+                ])
                 self.fitSheetToContent()
             }
         }
     }
 
     private func render(_ detail: PluginDetail) {
-        var statusRows: [NSView] = [KeyValueRow(key: "State", value: detail.status.detail, tint: detail.status.stateColor)]
+        var statusRows: [NSView] = [
+            KeyValueRow(key: "State", value: detail.status.detail, tint: detail.status.stateColor)
+        ]
         let rules = store.autoReview.rules.filter { $0.tool?.hasPrefix("\(pluginID)/") == true }
         if !rules.isEmpty {
-            let always = ActionRow(key: "Always allowed", value: rules.map { String(($0.tool ?? "").dropFirst(pluginID.count + 1)) }.joined(separator: ", "), tint: .labelColor, actionTitle: "Reset")
+            let always = ActionRow(
+                key: "Always allowed",
+                value: rules.map { String(($0.tool ?? "").dropFirst(pluginID.count + 1)) }.joined(
+                    separator: ", "), tint: .labelColor, actionTitle: "Reset")
             always.onAction = { [weak self] in
                 guard let self else { return }
                 var review = self.store.autoReview
@@ -113,7 +125,9 @@ final class PluginViewController: SheetViewController {
             statusRows.append(always)
         }
         if let homepage = detail.homepage, let url = URL(string: homepage) {
-            let site = ActionRow(key: "Site", value: url.host ?? homepage, tint: .secondaryLabelColor, actionTitle: "Open")
+            let site = ActionRow(
+                key: "Site", value: url.host ?? homepage, tint: .secondaryLabelColor,
+                actionTitle: "Open")
             site.onAction = { NSWorkspace.shared.open(url) }
             statusRows.append(site)
         }
@@ -121,30 +135,36 @@ final class PluginViewController: SheetViewController {
 
         let oauthServers = detail.servers.filter(\.oauth)
         signIn.isHidden = oauthServers.isEmpty
-        signIn.setRows(oauthServers.map { server in
-            let row = ActionRow(
-                key: oauthServers.count > 1 ? server.name : "Account",
-                value: server.signedIn ? "Signed in" : "Not signed in",
-                tint: server.signedIn ? .systemGreen : .secondaryLabelColor,
-                actionTitle: server.signedIn ? "Sign in again" : "Sign in")
-            row.onAction = { [weak self] in self?.connect() }
-            return row
-        })
+        signIn.setRows(
+            oauthServers.map { server in
+                let row = ActionRow(
+                    key: oauthServers.count > 1 ? server.name : "Account",
+                    value: server.signedIn ? "Signed in" : "Not signed in",
+                    tint: server.signedIn ? .systemGreen : .secondaryLabelColor,
+                    actionTitle: server.signedIn ? "Sign in again" : "Sign in")
+                row.onAction = { [weak self] in self?.connect() }
+                return row
+            })
 
         fields = []
         variables.isHidden = detail.variables.isEmpty
         saveButton.isHidden = detail.variables.isEmpty
-        variables.setRows(detail.variables.map { variable in
-            let field: NSTextField = variable.secret ? NSSecureTextField() : NSTextField()
-            field.placeholderString = variable.secret ? (variable.isSet ? "Set · type to replace" : "Not set") : (variable.isSet ? "" : "Not set")
-            field.stringValue = variable.secret ? "" : (variable.value ?? "")
-            field.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
-            field.controlSize = .small
-            field.toolTip = variable.description
-            fields.append((variable.name, field))
-            let row = FieldRow(key: variable.name + (variable.required ? " *" : ""), field: field)
-            return row
-        })
+        variables.setRows(
+            detail.variables.map { variable in
+                let field: NSTextField = variable.secret ? NSSecureTextField() : NSTextField()
+                field.placeholderString =
+                    variable.secret
+                    ? (variable.isSet ? "Set · type to replace" : "Not set")
+                    : (variable.isSet ? "" : "Not set")
+                field.stringValue = variable.secret ? "" : (variable.value ?? "")
+                field.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+                field.controlSize = .small
+                field.toolTip = variable.description
+                fields.append((variable.name, field))
+                let row = FieldRow(
+                    key: variable.name + (variable.required ? " *" : ""), field: field)
+                return row
+            })
 
         skills.isHidden = detail.skills.isEmpty
         skills.setRows(detail.skills.map { KeyValueRow(key: $0.name, value: $0.description) })
@@ -153,7 +173,8 @@ final class PluginViewController: SheetViewController {
 
     @objc private func save() {
         var values: [String: String] = [:]
-        for (name, field) in fields where !field.stringValue.isEmpty || !(field is NSSecureTextField) {
+        for (name, field) in fields
+        where !field.stringValue.isEmpty || !(field is NSSecureTextField) {
             values[name] = field.stringValue
         }
         saveButton.isEnabled = false
@@ -161,7 +182,8 @@ final class PluginViewController: SheetViewController {
             guard let self else { return }
             defer { self.saveButton.isEnabled = true }
             do {
-                _ = try await self.store.setPluginVariables(self.pluginID, on: self.runner.id, variables: values)
+                _ = try await self.store.setPluginVariables(
+                    self.pluginID, on: self.runner.id, variables: values)
                 self.load()
             } catch {
                 self.alert("Couldn't save", error.localizedDescription)
@@ -174,7 +196,9 @@ final class PluginViewController: SheetViewController {
             guard let self else { return }
             do {
                 let message = try await self.store.connectPlugin(self.pluginID, on: self.runner.id)
-                self.status.setRows([KeyValueRow(key: "State", value: message, tint: .controlAccentColor)])
+                self.status.setRows([
+                    KeyValueRow(key: "State", value: message, tint: .controlAccentColor)
+                ])
                 self.fitSheetToContent()
             } catch {
                 self.alert("Couldn't start the sign-in", error.localizedDescription)
@@ -187,7 +211,8 @@ final class PluginViewController: SheetViewController {
         let name = runner.plugins.first { $0.id == pluginID }?.name ?? pluginID
         let alert = NSAlert()
         alert.messageText = "Remove \(name) from \(runner.name)?"
-        alert.informativeText = "Every bot on \(runner.name) loses it, and its keys and sign-ins there are forgotten."
+        alert.informativeText =
+            "Every bot on \(runner.name) loses it, and its keys and sign-ins there are forgotten."
         alert.addButton(withTitle: "Remove")
         alert.addButton(withTitle: "Cancel")
         alert.alertStyle = .warning
@@ -218,7 +243,9 @@ final class FieldRow: NSView {
     init(key keyText: String, field: NSTextField) {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
-        let key = Build.label(keyText, font: .monospacedSystemFont(ofSize: 11, weight: .regular), color: .secondaryLabelColor)
+        let key = Build.label(
+            keyText, font: .monospacedSystemFont(ofSize: 11, weight: .regular),
+            color: .secondaryLabelColor)
         key.setContentCompressionResistancePriority(.required, for: .horizontal)
         field.translatesAutoresizingMaskIntoConstraints = false
         addSubview(key)

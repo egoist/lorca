@@ -78,6 +78,7 @@ final class KeyValueRow: NSView {
             valueText,
             font: monospaced ? .monospacedSystemFont(ofSize: 11, weight: .regular) : .systemFont(ofSize: 12),
             color: tint ?? .labelColor,
+            lines: 0,
             alignment: .right
         )
         super.init(frame: .zero)
@@ -92,11 +93,25 @@ final class KeyValueRow: NSView {
         NSLayoutConstraint.activate([
             heightAnchor.constraint(greaterThanOrEqualToConstant: 32),
             key.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            key.centerYAnchor.constraint(equalTo: centerYAnchor),
+            key.firstBaselineAnchor.constraint(equalTo: value.firstBaselineAnchor),
             value.leadingAnchor.constraint(greaterThanOrEqualTo: key.trailingAnchor, constant: 10),
             value.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            value.topAnchor.constraint(greaterThanOrEqualTo: topAnchor, constant: 8),
+            value.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -8),
             value.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
+    }
+
+    // A wrapping label only reports a multi-line intrinsic height once it
+    // knows its width, so feed it the width left over after the key.
+    override func layout() {
+        super.layout()
+        let available = bounds.width - 12 - key.frame.width - 10 - 12
+        if available > 0, value.preferredMaxLayoutWidth != available {
+            value.preferredMaxLayoutWidth = available
+            invalidateIntrinsicContentSize()
+            needsLayout = true
+        }
     }
 
     @available(*, unavailable)
