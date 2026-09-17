@@ -352,11 +352,15 @@ final class StatusCellView: NSTableCellView {
 
 // MARK: - Handoff cell
 
-/// Bot-to-bot messages as centered markers: "Message from ◉ Name" where one arrived, "Messaged ◉
-/// Name" where one was sent, with the text itself as the tooltip. A handoff between two bots in
-/// the same chat keeps both avatars on one line.
+/// Bot-to-bot messages as centered markers: "Message from ◉ Name · first line" where one arrived,
+/// "Messaged ◉ Name · first line" where one was sent. The preview is one truncated line; a click on
+/// the marker opens the whole message in a popover. A handoff between two bots in the same chat
+/// keeps both avatars on one line with the same preview and popover.
 final class HandoffCellView: NSTableCellView {
     static let identifier = NSUserInterfaceItemIdentifier("HandoffCell")
+
+    /// The preview line never grows past this, so a long message still reads as a marker.
+    static let previewMaxWidth: CGFloat = 260
 
     enum Mode {
         case incoming(from: Bot?)
@@ -369,8 +373,12 @@ final class HandoffCellView: NSTableCellView {
     private let toAvatar = AvatarView(diameter: 18)
     private let lead = Build.label("", font: .systemFont(ofSize: 11.5), color: .secondaryLabelColor)
     private let label = Build.label("", font: .systemFont(ofSize: 11.5), color: .secondaryLabelColor)
+    private let preview = Build.label("", font: .systemFont(ofSize: 11.5), color: .secondaryLabelColor)
     private var groupStart = true
     private var incoming = false
+    private var fullText = ""
+    /// The marker's bounds after layout: the click target and pointer cursor region.
+    private var markerRect = NSRect.zero
 
     init() {
         super.init(frame: .zero)
@@ -384,6 +392,7 @@ final class HandoffCellView: NSTableCellView {
         addSubview(arrow.framePositioned())
         addSubview(toAvatar.framePositioned())
         addSubview(label.framePositioned())
+        addSubview(preview.framePositioned())
     }
 
     @available(*, unavailable)
@@ -393,6 +402,10 @@ final class HandoffCellView: NSTableCellView {
 
     func configure(mode: Mode, reason: String, groupStart: Bool) {
         self.groupStart = groupStart
+        fullText = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        let firstLine = TextPopover.firstLine(of: fullText)
+        preview.stringValue = firstLine.isEmpty ? "" : "· \(firstLine)"
+        preview.isHidden = firstLine.isEmpty
         let avatar = { (bot: Bot?) -> AvatarView.Content in
             bot.map { .bot(symbolName: $0.symbolName, accent: $0.accent) } ?? .system
         }
@@ -409,8 +422,7 @@ final class HandoffCellView: NSTableCellView {
             label.stringValue = from?.name ?? "?"
             label.textColor = .labelColor
             label.font = .systemFont(ofSize: 11.5, weight: .medium)
-            toolTip = reason
-            setAccessibilityLabel("\(verb) \(from?.name ?? "?"): \(reason)")
+            setAccessibilityLabel("\(verb) \(from?.name ?? "?"): \(fullText)")
         case let .handoff(from, to):
             incoming = false
             fromAvatar.content = avatar(from)
@@ -418,11 +430,10 @@ final class HandoffCellView: NSTableCellView {
             lead.isHidden = true
             arrow.isHidden = false
             toAvatar.isHidden = false
-            label.stringValue = "\(from?.name ?? "?") handed off to \(to?.name ?? "?") · \(reason)"
+            label.stringValue = "\(from?.name ?? "?") handed off to \(to?.name ?? "?")"
             label.textColor = .secondaryLabelColor
             label.font = .systemFont(ofSize: 11.5)
-            toolTip = nil
-            setAccessibilityLabel(label.stringValue)
+            setAccessibilityLabel("\(label.stringValue): \(fullText)")
         }
         needsLayout = true
     }
@@ -431,19 +442,30 @@ final class HandoffCellView: NSTableCellView {
         super.layout()
         let top = groupStart ? ChatMetrics.groupTopPadding : ChatMetrics.tightTopPadding
         let centerY = top + 17
+        let previewGap: CGFloat = 5
+        let available = max(0, bounds.width - ChatMetrics.horizontalInset * 2)
 
         if incoming {
             // Cell sizes, not glyph bounds: a text field pads its text and clips without it.
             let leadWidth = TextMeasure.labelSize(of: lead.attributedStringValue).width
             let nameWidth = TextMeasure.labelSize(of: label.attributedStringValue).width
             let avatarSize: CGFloat = 16
-            let total = leadWidth + 6 + avatarSize + 5 + nameWidth
+            let fixed = leadWidth + 6 + avatarSize + 5 + nameWidth
+            let previewWidth = preview.isHidden ? 0 : min(
+                Self.previewMaxWidth,
+                TextMeasure.labelSize(of: preview.attributedStringValue).width,
+                max(0, available - fixed - previewGap))
+            let total = fixed + (previewWidth > 0 ? previewGap + previewWidth : 0)
             var x = (bounds.width - total) / 2
+            markerRect = NSRect(x: x - 4, y: centerY - 11, width: total + 8, height: 22)
             lead.frame = NSRect(x: x, y: centerY - 8, width: leadWidth, height: 16)
             x += leadWidth + 6
             fromAvatar.frame = NSRect(x: x, y: centerY - avatarSize / 2, width: avatarSize, height: avatarSize)
             x += avatarSize + 5
             label.frame = NSRect(x: x, y: centerY - 8, width: nameWidth, height: 16)
+            x += nameWidth + previewGap
+            preview.frame = NSRect(x: x, y: centerY - 8, width: previewWidth, height: 16)
+            window?.invalidateCursorRects(for: self)
             return
         }
 
@@ -451,9 +473,29 @@ final class HandoffCellView: NSTableCellView {
         fromAvatar.frame = NSRect(x: x, y: centerY - 9, width: 18, height: 18)
         arrow.frame = NSRect(x: x + 22, y: centerY - 6, width: 12, height: 12)
         toAvatar.frame = NSRect(x: x + 38, y: centerY - 9, width: 18, height: 18)
-        label.frame = NSRect(
-            x: x + 64, y: centerY - 8,
-            width: max(0, bounds.width - x - 64 - ChatMetrics.horizontalInset), height: 16)
+        let textMax = max(0, bounds.width - x - 64 - ChatMetrics.horizontalInset)
+        let nameWidth = min(textMax, TextMeasure.labelSize(of: label.attributedStringValue).width)
+        label.frame = NSRect(x: x + 64, y: centerY - 8, width: nameWidth, height: 16)
+        let previewWidth = preview.isHidden ? 0 : min(
+            Self.previewMaxWidth,
+            TextMeasure.labelSize(of: preview.attributedStringValue).width,
+            max(0, textMax - nameWidth - previewGap))
+        preview.frame = NSRect(x: x + 64 + nameWidth + previewGap, y: centerY - 8, width: previewWidth, height: 16)
+        markerRect = NSRect(
+            x: x - 4, y: centerY - 11,
+            width: 64 + nameWidth + (previewWidth > 0 ? previewGap + previewWidth : 0) + 8, height: 22)
+        window?.invalidateCursorRects(for: self)
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        if !fullText.isEmpty { addCursorRect(markerRect, cursor: .pointingHand) }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        guard !fullText.isEmpty, markerRect.contains(point) else { return super.mouseDown(with: event) }
+        TextPopover.show(fullText, relativeTo: markerRect, of: self)
     }
 }
 
