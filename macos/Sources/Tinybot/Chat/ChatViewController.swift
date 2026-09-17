@@ -352,14 +352,14 @@ final class ChatViewController: NSViewController {
         let insets = scrollView.contentInsets
         let bottom = max(-insets.top, documentHeight + insets.bottom - clip.bounds.height)
         let origin = NSPoint(x: clip.bounds.origin.x, y: bottom)
-        if animated {
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.18
-                context.allowsImplicitAnimation = true
-                clip.animator().setBoundsOrigin(origin)
-            }
-        } else {
-            clip.scroll(to: origin)
+        // Always through the animator: a new animation on the bounds origin replaces one in
+        // flight. A plain `scroll(to:)` holds for a frame and is then dragged back to the
+        // earlier animation's target, which a send makes stale (the working row lands right
+        // after the message, one row below where that animation was heading).
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = animated ? 0.18 : 0
+            context.allowsImplicitAnimation = animated
+            clip.animator().setBoundsOrigin(origin)
         }
         scrollView.reflectScrolledClipView(clip)
         isPinnedToBottom = true
