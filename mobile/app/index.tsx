@@ -5,7 +5,7 @@ import { useMemo, useState } from "react";
 import { Alert, Platform, StyleSheet, Text, View } from "react-native";
 import { chatTitle, engine } from "../src/core/engine";
 import type { Chat } from "../src/core/model";
-import { useBotMap, useStore, useWorkingBotIds } from "../src/core/store";
+import { markRead, useBotMap, useStore, useWorkingBotIds } from "../src/core/store";
 import { ChatPeek } from "../src/ui/ChatPeek";
 import { ChatRow } from "../src/ui/ChatRow";
 import { lastActivity } from "../src/ui/format";
@@ -93,7 +93,7 @@ export default function ChatsScreen() {
                   {chat.is_pinned ? "Unpin" : "Pin"}
                 </Link.MenuAction>
                 {chat.unread_count > 0 ? (
-                  <Link.MenuAction icon="checkmark.circle" onPress={() => useStore.setState((s) => ({ chats: s.chats.map((c) => (c.id === chat.id ? { ...c, unread_count: 0 } : c)) }))}>
+                  <Link.MenuAction icon="checkmark.circle" onPress={() => markRead(chat.id)}>
                     Mark as Read
                   </Link.MenuAction>
                 ) : null}

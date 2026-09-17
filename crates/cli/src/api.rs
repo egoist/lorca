@@ -59,6 +59,22 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             pairing::accept(app.clone(), &text, opt_string(&params, "device_name")).await.map_err(|e| e.to_string())
         }
 
+        "device.rename" => {
+            let name = string(&params, "name")?;
+            app.rename_device(&name).map_err(|e| e.to_string())?;
+            Ok(json!({ "name": name }))
+        }
+        "identity.forget" => {
+            app.forget_identity().map_err(|e| e.to_string())?;
+            Ok(Value::Null)
+        }
+        // The app came back to the foreground: ask the relay again now, not after the backoff.
+        "sync.wake" => {
+            app.relay.forget_token();
+            app.outbox_notify.notify_waiters();
+            Ok(Value::Null)
+        }
+
         "config.set" => {
             if params.get("relay_url").is_some() {
                 let url = params["relay_url"].as_str().map(str::to_string);

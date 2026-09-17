@@ -5,17 +5,17 @@ import { Platform, useColorScheme } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { engine } from "../src/core/engine";
-import { loadStore, useStore } from "../src/core/store";
+import { useStore } from "../src/core/store";
 import { usePalette } from "../src/ui/theme";
 
 export default function RootLayout() {
   const ready = useStore((s) => s.ready);
-  const paired = useStore((s) => s.machineFile !== null);
+  const paired = useStore((s) => s.paired);
   const p = usePalette();
   const scheme = useColorScheme();
 
   useEffect(() => {
-    void loadStore().then(() => engine.bind(useStore.getState().machineFile));
+    void engine.start();
   }, []);
 
   if (!ready) return null;

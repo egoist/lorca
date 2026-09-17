@@ -197,6 +197,53 @@ impl App {
         Ok(())
     }
 
+    /// Renames this Device; the roster hears through the machine blob.
+    pub fn rename_device(&self, name: &str) -> anyhow::Result<()> {
+        let name = name.trim();
+        if name.is_empty() {
+            anyhow::bail!("Give the Device a name");
+        }
+        {
+            let mut machine = self.machine.lock().unwrap();
+            let Some(file) = machine.as_mut() else { anyhow::bail!("No identity on this Device") };
+            file.name = name.to_string();
+        }
+        self.save_machine()?;
+        if let Some(device) = self.local_device() {
+            upsert_device(&mut self.state.lock().unwrap().devices, device);
+        }
+        self.save_state();
+        self.push_machine_blob_if_changed();
+        self.emit(self.roster_summary());
+        Ok(())
+    }
+
+    /// Forgets the identity on this Device: keys, credentials, and everything synced. The
+    /// relay keeps the account; another Device or the backup phrase brings it back.
+    pub fn forget_identity(&self) -> anyhow::Result<()> {
+        for (_, _, cancel) in self.running_jobs.lock().unwrap().values() {
+            cancel.cancel();
+        }
+        *self.identity.lock().unwrap() = None;
+        *self.machine.lock().unwrap() = None;
+        *self.credentials.lock().unwrap() = Credentials::default();
+        *self.state.lock().unwrap() = State::default();
+        self.settings.lock().unwrap().relay_url = None;
+        self.relay.forget_token();
+        for path in [self.config.identity_path(), self.config.machine_path(), self.config.credentials_path(), self.config.state_path(), self.config.settings_path()] {
+            if path.exists() {
+                std::fs::remove_file(&path)?;
+            }
+        }
+        let files = self.config.files_dir();
+        if files.is_dir() {
+            std::fs::remove_dir_all(&files)?;
+        }
+        self.emit(Event::IdentityChanged { has_identity: false });
+        self.emit(Event::Snapshot(self.snapshot()));
+        Ok(())
+    }
+
     /// This Device as the roster sees it.
     pub fn local_device(&self) -> Option<Device> {
         let machine = self.machine_file()?;

@@ -1,0 +1,7 @@
+{
+  "name": "tinybot-core",
+  "version": "0.1.0",
+  "description": "Tinybot's Device core (Rust) for the phone: the JSON API and events",
+  "main": "index.ts",
+  "private": true
+}

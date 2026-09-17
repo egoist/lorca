@@ -3,9 +3,6 @@
   "version": "1.0.0",
   "main": "index.ts",
   "dependencies": {
-    "@noble/ciphers": "^2.4.0",
-    "@noble/curves": "^2.4.0",
-    "@noble/hashes": "^2.4.0",
     "@shopify/flash-list": "2.0.2",
     "expo": "~57.0.23",
     "expo-application": "~57.0.3",
@@ -39,7 +36,6 @@
     "react-native-reanimated": "4.5.1",
     "react-native-safe-area-context": "~5.7.0",
     "react-native-screens": "~4.26.0",
-    "tweetnacl": "^1.0.3",
     "zustand": "^5.0.15"
   },
   "devDependencies": {
@@ -52,7 +48,8 @@
     "ios": "expo run:ios",
     "android": "expo run:android",
     "typecheck": "tsc --noEmit",
-    "test": "bun test src"
+    "test": "bun test src",
+    "core": "bun run modules/tinybot-core/build.ts"
   },
   "private": true
 }

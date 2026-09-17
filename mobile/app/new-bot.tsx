@@ -3,7 +3,7 @@ import { useMemo, useState } from "react";
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { engine } from "../src/core/engine";
-import { isRunner, providerLabel, THINKING_LEVELS, thinkingLabel } from "../src/core/model";
+import { connectedProviders, isRunner, providerLabel, THINKING_LEVELS, thinkingLabel } from "../src/core/model";
 import { deviceIsOnline, useStore } from "../src/core/store";
 import { CheckRow, FieldRow, Section } from "../src/ui/forms";
 import { BOT_SYMBOLS, Symbol } from "../src/ui/Symbol";
@@ -44,18 +44,19 @@ export default function NewBotScreen() {
   const [accent, setAccent] = useState("indigo");
   const [runnerId, setRunnerId] = useState<string>(() => runners.find((r) => deviceIsOnline(r.id))?.id ?? runners[0]?.id ?? "");
   const runner = runners.find((r) => r.id === runnerId);
-  const providers = runner?.providers_connected.length ? runner.providers_connected : ["deepseek", "anthropic", "chatgpt"];
+  const connected = runner ? connectedProviders(runner) : [];
+  const providers = connected.length ? connected : ["deepseek", "anthropic", "chatgpt"];
   const [provider, setProvider] = useState<string>(providers[0]);
   const [model, setModel] = useState<string | undefined>(undefined);
   const [thinking, setThinking] = useState<string | undefined>(undefined);
   const effectiveProvider = providers.includes(provider) ? provider : providers[0];
   const canSave = name.trim().length > 0 && !!runnerId;
 
-  function save() {
+  async function save() {
     try {
-      const { chat } = engine.createBot({ name, label, description, instructions, symbol_name: symbol, accent, runner_id: runnerId, provider: effectiveProvider, model, thinking });
+      const { chatId } = await engine.createBot({ name, label, description, instructions, symbol_name: symbol, accent, runner_id: runnerId, provider: effectiveProvider, model, thinking });
       router.dismiss();
-      router.push(`/chat/${chat.id}`);
+      router.push(`/chat/${chatId}`);
     } catch (error) {
       Alert.alert("Could not create the bot", error instanceof Error ? error.message : String(error));
     }
@@ -68,7 +69,7 @@ export default function NewBotScreen() {
         <Stack.Toolbar.Button onPress={() => router.dismiss()}>Cancel</Stack.Toolbar.Button>
       </Stack.Toolbar>
       <Stack.Toolbar placement="right">
-        <Stack.Toolbar.Button variant="done" disabled={!canSave} onPress={save}>
+        <Stack.Toolbar.Button variant="done" disabled={!canSave} onPress={() => void save()}>
           Create
         </Stack.Toolbar.Button>
       </Stack.Toolbar>
@@ -115,7 +116,7 @@ export default function NewBotScreen() {
           ))}
         </Section>
         {runner && (
-          <Section title="Provider" footer={runner.providers_connected.length ? undefined : `${runner.name} has no provider connected yet; connect one there before this bot answers.`}>
+          <Section title="Provider" footer={connected.length ? undefined : `${runner.name} has no provider connected yet; connect one there before this bot answers.`}>
             {providers.map((kind) => (
               <CheckRow key={kind} title={providerLabel(kind)} checked={kind === effectiveProvider} onPress={() => { setProvider(kind); setModel(undefined); setThinking(undefined); }} />
             ))}

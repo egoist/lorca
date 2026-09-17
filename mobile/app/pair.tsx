@@ -2,7 +2,8 @@ import { CameraView, useCameraPermissions } from "expo-camera";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import { LinearGradient } from "expo-linear-gradient";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useLocalSearchParams } from "expo-router";
 import { ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { engine } from "../src/core/engine";
@@ -27,6 +28,16 @@ export default function PairScreen() {
   /// second request (which the relay refuses as "already has a request") from going out.
   const inFlight = useRef(false);
   const busy = phase !== "idle";
+  // A pairing code opened as a link (`tinybot://pair?…`, from the Camera app or a tap on the
+  // Mac's code) lands here with its fields as params: pair with it right away.
+  const params = useLocalSearchParams<{ relay?: string; id?: string; ek?: string; n?: string }>();
+  useEffect(() => {
+    if (!params.relay || !params.id || !params.ek || !params.n || inFlight.current) return;
+    const text = `tinybot://pair?relay=${encodeURIComponent(params.relay)}&id=${params.id}&ek=${params.ek}&n=${params.n}`;
+    setCode(text);
+    void pair(text);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params.relay, params.id, params.ek, params.n]);
 
   async function pair(text: string) {
     if (inFlight.current) return;

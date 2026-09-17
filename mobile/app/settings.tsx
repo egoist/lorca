@@ -3,8 +3,7 @@ import { Stack, useRouter } from "expo-router";
 import { useState } from "react";
 import { Alert, ScrollView, StyleSheet, Text, View } from "react-native";
 import { engine } from "../src/core/engine";
-import { identityId } from "../src/core/keys";
-import { isRunner, providerLabel } from "../src/core/model";
+import { connectedProviders, isRunner, providerLabel } from "../src/core/model";
 import { deviceIsOnline, useStore } from "../src/core/store";
 import { FieldRow, Row, Section } from "../src/ui/forms";
 import { lastSeen } from "../src/ui/format";
@@ -16,17 +15,19 @@ import { languageName, pickDictationLanguage, useDictationLanguage } from "../sr
 export default function SettingsScreen() {
   const router = useRouter();
   const p = usePalette();
-  const file = useStore((s) => s.machineFile);
   const devices = useStore((s) => s.devices);
   const seen = useStore((s) => s.device_seen);
   const relayConnected = useStore((s) => s.relayConnected);
-  const [name, setName] = useState(file?.name ?? "");
+  const relayUrl = useStore((s) => s.relayUrl);
+  const identity = useStore((s) => s.identityId);
+  const thisDevice = devices.find((d) => d.is_this_device);
+  const [name, setName] = useState(thisDevice?.name ?? "");
   const dictation = useDictationLanguage();
   const thisId = engine.deviceId;
   const sorted = [...devices].sort((a, b) => (a.id === thisId ? -1 : b.id === thisId ? 1 : a.name.localeCompare(b.name)));
 
   function commitName() {
-    if (file && name.trim() && name.trim() !== file.name) void engine.renameDevice(name);
+    if (thisDevice && name.trim() && name.trim() !== thisDevice.name) void engine.renameDevice(name);
   }
 
   function confirmUnpair() {
@@ -58,8 +59,8 @@ export default function SettingsScreen() {
         </Section>
 
         <Section title="Account">
-          <Row title="Identity" detail={file ? identityId(file.identity_pubkey) : "—"} />
-          <Row title="Relay" detail={file?.relay_url.replace(/^https?:\/\//, "") ?? "—"} subtitle={relayConnected ? "Connected" : "Connecting…"} />
+          <Row title="Identity" detail={identity ?? "—"} />
+          <Row title="Relay" detail={relayUrl?.replace(/^https?:\/\//, "") ?? "—"} subtitle={relayConnected ? "Connected" : "Connecting…"} />
         </Section>
 
         <Section title="Devices" footer="Desktop Devices are Runners: they run bots with their own provider credentials. Phones and tablets read and write chats.">
@@ -67,7 +68,7 @@ export default function SettingsScreen() {
             <Row
               key={device.id}
               title={device.id === thisId ? `${device.name} (this phone)` : device.name}
-              subtitle={[device.model, isRunner(device) ? "Runner" : "Device", device.id === thisId ? "Online" : lastSeen(seen[device.id]), ...device.providers_connected.map(providerLabel)].filter(Boolean).join(" · ")}
+              subtitle={[device.model, isRunner(device) ? "Runner" : "Device", device.id === thisId ? "Online" : lastSeen(seen[device.id]), ...connectedProviders(device).map(providerLabel)].filter(Boolean).join(" · ")}
               leading={
                 <View style={styles.deviceIcon}>
                   <Symbol name={deviceSymbol(device.os, device.model)} size={22} color={p.label} />

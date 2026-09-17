@@ -10,6 +10,7 @@
     "expo-env.d.ts"
   ],
   "exclude": [
-    "**/*.test.ts"
+    "**/*.test.ts",
+    "modules/tinybot-core/build.ts"
   ]
 }

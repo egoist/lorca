@@ -1,9 +1,17 @@
-// Plaintext domain model, the same JSON the CLI reads and writes inside encrypted blobs
-// (crates/cli/src/model.rs). Field names are the wire names.
+// The domain model as the core reports it over the JSON API (crates/cli/src/model.rs and the
+// snapshot in app.rs). Field names are the wire names.
 
 export const MAX_GROUP_BOTS = 6;
 export const ONLINE_WINDOW_SECS = 150;
 
+export interface ProviderStatus {
+  kind: string;
+  is_connected: boolean;
+  detail: string;
+  base_url?: string;
+}
+
+/// A Device as the core's snapshot describes it: presence and providers already resolved.
 export interface Device {
   /// The machine signing public key, base64url.
   id: string;
@@ -11,9 +19,16 @@ export interface Device {
   model: string;
   os: string;
   os_version: string;
-  box_pubkey: string;
-  providers_connected: string[];
-  updated_at: number;
+  machine_key: string;
+  is_this_device: boolean;
+  status: "online" | "offline";
+  /// Unix seconds.
+  last_seen: number;
+  providers: ProviderStatus[];
+}
+
+export function connectedProviders(device: Device): string[] {
+  return device.providers.filter((p) => p.is_connected).map((p) => p.kind);
 }
 
 export function isRunner(device: Device): boolean {
@@ -131,63 +146,23 @@ export interface ChatMeta {
   created_at: number;
 }
 
-export interface Chat extends ChatMeta {
-  messages: Message[];
-  unread_count: number;
-}
-
-// MARK: - Blob payloads
-
-export interface RosterBlob {
-  bots: Bot[];
-  chats: ChatMeta[];
+/// The tokens and money the turns in a chat used, from its Runner.
+export interface ChatUsage {
+  context_tokens: number;
+  context_window: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cost_usd: number;
+  turns: number;
+  model: string;
   updated_at: number;
 }
 
-export type ChatBlob =
-  | { op: "upsert"; message: Message }
-  | { op: "remove"; chat_id: string; message_id: string }
-  | { op: "clear_unread"; chat_id: string };
-
-export interface MachineBlob {
-  device: Device;
-}
-
-export interface Job {
-  id: string;
-  chat_id: string;
-  bot_id: string;
-  /// `turn` for a user message in a DM, `room_turn` for one member's turn in a group,
-  /// `message` for a teammate's message_bot.
-  kind: "turn" | "room_turn" | "message";
-  trigger_message_id: string;
-  requested_by: string;
-  from_bot_id?: string;
-  hops: number;
-  round: number;
-  is_winding_down: boolean;
-  created_at: number;
-}
-
-export interface JobResult {
-  job_id: string;
-  chat_id: string;
-  bot_id: string;
-  /// `sent`, `pass`, or `error`.
-  outcome: "sent" | "pass" | "error" | string;
-}
-
-export interface PairRequest {
-  machine_pubkey: string;
-  box_pubkey: string;
-  device: Device;
-}
-
-export interface PairReply {
-  identity_pubkey: string;
-  content_pubkey: string;
-  account_dek: string;
-  relay_url: string;
+export interface Chat extends ChatMeta {
+  messages: Message[];
+  unread_count: number;
+  usage?: ChatUsage;
 }
 
 export const PROVIDER_LABELS: Record<string, string> = {

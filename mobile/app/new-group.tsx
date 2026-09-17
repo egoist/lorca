@@ -17,9 +17,9 @@ export default function NewGroupScreen() {
     setSelected((ids) => (ids.includes(id) ? ids.filter((i) => i !== id) : ids.length < MAX_GROUP_BOTS ? [...ids, id] : ids));
   }
 
-  function create() {
+  async function create() {
     try {
-      const chat = engine.createGroup(title, selected);
+      const chat = await engine.createGroup(title, selected);
       router.dismiss();
       router.push(`/chat/${chat.id}`);
     } catch (error) {
@@ -34,7 +34,7 @@ export default function NewGroupScreen() {
         <Stack.Toolbar.Button onPress={() => router.dismiss()}>Cancel</Stack.Toolbar.Button>
       </Stack.Toolbar>
       <Stack.Toolbar placement="right">
-        <Stack.Toolbar.Button variant="done" disabled={selected.length === 0} onPress={create}>
+        <Stack.Toolbar.Button variant="done" disabled={selected.length === 0} onPress={() => void create()}>
           Create
         </Stack.Toolbar.Button>
       </Stack.Toolbar>
