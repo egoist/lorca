@@ -218,6 +218,7 @@ export const PROVIDER_LABELS: Record<string, string> = {
   deepseek: "DeepSeek",
   anthropic: "Anthropic",
   chatgpt: "ChatGPT",
+  grok: "Grok",
 };
 
 export function providerLabel(kind: string): string {
@@ -229,6 +230,7 @@ export const THINKING_LEVELS: Record<string, string[]> = {
   deepseek: ["off", "low", "medium", "high", "xhigh", "max"],
   anthropic: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
   chatgpt: ["low", "medium", "high", "xhigh"],
+  grok: ["low", "medium", "high"],
 };
 
 export function thinkingLabel(level: string): string {

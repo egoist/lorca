@@ -268,7 +268,8 @@ final class ProvidersSettingsViewController: SettingsPaneViewController {
                     subtitle: "\(credential.kind.subtitle) · \(credential.detail)",
                     state: credential.isConnected ? "Connected" : nil,
                     stateColor: .systemGreen,
-                    actionTitle: credential.isConnected ? "Disconnect" : "Connect…"
+                    actionTitle: credential.isConnected ? "Disconnect" : "Connect…",
+                    destructive: credential.isConnected
                 )
                 row.onAction = { [weak self] in
                     guard let self else { return }

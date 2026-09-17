@@ -569,6 +569,7 @@ fn provider_label(kind: &str) -> &str {
         "deepseek" => "DeepSeek",
         "anthropic" => "Anthropic",
         "chatgpt" => "ChatGPT",
+        "grok" => "Grok",
         other => other,
     }
 }
@@ -1592,7 +1593,7 @@ impl Tool for CreateBot {
                 "label": { "type": "string", "description": "One short line under the name: what it is for" },
                 "description": { "type": "string", "description": "A sentence or two about what it does, shown in its profile" },
                 "instructions": { "type": "string", "description": "How it should work: scope, tone, what to ask before acting" },
-                "provider": { "type": "string", "enum": ["deepseek", "anthropic", "chatgpt"], "description": "Defaults to your own provider" },
+                "provider": { "type": "string", "enum": ["deepseek", "anthropic", "chatgpt", "grok"], "description": "Defaults to your own provider" },
                 "thinking": { "type": "string", "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "max"], "description": "How much the model thinks. Defaults to the provider's default" },
                 "workdir": { "type": "string", "description": "Working directory for its tools. Defaults to a private workspace under the CLI home; give it your own path to share files" }
             },
@@ -1692,7 +1693,7 @@ impl Tool for EditBot {
                 "label": { "type": "string", "description": "New short line under the name: what it is for" },
                 "description": { "type": "string", "description": "New sentence or two about what it does" },
                 "instructions": { "type": "string", "description": "New instructions, complete: they replace the old ones" },
-                "provider": { "type": "string", "enum": ["deepseek", "anthropic", "chatgpt"] },
+                "provider": { "type": "string", "enum": ["deepseek", "anthropic", "chatgpt", "grok"] },
                 "thinking": { "type": "string", "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "max"], "description": "How much the model thinks" },
                 "workdir": { "type": "string", "description": "New working directory for its tools" }
             },
@@ -1732,8 +1733,8 @@ impl Tool for EditBot {
             }
         }
         if let Some(p) = &provider {
-            if !matches!(p.as_str(), "deepseek" | "anthropic" | "chatgpt") {
-                return Err(ToolError(format!("Unknown provider {p}. Use deepseek, anthropic, or chatgpt.")));
+            if !matches!(p.as_str(), "deepseek" | "anthropic" | "chatgpt" | "grok") {
+                return Err(ToolError(format!("Unknown provider {p}. Use deepseek, anthropic, chatgpt, or grok.")));
             }
         }
         let changed: Vec<&str> = [

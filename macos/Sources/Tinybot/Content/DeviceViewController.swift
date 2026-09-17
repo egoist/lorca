@@ -126,9 +126,17 @@ final class DeviceViewController: NSViewController {
                         subtitle: "\(credential.kind.subtitle) · \(credential.detail)",
                         state: credential.isConnected ? "Connected" : nil,
                         stateColor: .systemGreen,
-                        actionTitle: credential.isConnected ? nil : "Connect…"
+                        actionTitle: credential.isConnected ? (device.isThisDevice ? "Disconnect" : nil) : "Connect…",
+                        destructive: credential.isConnected
                     )
-                    row.onAction = { [weak self] in self?.connectProvider(credential.kind, on: device) }
+                    row.onAction = { [weak self] in
+                        guard let self else { return }
+                        if credential.isConnected {
+                            Task { try? await self.store.disconnectProvider(credential.kind) }
+                        } else {
+                            self.connectProvider(credential.kind, on: device)
+                        }
+                    }
                     return row
                 })
         }
@@ -160,7 +168,7 @@ final class DeviceViewController: NSViewController {
             } else if device.isThisDevice {
                 "Keys for this Runner live in the CLI on this Mac. Connecting a provider here never leaves the machine."
             } else {
-                "Provider credentials live on \(device.name). Connect DeepSeek, Anthropic, or ChatGPT from the Tinybot app running there — this Mac only sends encrypted job envelopes."
+                "Provider credentials live on \(device.name). Connect DeepSeek, Anthropic, ChatGPT, or Grok from the Tinybot app running there — this Mac only sends encrypted job envelopes."
             }
     }
 

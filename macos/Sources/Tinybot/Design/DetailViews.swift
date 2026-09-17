@@ -265,7 +265,8 @@ final class StatusRow: NSView {
         subtitle subtitleText: String,
         state stateText: String?,
         stateColor: NSColor = .secondaryLabelColor,
-        actionTitle: String? = nil
+        actionTitle: String? = nil,
+        destructive: Bool = false
     ) {
         icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
         icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
@@ -276,7 +277,12 @@ final class StatusRow: NSView {
         state.isHidden = stateText == nil
 
         if let actionTitle {
-            action.title = actionTitle
+            // The same bezel for both; a destructive action has a red title. Neither
+            // `contentTintColor` nor `hasDestructiveAction` colors a rounded bezel's title, so
+            // the title is attributed.
+            let font = NSFont.systemFont(ofSize: NSFont.systemFontSize(for: .small))
+            let color: NSColor = destructive ? .systemRed : .controlTextColor
+            action.attributedTitle = NSAttributedString(string: actionTitle, attributes: [.foregroundColor: color, .font: font])
             action.isHidden = false
             state.isHidden = true
         } else {

@@ -6,7 +6,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::providers::chatgpt::TokenSource;
-use crate::providers::{AnthropicProvider, ChatGptProvider, OpenAiCompatProvider};
+use crate::providers::grok::GrokTokenSource;
+use crate::providers::{AnthropicProvider, ChatGptProvider, GrokProvider, OpenAiCompatProvider};
 use crate::types::ThinkingLevel;
 use crate::Provider;
 
@@ -52,11 +53,13 @@ type Builder = Arc<dyn Fn(&str, Option<ThinkingLevel>) -> Result<Arc<dyn Provide
 /// | `anthropic` | `ANTHROPIC_API_KEY` | `ANTHROPIC_BASE_URL` |
 /// | `openai` | `OPENAI_API_KEY` | `OPENAI_BASE_URL` (default `https://api.openai.com/v1`) |
 /// | `chatgpt` | the [`TokenSource`] given to `with_chatgpt` | |
+/// | `grok` | the [`GrokTokenSource`] given to `with_grok` | `GROK_BASE_URL` |
 ///
 /// `register` adds or replaces a provider id with a builder of the host's own.
 #[derive(Default)]
 pub struct EnvProviderFactory {
     chatgpt: Option<Arc<dyn TokenSource>>,
+    grok: Option<Arc<dyn GrokTokenSource>>,
     custom: HashMap<String, Builder>,
 }
 
@@ -67,6 +70,11 @@ impl EnvProviderFactory {
 
     pub fn with_chatgpt(mut self, tokens: Arc<dyn TokenSource>) -> Self {
         self.chatgpt = Some(tokens);
+        self
+    }
+
+    pub fn with_grok(mut self, tokens: Arc<dyn GrokTokenSource>) -> Self {
+        self.grok = Some(tokens);
         self
     }
 
@@ -113,6 +121,14 @@ impl ProviderFactory for EnvProviderFactory {
             "chatgpt" => {
                 let tokens = self.chatgpt.clone().ok_or("ChatGPT needs a token source; give the factory one with with_chatgpt")?;
                 Ok(Arc::new(ChatGptProvider::new(tokens, model_id).with_thinking(thinking)))
+            }
+            "grok" => {
+                let tokens = self.grok.clone().ok_or("Grok needs a token source; give the factory one with with_grok")?;
+                let mut provider = GrokProvider::new(tokens, model_id);
+                if let Some(base) = Self::env("GROK_BASE_URL") {
+                    provider = provider.with_base_url(&base);
+                }
+                Ok(Arc::new(provider.with_thinking(thinking)))
             }
             other => Err(format!("Unknown provider {other}")),
         }

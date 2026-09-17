@@ -8,30 +8,40 @@ struct ProviderCredential: Hashable, Identifiable {
         case deepseek = "DeepSeek"
         case anthropic = "Anthropic"
         case chatgpt = "ChatGPT"
+        case grok = "Grok"
 
         var symbolName: String {
             switch self {
             case .deepseek, .anthropic: "key.fill"
-            case .chatgpt: "person.badge.key.fill"
+            case .chatgpt, .grok: "person.badge.key.fill"
             }
         }
 
         var subtitle: String {
             switch self {
             case .deepseek, .anthropic: "API key"
-            case .chatgpt: "Subscription"
+            case .chatgpt, .grok: "Subscription"
             }
         }
 
-        /// Connects with a pasted API key; ChatGPT signs in through the browser instead.
-        var usesAPIKey: Bool { self != .chatgpt }
+        /// Connects with a pasted API key; ChatGPT and Grok sign in through the browser instead.
+        var usesAPIKey: Bool { self != .chatgpt && self != .grok }
+
+        /// What the sign-in needs, for the subscription providers.
+        var signInRequirement: String {
+            switch self {
+            case .chatgpt: "It needs a ChatGPT subscription."
+            case .grok: "It needs a SuperGrok or X Premium+ subscription."
+            case .deepseek, .anthropic: ""
+            }
+        }
 
         /// The API root the CLI calls unless the credential names another.
         var defaultBaseURL: String {
             switch self {
             case .deepseek: "https://api.deepseek.com"
             case .anthropic: "https://api.anthropic.com"
-            case .chatgpt: ""
+            case .chatgpt, .grok: ""
             }
         }
 
@@ -40,7 +50,7 @@ struct ProviderCredential: Hashable, Identifiable {
             switch self {
             case .deepseek: "sk-… from platform.deepseek.com"
             case .anthropic: "sk-ant-… from console.anthropic.com"
-            case .chatgpt: ""
+            case .chatgpt, .grok: ""
             }
         }
 
@@ -50,6 +60,7 @@ struct ProviderCredential: Hashable, Identifiable {
             case .deepseek: "deepseek"
             case .anthropic: "anthropic"
             case .chatgpt: "chatgpt"
+            case .grok: "grok"
             }
         }
 
@@ -58,6 +69,7 @@ struct ProviderCredential: Hashable, Identifiable {
             case "deepseek": self = .deepseek
             case "anthropic": self = .anthropic
             case "chatgpt": self = .chatgpt
+            case "grok": self = .grok
             default: return nil
             }
         }
@@ -70,6 +82,7 @@ struct ProviderCredential: Hashable, Identifiable {
                 case .deepseek: ["off", "low", "medium", "high", "xhigh", "max"]
                 case .anthropic: ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
                 case .chatgpt: ["low", "medium", "high", "xhigh"]
+                case .grok: ["low", "medium", "high"]
                 }
             return ids.map { ($0, Self.thinkingLabel($0)) }
         }
@@ -102,6 +115,14 @@ struct ProviderCredential: Hashable, Identifiable {
                     ("gpt-5.6-luna", "GPT-5.6 Luna"),
                     ("gpt-5.5", "GPT-5.5"),
                     ("gpt-5.3-codex-spark", "Codex Spark (Pro)"),
+                ]
+            case .grok:
+                [
+                    ("grok-4.6", "Grok 4.6"),
+                    ("grok-4.5", "Grok 4.5"),
+                    ("grok-4.3", "Grok 4.3"),
+                    ("grok-4.20-0309-reasoning", "Grok 4.20 Reasoning"),
+                    ("grok-build-0.1", "Grok Build 0.1"),
                 ]
             }
         }

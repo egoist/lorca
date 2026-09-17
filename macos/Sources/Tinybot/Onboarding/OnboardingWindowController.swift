@@ -326,7 +326,7 @@ final class OnboardingViewController: NSViewController {
     /// swaps only the credential row, so the page never re-renders.
     private func providerRows() -> [(String, NSView)] {
         let picker = NSSegmentedControl(
-            labels: ProviderCredential.Kind.allCases.map { "\($0.rawValue) · \($0.subtitle)" }, trackingMode: .selectOne,
+            labels: ProviderCredential.Kind.allCases.map(\.rawValue), trackingMode: .selectOne,
             target: self, action: #selector(providerPicked(_:)))
         picker.selectedSegment = ProviderCredential.Kind.allCases.firstIndex(of: providerKind) ?? 0
         picker.segmentStyle = .rounded
@@ -359,7 +359,7 @@ final class OnboardingViewController: NSViewController {
             control = keyField
         } else {
             control = Build.label(
-                "Your browser opens a ChatGPT sign-in when you continue. Needs a ChatGPT subscription.",
+                "Your browser opens a \(providerKind.rawValue) sign-in when you continue. \(providerKind.signInRequirement)",
                 font: .systemFont(ofSize: 12), color: .secondaryLabelColor, lines: 0)
         }
         control.translatesAutoresizingMaskIntoConstraints = false
@@ -373,7 +373,7 @@ final class OnboardingViewController: NSViewController {
                 : "Tokens from the sign-in stay in the CLI's credential file on this Mac.",
             color: .tertiaryLabelColor)
         if let button = findContinueButton() {
-            button.title = providerKind.usesAPIKey ? "Continue" : "Sign in with ChatGPT"
+            button.title = providerKind.usesAPIKey ? "Continue" : "Sign in with \(providerKind.rawValue)"
             button.isEnabled = !providerKind.usesAPIKey
         }
     }
@@ -613,7 +613,7 @@ final class OnboardingViewController: NSViewController {
                 if self.providerKind.usesAPIKey {
                     try await self.store.connectAPIKey(self.providerKind, apiKey: key)
                 } else {
-                    try await self.store.connectChatGPT()
+                    try await self.store.connectSignIn(self.providerKind)
                 }
                 self.transition(to: .done)
             } catch {

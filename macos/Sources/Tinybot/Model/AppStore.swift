@@ -976,8 +976,10 @@ final class AppStore {
         _ = try await client.request("providers.connect_\(kind.wireValue)", params)
     }
 
-    func connectChatGPT() async throws {
-        _ = try await client.request("providers.connect_chatgpt")
+    /// Runs a subscription sign-in on this Runner (`providers.connect_chatgpt`,
+    /// `providers.connect_grok`): the CLI opens the browser and keeps the tokens.
+    func connectSignIn(_ kind: ProviderCredential.Kind) async throws {
+        _ = try await client.request("providers.connect_\(kind.wireValue)")
     }
 
     func disconnectProvider(_ kind: ProviderCredential.Kind) async throws {

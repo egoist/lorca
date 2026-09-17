@@ -6,21 +6,17 @@ pub mod oauth;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::{HashMap, HashSet};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use crate::provider::{
-    channel_stream, AssistantEvent, AssistantEventStream, ModelRequest, Provider, WEB_FETCH_TOOL, WEB_SEARCH_TOOL,
-};
+use super::responses;
 use crate::models::{self, ModelInfo};
+use crate::provider::{channel_stream, AssistantEvent, AssistantEventStream, ModelRequest, Provider};
 use crate::retry::{send_with_retry, RequestFailure, DEFAULT_MAX_RETRY_DELAY_MS};
-use crate::sse::SseParser;
 use crate::transform::{transform_messages, TransformOptions};
-use crate::types::{AssistantPart, ContentPart, LlmMessage, StopReason, ThinkingLevel, Usage};
+use crate::types::ThinkingLevel;
 
 pub const CHATGPT_RESPONSES_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
 /// The balanced everyday model Codex offers to ChatGPT sign-ins. Others accepted with a
@@ -101,65 +97,12 @@ impl ChatGptProvider {
             &request.messages,
             &TransformOptions { provider: "chatgpt", model: &self.model, supports_images: true, normalize_tool_call_id: None },
         );
-        let mut input = Vec::new();
-        for message in &transformed {
-            match message {
-                LlmMessage::User(user) => {
-                    let content: Vec<Value> = user
-                        .content
-                        .iter()
-                        .map(|part| match part {
-                            ContentPart::Text { text } => json!({ "type": "input_text", "text": text }),
-                            ContentPart::Image { data, mime_type } => json!({
-                                "type": "input_image",
-                                "image_url": format!("data:{mime_type};base64,{data}"),
-                            }),
-                        })
-                        .collect();
-                    input.push(json!({ "type": "message", "role": "user", "content": content }));
-                }
-                LlmMessage::Assistant(assistant) => {
-                    let text = assistant.text();
-                    if !text.is_empty() {
-                        input.push(json!({
-                            "type": "message",
-                            "role": "assistant",
-                            "content": [{ "type": "output_text", "text": text }],
-                        }));
-                    }
-                    for part in &assistant.content {
-                        if let AssistantPart::ToolCall(call) = part {
-                            input.push(json!({
-                                "type": "function_call",
-                                "call_id": call.id,
-                                "name": call.name,
-                                "arguments": call.arguments.to_string(),
-                            }));
-                        }
-                    }
-                }
-                LlmMessage::ToolResult(result) => {
-                    input.push(json!({
-                        "type": "function_call_output",
-                        "call_id": result.tool_call_id,
-                        "output": result.text(),
-                    }));
-                }
-            }
-        }
+        let input = responses::input_items(&transformed);
 
         // The backend's own web search: it searches and reads pages server-side and streams
         // `web_search_call` items, which become server-tool events here.
         let mut tools = vec![json!({ "type": "web_search" })];
-        tools.extend(request.tools.iter().map(|tool| {
-            json!({
-                "type": "function",
-                "name": tool.name,
-                "description": tool.description,
-                "parameters": tool.parameters,
-                "strict": false,
-            })
-        }));
+        tools.extend(responses::function_tools(&request.tools));
 
         let mut body = json!({
             "model": self.model,
@@ -185,166 +128,6 @@ impl ChatGptProvider {
             body["reasoning"] = json!({ "effort": effort, "summary": "auto" });
         }
         body
-    }
-}
-
-#[derive(Default)]
-struct ResponsesState {
-    next_index: usize,
-    items: HashMap<String, usize>,
-    /// `web_search_call` item ids in flight, reported as server tools rather than blocks.
-    web_calls: HashSet<String>,
-    text_item: Option<usize>,
-    thinking_item: Option<usize>,
-    tool_deltas_seen: HashMap<usize, bool>,
-    stop_reason: StopReason,
-    usage: Usage,
-}
-
-impl ResponsesState {
-    fn new() -> Self {
-        Self::default()
-    }
-
-    async fn apply(&mut self, kind: &str, value: &Value, tx: &mpsc::Sender<AssistantEvent>) -> Result<bool, String> {
-        match kind {
-            "response.output_item.added" => {
-                let item = &value["item"];
-                let item_id = item["id"].as_str().unwrap_or("").to_string();
-                match item["type"].as_str().unwrap_or("") {
-                    "function_call" => {
-                        let index = self.next_index;
-                        self.next_index += 1;
-                        self.items.insert(item_id, index);
-                        let id = item["call_id"].as_str().unwrap_or("").to_string();
-                        let name = item["name"].as_str().unwrap_or("").to_string();
-                        let _ = tx.send(AssistantEvent::ToolCallStart { index, id, name }).await;
-                        self.stop_reason = StopReason::ToolUse;
-                    }
-                    "message" => {
-                        let index = self.next_index;
-                        self.next_index += 1;
-                        self.items.insert(item_id, index);
-                        self.text_item = Some(index);
-                        let _ = tx.send(AssistantEvent::TextStart { index }).await;
-                    }
-                    "reasoning" => {
-                        let index = self.next_index;
-                        self.next_index += 1;
-                        self.items.insert(item_id, index);
-                        self.thinking_item = Some(index);
-                        let _ = tx.send(AssistantEvent::ThinkingStart { index }).await;
-                    }
-                    "web_search_call" => {
-                        self.web_calls.insert(item_id.clone());
-                        let (name, detail, _) = web_call_action(&item["action"]);
-                        let _ = tx.send(AssistantEvent::ServerToolStart { id: item_id, name, detail }).await;
-                    }
-                    _ => {}
-                }
-            }
-            "response.output_text.delta" => {
-                let index = self.index_for(&value["item_id"]).or(self.text_item);
-                if let (Some(index), Some(delta)) = (index, value["delta"].as_str()) {
-                    let _ = tx.send(AssistantEvent::TextDelta { index, delta: delta.to_string() }).await;
-                }
-            }
-            "response.reasoning_summary_text.delta" | "response.reasoning_text.delta" => {
-                let index = self.index_for(&value["item_id"]).or(self.thinking_item);
-                if let (Some(index), Some(delta)) = (index, value["delta"].as_str()) {
-                    let _ = tx.send(AssistantEvent::ThinkingDelta { index, delta: delta.to_string() }).await;
-                }
-            }
-            "response.function_call_arguments.delta" => {
-                if let (Some(index), Some(delta)) = (self.index_for(&value["item_id"]), value["delta"].as_str()) {
-                    self.tool_deltas_seen.insert(index, true);
-                    let _ = tx.send(AssistantEvent::ToolCallDelta { index, delta: delta.to_string() }).await;
-                }
-            }
-            "response.output_item.done" => {
-                let item = &value["item"];
-                if item["type"].as_str() == Some("web_search_call") {
-                    let item_id = item["id"].as_str().unwrap_or("").to_string();
-                    if self.web_calls.remove(&item_id) {
-                        let (name, detail, summary) = web_call_action(&item["action"]);
-                        let _ = tx.send(AssistantEvent::ServerToolEnd { id: item_id, name, detail, summary }).await;
-                    }
-                    return Ok(false);
-                }
-                let Some(index) = self.index_for(&item["id"]) else { return Ok(false) };
-                match item["type"].as_str().unwrap_or("") {
-                    "function_call" => {
-                        if !self.tool_deltas_seen.contains_key(&index) {
-                            if let Some(arguments) = item["arguments"].as_str() {
-                                let _ = tx.send(AssistantEvent::ToolCallDelta { index, delta: arguments.to_string() }).await;
-                            }
-                        }
-                        let _ = tx.send(AssistantEvent::ToolCallEnd { index }).await;
-                    }
-                    "message" => {
-                        let _ = tx.send(AssistantEvent::TextEnd { index }).await;
-                        self.text_item = None;
-                    }
-                    "reasoning" => {
-                        let _ = tx.send(AssistantEvent::ThinkingEnd { index }).await;
-                        self.thinking_item = None;
-                    }
-                    _ => {}
-                }
-            }
-            "response.completed" | "response.done" => {
-                let usage = &value["response"]["usage"];
-                self.usage = Usage {
-                    reasoning: None,
-                    cost: Default::default(),
-                    input: usage["input_tokens"].as_u64().unwrap_or(0),
-                    output: usage["output_tokens"].as_u64().unwrap_or(0),
-                    cache_read: usage["input_tokens_details"]["cached_tokens"].as_u64().unwrap_or(0),
-                    cache_write: 0,
-                    total_tokens: usage["total_tokens"].as_u64().unwrap_or(0),
-                };
-                if value["response"]["status"].as_str() == Some("incomplete") {
-                    self.stop_reason = StopReason::Length;
-                }
-                return Ok(true);
-            }
-            "response.incomplete" => {
-                self.stop_reason = StopReason::Length;
-                return Ok(true);
-            }
-            "response.failed" => {
-                let message = value["response"]["error"]["message"].as_str().unwrap_or("Response failed").to_string();
-                return Err(message);
-            }
-            "error" => {
-                let message = value["message"].as_str().or(value["error"]["message"].as_str()).unwrap_or("Provider error");
-                return Err(message.to_string());
-            }
-            _ => {}
-        }
-        Ok(false)
-    }
-
-    fn index_for(&self, item_id: &Value) -> Option<usize> {
-        item_id.as_str().and_then(|id| self.items.get(id).copied())
-    }
-}
-
-/// What a `web_search_call` did, from its `action`: the tool name it counts as, the detail to
-/// keep (query or URL), and a one-line summary for the finished row. A `search` (or `find`
-/// within a page) is a search; `open_page` is a read of one page.
-fn web_call_action(action: &Value) -> (String, String, String) {
-    let query = action["query"].as_str().unwrap_or("").trim();
-    let url = action["url"].as_str().unwrap_or("").trim();
-    match action["type"].as_str().unwrap_or("search") {
-        "open_page" if !url.is_empty() => (WEB_FETCH_TOOL.into(), url.into(), format!("Read {url}")),
-        "find" if !url.is_empty() => {
-            let pattern = action["pattern"].as_str().unwrap_or("").trim();
-            let detail = if pattern.is_empty() { url.to_string() } else { format!("{pattern} in {url}") };
-            (WEB_FETCH_TOOL.into(), detail, format!("Searched {url}"))
-        }
-        _ if !query.is_empty() => (WEB_SEARCH_TOOL.into(), query.into(), format!("Searched the web for “{query}”")),
-        _ => (WEB_SEARCH_TOOL.into(), String::new(), "Searched the web".into()),
     }
 }
 
@@ -402,53 +185,7 @@ impl Provider for ChatGptProvider {
                 }
             };
 
-            let _ = tx.send(AssistantEvent::Start).await;
-            let mut parser = SseParser::new();
-            let mut state = ResponsesState::new();
-            let mut bytes = response.bytes_stream();
-            let mut completed = false;
-
-            'outer: loop {
-                let chunk = tokio::select! {
-                    _ = cancel.cancelled() => {
-                        let _ = tx.send(AssistantEvent::Error { message: "Request aborted".into(), aborted: true }).await;
-                        return;
-                    }
-                    chunk = bytes.next() => chunk,
-                };
-                let Some(chunk) = chunk else { break };
-                let chunk = match chunk {
-                    Ok(chunk) => chunk,
-                    Err(error) => {
-                        let _ = tx.send(AssistantEvent::Error { message: format!("Stream failed: {error}"), aborted: false }).await;
-                        return;
-                    }
-                };
-                for event in parser.push(&chunk) {
-                    let Ok(value) = serde_json::from_str::<Value>(&event.data) else { continue };
-                    let kind = value["type"].as_str().map(str::to_string).or(event.event.clone()).unwrap_or_default();
-                    match state.apply(&kind, &value, &tx).await {
-                        Ok(true) => {
-                            completed = true;
-                            break 'outer;
-                        }
-                        Ok(false) => {}
-                        Err(message) => {
-                            let _ = tx.send(AssistantEvent::Error { message, aborted: false }).await;
-                            return;
-                        }
-                    }
-                }
-            }
-
-            if !completed {
-                tracing::debug!("chatgpt stream ended without response.completed");
-            }
-            let mut usage = state.usage.clone();
-            if let Some(info) = info {
-                usage.cost = info.cost_of(&usage);
-            }
-            let _ = tx.send(AssistantEvent::Done { stop_reason: state.stop_reason, usage }).await;
+            responses::pump(response, tx, cancel, info, "chatgpt").await;
         });
 
         channel_stream(rx)
@@ -459,6 +196,7 @@ impl Provider for ChatGptProvider {
 mod tests {
     use super::*;
     use crate::provider::ToolSpec;
+    use crate::types::LlmMessage;
 
     struct StaticTokens;
 
@@ -487,45 +225,5 @@ mod tests {
         assert_eq!(tools[0], json!({ "type": "web_search" }));
         assert_eq!(tools[1]["type"], "function");
         assert_eq!(tools[1]["name"], "read");
-    }
-
-    #[tokio::test]
-    async fn web_search_calls_stream_as_server_tools_and_never_as_blocks() {
-        let (tx, mut rx) = mpsc::channel(16);
-        let mut state = ResponsesState::new();
-        let added = json!({ "item": { "type": "web_search_call", "id": "ws_1", "status": "in_progress" } });
-        assert_eq!(state.apply("response.output_item.added", &added, &tx).await, Ok(false));
-        let done = json!({ "item": {
-            "type": "web_search_call", "id": "ws_1", "status": "completed",
-            "action": { "type": "search", "query": "tinybot relay" },
-        } });
-        assert_eq!(state.apply("response.output_item.done", &done, &tx).await, Ok(false));
-        let page = json!({ "item": { "type": "web_search_call", "id": "ws_2", "action": { "type": "open_page", "url": "https://example.com/a" } } });
-        assert_eq!(state.apply("response.output_item.added", &page, &tx).await, Ok(false));
-        assert_eq!(state.apply("response.output_item.done", &page, &tx).await, Ok(false));
-        // A message after the searches is still block 0: the searches took no index.
-        let message = json!({ "item": { "type": "message", "id": "msg_1" } });
-        assert_eq!(state.apply("response.output_item.added", &message, &tx).await, Ok(false));
-        drop(tx);
-
-        let mut events = Vec::new();
-        while let Some(event) = rx.recv().await {
-            events.push(event);
-        }
-        assert!(matches!(&events[0], AssistantEvent::ServerToolStart { id, name, detail } if id == "ws_1" && name == WEB_SEARCH_TOOL && detail.is_empty()));
-        assert!(matches!(&events[1], AssistantEvent::ServerToolEnd { id, name, detail, summary }
-            if id == "ws_1" && name == WEB_SEARCH_TOOL && detail == "tinybot relay" && summary == "Searched the web for “tinybot relay”"));
-        assert!(matches!(&events[2], AssistantEvent::ServerToolStart { name, detail, .. } if name == WEB_FETCH_TOOL && detail == "https://example.com/a"));
-        assert!(matches!(&events[3], AssistantEvent::ServerToolEnd { name, summary, .. } if name == WEB_FETCH_TOOL && summary == "Read https://example.com/a"));
-        assert!(matches!(&events[4], AssistantEvent::TextStart { index: 0 }));
-        assert_eq!(state.stop_reason, StopReason::Stop);
-    }
-
-    #[test]
-    fn a_find_inside_a_page_counts_as_a_read() {
-        let (name, detail, summary) = web_call_action(&json!({ "type": "find", "url": "https://x.dev", "pattern": "pricing" }));
-        assert_eq!((name.as_str(), detail.as_str(), summary.as_str()), (WEB_FETCH_TOOL, "pricing in https://x.dev", "Searched https://x.dev"));
-        let (name, _, summary) = web_call_action(&json!({}));
-        assert_eq!((name.as_str(), summary.as_str()), (WEB_SEARCH_TOOL, "Searched the web"));
     }
 }

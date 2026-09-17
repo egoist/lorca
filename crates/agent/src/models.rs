@@ -96,6 +96,9 @@ const ALWAYS_ON_LEVELS: &[ThinkingLevel] = &[Minimal, Low, Medium, High, XHigh, 
 const BUDGET_LEVELS: &[ThinkingLevel] = &[Off, Minimal, Low, Medium, High];
 const DEEPSEEK_LEVELS: &[ThinkingLevel] = &[Off, Low, Medium, High, XHigh, Max];
 const CODEX_LEVELS: &[ThinkingLevel] = &[Low, Medium, High, XHigh];
+/// The Grok models that take `reasoning.effort`; the others reason on their own.
+const GROK_LEVELS: &[ThinkingLevel] = &[Low, Medium, High];
+const NO_LEVELS: &[ThinkingLevel] = &[];
 
 const fn rates(input: f64, output: f64, cache_read: f64, cache_write: f64) -> Rates {
     Rates { input, output, cache_read, cache_write }
@@ -104,6 +107,13 @@ const fn rates(input: f64, output: f64, cache_read: f64, cache_write: f64) -> Ra
 macro_rules! tier_272k {
     ($input:expr, $output:expr, $cache_read:expr, $cache_write:expr) => {{
         const TIERS: &[CostTier] = &[CostTier { input_tokens_above: 272_000, rates: rates($input, $output, $cache_read, $cache_write) }];
+        TIERS
+    }};
+}
+
+macro_rules! tier_200k {
+    ($input:expr, $output:expr, $cache_read:expr, $cache_write:expr) => {{
+        const TIERS: &[CostTier] = &[CostTier { input_tokens_above: 200_000, rates: rates($input, $output, $cache_read, $cache_write) }];
         TIERS
     }};
 }
@@ -281,6 +291,73 @@ pub const MODELS: &[ModelInfo] = &[
         tiers: NO_TIERS,
         thinking: ThinkingMode::Effort,
         levels: CODEX_LEVELS,
+    },
+    // Grok sign-ins: a SuperGrok or X Premium+ subscription, not billed per token; these are
+    // xAI's API rates (docs.x.ai, 2026-09), so a turn's cost still says what the work was worth.
+    ModelInfo {
+        id: "grok-4.6",
+        name: "Grok 4.6",
+        provider: "grok",
+        context_window: 500_000,
+        max_output: 64_000,
+        reasoning: true,
+        images: true,
+        rates: rates(2.0, 6.0, 0.5, 0.0),
+        tiers: tier_200k!(4.0, 12.0, 1.0, 0.0),
+        thinking: ThinkingMode::Effort,
+        levels: GROK_LEVELS,
+    },
+    ModelInfo {
+        id: "grok-4.5",
+        name: "Grok 4.5",
+        provider: "grok",
+        context_window: 500_000,
+        max_output: 64_000,
+        reasoning: true,
+        images: true,
+        rates: rates(2.0, 6.0, 0.3, 0.0),
+        tiers: tier_200k!(4.0, 12.0, 0.6, 0.0),
+        thinking: ThinkingMode::Effort,
+        levels: GROK_LEVELS,
+    },
+    ModelInfo {
+        id: "grok-4.3",
+        name: "Grok 4.3",
+        provider: "grok",
+        context_window: 1_000_000,
+        max_output: 64_000,
+        reasoning: true,
+        images: true,
+        rates: rates(1.25, 2.5, 0.2, 0.0),
+        tiers: tier_200k!(2.5, 5.0, 0.4, 0.0),
+        thinking: ThinkingMode::Effort,
+        levels: GROK_LEVELS,
+    },
+    ModelInfo {
+        id: "grok-4.20-0309-reasoning",
+        name: "Grok 4.20 Reasoning",
+        provider: "grok",
+        context_window: 1_000_000,
+        max_output: 64_000,
+        reasoning: true,
+        images: true,
+        rates: rates(1.25, 2.5, 0.2, 0.0),
+        tiers: tier_200k!(2.5, 5.0, 0.4, 0.0),
+        thinking: ThinkingMode::Effort,
+        levels: NO_LEVELS,
+    },
+    ModelInfo {
+        id: "grok-build-0.1",
+        name: "Grok Build 0.1",
+        provider: "grok",
+        context_window: 256_000,
+        max_output: 64_000,
+        reasoning: true,
+        images: false,
+        rates: rates(1.0, 2.0, 0.2, 0.0),
+        tiers: tier_200k!(2.0, 4.0, 0.4, 0.0),
+        thinking: ThinkingMode::Effort,
+        levels: NO_LEVELS,
     },
 ];
 

@@ -200,7 +200,7 @@ export function Chef() {
         <ol className="space-y-5">
           {[
             ['Create an identity', 'A key pair and a thirteen-group backup phrase.'],
-            ['Connect a provider', 'A DeepSeek key, or sign in to ChatGPT. It stays on this machine.'],
+            ['Connect a provider', 'A DeepSeek key, or sign in to ChatGPT or Grok. It stays on this machine.'],
             ['Meet Chef', 'Describe your week. Say yes to the team it proposes.'],
             ['Pair the next machine', 'Paste the pairing string. Assign a bot to it.'],
           ].map(([title, body], i) => (
@@ -221,7 +221,7 @@ export function Chef() {
 const faq = [
   ['Do I need a server?', 'No. One machine works on its own. The relay only matters when you pair a second device, and it stores ciphertext and nothing else.'],
   ['Which platforms?', 'macOS today, on Apple silicon and Intel. Windows and Linux are next, and a bot on any of them can join the same team.'],
-  ['Which models can bots use?', 'DeepSeek with an API key, or ChatGPT by signing in with your own account. Each bot chooses its provider and model, and you can change them any time.'],
+  ['Which models can bots use?', 'DeepSeek with an API key, or ChatGPT or Grok by signing in with your own account. Each bot chooses its provider and model, and you can change them any time.'],
   ['What can a bot do on my computer?', 'Read, write, and edit files, search, and run commands inside the working directory you give it. It runs as you, on the machine you assigned it to.'],
   ['What does the relay see?', 'Encrypted blobs, a machine public key, and a sequence number. No names, no titles, no messages.'],
 ]

@@ -443,6 +443,11 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             Ok(json!({ "email": tokens.email, "providers": app.credentials.lock().unwrap().statuses() }))
         }
         #[cfg(feature = "runner")]
+        "providers.connect_grok" => {
+            let tokens = providers::connect_grok(app).await?;
+            Ok(json!({ "email": tokens.email, "providers": app.credentials.lock().unwrap().statuses() }))
+        }
+        #[cfg(feature = "runner")]
         "providers.disconnect" => {
             providers::disconnect(app, &string(&params, "kind")?)?;
             Ok(json!({ "providers": app.credentials.lock().unwrap().statuses() }))

@@ -1,7 +1,7 @@
 import AppKit
 
-/// Connects a provider on this Runner. DeepSeek and Anthropic take an API key; ChatGPT signs in
-/// through the browser, driven by the CLI. Credentials never leave this Mac.
+/// Connects a provider on this Runner. DeepSeek and Anthropic take an API key; ChatGPT and Grok
+/// sign in through the browser, driven by the CLI. Credentials never leave this Mac.
 final class ConnectProviderViewController: SheetViewController {
     private let store = AppStore.shared
     private let kind: ProviderCredential.Kind
@@ -23,7 +23,7 @@ final class ConnectProviderViewController: SheetViewController {
             if kind.usesAPIKey {
                 "The key is checked against \(kind.rawValue), then stored in the CLI on this Mac with mode 0600. Bots assigned here use it directly."
             } else {
-                "Your browser opens a ChatGPT sign-in. The CLI on this Mac keeps the resulting tokens; nothing is sent to a Tinybot server."
+                "Your browser opens a \(kind.rawValue) sign-in. The CLI on this Mac keeps the resulting tokens; nothing is sent to a Tinybot server."
             }
         super.init(title: "Connect \(kind.rawValue)", subtitle: subtitle, width: 420)
     }
@@ -65,12 +65,13 @@ final class ConnectProviderViewController: SheetViewController {
             setButtons(confirm: "Connect")
             confirmButton.isEnabled = false
         } else {
+            let flow = kind == .chatgpt ? "the same OAuth flow as the Codex CLI" : "the same OAuth flow as xAI's Grok CLI"
             let note = Build.label(
-                "Sign-in uses the same OAuth flow as the Codex CLI. It needs a ChatGPT subscription.",
+                "Sign-in uses \(flow). \(kind.signInRequirement)",
                 font: Theme.Font.caption, color: .tertiaryLabelColor, lines: 0)
             contentStack.addArrangedSubview(note)
             note.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
-            setButtons(confirm: "Sign in with ChatGPT…")
+            setButtons(confirm: "Sign in with \(kind.rawValue)…")
         }
 
         contentStack.addArrangedSubview(statusRow)
@@ -90,7 +91,7 @@ final class ConnectProviderViewController: SheetViewController {
                 if self.kind.usesAPIKey {
                     try await self.store.connectAPIKey(self.kind, apiKey: key, baseURL: self.baseURLField.stringValue)
                 } else {
-                    try await self.store.connectChatGPT()
+                    try await self.store.connectSignIn(self.kind)
                 }
                 self.spinner.stopAnimation(nil)
                 self.status.textColor = .systemGreen

@@ -77,7 +77,7 @@ Read events on a separate task, as above. The run waits for the channel to accep
 - [How it works](how-it-works.md): messages, the turn loop, event order, errors, cancellation
 - [The `Agent`](agent.md): prompting, continuing, steering, follow-ups, abort, persistence
 - [Tools](tools.md): writing a tool, streaming updates, terminating a run, the built-in coding tools
-- [Providers](providers.md): the provider contract, the Anthropic Messages, OpenAI-compatible, and ChatGPT adapters, writing your own
+- [Providers](providers.md): the provider contract, the Anthropic Messages, OpenAI-compatible, ChatGPT, and Grok adapters, writing your own
 - [Hooks](hooks.md): context transforms, custom messages, tool-call gates, stopping early, preparing the next turn
 - [Compaction](compaction.md): keeping a long conversation inside the window, estimating context size
 - [The harness](harness.md): a general agent with model switching, skills, prompt templates, queues, hooks, and events

@@ -23,6 +23,7 @@ enum MockData {
                     ProviderCredential(kind: .anthropic, isConnected: false, detail: "Not connected"),
                     ProviderCredential(
                         kind: .chatgpt, isConnected: true, detail: "you@tinybot.dev"),
+                    ProviderCredential(kind: .grok, isConnected: false, detail: "Not connected"),
                 ],
                 plugins: plugins()
             ),
@@ -40,6 +41,7 @@ enum MockData {
                     ProviderCredential(kind: .deepseek, isConnected: true, detail: "sk-live…8b17"),
                     ProviderCredential(kind: .anthropic, isConnected: false, detail: "Not connected"),
                     ProviderCredential(kind: .chatgpt, isConnected: false, detail: "Not connected"),
+                    ProviderCredential(kind: .grok, isConnected: false, detail: "Not connected"),
                 ]
             ),
             Device(
@@ -56,6 +58,7 @@ enum MockData {
                     ProviderCredential(kind: .deepseek, isConnected: false, detail: "Not connected"),
                     ProviderCredential(kind: .anthropic, isConnected: false, detail: "Not connected"),
                     ProviderCredential(kind: .chatgpt, isConnected: false, detail: "Not connected"),
+                    ProviderCredential(kind: .grok, isConnected: false, detail: "Not connected"),
                 ]
             ),
             Device(

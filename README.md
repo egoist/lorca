@@ -30,7 +30,7 @@ bun run reset        # stop everything and wipe identity, credentials, chats, pr
 ## AI services
 
 - API key: DeepSeek
-- Subscription: ChatGPT
+- Subscription: ChatGPT, Grok (SuperGrok or X Premium+)
 
 Architecture: [ARCHITECTURE.md](./ARCHITECTURE.md). Read it before implementing.
 

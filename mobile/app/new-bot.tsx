@@ -29,6 +29,13 @@ const MODELS: Record<string, { id: string; label: string }[]> = {
     { id: "gpt-5.6-luna", label: "GPT-5.6 Luna" },
     { id: "gpt-5.5", label: "GPT-5.5" },
   ],
+  grok: [
+    { id: "grok-4.6", label: "Grok 4.6" },
+    { id: "grok-4.5", label: "Grok 4.5" },
+    { id: "grok-4.3", label: "Grok 4.3" },
+    { id: "grok-4.20-0309-reasoning", label: "Grok 4.20 Reasoning" },
+    { id: "grok-build-0.1", label: "Grok Build 0.1" },
+  ],
 };
 
 export default function NewBotScreen() {
@@ -45,7 +52,7 @@ export default function NewBotScreen() {
   const [runnerId, setRunnerId] = useState<string>(() => runners.find((r) => deviceIsOnline(r.id))?.id ?? runners[0]?.id ?? "");
   const runner = runners.find((r) => r.id === runnerId);
   const connected = runner ? connectedProviders(runner) : [];
-  const providers = connected.length ? connected : ["deepseek", "anthropic", "chatgpt"];
+  const providers = connected.length ? connected : ["deepseek", "anthropic", "chatgpt", "grok"];
   const [provider, setProvider] = useState<string>(providers[0]);
   const [model, setModel] = useState<string | undefined>(undefined);
   const [thinking, setThinking] = useState<string | undefined>(undefined);
