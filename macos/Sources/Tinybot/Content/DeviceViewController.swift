@@ -133,7 +133,7 @@ final class DeviceViewController: NSViewController {
                 })
         }
 
-        machineSection.setRows([
+        var machineRows: [NSView] = [
             KeyValueRow(key: "Machine key", value: device.machineKey, monospaced: true),
             KeyValueRow(key: "OS", value: "\(device.os.rawValue) · \(device.osVersion)"),
             KeyValueRow(
@@ -146,7 +146,13 @@ final class DeviceViewController: NSViewController {
                 key: "Relay",
                 value: store.relayURL.map { store.relayConnected ? $0 : "\($0) · offline" } ?? "Not configured",
                 monospaced: true),
-        ])
+        ]
+        if !device.isThisDevice {
+            let unpair = ActionRow(key: "Pairing", value: "Paired to this account", tint: .secondaryLabelColor, actionTitle: "Unpair…")
+            unpair.onAction = { [weak self] in UnpairDevice.confirm(device, in: self?.view.window) }
+            machineRows.append(unpair)
+        }
+        machineSection.setRows(machineRows)
 
         note.stringValue =
             if !device.isRunner {

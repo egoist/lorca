@@ -27,6 +27,10 @@ export default function PairScreen() {
   /// it unmounts, and state updates land later than the next frame, so a ref is what keeps a
   /// second request (which the relay refuses as "already has a request") from going out.
   const inFlight = useRef(false);
+  /// The camera keeps reporting the code while the scanner slides away, and a code that
+  /// failed once fails the same way again; both would stack "Pairing failed" alerts.
+  const scanned = useRef(false);
+  const lastFailed = useRef<string | null>(null);
   const busy = phase !== "idle";
   // A pairing code opened as a link (`tinybot://pair?…`, from the Camera app or a tap on the
   // Mac's code) lands here with its fields as params: pair with it right away.
@@ -47,6 +51,10 @@ export default function PairScreen() {
       Alert.alert("Not a pairing code", error instanceof Error ? error.message : String(error));
       return;
     }
+    if (lastFailed.current === text.trim()) {
+      Alert.alert("Code already used", "Each code pairs one Device. Open Pair a Device on your Mac for a fresh one.");
+      return;
+    }
     inFlight.current = true;
     cancel.current = new AbortController();
     setPhase("posting");
@@ -58,6 +66,7 @@ export default function PairScreen() {
       // Cancel was tapped here: the core's "Pairing cancelled" is not news.
       if (cancel.current?.signal.aborted) return;
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      lastFailed.current = text.trim();
       Alert.alert("Pairing failed", error instanceof Error ? error.message : String(error));
     } finally {
       inFlight.current = false;
@@ -72,6 +81,7 @@ export default function PairScreen() {
         return;
       }
     }
+    scanned.current = false;
     setScanning(true);
   }
 
@@ -154,7 +164,8 @@ export default function PairScreen() {
             facing="back"
             barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
             onBarcodeScanned={({ data }) => {
-              if (!data.includes("pair?") || inFlight.current) return;
+              if (!data.includes("pair?") || inFlight.current || scanned.current) return;
+              scanned.current = true;
               setScanning(false);
               void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
               setCode(data);

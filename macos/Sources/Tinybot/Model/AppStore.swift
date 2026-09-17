@@ -863,6 +863,16 @@ final class AppStore {
         return created.phrase
     }
 
+    /// Unpairs another Device. The CLI has the relay drop its key; the Device wipes its copy of
+    /// the account the next time it connects. Throws when the relay could not be told.
+    func unpairDevice(_ id: Device.ID) async throws {
+        if !isMock {
+            _ = try await client.request("device.unpair", ["id": id])
+        }
+        devices.removeAll { $0.id == id }
+        emit(.rosterChanged)
+    }
+
     func restoreIdentity(phrase: String) async throws {
         _ = try await client.request("identity.restore", ["phrase": phrase])
         hasIdentity = true

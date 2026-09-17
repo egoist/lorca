@@ -3,7 +3,7 @@ import { Stack, useRouter } from "expo-router";
 import { useState } from "react";
 import { Alert, ScrollView, StyleSheet, Text, View } from "react-native";
 import { engine } from "../src/core/engine";
-import { connectedProviders, isRunner, providerLabel } from "../src/core/model";
+import { connectedProviders, isRunner, providerLabel, type Device } from "../src/core/model";
 import { deviceIsOnline, useStore } from "../src/core/store";
 import { FieldRow, Row, Section, ToggleRow } from "../src/ui/forms";
 import { lastSeen } from "../src/ui/format";
@@ -56,6 +56,22 @@ export default function SettingsScreen() {
     ]);
   }
 
+  function confirmUnpairDevice(device: Device) {
+    const detail = isRunner(device)
+      ? "It loses its keys and synced chats the next time it connects, and bots assigned to it stop running until you assign them to another Runner. You can pair it again any time."
+      : "It loses its keys and synced chats the next time it connects. You can pair it again any time.";
+    Alert.alert(`Unpair ${device.name}?`, detail, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Unpair",
+        style: "destructive",
+        onPress: () => {
+          engine.unpairDevice(device.id).catch((error: unknown) => Alert.alert(`Couldn’t unpair ${device.name}`, error instanceof Error ? error.message : String(error)));
+        },
+      },
+    ]);
+  }
+
   function confirmUnpair() {
     Alert.alert("Unpair this phone?", "Its keys and the synced chats are removed from this phone. Your Mac keeps everything, and you can pair again any time.", [
       { text: "Cancel", style: "cancel" },
@@ -97,11 +113,13 @@ export default function SettingsScreen() {
           <Row title="Add rule…" onPress={addRule} />
         </Section>
 
-        <Section title="Devices" footer="Desktop Devices are Runners: they run bots with their own provider credentials. Phones and tablets read and write chats.">
+        <Section title="Devices" footer="Desktop Devices are Runners: they run bots with their own provider credentials. Phones and tablets read and write chats. Tap a Device to unpair it.">
           {sorted.map((device) => (
             <Row
               key={device.id}
               title={device.id === thisId ? `${device.name} (this phone)` : device.name}
+              onPress={device.id === thisId ? undefined : () => confirmUnpairDevice(device)}
+              chevron={device.id !== thisId}
               subtitle={[device.model, isRunner(device) ? "Runner" : "Device", device.id === thisId ? "Online" : lastSeen(seen[device.id]), ...connectedProviders(device).map(providerLabel)].filter(Boolean).join(" · ")}
               leading={
                 <View style={styles.deviceIcon}>

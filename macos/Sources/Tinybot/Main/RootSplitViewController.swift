@@ -147,6 +147,11 @@ final class RootSplitViewController: NSSplitViewController {
             if case let .chat(id) = selection, store.chat(id) == nil {
                 select(store.chats.first.map { .chat($0.id) })
             }
+        case .rosterChanged:
+            // An unpaired Device leaves the list; its page goes with it.
+            if case let .device(id) = selection, store.device(id) == nil {
+                select(store.thisDevice.map { .device($0.id) } ?? store.chats.first.map { .chat($0.id) })
+            }
         case let .chatChanged(id):
             if case .chat(id) = selection {
                 inspector.reload()
@@ -309,6 +314,14 @@ final class RootSplitViewController: NSSplitViewController {
             guard response == .alertFirstButtonReturn else { return }
             self?.store.deleteChat(chatID)
         }
+    }
+
+    @objc func unpairDevice(_ sender: Any?) {
+        guard case let .device(id) = selection, let device = store.device(id), !device.isThisDevice else {
+            NSSound.beep()
+            return
+        }
+        UnpairDevice.confirm(device, in: view.window)
     }
 }
 

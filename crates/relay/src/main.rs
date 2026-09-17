@@ -116,6 +116,8 @@ pub struct AppState {
     pub wakers: Arc<db::Wakers>,
     /// Throttles `last_seen` writes.
     pub presence: Arc<db::Presence>,
+    /// Keys of unpaired machines; their tokens are refused.
+    pub revoked: Arc<db::Revoked>,
     pub quota_bytes: u64,
     pub ip_limiter: Arc<limit::RateLimiter>,
     pub identity_limiter: Arc<limit::RateLimiter>,
@@ -133,6 +135,7 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let db = Arc::new(db::Db::open(&args.db)?);
     let file_store = Arc::new(file_store(&args)?);
+    let revoked = Arc::new(db::Revoked::load(db.read(|db| Ok(db::revoked_machines(db)?)).await.map_err(|e| anyhow::anyhow!("{e:?}"))?));
 
     let mut secret = [0u8; 32];
     match args.secret {
@@ -148,6 +151,7 @@ async fn main() -> anyhow::Result<()> {
         secret: Arc::new(secret),
         wakers: Arc::new(db::Wakers::default()),
         presence: Arc::new(db::Presence::default()),
+        revoked,
         quota_bytes: args.quota_bytes,
         ip_limiter: Arc::new(limit::RateLimiter::new(args.ip_per_minute as f64 / 60.0, args.ip_per_minute)),
         identity_limiter: Arc::new(limit::RateLimiter::new(

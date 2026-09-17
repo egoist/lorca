@@ -47,6 +47,10 @@ impl ApiError {
     pub fn conflict(message: &str) -> Self {
         Self::new(StatusCode::CONFLICT, message)
     }
+    /// The machine was unpaired: its key is dead for good, unlike an unknown one.
+    pub fn gone(message: &str) -> Self {
+        Self::new(StatusCode::GONE, message)
+    }
     pub fn too_large(message: &str) -> Self {
         Self::new(StatusCode::PAYLOAD_TOO_LARGE, message)
     }
@@ -89,6 +93,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/v1/health", get(health))
         .route("/v1/machines", get(list_machines))
+        .route("/v1/machines/{machine_pubkey}", axum::routing::delete(revoke_machine))
         .route("/v1/blobs", get(list_blobs).put(put_blob))
         .route("/v1/blobs/{id}", get(get_blob).delete(delete_blob))
         .route("/v1/pair", post(create_pairing))
@@ -221,6 +226,20 @@ async fn list_machines(State(state): State<AppState>, auth: Auth) -> ApiResult<J
         })
         .collect();
     Ok(Json(json!({ "machines": machines, "now": now() })))
+}
+
+/// Unpairs one machine of the caller's identity, the caller's own included. Its key never
+/// authenticates again, and its pending envelopes go. The identity's long-polls are woken so
+/// the other Devices refresh their machine list now.
+async fn revoke_machine(State(state): State<AppState>, auth: Auth, Path(machine_pubkey): Path<String>) -> ApiResult<StatusCode> {
+    let (identity, target) = (auth.identity_pubkey.clone(), machine_pubkey.clone());
+    let removed = state.db.write(move |db| Ok(db::revoke_machine(db, &identity, &target)?)).await?;
+    if !removed {
+        return Err(ApiError::not_found("Not a machine of this identity"));
+    }
+    state.revoked.insert(&machine_pubkey);
+    state.wakers.machines_changed(&auth.identity_pubkey);
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // MARK: - Blobs
@@ -373,7 +392,8 @@ impl From<db::BlobRow> for BlobOut {
 }
 
 /// Long-poll. The identity's waker is armed before each query, so a blob that lands between
-/// the query and the wait still wakes this call; there is no periodic re-query.
+/// the query and the wait still wakes this call; there is no periodic re-query. A change to
+/// the identity's machine list ends the wait early too, with whatever blobs there are.
 async fn list_blobs(State(state): State<AppState>, auth: Auth, Query(query): Query<ListBlobs>) -> ApiResult<Json<Value>> {
     let kinds: Vec<String> = query
         .kinds
@@ -391,6 +411,7 @@ async fn list_blobs(State(state): State<AppState>, auth: Auth, Query(query): Que
     let wait = query.wait.unwrap_or(0).min(MAX_WAIT_SECONDS);
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(wait);
     let waker = state.wakers.waiter(&auth.identity_pubkey);
+    let generation = state.wakers.generation(&auth.identity_pubkey);
 
     loop {
         let notified = waker.notified();
@@ -413,6 +434,11 @@ async fn list_blobs(State(state): State<AppState>, auth: Auth, Query(query): Que
             return Ok(Json(json!({ "blobs": blobs, "seq": head })));
         }
         if tokio::time::timeout_at(deadline, notified).await.is_err() {
+            return Ok(Json(json!({ "blobs": blobs, "seq": head })));
+        }
+        // A machine was unpaired: nothing new to read, but the caller should refresh its
+        // machine list now rather than at the end of the wait.
+        if state.wakers.generation(&auth.identity_pubkey) != generation {
             return Ok(Json(json!({ "blobs": blobs, "seq": head })));
         }
     }

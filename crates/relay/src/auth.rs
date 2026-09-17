@@ -92,8 +92,9 @@ pub fn parse_token(secret: &[u8; 32], token: &str) -> Result<Auth, ApiError> {
     Ok(Auth { identity_pubkey, machine_pubkey })
 }
 
-/// The authenticated machine. Extracting it also bumps the machine's `last_seen`, at most
-/// once every `db::TOUCH_INTERVAL` seconds per machine.
+/// The authenticated machine. A token outlives an unpairing by up to an hour, so the revoked
+/// set is checked first. Extracting it also bumps the machine's `last_seen`, at most once
+/// every `db::TOUCH_INTERVAL` seconds per machine.
 #[derive(Debug, Clone)]
 pub struct Auth {
     pub identity_pubkey: String,
@@ -111,6 +112,9 @@ impl FromRequestParts<AppState> for Auth {
             .ok_or_else(|| ApiError::unauthorized("Missing bearer token"))?;
         let token = header.strip_prefix("Bearer ").ok_or_else(|| ApiError::unauthorized("Missing bearer token"))?;
         let auth = parse_token(&state.secret, token)?;
+        if state.revoked.contains(&auth.machine_pubkey) {
+            return Err(ApiError::gone("Machine was unpaired"));
+        }
         if let Err(retry_after) = state.identity_limiter.check(&auth.identity_pubkey) {
             return Err(ApiError::too_many(retry_after));
         }

@@ -69,6 +69,12 @@ Recovery: restore the master secret from the backup phrase → re-derive content
 
 App ↔ CLI on one machine uses `127.0.0.1`; those keys are already local.
 
+### Unpairing a Device
+
+Any paired Device can unpair any other from its Device list (`device.unpair`), and a Device unpairs itself with `identity.forget`. Either way the CLI calls `DELETE /v1/machines/{machine_pubkey}` with its bearer token: the relay drops the machine row, remembers the key in `revoked_machines`, deletes the envelopes sealed to it, and wakes the identity's long-polls. A revoked key never authenticates again: its bearer tokens are refused, its challenge answers `410 Gone`, and the identity cannot re-attest it. A Device that pairs again generates a new machine key.
+
+The relay's machine list is the list of paired Devices. Every sync cycle refreshes presence from it and drops a Device it no longer lists, so the other Devices see an unpaired one leave within a poll; a stale `machine` blob for a key the relay does not list is ignored. The unpaired Device learns on its next relay call: a `410` from the relay makes its CLI forget the identity (keys, credentials, chats), and the app shows onboarding. That holds for the identity device too: a phone can unpair a lost Mac, and the backup phrase restores the identity on a new machine key.
+
 ### Devices and Runners
 
 Every Device writes its `os` into its machine metadata blob. Values: `macos`, `linux`, `windows`, `ios`, `ipados`, `android`. The client sets it at pairing and re-sends it with presence.
@@ -90,6 +96,7 @@ The relay stores:
 - Blob ids, kinds, sequence numbers, timestamps, size
 - Recipient machine public key on an envelope (so a Runner can fetch its jobs)
 - Last-seen of a machine public key (presence: online within 150 s)
+- Keys of unpaired machines, refused for good
 - Pairing mailboxes keyed by nonce, expiring after ten minutes
 
 Nicknames, Device names and `os`, bot profiles, and chat text live inside encrypted blobs.
@@ -134,7 +141,7 @@ If B is offline or still connecting a provider, the envelope waits on the relay 
 
 - **The core** (`crates/mobile/src/lib.rs`): `Core.start(home, name, os, osVersion, model, listener)` loads the App from the app's own folder, sets the host facts (a phone cannot probe them), and starts the relay sync loop on an embedded tokio runtime; `request(method, params)` is one call of the JSON API in `crates/cli/src/api.rs`, blocking on the module's background queue, answering `{ result }` or `{ error: { message } }`; `wake()` asks the relay again now (the app calls it on foreground, since iOS killed the poll in flight). Every event on the App's bus reaches the listener as the `{ event, data }` frame the websocket carries.
 - **The native module** (`mobile/modules/tinybot-core`, picked up by Expo autolinking): a Swift `Module` and a Kotlin one, each about forty lines, forwarding `start`, `request`, and `wake` and turning the listener's frames into a `sendEvent`. `bun run core` (`build.ts`) builds the Rust for `aarch64-apple-ios` and the simulator into an xcframework with the UniFFI Swift beside it, and for `arm64-v8a` and `x86_64` with `cargo ndk` into `jniLibs` with the Kotlin (over JNA). The built pieces are gitignored; a Rust change needs `bun run core` and a native rebuild, a JS change is a Metro reload.
-- **The JS side** (`mobile/src/core`): `engine.ts` starts the core, mirrors its events into the zustand store (`store.ts`, the way the Mac app's AppStore mirrors the CLI: `snapshot`, `roster.changed`, `message.*`, `job.*`, `chat.usage`, `relay.status`, `identity.changed`), and offers the screens the same verbs the Mac app has, each one request (`chats.send`, `bots.create`, `pair.accept`, `device.rename`, `identity.forget`, `sync.wake`, …). `prefs.ts` keeps the one thing that is the phone's own, the dictation language. Nothing about the account is stored outside the core's folder.
+- **The JS side** (`mobile/src/core`): `engine.ts` starts the core, mirrors its events into the zustand store (`store.ts`, the way the Mac app's AppStore mirrors the CLI: `snapshot`, `roster.changed`, `message.*`, `job.*`, `chat.usage`, `relay.status`, `identity.changed`), and offers the screens the same verbs the Mac app has, each one request (`chats.send`, `bots.create`, `pair.accept`, `device.rename`, `device.unpair`, `identity.forget`, `sync.wake`, …). `prefs.ts` keeps the one thing that is the phone's own, the dictation language. Nothing about the account is stored outside the core's folder.
 - **Pairing**: the phone scans the QR code the Mac shows, pastes the string, or opens it as a `tinybot://pair?…` link; `pair.accept` does the handshake in the core and the first `bootstrap` snapshot fills the store.
 - **Attachments**: the composer's `+` offers the photo library, the camera, and the file picker; a picked file's path goes with `chats.send`, and the core copies, encrypts, and uploads it as a `file` blob ahead of the message. A bubble that shows an attachment this phone does not have asks `files.path`, which fetches the blob and answers with the file. Images render as thumbnails sized from the width and height in the message (full screen on tap); other files as a name-and-size card.
 - **Dictation**: the primary disc is Dictate while the field is empty (a small microphone sits inside the field once there is text). While recording, the field shows Grok Bot's pill: a stop square, the elapsed time, and bars that follow the microphone, with Send still beside it. The words land in the field after whatever was typed when the user taps the square, or go out at once when the user taps Send. The recognizer (`expo-speech-recognition`) listens in the first of the phone's preferred languages it supports (`src/ui/dictation.ts`; a Chinese speaker on an English-region phone gets zh-CN), or the language chosen in Settings or by a long press on the microphone.
@@ -178,7 +185,7 @@ Blob API: `PUT /v1/blobs` (client-chosen id of up to 64 characters in `[A-Za-z0-
 
 Clients set `TINYBOT_RELAY_URL` or the relay URL in Settings › Advanced. Without a relay the CLI works on one Device alone. In dev (`bun run dev` sets `TINYBOT_DEV=1` and runs a relay on `0.0.0.0:8787`), a Device with no relay configured defaults to `http://<this Mac's LAN IP>:8787`, so Pair a Device shows a code a phone on the same network can use.
 
-A CLI lists blobs for its identity and envelopes for its machine public key (long-poll), decrypts, and emits events to the app on localhost.
+A CLI lists blobs for its identity and envelopes for its machine public key (long-poll), decrypts, and emits events to the app on localhost. A page of twenty or more blobs is a backlog (a fresh pair replays the whole history): the CLI applies it with message and roster events held back and no state write per message, saves once, and emits one `snapshot` at the end of the page, so the app fills in at once instead of one message at a time.
 
 ## CLI (runtime)
 

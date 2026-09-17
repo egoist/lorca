@@ -208,15 +208,20 @@ final class DevicesSettingsViewController: SettingsPaneViewController {
         section.setRows(
             store.devices.map { device in
                 let row = StatusRow()
+                let presence = device.status == .online ? "Online" : Format.lastSeen(device.lastSeen)
+                let detail = device.isRunner
+                    ? "\(device.model) · \(store.bots(on: device.id).count) bots"
+                    : "\(device.model) · \(device.os.displayName) · not a Runner"
+                // The Unpair button takes the state label's place, so presence moves into the subtitle.
                 row.configure(
                     symbol: device.symbolName,
                     title: device.isThisDevice ? "\(device.name) (this Mac)" : device.name,
-                    subtitle: device.isRunner
-                        ? "\(device.model) · \(store.bots(on: device.id).count) bots"
-                        : "\(device.model) · \(device.os.displayName) · not a Runner",
-                    state: device.status == .online ? "Online" : Format.lastSeen(device.lastSeen),
-                    stateColor: device.status == .online ? .systemGreen : .secondaryLabelColor
+                    subtitle: device.isThisDevice ? detail : "\(detail) · \(presence)",
+                    state: presence,
+                    stateColor: device.status == .online ? .systemGreen : .secondaryLabelColor,
+                    actionTitle: device.isThisDevice ? nil : "Unpair…"
                 )
+                row.onAction = { [weak self] in UnpairDevice.confirm(device, in: self?.view.window) }
                 return row
             })
     }

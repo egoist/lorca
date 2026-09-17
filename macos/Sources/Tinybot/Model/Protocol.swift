@@ -382,6 +382,13 @@ enum Wire {
     struct PairStatus: Decodable {
         var state: String
         var error: String?
+        /// `completed`: the Device that joined.
+        var device: PairedDevice?
+    }
+
+    struct PairedDevice: Decodable {
+        var id: String
+        var name: String
     }
 
     struct IdentityCreated: Decodable {

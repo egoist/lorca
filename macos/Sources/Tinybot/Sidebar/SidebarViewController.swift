@@ -346,8 +346,12 @@ extension SidebarViewController: NSMenuDelegate {
             menu.addItem(.separator())
             menu.addItem(item("Delete", #selector(RootSplitViewController.deleteChat(_:))))
 
-        case .device:
+        case let .device(id):
             menu.addItem(item("Pair a Device…", #selector(AppDelegate.pairDevice(_:))))
+            if store.device(id)?.isThisDevice == false {
+                menu.addItem(.separator())
+                menu.addItem(item("Unpair…", #selector(RootSplitViewController.unpairDevice(_:))))
+            }
 
         case .header:
             break

@@ -25,6 +25,10 @@ impl RelayError {
     pub fn is_unknown_machine(&self) -> bool {
         self.status == Some(404)
     }
+    /// This machine was unpaired from another Device. Its key is dead for good.
+    pub fn is_unpaired(&self) -> bool {
+        self.status == Some(410)
+    }
     pub fn is_client_error(&self) -> bool {
         matches!(self.status, Some(400..=499))
     }
@@ -192,6 +196,12 @@ impl RelayClient {
     }
 
     // MARK: - Pairing mailbox
+
+    /// Unpairs a machine of this identity, this one included.
+    pub async fn revoke_machine(&self, url: &str, token: &str, machine_pubkey: &str) -> RelayResult<()> {
+        Self::check(self.http.delete(format!("{url}/v1/machines/{machine_pubkey}")).bearer_auth(token).send().await?).await?;
+        Ok(())
+    }
 
     pub async fn pair_create(&self, url: &str, token: &str) -> RelayResult<String> {
         let value = Self::check(self.http.post(format!("{url}/v1/pair")).bearer_auth(token).send().await?).await?;

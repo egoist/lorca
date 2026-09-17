@@ -258,6 +258,10 @@ final class PairingSheetViewController: SheetViewController {
         "Waiting for the other Device… Done keeps this code good for ten minutes; Cancel retires it.",
         font: .systemFont(ofSize: 12), color: .secondaryLabelColor, lines: 0)
     private let spinner = NSProgressIndicator()
+    /// Covers the code once a Device has used it: a code pairs one Device, and scanning it
+    /// again would only fail on the phone.
+    private let pairedOverlay = BackgroundView()
+    private var copy: NSButton?
     private var task: Task<Void, Never>?
 
     init() {
@@ -282,6 +286,17 @@ final class PairingSheetViewController: SheetViewController {
         qr.translatesAutoresizingMaskIntoConstraints = false
         frame.addSubview(qr)
 
+        pairedOverlay.cornerRadius = 12
+        pairedOverlay.fillColor = NSColor.white.withAlphaComponent(0.9)
+        pairedOverlay.isHidden = true
+        let check = NSImageView()
+        check.image = NSImage(systemSymbolName: "checkmark.circle.fill", accessibilityDescription: "Paired")
+        check.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 64, weight: .regular)
+        check.contentTintColor = .systemGreen
+        check.translatesAutoresizingMaskIntoConstraints = false
+        pairedOverlay.addSubview(check)
+        frame.addSubview(pairedOverlay)
+
         let codeBox = BackgroundView()
         codeBox.cornerRadius = 8
         codeBox.fillColor = Theme.codeBackground
@@ -290,6 +305,7 @@ final class PairingSheetViewController: SheetViewController {
         let copy = Build.imageButton(
             symbol: "doc.on.doc", pointSize: 11, tooltip: "Copy pairing string", target: self,
             action: #selector(copyPairingString))
+        self.copy = copy
         codeBox.addSubview(code)
         codeBox.addSubview(copy)
 
@@ -311,6 +327,12 @@ final class PairingSheetViewController: SheetViewController {
             qr.leadingAnchor.constraint(equalTo: frame.leadingAnchor, constant: 10),
             qr.trailingAnchor.constraint(equalTo: frame.trailingAnchor, constant: -10),
             qr.bottomAnchor.constraint(equalTo: frame.bottomAnchor, constant: -10),
+            pairedOverlay.topAnchor.constraint(equalTo: frame.topAnchor),
+            pairedOverlay.leadingAnchor.constraint(equalTo: frame.leadingAnchor),
+            pairedOverlay.trailingAnchor.constraint(equalTo: frame.trailingAnchor),
+            pairedOverlay.bottomAnchor.constraint(equalTo: frame.bottomAnchor),
+            check.centerXAnchor.constraint(equalTo: pairedOverlay.centerXAnchor),
+            check.centerYAnchor.constraint(equalTo: pairedOverlay.centerYAnchor),
 
             codeBox.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
             code.leadingAnchor.constraint(equalTo: codeBox.leadingAnchor, constant: 10),
@@ -346,10 +368,7 @@ final class PairingSheetViewController: SheetViewController {
                     let status = try await self.store.pairingStatus(nonce: started.nonce)
                     switch status.state {
                     case "completed":
-                        self.spinner.stopAnimation(nil)
-                        self.spinner.isHidden = true
-                        self.statusLabel.stringValue = "Paired. The account key is wrapped to that machine."
-                        self.statusLabel.textColor = .systemGreen
+                        self.markPaired(with: status.device?.name)
                         return
                     case "failed":
                         throw CLIClient.RequestError(message: status.error ?? "Pairing failed")
@@ -365,6 +384,20 @@ final class PairingSheetViewController: SheetViewController {
                 self.statusLabel.textColor = .systemRed
             }
         }
+    }
+
+    /// The code is spent: cover it, retire the copy button, and say who joined.
+    private func markPaired(with deviceName: String?) {
+        spinner.stopAnimation(nil)
+        spinner.isHidden = true
+        pairedOverlay.isHidden = false
+        copy?.isEnabled = false
+        copy?.isHidden = true
+        code.stringValue = "Paired with \(deviceName ?? "the other Device"). This code is used up; pair another Device with a fresh one."
+        code.font = .systemFont(ofSize: 12)
+        code.textColor = .labelColor
+        statusLabel.stringValue = "Paired. The account key is wrapped to that machine."
+        statusLabel.textColor = .systemGreen
     }
 
     @objc private func copyPairingString() {

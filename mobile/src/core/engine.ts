@@ -273,6 +273,13 @@ class Engine {
     core.wake();
   }
 
+  /// Unpairs another Device. The core has the relay drop its key; the Device wipes its copy
+  /// of the account the next time it connects. Rejects when the relay could not be told.
+  async unpairDevice(id: string) {
+    await core.request("device.unpair", { id });
+    useStore.setState((s) => ({ devices: s.devices.filter((d) => d.id !== id) }));
+  }
+
   /// Forgets the identity: keys, account key, and everything synced.
   async unpair() {
     await core.request("identity.forget");

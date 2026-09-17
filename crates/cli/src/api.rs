@@ -68,7 +68,19 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             app.rename_device(&name).map_err(|e| e.to_string())?;
             Ok(json!({ "name": name }))
         }
+        // Another Device by id, or this one: the latter is `identity.forget`.
+        "device.unpair" => {
+            let id = string(&params, "id")?;
+            if app.this_device_id().as_deref() == Some(id.as_str()) {
+                crate::sync::revoke_self(app).await;
+                app.forget_identity().map_err(|e| e.to_string())?;
+            } else {
+                crate::sync::unpair_device(app, &id).await?;
+            }
+            Ok(Value::Null)
+        }
         "identity.forget" => {
+            crate::sync::revoke_self(app).await;
             app.forget_identity().map_err(|e| e.to_string())?;
             Ok(Value::Null)
         }

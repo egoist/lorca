@@ -91,6 +91,13 @@ pub struct App {
     pub relay: RelayClient,
     pub outbox_notify: Notify,
     pub relay_connected: AtomicBool,
+    /// A `machine` blob named a key the last presence refresh did not list: a Device that
+    /// just paired, or one unpaired since. The cycle refreshes presence again to tell.
+    pub presence_stale: AtomicBool,
+    /// Set while the sync loop applies a backlog of blobs (a fresh pair replays the whole
+    /// history). Message and roster events are held back and state is not written per
+    /// message; the cycle saves once and emits one snapshot when the page is applied.
+    pub bulk_sync: AtomicBool,
     pub pairings: Mutex<HashMap<String, PendingPairing>>,
     /// The pairing this Device is joining, while `pair.accept` waits for the reply.
     pub accepting: Mutex<Option<CancellationToken>>,
@@ -140,6 +147,8 @@ impl App {
             relay: RelayClient::new(http.clone()),
             outbox_notify: Notify::new(),
             relay_connected: AtomicBool::new(false),
+            presence_stale: AtomicBool::new(false),
+            bulk_sync: AtomicBool::new(false),
             pairings: Mutex::new(HashMap::new()),
             accepting: Mutex::new(None),
             running_jobs: Mutex::new(HashMap::new()),
@@ -159,6 +168,14 @@ impl App {
     // MARK: - Persistence
 
     pub fn save_state(&self) {
+        // A backlog is saved once at the end of the page, not once per message.
+        if self.bulk_sync.load(Ordering::Relaxed) {
+            return;
+        }
+        self.save_state_now();
+    }
+
+    pub fn save_state_now(&self) {
         let snapshot = self.state.lock().unwrap().clone();
         if let Err(error) = config::write_json_private(&self.config.state_path(), &snapshot) {
             tracing::error!(%error, "saving state");
@@ -187,6 +204,20 @@ impl App {
     }
 
     pub fn emit(&self, event: Event) {
+        if self.bulk_sync.load(Ordering::Relaxed)
+            && matches!(
+                event,
+                Event::MessageAdded { .. }
+                    | Event::MessageUpdated { .. }
+                    | Event::MessageRemoved { .. }
+                    | Event::ChatRemoved { .. }
+                    | Event::RosterChanged { .. }
+                    | Event::ChatUsageChanged { .. }
+            )
+        {
+            // The snapshot at the end of the page carries all of this at once.
+            return;
+        }
         let _ = self.events.send(event);
     }
 

@@ -249,13 +249,12 @@ async fn join(app: &Arc<App>, pairing_string: &str, device_name: Option<String>)
     };
     let request = PairRequest { machine_pubkey: machine.pubkey(), box_pubkey: machine.box_pubkey(), device: device.clone() };
     let sealed = crate::crypto::seal_json(&ek, &request)?;
-    // A mailbox that is gone means A cancelled, or the code expired.
-    let gone = |error: crate::relay::RelayError| {
-        if error.status == Some(404) {
-            anyhow::anyhow!("The other Device stopped waiting on this code. Get a fresh one from it.")
-        } else {
-            anyhow::anyhow!("{error}")
-        }
+    // A mailbox that is gone means A cancelled, or the code expired. One that already holds
+    // a request was used by a Device already: a code is good for one pairing.
+    let gone = |error: crate::relay::RelayError| match error.status {
+        Some(404) => anyhow::anyhow!("The other Device stopped waiting on this code. Get a fresh one from it."),
+        Some(409) => anyhow::anyhow!("This code was already used. Each code pairs one Device; get a fresh one from the other Device."),
+        _ => anyhow::anyhow!("{error}"),
     };
     app.relay.pair_post_request(&relay_url, &nonce, &sealed).await.map_err(gone)?;
     app.emit(Event::PairPosted { nonce: nonce.clone() });

@@ -11,6 +11,8 @@ use crate::model::*;
 use crate::relay::{BlobIn, RelayError};
 
 const POLL_WAIT_SECS: u64 = 25;
+/// A poll page at least this long is applied as a backlog: see `App::bulk_sync`.
+const BULK_BLOBS: usize = 20;
 
 /// What the poll takes. `file` blobs are left out: a transcript fetches them by id when it
 /// needs them, so a photo sent to one bot is not downloaded by every Device.
@@ -27,6 +29,16 @@ pub async fn run(app: Arc<App>) {
                 }
                 if error.is_unauthorized() {
                     app.relay.forget_token();
+                }
+                // Another Device unpaired this one: the relay is done with its key, so its
+                // copy of the account goes. Onboarding is next.
+                if error.is_unpaired() {
+                    tracing::warn!("this Device was unpaired; forgetting the identity");
+                    if let Err(error) = app.forget_identity() {
+                        tracing::error!(%error, "forgetting the identity");
+                    }
+                    failures = 0;
+                    continue;
                 }
                 failures = failures.saturating_add(1);
                 let delay = (2u64.pow(failures.min(5))).min(60);
@@ -74,12 +86,24 @@ async fn cycle(app: &Arc<App>) -> Result<(), RelayError> {
         _ = app.outbox_notify.notified() => return Ok(()),
     };
 
+    // A page this long is a backlog (a fresh pair replays the history): apply it quietly and
+    // tell the app once, instead of one event and one state write per message.
+    let bulk = blobs.len() >= BULK_BLOBS;
+    app.bulk_sync.store(bulk, Ordering::Relaxed);
     for blob in blobs {
         apply_blob(app, &machine_file, &blob);
         let mut state = app.state.lock().unwrap();
         state.last_seq = state.last_seq.max(blob.seq);
     }
-    app.save_state();
+    app.bulk_sync.store(false, Ordering::Relaxed);
+    app.save_state_now();
+    if bulk {
+        crate::runtime::prime_names(app);
+        app.emit(Event::Snapshot(app.snapshot()));
+    }
+    if app.presence_stale.swap(false, Ordering::Relaxed) {
+        refresh_presence(app, &url, &token).await?;
+    }
     Ok(())
 }
 
@@ -132,12 +156,15 @@ async fn drain_outbox(app: &Arc<App>, url: &str, token: &str) -> Result<(), Rela
     }
 }
 
+/// The relay's machine list is the list of paired Devices: presence comes from it, and a
+/// Device it no longer lists was unpaired, so it leaves the roster here too.
 async fn refresh_presence(app: &Arc<App>, url: &str, token: &str) -> Result<(), RelayError> {
     let (machines, _now) = app.relay.machines(url, token).await?;
-    let changed = {
+    let this_id = app.this_device_id();
+    let (changed, pruned) = {
         let mut state = app.state.lock().unwrap();
         let before: Vec<bool> = state.devices.iter().map(|d| online(&state, &d.id)).collect();
-        for machine in machines {
+        for machine in &machines {
             state.device_seen.insert(machine.machine_pubkey.clone(), machine.last_seen);
             if let Some(device) = state.devices.iter_mut().find(|d| d.id == machine.machine_pubkey) {
                 if device.box_pubkey.is_empty() {
@@ -145,13 +172,58 @@ async fn refresh_presence(app: &Arc<App>, url: &str, token: &str) -> Result<(), 
                 }
             }
         }
+        let count = state.devices.len();
+        state.devices.retain(|d| Some(&d.id) == this_id.as_ref() || machines.iter().any(|m| m.machine_pubkey == d.id));
+        let pruned = state.devices.len() != count;
+        if pruned {
+            state.device_seen.retain(|id, _| Some(id) == this_id.as_ref() || machines.iter().any(|m| &m.machine_pubkey == id));
+        }
         let after: Vec<bool> = state.devices.iter().map(|d| online(&state, &d.id)).collect();
-        before != after
+        (before != after, pruned)
     };
-    if changed {
+    if pruned {
+        app.save_state();
+    }
+    if changed || pruned {
         app.emit(app.roster_summary());
     }
     Ok(())
+}
+
+/// Unpairs another Device: the relay drops its key, and it leaves this roster now rather
+/// than on the next presence refresh. A machine the relay already forgot still leaves.
+pub async fn unpair_device(app: &Arc<App>, id: &str) -> Result<(), String> {
+    let url = app.relay_url().ok_or("Set a relay URL first.")?;
+    let machine = app.machine_file().and_then(|m| m.machine().ok()).ok_or("No identity on this Device")?;
+    let token = token_or_register(app, &url, &machine).await.map_err(|e| e.to_string())?;
+    match app.relay.revoke_machine(&url, &token, id).await {
+        Ok(()) => {}
+        Err(error) if error.is_unknown_machine() => {}
+        Err(error) => return Err(error.to_string()),
+    }
+    {
+        let mut state = app.state.lock().unwrap();
+        state.devices.retain(|d| d.id != id);
+        state.device_seen.remove(id);
+    }
+    app.save_state();
+    app.emit(app.roster_summary());
+    Ok(())
+}
+
+/// Before this Device forgets the identity, it asks the relay to drop its key, so the other
+/// Devices see it leave instead of an offline ghost. Best effort: the relay may be away.
+pub async fn revoke_self(app: &Arc<App>) {
+    let (Some(url), Some(machine)) = (app.relay_url(), app.machine_file().and_then(|m| m.machine().ok())) else { return };
+    let revoke = async {
+        let token = app.relay.token(&url, &machine).await?;
+        app.relay.revoke_machine(&url, &token, &machine.pubkey()).await
+    };
+    match tokio::time::timeout(std::time::Duration::from_secs(5), revoke).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => tracing::warn!(%error, "revoking this machine on the relay"),
+        Err(_) => tracing::warn!("revoking this machine on the relay timed out"),
+    }
 }
 
 fn online(state: &crate::app::State, id: &str) -> bool {
@@ -199,7 +271,17 @@ pub fn apply_blob(app: &Arc<App>, machine_file: &crate::keys::MachineFile, blob:
                 if app.this_device_id().as_deref() == Some(device.id.as_str()) {
                     return;
                 }
-                let changed = upsert_device(&mut app.state.lock().unwrap().devices, device);
+                let mut state = app.state.lock().unwrap();
+                // A key the last presence refresh did not list is either a Device that just
+                // paired or one unpaired since, whose old blob must not bring it back. It
+                // lands quietly, and the refresh at the end of the cycle confirms or prunes it.
+                if !state.device_seen.contains_key(&device.id) {
+                    upsert_device(&mut state.devices, device);
+                    app.presence_stale.store(true, Ordering::Relaxed);
+                    return;
+                }
+                let changed = upsert_device(&mut state.devices, device);
+                drop(state);
                 if changed {
                     app.save_state();
                     app.emit(app.roster_summary());
@@ -292,8 +374,8 @@ fn apply_chat_op(app: &Arc<App>, op: ChatBlob) {
                     chat.unread_count += 1;
                 }
             }
+            // The cycle saves state once after the page.
             app.upsert_message(message, false);
-            app.save_state();
             if is_new && from_bot {
                 app.emit(app.roster_summary());
             }

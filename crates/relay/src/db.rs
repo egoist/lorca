@@ -4,7 +4,7 @@
 //!
 //! Every SQL statement lives here. `routes.rs` only decides what to ask for.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
 use rusqlite::types::Value;
@@ -41,6 +41,11 @@ const SCHEMA: &str = "
         created_at INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS machines_identity ON machines(identity_pubkey);
+    CREATE TABLE IF NOT EXISTS revoked_machines (
+        machine_pubkey TEXT PRIMARY KEY,
+        identity_pubkey TEXT NOT NULL,
+        revoked_at INTEGER NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS blobs (
         identity_pubkey TEXT NOT NULL,
         id TEXT NOT NULL,
@@ -180,9 +185,22 @@ impl Drop for Reader {
 #[derive(Default)]
 pub struct Wakers {
     map: Mutex<HashMap<String, Weak<Notify>>>,
+    /// Bumped when an identity's machine list changes, so a woken long-poll with no new
+    /// blobs still returns and the Devices refresh their presence.
+    generations: Mutex<HashMap<String, u64>>,
 }
 
 impl Wakers {
+    pub fn generation(&self, identity_pubkey: &str) -> u64 {
+        unpoisoned(&self.generations).get(identity_pubkey).copied().unwrap_or(0)
+    }
+
+    /// Marks the identity's machine list as changed and wakes its long-polls.
+    pub fn machines_changed(&self, identity_pubkey: &str) {
+        *unpoisoned(&self.generations).entry(identity_pubkey.to_string()).or_insert(0) += 1;
+        self.wake(identity_pubkey);
+    }
+
     pub fn waiter(&self, identity_pubkey: &str) -> Arc<Notify> {
         let mut map = unpoisoned(&self.map);
         if let Some(notify) = map.get(identity_pubkey).and_then(Weak::upgrade) {
@@ -231,6 +249,28 @@ impl Presence {
     }
 }
 
+/// The keys of unpaired machines, so a bearer token issued before the unpairing dies with
+/// it. Loaded from `revoked_machines` at startup and kept current by `revoke_machine`'s
+/// caller.
+#[derive(Default)]
+pub struct Revoked {
+    keys: Mutex<HashSet<String>>,
+}
+
+impl Revoked {
+    pub fn load(keys: Vec<String>) -> Self {
+        Revoked { keys: Mutex::new(keys.into_iter().collect()) }
+    }
+
+    pub fn contains(&self, machine_pubkey: &str) -> bool {
+        unpoisoned(&self.keys).contains(machine_pubkey)
+    }
+
+    pub fn insert(&self, machine_pubkey: &str) {
+        unpoisoned(&self.keys).insert(machine_pubkey.to_string());
+    }
+}
+
 // MARK: - Identities and machines
 
 pub struct Machine {
@@ -275,6 +315,45 @@ pub fn touch_machine(connection: &Connection, machine_pubkey: &str) -> rusqlite:
     Ok(())
 }
 
+/// True once a machine was unpaired. Its key never comes back: a Device that pairs again
+/// generates a new one.
+pub fn is_revoked(connection: &Connection, machine_pubkey: &str) -> rusqlite::Result<bool> {
+    connection
+        .prepare_cached("SELECT 1 FROM revoked_machines WHERE machine_pubkey = ?1")?
+        .query_row(params![machine_pubkey], |_| Ok(()))
+        .optional()
+        .map(|row| row.is_some())
+}
+
+pub fn revoked_machines(connection: &Connection) -> rusqlite::Result<Vec<String>> {
+    connection.prepare("SELECT machine_pubkey FROM revoked_machines")?.query_map([], |row| row.get(0))?.collect()
+}
+
+/// Unpairs a machine of this identity: its row goes, its key is remembered as revoked, and
+/// the envelopes sealed to it (jobs, results, requests, responses nobody else can read) go
+/// with it. False when the identity has no such machine.
+pub fn revoke_machine(connection: &mut Connection, identity_pubkey: &str, machine_pubkey: &str) -> rusqlite::Result<bool> {
+    let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let removed = tx
+        .prepare_cached("DELETE FROM machines WHERE machine_pubkey = ?1 AND identity_pubkey = ?2")?
+        .execute(params![machine_pubkey, identity_pubkey])?;
+    if removed == 0 {
+        return Ok(false);
+    }
+    tx.prepare_cached("INSERT OR REPLACE INTO revoked_machines (machine_pubkey, identity_pubkey, revoked_at) VALUES (?1, ?2, ?3)")?
+        .execute(params![machine_pubkey, identity_pubkey, now()])?;
+    tx.prepare_cached("DELETE FROM challenges WHERE machine_pubkey = ?1")?.execute(params![machine_pubkey])?;
+    let freed: i64 = tx
+        .prepare_cached("SELECT COALESCE(SUM(size), 0) FROM blobs WHERE identity_pubkey = ?1 AND recipient_machine_pubkey = ?2")?
+        .query_row(params![identity_pubkey, machine_pubkey], |row| row.get(0))?;
+    tx.prepare_cached("DELETE FROM blobs WHERE identity_pubkey = ?1 AND recipient_machine_pubkey = ?2")?
+        .execute(params![identity_pubkey, machine_pubkey])?;
+    tx.prepare_cached("UPDATE usage SET bytes = MAX(bytes - ?1, 0) WHERE identity_pubkey = ?2")?
+        .execute(params![freed, identity_pubkey])?;
+    tx.commit()?;
+    Ok(true)
+}
+
 /// Registers the identity (idempotent) and attests one machine.
 pub fn register_identity(
     connection: &Connection,
@@ -284,6 +363,9 @@ pub fn register_identity(
     box_pubkey: &str,
     attestation: &str,
 ) -> ApiResult<()> {
+    if is_revoked(connection, machine_pubkey)? {
+        return Err(ApiError::gone("Machine was unpaired"));
+    }
     let existing: Option<String> = connection
         .query_row("SELECT content_pubkey FROM identities WHERE pubkey = ?1", params![identity_pubkey], |row| row.get(0))
         .optional()?;
@@ -312,6 +394,9 @@ pub fn register_identity(
 
 pub fn create_challenge(connection: &Connection, nonce: &str, machine_pubkey: &str, expires_at: i64) -> ApiResult<()> {
     if machine(connection, machine_pubkey)?.is_none() {
+        if is_revoked(connection, machine_pubkey)? {
+            return Err(ApiError::gone("Machine was unpaired"));
+        }
         return Err(ApiError::not_found("Unknown machine"));
     }
     connection.execute(
