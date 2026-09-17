@@ -79,7 +79,9 @@ export default function SettingsScreen() {
         text: "Unpair",
         style: "destructive",
         onPress: () => {
-          void engine.unpair().then(() => router.dismissAll());
+          // Forgetting the identity flips `paired`, and the guarded stack swaps to the pair
+          // screen on its own; dismissing here would find nothing to pop.
+          void engine.unpair();
         },
       },
     ]);
