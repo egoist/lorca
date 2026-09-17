@@ -205,8 +205,6 @@ struct Bot: Identifiable, Hashable {
     /// How much the model thinks; nil means the provider's default.
     var thinking: String? = nil
     var instructions: String
-    /// Plugins this bot may use: a subset of what its Runner has installed.
-    var pluginIDs: [String] = []
     /// Plugin tools the user always allows, as `plugin/tool`.
     var allowRules: [String] = []
     var createdAt: Date

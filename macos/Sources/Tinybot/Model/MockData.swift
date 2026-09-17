@@ -120,7 +120,6 @@ enum MockData {
                 provider: .chatgpt,
                 instructions:
                     "You coordinate the other bots. Break work down, hand off with message_bot, and summarize what came back.",
-                pluginIDs: ["github"],
                 createdAt: minutesAgo(60 * 24 * 21)
             ),
             Bot(

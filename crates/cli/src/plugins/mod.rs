@@ -1,7 +1,7 @@
 //! Plugins: MCP servers a bot can use, after Grok Bot's marketplace. A plugin is a manifest
 //! (`plugin.json`: servers, variables, skills, tool hints) that a Runner installs; the Runner
 //! keeps the package, the variables, the secrets, and the OAuth tokens, and advertises what it
-//! has in its machine blob. A bot enables a subset of its Runner's plugins (`Bot.plugins`).
+//! has in its machine blob. Every bot on the Runner may use every plugin installed there.
 //! The MCP side, with the permission gate, is `mcp` under the `runner` feature.
 
 #[cfg(feature = "runner")]
@@ -472,12 +472,10 @@ pub fn uninstall(app: &Arc<App>, id: &str) -> Result<(), String> {
     if dir.is_dir() {
         let _ = std::fs::remove_dir_all(&dir);
     }
-    let bots: Vec<String> = app.state.lock().unwrap().bots.iter().filter(|b| b.plugins.iter().any(|p| p == id)).map(|b| b.id.clone()).collect();
+    let prefix = format!("{id}/");
+    let bots: Vec<String> = app.state.lock().unwrap().bots.iter().filter(|b| b.allow_rules.iter().any(|r| r.starts_with(&prefix))).map(|b| b.id.clone()).collect();
     for bot_id in bots {
-        let _ = app.update_bot(&bot_id, |bot| {
-            bot.plugins.retain(|p| p != id);
-            bot.allow_rules.retain(|r| !r.starts_with(&format!("{id}/")));
-        });
+        let _ = app.update_bot(&bot_id, |bot| bot.allow_rules.retain(|r| !r.starts_with(&prefix)));
     }
     announce(app);
     Ok(())

@@ -1,8 +1,8 @@
 import AppKit
 
 /// The marketplace for one Runner, after Grok Bot's Plugins overlay: search, a row per plugin
-/// with Install (or its state on this Runner), and Add MCP Server for a pasted config. Opened
-/// from a DM's inspector, an install also enables the plugin for that bot.
+/// with Install (or its state on this Runner), and Add MCP Server for a pasted config. An
+/// install is for every bot on the Runner.
 final class PluginsMarketplaceViewController: SheetViewController {
     private let store = AppStore.shared
     private let runner: Device
@@ -25,8 +25,7 @@ final class PluginsMarketplaceViewController: SheetViewController {
         self.bot = bot
         super.init(
             title: "Plugins",
-            subtitle: bot.map { "Installed on \(runner.name), used by \($0.name). Every bot on \(runner.name) can be given a plugin it has." }
-                ?? "Installed on \(runner.name). Each bot there chooses which of them it uses.",
+            subtitle: "Installed on \(runner.name), for \(bot.map { "\($0.name) and every other bot" } ?? "every bot") there.",
             width: 560
         )
     }
@@ -154,7 +153,6 @@ final class PluginsMarketplaceViewController: SheetViewController {
             defer { self.busy.remove(plugin.id); self.render() }
             do {
                 let status = try await self.store.installPlugin(plugin.id, on: self.runner.id)
-                self.enableForBot(plugin.id)
                 self.status.stringValue = self.nextStep(for: status)
             } catch {
                 self.status.stringValue = "Couldn't install \(plugin.name): \(error.localizedDescription)"
@@ -184,7 +182,6 @@ final class PluginsMarketplaceViewController: SheetViewController {
             defer { self.addButton.isEnabled = true }
             do {
                 let installed = try await self.store.installMCPServer(named: name, json: json, on: self.runner.id)
-                self.enableForBot(installed.id)
                 self.status.stringValue = "\(installed.name) added to \(self.runner.name). \(self.nextStep(for: installed))"
                 self.custom.isHidden = true
                 self.customToggle.title = "Add MCP Server…"
@@ -196,14 +193,9 @@ final class PluginsMarketplaceViewController: SheetViewController {
         }
     }
 
-    private func enableForBot(_ pluginID: String) {
-        guard let bot, let current = store.bot(bot.id), !current.pluginIDs.contains(pluginID) else { return }
-        store.setBotPlugins(bot.id, pluginIDs: current.pluginIDs + [pluginID])
-    }
-
     private func nextStep(for plugin: InstalledPlugin) -> String {
         switch plugin.state {
-        case .ready: "\(plugin.name) is ready" + (bot.map { " for \($0.name)." } ?? ".")
+        case .ready: "\(plugin.name) is ready for every bot on \(runner.name)."
         case .needsAuth: "\(plugin.name) needs a sign-in: open it and click Sign in."
         case .needsSetup: "\(plugin.name) needs setup: \(plugin.detail)."
         case .connecting, .error, .unknown: "\(plugin.name): \(plugin.detail)"

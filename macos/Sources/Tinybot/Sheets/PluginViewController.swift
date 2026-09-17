@@ -2,7 +2,7 @@ import AppKit
 
 /// One installed plugin on a Runner: its state, the sign-in for a remote server, its
 /// variables (a secret is written, never read back), the skills it brought, and Remove. From a
-/// DM's inspector it also switches the bot's use of it.
+/// DM's inspector it also shows that bot's always-allow rules.
 final class PluginViewController: SheetViewController {
     private let store = AppStore.shared
     private let pluginID: String
@@ -101,16 +101,6 @@ final class PluginViewController: SheetViewController {
     private func render(_ detail: PluginDetail) {
         var statusRows: [NSView] = [KeyValueRow(key: "State", value: detail.status.detail, tint: detail.status.stateColor)]
         if let bot {
-            let enabled = store.bot(bot.id)?.pluginIDs.contains(pluginID) ?? false
-            let use = ActionRow(key: bot.name, value: enabled ? "May use it" : "Not using it", tint: .labelColor, actionTitle: enabled ? "Turn off" : "Turn on")
-            use.onAction = { [weak self] in
-                guard let self, let current = self.store.bot(bot.id) else { return }
-                var ids = current.pluginIDs.filter { $0 != self.pluginID }
-                if !enabled { ids.append(self.pluginID) }
-                self.store.setBotPlugins(bot.id, pluginIDs: ids)
-                self.render(detail)
-            }
-            statusRows.append(use)
             let rules = (store.bot(bot.id)?.allowRules ?? []).filter { $0.hasPrefix("\(pluginID)/") }
             if !rules.isEmpty {
                 let always = ActionRow(key: "Always allowed", value: rules.map { String($0.dropFirst(pluginID.count + 1)) }.joined(separator: ", "), tint: .labelColor, actionTitle: "Reset")

@@ -1,6 +1,6 @@
 //! The MCP side of plugins on this Runner: a pool of connected servers (`rmcp`, stdio or
 //! streamable HTTP), the OAuth sign-in for a remote server, and the tools a turn gets from a
-//! bot's enabled plugins, each behind the permission gate: a read-only tool runs, anything
+//! plugins installed on its Runner, each behind the permission gate: a read-only tool runs, anything
 //! else asks the user in the chat first, after Grok Bot.
 
 use std::collections::{BTreeMap, HashMap};
@@ -563,13 +563,14 @@ pub struct PluginTool {
     read_only: bool,
 }
 
-/// The tools of every plugin the bot has enabled, connected now. A plugin that cannot connect
-/// is skipped with a warning; the bot is told in its prompt.
+/// The tools of every plugin installed on this Runner, connected now, for a bot that runs
+/// here. A plugin that cannot connect is skipped with a warning; the bot is told in its prompt.
 pub async fn tools_for(app: &Arc<App>, chat_id: &str, bot: &Bot, unattended: bool) -> (Vec<Arc<dyn Tool>>, Vec<PluginBrief>) {
     let mut tools: Vec<Arc<dyn Tool>> = Vec::new();
     let mut briefs = Vec::new();
-    for plugin_id in &bot.plugins {
-        let Some(plugin) = app.plugins.lock().unwrap().get(plugin_id).cloned() else { continue };
+    let installed: Vec<super::Installed> = app.plugins.lock().unwrap().installed().to_vec();
+    for plugin in &installed {
+        let plugin_id = &plugin.manifest.id;
         let status = app.plugins.lock().unwrap().status(plugin_id);
         let mut brief = PluginBrief {
             id: plugin_id.clone(),
@@ -618,7 +619,7 @@ pub async fn tools_for(app: &Arc<App>, chat_id: &str, bot: &Bot, unattended: boo
     (tools, briefs)
 }
 
-/// What the system prompt says about one enabled plugin.
+/// What the system prompt says about one installed plugin.
 pub struct PluginBrief {
     pub id: String,
     pub name: String,

@@ -121,24 +121,15 @@ export default function ChatInfoScreen() {
       )}
 
       {bot && runner && (
-        <Section title="Plugins" footer={(runner.plugins ?? []).length === 0 ? `No plugins on ${runner.name} yet. Add one from the Mac app, or ask ${bot.name} to find one.` : `Installed on ${runner.name}; on means ${bot.name} may use it.`}>
-          {(runner.plugins ?? []).map((plugin) => {
-            const enabled = (bot.plugins ?? []).includes(plugin.id);
-            return (
-              <Row
-                key={plugin.id}
-                title={plugin.name}
-                subtitle={plugin.state === "ready" ? plugin.description : plugin.detail}
-                icon={plugin.icon || "puzzlepiece.extension"}
-                accessory={
-                  <Switch
-                    value={enabled}
-                    onValueChange={(v) => engine.setBotPlugins(bot.id, v ? [...(bot.plugins ?? []), plugin.id] : (bot.plugins ?? []).filter((id) => id !== plugin.id))}
-                  />
-                }
-              />
-            );
-          })}
+        <Section title="Plugins" footer={(runner.plugins ?? []).length === 0 ? `No plugins on ${runner.name} yet. Add one from the Mac app, or ask ${bot.name} to find one.` : `Installed on ${runner.name}, for ${bot.name} and every other bot there.`}>
+          {(runner.plugins ?? []).map((plugin) => (
+            <Row
+              key={plugin.id}
+              title={plugin.name}
+              subtitle={plugin.state === "ready" ? plugin.description : plugin.detail}
+              icon={plugin.icon || "puzzlepiece.extension"}
+            />
+          ))}
         </Section>
       )}
 

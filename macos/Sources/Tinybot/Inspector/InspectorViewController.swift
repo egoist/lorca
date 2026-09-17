@@ -25,6 +25,8 @@ final class InspectorViewController: NSViewController {
     /// Why the last fetch failed: the Runner is offline, or did not answer.
     private var memoryErrors: [Bot.ID: String] = [:]
     private var memoryFetches: Set<Bot.ID> = []
+    /// The bot whose plugin rows are showing, for a click on one.
+    private var pluginBotID: Bot.ID?
 
     var onOpenDevice: ((Device.ID) -> Void)?
     var onRemoveBot: ((Bot.ID) -> Void)?
@@ -352,31 +354,25 @@ final class InspectorViewController: NSViewController {
         }
     }
 
-    /// The plugins the bot's Runner has, each with a switch for whether this bot may use it,
-    /// and a way to the marketplace. A plugin that needs setup says so; clicking opens it.
+    /// The plugins the bot's Runner has, which every bot there may use, and a way to the
+    /// marketplace. A plugin that needs setup says so; clicking opens it.
     private func pluginRows(for bot: Bot) -> [NSView] {
         let runner = store.device(bot.runnerID)
         let runnerName = runner?.name ?? "its Runner"
+        pluginBotID = bot.id
         var rows: [NSView] = []
         for plugin in runner?.plugins ?? [] {
-            let enabled = bot.pluginIDs.contains(plugin.id)
-            let row = SwitchRow()
-            let detail = plugin.state == .ready ? (enabled ? "On" : "Off") : plugin.detail
+            let row = StatusRow()
             row.configure(
-                symbol: plugin.symbolName, tint: enabled ? .controlAccentColor : .tertiaryLabelColor,
-                title: plugin.name, detail: detail, isOn: enabled,
-                toggleTooltip: enabled ? "Stop \(bot.name) using \(plugin.name)" : "Let \(bot.name) use \(plugin.name)",
-                tooltip: plugin.description)
-            row.onToggle = { [weak self] on in
-                guard let self, let current = self.store.bot(bot.id) else { return }
-                var ids = current.pluginIDs.filter { $0 != plugin.id }
-                if on { ids.append(plugin.id) }
-                self.store.setBotPlugins(bot.id, pluginIDs: ids)
-            }
-            row.onClick = { [weak self] in
-                guard let self, let runner else { return }
-                self.presentAsSheet(PluginViewController(pluginID: plugin.id, runner: runner, bot: bot))
-            }
+                symbol: plugin.symbolName,
+                title: plugin.name,
+                subtitle: plugin.description,
+                state: plugin.detail,
+                stateColor: plugin.stateColor
+            )
+            row.toolTip = "Open \(plugin.name)"
+            row.identifier = NSUserInterfaceItemIdentifier(plugin.id)
+            row.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(openPlugin(_:))))
             rows.append(row)
         }
         if rows.isEmpty {
@@ -389,6 +385,11 @@ final class InspectorViewController: NSViewController {
         }
         rows.append(add)
         return rows
+    }
+
+    @objc private func openPlugin(_ sender: NSClickGestureRecognizer) {
+        guard let id = sender.view?.identifier?.rawValue, let bot = pluginBotID.flatMap(store.bot), let runner = store.device(bot.runnerID) else { return }
+        presentAsSheet(PluginViewController(pluginID: id, runner: runner, bot: bot))
     }
 
     @objc private func addBot() {

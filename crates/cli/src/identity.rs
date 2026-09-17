@@ -85,7 +85,6 @@ fn create_lead_bot(app: &Arc<App>) {
             Be direct and concrete, and never invent results."
             .into(),
         workdir: None,
-        plugins: Vec::new(),
             allow_rules: Vec::new(),
             created_at: 0.0,
     };

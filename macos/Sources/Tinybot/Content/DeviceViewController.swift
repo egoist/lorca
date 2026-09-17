@@ -162,11 +162,10 @@ final class DeviceViewController: NSViewController {
     private func pluginRows(on device: Device) -> [NSView] {
         var rows: [NSView] = device.plugins.map { plugin in
             let row = StatusRow()
-            let users = store.bots(on: device.id).filter { $0.pluginIDs.contains(plugin.id) }.map(\.name)
             row.configure(
                 symbol: plugin.symbolName,
                 title: plugin.name,
-                subtitle: users.isEmpty ? plugin.description : "Used by \(users.joined(separator: ", "))",
+                subtitle: plugin.description,
                 state: plugin.detail,
                 stateColor: plugin.stateColor
             )

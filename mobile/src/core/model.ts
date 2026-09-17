@@ -67,8 +67,6 @@ export interface Bot {
   thinking?: string;
   instructions: string;
   workdir?: string;
-  /// Plugins this bot may use: a subset of what its Runner has installed.
-  plugins?: string[];
   /// Plugin tools the user always allows, as `plugin/tool`.
   allow_rules?: string[];
   created_at: number;

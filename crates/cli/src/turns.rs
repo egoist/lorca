@@ -144,7 +144,7 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
         Arc::new(CreateBot { app: app.clone(), chat_id: chat.meta.id.clone(), bot: bot.clone() }),
         Arc::new(EditBot { app: app.clone(), bot: bot.clone() }),
         Arc::new(Routines { app: app.clone(), bot: bot.clone() }),
-        Arc::new(SearchPlugins { app: app.clone(), bot: bot.clone() }),
+        Arc::new(SearchPlugins { app: app.clone() }),
         Arc::new(InstallPlugin { app: app.clone(), chat_id: chat.meta.id.clone(), bot: bot.clone(), unattended: routine.is_some() }),
         Arc::new(ConnectPlugin { app: app.clone(), chat_id: chat.meta.id.clone(), bot: bot.clone() }),
     ];
@@ -988,13 +988,13 @@ fn routines_prompt(app: &App, bot: &Bot) -> String {
     prompt
 }
 
-/// The plugins part of the system prompt: what plugins are, how to get one, and the enabled
-/// ones with their tools, instructions, and skills.
+/// The plugins part of the system prompt: what plugins are, how to get one, and the ones on
+/// the Runner with their tools, instructions, and skills.
 fn plugins_prompt(app: &App, bot: &Bot, plugins: &[crate::plugins::mcp::PluginBrief]) -> String {
     let runner = app.device(&bot.runner_id).map(|d| d.name).unwrap_or_else(|| "your Runner".into());
     let mut prompt = format!(
         "\nPlugins: connected services (GitHub, Linear, Notion, a browser, any MCP server) whose tools you call like your own. \
-         A plugin is installed on {runner} and enabled for you; the user manages them in this chat's inspector. When a task \
+         A plugin installed on {runner} is yours, as it is every bot's there; the user manages them in this chat's inspector. When a task \
          needs a service you lack, search_plugins finds one and install_plugin asks the user before installing it; a plugin that \
          needs a sign-in gets one from connect_plugin, a card the user taps. A tool that \
          only reads runs at once; one that changes something first asks the user in the chat, so say what you are about to do. \
@@ -1631,7 +1631,6 @@ impl Tool for CreateBot {
             thinking: args["thinking"].as_str().map(|t| t.trim().to_string()).filter(|t| !t.is_empty()),
             instructions,
             workdir: args["workdir"].as_str().map(|w| w.trim().to_string()).filter(|w| !w.is_empty()),
-            plugins: Vec::new(),
             allow_rules: Vec::new(),
             created_at: 0.0,
         };
@@ -1896,10 +1895,9 @@ impl Tool for Routines {
     }
 }
 
-/// The marketplace as the bot sees it: what exists, what its Runner has, what it may use.
+/// The marketplace as the bot sees it: what exists and what its Runner has.
 struct SearchPlugins {
     app: Arc<App>,
-    bot: Bot,
 }
 
 #[async_trait]
@@ -1909,7 +1907,7 @@ impl Tool for SearchPlugins {
     }
     fn description(&self) -> &str {
         "Find plugins (connected services and MCP servers) in the marketplace: their name, what they do, whether your Runner \
-         has them installed, and whether you may use them. Search by words, or pass nothing to list everything."
+         has them installed (an installed plugin is yours). Search by words, or pass nothing to list everything."
     }
     fn parameters(&self) -> Value {
         json!({
@@ -1922,7 +1920,6 @@ impl Tool for SearchPlugins {
         let query = args["query"].as_str().unwrap_or("");
         let all = crate::plugins::marketplace(&self.app).await;
         let found = crate::plugins::search(&all, query);
-        let bot = self.app.bot(&self.bot.id).unwrap_or_else(|| self.bot.clone());
         let rows: Vec<Value> = found
             .iter()
             .map(|m| {
@@ -1933,19 +1930,18 @@ impl Tool for SearchPlugins {
                     "description": m.description,
                     "installed_here": status.is_some(),
                     "state": status.as_ref().map(|s| s.state.clone()),
-                    "enabled_for_you": bot.plugins.contains(&m.id),
                     "signs_in": m.servers.values().any(|s| matches!(s, crate::plugins::ServerSpec::Http { auth: Some(crate::plugins::AuthSpec::Oauth { .. }), .. })),
                 })
             })
             .collect();
         let mut text = serde_json::to_string_pretty(&json!({ "plugins": rows })).unwrap_or_default();
-        text.push_str("\n\ninstall_plugin installs one on your Runner and enables it for you, after the user agrees. The user can also add any MCP server by hand from the inspector.");
+        text.push_str("\n\ninstall_plugin installs one on your Runner, after the user agrees; an installed plugin is yours already. The user can also add any MCP server by hand from the inspector.");
         Ok(ToolResult::text(text).with_details(json!({ "summary": format!("Found {} plugins", rows.len()) })))
     }
 }
 
-/// Installs a marketplace plugin on the bot's Runner and enables it for the bot, once the
-/// user allows it on a permission card, as Grok Bot asks before InstallPlugin.
+/// Installs a marketplace plugin on the bot's Runner, once the user allows it on a permission
+/// card, as Grok Bot asks before InstallPlugin. Every bot on the Runner gets it.
 struct InstallPlugin {
     app: Arc<App>,
     chat_id: String,
@@ -1959,7 +1955,7 @@ impl Tool for InstallPlugin {
         "install_plugin"
     }
     fn description(&self) -> &str {
-        "Install a marketplace plugin on your Runner and enable it for yourself. The user is asked first, in the chat, and \
+        "Install a marketplace plugin on your Runner, for you and every bot there. The user is asked first, in the chat, and \
          may say no: propose it in words before calling this. Its tools are available from your next turn. Some plugins \
          then need a sign-in or a key the user provides in the inspector."
     }
@@ -1992,29 +1988,23 @@ impl Tool for InstallPlugin {
             .cloned()
             .ok_or_else(|| ToolError(format!("No plugin {wanted:?} in the marketplace. Use search_plugins to see what exists.")))?;
         let runner = self.app.device(&self.bot.runner_id).map(|d| d.name).unwrap_or_else(|| "this Runner".into());
-        let already = self.app.plugins.lock().unwrap().status(&manifest.id);
-        let summary = match &already {
-            Some(_) => format!("Enable {} for {}", manifest.name, self.bot.name),
-            None => format!("Install {} on {runner} and enable it for {}", manifest.name, self.bot.name),
-        };
+        if let Some(status) = self.app.plugins.lock().unwrap().status(&manifest.id) {
+            let next = match status.state.as_str() {
+                "ready" => "Its tools are yours from your next turn.".to_string(),
+                "needs_auth" => "It still needs a sign-in: call connect_plugin to put the card in the chat.".to_string(),
+                _ => status.detail.clone(),
+            };
+            return Ok(ToolResult::text(format!("{} is already installed on {runner}. {next}", manifest.name))
+                .with_details(json!({ "summary": format!("{} was already installed", manifest.name), "plugin_id": manifest.id })));
+        }
+        let summary = format!("Install {} on {runner}", manifest.name);
         let decision = crate::plugins::mcp::ask(&self.app, &self.chat_id, &self.bot.id, &manifest.id, &manifest.name, "install", &summary, json!({ "plugin": manifest.id }), &cancel).await;
         match decision {
             crate::plugins::mcp::Decision::Allowed | crate::plugins::mcp::Decision::Always => {}
             crate::plugins::mcp::Decision::Denied => return Err(ToolError(format!("The user did not want {} installed. Do not ask again this turn.", manifest.name))),
             crate::plugins::mcp::Decision::Expired => return Err("Nobody answered in time. Say what you needed and stop.".into()),
         }
-        let status = match already {
-            Some(status) => status,
-            None => crate::plugins::install(&self.app, manifest.clone(), "marketplace").map_err(ToolError)?,
-        };
-        let id = manifest.id.clone();
-        self.app
-            .update_bot(&self.bot.id, |bot| {
-                if !bot.plugins.contains(&id) {
-                    bot.plugins.push(id.clone());
-                }
-            })
-            .map_err(|e| ToolError(e.to_string()))?;
+        let status = crate::plugins::install(&self.app, manifest.clone(), "marketplace").map_err(ToolError)?;
         let next = match status.state.as_str() {
             "ready" => "It is ready; its tools are yours from your next turn.".to_string(),
             "needs_auth" => match crate::plugins::mcp::post_sign_in_card(&self.app, &self.chat_id, &self.bot.id, &manifest.id) {
@@ -2024,7 +2014,7 @@ impl Tool for InstallPlugin {
             "needs_setup" => format!("The user still has to set {} in this chat's inspector (Plugins); tell them.", status.detail.trim_start_matches("Needs ")),
             _ => status.detail.clone(),
         };
-        Ok(ToolResult::text(format!("{} is installed on {runner} and enabled for you. {next}", manifest.name))
+        Ok(ToolResult::text(format!("{} is installed on {runner}. {next}", manifest.name))
             .with_details(json!({ "summary": format!("Installed {}", manifest.name), "plugin_id": manifest.id })))
     }
 }
@@ -2163,7 +2153,6 @@ mod tests {
             thinking: None,
             instructions: String::new(),
             workdir: None,
-            plugins: Vec::new(),
             allow_rules: Vec::new(),
             created_at: 0.0,
         }

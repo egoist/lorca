@@ -193,7 +193,6 @@ enum Wire {
         var model: String?
         var thinking: String?
         var instructions: String
-        var plugins: [String]?
         var allowRules: [String]?
         var createdAt: Double
     }
@@ -424,7 +423,6 @@ extension Wire.Bot {
             model: model,
             thinking: thinking,
             instructions: instructions,
-            pluginIDs: plugins ?? [],
             allowRules: allowRules ?? [],
             createdAt: Date(timeIntervalSince1970: createdAt)
         )

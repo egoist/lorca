@@ -572,16 +572,6 @@ final class AppStore {
         return try await client.request("plugins.connect", ["runner_id": runnerID, "plugin_id": pluginID], as: Wire.PluginConnected.self).message
     }
 
-    /// Which of its Runner's plugins a bot may use.
-    func setBotPlugins(_ id: Bot.ID, pluginIDs: [String]) {
-        guard let index = bots.firstIndex(where: { $0.id == id }) else { return }
-        bots[index].pluginIDs = pluginIDs
-        bots[index].allowRules.removeAll { rule in !pluginIDs.contains { rule.hasPrefix("\($0)/") } }
-        emit(.rosterChanged)
-        for chat in chats where chat.botIDs.contains(id) { emit(.chatChanged(chat.id)) }
-        perform("bots.set_plugins", ["id": id, "plugin_ids": pluginIDs])
-    }
-
     /// Replaces a bot's always-allow rules, as the plugin sheet's Reset does.
     func setBotAllowRules(_ id: Bot.ID, rules: [String]) {
         guard let index = bots.firstIndex(where: { $0.id == id }) else { return }

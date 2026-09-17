@@ -202,12 +202,6 @@ class Engine {
 
   // MARK: - Plugins
 
-  /// Which of its Runner's plugins a bot may use.
-  setBotPlugins(botId: string, pluginIds: string[]) {
-    useStore.setState((s) => ({ bots: s.bots.map((b) => (b.id === botId ? { ...b, plugins: pluginIds } : b)) }));
-    void core.request("bots.set_plugins", { id: botId, plugin_ids: pluginIds });
-  }
-
   /// Answers a permission card; the core's message event confirms the decision.
   answerPermission(chatId: string, messageId: string, decision: "allow" | "always" | "deny") {
     const decided = decision === "always" ? "always" : decision === "deny" ? "denied" : "allowed";

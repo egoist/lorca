@@ -101,7 +101,6 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
                 thinking: opt_string(&params, "thinking"),
                 instructions: opt_string(&params, "instructions").unwrap_or_default(),
                 workdir: opt_string(&params, "workdir"),
-                plugins: Vec::new(),
                 allow_rules: Vec::new(),
                 created_at: 0.0,
             };
@@ -348,16 +347,6 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
         "plugins.detail" => {
             let runner_id = string(&params, "runner_id")?;
             crate::plugins::on_runner(app, &runner_id, "plugins.detail", json!({ "plugin_id": string(&params, "plugin_id")? })).await
-        }
-        "bots.set_plugins" => {
-            let id = string(&params, "id")?;
-            let plugin_ids: Vec<String> = serde_json::from_value(params["plugin_ids"].clone()).map_err(|e| e.to_string())?;
-            let bot = app.update_bot(&id, |bot| {
-                bot.plugins = plugin_ids.clone();
-                bot.allow_rules.retain(|rule| plugin_ids.iter().any(|p| rule.starts_with(&format!("{p}/"))));
-            })
-            .map_err(|e| e.to_string())?;
-            Ok(json!({ "bot": bot }))
         }
         "bots.set_allow_rules" => {
             let id = string(&params, "id")?;

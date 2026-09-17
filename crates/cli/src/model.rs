@@ -86,9 +86,6 @@ pub struct Bot {
     /// `<TINYBOT_HOME>/workspaces/<bot id>`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workdir: Option<String>,
-    /// Plugins this bot may use, by id: a subset of what its Runner has installed.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub plugins: Vec<String>,
     /// Plugin tools the user always allows, as `plugin/tool` (`plugin/*` for every tool).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allow_rules: Vec<String>,
