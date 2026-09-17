@@ -1,12 +1,13 @@
-// The message field, after Grok Bot's phone composer: a liquid-glass "+" button that drops down
-// a native menu of attachment sources, and a glass pill that floats over the transcript, holding
-// a multiline input that grows to five lines and, inside its right edge, a disc that is Dictate
-// while the field is empty and Send once there is something to send. @-mention chips in a group. There is no Stop, as in Grok Bot: a turn runs
-// to its end. Where liquid glass is not available (older iOS, Android) the pill is a plain
-// filled field.
+// The message field, laid out like the desktop composer: one glass pill floating over the
+// transcript. Inside its left edge a "+" disc drops down a native menu of attachment sources;
+// inside its right edge a disc is Dictate while the field is empty and Send once there is
+// something to send; between them a multiline input grows to five lines. Attached files expand
+// the pill: their chips wrap above the text, and the discs move to a row underneath. @-mention
+// chips in a group. There is no Stop, as in Grok Bot: a turn runs to its end. Where liquid glass
+// is not available (older iOS, Android) the pill is a plain filled field.
 
 import { Button as MenuButton, Host, Image as MenuImage, Menu, type ButtonProps } from "@expo/ui/swift-ui";
-import { background, frame, glassEffect } from "@expo/ui/swift-ui/modifiers";
+import { background, frame, shapes } from "@expo/ui/swift-ui/modifiers";
 import * as DocumentPicker from "expo-document-picker";
 import { GlassView, isLiquidGlassAvailable } from "expo-glass-effect";
 import * as Haptics from "expo-haptics";
@@ -14,7 +15,7 @@ import { Image } from "expo-image";
 import * as ImagePicker from "expo-image-picker";
 import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from "expo-speech-recognition";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View, type ColorValue } from "react-native";
+import { Alert, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View, type ColorValue, type StyleProp, type ViewStyle } from "react-native";
 import type { PickedFile } from "../core/engine";
 import { fileSize, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS, type Bot } from "../core/model";
 import { BotAvatar } from "./Avatar";
@@ -25,18 +26,19 @@ import { Font, usePalette } from "./theme";
 
 const MAX_LINES = 5;
 const CHIP = 56;
-const PLUS = 46;
+const FILE_CHIP = 176;
+const DISC = 34;
 const GLASS = isLiquidGlassAvailable();
 
 /// A glass surface, or a filled one where glass is not available.
-function Surface({ style, children, tint, edge }: { style: any; children: React.ReactNode; tint: ColorValue; edge: ColorValue }) {
+function Surface({ style, children, tint, edge }: { style: StyleProp<ViewStyle>; children: React.ReactNode; tint: ColorValue; edge: ColorValue }) {
   // A hairline edge keeps the pill visible over a plain background, as Grok Bot's is.
   const outline = { borderWidth: StyleSheet.hairlineWidth, borderColor: edge };
   if (GLASS) {
     // The glass is a layer under the content; the edge is drawn by the wrapping view.
     return (
       <View style={[style, outline]}>
-        <GlassView glassEffectStyle="regular" isInteractive style={[StyleSheet.absoluteFill, { borderRadius: style.borderRadius }]} />
+        <GlassView glassEffectStyle="regular" isInteractive style={[StyleSheet.absoluteFill, { borderRadius: StyleSheet.flatten(style)?.borderRadius }]} />
         {children}
       </View>
     );
@@ -51,18 +53,27 @@ interface AttachSource {
 }
 
 /// The "+" disc as the label of a SwiftUI Menu, so a tap drops down a native menu of sources
-/// right at the button instead of raising a sheet. The disc is glass where glass exists and a
-/// filled circle elsewhere, matching Surface.
-function AttachMenu({ sources, tint, label, edge }: { sources: AttachSource[]; tint: ColorValue; label: ColorValue; edge: ColorValue }) {
-  const disc = GLASS
-    ? glassEffect({ glass: { variant: "regular", interactive: true }, shape: "circle" })
-    : background(String(tint));
+/// right at the button instead of raising a sheet. The disc is filled like the Dictate disc
+/// beside it; the pill under both supplies the glass. The fill is part of the SwiftUI label,
+/// not the wrapping view: the menu morphs out of its label and hides it while open, so a
+/// label that is only the glyph would leave an empty disc behind.
+function AttachMenu({ sources, tint, label }: { sources: AttachSource[]; tint: ColorValue; label: ColorValue }) {
   return (
-    <View style={[styles.plus, { borderWidth: StyleSheet.hairlineWidth, borderColor: edge }]}>
-      <Host style={StyleSheet.absoluteFill} testID="attach">
+    <View style={styles.disc}>
+      {/* The hosted view would otherwise avoid the keyboard by itself: SwiftUI treats the keys as
+          a safe-area inset and pushes the disc up out of its frame while the sticky composer
+          already rides above them. */}
+      <Host style={StyleSheet.absoluteFill} ignoreSafeArea="keyboard" testID="attach">
         <Menu
-          label={<MenuImage systemName="plus" size={22} color={label} modifiers={[frame({ width: PLUS, height: PLUS }), disc]} />}
-          modifiers={[frame({ width: PLUS, height: PLUS })]}
+          label={
+            <MenuImage
+              systemName="plus"
+              size={18}
+              color={label}
+              modifiers={[frame({ width: DISC, height: DISC }), background(tint, shapes.circle())]}
+            />
+          }
+          modifiers={[frame({ width: DISC, height: DISC })]}
         >
           {sources.map((source) => (
             <MenuButton key={source.title} systemImage={source.icon} label={source.title} onPress={source.run} />
@@ -278,6 +289,61 @@ export function Composer({
 
   const primary = listening || canSend ? "send" : "dictate";
   const edge = p.dark ? "rgba(255,255,255,0.14)" : "rgba(0,0,0,0.1)";
+  const expanded = attachments.length > 0;
+
+  const plus =
+    Platform.OS === "ios" ? (
+      <AttachMenu sources={sources} tint={p.fill} label={p.label} />
+    ) : (
+      <Pressable onPress={attachDialog} style={({ pressed }) => [styles.disc, { backgroundColor: p.fill, opacity: pressed ? 0.6 : 1 }]} accessibilityLabel="Attach">
+        <Symbol name="plus" size={18} color={p.label} weight="medium" />
+      </Pressable>
+    );
+
+  const recording = (
+    <Pressable
+      onPress={() => ExpoSpeechRecognitionModule.stop()}
+      style={({ pressed }) => [styles.pill, { backgroundColor: p.fill, opacity: pressed ? 0.7 : 1 }]}
+      accessibilityRole="button"
+      accessibilityLabel={`Stop recording, ${elapsed} seconds`}
+    >
+      <View style={styles.stop}>
+        <Symbol name="stop.fill" size={11} color={p.label} weight="bold" />
+      </View>
+      <Text style={[styles.elapsed, { color: p.label }]}>{`${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, "0")}`}</Text>
+      <View style={styles.bars}>
+        {levels.map((level, index) => (
+          <View key={index} style={[styles.levelBar, { backgroundColor: p.label, height: 3 + level * 11 }]} />
+        ))}
+      </View>
+    </Pressable>
+  );
+
+  const input = (
+    <TextInput
+      value={text}
+      onChangeText={setText}
+      placeholder={placeholder}
+      placeholderTextColor={p.tertiaryLabel}
+      multiline
+      keyboardAppearance={p.dark ? "dark" : "light"}
+      onContentSizeChange={(e) => setHeight(e.nativeEvent.contentSize.height)}
+      style={[styles.input, { color: p.label, lineHeight, height: Math.min(MAX_LINES, Math.max(1, Math.round(height / lineHeight))) * lineHeight }]}
+      accessibilityLabel="Message"
+    />
+  );
+
+  const primaryDisc = (
+    <Pressable
+      onPress={primary === "send" ? send : () => void dictate()}
+      onLongPress={primary === "dictate" ? () => void pickDictationLanguage() : undefined}
+      style={({ pressed }) => [styles.disc, { backgroundColor: primary === "send" ? p.tint : p.fill, opacity: pressed ? 0.7 : 1 }]}
+      accessibilityLabel={primary === "send" ? "Send" : "Dictate"}
+      accessibilityHint={primary === "dictate" ? "Long press to choose the language" : undefined}
+    >
+      <Symbol name={primary === "send" ? "arrow.up" : "mic.fill"} size={16} color={primary === "send" ? "#FFFFFF" : p.label} weight="bold" />
+    </Pressable>
+  );
 
   return (
     <View style={styles.wrap} pointerEvents="box-none">
@@ -291,87 +357,55 @@ export function Composer({
           ))}
         </ScrollView>
       )}
-      {attachments.length > 0 && (
-        <ScrollView horizontal keyboardShouldPersistTaps="always" showsHorizontalScrollIndicator={false} contentContainerStyle={styles.files}>
-          {attachments.map((file, index) => (
-            <View key={`${file.uri}-${index}`} style={styles.fileChip}>
-              {file.mime.startsWith("image/") ? (
-                <Image source={{ uri: file.uri }} style={[styles.thumb, { backgroundColor: p.fill }]} contentFit="cover" />
-              ) : (
-                <View style={[styles.fileCard, { backgroundColor: p.cell }]}>
-                  <Symbol name="doc.fill" size={18} color={p.secondaryLabel} />
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.fileName, { color: p.label }]} numberOfLines={1}>
-                      {file.name}
-                    </Text>
-                    {file.size !== undefined && <Text style={[styles.fileSize, { color: p.secondaryLabel }]}>{fileSize(file.size)}</Text>}
+      {/* With attachments the pill expands: chips wrap above the text and the discs drop to a row
+          underneath, as on the desktop. Otherwise the discs sit beside the text. */}
+      <Surface style={[styles.field, expanded ? styles.fieldExpanded : styles.fieldCompact]} tint={p.cell} edge={edge}>
+        {expanded && (
+          <View style={styles.files}>
+            {attachments.map((file, index) => (
+              <View key={`${file.uri}-${index}`} style={styles.fileChip}>
+                {file.mime.startsWith("image/") ? (
+                  <Image source={{ uri: file.uri }} style={[styles.thumb, { backgroundColor: p.fill }]} contentFit="cover" />
+                ) : (
+                  <View style={[styles.fileCard, { backgroundColor: p.fill }]}>
+                    <Symbol name="doc.fill" size={18} color={p.secondaryLabel} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.fileName, { color: p.label }]} numberOfLines={1}>
+                        {file.name}
+                      </Text>
+                      {file.size !== undefined && <Text style={[styles.fileSize, { color: p.secondaryLabel }]}>{fileSize(file.size)}</Text>}
+                    </View>
                   </View>
-                </View>
-              )}
-              <Pressable
-                onPress={() => setAttachments((current) => current.filter((_, i) => i !== index))}
-                hitSlop={8}
-                style={styles.remove}
-                accessibilityLabel={`Remove ${file.name}`}
-              >
-                <Symbol name="xmark" size={9} color="#FFFFFF" weight="bold" />
-              </Pressable>
-            </View>
-          ))}
-        </ScrollView>
-      )}
-      <View style={styles.bar}>
-        {Platform.OS === "ios" ? (
-          <AttachMenu sources={sources} tint={p.cell} label={p.label} edge={edge} />
-        ) : (
-          <Surface style={styles.plus} tint={p.cell} edge={edge}>
-            <Pressable onPress={attachDialog} style={({ pressed }) => [styles.plusPress, { opacity: pressed ? 0.6 : 1 }]} accessibilityLabel="Attach">
-              <Symbol name="plus" size={22} color={p.label} weight="medium" />
-            </Pressable>
-          </Surface>
+                )}
+                <Pressable
+                  onPress={() => setAttachments((current) => current.filter((_, i) => i !== index))}
+                  hitSlop={8}
+                  style={styles.remove}
+                  accessibilityLabel={`Remove ${file.name}`}
+                >
+                  <Symbol name="xmark" size={9} color="#FFFFFF" weight="bold" />
+                </Pressable>
+              </View>
+            ))}
+          </View>
         )}
-        <Surface style={styles.field} tint={p.cell} edge={edge}>
-          {listening ? (
-            <Pressable
-              onPress={() => ExpoSpeechRecognitionModule.stop()}
-              style={({ pressed }) => [styles.pill, { backgroundColor: p.fill, opacity: pressed ? 0.7 : 1 }]}
-              accessibilityRole="button"
-              accessibilityLabel={`Stop recording, ${elapsed} seconds`}
-            >
-              <View style={styles.stop}>
-                <Symbol name="stop.fill" size={11} color={p.label} weight="bold" />
-              </View>
-              <Text style={[styles.elapsed, { color: p.label }]}>{`${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, "0")}`}</Text>
-              <View style={styles.bars}>
-                {levels.map((level, index) => (
-                  <View key={index} style={[styles.levelBar, { backgroundColor: p.label, height: 3 + level * 11 }]} />
-                ))}
-              </View>
-            </Pressable>
-          ) : (
-            <TextInput
-              value={text}
-              onChangeText={setText}
-              placeholder={placeholder}
-              placeholderTextColor={p.tertiaryLabel}
-              multiline
-              keyboardAppearance={p.dark ? "dark" : "light"}
-              onContentSizeChange={(e) => setHeight(e.nativeEvent.contentSize.height)}
-              style={[styles.input, { color: p.label, lineHeight, height: Math.min(MAX_LINES, Math.max(1, Math.round(height / lineHeight))) * lineHeight }]}
-              accessibilityLabel="Message"
-            />
-          )}
-          <Pressable
-            onPress={primary === "send" ? send : () => void dictate()}
-            onLongPress={primary === "dictate" ? () => void pickDictationLanguage() : undefined}
-            style={({ pressed }) => [styles.disc, { backgroundColor: primary === "send" ? p.tint : p.fill, opacity: pressed ? 0.7 : 1 }]}
-            accessibilityLabel={primary === "send" ? "Send" : "Dictate"}
-            accessibilityHint={primary === "dictate" ? "Long press to choose the language" : undefined}
-          >
-            <Symbol name={primary === "send" ? "arrow.up" : "mic.fill"} size={16} color={primary === "send" ? "#FFFFFF" : p.label} weight="bold" />
-          </Pressable>
-        </Surface>
-      </View>
+        {expanded ? (
+          <>
+            {!listening && <View style={styles.textRow}>{input}</View>}
+            <View style={styles.controls}>
+              {plus}
+              {listening && recording}
+              {primaryDisc}
+            </View>
+          </>
+        ) : (
+          <View style={styles.row}>
+            {plus}
+            {listening ? recording : input}
+            {primaryDisc}
+          </View>
+        )}
+      </Surface>
     </View>
   );
 }
@@ -398,26 +432,29 @@ function deviceLanguage(): string {
 
 const styles = StyleSheet.create({
   wrap: { paddingBottom: 8 },
-  bar: { flexDirection: "row", alignItems: "flex-end", paddingHorizontal: 12, gap: 10 },
-  plus: { width: PLUS, height: PLUS, borderRadius: PLUS / 2, overflow: "hidden" },
-  plusPress: { flex: 1, alignItems: "center", justifyContent: "center" },
-  field: { flex: 1, flexDirection: "row", alignItems: "flex-end", borderRadius: 23, height: undefined, paddingLeft: 18, paddingRight: 6, paddingVertical: 6, overflow: "hidden" },
-  // One line of text makes the pill exactly as tall as the + disc: 6 + 22 + 6 inside 6 + 6 of padding.
-  input: { flex: 1, fontSize: Font.body, paddingTop: 0, paddingBottom: 0, margin: 0, marginVertical: 6 },
+  field: { marginHorizontal: 12, borderRadius: 23, overflow: "hidden" },
+  // One line of text makes the pill exactly as tall as a disc plus its padding: 6 + 34 + 6.
+  fieldCompact: { paddingHorizontal: 6, paddingVertical: 6 },
+  fieldExpanded: { paddingHorizontal: 6, paddingTop: 0, paddingBottom: 6 },
+  row: { flexDirection: "row", alignItems: "flex-end", gap: 6 },
+  // Chips wrap; the padding leaves room for the remove button hanging off a chip's corner.
+  files: { flexDirection: "row", flexWrap: "wrap", gap: 12, paddingTop: 12, paddingHorizontal: 6, paddingBottom: 2 },
+  textRow: { flexDirection: "row", paddingHorizontal: 6, paddingTop: 4 },
+  controls: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 6, paddingTop: 4 },
+  input: { flex: 1, fontSize: Font.body, paddingTop: 0, paddingBottom: 0, margin: 0, marginVertical: 6, marginHorizontal: 6 },
   // At the right of the field, beside Send, where Grok Bot puts it.
-  pill: { flexDirection: "row", alignItems: "center", gap: 6, height: 28, borderRadius: 14, paddingLeft: 4, paddingRight: 10, marginLeft: "auto", marginRight: 6, marginBottom: 3 },
+  pill: { flexDirection: "row", alignItems: "center", gap: 6, height: 28, borderRadius: 14, paddingLeft: 4, paddingRight: 10, marginLeft: "auto", marginBottom: 3 },
   stop: { width: 22, height: 22, alignItems: "center", justifyContent: "center" },
   elapsed: { fontSize: 14, fontVariant: ["tabular-nums"] },
   bars: { flexDirection: "row", alignItems: "center", gap: 2.5, height: 14 },
   levelBar: { width: 3, borderRadius: 1.5, opacity: 0.85 },
-  disc: { width: 34, height: 34, borderRadius: 17, alignItems: "center", justifyContent: "center" },
+  disc: { width: DISC, height: DISC, borderRadius: DISC / 2, alignItems: "center", justifyContent: "center", overflow: "hidden" },
   chips: { paddingHorizontal: 12, paddingBottom: 8, gap: 8 },
   chip: { flexDirection: "row", alignItems: "center", gap: 6, paddingLeft: 4, paddingRight: 10, paddingVertical: 4, borderRadius: 14 },
   chipText: { fontSize: 14, fontWeight: "500" },
-  files: { paddingHorizontal: 12, paddingTop: 6, paddingBottom: 10, gap: 10 },
-  fileChip: { height: CHIP },
+  fileChip: { height: CHIP, maxWidth: "100%" },
   thumb: { width: CHIP, height: CHIP, borderRadius: 10 },
-  fileCard: { height: CHIP, width: 170, borderRadius: 10, flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 10 },
+  fileCard: { height: CHIP, width: FILE_CHIP, maxWidth: "100%", borderRadius: 10, flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 10 },
   fileName: { fontSize: 13, fontWeight: "500" },
   fileSize: { fontSize: Font.caption },
   remove: { position: "absolute", top: -6, right: -6, width: 18, height: 18, borderRadius: 9, backgroundColor: "rgba(0,0,0,0.7)", alignItems: "center", justifyContent: "center" },
