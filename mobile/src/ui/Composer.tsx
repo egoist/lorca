@@ -1,9 +1,9 @@
 // The message field, laid out like the desktop composer: one glass pill floating over the
 // transcript. Inside its left edge a "+" disc drops down a native menu of attachment sources;
 // inside its right edge a disc is Dictate while the field is empty and Send once there is
-// something to send; between them a multiline input grows to five lines. Attached files expand
-// the pill: their chips wrap above the text, and the discs move to a row underneath. @-mention
-// chips in a group. There is no Stop, as in Grok Bot: a turn runs to its end. Where liquid glass
+// something to send; between them a multiline input grows to five lines. Focus, text, or
+// attached files expand the pill: the text takes its own row above the discs, and chips wrap
+// above the text. @-mention chips in a group. There is no Stop, as in Grok Bot: a turn runs to its end. Where liquid glass
 // is not available (older iOS, Android) the pill is a plain filled field.
 
 import { Button as MenuButton, Host, Image as MenuImage, Menu, type ButtonProps } from "@expo/ui/swift-ui";
@@ -97,8 +97,8 @@ export function Composer({
 }) {
   const p = usePalette();
   const [text, setText] = useState("");
-  const [height, setHeight] = useState(0);
   const [attachments, setAttachments] = useState<PickedFile[]>([]);
+  const [focused, setFocused] = useState(false);
   const [listening, setListening] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [levels, setLevels] = useState<number[]>([0, 0, 0, 0, 0]);
@@ -135,7 +135,6 @@ export function Composer({
     onSend(text, attachments);
     setText("");
     setAttachments([]);
-    setHeight(0);
   }
 
   // MARK: - Attachments
@@ -256,8 +255,7 @@ export function Composer({
         onSend(next, attachments);
         setText("");
         setAttachments([]);
-        setHeight(0);
-      }
+          }
     }
   }
 
@@ -289,19 +287,23 @@ export function Composer({
 
   const primary = listening || canSend ? "send" : "dictate";
   const edge = p.dark ? "rgba(255,255,255,0.14)" : "rgba(0,0,0,0.1)";
-  const expanded = attachments.length > 0;
+  const expanded = focused || text.length > 0 || attachments.length > 0;
 
+  // The pieces below carry keys and always share one parent view, so switching between the
+  // compact row and the expanded stack reorders them instead of remounting them: a remounted
+  // input drops focus and takes the keyboard down with it.
   const plus =
     Platform.OS === "ios" ? (
-      <AttachMenu sources={sources} tint={p.fill} label={p.label} />
+      <AttachMenu key="plus" sources={sources} tint={p.fill} label={p.label} />
     ) : (
-      <Pressable onPress={attachDialog} style={({ pressed }) => [styles.disc, { backgroundColor: p.fill, opacity: pressed ? 0.6 : 1 }]} accessibilityLabel="Attach">
+      <Pressable key="plus" onPress={attachDialog} style={({ pressed }) => [styles.disc, { backgroundColor: p.fill, opacity: pressed ? 0.6 : 1 }]} accessibilityLabel="Attach">
         <Symbol name="plus" size={18} color={p.label} weight="medium" />
       </Pressable>
     );
 
   const recording = (
     <Pressable
+      key="recording"
       onPress={() => ExpoSpeechRecognitionModule.stop()}
       style={({ pressed }) => [styles.pill, { backgroundColor: p.fill, opacity: pressed ? 0.7 : 1 }]}
       accessibilityRole="button"
@@ -319,22 +321,33 @@ export function Composer({
     </Pressable>
   );
 
+  // The field sizes itself to its text (Fabric measures a multiline input with no fixed height)
+  // up to five lines, past which the text view scrolls. A content-size event is no use here:
+  // Fabric emits it only when the layout changes, so a fixed height never learns of a wrapped
+  // line. The measurement leaves out a trailing empty line, so the text's own line count is a
+  // floor: Return at the end of the text opens a new line at once.
+  const breaks = text.split("\n").length;
+  const minHeight = Math.min(MAX_LINES, Math.max(1, breaks)) * lineHeight;
+  const maxHeight = MAX_LINES * lineHeight;
   const input = (
     <TextInput
+      key="input"
       value={text}
       onChangeText={setText}
       placeholder={placeholder}
       placeholderTextColor={p.tertiaryLabel}
       multiline
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
       keyboardAppearance={p.dark ? "dark" : "light"}
-      onContentSizeChange={(e) => setHeight(e.nativeEvent.contentSize.height)}
-      style={[styles.input, { color: p.label, lineHeight, height: Math.min(MAX_LINES, Math.max(1, Math.round(height / lineHeight))) * lineHeight }]}
+      style={[styles.input, expanded && styles.inputExpanded, { color: p.label, lineHeight, minHeight, maxHeight }]}
       accessibilityLabel="Message"
     />
   );
 
   const primaryDisc = (
     <Pressable
+      key="primary"
       onPress={primary === "send" ? send : () => void dictate()}
       onLongPress={primary === "dictate" ? () => void pickDictationLanguage() : undefined}
       style={({ pressed }) => [styles.disc, { backgroundColor: primary === "send" ? p.tint : p.fill, opacity: pressed ? 0.7 : 1 }]}
@@ -357,10 +370,11 @@ export function Composer({
           ))}
         </ScrollView>
       )}
-      {/* With attachments the pill expands: chips wrap above the text and the discs drop to a row
-          underneath, as on the desktop. Otherwise the discs sit beside the text. */}
+      {/* Focused, holding text, or carrying attachments, the pill expands: chips wrap above the
+          text and the discs drop to a row underneath, as on the desktop. Empty and idle, the
+          discs sit beside the placeholder. */}
       <Surface style={[styles.field, expanded ? styles.fieldExpanded : styles.fieldCompact]} tint={p.cell} edge={edge}>
-        {expanded && (
+        {attachments.length > 0 && (
           <View style={styles.files}>
             {attachments.map((file, index) => (
               <View key={`${file.uri}-${index}`} style={styles.fileChip}>
@@ -389,22 +403,18 @@ export function Composer({
             ))}
           </View>
         )}
-        {expanded ? (
-          <>
-            {!listening && <View style={styles.textRow}>{input}</View>}
-            <View style={styles.controls}>
-              {plus}
-              {listening && recording}
-              {primaryDisc}
-            </View>
-          </>
-        ) : (
-          <View style={styles.row}>
-            {plus}
-            {listening ? recording : input}
-            {primaryDisc}
-          </View>
-        )}
+        <View style={expanded ? styles.stack : styles.row}>
+          {expanded
+            ? [
+                !listening && input,
+                <View key="controls" style={styles.controls}>
+                  {plus}
+                  {listening && recording}
+                  {primaryDisc}
+                </View>,
+              ]
+            : [plus, listening ? recording : input, primaryDisc]}
+        </View>
       </Surface>
     </View>
   );
@@ -437,11 +447,13 @@ const styles = StyleSheet.create({
   fieldCompact: { paddingHorizontal: 6, paddingVertical: 6 },
   fieldExpanded: { paddingHorizontal: 6, paddingTop: 0, paddingBottom: 6 },
   row: { flexDirection: "row", alignItems: "flex-end", gap: 6 },
+  stack: { flexDirection: "column", alignItems: "stretch" },
   // Chips wrap; the padding leaves room for the remove button hanging off a chip's corner.
   files: { flexDirection: "row", flexWrap: "wrap", gap: 12, paddingTop: 12, paddingHorizontal: 6, paddingBottom: 2 },
-  textRow: { flexDirection: "row", paddingHorizontal: 6, paddingTop: 4 },
   controls: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 6, paddingTop: 4 },
   input: { flex: 1, fontSize: Font.body, paddingTop: 0, paddingBottom: 0, margin: 0, marginVertical: 6, marginHorizontal: 6 },
+  // In the stack the input is a row of its own: no growing into the column, wider margins.
+  inputExpanded: { flex: 0, marginHorizontal: 12, marginTop: 10, marginBottom: 6 },
   // At the right of the field, beside Send, where Grok Bot puts it.
   pill: { flexDirection: "row", alignItems: "center", gap: 6, height: 28, borderRadius: 14, paddingLeft: 4, paddingRight: 10, marginLeft: "auto", marginBottom: 3 },
   stop: { width: 22, height: 22, alignItems: "center", justifyContent: "center" },
