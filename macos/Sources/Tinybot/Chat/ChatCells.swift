@@ -253,8 +253,10 @@ final class WorkingCellView: NSTableCellView {
         needsLayout = true
     }
 
-    /// What a tool row means while it runs, in the words of the status line.
-    static func activity(for tool: ToolInvocation, targetName: String?) -> String {
+    /// What a tool row means while it runs, in the words of the status line. `pluginName` is
+    /// the plugin behind a `<plugin>__<tool>` row, so the line reads "Using GitHub" between
+    /// two calls as well as during one.
+    static func activity(for tool: ToolInvocation, targetName: String?, pluginName: String? = nil) -> String {
         switch tool.name {
         case "read": return "Reading a file"
         case "write", "edit": return "Drafting a file"
@@ -270,7 +272,11 @@ final class WorkingCellView: NSTableCellView {
         case "search_plugins": return "Searching plugins"
         case "install_plugin": return "Installing a plugin"
         default:
-            // A plugin tool's row already names the plugin: "Using GitHub…".
+            // A plugin tool: "Using GitHub", whether the call is running or just finished, so
+            // a run of quick calls never flashes back to "Working" between them.
+            if let pluginName {
+                return "Using \(pluginName)"
+            }
             if tool.name.contains("__"), tool.summary.hasPrefix("Using ") {
                 return String(tool.summary.dropLast(tool.summary.hasSuffix("…") ? 1 : 0))
             }

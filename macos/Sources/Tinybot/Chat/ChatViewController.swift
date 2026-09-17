@@ -477,6 +477,13 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
         return true
     }
 
+    /// The plugin behind a `<plugin>__<tool>` row, by name, from the bot's Runner.
+    private func pluginName(of tool: ToolInvocation, bot botID: Bot.ID) -> String? {
+        guard let range = tool.name.range(of: "__"), let bot = store.bot(botID) else { return nil }
+        let pluginID = String(tool.name[..<range.lowerBound])
+        return store.device(bot.runnerID)?.plugins.first { $0.id == pluginID }?.name ?? pluginID.capitalized
+    }
+
     private func configure(cell: NSView, row: ChatRow) {
         switch row {
         case let .day(date):
@@ -493,7 +500,7 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
                 case let .tool(tool) = last.body, !tool.isSentMessage
             {
                 let target = store.bots.first { tool.detail.localizedCaseInsensitiveContains("\"bot\": \"\($0.name)\"") }
-                activity = WorkingCellView.activity(for: tool, targetName: target?.name)
+                activity = WorkingCellView.activity(for: tool, targetName: target?.name, pluginName: pluginName(of: tool, bot: botIDs[0]))
             }
             // A model call being asked again outranks the last tool: the bot is waiting, not working.
             if let note = store.retryNote(for: chatID) {
