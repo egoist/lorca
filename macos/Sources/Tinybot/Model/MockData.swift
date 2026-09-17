@@ -23,7 +23,8 @@ enum MockData {
                     ProviderCredential(kind: .anthropic, isConnected: false, detail: "Not connected"),
                     ProviderCredential(
                         kind: .chatgpt, isConnected: true, detail: "you@tinybot.dev"),
-                ]
+                ],
+                plugins: plugins()
             ),
             Device(
                 id: "dev-studio",
@@ -72,6 +73,22 @@ enum MockData {
         ]
     }
 
+    static func plugins() -> [InstalledPlugin] {
+        [
+            InstalledPlugin(id: "github", name: "GitHub", description: "Issues, pull requests, code search, and repositories on GitHub.", version: "1", icon: "chevron.left.forwardslash.chevron.right", state: .ready, detail: "Ready"),
+            InstalledPlugin(id: "linear", name: "Linear", description: "Issues, projects, and cycles in Linear.", version: "1", icon: "line.3.horizontal.decrease.circle", state: .needsAuth, detail: "Sign in"),
+        ]
+    }
+
+    static func marketplace() -> [MarketplacePlugin] {
+        [
+            MarketplacePlugin(id: "github", name: "GitHub", description: "Issues, pull requests, code search, and repositories on GitHub.", icon: "chevron.left.forwardslash.chevron.right", homepage: nil, tags: ["git"], signsIn: true, variableNames: ["GITHUB_TOKEN"], installedOn: ["dev-workbench"]),
+            MarketplacePlugin(id: "linear", name: "Linear", description: "Issues, projects, and cycles in Linear.", icon: "line.3.horizontal.decrease.circle", homepage: nil, tags: [], signsIn: true, variableNames: [], installedOn: ["dev-workbench"]),
+            MarketplacePlugin(id: "notion", name: "Notion", description: "Pages and databases in a Notion workspace.", icon: "doc.richtext", homepage: nil, tags: [], signsIn: true, variableNames: [], installedOn: []),
+            MarketplacePlugin(id: "playwright", name: "Browser", description: "Opens web pages in a headless browser on the Runner.", icon: "globe", homepage: nil, tags: [], signsIn: false, variableNames: [], installedOn: []),
+        ]
+    }
+
     static func routines() -> [Routine] {
         [
             Routine(
@@ -103,6 +120,7 @@ enum MockData {
                 provider: .chatgpt,
                 instructions:
                     "You coordinate the other bots. Break work down, hand off with message_bot, and summarize what came back.",
+                pluginIDs: ["github"],
                 createdAt: minutesAgo(60 * 24 * 21)
             ),
             Bot(
@@ -340,6 +358,19 @@ enum MockData {
                 author: .bot("bot-nova"),
                 body: .text("That is the rule I am working to. Same field names, same ordering."),
                 createdAt: minutesAgo(179)
+            ),
+            Message(
+                author: .you,
+                body: .text("File the relay title leak as an issue."),
+                createdAt: minutesAgo(3)
+            ),
+            Message(
+                author: .bot("bot-nova"),
+                body: .permission(
+                    PermissionRequest(
+                        pluginID: "github", pluginName: "GitHub", tool: "create_issue",
+                        summary: "create_issue · repo: tinybot, title: Relay stores plaintext chat titles", decision: .pending)),
+                createdAt: minutesAgo(2)
             ),
         ]
     }

@@ -120,6 +120,28 @@ export default function ChatInfoScreen() {
         </Section>
       )}
 
+      {bot && runner && (
+        <Section title="Plugins" footer={(runner.plugins ?? []).length === 0 ? `No plugins on ${runner.name} yet. Add one from the Mac app, or ask ${bot.name} to find one.` : `Installed on ${runner.name}; on means ${bot.name} may use it.`}>
+          {(runner.plugins ?? []).map((plugin) => {
+            const enabled = (bot.plugins ?? []).includes(plugin.id);
+            return (
+              <Row
+                key={plugin.id}
+                title={plugin.name}
+                subtitle={plugin.state === "ready" ? plugin.description : plugin.detail}
+                icon={plugin.icon || "puzzlepiece.extension"}
+                accessory={
+                  <Switch
+                    value={enabled}
+                    onValueChange={(v) => engine.setBotPlugins(bot.id, v ? [...(bot.plugins ?? []), plugin.id] : (bot.plugins ?? []).filter((id) => id !== plugin.id))}
+                  />
+                }
+              />
+            );
+          })}
+        </Section>
+      )}
+
       {bot && bot.instructions ? (
         <Section title="Instructions">
           <View style={styles.instructions}>

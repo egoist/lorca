@@ -85,7 +85,9 @@ fn create_lead_bot(app: &Arc<App>) {
             Be direct and concrete, and never invent results."
             .into(),
         workdir: None,
-        created_at: 0.0,
+        plugins: Vec::new(),
+            allow_rules: Vec::new(),
+            created_at: 0.0,
     };
     match app.create_bot_with_dm(bot, None) {
         Ok((_, chat)) => {

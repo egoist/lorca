@@ -28,8 +28,32 @@ pub struct Device {
     /// Providers connected on that Runner, by kind. Details stay on the Runner.
     #[serde(default)]
     pub providers_connected: Vec<String>,
+    /// Plugins installed on that Runner, with their setup state. Secrets stay on the Runner.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plugins: Vec<PluginStatus>,
     #[serde(default)]
     pub updated_at: i64,
+}
+
+/// A plugin as its Runner advertises it in the machine blob: what is installed and whether it
+/// is ready to use. Variables, tokens, and the package itself never leave the Runner.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PluginStatus {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub version: String,
+    /// An SF Symbol name for the apps.
+    #[serde(default)]
+    pub icon: String,
+    /// `ready`, `needs_setup` (a required variable is missing), `needs_auth` (sign in on the
+    /// Runner), `connecting`, or `error`.
+    pub state: String,
+    /// What the state means, for a row's subtitle.
+    #[serde(default)]
+    pub detail: String,
 }
 
 impl Device {
@@ -62,6 +86,12 @@ pub struct Bot {
     /// `<TINYBOT_HOME>/workspaces/<bot id>`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workdir: Option<String>,
+    /// Plugins this bot may use, by id: a subset of what its Runner has installed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plugins: Vec<String>,
+    /// Plugin tools the user always allows, as `plugin/tool` (`plugin/*` for every tool).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allow_rules: Vec<String>,
     pub created_at: f64,
 }
 
@@ -137,6 +167,24 @@ pub enum Body {
         /// Set on the "Routine · Name" marker that opens a routine's run.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         routine_id: Option<String>,
+    },
+    /// The bot asks before using a plugin tool that is not read-only (or before installing a
+    /// plugin, with `tool` = `install`). The turn waits for `decision`: `pending`, `allowed`
+    /// (once), `always`, `denied`, or `expired`.
+    Permission {
+        plugin_id: String,
+        plugin_name: String,
+        tool: String,
+        /// One line about the call: "create_issue · repo: tinybot, title: …".
+        summary: String,
+        #[serde(default)]
+        arguments: serde_json::Value,
+        decision: String,
+        /// A sign-in card mid-flow: where to go and the code to enter there (device flow).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        link: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        code: Option<String>,
     },
 }
 

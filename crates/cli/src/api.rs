@@ -101,6 +101,8 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
                 thinking: opt_string(&params, "thinking"),
                 instructions: opt_string(&params, "instructions").unwrap_or_default(),
                 workdir: opt_string(&params, "workdir"),
+                plugins: Vec::new(),
+                allow_rules: Vec::new(),
                 created_at: 0.0,
             };
             // Every bot has one direct chat; both land in a single roster change.
@@ -293,6 +295,88 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             Ok(Value::Null)
         }
         "routines.describe" => routines::describe(&string(&params, "schedule")?),
+
+        // Plugins are installed per Runner (here, or through a sealed request to that Runner)
+        // and enabled per bot.
+        "plugins.marketplace" => {
+            let query = opt_string(&params, "query").unwrap_or_default();
+            let all = crate::plugins::marketplace(app).await;
+            let installed_on: Vec<(String, Vec<crate::model::PluginStatus>)> =
+                app.state.lock().unwrap().devices.iter().map(|d| (d.id.clone(), d.plugins.clone())).collect();
+            let plugins: Vec<Value> = crate::plugins::search(&all, &query)
+                .into_iter()
+                .map(|m| {
+                    let mut out = serde_json::to_value(m).unwrap_or_default();
+                    out["installed_on"] = json!(installed_on.iter().filter(|(_, p)| p.iter().any(|s| s.id == m.id)).map(|(id, _)| id.clone()).collect::<Vec<_>>());
+                    out
+                })
+                .collect();
+            Ok(json!({ "plugins": plugins }))
+        }
+        "plugins.install" => {
+            let runner_id = string(&params, "runner_id")?;
+            let manifest = match params.get("manifest") {
+                Some(value) => crate::plugins::Manifest::parse(value)?,
+                None => match params.get("mcp_json") {
+                    Some(mcp) => crate::plugins::Manifest::from_mcp_json(&string(&params, "name")?, mcp)?,
+                    None => {
+                        let id = string(&params, "plugin_id")?;
+                        crate::plugins::marketplace(app).await.into_iter().find(|m| m.id == id).ok_or_else(|| format!("No plugin {id} in the marketplace"))?
+                    }
+                },
+            };
+            let source = if params.get("plugin_id").is_some() { "marketplace" } else { "inline" };
+            let body = json!({ "manifest": manifest, "source": source });
+            let status = crate::plugins::on_runner(app, &runner_id, "plugins.install", body).await?;
+            Ok(json!({ "status": status }))
+        }
+        "plugins.uninstall" => {
+            let runner_id = string(&params, "runner_id")?;
+            crate::plugins::on_runner(app, &runner_id, "plugins.uninstall", json!({ "plugin_id": string(&params, "plugin_id")? })).await
+        }
+        "plugins.set_variables" => {
+            let runner_id = string(&params, "runner_id")?;
+            let body = json!({ "plugin_id": string(&params, "plugin_id")?, "variables": params["variables"] });
+            let status = crate::plugins::on_runner(app, &runner_id, "plugins.variables", body).await?;
+            Ok(json!({ "status": status }))
+        }
+        "plugins.connect" => {
+            let runner_id = string(&params, "runner_id")?;
+            let body = json!({ "plugin_id": string(&params, "plugin_id")?, "server": opt_string(&params, "server") });
+            crate::plugins::on_runner(app, &runner_id, "plugins.connect", body).await
+        }
+        "plugins.detail" => {
+            let runner_id = string(&params, "runner_id")?;
+            crate::plugins::on_runner(app, &runner_id, "plugins.detail", json!({ "plugin_id": string(&params, "plugin_id")? })).await
+        }
+        "bots.set_plugins" => {
+            let id = string(&params, "id")?;
+            let plugin_ids: Vec<String> = serde_json::from_value(params["plugin_ids"].clone()).map_err(|e| e.to_string())?;
+            let bot = app.update_bot(&id, |bot| {
+                bot.plugins = plugin_ids.clone();
+                bot.allow_rules.retain(|rule| plugin_ids.iter().any(|p| rule.starts_with(&format!("{p}/"))));
+            })
+            .map_err(|e| e.to_string())?;
+            Ok(json!({ "bot": bot }))
+        }
+        "bots.set_allow_rules" => {
+            let id = string(&params, "id")?;
+            let rules: Vec<String> = serde_json::from_value(params["allow_rules"].clone()).map_err(|e| e.to_string())?;
+            let bot = app.update_bot(&id, |bot| bot.allow_rules = rules.clone()).map_err(|e| e.to_string())?;
+            Ok(json!({ "bot": bot }))
+        }
+        // The user answered a permission card: here when the bot runs here, else sealed to
+        // its Runner.
+        "chats.permission" => {
+            let chat_id = string(&params, "chat_id")?;
+            let message_id = string(&params, "message_id")?;
+            let decision = string(&params, "decision")?;
+            let message = app.message(&chat_id, &message_id).ok_or("Unknown message")?;
+            let Author::Bot { bot_id } = &message.author else { return Err("Not a permission request".into()) };
+            let bot = app.bot(bot_id).ok_or("Unknown bot")?;
+            let body = json!({ "chat_id": chat_id, "message_id": message_id, "decision": decision });
+            crate::plugins::on_runner(app, &bot.runner_id, "permission.answer", body).await
+        }
 
         #[cfg(feature = "runner")]
         "providers.connect_deepseek" => {

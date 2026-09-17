@@ -82,16 +82,19 @@ pub fn serve(app: Arc<App>, request: Request, blob_id: String) {
     });
 }
 
-/// What this Runner can be asked. Every verb checks that the bot runs here: a request that
-/// reached the wrong machine is refused, not forwarded.
+/// What this Runner can be asked. The memory verbs check that the bot runs here: a request
+/// that reached the wrong machine is refused, not forwarded. The plugin verbs act on this
+/// Runner's own installs; the permission verb answers a card a bot here is waiting on.
 fn answer(app: &Arc<App>, request: &Request) -> Result<Value, String> {
-    let bot_id = request.body["bot_id"].as_str().ok_or("missing bot_id")?;
+    let body = &request.body;
     match request.verb.as_str() {
-        "memory.read" => memory_read(app, bot_id),
+        "memory.read" => memory_read(app, body["bot_id"].as_str().ok_or("missing bot_id")?),
         "memory.write" => {
-            let text = request.body["text"].as_str().ok_or("missing text")?;
-            memory_write(app, bot_id, text, request.body["expected_hash"].as_str())
+            let text = body["text"].as_str().ok_or("missing text")?;
+            memory_write(app, body["bot_id"].as_str().ok_or("missing bot_id")?, text, body["expected_hash"].as_str())
         }
+        #[cfg(feature = "runner")]
+        verb if verb.starts_with("plugins.") || verb == "permission.answer" => crate::plugins::serve_request(app, verb, body),
         other => Err(format!("Unknown request {other}")),
     }
 }

@@ -82,6 +82,8 @@ async fn main() -> anyhow::Result<()> {
     match cli.command.unwrap_or(Command::Serve { parent_pid: None }) {
         Command::Serve { parent_pid } => {
             runtime::prime_names(&app);
+            // Installed marketplace plugins follow the index this build ships.
+            tinybot::plugins::refresh_installed(&app, &tinybot::plugins::bundled());
             if let Some(pid) = parent_pid {
                 tokio::spawn(watch_parent(pid));
             }

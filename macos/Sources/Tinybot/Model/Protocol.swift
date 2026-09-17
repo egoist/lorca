@@ -86,6 +86,99 @@ enum Wire {
         var status: String
         var lastSeen: Double
         var providers: [Provider]
+        var plugins: [PluginStatus]?
+    }
+
+    struct PluginStatus: Decodable {
+        var id: String
+        var name: String
+        var description: String?
+        var version: String?
+        var icon: String?
+        var state: String
+        var detail: String?
+
+        func toModel() -> InstalledPlugin {
+            InstalledPlugin(
+                id: id, name: name, description: description ?? "", version: version ?? "", icon: icon ?? "",
+                state: InstalledPlugin.State(rawValue: state) ?? .unknown, detail: detail ?? "")
+        }
+    }
+
+    struct MarketplacePlugin: Decodable {
+        struct Server: Decodable {
+            struct Auth: Decodable { var type: String }
+            var type: String
+            var auth: Auth?
+        }
+        struct Variable: Decodable { var name: String }
+        var id: String
+        var name: String
+        var description: String?
+        var icon: String?
+        var homepage: String?
+        var tags: [String]?
+        var servers: [String: Server]?
+        var variables: [Variable]?
+        var installedOn: [String]?
+
+        func toModel() -> Tinybot.MarketplacePlugin {
+            Tinybot.MarketplacePlugin(
+                id: id, name: name, description: description ?? "", icon: icon ?? "", homepage: homepage, tags: tags ?? [],
+                signsIn: (servers ?? [:]).values.contains { $0.auth?.type == "oauth" },
+                variableNames: (variables ?? []).map(\.name), installedOn: installedOn ?? [])
+        }
+    }
+
+    struct Marketplace: Decodable {
+        var plugins: [MarketplacePlugin]
+    }
+
+    struct PluginInstalled: Decodable {
+        var status: PluginStatus
+    }
+
+    struct PluginConnected: Decodable {
+        var message: String
+    }
+
+    struct PluginDetail: Decodable {
+        struct Manifest: Decodable { var homepage: String? }
+        struct Variable: Decodable {
+            var name: String
+            var description: String?
+            var secret: Bool
+            var required: Bool
+            var isSet: Bool
+            var value: String?
+        }
+        struct Server: Decodable {
+            struct Auth: Decodable {
+                var url: String?
+                var oauth: Bool?
+                var signedIn: Bool?
+            }
+            var name: String
+            var kind: String
+            var auth: Auth
+        }
+        struct Skill: Decodable {
+            var name: String
+            var description: String?
+        }
+        var manifest: Manifest
+        var status: PluginStatus
+        var variables: [Variable]
+        var servers: [Server]
+        var skills: [Skill]
+
+        func toModel() -> Tinybot.PluginDetail {
+            Tinybot.PluginDetail(
+                status: status.toModel(), homepage: manifest.homepage,
+                variables: variables.map { .init(name: $0.name, description: $0.description ?? "", secret: $0.secret, required: $0.required, isSet: $0.isSet, value: $0.value) },
+                servers: servers.map { .init(name: $0.name, kind: $0.kind, url: $0.auth.url, oauth: $0.auth.oauth ?? false, signedIn: $0.auth.signedIn ?? false) },
+                skills: skills.map { (name: $0.name, description: $0.description ?? "") })
+        }
     }
 
     struct Bot: Decodable {
@@ -100,6 +193,8 @@ enum Wire {
         var model: String?
         var thinking: String?
         var instructions: String
+        var plugins: [String]?
+        var allowRules: [String]?
         var createdAt: Double
     }
 
@@ -200,6 +295,12 @@ enum Wire {
         var from: String?
         var to: String?
         var reason: String?
+        var pluginId: String?
+        var pluginName: String?
+        var tool: String?
+        var decision: String?
+        var link: String?
+        var code: String?
     }
 
     struct State: Decodable {
@@ -303,7 +404,8 @@ extension Wire.Device {
             providers: providers.compactMap { provider in
                 guard let kind = ProviderCredential.Kind(wireValue: provider.kind) else { return nil }
                 return ProviderCredential(kind: kind, isConnected: provider.isConnected, detail: provider.detail, baseURL: provider.baseUrl)
-            }
+            },
+            plugins: (plugins ?? []).map { $0.toModel() }
         )
     }
 }
@@ -322,6 +424,8 @@ extension Wire.Bot {
             model: model,
             thinking: thinking,
             instructions: instructions,
+            pluginIDs: plugins ?? [],
+            allowRules: allowRules ?? [],
             createdAt: Date(timeIntervalSince1970: createdAt)
         )
     }
@@ -350,6 +454,12 @@ extension Wire.Message {
             body = .handoff(from: self.body.from ?? "", to: self.body.to ?? "", reason: self.body.reason ?? "")
         case "notice":
             body = .notice(self.body.text ?? "")
+        case "permission":
+            body = .permission(
+                PermissionRequest(
+                    pluginID: self.body.pluginId ?? "", pluginName: self.body.pluginName ?? "", tool: self.body.tool ?? "",
+                    summary: self.body.summary ?? "", decision: PermissionRequest.Decision(rawValue: self.body.decision ?? "") ?? .pending,
+                    link: self.body.link, code: self.body.code))
         default:
             body = .text(self.body.text ?? "")
         }

@@ -19,7 +19,7 @@ default = ["cli"]
 # The command-line binary: everything.
 cli = ["runner", "server", "dep:clap", "dep:tracing-subscriber"]
 # Running bots: the agent loop, providers, tools. Off for a Device that only takes part.
-runner = ["dep:tinybot-agent", "dep:open"]
+runner = ["dep:tinybot-agent", "dep:open", "dep:rmcp", "dep:mcp_http"]
 # The local websocket the desktop app connects to.
 server = ["dep:axum"]
 
@@ -53,3 +53,6 @@ tracing-subscriber = { workspace = true, optional = true }
 uuid.workspace = true
 x25519-dalek.workspace = true
 if-addrs = "0.15.0"
+# rmcp speaks reqwest 0.13; the rest of the crate is on the workspace's 0.12, so the MCP side has its own client.
+mcp_http = { package = "reqwest", version = "0.13", default-features = false, features = ["json", "stream", "rustls", "http2"], optional = true }
+rmcp = { version = "3.4.0", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "auth", "reqwest"], optional = true }

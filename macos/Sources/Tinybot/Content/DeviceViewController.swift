@@ -8,6 +8,7 @@ final class DeviceViewController: NSViewController {
     private let header = DeviceHeaderView()
     private let botsSection = SectionView(title: "Bots assigned here")
     private let providersSection = SectionView(title: "Provider credentials")
+    private let pluginsSection = SectionView(title: "Plugins")
     private let machineSection = SectionView(title: "Machine")
     private let note = Build.label(
         "", font: Theme.Font.caption, color: .tertiaryLabelColor, lines: 0)
@@ -27,6 +28,7 @@ final class DeviceViewController: NSViewController {
         column.addArrangedSubview(header)
         column.addArrangedSubview(botsSection)
         column.addArrangedSubview(providersSection)
+        column.addArrangedSubview(pluginsSection)
         column.addArrangedSubview(machineSection)
         column.addArrangedSubview(note)
 
@@ -51,7 +53,7 @@ final class DeviceViewController: NSViewController {
             column.bottomAnchor.constraint(equalTo: documentView.bottomAnchor),
         ])
 
-        for section in [header, botsSection, providersSection, machineSection, note] as [NSView] {
+        for section in [header, botsSection, providersSection, pluginsSection, machineSection, note] as [NSView] {
             section.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -56).isActive = true
         }
 
@@ -89,6 +91,10 @@ final class DeviceViewController: NSViewController {
 
         botsSection.isHidden = !device.isRunner
         providersSection.isHidden = !device.isRunner
+        pluginsSection.isHidden = !device.isRunner
+        if device.isRunner {
+            pluginsSection.setRows(pluginRows(on: device))
+        }
 
         if device.isRunner {
             let bots = store.bots(on: device.id)
@@ -150,6 +156,36 @@ final class DeviceViewController: NSViewController {
             } else {
                 "Provider credentials live on \(device.name). Connect DeepSeek, Anthropic, or ChatGPT from the Tinybot app running there — this Mac only sends encrypted job envelopes."
             }
+    }
+
+    /// What this Runner has installed, with each plugin's state, and the marketplace.
+    private func pluginRows(on device: Device) -> [NSView] {
+        var rows: [NSView] = device.plugins.map { plugin in
+            let row = StatusRow()
+            let users = store.bots(on: device.id).filter { $0.pluginIDs.contains(plugin.id) }.map(\.name)
+            row.configure(
+                symbol: plugin.symbolName,
+                title: plugin.name,
+                subtitle: users.isEmpty ? plugin.description : "Used by \(users.joined(separator: ", "))",
+                state: plugin.detail,
+                stateColor: plugin.stateColor
+            )
+            row.identifier = NSUserInterfaceItemIdentifier(plugin.id)
+            row.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(openPlugin(_:))))
+            return row
+        }
+        if rows.isEmpty {
+            rows.append(KeyValueRow(key: "No plugins installed", value: "", tint: .secondaryLabelColor))
+        }
+        let add = ActionRow(key: "Marketplace", value: "", tint: .secondaryLabelColor, actionTitle: "Add from Plugins…")
+        add.onAction = { [weak self] in self?.presentAsSheet(PluginsMarketplaceViewController(runner: device, bot: nil)) }
+        rows.append(add)
+        return rows
+    }
+
+    @objc private func openPlugin(_ sender: NSClickGestureRecognizer) {
+        guard let id = sender.view?.identifier?.rawValue, let deviceID, let device = store.device(deviceID) else { return }
+        presentAsSheet(PluginViewController(pluginID: id, runner: device, bot: nil))
     }
 
     private func openChat(with bot: Bot) {

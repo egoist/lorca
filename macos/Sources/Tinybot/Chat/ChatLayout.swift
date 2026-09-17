@@ -264,6 +264,9 @@ final class ChatLayout {
 
             case let .notice(text):
                 return top + noticeMetrics(for: text, tableWidth: tableWidth).boxSize.height
+
+            case let .permission(request):
+                return top + PermissionCellView.height(pending: request.isPending, summary: request.isPending ? request.summary : "\(request.decisionText) · \(request.summary)", hasCode: request.decision == .allowed && request.code != nil)
             }
         }
     }

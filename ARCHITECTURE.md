@@ -64,7 +64,7 @@ Recovery: restore the master secret from the backup phrase → re-derive content
 1. Device A (has the identity) asks the relay for a pairing nonce and shows a pairing string: `tinybot://pair?relay=…&id=<identity pubkey>&ek=<ephemeral pubkey>&n=<nonce>`. The CLI waits on it for ten minutes whether or not the sheet stays open (Done keeps the code good). Cancel retires it: `pair.cancel` drops the waiter and deletes the mailbox (`DELETE /v1/pair/{nonce}`), so a Device that pastes the code afterwards is told at once instead of polling out the TTL.
 2. Device B pastes it (onboarding, or `tinybot pair <string>`). B generates its machine keys and posts a request sealed to `ek` into the relay’s pairing mailbox (`POST /v1/pair/{nonce}/request`, no auth): its machine public key, box public key, `name`, `os`. `pair.accept` emits `pair.posted` once the request is up and then polls for the reply; `pair.abort` ends that wait, a newer `pair.accept` replaces it, and a mailbox that is gone (cancelled or expired) fails the wait with a message that says to get a fresh code.
 3. A polls the mailbox, unseals the request, attests B on the relay with an identity-signed `POST /v1/identities`, and posts a reply sealed to B’s box key: identity public key, content public key, the **account DEK**, and the relay URL. Provider credentials stay on each Runner.
-4. B unseals the reply, saves `machine.json`, authenticates with the challenge, and uploads its `machine` blob (`name`, `os`, connected provider kinds).
+4. B unseals the reply, saves `machine.json`, authenticates with the challenge, and uploads its `machine` blob (`name`, `os`, connected provider kinds, installed plugins and their state).
 5. B syncs the roster and chats and shows up in the Device list. If B is a Runner, connecting a provider on B happens on B.
 
 App ↔ CLI on one machine uses `127.0.0.1`; those keys are already local.
@@ -105,6 +105,7 @@ Identity 1──* Chat
 Chat     *──* Bot          (kind dm: exactly 1 bot, fixed · kind group: 1–6 bots, members change)
 Chat     1──* Message
 Bot      1──* Routine      (a scheduled task, run in the bot's DM on its Runner)
+Device   1──* Plugin       (an MCP server installed on a Runner; a bot enables a subset)
 Bot      1──* Job          (a turn on the bot's Runner)
 ```
 
@@ -114,6 +115,7 @@ Bot      1──* Job          (a turn on the bot's Runner)
 | Device             | Machine keypair, `os`, local provider creds (Runner only) | Machine public key + encrypted metadata blob           |
 | Bot                | Decrypted profile                                         | Inside encrypted roster blobs                          |
 | Routine            | Name, schedule, prompt, state                             | Inside encrypted roster blobs                          |
+| Plugin             | Manifest, variables, secrets, tokens on the Runner        | Id and state inside the Runner's encrypted machine blob |
 | ProviderCredential | Assigned Runner’s keychain                                | —                                                      |
 | Chat / Message     | Account/chat DEK                                          | Encrypted blobs                                        |
 | Job                | Any paired Device may create; the assigned Runner runs it | Sealed envelope to that Runner’s machine box key; deleted once run. A `room_turn` answers with a `job_result` sealed to the requesting Device |
@@ -170,7 +172,7 @@ Tables:
 - `blobs(identity_pubkey, id, kind, recipient_machine_pubkey nullable, seq, ciphertext, size, created_at)`, keyed on `(identity_pubkey, id)`
 - `sequences(identity_pubkey, seq)`, `usage(identity_pubkey, bytes)`, `challenges`, `pairings(nonce, identity_pubkey, request, reply, expires_at)`
 
-`kind` is `roster` | `chat` | `job` | `job_result` | `machine` | `key` | `file`. Ciphertext is bytes; the nonce sits inside it. `seq` increases per identity. A Device’s `name` and `os` are inside its `machine` blob, not columns. A `file` blob is an attachment's bytes under the attachment's id, up to 24 MB of ciphertext (other kinds 4 MB); Devices poll with an explicit kinds list that leaves `file` out and fetch one by id when a transcript needs it.
+`kind` is `roster` | `chat` | `job` | `job_result` | `machine` | `key` | `file` | `request` | `response`. Ciphertext is bytes; the nonce sits inside it. `seq` increases per identity. A Device’s `name` and `os` are inside its `machine` blob, not columns. A `file` blob is an attachment's bytes under the attachment's id, up to 24 MB of ciphertext (other kinds 4 MB); Devices poll with an explicit kinds list that leaves `file` out and fetch one by id when a transcript needs it.
 
 Blob API: `PUT /v1/blobs` (client-chosen id of up to 64 characters in `[A-Za-z0-9._-]`, idempotent; 413 over quota), `GET /v1/blobs?since=<seq>&kinds=&wait=25` (long-poll; returns blobs for the identity that are unaddressed or addressed to the caller’s machine, filtered by kind in the query), `GET /v1/blobs/{id}` (one blob, same visibility), `DELETE /v1/blobs/{id}`, `GET /v1/machines` (presence).
 
@@ -223,6 +225,9 @@ Team tools (the CLI):
 - `create_bot { name, label, description?, instructions, provider?, workdir? }` — a new teammate on the caller’s Runner with its own DM; in a group chat it joins that chat. This is how a lead bot builds its team.
 - `edit_bot { bot, name?, label?, description?, instructions?, provider?, workdir? }` — changes a teammate’s profile, or the caller’s own. Only the passed fields change and instructions replace in full; the new profile applies from that bot’s next turn.
 - `routines { action: list | create | edit | pause | resume | run | delete, routine?, name?, schedule?, prompt?, enabled? }` — the caller’s own routines (see Routines below).
+- `search_plugins { query? }` / `install_plugin { plugin }` / `connect_plugin { plugin }` — the marketplace, an install on the caller’s Runner that the user allows on a permission card first, and a sign-in card for an installed plugin (see Plugins below).
+
+Plugin tools (`<plugin>__<tool>`, such as `github__create_issue`) come from the MCP servers of the plugins the bot has enabled.
 
 Coding tools (`tinybot_agent::tools`, ports of pi’s built-ins, same schemas and truncation rules: 2000 lines / 50KB, whichever first):
 
@@ -258,6 +263,24 @@ A run is a `routine` Job in the bot's DM. It opens with a "Routine · Name" mark
 When the user has not written in any chat for seven days, due routines are paused instead of run (`paused_reason: away`) with a notice in the bot's DM, as Grok Bot does, so nothing keeps spending on results nobody reads; the switch turns them back on.
 
 The Mac app's DM inspector has a Routines section: a row per routine (clock, pause, or running icon; the schedule in words and the next run; a switch that pauses or resumes) that opens a sheet with the state, schedule, next and last run, the prompt, and Run Now, Pause/Resume, Edit in Chat (which puts `Edit my routine "Name": ` in the composer), and Delete. With none, the section says routines are set up by asking the bot. The phone's chat details show the same list with a switch; a tap offers Run Now and Delete.
+
+### Plugins
+
+A plugin is an MCP server (or several) a bot can use, after Grok Bot's marketplace: GitHub, Linear, Notion, Sentry, Context7, a headless browser, or any server the user pastes as JSON. A plugin is described by a manifest (`crates/cli/src/plugins/mod.rs`): `id`, `name`, `description`, `icon`, `servers` (`stdio` with `command`, `args`, `env`, or `http` with `url`, `headers`, and `auth`: `oauth` or `bearer`), `variables` (setup fields, `secret` ones never read back), `skills` (notes written to the plugin's folder that the prompt points the bot at), and `tools` hints (`readonly` patterns, `hide`). `${VAR}` in args, env, and headers is filled from the variables.
+
+**Installed per Runner, enabled per bot.** The Runner holds the install under `~/.tinybot/plugins/` (`installed.json`, the plain variables; `secrets.json`, mode 0600, the secret variables and OAuth tokens; a folder per plugin with its skills) and advertises each plugin's id, name, and state (`ready`, `needs_setup`, `needs_auth`, `connecting`, `error`) in its `machine` blob, so every Device lists what each Runner has without a secret leaving it. A bot's `plugins` list (in the roster) names the ones it may use, always a subset of its Runner's installs; its `allow_rules` (`plugin/tool`) are the tools the user always allows. Installing, removing, setting variables, signing in, and reading a plugin's detail run on the Runner: locally when the app's CLI is that Runner, else as a `request` sealed to it (`plugins.install`, `plugins.uninstall`, `plugins.variables`, `plugins.connect`, `plugins.detail`), so a phone installs a plugin on a Mac and hands it a key through ciphertext.
+
+An installed marketplace plugin follows the index: at startup the Runner replaces the manifest it installed with the bundled one when that changed, and again when the marketplace loads, keeping variables, secrets, and sign-ins, so a new sign-in method or server reaches existing installs without a reinstall. A plugin added by hand is left as it is.
+
+**The marketplace** is a JSON index of manifests: the one bundled in the CLI (`crates/cli/marketplace/index.json`) plus the one at `marketplace_url` in settings (or `TINYBOT_MARKETPLACE_URL`), fetched at most hourly. `plugins.marketplace { query? }` answers with each entry and the Runners that have it. An MCP config pasted in the app (`{ "mcpServers": { … } }` or one server) becomes a manifest of its own (`plugins.install { runner_id, name, mcp_json }`).
+
+**At turn time** (`crates/cli/src/plugins/mcp.rs`, `rmcp`), the Runner connects each enabled plugin's servers on first use and keeps them in a pool (stdio children, or streamable HTTP with the plugin's headers, a pasted token, or the saved OAuth tokens, refreshed by the transport and written back), lists their tools, and offers them to the model as `<plugin>__<tool>` with the server's instructions and the plugin's skills in the system prompt. A tool the server marks read-only (`readOnlyHint`) or the manifest lists as such runs at once. Any other tool asks first: the bot posts a `permission` message in the chat ("Chef wants to use GitHub · create_issue · repo: …") and the turn waits up to ten minutes for `chats.permission { decision: allow | always | deny }` from any Device (sealed to the Runner when answered elsewhere); `always` adds a rule to the bot, `deny` gives the model a refusal it must not retry, and a routine run, with nobody there, refuses the call outright. The working row reads "Using GitHub…" while a plugin tool runs.
+
+**Sign-in** for a remote server is the MCP authorization flow run on the Runner by `rmcp`: discovery from the server's challenge, dynamic client registration as a native app, PKCE, and a loopback redirect on a free port; the browser opens on the Runner, so a Device that is not the Runner is told to finish there. It starts from a card in the chat, as in Grok Bot: after an install that needs a sign-in, or when the bot calls `connect_plugin`, the bot posts a `permission` message with `tool` `connect` ("Chef needs a sign-in to GitHub · Sign in · Not now"); Sign in answers it with `chats.permission { decision: allow }`, which the Runner turns into the flow, and the card then reads "Finish signing in in the browser on Workbench", "Signed in", or "Sign-in failed: …" (`decision` `allowed`, `connected`, `failed`). The inspector's plugin sheet offers the same sign-in. Discovery is seeded from the server's own 401 challenge, since GitHub keeps its resource metadata under the server's path. A manifest can name a `token_variable` so a pasted token stands in for the sign-in, and `client_id_variable` / `client_secret_variable` (or fixed `client_id` / `client_secret`) for a server that registers no clients on the fly; the card says what to fill in when nothing is set. With a `client_id` and a `device_authorization_endpoint` plus `token_endpoint`, the sign-in is the device flow (RFC 8628) instead: the Runner asks for a code, the card shows it with the link ("Copy code and open github.com" on the Mac, the same on the phone), the Runner polls until the code is entered, and the token is used as a plain bearer since such tokens carry no refresh token. Nothing opens on the Runner's screen, so the card works from any Device, and no client secret ships. GitHub's entry uses the device flow with Tinybot's own OAuth app; a saved sign-in whose server metadata cannot be found again also falls back to a bearer. `TINYBOT_OAUTH_NO_BROWSER=1` fetches the authorize page instead of opening a browser, for tests against a fake server.
+
+**The bot** can search the marketplace (`search_plugins`) and, when the user agrees on a permission card with `tool` `install`, install a plugin on its own Runner and enable it (`install_plugin`), as Grok Bot's InstallPlugin does after a question. It is told in the result what setup the user still owes (a sign-in, a variable).
+
+**The apps.** The Mac app's DM inspector has a Plugins section: a switch per plugin the bot's Runner has, and "Add from Plugins…", which opens the marketplace sheet (search, Install per row with the Runner's state, "Add MCP Server…" for pasted JSON; from a DM an install also enables the plugin for that bot). A plugin's sheet shows its state, the sign-in per OAuth server, the variables (secret fields write only), the bot's always-allow rules with Reset, its skills, and Remove. The Device pane lists what that Runner has installed and who uses it. The transcript shows the permission card with Allow once, Always allow (not for installs), and Deny. The phone shows the same card, and the plugin switches in chat details.
 
 ### Memory
 
@@ -317,7 +340,7 @@ Working state, after Grok Bot: the CLI's `job.started` / `job.finished` events (
 
 JSON on `ws://127.0.0.1:4862/ws`. Requests are `{ id, method, params }` and get `{ id, result }` or `{ id, error: { message } }`; events are `{ event, data }`.
 
-App → CLI: `hello`, `bootstrap`, `identity.create`, `identity.restore`, `pair.start` / `pair.status` / `pair.cancel` / `pair.accept`, `config.set`, `bots.create` (`runner_id` may be another Device; it must be a Runner) / `bots.update`, `chats.create` / `chats.dm` / `chats.send` / `chats.stop` / `chats.delete` / `chats.rename` / `chats.pin` / `chats.add_bot` / `chats.remove_bot` / `chats.mark_read` / `chats.compact`, `routines.create` / `routines.update` / `routines.delete` / `routines.run` / `routines.describe`, `bots.memory` / `bots.memory.write` (this Runner's bots), `providers.connect_deepseek` / `providers.connect_anthropic` / `providers.connect_chatgpt` / `providers.disconnect` (this Runner).
+App → CLI: `hello`, `bootstrap`, `identity.create`, `identity.restore`, `pair.start` / `pair.status` / `pair.cancel` / `pair.accept`, `config.set`, `bots.create` (`runner_id` may be another Device; it must be a Runner) / `bots.update`, `chats.create` / `chats.dm` / `chats.send` / `chats.stop` / `chats.delete` / `chats.rename` / `chats.pin` / `chats.add_bot` / `chats.remove_bot` / `chats.mark_read` / `chats.compact`, `routines.create` / `routines.update` / `routines.delete` / `routines.run` / `routines.describe`, `plugins.marketplace` / `plugins.install` / `plugins.uninstall` / `plugins.set_variables` / `plugins.connect` / `plugins.detail` (`runner_id` names the Runner) / `bots.set_plugins` / `bots.set_allow_rules` / `chats.permission`, `bots.memory` / `bots.memory.write` (this Runner's bots), `providers.connect_deepseek` / `providers.connect_anthropic` / `providers.connect_chatgpt` / `providers.disconnect` (this Runner).
 
 CLI → App: `snapshot`, `roster.changed` (devices, bots, chats, routines), `message.added` / `message.updated` / `message.removed`, `chat.removed`, `job.started` / `job.finished` (with `routine_id` for a routine's run) / `job.retry`, `chat.usage`, `relay.status`, `pair.completed`, `identity.changed`.
 
@@ -328,7 +351,7 @@ The app may choose ids (`bots.create.id`, `chats.create.id`, `chats.send.message
 - Machine bearer for blobs and presence; identity signature for registering and attesting machines.
 - PUT/GET blobs; body is ciphertext. `roster` is a whole-roster snapshot of bots, chats, and routines (latest wins); `chat` is one upsert or removal of a message; `machine` is a Device’s metadata; `key` is the DEK sealed to the content key.
 - Jobs: `kind=job` with `recipient_machine_pubkey`, sealed to that machine’s box key, deleted by the Runner after the turn.
-- Questions: `kind=request` sealed to one Runner (`crates/cli/src/requests.rs`: `{ id, verb, requested_by, body }`), answered with a `kind=response` sealed to the Device that asked (`{ request_id, body, error? }`); each side deletes the blob it consumed, and the asker gives up after 20 s. The verbs are `memory.read` and `memory.write`, so a bot's memory can be shown and edited from a Device that is not its Runner. A request is refused up front when the Runner is unknown or offline.
+- Questions: `kind=request` sealed to one Runner (`crates/cli/src/requests.rs`: `{ id, verb, requested_by, body }`), answered with a `kind=response` sealed to the Device that asked (`{ request_id, body, error? }`); each side deletes the blob it consumed, and the asker gives up after 20 s. The verbs are `memory.read` and `memory.write`, so a bot's memory can be shown and edited from a Device that is not its Runner; `plugins.install` / `plugins.uninstall` / `plugins.variables` / `plugins.connect` / `plugins.detail`, so plugins on a Runner are managed from any Device; and `permission.answer`, so a permission card is answered from any Device. A request is refused up front when the Runner is unknown or offline.
 - Every Device keeps `last_seq` and an outbox; uploads retry until the relay accepts them.
 
 ```
@@ -361,7 +384,7 @@ tinybot/
 
 ## Status
 
-Done: crypto and blob protocol, relay, CLI (identity, pairing, restore, local WS, DeepSeek and Anthropic keys, ChatGPT OAuth adapter, server-side web search, agent loop, encrypt-before-upload, group chats, cross-Runner jobs and handoffs, stop, routines), app wiring and the bundled CLI launcher.
+Done: crypto and blob protocol, relay, CLI (identity, pairing, restore, local WS, DeepSeek and Anthropic keys, ChatGPT OAuth adapter, server-side web search, agent loop, encrypt-before-upload, group chats, cross-Runner jobs and handoffs, stop, routines, plugins over MCP with a marketplace and permission cards), app wiring and the bundled CLI launcher.
 
 Next: steering mid-turn, keychain storage, relay blob GC, a cost budget per chat.
 

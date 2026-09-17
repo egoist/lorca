@@ -45,6 +45,11 @@ impl Config {
         self.home.join("files")
     }
 
+    /// Installed plugins: `installed.json`, `secrets.json`, and a folder per plugin.
+    pub fn plugins_dir(&self) -> PathBuf {
+        self.home.join("plugins")
+    }
+
     pub fn ensure_home(&self) -> anyhow::Result<()> {
         std::fs::create_dir_all(&self.home)?;
         set_private(&self.home)?;
@@ -57,6 +62,9 @@ impl Config {
 pub struct Settings {
     #[serde(default)]
     pub relay_url: Option<String>,
+    /// A marketplace index to list beside the bundled one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub marketplace_url: Option<String>,
 }
 
 impl Settings {

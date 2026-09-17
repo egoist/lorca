@@ -447,9 +447,9 @@ final class WrappingTextField: NSTextField {
 }
 
 
-/// A routine in the inspector: an icon for its state, the name over the schedule, and a switch
-/// that pauses or resumes it. Clicking the row opens its details.
-final class RoutineRow: NSView {
+/// A row with an icon for its state, a title over a detail line, and a switch: a routine that
+/// pauses or resumes, a plugin a bot may use. Clicking the row opens its details.
+final class SwitchRow: NSView {
     private let icon = NSImageView()
     private let name = Build.label("", font: .systemFont(ofSize: 12.5, weight: .medium))
     private let detail = Build.label("", font: Theme.Font.caption, color: .secondaryLabelColor)
@@ -500,14 +500,22 @@ final class RoutineRow: NSView {
 
     func configure(routine: Routine) {
         let symbol = routine.isRunning ? "arrow.triangle.2.circlepath" : (routine.isEnabled ? "clock" : "pause.circle")
+        configure(
+            symbol: symbol,
+            tint: routine.isRunning ? .controlAccentColor : (routine.isEnabled ? .secondaryLabelColor : .tertiaryLabelColor),
+            title: routine.name, detail: routine.detail, isOn: routine.isEnabled,
+            toggleTooltip: routine.isEnabled ? "Pause \(routine.name)" : "Resume \(routine.name)", tooltip: routine.prompt)
+    }
+
+    func configure(symbol: String, tint: NSColor, title: String, detail detailText: String, isOn: Bool, toggleTooltip: String, tooltip: String) {
         icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
         icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
-        icon.contentTintColor = routine.isRunning ? .controlAccentColor : (routine.isEnabled ? .secondaryLabelColor : .tertiaryLabelColor)
-        name.stringValue = routine.name
-        detail.stringValue = routine.detail
-        toggle.state = routine.isEnabled ? .on : .off
-        toggle.toolTip = routine.isEnabled ? "Pause \(routine.name)" : "Resume \(routine.name)"
-        toolTip = routine.prompt
+        icon.contentTintColor = tint
+        name.stringValue = title
+        detail.stringValue = detailText
+        toggle.state = isOn ? .on : .off
+        toggle.toolTip = toggleTooltip
+        toolTip = tooltip
     }
 
     @objc private func toggled() {

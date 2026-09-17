@@ -48,6 +48,7 @@ import {
   MarkerRow,
   MessageRow,
   NoticeRow,
+  PermissionRow,
   StatusRow,
   WorkingRow,
   type Row,
@@ -367,6 +368,8 @@ export default function ChatScreen() {
                   return <MarkerRow row={item} />;
                 case "notice":
                   return <NoticeRow row={item} />;
+                case "permission":
+                  return <PermissionRow row={item} onDecide={(decision) => engine.answerPermission(item.message.chat_id, item.message.id, decision)} />;
                 case "working":
                   return <WorkingRow bots={item.bots} isGroup={isGroup} />;
                 case "status":

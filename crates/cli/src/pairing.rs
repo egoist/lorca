@@ -243,6 +243,7 @@ async fn join(app: &Arc<App>, pairing_string: &str, device_name: Option<String>)
         os,
         os_version,
         box_pubkey: machine.box_pubkey(),
+        plugins: Vec::new(),
         providers_connected: Vec::new(),
         updated_at: now_unix(),
     };

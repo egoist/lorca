@@ -1,0 +1,110 @@
+{
+  "plugins": [
+    {
+      "id": "github",
+      "name": "GitHub",
+      "description": "Issues, pull requests, code search, and repositories on GitHub.",
+      "version": "1",
+      "icon": "chevron.left.forwardslash.chevron.right",
+      "homepage": "https://github.com/github/github-mcp-server",
+      "tags": ["git", "code", "issues", "pull requests", "repositories"],
+      "servers": {
+        "github": {
+          "type": "http",
+          "url": "https://api.githubcopilot.com/mcp/",
+          "auth": {
+            "type": "oauth",
+            "scopes": ["repo", "read:org", "read:user", "user:email", "notifications"],
+            "client_id": "Ov23liOYPfJpZF2kQN8Z",
+            "device_authorization_endpoint": "https://github.com/login/device/code",
+            "token_endpoint": "https://github.com/login/oauth/access_token",
+            "token_variable": "GITHUB_TOKEN",
+            "client_id_variable": "GITHUB_CLIENT_ID",
+            "client_secret_variable": "GITHUB_CLIENT_SECRET"
+          }
+        }
+      },
+      "variables": [
+        { "name": "GITHUB_TOKEN", "description": "A personal access token (github.com/settings/tokens), the quickest way in.", "secret": true, "required": false },
+        { "name": "GITHUB_CLIENT_ID", "description": "Normally not needed: the client id of your own OAuth app (github.com/settings/developers, Device Flow enabled), to sign in with it instead of Tinybot's.", "secret": false, "required": false },
+        { "name": "GITHUB_CLIENT_SECRET", "description": "Only for a browser sign-in with your own app: its client secret.", "secret": true, "required": false }
+      ],
+      "tools": { "readonly": ["get_*", "list_*", "search_*"] }
+    },
+    {
+      "id": "linear",
+      "name": "Linear",
+      "description": "Issues, projects, and cycles in Linear.",
+      "version": "1",
+      "icon": "line.3.horizontal.decrease.circle",
+      "homepage": "https://linear.app/docs/mcp",
+      "tags": ["issues", "projects", "tasks", "planning"],
+      "servers": {
+        "linear": { "type": "http", "url": "https://mcp.linear.app/mcp", "auth": { "type": "oauth" } }
+      },
+      "tools": { "readonly": ["get_*", "list_*", "search_*"] }
+    },
+    {
+      "id": "notion",
+      "name": "Notion",
+      "description": "Pages and databases in a Notion workspace.",
+      "version": "1",
+      "icon": "doc.richtext",
+      "homepage": "https://developers.notion.com/docs/mcp",
+      "tags": ["notes", "docs", "wiki", "databases"],
+      "servers": {
+        "notion": { "type": "http", "url": "https://mcp.notion.com/mcp", "auth": { "type": "oauth" } }
+      },
+      "tools": { "readonly": ["get_*", "search*", "fetch*", "list_*"] }
+    },
+    {
+      "id": "sentry",
+      "name": "Sentry",
+      "description": "Errors, issues, and releases in Sentry.",
+      "version": "1",
+      "icon": "exclamationmark.triangle",
+      "homepage": "https://mcp.sentry.dev",
+      "tags": ["errors", "monitoring", "crashes"],
+      "servers": {
+        "sentry": { "type": "http", "url": "https://mcp.sentry.dev/mcp", "auth": { "type": "oauth" } }
+      },
+      "tools": { "readonly": ["get_*", "list_*", "search_*", "find_*"] }
+    },
+    {
+      "id": "context7",
+      "name": "Context7",
+      "description": "Up-to-date documentation and code examples for libraries and frameworks.",
+      "version": "1",
+      "icon": "book.closed",
+      "homepage": "https://context7.com",
+      "tags": ["docs", "documentation", "libraries", "api reference"],
+      "servers": {
+        "context7": { "type": "http", "url": "https://mcp.context7.com/mcp", "headers": { "CONTEXT7_API_KEY": "${CONTEXT7_API_KEY}" } }
+      },
+      "variables": [
+        { "name": "CONTEXT7_API_KEY", "description": "Optional API key from context7.com for higher limits.", "secret": true, "required": false }
+      ],
+      "tools": { "readonly": ["*"] }
+    },
+    {
+      "id": "playwright",
+      "name": "Browser",
+      "description": "Opens web pages in a headless browser on the Runner to read them, fill forms, and take screenshots.",
+      "version": "1",
+      "icon": "globe",
+      "homepage": "https://github.com/microsoft/playwright-mcp",
+      "tags": ["browser", "web", "scrape", "screenshot", "playwright"],
+      "servers": {
+        "browser": { "type": "stdio", "command": "npx", "args": ["-y", "@playwright/mcp@latest", "--headless"] }
+      },
+      "tools": { "readonly": ["browser_snapshot", "browser_take_screenshot", "browser_console_messages", "browser_network_requests"] },
+      "skills": [
+        {
+          "name": "Reading a page",
+          "description": "How to read a page without filling the context.",
+          "content": "# Reading a page\n\nNavigate with browser_navigate, then read browser_snapshot once. Prefer the snapshot over screenshots: it is text. Close tabs you opened when done."
+        }
+      ]
+    }
+  ]
+}

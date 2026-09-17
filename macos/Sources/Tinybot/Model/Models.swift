@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 // MARK: - Device
@@ -169,6 +170,8 @@ struct Device: Identifiable, Hashable {
     var lastSeen: Date
     var machineKey: String
     var providers: [ProviderCredential]
+    /// Plugins installed on this Runner, as it advertises them. Secrets stay on the Runner.
+    var plugins: [InstalledPlugin] = []
 
     /// Derived from `os` alone: a desktop Device is a Runner and can be assigned bots.
     var isRunner: Bool { os.isDesktop }
@@ -202,7 +205,139 @@ struct Bot: Identifiable, Hashable {
     /// How much the model thinks; nil means the provider's default.
     var thinking: String? = nil
     var instructions: String
+    /// Plugins this bot may use: a subset of what its Runner has installed.
+    var pluginIDs: [String] = []
+    /// Plugin tools the user always allows, as `plugin/tool`.
+    var allowRules: [String] = []
     var createdAt: Date
+}
+
+// MARK: - Plugins
+
+/// A plugin as its Runner advertises it: installed, and in what state.
+struct InstalledPlugin: Identifiable, Hashable {
+    enum State: String, Hashable {
+        case ready
+        case needsSetup = "needs_setup"
+        case needsAuth = "needs_auth"
+        case connecting
+        case error
+        case unknown
+    }
+
+    let id: String
+    var name: String
+    var description: String
+    var version: String
+    var icon: String
+    var state: State
+    var detail: String
+
+    var symbolName: String { icon.isEmpty ? "puzzlepiece.extension" : icon }
+
+    var stateColor: NSColor {
+        switch state {
+        case .ready: .systemGreen
+        case .connecting: .controlAccentColor
+        case .error: .systemRed
+        case .needsSetup, .needsAuth, .unknown: .systemOrange
+        }
+    }
+}
+
+/// A marketplace entry, with the Runners that already have it.
+struct MarketplacePlugin: Identifiable, Hashable {
+    let id: String
+    var name: String
+    var description: String
+    var icon: String
+    var homepage: String?
+    var tags: [String]
+    /// At least one server signs in with OAuth on the Runner.
+    var signsIn: Bool
+    var variableNames: [String]
+    var installedOn: [Device.ID]
+
+    var symbolName: String { icon.isEmpty ? "puzzlepiece.extension" : icon }
+}
+
+/// One installed plugin in full, as its Runner reports it: never a secret's value.
+struct PluginDetail {
+    struct Variable: Hashable {
+        var name: String
+        var description: String
+        var secret: Bool
+        var required: Bool
+        var isSet: Bool
+        var value: String?
+    }
+
+    struct Server: Hashable {
+        var name: String
+        var kind: String
+        var url: String?
+        var oauth: Bool
+        var signedIn: Bool
+    }
+
+    var status: InstalledPlugin
+    var homepage: String?
+    var variables: [Variable]
+    var servers: [Server]
+    var skills: [(name: String, description: String)]
+}
+
+/// A bot asking before a plugin tool runs, or before a plugin is installed.
+struct PermissionRequest: Hashable {
+    enum Decision: String, Hashable {
+        case pending
+        case allowed
+        case always
+        case denied
+        case expired
+        /// A sign-in card: the flow finished.
+        case connected
+        case failed
+    }
+
+    var pluginID: String
+    var pluginName: String
+    var tool: String
+    var summary: String
+    var decision: Decision
+    /// A sign-in mid-flow: where to go and the code to enter there.
+    var link: String? = nil
+    var code: String? = nil
+
+    var isPending: Bool { decision == .pending }
+    var isInstall: Bool { tool == "install" }
+    /// A sign-in card: Sign in starts the OAuth flow on the Runner.
+    var isConnect: Bool { tool == "connect" }
+
+    /// "wants to use GitHub" / "wants to install GitHub" / "needs a sign-in to GitHub"
+    var verbPhrase: String {
+        if isConnect { return "needs a sign-in to \(pluginName)" }
+        return isInstall ? "wants to install \(pluginName)" : "wants to use \(pluginName)"
+    }
+
+    var decisionText: String {
+        switch decision {
+        case .pending: "Waiting for you"
+        case .allowed: isConnect ? "Signing in" : "Allowed once"
+        case .always: "Always allowed"
+        case .denied: isConnect ? "Not now" : "Denied"
+        case .expired: "No answer in time"
+        case .connected: "Signed in"
+        case .failed: "Sign-in failed"
+        }
+    }
+
+    /// The buttons a pending card offers: (title, decision).
+    var choices: [(String, String)] {
+        if isConnect { return [("Sign in", "allow"), ("Not now", "deny")] }
+        if isInstall { return [("Allow", "allow"), ("Deny", "deny")] }
+        return [("Allow once", "allow"), ("Always allow", "always"), ("Deny", "deny")]
+    }
 }
 
 /// A bot's memory as its Runner reports it: the curated index with its load budget, and the
@@ -364,6 +499,7 @@ struct Message: Identifiable, Hashable {
         case tool(ToolInvocation)
         case handoff(from: Bot.ID, to: Bot.ID, reason: String)
         case notice(String)
+        case permission(PermissionRequest)
     }
 
     enum State: Hashable {
@@ -403,6 +539,7 @@ struct Message: Identifiable, Hashable {
         case let .tool(tool): tool.summary
         case let .handoff(_, _, reason): reason
         case let .notice(value): value
+        case let .permission(request): request.summary
         }
     }
 

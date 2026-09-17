@@ -200,6 +200,25 @@ class Engine {
     void core.request("chats.set_owner", { chat_id: chatId, bot_id: botId });
   }
 
+  // MARK: - Plugins
+
+  /// Which of its Runner's plugins a bot may use.
+  setBotPlugins(botId: string, pluginIds: string[]) {
+    useStore.setState((s) => ({ bots: s.bots.map((b) => (b.id === botId ? { ...b, plugins: pluginIds } : b)) }));
+    void core.request("bots.set_plugins", { id: botId, plugin_ids: pluginIds });
+  }
+
+  /// Answers a permission card; the core's message event confirms the decision.
+  answerPermission(chatId: string, messageId: string, decision: "allow" | "always" | "deny") {
+    const decided = decision === "always" ? "always" : decision === "deny" ? "denied" : "allowed";
+    useStore.setState((s) => ({
+      chats: s.chats.map((c) =>
+        c.id === chatId ? { ...c, messages: c.messages.map((m) => (m.id === messageId && m.body.kind === "permission" ? { ...m, body: { ...m.body, decision: decided } } : m)) } : c,
+      ),
+    }));
+    void core.request("chats.permission", { chat_id: chatId, message_id: messageId, decision });
+  }
+
   // MARK: - Routines
 
   /// Pauses or resumes a routine; a resumed schedule counts from now.

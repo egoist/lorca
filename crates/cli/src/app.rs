@@ -99,6 +99,16 @@ pub struct App {
     pub pending_results: Mutex<HashMap<String, tokio::sync::oneshot::Sender<String>>>,
     /// Requests sent to other Runners, waiting for their `response`.
     pub pending_responses: Mutex<HashMap<String, tokio::sync::oneshot::Sender<Response>>>,
+    /// Permission cards waiting for the user's answer, by message id.
+    #[cfg(feature = "runner")]
+    pub pending_permissions: Mutex<HashMap<String, tokio::sync::oneshot::Sender<crate::plugins::mcp::Decision>>>,
+    /// What this Runner has installed, with the secrets kept apart.
+    pub plugins: Mutex<crate::plugins::Store>,
+    /// A fetched marketplace index: (fetched at, manifests).
+    pub marketplace_cache: Mutex<Option<(f64, Vec<crate::plugins::Manifest>)>>,
+    /// Connected MCP servers.
+    #[cfg(feature = "runner")]
+    pub mcp: crate::plugins::mcp::Pool,
     pub http: reqwest::Client,
 }
 
@@ -109,6 +119,7 @@ impl App {
         let identity: Option<IdentityFile> = config::read_json(&config.identity_path());
         let machine: Option<MachineFile> = config::read_json(&config.machine_path());
         let credentials = Credentials::load(&config);
+        let plugins = crate::plugins::Store::load(&config);
         let mut state: State = config::read_json(&config.state_path()).unwrap_or_default();
         // Upload this Device's metadata once per launch: a relay that changed or was reset
         // since the last upload has no copy, and every newly paired Device needs one.
@@ -133,6 +144,12 @@ impl App {
             chat_locks: Mutex::new(HashMap::new()),
             pending_results: Mutex::new(HashMap::new()),
             pending_responses: Mutex::new(HashMap::new()),
+            #[cfg(feature = "runner")]
+            pending_permissions: Mutex::new(HashMap::new()),
+            plugins: Mutex::new(plugins),
+            marketplace_cache: Mutex::new(None),
+            #[cfg(feature = "runner")]
+            mcp: crate::plugins::mcp::Pool::new(),
             http,
         }))
     }
@@ -272,6 +289,7 @@ impl App {
             os_version: machine.os_version.clone(),
             box_pubkey: keys.box_pubkey(),
             providers_connected: self.credentials.lock().unwrap().connected_kinds(),
+            plugins: self.plugins.lock().unwrap().statuses(),
             updated_at: config::now_unix(),
         })
     }
@@ -328,8 +346,14 @@ impl App {
     pub fn push_machine_blob_if_changed(&self) {
         let (Some(dek), Some(device)) = (self.dek(), self.local_device()) else { return };
         let fingerprint = format!(
-            "{}|{}|{}|{}|{}|{:?}",
-            device.id, device.name, device.model, device.os, device.os_version, device.providers_connected
+            "{}|{}|{}|{}|{}|{:?}|{}",
+            device.id,
+            device.name,
+            device.model,
+            device.os,
+            device.os_version,
+            device.providers_connected,
+            serde_json::to_string(&device.plugins).unwrap_or_default()
         );
         let hash = keys::b64(&<sha2::Sha256 as sha2::Digest>::digest(fingerprint.as_bytes()));
         let changed = {
@@ -790,6 +814,7 @@ impl App {
                     "status": status,
                     "last_seen": seen as f64,
                     "providers": providers,
+                    "plugins": device.plugins,
                 })
             })
             .collect()

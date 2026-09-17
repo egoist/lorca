@@ -15,6 +15,7 @@ pub mod keys;
 pub mod memory;
 pub mod model;
 pub mod pairing;
+pub mod plugins;
 #[cfg(feature = "runner")]
 pub mod providers;
 pub mod relay;

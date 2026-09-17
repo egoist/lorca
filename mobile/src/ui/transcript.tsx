@@ -4,9 +4,10 @@
 // centered "Message from ◉ Name" / "Messaged ◉ Name" markers. Tool calls never render.
 
 import { useEffect } from "react";
-import { Pressable, StyleSheet, Text, useWindowDimensions, View } from "react-native";
+import { Linking, Pressable, StyleSheet, Text, useWindowDimensions, View } from "react-native";
+import * as Clipboard from "expo-clipboard";
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withDelay, withRepeat, withSequence, withTiming } from "react-native-reanimated";
-import { isSentMessage, recipientName, type Bot, type Chat, type Message } from "../core/model";
+import { isSentMessage, recipientName, type Body, type Bot, type Chat, type Message } from "../core/model";
 import { AttachmentBlock } from "./attachments";
 import { BotAvatar } from "./Avatar";
 import { daySeparator, time } from "./format";
@@ -24,6 +25,7 @@ export type Row =
   | { key: string; type: "message"; message: Message; groupStart: boolean; groupEnd: boolean; showsName: boolean }
   | { key: string; type: "marker"; text: string; bot: Bot | undefined; tooltip?: string; groupStart: boolean }
   | { key: string; type: "notice"; text: string; groupStart: boolean }
+  | { key: string; type: "permission"; message: Message; body: Extract<Body, { kind: "permission" }>; bot: Bot | undefined; groupStart: boolean }
   | { key: string; type: "working"; bots: Bot[] }
   | { key: string; type: "status"; text: string };
 
@@ -78,6 +80,10 @@ export function buildRows(chat: Chat, bots: Map<string, Bot>, workingBotIds: str
       }
       case "notice":
         rows.push({ key: message.id, type: "notice", text: message.body.text, groupStart });
+        previousAuthorKey = null;
+        break;
+      case "permission":
+        rows.push({ key: message.id, type: "permission", message, body: message.body, bot: message.author.kind === "bot" ? bots.get(message.author.bot_id) : undefined, groupStart });
         previousAuthorKey = null;
         break;
     }
@@ -176,6 +182,63 @@ export function NoticeRow({ row }: { row: Extract<Row, { type: "notice" }> }) {
   );
 }
 
+/// A bot asking before a plugin tool runs (or before an install): the question, the call in
+/// one line, and Allow once / Always allow / Deny while it waits, then the answer.
+export function PermissionRow({ row, onDecide }: { row: Extract<Row, { type: "permission" }>; onDecide: (decision: "allow" | "always" | "deny") => void }) {
+  const p = usePalette();
+  const pending = row.body.decision === "pending";
+  const connect = row.body.tool === "connect";
+  const verb = connect ? "needs a sign-in to" : row.body.tool === "install" ? "wants to install" : "wants to use";
+  const decided: Record<string, string> = connect
+    ? { allowed: "Signing in", denied: "Not now", connected: "Signed in", failed: "Sign-in failed" }
+    : { allowed: "Allowed once", always: "Always allowed", denied: "Denied", expired: "No answer in time" };
+  const choices: [string, "allow" | "always" | "deny"][] = connect
+    ? [["Sign in", "allow"], ["Not now", "deny"]]
+    : row.body.tool === "install"
+      ? [["Allow", "allow"], ["Deny", "deny"]]
+      : [["Allow once", "allow"], ["Always allow", "always"], ["Deny", "deny"]];
+  return (
+    <View style={{ paddingTop: row.groupStart ? 14 : 6, paddingHorizontal: INSET }}>
+      <View style={[styles.permission, { backgroundColor: p.cell, borderColor: p.separator }]}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <Symbol name={connect ? "person.crop.circle.badge.checkmark" : row.body.tool === "install" ? "puzzlepiece.extension" : "hand.raised"} size={16} color={row.body.decision === "failed" ? p.red : row.body.decision === "connected" ? p.green : p.tint} />
+          <Text style={[styles.permissionTitle, { color: p.label }]} numberOfLines={2}>
+            {row.bot?.name ?? "The bot"} {verb} {row.body.plugin_name}
+          </Text>
+        </View>
+        <Text style={[styles.caption, { color: p.secondaryLabel }]} numberOfLines={3}>
+          {pending ? row.body.summary : `${decided[row.body.decision] ?? row.body.decision} · ${row.body.summary}`}
+        </Text>
+        {row.body.decision === "allowed" && row.body.code ? (
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginTop: 4 }}>
+            <Text selectable style={{ color: p.label, fontSize: 17, fontWeight: "700", fontFamily: "Menlo" }}>{row.body.code}</Text>
+            <Pressable
+              onPress={() => {
+                if (row.body.code) void Clipboard.setStringAsync(row.body.code);
+                if (row.body.link) void Linking.openURL(row.body.link);
+              }}
+              style={({ pressed }) => [styles.permissionButton, { backgroundColor: pressed ? p.separator : p.fill }]}
+            >
+              <Text style={{ color: p.tint, fontSize: 13, fontWeight: "600" }}>Copy code and open</Text>
+            </Pressable>
+          </View>
+        ) : null}
+        {pending ? (
+          <View style={{ flexDirection: "row", gap: 8, marginTop: 4 }}>
+            {choices.map(([label, decision]) => (
+              <Pressable key={decision} onPress={() => onDecide(decision)} style={({ pressed }) => [styles.permissionButton, { backgroundColor: pressed ? p.separator : p.fill }]}>
+                <Text style={{ color: decision === "deny" ? p.label : p.tint, fontSize: 13, fontWeight: "600" }}>
+                  {label}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
 export function StatusRow({ text }: { text: string }) {
   const p = usePalette();
   return (
@@ -244,6 +307,9 @@ const styles = StyleSheet.create({
   centered: { alignItems: "center", paddingHorizontal: INSET },
   markerLine: { flexDirection: "row", alignItems: "center" },
   notice: { flexDirection: "row", alignItems: "flex-start", gap: 8, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8, maxWidth: 360 },
+  permission: { borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, paddingHorizontal: 12, paddingVertical: 10, gap: 6, maxWidth: 420 },
+  permissionTitle: { fontSize: 14, fontWeight: "600", flexShrink: 1 },
+  permissionButton: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 8 },
   noticeText: { fontSize: 12.5, lineHeight: 17, flexShrink: 1 },
   dots: { flexDirection: "row", gap: 4, alignItems: "center", marginLeft: 6 },
   dot: { width: 6, height: 6, borderRadius: 3 },

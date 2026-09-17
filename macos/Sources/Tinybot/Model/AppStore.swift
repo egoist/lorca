@@ -361,6 +361,9 @@ final class AppStore {
                 ? "Message from \(bot(from)?.name ?? "a teammate"): \(reason)"
                 : "Handed off to \(bot(to)?.name ?? "a teammate")"
         case let .notice(value): body = value
+        case let .permission(request):
+            let who = bot(last.author.botID ?? "")?.name ?? "A bot"
+            body = "\(who) \(request.verbPhrase)"
         }
 
         let flattened = body
@@ -520,6 +523,83 @@ final class AppStore {
     /// Summarizes the chat's older part for its bot now, on the Runner.
     func compactChat(_ id: Chat.ID) {
         perform("chats.compact", ["chat_id": id])
+    }
+
+    // MARK: - Plugins
+
+    /// The marketplace with what each Runner already has, from the CLI.
+    func marketplace(query: String = "") async throws -> [MarketplacePlugin] {
+        if isMock {
+            return MockData.marketplace().filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) }
+        }
+        return try await client.request("plugins.marketplace", ["query": query], as: Wire.Marketplace.self).plugins.map { $0.toModel() }
+    }
+
+    /// Installs a marketplace plugin on a Runner (here, or sealed to that Runner).
+    func installPlugin(_ pluginID: String, on runnerID: Device.ID) async throws -> InstalledPlugin {
+        guard !isMock else { return InstalledPlugin(id: pluginID, name: pluginID, description: "", version: "", icon: "", state: .ready, detail: "Ready") }
+        return try await client.request("plugins.install", ["runner_id": runnerID, "plugin_id": pluginID], as: Wire.PluginInstalled.self).status.toModel()
+    }
+
+    /// Installs an MCP server the user pasted as JSON, as Grok Bot's "Add MCP Server".
+    func installMCPServer(named name: String, json: Any, on runnerID: Device.ID) async throws -> InstalledPlugin {
+        guard !isMock else { return InstalledPlugin(id: name, name: name, description: "", version: "", icon: "", state: .ready, detail: "Ready") }
+        return try await client.request("plugins.install", ["runner_id": runnerID, "name": name, "mcp_json": json], as: Wire.PluginInstalled.self).status.toModel()
+    }
+
+    func uninstallPlugin(_ pluginID: String, on runnerID: Device.ID) async throws {
+        guard !isMock else { return }
+        _ = try await client.request("plugins.uninstall", ["runner_id": runnerID, "plugin_id": pluginID])
+    }
+
+    func pluginDetail(_ pluginID: String, on runnerID: Device.ID) async throws -> PluginDetail {
+        if isMock {
+            let status = device(runnerID)?.plugins.first { $0.id == pluginID } ?? InstalledPlugin(id: pluginID, name: pluginID, description: "", version: "", icon: "", state: .ready, detail: "Ready")
+            return PluginDetail(status: status, homepage: nil, variables: [.init(name: "GITHUB_TOKEN", description: "A personal access token, instead of signing in.", secret: true, required: false, isSet: false, value: nil)], servers: [.init(name: "github", kind: "http", url: "https://api.githubcopilot.com/mcp/", oauth: true, signedIn: status.state == .ready)], skills: [])
+        }
+        return try await client.request("plugins.detail", ["runner_id": runnerID, "plugin_id": pluginID], as: Wire.PluginDetail.self).toModel()
+    }
+
+    /// Sets variables on the Runner; a secret goes out in the request and is never read back.
+    func setPluginVariables(_ pluginID: String, on runnerID: Device.ID, variables: [String: String]) async throws -> InstalledPlugin {
+        guard !isMock else { return InstalledPlugin(id: pluginID, name: pluginID, description: "", version: "", icon: "", state: .ready, detail: "Ready") }
+        return try await client.request("plugins.set_variables", ["runner_id": runnerID, "plugin_id": pluginID, "variables": variables], as: Wire.PluginInstalled.self).status.toModel()
+    }
+
+    /// Starts the sign-in on the Runner; the browser opens there.
+    func connectPlugin(_ pluginID: String, on runnerID: Device.ID) async throws -> String {
+        guard !isMock else { return "Opened the sign-in page." }
+        return try await client.request("plugins.connect", ["runner_id": runnerID, "plugin_id": pluginID], as: Wire.PluginConnected.self).message
+    }
+
+    /// Which of its Runner's plugins a bot may use.
+    func setBotPlugins(_ id: Bot.ID, pluginIDs: [String]) {
+        guard let index = bots.firstIndex(where: { $0.id == id }) else { return }
+        bots[index].pluginIDs = pluginIDs
+        bots[index].allowRules.removeAll { rule in !pluginIDs.contains { rule.hasPrefix("\($0)/") } }
+        emit(.rosterChanged)
+        for chat in chats where chat.botIDs.contains(id) { emit(.chatChanged(chat.id)) }
+        perform("bots.set_plugins", ["id": id, "plugin_ids": pluginIDs])
+    }
+
+    /// Replaces a bot's always-allow rules, as the plugin sheet's Reset does.
+    func setBotAllowRules(_ id: Bot.ID, rules: [String]) {
+        guard let index = bots.firstIndex(where: { $0.id == id }) else { return }
+        bots[index].allowRules = rules
+        emit(.rosterChanged)
+        perform("bots.set_allow_rules", ["id": id, "allow_rules": rules])
+    }
+
+    /// Answers a permission card: `allow`, `always`, or `deny`. The CLI confirms with the
+    /// message's new decision.
+    func answerPermission(chatID: Chat.ID, messageID: Message.ID, decision: String) {
+        update(messageID, in: chatID) { message in
+            guard case var .permission(request) = message.body else { return }
+            request.decision = decision == "always" ? .always : (decision == "deny" ? .denied : .allowed)
+            if request.isConnect, request.decision == .allowed { request.summary = "Starting the sign-in…" }
+            message.body = .permission(request)
+        }
+        perform("chats.permission", ["chat_id": chatID, "message_id": messageID, "decision": decision])
     }
 
     // MARK: - Routines

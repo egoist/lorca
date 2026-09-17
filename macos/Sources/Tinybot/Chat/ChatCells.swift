@@ -267,7 +267,14 @@ final class WorkingCellView: NSTableCellView {
         case "create_bot": return "Creating a bot"
         case "edit_bot": return "Updating a bot"
         case "remember": return "Taking a note"
-        default: return "Working"
+        case "search_plugins": return "Searching plugins"
+        case "install_plugin": return "Installing a plugin"
+        default:
+            // A plugin tool's row already names the plugin: "Using GitHub…".
+            if tool.name.contains("__"), tool.summary.hasPrefix("Using ") {
+                return String(tool.summary.dropLast(tool.summary.hasSuffix("…") ? 1 : 0))
+            }
+            return "Working"
         }
     }
 
@@ -529,5 +536,148 @@ final class DayCellView: NSTableCellView {
             height: 16
         )
         label.frame = NSRect(x: 0, y: 1, width: width, height: 14)
+    }
+}
+
+
+// MARK: - Permission card
+
+/// A bot asking before a plugin tool runs (or before a plugin is installed): the question,
+/// the call in one line, and Allow once / Always allow / Deny while it waits, then the answer.
+final class PermissionCellView: NSTableCellView {
+    static let identifier = NSUserInterfaceItemIdentifier("PermissionCell")
+
+    static let width: CGFloat = 420
+
+    /// A decided card is one line; a long answer (a sign-in failure with advice) gets two more,
+    /// and a card showing a code to enter has a button row like a pending one.
+    static func height(pending: Bool, summary: String, hasCode: Bool = false) -> CGFloat {
+        if pending || hasCode { return 90 }
+        return summary.count > 70 ? 86 : 58
+    }
+
+    private let box = BackgroundView()
+    private let icon = NSImageView()
+    private let title = Build.label("", font: .systemFont(ofSize: 12.5, weight: .semibold))
+    private let summary = Build.label("", font: Theme.Font.caption, color: .secondaryLabelColor, lines: 3)
+    private let allowButton = NSButton()
+    private let alwaysButton = NSButton()
+    private let denyButton = NSButton()
+    private let codeLabel = Build.label("", font: .monospacedSystemFont(ofSize: 15, weight: .semibold))
+    private let openButton = NSButton()
+    private var groupStart = true
+    private var pending = true
+    private var summaryText = ""
+    private var hasCode = false
+    private var link: String?
+    private var code: String?
+
+    var onDecision: ((String) -> Void)?
+
+    init() {
+        super.init(frame: .zero)
+        box.cornerRadius = 12
+        box.fillColor = Theme.botBubble
+        box.borderColor = Theme.botBubbleBorder
+        icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)
+        icon.contentTintColor = .controlAccentColor
+        summary.lineBreakMode = .byWordWrapping
+        for (button, label, decision) in [(allowButton, "Allow once", "allow"), (alwaysButton, "Always allow", "always"), (denyButton, "Deny", "deny")] {
+            button.title = label
+            button.bezelStyle = .rounded
+            button.controlSize = .small
+            button.font = .systemFont(ofSize: 11)
+            button.target = self
+            button.action = #selector(decide(_:))
+            button.identifier = NSUserInterfaceItemIdentifier(decision)
+        }
+        addSubview(box.framePositioned())
+        addSubview(icon.framePositioned())
+        addSubview(title.framePositioned())
+        addSubview(summary.framePositioned())
+        addSubview(allowButton.framePositioned())
+        addSubview(alwaysButton.framePositioned())
+        addSubview(denyButton.framePositioned())
+        codeLabel.isSelectable = true
+        openButton.bezelStyle = .rounded
+        openButton.controlSize = .small
+        openButton.font = .systemFont(ofSize: 11)
+        openButton.target = self
+        openButton.action = #selector(openLink)
+        addSubview(codeLabel.framePositioned())
+        addSubview(openButton.framePositioned())
+    }
+
+    /// Copies the code and opens the sign-in page, so the code is one paste away.
+    @objc private func openLink() {
+        if let code {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(code, forType: .string)
+        }
+        if let link, let url = URL(string: link) { NSWorkspace.shared.open(url) }
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var isFlipped: Bool { true }
+
+    func configure(request: PermissionRequest, botName: String, groupStart: Bool) {
+        self.groupStart = groupStart
+        pending = request.isPending
+        icon.image = NSImage(systemSymbolName: request.isConnect ? "person.crop.circle.badge.checkmark" : (request.isInstall ? "puzzlepiece.extension" : "hand.raised"), accessibilityDescription: nil)
+        icon.contentTintColor = request.decision == .failed ? .systemRed : (request.decision == .connected ? .systemGreen : .controlAccentColor)
+        title.stringValue = "\(botName) \(request.verbPhrase)"
+        hasCode = request.decision == .allowed && request.code != nil
+        link = request.link
+        code = request.code
+        summaryText = request.isPending ? request.summary : (hasCode ? "Enter this code at \(URL(string: request.link ?? "")?.host ?? "the link"), then come back." : "\(request.decisionText) · \(request.summary)")
+        summary.stringValue = summaryText
+        summary.toolTip = request.summary
+        codeLabel.stringValue = request.code ?? ""
+        codeLabel.isHidden = !hasCode
+        openButton.title = "Copy code and open \(URL(string: request.link ?? "")?.host ?? "link")"
+        openButton.isHidden = !hasCode
+        // The buttons follow the card's kind: Sign in / Not now, Allow / Deny, or the three.
+        let buttons = [allowButton, alwaysButton, denyButton]
+        for button in buttons { button.isHidden = true }
+        if pending {
+            for (button, choice) in zip(buttons, request.choices) {
+                button.title = choice.0
+                button.identifier = NSUserInterfaceItemIdentifier(choice.1)
+                button.isHidden = false
+            }
+        }
+        needsLayout = true
+    }
+
+    @objc private func decide(_ sender: NSButton) {
+        guard let decision = sender.identifier?.rawValue else { return }
+        onDecision?(decision)
+    }
+
+    override func layout() {
+        super.layout()
+        let top = groupStart ? ChatMetrics.groupTopPadding : ChatMetrics.tightTopPadding
+        let width = min(Self.width, bounds.width - ChatMetrics.horizontalInset * 2)
+        let x = ChatMetrics.horizontalInset
+        // `height` is the box alone; the row adds `top` above it.
+        let height = Self.height(pending: pending, summary: summaryText, hasCode: hasCode)
+        box.frame = NSRect(x: x, y: top, width: width, height: height)
+        icon.frame = NSRect(x: x + 12, y: top + 12, width: 18, height: 18)
+        title.frame = NSRect(x: x + 38, y: top + 11, width: width - 50, height: 17)
+        summary.frame = NSRect(x: x + 38, y: top + 30, width: width - 50, height: pending || hasCode ? 16 : height - 30 - 10)
+        if hasCode {
+            let codeSize = codeLabel.intrinsicContentSize
+            codeLabel.frame = NSRect(x: x + 38, y: top + 52, width: codeSize.width + 4, height: 24)
+            let openSize = openButton.intrinsicContentSize
+            openButton.frame = NSRect(x: x + 38 + codeSize.width + 14, y: top + 53, width: openSize.width + 4, height: 22)
+        }
+        var buttonX = x + 36
+        for button in [allowButton, alwaysButton, denyButton] where !button.isHidden {
+            let size = button.intrinsicContentSize
+            button.frame = NSRect(x: buttonX, y: top + 54, width: size.width + 4, height: 22)
+            buttonX += size.width + 12
+        }
     }
 }

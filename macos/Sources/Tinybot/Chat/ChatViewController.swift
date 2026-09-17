@@ -451,6 +451,9 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
             case .notice:
                 identifier = NoticeCellView.identifier
                 cell = dequeue(identifier) { NoticeCellView() }
+            case .permission:
+                identifier = PermissionCellView.identifier
+                cell = dequeue(identifier) { PermissionCellView() }
             }
             configure(cell: cell, row: chatRow)
             return cell
@@ -558,6 +561,17 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
                     groupStart: groupStart,
                     metrics: layout.noticeMetrics(
                         for: text, tableWidth: max(tableView.bounds.width, 320)))
+
+            case let .permission(request):
+                let permissionCell = cell as? PermissionCellView
+                permissionCell?.configure(
+                    request: request,
+                    botName: message.author.botID.flatMap(store.bot)?.name ?? "The bot",
+                    groupStart: groupStart)
+                permissionCell?.onDecision = { [weak self] decision in
+                    guard let self else { return }
+                    self.store.answerPermission(chatID: chat.id, messageID: message.id, decision: decision)
+                }
             }
 
             _ = chat

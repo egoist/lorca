@@ -114,6 +114,11 @@ export function preview(chat: Chat, bots: Map<string, Bot>): string {
     case "notice":
       body = shown.body.text;
       break;
+    case "permission": {
+      const who = shown.author.kind === "bot" ? (bots.get(shown.author.bot_id)?.name ?? "A bot") : "A bot";
+      body = shown.body.tool === "connect" ? `${who} needs a sign-in to ${shown.body.plugin_name}` : `${who} wants to ${shown.body.tool === "install" ? "install" : "use"} ${shown.body.plugin_name}`;
+      break;
+    }
   }
   const flattened = body.replace(/\n/g, " ").replace(/\*\*/g, "").replace(/`/g, "").trim();
   if (chat.kind === "group" && shown.author.kind === "bot" && shown.body.kind === "text") {

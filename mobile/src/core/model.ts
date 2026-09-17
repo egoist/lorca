@@ -25,6 +25,20 @@ export interface Device {
   /// Unix seconds.
   last_seen: number;
   providers: ProviderStatus[];
+  /// Plugins installed on that Runner, with their setup state.
+  plugins?: PluginStatus[];
+}
+
+/// A plugin as its Runner advertises it: installed, and in what state.
+export interface PluginStatus {
+  id: string;
+  name: string;
+  description?: string;
+  version?: string;
+  /// An SF Symbol name.
+  icon?: string;
+  state: "ready" | "needs_setup" | "needs_auth" | "connecting" | "error";
+  detail?: string;
 }
 
 export function connectedProviders(device: Device): string[] {
@@ -53,6 +67,10 @@ export interface Bot {
   thinking?: string;
   instructions: string;
   workdir?: string;
+  /// Plugins this bot may use: a subset of what its Runner has installed.
+  plugins?: string[];
+  /// Plugin tools the user always allows, as `plugin/tool`.
+  allow_rules?: string[];
   created_at: number;
 }
 
@@ -127,7 +145,9 @@ export type Body =
       is_error?: boolean;
     }
   | { kind: "handoff"; from: string; to: string; reason: string }
-  | { kind: "notice"; text: string; routine_id?: string };
+  | { kind: "notice"; text: string; routine_id?: string }
+  /// The bot asks before a plugin tool runs, or before installing a plugin (`tool` is `install`).
+  | { kind: "permission"; plugin_id: string; plugin_name: string; tool: string; summary: string; decision: "pending" | "allowed" | "always" | "denied" | "expired" | "connected" | "failed"; link?: string; code?: string };
 
 export type MessageState =
   | { kind: "thinking" }

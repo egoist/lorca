@@ -13,6 +13,7 @@ final class InspectorViewController: NSViewController {
     private let runtime = SectionView(title: "Runs with")
     private let memory = SectionView(title: "Memory")
     private let routines = SectionView(title: "Routines")
+    private let plugins = SectionView(title: "Plugins")
     private let routing = SectionView(title: "Where turns run")
     private let security = SectionView(title: "Encryption")
     private let addButton = NSButton()
@@ -53,6 +54,7 @@ final class InspectorViewController: NSViewController {
         column.addArrangedSubview(runtime)
         column.addArrangedSubview(memory)
         column.addArrangedSubview(routines)
+        column.addArrangedSubview(plugins)
         column.addArrangedSubview(routing)
         column.addArrangedSubview(security)
         column.setCustomSpacing(10, after: participants)
@@ -89,6 +91,7 @@ final class InspectorViewController: NSViewController {
             runtime.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             memory.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             routines.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
+            plugins.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             routing.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             security.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
         ])
@@ -172,9 +175,11 @@ final class InspectorViewController: NSViewController {
         runtime.isHidden = !single
         memory.isHidden = !single
         routines.isHidden = !single
+        plugins.isHidden = !single
         if single, let bot = members.first {
             memory.setRows(memoryRows(for: bot))
             routines.setRows(routineRows(for: bot))
+            plugins.setRows(pluginRows(for: bot))
             nameRow.setValue(bot.name)
             labelRow.setValue(bot.label)
             descriptionRow.setValue(bot.description)
@@ -334,7 +339,7 @@ final class InspectorViewController: NSViewController {
             return [NoteRow(text: "Routines are recurring tasks this bot runs on a schedule. Ask it in chat to set one up.")]
         }
         return mine.map { routine in
-            let row = RoutineRow()
+            let row = SwitchRow()
             row.configure(routine: routine)
             row.onToggle = { [weak self] enabled in self?.store.setRoutineEnabled(routine.id, enabled) }
             row.onClick = { [weak self] in
@@ -345,6 +350,45 @@ final class InspectorViewController: NSViewController {
             }
             return row
         }
+    }
+
+    /// The plugins the bot's Runner has, each with a switch for whether this bot may use it,
+    /// and a way to the marketplace. A plugin that needs setup says so; clicking opens it.
+    private func pluginRows(for bot: Bot) -> [NSView] {
+        let runner = store.device(bot.runnerID)
+        let runnerName = runner?.name ?? "its Runner"
+        var rows: [NSView] = []
+        for plugin in runner?.plugins ?? [] {
+            let enabled = bot.pluginIDs.contains(plugin.id)
+            let row = SwitchRow()
+            let detail = plugin.state == .ready ? (enabled ? "On" : "Off") : plugin.detail
+            row.configure(
+                symbol: plugin.symbolName, tint: enabled ? .controlAccentColor : .tertiaryLabelColor,
+                title: plugin.name, detail: detail, isOn: enabled,
+                toggleTooltip: enabled ? "Stop \(bot.name) using \(plugin.name)" : "Let \(bot.name) use \(plugin.name)",
+                tooltip: plugin.description)
+            row.onToggle = { [weak self] on in
+                guard let self, let current = self.store.bot(bot.id) else { return }
+                var ids = current.pluginIDs.filter { $0 != plugin.id }
+                if on { ids.append(plugin.id) }
+                self.store.setBotPlugins(bot.id, pluginIDs: ids)
+            }
+            row.onClick = { [weak self] in
+                guard let self, let runner else { return }
+                self.presentAsSheet(PluginViewController(pluginID: plugin.id, runner: runner, bot: bot))
+            }
+            rows.append(row)
+        }
+        if rows.isEmpty {
+            rows.append(NoteRow(text: "No plugins on \(runnerName) yet. Add one from the marketplace, or ask \(bot.name) to find one."))
+        }
+        let add = ActionRow(key: "Marketplace", value: "", tint: .secondaryLabelColor, actionTitle: "Add from Plugins…")
+        add.onAction = { [weak self] in
+            guard let self, let runner else { return }
+            self.presentAsSheet(PluginsMarketplaceViewController(runner: runner, bot: bot))
+        }
+        rows.append(add)
+        return rows
     }
 
     @objc private func addBot() {
