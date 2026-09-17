@@ -120,7 +120,7 @@ export default function PairScreen() {
           {busy ? (
             <View style={[styles.card, styles.progress, { backgroundColor: p.cell }]}>
               <ActivityIndicator />
-              <Text style={{ color: p.label, fontSize: Font.body }}>{phase === "posting" ? "Sending the request…" : "Waiting for your Mac to accept…"}</Text>
+              <Text style={{ flex: 1, color: p.label, fontSize: Font.body }}>{phase === "posting" ? "Sending the request…" : "Waiting for your Mac to accept…"}</Text>
               <Pressable onPress={() => cancel.current?.abort()} hitSlop={10}>
                 <Text style={{ color: p.tint, fontSize: Font.body }}>Cancel</Text>
               </Pressable>
