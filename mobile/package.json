@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "main": "index.ts",
   "dependencies": {
+    "@expo/ui": "~57.0.18",
     "@shopify/flash-list": "2.0.2",
     "expo": "~57.0.23",
     "expo-application": "~57.0.3",

@@ -1,10 +1,12 @@
-// The message field, after Grok Bot's phone composer: a liquid-glass "+" button and a glass
-// pill that floats over the transcript, holding a multiline input that grows to five lines and,
-// inside its right edge, a disc that is Dictate while the field is empty and Send once there is
-// something to send. @-mention chips in a group. There is no Stop, as in Grok Bot: a turn runs
+// The message field, after Grok Bot's phone composer: a liquid-glass "+" button that drops down
+// a native menu of attachment sources, and a glass pill that floats over the transcript, holding
+// a multiline input that grows to five lines and, inside its right edge, a disc that is Dictate
+// while the field is empty and Send once there is something to send. @-mention chips in a group. There is no Stop, as in Grok Bot: a turn runs
 // to its end. Where liquid glass is not available (older iOS, Android) the pill is a plain
 // filled field.
 
+import { Button as MenuButton, Host, Image as MenuImage, Menu, type ButtonProps } from "@expo/ui/swift-ui";
+import { background, frame, glassEffect } from "@expo/ui/swift-ui/modifiers";
 import * as DocumentPicker from "expo-document-picker";
 import { GlassView, isLiquidGlassAvailable } from "expo-glass-effect";
 import * as Haptics from "expo-haptics";
@@ -12,7 +14,7 @@ import { Image } from "expo-image";
 import * as ImagePicker from "expo-image-picker";
 import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from "expo-speech-recognition";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ActionSheetIOS, Alert, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View, type ColorValue } from "react-native";
+import { Alert, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View, type ColorValue } from "react-native";
 import type { PickedFile } from "../core/engine";
 import { fileSize, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS, type Bot } from "../core/model";
 import { BotAvatar } from "./Avatar";
@@ -23,6 +25,7 @@ import { Font, usePalette } from "./theme";
 
 const MAX_LINES = 5;
 const CHIP = 56;
+const PLUS = 46;
 const GLASS = isLiquidGlassAvailable();
 
 /// A glass surface, or a filled one where glass is not available.
@@ -39,6 +42,35 @@ function Surface({ style, children, tint, edge }: { style: any; children: React.
     );
   }
   return <View style={[style, outline, { backgroundColor: tint }]}>{children}</View>;
+}
+
+interface AttachSource {
+  title: string;
+  icon: NonNullable<ButtonProps["systemImage"]>;
+  run: () => void;
+}
+
+/// The "+" disc as the label of a SwiftUI Menu, so a tap drops down a native menu of sources
+/// right at the button instead of raising a sheet. The disc is glass where glass exists and a
+/// filled circle elsewhere, matching Surface.
+function AttachMenu({ sources, tint, label, edge }: { sources: AttachSource[]; tint: ColorValue; label: ColorValue; edge: ColorValue }) {
+  const disc = GLASS
+    ? glassEffect({ glass: { variant: "regular", interactive: true }, shape: "circle" })
+    : background(String(tint));
+  return (
+    <View style={[styles.plus, { borderWidth: StyleSheet.hairlineWidth, borderColor: edge }]}>
+      <Host style={StyleSheet.absoluteFill} testID="attach">
+        <Menu
+          label={<MenuImage systemName="plus" size={22} color={label} modifiers={[frame({ width: PLUS, height: PLUS }), disc]} />}
+          modifiers={[frame({ width: PLUS, height: PLUS })]}
+        >
+          {sources.map((source) => (
+            <MenuButton key={source.title} systemImage={source.icon} label={source.title} onPress={source.run} />
+          ))}
+        </Menu>
+      </Host>
+    </View>
+  );
 }
 
 export function Composer({
@@ -155,19 +187,15 @@ export function Composer({
     );
   }
 
-  function attach() {
-    const actions: { title: string; run: () => void }[] = [
-      { title: "Photo Library", run: () => void pickPhotos() },
-      { title: "Take Photo", run: () => void takePhoto() },
-      { title: "Choose File", run: () => void pickFiles() },
-    ];
-    if (Platform.OS === "ios") {
-      ActionSheetIOS.showActionSheetWithOptions({ options: [...actions.map((a) => a.title), "Cancel"], cancelButtonIndex: actions.length }, (index) => {
-        actions[index]?.run();
-      });
-    } else {
-      Alert.alert("Attach", undefined, [...actions.map((a) => ({ text: a.title, onPress: a.run })), { text: "Cancel", style: "cancel" as const }]);
-    }
+  const sources: AttachSource[] = [
+    { title: "Photo Library", icon: "photo.on.rectangle", run: () => void pickPhotos() },
+    { title: "Take Photo", icon: "camera", run: () => void takePhoto() },
+    { title: "Choose File", icon: "folder", run: () => void pickFiles() },
+  ];
+
+  // Android has no native pull-down menu here; a dialog lists the same sources.
+  function attachDialog() {
+    Alert.alert("Attach", undefined, [...sources.map((a) => ({ text: a.title, onPress: a.run })), { text: "Cancel", style: "cancel" as const }]);
   }
 
   // MARK: - Dictation
@@ -293,11 +321,15 @@ export function Composer({
         </ScrollView>
       )}
       <View style={styles.bar}>
-        <Surface style={styles.plus} tint={p.cell} edge={edge}>
-          <Pressable onPress={attach} style={({ pressed }) => [styles.plusPress, { opacity: pressed ? 0.6 : 1 }]} accessibilityLabel="Attach">
-            <Symbol name="plus" size={22} color={p.label} weight="medium" />
-          </Pressable>
-        </Surface>
+        {Platform.OS === "ios" ? (
+          <AttachMenu sources={sources} tint={p.cell} label={p.label} edge={edge} />
+        ) : (
+          <Surface style={styles.plus} tint={p.cell} edge={edge}>
+            <Pressable onPress={attachDialog} style={({ pressed }) => [styles.plusPress, { opacity: pressed ? 0.6 : 1 }]} accessibilityLabel="Attach">
+              <Symbol name="plus" size={22} color={p.label} weight="medium" />
+            </Pressable>
+          </Surface>
+        )}
         <Surface style={styles.field} tint={p.cell} edge={edge}>
           {listening ? (
             <Pressable
@@ -367,7 +399,7 @@ function deviceLanguage(): string {
 const styles = StyleSheet.create({
   wrap: { paddingBottom: 8 },
   bar: { flexDirection: "row", alignItems: "flex-end", paddingHorizontal: 12, gap: 10 },
-  plus: { width: 46, height: 46, borderRadius: 23, overflow: "hidden" },
+  plus: { width: PLUS, height: PLUS, borderRadius: PLUS / 2, overflow: "hidden" },
   plusPress: { flex: 1, alignItems: "center", justifyContent: "center" },
   field: { flex: 1, flexDirection: "row", alignItems: "flex-end", borderRadius: 23, height: undefined, paddingLeft: 18, paddingRight: 6, paddingVertical: 6, overflow: "hidden" },
   // One line of text makes the pill exactly as tall as the + disc: 6 + 22 + 6 inside 6 + 6 of padding.
