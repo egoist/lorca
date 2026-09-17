@@ -142,6 +142,9 @@ final class ComposerButton: NSButton {
 
 final class ComposerView: NSView {
     private let field = BackgroundView()
+    /// Liquid glass under the pill on macOS 26+; the field is then a clear view that draws
+    /// the hairline edge over it, as the phone composer does. Elsewhere the field is filled.
+    private var glass: NSView?
     private let scrollView = NSScrollView()
     private let textView: ComposerTextView
     private let strip = ComposerAttachmentStrip()
@@ -246,8 +249,23 @@ final class ComposerView: NSView {
         trailing.spacing = controlSpacing
 
         field.cornerRadius = (controlSize + controlInset * 2) / 2
-        field.fillColor = Theme.composerField
         field.borderColor = Theme.composerBorder
+        if #available(macOS 26, *) {
+            let glass = NSGlassEffectView()
+            glass.cornerRadius = field.cornerRadius
+            glass.translatesAutoresizingMaskIntoConstraints = false
+            field.fillColor = .clear
+            field.addSubview(glass)
+            NSLayoutConstraint.activate([
+                glass.topAnchor.constraint(equalTo: field.topAnchor),
+                glass.leadingAnchor.constraint(equalTo: field.leadingAnchor),
+                glass.trailingAnchor.constraint(equalTo: field.trailingAnchor),
+                glass.bottomAnchor.constraint(equalTo: field.bottomAnchor),
+            ])
+            self.glass = glass
+        } else {
+            field.fillColor = Theme.composerField
+        }
 
         scrollView.documentView = textView
         scrollView.drawsBackground = false
@@ -327,6 +345,14 @@ final class ComposerView: NSView {
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
+
+    /// The composer floats over the transcript; only the pill takes clicks, so the margins
+    /// beside it still reach the messages underneath.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let local = convert(point, from: superview)
+        guard field.frame.contains(local) else { return nil }
+        return super.hitTest(point)
+    }
 
     private func configureTextView() {
         textView.delegate = self

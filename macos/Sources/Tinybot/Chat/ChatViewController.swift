@@ -37,7 +37,13 @@ final class ChatViewController: NSViewController {
         jumpButton.image = NSImage(
             systemSymbolName: "arrow.down", accessibilityDescription: "Scroll to latest")
         jumpButton.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 11, weight: .semibold)
-        jumpButton.bezelStyle = .circular
+        // A glass disc on macOS 26+, like the composer it floats above.
+        if #available(macOS 26, *) {
+            jumpButton.bezelStyle = .glass
+            jumpButton.borderShape = .circle
+        } else {
+            jumpButton.bezelStyle = .circular
+        }
         jumpButton.target = self
         jumpButton.action = #selector(scrollToLatest(_:))
         jumpButton.toolTip = "Scroll to latest (⌘J)"
@@ -46,6 +52,16 @@ final class ChatViewController: NSViewController {
 
         composer.onSend = { [weak self] text, attachments in self?.send(text, attachments: attachments) }
         composer.onStop = { [weak self] in self?.stopResponding(nil) }
+        // The composer floats over the transcript, as on the phone: the scroll view runs to
+        // the bottom of the window and keeps an inset the height of the composer, so the last
+        // message clears it and the messages show through the glass while they scroll under.
+        composer.postsFrameChangedNotifications = true
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(composerFrameDidChange),
+            name: NSView.frameDidChangeNotification,
+            object: composer
+        )
 
         emptyState.isHidden = true
         emptyState.onPick = { [weak self] prompt in
@@ -62,7 +78,7 @@ final class ChatViewController: NSViewController {
             scrollView.topAnchor.constraint(equalTo: container.topAnchor),
             scrollView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            scrollView.bottomAnchor.constraint(equalTo: composer.topAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
 
             emptyState.topAnchor.constraint(equalTo: container.topAnchor),
             emptyState.leadingAnchor.constraint(equalTo: container.leadingAnchor),
@@ -332,6 +348,15 @@ final class ChatViewController: NSViewController {
     }
 
     // MARK: - Scrolling
+
+    /// Keeps the bottom inset the height of the floating composer, which grows with its text
+    /// and attachments; a pinned transcript stays pinned as the inset changes.
+    @objc private func composerFrameDidChange() {
+        let bottom = composer.frame.height
+        guard abs(scrollView.contentInsets.bottom - bottom) > 0.5 else { return }
+        scrollView.contentInsets.bottom = bottom
+        if isPinnedToBottom { scrollToBottom(animated: false) }
+    }
 
     @objc private func scrollDidChange() {
         let clip = scrollView.contentView
