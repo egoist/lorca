@@ -20,6 +20,26 @@ fn opt_string(params: &Value, key: &str) -> Option<String> {
     params[key].as_str().map(str::to_string).filter(|s| !s.is_empty())
 }
 
+/// A bot's profile image from the `avatar` param: `None` when the param is absent (leave it),
+/// `Some(None)` when it is null (remove it), and `Some(Some(_))` for a `{ path, … }` file,
+/// which is copied into the store and queued as a `file` blob like a message attachment.
+fn store_avatar(app: &Arc<App>, params: &Value) -> Result<Option<Option<Attachment>>, String> {
+    match params.get("avatar") {
+        None => Ok(None),
+        Some(Value::Null) => Ok(Some(None)),
+        Some(value) => {
+            let file: crate::files::OutgoingFile = serde_json::from_value(value.clone()).map_err(|e| e.to_string())?;
+            let attachment = crate::files::store(app, &file).map_err(|e| e.to_string())?;
+            if !attachment.is_image() {
+                let _ = std::fs::remove_file(crate::files::local_path(app, &attachment.id));
+                return Err(format!("{} is not an image", attachment.name));
+            }
+            crate::files::push_blob(app, &attachment).map_err(|e| e.to_string())?;
+            Ok(Some(Some(attachment)))
+        }
+    }
+}
+
 pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Value, String> {
     match method {
         "hello" => Ok(json!({
@@ -107,6 +127,7 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
                 description: opt_string(&params, "description").unwrap_or_default(),
                 symbol_name: opt_string(&params, "symbol_name").unwrap_or_else(|| "sparkles".into()),
                 accent: opt_string(&params, "accent").unwrap_or_else(|| "indigo".into()),
+                avatar: store_avatar(app, &params)?.flatten(),
                 runner_id: string(&params, "runner_id")?,
                 provider: opt_string(&params, "provider").unwrap_or_else(|| "deepseek".into()),
                 model: opt_string(&params, "model"),
@@ -122,9 +143,15 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
         }
         "bots.update" => {
             let id = string(&params, "id")?;
-            app.update_bot(&id, |bot| {
+            // The image is copied and queued before the roster names it, so every Device can
+            // fetch the blob by the time it reads the profile.
+            let avatar = store_avatar(app, &params)?;
+            let bot = app.update_bot(&id, |bot| {
                 if let Some(v) = opt_string(&params, "name") { bot.name = v; }
                 if let Some(v) = opt_string(&params, "label") { bot.label = v; }
+                if let Some(v) = opt_string(&params, "symbol_name") { bot.symbol_name = v; }
+                if let Some(v) = opt_string(&params, "accent") { bot.accent = v; }
+                if let Some(v) = avatar { bot.avatar = v; }
                 if let Some(v) = params["description"].as_str() { bot.description = v.trim().to_string(); }
                 if let Some(v) = params["instructions"].as_str() { bot.instructions = v.to_string(); }
                 if let Some(v) = opt_string(&params, "provider") { bot.provider = v; }
@@ -134,7 +161,7 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
                 if let Some(v) = params["workdir"].as_str() { bot.workdir = Some(v.to_string()).filter(|w| !w.trim().is_empty()); }
             })
             .map_err(|e| e.to_string())?;
-            Ok(Value::Null)
+            Ok(json!({ "bot": bot }))
         }
 
         "chats.create" => {

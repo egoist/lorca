@@ -168,6 +168,20 @@ class Engine {
     void core.request("bots.update", { id, ...update });
   }
 
+  /// The bot's symbol and accent, the look under and behind its image.
+  async setBotLook(id: string, look: { symbol_name?: string; accent?: string }): Promise<void> {
+    await core.request("bots.update", { id, ...look });
+  }
+
+  /// A custom profile image from a picked file (null removes it). The core copies the file,
+  /// uploads it as a `file` blob, and names it in the roster for every Device.
+  async setBotAvatar(id: string, file: PickedFile | null): Promise<void> {
+    const avatar = file ? { path: pathOf(file.uri), name: file.name, mime: file.mime, width: file.width, height: file.height } : null;
+    const { bot } = await core.request<{ bot: Bot }>("bots.update", { id, avatar });
+    // The picked file is the same picture; show it before the store copy is asked for.
+    if (file && bot.avatar) markFile(bot.avatar.id, file.uri);
+  }
+
   async createGroup(title: string, botIds: string[]): Promise<Chat> {
     const { chat } = await core.request<{ chat: Chat }>("chats.create", { kind: "group", title: title.trim() || undefined, bot_ids: botIds });
     return { ...chat, messages: chat.messages ?? [], unread_count: chat.unread_count ?? 0 };

@@ -277,7 +277,7 @@ final class OnboardingViewController: NSViewController {
         )
 
         let avatar = AvatarView(diameter: 40)
-        avatar.content = .bot(symbolName: firstBot?.symbolName ?? "sparkles", accent: firstBot?.accent ?? .indigo)
+        avatar.content = firstBot.map { AvatarView.content(for: $0) } ?? .bot(symbolName: "sparkles", accent: .indigo)
 
         let nameField = NSTextField()
         nameField.stringValue = firstBot?.name ?? "Chef"

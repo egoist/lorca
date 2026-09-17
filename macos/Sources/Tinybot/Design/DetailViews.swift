@@ -129,6 +129,11 @@ final class BotRow: NSView {
 
     var onAccessory: (() -> Void)?
     var onClick: (() -> Void)?
+    /// A click on the avatar itself, for changing the bot's look. Set, the avatar shows a
+    /// pointing hand and takes the click instead of the row.
+    var onAvatarClick: (() -> Void)? {
+        didSet { avatar.onClick = onAvatarClick }
+    }
 
     init() {
         super.init(frame: .zero)
@@ -166,7 +171,7 @@ final class BotRow: NSView {
     func configure(bot: Bot, detailText: String, accessorySymbol: String? = nil, tooltip: String = "")
         -> BotRow
     {
-        avatar.content = .bot(symbolName: bot.symbolName, accent: bot.accent)
+        avatar.content = AvatarView.content(for: bot)
         name.stringValue = bot.name
         detail.stringValue = detailText
         if let accessorySymbol {

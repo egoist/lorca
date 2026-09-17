@@ -70,8 +70,13 @@ pub struct Bot {
     pub label: String,
     /// A sentence or two about the bot, shown in its profile and its prompt.
     pub description: String,
+    /// SF Symbol drawn on the accent gradient; the look when there is no image.
     pub symbol_name: String,
     pub accent: String,
+    /// A custom profile image, a `file` blob like a message attachment, shown in place of the
+    /// symbol and accent wherever the bot's avatar appears.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar: Option<Attachment>,
     pub runner_id: String,
     pub provider: String,
     /// Model id for the provider. `None` means the provider's default.

@@ -58,8 +58,11 @@ export interface Bot {
   label: string;
   /** A sentence or two about the bot. */
   description: string;
+  /** SF Symbol on the accent gradient: the look when there is no image. */
   symbol_name: string;
   accent: Accent | string;
+  /** A custom profile image, a `file` blob like a message attachment; shown in place of the symbol and accent. */
+  avatar?: Attachment;
   runner_id: string;
   provider: string;
   model?: string;

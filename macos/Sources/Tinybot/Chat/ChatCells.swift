@@ -235,7 +235,7 @@ final class WorkingCellView: NSTableCellView {
     /// unless there is an activity to name.
     func configure(bots: [Bot], activity: String?, showsName: Bool) {
         if let first = bots.first {
-            avatar.content = .bot(symbolName: first.symbolName, accent: first.accent)
+            avatar.content = AvatarView.content(for: first)
         }
         let names = bots.map(\.name)
         let text: String
@@ -407,7 +407,7 @@ final class HandoffCellView: NSTableCellView {
         preview.stringValue = firstLine.isEmpty ? "" : "· \(firstLine)"
         preview.isHidden = firstLine.isEmpty
         let avatar = { (bot: Bot?) -> AvatarView.Content in
-            bot.map { .bot(symbolName: $0.symbolName, accent: $0.accent) } ?? .system
+            bot.map { AvatarView.content(for: $0) } ?? .system
         }
         switch mode {
         case let .incoming(from), let .outgoing(to: from):

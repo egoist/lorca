@@ -512,6 +512,37 @@ final class AppStore {
         perform("bots.update", params)
     }
 
+    /// The bot's symbol and accent, the look under and behind its image.
+    func setBotLook(_ id: Bot.ID, symbolName: String, accent: Accent) {
+        guard let index = bots.firstIndex(where: { $0.id == id }) else { return }
+        bots[index].symbolName = symbolName
+        bots[index].accent = accent
+        emit(.rosterChanged)
+        emit(.chatsChanged)
+        perform("bots.update", ["id": id, "symbol_name": symbolName, "accent": accent.rawValue])
+    }
+
+    /// A custom profile image from a file on this Mac (nil removes the current one). The CLI
+    /// copies it into its store, uploads it as a `file` blob, and names it in the roster, which
+    /// comes back as the bot's `avatar` for every Device.
+    func setBotAvatar(_ id: Bot.ID, fileURL: URL?) {
+        guard bots.contains(where: { $0.id == id }) else { return }
+        if let fileURL {
+            let attachment = Attachment(id: "att-\(UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "").prefix(12))", name: fileURL.lastPathComponent, mime: "image/png", size: 0)
+            if let image = NSImage(contentsOf: fileURL) { avatarImages[attachment.id] = image }
+            attachmentURLs[attachment.id] = fileURL
+            if let index = bots.firstIndex(where: { $0.id == id }) { bots[index].avatar = attachment }
+            emit(.rosterChanged)
+            emit(.chatsChanged)
+            perform("bots.update", ["id": id, "avatar": ["id": attachment.id, "path": fileURL.path, "name": attachment.name, "mime": attachment.mime]])
+        } else {
+            if let index = bots.firstIndex(where: { $0.id == id }) { bots[index].avatar = nil }
+            emit(.rosterChanged)
+            emit(.chatsChanged)
+            perform("bots.update", ["id": id, "avatar": NSNull()])
+        }
+    }
+
     /// Provider, model, and thinking level a bot runs with. nil means the provider's default.
     func setBotRuntime(_ id: Bot.ID, provider: ProviderCredential.Kind, model: String?, thinking: String?) {
         guard let index = bots.firstIndex(where: { $0.id == id }) else { return }
@@ -789,6 +820,41 @@ final class AppStore {
     }
 
     // MARK: - Attachments
+
+    /// Decoded profile images by attachment id, so avatars draw without touching the disk.
+    private var avatarImages: [Attachment.ID: NSImage] = [:]
+
+    /// The bot's profile image once this Mac has it. The first ask for one that is not here
+    /// fetches the blob and redraws the roster when it lands; until then callers draw the
+    /// symbol and accent.
+    func avatarImage(for bot: Bot) -> NSImage? {
+        guard let attachment = bot.avatar else { return nil }
+        if let image = avatarImages[attachment.id] { return image }
+        if let url = attachmentURLs[attachment.id], let image = NSImage(contentsOf: url) {
+            avatarImages[attachment.id] = image
+            return image
+        }
+        guard !isMock, !fetchingAttachments.contains(attachment.id) else { return nil }
+        fetchingAttachments.insert(attachment.id)
+        Task { [weak self] in
+            let params: [String: Any] = [
+                "attachment": ["id": attachment.id, "name": attachment.name, "mime": attachment.mime, "size": attachment.size]
+            ]
+            guard let self else { return }
+            do {
+                let reply = try await client.request("files.path", params, as: Wire.FilePath.self)
+                let url = URL(fileURLWithPath: reply.path)
+                attachmentURLs[attachment.id] = url
+                if let image = NSImage(contentsOf: url) { avatarImages[attachment.id] = image }
+                emit(.rosterChanged)
+                emit(.chatsChanged)
+                for chat in chats where chat.botIDs.contains(bot.id) { emit(.chatChanged(chat.id)) }
+            } catch {
+                NSLog("fetching \(bot.name)'s image failed: \(error.localizedDescription)")
+            }
+        }
+        return nil
+    }
 
     /// Where an attachment's bytes are on this Mac. A file sent from here is known at once; one
     /// sent from another Device is fetched through the CLI, and the message reloads when it lands.

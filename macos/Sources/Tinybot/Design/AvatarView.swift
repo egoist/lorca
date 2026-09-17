@@ -11,16 +11,41 @@ enum Glyph {
     }
 }
 
-/// Circular gradient badge with the bot's SF Symbol. Also renders "you" and devices.
+/// Circular gradient badge with the bot's SF Symbol, or the bot's own image. Also renders
+/// "you" and devices.
 final class AvatarView: NSView {
     enum Content: Equatable {
         case bot(symbolName: String, accent: Accent)
+        /// A custom profile image, drawn aspect-filled inside the circle.
+        case image(NSImage)
         case you
         case system
     }
 
     var content: Content = .system {
         didSet { if content != oldValue { needsDisplay = true } }
+    }
+
+    /// Set, a click on the avatar calls this and the pointer becomes a hand over it.
+    var onClick: (() -> Void)? {
+        didSet {
+            toolTip = onClick == nil ? nil : "Change look"
+            window?.invalidateCursorRects(for: self)
+        }
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        if onClick != nil { addCursorRect(bounds, cursor: .pointingHand) }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard onClick != nil else { return super.mouseDown(with: event) }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard let onClick else { return super.mouseUp(with: event) }
+        if bounds.contains(convert(event.locationInWindow, from: nil)) { onClick() }
     }
 
     /// Green dot at the bottom right while the bot has a turn running.
@@ -104,6 +129,23 @@ final class AvatarView: NSView {
             gradient?.draw(in: path, angle: -90)
             renderSymbol(symbolName, in: box, color: .white, scale: 0.52)
 
+        case let .image(image):
+            NSGraphicsContext.saveGraphicsState()
+            path.addClip()
+            NSColor.quaternaryLabelColor.setFill()
+            path.fill()
+            let size = image.size
+            guard size.width > 0, size.height > 0 else {
+                NSGraphicsContext.restoreGraphicsState()
+                return
+            }
+            // Aspect-fill: scale so the shorter side spans the circle, centered.
+            let scale = max(box.width / size.width, box.height / size.height)
+            let drawn = NSSize(width: size.width * scale, height: size.height * scale)
+            let origin = NSPoint(x: box.midX - drawn.width / 2, y: box.midY - drawn.height / 2)
+            image.draw(in: NSRect(origin: origin, size: drawn), from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: [.interpolation: NSImageInterpolation.high])
+            NSGraphicsContext.restoreGraphicsState()
+
         case .you:
             NSColor.tertiaryLabelColor.setFill()
             path.fill()
@@ -133,8 +175,16 @@ final class AvatarView: NSView {
         case .you: .you
         case .system: .system
         case let .bot(id):
-            store.bot(id).map { .bot(symbolName: $0.symbolName, accent: $0.accent) } ?? .system
+            store.bot(id).map { content(for: $0, store: store) } ?? .system
         }
+    }
+
+    /// The bot's image when it has one and this Mac has the bytes (the store fetches them and
+    /// redraws otherwise), else its symbol on its accent.
+    @MainActor
+    static func content(for bot: Bot, store: AppStore? = nil) -> Content {
+        if let image = (store ?? AppStore.shared).avatarImage(for: bot) { return .image(image) }
+        return .bot(symbolName: bot.symbolName, accent: bot.accent)
     }
 }
 
@@ -182,9 +232,7 @@ final class AvatarClusterView: NSView {
     override var allowsVibrancy: Bool { false }
 
     func configure(with bots: [Bot]) {
-        let next = bots.prefix(4).map {
-            AvatarView.Content.bot(symbolName: $0.symbolName, accent: $0.accent)
-        }
+        let next = bots.prefix(4).map { AvatarView.content(for: $0) }
         guard next != contents else { return }
         contents = Array(next)
         needsDisplay = true
@@ -321,7 +369,7 @@ final class AvatarStackView: NSView {
         // Later avatars sit on top and to the right; a ring keeps them separated.
         for (index, bot) in visible.enumerated() {
             let avatar = avatars[index]
-            avatar.content = .bot(symbolName: bot.symbolName, accent: bot.accent)
+            avatar.content = AvatarView.content(for: bot)
             avatar.layer?.borderWidth = visible.count > 1 ? 1.5 : 0
             avatar.layer?.borderColor = NSColor.windowBackgroundColor.cgColor
         }

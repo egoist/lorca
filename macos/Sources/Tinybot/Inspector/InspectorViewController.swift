@@ -105,7 +105,7 @@ final class InspectorViewController: NSViewController {
         super.viewDidLoad()
         store.observe(self) { [weak self] event in
             switch event {
-            case .chatChanged, .chatsChanged, .snapshotReplaced:
+            case .chatChanged, .chatsChanged, .snapshotReplaced, .rosterChanged:
                 self?.reload()
             case let .respondingChanged(chatID):
                 // A turn ended (or started): what the bot remembers may have moved.
@@ -164,6 +164,8 @@ final class InspectorViewController: NSViewController {
                     tooltip: "Remove from chat"
                 )
                 row.onAccessory = { [weak self] in self?.onRemoveBot?(bot.id) }
+                // The avatar is the way to a bot's look: symbol, color, or an image.
+                row.onAvatarClick = { [weak self] in self?.presentAsSheet(BotLookViewController(botID: bot.id)) }
                 return row
             })
 

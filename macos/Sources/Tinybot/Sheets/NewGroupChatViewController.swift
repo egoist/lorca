@@ -199,7 +199,7 @@ final class SelectableBotRow: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     func configure(bot: Bot, detail detailText: String, isOffline: Bool) {
-        avatar.content = .bot(symbolName: bot.symbolName, accent: bot.accent)
+        avatar.content = AvatarView.content(for: bot)
         name.stringValue = bot.name
         detail.stringValue = detailText
         offline.isHidden = !isOffline

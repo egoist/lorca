@@ -71,6 +71,12 @@ const ANDROID: Record<string, string> = {
   "doc.fill": "description",
   "folder.fill": "folder",
   "xmark.circle.fill": "cancel",
+  "binoculars.fill": "search",
+  "chevron.left.forwardslash.chevron.right": "code",
+  "pencil.and.scribble": "draw",
+  "bolt.horizontal.fill": "electric_bolt",
+  "flame.fill": "local_fire_department",
+  "puzzlepiece.extension": "extension",
 };
 
 export interface SymbolProps {
@@ -114,4 +120,9 @@ export const BOT_SYMBOLS = [
   "bolt.fill",
   "leaf.fill",
   "shield.fill",
+  "binoculars.fill",
+  "chevron.left.forwardslash.chevron.right",
+  "pencil.and.scribble",
+  "bolt.horizontal.fill",
+  "flame.fill",
 ];

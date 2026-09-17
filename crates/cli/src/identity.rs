@@ -75,6 +75,7 @@ fn create_lead_bot(app: &Arc<App>) {
         description: "Learns what you work on, proposes a small team of one-job bots, and routes work to them.".into(),
         symbol_name: "sparkles".into(),
         accent: "indigo".into(),
+        avatar: None,
         runner_id,
         provider: "deepseek".into(),
         model: None,

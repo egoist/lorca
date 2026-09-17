@@ -178,7 +178,7 @@ final class MentionRowView: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     func configure(bot: Bot, runnerName: String) {
-        avatar.content = .bot(symbolName: bot.symbolName, accent: bot.accent)
+        avatar.content = AvatarView.content(for: bot)
         name.stringValue = bot.name
         detail.stringValue = runnerName.isEmpty ? bot.label : "on \(runnerName)"
     }

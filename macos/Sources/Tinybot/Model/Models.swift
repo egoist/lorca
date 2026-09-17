@@ -204,6 +204,9 @@ struct Bot: Identifiable, Hashable {
     var model: String? = nil
     /// How much the model thinks; nil means the provider's default.
     var thinking: String? = nil
+    /// A custom profile image, kept as a `file` blob like a message attachment. Shown in place
+    /// of the symbol and accent once this Mac has the bytes.
+    var avatar: Attachment? = nil
     var instructions: String
     var createdAt: Date
 }

@@ -77,7 +77,13 @@ export default function ChatInfoScreen() {
       </Stack.Toolbar>
     <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={{ paddingBottom: 40 }} keyboardDismissMode="on-drag">
       <View style={styles.hero}>
-        <AvatarCluster bots={members} size={72} working={members.some((m) => working.has(m.id))} />
+        {bot ? (
+          <Pressable onPress={() => router.push(`/chat-info/look/${bot.id}`)} accessibilityLabel={`Change ${bot.name}'s look`} accessibilityRole="button" hitSlop={8}>
+            <BotAvatar bot={bot} size={72} working={working.has(bot.id)} />
+          </Pressable>
+        ) : (
+          <AvatarCluster bots={members} size={72} working={members.some((m) => working.has(m.id))} />
+        )}
         <Text style={[styles.heroTitle, { color: p.label }]}>{chatTitle(chat)}</Text>
         {bot ? <Text style={[styles.heroSubtitle, { color: p.secondaryLabel }]}>{bot.label}</Text> : <Text style={[styles.heroSubtitle, { color: p.secondaryLabel }]}>{members.length} {members.length === 1 ? "bot" : "bots"}</Text>}
       </View>

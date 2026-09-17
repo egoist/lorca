@@ -292,6 +292,7 @@ mod tests {
                 description: String::new(),
                 symbol_name: String::new(),
                 accent: String::new(),
+                avatar: None,
                 runner_id,
                 provider: "deepseek".into(),
                 model: None,
