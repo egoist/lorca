@@ -568,7 +568,7 @@ export default function ChatScreen() {
       </Stack.Title>
       <Stack.Toolbar placement="right">
         <Stack.Toolbar.Button
-          icon="info.circle"
+          icon="ellipsis"
           accessibilityLabel="Chat info"
           onPress={() => router.push(`/chat-info/${id}`)}
         />
