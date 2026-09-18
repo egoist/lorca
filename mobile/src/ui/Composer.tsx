@@ -31,19 +31,23 @@ const DISC = 34;
 const GLASS = isLiquidGlassAvailable();
 
 /// A glass surface, or a filled one where glass is not available.
-export function Surface({ style, children, tint, edge }: { style: StyleProp<ViewStyle>; children: React.ReactNode; tint: ColorValue; edge: ColorValue }) {
+export function Surface({ style, children, tint, edge, onPress }: { style: StyleProp<ViewStyle>; children: React.ReactNode; tint: ColorValue; edge: ColorValue; onPress?: () => void }) {
   // A hairline edge keeps the pill visible over a plain background, as Grok Bot's is.
   const outline = { borderWidth: StyleSheet.hairlineWidth, borderColor: edge };
   if (GLASS) {
     // The glass is a layer under the content; the edge is drawn by the wrapping view.
     return (
-      <View style={[style, outline]}>
+      <Pressable onPress={onPress} disabled={!onPress} accessible={false} style={[style, outline]}>
         <GlassView glassEffectStyle="regular" isInteractive style={[StyleSheet.absoluteFill, { borderRadius: StyleSheet.flatten(style)?.borderRadius }]} />
         {children}
-      </View>
+      </Pressable>
     );
   }
-  return <View style={[style, outline, { backgroundColor: tint }]}>{children}</View>;
+  return (
+    <Pressable onPress={onPress} disabled={!onPress} accessible={false} style={[style, outline, { backgroundColor: tint }]}>
+      {children}
+    </Pressable>
+  );
 }
 
 interface AttachSource {
@@ -106,6 +110,7 @@ export function Composer({
   /// stops or sends, the way Grok Bot commits a recording.
   const transcript = useRef("");
   const pendingSend = useRef(false);
+  const inputRef = useRef<TextInput>(null);
   const { language } = useDictationLanguage();
   const canSend = text.trim().length > 0 || attachments.length > 0;
   const lineHeight = Font.body * 1.3;
@@ -332,6 +337,7 @@ export function Composer({
   const input = (
     <TextInput
       key="input"
+      ref={inputRef}
       value={text}
       onChangeText={setText}
       placeholder={placeholder}
@@ -372,8 +378,9 @@ export function Composer({
       )}
       {/* Focused, holding text, or carrying attachments, the pill expands: chips wrap above the
           text and the discs drop to a row underneath, as on the desktop. Empty and idle, the
-          discs sit beside the placeholder. */}
-      <Surface style={[styles.field, expanded ? styles.fieldExpanded : styles.fieldCompact]} tint={p.cell} edge={edge}>
+          discs sit beside the placeholder. The input is one line tall inside a taller pill, so
+          a tap anywhere on the pill outside the discs focuses it. */}
+      <Surface style={[styles.field, expanded ? styles.fieldExpanded : styles.fieldCompact]} tint={p.cell} edge={edge} onPress={() => inputRef.current?.focus()}>
         {attachments.length > 0 && (
           <View style={styles.files}>
             {attachments.map((file, index) => (
