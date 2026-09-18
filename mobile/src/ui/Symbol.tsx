@@ -55,6 +55,7 @@ const ANDROID: Record<string, string> = {
   "cart.fill": "shopping_cart",
   "arrow.triangle.turn.up.right.diamond.fill": "alt_route",
   "chevron.right": "chevron_right",
+  "arrow.down": "arrow_downward",
   "plus": "add",
   "xmark": "close",
   "ellipsis": "more_horiz",

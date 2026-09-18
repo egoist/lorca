@@ -31,7 +31,7 @@ const DISC = 34;
 const GLASS = isLiquidGlassAvailable();
 
 /// A glass surface, or a filled one where glass is not available.
-function Surface({ style, children, tint, edge }: { style: StyleProp<ViewStyle>; children: React.ReactNode; tint: ColorValue; edge: ColorValue }) {
+export function Surface({ style, children, tint, edge }: { style: StyleProp<ViewStyle>; children: React.ReactNode; tint: ColorValue; edge: ColorValue }) {
   // A hairline edge keeps the pill visible over a plain background, as Grok Bot's is.
   const outline = { borderWidth: StyleSheet.hairlineWidth, borderColor: edge };
   if (GLASS) {

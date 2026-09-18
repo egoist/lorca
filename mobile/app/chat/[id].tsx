@@ -26,10 +26,12 @@ import {
   KeyboardStickyView,
   useKeyboardHandler,
 } from "react-native-keyboard-controller";
-import {
+import Animated, {
   runOnJS,
   useAnimatedReaction,
   useSharedValue,
+  ZoomIn,
+  ZoomOut,
 } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { chatTitle, engine } from "../../src/core/engine";
@@ -43,7 +45,8 @@ import {
   useWorkingBots,
 } from "../../src/core/store";
 import { AvatarCluster } from "../../src/ui/Avatar";
-import { Composer } from "../../src/ui/Composer";
+import { Composer, Surface } from "../../src/ui/Composer";
+import { Symbol } from "../../src/ui/Symbol";
 import { usePalette } from "../../src/ui/theme";
 import {
   buildRows,
@@ -61,6 +64,9 @@ import {
 const COMPOSER_GAP = 14;
 /// How much taller the composer gets when it expands on focus, until it has been seen to.
 const FOCUS_GROWTH_GUESS = 36;
+/// How far from the end the transcript is scrolled before the jump-to-bottom disc shows.
+const JUMP_DISTANCE = 160;
+const JUMP_DISC = 36;
 
 export default function ChatScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -192,8 +198,7 @@ export default function ChatScreen() {
   const blankFor = useCallback(() => {
     const list = listRef.current;
     const key = anchorKey.current;
-    if (!list || !key || layoutHeight.current === 0)
-      return restingSpace();
+    if (!list || !key || layoutHeight.current === 0) return restingSpace();
     const index = rowsRef.current.findIndex((row) => row.key === key);
     const layout = index < 0 ? undefined : list.getLayout(index);
     // The sent message has not reached the list yet: keep what is there.
@@ -256,6 +261,29 @@ export default function ChatScreen() {
     [composerBlank, topInsetFor],
   );
   endOffsetRef.current = endOffset;
+  // Where the transcript rests right now: with the keyboard up its end sits above the composer
+  // on the keys, whatever space an anchored message holds below it.
+  const keyboardHeight = useRef(0);
+  const restingEnd = useCallback(() => {
+    if (keyboardHeight.current === 0) return endOffset();
+    return Math.max(
+      -topInsetFor(),
+      contentHeight.current +
+        keyboardHeight.current +
+        composerExtraTarget.value -
+        layoutHeight.current,
+    );
+  }, [composerExtraTarget, endOffset, topInsetFor]);
+  // The jump-to-bottom disc floats over the composer while the end is out of reach.
+  const [awayFromEnd, setAwayFromEnd] = useState(false);
+  const [composerHeight, setComposerHeight] = useState(
+    composerGuess - COMPOSER_GAP,
+  );
+  const jumpToEnd = useCallback(() => {
+    if (Platform.OS === "ios")
+      listRef.current?.scrollToOffset({ offset: restingEnd(), animated: true });
+    else listRef.current?.scrollToEnd({ animated: true });
+  }, [restingEnd]);
   // The space under an anchored message swallows the keyboard: the scroll view sees room below
   // the content and lifts nothing, so the keys would cover a reply that reaches under them. With
   // the keyboard up the end of the transcript goes above the composer instead, unless everything
@@ -276,6 +304,7 @@ export default function ChatScreen() {
     });
   };
   keyboardEndRef.current = (height) => {
+    keyboardHeight.current = height;
     // The composer has expanded by now: what it grew by is what the next focus will need.
     const grown = composerActual.current - composerCompact.current;
     if (height > 0 && compactAtKeyboardStart.current && grown > 1)
@@ -350,6 +379,7 @@ export default function ChatScreen() {
     releaseAnchor();
     setSettled(false);
     setRevealed(false);
+    setAwayFromEnd(false);
     // A chat with nothing to measure (or a load that never reports) still has to show up.
     const fallback = setTimeout(() => setRevealed(true), 800);
     return () => {
@@ -359,8 +389,14 @@ export default function ChatScreen() {
   }, [id, releaseAnchor, stopSettling]);
   const onScroll = useCallback(
     (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+      const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
+      const distance =
+        Platform.OS === "ios"
+          ? restingEnd() - contentOffset.y
+          : contentSize.height - layoutMeasurement.height - contentOffset.y;
+      setAwayFromEnd(!settling.current && distance > JUMP_DISTANCE);
       if (Platform.OS !== "ios") return;
-      lastOffset.current = e.nativeEvent.contentOffset.y;
+      lastOffset.current = contentOffset.y;
       if (!settling.current) return;
       // Only a pin can confirm: the list's own first scroll can sit at the computed end by
       // coincidence while the content height is still unknown.
@@ -372,7 +408,7 @@ export default function ChatScreen() {
         pinToBottom();
       }
     },
-    [confirm, endOffset, pinToBottom, unconfirm],
+    [confirm, endOffset, pinToBottom, restingEnd, unconfirm],
   );
   useEffect(() => {
     unconfirm();
@@ -454,7 +490,10 @@ export default function ChatScreen() {
   const openMarker = useCallback(
     (row: Extract<Row, { type: "marker" }>) => {
       const title = `${row.text} ${row.bot?.name ?? "a teammate"}`;
-      router.push({ pathname: "/message/[id]", params: { id: row.key, chat: id, title } });
+      router.push({
+        pathname: "/message/[id]",
+        params: { id: row.key, chat: id, title },
+      });
     },
     [router, id],
   );
@@ -465,9 +504,7 @@ export default function ChatScreen() {
         case "day":
           return <DayRow at={item.at} />;
         case "message":
-          return (
-            <MessageRow row={item} bots={bots} isGroup={isGroup} />
-          );
+          return <MessageRow row={item} bots={bots} isGroup={isGroup} />;
         case "marker":
           return <MarkerRow row={item} onPress={openMarker} />;
         case "notice":
@@ -579,6 +616,33 @@ export default function ChatScreen() {
           />
         </View>
         <KeyboardStickyView
+          style={[styles.jump, { bottom: composerHeight + 10 }]}
+          offset={{ closed: 0, opened: insets.bottom }}
+          pointerEvents="box-none"
+        >
+          {awayFromEnd && (
+            <Animated.View
+              entering={ZoomIn.duration(160)}
+              exiting={ZoomOut.duration(160)}
+            >
+              <Pressable
+                onPress={jumpToEnd}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="Jump to bottom"
+              >
+                <Surface
+                  style={styles.jumpDisc}
+                  tint={p.cell}
+                  edge={p.dark ? "rgba(255,255,255,0.14)" : "rgba(0,0,0,0.1)"}
+                >
+                  <Symbol name="arrow.down" size={16} color={p.label} />
+                </Surface>
+              </Pressable>
+            </Animated.View>
+          )}
+        </KeyboardStickyView>
+        <KeyboardStickyView
           style={[
             styles.composer,
             { paddingBottom: Math.max(insets.bottom, 8) },
@@ -586,6 +650,7 @@ export default function ChatScreen() {
           // Open, the composer's home-indicator padding is not needed: it sits on the keys.
           offset={{ closed: 0, opened: insets.bottom }}
           onLayout={(e) => {
+            setComposerHeight(e.nativeEvent.layout.height);
             const blank = e.nativeEvent.layout.height + COMPOSER_GAP;
             if (blank !== composerSpace.current) unconfirm();
             composerSpace.current = blank;
@@ -605,12 +670,14 @@ export default function ChatScreen() {
             onSend={(text, files) => {
               // The anchor is measured against the screen without the keyboard.
               void KeyboardController.dismiss();
-              const sent = engine.sendMessage(id, text, files).then((message) => {
-                stopSettling();
-                anchorKey.current = message.id;
-                anchorTarget.current = null;
-                setAnchored(true);
-              });
+              const sent = engine
+                .sendMessage(id, text, files)
+                .then((message) => {
+                  stopSettling();
+                  anchorKey.current = message.id;
+                  anchorTarget.current = null;
+                  setAnchored(true);
+                });
               sent.catch((error) => {
                 Alert.alert(
                   "Could not send",
@@ -628,6 +695,14 @@ export default function ChatScreen() {
 const styles = StyleSheet.create({
   missing: { flex: 1, alignItems: "center", justifyContent: "center" },
   composer: { position: "absolute", left: 0, right: 0, bottom: 0 },
+  jump: { position: "absolute", right: 12 },
+  jumpDisc: {
+    width: JUMP_DISC,
+    height: JUMP_DISC,
+    borderRadius: JUMP_DISC / 2,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   titleView: {
     flexDirection: "row",
     alignItems: "center",
