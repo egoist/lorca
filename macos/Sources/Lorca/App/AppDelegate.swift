@@ -103,6 +103,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Preferences.hasOnboarded = true
             self?.onboardingWindowController?.close()
             self?.onboardingWindowController = nil
+            self?.settingsWindowController?.close()
+            self?.settingsWindowController = nil
             self?.showMainWindow()
         }
         onboardingWindowController = controller
@@ -114,12 +116,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Actions
 
+    /// Settings is a mode of the main window. While onboarding is up there is no main window,
+    /// so the relay URL and the CLI port get a small window of their own.
     @objc func showSettings(_ sender: Any?) {
-        if settingsWindowController == nil {
-            settingsWindowController = SettingsWindowController()
+        guard onboardingWindowController == nil else {
+            if settingsWindowController == nil {
+                settingsWindowController = SettingsWindowController()
+            }
+            settingsWindowController?.showWindow(nil)
+            settingsWindowController?.window?.makeKeyAndOrderFront(nil)
+            return
         }
-        settingsWindowController?.showWindow(nil)
-        settingsWindowController?.window?.makeKeyAndOrderFront(nil)
+        showMainWindow()
+        mainWindowController?.root.showSettings()
     }
 
     @objc func newGroupChat(_ sender: Any?) {
@@ -155,6 +164,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func showOnboarding(_ sender: Any?) {
+        guard onboardingWindowController == nil else { return }
         Preferences.hasOnboarded = false
         mainWindowController?.close()
         mainWindowController = nil

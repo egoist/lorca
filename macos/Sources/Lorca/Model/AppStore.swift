@@ -19,9 +19,23 @@ enum StoreEvent {
     case identityChanged
 }
 
+enum SettingsPane: String, CaseIterable {
+    case general
+    case providers
+    case autoReview = "auto-review"
+    case advanced
+}
+
 enum Selection: Hashable {
     case chat(Chat.ID)
+    case settings(SettingsPane)
     case device(Device.ID)
+
+    /// Settings panes and Device pages are listed by the settings sidebar; chats by the main one.
+    var isSettings: Bool {
+        if case .chat = self { return false }
+        return true
+    }
 }
 
 /// The app's model. Everything comes from the CLI over 127.0.0.1; mutations are applied

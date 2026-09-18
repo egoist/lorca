@@ -34,10 +34,10 @@ final class SidebarViewController: NSViewController {
             self?.setSearchQuery(query)
         }
 
+        // This Mac's page is listed by the settings sidebar, so the click lands there.
         footer.onClick = { [weak self] in
             guard let id = self?.store.thisDevice?.id else { return }
             self?.onSelect?(.device(id))
-            self?.setSelection(.device(id))
         }
 
         let divider = HairlineView()
@@ -73,6 +73,10 @@ final class SidebarViewController: NSViewController {
 
     func focusSearch() {
         view.window?.makeFirstResponder(searchBar.field)
+    }
+
+    func focusList() {
+        view.window?.makeFirstResponder(outlineView)
     }
 
     private func configureOutlineView() {
@@ -116,10 +120,7 @@ final class SidebarViewController: NSViewController {
         let chatsHeader = SidebarNode(.header("Chats"))
         chatsHeader.children = filteredChats().map { SidebarNode(.chat($0.id)) }
 
-        let devicesHeader = SidebarNode(.header("Devices"))
-        devicesHeader.children = filteredDevices().map { SidebarNode(.device($0.id)) }
-
-        let fresh = [chatsHeader, devicesHeader].filter { !$0.children.isEmpty || searchQuery.isEmpty }
+        let fresh = [chatsHeader].filter { !$0.children.isEmpty || searchQuery.isEmpty }
 
         if shape(of: fresh) == shape(of: nodes) {
             // Same rows in the same order (an unread count cleared, a pin toggled): update the
@@ -149,15 +150,8 @@ final class SidebarViewController: NSViewController {
             guard let node = outlineView.item(atRow: row) as? SidebarNode,
                 let cell = outlineView.view(atColumn: 0, row: row, makeIfNecessary: false)
             else { continue }
-            switch (node.kind, cell) {
-            case let (.chat(id), cell as SidebarChatCell):
-                if let chat = store.chat(id) { cell.configure(chat: chat, store: store) }
-            case let (.device(id), cell as SidebarDeviceCell):
-                if let device = store.device(id) {
-                    cell.configure(device: device, store: store)
-                }
-            default:
-                break
+            if case let .chat(id) = node.kind, let cell = cell as? SidebarChatCell, let chat = store.chat(id) {
+                cell.configure(chat: chat, store: store)
             }
         }
     }
@@ -171,14 +165,6 @@ final class SidebarViewController: NSViewController {
                 store.bots(in: chat).map(\.name).joined(separator: " "),
             ].joined(separator: " ")
             return haystack.localizedCaseInsensitiveContains(searchQuery)
-        }
-    }
-
-    private func filteredDevices() -> [Device] {
-        guard !searchQuery.isEmpty else { return store.devices }
-        return store.devices.filter {
-            $0.name.localizedCaseInsensitiveContains(searchQuery)
-                || $0.model.localizedCaseInsensitiveContains(searchQuery)
         }
     }
 
@@ -259,11 +245,7 @@ extension SidebarViewController: NSOutlineViewDelegate {
 
     func outlineView(_ outlineView: NSOutlineView, heightOfRowByItem item: Any) -> CGFloat {
         guard let node = item as? SidebarNode else { return 32 }
-        switch node.kind {
-        case .header: return 28
-        case .chat: return 54
-        case .device: return 32
-        }
+        return node.isHeader ? 28 : 54
     }
 
     func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any)
@@ -295,17 +277,8 @@ extension SidebarViewController: NSOutlineViewDelegate {
             cell.configure(chat: chat, store: store)
             return cell
 
-        case let .device(id):
-            guard let device = store.device(id) else { return nil }
-            let cell =
-                outlineView.makeView(withIdentifier: SidebarDeviceCell.identifier, owner: self)
-                as? SidebarDeviceCell ?? {
-                    let new = SidebarDeviceCell()
-                    new.identifier = SidebarDeviceCell.identifier
-                    return new
-                }()
-            cell.configure(device: device, store: store)
-            return cell
+        case .pane, .device:
+            return nil
         }
     }
 
@@ -332,30 +305,18 @@ extension SidebarViewController: NSMenuDelegate {
         setSelection(selection)
         onSelect?(selection)
 
-        switch node.kind {
-        case let .chat(id):
-            let chat = store.chat(id)
-            let pinned = chat?.isPinned ?? false
-            menu.addItem(
-                item(pinned ? "Unpin" : "Pin", #selector(RootSplitViewController.togglePinChat(_:))))
-            menu.addItem(item("Rename…", #selector(RootSplitViewController.renameChat(_:))))
-            // Only groups take new members; a DM is fixed to its one bot.
-            if chat?.isGroup == true {
-                menu.addItem(item("Add Bot…", #selector(RootSplitViewController.addBotToChat(_:))))
-            }
-            menu.addItem(.separator())
-            menu.addItem(item("Delete", #selector(RootSplitViewController.deleteChat(_:))))
-
-        case let .device(id):
-            menu.addItem(item("Pair a Device…", #selector(AppDelegate.pairDevice(_:))))
-            if store.device(id)?.isThisDevice == false {
-                menu.addItem(.separator())
-                menu.addItem(item("Unpair…", #selector(RootSplitViewController.unpairDevice(_:))))
-            }
-
-        case .header:
-            break
+        guard case let .chat(id) = node.kind else { return }
+        let chat = store.chat(id)
+        let pinned = chat?.isPinned ?? false
+        menu.addItem(
+            item(pinned ? "Unpin" : "Pin", #selector(RootSplitViewController.togglePinChat(_:))))
+        menu.addItem(item("Rename…", #selector(RootSplitViewController.renameChat(_:))))
+        // Only groups take new members; a DM is fixed to its one bot.
+        if chat?.isGroup == true {
+            menu.addItem(item("Add Bot…", #selector(RootSplitViewController.addBotToChat(_:))))
         }
+        menu.addItem(.separator())
+        menu.addItem(item("Delete", #selector(RootSplitViewController.deleteChat(_:))))
     }
 
     private func item(_ title: String, _ action: Selector) -> NSMenuItem {

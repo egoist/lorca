@@ -32,7 +32,7 @@ final class DeviceViewController: NSViewController {
         column.addArrangedSubview(machineSection)
         column.addArrangedSubview(note)
 
-        let documentView = NSView()
+        let documentView = FlippedView()
         documentView.translatesAutoresizingMaskIntoConstraints = false
         documentView.addSubview(column)
 
@@ -42,10 +42,17 @@ final class DeviceViewController: NSViewController {
         scrollView.autohidesScrollers = true
         scrollView.translatesAutoresizingMaskIntoConstraints = false
 
+        // The page starts below the titlebar. A scroll view running under it gets AppKit's scroll
+        // pocket, a strip with a hard edge that reaches past the pane and over the sidebar.
+        scrollView.automaticallyAdjustsContentInsets = false
+
         container.addSubview(scrollView)
-        scrollView.pin(to: container)
 
         NSLayoutConstraint.activate([
+            scrollView.topAnchor.constraint(equalTo: container.safeAreaLayoutGuide.topAnchor),
+            scrollView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
             documentView.widthAnchor.constraint(equalTo: scrollView.widthAnchor),
             column.topAnchor.constraint(equalTo: documentView.topAnchor),
             column.leadingAnchor.constraint(equalTo: documentView.leadingAnchor),
@@ -77,6 +84,7 @@ final class DeviceViewController: NSViewController {
         guard isViewLoaded else { return }
         reload()
         scrollView.contentView.scroll(to: .zero)
+        scrollView.reflectScrolledClipView(scrollView.contentView)
     }
 
     override func viewWillAppear() {

@@ -127,7 +127,12 @@ export async function buildMarkdown(config: Config): Promise<{ ok: boolean }> {
   const include = join(generated, "include")
   await mkdir(include, { recursive: true })
   for (const name of await readdir(generated)) {
-    if (name.endsWith(".swift")) await rename(join(generated, name), join(MARKDOWN_SWIFT_DIR, name))
+    // Unchanged bindings stay as they are on disk, so the Swift target is not recompiled.
+    if (name.endsWith(".swift")) {
+      const fresh = await readFile(join(generated, name), "utf8")
+      const current = await readFile(join(MARKDOWN_SWIFT_DIR, name), "utf8").catch(() => null)
+      if (fresh !== current) await writeFile(join(MARKDOWN_SWIFT_DIR, name), fresh)
+    }
     if (name.endsWith("FFI.h")) await rename(join(generated, name), join(include, name))
     if (name.endsWith("FFI.modulemap")) {
       await writeFile(join(include, "module.modulemap"), await readFile(join(generated, name)))

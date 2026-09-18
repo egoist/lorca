@@ -1,8 +1,9 @@
 import { watch } from "node:fs"
-import { join } from "node:path"
+import { join, relative } from "node:path"
 import {
   APP_NAME,
   CRATES_DIR,
+  MARKDOWN_SWIFT_DIR,
   PACKAGE_DIR,
   ROOT,
   SOURCES_DIR,
@@ -214,9 +215,14 @@ function watchSources() {
   // so a relay file and an app file saved together restart the relay and rebuild the app.
   let relayChanged = false
   let appChanged = ""
+  // The build writes the markdown bindings into the Swift sources. They change only when the
+  // markdown crate does, which is watched itself; counting them as a save would make every
+  // build queue the next one.
+  const generated = `${relative(SOURCES_DIR, MARKDOWN_SWIFT_DIR)}/`
   const onChange = (_event: string, filename: string | null) => {
     if (!filename) return
     if (!filename.endsWith(".swift") && !filename.endsWith(".rs") && !filename.endsWith("Cargo.toml")) return
+    if (filename.startsWith(generated)) return
     // The relay crate stands alone: its changes rebuild the relay, not the app.
     if (filename.startsWith("relay/")) relayChanged = true
     else appChanged = filename

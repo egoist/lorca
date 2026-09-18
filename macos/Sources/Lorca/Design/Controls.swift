@@ -115,6 +115,11 @@ final class BubbleView: BackgroundView {
     }
 }
 
+/// Plain container whose y grows downward, for scroll views whose content is shorter than the pane.
+final class FlippedView: NSView {
+    override var isFlipped: Bool { true }
+}
+
 /// One-pixel rule that stays crisp on Retina and follows the appearance.
 final class HairlineView: NSView {
     var color: NSColor = .separatorColor { didSet { needsDisplay = true } }

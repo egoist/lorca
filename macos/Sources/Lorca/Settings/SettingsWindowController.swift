@@ -1,22 +1,20 @@
 import AppKit
 
+/// Settings while onboarding is up. There is no main window to hold the panes yet, and restoring
+/// or pairing may need the relay URL first, so the two panes that work without an account get a
+/// window of their own.
 final class SettingsWindowController: NSWindowController {
     init() {
         let tabController = NSTabViewController()
         tabController.tabStyle = .toolbar
 
-        let tabs: [(NSViewController, String, String)] = [
-            (GeneralSettingsViewController(), "General", "gearshape"),
-            (DevicesSettingsViewController(), "Devices", "laptopcomputer"),
-            (ProvidersSettingsViewController(), "Providers", "key"),
-            (AutoReviewSettingsViewController(), "Auto-review", "checkmark.shield"),
-            (AdvancedSettingsViewController(), "Advanced", "slider.horizontal.3"),
-        ]
-
-        for (controller, label, symbol) in tabs {
+        for pane in [SettingsPane.general, .advanced] {
+            let controller: NSViewController =
+                pane == .general ? GeneralSettingsViewController() : AdvancedSettingsViewController()
+            controller.preferredContentSize = NSSize(width: 560, height: 420)
             let item = NSTabViewItem(viewController: controller)
-            item.label = label
-            item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
+            item.label = pane.title
+            item.image = NSImage(systemSymbolName: pane.symbolName, accessibilityDescription: pane.title)
             tabController.addTabViewItem(item)
         }
 
@@ -24,7 +22,7 @@ final class SettingsWindowController: NSWindowController {
         window.title = "Settings"
         window.styleMask.insert(.closable)
         window.styleMask.remove(.resizable)
-        window.setContentSize(NSSize(width: 520, height: 380))
+        window.setContentSize(NSSize(width: 560, height: 420))
         window.center()
         super.init(window: window)
     }
@@ -35,37 +33,69 @@ final class SettingsWindowController: NSWindowController {
 
 // MARK: - Base
 
+/// A settings page in the main window's content area, laid out like a Device page: a title,
+/// section cards, and footnotes in one scrolling column.
 class SettingsPaneViewController: NSViewController {
-    let column = Build.stack([], spacing: 18)
+    let column = Build.stack([], spacing: 22)
+    private let scrollView = NSScrollView()
+    private let heading = Build.label("", font: .systemFont(ofSize: 22, weight: .semibold))
+    private let inset: CGFloat = 28
+
+    override var title: String? {
+        didSet { heading.stringValue = title ?? "" }
+    }
 
     override func loadView() {
-        let container = NSView()
-        container.translatesAutoresizingMaskIntoConstraints = false
+        let container = BackgroundView()
+        container.fillColor = Theme.transcriptBackground
+        container.cornerRadius = 0
+
         column.orientation = .vertical
         column.alignment = .leading
-        container.addSubview(column)
+        column.edgeInsets = NSEdgeInsets(top: 24, left: inset, bottom: 32, right: inset)
+        add(heading)
+
+        let documentView = FlippedView()
+        documentView.translatesAutoresizingMaskIntoConstraints = false
+        documentView.addSubview(column)
+
+        scrollView.documentView = documentView
+        scrollView.drawsBackground = false
+        scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+
+        // The page starts below the titlebar. A scroll view running under it gets AppKit's scroll
+        // pocket, a strip with a hard edge that reaches past the pane and over the sidebar.
+        scrollView.automaticallyAdjustsContentInsets = false
+
+        container.addSubview(scrollView)
 
         NSLayoutConstraint.activate([
-            container.widthAnchor.constraint(equalToConstant: 520),
-            column.topAnchor.constraint(equalTo: container.topAnchor, constant: 24),
-            column.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 24),
-            column.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -24),
-            column.bottomAnchor.constraint(
-                lessThanOrEqualTo: container.bottomAnchor, constant: -24),
-            container.heightAnchor.constraint(greaterThanOrEqualToConstant: 340),
+            scrollView.topAnchor.constraint(equalTo: container.safeAreaLayoutGuide.topAnchor),
+            scrollView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            documentView.widthAnchor.constraint(equalTo: scrollView.widthAnchor),
+            column.topAnchor.constraint(equalTo: documentView.topAnchor),
+            column.leadingAnchor.constraint(equalTo: documentView.leadingAnchor),
+            column.trailingAnchor.constraint(equalTo: documentView.trailingAnchor),
+            column.bottomAnchor.constraint(equalTo: documentView.bottomAnchor),
         ])
         view = container
     }
 
+    private func add(_ row: NSView) {
+        column.addArrangedSubview(row)
+        row.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -2 * inset).isActive = true
+    }
+
     func addSection(_ section: SectionView) {
-        column.addArrangedSubview(section)
-        section.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
+        add(section)
     }
 
     func addFootnote(_ text: String) {
-        let label = Build.label(text, font: Theme.Font.caption, color: .tertiaryLabelColor, lines: 0)
-        column.addArrangedSubview(label)
-        label.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
+        add(Build.label(text, font: Theme.Font.caption, color: .tertiaryLabelColor, lines: 0))
     }
 }
 
@@ -79,31 +109,27 @@ final class GeneralSettingsViewController: SettingsPaneViewController {
         super.viewDidLoad()
         title = "General"
 
-        let sendOnReturn = checkbox(
-            "Return sends the message", state: Preferences.sendOnReturn,
-            action: #selector(toggleSendOnReturn))
-        let timestamps = checkbox(
-            "Show timestamps in transcripts", state: Preferences.showTimestamps,
-            action: #selector(toggleTimestamps))
+        let chats = SectionView(title: "Chats")
+        chats.setRows([
+            AccessoryRow(
+                key: "Return sends the message",
+                accessory: toggle(Preferences.sendOnReturn, #selector(toggleSendOnReturn))),
+            AccessoryRow(
+                key: "Show timestamps in transcripts",
+                accessory: toggle(Preferences.showTimestamps, #selector(toggleTimestamps))),
+        ])
+        addSection(chats)
 
         appearance.addItems(withTitles: ["System", "Light", "Dark"])
-        appearance.target = self
-        appearance.action = #selector(changeAppearance)
-        appearance.translatesAutoresizingMaskIntoConstraints = false
-
-        let appearanceRow = NSView()
-        appearanceRow.translatesAutoresizingMaskIntoConstraints = false
-        let label = Build.label("Appearance", font: .systemFont(ofSize: 12), color: .secondaryLabelColor)
-        appearanceRow.addSubview(label)
-        appearanceRow.addSubview(appearance)
-        NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: appearanceRow.leadingAnchor),
-            label.centerYAnchor.constraint(equalTo: appearance.centerYAnchor),
-            appearance.leadingAnchor.constraint(equalTo: label.trailingAnchor, constant: 12),
-            appearance.topAnchor.constraint(equalTo: appearanceRow.topAnchor),
-            appearance.bottomAnchor.constraint(equalTo: appearanceRow.bottomAnchor),
-            appearance.widthAnchor.constraint(equalToConstant: 140),
-        ])
+        switch NSApp.appearance?.name {
+        case .aqua?: appearance.selectItem(at: 1)
+        case .darkAqua?: appearance.selectItem(at: 2)
+        default: appearance.selectItem(at: 0)
+        }
+        configure(appearance, width: 140, action: #selector(changeAppearance))
+        let look = SectionView(title: "Appearance")
+        look.setRows([AccessoryRow(key: "Appearance", accessory: appearance)])
+        addSection(look)
 
         // The language the Dictate button listens in. Automatic follows the keyboard input
         // source, then the system languages.
@@ -118,45 +144,38 @@ final class GeneralSettingsViewController: SettingsPaneViewController {
         {
             dictationLanguage.select(item)
         }
-        dictationLanguage.target = self
-        dictationLanguage.action = #selector(changeDictationLanguage)
-        dictationLanguage.translatesAutoresizingMaskIntoConstraints = false
-        let dictationRow = NSView()
-        dictationRow.translatesAutoresizingMaskIntoConstraints = false
-        let dictationLabel = Build.label("Dictation", font: .systemFont(ofSize: 12), color: .secondaryLabelColor)
-        dictationRow.addSubview(dictationLabel)
-        dictationRow.addSubview(dictationLanguage)
-        NSLayoutConstraint.activate([
-            dictationLabel.leadingAnchor.constraint(equalTo: dictationRow.leadingAnchor),
-            dictationLabel.centerYAnchor.constraint(equalTo: dictationLanguage.centerYAnchor),
-            dictationLanguage.leadingAnchor.constraint(equalTo: dictationLabel.trailingAnchor, constant: 12),
-            dictationLanguage.topAnchor.constraint(equalTo: dictationRow.topAnchor),
-            dictationLanguage.bottomAnchor.constraint(equalTo: dictationRow.bottomAnchor),
-            dictationLanguage.widthAnchor.constraint(equalToConstant: 220),
-        ])
+        configure(dictationLanguage, width: 220, action: #selector(changeDictationLanguage))
+        let dictation = SectionView(title: "Dictation")
+        dictation.setRows([AccessoryRow(key: "Language", accessory: dictationLanguage)])
+        addSection(dictation)
 
-        column.addArrangedSubview(sendOnReturn)
-        column.addArrangedSubview(timestamps)
-        column.addArrangedSubview(appearanceRow)
-        column.addArrangedSubview(dictationRow)
-        column.setCustomSpacing(8, after: sendOnReturn)
         addFootnote(
             "Lorca talks only to the CLI on this Mac. Nothing here is synced; each Device keeps its own settings."
         )
     }
 
-    private func checkbox(_ title: String, state: Bool, action: Selector) -> NSButton {
-        let button = NSButton(checkboxWithTitle: title, target: self, action: action)
-        button.state = state ? .on : .off
-        button.translatesAutoresizingMaskIntoConstraints = false
-        return button
+    private func toggle(_ isOn: Bool, _ action: Selector) -> NSSwitch {
+        let toggle = NSSwitch()
+        toggle.controlSize = .small
+        toggle.state = isOn ? .on : .off
+        toggle.target = self
+        toggle.action = action
+        return toggle
     }
 
-    @objc private func toggleSendOnReturn(_ sender: NSButton) {
+    private func configure(_ popUp: NSPopUpButton, width: CGFloat, action: Selector) {
+        popUp.controlSize = .small
+        popUp.font = .systemFont(ofSize: NSFont.systemFontSize(for: .small))
+        popUp.target = self
+        popUp.action = action
+        popUp.widthAnchor.constraint(equalToConstant: width).isActive = true
+    }
+
+    @objc private func toggleSendOnReturn(_ sender: NSSwitch) {
         Preferences.sendOnReturn = sender.state == .on
     }
 
-    @objc private func toggleTimestamps(_ sender: NSButton) {
+    @objc private func toggleTimestamps(_ sender: NSSwitch) {
         Preferences.showTimestamps = sender.state == .on
     }
 
@@ -170,60 +189,6 @@ final class GeneralSettingsViewController: SettingsPaneViewController {
         case 2: NSApp.appearance = NSAppearance(named: .darkAqua)
         default: NSApp.appearance = nil
         }
-    }
-}
-
-// MARK: - Devices
-
-final class DevicesSettingsViewController: SettingsPaneViewController {
-    private let section = SectionView(title: "Paired Devices")
-
-    override func viewDidLoad() {
-        super.viewDidLoad()
-        title = "Devices"
-
-        reload()
-        addSection(section)
-
-        let pair = NSButton(
-            title: "Pair a Device…", target: NSApp.delegate,
-            action: #selector(AppDelegate.pairDevice(_:)))
-        pair.bezelStyle = .rounded
-        column.addArrangedSubview(pair)
-
-        addFootnote(
-            "Pairing wraps the account key to the other machine's public key. The relay stores only public keys and ciphertext."
-        )
-
-        AppStore.shared.observe(self) { [weak self] event in
-            switch event {
-            case .rosterChanged, .snapshotReplaced: self?.reload()
-            default: break
-            }
-        }
-    }
-
-    private func reload() {
-        let store = AppStore.shared
-        section.setRows(
-            store.devices.map { device in
-                let row = StatusRow()
-                let presence = device.status == .online ? "Online" : Format.lastSeen(device.lastSeen)
-                let detail = device.isRunner
-                    ? "\(device.model) · \(store.bots(on: device.id).count) bots"
-                    : "\(device.model) · \(device.os.displayName) · not a Runner"
-                // The Unpair button takes the state label's place, so presence moves into the subtitle.
-                row.configure(
-                    symbol: device.symbolName,
-                    title: device.isThisDevice ? "\(device.name) (this Mac)" : device.name,
-                    subtitle: device.isThisDevice ? detail : "\(detail) · \(presence)",
-                    state: presence,
-                    stateColor: device.status == .online ? .systemGreen : .secondaryLabelColor,
-                    actionTitle: device.isThisDevice ? nil : "Unpair…"
-                )
-                row.onAction = { [weak self] in UnpairDevice.confirm(device, in: self?.view.window) }
-                return row
-            })
     }
 }
 
@@ -287,71 +252,51 @@ final class ProvidersSettingsViewController: SettingsPaneViewController {
 // MARK: - Advanced
 
 final class AdvancedSettingsViewController: SettingsPaneViewController {
-    private let relayField = NSTextField()
-    private let portField = NSTextField()
+    private let relay = EditableRow(key: "Relay URL", placeholder: "https://relay.example.com")
+    private let port = EditableRow(key: "CLI port", placeholder: "4862")
 
     override func viewDidLoad() {
         super.viewDidLoad()
         title = "Advanced"
 
-        relayField.stringValue = AppStore.shared.relayURL ?? Preferences.relayURL
-        relayField.placeholderString = "https://relay.example.com"
-        relayField.delegate = self
-        portField.stringValue = "\(Preferences.cliPort)"
-        portField.delegate = self
-
-        column.addArrangedSubview(field("Relay URL", relayField))
-        column.addArrangedSubview(field("CLI port", portField))
-
-        let reset = NSButton(
-            title: "Show Onboarding Again", target: NSApp.delegate,
-            action: #selector(AppDelegate.showOnboarding(_:)))
-        reset.bezelStyle = .rounded
-        column.addArrangedSubview(reset)
-
+        relay.field.stringValue = AppStore.shared.relayURL ?? Preferences.relayURL
+        port.field.stringValue = "\(Preferences.cliPort)"
+        for row in [relay, port] {
+            row.field.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+            row.onCommit = { [weak self] in self?.commit() }
+        }
+        let connection = SectionView(title: "Connection")
+        connection.setRows([relay, port])
+        addSection(connection)
         addFootnote(
             "Self-hosting the relay is a URL change: clients sign their requests and upload ciphertext, so the relay has nothing to trust. Leave it empty to run on this Mac alone."
         )
-    }
 
-    private func field(_ title: String, _ control: NSTextField) -> NSView {
-        let container = NSView()
-        container.translatesAutoresizingMaskIntoConstraints = false
-        control.translatesAutoresizingMaskIntoConstraints = false
-        control.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
-
-        let label = Build.label(title, font: .systemFont(ofSize: 12), color: .secondaryLabelColor)
-        container.addSubview(label)
-        container.addSubview(control)
-
-        NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            label.centerYAnchor.constraint(equalTo: control.centerYAnchor),
-            label.widthAnchor.constraint(equalToConstant: 80),
-            control.leadingAnchor.constraint(equalTo: label.trailingAnchor, constant: 12),
-            control.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            control.topAnchor.constraint(equalTo: container.topAnchor),
-            control.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-        ])
-        container.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
-        return container
-    }
-}
-
-extension AdvancedSettingsViewController: NSTextFieldDelegate {
-    func controlTextDidEndEditing(_ obj: Notification) {
-        let relay = relayField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        if relay != (AppStore.shared.relayURL ?? "") {
-            Preferences.relayURL = relay
-            AppStore.shared.setRelayURL(relay)
+        let onboarding = ActionRow(
+            key: "Onboarding", value: "", tint: .secondaryLabelColor, actionTitle: "Show Onboarding Again")
+        // Onboarding closes the window this row is in, so the click returns first.
+        onboarding.onAction = {
+            DispatchQueue.main.async {
+                NSApp.sendAction(#selector(AppDelegate.showOnboarding(_:)), to: nil, from: nil)
+            }
         }
-        if let port = Int(portField.stringValue), port > 0, port < 65536 {
-            if port != Preferences.cliPort {
-                Preferences.cliPort = port
+        let setup = SectionView(title: "Setup")
+        setup.setRows([onboarding])
+        addSection(setup)
+    }
+
+    private func commit() {
+        if relay.value != (AppStore.shared.relayURL ?? "") {
+            Preferences.relayURL = relay.value
+            AppStore.shared.setRelayURL(relay.value)
+        }
+        if let number = Int(port.value), number > 0, number < 65536 {
+            if number != Preferences.cliPort {
+                Preferences.cliPort = number
                 AppStore.shared.reconnect()
             }
         } else {
-            portField.stringValue = "\(Preferences.cliPort)"
+            port.field.stringValue = "\(Preferences.cliPort)"
         }
     }
 }

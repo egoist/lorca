@@ -403,8 +403,3 @@ final class InspectorViewController: NSViewController {
         onOpenDevice?(id)
     }
 }
-
-/// Plain container whose y grows downward, for scroll views whose content is shorter than the pane.
-private final class FlippedView: NSView {
-    override var isFlipped: Bool { true }
-}

@@ -21,6 +21,7 @@ final class SidebarNode: NSObject {
     enum Kind: Hashable {
         case header(String)
         case chat(Chat.ID)
+        case pane(SettingsPane)
         case device(Device.ID)
     }
 
@@ -35,6 +36,7 @@ final class SidebarNode: NSObject {
         switch kind {
         case .header: nil
         case let .chat(id): .chat(id)
+        case let .pane(pane): .settings(pane)
         case let .device(id): .device(id)
         }
     }
@@ -62,22 +64,109 @@ final class SidebarHeaderCell: NSTableCellView {
 
     private let label = Build.label(
         "", font: .systemFont(ofSize: 11, weight: .bold), color: .secondaryLabelColor)
+    private lazy var button = HoverButton(
+        symbol: "plus", pointSize: 11, tooltip: "", target: self, action: #selector(performAction))
+    private var onAction: (() -> Void)?
 
     init() {
         super.init(frame: .zero)
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.isHidden = true
         addSubview(label)
+        addSubview(button)
         NSLayoutConstraint.activate([
             label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: SidebarMetric.inset + 2),
-            label.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
+            label.trailingAnchor.constraint(lessThanOrEqualTo: button.leadingAnchor, constant: -4),
             label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -5),
+
+            button.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -SidebarMetric.trailingInset + 4),
+            button.centerYAnchor.constraint(equalTo: label.centerYAnchor),
+            button.widthAnchor.constraint(equalToConstant: 20),
+            button.heightAnchor.constraint(equalToConstant: 20),
         ])
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(_ title: String) {
+    /// A header may carry one action for its section, shown as a plus at the trailing edge.
+    func configure(_ title: String, actionTooltip: String? = nil, onAction: (() -> Void)? = nil) {
         label.stringValue = title
+        self.onAction = onAction
+        button.isHidden = onAction == nil
+        button.toolTip = actionTooltip
+        button.setAccessibilityLabel(actionTooltip)
+    }
+
+    @objc private func performAction() {
+        onAction?()
+    }
+}
+
+// MARK: - Settings pane row
+
+extension SettingsPane {
+    var title: String {
+        switch self {
+        case .general: "General"
+        case .providers: "Providers"
+        case .autoReview: "Auto-review"
+        case .advanced: "Advanced"
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .general: "gearshape"
+        case .providers: "key"
+        case .autoReview: "checkmark.shield"
+        case .advanced: "slider.horizontal.3"
+        }
+    }
+}
+
+final class SidebarPaneCell: NSTableCellView {
+    static let identifier = NSUserInterfaceItemIdentifier("SidebarPaneCell")
+
+    private let icon = NSImageView()
+    private let title = Build.label("", font: .systemFont(ofSize: 13))
+
+    init() {
+        super.init(frame: .zero)
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(icon)
+        addSubview(title)
+
+        NSLayoutConstraint.activate([
+            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: SidebarMetric.inset),
+            icon.centerYAnchor.constraint(equalTo: centerYAnchor),
+            icon.widthAnchor.constraint(equalToConstant: SidebarMetric.slot),
+
+            title.leadingAnchor.constraint(equalTo: leadingAnchor, constant: SidebarMetric.textLeading),
+            title.centerYAnchor.constraint(equalTo: centerYAnchor),
+            title.trailingAnchor.constraint(
+                lessThanOrEqualTo: trailingAnchor, constant: -SidebarMetric.trailingInset),
+        ])
+
+        textField = title
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    func configure(pane: SettingsPane) {
+        icon.image = NSImage(systemSymbolName: pane.symbolName, accessibilityDescription: nil)
+        icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
+        title.stringValue = pane.title
+        applyBackgroundStyle()
+    }
+
+    override var backgroundStyle: NSView.BackgroundStyle {
+        didSet { applyBackgroundStyle() }
+    }
+
+    private func applyBackgroundStyle() {
+        icon.contentTintColor = backgroundStyle == .emphasized ? .white : .secondaryLabelColor
     }
 }
 

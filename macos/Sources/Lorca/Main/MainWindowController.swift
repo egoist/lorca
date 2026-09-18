@@ -13,7 +13,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         window.title = "Lorca"
         window.titleVisibility = .visible
         window.toolbarStyle = .unified
-        window.titlebarSeparatorStyle = .automatic
+        // The content pane draws the titlebar strip and its separator (ContentContainerViewController).
+        window.titlebarAppearsTransparent = true
+        window.titlebarSeparatorStyle = .none
         window.minSize = NSSize(width: 860, height: 520)
         window.contentViewController = root
         window.setFrameAutosaveName("LorcaMainWindow")
@@ -100,6 +102,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             guard let chat = AppStore.shared.chat(id) else { return }
             window.title = AppStore.shared.title(for: chat)
             window.subtitle = AppStore.shared.subtitle(for: chat)
+        case let .settings(pane):
+            window.title = pane.title
+            window.subtitle = "Settings"
         case let .device(id):
             guard let device = AppStore.shared.device(id) else { return }
             window.title = device.name

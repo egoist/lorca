@@ -3,7 +3,9 @@ import AppKit
 final class RootSplitViewController: NSSplitViewController {
     private let store = AppStore.shared
 
+    private let sidebarContainer = ContentContainerViewController(drawsTitlebar: false)
     private let sidebar = SidebarViewController()
+    private let settingsSidebar = SettingsSidebarViewController()
     private let content = ContentContainerViewController()
     private let inspector = InspectorViewController()
 
@@ -13,6 +15,9 @@ final class RootSplitViewController: NSSplitViewController {
     private var userWantsInspector = true
     private var chatController: ChatViewController?
     private let deviceController = DeviceViewController()
+    private var settingsControllers: [SettingsPane: NSViewController] = [:]
+    /// The chat Back returns to.
+    private var lastChatID: Chat.ID?
     private let offlineController = OfflineViewController()
     private let placeholderController = PlaceholderViewController()
 
@@ -21,6 +26,7 @@ final class RootSplitViewController: NSSplitViewController {
     private(set) var selection: Selection? {
         didSet {
             guard selection != oldValue else { return }
+            if case let .chat(id) = oldValue { lastChatID = id }
             Preferences.selection = encode(selection)
             updateContent()
             onSelectionChange?()
@@ -37,7 +43,7 @@ final class RootSplitViewController: NSSplitViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
 
-        sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebar)
+        sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebarContainer)
         sidebarItem.minimumThickness = 232
         sidebarItem.maximumThickness = 340
         sidebarItem.canCollapse = true
@@ -59,6 +65,12 @@ final class RootSplitViewController: NSSplitViewController {
         }
         sidebar.onDoubleClick = { [weak self] selection in
             if case .chat = selection { self?.renameChat(nil) }
+        }
+        settingsSidebar.onSelect = { [weak self] selection in
+            self?.select(selection)
+        }
+        settingsSidebar.onBack = { [weak self] in
+            self?.closeSettings()
         }
         inspector.onOpenDevice = { [weak self] deviceID in
             self?.select(.device(deviceID))
@@ -94,12 +106,13 @@ final class RootSplitViewController: NSSplitViewController {
         } else {
             selection = store.chats.first.map { .chat($0.id) }
         }
-        sidebar.setSelection(selection)
+        syncSidebar()
     }
 
     private func exists(_ selection: Selection) -> Bool {
         switch selection {
         case let .chat(id): store.chat(id) != nil
+        case .settings: true
         case let .device(id): store.device(id) != nil
         }
     }
@@ -107,6 +120,7 @@ final class RootSplitViewController: NSSplitViewController {
     private func encode(_ selection: Selection?) -> String? {
         switch selection {
         case let .chat(id): "chat:\(id)"
+        case let .settings(pane): "settings:\(pane.rawValue)"
         case let .device(id): "device:\(id)"
         case nil: nil
         }
@@ -117,6 +131,7 @@ final class RootSplitViewController: NSSplitViewController {
         guard parts.count == 2 else { return nil }
         switch parts[0] {
         case "chat": return .chat(parts[1])
+        case "settings": return SettingsPane(rawValue: parts[1]).map { .settings($0) }
         case "device": return .device(parts[1])
         default: return nil
         }
@@ -129,7 +144,45 @@ final class RootSplitViewController: NSSplitViewController {
         if case let .chat(id) = newSelection {
             store.markRead(id)
         }
-        sidebar.setSelection(newSelection)
+        syncSidebar()
+    }
+
+    /// Settings lives in this window: its panes and the Device pages take the content area, and
+    /// the sidebar lists them in place of the chats.
+    func showSettings() {
+        if sidebarItem.isCollapsed { sidebarItem.animator().isCollapsed = false }
+        guard selection?.isSettings != true else { return }
+        select(.settings(.general))
+    }
+
+    func closeSettings() {
+        let chat = lastChatID.flatMap { store.chat($0) } ?? store.chats.first
+        select(chat.map { .chat($0.id) })
+    }
+
+    /// Escape leaves Settings. NSResponder has no implementation to call, so anywhere else the
+    /// command keeps travelling up the chain.
+    override func cancelOperation(_ sender: Any?) {
+        guard selection?.isSettings == true else {
+            nextResponder?.doCommand(by: #selector(cancelOperation(_:)))
+            return
+        }
+        closeSettings()
+    }
+
+    /// Shows the sidebar the selection belongs to, with its row selected. The list takes the
+    /// keyboard when the sidebars trade places, so the selected row draws emphasized.
+    private func syncSidebar() {
+        let isSettings = selection?.isSettings == true
+        let wasSettings = settingsSidebar.parent != nil
+        sidebarContainer.show(isSettings ? settingsSidebar : sidebar)
+        if isSettings {
+            settingsSidebar.setSelection(selection)
+        } else {
+            sidebar.setSelection(selection)
+        }
+        guard isSettings != wasSettings, !sidebarItem.isCollapsed else { return }
+        if isSettings { settingsSidebar.focusList() } else { sidebar.focusList() }
     }
 
     func windowBecameKey() {
@@ -165,6 +218,14 @@ final class RootSplitViewController: NSSplitViewController {
     private func updateContent() {
         guard isViewLoaded else { return }
 
+        // The relay URL and the CLI port are what a Mac with no CLI answering needs, so the
+        // panes show either way.
+        if case let .settings(pane) = selection {
+            content.show(settingsController(for: pane))
+            setInspector(visible: false)
+            return
+        }
+
         guard store.isConnected else {
             content.show(offlineController)
             setInspector(visible: false)
@@ -190,10 +251,26 @@ final class RootSplitViewController: NSSplitViewController {
             content.show(deviceController)
             setInspector(visible: false)
 
+        case .settings:
+            break
+
         case nil:
             content.show(placeholderController)
             setInspector(visible: false)
         }
+    }
+
+    private func settingsController(for pane: SettingsPane) -> NSViewController {
+        if let controller = settingsControllers[pane] { return controller }
+        let controller: NSViewController =
+            switch pane {
+            case .general: GeneralSettingsViewController()
+            case .providers: ProvidersSettingsViewController()
+            case .autoReview: AutoReviewSettingsViewController()
+            case .advanced: AdvancedSettingsViewController()
+            }
+        settingsControllers[pane] = controller
+        return controller
     }
 
     private func setInspector(visible: Bool) {
@@ -329,11 +406,44 @@ final class RootSplitViewController: NSSplitViewController {
 
 final class ContentContainerViewController: NSViewController {
     private var current: NSViewController?
+    private let drawsTitlebar: Bool
+    private var titlebar: NSView?
+
+    /// The content pane draws the titlebar's material itself. AppKit lays the window's own strip
+    /// out from the split divider's frame, which starts 3pt inside the sidebar, so its edge
+    /// never meets the pane's; the window's titlebar is transparent instead.
+    init(drawsTitlebar: Bool = true) {
+        self.drawsTitlebar = drawsTitlebar
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
 
     override func loadView() {
         let container = NSView()
         container.wantsLayer = true
         view = container
+        guard drawsTitlebar else { return }
+
+        let material = NSVisualEffectView()
+        material.material = .titlebar
+        material.blendingMode = .withinWindow
+        material.state = .followsWindowActiveState
+        material.translatesAutoresizingMaskIntoConstraints = false
+        let separator = HairlineView()
+        material.addSubview(separator)
+        container.addSubview(material)
+        NSLayoutConstraint.activate([
+            material.topAnchor.constraint(equalTo: container.topAnchor),
+            material.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            material.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            material.bottomAnchor.constraint(equalTo: container.safeAreaLayoutGuide.topAnchor),
+            separator.leadingAnchor.constraint(equalTo: material.leadingAnchor),
+            separator.trailingAnchor.constraint(equalTo: material.trailingAnchor),
+            separator.bottomAnchor.constraint(equalTo: material.bottomAnchor),
+        ])
+        titlebar = material
     }
 
     func show(_ controller: NSViewController) {
@@ -346,7 +456,7 @@ final class ContentContainerViewController: NSViewController {
 
         addChild(controller)
         controller.view.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(controller.view)
+        view.addSubview(controller.view, positioned: .below, relativeTo: titlebar)
         controller.view.pin(to: view)
         current = controller
     }
