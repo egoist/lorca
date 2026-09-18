@@ -4,10 +4,10 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use tinybot_agent::providers::anthropic::{ANTHROPIC_BASE_URL, ANTHROPIC_VERSION};
-use tinybot_agent::providers::grok::oauth as grok_oauth;
-use tinybot_agent::providers::{AnthropicProvider, ChatGptProvider, ChatGptTokens, GrokProvider, GrokTokenSource, GrokTokens, TokenSource};
-use tinybot_agent::{models, Provider, ThinkingLevel};
+use lorca_agent::providers::anthropic::{ANTHROPIC_BASE_URL, ANTHROPIC_VERSION};
+use lorca_agent::providers::grok::oauth as grok_oauth;
+use lorca_agent::providers::{AnthropicProvider, ChatGptProvider, ChatGptTokens, GrokProvider, GrokTokenSource, GrokTokens, TokenSource};
+use lorca_agent::{models, Provider, ThinkingLevel};
 
 use crate::app::App;
 use crate::config;
@@ -64,10 +64,10 @@ pub fn supports_vision(kind: &str, model: Option<&str>) -> bool {
 /// The model a bot of `kind` runs without one of its own.
 pub fn default_model(kind: &str) -> &'static str {
     match kind {
-        "deepseek" => tinybot_agent::providers::openai_compat::DEEPSEEK_DEFAULT_MODEL,
-        "anthropic" => tinybot_agent::providers::anthropic::ANTHROPIC_DEFAULT_MODEL,
-        "chatgpt" => tinybot_agent::providers::chatgpt::CHATGPT_DEFAULT_MODEL,
-        "grok" => tinybot_agent::providers::grok::GROK_DEFAULT_MODEL,
+        "deepseek" => lorca_agent::providers::openai_compat::DEEPSEEK_DEFAULT_MODEL,
+        "anthropic" => lorca_agent::providers::anthropic::ANTHROPIC_DEFAULT_MODEL,
+        "chatgpt" => lorca_agent::providers::chatgpt::CHATGPT_DEFAULT_MODEL,
+        "grok" => lorca_agent::providers::grok::GROK_DEFAULT_MODEL,
         _ => "",
     }
 }
@@ -88,7 +88,7 @@ pub fn provider_for(app: &Arc<App>, kind: &str, model: Option<&str>, thinking: O
                 .deepseek
                 .clone()
                 .ok_or_else(|| "DeepSeek is not connected on this Runner".to_string())?;
-            let model = model.or_else(|| std::env::var("TINYBOT_DEEPSEEK_MODEL").ok());
+            let model = model.or_else(|| std::env::var("LORCA_DEEPSEEK_MODEL").ok());
             // The Anthropic-compatible endpoint: the one with DeepSeek's server-side web search.
             let base_url = deepseek_anthropic_url(&key.base_url.clone().unwrap_or_else(deepseek_base_url));
             Ok(Arc::new(AnthropicProvider::deepseek(&key.api_key, model.as_deref()).with_base_url(&base_url).with_thinking(thinking)))
@@ -101,7 +101,7 @@ pub fn provider_for(app: &Arc<App>, kind: &str, model: Option<&str>, thinking: O
                 .anthropic
                 .clone()
                 .ok_or_else(|| "Anthropic is not connected on this Runner".to_string())?;
-            let model = model.or_else(|| std::env::var("TINYBOT_ANTHROPIC_MODEL").ok());
+            let model = model.or_else(|| std::env::var("LORCA_ANTHROPIC_MODEL").ok());
             let base_url = key.base_url.clone().unwrap_or_else(anthropic_base_url);
             Ok(Arc::new(AnthropicProvider::anthropic(&key.api_key, model.as_deref()).with_base_url(&base_url).with_thinking(thinking)))
         }
@@ -109,19 +109,19 @@ pub fn provider_for(app: &Arc<App>, kind: &str, model: Option<&str>, thinking: O
             if app.credentials.lock().unwrap().chatgpt.is_none() {
                 return Err("ChatGPT is not connected on this Runner".into());
             }
-            let model = model.or_else(|| std::env::var("TINYBOT_CHATGPT_MODEL").ok());
+            let model = model.or_else(|| std::env::var("LORCA_CHATGPT_MODEL").ok());
             Ok(Arc::new(ChatGptProvider::new(Arc::new(AppTokenSource(app.clone())), model.as_deref()).with_thinking(thinking)))
         }
         "grok" => {
             if app.credentials.lock().unwrap().grok.is_none() {
                 return Err("Grok is not connected on this Runner".into());
             }
-            let model = model.or_else(|| std::env::var("TINYBOT_GROK_MODEL").ok());
+            let model = model.or_else(|| std::env::var("LORCA_GROK_MODEL").ok());
             let mut provider = GrokProvider::new(Arc::new(AppGrokTokenSource(app.clone())), model.as_deref()).with_thinking(thinking);
-            if let Some(base_url) = env_url("TINYBOT_GROK_BASE_URL") {
+            if let Some(base_url) = env_url("LORCA_GROK_BASE_URL") {
                 provider = provider.with_base_url(&base_url);
             }
-            if let Some(issuer) = env_url("TINYBOT_GROK_ISSUER") {
+            if let Some(issuer) = env_url("LORCA_GROK_ISSUER") {
                 provider = provider.with_issuer(&issuer);
             }
             Ok(Arc::new(provider))
@@ -130,10 +130,10 @@ pub fn provider_for(app: &Arc<App>, kind: &str, model: Option<&str>, thinking: O
     }
 }
 
-/// DeepSeek's API root when the credential has none: `TINYBOT_DEEPSEEK_BASE_URL` (a proxy or a
+/// DeepSeek's API root when the credential has none: `LORCA_DEEPSEEK_BASE_URL` (a proxy or a
 /// test server) or DeepSeek itself.
 fn deepseek_base_url() -> String {
-    env_url("TINYBOT_DEEPSEEK_BASE_URL").unwrap_or_else(|| tinybot_agent::providers::openai_compat::DEEPSEEK_BASE_URL.to_string())
+    env_url("LORCA_DEEPSEEK_BASE_URL").unwrap_or_else(|| lorca_agent::providers::openai_compat::DEEPSEEK_BASE_URL.to_string())
 }
 
 /// The Anthropic-compatible endpoint under a DeepSeek API root. A root given with its
@@ -147,10 +147,10 @@ fn deepseek_anthropic_url(root: &str) -> String {
     }
 }
 
-/// Anthropic's API root when the credential has none: `TINYBOT_ANTHROPIC_BASE_URL` or
+/// Anthropic's API root when the credential has none: `LORCA_ANTHROPIC_BASE_URL` or
 /// Anthropic itself.
 fn anthropic_base_url() -> String {
-    env_url("TINYBOT_ANTHROPIC_BASE_URL").unwrap_or_else(|| ANTHROPIC_BASE_URL.to_string())
+    env_url("LORCA_ANTHROPIC_BASE_URL").unwrap_or_else(|| ANTHROPIC_BASE_URL.to_string())
 }
 
 fn env_url(name: &str) -> Option<String> {
@@ -220,7 +220,7 @@ fn save_api_key(app: &Arc<App>, kind: &str, key: &str, base_url: Option<String>)
 
 /// Opens the browser for the ChatGPT sign-in and waits for the callback.
 pub async fn connect_chatgpt(app: &Arc<App>) -> Result<ChatGptTokens, String> {
-    let tokens = tinybot_agent::providers::chatgpt::oauth::login(
+    let tokens = lorca_agent::providers::chatgpt::oauth::login(
         &app.http,
         |url| open::that(url).map_err(|e| format!("Cannot open the browser: {e}")),
         std::time::Duration::from_secs(5 * 60),
@@ -233,10 +233,10 @@ pub async fn connect_chatgpt(app: &Arc<App>) -> Result<ChatGptTokens, String> {
     Ok(tokens)
 }
 
-/// Opens the browser for the Grok sign-in (xAI's OAuth at `auth.x.ai`, or `TINYBOT_GROK_ISSUER`
+/// Opens the browser for the Grok sign-in (xAI's OAuth at `auth.x.ai`, or `LORCA_GROK_ISSUER`
 /// for a test server) and waits for the loopback callback.
 pub async fn connect_grok(app: &Arc<App>) -> Result<GrokTokens, String> {
-    let endpoints = env_url("TINYBOT_GROK_ISSUER").map(|issuer| grok_oauth::Endpoints::at(&issuer)).unwrap_or_else(grok_oauth::Endpoints::xai);
+    let endpoints = env_url("LORCA_GROK_ISSUER").map(|issuer| grok_oauth::Endpoints::at(&issuer)).unwrap_or_else(grok_oauth::Endpoints::xai);
     let tokens = grok_oauth::login(
         &app.http,
         &endpoints,
@@ -262,7 +262,7 @@ pub fn disconnect(app: &Arc<App>, kind: &str) -> Result<(), String> {
                 // Tell xAI the sign-in is over; the local removal stands either way.
                 if let Some(tokens) = credentials.grok.take() {
                     let http = app.http.clone();
-                    let endpoints = env_url("TINYBOT_GROK_ISSUER").map(|issuer| grok_oauth::Endpoints::at(&issuer)).unwrap_or_else(grok_oauth::Endpoints::xai);
+                    let endpoints = env_url("LORCA_GROK_ISSUER").map(|issuer| grok_oauth::Endpoints::at(&issuer)).unwrap_or_else(grok_oauth::Endpoints::xai);
                     tokio::spawn(async move {
                         if let Err(error) = grok_oauth::revoke(&http, &endpoints, &tokens.refresh_token).await {
                             tracing::debug!("grok revoke: {error}");

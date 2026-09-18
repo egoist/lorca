@@ -11,6 +11,6 @@
   ],
   "exclude": [
     "**/*.test.ts",
-    "modules/tinybot-core/build.ts"
+    "modules/lorca-core/build.ts"
   ]
 }

@@ -2,8 +2,8 @@
 //! skills from `./skills`, prompt templates from `./prompts`, and a few slash commands.
 //!
 //! ```text
-//! DEEPSEEK_API_KEY=… cargo run -p tinybot-agent --example chat -- deepseek/deepseek-flash
-//! ANTHROPIC_API_KEY=… cargo run -p tinybot-agent --example chat -- anthropic/claude-opus-5
+//! DEEPSEEK_API_KEY=… cargo run -p lorca-agent --example chat -- deepseek/deepseek-flash
+//! ANTHROPIC_API_KEY=… cargo run -p lorca-agent --example chat -- anthropic/claude-opus-5
 //! ```
 //!
 //! Commands: `/model provider/id`, `/think level`, `/compact`, `/stats`, `/tools`, `/skill name`,
@@ -12,13 +12,13 @@
 use std::io::{BufRead, Write};
 use std::sync::Arc;
 
-use tinybot_agent::harness::{
+use lorca_agent::harness::{
     build_system_prompt, load_prompt_templates, load_skills, parse_command_args, AgentHarness, EnvProviderFactory, HarnessEvent, HarnessOptions,
     ModelIdentity, ProviderFactory, Resources, SystemPromptParts,
 };
-use tinybot_agent::provider::AssistantEvent;
-use tinybot_agent::tools::coding_tools;
-use tinybot_agent::{AgentMessage, ThinkingLevel};
+use lorca_agent::provider::AssistantEvent;
+use lorca_agent::tools::coding_tools;
+use lorca_agent::{AgentMessage, ThinkingLevel};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

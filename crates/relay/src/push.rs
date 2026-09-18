@@ -27,7 +27,7 @@ const APNS_JWT_TTL: i64 = 40 * 60;
 const EXPIRES_AFTER: i64 = 24 * 60 * 60;
 
 /// What the phone shows when it cannot decrypt (no key yet, or a push from before it paired).
-const FALLBACK_TITLE: &str = "Tinybot";
+const FALLBACK_TITLE: &str = "Lorca";
 const FALLBACK_BODY: &str = "New reply";
 
 pub enum Delivery {
@@ -267,7 +267,7 @@ Z6lqVJhY2NcZwEuF4trWnvnw1AehRANCAATwsWtjWEGippjwrz56xcdYTXE0D0Ud
 
     #[test]
     fn the_apns_provider_token_is_a_signed_es256_jwt() {
-        let apns = Apns::new(P8, "KEYID12345".into(), "TEAMID1234".into(), "dev.tinybot.app".into(), None).unwrap();
+        let apns = Apns::new(P8, "KEYID12345".into(), "TEAMID1234".into(), "app.lorca".into(), None).unwrap();
         let token = apns.provider_token().unwrap();
         let parts: Vec<&str> = token.split('.').collect();
         assert_eq!(parts.len(), 3);

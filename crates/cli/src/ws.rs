@@ -34,14 +34,14 @@ pub async fn serve(app: Arc<App>) -> anyhow::Result<()> {
         .with_state(app.clone());
     let listener = tokio::net::TcpListener::bind(addr)
         .await
-        .map_err(|e| anyhow::anyhow!("cannot bind {addr}: {e}. Is another tinybot serve running?"))?;
-    tracing::info!(%addr, "tinybot serve");
+        .map_err(|e| anyhow::anyhow!("cannot bind {addr}: {e}. Is another lorca serve running?"))?;
+    tracing::info!(%addr, "lorca serve");
     axum::serve(listener, router).await?;
     Ok(())
 }
 
 async fn index() -> impl IntoResponse {
-    "tinybot"
+    "lorca"
 }
 
 async fn upgrade(State(app): State<Arc<App>>, ws: WebSocketUpgrade) -> impl IntoResponse {

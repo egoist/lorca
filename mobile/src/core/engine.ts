@@ -4,7 +4,7 @@
 // core does the keys, the relay, jobs, rooms, and questions to Runners.
 
 import { AppState, type AppStateStatus } from "react-native";
-import * as core from "../../modules/tinybot-core";
+import * as core from "../../modules/lorca-core";
 import { hostFacts } from "./host";
 import type { Attachment, AutoReview, Bot, Chat, ChatMeta, ChatUsage, Message } from "./model";
 import { coreHome, loadPrefs, pathOf, wipePrefs } from "./prefs";

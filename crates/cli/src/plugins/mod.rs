@@ -715,7 +715,7 @@ pub fn serve_request(app: &Arc<App>, verb: &str, body: &Value) -> Result<Value, 
 /// fetched at most once an hour. A fetch that fails leaves the bundled list.
 pub async fn marketplace(app: &Arc<App>) -> Vec<Manifest> {
     let mut plugins: Vec<Manifest> = parse_index(BUNDLED_INDEX).unwrap_or_default();
-    let url = app.settings.lock().unwrap().marketplace_url.clone().or_else(|| std::env::var("TINYBOT_MARKETPLACE_URL").ok()).filter(|u| !u.trim().is_empty());
+    let url = app.settings.lock().unwrap().marketplace_url.clone().or_else(|| std::env::var("LORCA_MARKETPLACE_URL").ok()).filter(|u| !u.trim().is_empty());
     if let Some(url) = url {
         let cached = app.marketplace_cache.lock().unwrap().clone();
         let extra = match cached {
@@ -817,7 +817,7 @@ mod tests {
     }
 
     fn scratch_app() -> ScratchApp {
-        let home = std::env::temp_dir().join(format!("tinybot-plugins-{}", uuid::Uuid::new_v4()));
+        let home = std::env::temp_dir().join(format!("lorca-plugins-{}", uuid::Uuid::new_v4()));
         let app = App::load(crate::config::Config { home: home.clone(), port: 0 }).unwrap();
         ScratchApp(app, home)
     }

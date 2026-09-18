@@ -1,6 +1,6 @@
 //! What is known about a model ahead of time: its context window and output cap, whether it
 //! reasons or sees images, how it is asked to think, and what its tokens cost. A snapshot of
-//! models.dev (fetched 2026-09-16) for the models Tinybot offers. A model that is not listed
+//! models.dev (fetched 2026-09-16) for the models Lorca offers. A model that is not listed
 //! runs with no window, no levels beyond the provider's default, and zero cost.
 
 use crate::types::{Cost, ThinkingLevel, Usage};

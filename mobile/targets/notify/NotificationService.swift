@@ -29,9 +29,9 @@ final class NotificationService: UNNotificationServiceExtension {
   }
 }
 
-/// The push key in the app group's keychain, written by the app (`TinybotCoreModule`).
+/// The push key in the app group's keychain, written by the app (`LorcaCoreModule`).
 enum PushKey {
-  static let group = "group.dev.tinybot.app"
+  static let group = "group.app.lorca"
   static let account = "push-key"
 
   static func read() -> Data? {

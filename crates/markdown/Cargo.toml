@@ -1,12 +1,12 @@
 [package]
-name = "tinybot-markdown"
-description = "Message Markdown as blocks and spans, parsed with pulldown-cmark, for every Tinybot app to render natively"
+name = "lorca-markdown"
+description = "Message Markdown as blocks and spans, parsed with pulldown-cmark, for every Lorca app to render natively"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [lib]
-name = "tinybot_markdown"
+name = "lorca_markdown"
 path = "src/lib.rs"
 # A static library for the Mac app, a host dylib the bindings generator reads, and the rlib
 # the phone core links.

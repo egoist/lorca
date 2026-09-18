@@ -1,12 +1,12 @@
 [package]
-name = "tinybot-mobile"
-description = "Tinybot's Device core for the phone: the JSON API and events over UniFFI"
+name = "lorca-mobile"
+description = "Lorca's Device core for the phone: the JSON API and events over UniFFI"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [lib]
-name = "tinybot_mobile"
+name = "lorca_mobile"
 # A static library for iOS, a shared one for Android, and a host dylib the bindings generator reads.
 crate-type = ["lib", "staticlib", "cdylib"]
 
@@ -19,11 +19,11 @@ required-features = ["bindgen"]
 bindgen = ["uniffi/cli"]
 
 [dependencies]
-tinybot = { path = "../cli", default-features = false }
+lorca = { path = "../cli", default-features = false }
 uniffi = "0.32"
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-tinybot-markdown = { version = "0.1.0", path = "../markdown" }
+lorca-markdown = { version = "0.1.0", path = "../markdown" }

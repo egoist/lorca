@@ -3,7 +3,7 @@
 
 import { useMemo } from "react";
 import { processColor, type ColorValue } from "react-native";
-import { MarkdownView, measureMarkdown } from "../../modules/tinybot-core/MarkdownView";
+import { MarkdownView, measureMarkdown } from "../../modules/lorca-core/MarkdownView";
 import { Font, usePalette } from "./theme";
 
 export function Markdown({ text, color, maxWidth, size = Font.message }: { text: string; color: ColorValue; maxWidth: number; size?: number }) {

@@ -277,7 +277,7 @@ mod tests {
     /// An App with an identity on a scratch home, so this Device is a Runner, and one bot
     /// `b1` (Chef) assigned to it.
     fn scratch_app() -> ScratchApp {
-        let home = std::env::temp_dir().join(format!("tinybot-routines-{}", uuid::Uuid::new_v4()));
+        let home = std::env::temp_dir().join(format!("lorca-routines-{}", uuid::Uuid::new_v4()));
         let app = App::load(crate::config::Config { home: home.clone(), port: 0 }).unwrap();
         crate::identity::create(&app, Some("Workbench".into())).unwrap();
         let runner_id = app.this_device_id().unwrap();

@@ -145,9 +145,9 @@ pub async fn wait_for_callback(expected_state: &str, timeout: std::time::Duratio
             }
 
             let (status, body) = if error.is_some() || state.as_deref() != Some(expected_state) || code.is_none() {
-                ("400 Bad Request", "<html><body style=\"font-family:-apple-system\"><h2>Sign-in failed</h2><p>Go back to Tinybot and try again.</p></body></html>")
+                ("400 Bad Request", "<html><body style=\"font-family:-apple-system\"><h2>Sign-in failed</h2><p>Go back to Lorca and try again.</p></body></html>")
             } else {
-                ("200 OK", "<html><body style=\"font-family:-apple-system\"><h2>Signed in to ChatGPT</h2><p>You can close this window and return to Tinybot.</p></body></html>")
+                ("200 OK", "<html><body style=\"font-family:-apple-system\"><h2>Signed in to ChatGPT</h2><p>You can close this window and return to Lorca.</p></body></html>")
             };
             let response = format!(
                 "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",

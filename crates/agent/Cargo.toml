@@ -1,6 +1,6 @@
 [package]
-name = "tinybot-agent"
-description = "Agent loop, tools, and provider adapters for Tinybot (after pi-agent-core)"
+name = "lorca-agent"
+description = "Agent loop, tools, and provider adapters for Lorca (after pi-agent-core)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

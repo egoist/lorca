@@ -32,12 +32,12 @@ export default function PairScreen() {
   const scanned = useRef(false);
   const lastFailed = useRef<string | null>(null);
   const busy = phase !== "idle";
-  // A pairing code opened as a link (`tinybot://pair?…`, from the Camera app or a tap on the
+  // A pairing code opened as a link (`lorca://pair?…`, from the Camera app or a tap on the
   // Mac's code) lands here with its fields as params: pair with it right away.
   const params = useLocalSearchParams<{ relay?: string; id?: string; ek?: string; n?: string }>();
   useEffect(() => {
     if (!params.relay || !params.id || !params.ek || !params.n || inFlight.current) return;
-    const text = `tinybot://pair?relay=${encodeURIComponent(params.relay)}&id=${params.id}&ek=${params.ek}&n=${params.n}`;
+    const text = `lorca://pair?relay=${encodeURIComponent(params.relay)}&id=${params.id}&ek=${params.ek}&n=${params.n}`;
     setCode(text);
     void pair(text);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -91,7 +91,7 @@ export default function PairScreen() {
       setCode(text);
       void pair(text);
     } else {
-      Alert.alert("Nothing to paste", "Copy the pairing code from Tinybot on your Mac first (Devices › Pair a Device).");
+      Alert.alert("Nothing to paste", "Copy the pairing code from Lorca on your Mac first (Devices › Pair a Device).");
     }
   }
 
@@ -109,7 +109,7 @@ export default function PairScreen() {
           </View>
           <Text style={[styles.title, { color: p.label }]}>Pair with your Mac</Text>
           <Text style={[styles.subtitle, { color: p.secondaryLabel }]}>
-            Your bots run on your own machines. This phone joins them with a code from Tinybot on your Mac: open Devices, choose Pair a Device, and scan or copy the code.
+            Your bots run on your own machines. This phone joins them with a code from Lorca on your Mac: open Devices, choose Pair a Device, and scan or copy the code.
           </Text>
 
           <View style={[styles.card, { backgroundColor: p.cell }]}>
@@ -140,7 +140,7 @@ export default function PairScreen() {
                 <TextInput
                   value={code}
                   onChangeText={setCode}
-                  placeholder="tinybot://pair?relay=…"
+                  placeholder="lorca://pair?relay=…"
                   placeholderTextColor={p.tertiaryLabel}
                   style={[styles.input, styles.codeInput, { color: p.label }]}
                   autoCapitalize="none"

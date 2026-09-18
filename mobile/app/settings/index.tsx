@@ -91,7 +91,7 @@ export default function SettingsScreen() {
           <Row title="Relay" detail={relayUrl?.replace(/^https?:\/\//, "") ?? "—"} subtitle={relayConnected ? "Connected" : "Connecting…"} />
         </Section>
 
-        <Section title="Auto-review" footer={autoReview.is_enabled ? "Tinybot checks each plugin action before it runs and asks you first when needed. Add rules to customize what bots can do automatically; \"Ask first\" wins if rules conflict. Built-in safety checks always apply." : "Off: every plugin action that changes something asks you first."}>
+        <Section title="Auto-review" footer={autoReview.is_enabled ? "Lorca checks each plugin action before it runs and asks you first when needed. Add rules to customize what bots can do automatically; \"Ask first\" wins if rules conflict. Built-in safety checks always apply." : "Off: every plugin action that changes something asks you first."}>
           <ToggleRow title="Check actions before they run" value={autoReview.is_enabled} onValueChange={(v) => engine.setAutoReview({ ...autoReview, is_enabled: v })} />
           {autoReview.rules.map((rule) => (
             <Row key={rule.id} title={rule.text} detail={rule.behavior === "allow" ? "Allow automatically" : "Ask first"} onPress={() => editRule(rule.id)} />
@@ -122,7 +122,7 @@ export default function SettingsScreen() {
         </Section>
 
         <Text style={[styles.version, { color: p.tertiaryLabel }]}>
-          Tinybot {Application.nativeApplicationVersion ?? ""} ({Application.nativeBuildVersion ?? ""})
+          Lorca {Application.nativeApplicationVersion ?? ""} ({Application.nativeBuildVersion ?? ""})
         </Text>
       </ScrollView>
     </>

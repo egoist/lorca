@@ -2,26 +2,26 @@
 import PackageDescription
 
 let package = Package(
-    name: "Tinybot",
+    name: "Lorca",
     platforms: [.macOS(.v14)],
     targets: [
         // The Markdown parser from crates/markdown: the Rust static library and its C header,
         // built into Libraries/ by scripts/app.ts.
         .binaryTarget(
-            name: "TinybotMarkdownFFI",
-            path: "Libraries/TinybotMarkdownFFI.xcframework"
+            name: "LorcaMarkdownFFI",
+            path: "Libraries/LorcaMarkdownFFI.xcframework"
         ),
-        // The UniFFI Swift bindings over it, generated into Sources/TinybotMarkdown by the same step.
+        // The UniFFI Swift bindings over it, generated into Sources/LorcaMarkdown by the same step.
         .target(
-            name: "TinybotMarkdown",
-            dependencies: ["TinybotMarkdownFFI"],
-            path: "Sources/TinybotMarkdown",
+            name: "LorcaMarkdown",
+            dependencies: ["LorcaMarkdownFFI"],
+            path: "Sources/LorcaMarkdown",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .executableTarget(
-            name: "Tinybot",
-            dependencies: ["TinybotMarkdown"],
-            path: "Sources/Tinybot",
+            name: "Lorca",
+            dependencies: ["LorcaMarkdown"],
+            path: "Sources/Lorca",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
     ]

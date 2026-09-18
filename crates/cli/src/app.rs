@@ -246,12 +246,12 @@ impl App {
         self.machine_file().and_then(|m| m.dek().ok())
     }
 
-    /// Settings, then `TINYBOT_RELAY_URL`, then the URL pairing handed this Device, then, in
+    /// Settings, then `LORCA_RELAY_URL`, then the URL pairing handed this Device, then, in
     /// dev, the relay the dev loop runs on this machine.
     pub fn relay_url(&self) -> Option<String> {
         let from_settings = self.settings.lock().unwrap().effective_relay_url();
         from_settings
-            .or_else(|| std::env::var("TINYBOT_RELAY_URL").ok().filter(|s| !s.is_empty()))
+            .or_else(|| std::env::var("LORCA_RELAY_URL").ok().filter(|s| !s.is_empty()))
             .or_else(|| self.machine_file().and_then(|m| m.relay_url))
             .or_else(config::dev_relay_url)
     }
@@ -796,12 +796,12 @@ impl App {
 
     /// Adds a finished turn's usage to the chat's and tells the app.
     #[cfg(feature = "runner")]
-    pub fn record_usage(&self, chat_id: &str, model: &str, usage: &tinybot_agent::Usage, context_window: u64) {
+    pub fn record_usage(&self, chat_id: &str, model: &str, usage: &lorca_agent::Usage, context_window: u64) {
         let updated = {
             let mut state = self.state.lock().unwrap();
             let Some(chat) = state.chats.iter_mut().find(|c| c.meta.id == chat_id) else { return };
             let entry = chat.usage.get_or_insert_with(ChatUsage::default);
-            entry.context_tokens = tinybot_agent::estimate::context_tokens(usage);
+            entry.context_tokens = lorca_agent::estimate::context_tokens(usage);
             entry.context_window = context_window;
             entry.input_tokens += usage.input + usage.cache_read + usage.cache_write;
             entry.output_tokens += usage.output;

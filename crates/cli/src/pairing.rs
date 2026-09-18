@@ -19,9 +19,9 @@ const POLL: std::time::Duration = std::time::Duration::from_millis(1500);
 pub fn parse_pairing_string(text: &str) -> anyhow::Result<(String, String, String, String)> {
     let text = text.trim();
     let query = text
-        .strip_prefix("tinybot://pair?")
+        .strip_prefix("lorca://pair?")
         .or_else(|| text.split_once("pair?").map(|(_, q)| q))
-        .ok_or_else(|| anyhow::anyhow!("That is not a Tinybot pairing string"))?;
+        .ok_or_else(|| anyhow::anyhow!("That is not a Lorca pairing string"))?;
     let mut relay = None;
     let mut id = None;
     let mut ek = None;
@@ -88,7 +88,7 @@ pub async fn start(app: Arc<App>) -> anyhow::Result<(String, String)> {
     let ephemeral = crypto_box::SecretKey::generate(&mut rand::rngs::OsRng);
     let ek = keys::b64(ephemeral.public_key().as_bytes());
     let pairing_string = format!(
-        "tinybot://pair?relay={}&id={}&ek={}&n={}",
+        "lorca://pair?relay={}&id={}&ek={}&n={}",
         percent_encode(&url),
         percent_encode(&identity.pubkey()),
         percent_encode(&ek),

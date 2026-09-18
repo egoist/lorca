@@ -12,7 +12,7 @@ const uuid = () => `m-${++nextId}`;
 describe("pairing", () => {
   test("parses the string the Mac shows", () => {
     const target = parsePairingString(
-      " tinybot://pair?relay=http%3A%2F%2F127.0.0.1%3A18790%2F&id=Clup-vXLfBF6T2JkKpLqNOpyE9hdQbqXjrIWfdDvLbs&ek=nAanQrXTSxfK1tf7m3V2Fg-65OL84r6MeqmQmWw5uhw&n=1qUeEODuTz_A2y5jSZdBqQ \n",
+      " lorca://pair?relay=http%3A%2F%2F127.0.0.1%3A18790%2F&id=Clup-vXLfBF6T2JkKpLqNOpyE9hdQbqXjrIWfdDvLbs&ek=nAanQrXTSxfK1tf7m3V2Fg-65OL84r6MeqmQmWw5uhw&n=1qUeEODuTz_A2y5jSZdBqQ \n",
     );
     expect(target).toEqual({
       relay: "http://127.0.0.1:18790",
@@ -23,8 +23,8 @@ describe("pairing", () => {
   });
 
   test("rejects other text", () => {
-    expect(() => parsePairingString("hello")).toThrow("not a Tinybot pairing string");
-    expect(() => parsePairingString("tinybot://pair?relay=x&id=y")).toThrow("missing a field");
+    expect(() => parsePairingString("hello")).toThrow("not a Lorca pairing string");
+    expect(() => parsePairingString("lorca://pair?relay=x&id=y")).toThrow("missing a field");
   });
 });
 

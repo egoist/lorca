@@ -86,7 +86,7 @@ export interface Routine {
   /** "Weekdays at 9:00 AM" */
   schedule_text: string;
   is_enabled: boolean;
-  /** Why Tinybot paused it, when it did: "away". */
+  /** Why Lorca paused it, when it did: "away". */
   paused_reason?: string;
   last_run_at?: number;
   /** "sent", "pass", or "error". */

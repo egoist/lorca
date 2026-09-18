@@ -14,8 +14,8 @@ use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig
 use rmcp::transport::{StreamableHttpClientTransport, TokioChildProcess};
 use rmcp::{RoleClient, ServiceExt};
 use serde_json::{json, Value};
-use tinybot_agent::agent_loop::ToolExecutionMode;
-use tinybot_agent::{ContentPart, Tool, ToolError, ToolResult, ToolUpdateFn};
+use lorca_agent::agent_loop::ToolExecutionMode;
+use lorca_agent::{ContentPart, Tool, ToolError, ToolResult, ToolUpdateFn};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_util::sync::CancellationToken;
 
@@ -120,7 +120,7 @@ impl Pool {
 
 async fn connect(app: &Arc<App>, plugin: &Installed, name: &str, spec: &ServerSpec, values: &BTreeMap<String, String>) -> Result<Server, String> {
     let mut implementation = Implementation::default();
-    implementation.name = "Tinybot".into();
+    implementation.name = "Lorca".into();
     implementation.version = crate::config::VERSION.into();
     let mut info = ClientConfig::default();
     info.client_info = implementation;
@@ -458,7 +458,7 @@ impl ClientHint {
 /// The server's own `WWW-Authenticate` challenge, which names its resource metadata (GitHub
 /// keeps it under the server's path, where a blind probe never looks).
 async fn challenge_of(app: &Arc<App>, url: &str) -> Option<String> {
-    let probe = json!({ "jsonrpc": "2.0", "id": 0, "method": "initialize", "params": { "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": { "name": "Tinybot", "version": crate::config::VERSION } } });
+    let probe = json!({ "jsonrpc": "2.0", "id": 0, "method": "initialize", "params": { "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": { "name": "Lorca", "version": crate::config::VERSION } } });
     let response = app.mcp.http.post(url).header("accept", "application/json, text/event-stream").json(&probe).send().await.ok()?;
     if response.status().as_u16() != 401 {
         return None;
@@ -471,7 +471,7 @@ async fn sign_in(app: &Arc<App>, url: &str, scopes: &[String], name: &str, clien
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     let redirect = format!("http://127.0.0.1:{port}/callback");
     let mut state = OAuthState::new(url, Some(app.mcp.http.clone())).await.map_err(|e| format!("{name}: {e}"))?;
-    let mut request = AuthorizationRequest::new(redirect).with_scopes(scopes.iter().cloned()).with_client_name("Tinybot").with_application_type("native");
+    let mut request = AuthorizationRequest::new(redirect).with_scopes(scopes.iter().cloned()).with_client_name("Lorca").with_application_type("native");
     if let Some(challenge) = challenge_of(app, url).await {
         request = request.with_challenge(challenge);
     }
@@ -486,7 +486,7 @@ async fn sign_in(app: &Arc<App>, url: &str, scopes: &[String], name: &str, clien
         other => format!("{name} does not offer a sign-in: {other}"),
     })?;
     let authorize_url = state.get_authorization_url().await.map_err(|e| e.to_string())?;
-    if std::env::var("TINYBOT_OAUTH_NO_BROWSER").ok().as_deref() == Some("1") {
+    if std::env::var("LORCA_OAUTH_NO_BROWSER").ok().as_deref() == Some("1") {
         // Tests: fetch the page ourselves; a fake server redirects straight to the callback.
         let http = app.mcp.http.clone();
         let url = authorize_url.clone();
@@ -521,9 +521,9 @@ async fn wait_for_callback(listener: tokio::net::TcpListener, port: u16, name: &
         }
         let failed = path.contains("error=");
         let body = if failed {
-            "<html><body style=\"font-family:-apple-system\"><h2>Sign-in failed</h2><p>Go back to Tinybot and try again.</p></body></html>".to_string()
+            "<html><body style=\"font-family:-apple-system\"><h2>Sign-in failed</h2><p>Go back to Lorca and try again.</p></body></html>".to_string()
         } else {
-            format!("<html><body style=\"font-family:-apple-system\"><h2>Signed in to {name}</h2><p>You can close this window and return to Tinybot.</p></body></html>")
+            format!("<html><body style=\"font-family:-apple-system\"><h2>Signed in to {name}</h2><p>You can close this window and return to Lorca.</p></body></html>")
         };
         let response = format!(
             "HTTP/1.1 {}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -744,7 +744,7 @@ async fn persist_refreshed(app: &Arc<App>, plugin_id: &str, server: &str, auth: 
     }
 }
 
-/// `create_issue · repo: tinybot, title: Fix the relay`
+/// `create_issue · repo: lorca, title: Fix the relay`
 fn call_summary(tool: &str, args: &Value) -> String {
     let mut parts = Vec::new();
     if let Some(object) = args.as_object() {
@@ -859,7 +859,7 @@ mod tests {
         assert_eq!(tool_name("my-server", "weird.name/x"), "my-server__weird_name_x");
         assert_eq!(tool_name("p", &"x".repeat(100)).len(), 64);
         // serde_json keeps object keys sorted, so the summary lists them alphabetically.
-        assert_eq!(call_summary("create_issue", &json!({ "repo": "tinybot", "title": "Fix   the relay", "body": "x".repeat(80) })), format!("create_issue · body: {}…, repo: tinybot, title: Fix the relay", "x".repeat(60)));
+        assert_eq!(call_summary("create_issue", &json!({ "repo": "lorca", "title": "Fix   the relay", "body": "x".repeat(80) })), format!("create_issue · body: {}…, repo: lorca, title: Fix the relay", "x".repeat(60)));
         assert_eq!(call_summary("get_me", &json!({})), "get_me");
         assert_eq!(Decision::parse("always"), Some(Decision::Always));
         assert_eq!(Decision::parse("nope"), None);

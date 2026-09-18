@@ -1,6 +1,6 @@
 //! Attachments: files a Device sends with a message. The bytes leave as a `file` blob under
 //! the attachment's id, encrypted with the account key like a chat op, and land in
-//! `~/.tinybot/files/<id>` on every Device that needs them: the Runner copies them into the
+//! `~/.lorca/files/<id>` on every Device that needs them: the Runner copies them into the
 //! bot's working directory for its turn, and the app shows them in the transcript.
 
 use std::path::{Path, PathBuf};
@@ -9,7 +9,7 @@ use std::sync::Arc;
 #[cfg(feature = "runner")]
 use base64::Engine;
 #[cfg(feature = "runner")]
-use tinybot_agent::ContentPart;
+use lorca_agent::ContentPart;
 
 use crate::app::App;
 use crate::model::Attachment;

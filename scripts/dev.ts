@@ -21,7 +21,7 @@ let building = false
 let queued = false
 let stopping = false
 
-async function tinybotPids(): Promise<number[]> {
+async function lorcaPids(): Promise<number[]> {
   const proc = Bun.spawn(["pgrep", "-x", APP_NAME], { stdout: "pipe", stderr: "pipe" })
   const text = await new Response(proc.stdout).text()
   await proc.exited
@@ -39,31 +39,31 @@ function killPid(pid: number, signal: NodeJS.Signals) {
   }
 }
 
-/** Quit every Tinybot process, not only the pid this script spawned last. */
+/** Quit every Lorca process, not only the pid this script spawned last. */
 async function stopApp() {
   const current = app
   app = null
   if (current?.pid) killPid(current.pid, "SIGTERM")
 
-  let pids = await tinybotPids()
+  let pids = await lorcaPids()
   for (const pid of pids) killPid(pid, "SIGTERM")
 
   for (let attempt = 0; attempt < 40; attempt++) {
-    pids = await tinybotPids()
+    pids = await lorcaPids()
     if (pids.length === 0) {
       if (current) await Promise.race([current.exited, Bun.sleep(250)])
       return
     }
     if (attempt === 10) {
-      log(color.yellow(`Tinybot still running (${pids.join(", ")}) — sending SIGKILL`))
+      log(color.yellow(`Lorca still running (${pids.join(", ")}) — sending SIGKILL`))
       for (const pid of pids) killPid(pid, "SIGKILL")
     }
     await Bun.sleep(50)
   }
 
-  pids = await tinybotPids()
+  pids = await lorcaPids()
   if (pids.length > 0) {
-    log(color.red(`could not stop Tinybot pids ${pids.join(", ")}`))
+    log(color.red(`could not stop Lorca pids ${pids.join(", ")}`))
   }
 }
 
@@ -77,7 +77,7 @@ async function relayAnswers(): Promise<boolean> {
   }
 }
 
-/** The pid of a tinybot-relay listening on the dev port that this loop did not start. */
+/** The pid of a lorca-relay listening on the dev port that this loop did not start. */
 async function strayRelayPid(): Promise<number | null> {
   const proc = Bun.spawn(["lsof", "-ti", `tcp:${RELAY_PORT}`, "-sTCP:LISTEN"], { stdout: "pipe", stderr: "pipe" })
   const text = await new Response(proc.stdout).text()
@@ -88,13 +88,13 @@ async function strayRelayPid(): Promise<number | null> {
     const ps = Bun.spawn(["ps", "-o", "command=", "-p", String(pid)], { stdout: "pipe", stderr: "pipe" })
     const command = await new Response(ps.stdout).text()
     await ps.exited
-    if (command.includes("tinybot-relay")) return pid
+    if (command.includes("lorca-relay")) return pid
   }
   return null
 }
 
 /** A local relay on every interface, so a phone on this network can pair through it. The dev
- * app (TINYBOT_DEV=1) defaults its relay URL to this Mac's LAN IP on this port. A relay left
+ * app (LORCA_DEV=1) defaults its relay URL to this Mac's LAN IP on this port. A relay left
  * over from an earlier loop is replaced: it may predate the blob kinds the CLI now syncs, and
  * the CLI fails every cycle against one that rejects them. */
 async function startRelay() {
@@ -111,13 +111,13 @@ async function startRelay() {
   }
   // Build, then run the binary itself. Through `cargo run` the stop signal reaches cargo and
   // not the relay, which lives on orphaned and is what the next loop finds "already listening".
-  const build = Bun.spawn(["cargo", "build", "-q", "-p", "tinybot-relay"], { cwd: ROOT, stdin: "ignore", stdout: "inherit", stderr: "inherit" })
+  const build = Bun.spawn(["cargo", "build", "-q", "-p", "lorca-relay"], { cwd: ROOT, stdin: "ignore", stdout: "inherit", stderr: "inherit" })
   if ((await build.exited) !== 0) {
     log(color.red("relay build failed — not started"))
     return
   }
   relay = Bun.spawn(
-    [join(ROOT, "target", "debug", "tinybot-relay"), "--bind", `0.0.0.0:${RELAY_PORT}`, "--db", join(ROOT, "target", "tinybot-relay.db")],
+    [join(ROOT, "target", "debug", "lorca-relay"), "--bind", `0.0.0.0:${RELAY_PORT}`, "--db", join(ROOT, "target", "lorca-relay.db")],
     {
       cwd: ROOT,
       stdin: "ignore",
@@ -165,11 +165,11 @@ async function ttyPath(): Promise<string> {
  * Info.plist, and aborts the app when one is missing there (Kero has no speech string, so the
  * Dictate button crashed). Through `open` the app is its own responsible process and TCC reads
  * the bundle's own Info.plist. `open -W` exits when the app does; its environment is not
- * inherited, so TINYBOT_DEV goes through `--env`. */
+ * inherited, so LORCA_DEV goes through `--env`. */
 async function startApp() {
   const bundle = bundlePath(CONFIG)
   const output = (await ttyPath()) || join(PACKAGE_DIR, ".build", "app.log")
-  app = Bun.spawn(["open", "-n", "-W", "--stdout", output, "--stderr", output, "--env", "TINYBOT_DEV=1", bundle], {
+  app = Bun.spawn(["open", "-n", "-W", "--stdout", output, "--stderr", output, "--env", "LORCA_DEV=1", bundle], {
     stdin: "ignore",
     stdout: "inherit",
     stderr: "inherit",

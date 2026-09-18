@@ -1,6 +1,6 @@
-# Tinybot
+# Lorca
 
-Tinybot is a Grok bot alternative: a native macOS AppKit app and a Rust CLI. The CLI is a localhost websocket service and the agent loop; the app is the UI for that CLI and launches it from its own bundle.
+Lorca is a Grok bot alternative: a native macOS AppKit app and a Rust CLI. The CLI is a localhost websocket service and the agent loop; the app is the UI for that CLI and launches it from its own bundle.
 
 You create bots, talk to them 1:1, or put them in a group chat. Bots can hand work to each other and orchestrate, in the same spirit as Grok Bot.
 
@@ -22,7 +22,7 @@ Identity is a local key pair. Devices pair to each other. Traffic to the network
 ```bash
 bun run dev          # builds the CLI and the app, launches the app, rebuilds on change; runs a relay on 0.0.0.0:8787
 bun run mobile       # Expo dev server for the phone app (bun run mobile:ios builds the dev client)
-bun run relay        # a local relay on 0.0.0.0:8787 (set TINYBOT_RELAY_URL to use it)
+bun run relay        # a local relay on 0.0.0.0:8787 (set LORCA_RELAY_URL to use it)
 cargo test           # agent loop, crypto, and SSE tests
 bun run reset        # stop everything and wipe identity, credentials, chats, prefs (-y, --build, --relay)
 ```

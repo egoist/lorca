@@ -6,15 +6,15 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use tinybot_agent::agent_loop::{
+use lorca_agent::agent_loop::{
     run_agent_loop_continue, AgentContext, AgentLoopConfig, EventSink, LoopHooks, PrepareNextTurnContext, ToolExecutionMode, TurnUpdate,
 };
-use tinybot_agent::compaction::{self, CompactionSettings};
-use tinybot_agent::estimate::{context_tokens, estimate_context_tokens, estimate_text_tokens};
-use tinybot_agent::provider::{is_server_tool, AssistantEvent, WEB_FETCH_TOOL};
-use tinybot_agent::retry::{is_context_overflow, RetryPolicy};
-use tinybot_agent::{LlmMessage, Provider};
-use tinybot_agent::{
+use lorca_agent::compaction::{self, CompactionSettings};
+use lorca_agent::estimate::{context_tokens, estimate_context_tokens, estimate_text_tokens};
+use lorca_agent::provider::{is_server_tool, AssistantEvent, WEB_FETCH_TOOL};
+use lorca_agent::retry::{is_context_overflow, RetryPolicy};
+use lorca_agent::{LlmMessage, Provider};
+use lorca_agent::{
     AgentEvent, AgentMessage, AssistantMessage, AssistantPart, ContentPart, StopReason, Tool, ToolCall, ToolError,
     ToolResult, ToolResultMessage, ToolUpdateFn, UserMessage,
 };
@@ -33,12 +33,12 @@ use crate::runtime::{chat_source, name_of, prime_names, start_turn, TurnOutcome}
 /// so nothing is dropped without a summary; with compaction off, older rows are left out.
 const MAX_CONTEXT_MESSAGES: usize = 400;
 
-/// Compaction as configured on this Runner: pi's defaults, off with `TINYBOT_COMPACTION=0`.
+/// Compaction as configured on this Runner: pi's defaults, off with `LORCA_COMPACTION=0`.
 /// With the model's window known, one summarization request carries at most the window less
 /// twice the reserve, and a longer history is summarized in pieces.
 fn compaction_settings(window: u64) -> CompactionSettings {
     let mut settings = CompactionSettings::default();
-    if std::env::var("TINYBOT_COMPACTION").ok().as_deref() == Some("0") {
+    if std::env::var("LORCA_COMPACTION").ok().as_deref() == Some("0") {
         settings.enabled = false;
     }
     if window > 0 {
@@ -47,9 +47,9 @@ fn compaction_settings(window: u64) -> CompactionSettings {
     settings
 }
 
-/// The memory flush before a compaction, off with `TINYBOT_MEMORY_FLUSH=0`.
+/// The memory flush before a compaction, off with `LORCA_MEMORY_FLUSH=0`.
 fn memory_flush_enabled() -> bool {
-    std::env::var("TINYBOT_MEMORY_FLUSH").ok().as_deref() != Some("0")
+    std::env::var("LORCA_MEMORY_FLUSH").ok().as_deref() != Some("0")
 }
 
 // MARK: - The turn
@@ -152,7 +152,7 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
     tools.extend(plugin_tools);
     tools.extend(memory_tools(&store, &chat));
     tools.push(Arc::new(Recall { app: app.clone(), store: store.clone(), bot: bot.clone() }));
-    tools.extend(tinybot_agent::tools::coding_tools(workdir.clone()));
+    tools.extend(lorca_agent::tools::coding_tools(workdir.clone()));
 
     let sink = Arc::new(TurnSink(std::sync::Mutex::new(TurnState {
         app: app.clone(),
@@ -477,7 +477,7 @@ async fn memory_flush(
     let chunk = compaction::chunk_by_tokens(history, settings.max_input_tokens).pop().unwrap_or(history);
     let store = MemoryStore::for_bot(&app.config.home, bot);
     let index = store.load_index();
-    let mut system = format!("You are {}, a bot in Tinybot, doing housekeeping on your own memory.\n", bot.name);
+    let mut system = format!("You are {}, a bot in Lorca, doing housekeeping on your own memory.\n", bot.name);
     if !index.text.trim().is_empty() {
         system.push_str(&format!("\nYour memory (MEMORY.md) so far:\n{}\n", index.text));
     }
@@ -875,7 +875,7 @@ fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job, store: &Memo
     let runner = app.device(&bot.runner_id);
     let workdir = bot.working_directory(&app.config.home);
     let mut prompt = String::new();
-    prompt.push_str(&format!("You are {}, a bot in Tinybot. {}\n", bot.name, bot.label));
+    prompt.push_str(&format!("You are {}, a bot in Lorca. {}\n", bot.name, bot.label));
     if !bot.description.trim().is_empty() {
         prompt.push_str(&format!("{}\n", bot.description.trim()));
     }
@@ -949,8 +949,8 @@ fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job, store: &Memo
          the answer; headings are for long reports the user asked for. Ask one question when something is unclear. \
          Markdown renders. Do not invent APIs, files, or results.\n",
     );
-    prompt.push_str(&format!("\nTools on your Runner: {}\n", tinybot_agent::tools::coding_tools_snippet()));
-    for guideline in tinybot_agent::tools::coding_tools_guidelines() {
+    prompt.push_str(&format!("\nTools on your Runner: {}\n", lorca_agent::tools::coding_tools_snippet()));
+    for guideline in lorca_agent::tools::coding_tools_guidelines() {
         prompt.push_str(&format!("- {guideline}\n"));
     }
     prompt.push_str(&format!(
@@ -2140,7 +2140,7 @@ mod tests {
     }
 
     fn scratch_app() -> ScratchApp {
-        let home = std::env::temp_dir().join(format!("tinybot-runtime-{}", uuid::Uuid::new_v4()));
+        let home = std::env::temp_dir().join(format!("lorca-runtime-{}", uuid::Uuid::new_v4()));
         let app = App::load(crate::config::Config { home: home.clone(), port: 0 }).unwrap();
         ScratchApp(app, home)
     }

@@ -70,7 +70,7 @@ From the stream it reads `text_delta`, `thinking_delta`, `signature_delta` (as `
 
 An `error` event and HTTP errors become an error message with the server's `error.message`.
 
-`DEEPSEEK_API_KEY=… cargo test -p tinybot-agent live_deepseek -- --ignored --nocapture` runs a search followed by a function call and continues the turn with the seals and server blocks replayed.
+`DEEPSEEK_API_KEY=… cargo test -p lorca-agent live_deepseek -- --ignored --nocapture` runs a search followed by a function call and continues the turn with the seals and server blocks replayed.
 
 ### Thinking levels
 

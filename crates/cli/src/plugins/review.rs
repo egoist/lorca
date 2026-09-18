@@ -7,9 +7,9 @@ use std::sync::Arc;
 
 use futures::StreamExt;
 use serde_json::Value;
-use tinybot_agent::provider::AssistantAccumulator;
-use tinybot_agent::types::{LlmMessage, StopReason, UserMessage};
-use tinybot_agent::{ModelRequest, RequestOptions};
+use lorca_agent::provider::AssistantAccumulator;
+use lorca_agent::types::{LlmMessage, StopReason, UserMessage};
+use lorca_agent::{ModelRequest, RequestOptions};
 use tokio_util::sync::CancellationToken;
 
 use crate::app::App;
@@ -44,7 +44,7 @@ pub async fn decide(app: &Arc<App>, bot: &Bot, chat_id: &str, plugin_id: &str, p
     if !auto_review.is_enabled {
         return Outcome::Ask { reason: None };
     }
-    let provider = match crate::providers::provider_for(app, &bot.provider, bot.model.as_deref(), Some(tinybot_agent::types::ThinkingLevel::Off)) {
+    let provider = match crate::providers::provider_for(app, &bot.provider, bot.model.as_deref(), Some(lorca_agent::types::ThinkingLevel::Off)) {
         Ok(provider) => provider,
         Err(error) => return Outcome::Ask { reason: Some(format!("Auto-review could not check this action ({error}).")) },
     };

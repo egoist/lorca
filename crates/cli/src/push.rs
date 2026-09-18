@@ -117,8 +117,8 @@ mod tests {
     #[test]
     fn the_extension_vector_opens() {
         let dek = crate::keys::unb64_32("yMfGxcTDwsHAv769vLu6ubi3trW0s7KxsK-urayrqqk").unwrap();
-        assert_eq!(crate::keys::b64(&crate::keys::push_key(&dek)), "4S6spfEIVQIjNxrSAxSE_fT_ICUi_yfRbhdledV4PUg");
-        let sealed = crate::keys::unb64("51i6ruwzJ6EZI-b06mpyORvBFsSPytbDA3F_SaGtd9xNr5Vi5VcBMCr5sDC4FGtrNjSCg5kQPOO1WV-2-veNuCV5LGj1jjs3Ae_oPzeKSEjvGxr2GoG7-eECTFTIry9m4WzKeRqbgDwqHpaBAIzGDEiyc2dHKO78zTLldd7s").unwrap();
+        assert_eq!(crate::keys::b64(&crate::keys::push_key(&dek)), "unjACZuGtiiK-SdODWMW3_WnbcuTvn9uzRsw0n7qHus");
+        let sealed = crate::keys::unb64("cPVJx5Kj3f-rxYhZNRuI61AeE75VVo89I2TVTkq372GepHEWAdS9QxGYMPLesVR2AjaBWI7r0-WzY4a4lXRbzHEIG1-8JjyetlxTUxPYBYTTzoOPGTq4Dfu-AIoi1lSRugJWU9eHX2KS_ybQSp8Tu2yiEZQLaMe22zjax9uk").unwrap();
         let notice = open(&dek, &sealed).unwrap();
         assert_eq!((notice.title.as_str(), notice.subtitle.as_deref(), notice.chat_id.as_str()), ("Chef", Some("Standup"), "chat-1"));
         assert_eq!(notice.body, "Sent the three flagged invoices.");

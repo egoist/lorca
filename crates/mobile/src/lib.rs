@@ -1,4 +1,4 @@
-//! Tinybot's Device core for the phone. The app starts one `Core` with a folder to keep things
+//! Lorca's Device core for the phone. The app starts one `Core` with a folder to keep things
 //! in and the facts about the phone, then speaks the same JSON API the desktop app speaks over
 //! the local websocket: `request(method, params)` answers with `{ "result": … }` or
 //! `{ "error": { "message": … } }`, and every event on the core's bus reaches the listener as
@@ -8,14 +8,14 @@
 uniffi::setup_scaffolding!();
 
 /// Linked so the phone's bindings carry the Markdown parser's FFI beside the core's.
-pub use tinybot_markdown::parse_markdown;
+pub use lorca_markdown::parse_markdown;
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use tinybot::app::App;
-use tinybot::config::Config;
-use tinybot::events::Event;
+use lorca::app::App;
+use lorca::config::Config;
+use lorca::events::Event;
 
 /// Where events go. Implemented by the app; called from the core's threads.
 #[uniffi::export(with_foreign)]
@@ -44,8 +44,8 @@ pub struct PushNotice {
 /// the process. `None` when this phone is not paired or the push is not for this account.
 #[uniffi::export]
 pub fn push_open(home: String, sealed: String) -> Option<PushNotice> {
-    let machine: tinybot::keys::MachineFile = tinybot::config::read_json(&Config { home: PathBuf::from(home), port: 0 }.machine_path())?;
-    let notice = tinybot::push::open(&machine.dek().ok()?, &tinybot::keys::unb64(&sealed).ok()?).ok()?;
+    let machine: lorca::keys::MachineFile = lorca::config::read_json(&Config { home: PathBuf::from(home), port: 0 }.machine_path())?;
+    let notice = lorca::push::open(&machine.dek().ok()?, &lorca::keys::unb64(&sealed).ok()?).ok()?;
     Some(PushNotice { title: notice.title, subtitle: notice.subtitle, body: notice.body, chat_id: notice.chat_id })
 }
 
@@ -64,12 +64,12 @@ impl Core {
     #[uniffi::constructor]
     pub fn start(home: String, name: String, os: String, os_version: String, model: String, listener: Arc<dyn EventListener>) -> Result<Arc<Self>, CoreError> {
         let _ = tracing_subscriber::fmt()
-            .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "tinybot=info".into()))
+            .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "lorca=info".into()))
             .with_target(false)
             .with_ansi(false)
             .with_writer(std::io::stderr)
             .try_init();
-        tinybot::model::set_host_facts(name, os, os_version, model);
+        lorca::model::set_host_facts(name, os, os_version, model);
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
@@ -77,8 +77,8 @@ impl Core {
             .map_err(|e| CoreError::Failed(e.to_string()))?;
         let app = App::load(Config { home: PathBuf::from(home), port: 0 }).map_err(|e| CoreError::Failed(e.to_string()))?;
         let _guard = runtime.enter();
-        tinybot::runtime::prime_names(&app);
-        runtime.spawn(tinybot::sync::run(app.clone()));
+        lorca::runtime::prime_names(&app);
+        runtime.spawn(lorca::sync::run(app.clone()));
         runtime.spawn(forward_events(app.clone(), listener));
         Ok(Arc::new(Core { app, runtime }))
     }
@@ -89,7 +89,7 @@ impl Core {
         let params: serde_json::Value = if params.trim().is_empty() { serde_json::Value::Null } else { serde_json::from_str(&params).unwrap_or(serde_json::Value::Null) };
         let app = self.app.clone();
         let response = self.runtime.block_on(async move {
-            match tinybot::api::dispatch(&app, &method, params).await {
+            match lorca::api::dispatch(&app, &method, params).await {
                 Ok(result) => serde_json::json!({ "result": result }),
                 Err(message) => serde_json::json!({ "error": { "message": message } }),
             }
@@ -100,7 +100,7 @@ impl Core {
     /// The key pushes are sealed under, for the iOS notification service extension, which
     /// runs outside the app and reads it from the shared keychain. `None` until paired.
     pub fn push_key(&self) -> Option<Vec<u8>> {
-        self.app.dek().map(|dek| tinybot::keys::push_key(&dek).to_vec())
+        self.app.dek().map(|dek| lorca::keys::push_key(&dek).to_vec())
     }
 
     /// The app came to the foreground: sync now rather than after the backoff.
@@ -145,7 +145,7 @@ mod tests {
 
     #[test]
     fn the_core_answers_the_api_and_forwards_events() {
-        let home = std::env::temp_dir().join(format!("tinybot-mobile-{}", std::process::id()));
+        let home = std::env::temp_dir().join(format!("lorca-mobile-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
         let listener = Arc::new(Collect(Mutex::new(Vec::new())));
         let core = Core::start(home.display().to_string(), "Phone".into(), "ios".into(), "iOS 26".into(), "iPhone17,1".into(), listener.clone()).unwrap();

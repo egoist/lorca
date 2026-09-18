@@ -110,7 +110,7 @@ pub fn router(state: AppState) -> Router {
 }
 
 async fn health() -> Json<Value> {
-    Json(json!({ "ok": true, "service": "tinybot-relay" }))
+    Json(json!({ "ok": true, "service": "lorca-relay" }))
 }
 
 fn random_nonce(len: usize) -> String {

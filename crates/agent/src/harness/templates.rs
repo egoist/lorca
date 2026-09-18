@@ -173,7 +173,7 @@ mod tests {
 
     #[test]
     fn loads_templates_with_or_without_frontmatter() {
-        let root = std::env::temp_dir().join(format!("tinybot-templates-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("lorca-templates-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("review.md"), "---\ndescription: Review a diff\nargument-hint: <path>\n---\nReview $1 carefully.").unwrap();

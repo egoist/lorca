@@ -88,7 +88,7 @@ pub struct Bot {
     pub thinking: Option<String>,
     pub instructions: String,
     /// Working directory for the coding tools on the Runner. Defaults to
-    /// `<TINYBOT_HOME>/workspaces/<bot id>`.
+    /// `<LORCA_HOME>/workspaces/<bot id>`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workdir: Option<String>,
     pub created_at: f64,
@@ -133,12 +133,12 @@ impl AutoReview {
 
 impl Bot {
     /// Where this bot's tools run, keyed by id so renames never move files. Created on first use.
-    pub fn working_directory(&self, tinybot_home: &std::path::Path) -> std::path::PathBuf {
+    pub fn working_directory(&self, lorca_home: &std::path::Path) -> std::path::PathBuf {
         let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
         match self.workdir.as_deref().map(str::trim).filter(|w| !w.is_empty()) {
             Some(dir) if dir.starts_with('~') => home.join(dir.trim_start_matches('~').trim_start_matches('/')),
             Some(dir) => std::path::PathBuf::from(dir),
-            None => tinybot_home.join("workspaces").join(&self.id),
+            None => lorca_home.join("workspaces").join(&self.id),
         }
     }
 }
@@ -152,7 +152,7 @@ pub enum Author {
 }
 
 /// A file sent with a message. Its bytes travel as a `file` blob whose id is this id,
-/// encrypted with the account key; Devices keep a copy under `~/.tinybot/files/<id>`.
+/// encrypted with the account key; Devices keep a copy under `~/.lorca/files/<id>`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Attachment {
     pub id: String,
@@ -211,7 +211,7 @@ pub enum Body {
         plugin_id: String,
         plugin_name: String,
         tool: String,
-        /// One line about the call: "create_issue · repo: tinybot, title: …".
+        /// One line about the call: "create_issue · repo: lorca, title: …".
         summary: String,
         #[serde(default)]
         arguments: serde_json::Value,
@@ -386,7 +386,7 @@ pub struct Routine {
     /// How the last run ended: `sent`, `pass`, or `error`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_outcome: Option<String>,
-    /// Why Tinybot paused it, when it did: `away`.
+    /// Why Lorca paused it, when it did: `away`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub paused_reason: Option<String>,
     pub created_at: f64,

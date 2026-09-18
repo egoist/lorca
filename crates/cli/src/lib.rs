@@ -1,7 +1,7 @@
-//! Tinybot's Device core, and, with the `runner` feature, the Runner: keys, the relay sync,
-//! jobs and rooms, questions to other Runners, and the JSON API the apps speak. The `tinybot`
+//! Lorca's Device core, and, with the `runner` feature, the Runner: keys, the relay sync,
+//! jobs and rooms, questions to other Runners, and the JSON API the apps speak. The `lorca`
 //! binary adds the local websocket server and the command line; the phone links the core
-//! alone through `tinybot-mobile`.
+//! alone through `lorca-mobile`.
 
 pub mod api;
 pub mod app;

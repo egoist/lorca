@@ -220,7 +220,7 @@ export function markRead(chatId: string) {
   const chat = chatById(chatId);
   if (!chat || chat.unread_count === 0) return;
   useStore.setState((s) => ({ chats: s.chats.map((c) => (c.id === chatId ? { ...c, unread_count: 0 } : c)) }));
-  void import("../../modules/tinybot-core").then(({ request }) => request("chats.mark_read", { chat_id: chatId }).catch(() => {}));
+  void import("../../modules/lorca-core").then(({ request }) => request("chats.mark_read", { chat_id: chatId }).catch(() => {}));
 }
 
 export function markFile(id: string, uri: string) {

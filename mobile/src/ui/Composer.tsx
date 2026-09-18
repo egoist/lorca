@@ -178,7 +178,7 @@ export function Composer({
   async function takePhoto() {
     const permission = await ImagePicker.requestCameraPermissionsAsync();
     if (!permission.granted) {
-      Alert.alert("Camera access is off", "Allow the camera for Tinybot in Settings to take a photo.", [
+      Alert.alert("Camera access is off", "Allow the camera for Lorca in Settings to take a photo.", [
         { text: "Settings", onPress: () => void Linking.openSettings() },
         { text: "OK", style: "cancel" },
       ]);
@@ -271,7 +271,7 @@ export function Composer({
     }
     const permission = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
     if (!permission.granted) {
-      Alert.alert("Dictation needs the microphone", "Allow the microphone and speech recognition for Tinybot in Settings.", [
+      Alert.alert("Dictation needs the microphone", "Allow the microphone and speech recognition for Lorca in Settings.", [
         { text: "Settings", onPress: () => void Linking.openSettings() },
         { text: "OK", style: "cancel" },
       ]);

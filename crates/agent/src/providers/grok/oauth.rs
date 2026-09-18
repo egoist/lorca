@@ -19,7 +19,7 @@ pub const ISSUER: &str = "https://auth.x.ai";
 /// `grok-cli:access` and `api:access` are what let the token call `api.x.ai`.
 pub const SCOPES: &str = "openid profile email offline_access grok-cli:access api:access";
 /// Attribution xAI asks clients to send on the authorize URL.
-pub const REFERRER: &str = "tinybot";
+pub const REFERRER: &str = "lorca";
 
 fn b64url(bytes: &[u8]) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
@@ -207,8 +207,8 @@ fn preflight_response() -> String {
     )
 }
 
-const SUCCESS_PAGE: &str = "<html><body style=\"font-family:-apple-system\"><h2>Signed in to Grok</h2><p>You can close this window and return to Tinybot.</p></body></html>";
-const FAILURE_PAGE: &str = "<html><body style=\"font-family:-apple-system\"><h2>Sign-in failed</h2><p>Go back to Tinybot and try again.</p></body></html>";
+const SUCCESS_PAGE: &str = "<html><body style=\"font-family:-apple-system\"><h2>Signed in to Grok</h2><p>You can close this window and return to Lorca.</p></body></html>";
+const FAILURE_PAGE: &str = "<html><body style=\"font-family:-apple-system\"><h2>Sign-in failed</h2><p>Go back to Lorca and try again.</p></body></html>";
 const NOT_FOUND: &str = "<!doctype html><title>Not found</title>Not found.";
 
 /// Serves one connection: the preflight, the callback itself, or something unrelated (a
@@ -454,7 +454,7 @@ mod tests {
         assert!(url.contains("scope=openid%20profile%20email%20offline_access%20grok-cli%3Aaccess%20api%3Aaccess"));
         assert!(url.contains("code_challenge_method=S256"));
         assert!(url.contains(&format!("code_challenge={}", flow.challenge)));
-        assert!(url.contains("referrer=tinybot"));
+        assert!(url.contains("referrer=lorca"));
     }
 
     #[test]

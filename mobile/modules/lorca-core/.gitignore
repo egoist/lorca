@@ -1,0 +1,6 @@
+# Built by build.ts from crates/mobile; never committed.
+ios/generated/
+ios/LorcaCore.xcframework/
+android/src/main/jniLibs/
+android/src/main/java/uniffi/
+android/build/

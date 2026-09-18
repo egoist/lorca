@@ -1,5 +1,5 @@
 // The pairing string the identity Mac shows (as a QR code or text):
-// `tinybot://pair?relay=…&id=<identity pubkey>&ek=<ephemeral pubkey>&n=<nonce>`. The core does
+// `lorca://pair?relay=…&id=<identity pubkey>&ek=<ephemeral pubkey>&n=<nonce>`. The core does
 // the pairing itself; this only checks a scanned or pasted string before it is handed over.
 
 export interface PairingTarget {
@@ -12,8 +12,8 @@ export interface PairingTarget {
 export function parsePairingString(text: string): PairingTarget {
   const trimmed = text.trim();
   const index = trimmed.indexOf("pair?");
-  if (!trimmed.startsWith("tinybot://pair?") && index < 0) {
-    throw new Error("That is not a Tinybot pairing string");
+  if (!trimmed.startsWith("lorca://pair?") && index < 0) {
+    throw new Error("That is not a Lorca pairing string");
   }
   const query = trimmed.slice(trimmed.indexOf("pair?") + "pair?".length);
   const fields: Record<string, string> = {};

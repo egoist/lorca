@@ -53,7 +53,7 @@
     "android": "expo run:android",
     "typecheck": "tsc --noEmit",
     "test": "bun test src",
-    "core": "bun run modules/tinybot-core/build.ts"
+    "core": "bun run modules/lorca-core/build.ts"
   },
   "private": true
 }

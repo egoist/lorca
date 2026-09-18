@@ -90,7 +90,7 @@ export default function DeviceScreen() {
         )}
 
         {runner && (
-          <Section title="Provider credentials" footer={`Provider credentials live on ${device.name}. Connect DeepSeek, Anthropic, ChatGPT, or Grok from the Tinybot app running there; this phone only sends encrypted job envelopes.`}>
+          <Section title="Provider credentials" footer={`Provider credentials live on ${device.name}. Connect DeepSeek, Anthropic, ChatGPT, or Grok from the Lorca app running there; this phone only sends encrypted job envelopes.`}>
             {device.providers.map((provider) => (
               <Row key={provider.kind} title={providerLabel(provider.kind)} subtitle={provider.is_connected ? provider.detail || undefined : undefined} detail={provider.is_connected ? "Connected" : "Not connected"} />
             ))}

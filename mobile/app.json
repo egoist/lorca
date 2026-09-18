@@ -1,9 +1,9 @@
 {
   "expo": {
-    "name": "Tinybot",
-    "slug": "tinybot",
+    "name": "Lorca",
+    "slug": "lorca",
     "version": "1.0.0",
-    "scheme": "tinybot",
+    "scheme": "lorca",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -14,24 +14,24 @@
       "backgroundColor": "#3d85f0"
     },
     "ios": {
-      "bundleIdentifier": "dev.tinybot.app",
+      "bundleIdentifier": "app.lorca",
       "supportsTablet": true,
       "infoPlist": {
-        "NSCameraUsageDescription": "Tinybot scans the pairing code your Mac shows.",
-        "NSMicrophoneUsageDescription": "Tinybot listens while you dictate a message.",
-        "NSSpeechRecognitionUsageDescription": "Tinybot turns what you say into the message text.",
-        "NSPhotoLibraryUsageDescription": "Tinybot attaches photos you pick to a message."
+        "NSCameraUsageDescription": "Lorca scans the pairing code your Mac shows.",
+        "NSMicrophoneUsageDescription": "Lorca listens while you dictate a message.",
+        "NSSpeechRecognitionUsageDescription": "Lorca turns what you say into the message text.",
+        "NSPhotoLibraryUsageDescription": "Lorca attaches photos you pick to a message."
       },
       "buildNumber": "1",
       "entitlements": {
         "com.apple.security.application-groups": [
-          "group.dev.tinybot.app"
+          "group.app.lorca"
         ]
       },
       "appleTeamId": "GJE9R5VE87"
     },
     "android": {
-      "package": "dev.tinybot.app",
+      "package": "app.lorca",
       "adaptiveIcon": {
         "backgroundImage": "./assets/android-icon-background.png",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -48,21 +48,21 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "Tinybot scans the pairing code your Mac shows."
+          "cameraPermission": "Lorca scans the pairing code your Mac shows."
         }
       ],
       [
         "expo-image-picker",
         {
-          "photosPermission": "Tinybot attaches photos you pick to a message.",
-          "cameraPermission": "Tinybot attaches photos you take to a message."
+          "photosPermission": "Lorca attaches photos you pick to a message.",
+          "cameraPermission": "Lorca attaches photos you take to a message."
         }
       ],
       [
         "expo-speech-recognition",
         {
-          "microphonePermission": "Tinybot listens while you dictate a message.",
-          "speechRecognitionPermission": "Tinybot turns what you say into the message text."
+          "microphonePermission": "Lorca listens while you dictate a message.",
+          "speechRecognitionPermission": "Lorca turns what you say into the message text."
         }
       ],
       "expo-image",

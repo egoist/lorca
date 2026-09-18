@@ -314,7 +314,7 @@ mod tests {
         assert_eq!(state.apply("response.output_item.added", &added, &tx).await, Ok(false));
         let done = json!({ "item": {
             "type": "web_search_call", "id": "ws_1", "status": "completed",
-            "action": { "type": "search", "query": "tinybot relay" },
+            "action": { "type": "search", "query": "lorca relay" },
         } });
         assert_eq!(state.apply("response.output_item.done", &done, &tx).await, Ok(false));
         let page = json!({ "item": { "type": "web_search_call", "id": "ws_2", "action": { "type": "open_page", "url": "https://example.com/a" } } });
@@ -331,7 +331,7 @@ mod tests {
         }
         assert!(matches!(&events[0], AssistantEvent::ServerToolStart { id, name, detail } if id == "ws_1" && name == WEB_SEARCH_TOOL && detail.is_empty()));
         assert!(matches!(&events[1], AssistantEvent::ServerToolEnd { id, name, detail, summary }
-            if id == "ws_1" && name == WEB_SEARCH_TOOL && detail == "tinybot relay" && summary == "Searched the web for “tinybot relay”"));
+            if id == "ws_1" && name == WEB_SEARCH_TOOL && detail == "lorca relay" && summary == "Searched the web for “lorca relay”"));
         assert!(matches!(&events[2], AssistantEvent::ServerToolStart { name, detail, .. } if name == WEB_FETCH_TOOL && detail == "https://example.com/a"));
         assert!(matches!(&events[3], AssistantEvent::ServerToolEnd { name, summary, .. } if name == WEB_FETCH_TOOL && summary == "Read https://example.com/a"));
         assert!(matches!(&events[4], AssistantEvent::TextStart { index: 0 }));
@@ -342,7 +342,7 @@ mod tests {
     async fn an_x_search_reads_as_a_search_of_x() {
         let (tx, mut rx) = mpsc::channel(16);
         let mut state = ResponsesState::new();
-        let item = json!({ "item": { "type": "x_search_call", "id": "xs_1", "action": { "type": "search", "query": "tinybot" } } });
+        let item = json!({ "item": { "type": "x_search_call", "id": "xs_1", "action": { "type": "search", "query": "lorca" } } });
         assert_eq!(state.apply("response.output_item.added", &item, &tx).await, Ok(false));
         assert_eq!(state.apply("response.output_item.done", &item, &tx).await, Ok(false));
         drop(tx);
@@ -351,7 +351,7 @@ mod tests {
             events.push(event);
         }
         assert!(matches!(&events[1], AssistantEvent::ServerToolEnd { name, detail, summary, .. }
-            if name == WEB_SEARCH_TOOL && detail == "tinybot" && summary == "Searched X for “tinybot”"));
+            if name == WEB_SEARCH_TOOL && detail == "lorca" && summary == "Searched X for “lorca”"));
     }
 
     #[test]

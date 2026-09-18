@@ -2,7 +2,7 @@ import { HeadContent, Scripts, createRootRoute } from '@tanstack/react-router'
 
 import appCss from '../styles.css?url'
 
-const title = 'Tinybot'
+const title = 'Lorca'
 const description =
   'A team of AI bots that live on your own machines. Direct chats, group chats where bots take turns, and an end-to-end encrypted relay between your devices.'
 

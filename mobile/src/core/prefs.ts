@@ -9,7 +9,7 @@ export interface Prefs {
 }
 
 function root(): Directory {
-  const dir = new Directory(Paths.document, "tinybot");
+  const dir = new Directory(Paths.document, "lorca");
   if (!dir.exists) dir.create({ intermediates: true, idempotent: true });
   return dir;
 }

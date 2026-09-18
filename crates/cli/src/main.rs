@@ -1,22 +1,22 @@
-//! `tinybot`: keys, the local websocket for the app, the agent loop, and relay sync.
+//! `lorca`: keys, the local websocket for the app, the agent loop, and relay sync.
 
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
-use tinybot::app::App;
-use tinybot::config::Config;
-use tinybot::{identity, keys, pairing, routines, runtime, sync, ws};
+use lorca::app::App;
+use lorca::config::Config;
+use lorca::{identity, keys, pairing, routines, runtime, sync, ws};
 
 #[derive(Parser, Debug)]
-#[command(name = "tinybot", version, about = "Tinybot CLI: identity, local API, agent loop, relay sync")]
+#[command(name = "lorca", version, about = "Lorca CLI: identity, local API, agent loop, relay sync")]
 struct Cli {
-    /// Data directory (default ~/.tinybot).
-    #[arg(long, env = "TINYBOT_HOME", global = true)]
+    /// Data directory (default ~/.lorca).
+    #[arg(long, env = "LORCA_HOME", global = true)]
     home: Option<PathBuf>,
 
     /// Local websocket port for the app.
-    #[arg(long, env = "TINYBOT_PORT", global = true)]
+    #[arg(long, env = "LORCA_PORT", global = true)]
     port: Option<u16>,
 
     #[command(subcommand)]
@@ -71,7 +71,7 @@ enum IdentityCommand {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "tinybot=info,tinybot_agent=info".into()))
+        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "lorca=info,lorca_agent=info".into()))
         .with_target(false)
         .init();
 
@@ -83,7 +83,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Serve { parent_pid } => {
             runtime::prime_names(&app);
             // Installed marketplace plugins follow the index this build ships.
-            tinybot::plugins::refresh_installed(&app, &tinybot::plugins::bundled());
+            lorca::plugins::refresh_installed(&app, &lorca::plugins::bundled());
             if let Some(pid) = parent_pid {
                 tokio::spawn(watch_parent(pid));
             }
@@ -98,7 +98,7 @@ async fn main() -> anyhow::Result<()> {
                 println!("Backup phrase (write it down; it is the identity):\n");
                 println!("  {}\n", phrase.join(" "));
                 if app.relay_url().is_none() {
-                    println!("No relay configured. Set TINYBOT_RELAY_URL to sync with other Devices.");
+                    println!("No relay configured. Set LORCA_RELAY_URL to sync with other Devices.");
                 } else {
                     flush_outbox_once(&app).await;
                 }
@@ -106,7 +106,7 @@ async fn main() -> anyhow::Result<()> {
             }
             IdentityCommand::Restore { phrase, name } => {
                 identity::restore(&app, &phrase.join(" "), name).await?;
-                println!("Identity restored. Run `tinybot serve` to sync.");
+                println!("Identity restored. Run `lorca serve` to sync.");
                 Ok(())
             }
             IdentityCommand::Show => {
@@ -119,7 +119,7 @@ async fn main() -> anyhow::Result<()> {
                         println!("holds master:  {}", app.is_identity_device());
                         println!("registered:    {}", machine.registered);
                     }
-                    None => println!("No identity on this Device. Run `tinybot identity new`."),
+                    None => println!("No identity on this Device. Run `lorca identity new`."),
                 }
                 Ok(())
             }
@@ -127,12 +127,12 @@ async fn main() -> anyhow::Result<()> {
         Command::Pair { pairing_string, name } => match pairing_string {
             Some(text) => {
                 let device = pairing::accept(app.clone(), &text, name).await?;
-                println!("Paired as {}. Run `tinybot serve` to sync.", device["name"].as_str().unwrap_or("this Device"));
+                println!("Paired as {}. Run `lorca serve` to sync.", device["name"].as_str().unwrap_or("this Device"));
                 Ok(())
             }
             None => {
                 let (nonce, pairing_string) = pairing::start(app.clone()).await?;
-                println!("On the other Device run:\n\n  tinybot pair '{pairing_string}'\n\nWaiting…");
+                println!("On the other Device run:\n\n  lorca pair '{pairing_string}'\n\nWaiting…");
                 loop {
                     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                     let status = pairing::status(&app, &nonce);
@@ -181,15 +181,15 @@ async fn flush_outbox_once(app: &std::sync::Arc<App>) {
 async fn doctor(app: &std::sync::Arc<App>) {
     let ok = |label: &str, good: bool, detail: String| println!("{} {label}: {detail}", if good { "✔" } else { "✘" });
     ok("home", app.config.home.is_dir(), app.config.home.display().to_string());
-    ok("identity", app.has_identity(), if app.has_identity() { "present".into() } else { "run `tinybot identity new`".into() });
+    ok("identity", app.has_identity(), if app.has_identity() { "present".into() } else { "run `lorca identity new`".into() });
     let port_free = std::net::TcpListener::bind(("127.0.0.1", app.config.port)).is_ok();
-    ok("port", port_free, if port_free { format!("{} free", app.config.port) } else { format!("{} busy (tinybot serve running?)", app.config.port) });
+    ok("port", port_free, if port_free { format!("{} free", app.config.port) } else { format!("{} busy (lorca serve running?)", app.config.port) });
     match app.relay_url() {
         Some(url) => {
             let reachable = app.relay.health(&url).await.is_ok();
             ok("relay", reachable, if reachable { url } else { format!("{url} unreachable") });
         }
-        None => ok("relay", false, "not configured (TINYBOT_RELAY_URL); single-Device mode".into()),
+        None => ok("relay", false, "not configured (LORCA_RELAY_URL); single-Device mode".into()),
     }
     let credentials = app.credentials.lock().unwrap().connected_kinds();
     ok("providers", !credentials.is_empty(), if credentials.is_empty() { "none connected".into() } else { credentials.join(", ") });

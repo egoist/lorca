@@ -537,7 +537,7 @@ mod tests {
         assert_eq!(compact(&summarizer, &messages[6..], None, &settings, None, &RequestOptions::default(), &CancellationToken::new()).await.unwrap(), None);
     }
 
-    /// `DEEPSEEK_API_KEY=… cargo test -p tinybot-agent live_deepseek_summary -- --ignored --nocapture`
+    /// `DEEPSEEK_API_KEY=… cargo test -p lorca-agent live_deepseek_summary -- --ignored --nocapture`
     #[tokio::test]
     #[ignore]
     async fn live_deepseek_summary() {

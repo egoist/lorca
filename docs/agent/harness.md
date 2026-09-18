@@ -121,4 +121,4 @@ Each queue call returns the message's id and sends a `queue_update` event.
 
 `load_skills(dirs)` finds `SKILL.md` files (agentskills.io) and root `.md` files with a `description`; `format_skills_for_system_prompt` lists the model-visible ones and `build_system_prompt` includes them. `harness.skill(name, extra)` runs one. `load_prompt_templates(paths)` reads `.md` files whose `$1`, `$@`, `$ARGUMENTS`, `${@:N}`, and `${@:N:L}` are filled from `parse_command_args`; `harness.prompt_from_template(name, args)` runs one.
 
-`crates/agent/examples/chat.rs` is a terminal chat over all of this: `cargo run -p tinybot-agent --example chat -- deepseek/deepseek-flash`.
+`crates/agent/examples/chat.rs` is a terminal chat over all of this: `cargo run -p lorca-agent --example chat -- deepseek/deepseek-flash`.

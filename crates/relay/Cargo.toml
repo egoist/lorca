@@ -1,12 +1,12 @@
 [package]
-name = "tinybot-relay"
-description = "Zero-knowledge store-and-forward relay for Tinybot"
+name = "lorca-relay"
+description = "Zero-knowledge store-and-forward relay for Lorca"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "tinybot-relay"
+name = "lorca-relay"
 path = "src/main.rs"
 
 [dependencies]

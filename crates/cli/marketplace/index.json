@@ -26,7 +26,7 @@
       },
       "variables": [
         { "name": "GITHUB_TOKEN", "description": "A personal access token (github.com/settings/tokens), the quickest way in.", "secret": true, "required": false },
-        { "name": "GITHUB_CLIENT_ID", "description": "Normally not needed: the client id of your own OAuth app (github.com/settings/developers, Device Flow enabled), to sign in with it instead of Tinybot's.", "secret": false, "required": false },
+        { "name": "GITHUB_CLIENT_ID", "description": "Normally not needed: the client id of your own OAuth app (github.com/settings/developers, Device Flow enabled), to sign in with it instead of Lorca's.", "secret": false, "required": false },
         { "name": "GITHUB_CLIENT_SECRET", "description": "Only for a browser sign-in with your own app: its client secret.", "secret": true, "required": false }
       ],
       "tools": { "readonly": ["get_*", "list_*", "search_*"] }

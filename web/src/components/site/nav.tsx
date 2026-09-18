@@ -3,7 +3,7 @@ import { Logo } from './logo'
 
 /// Where the installer lives. macOS ships first; the same button will offer the other platforms.
 export const DOWNLOAD = '/download'
-export const SITE = 'https://tinybot.app'
+export const SITE = 'https://lorca.app'
 
 const links = [
   { href: '#turns', label: 'Turns' },
@@ -18,7 +18,7 @@ export function Nav() {
       <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-5">
         <a href="#top" className="flex items-center gap-2.5 font-semibold tracking-tight">
           <Logo className="size-7" />
-          Tinybot
+          Lorca
         </a>
         <nav className="hidden items-center gap-7 text-sm text-muted-foreground md:flex">
           {links.map((link) => (

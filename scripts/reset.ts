@@ -1,4 +1,4 @@
-// Reset Tinybot on this Mac: stop the app and CLI, wipe identity, keys, credentials, chats,
+// Reset Lorca on this Mac: stop the app and CLI, wipe identity, keys, credentials, chats,
 // app preferences, and logs. Use --build to drop build output too, --relay for the local relay
 // database, -y to skip the confirmation.
 import { rm } from "node:fs/promises"
@@ -12,16 +12,16 @@ const wipeBuild = args.includes("--build")
 const wipeRelay = args.includes("--relay")
 const yes = args.includes("-y") || args.includes("--yes")
 
-const home = process.env.TINYBOT_HOME ?? join(homedir(), ".tinybot")
+const home = process.env.LORCA_HOME ?? join(homedir(), ".lorca")
 const logs = join(homedir(), "Library", "Logs", APP_NAME)
 
 const targets: { path: string; what: string; on: boolean }[] = [
   { path: home, what: "identity, keys, credentials, chats", on: true },
   { path: logs, what: "CLI logs", on: true },
-  { path: join(ROOT, "target", "tinybot-relay.db"), what: "local relay database", on: wipeRelay },
-  { path: join(ROOT, "target", "tinybot-relay.db-wal"), what: "local relay database", on: wipeRelay },
-  { path: join(ROOT, "target", "tinybot-relay.db-shm"), what: "local relay database", on: wipeRelay },
-  { path: join(ROOT, "target", "tinybot-relay.files"), what: "local relay attachments", on: wipeRelay },
+  { path: join(ROOT, "target", "lorca-relay.db"), what: "local relay database", on: wipeRelay },
+  { path: join(ROOT, "target", "lorca-relay.db-wal"), what: "local relay database", on: wipeRelay },
+  { path: join(ROOT, "target", "lorca-relay.db-shm"), what: "local relay database", on: wipeRelay },
+  { path: join(ROOT, "target", "lorca-relay.files"), what: "local relay attachments", on: wipeRelay },
   { path: join(ROOT, "target"), what: "Rust build output", on: wipeBuild },
   { path: join(PACKAGE_DIR, ".build"), what: "Swift build output", on: wipeBuild },
 ]
@@ -37,7 +37,7 @@ async function pids(pattern: string): Promise<number[]> {
 }
 
 async function stopProcesses() {
-  const patterns = [`${APP_NAME}.app/Contents/MacOS/${APP_NAME}`, "tinybot serve", "tinybot-relay"]
+  const patterns = [`${APP_NAME}.app/Contents/MacOS/${APP_NAME}`, "lorca serve", "lorca-relay"]
   let found: number[] = []
   for (const pattern of patterns) found = found.concat(await pids(pattern))
   found = [...new Set(found)]
@@ -57,7 +57,7 @@ async function stopProcesses() {
 
 async function confirm(): Promise<boolean> {
   if (yes || !process.stdin.isTTY) return yes
-  process.stdout.write(`${color.yellow("Reset Tinybot?")} This deletes the identity on this Mac; without the backup phrase it is gone. [y/N] `)
+  process.stdout.write(`${color.yellow("Reset Lorca?")} This deletes the identity on this Mac; without the backup phrase it is gone. [y/N] `)
   for await (const chunk of Bun.stdin.stream()) {
     const answer = new TextDecoder().decode(chunk).trim().toLowerCase()
     return answer === "y" || answer === "yes"

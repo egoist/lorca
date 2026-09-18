@@ -16,10 +16,10 @@ pub struct Config {
 impl Config {
     pub fn load(home_override: Option<PathBuf>, port_override: Option<u16>) -> Self {
         let home = home_override
-            .or_else(|| std::env::var_os("TINYBOT_HOME").map(PathBuf::from))
-            .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".tinybot"));
+            .or_else(|| std::env::var_os("LORCA_HOME").map(PathBuf::from))
+            .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".lorca"));
         let port = port_override
-            .or_else(|| std::env::var("TINYBOT_PORT").ok().and_then(|p| p.parse().ok()))
+            .or_else(|| std::env::var("LORCA_PORT").ok().and_then(|p| p.parse().ok()))
             .unwrap_or(DEFAULT_PORT);
         Config { home, port }
     }
@@ -76,9 +76,9 @@ impl Settings {
         write_json_private(&config.settings_path(), self)
     }
 
-    /// `TINYBOT_RELAY_URL` wins over the saved setting.
+    /// `LORCA_RELAY_URL` wins over the saved setting.
     pub fn effective_relay_url(&self) -> Option<String> {
-        std::env::var("TINYBOT_RELAY_URL")
+        std::env::var("LORCA_RELAY_URL")
             .ok()
             .filter(|s| !s.trim().is_empty())
             .or_else(|| self.relay_url.clone())
@@ -90,11 +90,11 @@ impl Settings {
 /// The relay port `bun run dev` and `bun run relay` listen on.
 pub const DEV_RELAY_PORT: u16 = 8787;
 
-/// In dev (`TINYBOT_DEV=1`, set by the dev loop), a Device with no relay configured uses the
+/// In dev (`LORCA_DEV=1`, set by the dev loop), a Device with no relay configured uses the
 /// relay the dev loop runs on this machine, addressed by this Mac's LAN IP so a phone on the
 /// same network can reach it through the pairing code.
 pub fn dev_relay_url() -> Option<String> {
-    if std::env::var("TINYBOT_DEV").ok().filter(|v| !v.is_empty() && v != "0").is_none() {
+    if std::env::var("LORCA_DEV").ok().filter(|v| !v.is_empty() && v != "0").is_none() {
         return None;
     }
     let host = lan_ip().map(|ip| ip.to_string()).unwrap_or_else(|| "127.0.0.1".into());

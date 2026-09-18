@@ -164,7 +164,7 @@ mod tests {
 
     #[test]
     fn loads_declared_skills_and_root_markdown_and_reports_problems() {
-        let root = std::env::temp_dir().join(format!("tinybot-skills-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("lorca-skills-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("deploy/nested")).unwrap();
         std::fs::create_dir_all(root.join("Bad Name")).unwrap();

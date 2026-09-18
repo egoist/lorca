@@ -8,7 +8,7 @@ use crate::config::{self, Config};
 use crate::model::ProviderStatus;
 
 #[cfg(feature = "runner")]
-pub use tinybot_agent::providers::{ChatGptTokens, GrokTokens};
+pub use lorca_agent::providers::{ChatGptTokens, GrokTokens};
 /// Without the runner the tokens are carried as they are and never used.
 #[cfg(not(feature = "runner"))]
 pub type ChatGptTokens = serde_json::Value;

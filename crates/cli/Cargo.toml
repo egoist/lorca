@@ -1,16 +1,16 @@
 [package]
-name = "tinybot"
-description = "Tinybot CLI: keys, local websocket, agent loop, relay sync"
+name = "lorca"
+description = "Lorca CLI: keys, local websocket, agent loop, relay sync"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [lib]
-name = "tinybot"
+name = "lorca"
 path = "src/lib.rs"
 
 [[bin]]
-name = "tinybot"
+name = "lorca"
 path = "src/main.rs"
 required-features = ["cli"]
 
@@ -19,12 +19,12 @@ default = ["cli"]
 # The command-line binary: everything.
 cli = ["runner", "server", "dep:clap", "dep:tracing-subscriber"]
 # Running bots: the agent loop, providers, tools. Off for a Device that only takes part.
-runner = ["dep:tinybot-agent", "dep:open", "dep:rmcp", "dep:mcp_http"]
+runner = ["dep:lorca-agent", "dep:open", "dep:rmcp", "dep:mcp_http"]
 # The local websocket the desktop app connects to.
 server = ["dep:axum"]
 
 [dependencies]
-tinybot-agent = { path = "../agent", optional = true }
+lorca-agent = { path = "../agent", optional = true }
 anyhow.workspace = true
 async-trait.workspace = true
 axum = { workspace = true, optional = true }

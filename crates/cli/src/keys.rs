@@ -25,7 +25,7 @@ pub fn unb64_32(text: &str) -> anyhow::Result<[u8; 32]> {
 }
 
 fn derive(secret: &[u8; 32], info: &str) -> [u8; 32] {
-    let hkdf = Hkdf::<Sha256>::new(Some(b"tinybot-v1"), secret);
+    let hkdf = Hkdf::<Sha256>::new(Some(b"lorca-v1"), secret);
     let mut out = [0u8; 32];
     hkdf.expand(info.as_bytes(), &mut out).expect("hkdf expand");
     out
@@ -53,7 +53,7 @@ pub fn secret_from_phrase(phrase: &str) -> anyhow::Result<[u8; 32]> {
     let cleaned: String = phrase.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_uppercase();
     let bytes = data_encoding::BASE32_NOPAD
         .decode(cleaned.as_bytes())
-        .map_err(|_| anyhow::anyhow!("That does not look like a Tinybot backup phrase"))?;
+        .map_err(|_| anyhow::anyhow!("That does not look like a Lorca backup phrase"))?;
     bytes.try_into().map_err(|_| anyhow::anyhow!("Backup phrase has the wrong length"))
 }
 
@@ -174,7 +174,7 @@ pub struct MachineFile {
     /// Whether the relay has this machine attested by the identity.
     #[serde(default)]
     pub registered: bool,
-    /// The identity's relay URL at pairing time. `TINYBOT_RELAY_URL` still overrides.
+    /// The identity's relay URL at pairing time. `LORCA_RELAY_URL` still overrides.
     #[serde(default)]
     pub relay_url: Option<String>,
     pub created_at: i64,

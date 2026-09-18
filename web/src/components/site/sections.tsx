@@ -101,7 +101,7 @@ export function Turns() {
         src="/screens/group.png"
         width={2400}
         height={1520}
-        alt="A Tinybot group chat: Scout reports two leaks, Nova hands the schema change to Patch, Patch posts the migration."
+        alt="A Lorca group chat: Scout reports two leaks, Nova hands the schema change to Patch, Patch posts the migration."
         className="window-frame mx-auto w-full max-w-5xl"
         loading="lazy"
         decoding="async"
@@ -142,7 +142,7 @@ const toolLog = [
   ['grep', 'blobs.title', '2 matches · crates/relay/src/db.rs, routes.rs'],
   ['read', 'crates/relay/src/db.rs', '188 lines'],
   ['edit', 'crates/relay/src/db.rs', '−1 +0 · dropped the title column'],
-  ['bash', 'cargo test -p tinybot-relay', 'ok · 10 passed'],
+  ['bash', 'cargo test -p lorca-relay', 'ok · 10 passed'],
   ['remember', 'Titles live in the roster blob now.', 'saved to MEMORY.md'],
 ]
 
@@ -166,7 +166,7 @@ export function Tools() {
             <span className="size-3 rounded-full bg-[#febc2e]" />
             <span className="size-3 rounded-full bg-[#28c840]" />
           </span>
-          <span className="ml-2">Patch · Studio · ~/.tinybot/workspaces/patch</span>
+          <span className="ml-2">Patch · Studio · ~/.lorca/workspaces/patch</span>
         </div>
         <ul className="divide-y divide-white/6">
           {toolLog.map(([tool, target, result]) => (
@@ -266,7 +266,7 @@ export function Footer() {
       <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 px-5 py-8 text-sm text-zinc-500 sm:flex-row">
         <div className="flex items-center gap-2">
           <Logo className="size-5" />
-          <span>© {new Date().getFullYear()} Tinybot</span>
+          <span>© {new Date().getFullYear()} Lorca</span>
         </div>
         <nav className="flex gap-6">
           <a href="#relay" className="hover:text-foreground">Privacy</a>

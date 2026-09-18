@@ -585,7 +585,7 @@ mod tests {
     }
 
     fn store() -> (Scratch, MemoryStore) {
-        let dir = std::env::temp_dir().join(format!("tinybot-memory-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("lorca-memory-{}", uuid::Uuid::new_v4()));
         let store = MemoryStore::new(dir.join("bot"));
         (Scratch(dir), store)
     }

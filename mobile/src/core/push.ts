@@ -7,7 +7,7 @@ import * as Application from "expo-application";
 import * as Notifications from "expo-notifications";
 import { router } from "expo-router";
 import { Platform } from "react-native";
-import * as core from "../../modules/tinybot-core";
+import * as core from "../../modules/lorca-core";
 import { useStore } from "./store";
 
 /// The chat a notification is about. iOS carries it as the data the extension set; Android's

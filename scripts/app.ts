@@ -6,10 +6,10 @@ export const PACKAGE_DIR = join(ROOT, "macos")
 export const SOURCES_DIR = join(PACKAGE_DIR, "Sources")
 
 export const CRATES_DIR = join(ROOT, "crates")
-export const CLI_NAME = "tinybot"
+export const CLI_NAME = "lorca"
 
-export const APP_NAME = "Tinybot"
-export const BUNDLE_ID = "dev.tinybot.app"
+export const APP_NAME = "Lorca"
+export const BUNDLE_ID = "app.lorca"
 export const VERSION = "0.1.0"
 
 export type Config = "debug" | "release"
@@ -33,7 +33,7 @@ export const color = {
 
 export function log(message: string) {
   const time = new Date().toLocaleTimeString("en-US", { hour12: false })
-  console.log(`${color.dim(time)} ${color.cyan("tinybot")} ${message}`)
+  console.log(`${color.dim(time)} ${color.cyan("lorca")} ${message}`)
 }
 
 function infoPlist() {
@@ -66,9 +66,9 @@ function infoPlist() {
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Tinybot listens while you dictate a message.</string>
+	<string>Lorca listens while you dictate a message.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Tinybot turns what you say into the message text.</string>
+	<string>Lorca turns what you say into the message text.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 	<key>NSSupportsAutomaticTermination</key>
@@ -99,11 +99,11 @@ export async function buildCLI(config: Config): Promise<{ ok: boolean; path: str
   return { ok: build.exitCode === 0, path: join(ROOT, "target", config, CLI_NAME) }
 }
 
-export const MARKDOWN_CRATE = "tinybot-markdown"
-/** The generated Swift bindings the app compiles as its `TinybotMarkdown` target. */
-export const MARKDOWN_SWIFT_DIR = join(SOURCES_DIR, "TinybotMarkdown")
+export const MARKDOWN_CRATE = "lorca-markdown"
+/** The generated Swift bindings the app compiles as its `LorcaMarkdown` target. */
+export const MARKDOWN_SWIFT_DIR = join(SOURCES_DIR, "LorcaMarkdown")
 /** The Rust static library and its C header, as the xcframework `Package.swift` links. */
-export const MARKDOWN_XCFRAMEWORK = join(PACKAGE_DIR, "Libraries", "TinybotMarkdownFFI.xcframework")
+export const MARKDOWN_XCFRAMEWORK = join(PACKAGE_DIR, "Libraries", "LorcaMarkdownFFI.xcframework")
 
 /**
  * Compile the Markdown parser the app links: the static library, the Swift bindings, and the
@@ -115,7 +115,7 @@ export async function buildMarkdown(config: Config): Promise<{ ok: boolean }> {
   if ((await run(["cargo", ...args], { cwd: ROOT })).exitCode !== 0) return { ok: false }
   // The bindings come from the host dylib's metadata; the debug one is always current after
   // the build above, whichever configuration produced the static library.
-  const dylib = join(ROOT, "target", config, "libtinybot_markdown.dylib")
+  const dylib = join(ROOT, "target", config, "liblorca_markdown.dylib")
   const generated = join(ROOT, "target", "markdown-bindings")
   await rm(generated, { recursive: true, force: true })
   const bindgen = await run(
@@ -136,7 +136,7 @@ export async function buildMarkdown(config: Config): Promise<{ ok: boolean }> {
   }
   await rm(MARKDOWN_XCFRAMEWORK, { recursive: true, force: true })
   const framework = await run(
-    ["xcodebuild", "-create-xcframework", "-library", join(ROOT, "target", config, "libtinybot_markdown.a"), "-headers", include, "-output", MARKDOWN_XCFRAMEWORK],
+    ["xcodebuild", "-create-xcframework", "-library", join(ROOT, "target", config, "liblorca_markdown.a"), "-headers", include, "-output", MARKDOWN_XCFRAMEWORK],
     { cwd: ROOT, capture: true },
   )
   return { ok: framework.exitCode === 0 }
@@ -175,8 +175,8 @@ export async function buildApp(config: Config): Promise<{ ok: boolean; ms: numbe
   await Bun.write(destination, Bun.file(source))
   await chmod(destination, 0o755)
 
-  // The app launches this binary as `tinybot serve`. It lives under Resources/bin: on a
-  // case-insensitive volume, MacOS/tinybot would be the same file as MacOS/Tinybot.
+  // The app launches this binary as `lorca serve`. It lives under Resources/bin: on a
+  // case-insensitive volume, MacOS/lorca would be the same file as MacOS/Lorca.
   const cliBinDir = join(bundle, "Contents", "Resources", "bin")
   await mkdir(cliBinDir, { recursive: true })
   const cliDestination = join(cliBinDir, CLI_NAME)

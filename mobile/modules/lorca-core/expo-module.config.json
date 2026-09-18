@@ -1,0 +1,18 @@
+{
+  "platforms": [
+    "apple",
+    "android"
+  ],
+  "apple": {
+    "modules": [
+      "LorcaCoreModule",
+      "MarkdownViewModule"
+    ]
+  },
+  "android": {
+    "modules": [
+      "app.lorca.core.LorcaCoreModule",
+      "app.lorca.core.MarkdownViewModule"
+    ]
+  }
+}

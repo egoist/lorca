@@ -22,7 +22,7 @@ pub struct BashTool {
 
 impl BashTool {
     pub fn new(cwd: PathBuf) -> Self {
-        let shell = std::env::var("TINYBOT_SHELL").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| {
+        let shell = std::env::var("LORCA_SHELL").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| {
             if std::path::Path::new("/bin/bash").exists() { "/bin/bash".into() } else { "/bin/sh".into() }
         });
         BashTool { cwd, shell }
@@ -157,7 +157,7 @@ impl Tool for BashTool {
         let text = String::from_utf8_lossy(&output).into_owned();
         let truncation = truncate_tail(&text, TruncationOptions::default());
         let full_output_path = if truncation.truncated {
-            let path = std::env::temp_dir().join(format!("tinybot-bash-{}-{}.log", std::process::id(), crate::now_ms()));
+            let path = std::env::temp_dir().join(format!("lorca-bash-{}-{}.log", std::process::id(), crate::now_ms()));
             let _ = std::fs::write(&path, &output);
             Some(path)
         } else {
