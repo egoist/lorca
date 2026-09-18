@@ -440,6 +440,12 @@ export default function ChatScreen() {
   // renders: the state flip on the first drag (stopSettling) re-renders this screen, and a fresh
   // rows array or renderItem there would launch an animated scroll-to-end against the drag.
   const contentInset = useMemo(() => ({ top: insetTop }), [insetTop]);
+  // The scroll view ends the bar's track where its bottom padding starts, which includes the
+  // gap kept above the composer; the bar itself runs down to the composer.
+  const scrollIndicatorInsets = useMemo(
+    () => ({ top: topInset, bottom: -COMPOSER_GAP }),
+    [topInset],
+  );
   const maintainVisibleContentPosition = useMemo(
     () => ({
       startRenderingFromBottom: true,
@@ -586,7 +592,10 @@ export default function ChatScreen() {
             getItemType={(row) => row.type}
             contentInsetAdjustmentBehavior="never"
             contentInset={contentInset}
-            scrollIndicatorInsets={{ top: topInset }}
+            // The insets here already account for the header and the composer; iOS would add the
+            // safe area to the scroll bar's track again and keep it short of both ends.
+            automaticallyAdjustsScrollIndicatorInsets={false}
+            scrollIndicatorInsets={scrollIndicatorInsets}
             onCommitLayoutEffect={syncInsetTop}
             keyboardDismissMode="interactive"
             maintainVisibleContentPosition={maintainVisibleContentPosition}
