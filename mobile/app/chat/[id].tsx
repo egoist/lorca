@@ -22,9 +22,15 @@ import {
 } from "react-native";
 import {
   KeyboardChatScrollView,
+  KeyboardController,
   KeyboardStickyView,
+  useKeyboardHandler,
 } from "react-native-keyboard-controller";
-import { useSharedValue } from "react-native-reanimated";
+import {
+  runOnJS,
+  useAnimatedReaction,
+  useSharedValue,
+} from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { chatTitle, engine } from "../../src/core/engine";
 import type { Bot } from "../../src/core/model";
@@ -75,6 +81,37 @@ export default function ChatScreen() {
   const composerGuess = 54 + COMPOSER_GAP + Math.max(insets.bottom, 8);
   const composerBlank = useSharedValue(composerGuess);
   const composerExtra = useSharedValue(composerGuess - insets.bottom);
+  // Focusing the composer makes it taller just as the keyboard starts to move. The scroll view
+  // answers a change of `extraContentPadding` by scrolling from the offset it last saw, which at
+  // that moment is the one from before the keyboard's lift, so the lift would be lost. A new
+  // composer height therefore waits until the keyboard has come to rest.
+  const composerExtraTarget = useSharedValue(composerGuess - insets.bottom);
+  const keyboardMoving = useSharedValue(false);
+  // Sending hides the keyboard; once it is down, an anchored message is put back under the
+  // header in case the keyboard's own unwinding moved it.
+  const reanchorRef = useRef<() => void>(() => {});
+  const reanchor = useCallback(() => reanchorRef.current(), []);
+  useKeyboardHandler(
+    {
+      onStart: () => {
+        "worklet";
+        keyboardMoving.value = true;
+      },
+      onEnd: () => {
+        "worklet";
+        keyboardMoving.value = false;
+        composerExtra.value = composerExtraTarget.value;
+        runOnJS(reanchor)();
+      },
+    },
+    [reanchor],
+  );
+  useAnimatedReaction(
+    () => composerExtraTarget.value,
+    (extra) => {
+      if (!keyboardMoving.value) composerExtra.value = extra;
+    },
+  );
   // Opening a chat: FlashList lays the last rows out from the bottom, but their measured heights,
   // the composer's inset and the header inset all land over the next few frames, and the composer
   // inset reaches the native scroll view a frame after JS sets it. So the end is computed here
@@ -98,14 +135,97 @@ export default function ChatScreen() {
   const topInset = Platform.OS === "ios" ? headerHeight : 0;
   const topInsetRef = useRef(topInset);
   topInsetRef.current = topInset;
+  // FlashList pads a transcript shorter than the list up to the list's full height, so the rows
+  // start from the bottom. That padding knows nothing of the header and composer insets, which
+  // would leave a short chat scrollable by their sum. The top inset gives the padding back: it
+  // shrinks by the padding, down to the point where the only offset left is the end.
+  const [insetTop, setInsetTop] = useState(topInset);
+  // Sending a message anchors it under the header: the space below the transcript grows until
+  // the rows from that message on fill the viewport, and gives way as the reply comes in. The
+  // end of the scroll range then keeps the message at the top, so nothing moves while the reply
+  // streams. Once the reply outgrows the viewport the anchor lets go and the list follows its end.
+  const composerSpace = useRef(composerGuess);
+  const anchorKey = useRef<string | null>(null);
+  const anchorTarget = useRef<number | null>(null);
+  const [anchored, setAnchored] = useState(false);
+  const rowsRef = useRef<Row[]>([]);
+  const releaseAnchor = useCallback(() => {
+    anchorKey.current = null;
+    anchorTarget.current = null;
+    setAnchored(false);
+  }, []);
+  const blankFor = useCallback(() => {
+    const list = listRef.current;
+    const key = anchorKey.current;
+    if (!list || !key || layoutHeight.current === 0)
+      return composerSpace.current;
+    const index = rowsRef.current.findIndex((row) => row.key === key);
+    const layout = index < 0 ? undefined : list.getLayout(index);
+    // The sent message has not reached the list yet: keep what is there.
+    if (!layout) return composerBlank.value;
+    const tail = list.getChildContainerDimensions().height - layout.y;
+    const blank = layoutHeight.current - topInsetRef.current - tail;
+    if (blank <= composerSpace.current) {
+      releaseAnchor();
+      return composerSpace.current;
+    }
+    return blank;
+  }, [composerBlank, releaseAnchor]);
+  const topInsetFor = useCallback(() => {
+    const list = listRef.current;
+    if (Platform.OS !== "ios") return 0;
+    if (!list || layoutHeight.current === 0 || contentHeight.current === 0)
+      return topInsetRef.current;
+    const padding = Math.max(
+      0,
+      list.getWindowSize().height -
+        list.getChildContainerDimensions().height -
+        list.getFirstItemOffset(),
+    );
+    const end =
+      contentHeight.current + composerBlank.value - layoutHeight.current;
+    return Math.round(
+      Math.min(
+        topInsetRef.current,
+        Math.max(topInsetRef.current - padding, -end),
+      ),
+    );
+  }, [composerBlank]);
+  const endOffsetRef = useRef<() => number>(() => 0);
+  const syncInsetTop = useCallback(() => {
+    composerBlank.value = blankFor();
+    setInsetTop(topInsetFor());
+    if (!anchorKey.current) return;
+    // The end moves only when the rows above the anchor are measured anew.
+    const target = endOffsetRef.current();
+    if (
+      anchorTarget.current !== null &&
+      Math.abs(anchorTarget.current - target) <= 1
+    )
+      return;
+    const index = rowsRef.current.findIndex(
+      (row) => row.key === anchorKey.current,
+    );
+    if (index < 0 || !listRef.current?.getLayout(index)) return;
+    anchorTarget.current = target;
+    if (Platform.OS === "ios")
+      listRef.current?.scrollToOffset({ offset: target, animated: true });
+    else listRef.current?.scrollToEnd({ animated: true });
+  }, [blankFor, composerBlank, topInsetFor]);
   const endOffset = useCallback(
     () =>
       Math.max(
-        -topInsetRef.current,
+        -topInsetFor(),
         contentHeight.current + composerBlank.value - layoutHeight.current,
       ),
-    [composerBlank],
+    [composerBlank, topInsetFor],
   );
+  endOffsetRef.current = endOffset;
+  reanchorRef.current = () => {
+    if (!anchorKey.current) return;
+    anchorTarget.current = null;
+    syncInsetTop();
+  };
   // Shows the list once it has been quiet for a few frames after a confirmed pin: FlashList
   // can re-lay the content out under an offset that was right an instant earlier.
   const scheduleReveal = useCallback(() => {
@@ -161,6 +281,7 @@ export default function ChatScreen() {
     loaded.current = false;
     confirmed.current = false;
     lastOffset.current = null;
+    releaseAnchor();
     setSettled(false);
     setRevealed(false);
     // A chat with nothing to measure (or a load that never reports) still has to show up.
@@ -169,7 +290,7 @@ export default function ChatScreen() {
       clearTimeout(fallback);
       stopSettling();
     };
-  }, [id, stopSettling]);
+  }, [id, releaseAnchor, stopSettling]);
   const onScroll = useCallback(
     (e: NativeSyntheticEvent<NativeScrollEvent>) => {
       if (Platform.OS !== "ios") return;
@@ -189,8 +310,9 @@ export default function ChatScreen() {
   );
   useEffect(() => {
     unconfirm();
+    syncInsetTop();
     pinToBottom();
-  }, [headerHeight, pinToBottom, unconfirm]);
+  }, [anchored, headerHeight, insetTop, pinToBottom, syncInsetTop, unconfirm]);
   // The transcript runs under the transparent header on iOS, so it starts below it. The insets
   // are explicit rather than iOS's automatic ones: the automatic behavior would add the home
   // indicator's safe area under the composer's inset, which already covers it, leaving a strip
@@ -215,13 +337,16 @@ export default function ChatScreen() {
   // bottom, animated once settled. Everything it is handed is therefore kept stable across
   // renders: the state flip on the first drag (stopSettling) re-renders this screen, and a fresh
   // rows array or renderItem there would launch an animated scroll-to-end against the drag.
+  const contentInset = useMemo(() => ({ top: insetTop }), [insetTop]);
   const maintainVisibleContentPosition = useMemo(
     () => ({
       startRenderingFromBottom: true,
-      autoscrollToBottomThreshold: 0.25,
+      // An anchored message holds the end still; FlashList's own catch-up would race the
+      // shrinking space below it.
+      autoscrollToBottomThreshold: anchored ? -1 : 0.25,
       animateAutoScrollToBottom: settled,
     }),
-    [settled],
+    [anchored, settled],
   );
 
   useEffect(() => {
@@ -241,6 +366,7 @@ export default function ChatScreen() {
     () => (chat ? buildRows(chat, bots, workingBotIds, isWorking, status) : []),
     [chat, bots, workingBotIds, isWorking, status],
   );
+  rowsRef.current = rows;
   const members = useMemo(
     () =>
       (chat?.bot_ids ?? [])
@@ -345,6 +471,7 @@ export default function ChatScreen() {
             if (e.nativeEvent.layout.height !== layoutHeight.current)
               unconfirm();
             layoutHeight.current = e.nativeEvent.layout.height;
+            syncInsetTop();
             pinToBottom();
           }}
         >
@@ -355,8 +482,9 @@ export default function ChatScreen() {
             keyExtractor={(row) => row.key}
             getItemType={(row) => row.type}
             contentInsetAdjustmentBehavior="never"
-            contentInset={{ top: topInset }}
+            contentInset={contentInset}
             scrollIndicatorInsets={{ top: topInset }}
+            onCommitLayoutEffect={syncInsetTop}
             keyboardDismissMode="interactive"
             maintainVisibleContentPosition={maintainVisibleContentPosition}
             contentContainerStyle={{
@@ -375,6 +503,7 @@ export default function ChatScreen() {
             onContentSizeChange={(_w, h) => {
               if (h !== contentHeight.current) unconfirm();
               contentHeight.current = h;
+              syncInsetTop();
               pinToBottom();
             }}
             onScroll={onScroll}
@@ -392,9 +521,10 @@ export default function ChatScreen() {
           offset={{ closed: 0, opened: insets.bottom }}
           onLayout={(e) => {
             const blank = e.nativeEvent.layout.height + COMPOSER_GAP;
-            if (blank !== composerBlank.value) unconfirm();
-            composerBlank.value = blank;
-            composerExtra.value = blank - insets.bottom;
+            if (blank !== composerSpace.current) unconfirm();
+            composerSpace.current = blank;
+            composerExtraTarget.value = blank - insets.bottom;
+            syncInsetTop();
             pinToBottom();
           }}
           pointerEvents="box-none"
@@ -404,7 +534,15 @@ export default function ChatScreen() {
             isGroup={isGroup}
             placeholder={placeholder}
             onSend={(text, files) => {
-              engine.sendMessage(id, text, files).catch((error) => {
+              // The anchor is measured against the screen without the keyboard.
+              void KeyboardController.dismiss();
+              const sent = engine.sendMessage(id, text, files).then((message) => {
+                stopSettling();
+                anchorKey.current = message.id;
+                anchorTarget.current = null;
+                setAnchored(true);
+              });
+              sent.catch((error) => {
                 Alert.alert(
                   "Could not send",
                   error instanceof Error ? error.message : String(error),
