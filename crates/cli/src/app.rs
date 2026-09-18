@@ -104,6 +104,8 @@ pub struct App {
     /// By job id.
     pub running_jobs: Mutex<HashMap<String, RunningJob>>,
     pub chat_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// The chat on screen in the local app while it is frontmost; a reply there needs no push.
+    pub watched_chat: Mutex<Option<String>>,
     /// `room_turn` jobs sent to other Runners, waiting for their `job_result`.
     pub pending_results: Mutex<HashMap<String, tokio::sync::oneshot::Sender<String>>>,
     /// Requests sent to other Runners, waiting for their `response`.
@@ -153,6 +155,7 @@ impl App {
             accepting: Mutex::new(None),
             running_jobs: Mutex::new(HashMap::new()),
             chat_locks: Mutex::new(HashMap::new()),
+            watched_chat: Mutex::new(None),
             pending_results: Mutex::new(HashMap::new()),
             pending_responses: Mutex::new(HashMap::new()),
             #[cfg(feature = "runner")]
@@ -708,6 +711,15 @@ impl App {
         out
     }
 
+    /// The local app says which chat the user is looking at (`None` when it is not frontmost).
+    pub fn set_watched_chat(&self, chat_id: Option<String>) {
+        *self.watched_chat.lock().unwrap() = chat_id;
+    }
+
+    pub fn is_watching(&self, chat_id: &str) -> bool {
+        self.watched_chat.lock().unwrap().as_deref() == Some(chat_id)
+    }
+
     pub fn mark_read(&self, chat_id: &str) {
         let changed = {
             let mut state = self.state.lock().unwrap();
@@ -745,9 +757,9 @@ impl App {
             }
         };
         if added {
-            self.emit(Event::MessageAdded { chat_id: message.chat_id.clone(), message: message.clone() });
+            self.emit(Event::MessageAdded { chat_id: message.chat_id.clone(), message: message.for_app() });
         } else if changed {
-            self.emit(Event::MessageUpdated { chat_id: message.chat_id.clone(), message: message.clone() });
+            self.emit(Event::MessageUpdated { chat_id: message.chat_id.clone(), message: message.for_app() });
         }
         if upload {
             self.save_state();
@@ -890,13 +902,23 @@ impl App {
             "relay_connected": self.relay_connected.load(Ordering::Relaxed),
             "devices": self.devices_out(&state),
             "bots": state.bots,
-            "chats": state.chats,
+            "chats": state.chats.iter().map(chat_for_app).collect::<Vec<_>>(),
             "routines": self.routines_out(&state),
             "auto_review": state.auto_review,
             "running_chat_ids": self.running_chat_ids(),
             "running_turns": self.running_turns(),
         })
     }
+}
+
+/// A chat as a snapshot carries it: its newest messages in the apps' form, and `has_more`
+/// when older ones are left to ask for with `chats.messages`.
+fn chat_for_app(chat: &Chat) -> Value {
+    let (messages, has_more) = message_page(&chat.messages, None, SNAPSHOT_MESSAGES);
+    let mut out = serde_json::to_value(ChatSummary { meta: chat.meta.clone(), unread_count: chat.unread_count, usage: chat.usage.clone() }).unwrap_or_default();
+    out["messages"] = json!(messages);
+    out["has_more"] = json!(has_more);
+    out
 }
 
 pub fn short_key(key: &str) -> String {

@@ -31,6 +31,12 @@ fn derive(secret: &[u8; 32], info: &str) -> [u8; 32] {
     out
 }
 
+/// The key pushes are sealed under, so the phone's notification extension holds this one
+/// key and never the account DEK.
+pub fn push_key(dek: &[u8; 32]) -> [u8; 32] {
+    derive(dek, "push")
+}
+
 pub fn random_32() -> [u8; 32] {
     let mut bytes = [0u8; 32];
     rand::rngs::OsRng.fill_bytes(&mut bytes);

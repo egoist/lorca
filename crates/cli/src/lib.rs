@@ -18,6 +18,7 @@ pub mod pairing;
 pub mod plugins;
 #[cfg(feature = "runner")]
 pub mod providers;
+pub mod push;
 pub mod relay;
 pub mod requests;
 pub mod routines;

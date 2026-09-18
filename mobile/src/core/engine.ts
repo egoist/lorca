@@ -8,6 +8,7 @@ import * as core from "../../modules/tinybot-core";
 import { hostFacts } from "./host";
 import type { Attachment, AutoReview, Bot, Chat, ChatMeta, ChatUsage, Message } from "./model";
 import { coreHome, loadPrefs, pathOf, wipePrefs } from "./prefs";
+import { installPushHandlers, registerForPushes } from "./push";
 import {
   applyRoster,
   botById,
@@ -46,6 +47,7 @@ type Snapshot = Parameters<typeof replaceSnapshot>[0];
 class Engine {
   private started = false;
   private fetchingFiles = new Set<string>();
+  private loadingOlder = new Set<string>();
 
   // MARK: - Lifecycle
 
@@ -58,11 +60,16 @@ class Engine {
     core.start(coreHome(), hostFacts());
     AppState.addEventListener("change", (status) => this.onAppState(status));
     replaceSnapshot(await core.request<Snapshot>("bootstrap"));
+    installPushHandlers();
+    if (useStore.getState().paired) void registerForPushes();
   }
 
   private onAppState(status: AppStateStatus) {
+    if (status !== "active") return;
     // Back in the foreground: the poll that was in flight died with the suspension.
-    if (status === "active") core.wake();
+    core.wake();
+    // The token can change, and permission may have been given in Settings meanwhile.
+    if (useStore.getState().paired) void registerForPushes();
   }
 
   /// Pull to refresh: ask the relay now.
@@ -143,6 +150,28 @@ class Engine {
     upsertMessage(message);
     setStatus(chatId, null);
     return message;
+  }
+
+  /// The page of messages before the chat's first one, as the transcript nears its top. One
+  /// request per chat at a time.
+  async loadOlder(chatId: string): Promise<void> {
+    const first = chatById(chatId)?.messages[0];
+    if (!first || !chatById(chatId)?.has_more || this.loadingOlder.has(chatId)) return;
+    this.loadingOlder.add(chatId);
+    try {
+      const page = await core.request<{ messages: Message[]; has_more: boolean }>("chats.messages", { chat_id: chatId, before: first.id });
+      useStore.setState((s) => ({
+        chats: s.chats.map((c) => {
+          if (c.id !== chatId || c.messages[0]?.id !== first.id) return c;
+          const known = new Set(c.messages.map((m) => m.id));
+          return { ...c, messages: [...page.messages.filter((m) => !known.has(m.id)), ...c.messages], has_more: page.has_more };
+        }),
+      }));
+    } catch (error) {
+      console.warn("loading older messages", error instanceof Error ? error.message : error);
+    } finally {
+      this.loadingOlder.delete(chatId);
+    }
   }
 
   /// The attachment's bytes, from this phone's copy or the relay, as a file URI in the store.
@@ -285,6 +314,7 @@ class Engine {
     replaceSnapshot(await core.request<Snapshot>("bootstrap"));
     onProgress?.({ phase: "done" });
     core.wake();
+    void registerForPushes();
   }
 
   /// Unpairs another Device. The core has the relay drop its key; the Device wipes its copy

@@ -17,4 +17,7 @@ android {
 dependencies {
   // The UniFFI Kotlin bindings load libtinybot_mobile.so through JNA.
   implementation "net.java.dev.jna:jna:5.15.0@aar"
+  // Pushes arrive as FCM data messages; PushService opens them and posts the notification.
+  implementation "com.google.firebase:firebase-messaging:24.1.0"
+  implementation "androidx.core:core-ktx:1.13.1"
 }

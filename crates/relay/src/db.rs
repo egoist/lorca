@@ -78,7 +78,16 @@ const SCHEMA: &str = "
         reply BLOB,
         created_at INTEGER NOT NULL,
         expires_at INTEGER NOT NULL
-    );";
+    );
+    CREATE TABLE IF NOT EXISTS push_tokens (
+        machine_pubkey TEXT PRIMARY KEY,
+        identity_pubkey TEXT NOT NULL,
+        platform TEXT NOT NULL,
+        token TEXT NOT NULL,
+        environment TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS push_tokens_identity ON push_tokens(identity_pubkey);";
 
 pub struct Db {
     writer: Arc<Mutex<Connection>>,
@@ -222,6 +231,49 @@ impl Wakers {
     }
 }
 
+// MARK: - Push tokens
+
+/// Where a phone takes pushes: its APNs or FCM device token, one per machine.
+#[derive(Debug, Clone)]
+pub struct PushToken {
+    pub machine_pubkey: String,
+    pub platform: String,
+    pub token: String,
+    /// `sandbox` or `production`; APNs keeps a host for each.
+    pub environment: String,
+}
+
+pub fn set_push_token(connection: &Connection, identity_pubkey: &str, token: &PushToken) -> rusqlite::Result<()> {
+    // A token belongs to one install. A phone that paired again has a new machine key and
+    // the same token, so the old row goes.
+    connection
+        .prepare_cached("DELETE FROM push_tokens WHERE token = ?1 AND machine_pubkey != ?2")?
+        .execute(params![token.token, token.machine_pubkey])?;
+    connection
+        .prepare_cached(
+            "INSERT OR REPLACE INTO push_tokens (machine_pubkey, identity_pubkey, platform, token, environment, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        )?
+        .execute(params![token.machine_pubkey, identity_pubkey, token.platform, token.token, token.environment, now()])?;
+    Ok(())
+}
+
+pub fn delete_push_token(connection: &Connection, machine_pubkey: &str) -> rusqlite::Result<()> {
+    connection.prepare_cached("DELETE FROM push_tokens WHERE machine_pubkey = ?1")?.execute(params![machine_pubkey])?;
+    Ok(())
+}
+
+/// The identity's tokens, leaving out the machine that asks for the push.
+pub fn push_tokens_for(connection: &Connection, identity_pubkey: &str, except_machine: &str) -> rusqlite::Result<Vec<PushToken>> {
+    let mut statement = connection.prepare_cached(
+        "SELECT machine_pubkey, platform, token, environment FROM push_tokens WHERE identity_pubkey = ?1 AND machine_pubkey != ?2",
+    )?;
+    let rows = statement.query_map(params![identity_pubkey, except_machine], |row| {
+        Ok(PushToken { machine_pubkey: row.get(0)?, platform: row.get(1)?, token: row.get(2)?, environment: row.get(3)? })
+    })?;
+    rows.collect()
+}
+
 // MARK: - Presence
 
 /// The online window is 150 s, so `last_seen` only needs a write every 30 s per machine
@@ -343,6 +395,7 @@ pub fn revoke_machine(connection: &mut Connection, identity_pubkey: &str, machin
     tx.prepare_cached("INSERT OR REPLACE INTO revoked_machines (machine_pubkey, identity_pubkey, revoked_at) VALUES (?1, ?2, ?3)")?
         .execute(params![machine_pubkey, identity_pubkey, now()])?;
     tx.prepare_cached("DELETE FROM challenges WHERE machine_pubkey = ?1")?.execute(params![machine_pubkey])?;
+    tx.prepare_cached("DELETE FROM push_tokens WHERE machine_pubkey = ?1")?.execute(params![machine_pubkey])?;
     let freed: i64 = tx
         .prepare_cached("SELECT COALESCE(SUM(size), 0) FROM blobs WHERE identity_pubkey = ?1 AND recipient_machine_pubkey = ?2")?
         .query_row(params![identity_pubkey, machine_pubkey], |row| row.get(0))?;

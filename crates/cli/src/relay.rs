@@ -195,6 +195,33 @@ impl RelayClient {
         Ok((machines, value["now"].as_i64().unwrap_or(now_unix())))
     }
 
+    // MARK: - Push
+
+    /// Where this phone takes pushes: its APNs or FCM device token.
+    pub async fn put_push_token(&self, url: &str, token: &str, platform: &str, device_token: &str, environment: Option<&str>) -> RelayResult<()> {
+        Self::check(
+            self.http
+                .put(format!("{url}/v1/push/token"))
+                .bearer_auth(token)
+                .json(&json!({ "platform": platform, "token": device_token, "environment": environment }))
+                .send()
+                .await?,
+        )
+        .await?;
+        Ok(())
+    }
+
+    pub async fn delete_push_token(&self, url: &str, token: &str) -> RelayResult<()> {
+        Self::check(self.http.delete(format!("{url}/v1/push/token")).bearer_auth(token).send().await?).await?;
+        Ok(())
+    }
+
+    /// Asks the relay to push this ciphertext to the identity's phones; answers how many it queued.
+    pub async fn push(&self, url: &str, token: &str, ciphertext_b64: &str) -> RelayResult<u64> {
+        let value = Self::check(self.http.post(format!("{url}/v1/push")).bearer_auth(token).json(&json!({ "ciphertext": ciphertext_b64 })).send().await?).await?;
+        Ok(value["queued"].as_u64().unwrap_or(0))
+    }
+
     // MARK: - Pairing mailbox
 
     /// Unpairs a machine of this identity, this one included.

@@ -243,6 +243,10 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
     } else {
         TurnOutcome::Pass
     };
+    // The user's phones hear about a reply; a pass or a failure stays quiet.
+    if let (TurnOutcome::Sent, Some(said)) = (outcome, state.last_said.as_deref()) {
+        crate::push::reply(app, &chat, &bot, said);
+    }
     // One line in the bot's daily log per turn that did something, written by the Runner, so
     // the bot's other chats can find out what happened here without the transcript.
     if let Some(line) = turn_log_line(state.last_said.as_deref(), &state.tools_used, outcome == TurnOutcome::Skipped) {

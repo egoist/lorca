@@ -22,7 +22,13 @@
         "NSSpeechRecognitionUsageDescription": "Tinybot turns what you say into the message text.",
         "NSPhotoLibraryUsageDescription": "Tinybot attaches photos you pick to a message."
       },
-      "buildNumber": "1"
+      "buildNumber": "1",
+      "entitlements": {
+        "com.apple.security.application-groups": [
+          "group.dev.tinybot.app"
+        ]
+      },
+      "appleTeamId": "GJE9R5VE87"
     },
     "android": {
       "package": "dev.tinybot.app",
@@ -60,7 +66,10 @@
         }
       ],
       "expo-image",
-      "expo-localization"
+      "expo-localization",
+      "expo-notifications",
+      "@bacons/apple-targets",
+      "./plugins/with-scene-lifecycle"
     ],
     "experiments": {
       "typedRoutes": true

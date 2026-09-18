@@ -53,6 +53,7 @@ Mac-first, after Happy’s layering. Until a phone exists, the first Device is t
 | Account DEK              | Random XChaCha20-Poly1305 key. Encrypts roster, chats, messages, machine metadata.  | Made locally. On the relay as a `key` blob **sealed** to the content public key; handed to each paired machine inside the sealed pairing reply. |
 | Machine keypair          | One 32-byte secret per Device → HKDF → Ed25519 signing key + X25519 box key.        | `~/.tinybot/machine.json`. Public keys on the relay, attested by the identity.                       |
 | Chat/job envelopes       | Account DEK for roster/chat/machine blobs; sealed box to the Runner’s box key for jobs. | Relay stores ciphertext.                                                                          |
+| Push key                 | HKDF from the account DEK. Seals what a push says.                                  | Every Device derives it. An iPhone keeps a copy in its app group's keychain for the notification extension. |
 | Ephemeral pairing key    | X25519, one handshake.                                                              | Devices; discarded after pairing.                                                                    |
 
 AEAD envelopes are `nonce(24) || ciphertext` with the blob kind as associated data. Sealed boxes are libsodium `crypto_box_seal` (`crypto_box` crate); signatures are `ed25519-dalek`.
@@ -97,6 +98,7 @@ The relay stores:
 - Recipient machine public key on an envelope (so a Runner can fetch its jobs)
 - Last-seen of a machine public key (presence: online within 150 s)
 - Keys of unpaired machines, refused for good
+- A phone's APNs or FCM device token, one per machine, dropped with the machine or when Apple or Google calls it dead
 - Pairing mailboxes keyed by nonce, expiring after ten minutes
 
 Nicknames, Device names and `os`, bot profiles, and chat text live inside encrypted blobs.
@@ -147,6 +149,7 @@ If B is offline or still connecting a provider, the envelope waits on the relay 
 - **Pairing**: the phone scans the QR code the Mac shows, pastes the string, or opens it as a `tinybot://pair?…` link; `pair.accept` does the handshake in the core and the first `bootstrap` snapshot fills the store.
 - **Attachments**: the composer's `+` offers the photo library, the camera, and the file picker; a picked file's path goes with `chats.send`, and the core copies, encrypts, and uploads it as a `file` blob ahead of the message. A bubble that shows an attachment this phone does not have asks `files.path`, which fetches the blob and answers with the file. Images render as thumbnails sized from the width and height in the message (full screen on tap); other files as a name-and-size card.
 - **Dictation**: the primary disc is Dictate while the field is empty (a small microphone sits inside the field once there is text). While recording, the field shows Grok Bot's pill: a stop square, the elapsed time, and bars that follow the microphone, with Send still beside it. The words land in the field after whatever was typed when the user taps the square, or go out at once when the user taps Send. The recognizer (`expo-speech-recognition`) listens in the first of the phone's preferred languages it supports (`src/ui/dictation.ts`; a Chinese speaker on an English-region phone gets zh-CN), or the language chosen in Settings or by a long press on the microphone.
+- **Notifications** (`src/core/push.ts`, `expo-notifications`): after pairing, and on every launch and foreground, the app asks for permission once, reads the native device token, and registers it with the relay through the core (`push.register { platform, token, environment }`). The Swift module writes the core's push key into the keychain of the app group `group.dev.tinybot.app` at start and on `identity.changed` (removed when the phone holds no account); the notification service extension is its own target, generated at prebuild by `@bacons/apple-targets` from `targets/notify`. A tap opens the chat, a reply in the chat on screen makes no banner, and opening a chat dismisses its notifications.
 - **Turns**: sending is `chats.send`; the core seals a `turn` Job to the bot's Runner or runs a group's room exchange itself, exactly as the CLI does on a Mac, and the `job.started` / `job.finished` events drive the "is working" row and "Chef stopped without replying". There is no Stop control, as in Grok Bot: a turn runs to its end.
 
 The UI is native: a native stack with large titles, search, and toolbar items; a composer after Grok Bot's phone app, a liquid-glass `+` button and glass pill (`expo-glass-effect`, a filled pill where glass is unavailable) floating over the transcript with the Dictate or Send disc inside the pill's right edge, riding the keyboard as a `KeyboardStickyView` while the transcript's `KeyboardChatScrollView` lifts the last messages with the keys by growing its bottom inset, so the list is never resized; form sheets for chat info, new bot, new group, and settings; Link previews and context menus on chat rows; SF Symbols (Material Symbols on Android); system colors; haptics. The transcript follows the Mac app: bubbles with the bot's name above and its avatar beside the bubble's bottom edge in a group, neither in a DM; "Today 4:13 AM" separators after fifteen minutes; the "is working" row and the breathing green dot on avatars; "Message from ◉ X" and "Messaged ◉ X" markers; tool calls never shown; sidebar-style previews and stamps.
@@ -181,9 +184,13 @@ Tables:
 - `blobs(identity_pubkey, id, kind, recipient_machine_pubkey nullable, seq, ciphertext, size, created_at)`, keyed on `(identity_pubkey, id)`
 - `sequences(identity_pubkey, seq)`, `usage(identity_pubkey, bytes)`, `challenges`, `pairings(nonce, identity_pubkey, request, reply, expires_at)`
 
+- `push_tokens(machine_pubkey, identity_pubkey, platform, token, environment, updated_at)`
+
 `kind` is `roster` | `chat` | `job` | `job_result` | `machine` | `key` | `file` | `request` | `response`. Ciphertext is bytes; the nonce sits inside it. `seq` increases per identity. A Device’s `name` and `os` are inside its `machine` blob, not columns. A `file` blob is an attachment's bytes under the attachment's id, up to 24 MB of ciphertext (other kinds 4 MB); Devices poll with an explicit kinds list that leaves `file` out and fetch one by id when a transcript needs it.
 
 Blob API: `PUT /v1/blobs` (client-chosen id of up to 64 characters in `[A-Za-z0-9._-]`, idempotent; 413 over quota), `GET /v1/blobs?since=<seq>&kinds=&wait=25` (long-poll; returns blobs for the identity that are unaddressed or addressed to the caller’s machine, filtered by kind in the query), `GET /v1/blobs/{id}` (one blob, same visibility), `DELETE /v1/blobs/{id}`, `GET /v1/machines` (presence).
+
+Push API (`push.rs`): a phone registers where its pushes go with `PUT /v1/push/token { platform: apns | fcm, token, environment? }` (`sandbox` for a development build's APNs token; `DELETE` removes it). Any Device asks for a push with `POST /v1/push { ciphertext }`, at most 2560 bytes; the relay answers `{ queued }` at once and then sends to every token of the identity but the caller's. To APNs that is an alert with fixed words ("Tinybot", "New reply"), `mutable-content`, and the ciphertext as `c`, over HTTP/2 with an ES256 provider token from the team's `.p8` key (`--apns-key`, `--apns-key-id`, `--apns-team-id`, `--apns-topic`, default `dev.tinybot.app`; the token's environment picks Apple's sandbox or production host). To FCM it is a data-only message carrying `c`, with an access token minted from a service account (`--fcm-service-account`). A relay with neither key queues nothing. `TINYBOT_RELAY_APNS_URL` and `TINYBOT_RELAY_FCM_URL` point either at a test server.
 
 Clients set `TINYBOT_RELAY_URL` or the relay URL in Settings › Advanced. Without a relay the CLI works on one Device alone. In dev (`bun run dev` sets `TINYBOT_DEV=1` and runs a relay on `0.0.0.0:8787`), a Device with no relay configured defaults to `http://<this Mac's LAN IP>:8787`, so Pair a Device shows a code a phone on the same network can use.
 
@@ -218,9 +225,18 @@ on decrypted Job:
            → every chunk and every completed message is encrypted with the account DEK → relay,
              so a paired phone watches the reply grow the way the local app does
     tool calls execute
+  a turn that ended with something said → a push to the identity's phones (see Notifications)
 ```
 
 Turns in one chat run one at a time on a Runner. `chats.stop` cancels the running turn (and the room exchange it belongs to).
+
+### Notifications
+
+A finished reply reaches the user wherever they are not looking.
+
+- **Phones** (`crates/cli/src/push.rs`): when a turn ends with something said (not a pass, not a failure), the Runner seals a notice `{ title: the bot's name, subtitle: the group's title, body: the first 280 characters, chat_id }` and posts it to the relay's `/v1/push`. The envelope is `nonce(12) || ciphertext` of ChaCha20-Poly1305 under the push key with `push` as associated data: the IETF cipher, so iOS opens it with CryptoKit alone. Apple, Google, and the relay see "New reply" and ciphertext. On an iPhone the notification service extension (`mobile/targets/notify`) reads the push key from the app group's keychain, opens `c`, and sets the title, subtitle, body, thread, and `chat_id` before the alert shows; on Android `PushService` in the native module opens it through the core (`push_open(home, c)`, which needs only `machine.json`) and posts the notification. A push that cannot be opened shows the fixed words.
+- **The Mac app** (`Notifier.swift`) posts a system notification itself from the CLI's events: on `job.finished` it takes what the bot said last in that turn, for a turn on this Runner or another. A click brings the app forward on the chat; opening a chat clears what was posted for it.
+- **Watching**: neither fires for a reply the user watches arrive. The Mac app tells its CLI which chat is on screen while it is frontmost (`ui.watching { chat_id | null }`, cleared when the app disconnects); the Runner skips the push for that chat and the app skips its own notification. The phone app shows no banner for the chat it has open.
 
 ### Tools
 
@@ -351,11 +367,13 @@ Working state, after Grok Bot: the CLI's `job.started` / `job.finished` events (
 
 JSON on `ws://127.0.0.1:4862/ws`. Requests are `{ id, method, params }` and get `{ id, result }` or `{ id, error: { message } }`; events are `{ event, data }`.
 
-App → CLI: `hello`, `bootstrap`, `identity.create`, `identity.restore`, `pair.start` / `pair.status` / `pair.cancel` / `pair.accept`, `config.set`, `bots.create` (`runner_id` may be another Device; it must be a Runner) / `bots.update`, `chats.create` / `chats.dm` / `chats.send` / `chats.stop` / `chats.delete` / `chats.rename` / `chats.pin` / `chats.add_bot` / `chats.remove_bot` / `chats.mark_read` / `chats.compact`, `routines.create` / `routines.update` / `routines.delete` / `routines.run` / `routines.describe`, `plugins.marketplace` / `plugins.install` / `plugins.uninstall` / `plugins.set_variables` / `plugins.connect` / `plugins.detail` (`runner_id` names the Runner) / `auto_review.set` / `chats.permission`, `bots.memory` / `bots.memory.write` (this Runner's bots), `providers.connect_deepseek` / `providers.connect_anthropic` / `providers.connect_chatgpt` / `providers.connect_grok` / `providers.disconnect` (this Runner).
+App → CLI: `hello`, `bootstrap`, `identity.create`, `identity.restore`, `pair.start` / `pair.status` / `pair.cancel` / `pair.accept`, `config.set`, `bots.create` (`runner_id` may be another Device; it must be a Runner) / `bots.update`, `chats.create` / `chats.dm` / `chats.send` / `chats.stop` / `chats.delete` / `chats.rename` / `chats.pin` / `chats.add_bot` / `chats.remove_bot` / `chats.mark_read` / `chats.messages` / `chats.compact`, `routines.create` / `routines.update` / `routines.delete` / `routines.run` / `routines.describe`, `plugins.marketplace` / `plugins.install` / `plugins.uninstall` / `plugins.set_variables` / `plugins.connect` / `plugins.detail` (`runner_id` names the Runner) / `auto_review.set` / `chats.permission`, `bots.memory` / `bots.memory.write` (this Runner's bots), `providers.connect_deepseek` / `providers.connect_anthropic` / `providers.connect_chatgpt` / `providers.connect_grok` / `providers.disconnect` (this Runner), `ui.watching` (the chat on screen in the desktop app), `push.register` / `push.unregister` (a phone's device token).
 
 CLI → App: `snapshot`, `roster.changed` (devices, bots, chats, routines), `message.added` / `message.updated` / `message.removed`, `chat.removed`, `job.started` / `job.finished` (with `routine_id` for a routine's run) / `job.retry`, `chat.usage`, `relay.status`, `pair.completed`, `identity.changed`.
 
 The app may choose ids (`bots.create.id`, `chats.create.id`, `chats.send.message_id`) so its optimistic rows match the CLI’s events.
+
+What the apps get of a chat is a view of it (`Message::for_app`, `message_page` in `model.rs`). A snapshot carries each chat's newest 60 messages and `has_more` when older ones are left; `chats.messages { chat_id, before?, limit? }` answers the page before a message id, oldest first, with `has_more`. The Mac transcript asks for it as it scrolls within reach of the first row and holds what is on screen in place; the phone asks from FlashList's `onStartReached`. Both keep pages they loaded when a later snapshot arrives. A `tool` message reaches the apps, in snapshots, pages, and `message.*` events, with its name, summary, running state, and the first 400 characters of its detail, and without its arguments and result: the apps show none of that, and a file read or a command's output runs to hundreds of kilobytes. The Runner's `state.json` keeps them whole for the next turn's context.
 
 ### CLI ↔ relay
 
@@ -395,7 +413,7 @@ tinybot/
 
 ## Status
 
-Done: crypto and blob protocol, relay, CLI (identity, pairing, restore, local WS, DeepSeek and Anthropic keys, ChatGPT and Grok OAuth adapters, server-side web search, agent loop, encrypt-before-upload, group chats, cross-Runner jobs and handoffs, stop, routines, plugins over MCP with a marketplace and permission cards), app wiring and the bundled CLI launcher.
+Done: crypto and blob protocol, relay, CLI (identity, pairing, restore, local WS, DeepSeek and Anthropic keys, ChatGPT and Grok OAuth adapters, server-side web search, agent loop, encrypt-before-upload, group chats, cross-Runner jobs and handoffs, stop, routines, plugins over MCP with a marketplace and permission cards, encrypted pushes for finished replies), app wiring and the bundled CLI launcher.
 
 Next: steering mid-turn, keychain storage, relay blob GC, a cost budget per chat.
 

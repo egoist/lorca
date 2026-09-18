@@ -19,6 +19,8 @@ const MAX_BODY_BYTES: usize = 40 * 1024 * 1024;
 const CHALLENGE_TTL: i64 = 120;
 const PAIRING_TTL: i64 = 10 * 60;
 const MAX_WAIT_SECONDS: u64 = 30;
+/// APNs takes 4 KB in all; the ciphertext rides in it as base64url beside the fixed alert.
+const MAX_PUSH_BYTES: usize = 2560;
 
 #[derive(Debug)]
 pub struct ApiError {
@@ -96,6 +98,8 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/machines/{machine_pubkey}", axum::routing::delete(revoke_machine))
         .route("/v1/blobs", get(list_blobs).put(put_blob))
         .route("/v1/blobs/{id}", get(get_blob).delete(delete_blob))
+        .route("/v1/push", post(send_push))
+        .route("/v1/push/token", axum::routing::put(put_push_token).delete(delete_push_token))
         .route("/v1/pair", post(create_pairing))
         .route("/v1/pair/{nonce}", axum::routing::delete(delete_pairing))
         .route("/v1/pair/{nonce}/request", get(get_pair_request))
@@ -468,6 +472,78 @@ async fn delete_blob(State(state): State<AppState>, auth: Auth, Path(id): Path<S
         }
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+// MARK: - Push
+
+#[derive(Debug, Deserialize)]
+struct PutPushToken {
+    /// `apns` or `fcm`.
+    platform: String,
+    token: String,
+    /// `sandbox` for a development build's APNs token.
+    #[serde(default)]
+    environment: Option<String>,
+}
+
+/// A phone says where its pushes go. The token names an app install to Apple or Google and
+/// nothing about the account.
+async fn put_push_token(State(state): State<AppState>, auth: Auth, Json(body): Json<PutPushToken>) -> ApiResult<StatusCode> {
+    if !matches!(body.platform.as_str(), "apns" | "fcm") {
+        return Err(ApiError::bad_request("platform must be apns or fcm"));
+    }
+    let valid = match body.platform.as_str() {
+        "apns" => !body.token.is_empty() && body.token.len() <= 200 && body.token.bytes().all(|b| b.is_ascii_hexdigit()),
+        _ => !body.token.is_empty() && body.token.len() <= 4096 && body.token.bytes().all(|b| b.is_ascii_graphic()),
+    };
+    if !valid {
+        return Err(ApiError::bad_request("Not a device token"));
+    }
+    let environment = match body.environment.as_deref() {
+        Some("sandbox") => "sandbox",
+        _ => "production",
+    };
+    let token = db::PushToken { machine_pubkey: auth.machine_pubkey.clone(), platform: body.platform, token: body.token, environment: environment.into() };
+    state.db.write(move |db| Ok(db::set_push_token(db, &auth.identity_pubkey, &token)?)).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn delete_push_token(State(state): State<AppState>, auth: Auth) -> ApiResult<StatusCode> {
+    state.db.write(move |db| Ok(db::delete_push_token(db, &auth.machine_pubkey)?)).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// A Device asks for a push to the identity's phones. The relay forwards ciphertext it
+/// cannot read; delivery happens after the answer, so a slow APNs never holds a Runner.
+async fn send_push(State(state): State<AppState>, auth: Auth, Json(body): Json<Ciphertext>) -> ApiResult<Json<Value>> {
+    let ciphertext = b64url_decode(&body.ciphertext)?;
+    if ciphertext.is_empty() || ciphertext.len() > MAX_PUSH_BYTES {
+        return Err(ApiError::bad_request("Push size out of range"));
+    }
+    let (identity, machine) = (auth.identity_pubkey.clone(), auth.machine_pubkey.clone());
+    let tokens: Vec<db::PushToken> = state
+        .db
+        .read(move |db| Ok(db::push_tokens_for(db, &identity, &machine)?))
+        .await?
+        .into_iter()
+        .filter(|token| state.pusher.takes(&token.platform))
+        .collect();
+    let queued = tokens.len();
+    tokio::spawn(async move {
+        for token in tokens {
+            match state.pusher.send(&token, &ciphertext).await {
+                crate::push::Delivery::Sent => {}
+                crate::push::Delivery::Gone => {
+                    let machine = token.machine_pubkey.clone();
+                    if let Err(error) = state.db.write(move |db| Ok(db::delete_push_token(db, &machine)?)).await {
+                        tracing::warn!(?error, "forgetting a dead push token");
+                    }
+                }
+                crate::push::Delivery::Failed(error) => tracing::warn!(%error, platform = %token.platform, "push"),
+            }
+        }
+    });
+    Ok(Json(json!({ "queued": queued })))
 }
 
 // MARK: - Pairing mailbox

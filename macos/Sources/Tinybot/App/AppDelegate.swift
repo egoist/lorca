@@ -20,6 +20,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         store.observe(self) { [weak self] event in
             if case .identityChanged = event { self?.identityStateChanged() }
         }
+        Notifier.shared.visibleChat = { [weak self] in
+            guard let controller = self?.mainWindowController, let window = controller.window, window.isVisible, !window.isMiniaturized,
+                case let .chat(id) = controller.root.selection
+            else { return nil }
+            return id
+        }
+        Notifier.shared.openChat = { [weak self] id in
+            self?.showMainWindow()
+            self?.mainWindowController?.root.select(.chat(id))
+        }
+        Notifier.shared.start()
         store.start()
         Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 2_500_000_000)

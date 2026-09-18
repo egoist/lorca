@@ -210,6 +210,8 @@ export interface ChatUsage {
 
 export interface Chat extends ChatMeta {
   messages: Message[];
+  /// The core holds messages older than these; the transcript asks for them by page.
+  has_more?: boolean;
   unread_count: number;
   usage?: ChatUsage;
 }

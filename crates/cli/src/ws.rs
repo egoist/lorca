@@ -103,4 +103,6 @@ async fn connection(app: Arc<App>, socket: WebSocket) {
         }
     }
     writer.abort();
+    // The app that said what it was watching is gone.
+    app.set_watched_chat(None);
 }

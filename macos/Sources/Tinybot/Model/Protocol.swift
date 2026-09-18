@@ -228,6 +228,12 @@ enum Wire {
         var messages: [Message]?
         var unreadCount: Int?
         var usage: ChatUsage?
+        var hasMore: Bool?
+    }
+
+    struct MessagePage: Decodable {
+        var messages: [Message]
+        var hasMore: Bool
     }
 
     struct ChatUsage: Decodable {
@@ -509,7 +515,7 @@ extension Wire.Message {
 }
 
 extension Wire.Chat {
-    func toModel(existingMessages: [Message]? = nil, existingUnread: Int = 0) -> Chat {
+    func toModel(existingMessages: [Message]? = nil, existingUnread: Int = 0, existingHasMore: Bool = false) -> Chat {
         Chat(
             id: id,
             kind: kind == "dm" ? .dm : .group,
@@ -519,7 +525,8 @@ extension Wire.Chat {
             unreadCount: unreadCount ?? existingUnread,
             isPinned: isPinned,
             createdAt: Date(timeIntervalSince1970: createdAt),
-            usage: usage?.toModel()
+            usage: usage?.toModel(),
+            hasMore: hasMore ?? existingHasMore
         )
     }
 }

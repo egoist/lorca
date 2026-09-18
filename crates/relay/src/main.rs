@@ -7,6 +7,7 @@
 mod auth;
 mod db;
 mod limit;
+mod push;
 mod routes;
 mod store;
 
@@ -80,6 +81,47 @@ struct Args {
     /// Falls back to AWS_SECRET_ACCESS_KEY.
     #[arg(long, env = "TINYBOT_RELAY_S3_SECRET_KEY", hide_env_values = true)]
     s3_secret_key: Option<String>,
+
+    /// Apple's `.p8` push key, for pushes to iPhones. Needs --apns-key-id and --apns-team-id.
+    #[arg(long, env = "TINYBOT_RELAY_APNS_KEY", requires_all = ["apns_key_id", "apns_team_id"])]
+    apns_key: Option<std::path::PathBuf>,
+
+    #[arg(long, env = "TINYBOT_RELAY_APNS_KEY_ID")]
+    apns_key_id: Option<String>,
+
+    #[arg(long, env = "TINYBOT_RELAY_APNS_TEAM_ID")]
+    apns_team_id: Option<String>,
+
+    /// The phone app's bundle id.
+    #[arg(long, env = "TINYBOT_RELAY_APNS_TOPIC", default_value = "dev.tinybot.app")]
+    apns_topic: String,
+
+    /// A Firebase service account JSON file, for pushes to Android phones.
+    #[arg(long, env = "TINYBOT_RELAY_FCM_SERVICE_ACCOUNT")]
+    fcm_service_account: Option<std::path::PathBuf>,
+}
+
+/// APNs and FCM, each when its key is given. `TINYBOT_RELAY_APNS_URL` and
+/// `TINYBOT_RELAY_FCM_URL` point them at a test server.
+fn pusher(args: &Args) -> anyhow::Result<push::Pusher> {
+    let apns = match &args.apns_key {
+        Some(path) => Some(push::Apns::new(
+            &std::fs::read_to_string(path).map_err(|e| anyhow::anyhow!("reading {}: {e}", path.display()))?,
+            args.apns_key_id.clone().expect("clap requires the key id"),
+            args.apns_team_id.clone().expect("clap requires the team id"),
+            args.apns_topic.clone(),
+            std::env::var("TINYBOT_RELAY_APNS_URL").ok(),
+        )?),
+        None => None,
+    };
+    let fcm = match &args.fcm_service_account {
+        Some(path) => Some(push::Fcm::new(
+            &std::fs::read_to_string(path).map_err(|e| anyhow::anyhow!("reading {}: {e}", path.display()))?,
+            std::env::var("TINYBOT_RELAY_FCM_URL").ok(),
+        )?),
+        None => None,
+    };
+    Ok(push::Pusher::new(apns, fcm))
 }
 
 fn file_store(args: &Args) -> anyhow::Result<store::FileStore> {
@@ -124,6 +166,8 @@ pub struct AppState {
     pub trust_proxy: bool,
     /// Where `file` ciphertext goes. The database holds only the row.
     pub file_store: Arc<store::FileStore>,
+    /// APNs and FCM, for the phones of an identity.
+    pub pusher: Arc<push::Pusher>,
 }
 
 #[tokio::main]
@@ -135,6 +179,7 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let db = Arc::new(db::Db::open(&args.db)?);
     let file_store = Arc::new(file_store(&args)?);
+    let pusher = Arc::new(pusher(&args)?);
     let revoked = Arc::new(db::Revoked::load(db.read(|db| Ok(db::revoked_machines(db)?)).await.map_err(|e| anyhow::anyhow!("{e:?}"))?));
 
     let mut secret = [0u8; 32];
@@ -160,6 +205,7 @@ async fn main() -> anyhow::Result<()> {
         )),
         trust_proxy: args.trust_proxy,
         file_store: file_store.clone(),
+        pusher: pusher.clone(),
     };
 
     tokio::spawn(async move {
@@ -179,6 +225,7 @@ async fn main() -> anyhow::Result<()> {
         db = %args.db,
         quota_bytes = args.quota_bytes,
         files = %file_store.describe(),
+        push = %pusher.describe(),
         "tinybot-relay listening"
     );
     axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await?;

@@ -127,7 +127,15 @@ export function replaceSnapshot(snapshot: {
     devices: snapshot.devices,
     device_seen: seenOf(snapshot.devices),
     bots: snapshot.bots,
-    chats: snapshot.chats.map((c) => ({ ...c, messages: c.messages ?? [], unread_count: c.unread_count ?? 0 })),
+    // A snapshot carries each chat's newest messages. Older pages already loaded stay ahead of
+    // them, so a resync does not throw an open transcript back to the last page.
+    chats: snapshot.chats.map((c) => {
+      const messages = c.messages ?? [];
+      const old = useStore.getState().chats.find((o) => o.id === c.id);
+      const at = old && messages.length ? old.messages.findIndex((m) => m.id === messages[0].id) : -1;
+      const kept = at > 0 ? { messages: [...old!.messages.slice(0, at), ...messages], has_more: old!.has_more } : { messages };
+      return { ...c, ...kept, unread_count: c.unread_count ?? 0 };
+    }),
     routines: snapshot.routines ?? [],
     auto_review: snapshot.auto_review ?? { is_enabled: true, rules: [] },
     running,
@@ -150,7 +158,7 @@ export function applyRoster(roster: { devices: Device[]; bots: Bot[]; chats: (Ch
     const existing = new Map(s.chats.map((c) => [c.id, c]));
     const chats: Chat[] = roster.chats.map((meta) => {
       const old = existing.get(meta.id);
-      return { ...meta, is_pinned: meta.is_pinned ?? false, messages: old?.messages ?? [], unread_count: meta.unread_count ?? old?.unread_count ?? 0, usage: meta.usage ?? old?.usage };
+      return { ...meta, is_pinned: meta.is_pinned ?? false, messages: old?.messages ?? [], has_more: old?.has_more, unread_count: meta.unread_count ?? old?.unread_count ?? 0, usage: meta.usage ?? old?.usage };
     });
     return { devices: roster.devices, device_seen: seenOf(roster.devices), bots: roster.bots, chats, routines: roster.routines ?? s.routines, auto_review: roster.auto_review ?? s.auto_review };
   });

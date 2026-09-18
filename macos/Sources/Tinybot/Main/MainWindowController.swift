@@ -41,7 +41,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
                 createButton,
             ]))
 
-        root.onSelectionChange = { [weak self] in self?.updateTitle() }
+        root.onSelectionChange = { [weak self] in
+            self?.updateTitle()
+            Notifier.shared.watchingChanged()
+        }
         updateTitle()
     }
 
@@ -109,6 +112,16 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
     func windowDidBecomeKey(_ notification: Notification) {
         root.windowBecameKey()
+        Notifier.shared.watchingChanged()
+    }
+
+    func windowDidMiniaturize(_ notification: Notification) {
+        Notifier.shared.watchingChanged()
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        // The window still counts as visible here; report once it has gone.
+        DispatchQueue.main.async { Notifier.shared.watchingChanged() }
     }
 }
 

@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "main": "index.ts",
   "dependencies": {
+    "@bacons/apple-targets": "^5.0.0",
     "@expo/ui": "~57.0.18",
     "@shopify/flash-list": "2.0.2",
     "expo": "~57.0.23",
@@ -24,6 +25,7 @@
     "expo-linear-gradient": "~57.0.2",
     "expo-linking": "~57.0.10",
     "expo-localization": "~57.0.2",
+    "expo-notifications": "~57.0.20",
     "expo-router": "~57.0.21",
     "expo-secure-store": "~57.0.4",
     "expo-speech-recognition": "^57.1.0",

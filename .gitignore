@@ -4,3 +4,5 @@ dist
 temp/
 .build/
 target/
+.env
+.env.local

@@ -10,6 +10,10 @@ enum StoreEvent {
     case messageChanged(Chat.ID, Message.ID)
     case messageRemoved(Chat.ID, Message.ID)
     case respondingChanged(Chat.ID)
+    /// A page of older messages was put ahead of the chat's first one.
+    case olderMessagesLoaded(Chat.ID)
+    /// A bot's turn ended; the date is when this app saw it start.
+    case turnFinished(Chat.ID, Bot.ID, Date)
     case selectionChanged
     case connectionChanged
     case identityChanged
@@ -52,6 +56,12 @@ final class AppStore {
     /// member turns), and the routine when the turn is one of its runs. Drives the "is working"
     /// row, the presence dot on avatars, and the spinner on a routine.
     private var runningJobs: [(id: String, chatID: Chat.ID, botID: Bot.ID, routineID: Routine.ID?)] = []
+    /// When each turn in flight was first seen, so a finished turn's reply can be told from
+    /// what the bot said before it.
+    private var jobStarts: [String: Date] = [:]
+    /// The chat last reported to the CLI as on screen; `.some(nil)` is "none".
+    private var reportedWatchedChat: Chat.ID??
+    private var loadingOlder: Set<Chat.ID> = []
     private var replyEngine: ReplyEngine?
     private var started = false
 
@@ -89,6 +99,7 @@ final class AppStore {
             case .connected:
                 Task { await self.bootstrap() }
             case .disconnected, .connecting:
+                self.reportedWatchedChat = nil
                 if self.isConnected {
                     self.isConnected = false
                     self.runningJobs.removeAll()
@@ -152,7 +163,19 @@ final class AppStore {
         relayConnected = snapshot.relayConnected
         devices = snapshot.devices.map { $0.toModel() }
         bots = snapshot.bots.map { $0.toModel() }
-        chats = snapshot.chats.map { $0.toModel() }
+        // A snapshot carries each chat's newest messages. Older pages this app already loaded
+        // stay ahead of them, so a resync does not throw the transcript back to the last page.
+        let loaded = chats
+        chats = snapshot.chats.map { incoming in
+            var chat = incoming.toModel()
+            if let existing = loaded.first(where: { $0.id == chat.id }), let first = chat.messages.first,
+                let index = existing.index(of: first.id), index > 0
+            {
+                chat.messages.insert(contentsOf: existing.messages[..<index], at: 0)
+                chat.hasMore = existing.hasMore
+            }
+            return chat
+        }
         routines = (snapshot.routines ?? []).map { $0.toModel() }
         autoReview = snapshot.autoReview?.toModel() ?? AutoReview()
         runningJobs = (snapshot.runningTurns ?? []).map { ($0.jobId, $0.chatId, $0.botId, $0.routineId) }
@@ -184,7 +207,8 @@ final class AppStore {
             var changed: [Chat.ID] = []
             for summary in roster.chats {
                 let existing = chats.first { $0.id == summary.id }
-                let chat = summary.toModel(existingMessages: existing?.messages ?? [], existingUnread: existing?.unreadCount ?? 0)
+                let chat = summary.toModel(
+                    existingMessages: existing?.messages ?? [], existingUnread: existing?.unreadCount ?? 0, existingHasMore: existing?.hasMore ?? false)
                 if let existing, existing.botIDs != chat.botIDs || existing.customTitle != chat.customTitle {
                     changed.append(chat.id)
                 }
@@ -221,6 +245,7 @@ final class AppStore {
             guard let job = decode(Wire.JobEvent.self) else { return }
             runningJobs.removeAll { $0.id == "pending:\(job.chatId)" }
             runningJobs.append((job.jobId, job.chatId, job.botId, job.routineId))
+            jobStarts[job.jobId] = jobStarts[job.jobId] ?? Date()
             emit(.respondingChanged(job.chatId))
             emit(.chatsChanged)
 
@@ -230,6 +255,9 @@ final class AppStore {
             retryNotes[job.chatId] = nil
             emit(.respondingChanged(job.chatId))
             emit(.chatsChanged)
+            if let startedAt = jobStarts.removeValue(forKey: job.jobId), !job.botId.isEmpty {
+                emit(.turnFinished(job.chatId, job.botId, startedAt))
+            }
 
         case "job.retry":
             guard let retry = decode(Wire.JobRetry.self) else { return }
@@ -701,6 +729,31 @@ final class AppStore {
         sortChats()
         emit(.chatsChanged)
         perform("chats.pin", ["chat_id": id, "pinned": chats.first { $0.id == id }?.isPinned ?? false])
+    }
+
+    /// Asks the CLI for the page of messages before the chat's first one. The transcript calls
+    /// this as it nears the top; one request per chat at a time.
+    func loadOlderMessages(in id: Chat.ID) {
+        guard !isMock, !loadingOlder.contains(id), let chat = chat(id), chat.hasMore, let first = chat.messages.first else { return }
+        loadingOlder.insert(id)
+        Task {
+            defer { loadingOlder.remove(id) }
+            guard let page = try? await client.request("chats.messages", ["chat_id": id, "before": first.id], as: Wire.MessagePage.self),
+                let index = chats.firstIndex(where: { $0.id == id }), chats[index].messages.first?.id == first.id
+            else { return }
+            let known = Set(chats[index].messages.map(\.id))
+            chats[index].messages.insert(contentsOf: page.messages.map { $0.toModel() }.filter { !known.contains($0.id) }, at: 0)
+            chats[index].hasMore = page.hasMore
+            emit(.olderMessagesLoaded(id))
+        }
+    }
+
+    /// Tells the CLI which chat the user is looking at (nil when none, or the app is not
+    /// frontmost), so a reply they watch arrive is not pushed to their phone.
+    func setWatchedChat(_ id: Chat.ID?) {
+        guard !isMock, isConnected, reportedWatchedChat != .some(id) else { return }
+        reportedWatchedChat = .some(id)
+        Task { _ = try? await client.request("ui.watching", ["chat_id": id ?? NSNull()]) }
     }
 
     func markRead(_ id: Chat.ID) {

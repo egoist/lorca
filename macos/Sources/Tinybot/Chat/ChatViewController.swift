@@ -304,6 +304,9 @@ final class ChatViewController: NSViewController {
             guard let chat = store.chat(chatID) else { return }
             composer.configure(placeholder: placeholder(for: chat), bots: mentionable(in: chat))
 
+        case let .olderMessagesLoaded(id) where id == chatID:
+            olderMessagesLoaded()
+
         case .snapshotReplaced:
             show(chatID: chatID)
 
@@ -364,6 +367,26 @@ final class ChatViewController: NSViewController {
         let distance = documentHeight - (clip.bounds.origin.y + clip.bounds.height)
         isPinnedToBottom = distance < 48
         jumpButton.isHidden = isPinnedToBottom || rows.isEmpty
+        // Nearing the first message: ask for the page before it.
+        if let chatID, clip.bounds.origin.y + scrollView.contentInsets.top < 600 {
+            store.loadOlderMessages(in: chatID)
+        }
+    }
+
+    /// Older messages went in above the first row: keep what is on screen where it is by
+    /// holding the distance to the end of the document.
+    private func olderMessagesLoaded() {
+        let clip = scrollView.contentView
+        let fromEnd = (rows.isEmpty ? 0 : tableView.rect(ofRow: rows.count - 1).maxY) - clip.bounds.origin.y
+        rebuildRows()
+        tableView.reloadData()
+        guard !rows.isEmpty else { return }
+        let origin = NSPoint(x: clip.bounds.origin.x, y: tableView.rect(ofRow: rows.count - 1).maxY - fromEnd)
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            clip.animator().setBoundsOrigin(origin)
+        }
+        scrollView.reflectScrolledClipView(clip)
     }
 
     /// Scrolls the clip view to the end of the document itself rather than to the last row:

@@ -1,4 +1,5 @@
 import ExpoModulesCore
+import Security
 
 /// The Rust core behind the phone: started once with the app's folder and the phone's facts,
 /// then one request at a time and a stream of events, the same JSON the desktop app speaks
@@ -10,8 +11,28 @@ public class TinybotCoreModule: Module {
   private final class Listener: EventListener, @unchecked Sendable {
     weak var module: TinybotCoreModule?
     func onEvent(json: String) {
+      // Pairing and forgetting change the account key, and with it the push key.
+      if json.hasPrefix("{\"event\":\"identity.changed\"") { module?.sharePushKey() }
       module?.sendEvent("event", ["json": json])
     }
+  }
+
+  /// Leaves the push key in the app group's keychain for the notification service extension,
+  /// which runs outside the app and opens a push's ciphertext before the alert shows
+  /// (`targets/notify`). Removed when this phone holds no account.
+  fileprivate func sharePushKey() {
+    let group = "group.dev.tinybot.app"
+    let item: [CFString: Any] = [
+      kSecClass: kSecClassGenericPassword,
+      kSecAttrService: group,
+      kSecAttrAccount: "push-key",
+      kSecAttrAccessGroup: group,
+    ]
+    SecItemDelete(item as CFDictionary)
+    guard let key = core?.pushKey() else { return }
+    // A push can arrive while the phone is locked.
+    let status = SecItemAdd(item.merging([kSecValueData: key, kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly]) { $1 } as CFDictionary, nil)
+    if status != errSecSuccess { NSLog("Tinybot: sharing the push key failed (%d)", status) }
   }
 
   public func definition() -> ModuleDefinition {
@@ -24,6 +45,7 @@ public class TinybotCoreModule: Module {
       let listener = Listener()
       listener.module = self
       self.core = try Core.start(home: home, name: name, os: os, osVersion: osVersion, model: model, listener: listener)
+      self.sharePushKey()
     }
 
     // Blocks until the core answers. On a concurrent queue, never the JS thread and never the

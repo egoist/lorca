@@ -36,6 +36,7 @@ import Animated, {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { chatTitle, engine } from "../../src/core/engine";
 import type { Bot } from "../../src/core/model";
+import { clearPushes } from "../../src/core/push";
 import {
   markRead,
   useBotMap,
@@ -460,6 +461,7 @@ export default function ChatScreen() {
   useEffect(() => {
     useStore.setState({ openChatId: id });
     markRead(id);
+    void clearPushes(id);
     return () => {
       if (useStore.getState().openChatId === id)
         useStore.setState({ openChatId: null });
@@ -618,6 +620,12 @@ export default function ChatScreen() {
               syncInsetTop();
               pinToBottom();
             }}
+            // Nearing the first message: the page before it. Not while the list is still
+            // finding the end after opening.
+            onStartReached={() => {
+              if (!settling.current) void engine.loadOlder(id);
+            }}
+            onStartReachedThreshold={1}
             onScroll={onScroll}
             scrollEventThrottle={16}
             onScrollBeginDrag={stopSettling}

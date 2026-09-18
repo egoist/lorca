@@ -111,6 +111,29 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             Ok(Value::Null)
         }
 
+        // The desktop app names the chat on screen while it is frontmost, null otherwise; a
+        // reply the user is watching arrive is not pushed to their phone.
+        "ui.watching" => {
+            app.set_watched_chat(opt_string(&params, "chat_id"));
+            Ok(Value::Null)
+        }
+        // A phone's APNs or FCM device token, registered with the relay under this machine.
+        "push.register" => {
+            let (platform, device_token) = (string(&params, "platform")?, string(&params, "token")?);
+            let url = app.relay_url().ok_or("No relay configured")?;
+            let machine = app.machine_file().and_then(|m| m.machine().ok()).ok_or("Not paired")?;
+            let token = crate::sync::token_or_register(app, &url, &machine).await.map_err(|e| e.to_string())?;
+            app.relay.put_push_token(&url, &token, &platform, &device_token, params["environment"].as_str()).await.map_err(|e| e.to_string())?;
+            Ok(Value::Null)
+        }
+        "push.unregister" => {
+            let url = app.relay_url().ok_or("No relay configured")?;
+            let machine = app.machine_file().and_then(|m| m.machine().ok()).ok_or("Not paired")?;
+            let token = crate::sync::token_or_register(app, &url, &machine).await.map_err(|e| e.to_string())?;
+            app.relay.delete_push_token(&url, &token).await.map_err(|e| e.to_string())?;
+            Ok(Value::Null)
+        }
+
         "config.set" => {
             if params.get("relay_url").is_some() {
                 let url = params["relay_url"].as_str().map(str::to_string);
@@ -294,6 +317,13 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             })
             .map_err(|e| e.to_string())?;
             Ok(Value::Null)
+        }
+        // Older messages than the snapshot carried, a page at a time, oldest first.
+        "chats.messages" => {
+            let chat = app.chat(&string(&params, "chat_id")?).ok_or("No such chat")?;
+            let limit = params["limit"].as_u64().unwrap_or(SNAPSHOT_MESSAGES as u64).clamp(1, 200) as usize;
+            let (messages, has_more) = message_page(&chat.messages, params["before"].as_str(), limit);
+            Ok(json!({ "messages": messages, "has_more": has_more }))
         }
         "chats.mark_read" => {
             app.mark_read(&string(&params, "chat_id")?);

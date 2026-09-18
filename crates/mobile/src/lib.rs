@@ -30,6 +30,25 @@ pub enum CoreError {
     Failed(String),
 }
 
+/// A push, opened: who replied, where, and the first words.
+#[derive(uniffi::Record)]
+pub struct PushNotice {
+    pub title: String,
+    pub subtitle: Option<String>,
+    pub body: String,
+    pub chat_id: String,
+}
+
+/// Opens the ciphertext a push carries (`c`, base64url) with the account key kept under
+/// `home`. No running core needed: Android's messaging service calls this when a push wakes
+/// the process. `None` when this phone is not paired or the push is not for this account.
+#[uniffi::export]
+pub fn push_open(home: String, sealed: String) -> Option<PushNotice> {
+    let machine: tinybot::keys::MachineFile = tinybot::config::read_json(&Config { home: PathBuf::from(home), port: 0 }.machine_path())?;
+    let notice = tinybot::push::open(&machine.dek().ok()?, &tinybot::keys::unb64(&sealed).ok()?).ok()?;
+    Some(PushNotice { title: notice.title, subtitle: notice.subtitle, body: notice.body, chat_id: notice.chat_id })
+}
+
 /// One running core: the App, its runtime, and the sync loop.
 #[derive(uniffi::Object)]
 pub struct Core {
@@ -76,6 +95,12 @@ impl Core {
             }
         });
         response.to_string()
+    }
+
+    /// The key pushes are sealed under, for the iOS notification service extension, which
+    /// runs outside the app and reads it from the shared keychain. `None` until paired.
+    pub fn push_key(&self) -> Option<Vec<u8>> {
+        self.app.dek().map(|dek| tinybot::keys::push_key(&dek).to_vec())
     }
 
     /// The app came to the foreground: sync now rather than after the backoff.

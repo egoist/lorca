@@ -64,6 +64,9 @@ final class CLIClient: NSObject {
         let myGeneration = generation
         state = .connecting
         let task = session.webSocketTask(with: url)
+        // The default is 1 MiB, and a message over it fails the receive, which reads as a dropped
+        // connection. A snapshot carries every chat's messages and outgrows that.
+        task.maximumMessageSize = 256 * 1024 * 1024
         self.task = task
         task.resume()
         receive(on: task, generation: myGeneration)

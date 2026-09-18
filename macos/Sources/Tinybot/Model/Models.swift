@@ -618,6 +618,8 @@ struct Chat: Identifiable, Hashable {
     var createdAt: Date
     /// What the turns run in this chat used, from the Runner that ran them.
     var usage: ChatUsage? = nil
+    /// The CLI holds messages older than the ones here; the transcript asks for them by page.
+    var hasMore = false
 
     var isGroup: Bool { kind == .group }
     var isDM: Bool { kind == .dm }
