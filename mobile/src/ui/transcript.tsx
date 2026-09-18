@@ -108,7 +108,7 @@ export function DayRow({ at }: { at: number }) {
   );
 }
 
-export function MessageRow({ row, bots, isGroup, onLongPress }: { row: Extract<Row, { type: "message" }>; bots: Map<string, Bot>; isGroup: boolean; onLongPress?: (message: Message) => void }) {
+export function MessageRow({ row, bots, isGroup }: { row: Extract<Row, { type: "message" }>; bots: Map<string, Bot>; isGroup: boolean }) {
   const p = usePalette();
   const { width: screenWidth } = useWindowDimensions();
   const { message, groupStart, groupEnd, showsName } = row;
@@ -118,7 +118,8 @@ export function MessageRow({ row, bots, isGroup, onLongPress }: { row: Extract<R
   const attachments = message.body.kind === "text" ? (message.body.attachments ?? []) : [];
   const failed = message.state.kind === "failed";
   const showsAvatar = isGroup && !isYou;
-  // The bubble column is 80% of the screen; the bubble pads 13 a side.
+  // The bubble column is 80% of the screen; the bubble pads 13 a side. Attachments and the
+  // text both fit that width.
   const attachmentWidth = Math.floor(screenWidth * 0.8) - 26 - (showsAvatar ? AVATAR + GUTTER : 0);
   return (
     <View style={[styles.messageRow, { paddingTop: groupStart ? 14 : 3 }, isYou ? styles.messageRowYou : styles.messageRowBot]}>
@@ -129,24 +130,19 @@ export function MessageRow({ row, bots, isGroup, onLongPress }: { row: Extract<R
             {bot?.name ?? "Bot"}
           </Text>
         )}
-        <Pressable onLongPress={onLongPress ? () => onLongPress(message) : undefined} delayLongPress={350}>
-          {({ pressed }) => (
-            <View
-              style={[
-                styles.bubble,
-                isYou ? { backgroundColor: p.userBubble, borderBottomRightRadius: groupEnd ? 6 : 18 } : { backgroundColor: failed ? "rgba(255,59,48,0.14)" : p.botBubble, borderBottomLeftRadius: groupEnd ? 6 : 18 },
-                pressed && { opacity: 0.85 },
-              ]}
-            >
-              {attachments.length > 0 && <AttachmentBlock attachments={attachments} onUserBubble={isYou} maxWidth={attachmentWidth} />}
-              {text.length > 0 && <Markdown text={text} color={isYou ? p.userBubbleText : p.botBubbleText} />}
-              <View style={styles.bubbleFooter}>
-                {failed && <Symbol name="exclamationmark.triangle.fill" size={11} color={p.red} />}
-                <Text style={[styles.time, { color: isYou ? "rgba(255,255,255,0.75)" : p.tertiaryLabel }]}>{time(new Date(message.created_at * 1000))}</Text>
-              </View>
-            </View>
-          )}
-        </Pressable>
+        <View
+          style={[
+            styles.bubble,
+            isYou ? { backgroundColor: p.userBubble, borderBottomRightRadius: groupEnd ? 6 : 18 } : { backgroundColor: failed ? "rgba(255,59,48,0.14)" : p.botBubble, borderBottomLeftRadius: groupEnd ? 6 : 18 },
+          ]}
+        >
+          {attachments.length > 0 && <AttachmentBlock attachments={attachments} onUserBubble={isYou} maxWidth={attachmentWidth} />}
+          {text.length > 0 && <Markdown text={text} color={isYou ? p.userBubbleText : p.botBubbleText} maxWidth={attachmentWidth} />}
+          <View style={styles.bubbleFooter}>
+            {failed && <Symbol name="exclamationmark.triangle.fill" size={11} color={p.red} />}
+            <Text style={[styles.time, { color: isYou ? "rgba(255,255,255,0.75)" : p.tertiaryLabel }]}>{time(new Date(message.created_at * 1000))}</Text>
+          </View>
+        </View>
       </View>
     </View>
   );

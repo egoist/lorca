@@ -1,4 +1,4 @@
-import { rm, mkdir, chmod } from "node:fs/promises"
+import { rm, mkdir, chmod, readdir, readFile, rename, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 
 export const ROOT = resolve(import.meta.dir, "..")
@@ -99,12 +99,58 @@ export async function buildCLI(config: Config): Promise<{ ok: boolean; path: str
   return { ok: build.exitCode === 0, path: join(ROOT, "target", config, CLI_NAME) }
 }
 
+export const MARKDOWN_CRATE = "tinybot-markdown"
+/** The generated Swift bindings the app compiles as its `TinybotMarkdown` target. */
+export const MARKDOWN_SWIFT_DIR = join(SOURCES_DIR, "TinybotMarkdown")
+/** The Rust static library and its C header, as the xcframework `Package.swift` links. */
+export const MARKDOWN_XCFRAMEWORK = join(PACKAGE_DIR, "Libraries", "TinybotMarkdownFFI.xcframework")
+
+/**
+ * Compile the Markdown parser the app links: the static library, the Swift bindings, and the
+ * xcframework that carries the library and its header to SwiftPM.
+ */
+export async function buildMarkdown(config: Config): Promise<{ ok: boolean }> {
+  const args = ["build", "-q", "-p", MARKDOWN_CRATE]
+  if (config === "release") args.push("--release")
+  if ((await run(["cargo", ...args], { cwd: ROOT })).exitCode !== 0) return { ok: false }
+  // The bindings come from the host dylib's metadata; the debug one is always current after
+  // the build above, whichever configuration produced the static library.
+  const dylib = join(ROOT, "target", config, "libtinybot_markdown.dylib")
+  const generated = join(ROOT, "target", "markdown-bindings")
+  await rm(generated, { recursive: true, force: true })
+  const bindgen = await run(
+    ["cargo", "run", "-q", "-p", MARKDOWN_CRATE, "--features", "bindgen", "--bin", "uniffi-bindgen", "--", "generate", "--library", dylib, "--language", "swift", "--out-dir", generated],
+    { cwd: ROOT },
+  )
+  if (bindgen.exitCode !== 0) return { ok: false }
+  await mkdir(MARKDOWN_SWIFT_DIR, { recursive: true })
+  const include = join(generated, "include")
+  await mkdir(include, { recursive: true })
+  for (const name of await readdir(generated)) {
+    if (name.endsWith(".swift")) await rename(join(generated, name), join(MARKDOWN_SWIFT_DIR, name))
+    if (name.endsWith("FFI.h")) await rename(join(generated, name), join(include, name))
+    if (name.endsWith("FFI.modulemap")) {
+      await writeFile(join(include, "module.modulemap"), await readFile(join(generated, name)))
+      await rm(join(generated, name))
+    }
+  }
+  await rm(MARKDOWN_XCFRAMEWORK, { recursive: true, force: true })
+  const framework = await run(
+    ["xcodebuild", "-create-xcframework", "-library", join(ROOT, "target", config, "libtinybot_markdown.a"), "-headers", include, "-output", MARKDOWN_XCFRAMEWORK],
+    { cwd: ROOT, capture: true },
+  )
+  return { ok: framework.exitCode === 0 }
+}
+
 /** Compile the SPM target and lay the product out as a launchable .app bundle with the CLI inside. */
 export async function buildApp(config: Config): Promise<{ ok: boolean; ms: number }> {
   const started = performance.now()
 
   const cli = await buildCLI(config)
   if (!cli.ok) {
+    return { ok: false, ms: performance.now() - started }
+  }
+  if (!(await buildMarkdown(config)).ok) {
     return { ok: false, ms: performance.now() - started }
   }
 

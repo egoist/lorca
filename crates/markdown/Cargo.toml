@@ -1,0 +1,26 @@
+[package]
+name = "tinybot-markdown"
+description = "Message Markdown as blocks and spans, parsed with pulldown-cmark, for every Tinybot app to render natively"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "tinybot_markdown"
+path = "src/lib.rs"
+# A static library for the Mac app, a host dylib the bindings generator reads, and the rlib
+# the phone core links.
+crate-type = ["lib", "staticlib", "cdylib"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bindgen.rs"
+required-features = ["bindgen"]
+
+[features]
+bindgen = ["uniffi/cli"]
+
+[dependencies]
+pulldown-cmark = { version = "0.13", default-features = false }
+serde.workspace = true
+uniffi = "0.32"

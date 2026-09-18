@@ -3,3 +3,4 @@ ios/generated/
 ios/TinybotCore.xcframework/
 android/src/main/jniLibs/
 android/src/main/java/uniffi/
+android/build/

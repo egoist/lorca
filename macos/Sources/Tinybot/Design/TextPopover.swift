@@ -14,29 +14,14 @@ enum TextPopover {
     @MainActor
     static func show(_ text: String, relativeTo rect: NSRect, of view: NSView, preferredEdge: NSRectEdge = .maxY) {
         current?.close()
-        let segments = Markdown.segments(text, textColor: .labelColor)
-        guard !segments.isEmpty else { return }
+        let rendered = RenderedMessage(text, textColor: .labelColor)
+        guard !rendered.isEmpty else { return }
 
-        let natural = segments.map { segment -> CGFloat in
-            switch segment {
-            case let .text(attributed): TextMeasure.width(of: attributed)
-            case let .code(attributed, _): TextMeasure.width(of: attributed) + Markdown.codePaddingX * 2
-            }
-        }.max() ?? 0
-        let width = min(maxWidth, max(minWidth, ceil(natural)))
-        let height = segments.enumerated().reduce(CGFloat(0)) { sum, item in
-            let gap: CGFloat = item.offset < segments.count - 1 ? Markdown.segmentSpacing : 0
-            switch item.element {
-            case let .text(attributed):
-                return sum + TextMeasure.labelSize(of: attributed, width: width).height + gap
-            case let .code(attributed, _):
-                return sum + TextMeasure.labelSize(of: attributed, width: width - Markdown.codePaddingX * 2).height
-                    + Markdown.codePaddingY * 2 + gap
-            }
-        }
+        let width = min(maxWidth, max(minWidth, rendered.preferredWidth(max: maxWidth)))
+        let height = rendered.height(forWidth: width)
 
         let content = SegmentedTextView().framePositioned()
-        content.configure(segments)
+        content.configure(rendered.segments, textColor: .labelColor)
         content.frame = NSRect(x: padding, y: padding, width: width, height: height)
 
         // A padded document view, not scroll-view insets: insets shift the scroll range, not the text.

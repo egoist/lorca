@@ -1,7 +1,7 @@
 // Builds the Rust core for the phone and drops it where the Expo module picks it up: an
 // xcframework plus Swift bindings under ios/, shared libraries plus Kotlin bindings under
 // android/. Run from mobile/: `bun run core` (or `bun run core ios` / `bun run core android`).
-import { existsSync, mkdirSync, readdirSync, renameSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -38,11 +38,19 @@ if (wantIos) {
   const generated = join(MODULE, "ios/generated");
   rmSync(generated, { recursive: true, force: true });
   await run([...bindgen, "--language", "swift", "--out-dir", generated]);
-  // The header and its module map go where both the xcframework and the pod find them.
+  // The library carries two UniFFI crates (the core and the Markdown parser). Their headers and
+  // module maps go together where both the xcframework and the pod find them.
   const include = join(generated, "include");
   mkdirSync(include, { recursive: true });
-  renameSync(join(generated, "tinybot_mobileFFI.h"), join(include, "tinybot_mobileFFI.h"));
-  renameSync(join(generated, "tinybot_mobileFFI.modulemap"), join(include, "module.modulemap"));
+  const maps: string[] = [];
+  for (const name of readdirSync(generated)) {
+    if (name.endsWith("FFI.h")) renameSync(join(generated, name), join(include, name));
+    if (name.endsWith("FFI.modulemap")) {
+      maps.push(readFileSync(join(generated, name), "utf8"));
+      rmSync(join(generated, name));
+    }
+  }
+  writeFileSync(join(include, "module.modulemap"), maps.join("\n"));
   const xcframework = join(MODULE, "ios/TinybotCore.xcframework");
   rmSync(xcframework, { recursive: true, force: true });
   await run([

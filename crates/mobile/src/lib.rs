@@ -7,6 +7,9 @@
 
 uniffi::setup_scaffolding!();
 
+/// Linked so the phone's bindings carry the Markdown parser's FFI beside the core's.
+pub use tinybot_markdown::parse_markdown;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 

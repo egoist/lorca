@@ -2,11 +2,12 @@ import AppKit
 
 // MARK: - Segment stack
 
-/// Lays out the parsed message body: wrapped text runs and fenced code blocks.
+/// Lays out the parsed message body: text runs in selectable text views, tables as grids.
 final class SegmentedTextView: NSView {
-    private var labels: [NSTextField] = []
-    private var codeBoxes: [BackgroundView] = []
+    private var textViews: [MarkdownTextView] = []
+    private var tableViews: [MarkdownTableView] = []
     private var segments: [MessageSegment] = []
+    private var textColor: NSColor = .labelColor
 
     init() {
         super.init(frame: .zero)
@@ -18,46 +19,31 @@ final class SegmentedTextView: NSView {
 
     override var isFlipped: Bool { true }
 
-    func configure(_ newSegments: [MessageSegment]) {
+    func configure(_ newSegments: [MessageSegment], textColor: NSColor) {
         segments = newSegments
+        self.textColor = textColor
         syncViews()
         needsLayout = true
     }
 
+    /// Text views are rebuilt per configure: their link color follows the text color, and a
+    /// recycled cell can swap between a user and a bot bubble.
     private func syncViews() {
-        while labels.count < segments.count {
-            let field = NSTextField(labelWithString: "")
-            field.maximumNumberOfLines = 0
-            field.lineBreakMode = .byWordWrapping
-            field.cell?.wraps = true
-            field.cell?.isScrollable = false
-            field.isSelectable = true
-            field.allowsEditingTextAttributes = true
-            addSubview(field.framePositioned())
-            labels.append(field)
-
-            let box = BackgroundView()
-            box.cornerRadius = 7
-            box.isHidden = true
-            addSubview(box.framePositioned(), positioned: .below, relativeTo: field)
-            codeBoxes.append(box)
-        }
-        while labels.count > segments.count {
-            labels.removeLast().removeFromSuperview()
-            codeBoxes.removeLast().removeFromSuperview()
-        }
-
-        for (index, segment) in segments.enumerated() {
-            let label = labels[index]
-            let box = codeBoxes[index]
+        for view in textViews { view.removeFromSuperview() }
+        for view in tableViews { view.removeFromSuperview() }
+        textViews = []
+        tableViews = []
+        for segment in segments {
             switch segment {
-            case let .text(attributed):
-                label.attributedStringValue = attributed
-                box.isHidden = true
-            case let .code(attributed, _):
-                label.attributedStringValue = attributed
-                box.isHidden = false
-                box.fillColor = Theme.codeBackground
+            case let .text(attributed, top, bottom):
+                let view = MarkdownTextView(textColor: textColor)
+                view.show(attributed, topInset: top, bottomInset: bottom)
+                addSubview(view.framePositioned())
+                textViews.append(view)
+            case .table:
+                let view = MarkdownTableView()
+                addSubview(view.framePositioned())
+                tableViews.append(view)
             }
         }
     }
@@ -65,30 +51,23 @@ final class SegmentedTextView: NSView {
     override func layout() {
         super.layout()
         var y: CGFloat = 0
+        var texts = 0
+        var tables = 0
         for (index, segment) in segments.enumerated() {
-            let label = labels[index]
-            let box = codeBoxes[index]
-
             switch segment {
-            case let .text(attributed):
-                let height = TextMeasure.labelSize(of: attributed, width: bounds.width).height
-                label.frame = NSRect(x: 0, y: y, width: bounds.width, height: height)
+            case let .text(attributed, top, bottom):
+                let height = TextMeasure.textSize(of: attributed, width: bounds.width).height + top + bottom
+                textViews[texts].frame = NSRect(x: 0, y: y, width: bounds.width, height: height)
+                texts += 1
                 y += height
-
-            case let .code(attributed, _):
-                let inner = bounds.width - Markdown.codePaddingX * 2
-                let height = TextMeasure.labelSize(of: attributed, width: inner).height
-                box.frame = NSRect(
-                    x: 0, y: y, width: bounds.width, height: height + Markdown.codePaddingY * 2)
-                label.frame = NSRect(
-                    x: Markdown.codePaddingX,
-                    y: y + Markdown.codePaddingY,
-                    width: inner,
-                    height: height
-                )
-                y += height + Markdown.codePaddingY * 2
+            case let .table(content):
+                let table = TableLayout.make(content, maxWidth: bounds.width)
+                let view = tableViews[tables]
+                view.show(table, textColor: textColor)
+                view.frame = NSRect(x: 0, y: y, width: min(table.width, bounds.width), height: table.height)
+                tables += 1
+                y += table.height
             }
-
             if index < segments.count - 1 { y += Markdown.segmentSpacing }
         }
     }
@@ -158,7 +137,7 @@ final class MessageCellView: NSTableCellView {
         stamp.stringValue = Preferences.showTimestamps ? Format.time(message.createdAt) : ""
         stamp.isHidden = stamp.stringValue.isEmpty
 
-        content.configure(segments)
+        content.configure(segments, textColor: isUser ? Theme.userBubbleText : .labelColor)
 
         if isUser {
             bubble.fillColor = Theme.userBubble

@@ -1,9 +1,18 @@
 {
-  "platforms": ["apple", "android"],
+  "platforms": [
+    "apple",
+    "android"
+  ],
   "apple": {
-    "modules": ["TinybotCoreModule"]
+    "modules": [
+      "TinybotCoreModule",
+      "MarkdownViewModule"
+    ]
   },
   "android": {
-    "modules": ["dev.tinybot.core.TinybotCoreModule"]
+    "modules": [
+      "dev.tinybot.core.TinybotCoreModule",
+      "dev.tinybot.core.MarkdownViewModule"
+    ]
   }
 }

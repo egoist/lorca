@@ -1,6 +1,4 @@
 import { FlashList, type FlashListRef } from "@shopify/flash-list";
-import * as Clipboard from "expo-clipboard";
-import * as Haptics from "expo-haptics";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useHeaderHeight } from "expo-router/react-navigation";
 import {
@@ -12,7 +10,6 @@ import {
   useState,
 } from "react";
 import {
-  ActionSheetIOS,
   Alert,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
@@ -30,7 +27,7 @@ import {
 import { useSharedValue } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { chatTitle, engine } from "../../src/core/engine";
-import type { Bot, Message } from "../../src/core/model";
+import type { Bot } from "../../src/core/model";
 import {
   markRead,
   useBotMap,
@@ -261,27 +258,6 @@ export default function ChatScreen() {
         ? `Message ${title} — @ to address one bot`
         : `Message ${title}`;
 
-  const onLongPress = useCallback((message: Message) => {
-    const text = message.body.kind === "text" ? message.body.text : "";
-    const copy = () => {
-      void Clipboard.setStringAsync(text);
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    };
-    if (Platform.OS === "ios") {
-      ActionSheetIOS.showActionSheetWithOptions(
-        { options: ["Copy", "Cancel"], cancelButtonIndex: 1 },
-        (index) => {
-          if (index === 0) copy();
-        },
-      );
-    } else {
-      Alert.alert("Message", undefined, [
-        { text: "Copy", onPress: copy },
-        { text: "Cancel", style: "cancel" },
-      ]);
-    }
-  }, []);
-
   /// The whole message behind a "Messaged ◉ Name" marker, as a sheet.
   const openMarker = useCallback(
     (row: Extract<Row, { type: "marker" }>) => {
@@ -298,12 +274,7 @@ export default function ChatScreen() {
           return <DayRow at={item.at} />;
         case "message":
           return (
-            <MessageRow
-              row={item}
-              bots={bots}
-              isGroup={isGroup}
-              onLongPress={onLongPress}
-            />
+            <MessageRow row={item} bots={bots} isGroup={isGroup} />
           );
         case "marker":
           return <MarkerRow row={item} onPress={openMarker} />;
@@ -328,7 +299,7 @@ export default function ChatScreen() {
           return <StatusRow text={item.text} />;
       }
     },
-    [bots, isGroup, onLongPress, openMarker],
+    [bots, isGroup, openMarker],
   );
 
   if (!chat) {
