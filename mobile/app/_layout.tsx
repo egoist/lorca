@@ -52,7 +52,7 @@ export default function RootLayout() {
               <Stack.Screen name="message/[id]" options={{ ...sheet, sheetAllowedDetents: [0.5, 1], sheetGrabberVisible: true }} />
               <Stack.Screen name="new-bot" options={sheet} />
               <Stack.Screen name="new-group" options={sheet} />
-              <Stack.Screen name="settings" options={sheet} />
+              <Stack.Screen name="settings" options={{ ...sheet, headerShown: false }} />
               <Stack.Screen
                 name="attachment/[id]"
                 options={{ presentation: "fullScreenModal", headerShown: true, headerStyle: { backgroundColor: "#000000" }, headerTintColor: "#FFFFFF", headerTitleStyle: { color: "#FFFFFF" }, contentStyle: { backgroundColor: "#000000" } }}
