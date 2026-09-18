@@ -147,6 +147,27 @@ export async function buildMarkdown(config: Config): Promise<{ ok: boolean }> {
   return { ok: framework.exitCode === 0 }
 }
 
+/** AppKit picks the app's look from the SDK version in the binary's LC_BUILD_VERSION. The Swift
+ * Build engine writes the deployment target there (`sdk 14.0`), and AppKit then runs the app in
+ * its pre-macOS 26 look: a flat sidebar, an opaque titlebar strip with a fixed separator, no
+ * scroll-edge effect under the titlebar. Restamp with the SDK the app was compiled against. */
+export async function stampSDK(binary: string): Promise<boolean> {
+  const build = await run(["vtool", "-show-build", binary], { capture: true })
+  const minos = build.stdout.match(/minos (\S+)/)?.[1]
+  const stamped = build.stdout.match(/sdk (\S+)/)?.[1]
+  const sdk = (await run(["xcrun", "--sdk", "macosx", "--show-sdk-version"], { capture: true })).stdout.trim()
+  if (build.exitCode !== 0 || !minos || !sdk) return false
+  if (stamped === sdk) return true
+  const restamped = `${binary}.restamped`
+  const vtool = await run(
+    ["vtool", "-set-build-version", "macos", minos, sdk, "-replace", "-output", restamped, binary],
+    { capture: true },
+  )
+  if (vtool.exitCode !== 0) return false
+  await rename(restamped, binary)
+  return true
+}
+
 /** Compile the SPM target and lay the product out as a launchable .app bundle with the CLI inside. */
 export async function buildApp(config: Config): Promise<{ ok: boolean; ms: number }> {
   const started = performance.now()
@@ -178,6 +199,9 @@ export async function buildApp(config: Config): Promise<{ ok: boolean; ms: numbe
   const destination = join(macos, APP_NAME)
   await rm(destination, { force: true })
   await Bun.write(destination, Bun.file(source))
+  if (!(await stampSDK(destination))) {
+    return { ok: false, ms: performance.now() - started }
+  }
   await chmod(destination, 0o755)
 
   // The app launches this binary as `lorca serve`. It lives under Resources/bin: on a

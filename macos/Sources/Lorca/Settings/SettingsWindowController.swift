@@ -65,17 +65,11 @@ class SettingsPaneViewController: NSViewController {
         scrollView.autohidesScrollers = true
         scrollView.translatesAutoresizingMaskIntoConstraints = false
 
-        // The page starts below the titlebar. A scroll view running under it gets AppKit's scroll
-        // pocket, a strip with a hard edge that reaches past the pane and over the sidebar.
-        scrollView.automaticallyAdjustsContentInsets = false
-
+        // The page runs under the titlebar, which gives it AppKit's scroll-edge effect there.
         container.addSubview(scrollView)
+        scrollView.pin(to: container)
 
         NSLayoutConstraint.activate([
-            scrollView.topAnchor.constraint(equalTo: container.safeAreaLayoutGuide.topAnchor),
-            scrollView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            scrollView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            scrollView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
             documentView.widthAnchor.constraint(equalTo: scrollView.widthAnchor),
             column.topAnchor.constraint(equalTo: documentView.topAnchor),
             column.leadingAnchor.constraint(equalTo: documentView.leadingAnchor),

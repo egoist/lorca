@@ -13,9 +13,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         window.title = "Lorca"
         window.titleVisibility = .visible
         window.toolbarStyle = .unified
-        // The content pane draws the titlebar strip and its separator (ContentContainerViewController).
-        window.titlebarAppearsTransparent = true
-        window.titlebarSeparatorStyle = .none
+        window.titlebarSeparatorStyle = .automatic
         window.minSize = NSSize(width: 860, height: 520)
         window.contentViewController = root
         window.setFrameAutosaveName("LorcaMainWindow")

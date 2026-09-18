@@ -3,7 +3,7 @@ import AppKit
 final class RootSplitViewController: NSSplitViewController {
     private let store = AppStore.shared
 
-    private let sidebarContainer = ContentContainerViewController(drawsTitlebar: false)
+    private let sidebarContainer = ContentContainerViewController()
     private let sidebar = SidebarViewController()
     private let settingsSidebar = SettingsSidebarViewController()
     private let content = ContentContainerViewController()
@@ -406,44 +406,11 @@ final class RootSplitViewController: NSSplitViewController {
 
 final class ContentContainerViewController: NSViewController {
     private var current: NSViewController?
-    private let drawsTitlebar: Bool
-    private var titlebar: NSView?
-
-    /// The content pane draws the titlebar's material itself. AppKit lays the window's own strip
-    /// out from the split divider's frame, which starts 3pt inside the sidebar, so its edge
-    /// never meets the pane's; the window's titlebar is transparent instead.
-    init(drawsTitlebar: Bool = true) {
-        self.drawsTitlebar = drawsTitlebar
-        super.init(nibName: nil, bundle: nil)
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError() }
 
     override func loadView() {
         let container = NSView()
         container.wantsLayer = true
         view = container
-        guard drawsTitlebar else { return }
-
-        let material = NSVisualEffectView()
-        material.material = .titlebar
-        material.blendingMode = .withinWindow
-        material.state = .followsWindowActiveState
-        material.translatesAutoresizingMaskIntoConstraints = false
-        let separator = HairlineView()
-        material.addSubview(separator)
-        container.addSubview(material)
-        NSLayoutConstraint.activate([
-            material.topAnchor.constraint(equalTo: container.topAnchor),
-            material.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            material.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            material.bottomAnchor.constraint(equalTo: container.safeAreaLayoutGuide.topAnchor),
-            separator.leadingAnchor.constraint(equalTo: material.leadingAnchor),
-            separator.trailingAnchor.constraint(equalTo: material.trailingAnchor),
-            separator.bottomAnchor.constraint(equalTo: material.bottomAnchor),
-        ])
-        titlebar = material
     }
 
     func show(_ controller: NSViewController) {
@@ -456,7 +423,7 @@ final class ContentContainerViewController: NSViewController {
 
         addChild(controller)
         controller.view.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(controller.view, positioned: .below, relativeTo: titlebar)
+        view.addSubview(controller.view)
         controller.view.pin(to: view)
         current = controller
     }
