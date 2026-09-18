@@ -59,6 +59,8 @@ import {
 
 /// Breathing room between the last message and the composer, as on the Mac.
 const COMPOSER_GAP = 14;
+/// How much taller the composer gets when it expands on focus, until it has been seen to.
+const FOCUS_GROWTH_GUESS = 36;
 
 export default function ChatScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -84,27 +86,54 @@ export default function ChatScreen() {
   // Focusing the composer makes it taller just as the keyboard starts to move. The scroll view
   // answers a change of `extraContentPadding` by scrolling from the offset it last saw, which at
   // that moment is the one from before the keyboard's lift, so the lift would be lost. A new
-  // composer height therefore waits until the keyboard has come to rest.
-  const composerExtraTarget = useSharedValue(composerGuess - insets.bottom);
+  // composer height therefore waits until the keyboard has come to rest. For the lift to cover
+  // the expanded composer in one motion, the padding already counts the expanded height while
+  // the keyboard is down: the compact composer's height plus the growth seen on earlier focuses.
+  const composerExtraTarget = useSharedValue(
+    composerGuess - insets.bottom + FOCUS_GROWTH_GUESS,
+  );
+  const composerActual = useRef(composerGuess - insets.bottom);
+  const composerCompact = useRef(Number.POSITIVE_INFINITY);
+  const focusGrowth = useRef(FOCUS_GROWTH_GUESS);
+  const compactAtKeyboardStart = useRef(false);
+  const publishComposerExtra = useCallback(() => {
+    const actual = composerActual.current;
+    const compact = composerCompact.current;
+    const expanded = actual > compact + 1;
+    composerExtraTarget.value = expanded
+      ? actual
+      : compact + focusGrowth.current;
+  }, [composerExtraTarget]);
   const keyboardMoving = useSharedValue(false);
   // Sending hides the keyboard; once it is down, an anchored message is put back under the
   // header in case the keyboard's own unwinding moved it.
-  const reanchorRef = useRef<() => void>(() => {});
-  const reanchor = useCallback(() => reanchorRef.current(), []);
+  const keyboardEndRef = useRef<(height: number) => void>(() => {});
+  const keyboardEnded = useCallback(
+    (height: number) => keyboardEndRef.current(height),
+    [],
+  );
+  // The keyboard takes over the scroll position: the pin that holds a just-opened chat at its
+  // end would otherwise scroll the keyboard's lift straight back.
+  const keyboardStartRef = useRef<(height: number) => void>(() => {});
+  const keyboardStarted = useCallback(
+    (height: number) => keyboardStartRef.current(height),
+    [],
+  );
   useKeyboardHandler(
     {
-      onStart: () => {
+      onStart: (e) => {
         "worklet";
         keyboardMoving.value = true;
+        runOnJS(keyboardStarted)(e.height);
       },
-      onEnd: () => {
+      onEnd: (e) => {
         "worklet";
         keyboardMoving.value = false;
         composerExtra.value = composerExtraTarget.value;
-        runOnJS(reanchor)();
+        runOnJS(keyboardEnded)(e.height);
       },
     },
-    [reanchor],
+    [keyboardEnded, keyboardStarted],
   );
   useAnimatedReaction(
     () => composerExtraTarget.value,
@@ -154,23 +183,29 @@ export default function ChatScreen() {
     anchorTarget.current = null;
     setAnchored(false);
   }, []);
+  // The space under the transcript with the keyboard down: the composer's, or the padding the
+  // scroll view keeps for the expanded composer when that is the larger.
+  const restingSpace = useCallback(
+    () => Math.max(composerSpace.current, composerExtraTarget.value),
+    [composerExtraTarget],
+  );
   const blankFor = useCallback(() => {
     const list = listRef.current;
     const key = anchorKey.current;
     if (!list || !key || layoutHeight.current === 0)
-      return composerSpace.current;
+      return restingSpace();
     const index = rowsRef.current.findIndex((row) => row.key === key);
     const layout = index < 0 ? undefined : list.getLayout(index);
     // The sent message has not reached the list yet: keep what is there.
     if (!layout) return composerBlank.value;
     const tail = list.getChildContainerDimensions().height - layout.y;
     const blank = layoutHeight.current - topInsetRef.current - tail;
-    if (blank <= composerSpace.current) {
+    if (blank <= restingSpace()) {
       releaseAnchor();
-      return composerSpace.current;
+      return restingSpace();
     }
     return blank;
-  }, [composerBlank, releaseAnchor]);
+  }, [composerBlank, releaseAnchor, restingSpace]);
   const topInsetFor = useCallback(() => {
     const list = listRef.current;
     if (Platform.OS !== "ios") return 0;
@@ -221,8 +256,33 @@ export default function ChatScreen() {
     [composerBlank, topInsetFor],
   );
   endOffsetRef.current = endOffset;
-  reanchorRef.current = () => {
+  // The space under an anchored message swallows the keyboard: the scroll view sees room below
+  // the content and lifts nothing, so the keys would cover a reply that reaches under them. With
+  // the keyboard up the end of the transcript goes above the composer instead, unless everything
+  // from the anchor on fits there anyway; with the keyboard down the anchor takes over again.
+  const liftAnchored = (height: number) => {
+    const list = listRef.current;
+    const key = anchorKey.current;
+    if (!list || !key || Platform.OS !== "ios") return;
+    const index = rowsRef.current.findIndex((row) => row.key === key);
+    const layout = index < 0 ? undefined : list.getLayout(index);
+    if (!layout) return;
+    const covered = height + composerExtraTarget.value;
+    const tail = list.getChildContainerDimensions().height - layout.y;
+    if (tail <= layoutHeight.current - topInsetRef.current - covered) return;
+    list.scrollToOffset({
+      offset: contentHeight.current + covered - layoutHeight.current,
+      animated: true,
+    });
+  };
+  keyboardEndRef.current = (height) => {
+    // The composer has expanded by now: what it grew by is what the next focus will need.
+    const grown = composerActual.current - composerCompact.current;
+    if (height > 0 && compactAtKeyboardStart.current && grown > 1)
+      focusGrowth.current = grown;
+    publishComposerExtra();
     if (!anchorKey.current) return;
+    if (height > 0) return liftAnchored(height);
     anchorTarget.current = null;
     syncInsetTop();
   };
@@ -275,6 +335,12 @@ export default function ChatScreen() {
     if (revealTimer.current) clearTimeout(revealTimer.current);
     revealTimer.current = null;
   }, []);
+  keyboardStartRef.current = (height) => {
+    compactAtKeyboardStart.current =
+      composerActual.current <= composerCompact.current + 1;
+    if (settling.current) stopSettling();
+    if (height > 0) liftAnchored(height);
+  };
   useEffect(() => {
     settling.current = true;
     pinIssued.current = false;
@@ -523,7 +589,10 @@ export default function ChatScreen() {
             const blank = e.nativeEvent.layout.height + COMPOSER_GAP;
             if (blank !== composerSpace.current) unconfirm();
             composerSpace.current = blank;
-            composerExtraTarget.value = blank - insets.bottom;
+            const extra = blank - insets.bottom;
+            composerActual.current = extra;
+            composerCompact.current = Math.min(composerCompact.current, extra);
+            publishComposerExtra();
             syncInsetTop();
             pinToBottom();
           }}
