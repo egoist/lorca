@@ -10,7 +10,7 @@ import Animated, { Easing, useAnimatedStyle, useSharedValue, withDelay, withRepe
 import { isSentMessage, recipientName, type Body, type Bot, type Chat, type Message } from "../core/model";
 import { AttachmentBlock } from "./attachments";
 import { BotAvatar } from "./Avatar";
-import { daySeparator, firstLine, time } from "./format";
+import { daySeparator, firstLine } from "./format";
 import { Markdown } from "./Markdown";
 import { Symbol } from "./Symbol";
 import { Font, usePalette } from "./theme";
@@ -138,10 +138,11 @@ export function MessageRow({ row, bots, isGroup }: { row: Extract<Row, { type: "
         >
           {attachments.length > 0 && <AttachmentBlock attachments={attachments} onUserBubble={isYou} maxWidth={attachmentWidth} />}
           {text.length > 0 && <Markdown text={text} color={isYou ? p.userBubbleText : p.botBubbleText} maxWidth={attachmentWidth} />}
-          <View style={styles.bubbleFooter}>
-            {failed && <Symbol name="exclamationmark.triangle.fill" size={11} color={p.red} />}
-            <Text style={[styles.time, { color: isYou ? "rgba(255,255,255,0.75)" : p.tertiaryLabel }]}>{time(new Date(message.created_at * 1000))}</Text>
-          </View>
+          {failed && (
+            <View style={styles.bubbleFooter}>
+              <Symbol name="exclamationmark.triangle.fill" size={11} color={p.red} />
+            </View>
+          )}
         </View>
       </View>
     </View>
@@ -312,8 +313,7 @@ const styles = StyleSheet.create({
   bubbleColumnYou: { alignItems: "flex-end" },
   author: { fontSize: Font.author, fontWeight: "600", marginLeft: 12, marginBottom: 2 },
   bubble: { borderRadius: 18, paddingHorizontal: 13, paddingVertical: 9, gap: 2 },
-  bubbleFooter: { flexDirection: "row", justifyContent: "flex-end", alignItems: "center", gap: 4, marginTop: -2 },
-  time: { fontSize: 10.5, fontWeight: "500" },
+  bubbleFooter: { flexDirection: "row", justifyContent: "flex-end", alignItems: "center" },
   centered: { alignItems: "center", paddingHorizontal: INSET },
   markerLine: { flexDirection: "row", alignItems: "center" },
   notice: { flexDirection: "row", alignItems: "flex-start", gap: 8, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8, maxWidth: 360 },

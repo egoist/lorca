@@ -336,9 +336,100 @@ final class MarkdownRenderer {
   }
 }
 
+/// Text and table sizes from standalone TextKit stacks: no views, so the JS thread can ask for
+/// a message's size before the view exists and the view lays out to the same numbers.
+enum MarkdownMeasure {
+  static func text(_ text: NSAttributedString, insets: UIEdgeInsets, maxWidth: CGFloat) -> CGSize {
+    let storage = NSTextStorage(attributedString: text)
+    let manager = NSLayoutManager()
+    let container = NSTextContainer(size: CGSize(width: max(1, maxWidth - insets.left - insets.right), height: CGFloat.greatestFiniteMagnitude))
+    container.lineFragmentPadding = 0
+    manager.addTextContainer(container)
+    storage.addLayoutManager(manager)
+    manager.ensureLayout(for: container)
+    let used = manager.usedRect(for: container)
+    return CGSize(width: min(ceil(used.width) + insets.left + insets.right, maxWidth), height: ceil(used.height) + insets.top + insets.bottom)
+  }
+
+  /// The size a whole message takes within `maxWidth`: its segments stacked with the block gap.
+  static func message(_ style: MarkdownStyle) -> CGSize {
+    let renderer = MarkdownRenderer(style: style)
+    let width = max(style.maxWidth, 1)
+    var total = CGSize.zero
+    for (index, segment) in renderer.render(parseMarkdown(text: style.markdown)).enumerated() {
+      let size: CGSize
+      switch segment {
+      case .text(let rendered):
+        size = text(rendered.text, insets: UIEdgeInsets(top: rendered.topInset, left: 0, bottom: rendered.bottomInset, right: 0), maxWidth: width)
+      case .table(let spec):
+        size = TableLayout(cells: TableLayout.cells(spec, renderer: renderer), maxWidth: width).size
+      }
+      if index > 0 { total.height += MarkdownLayout.gap }
+      total.height += size.height
+      total.width = max(total.width, size.width)
+    }
+    return total
+  }
+}
+
+/// A table's columns measured from their cells and shrunk to fit when they must, rows as tall
+/// as their tallest cell.
+struct TableLayout {
+  static let cellInsets = UIEdgeInsets(top: MarkdownLayout.cellPaddingY, left: MarkdownLayout.cellPaddingX, bottom: MarkdownLayout.cellPaddingY, right: MarkdownLayout.cellPaddingX)
+
+  var widths: [CGFloat] = []
+  var heights: [CGFloat] = []
+  /// The size the table takes in the message; the grid itself may be wider.
+  var size = CGSize.zero
+
+  /// The header and rows as attributed cells, every row padded to the widest one.
+  static func cells(_ spec: TableSpec, renderer: MarkdownRenderer) -> [[NSAttributedString]] {
+    let rows = [spec.header] + spec.rows.map(\.cells)
+    let columns = rows.map(\.count).max() ?? 0
+    return rows.enumerated().map { r, row in
+      (0..<columns).map { c in
+        let align = c < spec.alignments.count ? spec.alignments[c] : .auto
+        return renderer.cell(c < row.count ? row[c].spans : [], header: r == 0, align: align)
+      }
+    }
+  }
+
+  init(cells: [[NSAttributedString]], maxWidth: CGFloat) {
+    let columns = cells.first?.count ?? 0
+    guard columns > 0 else { return }
+    let unbounded: CGFloat = 100_000
+    var natural = [CGFloat](repeating: 0, count: columns)
+    for row in cells {
+      for (c, cell) in row.enumerated() {
+        natural[c] = max(natural[c], MarkdownMeasure.text(cell, insets: Self.cellInsets, maxWidth: unbounded).width)
+      }
+    }
+    widths = natural
+    let total = natural.reduce(0, +)
+    if total > maxWidth {
+      // Take the excess from the wide columns first; no column drops below the floor.
+      let floor = MarkdownLayout.columnFloor
+      let flexible = natural.map { max(0, $0 - floor) }
+      let give = flexible.reduce(0, +)
+      let excess = min(total - maxWidth, give)
+      if give > 0 {
+        for c in 0..<columns { widths[c] = natural[c] - flexible[c] / give * excess }
+      }
+    }
+    widths = widths.map { ceil($0) }
+    for row in cells {
+      var height: CGFloat = 0
+      for (c, cell) in row.enumerated() {
+        height = max(height, MarkdownMeasure.text(cell, insets: Self.cellInsets, maxWidth: widths[c]).height)
+      }
+      heights.append(ceil(height))
+    }
+    size = CGSize(width: min(widths.reduce(0, +), maxWidth), height: heights.reduce(0, +))
+  }
+}
+
 /// A read-only, selectable UITextView on a TextKit 1 stack, so the layout manager can paint
-/// code boxes and quote bars. `measure` lays the text out against a width and reports the
-/// size it actually uses.
+/// code boxes and quote bars.
 final class SelectableTextView: UITextView {
   private let manager = MarkdownLayoutManager()
   private let storage = NSTextStorage()
@@ -367,40 +458,25 @@ final class SelectableTextView: UITextView {
   required init?(coder: NSCoder) {
     fatalError("init(coder:) has not been implemented")
   }
-
-  func measure(_ maxWidth: CGFloat) -> CGSize {
-    let insets = textContainerInset
-    container.size = CGSize(width: max(1, maxWidth - insets.left - insets.right), height: CGFloat.greatestFiniteMagnitude)
-    manager.ensureLayout(for: container)
-    let used = manager.usedRect(for: container)
-    return CGSize(width: min(ceil(used.width) + insets.left + insets.right, maxWidth), height: ceil(used.height) + insets.top + insets.bottom)
-  }
 }
 
-/// A table as a grid: columns measured from their cells and shrunk to fit when they must,
-/// rows as tall as their tallest cell, a filled header row, hairline rules, rounded corners.
-/// Wider than the bubble, it scrolls sideways.
+/// A table as a grid: a filled header row, hairline rules, rounded corners. Wider than the
+/// bubble, it scrolls sideways.
 final class MarkdownTableView: UIScrollView {
   private let grid: TableGridView
+  private let texts: [[NSAttributedString]]
   private let cells: [[SelectableTextView]]
-  private let columns: Int
 
   init(spec: TableSpec, style: MarkdownStyle, renderer: MarkdownRenderer) {
-    let rows = [spec.header] + spec.rows.map(\.cells)
-    columns = rows.map(\.count).max() ?? 0
-    var built: [[SelectableTextView]] = []
-    for (r, row) in rows.enumerated() {
-      var views: [SelectableTextView] = []
-      for c in 0..<columns {
+    texts = TableLayout.cells(spec, renderer: renderer)
+    cells = texts.map { row in
+      row.map { text in
         let view = SelectableTextView(style: style)
-        view.textContainerInset = UIEdgeInsets(top: MarkdownLayout.cellPaddingY, left: MarkdownLayout.cellPaddingX, bottom: MarkdownLayout.cellPaddingY, right: MarkdownLayout.cellPaddingX)
-        let align = c < spec.alignments.count ? spec.alignments[c] : .auto
-        view.attributedText = renderer.cell(c < row.count ? row[c].spans : [], header: r == 0, align: align)
-        views.append(view)
+        view.textContainerInset = TableLayout.cellInsets
+        view.attributedText = text
+        return view
       }
-      built.append(views)
     }
-    cells = built
     grid = TableGridView(style: style)
     super.init(frame: .zero)
     showsHorizontalScrollIndicator = false
@@ -418,51 +494,22 @@ final class MarkdownTableView: UIScrollView {
 
   /// Lays the grid out for the width and returns the size the table takes in the message.
   func measure(_ maxWidth: CGFloat) -> CGSize {
-    guard columns > 0 else { return .zero }
-    let unbounded: CGFloat = 100_000
-    var natural = [CGFloat](repeating: 0, count: columns)
-    for row in cells {
-      for (c, cell) in row.enumerated() {
-        natural[c] = max(natural[c], cell.measure(unbounded).width)
-      }
-    }
-    var widths = natural
-    let total = natural.reduce(0, +)
-    if total > maxWidth {
-      // Take the excess from the wide columns first; no column drops below the floor.
-      let floor = MarkdownLayout.columnFloor
-      let flexible = natural.map { max(0, $0 - floor) }
-      let give = flexible.reduce(0, +)
-      let excess = min(total - maxWidth, give)
-      if give > 0 {
-        for c in 0..<columns { widths[c] = natural[c] - flexible[c] / give * excess }
-      }
-    }
-    widths = widths.map { ceil($0) }
-    let tableWidth = widths.reduce(0, +)
-    var heights: [CGFloat] = []
-    for row in cells {
-      var height: CGFloat = 0
-      for (c, cell) in row.enumerated() {
-        height = max(height, cell.measure(widths[c]).height)
-      }
-      heights.append(ceil(height))
-    }
+    let layout = TableLayout(cells: texts, maxWidth: maxWidth)
     var y: CGFloat = 0
     for (r, row) in cells.enumerated() {
       var x: CGFloat = 0
       for (c, cell) in row.enumerated() {
-        cell.frame = CGRect(x: x, y: y, width: widths[c], height: heights[r])
-        x += widths[c]
+        cell.frame = CGRect(x: x, y: y, width: layout.widths[c], height: layout.heights[r])
+        x += layout.widths[c]
       }
-      y += heights[r]
+      y += layout.heights[r]
     }
-    grid.columns = widths
-    grid.rows = heights
-    grid.frame = CGRect(x: 0, y: 0, width: tableWidth, height: y)
+    grid.columns = layout.widths
+    grid.rows = layout.heights
+    grid.frame = CGRect(x: 0, y: 0, width: layout.widths.reduce(0, +), height: y)
     grid.setNeedsDisplay()
     contentSize = grid.frame.size
-    return CGSize(width: min(tableWidth, maxWidth), height: y)
+    return layout.size
   }
 }
 
@@ -498,9 +545,9 @@ final class TableGridView: UIView {
 }
 
 /// A message body as native views: the core parses the Markdown, this renders the text runs
-/// into selectable text views and the tables into grids, stacked with the block gap. It
-/// measures everything against `maxWidth` and claims exactly the used size, so a one-line
-/// message keeps a narrow bubble.
+/// into selectable text views and the tables into grids, stacked with the block gap. The JS
+/// side sizes it from `MarkdownMeasure.message`, in the same commit as the text, so a one-line
+/// message keeps a narrow bubble and a recycled row never shows its last message's width.
 final class MarkdownView: ExpoView {
   var style = MarkdownStyle()
   private var segments: [(view: UIView, size: CGSize)] = []
@@ -525,7 +572,6 @@ final class MarkdownView: ExpoView {
     segments = []
     let renderer = MarkdownRenderer(style: style)
     let width = max(style.maxWidth, 1)
-    var total = CGSize.zero
     for segment in renderer.render(parseMarkdown(text: style.markdown)) {
       let view: UIView
       let size: CGSize
@@ -534,7 +580,7 @@ final class MarkdownView: ExpoView {
         let text = SelectableTextView(style: style)
         text.textContainerInset = UIEdgeInsets(top: rendered.topInset, left: 0, bottom: rendered.bottomInset, right: 0)
         text.attributedText = rendered.text
-        size = text.measure(width)
+        size = MarkdownMeasure.text(rendered.text, insets: text.textContainerInset, maxWidth: width)
         view = text
       case .table(let spec):
         let table = MarkdownTableView(spec: spec, style: style, renderer: renderer)
@@ -542,12 +588,8 @@ final class MarkdownView: ExpoView {
         view = table
       }
       addSubview(view)
-      if !segments.isEmpty { total.height += MarkdownLayout.gap }
-      total.height += size.height
-      total.width = max(total.width, size.width)
       segments.append((view, size))
     }
-    setViewSize(total)
     setNeedsLayout()
   }
 }

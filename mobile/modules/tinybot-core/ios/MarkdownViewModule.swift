@@ -6,6 +6,18 @@ public class MarkdownViewModule: Module {
   public func definition() -> ModuleDefinition {
     Name("MarkdownView")
 
+    // The size a message takes within `maxWidth`. Synchronous, so the size lands in the same
+    // commit as the text.
+    Function("measure") { (markdown: String, maxWidth: Double, fontSize: Double, codeFontSize: Double) -> [String: Double] in
+      var style = MarkdownStyle()
+      style.markdown = markdown
+      style.maxWidth = CGFloat(maxWidth)
+      style.fontSize = CGFloat(fontSize)
+      style.codeFontSize = CGFloat(codeFontSize)
+      let size = MarkdownMeasure.message(style)
+      return ["width": Double(size.width), "height": Double(size.height)]
+    }
+
     View(MarkdownView.self) {
       Prop("markdown") { (view: MarkdownView, markdown: String) in
         view.style.markdown = markdown
