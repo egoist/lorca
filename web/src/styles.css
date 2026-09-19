@@ -122,6 +122,38 @@
     font-weight: 400;
     letter-spacing: -0.01em;
   }
+  /* Han characters want air: no negative tracking, no faux italic. */
+  :lang(zh) .display {
+    letter-spacing: -0.01em;
+    line-height: 1.12;
+  }
+  /* Full-width glyphs run wider than Latin: scale the headline so each line stays whole. */
+  :lang(zh) h1.display {
+    font-size: clamp(2.5rem, 11vw, 4.6rem);
+    word-break: keep-all;
+  }
+  /* A thin Songti beside heavy Hei looks lopsided, so Chinese accents keep the headline face
+     and weight and carry the emphasis in color. */
+  :lang(zh) .serif-accent {
+    font-family: inherit;
+    font-style: normal;
+    font-weight: inherit;
+    font-size: 1em;
+    letter-spacing: inherit;
+    color: var(--muted-foreground);
+  }
+  :lang(zh) h2.display {
+    font-size: clamp(1.75rem, 7.5vw, 3rem);
+  }
+  :lang(zh) h2 .serif-accent {
+    display: block;
+  }
+  :lang(zh) h1 .serif-accent {
+    background: linear-gradient(100deg, var(--violet), var(--azure) 55%, var(--cyan));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
   /* Film grain on top of the gradient stages. */
   .grain::after {
     content: '';

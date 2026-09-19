@@ -1,22 +1,17 @@
-import { HeadContent, Scripts, createRootRoute } from '@tanstack/react-router'
+import { HeadContent, Scripts, createRootRoute, useLocation } from '@tanstack/react-router'
+import { I18nextProvider } from 'react-i18next'
+
+import { htmlLang, i18nFor, languageOf } from '#/i18n'
 
 import appCss from '../styles.css?url'
-
-const title = 'Lorca'
-const description =
-  'A team of AI bots that live on your own machines. Direct chats, group chats where bots take turns, and an end-to-end encrypted relay between your devices.'
 
 export const Route = createRootRoute({
   head: () => ({
     meta: [
       { charSet: 'utf-8' },
       { name: 'viewport', content: 'width=device-width, initial-scale=1' },
-      { title },
-      { name: 'description', content: description },
       { name: 'theme-color', content: '#fafafb', media: '(prefers-color-scheme: light)' },
       { name: 'theme-color', content: '#0f0f12', media: '(prefers-color-scheme: dark)' },
-      { property: 'og:title', content: title },
-      { property: 'og:description', content: description },
       { property: 'og:type', content: 'website' },
       { property: 'og:image', content: '/screens/group.png' },
       { name: 'twitter:card', content: 'summary_large_image' },
@@ -36,13 +31,14 @@ export const Route = createRootRoute({
 })
 
 function RootDocument({ children }: { children: React.ReactNode }) {
+  const lng = languageOf(useLocation({ select: (location) => location.pathname }))
   return (
-    <html lang="en">
+    <html lang={htmlLang[lng]}>
       <head>
         <HeadContent />
       </head>
       <body>
-        {children}
+        <I18nextProvider i18n={i18nFor(lng)}>{children}</I18nextProvider>
         <Scripts />
       </body>
     </html>
