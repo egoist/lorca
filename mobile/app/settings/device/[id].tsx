@@ -1,5 +1,5 @@
 // One Device, slid in from its row in Settings inside the same sheet: the bots assigned to it,
-// its provider credentials and plugins when it is a Runner, and the machine itself.
+// its plugins when it is a Runner, and the machine itself.
 
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { Alert, ScrollView, StyleSheet, Text, View } from "react-native";
@@ -86,14 +86,6 @@ export default function DeviceScreen() {
         {runner && (
           <Section title="Bots assigned here">
             {bots.length === 0 ? <Row title="No bots assigned" /> : bots.map((bot) => <Row key={bot.id} title={bot.name} subtitle={[bot.label, providerLabel(bot.provider)].filter(Boolean).join(" · ")} leading={<BotAvatar bot={bot} size={32} />} chevron onPress={() => openChat(bot.id)} />)}
-          </Section>
-        )}
-
-        {runner && (
-          <Section title="Provider credentials" footer={`Provider credentials live on ${device.name}. Connect DeepSeek, Anthropic, ChatGPT, or Grok from the Lorca app running there; this phone only sends encrypted job envelopes.`}>
-            {device.providers.map((provider) => (
-              <Row key={provider.kind} title={providerLabel(provider.kind)} subtitle={provider.is_connected ? provider.detail || undefined : undefined} detail={provider.is_connected ? "Connected" : "Not connected"} />
-            ))}
           </Section>
         )}
 

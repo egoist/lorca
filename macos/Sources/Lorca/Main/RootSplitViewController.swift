@@ -16,7 +16,7 @@ final class RootSplitViewController: NSSplitViewController {
 
     private var userWantsInspector = true
     private var chatController: ChatViewController?
-    /// The Device the Providers, Plugins, Bots, and Devices panes show, picked in the window's
+    /// The Device the Plugins, Bots, and Devices panes show, picked in the window's
     /// toolbar. This Mac until another is picked.
     private(set) var settingsDeviceID: Device.ID?
     private var settingsControllers: [SettingsPane: NSViewController] = [:]

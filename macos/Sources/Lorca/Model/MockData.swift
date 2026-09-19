@@ -18,13 +18,6 @@ enum MockData {
                 status: .online,
                 lastSeen: Date(),
                 machineKey: "mk_7c41…a09f",
-                providers: [
-                    ProviderCredential(kind: .deepseek, isConnected: true, detail: "sk-live…4f2c"),
-                    ProviderCredential(kind: .anthropic, isConnected: false, detail: "Not connected"),
-                    ProviderCredential(
-                        kind: .chatgpt, isConnected: true, detail: "you@lorca.app"),
-                    ProviderCredential(kind: .grok, isConnected: false, detail: "Not connected"),
-                ],
                 plugins: plugins()
             ),
             Device(
@@ -36,13 +29,7 @@ enum MockData {
                 isThisDevice: false,
                 status: .online,
                 lastSeen: minutesAgo(1),
-                machineKey: "mk_1f88…23bd",
-                providers: [
-                    ProviderCredential(kind: .deepseek, isConnected: true, detail: "sk-live…8b17"),
-                    ProviderCredential(kind: .anthropic, isConnected: false, detail: "Not connected"),
-                    ProviderCredential(kind: .chatgpt, isConnected: false, detail: "Not connected"),
-                    ProviderCredential(kind: .grok, isConnected: false, detail: "Not connected"),
-                ]
+                machineKey: "mk_1f88…23bd"
             ),
             Device(
                 id: "dev-closet",
@@ -53,13 +40,7 @@ enum MockData {
                 isThisDevice: false,
                 status: .offline,
                 lastSeen: minutesAgo(184),
-                machineKey: "mk_c052…77e1",
-                providers: [
-                    ProviderCredential(kind: .deepseek, isConnected: false, detail: "Not connected"),
-                    ProviderCredential(kind: .anthropic, isConnected: false, detail: "Not connected"),
-                    ProviderCredential(kind: .chatgpt, isConnected: false, detail: "Not connected"),
-                    ProviderCredential(kind: .grok, isConnected: false, detail: "Not connected"),
-                ]
+                machineKey: "mk_c052…77e1"
             ),
             Device(
                 id: "dev-phone",
@@ -70,9 +51,17 @@ enum MockData {
                 isThisDevice: false,
                 status: .online,
                 lastSeen: minutesAgo(12),
-                machineKey: "mk_9e3d…51c8",
-                providers: []
+                machineKey: "mk_9e3d…51c8"
             ),
+        ]
+    }
+
+    static func providers() -> [ProviderCredential] {
+        [
+            ProviderCredential(kind: .deepseek, isConnected: true, detail: "sk-live…4f2c"),
+            ProviderCredential(kind: .anthropic, isConnected: false, detail: "Not connected"),
+            ProviderCredential(kind: .chatgpt, isConnected: true, detail: "you@lorca.app"),
+            ProviderCredential(kind: .grok, isConnected: false, detail: "Not connected"),
         ]
     }
 

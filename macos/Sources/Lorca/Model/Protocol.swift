@@ -30,6 +30,7 @@ enum Wire {
         var chats: [Chat]
         var routines: [Routine]?
         var autoReview: AutoReview?
+        var providers: [Provider]?
         var runningChatIds: [String]
         var runningTurns: [RunningTurn]?
     }
@@ -94,6 +95,11 @@ enum Wire {
         var isConnected: Bool
         var detail: String
         var baseUrl: String?
+
+        func toModel() -> ProviderCredential? {
+            guard let kind = ProviderCredential.Kind(wireValue: kind) else { return nil }
+            return ProviderCredential(kind: kind, isConnected: isConnected, detail: detail, baseURL: baseUrl)
+        }
     }
 
     struct Device: Decodable {
@@ -106,7 +112,6 @@ enum Wire {
         var isThisDevice: Bool
         var status: String
         var lastSeen: Double
-        var providers: [Provider]
         var plugins: [PluginStatus]?
     }
 
@@ -349,6 +354,7 @@ enum Wire {
         var chats: [Chat]
         var routines: [Routine]?
         var autoReview: AutoReview?
+        var providers: [Provider]?
     }
 
     struct MessageEvent: Decodable {
@@ -435,10 +441,6 @@ extension Wire.Device {
             status: status == "online" ? .online : (status == "pairing" ? .pairing : .offline),
             lastSeen: Date(timeIntervalSince1970: lastSeen),
             machineKey: machineKey,
-            providers: providers.compactMap { provider in
-                guard let kind = ProviderCredential.Kind(wireValue: provider.kind) else { return nil }
-                return ProviderCredential(kind: kind, isConnected: provider.isConnected, detail: provider.detail, baseURL: provider.baseUrl)
-            },
             plugins: (plugins ?? []).map { $0.toModel() }
         )
     }

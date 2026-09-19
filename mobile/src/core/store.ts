@@ -5,7 +5,7 @@
 import { useMemo } from "react";
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
-import type { AutoReview, Bot, Chat, ChatMeta, ChatUsage, Device, Message, Routine } from "./model";
+import type { AutoReview, Bot, Chat, ChatMeta, ChatUsage, Device, Message, ProviderStatus, Routine } from "./model";
 import { savePrefs } from "./prefs";
 
 export interface Running {
@@ -32,6 +32,8 @@ export interface StoreState {
   routines: Routine[];
   /// Auto-review, from the roster.
   auto_review: AutoReview;
+  /// The account's provider credentials, the same on every Device.
+  providers: ProviderStatus[];
   /// Turns in flight, by job id.
   running: Record<string, Running>;
   /// "Chef stopped without replying", by chat id, after a turn ends with nothing said.
@@ -56,6 +58,7 @@ function empty(): Omit<StoreState, "ready" | "dictation_lang"> {
     chats: [],
     routines: [],
     auto_review: { is_enabled: true, rules: [] },
+    providers: [],
     running: {},
     statuses: {},
     openChatId: null,
@@ -113,6 +116,7 @@ export function replaceSnapshot(snapshot: {
   chats: Chat[];
   routines?: Routine[];
   auto_review?: AutoReview;
+  providers?: ProviderStatus[];
   running_turns: { job_id: string; chat_id: string; bot_id: string }[];
 }) {
   const running: Record<string, Running> = {};
@@ -138,6 +142,7 @@ export function replaceSnapshot(snapshot: {
     }),
     routines: snapshot.routines ?? [],
     auto_review: snapshot.auto_review ?? { is_enabled: true, rules: [] },
+    providers: snapshot.providers ?? [],
     running,
   });
 }
@@ -150,7 +155,7 @@ function seenOf(devices: Device[]): Record<string, number> {
 
 /// `roster.changed`: bots replace, chat metadata merges over kept messages, chats not named
 /// are gone.
-export function applyRoster(roster: { devices: Device[]; bots: Bot[]; chats: (ChatMeta & { unread_count: number; usage?: ChatUsage })[]; routines?: Routine[]; auto_review?: AutoReview }): { removed: string[] } {
+export function applyRoster(roster: { devices: Device[]; bots: Bot[]; chats: (ChatMeta & { unread_count: number; usage?: ChatUsage })[]; routines?: Routine[]; auto_review?: AutoReview; providers?: ProviderStatus[] }): { removed: string[] } {
   const removed: string[] = [];
   useStore.setState((s) => {
     const incoming = new Set(roster.chats.map((c) => c.id));
@@ -160,7 +165,7 @@ export function applyRoster(roster: { devices: Device[]; bots: Bot[]; chats: (Ch
       const old = existing.get(meta.id);
       return { ...meta, is_pinned: meta.is_pinned ?? false, messages: old?.messages ?? [], has_more: old?.has_more, unread_count: meta.unread_count ?? old?.unread_count ?? 0, usage: meta.usage ?? old?.usage };
     });
-    return { devices: roster.devices, device_seen: seenOf(roster.devices), bots: roster.bots, chats, routines: roster.routines ?? s.routines, auto_review: roster.auto_review ?? s.auto_review };
+    return { devices: roster.devices, device_seen: seenOf(roster.devices), bots: roster.bots, chats, routines: roster.routines ?? s.routines, auto_review: roster.auto_review ?? s.auto_review, providers: roster.providers ?? s.providers };
   });
   return { removed };
 }

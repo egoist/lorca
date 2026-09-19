@@ -311,7 +311,7 @@ final class OnboardingViewController: NSViewController {
     private func providerView() -> NSView {
         let title = Build.label("Connect a provider", font: .systemFont(ofSize: 22, weight: .semibold))
         let subtitle = Build.label(
-            "Bots assigned to this Mac run with credentials stored here, in the CLI. Nothing is sent to a Lorca server.",
+            "Credentials belong to your account: your bots use them on every Runner you pair. They sync encrypted with your account key; the relay cannot read them.",
             font: .systemFont(ofSize: 12.5), color: .secondaryLabelColor, lines: 0
         )
         let skip = secondaryButton("Skip for Now", action: #selector(goDone))
@@ -369,8 +369,8 @@ final class OnboardingViewController: NSViewController {
         credentialLabel?.stringValue = providerKind.usesAPIKey ? "API key" : "Account"
         setStatus(
             providerKind.usesAPIKey
-                ? "The key is checked against \(providerKind.rawValue) and kept in the CLI's credential file on this Mac."
-                : "Tokens from the sign-in stay in the CLI's credential file on this Mac.",
+                ? "The key is checked against \(providerKind.rawValue) and shared with your paired Devices, encrypted."
+                : "Tokens from the sign-in are shared with your paired Devices, encrypted.",
             color: .tertiaryLabelColor)
         if let button = findContinueButton() {
             button.title = providerKind.usesAPIKey ? "Continue" : "Sign in with \(providerKind.rawValue)"
@@ -431,7 +431,7 @@ final class OnboardingViewController: NSViewController {
             alignment: .center)
         let subtitle = Build.label(
             """
-            \(firstBot.map { "\($0.name) is ready to talk to." } ?? "Bots you create here run on this machine with its own provider credentials.") \
+            \(firstBot.map { "\($0.name) is ready to talk to." } ?? "Bots you create here run on this machine with your account's provider credentials.") \
             Pair another Mac any time from the File menu.
             """,
             font: .systemFont(ofSize: 12.5), color: .secondaryLabelColor, lines: 0, alignment: .center
@@ -661,11 +661,20 @@ final class OnboardingViewController: NSViewController {
             defer { self.busy = false }
             do {
                 try await self.store.restoreIdentity(phrase: text)
-                self.transition(to: .provider)
+                await self.continueAfterJoining()
             } catch {
                 self.setStatus(error.localizedDescription, color: .systemRed)
             }
         }
+    }
+
+    /// A Mac that joined an account gets its credentials with the first sync, so the provider
+    /// step shows only when none arrive.
+    private func continueAfterJoining() async {
+        for _ in 0..<15 where !store.providers.contains(where: \.isConnected) {
+            try? await Task.sleep(for: .milliseconds(200))
+        }
+        transition(to: store.providers.contains(where: \.isConnected) ? .done : .provider)
     }
 
     @objc private func acceptPairing() {
@@ -683,7 +692,7 @@ final class OnboardingViewController: NSViewController {
             defer { self.busy = false }
             do {
                 try await self.store.acceptPairing(text)
-                self.transition(to: .provider)
+                await self.continueAfterJoining()
             } catch {
                 self.setStatus(error.localizedDescription, color: .systemRed)
             }

@@ -41,7 +41,7 @@ final class SettingsSidebarViewController: NSViewController {
 
     private var nodes: [SidebarNode] = []
     private var selection: Selection?
-    /// The Device the Device panes show, whose bots, providers, and plugins a query searches.
+    /// The Device the Device panes show, whose bots and plugins a query searches.
     private var deviceID: Device.ID?
     private var searchQuery = ""
     private var isApplyingSelection = false

@@ -87,7 +87,15 @@ impl ChatGptProvider {
         if !tokens.is_expired() {
             return Ok(tokens);
         }
-        let refreshed = oauth::refresh(&self.client, &tokens.refresh_token).await?;
+        let refreshed = match oauth::refresh(&self.client, &tokens.refresh_token).await {
+            Ok(refreshed) => refreshed,
+            // The source may be shared: another holder that refreshed first spent this
+            // refresh token, and its tokens are the ones to use.
+            Err(error) => match self.tokens.tokens().await {
+                Ok(current) if current.refresh_token != tokens.refresh_token && !current.is_expired() => return Ok(current),
+                _ => return Err(error),
+            },
+        };
         self.tokens.store(refreshed.clone()).await?;
         Ok(refreshed)
     }

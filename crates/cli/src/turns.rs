@@ -79,8 +79,7 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
     let provider = match providers::provider_for(app, &bot.provider, bot.model.as_deref(), providers::thinking_level(&bot)) {
         Ok(provider) => provider,
         Err(reason) => {
-            let runner = app.device(&bot.runner_id).map(|d| d.name).unwrap_or_else(|| "its Runner".into());
-            app.notice(&job.chat_id, format!("{} cannot run yet: {reason}. Connect {} on {runner}.", bot.name, provider_label(&bot.provider)));
+            app.notice(&job.chat_id, format!("{} cannot run yet: {reason}. Connect {} in Settings.", bot.name, provider_label(&bot.provider)));
             return TurnOutcome::Skipped;
         }
     };

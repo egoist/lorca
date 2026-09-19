@@ -190,7 +190,6 @@ struct Device: Identifiable, Hashable {
     var status: Status
     var lastSeen: Date
     var machineKey: String
-    var providers: [ProviderCredential]
     /// Plugins installed on this Runner, as it advertises them. Secrets stay on the Runner.
     var plugins: [InstalledPlugin] = []
 
@@ -198,14 +197,6 @@ struct Device: Identifiable, Hashable {
     var isRunner: Bool { os.isDesktop }
 
     var roleLabel: String { isRunner ? "Runner" : "Device" }
-
-    var connectedProviders: [ProviderCredential] {
-        providers.filter(\.isConnected)
-    }
-
-    func credential(for kind: ProviderCredential.Kind) -> ProviderCredential? {
-        providers.first { $0.kind == kind }
-    }
 }
 
 // MARK: - Bot

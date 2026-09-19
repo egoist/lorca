@@ -14,7 +14,7 @@ const BULK_BLOBS: usize = 20;
 
 /// What a pull takes. `file` blobs are left out: a transcript fetches them by id when it
 /// needs them, so a photo sent to one bot is not downloaded by every Device.
-pub const POLL_KINDS: &str = "roster,chat,machine,job,job_result,request,response";
+pub const POLL_KINDS: &str = "roster,chat,machine,credentials,job,job_result,request,response";
 
 pub async fn run(app: Arc<App>) {
     let mut failures: u32 = 0;
@@ -97,6 +97,7 @@ async fn session(app: &Arc<App>) -> Result<(), RelayError> {
     }
 
     let (mut pull, mut refresh) = (true, true);
+    let mut credentials_due = true;
     loop {
         let same_machine = app.machine_file().is_some_and(|file| file.machine().is_ok_and(|m| m.pubkey() == machine.pubkey()));
         if !same_machine || app.relay_url().as_deref() != Some(url.as_str()) {
@@ -118,6 +119,10 @@ async fn session(app: &Arc<App>) -> Result<(), RelayError> {
         }
         if pull {
             pull_blobs(app, &url, &token, &machine_file).await?;
+            // Once per session, so a relay that refuses the kind is not asked in a loop.
+            if std::mem::take(&mut credentials_due) {
+                app.push_credentials_if_owed();
+            }
         }
         if app.presence_stale.swap(false, Ordering::Relaxed) {
             refresh_presence(app, &url, &token).await?;
@@ -200,7 +205,11 @@ pub async fn ensure_registered(app: &Arc<App>, url: &str) -> Result<(), RelayErr
         file.registered = true;
     }
     // A relay that had to be told about this machine has none of its blobs either.
-    app.state.lock().unwrap().machine_blob_hash = None;
+    {
+        let mut state = app.state.lock().unwrap();
+        state.machine_blob_hash = None;
+        state.credentials_uploaded = false;
+    }
     app.save_machine().map_err(|e| RelayError { status: None, message: e.to_string() })?;
     Ok(())
 }
@@ -212,6 +221,9 @@ async fn drain_outbox(app: &Arc<App>, url: &str, token: &str) -> Result<(), Rela
             Ok(_) => {}
             Err(error) if error.is_client_error() && !error.is_unauthorized() => {
                 tracing::warn!(%error, kind = %item.kind, "relay rejected blob; dropping");
+                if item.kind == "credentials" {
+                    app.state.lock().unwrap().credentials_uploaded = false;
+                }
             }
             Err(error) => return Err(error),
         }
@@ -376,6 +388,10 @@ fn apply_blob_contents(app: &Arc<App>, machine_file: &crate::keys::MachineFile, 
                 }
             }
             Err(error) => tracing::warn!(%error, "machine blob"),
+        },
+        "credentials" => match crate::crypto::decrypt_json::<crate::credentials::Credentials>(&dek, "credentials", &ciphertext) {
+            Ok(credentials) => app.apply_credentials(&credentials),
+            Err(error) => tracing::warn!(%error, "credentials blob"),
         },
         "job" => {
             let Ok(machine) = machine_file.machine() else { return };

@@ -267,16 +267,14 @@ final class InspectorViewController: NSViewController {
             usageRows.append(KeyValueRow(key: "Spent", value: usage.spendSummary))
         }
 
-        let runner = store.device(bot.runnerID)
-        let credential = runner?.credential(for: bot.provider)
+        let credential = store.credential(for: bot.provider)
         let connected = credential?.isConnected ?? false
-        let isHere = runner?.isThisDevice ?? false
         // Connected: the masked key and a Change link. Not connected: just the Connect link.
         let status = ActionRow(
             key: "Credential",
-            value: connected ? (credential?.detail ?? "Connected") : (isHere ? "" : "Connect on \(runner?.name ?? "its Runner")"),
+            value: connected ? (credential?.detail ?? "Connected") : "",
             tint: connected ? .labelColor : .secondaryLabelColor,
-            actionTitle: isHere ? (connected ? "Change" : "Connect") : nil
+            actionTitle: connected ? "Change" : "Connect"
         )
         status.onAction = { [weak self] in
             self?.presentAsSheet(ConnectProviderViewController(kind: bot.provider))

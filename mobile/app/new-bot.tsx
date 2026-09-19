@@ -51,7 +51,7 @@ export default function NewBotScreen() {
   const [accent, setAccent] = useState("indigo");
   const [runnerId, setRunnerId] = useState<string>(() => runners.find((r) => deviceIsOnline(r.id))?.id ?? runners[0]?.id ?? "");
   const runner = runners.find((r) => r.id === runnerId);
-  const connected = runner ? connectedProviders(runner) : [];
+  const connected = connectedProviders(useStore((s) => s.providers));
   const providers = connected.length ? connected : ["deepseek", "anthropic", "chatgpt", "grok"];
   const [provider, setProvider] = useState<string>(providers[0]);
   const [model, setModel] = useState<string | undefined>(undefined);
@@ -110,7 +110,7 @@ export default function NewBotScreen() {
             ))}
           </View>
         </Section>
-        <Section title="Runs on" footer={runners.length ? "Bots run on a paired desktop Device with the CLI; the provider's credentials stay there." : "Pair a Mac, Linux, or Windows machine first. Phones never run bots."}>
+        <Section title="Runs on" footer={runners.length ? "Bots run on a paired desktop Device with the CLI, using your account's provider credentials." : "Pair a Mac, Linux, or Windows machine first. Phones never run bots."}>
           {runners.map((r) => (
             <CheckRow
               key={r.id}
@@ -123,7 +123,7 @@ export default function NewBotScreen() {
           ))}
         </Section>
         {runner && (
-          <Section title="Provider" footer={connected.length ? undefined : `${runner.name} has no provider connected yet; connect one there before this bot answers.`}>
+          <Section title="Provider" footer={connected.length ? undefined : "No provider is connected yet; connect one from Lorca on a Mac before this bot answers."}>
             {providers.map((kind) => (
               <CheckRow key={kind} title={providerLabel(kind)} checked={kind === effectiveProvider} onPress={() => { setProvider(kind); setModel(undefined); setThinking(undefined); }} />
             ))}

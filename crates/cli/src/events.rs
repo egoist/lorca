@@ -3,7 +3,7 @@
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::model::{AutoReview, Bot, ChatMeta, ChatUsage, Message};
+use crate::model::{AutoReview, Bot, ChatMeta, ChatUsage, Message, ProviderStatus};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "event", content = "data")]
@@ -11,7 +11,7 @@ pub enum Event {
     #[serde(rename = "snapshot")]
     Snapshot(Value),
     #[serde(rename = "roster.changed")]
-    RosterChanged { devices: Vec<Value>, bots: Vec<Bot>, chats: Vec<ChatSummary>, routines: Vec<Value>, auto_review: AutoReview },
+    RosterChanged { devices: Vec<Value>, bots: Vec<Bot>, chats: Vec<ChatSummary>, routines: Vec<Value>, auto_review: AutoReview, providers: Vec<ProviderStatus> },
     #[serde(rename = "message.added")]
     MessageAdded { chat_id: String, message: Message },
     #[serde(rename = "message.updated")]

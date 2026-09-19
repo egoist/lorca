@@ -1,4 +1,5 @@
-//! Provider credentials for this Runner. They never sync.
+//! Providers built from the account's credentials, and the connect and disconnect flows. A
+//! change made here reaches every Device through the `credentials` blob.
 
 use std::sync::Arc;
 
@@ -12,36 +13,34 @@ use lorca_agent::{models, Provider, ThinkingLevel};
 use crate::app::App;
 use crate::config;
 
-/// The provider kinds a Runner can hold, in the order the apps list them.
+/// The provider kinds an account can hold, in the order the apps list them.
 pub use crate::credentials::{ApiKeyCredential, Credentials, PROVIDER_KINDS};
 
-/// Reads and refreshes ChatGPT tokens through the App's credential file.
+/// Reads ChatGPT tokens from the account's credentials and hands refreshed ones to every Device.
 pub struct AppTokenSource(pub Arc<App>);
 
 #[async_trait]
 impl TokenSource for AppTokenSource {
     async fn tokens(&self) -> Result<ChatGptTokens, String> {
-        self.0.credentials.lock().unwrap().chatgpt.clone().ok_or_else(|| "ChatGPT is not connected on this Runner".to_string())
+        self.0.credentials.lock().unwrap().chatgpt.clone().ok_or_else(|| "ChatGPT is not connected".to_string())
     }
 
     async fn store(&self, tokens: ChatGptTokens) -> Result<(), String> {
-        self.0.credentials.lock().unwrap().chatgpt = Some(tokens);
-        self.0.save_credentials().map_err(|e| e.to_string())
+        self.0.update_credentials("chatgpt", |c| c.chatgpt = Some(tokens)).map_err(|e| e.to_string())
     }
 }
 
-/// Reads and refreshes Grok tokens through the App's credential file.
+/// Reads Grok tokens from the account's credentials and hands refreshed ones to every Device.
 pub struct AppGrokTokenSource(pub Arc<App>);
 
 #[async_trait]
 impl GrokTokenSource for AppGrokTokenSource {
     async fn tokens(&self) -> Result<GrokTokens, String> {
-        self.0.credentials.lock().unwrap().grok.clone().ok_or_else(|| "Grok is not connected on this Runner".to_string())
+        self.0.credentials.lock().unwrap().grok.clone().ok_or_else(|| "Grok is not connected".to_string())
     }
 
     async fn store(&self, tokens: GrokTokens) -> Result<(), String> {
-        self.0.credentials.lock().unwrap().grok = Some(tokens);
-        self.0.save_credentials().map_err(|e| e.to_string())
+        self.0.update_credentials("grok", |c| c.grok = Some(tokens)).map_err(|e| e.to_string())
     }
 }
 
@@ -87,7 +86,7 @@ pub fn provider_for(app: &Arc<App>, kind: &str, model: Option<&str>, thinking: O
                 .unwrap()
                 .deepseek
                 .clone()
-                .ok_or_else(|| "DeepSeek is not connected on this Runner".to_string())?;
+                .ok_or_else(|| "DeepSeek is not connected".to_string())?;
             let model = model.or_else(|| std::env::var("LORCA_DEEPSEEK_MODEL").ok());
             // The Anthropic-compatible endpoint: the one with DeepSeek's server-side web search.
             let base_url = deepseek_anthropic_url(&key.base_url.clone().unwrap_or_else(deepseek_base_url));
@@ -100,21 +99,21 @@ pub fn provider_for(app: &Arc<App>, kind: &str, model: Option<&str>, thinking: O
                 .unwrap()
                 .anthropic
                 .clone()
-                .ok_or_else(|| "Anthropic is not connected on this Runner".to_string())?;
+                .ok_or_else(|| "Anthropic is not connected".to_string())?;
             let model = model.or_else(|| std::env::var("LORCA_ANTHROPIC_MODEL").ok());
             let base_url = key.base_url.clone().unwrap_or_else(anthropic_base_url);
             Ok(Arc::new(AnthropicProvider::anthropic(&key.api_key, model.as_deref()).with_base_url(&base_url).with_thinking(thinking)))
         }
         "chatgpt" => {
             if app.credentials.lock().unwrap().chatgpt.is_none() {
-                return Err("ChatGPT is not connected on this Runner".into());
+                return Err("ChatGPT is not connected".into());
             }
             let model = model.or_else(|| std::env::var("LORCA_CHATGPT_MODEL").ok());
             Ok(Arc::new(ChatGptProvider::new(Arc::new(AppTokenSource(app.clone())), model.as_deref()).with_thinking(thinking)))
         }
         "grok" => {
             if app.credentials.lock().unwrap().grok.is_none() {
-                return Err("Grok is not connected on this Runner".into());
+                return Err("Grok is not connected".into());
             }
             let model = model.or_else(|| std::env::var("LORCA_GROK_MODEL").ok());
             let mut provider = GrokProvider::new(Arc::new(AppGrokTokenSource(app.clone())), model.as_deref()).with_thinking(thinking);
@@ -204,18 +203,11 @@ async fn check_key(name: &str, request: reqwest::RequestBuilder) -> Result<(), S
 
 fn save_api_key(app: &Arc<App>, kind: &str, key: &str, base_url: Option<String>) -> Result<(), String> {
     let credential = Some(ApiKeyCredential { api_key: key.to_string(), base_url, connected_at: config::now_unix() });
-    {
-        let mut credentials = app.credentials.lock().unwrap();
-        match kind {
-            "deepseek" => credentials.deepseek = credential,
-            "anthropic" => credentials.anthropic = credential,
-            other => return Err(format!("Unknown provider {other}")),
-        }
-    }
-    app.save_credentials().map_err(|e| e.to_string())?;
-    app.push_machine_blob_if_changed();
-    app.emit(app.roster_summary());
-    Ok(())
+    let update = |credentials: &mut Credentials| match kind {
+        "deepseek" => credentials.deepseek = credential,
+        _ => credentials.anthropic = credential,
+    };
+    app.update_credentials(kind, update).map_err(|e| e.to_string())
 }
 
 /// Opens the browser for the ChatGPT sign-in and waits for the callback.
@@ -226,10 +218,7 @@ pub async fn connect_chatgpt(app: &Arc<App>) -> Result<ChatGptTokens, String> {
         std::time::Duration::from_secs(5 * 60),
     )
     .await?;
-    app.credentials.lock().unwrap().chatgpt = Some(tokens.clone());
-    app.save_credentials().map_err(|e| e.to_string())?;
-    app.push_machine_blob_if_changed();
-    app.emit(app.roster_summary());
+    app.update_credentials("chatgpt", |c| c.chatgpt = Some(tokens.clone())).map_err(|e| e.to_string())?;
     Ok(tokens)
 }
 
@@ -244,22 +233,22 @@ pub async fn connect_grok(app: &Arc<App>) -> Result<GrokTokens, String> {
         std::time::Duration::from_secs(5 * 60),
     )
     .await?;
-    app.credentials.lock().unwrap().grok = Some(tokens.clone());
-    app.save_credentials().map_err(|e| e.to_string())?;
-    app.push_machine_blob_if_changed();
-    app.emit(app.roster_summary());
+    app.update_credentials("grok", |c| c.grok = Some(tokens.clone())).map_err(|e| e.to_string())?;
     Ok(tokens)
 }
 
+/// Disconnects `kind` for the whole account: every Device drops the credential.
 pub fn disconnect(app: &Arc<App>, kind: &str) -> Result<(), String> {
-    {
-        let mut credentials = app.credentials.lock().unwrap();
+    if !PROVIDER_KINDS.contains(&kind) {
+        return Err(format!("Unknown provider {kind}"));
+    }
+    app.update_credentials(kind, |credentials| {
         match kind {
             "deepseek" => credentials.deepseek = None,
             "anthropic" => credentials.anthropic = None,
             "chatgpt" => credentials.chatgpt = None,
-            "grok" => {
-                // Tell xAI the sign-in is over; the local removal stands either way.
+            _ => {
+                // Tell xAI the sign-in is over; the removal stands either way.
                 if let Some(tokens) = credentials.grok.take() {
                     let http = app.http.clone();
                     let endpoints = env_url("LORCA_GROK_ISSUER").map(|issuer| grok_oauth::Endpoints::at(&issuer)).unwrap_or_else(grok_oauth::Endpoints::xai);
@@ -270,11 +259,7 @@ pub fn disconnect(app: &Arc<App>, kind: &str) -> Result<(), String> {
                     });
                 }
             }
-            other => return Err(format!("Unknown provider {other}")),
         }
-    }
-    app.save_credentials().map_err(|e| e.to_string())?;
-    app.push_machine_blob_if_changed();
-    app.emit(app.roster_summary());
-    Ok(())
+    })
+    .map_err(|e| e.to_string())
 }

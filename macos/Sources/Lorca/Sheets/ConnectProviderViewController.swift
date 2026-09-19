@@ -1,7 +1,8 @@
 import AppKit
 
-/// Connects a provider on this Runner. DeepSeek and Anthropic take an API key; ChatGPT and Grok
-/// sign in through the browser, driven by the CLI. Credentials never leave this Mac.
+/// Connects a provider for the account. DeepSeek and Anthropic take an API key; ChatGPT and Grok
+/// sign in through the browser, driven by the CLI. The credential reaches every paired Device
+/// encrypted with the account key.
 final class ConnectProviderViewController: SheetViewController {
     private let store = AppStore.shared
     private let kind: ProviderCredential.Kind
@@ -14,16 +15,16 @@ final class ConnectProviderViewController: SheetViewController {
 
     private let onDone: () -> Void
 
-    /// `baseURL` is the custom API root the Runner already uses for this provider, if any.
+    /// `baseURL` is the custom API root the account already uses for this provider, if any.
     init(kind: ProviderCredential.Kind, baseURL: String? = nil, onDone: @escaping () -> Void = {}) {
         self.kind = kind
         self.initialBaseURL = baseURL
         self.onDone = onDone
         let subtitle =
             if kind.usesAPIKey {
-                "The key is checked against \(kind.rawValue), then stored in the CLI on this Mac with mode 0600. Bots assigned here use it directly."
+                "The key is checked against \(kind.rawValue), then shared with your paired Devices, encrypted with your account key. Bots on any Runner use it."
             } else {
-                "Your browser opens a \(kind.rawValue) sign-in. The CLI on this Mac keeps the resulting tokens; nothing is sent to a Lorca server."
+                "Your browser opens a \(kind.rawValue) sign-in. The tokens are shared with your paired Devices, encrypted with your account key; the relay cannot read them."
             }
         super.init(title: "Connect \(kind.rawValue)", subtitle: subtitle, width: 420)
     }
@@ -95,7 +96,7 @@ final class ConnectProviderViewController: SheetViewController {
                 }
                 self.spinner.stopAnimation(nil)
                 self.status.textColor = .systemGreen
-                self.status.stringValue = "\(self.kind.rawValue) connected on this Mac."
+                self.status.stringValue = "\(self.kind.rawValue) connected."
                 try? await Task.sleep(nanoseconds: 600_000_000)
                 self.dismiss(nil)
                 self.onDone()

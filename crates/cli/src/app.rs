@@ -74,6 +74,9 @@ pub struct State {
     pub group_deletes: Vec<String>,
     #[serde(default)]
     pub machine_blob_hash: Option<String>,
+    /// Whether the relay has had this Device's credentials since they last changed here.
+    #[serde(default)]
+    pub credentials_uploaded: bool,
     /// machine pubkey → last seen (unix), from the relay's machine list.
     #[serde(default)]
     pub device_seen: HashMap<String, i64>,
@@ -238,6 +241,58 @@ impl App {
         credentials.save(&self.config)
     }
 
+    /// Changes the account's credential of `kind`: saved here, sent to the other Devices, and
+    /// shown by the apps.
+    pub fn update_credentials(&self, kind: &str, update: impl FnOnce(&mut Credentials)) -> anyhow::Result<()> {
+        {
+            let mut credentials = self.credentials.lock().unwrap();
+            update(&mut credentials);
+            credentials.touch(kind);
+        }
+        self.save_credentials()?;
+        self.push_credentials();
+        self.emit(self.roster_summary());
+        Ok(())
+    }
+
+    /// Queues the account's credentials for the other Devices.
+    pub fn push_credentials(&self) {
+        let Some(dek) = self.dek() else { return };
+        let credentials = self.credentials.lock().unwrap().clone();
+        match crate::crypto::encrypt_json(&dek, "credentials", &credentials) {
+            Ok(ciphertext) => {
+                self.state.lock().unwrap().credentials_uploaded = true;
+                self.push_slot_blob("credentials", Slot::latest("credentials"), None, ciphertext);
+            }
+            Err(error) => tracing::error!(%error, "encrypting credentials"),
+        }
+    }
+
+    /// Sends the credentials this Device holds when the relay never had them: the ones
+    /// connected here before the account carried them, or a relay that was reset. Called once
+    /// a pull has merged what the relay holds, so an older set never replaces a newer one.
+    pub fn push_credentials_if_owed(&self) {
+        let is_owed = !self.state.lock().unwrap().credentials_uploaded && !self.credentials.lock().unwrap().is_empty();
+        if is_owed {
+            self.push_credentials();
+        }
+    }
+
+    /// Another Device's credentials arrived: the later change of each kind wins, and a set
+    /// that lacks a change made here gets this Device's in return.
+    pub fn apply_credentials(&self, incoming: &Credentials) {
+        let merge = self.credentials.lock().unwrap().merge(incoming);
+        if !merge.taken.is_empty() {
+            if let Err(error) = self.save_credentials() {
+                tracing::error!(%error, "saving credentials");
+            }
+            self.emit(self.roster_summary());
+        }
+        if merge.is_ahead {
+            self.push_credentials();
+        }
+    }
+
     pub fn emit(&self, event: Event) {
         if self.bulk_sync.load(Ordering::Relaxed)
             && matches!(
@@ -361,7 +416,6 @@ impl App {
             os: machine.os.clone(),
             os_version,
             box_pubkey: keys.box_pubkey(),
-            providers_connected: self.credentials.lock().unwrap().connected_kinds(),
             plugins: self.plugins.lock().unwrap().statuses(),
             updated_at: config::now_unix(),
         })
@@ -444,13 +498,12 @@ impl App {
     pub fn push_machine_blob_if_changed(&self) {
         let (Some(dek), Some(device)) = (self.dek(), self.local_device()) else { return };
         let fingerprint = format!(
-            "{}|{}|{}|{}|{}|{:?}|{}",
+            "{}|{}|{}|{}|{}|{}",
             device.id,
             device.name,
             device.model,
             device.os,
             device.os_version,
-            device.providers_connected,
             serde_json::to_string(&device.plugins).unwrap_or_default()
         );
         let hash = keys::b64(&<sha2::Sha256 as sha2::Digest>::digest(fingerprint.as_bytes()));
@@ -546,6 +599,7 @@ impl App {
             chats: state.chats.iter().map(|c| ChatSummary { meta: c.meta.clone(), unread_count: c.unread_count, usage: c.usage.clone() }).collect(),
             routines: self.routines_out(&state),
             auto_review: state.auto_review.clone(),
+            providers: self.credentials.lock().unwrap().statuses(),
         }
     }
 
@@ -922,25 +976,6 @@ impl App {
                 let is_this = Some(device.id.clone()) == this_id;
                 let seen = state.device_seen.get(&device.id).copied().unwrap_or(device.updated_at);
                 let status = if is_this || state.device_online.contains(&device.id) { "online" } else { "offline" };
-                let providers: Vec<ProviderStatus> = if is_this {
-                    self.credentials.lock().unwrap().statuses()
-                } else if device.is_runner() {
-                    crate::credentials::PROVIDER_KINDS
-                        .iter()
-                        .map(|kind| ProviderStatus {
-                            kind: kind.to_string(),
-                            is_connected: device.providers_connected.iter().any(|k| k == kind),
-                            detail: if device.providers_connected.iter().any(|k| k == kind) {
-                                format!("Connected on {}", device.name)
-                            } else {
-                                "Not connected".into()
-                            },
-                            base_url: None,
-                        })
-                        .collect()
-                } else {
-                    Vec::new()
-                };
                 json!({
                     "id": device.id,
                     "name": device.name,
@@ -951,7 +986,6 @@ impl App {
                     "is_this_device": is_this,
                     "status": status,
                     "last_seen": seen as f64,
-                    "providers": providers,
                     "plugins": device.plugins,
                 })
             })
@@ -974,6 +1008,7 @@ impl App {
             "chats": state.chats.iter().map(chat_for_app).collect::<Vec<_>>(),
             "routines": self.routines_out(&state),
             "auto_review": state.auto_review,
+            "providers": self.credentials.lock().unwrap().statuses(),
             "running_chat_ids": self.running_chat_ids(),
             "running_turns": self.running_turns(),
         })

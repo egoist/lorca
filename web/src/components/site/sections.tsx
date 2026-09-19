@@ -129,7 +129,7 @@ export function Relay() {
           The relay is a mailbox, <span className="serif-accent text-zinc-300">not a reader.</span>
         </>
       }
-      body="Your identity is a key pair made on your first machine; the backup is a phrase you write down. Pair the next computer with a string, and from then on chats sync through a relay that only ever holds ciphertext. When a bot on another machine has a turn, the job travels as an envelope sealed to that machine's key. Provider credentials never sync at all: they stay in the keychain of the machine that uses them."
+      body="Your identity is a key pair made on your first machine; the backup is a phrase you write down. Pair the next computer with a string, and from then on chats sync through a relay that only ever holds ciphertext. When a bot on another machine has a turn, the job travels as an envelope sealed to that machine's key. Provider credentials travel the same way: connect a provider once, and your other machines get it encrypted with your account key, which the relay never holds."
     >
       <div className="mx-auto max-w-4xl">
         <RelayDiagram />

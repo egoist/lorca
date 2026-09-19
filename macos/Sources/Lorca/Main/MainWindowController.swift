@@ -2,7 +2,7 @@ import AppKit
 
 final class MainWindowController: NSWindowController, NSWindowDelegate {
     let root = RootSplitViewController()
-    /// The Device the Providers, Plugins, Bots, and Devices panes show. Its toolbar item is in the
+    /// The Device the Plugins, Bots, and Devices panes show. Its toolbar item is in the
     /// toolbar only while one of those panes is up.
     private let devicePicker = NSPopUpButton()
     /// Creating bots and chats belongs to the chats; Settings hides it.

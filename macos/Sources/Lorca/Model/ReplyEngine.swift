@@ -268,7 +268,7 @@ final class ReplyEngine {
                 Want me to hand the first piece to Patch?
                 """,
                 """
-                The constraint that decides this is **provider credentials live on the assigned Runner**. Anything that needs a key has to run there, so the answer is a job envelope, not a call from here.
+                The constraint that decides this is **a bot runs on its assigned Runner**. Its files and plugins are there, so the answer is a job envelope, not a call from here.
                 """,
                 "Short answer: yes. Longer answer: yes, but not until pairing works on two machines, because that is where this gets interesting.",
             ]

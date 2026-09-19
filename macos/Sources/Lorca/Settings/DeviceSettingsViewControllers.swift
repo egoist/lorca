@@ -1,8 +1,8 @@
 import AppKit
 
 /// A pane that shows one Device, picked from the pop-up in the window's toolbar; the pick holds
-/// across these panes. Bots, provider credentials, and plugins live on a Runner, so a Device that
-/// never runs bots gets a note instead.
+/// across these panes. Bots and plugins live on a Runner, so a Device that never runs bots gets
+/// a note instead.
 class DevicePaneViewController: SettingsPaneViewController {
     let store = AppStore.shared
     private(set) var deviceID: Device.ID?
@@ -50,7 +50,7 @@ final class BotsSettingsViewController: DevicePaneViewController {
     override func viewDidLoad() {
         title = "Bots"
         addSection(section)
-        addFootnote("A bot runs on the Runner it is assigned to, with that Runner's credentials and plugins.")
+        addFootnote("A bot runs on the Runner it is assigned to, with your account's credentials and that Runner's plugins.")
         super.viewDidLoad()
     }
 
@@ -89,32 +89,33 @@ final class BotsSettingsViewController: DevicePaneViewController {
 
 // MARK: - Providers
 
-final class ProvidersSettingsViewController: DevicePaneViewController {
+/// The account's provider credentials: connected on any Mac, used by every Runner.
+final class ProvidersSettingsViewController: SettingsPaneViewController {
+    private let store = AppStore.shared
     private let section = SectionView(title: "Credentials")
-    private let note = Build.label("", font: Theme.Font.caption, color: .tertiaryLabelColor, lines: 0)
 
     override func viewDidLoad() {
         title = "Providers"
         addSection(section)
-        add(note)
+        addFootnote(
+            "Credentials belong to your account. They reach your paired Devices encrypted with the account key, so a bot uses them on whichever Runner it is assigned to; the relay stores ciphertext.")
         super.viewDidLoad()
+        store.observe(self) { [weak self] event in
+            switch event {
+            case .snapshotReplaced, .rosterChanged: self?.reload()
+            default: break
+            }
+        }
+        reload()
     }
 
-    override func reload() {
-        section.title = device.map { "Credentials on \($0.name)" } ?? "Credentials"
-        note.stringValue =
-            if let device, device.isRunner, !device.isThisDevice {
-                "Provider credentials live on \(device.name). Connect DeepSeek, Anthropic, ChatGPT, or Grok from the Lorca app running there — this Mac only sends encrypted job envelopes."
-            } else {
-                "Keys stay on the Runner they were entered on, in the CLI's credential file. A bot assigned to another Runner uses that machine's credentials — this one never sees them."
-            }
-        if let rows = placeholderRows(for: device) {
-            section.setRows(rows)
+    private func reload() {
+        guard !store.providers.isEmpty else {
+            section.setRows([KeyValueRow(key: "Waiting for the CLI", value: "")])
             return
         }
-        guard let device else { return }
         section.setRows(
-            device.providers.map { credential in
+            store.providers.map { credential in
                 let row = StatusRow()
                 row.configure(
                     symbol: credential.kind.symbolName,
@@ -122,34 +123,19 @@ final class ProvidersSettingsViewController: DevicePaneViewController {
                     subtitle: "\(credential.kind.subtitle) · \(credential.detail)",
                     state: credential.isConnected ? "Connected" : nil,
                     stateColor: .systemGreen,
-                    actionTitle: credential.isConnected ? (device.isThisDevice ? "Disconnect" : nil) : "Connect…",
+                    actionTitle: credential.isConnected ? "Disconnect" : "Connect…",
                     destructive: credential.isConnected
                 )
                 row.onAction = { [weak self] in
                     guard let self else { return }
                     if credential.isConnected {
                         Task { try? await self.store.disconnectProvider(credential.kind) }
-                    } else if device.isThisDevice {
-                        self.presentAsSheet(ConnectProviderViewController(kind: credential.kind, baseURL: credential.baseURL))
                     } else {
-                        self.explainProviderSetup(on: device)
+                        self.presentAsSheet(ConnectProviderViewController(kind: credential.kind, baseURL: credential.baseURL))
                     }
                 }
                 return row
             })
-    }
-
-    private func explainProviderSetup(on device: Device) {
-        let alert = NSAlert()
-        alert.messageText = "Connect it on \(device.name)"
-        alert.informativeText =
-            "Credentials never sync. Open Lorca on \(device.name) and connect the provider there; bots assigned to it pick it up on the next turn."
-        alert.addButton(withTitle: "OK")
-        if let window = view.window {
-            alert.beginSheetModal(for: window)
-        } else {
-            alert.runModal()
-        }
     }
 }
 

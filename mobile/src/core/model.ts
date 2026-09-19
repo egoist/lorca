@@ -11,7 +11,7 @@ export interface ProviderStatus {
   base_url?: string;
 }
 
-/// A Device as the core's snapshot describes it: presence and providers already resolved.
+/// A Device as the core's snapshot describes it: presence already resolved.
 export interface Device {
   /// The machine signing public key, base64url.
   id: string;
@@ -24,7 +24,6 @@ export interface Device {
   status: "online" | "offline";
   /// Unix seconds.
   last_seen: number;
-  providers: ProviderStatus[];
   /// Plugins installed on that Runner, with their setup state.
   plugins?: PluginStatus[];
 }
@@ -41,8 +40,9 @@ export interface PluginStatus {
   detail?: string;
 }
 
-export function connectedProviders(device: Device): string[] {
-  return device.providers.filter((p) => p.is_connected).map((p) => p.kind);
+/// The kinds the account has connected.
+export function connectedProviders(providers: ProviderStatus[]): string[] {
+  return providers.filter((p) => p.is_connected).map((p) => p.kind);
 }
 
 export function isRunner(device: Device): boolean {

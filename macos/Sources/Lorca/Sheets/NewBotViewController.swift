@@ -202,12 +202,12 @@ final class NewBotViewController: SheetViewController {
         }
         let runner = runners[runnerPopup.indexOfSelectedItem]
         let provider = selectedProvider
-        if runner.credential(for: provider)?.isConnected == true {
-            note.stringValue = "\(runner.name) has \(provider.rawValue) connected. Turns run there."
+        if store.credential(for: provider)?.isConnected == true {
+            note.stringValue = "\(provider.rawValue) is connected. Turns run on \(runner.name)."
             note.textColor = .tertiaryLabelColor
         } else {
             note.stringValue =
-                "\(runner.name) has no \(provider.rawValue) credential yet. The bot is created now and its first turn waits until you connect one there."
+                "\(provider.rawValue) is not connected yet. The bot is created now and its first turn waits until you connect it in Settings."
             note.textColor = .systemOrange
         }
     }

@@ -25,9 +25,6 @@ pub struct Device {
     pub os: String,
     pub os_version: String,
     pub box_pubkey: String,
-    /// Providers connected on that Runner, by kind. Details stay on the Runner.
-    #[serde(default)]
-    pub providers_connected: Vec<String>,
     /// Plugins installed on that Runner, with their setup state. Secrets stay on the Runner.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub plugins: Vec<PluginStatus>,

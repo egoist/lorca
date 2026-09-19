@@ -28,12 +28,13 @@ enum SettingsPane: String, CaseIterable {
     case device
     case advanced
 
-    /// Bots, provider credentials, and plugins live on a Runner, so these panes show one Device,
-    /// picked at the top of the page. The others hold this Mac's settings and the shared roster's.
+    /// Bots and plugins live on a Runner, so these panes show one Device, picked at the top of
+    /// the page. The others hold this Mac's settings and the account's: the shared roster and
+    /// the provider credentials.
     var isDeviceScoped: Bool {
         switch self {
-        case .general, .autoReview, .advanced: false
-        case .bots, .providers, .plugins, .device: true
+        case .general, .providers, .autoReview, .advanced: false
+        case .bots, .plugins, .device: true
         }
     }
 }
@@ -67,6 +68,8 @@ final class AppStore {
     private(set) var routines: [Routine] = []
     /// Auto-review, shared through the roster.
     private(set) var autoReview = AutoReview()
+    /// The account's provider credentials, the same on every Device.
+    private(set) var providers: [ProviderCredential] = []
 
     /// True when the CLI answers on localhost (mock: toggled from the Debug menu).
     private(set) var isConnected = false
@@ -203,6 +206,7 @@ final class AppStore {
         }
         routines = (snapshot.routines ?? []).map { $0.toModel() }
         autoReview = snapshot.autoReview?.toModel() ?? AutoReview()
+        providers = (snapshot.providers ?? []).compactMap { $0.toModel() }
         runningJobs = (snapshot.runningTurns ?? []).map { ($0.jobId, $0.chatId, $0.botId, $0.routineId) }
         for id in snapshot.runningChatIds where !runningJobs.contains(where: { $0.chatID == id }) {
             runningJobs.append(("chat:\(id)", id, "", nil))
@@ -228,6 +232,7 @@ final class AppStore {
             bots = roster.bots.map { $0.toModel() }
             if let incoming = roster.routines { routines = incoming.map { $0.toModel() } }
             if let incoming = roster.autoReview { autoReview = incoming.toModel() }
+            if let incoming = roster.providers { providers = incoming.compactMap { $0.toModel() } }
             var merged: [Chat] = []
             var changed: [Chat.ID] = []
             for summary in roster.chats {
@@ -1054,10 +1059,14 @@ final class AppStore {
         _ = try await client.request("providers.connect_\(kind.wireValue)", params)
     }
 
-    /// Runs a subscription sign-in on this Runner (`providers.connect_chatgpt`,
-    /// `providers.connect_grok`): the CLI opens the browser and keeps the tokens.
+    /// Runs a subscription sign-in (`providers.connect_chatgpt`, `providers.connect_grok`): the
+    /// CLI opens the browser on this Mac and the tokens go to the whole account.
     func connectSignIn(_ kind: ProviderCredential.Kind) async throws {
         _ = try await client.request("providers.connect_\(kind.wireValue)")
+    }
+
+    func credential(for kind: ProviderCredential.Kind) -> ProviderCredential? {
+        providers.first { $0.kind == kind }
     }
 
     func disconnectProvider(_ kind: ProviderCredential.Kind) async throws {
@@ -1078,6 +1087,7 @@ final class AppStore {
         chats = MockData.chats()
         routines = MockData.routines()
         autoReview = MockData.autoReview()
+        providers = MockData.providers()
         sortChats()
         emit(.snapshotReplaced)
     }
