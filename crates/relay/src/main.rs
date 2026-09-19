@@ -6,6 +6,7 @@
 
 mod auth;
 mod db;
+mod hub;
 mod limit;
 mod push;
 mod routes;
@@ -154,10 +155,8 @@ fn file_store(args: &Args) -> anyhow::Result<store::FileStore> {
 pub struct AppState {
     pub db: Arc<db::Db>,
     pub secret: Arc<[u8; 32]>,
-    /// Woken per identity on every blob write so its long-polls return early.
-    pub wakers: Arc<db::Wakers>,
-    /// Throttles `last_seen` writes.
-    pub presence: Arc<db::Presence>,
+    /// The sync sockets: who is online, and whom to tell about a new blob.
+    pub hub: Arc<hub::Hub>,
     /// Keys of unpaired machines; their tokens are refused.
     pub revoked: Arc<db::Revoked>,
     pub quota_bytes: u64,
@@ -194,8 +193,7 @@ async fn main() -> anyhow::Result<()> {
     let state = AppState {
         db: db.clone(),
         secret: Arc::new(secret),
-        wakers: Arc::new(db::Wakers::default()),
-        presence: Arc::new(db::Presence::default()),
+        hub: Arc::new(hub::Hub::default()),
         revoked,
         quota_bytes: args.quota_bytes,
         ip_limiter: Arc::new(limit::RateLimiter::new(args.ip_per_minute as f64 / 60.0, args.ip_per_minute)),

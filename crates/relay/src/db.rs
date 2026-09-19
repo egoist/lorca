@@ -4,12 +4,12 @@
 //!
 //! Every SQL statement lives here. `routes.rs` only decides what to ask for.
 
-use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex, MutexGuard, Weak};
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, TransactionBehavior};
-use tokio::sync::{Notify, Semaphore};
+use tokio::sync::Semaphore;
 
 use crate::routes::{ApiError, ApiResult};
 
@@ -212,50 +212,6 @@ impl Drop for Reader {
     }
 }
 
-// MARK: - Long-poll wakeups
-
-/// One `Notify` per identity with a long-poll in flight, so a blob write wakes only the
-/// machines of the identity it belongs to.
-#[derive(Default)]
-pub struct Wakers {
-    map: Mutex<HashMap<String, Weak<Notify>>>,
-    /// Bumped when an identity's machine list changes, so a woken long-poll with no new
-    /// blobs still returns and the Devices refresh their presence.
-    generations: Mutex<HashMap<String, u64>>,
-}
-
-impl Wakers {
-    pub fn generation(&self, identity_pubkey: &str) -> u64 {
-        unpoisoned(&self.generations).get(identity_pubkey).copied().unwrap_or(0)
-    }
-
-    /// Marks the identity's machine list as changed and wakes its long-polls.
-    pub fn machines_changed(&self, identity_pubkey: &str) {
-        *unpoisoned(&self.generations).entry(identity_pubkey.to_string()).or_insert(0) += 1;
-        self.wake(identity_pubkey);
-    }
-
-    pub fn waiter(&self, identity_pubkey: &str) -> Arc<Notify> {
-        let mut map = unpoisoned(&self.map);
-        if let Some(notify) = map.get(identity_pubkey).and_then(Weak::upgrade) {
-            return notify;
-        }
-        if map.len() >= 4096 {
-            map.retain(|_, weak| weak.strong_count() > 0);
-        }
-        let notify = Arc::new(Notify::new());
-        map.insert(identity_pubkey.to_string(), Arc::downgrade(&notify));
-        notify
-    }
-
-    pub fn wake(&self, identity_pubkey: &str) {
-        let notify = unpoisoned(&self.map).get(identity_pubkey).and_then(Weak::upgrade);
-        if let Some(notify) = notify {
-            notify.notify_waiters();
-        }
-    }
-}
-
 // MARK: - Push tokens
 
 /// Where a phone takes pushes: its APNs or FCM device token, one per machine.
@@ -299,32 +255,7 @@ pub fn push_tokens_for(connection: &Connection, identity_pubkey: &str, except_ma
     rows.collect()
 }
 
-// MARK: - Presence
-
-/// The online window is 150 s, so `last_seen` only needs a write every 30 s per machine
-/// instead of one on every authenticated request.
-pub const TOUCH_INTERVAL: i64 = 30;
-
-#[derive(Default)]
-pub struct Presence {
-    touched: Mutex<HashMap<String, i64>>,
-}
-
-impl Presence {
-    /// True when this machine's `last_seen` is due for a write.
-    pub fn due(&self, machine_pubkey: &str) -> bool {
-        let now = now();
-        let mut touched = unpoisoned(&self.touched);
-        if touched.get(machine_pubkey).is_some_and(|last| now - last < TOUCH_INTERVAL) {
-            return false;
-        }
-        if touched.len() >= 65_536 {
-            touched.retain(|_, last| now - *last < 10 * 60);
-        }
-        touched.insert(machine_pubkey.to_string(), now);
-        true
-    }
-}
+// MARK: - Revoked machines
 
 /// The keys of unpaired machines, so a bearer token issued before the unpairing dies with
 /// it. Loaded from `revoked_machines` at startup and kept current by `revoke_machine`'s

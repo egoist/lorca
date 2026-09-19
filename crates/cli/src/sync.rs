@@ -4,29 +4,25 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use crate::app::{remember_applied, upsert_device, App};
-use crate::config::now_unix;
 use crate::events::Event;
 use crate::keys::unb64;
 use crate::model::*;
-use crate::relay::{BlobIn, RelayError};
+use crate::relay::{BlobIn, RelayError, Signal};
 
-const POLL_WAIT_SECS: u64 = 25;
-/// A poll page at least this long is applied as a backlog: see `App::bulk_sync`.
+/// A pull page at least this long is applied as a backlog: see `App::bulk_sync`.
 const BULK_BLOBS: usize = 20;
 
-/// What the poll takes. `file` blobs are left out: a transcript fetches them by id when it
+/// What a pull takes. `file` blobs are left out: a transcript fetches them by id when it
 /// needs them, so a photo sent to one bot is not downloaded by every Device.
 pub const POLL_KINDS: &str = "roster,chat,machine,job,job_result,request,response";
 
 pub async fn run(app: Arc<App>) {
     let mut failures: u32 = 0;
     loop {
-        match cycle(&app).await {
+        match session(&app).await {
             Ok(()) => failures = 0,
             Err(error) => {
-                if app.relay_connected.swap(false, Ordering::Relaxed) {
-                    app.emit(Event::RelayStatus { connected: false, url: app.relay_url() });
-                }
+                disconnected(&app);
                 if error.is_unauthorized() {
                     app.relay.forget_token();
                 }
@@ -52,7 +48,27 @@ pub async fn run(app: Arc<App>) {
     }
 }
 
-async fn cycle(app: &Arc<App>) -> Result<(), RelayError> {
+/// Without its own socket this Device knows nothing of the others' presence.
+fn disconnected(app: &Arc<App>) {
+    if app.relay_connected.swap(false, Ordering::Relaxed) {
+        app.emit(Event::RelayStatus { connected: false, url: app.relay_url() });
+    }
+    let had_online = {
+        let mut state = app.state.lock().unwrap();
+        let had = !state.device_online.is_empty();
+        state.device_online.clear();
+        had
+    };
+    if had_online {
+        app.emit(app.roster_summary());
+    }
+}
+
+/// One sync socket, from connect to its end. The relay signals over it and carries no data:
+/// `blobs` is answered with a pull, `machines` with a fresh machine list. The outbox wakes
+/// the session too. `Ok` means the identity or the relay URL changed and the next session
+/// starts from there; an error is the socket or a request failing.
+async fn session(app: &Arc<App>) -> Result<(), RelayError> {
     let Some(machine_file) = app.machine_file() else {
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         return Ok(());
@@ -70,52 +86,86 @@ async fn cycle(app: &Arc<App>) -> Result<(), RelayError> {
         ensure_registered(app, &url).await?;
     }
 
+    // The socket opens before the first pull, so no blob lands unseen between the two.
     let token = token_or_register(app, &url, &machine).await?;
+    let mut socket = app.relay.sync_socket(&url, &token).await?;
     if !app.relay_connected.swap(true, Ordering::Relaxed) {
         app.emit(Event::RelayStatus { connected: true, url: Some(url.clone()) });
     }
 
-    app.push_machine_blob_if_changed();
-    drain_outbox(app, &url, &token).await?;
-    drain_group_deletes(app, &url, &token).await?;
-    refresh_presence(app, &url, &token).await?;
+    let (mut pull, mut refresh) = (true, true);
+    loop {
+        let same_machine = app.machine_file().is_some_and(|file| file.machine().is_ok_and(|m| m.pubkey() == machine.pubkey()));
+        if !same_machine || app.relay_url().as_deref() != Some(url.as_str()) {
+            disconnected(app);
+            return Ok(());
+        }
+        // Armed before the outbox is read: a blob queued while this round runs wakes the wait
+        // below instead of sitting there until the relay next speaks.
+        let queued = app.outbox_notify.notified();
+        tokio::pin!(queued);
+        queued.as_mut().enable();
 
-    let since = app.state.lock().unwrap().last_seq;
+        let token = token_or_register(app, &url, &machine).await?;
+        app.push_machine_blob_if_changed();
+        drain_outbox(app, &url, &token).await?;
+        drain_group_deletes(app, &url, &token).await?;
+        if refresh {
+            refresh_presence(app, &url, &token).await?;
+        }
+        if pull {
+            pull_blobs(app, &url, &token, &machine_file).await?;
+        }
+        if app.presence_stale.swap(false, Ordering::Relaxed) {
+            refresh_presence(app, &url, &token).await?;
+        }
+
+        (pull, refresh) = tokio::select! {
+            signal = socket.next() => match signal? {
+                Signal::Blobs => (true, false),
+                Signal::Machines => (false, true),
+            },
+            // The outbox, or `sync.wake` from a phone that came back to the foreground: its
+            // socket may have died unnoticed, and a pull costs one request.
+            _ = &mut queued => (true, false),
+        };
+    }
+}
+
+/// Pulls the log from `last_seq` until a page comes back empty.
+async fn pull_blobs(app: &Arc<App>, url: &str, token: &str, machine_file: &crate::keys::MachineFile) -> Result<(), RelayError> {
     // The relay keeps the latest roster, so in a replay from the start it comes after the
     // messages. It is taken first, and the chats have their names and bots when those land.
     // It is a preview: the replay applies the same blob again at its place in the log, where
     // it prunes the placeholder chats that the messages of deleted chats left behind.
-    if since == 0 {
-        let (blobs, _head) = app.relay.list_blobs(&url, &token, 0, "roster,machine", 0).await?;
+    if app.state.lock().unwrap().last_seq == 0 {
+        let (blobs, _head) = app.relay.list_blobs(url, token, 0, "roster,machine").await?;
         for blob in blobs {
-            apply_blob_contents(app, &machine_file, &blob);
+            apply_blob_contents(app, machine_file, &blob);
         }
     }
-    let poll = app.relay.list_blobs(&url, &token, since, POLL_KINDS, POLL_WAIT_SECS);
-    let (blobs, _head) = tokio::select! {
-        result = poll => result?,
-        _ = app.outbox_notify.notified() => return Ok(()),
-    };
-
-    // A page this long is a backlog (a fresh pair replays the history): apply it quietly and
-    // tell the app once, instead of one event and one state write per message.
-    let bulk = blobs.len() >= BULK_BLOBS;
-    app.bulk_sync.store(bulk, Ordering::Relaxed);
-    for blob in blobs {
-        apply_blob(app, &machine_file, &blob);
-        let mut state = app.state.lock().unwrap();
-        state.last_seq = state.last_seq.max(blob.seq);
+    loop {
+        let since = app.state.lock().unwrap().last_seq;
+        let (blobs, _head) = app.relay.list_blobs(url, token, since, POLL_KINDS).await?;
+        if blobs.is_empty() {
+            return Ok(());
+        }
+        // A page this long is a backlog (a fresh pair replays the history): apply it quietly
+        // and tell the app once, instead of one event and one state write per message.
+        let bulk = blobs.len() >= BULK_BLOBS;
+        app.bulk_sync.store(bulk, Ordering::Relaxed);
+        for blob in blobs {
+            apply_blob(app, machine_file, &blob);
+            let mut state = app.state.lock().unwrap();
+            state.last_seq = state.last_seq.max(blob.seq);
+        }
+        app.bulk_sync.store(false, Ordering::Relaxed);
+        app.save_state_now();
+        if bulk {
+            crate::runtime::prime_names(app);
+            app.emit(Event::Snapshot(app.snapshot()));
+        }
     }
-    app.bulk_sync.store(false, Ordering::Relaxed);
-    app.save_state_now();
-    if bulk {
-        crate::runtime::prime_names(app);
-        app.emit(Event::Snapshot(app.snapshot()));
-    }
-    if app.presence_stale.swap(false, Ordering::Relaxed) {
-        refresh_presence(app, &url, &token).await?;
-    }
-    Ok(())
 }
 
 /// A bearer for this machine. When the relay does not know the machine (a relay other than
@@ -192,6 +242,7 @@ async fn refresh_presence(app: &Arc<App>, url: &str, token: &str) -> Result<(), 
     let (changed, pruned) = {
         let mut state = app.state.lock().unwrap();
         let before: Vec<bool> = state.devices.iter().map(|d| online(&state, &d.id)).collect();
+        state.device_online = machines.iter().filter(|m| m.online).map(|m| m.machine_pubkey.clone()).collect();
         for machine in &machines {
             state.device_seen.insert(machine.machine_pubkey.clone(), machine.last_seen);
             if let Some(device) = state.devices.iter_mut().find(|d| d.id == machine.machine_pubkey) {
@@ -233,6 +284,7 @@ pub async fn unpair_device(app: &Arc<App>, id: &str) -> Result<(), String> {
         let mut state = app.state.lock().unwrap();
         state.devices.retain(|d| d.id != id);
         state.device_seen.remove(id);
+        state.device_online.remove(id);
     }
     app.save_state();
     app.emit(app.roster_summary());
@@ -255,7 +307,7 @@ pub async fn revoke_self(app: &Arc<App>) {
 }
 
 fn online(state: &crate::app::State, id: &str) -> bool {
-    state.device_seen.get(id).map(|seen| now_unix() - seen < crate::app::ONLINE_WINDOW_SECS).unwrap_or(false)
+    state.device_online.contains(id)
 }
 
 pub async fn delete_remote_blob(app: &Arc<App>, id: &str) {
@@ -421,7 +473,7 @@ fn apply_chat_op(app: &Arc<App>, op: ChatBlob) {
 /// Restore path: pull the account DEK the identity device sealed to the content key.
 pub async fn fetch_dek(app: &Arc<App>, url: &str, identity: &crate::keys::Identity, machine: &crate::keys::Machine) -> Result<[u8; 32], String> {
     let token = app.relay.authenticate(url, machine).await.map_err(|e| e.to_string())?;
-    let (blobs, _) = app.relay.list_blobs(url, &token, 0, "key", 0).await.map_err(|e| e.to_string())?;
+    let (blobs, _) = app.relay.list_blobs(url, &token, 0, "key").await.map_err(|e| e.to_string())?;
     for blob in blobs.iter().rev() {
         let Ok(ciphertext) = unb64(&blob.ciphertext) else { continue };
         if let Ok(bytes) = crate::crypto::unseal(&identity.content_secret, &ciphertext) {

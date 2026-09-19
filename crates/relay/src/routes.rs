@@ -1,3 +1,4 @@
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -18,7 +19,9 @@ const MAX_FILE_BLOB_BYTES: usize = 24 * 1024 * 1024;
 const MAX_BODY_BYTES: usize = 40 * 1024 * 1024;
 const CHALLENGE_TTL: i64 = 120;
 const PAIRING_TTL: i64 = 10 * 60;
-const MAX_WAIT_SECONDS: u64 = 30;
+/// The relay pings each sync socket this often, and drops one that has been silent for two
+/// rounds: a Mac that went to sleep, a phone that left the network.
+const PING_SECONDS: u64 = 25;
 /// Ciphertext in one page of `GET /v1/blobs`. A Device that replays a long history gets it in
 /// pages this size, so the relay never builds a response out of hundreds of 4 MiB blobs.
 const MAX_PAGE_BYTES: i64 = 8 * 1024 * 1024;
@@ -97,6 +100,7 @@ pub fn router(state: AppState) -> Router {
         .route_layer(axum::middleware::from_fn_with_state(state.clone(), crate::limit::per_ip));
     Router::new()
         .route("/v1/health", get(health))
+        .route("/v1/sync", get(sync_socket))
         .route("/v1/machines", get(list_machines))
         .route("/v1/machines/{machine_pubkey}", axum::routing::delete(revoke_machine))
         .route("/v1/blobs", get(list_blobs).put(put_blob))
@@ -220,27 +224,31 @@ struct MachineOut {
     box_pubkey: String,
     last_seen: i64,
     created_at: i64,
+    /// The machine has a sync socket open.
+    online: bool,
 }
 
 async fn list_machines(State(state): State<AppState>, auth: Auth) -> ApiResult<Json<Value>> {
+    let online = state.hub.online(&auth.identity_pubkey);
     let machines: Vec<MachineOut> = state
         .db
         .read(move |db| Ok(db::machines_for(db, &auth.identity_pubkey)?))
         .await?
         .into_iter()
         .map(|m| MachineOut {
-            machine_pubkey: m.machine_pubkey,
             box_pubkey: m.box_pubkey,
             last_seen: m.last_seen,
             created_at: m.created_at,
+            online: online.contains(&m.machine_pubkey),
+            machine_pubkey: m.machine_pubkey,
         })
         .collect();
     Ok(Json(json!({ "machines": machines, "now": now() })))
 }
 
 /// Unpairs one machine of the caller's identity, the caller's own included. Its key never
-/// authenticates again, and its pending envelopes go. The identity's long-polls are woken so
-/// the other Devices refresh their machine list now.
+/// authenticates again, its pending envelopes go, and its sync socket closes. The other
+/// Devices are told to refresh their machine list now.
 async fn revoke_machine(State(state): State<AppState>, auth: Auth, Path(machine_pubkey): Path<String>) -> ApiResult<StatusCode> {
     let (identity, target) = (auth.identity_pubkey.clone(), machine_pubkey.clone());
     let removed = state.db.write(move |db| Ok(db::revoke_machine(db, &identity, &target)?)).await?;
@@ -248,7 +256,8 @@ async fn revoke_machine(State(state): State<AppState>, auth: Auth, Path(machine_
         return Err(ApiError::not_found("Not a machine of this identity"));
     }
     state.revoked.insert(&machine_pubkey);
-    state.wakers.machines_changed(&auth.identity_pubkey);
+    state.hub.kick(&auth.identity_pubkey, &machine_pubkey);
+    state.hub.machines(&auth.identity_pubkey);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -379,7 +388,7 @@ async fn put_blob(State(state): State<AppState>, auth: Auth, Json(body): Json<Pu
     if inserted.existing {
         return Ok(Json(json!({ "id": id, "seq": inserted.seq, "existing": true })));
     }
-    state.wakers.wake(&auth.identity_pubkey);
+    state.hub.blobs(&auth.identity_pubkey, body.recipient_machine_pubkey.as_deref());
     Ok(Json(json!({ "id": id, "seq": inserted.seq })))
 }
 
@@ -401,8 +410,6 @@ struct ListBlobs {
     since: i64,
     #[serde(default)]
     kinds: Option<String>,
-    #[serde(default)]
-    wait: Option<u64>,
     #[serde(default)]
     limit: Option<i64>,
 }
@@ -430,9 +437,8 @@ impl From<db::BlobRow> for BlobOut {
     }
 }
 
-/// Long-poll. The identity's waker is armed before each query, so a blob that lands between
-/// the query and the wait still wakes this call; there is no periodic re-query. A change to
-/// the identity's machine list ends the wait early too, with whatever blobs there are.
+/// A page of the identity's log after `since`. A Device pulls pages until one comes back
+/// empty, and again whenever its sync socket says `blobs`.
 async fn list_blobs(State(state): State<AppState>, auth: Auth, Query(query): Query<ListBlobs>) -> ApiResult<Json<Value>> {
     let kinds: Vec<String> = query
         .kinds
@@ -447,39 +453,66 @@ async fn list_blobs(State(state): State<AppState>, auth: Auth, Query(query): Que
         return Err(ApiError::bad_request("Unknown blob kind"));
     }
     let limit = query.limit.unwrap_or(200).clamp(1, 500);
-    let wait = query.wait.unwrap_or(0).min(MAX_WAIT_SECONDS);
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(wait);
-    let waker = state.wakers.waiter(&auth.identity_pubkey);
-    let generation = state.wakers.generation(&auth.identity_pubkey);
+    let (identity, machine, since) = (auth.identity_pubkey.clone(), auth.machine_pubkey.clone(), query.since);
+    let (mut rows, head) = state
+        .db
+        .read(move |db| {
+            let rows = db::blobs_since(db, &identity, &machine, since, &kinds, limit, MAX_PAGE_BYTES)?;
+            Ok((rows, db::current_seq(db, &identity)?))
+        })
+        .await?;
+    load_files(&state, &auth.identity_pubkey, &mut rows).await?;
+    let blobs: Vec<BlobOut> = rows.into_iter().map(BlobOut::from).collect();
+    Ok(Json(json!({ "blobs": blobs, "seq": head })))
+}
 
+// MARK: - Sync socket
+
+/// The machine's sync socket. It is online while this is open; `last_seen` is written when it
+/// comes and when it goes, and the identity's other sockets hear `machines` both times.
+async fn sync_socket(State(state): State<AppState>, auth: Auth, upgrade: WebSocketUpgrade) -> Response {
+    upgrade.on_upgrade(move |socket| serve_socket(state, auth, socket))
+}
+
+async fn touch(state: &AppState, machine_pubkey: &str) {
+    let machine_pubkey = machine_pubkey.to_string();
+    if let Err(error) = state.db.write(move |db| Ok(db::touch_machine(db, &machine_pubkey)?)).await {
+        tracing::warn!(?error, "writing last_seen");
+    }
+}
+
+async fn serve_socket(state: AppState, auth: Auth, mut socket: WebSocket) {
+    let mut seat = state.hub.join(&auth.identity_pubkey, &auth.machine_pubkey);
+    if seat.came_online {
+        touch(&state, &auth.machine_pubkey).await;
+        state.hub.machines(&auth.identity_pubkey);
+    }
+    let mut ping = tokio::time::interval(std::time::Duration::from_secs(PING_SECONDS));
+    ping.tick().await;
+    let mut heard = tokio::time::Instant::now();
     loop {
-        let notified = waker.notified();
-        tokio::pin!(notified);
-        notified.as_mut().enable();
-
-        let (identity, machine, kinds) = (auth.identity_pubkey.clone(), auth.machine_pubkey.clone(), kinds.clone());
-        let since = query.since;
-        let (mut rows, head) = state
-            .db
-            .read(move |db| {
-                let rows = db::blobs_since(db, &identity, &machine, since, &kinds, limit, MAX_PAGE_BYTES)?;
-                Ok((rows, db::current_seq(db, &identity)?))
-            })
-            .await?;
-        load_files(&state, &auth.identity_pubkey, &mut rows).await?;
-        let blobs: Vec<BlobOut> = rows.into_iter().map(BlobOut::from).collect();
-        let timed_out = tokio::time::Instant::now() >= deadline;
-        if !blobs.is_empty() || wait == 0 || timed_out {
-            return Ok(Json(json!({ "blobs": blobs, "seq": head })));
+        tokio::select! {
+            signal = seat.signals.recv() => {
+                // The hub dropped this seat: the machine was unpaired.
+                let Some(signal) = signal else { break };
+                if socket.send(Message::Text(signal.json().into())).await.is_err() {
+                    break;
+                }
+            }
+            _ = ping.tick() => {
+                if heard.elapsed().as_secs() > PING_SECONDS * 2 || socket.send(Message::Ping(Default::default())).await.is_err() {
+                    break;
+                }
+            }
+            message = socket.recv() => match message {
+                Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
+                Some(Ok(_)) => heard = tokio::time::Instant::now(),
+            },
         }
-        if tokio::time::timeout_at(deadline, notified).await.is_err() {
-            return Ok(Json(json!({ "blobs": blobs, "seq": head })));
-        }
-        // A machine was unpaired: nothing new to read, but the caller should refresh its
-        // machine list now rather than at the end of the wait.
-        if state.wakers.generation(&auth.identity_pubkey) != generation {
-            return Ok(Json(json!({ "blobs": blobs, "seq": head })));
-        }
+    }
+    if state.hub.leave(&auth.identity_pubkey, seat.id) && !state.revoked.contains(&auth.machine_pubkey) {
+        touch(&state, &auth.machine_pubkey).await;
+        state.hub.machines(&auth.identity_pubkey);
     }
 }
 

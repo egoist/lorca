@@ -93,8 +93,7 @@ pub fn parse_token(secret: &[u8; 32], token: &str) -> Result<Auth, ApiError> {
 }
 
 /// The authenticated machine. A token outlives an unpairing by up to an hour, so the revoked
-/// set is checked first. Extracting it also bumps the machine's `last_seen`, at most once
-/// every `db::TOUCH_INTERVAL` seconds per machine.
+/// set is checked first.
 #[derive(Debug, Clone)]
 pub struct Auth {
     pub identity_pubkey: String,
@@ -117,10 +116,6 @@ impl FromRequestParts<AppState> for Auth {
         }
         if let Err(retry_after) = state.identity_limiter.check(&auth.identity_pubkey) {
             return Err(ApiError::too_many(retry_after));
-        }
-        if state.presence.due(&auth.machine_pubkey) {
-            let machine_pubkey = auth.machine_pubkey.clone();
-            state.db.write(move |db| Ok(crate::db::touch_machine(db, &machine_pubkey)?)).await?;
         }
         Ok(auth)
     }

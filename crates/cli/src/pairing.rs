@@ -167,6 +167,8 @@ async fn wait_for_request(app: &Arc<App>, url: &str, nonce: &str) -> Result<Valu
             let mut state = app.state.lock().unwrap();
             upsert_device(&mut state.devices, device.clone());
             state.device_seen.insert(device.id.clone(), now_unix());
+            // It opens its sync socket next; the relay's `machines` signal confirms it.
+            state.device_online.insert(device.id.clone());
             // The new Device needs this machine's metadata, whatever the relay already holds.
             state.machine_blob_hash = None;
         }

@@ -48,6 +48,9 @@ sha2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
+tokio-tungstenite.workspace = true
+rustls.workspace = true
+webpki-roots.workspace = true
 tracing.workspace = true
 tracing-subscriber = { workspace = true, optional = true }
 uuid.workspace = true

@@ -16,7 +16,6 @@ use crate::model::*;
 use crate::credentials::Credentials;
 use crate::relay::RelayClient;
 
-pub const ONLINE_WINDOW_SECS: i64 = 150;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutboxItem {
@@ -78,6 +77,10 @@ pub struct State {
     /// machine pubkey → last seen (unix), from the relay's machine list.
     #[serde(default)]
     pub device_seen: HashMap<String, i64>,
+    /// The machines with a sync socket open on the relay, as of the last machine list. Not
+    /// kept across runs: it is only good while this Device's own socket is open.
+    #[serde(skip)]
+    pub device_online: std::collections::HashSet<String>,
     /// Relay blob ids this device produced or already applied, so its own echoes are no-ops.
     #[serde(default)]
     pub applied_blob_ids: Vec<String>,
@@ -328,6 +331,8 @@ impl App {
         *self.state.lock().unwrap() = State::default();
         self.settings.lock().unwrap().relay_url = None;
         self.relay.forget_token();
+        // The sync session ends on this instead of waiting for its socket to say something.
+        self.outbox_notify.notify_waiters();
         for path in [self.config.identity_path(), self.config.machine_path(), self.config.credentials_path(), self.config.state_path(), self.config.settings_path()] {
             if path.exists() {
                 std::fs::remove_file(&path)?;
@@ -506,7 +511,7 @@ impl App {
             return true;
         }
         let state = self.state.lock().unwrap();
-        state.device_seen.get(id).map(|seen| config::now_unix() - seen < ONLINE_WINDOW_SECS).unwrap_or(false)
+        state.device_online.contains(id)
     }
 
     pub fn chat_lock(&self, chat_id: &str) -> Arc<tokio::sync::Mutex<()>> {
@@ -909,7 +914,6 @@ impl App {
 
     fn devices_out(&self, state: &State) -> Vec<Value> {
         let this_id = self.this_device_id();
-        let now = config::now_unix();
         let mut devices: Vec<&Device> = state.devices.iter().collect();
         devices.sort_by_key(|d| (Some(d.id.clone()) != this_id, d.name.to_lowercase()));
         devices
@@ -917,7 +921,7 @@ impl App {
             .map(|device| {
                 let is_this = Some(device.id.clone()) == this_id;
                 let seen = state.device_seen.get(&device.id).copied().unwrap_or(device.updated_at);
-                let status = if is_this || now - seen < ONLINE_WINDOW_SECS { "online" } else { "offline" };
+                let status = if is_this || state.device_online.contains(&device.id) { "online" } else { "offline" };
                 let providers: Vec<ProviderStatus> = if is_this {
                     self.credentials.lock().unwrap().statuses()
                 } else if device.is_runner() {

@@ -1,7 +1,7 @@
 //! HTTP client for the relay. Signs identity-level requests, authenticates machines with the
 //! challenge, and moves ciphertext.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -60,6 +60,79 @@ pub struct MachineIn {
     pub box_pubkey: String,
     pub last_seen: i64,
     pub created_at: i64,
+    /// The machine has a sync socket open on the relay.
+    #[serde(default)]
+    pub online: bool,
+}
+
+/// What the relay says over the sync socket. It carries no data: a Device pulls after it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Signal {
+    /// The identity has a blob this machine may read.
+    Blobs,
+    /// The machine list or a machine's presence changed.
+    Machines,
+}
+
+/// This machine's sync socket. It is online on the relay while this is open.
+pub struct SyncSocket {
+    stream: tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+}
+
+/// The relay pings every 25 s. A socket silent for this long is dead: the Mac slept, the
+/// phone changed networks.
+const SOCKET_SILENCE: std::time::Duration = std::time::Duration::from_secs(70);
+
+impl SyncSocket {
+    /// The next signal. An error means the socket is gone and the caller connects again.
+    pub async fn next(&mut self) -> RelayResult<Signal> {
+        use futures::{SinkExt, StreamExt};
+        use tokio_tungstenite::tungstenite::Message;
+        loop {
+            let message = tokio::time::timeout(SOCKET_SILENCE, self.stream.next())
+                .await
+                .map_err(|_| RelayError { status: None, message: "the sync socket went silent".into() })?
+                .ok_or_else(|| RelayError { status: None, message: "the relay closed the sync socket".into() })?
+                .map_err(socket_error)?;
+            match message {
+                Message::Text(text) => match serde_json::from_str::<Value>(&text).ok().as_ref().and_then(|v| v["type"].as_str()) {
+                    Some("blobs") => return Ok(Signal::Blobs),
+                    Some("machines") => return Ok(Signal::Machines),
+                    _ => {}
+                },
+                // The pong has to be flushed by hand when nothing else is written.
+                Message::Ping(_) => self.stream.flush().await.map_err(socket_error)?,
+                Message::Close(_) => return Err(RelayError { status: None, message: "the relay closed the sync socket".into() }),
+                _ => {}
+            }
+        }
+    }
+}
+
+fn socket_error(error: tokio_tungstenite::tungstenite::Error) -> RelayError {
+    use tokio_tungstenite::tungstenite::Error;
+    match error {
+        // The upgrade was refused: 401 for a stale token, 410 for an unpaired machine.
+        Error::Http(response) => RelayError { status: Some(response.status().as_u16()), message: format!("sync socket refused ({})", response.status()) },
+        other => RelayError { status: None, message: format!("sync socket: {other}") },
+    }
+}
+
+/// TLS for `wss://`, with the provider named: the build links both ring and aws-lc-rs, and
+/// rustls picks neither by itself.
+fn tls() -> Arc<rustls::ClientConfig> {
+    static CONFIG: std::sync::OnceLock<Arc<rustls::ClientConfig>> = std::sync::OnceLock::new();
+    CONFIG
+        .get_or_init(|| {
+            let roots = rustls::RootCertStore { roots: webpki_roots::TLS_SERVER_ROOTS.to_vec() };
+            let config = rustls::ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+                .with_safe_default_protocol_versions()
+                .expect("ring supports the default TLS versions")
+                .with_root_certificates(roots)
+                .with_no_client_auth();
+            Arc::new(config)
+        })
+        .clone()
 }
 
 pub struct RelayClient {
@@ -167,13 +240,33 @@ impl RelayClient {
         Ok(value["seq"].as_i64().unwrap_or(0))
     }
 
-    pub async fn list_blobs(&self, url: &str, token: &str, since: i64, kinds: &str, wait: u64) -> RelayResult<(Vec<BlobIn>, i64)> {
+    /// Opens this machine's sync socket: `ws(s)://<relay>/v1/sync` with the bearer token.
+    pub async fn sync_socket(&self, url: &str, token: &str) -> RelayResult<SyncSocket> {
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        let address = match url.split_once("://") {
+            Some(("https", rest)) => format!("wss://{rest}/v1/sync"),
+            Some((_, rest)) => format!("ws://{rest}/v1/sync"),
+            None => format!("ws://{url}/v1/sync"),
+        };
+        let mut request = address.into_client_request().map_err(socket_error)?;
+        let bearer = format!("Bearer {token}").parse().map_err(|_| RelayError { status: None, message: "token is not a header value".into() })?;
+        request.headers_mut().insert("authorization", bearer);
+        let connector = tokio_tungstenite::Connector::Rustls(tls());
+        let connect = tokio_tungstenite::connect_async_tls_with_config(request, None, false, Some(connector));
+        let (stream, _) = tokio::time::timeout(std::time::Duration::from_secs(20), connect)
+            .await
+            .map_err(|_| RelayError { status: None, message: "the sync socket timed out connecting".into() })?
+            .map_err(socket_error)?;
+        Ok(SyncSocket { stream })
+    }
+
+    pub async fn list_blobs(&self, url: &str, token: &str, since: i64, kinds: &str) -> RelayResult<(Vec<BlobIn>, i64)> {
         let value = Self::check(
             self.http
                 .get(format!("{url}/v1/blobs"))
                 .bearer_auth(token)
-                .query(&[("since", since.to_string()), ("kinds", kinds.to_string()), ("wait", wait.to_string())])
-                .timeout(std::time::Duration::from_secs(wait + 30))
+                .query(&[("since", since.to_string()), ("kinds", kinds.to_string())])
+                .timeout(std::time::Duration::from_secs(60))
                 .send()
                 .await?,
         )
