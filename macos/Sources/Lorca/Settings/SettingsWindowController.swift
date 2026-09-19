@@ -79,6 +79,7 @@ class SettingsPaneViewController: NSViewController {
     }
 
     func addSection(_ section: SectionView) {
+        section.style = .heading
         add(section)
     }
 
@@ -118,8 +119,8 @@ class SettingsPaneViewController: NSViewController {
 // MARK: - General
 
 final class GeneralSettingsViewController: SettingsPaneViewController {
-    private let appearance = NSPopUpButton()
-    private let dictationLanguage = NSPopUpButton()
+    private let appearance = SettingsPopUpButton()
+    private let dictationLanguage = SettingsPopUpButton()
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -142,7 +143,7 @@ final class GeneralSettingsViewController: SettingsPaneViewController {
         case .darkAqua?: appearance.selectItem(at: 2)
         default: appearance.selectItem(at: 0)
         }
-        configure(appearance, width: 140, action: #selector(changeAppearance))
+        configure(appearance, action: #selector(changeAppearance))
         let look = SectionView(title: "Appearance")
         look.setRows([AccessoryRow(key: SettingsEntry.appearance.row, accessory: appearance)])
         addSection(look)
@@ -160,7 +161,7 @@ final class GeneralSettingsViewController: SettingsPaneViewController {
         {
             dictationLanguage.select(item)
         }
-        configure(dictationLanguage, width: 220, action: #selector(changeDictationLanguage))
+        configure(dictationLanguage, action: #selector(changeDictationLanguage))
         let dictation = SectionView(title: "Dictation")
         dictation.setRows([AccessoryRow(key: SettingsEntry.dictationLanguage.row, accessory: dictationLanguage)])
         addSection(dictation)
@@ -179,12 +180,9 @@ final class GeneralSettingsViewController: SettingsPaneViewController {
         return toggle
     }
 
-    private func configure(_ popUp: NSPopUpButton, width: CGFloat, action: Selector) {
-        popUp.controlSize = .small
-        popUp.font = .systemFont(ofSize: NSFont.systemFontSize(for: .small))
+    private func configure(_ popUp: NSPopUpButton, action: Selector) {
         popUp.target = self
         popUp.action = action
-        popUp.widthAnchor.constraint(equalToConstant: width).isActive = true
     }
 
     @objc private func toggleSendOnReturn(_ sender: NSSwitch) {

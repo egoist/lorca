@@ -3,7 +3,44 @@ import AppKit
 /// Titled card used by the inspector and the settings panes.
 final class SectionView: NSView {
     var title: String {
-        didSet { header.stringValue = title.uppercased() }
+        didSet { applyStyle() }
+    }
+
+    /// The inspector's small capitals, or System Settings' group title: the row text's size in
+    /// bold, on the rows' text column.
+    enum Style {
+        case caption
+        case heading
+    }
+
+    var style = Style.caption {
+        didSet { applyStyle() }
+    }
+
+    private var headerLeading: NSLayoutConstraint!
+    private var cardTop: NSLayoutConstraint!
+
+    private func applyStyle() {
+        switch style {
+        case .caption:
+            header.stringValue = title.uppercased()
+            header.font = .systemFont(ofSize: 10, weight: .semibold)
+            header.textColor = .tertiaryLabelColor
+            headerLeading.constant = 4
+            cardTop.constant = 6
+            card.borderColor = Theme.botBubbleBorder
+        case .heading:
+            header.stringValue = title
+            header.font = .systemFont(ofSize: 13, weight: .bold)
+            header.textColor = .labelColor
+            headerLeading.constant = 12
+            cardTop.constant = 9
+            // System Settings' cards are a fill alone.
+            card.borderColor = nil
+        }
+        for (index, end) in dividerEnds.enumerated() {
+            end.constant = index.isMultiple(of: 2) ? dividerInset : -dividerInset
+        }
     }
     private let header: NSTextField
     private let card = BackgroundView()
@@ -35,12 +72,14 @@ final class SectionView: NSView {
         addSubview(card)
         card.addSubview(rows)
 
+        headerLeading = header.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4)
+        cardTop = card.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 6)
         NSLayoutConstraint.activate([
             header.topAnchor.constraint(equalTo: topAnchor),
-            header.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
+            headerLeading,
             header.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
 
-            card.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 6),
+            cardTop,
             card.leadingAnchor.constraint(equalTo: leadingAnchor),
             card.trailingAnchor.constraint(equalTo: trailingAnchor),
             card.bottomAnchor.constraint(equalTo: bottomAnchor),
@@ -55,16 +94,34 @@ final class SectionView: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
+    /// The rows' dividers run edge to edge under a caption, and between the rows' text margins
+    /// under a heading, as System Settings' do.
+    private var dividerInset: CGFloat { style == .heading ? 12 : 0 }
+    private var dividerEnds: [NSLayoutConstraint] = []
+
     func setRows(_ views: [NSView]) {
+        dividerEnds = []
         for view in rows.arrangedSubviews {
             rows.removeArrangedSubview(view)
             view.removeFromSuperview()
         }
         for (index, view) in views.enumerated() {
             if index > 0 {
+                // The line sits in a full-width strip, so the style can pull its ends in.
+                let strip = NSView()
+                strip.translatesAutoresizingMaskIntoConstraints = false
                 let divider = HairlineView()
-                rows.addArrangedSubview(divider)
-                divider.widthAnchor.constraint(equalTo: rows.widthAnchor).isActive = true
+                strip.addSubview(divider)
+                let leading = divider.leadingAnchor.constraint(equalTo: strip.leadingAnchor, constant: dividerInset)
+                let trailing = divider.trailingAnchor.constraint(equalTo: strip.trailingAnchor, constant: -dividerInset)
+                dividerEnds += [leading, trailing]
+                NSLayoutConstraint.activate([
+                    leading, trailing,
+                    divider.topAnchor.constraint(equalTo: strip.topAnchor),
+                    divider.bottomAnchor.constraint(equalTo: strip.bottomAnchor),
+                ])
+                rows.addArrangedSubview(strip)
+                strip.widthAnchor.constraint(equalTo: rows.widthAnchor).isActive = true
             }
             rows.addArrangedSubview(view)
             view.widthAnchor.constraint(equalTo: rows.widthAnchor).isActive = true

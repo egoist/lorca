@@ -320,3 +320,103 @@ extension NSView {
         ])
     }
 }
+
+// MARK: - Settings pop-up
+
+/// A pop-up button as System Settings' rows have it: the choice as plain text, as wide as it
+/// needs, then the up-down chevrons on a small rounded platter. AppKit's bezel styles all draw a
+/// full-width capsule; this look is SwiftUI's grouped-form picker, so it is drawn here.
+final class SettingsPopUpButton: NSPopUpButton {
+    private static let platter = NSSize(width: 19, height: 19)
+    private static let gap: CGFloat = 8
+    /// Room ahead of the title for the platter that spans the whole button under the pointer.
+    private static let leading: CGFloat = 9
+    private static let titleFont = NSFont.systemFont(ofSize: 13)
+    private var tracking: NSTrackingArea?
+    private var isHovered = false { didSet { if isHovered != oldValue { needsDisplay = true } } }
+
+    init() {
+        super.init(frame: .zero, pullsDown: false)
+        isBordered = false
+        font = Self.titleFont
+        (cell as? NSPopUpButtonCell)?.arrowPosition = .noArrow
+        setContentHuggingPriority(.required, for: .horizontal)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    private var titleText: NSAttributedString {
+        NSAttributedString(
+            string: titleOfSelectedItem ?? "",
+            attributes: [
+                .font: Self.titleFont,
+                .foregroundColor: isEnabled ? NSColor.labelColor : NSColor.disabledControlTextColor,
+            ])
+    }
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(
+            width: Self.leading + ceil(titleText.size().width) + Self.gap + Self.platter.width, height: 24)
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        let area = NSTrackingArea(
+            rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow], owner: self)
+        addTrackingArea(area)
+        tracking = area
+    }
+
+    override func mouseEntered(with event: NSEvent) { isHovered = isEnabled }
+    override func mouseExited(with event: NSEvent) { isHovered = false }
+
+    // Menu tracking swallows the exit event when the pointer leaves while the menu is open.
+    override func mouseDown(with event: NSEvent) {
+        super.mouseDown(with: event)
+        isHovered = window.map { bounds.contains(convert($0.mouseLocationOutsideOfEventStream, from: nil)) } ?? false
+    }
+
+    /// The resting platter lines up with the row's margin; the one under the pointer runs a
+    /// little past it, so the frame is that much wider than what layout aligns.
+    private static let overhang: CGFloat = 4
+    override var alignmentRectInsets: NSEdgeInsets {
+        NSEdgeInsets(top: 0, left: 0, bottom: 0, right: Self.overhang)
+    }
+
+    // The title follows the selection, and the button's width follows the title.
+    override func synchronizeTitleAndSelectedItem() {
+        super.synchronizeTitleAndSelectedItem()
+        invalidateIntrinsicContentSize()
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let platter = NSRect(
+            x: bounds.maxX - Self.overhang - Self.platter.width, y: ((bounds.height - Self.platter.height) / 2).rounded(),
+            width: Self.platter.width, height: Self.platter.height)
+        // Under the pointer the platter grows to hold the title too, as System Settings' does.
+        NSColor.labelColor.withAlphaComponent(isHighlighted ? 0.16 : 0.08).setFill()
+        NSBezierPath(roundedRect: isHovered || isHighlighted ? bounds : platter, xRadius: 8, yRadius: 8).fill()
+
+        let configuration = NSImage.SymbolConfiguration(pointSize: 9.5, weight: .semibold)
+            .applying(.init(paletteColors: [isEnabled ? .labelColor : .disabledControlTextColor]))
+        if let chevrons = NSImage(systemSymbolName: "chevron.up.chevron.down", accessibilityDescription: nil)?
+            .withSymbolConfiguration(configuration)
+        {
+            let size = chevrons.size
+            chevrons.draw(
+                in: NSRect(
+                    x: platter.midX - size.width / 2, y: platter.midY - size.height / 2, width: size.width,
+                    height: size.height),
+                from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+        }
+
+        let title = titleText
+        let size = title.size()
+        title.draw(
+            at: NSPoint(
+                x: max(0, platter.minX - Self.gap - size.width), y: ((bounds.height - size.height) / 2).rounded()))
+    }
+}

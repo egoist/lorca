@@ -9,7 +9,7 @@ final class AutoReviewSettingsViewController: SettingsPaneViewController {
     private let rules = SectionView(title: SettingsEntry.autoReviewRules.row)
     private let toggle = NSSwitch()
     private let draft = NSTextField()
-    private let draftBehavior = NSPopUpButton()
+    private let draftBehavior = SettingsPopUpButton()
     private var rows: [(rule: AutoReviewRule, field: NSTextField, popup: NSPopUpButton)] = []
 
     override func viewDidLoad() {
@@ -26,7 +26,6 @@ final class AutoReviewSettingsViewController: SettingsPaneViewController {
             draftBehavior.addItem(withTitle: behavior.title)
             draftBehavior.lastItem?.representedObject = behavior.rawValue
         }
-        draftBehavior.controlSize = .small
         addSection(check)
         addSection(rules)
         addFootnote("Auto-review checks a plugin action that changes something before it runs, using the bot's own model, and asks you in the chat when the action needs a look. Off, every such action asks. Write one short, natural-language rule for each action; \"Ask first\" takes priority if rules conflict. Built-in safety checks always apply.")
@@ -55,13 +54,12 @@ final class AutoReviewSettingsViewController: SettingsPaneViewController {
             field.isEditable = rule.tool == nil
             field.delegate = self
             field.toolTip = rule.tool.map { "Made from Always allow on a card, for \($0)." }
-            let popup = NSPopUpButton()
+            let popup = SettingsPopUpButton()
             for behavior in [AutoReviewRule.Behavior.allow, .ask] {
                 popup.addItem(withTitle: behavior.title)
                 popup.lastItem?.representedObject = behavior.rawValue
             }
             popup.selectItem(at: rule.behavior == .allow ? 0 : 1)
-            popup.controlSize = .small
             popup.target = self
             popup.action = #selector(behaviorChanged(_:))
             rows.append((rule, field, popup))
