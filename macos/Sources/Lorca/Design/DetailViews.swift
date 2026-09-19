@@ -493,6 +493,10 @@ final class ActionRow: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
+    func setValue(_ text: String) {
+        value.stringValue = text
+    }
+
     @objc private func tapped() {
         onAction?()
     }

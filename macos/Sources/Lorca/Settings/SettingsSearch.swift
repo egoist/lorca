@@ -27,6 +27,12 @@ struct SettingsEntry: Hashable {
     static let dictationLanguage = SettingsEntry(
         .general, "Dictation Language", row: "Language",
         keywords: ["dictate", "speech", "voice", "microphone", "locale"])
+    static let version = SettingsEntry(
+        .general, "Check for Updates", row: "Version", keywords: ["update", "upgrade", "release", "sparkle"])
+    static let automaticChecks = SettingsEntry(
+        .general, "Check for updates automatically", keywords: ["update", "upgrade", "background"])
+    static let automaticDownloads = SettingsEntry(
+        .general, "Download and install updates automatically", keywords: ["update", "upgrade", "background"])
 
     static let autoReviewSwitch = SettingsEntry(
         .autoReview, "Check actions before they run",
@@ -75,7 +81,9 @@ enum SettingsSearch {
 
     static func entries(in pane: SettingsPane, device: Device?, store: AppStore) -> [SettingsEntry] {
         switch pane {
-        case .general: [.sendOnReturn, .timestamps, .appearance, .dictationLanguage]
+        case .general:
+            [.sendOnReturn, .timestamps, .appearance, .dictationLanguage]
+                + (Updater.isEnabled ? [.version, .automaticChecks, .automaticDownloads] : [])
         case .autoReview: [.autoReviewSwitch, .autoReviewRules]
         case .advanced: [.relayURL, .cliPort, .onboarding]
         case .bots: (device.map { store.bots(on: $0.id) } ?? []).map { .bot($0) }

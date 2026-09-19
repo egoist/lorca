@@ -32,6 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         Notifier.shared.start()
         store.start()
+        Updater.shared.start()
         Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 2_500_000_000)
             guard let self, self.store.hasIdentity == nil, self.onboardingWindowController == nil else { return }
@@ -151,6 +152,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mainWindowController?.focusSearch()
     }
 
+    @objc func checkForUpdates(_ sender: Any?) {
+        Updater.shared.checkForUpdates()
+    }
+
     @objc func toggleCLIConnection(_ sender: Any?) {
         if store.isMock {
             store.setConnected(!store.isConnected)
@@ -220,6 +225,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if menuItem.tag == MenuTag.replayMock {
             return store.isMock
+        }
+        if menuItem.action == #selector(checkForUpdates(_:)) {
+            return Updater.shared.canCheckForUpdates
         }
         return true
     }

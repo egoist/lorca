@@ -1,3 +1,4 @@
+import { existsSync, readFileSync } from "node:fs"
 import { rm, mkdir, chmod, readdir, readFile, rename, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 
@@ -10,7 +11,22 @@ export const CLI_NAME = "lorca"
 
 export const APP_NAME = "Lorca"
 export const BUNDLE_ID = "app.lorca"
-export const VERSION = "0.1.0"
+
+/** The root package.json's "version" is the Mac app's version: Info.plist carries it, and Sparkle
+ * compares it. scripts/release-mac.ts bumps it. */
+export const PACKAGE_JSON = join(ROOT, "package.json")
+export const VERSION_FIELD = /^(\s*"version"\s*:\s*)"([^"]*)"/m
+export function readVersion(): string {
+  const version = readFileSync(PACKAGE_JSON, "utf8").match(VERSION_FIELD)?.[2]
+  if (!version) throw new Error('package.json has no "version"')
+  return version
+}
+
+/** Where the app looks for updates, and the EdDSA public key Sparkle checks them against: the
+ * public half of the login keychain's Sparkle key (docs/releasing-mac.md). */
+export const RELEASES_URL = process.env.DOWNLOAD_URL_PREFIX ?? "https://mac-releases.lorca.app/"
+export const FEED_URL = process.env.FEED_URL ?? `${RELEASES_URL}appcast.xml`
+export const SPARKLE_PUBLIC_KEY = "gv9GLMPjH5yMQkZMFXnoNfHOyL8/7KGzl/jzAqlzZZY="
 
 export type Config = "debug" | "release"
 
@@ -36,7 +52,7 @@ export function log(message: string) {
   console.log(`${color.dim(time)} ${color.cyan("lorca")} ${message}`)
 }
 
-function infoPlist() {
+function infoPlist(version: string) {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -56,9 +72,9 @@ function infoPlist() {
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>${VERSION}</string>
+	<string>${version}</string>
 	<key>CFBundleVersion</key>
-	<string>${VERSION}</string>
+	<string>${version}</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.productivity</string>
 	<key>LSMinimumSystemVersion</key>
@@ -75,6 +91,12 @@ function infoPlist() {
 	<false/>
 	<key>NSSupportsSuddenTermination</key>
 	<false/>
+	<key>SUFeedURL</key>
+	<string>${FEED_URL}</string>
+	<key>SUPublicEDKey</key>
+	<string>${SPARKLE_PUBLIC_KEY}</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
 </dict>
 </plist>
 `
@@ -168,18 +190,88 @@ export async function stampSDK(binary: string): Promise<boolean> {
   return true
 }
 
-/** Compile the SPM target and lay the product out as a launchable .app bundle with the CLI inside. */
-export async function buildApp(config: Config): Promise<{ ok: boolean; ms: number }> {
-  const started = performance.now()
+/** Sparkle's command-line tools (`generate_keys`, `generate_appcast`), as SwiftPM unpacks them. */
+export const SPARKLE_TOOLS = join(PACKAGE_DIR, ".build", "artifacts", "sparkle", "Sparkle", "bin")
 
+/** SwiftPM links the app against the Sparkle.framework under .build/artifacts; the bundle carries
+ * its own copy in Contents/Frameworks, which the rpath in Package.swift resolves against. */
+async function embedSparkle(bundle: string): Promise<string | null> {
+  const xcframework = join(PACKAGE_DIR, ".build", "artifacts", "sparkle", "Sparkle", "Sparkle.xcframework")
+  const slice = (await readdir(xcframework).catch(() => [])).find((name) => name.startsWith("macos-"))
+  if (!slice) return null
+  const framework = join(bundle, "Contents", "Frameworks", "Sparkle.framework")
+  await rm(framework, { recursive: true, force: true })
+  await mkdir(join(bundle, "Contents", "Frameworks"), { recursive: true })
+  const copy = await run(["ditto", join(xcframework, slice, "Sparkle.framework"), framework], { capture: true })
+  if (copy.exitCode !== 0) return null
+  // Headers and module maps are for compiling against the framework.
+  for (const name of ["Headers", "PrivateHeaders", "Modules"]) {
+    await rm(join(framework, "Versions", "B", name), { recursive: true, force: true })
+    await rm(join(framework, name), { force: true })
+  }
+  return framework
+}
+
+/** The hardened runtime refuses the microphone unless the app claims it, before TCC is asked. */
+const ENTITLEMENTS = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+</dict>
+</plist>
+`
+
+/** Sign nested code before the bundle around it, innermost first: Sparkle's XPC services,
+ * Updater.app and Autoupdate, the framework, the CLI, then the app. A Developer ID identity signs
+ * under the hardened runtime with a secure timestamp, which notarization requires. */
+async function signBundle(bundle: string, sparkle: string, identity: string): Promise<boolean> {
+  const hardened = identity !== "-"
+  const flags = hardened ? ["--options", "runtime", "--timestamp"] : []
+  const sign = async (path: string, extra: string[] = []) =>
+    (await run(["codesign", "--force", ...flags, ...extra, "--sign", identity, path], { capture: true })).exitCode === 0
+
+  const version = join(sparkle, "Versions", "B")
+  const xpcServices = (await readdir(join(version, "XPCServices")).catch(() => []))
+    .filter((name) => name.endsWith(".xpc"))
+    .map((name) => join(version, "XPCServices", name))
+  for (const nested of [...xpcServices, join(version, "Updater.app"), join(version, "Autoupdate")]) {
+    if (existsSync(nested) && !(await sign(nested))) return false
+  }
+  if (!(await sign(version))) return false
+  if (!(await sign(join(bundle, "Contents", "Resources", "bin", CLI_NAME), ["--identifier", `${BUNDLE_ID}.cli`]))) {
+    return false
+  }
+
+  const entitlements = join(PACKAGE_DIR, ".build", "entitlements.plist")
+  await Bun.write(entitlements, ENTITLEMENTS)
+  return sign(bundle, ["--identifier", BUNDLE_ID, ...(hardened ? ["--entitlements", entitlements] : [])])
+}
+
+export type BuildOptions = {
+  /** A codesigning identity (a name or SHA-1) for a distributable build. Ad-hoc when absent. */
+  signIdentity?: string
+  /** Told each step as it starts. The release script prints them; the dev loop stays quiet. */
+  onStep?: (step: string) => void
+}
+
+/** Compile the SPM target and lay the product out as a launchable .app bundle with the CLI inside. */
+export async function buildApp(config: Config, options: BuildOptions = {}): Promise<{ ok: boolean; ms: number }> {
+  const started = performance.now()
+  const flag = config === "release" ? " --release" : ""
+
+  options.onStep?.(`cargo build${flag} -p ${CLI_NAME}`)
   const cli = await buildCLI(config)
   if (!cli.ok) {
     return { ok: false, ms: performance.now() - started }
   }
+  options.onStep?.(`cargo build${flag} -p ${MARKDOWN_CRATE}, Swift bindings, xcframework`)
   if (!(await buildMarkdown(config)).ok) {
     return { ok: false, ms: performance.now() - started }
   }
 
+  options.onStep?.(`swift build -c ${config}`)
   const build = await run(["swift", "build", "-c", config])
   if (build.exitCode !== 0) {
     return { ok: false, ms: performance.now() - started }
@@ -192,7 +284,7 @@ export async function buildApp(config: Config): Promise<{ ok: boolean; ms: numbe
   const macos = join(bundle, "Contents", "MacOS")
   await mkdir(macos, { recursive: true })
   await mkdir(join(bundle, "Contents", "Resources"), { recursive: true })
-  await Bun.write(join(bundle, "Contents", "Info.plist"), infoPlist())
+  await Bun.write(join(bundle, "Contents", "Info.plist"), infoPlist(readVersion()))
   await Bun.write(join(bundle, "Contents", "PkgInfo"), "APPL????")
 
   // Unlink before writing: macOS refuses to overwrite a running executable in place.
@@ -213,11 +305,10 @@ export async function buildApp(config: Config): Promise<{ ok: boolean; ms: numbe
   await Bun.write(cliDestination, Bun.file(cli.path))
   await chmod(cliDestination, 0o755)
 
-  const sign = await run(
-    ["codesign", "--force", "--sign", "-", "--identifier", BUNDLE_ID, bundle],
-    { capture: true },
-  )
-  if (sign.exitCode !== 0) {
+  options.onStep?.(`bundling the CLI and Sparkle, signing with ${options.signIdentity ?? "an ad-hoc identity"}`)
+  const sparkle = await embedSparkle(bundle)
+  if (!sparkle) log(color.red("Sparkle.framework not found under .build/artifacts"))
+  if (!sparkle || !(await signBundle(bundle, sparkle, options.signIdentity ?? "-"))) {
     return { ok: false, ms: performance.now() - started }
   }
 
