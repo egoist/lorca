@@ -33,17 +33,12 @@ final class SettingsWindowController: NSWindowController {
 
 // MARK: - Base
 
-/// A settings page in the main window's content area, laid out like a Device page: a title,
-/// section cards, and footnotes in one scrolling column.
+/// A settings page in the main window's content area: section cards and footnotes in one
+/// scrolling column. The window's titlebar carries the page title.
 class SettingsPaneViewController: NSViewController {
     let column = Build.stack([], spacing: 22)
     private let scrollView = NSScrollView()
-    private let heading = Build.label("", font: .systemFont(ofSize: 22, weight: .semibold))
     private let inset: CGFloat = 28
-
-    override var title: String? {
-        didSet { heading.stringValue = title ?? "" }
-    }
 
     override func loadView() {
         let container = BackgroundView()
@@ -53,7 +48,6 @@ class SettingsPaneViewController: NSViewController {
         column.orientation = .vertical
         column.alignment = .leading
         column.edgeInsets = NSEdgeInsets(top: 24, left: inset, bottom: 32, right: inset)
-        add(heading)
 
         let documentView = FlippedView()
         documentView.translatesAutoresizingMaskIntoConstraints = false

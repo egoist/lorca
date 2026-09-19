@@ -102,7 +102,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             window.subtitle = AppStore.shared.subtitle(for: chat)
         case let .settings(pane):
             window.title = pane.title
-            window.subtitle = "Settings"
+            window.subtitle = ""
         case let .device(id):
             guard let device = AppStore.shared.device(id) else { return }
             window.title = device.name
