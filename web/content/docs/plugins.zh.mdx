@@ -1,0 +1,54 @@
+---
+title: 插件
+description: 让智能体连接 GitHub、Linear、Notion、Sentry、浏览器，或任何 MCP 服务器。
+icon: Plug
+---
+
+插件为智能体提供某个服务或应用的工具。在底层，一个插件就是一个或多个 [MCP](https://modelcontextprotocol.io) 服务器。
+
+## 插件市场
+
+Lorca 自带 **GitHub**、**Linear**、**Notion**、**Sentry**、**Context7**（库文档）和 **Browser**（由智能体操作的无头浏览器）插件。
+
+插件**按 Runner 安装**。那台电脑上的每个智能体都能使用那里安装的每个插件。密钥和登录状态留在那个 Runner 上；你的其他设备只看得到插件的名字和状态。
+
+## 安装插件
+
+- **在聊天里：**对智能体说“安装 GitHub 插件”。它会找到插件，并在安装任何东西之前发一张卡片征求你的许可。
+- **在应用里：**打开智能体的检查器，找到 **Plugins**，选择 **Add from Plugins…**。或者进入 **Settings › Plugins**，在工具栏里选择 Runner。
+
+你可以从手机给 Mac 安装插件。请求会加密送到那个 Runner。
+
+## 登录
+
+需要账号的插件会在聊天里发一张登录卡片：**Sign in** 或 **Not now**。
+
+- GitHub 会显示一个短代码和一个链接。在任何设备上到 github.com 输入代码即可。
+- 其他服务会在 **Runner 上**的浏览器里打开登录页面。如果你在另一台设备上，卡片会告诉你到那边去完成。
+
+有些插件也接受直接粘贴的令牌，比如 GitHub 的个人访问令牌或 Context7 的 API 密钥。在插件的面板里填写。密钥字段只能写入：保存之后不会再显示。
+
+## 添加你自己的 MCP 服务器
+
+在插件市场面板里选择 **Add MCP Server…**，粘贴服务器的 JSON，格式与其他 MCP 客户端相同：
+
+```json
+{
+  "mcpServers": {
+    "weather": {
+      "command": "npx",
+      "args": ["-y", "weather-mcp"]
+    }
+  }
+}
+```
+
+本地（`command`）和远程（`url`）服务器都支持。
+
+## 插件可以做什么
+
+读取类操作立即执行。任何会改动东西的操作，比如创建 issue、发表评论、删除页面，都要经过 [Auto-review](/zh/docs/auto-review)，该问的时候会先问你。
+
+## 管理插件
+
+插件的面板会显示它的状态、登录、设置、你已经始终允许的操作（带 **Reset**），以及 **Remove**。市场里的插件会自动更新，并保留你的设置和登录状态。

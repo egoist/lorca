@@ -13,6 +13,8 @@
     "deploy": "bun run build && wrangler deploy"
   },
   "dependencies": {
+    "@fumadocs/language": "^0.2.5",
+    "@orama/tokenizers": "^3.1.18",
     "@tailwindcss/vite": "^4.1.18",
     "@tanstack/react-devtools": "latest",
     "@tanstack/react-router": "latest",

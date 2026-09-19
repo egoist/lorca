@@ -16,6 +16,11 @@ const links = [
   { href: '#faq', label: 'nav.faq' },
 ] as const
 
+/// The docs in the page's language: `/docs` and `/zh/docs`.
+export function docsPath(lng: string) {
+  return lng === 'en' ? '/docs' : `/${lng}/docs`
+}
+
 /// A link to the same page in the other language.
 export function LanguageLink({ className }: { className?: string }) {
   const { i18n } = useTranslation()
@@ -28,7 +33,7 @@ export function LanguageLink({ className }: { className?: string }) {
 }
 
 export function Nav() {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   return (
     <header className="sticky top-0 z-40 border-b bg-background/70 backdrop-blur-xl">
       <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-5">
@@ -42,7 +47,7 @@ export function Nav() {
               {t(link.label)}
             </a>
           ))}
-          <a href="/docs" className="transition-colors hover:text-foreground">
+          <a href={docsPath(i18n.language)} className="transition-colors hover:text-foreground">
             {t('nav.docs')}
           </a>
         </nav>

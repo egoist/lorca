@@ -72,6 +72,9 @@ export const en = {
     title: 'Give your machines a team.',
     body: 'On your Mac today. Everywhere you work, soon.',
   },
+  docs: {
+    title: 'Lorca Docs',
+  },
   footer: {
     privacy: 'Privacy',
     faq: 'FAQ',

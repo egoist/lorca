@@ -10,7 +10,7 @@ import {
 import { Button } from '#/components/ui/button'
 import { RelayDiagram } from './diagram'
 import { Logo } from './logo'
-import { DOWNLOAD, LanguageLink } from './nav'
+import { DOWNLOAD, LanguageLink, docsPath } from './nav'
 import { Pixels } from './pixels'
 
 export function Hero() {
@@ -231,7 +231,7 @@ export function CallToAction() {
 }
 
 export function Footer() {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   return (
     <footer className="border-t">
       <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 px-5 py-8 text-sm text-muted-foreground/80 sm:flex-row">
@@ -242,7 +242,7 @@ export function Footer() {
         <nav className="flex gap-6">
           <a href="#relay" className="hover:text-foreground">{t('footer.privacy')}</a>
           <a href="#faq" className="hover:text-foreground">{t('footer.faq')}</a>
-          <a href="/docs" className="hover:text-foreground">{t('nav.docs')}</a>
+          <a href={docsPath(i18n.language)} className="hover:text-foreground">{t('nav.docs')}</a>
           <a href={DOWNLOAD} className="hover:text-foreground">{t('footer.download')}</a>
           <LanguageLink className="hover:text-foreground" />
         </nav>

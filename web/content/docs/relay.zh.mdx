@@ -1,0 +1,45 @@
+---
+title: 中继
+description: 中继是你的设备之间存放密文的信箱。一个可执行文件就能自己运行。
+icon: Server
+---
+
+中继在你的设备之间存储并转发加密的数据块。只有一台设备时完全不需要中继。要配对第二台电脑或手机，才需要一个。
+
+因为一切都[在上传前加密](/zh/docs/security)，你对中继的信任只需要到“它能保持在线”为止。
+
+## 让 Lorca 使用某个中继
+
+在第一台设备上设置 **Settings › Advanced › Relay URL**，或者为命令行设置 `LORCA_RELAY_URL` 环境变量。之后配对的设备会从配对码里得知这个地址。
+
+## 自己运行
+
+中继是单个可执行文件 `lorca-relay`，内置 SQLite：
+
+```bash
+lorca-relay --bind 0.0.0.0:8787 --db lorca-relay.db
+```
+
+用 Caddy 或 nginx 这类反向代理为它加上 HTTPS（WebSocket 升级必须能通过），并加上 `--trust-proxy`，让限流看到真实的客户端地址。
+
+| 选项 | 作用 |
+| --- | --- |
+| `--bind` | 监听的地址和端口。 |
+| `--db` | SQLite 文件路径，或 `postgres://` URL。 |
+| `LORCA_RELAY_SECRET` | 用来签发会话令牌。设置它，令牌才能在重启后继续有效。 |
+| `--quota-bytes` | 每个身份的存储上限。`0` 表示不限。 |
+| `--files-dir` | 附件密文存放的位置。默认是数据库旁边的一个文件夹。 |
+| `--s3-bucket`、`--s3-endpoint` | 改为把附件存到 S3、R2 或 MinIO。 |
+| `--ip-per-minute`、`--identity-per-second` | 限流。 |
+
+### Postgres
+
+使用 `postgres://` URL，可以让多个中继进程共用一个数据库，实现无间断部署。它们必须共用 `LORCA_RELAY_SECRET`，并把附件存在 S3 兼容的存储桶里。
+
+### 推送通知
+
+要给手机应用发推送，需要给中继配置 APNs 密钥（`--apns-key`、`--apns-key-id`、`--apns-team-id`）或 Firebase 服务账号（`--fcm-service-account`）。不配置的话其他功能照常，只是手机收不到推送。
+
+## 限制
+
+一个消息数据块的密文最大 4 MB，一个附件最大 24 MB。

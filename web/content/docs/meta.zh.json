@@ -1,0 +1,24 @@
+{
+  "title": "Lorca",
+  "pages": [
+    "index",
+    "get-started",
+    "---使用 Lorca---",
+    "bots",
+    "chats",
+    "group-chats",
+    "tools",
+    "memory",
+    "routines",
+    "plugins",
+    "auto-review",
+    "---你的设备---",
+    "devices",
+    "providers",
+    "mobile",
+    "---安全与部署---",
+    "security",
+    "relay",
+    "cli"
+  ]
+}

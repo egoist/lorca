@@ -16,6 +16,10 @@ import { Route as ZhRouteImport } from './routes/zh'
 import { Route as ApiSearchRouteImport } from './routes/api/search'
 import { Route as DocsSplatRouteImport } from './routes/docs/$'
 import { Route as DocsChar123Char125DotmdRouteImport } from './routes/docs/{$}[.]md'
+import { Route as ZhLlmsFullDottxtRouteImport } from './routes/zh_/llms-full[.]txt'
+import { Route as ZhLlmsDottxtRouteImport } from './routes/zh_/llms[.]txt'
+import { Route as ZhDocsSplatRouteImport } from './routes/zh_/docs/$'
+import { Route as ZhDocsChar123Char125DotmdRouteImport } from './routes/zh_/docs/{$}[.]md'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -52,6 +56,27 @@ const DocsChar123Char125DotmdRoute = DocsChar123Char125DotmdRouteImport.update({
   path: '/docs/{$}.md',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ZhLlmsFullDottxtRoute = ZhLlmsFullDottxtRouteImport.update({
+  id: '/zh_/llms-full.txt',
+  path: '/zh/llms-full.txt',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ZhLlmsDottxtRoute = ZhLlmsDottxtRouteImport.update({
+  id: '/zh_/llms.txt',
+  path: '/zh/llms.txt',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ZhDocsSplatRoute = ZhDocsSplatRouteImport.update({
+  id: '/zh_/docs/$',
+  path: '/zh/docs/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ZhDocsChar123Char125DotmdRoute =
+  ZhDocsChar123Char125DotmdRouteImport.update({
+    id: '/zh_/docs/{$}.md',
+    path: '/zh/docs/{$}.md',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -61,6 +86,10 @@ export interface FileRoutesByFullPath {
   '/api/search': typeof ApiSearchRoute
   '/docs/$': typeof DocsSplatRoute
   '/docs/{$}.md': typeof DocsChar123Char125DotmdRoute
+  '/zh/llms-full.txt': typeof ZhLlmsFullDottxtRoute
+  '/zh/llms.txt': typeof ZhLlmsDottxtRoute
+  '/zh/docs/$': typeof ZhDocsSplatRoute
+  '/zh/docs/{$}.md': typeof ZhDocsChar123Char125DotmdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -70,6 +99,10 @@ export interface FileRoutesByTo {
   '/api/search': typeof ApiSearchRoute
   '/docs/$': typeof DocsSplatRoute
   '/docs/{$}.md': typeof DocsChar123Char125DotmdRoute
+  '/zh/llms-full.txt': typeof ZhLlmsFullDottxtRoute
+  '/zh/llms.txt': typeof ZhLlmsDottxtRoute
+  '/zh/docs/$': typeof ZhDocsSplatRoute
+  '/zh/docs/{$}.md': typeof ZhDocsChar123Char125DotmdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -80,6 +113,10 @@ export interface FileRoutesById {
   '/api/search': typeof ApiSearchRoute
   '/docs/$': typeof DocsSplatRoute
   '/docs/{$}.md': typeof DocsChar123Char125DotmdRoute
+  '/zh_/llms-full.txt': typeof ZhLlmsFullDottxtRoute
+  '/zh_/llms.txt': typeof ZhLlmsDottxtRoute
+  '/zh_/docs/$': typeof ZhDocsSplatRoute
+  '/zh_/docs/{$}.md': typeof ZhDocsChar123Char125DotmdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -91,6 +128,10 @@ export interface FileRouteTypes {
     | '/api/search'
     | '/docs/$'
     | '/docs/{$}.md'
+    | '/zh/llms-full.txt'
+    | '/zh/llms.txt'
+    | '/zh/docs/$'
+    | '/zh/docs/{$}.md'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -100,6 +141,10 @@ export interface FileRouteTypes {
     | '/api/search'
     | '/docs/$'
     | '/docs/{$}.md'
+    | '/zh/llms-full.txt'
+    | '/zh/llms.txt'
+    | '/zh/docs/$'
+    | '/zh/docs/{$}.md'
   id:
     | '__root__'
     | '/'
@@ -109,6 +154,10 @@ export interface FileRouteTypes {
     | '/api/search'
     | '/docs/$'
     | '/docs/{$}.md'
+    | '/zh_/llms-full.txt'
+    | '/zh_/llms.txt'
+    | '/zh_/docs/$'
+    | '/zh_/docs/{$}.md'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -119,6 +168,10 @@ export interface RootRouteChildren {
   ApiSearchRoute: typeof ApiSearchRoute
   DocsSplatRoute: typeof DocsSplatRoute
   DocsChar123Char125DotmdRoute: typeof DocsChar123Char125DotmdRoute
+  ZhLlmsFullDottxtRoute: typeof ZhLlmsFullDottxtRoute
+  ZhLlmsDottxtRoute: typeof ZhLlmsDottxtRoute
+  ZhDocsSplatRoute: typeof ZhDocsSplatRoute
+  ZhDocsChar123Char125DotmdRoute: typeof ZhDocsChar123Char125DotmdRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -172,6 +225,34 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DocsChar123Char125DotmdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/zh_/llms-full.txt': {
+      id: '/zh_/llms-full.txt'
+      path: '/zh/llms-full.txt'
+      fullPath: '/zh/llms-full.txt'
+      preLoaderRoute: typeof ZhLlmsFullDottxtRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/zh_/llms.txt': {
+      id: '/zh_/llms.txt'
+      path: '/zh/llms.txt'
+      fullPath: '/zh/llms.txt'
+      preLoaderRoute: typeof ZhLlmsDottxtRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/zh_/docs/$': {
+      id: '/zh_/docs/$'
+      path: '/zh/docs/$'
+      fullPath: '/zh/docs/$'
+      preLoaderRoute: typeof ZhDocsSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/zh_/docs/{$}.md': {
+      id: '/zh_/docs/{$}.md'
+      path: '/zh/docs/{$}.md'
+      fullPath: '/zh/docs/{$}.md'
+      preLoaderRoute: typeof ZhDocsChar123Char125DotmdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -183,6 +264,10 @@ const rootRouteChildren: RootRouteChildren = {
   ApiSearchRoute: ApiSearchRoute,
   DocsSplatRoute: DocsSplatRoute,
   DocsChar123Char125DotmdRoute: DocsChar123Char125DotmdRoute,
+  ZhLlmsFullDottxtRoute: ZhLlmsFullDottxtRoute,
+  ZhLlmsDottxtRoute: ZhLlmsDottxtRoute,
+  ZhDocsSplatRoute: ZhDocsSplatRoute,
+  ZhDocsChar123Char125DotmdRoute: ZhDocsChar123Char125DotmdRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

@@ -1,0 +1,50 @@
+---
+title: AI 服务商
+description: 接入一次 DeepSeek、Anthropic、ChatGPT 或 Grok，你账户下的每个 Runner 都能使用。
+icon: Sparkles
+---
+
+智能体用你自己的 AI 账号来思考。在任何一台 Mac 上接入一次服务商，它就会用你的账户密钥加密后送达每一台已配对的设备。
+
+| 服务商 | 接入方式 | 默认模型 |
+| --- | --- | --- |
+| **DeepSeek** | API 密钥 | `deepseek-flash` |
+| **Anthropic** | API 密钥 | `claude-opus-5` |
+| **ChatGPT** | 用你的 ChatGPT 订阅登录 | `gpt-5.6-terra` |
+| **Grok** | 用 SuperGrok 或 X Premium+ 登录 | `grok-4.6` |
+
+四家都在服务商一侧搜索网络。Grok 还能搜索 X。
+
+## 接入
+
+打开 **Settings › Providers**，点击 **Connect**。
+
+- **API 密钥：**粘贴密钥。Lorca 会先向服务商验证，再保存。
+- **登录：**浏览器会打开服务商自己的登录页面。Lorca 从不接触你的密码。
+
+在终端里：
+
+```bash
+lorca provider set deepseek
+lorca provider set anthropic
+lorca provider set chatgpt
+lorca provider list
+```
+
+### 自定义 API 地址
+
+如果要用代理或兼容的服务器，在接入 DeepSeek 或 Anthropic 密钥时填写 **Base URL**。密钥会针对那个地址验证。
+
+## 为每个智能体选模型
+
+每个智能体在 New Bot 面板里，或在检查器的 **Runs with** 下选择自己的服务商、模型和思考级别。没有指定模型的智能体使用服务商的默认模型。
+
+如果智能体的服务商没有接入，它的这一轮会以一条提示结束，告诉你去 Settings 里接入。
+
+## 断开
+
+**Disconnect** 会从每一台设备上移除这份凭据。对 Grok 来说，还会撤销登录。
+
+## 花费
+
+API 密钥类服务商按 token 向你计费；检查器会显示每个聊天花了多少。ChatGPT 和 Grok 登录用的是你的订阅，显示的数字是按 API 价格折算的花费。
