@@ -77,15 +77,18 @@ async fn cycle(app: &Arc<App>) -> Result<(), RelayError> {
 
     app.push_machine_blob_if_changed();
     drain_outbox(app, &url, &token).await?;
+    drain_group_deletes(app, &url, &token).await?;
     refresh_presence(app, &url, &token).await?;
 
     let since = app.state.lock().unwrap().last_seq;
     // The relay keeps the latest roster, so in a replay from the start it comes after the
     // messages. It is taken first, and the chats have their names and bots when those land.
+    // It is a preview: the replay applies the same blob again at its place in the log, where
+    // it prunes the placeholder chats that the messages of deleted chats left behind.
     if since == 0 {
         let (blobs, _head) = app.relay.list_blobs(&url, &token, 0, "roster,machine", 0).await?;
         for blob in blobs {
-            apply_blob(app, &machine_file, &blob);
+            apply_blob_contents(app, &machine_file, &blob);
         }
     }
     let poll = app.relay.list_blobs(&url, &token, since, POLL_KINDS, POLL_WAIT_SECS);
@@ -160,6 +163,23 @@ async fn drain_outbox(app: &Arc<App>, url: &str, token: &str) -> Result<(), Rela
             Err(error) => return Err(error),
         }
         app.state.lock().unwrap().outbox.retain(|i| i.id != item.id);
+        app.save_state();
+    }
+}
+
+/// Tells the relay to drop the blobs of the chats deleted here. A relay that refuses (one
+/// without groups) is not asked again; one that is away is asked on the next cycle.
+async fn drain_group_deletes(app: &Arc<App>, url: &str, token: &str) -> Result<(), RelayError> {
+    loop {
+        let Some(group) = app.state.lock().unwrap().group_deletes.first().cloned() else { return Ok(()) };
+        match app.relay.delete_group(url, token, &group).await {
+            Ok(()) => {}
+            Err(error) if error.is_client_error() && !error.is_unauthorized() && !error.is_unpaired() => {
+                tracing::warn!(%error, "relay refused a group delete; dropping");
+            }
+            Err(error) => return Err(error),
+        }
+        app.state.lock().unwrap().group_deletes.retain(|g| g != &group);
         app.save_state();
     }
 }
@@ -262,6 +282,11 @@ pub fn apply_blob(app: &Arc<App>, machine_file: &crate::keys::MachineFile, blob:
     if already {
         return;
     }
+    apply_blob_contents(app, machine_file, blob);
+}
+
+/// Applies a blob whether or not it was applied before, and leaves no record of it.
+fn apply_blob_contents(app: &Arc<App>, machine_file: &crate::keys::MachineFile, blob: &BlobIn) {
     let Ok(ciphertext) = unb64(&blob.ciphertext) else { return };
     let Ok(dek) = machine_file.dek() else { return };
 

@@ -34,7 +34,7 @@ fn store_avatar(app: &Arc<App>, params: &Value) -> Result<Option<Option<Attachme
                 let _ = std::fs::remove_file(crate::files::local_path(app, &attachment.id));
                 return Err(format!("{} is not an image", attachment.name));
             }
-            crate::files::push_blob(app, &attachment).map_err(|e| e.to_string())?;
+            crate::files::push_blob(app, None, &attachment).map_err(|e| e.to_string())?;
             Ok(Some(Some(attachment)))
         }
     }

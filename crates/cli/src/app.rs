@@ -29,6 +29,9 @@ pub struct OutboxItem {
     /// What this blob is a version of. The relay drops the versions it supersedes.
     #[serde(default)]
     pub slot: Option<Slot>,
+    /// The chat this blob belongs to. The relay deletes a group's blobs in one call.
+    #[serde(default)]
+    pub group: Option<String>,
 }
 
 /// A blob's place among the versions of one thing: a message, the roster, this Device's
@@ -67,6 +70,9 @@ pub struct State {
     pub last_seq: i64,
     #[serde(default)]
     pub outbox: Vec<OutboxItem>,
+    /// Chats deleted here whose blobs the relay still has to drop.
+    #[serde(default)]
+    pub group_deletes: Vec<String>,
     #[serde(default)]
     pub machine_blob_hash: Option<String>,
     /// machine pubkey → last seen (unix), from the relay's machine list.
@@ -365,15 +371,22 @@ impl App {
     /// Queues a blob under a chosen id: a `file` blob carries its attachment's id so any
     /// Device can fetch it by that id later.
     pub fn push_blob_as(&self, id: String, kind: &str, recipient: Option<String>, ciphertext: Vec<u8>) -> String {
-        self.queue_blob(OutboxItem { id: id.clone(), kind: kind.to_string(), recipient, ciphertext: keys::b64(&ciphertext), slot: None });
+        self.queue_blob(OutboxItem { id: id.clone(), kind: kind.to_string(), recipient, ciphertext: keys::b64(&ciphertext), slot: None, group: None });
         id
+    }
+
+    /// Queues a `file` blob under its attachment's id. A message's attachment goes with its
+    /// chat; a bot's avatar belongs to none.
+    pub fn push_file_blob(&self, id: String, chat_id: Option<&str>, ciphertext: Vec<u8>) {
+        let group = chat_id.map(crate::model::relay_name);
+        self.queue_blob(OutboxItem { id, kind: "file".into(), recipient: None, ciphertext: keys::b64(&ciphertext), slot: None, group });
     }
 
     /// Queues a version of `slot`. A version still waiting in the outbox gives way to this
     /// one, in its place in the queue, so a Device that was offline uploads each message once.
-    pub fn push_slot_blob(&self, kind: &str, slot: Slot, ciphertext: Vec<u8>) {
+    pub fn push_slot_blob(&self, kind: &str, slot: Slot, group: Option<String>, ciphertext: Vec<u8>) {
         let id = uuid::Uuid::new_v4().to_string();
-        self.queue_blob(OutboxItem { id, kind: kind.to_string(), recipient: None, ciphertext: keys::b64(&ciphertext), slot: Some(slot) });
+        self.queue_blob(OutboxItem { id, kind: kind.to_string(), recipient: None, ciphertext: keys::b64(&ciphertext), slot: Some(slot), group });
     }
 
     fn queue_blob(&self, item: OutboxItem) {
@@ -406,7 +419,7 @@ impl App {
         };
         match crate::crypto::encrypt_json(&dek, "roster", &roster) {
             Ok(ciphertext) => {
-                self.push_slot_blob("roster", Slot::latest("roster"), ciphertext);
+                self.push_slot_blob("roster", Slot::latest("roster"), None, ciphertext);
             }
             Err(error) => tracing::error!(%error, "encrypting roster"),
         }
@@ -416,7 +429,7 @@ impl App {
         let Some(dek) = self.dek() else { return };
         match crate::crypto::encrypt_json(&dek, "chat", op) {
             Ok(ciphertext) => {
-                self.push_slot_blob("chat", op.slot(), ciphertext);
+                self.push_slot_blob("chat", op.slot(), Some(op.group()), ciphertext);
             }
             Err(error) => tracing::error!(%error, "encrypting chat op"),
         }
@@ -452,7 +465,7 @@ impl App {
         let device_id = device.id.clone();
         match crate::crypto::encrypt_json(&dek, "machine", &MachineBlob { device }) {
             Ok(ciphertext) => {
-                self.push_slot_blob("machine", Slot::latest(format!("machine-{}", device_id)), ciphertext);
+                self.push_slot_blob("machine", Slot::latest(format!("machine-{}", device_id)), None, ciphertext);
             }
             Err(error) => tracing::error!(%error, "encrypting machine blob"),
         }
@@ -673,6 +686,14 @@ impl App {
         {
             let mut state = self.state.lock().unwrap();
             state.chats.retain(|c| c.meta.id != chat_id);
+            // The relay drops the chat's messages, read marks, and attachments in one call,
+            // made by the sync cycle and retried until it lands. What was still waiting to go
+            // up goes nowhere.
+            let group = crate::model::relay_name(chat_id);
+            state.outbox.retain(|item| item.group.as_deref() != Some(group.as_str()));
+            if !state.group_deletes.contains(&group) {
+                state.group_deletes.push(group);
+            }
         }
         self.emit(Event::ChatRemoved { chat_id: chat_id.to_string() });
         self.roster_changed(true);

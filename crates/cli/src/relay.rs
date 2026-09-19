@@ -152,6 +152,9 @@ impl RelayClient {
             body["slot"] = json!(slot.name);
             body["keep_first"] = json!(slot.keep_first);
         }
+        if let Some(group) = &item.group {
+            body["group"] = json!(group);
+        }
         let value = Self::check(
             self.http
                 .put(format!("{url}/v1/blobs"))
@@ -191,6 +194,12 @@ impl RelayClient {
 
     pub async fn delete_blob(&self, url: &str, token: &str, id: &str) -> RelayResult<()> {
         Self::check(self.http.delete(format!("{url}/v1/blobs/{id}")).bearer_auth(token).send().await?).await?;
+        Ok(())
+    }
+
+    /// Deletes every blob of a group. Good to repeat.
+    pub async fn delete_group(&self, url: &str, token: &str, group: &str) -> RelayResult<()> {
+        Self::check(self.http.delete(format!("{url}/v1/groups/{group}")).bearer_auth(token).send().await?).await?;
         Ok(())
     }
 

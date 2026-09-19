@@ -101,6 +101,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/machines/{machine_pubkey}", axum::routing::delete(revoke_machine))
         .route("/v1/blobs", get(list_blobs).put(put_blob))
         .route("/v1/blobs/{id}", get(get_blob).delete(delete_blob))
+        .route("/v1/groups/{group}", axum::routing::delete(delete_group))
         .route("/v1/push", post(send_push))
         .route("/v1/push/token", axum::routing::put(put_push_token).delete(delete_push_token))
         .route("/v1/pair", post(create_pairing))
@@ -267,6 +268,10 @@ struct PutBlob {
     slot: Option<String>,
     #[serde(default)]
     keep_first: bool,
+    /// What the blob belongs to, a chat to the Devices: `DELETE /v1/groups/{group}` takes
+    /// every blob of it.
+    #[serde(default)]
+    group: Option<String>,
 }
 
 /// Ids are client-chosen (uuids, `msg-<uuid>`) and become object keys, so only a plain charset.
@@ -295,6 +300,9 @@ async fn put_blob(State(state): State<AppState>, auth: Auth, Json(body): Json<Pu
             return Err(ApiError::bad_request("A file blob takes no slot"));
         }
     }
+    if body.group.as_deref().is_some_and(|group| !valid_id(group)) {
+        return Err(ApiError::bad_request("Group must be 1–64 characters of [A-Za-z0-9._-]"));
+    }
     let max = if body.kind == "file" { MAX_FILE_BLOB_BYTES } else { MAX_BLOB_BYTES };
     // Decoding a 24 MB attachment is work for the blocking pool, and it happens before the
     // writer is taken so other writes are not held up by it.
@@ -309,6 +317,7 @@ async fn put_blob(State(state): State<AppState>, auth: Auth, Json(body): Json<Pu
     let kind = body.kind.clone();
     let recipient = body.recipient_machine_pubkey.clone();
     let (slot, keep_first) = (body.slot.clone(), body.keep_first);
+    let group = body.group.clone();
 
     let inserted = match body.kind.as_str() {
         "file" => {
@@ -316,12 +325,17 @@ async fn put_blob(State(state): State<AppState>, auth: Auth, Json(body): Json<Pu
             // saves an upload the row would refuse; the transaction decides for real.
             let store = &state.file_store;
             let size = ciphertext.len() as i64;
-            let (precheck_identity, precheck_id) = (identity.clone(), stored_id.clone());
+            let (precheck_identity, precheck_id, precheck_group) = (identity.clone(), stored_id.clone(), group.clone());
             let refused = state
                 .db
                 .read(move |db| {
                     if let Some(seq) = db::blob_seq(db, &precheck_identity, &precheck_id)? {
                         return Ok(Some(db::Inserted { seq, existing: true }));
+                    }
+                    if let Some(group) = &precheck_group {
+                        if db::group_deleted(db, &precheck_identity, group)? {
+                            return Err(ApiError::conflict("Group was deleted"));
+                        }
                     }
                     if quota > 0 && (db::usage(db, &precheck_identity)? + size) as u64 > quota {
                         return Err(ApiError::too_large("Storage quota exceeded"));
@@ -337,7 +351,7 @@ async fn put_blob(State(state): State<AppState>, auth: Auth, Json(body): Json<Pu
             let inserted = state
                 .db
                 .write(move |db| {
-                    db::insert_blob(db, &identity, &stored_id, &kind, recipient.as_deref(), None, db::Payload::InFileStore { size }, quota)
+                    db::insert_blob(db, &identity, &stored_id, &kind, recipient.as_deref(), None, group.as_deref(), db::Payload::InFileStore { size }, quota)
                 })
                 .await;
             match inserted {
@@ -357,7 +371,7 @@ async fn put_blob(State(state): State<AppState>, auth: Auth, Json(body): Json<Pu
                 .db
                 .write(move |db| {
                     let slot = slot.as_deref().map(|name| db::Slot { name, keep_first });
-                    db::insert_blob(db, &identity, &stored_id, &kind, recipient.as_deref(), slot, db::Payload::Inline(&ciphertext), quota)
+                    db::insert_blob(db, &identity, &stored_id, &kind, recipient.as_deref(), slot, group.as_deref(), db::Payload::Inline(&ciphertext), quota)
                 })
                 .await?
         }
@@ -487,6 +501,25 @@ async fn delete_blob(State(state): State<AppState>, auth: Auth, Path(id): Path<S
     let Some(kind) = deleted else { return Err(ApiError::not_found("No such blob")) };
     if kind == "file" {
         // The row is gone either way; a leftover object is logged, not surfaced.
+        let key = crate::store::key(&auth.identity_pubkey, &id);
+        if let Err(error) = state.file_store.delete(&key).await {
+            tracing::warn!(?error, key, "deleting a file object");
+        }
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Deletes a group: a chat's messages, read marks, and attachments. The group stays deleted,
+/// so the call is good to repeat and a late blob of the chat is refused. The Devices learn of
+/// the deletion from the roster; nothing here wakes them.
+async fn delete_group(State(state): State<AppState>, auth: Auth, Path(group): Path<String>) -> ApiResult<StatusCode> {
+    if !valid_id(&group) {
+        return Err(ApiError::bad_request("Group must be 1–64 characters of [A-Za-z0-9._-]"));
+    }
+    let identity = auth.identity_pubkey.clone();
+    let files = state.db.write(move |db| Ok(db::delete_group(db, &identity, &group)?)).await?;
+    for id in files {
+        // The rows are gone either way; a leftover object is logged, not surfaced.
         let key = crate::store::key(&auth.identity_pubkey, &id);
         if let Err(error) = state.file_store.delete(&key).await {
             tracing::warn!(?error, key, "deleting a file object");

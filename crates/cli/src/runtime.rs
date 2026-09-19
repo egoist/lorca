@@ -37,7 +37,7 @@ pub fn send_user_message(app: Arc<App>, chat_id: &str, text: &str, message_id: O
     let chat = app.chat(chat_id).ok_or_else(|| anyhow::anyhow!("Unknown chat"))?;
     // The bytes go out ahead of the message that names them.
     for attachment in &attachments {
-        if let Err(error) = crate::files::push_blob(&app, attachment) {
+        if let Err(error) = crate::files::push_blob(&app, Some(chat_id), attachment) {
             tracing::warn!(%error, name = %attachment.name, "uploading an attachment");
         }
     }

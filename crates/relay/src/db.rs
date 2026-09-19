@@ -56,7 +56,14 @@ const SCHEMA: &str = "
         size INTEGER NOT NULL,
         created_at INTEGER NOT NULL,
         slot TEXT,
+        group_id TEXT,
         PRIMARY KEY (identity_pubkey, id)
+    );
+    CREATE TABLE IF NOT EXISTS deleted_groups (
+        identity_pubkey TEXT NOT NULL,
+        group_id TEXT NOT NULL,
+        deleted_at INTEGER NOT NULL,
+        PRIMARY KEY (identity_pubkey, group_id)
     );
     CREATE INDEX IF NOT EXISTS blobs_identity_seq ON blobs(identity_pubkey, seq);
     CREATE TABLE IF NOT EXISTS sequences (
@@ -154,7 +161,14 @@ fn migrate(connection: &Connection) -> rusqlite::Result<()> {
     if !has_slot {
         connection.execute_batch("ALTER TABLE blobs ADD COLUMN slot TEXT;")?;
     }
-    connection.execute_batch("CREATE INDEX IF NOT EXISTS blobs_identity_slot ON blobs(identity_pubkey, slot) WHERE slot IS NOT NULL;")
+    let has_group = connection.prepare("SELECT 1 FROM pragma_table_info('blobs') WHERE name = 'group_id'")?.exists([])?;
+    if !has_group {
+        connection.execute_batch("ALTER TABLE blobs ADD COLUMN group_id TEXT;")?;
+    }
+    connection.execute_batch(
+        "CREATE INDEX IF NOT EXISTS blobs_identity_slot ON blobs(identity_pubkey, slot) WHERE slot IS NOT NULL;
+         CREATE INDEX IF NOT EXISTS blobs_identity_group ON blobs(identity_pubkey, group_id) WHERE group_id IS NOT NULL;",
+    )
 }
 
 /// Runs CPU- or disk-bound work off the async workers.
@@ -578,6 +592,7 @@ pub fn insert_blob(
     kind: &str,
     recipient_machine_pubkey: Option<&str>,
     slot: Option<Slot<'_>>,
+    group: Option<&str>,
     payload: Payload<'_>,
     quota_bytes: u64,
 ) -> ApiResult<Inserted> {
@@ -594,6 +609,11 @@ pub fn insert_blob(
     }
     if let Some(seq) = blob_seq(&tx, identity_pubkey, id)? {
         return Ok(Inserted { seq, existing: true });
+    }
+    if let Some(group) = group {
+        if group_deleted(&tx, identity_pubkey, group)? {
+            return Err(ApiError::conflict("Group was deleted"));
+        }
     }
     // Before the quota check, so a new version of a message fits where the old one was. A
     // refusal below rolls this back with the rest.
@@ -612,10 +632,10 @@ pub fn insert_blob(
         .prepare_cached("SELECT seq FROM sequences WHERE identity_pubkey = ?1")?
         .query_row(params![identity_pubkey], |row| row.get(0))?;
     tx.prepare_cached(
-        "INSERT INTO blobs (id, identity_pubkey, kind, recipient_machine_pubkey, seq, ciphertext, size, created_at, slot)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        "INSERT INTO blobs (id, identity_pubkey, kind, recipient_machine_pubkey, seq, ciphertext, size, created_at, slot, group_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
     )?
-    .execute(params![id, identity_pubkey, kind, recipient_machine_pubkey, seq, ciphertext, size, now(), slot.map(|s| s.name)])?;
+    .execute(params![id, identity_pubkey, kind, recipient_machine_pubkey, seq, ciphertext, size, now(), slot.map(|s| s.name), group])?;
     tx.prepare_cached(
         "INSERT INTO usage (identity_pubkey, bytes) VALUES (?1, ?2)
          ON CONFLICT(identity_pubkey) DO UPDATE SET bytes = bytes + excluded.bytes",
@@ -623,6 +643,32 @@ pub fn insert_blob(
     .execute(params![identity_pubkey, size])?;
     tx.commit()?;
     Ok(Inserted { seq, existing: false })
+}
+
+/// True once the identity deleted this group. It stays deleted: a blob that names it later (a
+/// Runner finishing a turn in a chat another Device deleted) is refused.
+pub fn group_deleted(connection: &Connection, identity_pubkey: &str, group: &str) -> rusqlite::Result<bool> {
+    connection
+        .prepare_cached("SELECT 1 FROM deleted_groups WHERE identity_pubkey = ?1 AND group_id = ?2")?
+        .exists(params![identity_pubkey, group])
+}
+
+/// Deletes every blob of a group (a chat's messages, read marks, and attachments) and gives
+/// their bytes back to the identity's usage. Returns the ids of the `file` blobs among them;
+/// the caller removes their objects afterwards.
+pub fn delete_group(connection: &mut Connection, identity_pubkey: &str, group: &str) -> rusqlite::Result<Vec<String>> {
+    let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    tx.prepare_cached("INSERT OR IGNORE INTO deleted_groups (identity_pubkey, group_id, deleted_at) VALUES (?1, ?2, ?3)")?
+        .execute(params![identity_pubkey, group, now()])?;
+    let rows: Vec<(String, String, i64)> = tx
+        .prepare_cached("DELETE FROM blobs WHERE identity_pubkey = ?1 AND group_id = ?2 RETURNING id, kind, size")?
+        .query_map(params![identity_pubkey, group], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    let freed: i64 = rows.iter().map(|(_, _, size)| size).sum();
+    tx.prepare_cached("UPDATE usage SET bytes = MAX(bytes - ?1, 0) WHERE identity_pubkey = ?2")?
+        .execute(params![freed, identity_pubkey])?;
+    tx.commit()?;
+    Ok(rows.into_iter().filter(|(_, kind, _)| kind == "file").map(|(id, _, _)| id).collect())
 }
 
 pub fn current_seq(connection: &Connection, identity_pubkey: &str) -> rusqlite::Result<i64> {
@@ -766,7 +812,7 @@ mod tests {
     }
 
     fn put(connection: &mut Connection, id: &str, slot: Option<Slot<'_>>, bytes: &[u8]) -> i64 {
-        insert_blob(connection, "identity", id, "chat", None, slot, Payload::Inline(bytes), 0).map_err(|e| format!("{e:?}")).unwrap().seq
+        insert_blob(connection, "identity", id, "chat", None, slot, None, Payload::Inline(bytes), 0).map_err(|e| format!("{e:?}")).unwrap().seq
     }
 
     fn ids(connection: &Connection, since: i64, max_bytes: i64) -> Vec<String> {
@@ -802,10 +848,31 @@ mod tests {
     fn a_refused_put_leaves_the_slot_alone() {
         let mut db = open();
         let slot = || Some(Slot { name: "roster", keep_first: false });
-        insert_blob(&mut db, "identity", "v1", "roster", None, slot(), Payload::Inline(b"abc"), 4).map_err(|e| format!("{e:?}")).unwrap();
-        assert!(insert_blob(&mut db, "identity", "v2", "roster", None, slot(), Payload::Inline(b"abcde"), 4).is_err());
+        insert_blob(&mut db, "identity", "v1", "roster", None, slot(), None, Payload::Inline(b"abc"), 4).map_err(|e| format!("{e:?}")).unwrap();
+        assert!(insert_blob(&mut db, "identity", "v2", "roster", None, slot(), None, Payload::Inline(b"abcde"), 4).is_err());
         assert_eq!(ids(&db, 0, i64::MAX), ["v1"]);
         assert_eq!(usage(&db, "identity").unwrap(), 3);
+    }
+
+    #[test]
+    fn a_deleted_group_takes_its_blobs_and_stays_deleted() {
+        let mut db = open();
+        let grouped = |db: &mut Connection, id: &str, kind: &str, group: &str, payload: Payload<'_>| {
+            insert_blob(db, "identity", id, kind, None, None, Some(group), payload, 0).map(|inserted| inserted.seq)
+        };
+        grouped(&mut db, "m1", "chat", "chat-a", Payload::Inline(b"hello")).map_err(|e| format!("{e:?}")).unwrap();
+        grouped(&mut db, "photo", "file", "chat-a", Payload::InFileStore { size: 100 }).map_err(|e| format!("{e:?}")).unwrap();
+        grouped(&mut db, "m2", "chat", "chat-b", Payload::Inline(b"stays")).map_err(|e| format!("{e:?}")).unwrap();
+        put(&mut db, "loose", None, b"x");
+
+        assert_eq!(delete_group(&mut db, "identity", "chat-a").unwrap(), ["photo"]);
+        assert_eq!(ids(&db, 0, i64::MAX), ["m2", "loose"]);
+        assert_eq!(usage(&db, "identity").unwrap(), 5 + 1);
+        // A turn that finishes after the delete has nowhere to land.
+        assert!(grouped(&mut db, "late", "chat", "chat-a", Payload::Inline(b"late")).is_err());
+        // Another identity's group of the same name is its own.
+        insert_blob(&mut db, "other", "m", "chat", None, None, Some("chat-a"), Payload::Inline(b"ok"), 0).map_err(|e| format!("{e:?}")).unwrap();
+        assert!(delete_group(&mut db, "identity", "chat-a").unwrap().is_empty());
     }
 
     #[test]

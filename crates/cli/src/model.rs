@@ -436,15 +436,24 @@ impl ChatBlob {
     /// nothing of the message but the removal. A chat's read marks share another.
     pub fn slot(&self) -> crate::app::Slot {
         match self {
-            ChatBlob::Upsert { message } => crate::app::Slot::first_and_latest(slot_name(&message.id)),
-            ChatBlob::Remove { message_id, .. } => crate::app::Slot::latest(slot_name(message_id)),
-            ChatBlob::ClearUnread { chat_id } => crate::app::Slot::latest(slot_name(&format!("read-{chat_id}"))),
+            ChatBlob::Upsert { message } => crate::app::Slot::first_and_latest(relay_name(&message.id)),
+            ChatBlob::Remove { message_id, .. } => crate::app::Slot::latest(relay_name(message_id)),
+            ChatBlob::ClearUnread { chat_id } => crate::app::Slot::latest(relay_name(&format!("read-{chat_id}"))),
+        }
+    }
+
+    /// The chat, as the relay's group: deleting the chat deletes the group.
+    pub fn group(&self) -> String {
+        match self {
+            ChatBlob::Upsert { message } => relay_name(&message.chat_id),
+            ChatBlob::Remove { chat_id, .. } | ChatBlob::ClearUnread { chat_id } => relay_name(chat_id),
         }
     }
 }
 
-/// The relay takes 1–64 characters of `[A-Za-z0-9._-]`; any other name goes up as its hash.
-fn slot_name(name: &str) -> String {
+/// A slot or group name. The relay takes 1–64 characters of `[A-Za-z0-9._-]`; any other name
+/// goes up as its hash.
+pub fn relay_name(name: &str) -> String {
     let plain = !name.is_empty()
         && name.len() <= 64
         && name != "."
