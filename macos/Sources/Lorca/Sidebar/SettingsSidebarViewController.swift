@@ -10,6 +10,13 @@ final class SettingsSidebarViewController: NSViewController {
     private let scrollView = NSScrollView()
     private let backBar = SidebarBackBar()
     private let searchBar = SidebarSearchBar()
+    /// Back over the search field. Where the sidebar's chrome floats, the root hangs it on the
+    /// split view item; otherwise it is laid out in this view.
+    private(set) lazy var header: NSView = {
+        let stack = Build.stack([backBar, searchBar], spacing: 0)
+        stack.alignment = .width
+        return stack
+    }()
     private let noResults = Build.label(
         "", font: .systemFont(ofSize: 12), color: .secondaryLabelColor, lines: 0, alignment: .center)
 
@@ -56,27 +63,33 @@ final class SettingsSidebarViewController: NSViewController {
         }
         noResults.isHidden = true
 
-        container.addSubview(backBar)
-        container.addSubview(searchBar)
         container.addSubview(scrollView)
         container.addSubview(noResults)
 
+        if SidebarChrome.floats {
+            // The list runs the pane's full height under the header, inset by the safe area.
+            scrollView.automaticallyAdjustsContentInsets = true
+            scrollView.contentInsets = NSEdgeInsets()
+            scrollView.pin(to: container)
+        } else {
+            container.addSubview(header)
+            NSLayoutConstraint.activate([
+                // Pane content under the titlebar gets no clicks, so Back starts at the safe area.
+                header.topAnchor.constraint(equalTo: container.safeAreaLayoutGuide.topAnchor),
+                header.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+                header.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+
+                scrollView.topAnchor.constraint(equalTo: header.bottomAnchor),
+                scrollView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+                scrollView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+                scrollView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            ])
+        }
+
         NSLayoutConstraint.activate([
-            // Pane content under the titlebar gets no clicks, so Back starts at the safe area.
-            backBar.topAnchor.constraint(equalTo: container.safeAreaLayoutGuide.topAnchor),
-            backBar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            backBar.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-
-            searchBar.topAnchor.constraint(equalTo: backBar.bottomAnchor),
-            searchBar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            searchBar.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-
-            scrollView.topAnchor.constraint(equalTo: searchBar.bottomAnchor),
-            scrollView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            scrollView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            scrollView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-
-            noResults.topAnchor.constraint(equalTo: searchBar.bottomAnchor, constant: 24),
+            noResults.topAnchor.constraint(
+                equalTo: SidebarChrome.floats ? container.safeAreaLayoutGuide.topAnchor : header.bottomAnchor,
+                constant: 24),
             noResults.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
             noResults.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -16),
         ])
@@ -120,7 +133,7 @@ final class SettingsSidebarViewController: NSViewController {
     }
 
     func focusSearch() {
-        view.window?.makeFirstResponder(searchBar.field)
+        searchBar.window?.makeFirstResponder(searchBar.field)
     }
 
     /// Leaving Settings drops the query, so the next visit lists every page.

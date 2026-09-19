@@ -11,6 +11,8 @@ final class RootSplitViewController: NSSplitViewController {
 
     private var sidebarItem: NSSplitViewItem!
     private var inspectorItem: NSSplitViewItem!
+    /// The sidebars' bars as split view item accessories, made on first use, keyed by the bar.
+    private var sidebarAccessories: [ObjectIdentifier: NSViewController] = [:]
 
     private var userWantsInspector = true
     private var chatController: ChatViewController?
@@ -184,10 +186,39 @@ final class RootSplitViewController: NSSplitViewController {
         } else {
             sidebar.setSelection(selection)
         }
+        if #available(macOS 26.0, *) { syncSidebarAccessories(isSettings: isSettings) }
         guard isSettings != wasSettings else { return }
         if !isSettings { settingsSidebar.resetSearch() }
         guard !sidebarItem.isCollapsed else { return }
         if isSettings { settingsSidebar.focusList() } else { sidebar.focusList() }
+    }
+
+    /// The showing sidebar's bars, above and below its list. The list fills the pane and scrolls
+    /// under them; AppKit insets it by their heights and softens the edge behind them.
+    @available(macOS 26.0, *)
+    private func syncSidebarAccessories(isSettings: Bool) {
+        let top = accessory(for: isSettings ? settingsSidebar.header : sidebar.searchBar)
+        let bottom = isSettings ? [] : [accessory(for: sidebar.footer)]
+        if sidebarItem.topAlignedAccessoryViewControllers != [top] {
+            sidebarItem.topAlignedAccessoryViewControllers = [top]
+        }
+        if sidebarItem.bottomAlignedAccessoryViewControllers != bottom {
+            sidebarItem.bottomAlignedAccessoryViewControllers = bottom
+        }
+    }
+
+    @available(macOS 26.0, *)
+    private func accessory(for bar: NSView) -> NSSplitViewItemAccessoryViewController {
+        if let made = sidebarAccessories[ObjectIdentifier(bar)] as? NSSplitViewItemAccessoryViewController {
+            return made
+        }
+        let controller = NSSplitViewItemAccessoryViewController()
+        controller.view = bar
+        // The bars carry the sidebar's own margins.
+        controller.automaticallyAppliesContentInsets = false
+        if #available(macOS 26.1, *) { controller.preferredScrollEdgeEffectStyle = .soft }
+        sidebarAccessories[ObjectIdentifier(bar)] = controller
+        return controller
     }
 
     func windowBecameKey() {

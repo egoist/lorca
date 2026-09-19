@@ -5,8 +5,10 @@ final class SidebarViewController: NSViewController {
 
     private let outlineView = NSOutlineView()
     private let scrollView = NSScrollView()
-    private let searchBar = SidebarSearchBar()
-    private let footer = SidebarFooterView()
+    /// The views above and below the list. Where the sidebar's chrome floats, the root hangs them
+    /// on the split view item; otherwise they are laid out in this view.
+    let searchBar = SidebarSearchBar()
+    let footer = SidebarFooterView()
 
     private var nodes: [SidebarNode] = []
     private var searchQuery = ""
@@ -28,7 +30,7 @@ final class SidebarViewController: NSViewController {
         scrollView.drawsBackground = false
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.automaticallyAdjustsContentInsets = false
-        scrollView.contentInsets = NSEdgeInsets(top: 2, left: 0, bottom: 8, right: 0)
+        scrollView.contentInsets = NSEdgeInsets(top: 7, left: 0, bottom: 8, right: 0)
 
         searchBar.onQueryChange = { [weak self] query in
             self?.setSearchQuery(query)
@@ -44,6 +46,19 @@ final class SidebarViewController: NSViewController {
         footer.onDevice = { [weak self] in
             guard let id = self?.store.thisDevice?.id else { return }
             self?.onSelect?(.device(id))
+        }
+
+        if SidebarChrome.floats {
+            // The root hangs the search bar and the footer on the split view item, and the list
+            // runs the pane's full height beneath them, inset by the safe area they extend.
+            scrollView.automaticallyAdjustsContentInsets = true
+            scrollView.contentInsets = NSEdgeInsets()
+            // The gap between the search bar and the first chat.
+            container.additionalSafeAreaInsets.top = 5
+            container.addSubview(scrollView)
+            scrollView.pin(to: container)
+            view = container
+            return
         }
 
         let divider = HairlineView()
@@ -71,14 +86,13 @@ final class SidebarViewController: NSViewController {
             footer.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             footer.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             footer.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-            footer.heightAnchor.constraint(equalToConstant: 38),
         ])
 
         view = container
     }
 
     func focusSearch() {
-        view.window?.makeFirstResponder(searchBar.field)
+        searchBar.window?.makeFirstResponder(searchBar.field)
     }
 
     func focusList() {
@@ -304,6 +318,18 @@ extension SidebarViewController: NSMenuDelegate {
     }
 }
 
+// MARK: - Chrome
+
+/// From macOS 26 a sidebar's list scrolls under the whole pane, as System Settings' does: the
+/// bars above and below it are split view item accessories, which extend the safe area the list
+/// is inset by and get AppKit's scroll-edge effect behind them. Earlier systems stack the bars
+/// and the list inside the pane.
+enum SidebarChrome {
+    static var floats: Bool {
+        if #available(macOS 26.0, *) { true } else { false }
+    }
+}
+
 // MARK: - Search
 
 /// The strip at the top of a sidebar holding a standard search field, which brings AppKit's
@@ -398,6 +424,7 @@ final class SidebarFooterView: NSView {
         addSubview(buttons)
 
         NSLayoutConstraint.activate([
+            heightAnchor.constraint(equalToConstant: 38),
             buttons.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
             buttons.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
