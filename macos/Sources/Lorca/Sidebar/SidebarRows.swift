@@ -53,7 +53,7 @@ final class SidebarNode: NSObject {
 /// Shared column geometry. Chat and device rows use the same leading inset and
 /// icon slot so their titles line up down the whole sidebar.
 enum SidebarMetric {
-    static let inset: CGFloat = 8
+    static let inset: CGFloat = 4
     static let slot: CGFloat = 38
     static let gap: CGFloat = 10
     static let trailingInset: CGFloat = 8
