@@ -85,6 +85,27 @@ class SettingsPaneViewController: NSViewController {
     func addFootnote(_ text: String) {
         add(Build.label(text, font: Theme.Font.caption, color: .tertiaryLabelColor, lines: 0))
     }
+
+    /// Scrolls a setting picked from the sidebar's search into view and flashes its row. The page
+    /// may have entered the window on this same click, so the layout settles first.
+    func reveal(_ entry: SettingsEntry) {
+        loadViewIfNeeded()
+        DispatchQueue.main.async { [self] in
+            view.layoutSubtreeIfNeeded()
+            let sections = column.arrangedSubviews.compactMap { $0 as? SectionView }
+            guard let target = sections.lazy.compactMap({ $0.target(labelled: entry.row) }).first,
+                let documentView = scrollView.documentView
+            else { return }
+            // Room above the row for the section's title, and for the titlebar the page runs under.
+            let frame = documentView.convert(target.bounds, from: target).insetBy(dx: 0, dy: -40)
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.25
+                context.allowsImplicitAnimation = true
+                documentView.scrollToVisible(frame)
+            }
+            FlashView.flash(target)
+        }
+    }
 }
 
 // MARK: - General
@@ -100,10 +121,10 @@ final class GeneralSettingsViewController: SettingsPaneViewController {
         let chats = SectionView(title: "Chats")
         chats.setRows([
             AccessoryRow(
-                key: "Return sends the message",
+                key: SettingsEntry.sendOnReturn.row,
                 accessory: toggle(Preferences.sendOnReturn, #selector(toggleSendOnReturn))),
             AccessoryRow(
-                key: "Show timestamps in transcripts",
+                key: SettingsEntry.timestamps.row,
                 accessory: toggle(Preferences.showTimestamps, #selector(toggleTimestamps))),
         ])
         addSection(chats)
@@ -116,7 +137,7 @@ final class GeneralSettingsViewController: SettingsPaneViewController {
         }
         configure(appearance, width: 140, action: #selector(changeAppearance))
         let look = SectionView(title: "Appearance")
-        look.setRows([AccessoryRow(key: "Appearance", accessory: appearance)])
+        look.setRows([AccessoryRow(key: SettingsEntry.appearance.row, accessory: appearance)])
         addSection(look)
 
         // The language the Dictate button listens in. Automatic follows the keyboard input
@@ -134,7 +155,7 @@ final class GeneralSettingsViewController: SettingsPaneViewController {
         }
         configure(dictationLanguage, width: 220, action: #selector(changeDictationLanguage))
         let dictation = SectionView(title: "Dictation")
-        dictation.setRows([AccessoryRow(key: "Language", accessory: dictationLanguage)])
+        dictation.setRows([AccessoryRow(key: SettingsEntry.dictationLanguage.row, accessory: dictationLanguage)])
         addSection(dictation)
 
         addFootnote(
@@ -240,8 +261,8 @@ final class ProvidersSettingsViewController: SettingsPaneViewController {
 // MARK: - Advanced
 
 final class AdvancedSettingsViewController: SettingsPaneViewController {
-    private let relay = EditableRow(key: "Relay URL", placeholder: "https://relay.example.com")
-    private let port = EditableRow(key: "CLI port", placeholder: "4862")
+    private let relay = EditableRow(key: SettingsEntry.relayURL.row, placeholder: "https://relay.example.com")
+    private let port = EditableRow(key: SettingsEntry.cliPort.row, placeholder: "4862")
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -261,7 +282,7 @@ final class AdvancedSettingsViewController: SettingsPaneViewController {
         )
 
         let onboarding = ActionRow(
-            key: "Onboarding", value: "", tint: .secondaryLabelColor, actionTitle: "Show Onboarding Again")
+            key: SettingsEntry.onboarding.row, value: "", tint: .secondaryLabelColor, actionTitle: "Show Onboarding Again")
         // Onboarding closes the window this row is in, so the click returns first.
         onboarding.onAction = {
             DispatchQueue.main.async {

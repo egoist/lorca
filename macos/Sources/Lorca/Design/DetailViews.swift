@@ -2,6 +2,7 @@ import AppKit
 
 /// Titled card used by the inspector and the Device pane.
 final class SectionView: NSView {
+    let title: String
     private let header: NSTextField
     private let card = BackgroundView()
     private let rows = Build.stack([], spacing: 0)
@@ -10,6 +11,7 @@ final class SectionView: NSView {
         header = Build.label(
             title.uppercased(), font: .systemFont(ofSize: 10, weight: .semibold),
             color: .tertiaryLabelColor)
+        self.title = title
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
 
@@ -66,6 +68,45 @@ final class SectionView: NSView {
             view.widthAnchor.constraint(equalTo: rows.widthAnchor).isActive = true
         }
     }
+
+    /// The row showing `label`, or the whole card when `label` is this section's title.
+    func target(labelled label: String) -> NSView? {
+        if title == label { return rows }
+        return rows.arrangedSubviews.first { $0.showsLabel(label) }
+    }
+}
+
+extension NSView {
+    fileprivate func showsLabel(_ label: String) -> Bool {
+        if let field = self as? NSTextField, !field.isEditable, field.stringValue == label { return true }
+        return subviews.contains { $0.showsLabel(label) }
+    }
+}
+
+/// A brief accent wash over a view, marking where a search result landed.
+final class FlashView: NSView {
+    static func flash(_ target: NSView) {
+        target.subviews.filter { $0 is FlashView }.forEach { $0.removeFromSuperview() }
+        let flash = FlashView(frame: target.bounds)
+        flash.autoresizingMask = [.width, .height]
+        flash.wantsLayer = true
+        flash.layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.22).cgColor
+        target.addSubview(flash)
+
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 1
+        fade.toValue = 0
+        fade.beginTime = CACurrentMediaTime() + 0.5
+        fade.duration = 0.7
+        fade.fillMode = .both
+        fade.isRemovedOnCompletion = false
+        CATransaction.begin()
+        CATransaction.setCompletionBlock { [weak flash] in flash?.removeFromSuperview() }
+        flash.layer?.add(fade, forKey: "fade")
+        CATransaction.commit()
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
 final class KeyValueRow: NSView {

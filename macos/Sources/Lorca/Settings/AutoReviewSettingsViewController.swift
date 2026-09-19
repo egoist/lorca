@@ -6,7 +6,7 @@ import AppKit
 final class AutoReviewSettingsViewController: SettingsPaneViewController {
     private let store = AppStore.shared
     private let check = SectionView(title: "Auto-review")
-    private let rules = SectionView(title: "Auto-review Rules")
+    private let rules = SectionView(title: SettingsEntry.autoReviewRules.row)
     private let toggle = NSSwitch()
     private let draft = NSTextField()
     private let draftBehavior = NSPopUpButton()
@@ -43,7 +43,7 @@ final class AutoReviewSettingsViewController: SettingsPaneViewController {
         let review = store.autoReview
         toggle.state = review.isEnabled ? .on : .off
         let description = NoteRow(text: "Lorca checks each action before it runs and asks you first when needed. Add rules to customize what bots can do automatically.")
-        let switchRow = AccessoryRow(key: "Check actions before they run", accessory: toggle)
+        let switchRow = AccessoryRow(key: SettingsEntry.autoReviewSwitch.row, accessory: toggle)
         check.setRows([switchRow, description])
 
         rows = []

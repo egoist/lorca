@@ -1,22 +1,29 @@
 import AppKit
 
-/// The sidebar while Settings is open: Back, the panes, and the paired Devices, each Device
-/// opening its own page.
+/// The sidebar while Settings is open: Back, a search field, the panes, and the paired Devices,
+/// each Device opening its own page. A query narrows the list to the panes, settings and Devices
+/// that match; a setting opens its pane with the row in view.
 final class SettingsSidebarViewController: NSViewController {
     private let store = AppStore.shared
 
     private let outlineView = NSOutlineView()
     private let scrollView = NSScrollView()
     private let backBar = SidebarBackBar()
+    private let searchBar = SidebarSearchBar()
+    private let noResults = Build.label(
+        "", font: .systemFont(ofSize: 12), color: .secondaryLabelColor, lines: 0, alignment: .center)
 
     private static let devicesTitle = "Devices"
 
     private var nodes: [SidebarNode] = []
     private var selection: Selection?
+    private var searchQuery = ""
     private var isApplyingSelection = false
     private var isNotifyingSelection = false
 
     var onSelect: ((Selection) -> Void)?
+    /// A search result was picked: its pane is selected, and this brings the row into view.
+    var onReveal: ((SettingsEntry) -> Void)?
     var onBack: (() -> Void)?
 
     override func loadView() {
@@ -35,8 +42,24 @@ final class SettingsSidebarViewController: NSViewController {
 
         backBar.onClick = { [weak self] in self?.onBack?() }
 
+        searchBar.onQueryChange = { [weak self] query in
+            self?.searchQuery = query.trimmingCharacters(in: .whitespaces)
+            self?.rebuild()
+        }
+        searchBar.onMoveDown = { [weak self] in
+            guard let self else { return }
+            if outlineView.selectedRow < 0 { pickFirstResult() }
+            focusList()
+        }
+        searchBar.onSubmit = { [weak self] in
+            self?.pickFirstResult() ?? false
+        }
+        noResults.isHidden = true
+
         container.addSubview(backBar)
+        container.addSubview(searchBar)
         container.addSubview(scrollView)
+        container.addSubview(noResults)
 
         NSLayoutConstraint.activate([
             // Pane content under the titlebar gets no clicks, so Back starts at the safe area.
@@ -44,10 +67,18 @@ final class SettingsSidebarViewController: NSViewController {
             backBar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             backBar.trailingAnchor.constraint(equalTo: container.trailingAnchor),
 
-            scrollView.topAnchor.constraint(equalTo: backBar.bottomAnchor),
+            searchBar.topAnchor.constraint(equalTo: backBar.bottomAnchor),
+            searchBar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            searchBar.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+
+            scrollView.topAnchor.constraint(equalTo: searchBar.bottomAnchor),
             scrollView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             scrollView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+
+            noResults.topAnchor.constraint(equalTo: searchBar.bottomAnchor, constant: 24),
+            noResults.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
+            noResults.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -16),
         ])
 
         view = container
@@ -88,16 +119,38 @@ final class SettingsSidebarViewController: NSViewController {
         view.window?.makeFirstResponder(outlineView)
     }
 
+    func focusSearch() {
+        view.window?.makeFirstResponder(searchBar.field)
+    }
+
+    /// Leaving Settings drops the query, so the next visit lists every page.
+    func resetSearch() {
+        guard isViewLoaded else { return }
+        searchBar.clear()
+    }
+
     // MARK: - Data
 
     private func rebuild() {
         let settingsHeader = SidebarNode(.header("Settings"))
-        settingsHeader.children = SettingsPane.allCases.map { SidebarNode(.pane($0)) }
-
         let devicesHeader = SidebarNode(.header(Self.devicesTitle))
-        devicesHeader.children = store.devices.map { SidebarNode(.device($0.id)) }
 
-        let fresh = [settingsHeader, devicesHeader]
+        if searchQuery.isEmpty {
+            settingsHeader.children = SettingsPane.allCases.map { SidebarNode(.pane($0)) }
+            devicesHeader.children = store.devices.map { SidebarNode(.device($0.id)) }
+        } else {
+            settingsHeader.children = SettingsSearch.panes(matching: searchQuery, store: store).flatMap { result in
+                [SidebarNode(.pane(result.pane))] + result.entries.map { SidebarNode(.setting($0)) }
+            }
+            devicesHeader.children = SettingsSearch.devices(matching: searchQuery, store: store)
+                .map { SidebarNode(.device($0.id)) }
+        }
+
+        // A query lists only the sections with a match; the full list keeps both headers, and
+        // Devices keeps its Pair button.
+        let fresh = [settingsHeader, devicesHeader].filter { searchQuery.isEmpty || !$0.children.isEmpty }
+        noResults.stringValue = "No Results for \u{201C}\(searchQuery)\u{201D}"
+        noResults.isHidden = !fresh.isEmpty
 
         if shape(of: fresh) == shape(of: nodes) {
             // Same rows (a Device came online, a bot moved): update the cells in place, which
@@ -132,6 +185,13 @@ final class SettingsSidebarViewController: NSViewController {
     func setSelection(_ newSelection: Selection?) {
         selection = newSelection
         guard isViewLoaded else { return }
+        // A picked search result stands for its pane; the pane's own row sits above it.
+        let selectedRow = outlineView.selectedRow
+        if let newSelection, selectedRow >= 0,
+            (outlineView.item(atRow: selectedRow) as? SidebarNode)?.selection == newSelection
+        {
+            return
+        }
         for row in 0..<outlineView.numberOfRows {
             guard let node = outlineView.item(atRow: row) as? SidebarNode, let newSelection,
                 node.selection == newSelection
@@ -141,6 +201,28 @@ final class SettingsSidebarViewController: NSViewController {
             isApplyingSelection = false
             return
         }
+    }
+
+    /// Opens the best search result: the first matching setting, or else the first page listed.
+    @discardableResult
+    private func pickFirstResult() -> Bool {
+        guard !searchQuery.isEmpty else { return false }
+        let rows = (0..<outlineView.numberOfRows).filter {
+            (outlineView.item(atRow: $0) as? SidebarNode)?.isHeader == false
+        }
+        let setting = rows.first {
+            if case .setting = (outlineView.item(atRow: $0) as? SidebarNode)?.kind { return true }
+            return false
+        }
+        guard let row = setting ?? rows.first else { return false }
+        if outlineView.selectedRow == row {
+            // Already selected, so no selection change will bring the row into view again.
+            if case let .setting(entry) = (outlineView.item(atRow: row) as? SidebarNode)?.kind { onReveal?(entry) }
+        } else {
+            outlineView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        }
+        outlineView.scrollRowToVisible(row)
+        return true
     }
 }
 
@@ -179,7 +261,11 @@ extension SettingsSidebarViewController: NSOutlineViewDelegate {
     }
 
     func outlineView(_ outlineView: NSOutlineView, heightOfRowByItem item: Any) -> CGFloat {
-        (item as? SidebarNode)?.isHeader == true ? 28 : 32
+        switch (item as? SidebarNode)?.kind {
+        case .header: 28
+        case .setting: 26
+        default: 32
+        }
     }
 
     func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any)
@@ -216,6 +302,17 @@ extension SettingsSidebarViewController: NSOutlineViewDelegate {
             cell.configure(pane: pane)
             return cell
 
+        case let .setting(entry):
+            let cell =
+                outlineView.makeView(withIdentifier: SidebarSettingCell.identifier, owner: self)
+                as? SidebarSettingCell ?? {
+                    let new = SidebarSettingCell()
+                    new.identifier = SidebarSettingCell.identifier
+                    return new
+                }()
+            cell.configure(entry: entry)
+            return cell
+
         case let .device(id):
             guard let device = store.device(id) else { return nil }
             let cell =
@@ -236,7 +333,8 @@ extension SettingsSidebarViewController: NSOutlineViewDelegate {
     func outlineViewSelectionDidChange(_ notification: Notification) {
         guard !isApplyingSelection else { return }
         let row = outlineView.selectedRow
-        guard row >= 0, let picked = (outlineView.item(atRow: row) as? SidebarNode)?.selection else {
+        guard row >= 0, let node = outlineView.item(atRow: row) as? SidebarNode, let picked = node.selection
+        else {
             // A click on empty space clears the row; Settings always shows one of its pages.
             setSelection(selection)
             return
@@ -245,6 +343,7 @@ extension SettingsSidebarViewController: NSOutlineViewDelegate {
         isNotifyingSelection = true
         defer { isNotifyingSelection = false }
         onSelect?(picked)
+        if case let .setting(entry) = node.kind { onReveal?(entry) }
     }
 }
 

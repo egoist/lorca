@@ -22,6 +22,8 @@ final class SidebarNode: NSObject {
         case header(String)
         case chat(Chat.ID)
         case pane(SettingsPane)
+        /// A search result in the settings sidebar: one setting on its pane.
+        case setting(SettingsEntry)
         case device(Device.ID)
     }
 
@@ -37,6 +39,7 @@ final class SidebarNode: NSObject {
         case .header: nil
         case let .chat(id): .chat(id)
         case let .pane(pane): .settings(pane)
+        case let .setting(entry): .settings(entry.pane)
         case let .device(id): .device(id)
         }
     }
@@ -167,6 +170,36 @@ final class SidebarPaneCell: NSTableCellView {
 
     private func applyBackgroundStyle() {
         icon.contentTintColor = backgroundStyle == .emphasized ? .white : .secondaryLabelColor
+    }
+}
+
+// MARK: - Setting search result
+
+/// A setting found by the settings search, listed under its pane with the text on the pane
+/// title's column.
+final class SidebarSettingCell: NSTableCellView {
+    static let identifier = NSUserInterfaceItemIdentifier("SidebarSettingCell")
+
+    private let title = Build.label("", font: .systemFont(ofSize: 12))
+
+    init() {
+        super.init(frame: .zero)
+        addSubview(title)
+        NSLayoutConstraint.activate([
+            title.leadingAnchor.constraint(equalTo: leadingAnchor, constant: SidebarMetric.textLeading),
+            title.centerYAnchor.constraint(equalTo: centerYAnchor),
+            title.trailingAnchor.constraint(
+                lessThanOrEqualTo: trailingAnchor, constant: -SidebarMetric.trailingInset),
+        ])
+        textField = title
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    func configure(entry: SettingsEntry) {
+        title.stringValue = entry.title
+        toolTip = entry.title
     }
 }
 

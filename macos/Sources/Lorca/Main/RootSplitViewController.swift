@@ -69,6 +69,9 @@ final class RootSplitViewController: NSSplitViewController {
         settingsSidebar.onSelect = { [weak self] selection in
             self?.select(selection)
         }
+        settingsSidebar.onReveal = { [weak self] entry in
+            (self?.settingsController(for: entry.pane) as? SettingsPaneViewController)?.reveal(entry)
+        }
         settingsSidebar.onBack = { [weak self] in
             self?.closeSettings()
         }
@@ -181,7 +184,9 @@ final class RootSplitViewController: NSSplitViewController {
         } else {
             sidebar.setSelection(selection)
         }
-        guard isSettings != wasSettings, !sidebarItem.isCollapsed else { return }
+        guard isSettings != wasSettings else { return }
+        if !isSettings { settingsSidebar.resetSearch() }
+        guard !sidebarItem.isCollapsed else { return }
         if isSettings { settingsSidebar.focusList() } else { sidebar.focusList() }
     }
 
@@ -287,7 +292,7 @@ final class RootSplitViewController: NSSplitViewController {
     }
 
     func focusSearch() {
-        sidebar.focusSearch()
+        if selection?.isSettings == true { settingsSidebar.focusSearch() } else { sidebar.focusSearch() }
     }
 
     func presentNewGroupChat() {

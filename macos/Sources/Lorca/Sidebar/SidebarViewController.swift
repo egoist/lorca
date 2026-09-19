@@ -33,6 +33,9 @@ final class SidebarViewController: NSViewController {
         searchBar.onQueryChange = { [weak self] query in
             self?.setSearchQuery(query)
         }
+        searchBar.onMoveDown = { [weak self] in
+            self?.focusList()
+        }
 
         // Both land in the settings sidebar, which lists the panes and this Mac's page.
         footer.onSettings = { [weak self] in
@@ -252,7 +255,7 @@ extension SidebarViewController: NSOutlineViewDelegate {
             cell.configure(chat: chat, store: store)
             return cell
 
-        case .header, .pane, .device:
+        case .header, .pane, .setting, .device:
             return nil
         }
     }
@@ -303,99 +306,74 @@ extension SidebarViewController: NSMenuDelegate {
 
 // MARK: - Search
 
-/// Flat search field: a tinted rounded rect with a magnifier and a clear button.
+/// The strip at the top of a sidebar holding a standard search field, which brings AppKit's
+/// capsule, magnifier, clear button and focus ring.
 final class SidebarSearchBar: NSView, NSSearchFieldDelegate {
     let field = NSSearchField()
-    private let background = BackgroundView()
-    private let icon = NSImageView()
-    private lazy var clearButton = Build.imageButton(
-        symbol: "xmark.circle.fill", pointSize: 11, tooltip: "Clear search", target: self,
-        action: #selector(clear))
+    private var query = ""
 
     var onQueryChange: ((String) -> Void)?
+    /// Down arrow in the field: the list below takes the keyboard.
+    var onMoveDown: (() -> Void)?
+    /// Return in the field. Returns whether the bar's owner used it.
+    var onSubmit: (() -> Bool)?
 
-    init() {
+    init(placeholder: String = "Search") {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
 
-        background.fillColor = Theme.chipBackground
-        background.cornerRadius = 7
-
-        icon.image = NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: nil)
-        icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 12, weight: .regular)
-        icon.contentTintColor = .secondaryLabelColor
-        icon.translatesAutoresizingMaskIntoConstraints = false
-        icon.setContentHuggingPriority(.required, for: .horizontal)
-
-        field.placeholderString = "Search"
-        field.font = .systemFont(ofSize: 13)
-        field.isBezeled = false
-        field.isBordered = false
-        field.drawsBackground = false
-        field.focusRingType = .none
-        // The bar draws its own magnifier and clear button.
-        if let cell = field.cell as? NSSearchFieldCell {
-            cell.searchButtonCell = nil
-            cell.cancelButtonCell = nil
-        }
-        field.usesSingleLineMode = true
-        field.cell?.isScrollable = true
+        field.placeholderString = placeholder
+        field.controlSize = .large
+        field.sendsSearchStringImmediately = true
+        field.sendsWholeSearchString = false
         field.delegate = self
+        // The clear button empties the field without a text-change notification; it sends the
+        // action instead.
+        field.target = self
+        field.action = #selector(queryChanged)
         field.translatesAutoresizingMaskIntoConstraints = false
-        field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-
-        clearButton.contentTintColor = .tertiaryLabelColor
-        clearButton.isHidden = true
-
-        addSubview(background)
-        background.addSubview(icon)
-        background.addSubview(field)
-        background.addSubview(clearButton)
+        addSubview(field)
 
         NSLayoutConstraint.activate([
-            heightAnchor.constraint(equalToConstant: 36),
-            background.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
-            background.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
-            background.centerYAnchor.constraint(equalTo: centerYAnchor),
-            background.heightAnchor.constraint(equalToConstant: 28),
-
-            icon.leadingAnchor.constraint(equalTo: background.leadingAnchor, constant: 8),
-            icon.centerYAnchor.constraint(equalTo: background.centerYAnchor),
-
-            field.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 6),
-            field.trailingAnchor.constraint(equalTo: clearButton.leadingAnchor, constant: -4),
-            field.centerYAnchor.constraint(equalTo: background.centerYAnchor),
-
-            clearButton.trailingAnchor.constraint(equalTo: background.trailingAnchor, constant: -6),
-            clearButton.centerYAnchor.constraint(equalTo: background.centerYAnchor),
+            // Room for the focus ring between the field and the first row.
+            heightAnchor.constraint(equalToConstant: 40),
+            field.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            field.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            field.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    // Clicking the magnifier or padding focuses the field.
-    override func mouseDown(with event: NSEvent) {
-        window?.makeFirstResponder(field)
-    }
-
     func controlTextDidChange(_ obj: Notification) { queryChanged() }
 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-        guard commandSelector == #selector(NSResponder.cancelOperation(_:)), !field.stringValue.isEmpty
-        else { return false }
-        clear()
-        return true
+        switch commandSelector {
+        case #selector(NSResponder.cancelOperation(_:)):
+            guard !field.stringValue.isEmpty else { return false }
+            clear()
+            return true
+        case #selector(NSResponder.moveDown(_:)):
+            guard let onMoveDown else { return false }
+            onMoveDown()
+            return true
+        case #selector(NSResponder.insertNewline(_:)):
+            return onSubmit?() ?? false
+        default:
+            return false
+        }
     }
 
-    @objc private func clear() {
+    func clear() {
         field.stringValue = ""
         queryChanged()
     }
 
-    private func queryChanged() {
-        clearButton.isHidden = field.stringValue.isEmpty
-        onQueryChange?(field.stringValue)
+    @objc private func queryChanged() {
+        guard field.stringValue != query else { return }
+        query = field.stringValue
+        onQueryChange?(query)
     }
 }
 
