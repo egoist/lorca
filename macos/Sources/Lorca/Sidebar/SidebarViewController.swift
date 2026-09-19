@@ -24,6 +24,7 @@ final class SidebarViewController: NSViewController {
     }
 
     var onSelect: ((Selection?) -> Void)?
+    var onOpenDevice: ((Device.ID) -> Void)?
     var onDoubleClick: ((Selection) -> Void)?
 
     override func loadView() {
@@ -47,13 +48,13 @@ final class SidebarViewController: NSViewController {
             self?.focusList()
         }
 
-        // Both land in the settings sidebar, which lists the panes and this Mac's page.
+        // Both land in Settings: General, or this Mac's About pane.
         footer.onSettings = { [weak self] in
             self?.onSelect?(.settings(.general))
         }
         footer.onDevice = { [weak self] in
             guard let id = self?.store.thisDevice?.id else { return }
-            self?.onSelect?(.device(id))
+            self?.onOpenDevice?(id)
         }
 
         if SidebarChrome.floats {
@@ -346,7 +347,7 @@ extension SidebarViewController: NSOutlineViewDelegate {
             cell.shortcutNumber = nodes.firstIndex { $0 === node }.flatMap(shortcutNumber(forRow:))
             return cell
 
-        case .header, .pane, .setting, .device:
+        case .header, .pane, .setting:
             return nil
         }
     }

@@ -2,6 +2,11 @@ import AppKit
 
 final class MainWindowController: NSWindowController, NSWindowDelegate {
     let root = RootSplitViewController()
+    /// The Device the Providers, Plugins, Bots, and Devices panes show. Its toolbar item is in the
+    /// toolbar only while one of those panes is up.
+    private let devicePicker = NSPopUpButton()
+    /// Creating bots and chats belongs to the chats; Settings hides it.
+    private var createButton: HoverButton?
 
     init() {
         let window = NSWindow(
@@ -33,6 +38,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         let createButton = HoverButton(
             symbol: "plus", tooltip: "Create", target: nil, action: #selector(AppDelegate.newBot(_:)))
         createButton.menu = Self.createMenu()
+        self.createButton = createButton
         window.addTitlebarAccessoryViewController(
             Self.leadingAccessory([
                 HoverButton(
@@ -41,11 +47,85 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
                 createButton,
             ]))
 
+        devicePicker.target = self
+        devicePicker.action = #selector(pickDevice)
+        devicePicker.setAccessibilityLabel("Device")
+        devicePicker.toolTip = "The Device this page shows"
+
         root.onSelectionChange = { [weak self] in
             self?.updateTitle()
+            self?.updateDevicePicker()
             Notifier.shared.watchingChanged()
         }
+        AppStore.shared.observe(self) { [weak self] event in
+            switch event {
+            case .rosterChanged, .snapshotReplaced: self?.updateDevicePicker()
+            default: break
+            }
+        }
         updateTitle()
+        updateDevicePicker()
+    }
+
+    // MARK: - Device picker
+
+    private func updateDevicePicker() {
+        guard let toolbar = window?.toolbar else { return }
+        var isScoped = false
+        if case let .settings(pane) = root.selection { isScoped = pane.isDeviceScoped }
+
+        // Settings has no inspector and nothing to create.
+        let isSettings = root.selection?.isSettings == true
+        createButton?.isHidden = isSettings
+        let toggle = toolbar.items.firstIndex { $0.itemIdentifier == .inspectorToggle }
+        if isSettings, let toggle {
+            toolbar.removeItem(at: toggle)
+        } else if !isSettings, toggle == nil {
+            toolbar.insertItem(withItemIdentifier: .inspectorToggle, at: toolbar.items.count)
+        }
+
+        let index = toolbar.items.firstIndex { $0.itemIdentifier == .devicePicker }
+        if isScoped, index == nil {
+            // At the content area's trailing edge, ahead of the inspector's section.
+            let at = toolbar.items.firstIndex { $0.itemIdentifier == .inspectorTrackingSeparator } ?? toolbar.items.count
+            toolbar.insertItem(withItemIdentifier: .devicePicker, at: at)
+        } else if !isScoped, let index {
+            toolbar.removeItem(at: index)
+        }
+        guard isScoped else { return }
+
+        devicePicker.removeAllItems()
+        for device in AppStore.shared.devices {
+            devicePicker.addItem(withTitle: "")
+            guard let item = devicePicker.lastItem else { continue }
+            item.title = device.isThisDevice ? "\(device.name) (This Mac)" : device.name
+            item.representedObject = device.id
+            item.image = NSImage(systemSymbolName: device.symbolName, accessibilityDescription: nil)
+        }
+        selectPickedDevice()
+        devicePicker.menu?.addItem(.separator())
+        let pair = NSMenuItem(title: "Pair a Device…", action: #selector(pairDevice), keyEquivalent: "")
+        pair.target = self
+        devicePicker.menu?.addItem(pair)
+        devicePicker.sizeToFit()
+    }
+
+    private func selectPickedDevice() {
+        let picked = root.settingsDeviceID
+        if let item = devicePicker.itemArray.first(where: { $0.representedObject as? String == picked }) {
+            devicePicker.select(item)
+        }
+    }
+
+    @objc private func pickDevice() {
+        guard let id = devicePicker.selectedItem?.representedObject as? String else { return }
+        root.showSettingsDevice(id)
+    }
+
+    /// Pairing is a command, so the pop-up goes back to showing the picked Device.
+    @objc private func pairDevice() {
+        selectPickedDevice()
+        NSApp.sendAction(#selector(AppDelegate.pairDevice(_:)), to: nil, from: nil)
     }
 
     /// Lays square plain buttons out as a leading titlebar accessory, just past the traffic lights.
@@ -111,10 +191,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         case let .settings(pane):
             window.title = pane.title
             window.subtitle = ""
-        case let .device(id):
-            guard let device = AppStore.shared.device(id) else { return }
-            window.title = device.name
-            window.subtitle = device.model
         case nil:
             window.title = "Lorca"
             window.subtitle = ""
@@ -140,6 +216,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
 extension NSToolbarItem.Identifier {
     static let inspectorToggle = NSToolbarItem.Identifier("lorca.inspectorToggle")
+    static let devicePicker = NSToolbarItem.Identifier("lorca.devicePicker")
 }
 
 // Standard toolbar items sit on glass platters; a borderless custom-view item doesn't. AppKit moves
@@ -157,7 +234,7 @@ extension MainWindowController: NSToolbarDelegate {
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        toolbarDefaultItemIdentifiers(toolbar)
+        toolbarDefaultItemIdentifiers(toolbar) + [.devicePicker]
     }
 
     func toolbar(
@@ -165,6 +242,12 @@ extension MainWindowController: NSToolbarDelegate {
         itemForItemIdentifier identifier: NSToolbarItem.Identifier,
         willBeInsertedIntoToolbar flag: Bool
     ) -> NSToolbarItem? {
+        if identifier == .devicePicker {
+            let item = NSToolbarItem(itemIdentifier: identifier)
+            item.label = "Device"
+            item.view = devicePicker
+            return item
+        }
         guard identifier == .inspectorToggle else { return nil }
         let item = NSToolbarItem(itemIdentifier: identifier)
         item.label = "Inspector"

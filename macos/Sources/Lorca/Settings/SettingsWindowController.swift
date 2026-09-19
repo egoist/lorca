@@ -73,7 +73,7 @@ class SettingsPaneViewController: NSViewController {
         view = container
     }
 
-    private func add(_ row: NSView) {
+    func add(_ row: NSView) {
         column.addArrangedSubview(row)
         row.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -2 * inset).isActive = true
     }
@@ -84,6 +84,13 @@ class SettingsPaneViewController: NSViewController {
 
     func addFootnote(_ text: String) {
         add(Build.label(text, font: Theme.Font.caption, color: .tertiaryLabelColor, lines: 0))
+    }
+
+    /// Back to the top, which rests below the titlebar the scroll view runs under.
+    func scrollToTop() {
+        guard isViewLoaded else { return }
+        scrollView.contentView.scroll(to: NSPoint(x: 0, y: -scrollView.contentInsets.top))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
     }
 
     /// Scrolls a setting picked from the sidebar's search into view and flashes its row. The page
@@ -198,63 +205,6 @@ final class GeneralSettingsViewController: SettingsPaneViewController {
         case 2: NSApp.appearance = NSAppearance(named: .darkAqua)
         default: NSApp.appearance = nil
         }
-    }
-}
-
-// MARK: - Providers
-
-final class ProvidersSettingsViewController: SettingsPaneViewController {
-    private let section = SectionView(title: "Credentials on this Mac")
-
-    override func viewDidLoad() {
-        super.viewDidLoad()
-        title = "Providers"
-
-        reload()
-        addSection(section)
-        AppStore.shared.observe(self) { [weak self] event in
-            switch event {
-            case .rosterChanged, .snapshotReplaced: self?.reload()
-            default: break
-            }
-        }
-
-        addFootnote(
-            """
-            Keys stay on the Runner they were entered on, in the CLI's credential file. A bot assigned to another \
-            Runner uses that machine's credentials — this one never sees them.
-            """
-        )
-    }
-
-    private func reload() {
-        let store = AppStore.shared
-        guard let device = store.thisDevice else {
-            section.setRows([KeyValueRow(key: "Waiting for the CLI", value: "")])
-            return
-        }
-        section.setRows(
-            device.providers.map { credential in
-                let row = StatusRow()
-                row.configure(
-                    symbol: credential.kind.symbolName,
-                    title: credential.kind.rawValue,
-                    subtitle: "\(credential.kind.subtitle) · \(credential.detail)",
-                    state: credential.isConnected ? "Connected" : nil,
-                    stateColor: .systemGreen,
-                    actionTitle: credential.isConnected ? "Disconnect" : "Connect…",
-                    destructive: credential.isConnected
-                )
-                row.onAction = { [weak self] in
-                    guard let self else { return }
-                    if credential.isConnected {
-                        Task { try? await store.disconnectProvider(credential.kind) }
-                    } else {
-                        self.presentAsSheet(ConnectProviderViewController(kind: credential.kind))
-                    }
-                }
-                return row
-            })
     }
 }
 

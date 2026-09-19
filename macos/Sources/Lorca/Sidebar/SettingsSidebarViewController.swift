@@ -1,8 +1,7 @@
 import AppKit
 
-/// The sidebar while Settings is open: Back, a search field, the panes, and the paired Devices,
-/// each Device opening its own page. A query narrows the list to the panes, settings and Devices
-/// that match; a setting opens its pane with the row in view.
+/// The sidebar while Settings is open: Back, a search field, and the panes. A query narrows the
+/// list to the panes and settings that match; a setting opens its pane with the row in view.
 final class SettingsSidebarViewController: NSViewController {
     private let store = AppStore.shared
 
@@ -20,10 +19,10 @@ final class SettingsSidebarViewController: NSViewController {
     private let noResults = Build.label(
         "", font: .systemFont(ofSize: 12), color: .secondaryLabelColor, lines: 0, alignment: .center)
 
-    private static let devicesTitle = "Devices"
-
     private var nodes: [SidebarNode] = []
     private var selection: Selection?
+    /// The Device the Device panes show, whose bots, providers, and plugins a query searches.
+    private var deviceID: Device.ID?
     private var searchQuery = ""
     private var isApplyingSelection = false
     private var isNotifyingSelection = false
@@ -112,9 +111,6 @@ final class SettingsSidebarViewController: NSViewController {
         outlineView.allowsEmptySelection = true
         outlineView.dataSource = self
         outlineView.delegate = self
-        let menu = NSMenu()
-        menu.delegate = self
-        outlineView.menu = menu
     }
 
     override func viewDidLoad() {
@@ -145,36 +141,30 @@ final class SettingsSidebarViewController: NSViewController {
     // MARK: - Data
 
     private func rebuild() {
-        let settingsHeader = SidebarNode(.header("Settings"))
-        let devicesHeader = SidebarNode(.header(Self.devicesTitle))
+        var fresh: [SidebarNode] = []
+        let device = deviceID.flatMap { store.device($0) }
 
-        if searchQuery.isEmpty {
-            settingsHeader.children = SettingsPane.allCases.map { SidebarNode(.pane($0)) }
-            devicesHeader.children = store.devices.map { SidebarNode(.device($0.id)) }
-        } else {
-            settingsHeader.children = SettingsSearch.panes(matching: searchQuery, store: store).flatMap { result in
-                [SidebarNode(.pane(result.pane))] + result.entries.map { SidebarNode(.setting($0)) }
+        let results: [SettingsSearch.PaneResult] =
+            if searchQuery.isEmpty {
+                SettingsPane.allCases.map { .init(pane: $0, entries: []) }
+            } else {
+                SettingsSearch.panes(matching: searchQuery, device: device, store: store)
             }
-            devicesHeader.children = SettingsSearch.devices(matching: searchQuery, store: store)
-                .map { SidebarNode(.device($0.id)) }
+        for result in results {
+            fresh.append(SidebarNode(.pane(result.pane)))
+            fresh += result.entries.map { SidebarNode(.setting($0)) }
         }
 
-        // A query lists only the sections with a match; the full list keeps both headers, and
-        // Devices keeps its Pair button.
-        let fresh = [settingsHeader, devicesHeader].filter { searchQuery.isEmpty || !$0.children.isEmpty }
         noResults.stringValue = "No Results for \u{201C}\(searchQuery)\u{201D}"
         noResults.isHidden = !fresh.isEmpty
 
         if shape(of: fresh) == shape(of: nodes) {
-            // Same rows (a Device came online, a bot moved): update the cells in place, which
-            // keeps the row views and the selection's emphasis.
-            refreshVisibleCells()
+            // Same rows: the row views and the selection's emphasis stay as they are.
         } else if isNotifyingSelection {
             DispatchQueue.main.async { [weak self] in self?.rebuild() }
         } else {
             nodes = fresh
             outlineView.reloadData()
-            for node in nodes { outlineView.expandItem(node) }
             setSelection(selection)
         }
     }
@@ -183,14 +173,11 @@ final class SettingsSidebarViewController: NSViewController {
         nodes.map { [$0.kind] + $0.children.map(\.kind) }
     }
 
-    private func refreshVisibleCells() {
-        for row in 0..<outlineView.numberOfRows {
-            guard let node = outlineView.item(atRow: row) as? SidebarNode,
-                case let .device(id) = node.kind, let device = store.device(id),
-                let cell = outlineView.view(atColumn: 0, row: row, makeIfNecessary: false) as? SidebarDeviceCell
-            else { continue }
-            cell.configure(device: device, store: store)
-        }
+    func setDevice(_ id: Device.ID?) {
+        guard deviceID != id else { return }
+        deviceID = id
+        guard isViewLoaded, !searchQuery.isEmpty else { return }
+        rebuild()
     }
 
     // MARK: - Selection
@@ -264,7 +251,6 @@ extension SettingsSidebarViewController: NSOutlineViewDelegate {
         (item as? SidebarNode)?.isHeader ?? false
     }
 
-    // The Devices header holds the Pair button where a group row's Show/Hide control would go.
     func outlineView(_ outlineView: NSOutlineView, shouldShowOutlineCellForItem item: Any) -> Bool {
         false
     }
@@ -295,13 +281,7 @@ extension SettingsSidebarViewController: NSOutlineViewDelegate {
                     new.identifier = SidebarHeaderCell.identifier
                     return new
                 }()
-            if title == Self.devicesTitle {
-                cell.configure(title, actionTooltip: "Pair a Device…") {
-                    NSApp.sendAction(#selector(AppDelegate.pairDevice(_:)), to: nil, from: nil)
-                }
-            } else {
-                cell.configure(title)
-            }
+            cell.configure(title)
             return cell
 
         case let .pane(pane):
@@ -326,18 +306,6 @@ extension SettingsSidebarViewController: NSOutlineViewDelegate {
             cell.configure(entry: entry)
             return cell
 
-        case let .device(id):
-            guard let device = store.device(id) else { return nil }
-            let cell =
-                outlineView.makeView(withIdentifier: SidebarDeviceCell.identifier, owner: self)
-                as? SidebarDeviceCell ?? {
-                    let new = SidebarDeviceCell()
-                    new.identifier = SidebarDeviceCell.identifier
-                    return new
-                }()
-            cell.configure(device: device, store: store)
-            return cell
-
         case .chat:
             return nil
         }
@@ -357,35 +325,6 @@ extension SettingsSidebarViewController: NSOutlineViewDelegate {
         defer { isNotifyingSelection = false }
         onSelect?(picked)
         if case let .setting(entry) = node.kind { onReveal?(entry) }
-    }
-}
-
-// MARK: - Context menu
-
-extension SettingsSidebarViewController: NSMenuDelegate {
-    func menuNeedsUpdate(_ menu: NSMenu) {
-        menu.removeAllItems()
-
-        let row = outlineView.clickedRow
-        guard row >= 0, let node = outlineView.item(atRow: row) as? SidebarNode,
-            case let .device(id) = node.kind
-        else { return }
-
-        // Unpair reads the selection, so the clicked Device is selected first.
-        setSelection(.device(id))
-        onSelect?(.device(id))
-
-        menu.addItem(item("Pair a Device…", #selector(AppDelegate.pairDevice(_:))))
-        if store.device(id)?.isThisDevice == false {
-            menu.addItem(.separator())
-            menu.addItem(item("Unpair…", #selector(RootSplitViewController.unpairDevice(_:))))
-        }
-    }
-
-    private func item(_ title: String, _ action: Selector) -> NSMenuItem {
-        let menuItem = NSMenuItem(title: title, action: action, keyEquivalent: "")
-        menuItem.target = nil
-        return menuItem
     }
 }
 

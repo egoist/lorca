@@ -23,15 +23,26 @@ enum SettingsPane: String, CaseIterable {
     case general
     case providers
     case autoReview = "auto-review"
+    case plugins
+    case bots
+    case device
     case advanced
+
+    /// Bots, provider credentials, and plugins live on a Runner, so these panes show one Device,
+    /// picked at the top of the page. The others hold this Mac's settings and the shared roster's.
+    var isDeviceScoped: Bool {
+        switch self {
+        case .general, .autoReview, .advanced: false
+        case .bots, .providers, .plugins, .device: true
+        }
+    }
 }
 
 enum Selection: Hashable {
     case chat(Chat.ID)
     case settings(SettingsPane)
-    case device(Device.ID)
 
-    /// Settings panes and Device pages are listed by the settings sidebar; chats by the main one.
+    /// Settings panes are listed by the settings sidebar; chats by the main one.
     var isSettings: Bool {
         if case .chat = self { return false }
         return true

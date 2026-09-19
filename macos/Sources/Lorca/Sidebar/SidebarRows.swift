@@ -24,7 +24,6 @@ final class SidebarNode: NSObject {
         case pane(SettingsPane)
         /// A search result in the settings sidebar: one setting on its pane.
         case setting(SettingsEntry)
-        case device(Device.ID)
     }
 
     let kind: Kind
@@ -40,7 +39,6 @@ final class SidebarNode: NSObject {
         case let .chat(id): .chat(id)
         case let .pane(pane): .settings(pane)
         case let .setting(entry): .settings(entry.pane)
-        case let .device(id): .device(id)
         }
     }
 
@@ -112,18 +110,24 @@ extension SettingsPane {
     var title: String {
         switch self {
         case .general: "General"
-        case .providers: "Providers"
         case .autoReview: "Auto-review"
         case .advanced: "Advanced"
+        case .bots: "Bots"
+        case .providers: "Providers"
+        case .plugins: "Plugins"
+        case .device: "Devices"
         }
     }
 
     var symbolName: String {
         switch self {
         case .general: "gearshape"
-        case .providers: "key"
         case .autoReview: "checkmark.shield"
         case .advanced: "slider.horizontal.3"
+        case .bots: "person.2"
+        case .providers: "key"
+        case .plugins: "puzzlepiece.extension"
+        case .device: "desktopcomputer"
         }
     }
 }
@@ -323,75 +327,5 @@ final class SidebarChatCell: NSTableCellView {
         stamp.textColor = emphasized ? NSColor.white.withAlphaComponent(0.65) : .tertiaryLabelColor
         pin.contentTintColor = emphasized ? NSColor.white.withAlphaComponent(0.7) : .tertiaryLabelColor
         badge.fillColor = emphasized ? NSColor.white.withAlphaComponent(0.9) : .controlAccentColor
-    }
-}
-
-// MARK: - Device row
-
-final class SidebarDeviceCell: NSTableCellView {
-    static let identifier = NSUserInterfaceItemIdentifier("SidebarDeviceCell")
-
-    private let icon = NSImageView()
-    private let title = Build.label("", font: .systemFont(ofSize: 13))
-    private let detail = Build.label(
-        "", font: Theme.Font.caption, color: .tertiaryLabelColor, alignment: .right)
-    private let dot = StatusDotView(size: 6)
-
-    init() {
-        super.init(frame: .zero)
-        icon.translatesAutoresizingMaskIntoConstraints = false
-        detail.setContentCompressionResistancePriority(.required, for: .horizontal)
-        detail.setContentHuggingPriority(.required, for: .horizontal)
-
-        for subview in [icon, title, detail, dot] as [NSView] { addSubview(subview) }
-
-        NSLayoutConstraint.activate([
-            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: SidebarMetric.inset),
-            icon.centerYAnchor.constraint(equalTo: centerYAnchor),
-            icon.widthAnchor.constraint(equalToConstant: SidebarMetric.slot),
-
-            title.leadingAnchor.constraint(equalTo: leadingAnchor, constant: SidebarMetric.textLeading),
-            title.centerYAnchor.constraint(equalTo: centerYAnchor),
-            title.trailingAnchor.constraint(lessThanOrEqualTo: detail.leadingAnchor, constant: -6),
-
-            detail.trailingAnchor.constraint(equalTo: dot.leadingAnchor, constant: -6),
-            detail.centerYAnchor.constraint(equalTo: centerYAnchor),
-
-            dot.trailingAnchor.constraint(
-                equalTo: trailingAnchor, constant: -SidebarMetric.trailingInset),
-            dot.centerYAnchor.constraint(equalTo: centerYAnchor),
-        ])
-
-        textField = title
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError() }
-
-    func configure(device: Device, store: AppStore) {
-        icon.image = NSImage(systemSymbolName: device.symbolName, accessibilityDescription: nil)
-        icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
-        title.stringValue = device.name
-        let count = store.bots(on: device.id).count
-        detail.stringValue =
-            if device.isThisDevice {
-                "This Mac"
-            } else if device.isRunner {
-                "\(count) bot\(count == 1 ? "" : "s")"
-            } else {
-                device.os.displayName
-            }
-        dot.status = device.status
-        applyBackgroundStyle()
-    }
-
-    override var backgroundStyle: NSView.BackgroundStyle {
-        didSet { applyBackgroundStyle() }
-    }
-
-    private func applyBackgroundStyle() {
-        let emphasized = backgroundStyle == .emphasized
-        detail.textColor = emphasized ? NSColor.white.withAlphaComponent(0.7) : .tertiaryLabelColor
-        icon.contentTintColor = emphasized ? .white : .secondaryLabelColor
     }
 }

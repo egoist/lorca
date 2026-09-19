@@ -41,6 +41,18 @@ struct SettingsEntry: Hashable {
     static let onboarding = SettingsEntry(
         .advanced, "Onboarding", keywords: ["show onboarding again", "setup", "welcome", "restore"])
 
+    static let machineKey = SettingsEntry(
+        .device, "Machine key", keywords: ["device", "os", "role", "runner", "last seen", "relay"])
+    static let pairing = SettingsEntry(.device, "Pairing", keywords: ["unpair", "remove device", "paired"])
+
+    static func bot(_ bot: Bot) -> SettingsEntry {
+        SettingsEntry(.bots, bot.name, keywords: [bot.label, bot.provider.rawValue, "bot", "runner"])
+    }
+
+    static func plugin(_ plugin: InstalledPlugin) -> SettingsEntry {
+        SettingsEntry(.plugins, plugin.name, keywords: [plugin.description, "plugin", "mcp", "marketplace"])
+    }
+
     static func provider(_ kind: ProviderCredential.Kind) -> SettingsEntry {
         SettingsEntry(
             .providers, kind.rawValue,
@@ -53,7 +65,7 @@ struct SettingsEntry: Hashable {
 }
 
 /// What the settings sidebar lists for a query: each pane that matches by name or holds a matching
-/// setting, those settings under it, and the Devices that match.
+/// setting, and those settings under it. The Device panes answer for the picked Device.
 @MainActor
 enum SettingsSearch {
     struct PaneResult {
@@ -61,27 +73,23 @@ enum SettingsSearch {
         let entries: [SettingsEntry]
     }
 
-    static func entries(in pane: SettingsPane, store: AppStore) -> [SettingsEntry] {
+    static func entries(in pane: SettingsPane, device: Device?, store: AppStore) -> [SettingsEntry] {
         switch pane {
         case .general: [.sendOnReturn, .timestamps, .appearance, .dictationLanguage]
-        case .providers: (store.thisDevice?.providers ?? []).map { .provider($0.kind) }
         case .autoReview: [.autoReviewSwitch, .autoReviewRules]
         case .advanced: [.relayURL, .cliPort, .onboarding]
+        case .bots: (device.map { store.bots(on: $0.id) } ?? []).map { .bot($0) }
+        case .providers: (device?.providers ?? []).map { .provider($0.kind) }
+        case .plugins: (device?.plugins ?? []).map { .plugin($0) }
+        case .device: device?.isThisDevice == false ? [.machineKey, .pairing] : [.machineKey]
         }
     }
 
-    static func panes(matching query: String, store: AppStore) -> [PaneResult] {
+    static func panes(matching query: String, device: Device?, store: AppStore) -> [PaneResult] {
         SettingsPane.allCases.compactMap { pane in
-            let entries = entries(in: pane, store: store).filter { $0.matches(query) }
+            let entries = entries(in: pane, device: device, store: store).filter { $0.matches(query) }
             guard !entries.isEmpty || pane.title.localizedStandardContains(query) else { return nil }
             return PaneResult(pane: pane, entries: entries)
-        }
-    }
-
-    static func devices(matching query: String, store: AppStore) -> [Device] {
-        store.devices.filter { device in
-            [device.name, device.model, device.os.displayName, device.isThisDevice ? "This Mac" : ""]
-                .contains { $0.localizedStandardContains(query) }
         }
     }
 }

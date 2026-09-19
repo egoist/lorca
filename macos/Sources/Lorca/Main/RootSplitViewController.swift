@@ -16,7 +16,9 @@ final class RootSplitViewController: NSSplitViewController {
 
     private var userWantsInspector = true
     private var chatController: ChatViewController?
-    private let deviceController = DeviceViewController()
+    /// The Device the Providers, Plugins, Bots, and Devices panes show, picked in the window's
+    /// toolbar. This Mac until another is picked.
+    private(set) var settingsDeviceID: Device.ID?
     private var settingsControllers: [SettingsPane: NSViewController] = [:]
     /// The chat Back returns to.
     private var lastChatID: Chat.ID?
@@ -79,8 +81,11 @@ final class RootSplitViewController: NSSplitViewController {
         settingsSidebar.onBack = { [weak self] in
             self?.closeSettings()
         }
+        sidebar.onOpenDevice = { [weak self] deviceID in
+            self?.openDevice(deviceID)
+        }
         inspector.onOpenDevice = { [weak self] deviceID in
-            self?.select(.device(deviceID))
+            self?.openDevice(deviceID)
         }
         inspector.onRemoveBot = { [weak self] botID in
             guard case let .chat(chatID) = self?.selection else { return }
@@ -103,6 +108,7 @@ final class RootSplitViewController: NSSplitViewController {
             self?.handle(event)
         }
 
+        showSettingsDevice(nil)
         restoreSelection()
         updateContent()
     }
@@ -120,7 +126,6 @@ final class RootSplitViewController: NSSplitViewController {
         switch selection {
         case let .chat(id): store.chat(id) != nil
         case .settings: true
-        case let .device(id): store.device(id) != nil
         }
     }
 
@@ -128,7 +133,6 @@ final class RootSplitViewController: NSSplitViewController {
         switch selection {
         case let .chat(id): "chat:\(id)"
         case let .settings(pane): "settings:\(pane.rawValue)"
-        case let .device(id): "device:\(id)"
         case nil: nil
         }
     }
@@ -139,7 +143,6 @@ final class RootSplitViewController: NSSplitViewController {
         switch parts[0] {
         case "chat": return .chat(parts[1])
         case "settings": return SettingsPane(rawValue: parts[1]).map { .settings($0) }
-        case "device": return .device(parts[1])
         default: return nil
         }
     }
@@ -157,12 +160,28 @@ final class RootSplitViewController: NSSplitViewController {
         syncSidebar()
     }
 
-    /// Settings lives in this window: its panes and the Device pages take the content area, and
-    /// the sidebar lists them in place of the chats.
+    /// Settings lives in this window: its panes take the content area, and the sidebar lists them
+    /// in place of the chats.
     func showSettings() {
         if sidebarItem.isCollapsed { sidebarItem.animator().isCollapsed = false }
         guard selection?.isSettings != true else { return }
         select(.settings(.general))
+    }
+
+    /// The Devices pane on that Device, with the other Device panes on it too.
+    func openDevice(_ id: Device.ID) {
+        showSettingsDevice(id)
+        if sidebarItem.isCollapsed { sidebarItem.animator().isCollapsed = false }
+        select(.settings(.device))
+    }
+
+    func showSettingsDevice(_ id: Device.ID?) {
+        settingsDeviceID = id.flatMap { store.device($0) }?.id ?? store.thisDevice?.id
+        settingsSidebar.setDevice(settingsDeviceID)
+        for case let controller as DevicePaneViewController in settingsControllers.values {
+            controller.show(deviceID: settingsDeviceID)
+        }
+        onSelectionChange?()
     }
 
     func closeSettings() {
@@ -268,6 +287,7 @@ final class RootSplitViewController: NSSplitViewController {
         case .connectionChanged:
             updateContent()
         case .snapshotReplaced:
+            showSettingsDevice(settingsDeviceID)
             restoreSelection()
             updateContent()
         case .chatsChanged:
@@ -275,10 +295,8 @@ final class RootSplitViewController: NSSplitViewController {
                 select(store.chats.first.map { .chat($0.id) })
             }
         case .rosterChanged:
-            // An unpaired Device leaves the list; its page goes with it.
-            if case let .device(id) = selection, store.device(id) == nil {
-                select(store.thisDevice.map { .device($0.id) } ?? store.chats.first.map { .chat($0.id) })
-            }
+            // An unpaired Device leaves the pickers, which go back to this Mac.
+            showSettingsDevice(settingsDeviceID)
         case let .chatChanged(id):
             if case .chat(id) = selection {
                 inspector.reload()
@@ -317,14 +335,6 @@ final class RootSplitViewController: NSSplitViewController {
             inspector.show(selection: .chat(chat.id))
             setInspector(visible: userWantsInspector)
 
-        case let .device(id):
-            deviceController.show(deviceID: id)
-            deviceController.onOpenChat = { [weak self] chatID in
-                self?.select(.chat(chatID))
-            }
-            content.show(deviceController)
-            setInspector(visible: false)
-
         case .settings:
             break
 
@@ -339,10 +349,19 @@ final class RootSplitViewController: NSSplitViewController {
         let controller: NSViewController =
             switch pane {
             case .general: GeneralSettingsViewController()
-            case .providers: ProvidersSettingsViewController()
             case .autoReview: AutoReviewSettingsViewController()
             case .advanced: AdvancedSettingsViewController()
+            case .bots: BotsSettingsViewController()
+            case .providers: ProvidersSettingsViewController()
+            case .plugins: PluginsSettingsViewController()
+            case .device: AboutDeviceSettingsViewController()
             }
+        if let controller = controller as? DevicePaneViewController {
+            controller.show(deviceID: settingsDeviceID)
+        }
+        (controller as? BotsSettingsViewController)?.onOpenChat = { [weak self] chatID in
+            self?.select(.chat(chatID))
+        }
         settingsControllers[pane] = controller
         return controller
     }
@@ -475,13 +494,6 @@ final class RootSplitViewController: NSSplitViewController {
         }
     }
 
-    @objc func unpairDevice(_ sender: Any?) {
-        guard case let .device(id) = selection, let device = store.device(id), !device.isThisDevice else {
-            NSSound.beep()
-            return
-        }
-        UnpairDevice.confirm(device, in: view.window)
-    }
 }
 
 // MARK: - Content container

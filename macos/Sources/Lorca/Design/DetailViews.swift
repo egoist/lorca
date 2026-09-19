@@ -1,8 +1,10 @@
 import AppKit
 
-/// Titled card used by the inspector and the Device pane.
+/// Titled card used by the inspector and the settings panes.
 final class SectionView: NSView {
-    let title: String
+    var title: String {
+        didSet { header.stringValue = title.uppercased() }
+    }
     private let header: NSTextField
     private let card = BackgroundView()
     private let rows = Build.stack([], spacing: 0)
