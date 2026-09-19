@@ -458,8 +458,6 @@ fn apply_roster(app: &Arc<App>, roster: RosterBlob) {
 fn apply_chat_op(app: &Arc<App>, op: ChatBlob) {
     match op {
         ChatBlob::Upsert { message } => {
-            let from_bot = matches!(message.author, Author::Bot { .. });
-            let is_new;
             {
                 let mut state = app.state.lock().unwrap();
                 if !state.chats.iter().any(|c| c.meta.id == message.chat_id) {
@@ -472,20 +470,12 @@ fn apply_chat_op(app: &Arc<App>, op: ChatBlob) {
                         compactions: Vec::new(),
                     });
                 }
-                let chat = state.chats.iter_mut().find(|c| c.meta.id == message.chat_id).unwrap();
-                is_new = !chat.messages.iter().any(|m| m.id == message.id);
-                if is_new && from_bot && message.is_complete() {
-                    chat.unread_count += 1;
-                }
             }
             // The cycle saves state once after the page.
             app.upsert_message(message, false);
-            if is_new && from_bot {
-                app.emit(app.roster_summary());
-            }
         }
         ChatBlob::Remove { chat_id, message_id } => app.remove_message(&chat_id, &message_id, false),
-        ChatBlob::ClearUnread { chat_id } => app.mark_read(&chat_id),
+        ChatBlob::ClearUnread { chat_id } => app.mark_read(&chat_id, false),
     }
 }
 

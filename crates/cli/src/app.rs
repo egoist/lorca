@@ -844,7 +844,9 @@ impl App {
         self.watched_chat.lock().unwrap().as_deref() == Some(chat_id)
     }
 
-    pub fn mark_read(&self, chat_id: &str) {
+    /// Clears a chat's unread count. Read on this Device (`upload`), it clears on every other
+    /// one through a `ClearUnread` blob.
+    pub fn mark_read(&self, chat_id: &str, upload: bool) {
         let changed = {
             let mut state = self.state.lock().unwrap();
             match state.chats.iter_mut().find(|c| c.meta.id == chat_id) {
@@ -858,36 +860,59 @@ impl App {
         if changed {
             self.save_state();
             self.emit(self.roster_summary());
+            if upload {
+                self.push_chat_op(&ChatBlob::ClearUnread { chat_id: chat_id.to_string() });
+            }
         }
     }
 
     // MARK: - Messages
 
-    /// Insert or replace a message locally, emit, and optionally upload.
+    /// Insert or replace a message locally, emit, and optionally upload. A reply counts as
+    /// unread once, when it finishes, whether this Runner wrote it or the relay delivered it.
+    /// One that finishes while the user looks at its chat is read here, and so everywhere.
+    /// A message the user sends, from any Device, says they have read what came before it.
     pub fn upsert_message(&self, message: Message, upload: bool) {
-        let (added, changed) = {
+        let watching = self.is_watching(&message.chat_id);
+        let (added, changed, finished, read) = {
             let mut state = self.state.lock().unwrap();
             let Some(chat) = state.chats.iter_mut().find(|c| c.meta.id == message.chat_id) else { return };
-            match chat.messages.iter_mut().find(|m| m.id == message.id) {
+            let (added, changed, counted) = match chat.messages.iter_mut().find(|m| m.id == message.id) {
                 Some(existing) => {
                     let changed = *existing != message;
+                    let counted = existing.counts_unread();
                     *existing = message.clone();
-                    (false, changed)
+                    (false, changed, counted)
                 }
                 None => {
                     chat.messages.push(message.clone());
-                    (true, true)
+                    (true, true, false)
                 }
+            };
+            let finished = !counted && message.counts_unread();
+            if finished && !watching {
+                chat.unread_count += 1;
             }
+            let read = added && message.author == Author::You && chat.unread_count > 0;
+            if read {
+                chat.unread_count = 0;
+            }
+            (added, changed, finished, read)
         };
         if added {
             self.emit(Event::MessageAdded { chat_id: message.chat_id.clone(), message: message.for_app() });
         } else if changed {
             self.emit(Event::MessageUpdated { chat_id: message.chat_id.clone(), message: message.for_app() });
         }
+        if (finished && !watching) || read {
+            self.emit(self.roster_summary());
+        }
         if upload {
             self.save_state();
-            self.push_chat_op(&ChatBlob::Upsert { message });
+            self.push_chat_op(&ChatBlob::Upsert { message: message.clone() });
+        }
+        if finished && watching {
+            self.push_chat_op(&ChatBlob::ClearUnread { chat_id: message.chat_id });
         }
     }
 

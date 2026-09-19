@@ -285,6 +285,12 @@ impl Message {
     pub fn is_complete(&self) -> bool {
         matches!(self.state, MessageState::Complete)
     }
+
+    /// A finished thing a bot said: what the unread count counts. Tool calls never show in a
+    /// transcript, so they stay out of it.
+    pub fn counts_unread(&self) -> bool {
+        matches!(self.author, Author::Bot { .. }) && matches!(self.body, Body::Text { .. }) && self.is_complete()
+    }
 }
 
 /// Roster-level chat description. Messages live beside it in the store.

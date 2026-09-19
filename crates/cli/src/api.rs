@@ -326,7 +326,7 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             Ok(json!({ "messages": messages, "has_more": has_more }))
         }
         "chats.mark_read" => {
-            app.mark_read(&string(&params, "chat_id")?);
+            app.mark_read(&string(&params, "chat_id")?, true);
             Ok(Value::Null)
         }
 

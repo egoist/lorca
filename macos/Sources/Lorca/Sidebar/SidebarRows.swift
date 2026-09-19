@@ -219,8 +219,11 @@ final class SidebarChatCell: NSTableCellView {
     private let stamp = Build.label(
         "", font: Theme.Font.caption, color: .tertiaryLabelColor, alignment: .right)
     private let pin = NSImageView()
-    /// Unread activity: a dot, not a count.
+    /// Unread messages: a pill holding the count.
     private let badge = BackgroundView()
+    private let count = Build.label(
+        "", font: .monospacedDigitSystemFont(ofSize: 10.5, weight: .semibold), color: .white,
+        alignment: .center)
 
     /// The row's ⌘-number, shown in the stamp's place while ⌘ is held.
     var shortcutNumber: Int? {
@@ -248,10 +251,11 @@ final class SidebarChatCell: NSTableCellView {
         pin.translatesAutoresizingMaskIntoConstraints = false
         pin.isHidden = true
 
-        badge.cornerRadius = 4
+        badge.cornerRadius = 8
         badge.isHidden = true
+        badge.addSubview(count)
 
-        for tight in [stamp, pin, badge] as [NSView] {
+        for tight in [stamp, pin, badge, count] as [NSView] {
             tight.setContentCompressionResistancePriority(.required, for: .horizontal)
             tight.setContentHuggingPriority(.required, for: .horizontal)
         }
@@ -278,10 +282,14 @@ final class SidebarChatCell: NSTableCellView {
             preview.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 2),
 
             badge.trailingAnchor.constraint(
-                equalTo: trailingAnchor, constant: -SidebarMetric.trailingInset - 2),
+                equalTo: trailingAnchor, constant: -SidebarMetric.trailingInset),
             badge.centerYAnchor.constraint(equalTo: preview.centerYAnchor),
-            badge.heightAnchor.constraint(equalToConstant: 8),
-            badge.widthAnchor.constraint(equalToConstant: 8),
+            badge.heightAnchor.constraint(equalToConstant: 16),
+            badge.widthAnchor.constraint(greaterThanOrEqualToConstant: 16),
+
+            count.leadingAnchor.constraint(equalTo: badge.leadingAnchor, constant: 2.5),
+            count.trailingAnchor.constraint(equalTo: badge.trailingAnchor, constant: -2.5),
+            count.centerYAnchor.constraint(equalTo: badge.centerYAnchor),
         ])
 
         textField = title
@@ -304,11 +312,13 @@ final class SidebarChatCell: NSTableCellView {
 
         let unread = chat.unreadCount
         badge.isHidden = unread == 0
-        badge.setAccessibilityLabel(unread > 0 ? "Unread activity" : nil)
+        count.stringValue = unread > 999 ? "999+" : String(unread)
+        let unreadLabel = unread > 0 ? "\(unread) unread" : nil
+        badge.setAccessibilityLabel(unreadLabel)
         previewBeforeBadge.isActive = unread > 0
         previewBeforeEdge.isActive = unread == 0
         setAccessibilityLabel(
-            [title.stringValue, unread > 0 ? "Unread activity" : nil, avatars.isWorking ? "Working" : nil]
+            [title.stringValue, unreadLabel, avatars.isWorking ? "Working" : nil]
                 .compactMap { $0 }.joined(separator: ", "))
         applyBackgroundStyle()
     }
@@ -326,6 +336,6 @@ final class SidebarChatCell: NSTableCellView {
         preview.textColor = emphasized ? NSColor.white.withAlphaComponent(0.75) : .secondaryLabelColor
         stamp.textColor = emphasized ? NSColor.white.withAlphaComponent(0.65) : .tertiaryLabelColor
         pin.contentTintColor = emphasized ? NSColor.white.withAlphaComponent(0.7) : .tertiaryLabelColor
-        badge.fillColor = emphasized ? NSColor.white.withAlphaComponent(0.9) : .controlAccentColor
+        badge.fillColor = emphasized ? NSColor.white.withAlphaComponent(0.25) : .tertiaryLabelColor
     }
 }
