@@ -9,8 +9,8 @@ final class PluginsMarketplaceViewController: SheetViewController {
     private let bot: Bot?
 
     private let search = NSSearchField()
-    private let list = SectionView(title: "Popular plugins")
-    private let custom = SectionView(title: "Add MCP Server")
+    private let list = SectionView(title: L("Popular plugins"))
+    private let custom = SectionView(title: L("Add MCP Server"))
     private let nameField = NSTextField()
     private let jsonView = NSTextView()
     private let addButton = NSButton()
@@ -24,8 +24,9 @@ final class PluginsMarketplaceViewController: SheetViewController {
         self.runner = runner
         self.bot = bot
         super.init(
-            title: "Plugins",
-            subtitle: "Installed on \(runner.name), for \(bot.map { "\($0.name) and every other bot" } ?? "every bot") there.",
+            title: L("Plugins"),
+            subtitle: bot.map { L("Installed on %@, for %@ and every other bot there.", runner.name, $0.name) }
+                ?? L("Installed on %@, for every bot there.", runner.name),
             width: 560
         )
     }
@@ -35,13 +36,13 @@ final class PluginsMarketplaceViewController: SheetViewController {
 
     override func loadView() {
         super.loadView()
-        search.placeholderString = "Search plugins"
+        search.placeholderString = L("Search plugins")
         search.controlSize = .regular
         search.target = self
         search.action = #selector(searchChanged)
         search.translatesAutoresizingMaskIntoConstraints = false
 
-        nameField.placeholderString = "Name, such as My Server"
+        nameField.placeholderString = L("Name, such as My Server")
         nameField.controlSize = .small
         nameField.translatesAutoresizingMaskIntoConstraints = false
         jsonView.isRichText = false
@@ -60,7 +61,7 @@ final class PluginsMarketplaceViewController: SheetViewController {
         jsonScroll.hasVerticalScroller = true
         jsonScroll.borderType = .bezelBorder
         jsonScroll.translatesAutoresizingMaskIntoConstraints = false
-        addButton.title = "Add to \(runner.name)"
+        addButton.title = L("Add to %@", runner.name)
         addButton.bezelStyle = .rounded
         addButton.controlSize = .small
         addButton.target = self
@@ -69,7 +70,7 @@ final class PluginsMarketplaceViewController: SheetViewController {
         custom.setRows([customStack])
         custom.isHidden = true
 
-        customToggle.title = "Add MCP Server…"
+        customToggle.title = L("Add MCP Server…")
         customToggle.bezelStyle = .rounded
         customToggle.controlSize = .small
         customToggle.target = self
@@ -90,8 +91,8 @@ final class PluginsMarketplaceViewController: SheetViewController {
             jsonScroll.widthAnchor.constraint(equalTo: customStack.widthAnchor),
             jsonScroll.heightAnchor.constraint(equalToConstant: 110),
         ])
-        setButtons(confirm: "Done", cancel: nil)
-        list.setRows([KeyValueRow(key: "Loading the marketplace…", value: "", tint: .secondaryLabelColor)])
+        setButtons(confirm: L("Done"), cancel: nil)
+        list.setRows([KeyValueRow(key: L("Loading the marketplace…"), value: "", tint: .secondaryLabelColor)])
         load()
     }
 
@@ -110,7 +111,7 @@ final class PluginsMarketplaceViewController: SheetViewController {
                 self.plugins = try await self.store.marketplace(query: query)
                 self.render()
             } catch {
-                self.list.setRows([KeyValueRow(key: "The marketplace isn't available right now.", value: "", tint: .secondaryLabelColor)])
+                self.list.setRows([KeyValueRow(key: L("The marketplace isn't available right now."), value: "", tint: .secondaryLabelColor)])
                 self.fitSheetToContent()
             }
         }
@@ -123,19 +124,19 @@ final class PluginsMarketplaceViewController: SheetViewController {
     private func render() {
         let installed = store.device(runner.id)?.plugins ?? []
         if plugins.isEmpty {
-            list.setRows([KeyValueRow(key: search.stringValue.isEmpty ? "Nothing in the marketplace yet." : "No plugin matches.", value: "", tint: .secondaryLabelColor)])
+            list.setRows([KeyValueRow(key: search.stringValue.isEmpty ? L("Nothing in the marketplace yet.") : L("No plugin matches."), value: "", tint: .secondaryLabelColor)])
         } else {
             list.setRows(plugins.map { plugin in
                 let here = installed.first { $0.id == plugin.id }
                 let row = StatusRow()
-                let extras = [plugin.signsIn ? "Signs in" : nil, plugin.installedOn.isEmpty ? nil : "On \(plugin.installedOn.compactMap { self.store.device($0)?.name }.joined(separator: ", "))"].compactMap { $0 }
+                let extras = [plugin.signsIn ? L("Signs in") : nil, plugin.installedOn.isEmpty ? nil : L("On %@", plugin.installedOn.compactMap { self.store.device($0)?.name }.joined(separator: ", "))].compactMap { $0 }
                 row.configure(
                     symbol: plugin.symbolName,
                     title: plugin.name,
                     subtitle: ([plugin.description] + extras).joined(separator: " · "),
                     state: here?.detail,
                     stateColor: here?.stateColor ?? .secondaryLabelColor,
-                    actionTitle: here == nil ? (busy.contains(plugin.id) ? "Installing…" : "Install") : nil
+                    actionTitle: here == nil ? (busy.contains(plugin.id) ? L("Installing…") : L("Install")) : nil
                 )
                 row.onAction = { [weak self] in self?.install(plugin) }
                 return row
@@ -155,25 +156,25 @@ final class PluginsMarketplaceViewController: SheetViewController {
                 let status = try await self.store.installPlugin(plugin.id, on: self.runner.id)
                 self.status.stringValue = self.nextStep(for: status)
             } catch {
-                self.status.stringValue = "Couldn't install \(plugin.name): \(error.localizedDescription)"
+                self.status.stringValue = L("Couldn't install %@: %@", plugin.name, error.localizedDescription)
             }
         }
     }
 
     @objc private func toggleCustom() {
         custom.isHidden.toggle()
-        customToggle.title = custom.isHidden ? "Add MCP Server…" : "Hide"
+        customToggle.title = custom.isHidden ? L("Add MCP Server…") : L("Hide")
         fitSheetToContent()
     }
 
     @objc private func addCustom() {
         let name = nameField.stringValue.trimmingCharacters(in: .whitespaces)
         guard !name.isEmpty else {
-            status.stringValue = "Give the server a name."
+            status.stringValue = L("Give the server a name.")
             return
         }
         guard let data = jsonView.string.data(using: .utf8), let json = try? JSONSerialization.jsonObject(with: data) else {
-            status.stringValue = "That is not valid JSON."
+            status.stringValue = L("That is not valid JSON.")
             return
         }
         addButton.isEnabled = false
@@ -182,12 +183,12 @@ final class PluginsMarketplaceViewController: SheetViewController {
             defer { self.addButton.isEnabled = true }
             do {
                 let installed = try await self.store.installMCPServer(named: name, json: json, on: self.runner.id)
-                self.status.stringValue = "\(installed.name) added to \(self.runner.name). \(self.nextStep(for: installed))"
+                self.status.stringValue = L("%@ added to %@.", installed.name, self.runner.name) + " " + self.nextStep(for: installed)
                 self.custom.isHidden = true
-                self.customToggle.title = "Add MCP Server…"
+                self.customToggle.title = L("Add MCP Server…")
                 self.render()
             } catch {
-                self.status.stringValue = "Couldn't add it: \(error.localizedDescription)"
+                self.status.stringValue = L("Couldn't add it: %@", error.localizedDescription)
                 self.fitSheetToContent()
             }
         }
@@ -195,9 +196,9 @@ final class PluginsMarketplaceViewController: SheetViewController {
 
     private func nextStep(for plugin: InstalledPlugin) -> String {
         switch plugin.state {
-        case .ready: "\(plugin.name) is ready for every bot on \(runner.name)."
-        case .needsAuth: "\(plugin.name) needs a sign-in: open it and click Sign in."
-        case .needsSetup: "\(plugin.name) needs setup: \(plugin.detail)."
+        case .ready: L("%@ is ready for every bot on %@.", plugin.name, runner.name)
+        case .needsAuth: L("%@ needs a sign-in: open it and click Sign in.", plugin.name)
+        case .needsSetup: L("%@ needs setup: %@.", plugin.name, plugin.detail)
         case .connecting, .error, .unknown: "\(plugin.name): \(plugin.detail)"
         }
     }

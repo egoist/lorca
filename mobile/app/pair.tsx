@@ -9,6 +9,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { engine } from "../src/core/engine";
 import { hostFacts } from "../src/core/host";
 import { parsePairingString } from "../src/core/pairing";
+import { t } from "../src/i18n";
 import { Symbol } from "../src/ui/Symbol";
 import { Font, usePalette } from "../src/ui/theme";
 
@@ -48,11 +49,11 @@ export default function PairScreen() {
     try {
       parsePairingString(text);
     } catch (error) {
-      Alert.alert("Not a pairing code", error instanceof Error ? error.message : String(error));
+      Alert.alert(t("Not a pairing code"), error instanceof Error ? error.message : String(error));
       return;
     }
     if (lastFailed.current === text.trim()) {
-      Alert.alert("Code already used", "Each code pairs one Device. Open Pair a Device on your Mac for a fresh one.");
+      Alert.alert(t("Code already used"), t("Each code pairs one Device. Open Pair a Device on your Mac for a fresh one."));
       return;
     }
     inFlight.current = true;
@@ -67,7 +68,7 @@ export default function PairScreen() {
       if (cancel.current?.signal.aborted) return;
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       lastFailed.current = text.trim();
-      Alert.alert("Pairing failed", error instanceof Error ? error.message : String(error));
+      Alert.alert(t("Pairing failed"), error instanceof Error ? error.message : String(error));
     } finally {
       inFlight.current = false;
     }
@@ -77,7 +78,7 @@ export default function PairScreen() {
     if (!permission?.granted) {
       const result = await requestPermission();
       if (!result.granted) {
-        Alert.alert("Camera access needed", "Allow the camera to scan the pairing code, or paste the code instead.");
+        Alert.alert(t("Camera access needed"), t("Allow the camera to scan the pairing code, or paste the code instead."));
         return;
       }
     }
@@ -91,7 +92,7 @@ export default function PairScreen() {
       setCode(text);
       void pair(text);
     } else {
-      Alert.alert("Nothing to paste", "Copy the pairing code from Lorca on your Mac first (Devices › Pair a Device).");
+      Alert.alert(t("Nothing to paste"), t("Copy the pairing code from Lorca on your Mac first (Devices › Pair a Device)."));
     }
   }
 
@@ -107,36 +108,36 @@ export default function PairScreen() {
               </View>
             </LinearGradient>
           </View>
-          <Text style={[styles.title, { color: p.label }]}>Pair with your Mac</Text>
+          <Text style={[styles.title, { color: p.label }]}>{t("Pair with your Mac")}</Text>
           <Text style={[styles.subtitle, { color: p.secondaryLabel }]}>
-            Your bots run on your own machines. This phone joins them with a code from Lorca on your Mac: open Devices, choose Pair a Device, and scan or copy the code.
+            {t("Your bots run on your own machines. This phone joins them with a code from Lorca on your Mac: open Devices, choose Pair a Device, and scan or copy the code.")}
           </Text>
 
           <View style={[styles.card, { backgroundColor: p.cell }]}>
-            <Text style={[styles.label, { color: p.secondaryLabel }]}>THIS PHONE</Text>
+            <Text style={[styles.label, { color: p.secondaryLabel }]}>{t("THIS PHONE")}</Text>
             <TextInput value={name} onChangeText={setName} placeholder="iPhone" placeholderTextColor={p.tertiaryLabel} style={[styles.input, { color: p.label }]} autoCapitalize="words" editable={!busy} />
           </View>
 
           {busy ? (
             <View style={[styles.card, styles.progress, { backgroundColor: p.cell }]}>
               <ActivityIndicator />
-              <Text style={{ flex: 1, color: p.label, fontSize: Font.body }}>{phase === "posting" ? "Sending the request…" : "Waiting for your Mac to accept…"}</Text>
+              <Text style={{ flex: 1, color: p.label, fontSize: Font.body }}>{phase === "posting" ? t("Sending the request…") : t("Waiting for your Mac to accept…")}</Text>
               <Pressable onPress={() => cancel.current?.abort()} hitSlop={10}>
-                <Text style={{ color: p.tint, fontSize: Font.body }}>Cancel</Text>
+                <Text style={{ color: p.tint, fontSize: Font.body }}>{t("Cancel")}</Text>
               </Pressable>
             </View>
           ) : (
             <>
               <Pressable onPress={scan} style={({ pressed }) => [styles.primary, { backgroundColor: p.tint, opacity: pressed ? 0.85 : 1 }]}>
                 <Symbol name="qrcode.viewfinder" size={20} color="#FFFFFF" weight="semibold" />
-                <Text style={styles.primaryText}>Scan Code</Text>
+                <Text style={styles.primaryText}>{t("Scan Code")}</Text>
               </Pressable>
               <Pressable onPress={paste} style={({ pressed }) => [styles.secondary, { backgroundColor: p.fill, opacity: pressed ? 0.7 : 1 }]}>
                 <Symbol name="doc.on.clipboard" size={18} color={p.tint} />
-                <Text style={[styles.secondaryText, { color: p.tint }]}>Paste Code</Text>
+                <Text style={[styles.secondaryText, { color: p.tint }]}>{t("Paste Code")}</Text>
               </Pressable>
               <View style={[styles.card, { backgroundColor: p.cell, marginTop: 8 }]}>
-                <Text style={[styles.label, { color: p.secondaryLabel }]}>OR TYPE IT</Text>
+                <Text style={[styles.label, { color: p.secondaryLabel }]}>{t("OR TYPE IT")}</Text>
                 <TextInput
                   value={code}
                   onChangeText={setCode}
@@ -149,7 +150,7 @@ export default function PairScreen() {
                   onSubmitEditing={() => pair(code)}
                 />
                 <Pressable onPress={() => pair(code)} disabled={!code.trim()} hitSlop={8} style={{ alignSelf: "flex-end", marginTop: 6 }}>
-                  <Text style={{ color: code.trim() ? p.tint : p.tertiaryLabel, fontSize: Font.body, fontWeight: "600" }}>Pair</Text>
+                  <Text style={{ color: code.trim() ? p.tint : p.tertiaryLabel, fontSize: Font.body, fontWeight: "600" }}>{t("Pair")}</Text>
                 </Pressable>
               </View>
             </>
@@ -173,10 +174,10 @@ export default function PairScreen() {
             }}
           />
           <View style={[styles.scanOverlay, { paddingTop: insets.top + 12 }]}>
-            <Pressable onPress={() => setScanning(false)} style={styles.close} hitSlop={10} accessibilityLabel="Close">
+            <Pressable onPress={() => setScanning(false)} style={styles.close} hitSlop={10} accessibilityLabel={t("Close")}>
               <Symbol name="xmark" size={16} color="#FFFFFF" weight="bold" />
             </Pressable>
-            <Text style={styles.scanHint}>Point at the pairing code on your Mac</Text>
+            <Text style={styles.scanHint}>{t("Point at the pairing code on your Mac")}</Text>
           </View>
           <View pointerEvents="none" style={styles.reticleWrap}>
             <View style={styles.reticle} />

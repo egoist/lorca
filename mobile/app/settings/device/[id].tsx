@@ -6,6 +6,7 @@ import { Alert, ScrollView, StyleSheet, Text, View } from "react-native";
 import { engine } from "../../../src/core/engine";
 import { isRunner, providerLabel, type Device, type PluginStatus } from "../../../src/core/model";
 import { deviceIsOnline, useStore } from "../../../src/core/store";
+import { t } from "../../../src/i18n";
 import { BotAvatar } from "../../../src/ui/Avatar";
 import { deviceSymbol } from "../../../src/ui/devices";
 import { Row, Section } from "../../../src/ui/forms";
@@ -15,13 +16,20 @@ import { usePalette } from "../../../src/ui/theme";
 
 const OS_NAMES: Record<string, string> = { macos: "macOS", linux: "Linux", windows: "Windows", ios: "iOS", ipados: "iPadOS", android: "Android" };
 
-const PLUGIN_STATES: Record<PluginStatus["state"], string> = {
-  ready: "Ready",
-  needs_setup: "Needs setup",
-  needs_auth: "Needs sign-in",
-  connecting: "Connecting…",
-  error: "Error",
-};
+function pluginState(state: PluginStatus["state"]): string {
+  switch (state) {
+    case "ready":
+      return t("Ready");
+    case "needs_setup":
+      return t("Needs setup");
+    case "needs_auth":
+      return t("Needs sign-in");
+    case "connecting":
+      return t("Connecting…");
+    case "error":
+      return t("Error");
+  }
+}
 
 export default function DeviceScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -52,18 +60,18 @@ export default function DeviceScreen() {
 
   function confirmUnpair(target: Device) {
     const detail = isRunner(target)
-      ? "It loses its keys and synced chats the next time it connects, and bots assigned to it stop running until you assign them to another Runner. You can pair it again any time."
-      : "It loses its keys and synced chats the next time it connects. You can pair it again any time.";
-    Alert.alert(`Unpair ${target.name}?`, detail, [
-      { text: "Cancel", style: "cancel" },
+      ? t("It loses its keys and synced chats the next time it connects, and bots assigned to it stop running until you assign them to another Runner. You can pair it again any time.")
+      : t("It loses its keys and synced chats the next time it connects. You can pair it again any time.");
+    Alert.alert(t("Unpair {name}?", { name: target.name }), detail, [
+      { text: t("Cancel"), style: "cancel" },
       {
-        text: "Unpair",
+        text: t("Unpair"),
         style: "destructive",
         onPress: () => {
           engine
             .unpairDevice(target.id)
             .then(() => router.back())
-            .catch((error: unknown) => Alert.alert(`Couldn’t unpair ${target.name}`, error instanceof Error ? error.message : String(error)));
+            .catch((error: unknown) => Alert.alert(t("Couldn’t unpair {name}", { name: target.name }), error instanceof Error ? error.message : String(error)));
         },
       },
     ]);
@@ -79,37 +87,37 @@ export default function DeviceScreen() {
           <Text style={[styles.model, { color: p.secondaryLabel }]}>{[device.model, device.os_version].filter(Boolean).join(" · ")}</Text>
           <View style={styles.status}>
             <View style={[styles.dot, { backgroundColor: online ? p.green : p.tertiaryLabel }]} />
-            <Text style={[styles.statusText, { color: online ? p.green : p.secondaryLabel }]}>{online ? "Online" : lastSeen(seen)}</Text>
+            <Text style={[styles.statusText, { color: online ? p.green : p.secondaryLabel }]}>{online ? t("Online") : lastSeen(seen)}</Text>
           </View>
         </View>
 
         {runner && (
-          <Section title="Bots assigned here">
-            {bots.length === 0 ? <Row title="No bots assigned" /> : bots.map((bot) => <Row key={bot.id} title={bot.name} subtitle={[bot.label, providerLabel(bot.provider)].filter(Boolean).join(" · ")} leading={<BotAvatar bot={bot} size={32} />} chevron onPress={() => openChat(bot.id)} />)}
+          <Section title={t("Bots assigned here")}>
+            {bots.length === 0 ? <Row title={t("No bots assigned")} /> : bots.map((bot) => <Row key={bot.id} title={bot.name} subtitle={[bot.label, providerLabel(bot.provider)].filter(Boolean).join(" · ")} leading={<BotAvatar bot={bot} size={32} />} chevron onPress={() => openChat(bot.id)} />)}
           </Section>
         )}
 
         {runner && (
-          <Section title="Plugins">
+          <Section title={t("Plugins")}>
             {(device.plugins ?? []).length === 0 ? (
-              <Row title="No plugins installed" />
+              <Row title={t("No plugins installed")} />
             ) : (
-              (device.plugins ?? []).map((plugin) => <Row key={plugin.id} title={plugin.name} subtitle={plugin.state === "error" ? plugin.detail || plugin.description : plugin.description} detail={PLUGIN_STATES[plugin.state]} icon={plugin.icon ?? "puzzlepiece.extension"} />)
+              (device.plugins ?? []).map((plugin) => <Row key={plugin.id} title={plugin.name} subtitle={plugin.state === "error" ? plugin.detail || plugin.description : plugin.description} detail={pluginState(plugin.state)} icon={plugin.icon ?? "puzzlepiece.extension"} />)
             )}
           </Section>
         )}
 
-        <Section title="Machine" footer={runner ? undefined : `${osName} Devices hold your keys and chats but never run a bot. Assign bots to a Runner: a Device running macOS, Linux, or Windows.`}>
-          <Row title="Machine key" detail={device.machine_key} />
-          <Row title="OS" detail={device.os_version || osName} />
-          <Row title="Role" detail={runner ? "Runner" : "Device"} />
-          <Row title="Last seen" detail={online ? "Active now" : lastSeen(seen)} />
-          <Row title="Relay" detail={relay ? (relayConnected ? relay : `${relay} · offline`) : "Not configured"} />
+        <Section title={t("Machine")} footer={runner ? undefined : t("{os} Devices hold your keys and chats but never run a bot. Assign bots to a Runner: a Device running macOS, Linux, or Windows.", { os: osName })}>
+          <Row title={t("Machine key")} detail={device.machine_key} />
+          <Row title={t("OS")} detail={device.os_version || osName} />
+          <Row title={t("Role")} detail={runner ? t("Runner") : t("Device")} />
+          <Row title={t("Last seen")} detail={online ? t("Active now") : lastSeen(seen)} />
+          <Row title={t("Relay")} detail={relay ? (relayConnected ? relay : t("{relay} · offline", { relay })) : t("Not configured")} />
         </Section>
 
         {!isThis && (
           <Section>
-            <Row title="Unpair This Device" icon="xmark" destructive onPress={() => confirmUnpair(device)} />
+            <Row title={t("Unpair This Device")} icon="xmark" destructive onPress={() => confirmUnpair(device)} />
           </Section>
         )}
       </ScrollView>

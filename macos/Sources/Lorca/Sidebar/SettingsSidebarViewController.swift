@@ -16,9 +16,9 @@ final class SettingsSidebarViewController: NSViewController {
     /// the sidebar's chrome floats, like the header.
     private(set) lazy var footer: NSView = {
         let back = HoverButton(
-            symbol: "chevron.left", pointSize: 12, title: "Back", tooltip: "Back to Chats (esc)", target: self,
+            symbol: "chevron.left", pointSize: 12, title: L("Back"), tooltip: L("Back to Chats (esc)"), target: self,
             action: #selector(back))
-        back.setAccessibilityLabel("Back to Chats")
+        back.setAccessibilityLabel(L("Back to Chats"))
         back.translatesAutoresizingMaskIntoConstraints = false
         let bar = NSView()
         bar.translatesAutoresizingMaskIntoConstraints = false
@@ -184,7 +184,7 @@ final class SettingsSidebarViewController: NSViewController {
             fresh += result.entries.map { SidebarNode(.setting($0)) }
         }
 
-        noResults.stringValue = "No Results for \u{201C}\(searchQuery)\u{201D}"
+        noResults.stringValue = L("No Results for \u{201C}%@\u{201D}", searchQuery)
         noResults.isHidden = !fresh.isEmpty
 
         if shape(of: fresh) == shape(of: nodes) {

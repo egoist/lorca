@@ -4,6 +4,7 @@
 import { useMemo } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import type { Bot, Chat } from "../core/model";
+import { t } from "../i18n";
 import { AvatarCluster } from "./Avatar";
 import { usePalette } from "./theme";
 import { buildRows, DayRow, MarkerRow, MessageRow, NoticeRow } from "./transcript";
@@ -24,7 +25,7 @@ export function ChatPeek({ chat, bots, title }: { chat: Chat; bots: Map<string, 
       <View style={styles.body}>
         <View style={styles.tail}>
           {rows.length === 0 ? (
-            <Text style={[styles.empty, { color: p.tertiaryLabel }]}>No messages yet</Text>
+            <Text style={[styles.empty, { color: p.tertiaryLabel }]}>{t("No messages yet")}</Text>
           ) : (
             rows.map((row) => {
               switch (row.type) {

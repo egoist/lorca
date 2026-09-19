@@ -6,6 +6,8 @@ import { Directory, File, Paths } from "expo-file-system";
 export interface Prefs {
   /// Speech recognizer language tag; unset follows the phone's preferred languages.
   dictation_lang?: string;
+  /// The app's own language ("en", "zh"); unset follows the phone's.
+  app_lang?: string;
 }
 
 function root(): Directory {

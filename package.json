@@ -12,6 +12,7 @@
     "cli": "cargo run -q -p lorca -- serve",
     "reset": "bun run scripts/reset.ts",
     "relay": "cargo run -q -p lorca-relay -- --bind 0.0.0.0:8787 --db target/lorca-relay.db",
+    "l10n": "bun run scripts/l10n.ts",
     "web": "bun run --cwd web dev",
     "web:build": "bun run --cwd web build",
     "web:deploy": "bun run --cwd web deploy",

@@ -6,6 +6,7 @@ import { Alert, Platform, StyleSheet, Text, View } from "react-native";
 import { chatTitle, engine } from "../src/core/engine";
 import type { Chat } from "../src/core/model";
 import { markRead, useBotMap, useStore, useWorkingBotIds } from "../src/core/store";
+import { t } from "../src/i18n";
 import { ChatPeek } from "../src/ui/ChatPeek";
 import { ChatRow } from "../src/ui/ChatRow";
 import { lastActivity } from "../src/ui/format";
@@ -35,25 +36,25 @@ export default function ChatsScreen() {
   }
 
   function confirmDelete(chat: Chat) {
-    Alert.alert(`Delete “${chatTitle(chat)}”?`, "The chat and its messages are removed from every paired Device.", [
-      { text: "Cancel", style: "cancel" },
-      { text: "Delete", style: "destructive", onPress: () => engine.deleteChat(chat.id) },
+    Alert.alert(t("Delete “{name}”?", { name: chatTitle(chat) }), t("The chat and its messages are removed from every paired Device."), [
+      { text: t("Cancel"), style: "cancel" },
+      { text: t("Delete"), style: "destructive", onPress: () => engine.deleteChat(chat.id) },
     ]);
   }
 
   return (
     <>
-      <Stack.SearchBar placeholder="Search" onChangeText={(e) => setQuery(e.nativeEvent.text)} onCancelButtonPress={() => setQuery("")} hideWhenScrolling autoCapitalize="none" />
+      <Stack.SearchBar placeholder={t("Search")} onChangeText={(e) => setQuery(e.nativeEvent.text)} onCancelButtonPress={() => setQuery("")} hideWhenScrolling autoCapitalize="none" />
       <Stack.Toolbar placement="left">
-        <Stack.Toolbar.Button icon="gearshape" accessibilityLabel="Settings" onPress={() => router.push("/settings")} />
+        <Stack.Toolbar.Button icon="gearshape" accessibilityLabel={t("Settings")} onPress={() => router.push("/settings")} />
       </Stack.Toolbar>
       <Stack.Toolbar placement="right">
-        <Stack.Toolbar.Menu icon="square.and.pencil" accessibilityLabel="New">
+        <Stack.Toolbar.Menu icon="square.and.pencil" accessibilityLabel={t("New")}>
           <Stack.Toolbar.MenuAction icon="person.2.fill" onPress={() => router.push("/new-group")}>
-            New Group Chat
+            {t("New Group Chat")}
           </Stack.Toolbar.MenuAction>
           <Stack.Toolbar.MenuAction icon="person.badge.plus" onPress={() => router.push("/new-bot")}>
-            New Bot
+            {t("New Bot")}
           </Stack.Toolbar.MenuAction>
         </Stack.Toolbar.Menu>
       </Stack.Toolbar>
@@ -67,15 +68,15 @@ export default function ChatsScreen() {
           relayConnected ? null : (
             <View style={[styles.banner, { backgroundColor: p.fill }]}>
               <Symbol name="antenna.radiowaves.left.and.right" size={14} color={p.secondaryLabel} />
-              <Text style={[styles.bannerText, { color: p.secondaryLabel }]}>Connecting to the relay…</Text>
+              <Text style={[styles.bannerText, { color: p.secondaryLabel }]}>{t("Connecting to the relay…")}</Text>
             </View>
           )
         }
         ListEmptyComponent={
           <View style={styles.empty}>
             <Symbol name="sparkles" size={36} color={p.tertiaryLabel} />
-            <Text style={[styles.emptyTitle, { color: p.label }]}>{query ? "No matches" : "No chats yet"}</Text>
-            <Text style={[styles.emptyText, { color: p.secondaryLabel }]}>{query ? "Try another name." : "Your bots and their chats sync from the relay once this phone hears from your Runner."}</Text>
+            <Text style={[styles.emptyTitle, { color: p.label }]}>{query ? t("No matches") : t("No chats yet")}</Text>
+            <Text style={[styles.emptyText, { color: p.secondaryLabel }]}>{query ? t("Try another name.") : t("Your bots and their chats sync from the relay once this phone hears from your Runner.")}</Text>
           </View>
         }
         renderItem={({ item: chat }) => {
@@ -90,15 +91,15 @@ export default function ChatsScreen() {
               </Link.Preview>
               <Link.Menu>
                 <Link.MenuAction icon={chat.is_pinned ? "pin.slash" : "pin"} onPress={() => engine.pinChat(chat.id, !chat.is_pinned)}>
-                  {chat.is_pinned ? "Unpin" : "Pin"}
+                  {chat.is_pinned ? t("Unpin") : t("Pin")}
                 </Link.MenuAction>
                 {chat.unread_count > 0 ? (
                   <Link.MenuAction icon="checkmark.circle" onPress={() => markRead(chat.id)}>
-                    Mark as Read
+                    {t("Mark as Read")}
                   </Link.MenuAction>
                 ) : null}
                 <Link.MenuAction icon="trash" destructive onPress={() => confirmDelete(chat)}>
-                  Delete
+                  {t("Delete")}
                 </Link.MenuAction>
               </Link.Menu>
             </Link>

@@ -79,7 +79,7 @@ enum Wire {
 
         func toModel() -> Lorca.Routine {
             Lorca.Routine(
-                id: id, botID: botId, name: name, prompt: prompt, schedule: schedule, scheduleText: scheduleText ?? schedule,
+                id: id, botID: botId, name: name, prompt: prompt, schedule: schedule, scheduleText: Format.schedule(scheduleText ?? schedule),
                 isEnabled: isEnabled, pausedReason: pausedReason, lastRunAt: lastRunAt.map { Date(timeIntervalSince1970: $0) },
                 lastOutcome: lastOutcome, nextRunAt: nextRunAt.map { Date(timeIntervalSince1970: $0) }, isRunning: isRunning ?? false,
                 createdAt: Date(timeIntervalSince1970: createdAt))
@@ -503,7 +503,7 @@ extension Wire.Message {
         switch self.state.kind {
         case "thinking": state = .thinking
         case "streaming": state = .streaming
-        case "failed": state = .failed(self.state.error ?? "Failed")
+        case "failed": state = .failed(self.state.error ?? L("Failed"))
         default: state = .complete
         }
 

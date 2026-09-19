@@ -5,16 +5,16 @@ final class InspectorViewController: NSViewController {
 
     private let scrollView = NSScrollView()
     private let column = Build.stack([], spacing: 20)
-    private let participants = SectionView(title: "Bots in this chat")
-    private let profile = SectionView(title: "Profile")
-    private let nameRow = EditableRow(key: "Name", placeholder: "Name")
-    private let labelRow = EditableRow(key: "Label", placeholder: "What it is for")
-    private let descriptionRow = EditableRow(key: "Description", placeholder: "A sentence or two about what it does", multiline: true)
-    private let runtime = SectionView(title: "Runs with")
-    private let memory = SectionView(title: "Memory")
-    private let routines = SectionView(title: "Routines")
-    private let plugins = SectionView(title: "Plugins")
-    private let routing = SectionView(title: "Where turns run")
+    private let participants = SectionView(title: L("Bots in this chat"))
+    private let profile = SectionView(title: L("Profile"))
+    private let nameRow = EditableRow(key: L("Name"), placeholder: L("Name"))
+    private let labelRow = EditableRow(key: L("Label"), placeholder: L("What it is for"))
+    private let descriptionRow = EditableRow(key: L("Description"), placeholder: L("A sentence or two about what it does"), multiline: true)
+    private let runtime = SectionView(title: L("Runs with"))
+    private let memory = SectionView(title: L("Memory"))
+    private let routines = SectionView(title: L("Routines"))
+    private let plugins = SectionView(title: L("Plugins"))
+    private let routing = SectionView(title: L("Where turns run"))
     private let addButton = NSButton()
 
     private var selection: Selection?
@@ -40,7 +40,7 @@ final class InspectorViewController: NSViewController {
         column.alignment = .leading
         column.edgeInsets = NSEdgeInsets(top: 18, left: 16, bottom: 20, right: 16)
 
-        addButton.title = "Add Bot…"
+        addButton.title = L("Add Bot…")
         addButton.bezelStyle = .rounded
         addButton.controlSize = .regular
         addButton.target = self
@@ -156,9 +156,9 @@ final class InspectorViewController: NSViewController {
                 let row = BotRow()
                 row.configure(
                     bot: bot,
-                    detailText: "\(bot.provider.rawValue) · \(host?.name ?? "unassigned")",
+                    detailText: "\(bot.provider.rawValue) · \(host?.name ?? L("unassigned"))",
                     accessorySymbol: chat.canRemoveBot ? "minus.circle" : nil,
-                    tooltip: "Remove from chat"
+                    tooltip: L("Remove from chat")
                 )
                 row.onAccessory = { [weak self] in self?.onRemoveBot?(bot.id) }
                 // The avatar is the way to a bot's look: symbol, color, or an image.
@@ -201,7 +201,7 @@ final class InspectorViewController: NSViewController {
                     symbol: runner.symbolName,
                     title: runner.name,
                     subtitle: botNames,
-                    state: runner.status == .online ? "Online" : Format.lastSeen(runner.lastSeen),
+                    state: runner.status == .online ? L("Online") : Format.lastSeen(runner.lastSeen),
                     stateColor: runner.status == .online ? .systemGreen : .secondaryLabelColor
                 )
                 let click = NSClickGestureRecognizer(target: self, action: #selector(openDevice(_:)))
@@ -227,7 +227,7 @@ final class InspectorViewController: NSViewController {
     private func runtimeRows(for bot: Bot, in chat: Chat) -> [NSView] {
         let kinds = ProviderCredential.Kind.allCases
         let providerRow = PopUpRow(
-            key: "Provider",
+            key: L("Provider"),
             items: kinds.map(\.rawValue),
             selected: kinds.firstIndex(of: bot.provider) ?? 0)
         providerRow.onChange = { [weak self] index in
@@ -237,9 +237,9 @@ final class InspectorViewController: NSViewController {
         }
 
         let models = bot.provider.models
-        let modelItems = ["Default (\(models.first?.label ?? ""))"] + models.map(\.label)
+        let modelItems = [L("Default (%@)", models.first?.label ?? "")] + models.map(\.label)
         let selectedModel = bot.model.flatMap { id in models.firstIndex { $0.id == id } }.map { $0 + 1 } ?? 0
-        let modelRow = PopUpRow(key: "Model", items: modelItems, selected: selectedModel)
+        let modelRow = PopUpRow(key: L("Model"), items: modelItems, selected: selectedModel)
         modelRow.onChange = { [weak self] index in
             guard let self else { return }
             let model: String? = index == 0 ? nil : models[index - 1].id
@@ -248,9 +248,9 @@ final class InspectorViewController: NSViewController {
         }
 
         let levels = bot.provider.thinkingLevels
-        let thinkingItems = ["Default"] + levels.map(\.label)
+        let thinkingItems = [L("Default")] + levels.map(\.label)
         let selectedThinking = bot.thinking.flatMap { id in levels.firstIndex { $0.id == id } }.map { $0 + 1 } ?? 0
-        let thinkingRow = PopUpRow(key: "Thinking", items: thinkingItems, selected: selectedThinking)
+        let thinkingRow = PopUpRow(key: L("Thinking"), items: thinkingItems, selected: selectedThinking)
         thinkingRow.onChange = { [weak self] index in
             guard let self else { return }
             let thinking: String? = index == 0 ? nil : levels[index - 1].id
@@ -261,20 +261,20 @@ final class InspectorViewController: NSViewController {
         // What the turns here have used, and a way to shorten the context by hand.
         var usageRows: [NSView] = []
         if let usage = chat.usage {
-            let context = ActionRow(key: "Context", value: usage.contextSummary, tint: .labelColor, actionTitle: "Compact")
+            let context = ActionRow(key: L("Context"), value: usage.contextSummary, tint: .labelColor, actionTitle: L("Compact"))
             context.onAction = { [weak self] in self?.store.compactChat(chat.id) }
             usageRows.append(context)
-            usageRows.append(KeyValueRow(key: "Spent", value: usage.spendSummary))
+            usageRows.append(KeyValueRow(key: L("Spent"), value: usage.spendSummary))
         }
 
         let credential = store.credential(for: bot.provider)
         let connected = credential?.isConnected ?? false
         // Connected: the masked key and a Change link. Not connected: just the Connect link.
         let status = ActionRow(
-            key: "Credential",
-            value: connected ? (credential?.detail ?? "Connected") : "",
+            key: L("Credential"),
+            value: connected ? (credential?.detail ?? L("Connected")) : "",
             tint: connected ? .labelColor : .secondaryLabelColor,
-            actionTitle: connected ? "Change" : "Connect"
+            actionTitle: connected ? L("Change") : L("Connect")
         )
         status.onAction = { [weak self] in
             self?.presentAsSheet(ConnectProviderViewController(kind: bot.provider))
@@ -289,21 +289,21 @@ final class InspectorViewController: NSViewController {
     private func memoryRows(for bot: Bot) -> [NSView] {
         guard let memory = memoryByBot[bot.id] else {
             if let error = memoryErrors[bot.id] {
-                let row = ActionRow(key: "Notes", value: error, tint: .secondaryLabelColor, actionTitle: "Retry")
+                let row = ActionRow(key: L("Notes"), value: error, tint: .secondaryLabelColor, actionTitle: L("Retry"))
                 row.onAction = { [weak self] in self?.refreshMemory(of: bot.id) }
                 return [row]
             }
-            return [KeyValueRow(key: "Notes", value: memoryFetches.contains(bot.id) ? "Loading…" : "", tint: .secondaryLabelColor)]
+            return [KeyValueRow(key: L("Notes"), value: memoryFetches.contains(bot.id) ? L("Loading…") : "", tint: .secondaryLabelColor)]
         }
         let notes = ActionRow(
-            key: "Notes",
+            key: L("Notes"),
             value: memory.budgetSummary,
             tint: memory.truncated ? .systemOrange : .labelColor,
-            actionTitle: "Edit…"
+            actionTitle: L("Edit…")
         )
         notes.toolTip = memory.truncated
-            ? "Only the first \(memory.maxLines) lines or \(Format.kilobytes(memory.maxBytes)) open each turn; the rest is not read."
-            : "MEMORY.md opens at the start of every turn."
+            ? L("Only the first %d lines or %@ open each turn; the rest is not read.", memory.maxLines, Format.kilobytes(memory.maxBytes))
+            : L("MEMORY.md opens at the start of every turn.")
         notes.onAction = { [weak self] in
             guard let self else { return }
             let editor = MemoryViewController(bot: bot, memory: memory)
@@ -311,10 +311,10 @@ final class InspectorViewController: NSViewController {
             self.presentAsSheet(editor)
         }
         let folder = ActionRow(
-            key: "Folder",
-            value: memory.here ? memory.filesSummary : "\(memory.filesSummary) · on \(memory.runner)",
+            key: L("Folder"),
+            value: memory.here ? memory.filesSummary : L("%@ · on %@", memory.filesSummary, memory.runner),
             tint: .secondaryLabelColor,
-            actionTitle: memory.here ? "Show" : nil
+            actionTitle: memory.here ? L("Show") : nil
         )
         folder.toolTip = memory.path
         folder.onAction = {
@@ -329,7 +329,7 @@ final class InspectorViewController: NSViewController {
     private func routineRows(for bot: Bot) -> [NSView] {
         let mine = store.routines(for: bot.id)
         if mine.isEmpty {
-            return [NoteRow(text: "Routines are recurring tasks this bot runs on a schedule. Ask it in chat to set one up.")]
+            return [NoteRow(text: L("Routines are recurring tasks this bot runs on a schedule. Ask it in chat to set one up."))]
         }
         return mine.map { routine in
             let row = SwitchRow()
@@ -349,7 +349,7 @@ final class InspectorViewController: NSViewController {
     /// marketplace. A plugin that needs setup says so; clicking opens it.
     private func pluginRows(for bot: Bot) -> [NSView] {
         let runner = store.device(bot.runnerID)
-        let runnerName = runner?.name ?? "its Runner"
+        let runnerName = runner?.name ?? L("its Runner")
         pluginBotID = bot.id
         var rows: [NSView] = []
         for plugin in runner?.plugins ?? [] {
@@ -361,15 +361,15 @@ final class InspectorViewController: NSViewController {
                 state: plugin.detail,
                 stateColor: plugin.stateColor
             )
-            row.toolTip = "Open \(plugin.name)"
+            row.toolTip = L("Open %@", plugin.name)
             row.identifier = NSUserInterfaceItemIdentifier(plugin.id)
             row.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(openPlugin(_:))))
             rows.append(row)
         }
         if rows.isEmpty {
-            rows.append(NoteRow(text: "No plugins on \(runnerName) yet. Add one from the marketplace, or ask \(bot.name) to find one."))
+            rows.append(NoteRow(text: L("No plugins on %@ yet. Add one from the marketplace, or ask %@ to find one.", runnerName, bot.name)))
         }
-        let add = ActionRow(key: "Marketplace", value: "", tint: .secondaryLabelColor, actionTitle: "Add from Plugins…")
+        let add = ActionRow(key: L("Marketplace"), value: "", tint: .secondaryLabelColor, actionTitle: L("Add from Plugins…"))
         add.onAction = { [weak self] in
             guard let self, let runner else { return }
             self.presentAsSheet(PluginsMarketplaceViewController(runner: runner, bot: bot))

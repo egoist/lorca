@@ -45,6 +45,7 @@ import {
   useStore,
   useWorkingBots,
 } from "../../src/core/store";
+import { t } from "../../src/i18n";
 import { AvatarCluster } from "../../src/ui/Avatar";
 import { Composer, Surface } from "../../src/ui/Composer";
 import { Symbol } from "../../src/ui/Symbol";
@@ -485,19 +486,19 @@ export default function ChatScreen() {
     [chat, bots],
   );
   const isGroup = chat?.kind === "group";
-  const title = chat ? chatTitle(chat) : "Chat";
+  const title = chat ? chatTitle(chat) : t("Chat");
   // After the Mac app: "Message Chef", or the group's title with a hint that @ addresses one bot.
   const placeholder =
     !isGroup && members[0]
-      ? `Message ${members[0].name}`
+      ? t("Message {name}", { name: members[0].name })
       : members.length > 1
-        ? `Message ${title} — @ to address one bot`
-        : `Message ${title}`;
+        ? t("Message {title} — @ to address one bot", { title })
+        : t("Message {name}", { name: title });
 
   /// The whole message behind a "Messaged ◉ Name" marker, as a sheet.
   const openMarker = useCallback(
     (row: Extract<Row, { type: "marker" }>) => {
-      const title = `${row.text} ${row.bot?.name ?? "a teammate"}`;
+      const title = `${row.text} ${row.bot?.name ?? t("a teammate")}`;
       router.push({
         pathname: "/message/[id]",
         params: { id: row.key, chat: id, title },
@@ -542,9 +543,9 @@ export default function ChatScreen() {
   if (!chat) {
     return (
       <View style={styles.missing}>
-        <Stack.Screen options={{ title: "Chat" }} />
+        <Stack.Screen options={{ title: t("Chat") }} />
         <Text style={{ color: p.secondaryLabel }}>
-          This chat is no longer on the roster.
+          {t("This chat is no longer on the roster.")}
         </Text>
       </View>
     );
@@ -557,7 +558,7 @@ export default function ChatScreen() {
         <Pressable
           onPress={() => router.push(`/chat-info/${id}`)}
           style={styles.titleView}
-          accessibilityLabel={`${title}, info`}
+          accessibilityLabel={t("{title}, info", { title })}
         >
           <AvatarCluster bots={members} size={30} working={isWorking} />
           <Text
@@ -571,7 +572,7 @@ export default function ChatScreen() {
       <Stack.Toolbar placement="right">
         <Stack.Toolbar.Button
           icon="ellipsis"
-          accessibilityLabel="Chat info"
+          accessibilityLabel={t("Chat info")}
           onPress={() => router.push(`/chat-info/${id}`)}
         />
       </Stack.Toolbar>
@@ -646,7 +647,7 @@ export default function ChatScreen() {
                 onPress={jumpToEnd}
                 hitSlop={8}
                 accessibilityRole="button"
-                accessibilityLabel="Jump to bottom"
+                accessibilityLabel={t("Jump to bottom")}
               >
                 <Surface
                   style={styles.jumpDisc}
@@ -697,7 +698,7 @@ export default function ChatScreen() {
                 });
               sent.catch((error) => {
                 Alert.alert(
-                  "Could not send",
+                  t("Could not send"),
                   error instanceof Error ? error.message : String(error),
                 );
               });

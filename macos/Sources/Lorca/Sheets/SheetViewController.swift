@@ -56,7 +56,7 @@ class SheetViewController: NSViewController {
     }
 
     /// `cancel: nil` leaves only the confirm button, which then answers Escape as well.
-    func setButtons(confirm: String, cancel: String? = "Cancel") {
+    func setButtons(confirm: String, cancel: String? = L("Cancel")) {
         confirmButton = NSButton(title: confirm, target: self, action: #selector(confirmTapped))
         confirmButton.bezelStyle = .rounded
         confirmButton.keyEquivalent = "\r"

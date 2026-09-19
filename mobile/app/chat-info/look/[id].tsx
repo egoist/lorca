@@ -8,6 +8,7 @@ import { Stack, useLocalSearchParams } from "expo-router";
 import { Alert, Pressable, ScrollView, StyleSheet, View } from "react-native";
 import { engine, type PickedFile } from "../../../src/core/engine";
 import { useBotMap } from "../../../src/core/store";
+import { t } from "../../../src/i18n";
 import { AvatarDisc, useBotAvatarUri } from "../../../src/ui/Avatar";
 import { Row, Section } from "../../../src/ui/forms";
 import { BOT_SYMBOLS, Symbol } from "../../../src/ui/Symbol";
@@ -32,26 +33,26 @@ export default function BotLookScreen() {
       const square = await squareAvatar(asset);
       await engine.setBotAvatar(bot!.id, square);
     } catch (error) {
-      Alert.alert("Could not use that photo", error instanceof Error ? error.message : String(error));
+      Alert.alert(t("Could not use that photo"), error instanceof Error ? error.message : String(error));
     }
   }
 
   function removePhoto() {
-    void engine.setBotAvatar(bot!.id, null).catch((error) => Alert.alert("Could not remove the photo", error instanceof Error ? error.message : String(error)));
+    void engine.setBotAvatar(bot!.id, null).catch((error) => Alert.alert(t("Could not remove the photo"), error instanceof Error ? error.message : String(error)));
   }
 
   return (
     <>
-      <Stack.Screen options={{ title: "Look" }} />
+      <Stack.Screen options={{ title: t("Look") }} />
       <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={{ paddingBottom: 40 }}>
         <View style={styles.hero}>
           <AvatarDisc symbol={bot.symbol_name} accent={bot.accent} uri={uri} size={96} />
         </View>
-        <Section title="Photo" footer={bot.avatar ? "The photo shows in place of the symbol and color, on every paired Device." : "A photo shows in place of the symbol and color. It is shared encrypted, like an attachment."}>
-          <Row title={bot.avatar ? "Change Photo" : "Choose Photo"} icon="photo.on.rectangle" onPress={() => void choosePhoto()} />
-          {bot.avatar ? <Row title="Remove Photo" icon="xmark.circle.fill" destructive onPress={removePhoto} /> : null}
+        <Section title={t("Photo")} footer={bot.avatar ? t("The photo shows in place of the symbol and color, on every paired Device.") : t("A photo shows in place of the symbol and color. It is shared encrypted, like an attachment.")}>
+          <Row title={bot.avatar ? t("Change Photo") : t("Choose Photo")} icon="photo.on.rectangle" onPress={() => void choosePhoto()} />
+          {bot.avatar ? <Row title={t("Remove Photo")} icon="xmark.circle.fill" destructive onPress={removePhoto} /> : null}
         </Section>
-        <Section title="Symbol">
+        <Section title={t("Symbol")}>
           <View style={styles.grid}>
             {BOT_SYMBOLS.map((s) => (
               <Pressable key={s} onPress={() => void engine.setBotLook(bot.id, { symbol_name: s })} style={[styles.symbolCell, { backgroundColor: s === bot.symbol_name ? accentColors(bot.accent, p.dark)[1] : p.fill }]} accessibilityLabel={s}>
@@ -60,7 +61,7 @@ export default function BotLookScreen() {
             ))}
           </View>
         </Section>
-        <Section title="Color">
+        <Section title={t("Color")}>
           <View style={styles.grid}>
             {(Object.keys(ACCENTS) as (keyof typeof ACCENTS)[]).map((a) => (
               <Pressable key={a} onPress={() => void engine.setBotLook(bot.id, { accent: a })} style={styles.swatchCell} accessibilityLabel={a}>

@@ -36,8 +36,8 @@ final class NewBotViewController: SheetViewController {
     init(onCreate: @escaping (Bot.ID) -> Void) {
         self.onCreate = onCreate
         super.init(
-            title: "New Bot",
-            subtitle: "A bot runs on one Runner and uses that machine's credentials. Phones and tablets are not Runners.",
+            title: L("New Bot"),
+            subtitle: L("A bot runs on one Runner and uses that machine's credentials. Phones and tablets are not Runners."),
             width: 440
         )
     }
@@ -48,9 +48,9 @@ final class NewBotViewController: SheetViewController {
     override func loadView() {
         super.loadView()
 
-        nameField.placeholderString = "Name"
-        labelField.placeholderString = "What it is for"
-        descriptionField.placeholderString = "A sentence or two about what it does"
+        nameField.placeholderString = L("Name")
+        labelField.placeholderString = L("What it is for")
+        descriptionField.placeholderString = L("A sentence or two about what it does")
         for field in [nameField, labelField, descriptionField] {
             field.translatesAutoresizingMaskIntoConstraints = false
             field.delegate = self
@@ -59,7 +59,7 @@ final class NewBotViewController: SheetViewController {
         runnerPopup.translatesAutoresizingMaskIntoConstraints = false
         for device in store.runners {
             let title =
-                device.isThisDevice ? "\(device.name) (this Mac)" : device.name
+                device.isThisDevice ? L("%@ (this Mac)", device.name) : device.name
             runnerPopup.addItem(withTitle: title)
         }
         runnerPopup.target = self
@@ -78,14 +78,14 @@ final class NewBotViewController: SheetViewController {
         buildLookRow()
 
         let rows = [
-            labeled("Name", nameField),
-            labeled("Label", labelField),
-            labeled("Description", descriptionField),
-            labeled("Look", lookRow),
-            labeled("Runner", runnerPopup),
-            labeled("Provider", providerPopup),
-            labeled("Model", modelPopup),
-            labeled("Thinking", thinkingPopup),
+            labeled(L("Name"), nameField),
+            labeled(L("Label"), labelField),
+            labeled(L("Description"), descriptionField),
+            labeled(L("Look"), lookRow),
+            labeled(L("Runner"), runnerPopup),
+            labeled(L("Provider"), providerPopup),
+            labeled(L("Model"), modelPopup),
+            labeled(L("Thinking"), thinkingPopup),
             note,
         ]
         // Width constraints need a common ancestor, so they go on after each row joins the stack.
@@ -94,7 +94,7 @@ final class NewBotViewController: SheetViewController {
             row.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
         }
 
-        setButtons(confirm: "Create Bot")
+        setButtons(confirm: L("Create Bot"))
         confirmButton.isEnabled = false
         runnerChanged()
     }
@@ -183,11 +183,11 @@ final class NewBotViewController: SheetViewController {
     private func reloadModels() {
         let models = selectedProvider.models
         modelPopup.removeAllItems()
-        modelPopup.addItem(withTitle: "Default (\(models.first?.label ?? ""))")
+        modelPopup.addItem(withTitle: L("Default (%@)", models.first?.label ?? ""))
         for model in models { modelPopup.addItem(withTitle: model.label) }
         modelPopup.selectItem(at: 0)
         thinkingPopup.removeAllItems()
-        thinkingPopup.addItem(withTitle: "Default")
+        thinkingPopup.addItem(withTitle: L("Default"))
         for level in selectedProvider.thinkingLevels { thinkingPopup.addItem(withTitle: level.label) }
         thinkingPopup.selectItem(at: 0)
     }
@@ -195,7 +195,7 @@ final class NewBotViewController: SheetViewController {
     @objc private func runnerChanged() {
         let runners = store.runners
         guard runners.indices.contains(runnerPopup.indexOfSelectedItem) else {
-            note.stringValue = "No Runner is paired. Bots run on a Device with macOS, Linux, or Windows."
+            note.stringValue = L("No Runner is paired. Bots run on a Device with macOS, Linux, or Windows.")
             note.textColor = .systemOrange
             confirmButton.isEnabled = false
             return
@@ -203,11 +203,11 @@ final class NewBotViewController: SheetViewController {
         let runner = runners[runnerPopup.indexOfSelectedItem]
         let provider = selectedProvider
         if store.credential(for: provider)?.isConnected == true {
-            note.stringValue = "\(provider.rawValue) is connected. Turns run on \(runner.name)."
+            note.stringValue = L("%@ is connected. Turns run on %@.", provider.rawValue, runner.name)
             note.textColor = .tertiaryLabelColor
         } else {
             note.stringValue =
-                "\(provider.rawValue) is not connected yet. The bot is created now and its first turn waits until you connect it in Settings."
+                L("%@ is not connected yet. The bot is created now and its first turn waits until you connect it in Settings.", provider.rawValue)
             note.textColor = .systemOrange
         }
     }
@@ -221,7 +221,7 @@ final class NewBotViewController: SheetViewController {
 
         let botID = store.createBot(
             name: name,
-            label: label.isEmpty ? "New bot" : label,
+            label: label.isEmpty ? L("New bot") : label,
             description: description,
             symbolName: look.symbolName,
             accent: look.accent,
@@ -252,10 +252,10 @@ final class PairingSheetViewController: SheetViewController {
     private var nonce: String?
     private let qr = NSImageView()
     private let code = Build.label(
-        "Asking the CLI for a pairing code…", font: .monospacedSystemFont(ofSize: 10, weight: .regular),
+        L("Asking the CLI for a pairing code…"), font: .monospacedSystemFont(ofSize: 10, weight: .regular),
         color: .secondaryLabelColor, lines: 3)
     private let statusLabel = Build.label(
-        "Waiting for the other Device… Done keeps this code good for ten minutes; Cancel retires it.",
+        L("Waiting for the other Device… Done keeps this code good for ten minutes; Cancel retires it."),
         font: .systemFont(ofSize: 12), color: .secondaryLabelColor, lines: 0)
     private let spinner = NSProgressIndicator()
     /// Covers the code once a Device has used it: a code pairs one Device, and scanning it
@@ -266,9 +266,9 @@ final class PairingSheetViewController: SheetViewController {
 
     init() {
         super.init(
-            title: "Pair a Device",
+            title: L("Pair a Device"),
             subtitle:
-                "On the other Device, choose Pair in onboarding (or run `lorca pair <code>`) and paste this code. The Devices run a handshake; the relay only carries ciphertext.",
+                L("On the other Device, choose Pair in onboarding (or run `lorca pair <code>`) and paste this code. The Devices run a handshake; the relay only carries ciphertext."),
             width: 400
         )
     }
@@ -290,7 +290,7 @@ final class PairingSheetViewController: SheetViewController {
         pairedOverlay.fillColor = NSColor.white.withAlphaComponent(0.9)
         pairedOverlay.isHidden = true
         let check = NSImageView()
-        check.image = NSImage(systemSymbolName: "checkmark.circle.fill", accessibilityDescription: "Paired")
+        check.image = NSImage(systemSymbolName: "checkmark.circle.fill", accessibilityDescription: L("Paired"))
         check.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 64, weight: .regular)
         check.contentTintColor = .systemGreen
         check.translatesAutoresizingMaskIntoConstraints = false
@@ -303,7 +303,7 @@ final class PairingSheetViewController: SheetViewController {
         code.isSelectable = true
         code.lineBreakMode = .byCharWrapping
         let copy = Build.imageButton(
-            symbol: "doc.on.doc", pointSize: 11, tooltip: "Copy pairing string", target: self,
+            symbol: "doc.on.doc", pointSize: 11, tooltip: L("Copy pairing string"), target: self,
             action: #selector(copyPairingString))
         self.copy = copy
         codeBox.addSubview(code)
@@ -344,7 +344,7 @@ final class PairingSheetViewController: SheetViewController {
             status.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
         ])
 
-        setButtons(confirm: "Done")
+        setButtons(confirm: L("Done"))
         begin()
     }
 
@@ -371,7 +371,7 @@ final class PairingSheetViewController: SheetViewController {
                         self.markPaired(with: status.device?.name)
                         return
                     case "failed":
-                        throw CLIClient.RequestError(message: status.error ?? "Pairing failed")
+                        throw CLIClient.RequestError(message: status.error ?? L("Pairing failed"))
                     default:
                         continue
                     }
@@ -393,10 +393,10 @@ final class PairingSheetViewController: SheetViewController {
         pairedOverlay.isHidden = false
         copy?.isEnabled = false
         copy?.isHidden = true
-        code.stringValue = "Paired with \(deviceName ?? "the other Device"). This code is used up; pair another Device with a fresh one."
+        code.stringValue = L("Paired with %@. This code is used up; pair another Device with a fresh one.", deviceName ?? L("the other Device"))
         code.font = .systemFont(ofSize: 12)
         code.textColor = .labelColor
-        statusLabel.stringValue = "Paired. The account key is wrapped to that machine."
+        statusLabel.stringValue = L("Paired. The account key is wrapped to that machine.")
         statusLabel.textColor = .systemGreen
     }
 

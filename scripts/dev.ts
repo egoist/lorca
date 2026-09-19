@@ -3,6 +3,7 @@ import { join, relative } from "node:path"
 import {
   APP_NAME,
   CRATES_DIR,
+  RESOURCES_DIR,
   MARKDOWN_SWIFT_DIR,
   PACKAGE_DIR,
   ROOT,
@@ -231,7 +232,7 @@ function watchSources() {
   const generated = `${relative(SOURCES_DIR, MARKDOWN_SWIFT_DIR)}/`
   const onChange = (_event: string, filename: string | null) => {
     if (!filename) return
-    if (!filename.endsWith(".swift") && !filename.endsWith(".rs") && !filename.endsWith("Cargo.toml")) return
+    if (![".swift", ".rs", "Cargo.toml", ".strings"].some((suffix) => filename.endsWith(suffix))) return
     if (filename.startsWith(generated)) return
     // The relay crate stands alone: its changes rebuild the relay, not the app.
     if (filename.startsWith("relay/")) relayChanged = true
@@ -249,6 +250,8 @@ function watchSources() {
 
   watch(SOURCES_DIR, { recursive: true }, onChange)
   watch(CRATES_DIR, { recursive: true }, onChange)
+  // The string tables: the bundle step copies them, so a saved translation shows after a relaunch.
+  watch(RESOURCES_DIR, { recursive: true }, onChange)
   watch(join(PACKAGE_DIR, "Package.swift"), () => void cycle("Package.swift"))
 }
 

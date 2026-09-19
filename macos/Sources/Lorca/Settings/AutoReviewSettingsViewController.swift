@@ -5,7 +5,7 @@ import AppKit
 /// first; a card's Always allow adds one here too.
 final class AutoReviewSettingsViewController: SettingsPaneViewController {
     private let store = AppStore.shared
-    private let check = SectionView(title: "Auto-review")
+    private let check = SectionView(title: L("Auto-review"))
     private let rules = SectionView(title: SettingsEntry.autoReviewRules.row)
     private let toggle = NSSwitch()
     private let draft = NSTextField()
@@ -14,11 +14,11 @@ final class AutoReviewSettingsViewController: SettingsPaneViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        title = "Auto-review"
+        title = L("Auto-review")
         toggle.controlSize = .small
         toggle.target = self
         toggle.action = #selector(toggled)
-        draft.placeholderString = "When a bot wants to…"
+        draft.placeholderString = L("When a bot wants to…")
         draft.controlSize = .small
         draft.font = .systemFont(ofSize: 12)
         draft.delegate = self
@@ -28,7 +28,7 @@ final class AutoReviewSettingsViewController: SettingsPaneViewController {
         }
         addSection(check)
         addSection(rules)
-        addFootnote("Auto-review checks a plugin action that changes something before it runs, using the bot's own model, and asks you in the chat when the action needs a look. Off, every such action asks. Write one short, natural-language rule for each action; \"Ask first\" takes priority if rules conflict. Built-in safety checks always apply.")
+        addFootnote(L("Auto-review checks a plugin action that changes something before it runs, using the bot's own model, and asks you in the chat when the action needs a look. Off, every such action asks. Write one short, natural-language rule for each action; \"Ask first\" takes priority if rules conflict. Built-in safety checks always apply."))
         store.observe(self) { [weak self] event in
             switch event {
             case .rosterChanged, .snapshotReplaced: self?.render()
@@ -41,7 +41,7 @@ final class AutoReviewSettingsViewController: SettingsPaneViewController {
     private func render() {
         let review = store.autoReview
         toggle.state = review.isEnabled ? .on : .off
-        let description = NoteRow(text: "Lorca checks each action before it runs and asks you first when needed. Add rules to customize what bots can do automatically.")
+        let description = NoteRow(text: L("Lorca checks each action before it runs and asks you first when needed. Add rules to customize what bots can do automatically."))
         let switchRow = AccessoryRow(key: SettingsEntry.autoReviewSwitch.row, accessory: toggle)
         check.setRows([switchRow, description])
 
@@ -53,7 +53,7 @@ final class AutoReviewSettingsViewController: SettingsPaneViewController {
             field.font = .systemFont(ofSize: 12)
             field.isEditable = rule.tool == nil
             field.delegate = self
-            field.toolTip = rule.tool.map { "Made from Always allow on a card, for \($0)." }
+            field.toolTip = rule.tool.map { L("Made from Always allow on a card, for %@.", $0) }
             let popup = SettingsPopUpButton()
             for behavior in [AutoReviewRule.Behavior.allow, .ask] {
                 popup.addItem(withTitle: behavior.title)
@@ -68,9 +68,9 @@ final class AutoReviewSettingsViewController: SettingsPaneViewController {
             return row
         }
         if ruleRows.isEmpty {
-            ruleRows.append(NoteRow(text: "No rules yet. Always allow on a card adds one, or write one below."))
+            ruleRows.append(NoteRow(text: L("No rules yet. Always allow on a card adds one, or write one below.")))
         }
-        let add = RuleRow(field: draft, popup: draftBehavior, addTitle: "Add rule")
+        let add = RuleRow(field: draft, popup: draftBehavior, addTitle: L("Add rule"))
         add.onAdd = { [weak self] in self?.addRule() }
         ruleRows.append(add)
         rules.setRows(ruleRows)
@@ -169,7 +169,7 @@ final class RuleRow: NSView {
             button.title = addTitle
             button.action = #selector(add)
         } else {
-            button.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "Delete rule")
+            button.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: L("Delete rule"))
             button.bezelStyle = .accessoryBarAction
             button.isBordered = false
             button.action = #selector(delete)

@@ -128,16 +128,13 @@ final class OnboardingViewController: NSViewController {
         let title = Build.label(
             "Lorca", font: .systemFont(ofSize: 30, weight: .bold), alignment: .center)
         let subtitle = Build.label(
-            """
-            Bots that run on Macs you own. Your identity is a key pair on this machine — \
-            no account, no server that can read your chats.
-            """,
+            L("Bots that run on Macs you own. Your identity is a key pair on this machine — no account, no server that can read your chats."),
             font: .systemFont(ofSize: 13), color: .secondaryLabelColor, lines: 0, alignment: .center
         )
 
-        let create = primaryButton("Create a New Identity", action: #selector(createIdentity))
-        let restore = secondaryButton("Restore from Backup Phrase", action: #selector(goRestore))
-        let pair = secondaryButton("Pair with Another Device", action: #selector(goPair))
+        let create = primaryButton(L("Create a New Identity"), action: #selector(createIdentity))
+        let restore = secondaryButton(L("Restore from Backup Phrase"), action: #selector(goRestore))
+        let pair = secondaryButton(L("Pair with Another Device"), action: #selector(goPair))
 
         let buttons = Build.stack([create, restore, pair], spacing: 10)
         buttons.alignment = .centerX
@@ -164,30 +161,27 @@ final class OnboardingViewController: NSViewController {
     }
 
     private func createView() -> NSView {
-        let title = Build.label("Your backup phrase", font: .systemFont(ofSize: 22, weight: .semibold))
+        let title = Build.label(L("Your backup phrase"), font: .systemFont(ofSize: 22, weight: .semibold))
         let subtitle = Build.label(
-            """
-            This phrase is your master secret. It re-derives every key and unwraps everything on the \
-            relay. Write it down — nobody can reset it for you.
-            """,
+            L("This phrase is your master secret. It re-derives every key and unwraps everything on the relay. Write it down — nobody can reset it for you."),
             font: .systemFont(ofSize: 12.5), color: .secondaryLabelColor, lines: 0
         )
 
         let grid = phraseGrid(words: phrase)
 
-        let copy = NSButton(title: "Copy Phrase", target: self, action: #selector(copyPhrase))
+        let copy = NSButton(title: L("Copy Phrase"), target: self, action: #selector(copyPhrase))
         copy.bezelStyle = .rounded
 
         let confirm = NSButton(
-            checkboxWithTitle: "I wrote this phrase down somewhere safe", target: self,
+            checkboxWithTitle: L("I wrote this phrase down somewhere safe"), target: self,
             action: #selector(togglePhraseSaved))
         confirm.state = savedPhrase ? .on : .off
         confirm.translatesAutoresizingMaskIntoConstraints = false
 
         // The identity already exists on this Mac; there is no way back from here.
-        let back = secondaryButton("Back", action: #selector(goWelcome))
+        let back = secondaryButton(L("Back"), action: #selector(goWelcome))
         back.isHidden = true
-        let next = primaryButton("Continue", action: #selector(goBot))
+        let next = primaryButton(L("Continue"), action: #selector(goBot))
         next.isEnabled = savedPhrase
         next.identifier = NSUserInterfaceItemIdentifier("continue")
 
@@ -201,9 +195,9 @@ final class OnboardingViewController: NSViewController {
     }
 
     private func restoreView() -> NSView {
-        let title = Build.label("Restore your identity", font: .systemFont(ofSize: 22, weight: .semibold))
+        let title = Build.label(L("Restore your identity"), font: .systemFont(ofSize: 22, weight: .semibold))
         let subtitle = Build.label(
-            "Paste the twelve groups from your backup phrase. Everything else is re-derived and unwrapped from the relay.",
+            L("Paste the twelve groups from your backup phrase. Everything else is re-derived and unwrapped from the relay."),
             font: .systemFont(ofSize: 12.5), color: .secondaryLabelColor, lines: 0
         )
 
@@ -217,14 +211,14 @@ final class OnboardingViewController: NSViewController {
 
         let hint = Build.label(
             store.relayURL == nil
-                ? "Restoring unwraps the account key from the relay. Set a relay URL in Settings › Advanced first."
-                : "Restoring never contacts a login server. The relay only answers a signature challenge.",
+                ? L("Restoring unwraps the account key from the relay. Set a relay URL in Settings › Advanced first.")
+                : L("Restoring never contacts a login server. The relay only answers a signature challenge."),
             font: Theme.Font.caption, color: .tertiaryLabelColor, lines: 0)
         hint.widthAnchor.constraint(equalToConstant: 560).isActive = true
         hint.identifier = NSUserInterfaceItemIdentifier("status")
 
-        let back = secondaryButton("Back", action: #selector(goWelcome))
-        let next = primaryButton("Restore", action: #selector(restoreIdentity))
+        let back = secondaryButton(L("Back"), action: #selector(goWelcome))
+        let next = primaryButton(L("Restore"), action: #selector(restoreIdentity))
 
         return stepLayout(
             title: title,
@@ -236,9 +230,9 @@ final class OnboardingViewController: NSViewController {
     }
 
     private func pairView() -> NSView {
-        let title = Build.label("Pair with another Mac", font: .systemFont(ofSize: 22, weight: .semibold))
+        let title = Build.label(L("Pair with another Mac"), font: .systemFont(ofSize: 22, weight: .semibold))
         let subtitle = Build.label(
-            "On the Mac that already has your identity, choose File › Pair a Device and paste the code it shows here.",
+            L("On the Mac that already has your identity, choose File › Pair a Device and paste the code it shows here."),
             font: .systemFont(ofSize: 12.5), color: .secondaryLabelColor, lines: 0
         )
 
@@ -251,13 +245,13 @@ final class OnboardingViewController: NSViewController {
         field.identifier = NSUserInterfaceItemIdentifier("pairing")
 
         let status = Build.label(
-            "The two Devices run a handshake; the relay only carries the ciphertext. This Mac joins as a Runner.",
+            L("The two Devices run a handshake; the relay only carries the ciphertext. This Mac joins as a Runner."),
             font: Theme.Font.caption, color: .tertiaryLabelColor, lines: 0)
         status.widthAnchor.constraint(equalToConstant: 560).isActive = true
         status.identifier = NSUserInterfaceItemIdentifier("status")
 
-        let back = secondaryButton("Back", action: #selector(goWelcome))
-        let next = primaryButton("Pair", action: #selector(acceptPairing))
+        let back = secondaryButton(L("Back"), action: #selector(goWelcome))
+        let next = primaryButton(L("Pair"), action: #selector(acceptPairing))
 
         return stepLayout(
             title: title, subtitle: subtitle, body: Build.stack([field, status], spacing: 10), back: back,
@@ -270,9 +264,9 @@ final class OnboardingViewController: NSViewController {
     }
 
     private func botView() -> NSView {
-        let title = Build.label("Your first bot", font: .systemFont(ofSize: 22, weight: .semibold))
+        let title = Build.label(L("Your first bot"), font: .systemFont(ofSize: 22, weight: .semibold))
         let subtitle = Build.label(
-            "It runs on this Mac, plans your work, and builds the rest of the team when you ask. Give it a name and the credentials it runs with.",
+            L("It runs on this Mac, plans your work, and builds the rest of the team when you ask. Give it a name and the credentials it runs with."),
             font: .systemFont(ofSize: 12.5), color: .secondaryLabelColor, lines: 0
         )
 
@@ -281,27 +275,27 @@ final class OnboardingViewController: NSViewController {
 
         let nameField = NSTextField()
         nameField.stringValue = firstBot?.name ?? "Chef"
-        nameField.placeholderString = "Name"
+        nameField.placeholderString = L("Name")
         nameField.identifier = NSUserInterfaceItemIdentifier("botName")
         let labelField = NSTextField()
         labelField.stringValue = firstBot?.label ?? "Chief of staff"
-        labelField.placeholderString = "What it is for"
+        labelField.placeholderString = L("What it is for")
         labelField.identifier = NSUserInterfaceItemIdentifier("botLabel")
         let descriptionField = NSTextField()
         descriptionField.stringValue = firstBot?.description ?? "Learns what you work on, proposes a small team of one-job bots, and routes work to them."
-        descriptionField.placeholderString = "A sentence or two about what it does"
+        descriptionField.placeholderString = L("A sentence or two about what it does")
         descriptionField.identifier = NSUserInterfaceItemIdentifier("botDescription")
 
         let grid = formGrid([
             ("", avatar),
-            ("Name", nameField),
-            ("Label", labelField),
-            ("Description", descriptionField),
+            (L("Name"), nameField),
+            (L("Label"), labelField),
+            (L("Description"), descriptionField),
         ] + providerRows())
 
-        let back = secondaryButton("Back", action: #selector(goWelcome))
+        let back = secondaryButton(L("Back"), action: #selector(goWelcome))
         back.isHidden = true
-        let next = primaryButton("Continue", action: #selector(saveFirstBot))
+        let next = primaryButton(L("Continue"), action: #selector(saveFirstBot))
         next.identifier = NSUserInterfaceItemIdentifier("continue")
         let layout = stepLayout(title: title, subtitle: subtitle, body: card(grid), back: back, next: next)
         DispatchQueue.main.async { [weak self] in self?.renderCredential() }
@@ -309,13 +303,13 @@ final class OnboardingViewController: NSViewController {
     }
 
     private func providerView() -> NSView {
-        let title = Build.label("Connect a provider", font: .systemFont(ofSize: 22, weight: .semibold))
+        let title = Build.label(L("Connect a provider"), font: .systemFont(ofSize: 22, weight: .semibold))
         let subtitle = Build.label(
-            "Credentials belong to your account: your bots use them on every Runner you pair. They sync encrypted with your account key; the relay cannot read them.",
+            L("Credentials belong to your account: your bots use them on every Runner you pair. They sync encrypted with your account key; the relay cannot read them."),
             font: .systemFont(ofSize: 12.5), color: .secondaryLabelColor, lines: 0
         )
-        let skip = secondaryButton("Skip for Now", action: #selector(goDone))
-        let next = primaryButton("Continue", action: #selector(connectProvider))
+        let skip = secondaryButton(L("Skip for Now"), action: #selector(goDone))
+        let next = primaryButton(L("Continue"), action: #selector(connectProvider))
         next.identifier = NSUserInterfaceItemIdentifier("continue")
         let layout = stepLayout(title: title, subtitle: subtitle, body: card(formGrid(providerRows())), back: skip, next: next)
         DispatchQueue.main.async { [weak self] in self?.renderCredential() }
@@ -338,7 +332,7 @@ final class OnboardingViewController: NSViewController {
         let status = Build.label("", font: Theme.Font.caption, color: .tertiaryLabelColor, lines: 0)
         status.identifier = NSUserInterfaceItemIdentifier("status")
 
-        return [("Provider", picker), ("", host), ("", status)]
+        return [(L("Provider"), picker), ("", host), ("", status)]
     }
 
     private weak var credentialHost: NSView?
@@ -359,21 +353,21 @@ final class OnboardingViewController: NSViewController {
             control = keyField
         } else {
             control = Build.label(
-                "Your browser opens a \(providerKind.rawValue) sign-in when you continue. \(providerKind.signInRequirement)",
+                L("Your browser opens a %@ sign-in when you continue. %@", providerKind.rawValue, providerKind.signInRequirement),
                 font: .systemFont(ofSize: 12), color: .secondaryLabelColor, lines: 0)
         }
         control.translatesAutoresizingMaskIntoConstraints = false
         host.addSubview(control)
         control.pin(to: host)
 
-        credentialLabel?.stringValue = providerKind.usesAPIKey ? "API key" : "Account"
+        credentialLabel?.stringValue = providerKind.usesAPIKey ? L("API key") : L("Account")
         setStatus(
             providerKind.usesAPIKey
-                ? "The key is checked against \(providerKind.rawValue) and shared with your paired Devices, encrypted."
-                : "Tokens from the sign-in are shared with your paired Devices, encrypted.",
+                ? L("The key is checked against %@ and shared with your paired Devices, encrypted.", providerKind.rawValue)
+                : L("Tokens from the sign-in are shared with your paired Devices, encrypted."),
             color: .tertiaryLabelColor)
         if let button = findContinueButton() {
-            button.title = providerKind.usesAPIKey ? "Continue" : "Sign in with \(providerKind.rawValue)"
+            button.title = providerKind.usesAPIKey ? L("Continue") : L("Sign in with %@", providerKind.rawValue)
             button.isEnabled = !providerKind.usesAPIKey
         }
     }
@@ -427,17 +421,15 @@ final class OnboardingViewController: NSViewController {
         icon.translatesAutoresizingMaskIntoConstraints = false
 
         let title = Build.label(
-            "This Mac is your first Device", font: .systemFont(ofSize: 22, weight: .semibold),
+            L("This Mac is your first Device"), font: .systemFont(ofSize: 22, weight: .semibold),
             alignment: .center)
         let subtitle = Build.label(
-            """
-            \(firstBot.map { "\($0.name) is ready to talk to." } ?? "Bots you create here run on this machine with your account's provider credentials.") \
-            Pair another Mac any time from the File menu.
-            """,
+            firstBot.map { L("%@ is ready to talk to. Pair another Mac any time from the File menu.", $0.name) }
+                ?? L("Bots you create here run on this machine with your account's provider credentials. Pair another Mac any time from the File menu."),
             font: .systemFont(ofSize: 12.5), color: .secondaryLabelColor, lines: 0, alignment: .center
         )
 
-        let open = primaryButton("Open Lorca", action: #selector(finish))
+        let open = primaryButton(L("Open Lorca"), action: #selector(finish))
 
         let column = Build.stack([icon, title, subtitle, open], spacing: 14)
         column.alignment = .centerX
@@ -583,7 +575,7 @@ final class OnboardingViewController: NSViewController {
         let label = find(NSTextField.self, "botLabel")?.stringValue.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let description = find(NSTextField.self, "botDescription")?.stringValue.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !name.isEmpty else {
-            setStatus("Give the bot a name.", color: .systemRed)
+            setStatus(L("Give the bot a name."), color: .systemRed)
             return
         }
         // The bot runs with the provider chosen here, not the CLI's default.
@@ -601,11 +593,15 @@ final class OnboardingViewController: NSViewController {
         }
         let key = find(NSTextField.self, "apiKey")?.stringValue.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if providerKind.usesAPIKey, key.isEmpty {
-            setStatus("Paste \(providerKind == .anthropic ? "an" : "a") \(providerKind.rawValue) API key to continue.", color: .systemRed)
+            setStatus(
+                providerKind == .anthropic
+                    ? L("Paste an %@ API key to continue.", providerKind.rawValue)
+                    : L("Paste a %@ API key to continue.", providerKind.rawValue),
+                color: .systemRed)
             return
         }
         busy = true
-        setStatus(providerKind.usesAPIKey ? "Checking the key with \(providerKind.rawValue)…" : "Waiting for the browser…", color: .secondaryLabelColor)
+        setStatus(providerKind.usesAPIKey ? L("Checking the key with %@…", providerKind.rawValue) : L("Waiting for the browser…"), color: .secondaryLabelColor)
         Task { [weak self] in
             guard let self else { return }
             defer { self.busy = false }
@@ -630,7 +626,7 @@ final class OnboardingViewController: NSViewController {
             return
         }
         guard store.isConnected else {
-            presentError("The Lorca CLI is not running. Start it with `lorca serve` and try again.")
+            presentError(L("The Lorca CLI is not running. Start it with `lorca serve` and try again."))
             return
         }
         busy = true
@@ -655,7 +651,7 @@ final class OnboardingViewController: NSViewController {
             return
         }
         busy = true
-        setStatus("Re-deriving keys and unwrapping the account key…", color: .secondaryLabelColor)
+        setStatus(L("Re-deriving keys and unwrapping the account key…"), color: .secondaryLabelColor)
         Task { [weak self] in
             guard let self else { return }
             defer { self.busy = false }
@@ -686,7 +682,7 @@ final class OnboardingViewController: NSViewController {
             return
         }
         busy = true
-        setStatus("Waiting for the other Device to wrap the account key…", color: .secondaryLabelColor)
+        setStatus(L("Waiting for the other Device to wrap the account key…"), color: .secondaryLabelColor)
         Task { [weak self] in
             guard let self else { return }
             defer { self.busy = false }
@@ -720,7 +716,7 @@ final class OnboardingViewController: NSViewController {
         alert.messageText = "Lorca"
         alert.informativeText = message
         alert.alertStyle = .warning
-        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: L("OK"))
         if let window = view.window {
             alert.beginSheetModal(for: window)
         } else {

@@ -379,14 +379,14 @@ extension SidebarViewController: NSMenuDelegate {
         let chat = store.chat(id)
         let pinned = chat?.isPinned ?? false
         menu.addItem(
-            item(pinned ? "Unpin" : "Pin", #selector(RootSplitViewController.togglePinChat(_:))))
-        menu.addItem(item("Rename…", #selector(RootSplitViewController.renameChat(_:))))
+            item(pinned ? L("Unpin") : L("Pin"), #selector(RootSplitViewController.togglePinChat(_:))))
+        menu.addItem(item(L("Rename…"), #selector(RootSplitViewController.renameChat(_:))))
         // Only groups take new members; a DM is fixed to its one bot.
         if chat?.isGroup == true {
-            menu.addItem(item("Add Bot…", #selector(RootSplitViewController.addBotToChat(_:))))
+            menu.addItem(item(L("Add Bot…"), #selector(RootSplitViewController.addBotToChat(_:))))
         }
         menu.addItem(.separator())
-        menu.addItem(item("Delete", #selector(RootSplitViewController.deleteChat(_:))))
+        menu.addItem(item(L("Delete"), #selector(RootSplitViewController.deleteChat(_:))))
     }
 
     private func item(_ title: String, _ action: Selector) -> NSMenuItem {
@@ -422,7 +422,7 @@ final class SidebarSearchBar: NSView, NSSearchFieldDelegate {
     /// Return in the field. Returns whether the bar's owner used it.
     var onSubmit: (() -> Bool)?
 
-    init(placeholder: String = "Search") {
+    init(placeholder: String = L("Search")) {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
 
@@ -487,7 +487,7 @@ final class SidebarSearchBar: NSView, NSSearchFieldDelegate {
 /// the CLI is not answering.
 final class SidebarFooterView: NSView {
     private lazy var settings = HoverButton(
-        symbol: "gearshape", tooltip: "Settings (⌘,)", target: self, action: #selector(openSettings))
+        symbol: "gearshape", tooltip: L("Settings (⌘,)"), target: self, action: #selector(openSettings))
     private lazy var device = HoverButton(
         symbol: "laptopcomputer", tooltip: "", target: self, action: #selector(openDevice))
 
@@ -514,8 +514,8 @@ final class SidebarFooterView: NSView {
     func update() {
         let store = AppStore.shared
         let connected = store.isConnected
-        let name = store.thisDevice?.name ?? "This Mac"
-        let status = connected ? "CLI on 127.0.0.1:\(Preferences.cliPort)" : "CLI not running · start it with: lorca serve"
+        let name = store.thisDevice?.name ?? L("This Mac")
+        let status = connected ? L("CLI on 127.0.0.1:%@", String(Preferences.cliPort)) : L("CLI not running · start it with: lorca serve")
         // Device symbols fill their screen in monochrome, which sits heavier than the gear's
         // outline; a palette with a clear second layer leaves the outline alone. The iMac's chin
         // stays solid either way, so a desktop shows as a plain display here.

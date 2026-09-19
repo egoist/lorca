@@ -2,6 +2,8 @@
 // `lorca://pair?relay=…&id=<identity pubkey>&ek=<ephemeral pubkey>&n=<nonce>`. The core does
 // the pairing itself; this only checks a scanned or pasted string before it is handed over.
 
+import { t } from "../i18n";
+
 export interface PairingTarget {
   relay: string;
   id: string;
@@ -13,7 +15,7 @@ export function parsePairingString(text: string): PairingTarget {
   const trimmed = text.trim();
   const index = trimmed.indexOf("pair?");
   if (!trimmed.startsWith("lorca://pair?") && index < 0) {
-    throw new Error("That is not a Lorca pairing string");
+    throw new Error(t("That is not a Lorca pairing string"));
   }
   const query = trimmed.slice(trimmed.indexOf("pair?") + "pair?".length);
   const fields: Record<string, string> = {};
@@ -24,7 +26,7 @@ export function parsePairingString(text: string): PairingTarget {
     fields[key] = safeDecode(value);
   }
   const { relay, id, ek, n } = fields;
-  if (!relay || !id || !ek || !n) throw new Error("Pairing string is missing a field");
+  if (!relay || !id || !ek || !n) throw new Error(t("Pairing string is missing a field"));
   return { relay: relay.replace(/\/+$/, ""), id, ek, nonce: n };
 }
 

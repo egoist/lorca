@@ -23,13 +23,10 @@ final class OfflineViewController: NSViewController {
         icon.translatesAutoresizingMaskIntoConstraints = false
 
         let title = Build.label(
-            "The Lorca CLI isn't answering", font: .systemFont(ofSize: 18, weight: .semibold),
+            L("The Lorca CLI isn't answering"), font: .systemFont(ofSize: 18, weight: .semibold),
             alignment: .center)
         let body = Build.label(
-            """
-            Your bots, keys and transcripts live in the CLI on this Mac. The app starts it on its own; \
-            you can also run it from a terminal, and this window reconnects either way.
-            """,
+            L("Your bots, keys and transcripts live in the CLI on this Mac. The app starts it on its own; you can also run it from a terminal, and this window reconnects either way."),
             font: .systemFont(ofSize: 12.5), color: .secondaryLabelColor, lines: 0, alignment: .center
         )
 
@@ -39,12 +36,12 @@ final class OfflineViewController: NSViewController {
         let commandLabel = Build.label("$ \(command)", font: Theme.Font.code, color: .labelColor)
         commandLabel.isSelectable = true
         let copyButton = Build.imageButton(
-            symbol: "doc.on.doc", pointSize: 12, tooltip: "Copy command", target: self,
+            symbol: "doc.on.doc", pointSize: 12, tooltip: L("Copy command"), target: self,
             action: #selector(copyCommand))
         commandBox.addSubview(commandLabel)
         commandBox.addSubview(copyButton)
 
-        let retry = NSButton(title: "Retry Connection", target: self, action: #selector(retry))
+        let retry = NSButton(title: L("Retry Connection"), target: self, action: #selector(retry))
         retry.bezelStyle = .rounded
         retry.keyEquivalent = "\r"
         retry.controlSize = .large
@@ -111,12 +108,12 @@ final class PlaceholderViewController: NSViewController {
         icon.translatesAutoresizingMaskIntoConstraints = false
 
         let title = Build.label(
-            "No chat selected", font: .systemFont(ofSize: 16, weight: .semibold), alignment: .center)
+            L("No chat selected"), font: .systemFont(ofSize: 16, weight: .semibold), alignment: .center)
         let body = Build.label(
-            "Pick a conversation in the sidebar, or start a new one.",
+            L("Pick a conversation in the sidebar, or start a new one."),
             font: .systemFont(ofSize: 12.5), color: .secondaryLabelColor, alignment: .center)
 
-        let button = NSButton(title: "New Bot…", target: self, action: #selector(newBot))
+        let button = NSButton(title: L("New Bot…"), target: self, action: #selector(newBot))
         button.bezelStyle = .rounded
         button.controlSize = .large
 

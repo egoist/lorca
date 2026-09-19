@@ -223,12 +223,12 @@ final class WorkingCellView: NSTableCellView {
         } else {
             switch names.count {
             case 0: text = ""
-            case 1: text = "\(names[0]) is working…"
-            default: text = "\(names.dropLast().joined(separator: ", ")) and \(names.last ?? "") are working…"
+            case 1: text = L("%@ is working…", names[0])
+            default: text = L("%@ and %@ are working…", names.dropLast().joined(separator: L(", ")), names.last ?? "")
             }
         }
         label.stringValue = showsName || activity != nil ? text : ""
-        setAccessibilityLabel(names.count == 1 ? "\(names[0]) is working" : text)
+        setAccessibilityLabel(names.count == 1 ? L("%@ is working", names[0]) : text)
         needsLayout = true
     }
 
@@ -237,29 +237,29 @@ final class WorkingCellView: NSTableCellView {
     /// two calls as well as during one.
     static func activity(for tool: ToolInvocation, targetName: String?, pluginName: String? = nil) -> String {
         switch tool.name {
-        case "read": return "Reading a file"
-        case "write", "edit": return "Drafting a file"
-        case "bash": return "Running commands"
-        case "web_search": return "Searching the web"
-        case "web_fetch": return "Reading the web"
-        case "grep", "find", "ls": return "Searching files"
-        case "message_bot": return targetName.map { "Messaging \($0)" } ?? "Messaging another bot"
-        case "list_teammates": return "Checking the team"
-        case "create_bot": return "Creating a bot"
-        case "edit_bot": return "Updating a bot"
-        case "remember": return "Taking a note"
-        case "search_plugins": return "Searching plugins"
-        case "install_plugin": return "Installing a plugin"
+        case "read": return L("Reading a file")
+        case "write", "edit": return L("Drafting a file")
+        case "bash": return L("Running commands")
+        case "web_search": return L("Searching the web")
+        case "web_fetch": return L("Reading the web")
+        case "grep", "find", "ls": return L("Searching files")
+        case "message_bot": return targetName.map { L("Messaging %@", $0) } ?? L("Messaging another bot")
+        case "list_teammates": return L("Checking the team")
+        case "create_bot": return L("Creating a bot")
+        case "edit_bot": return L("Updating a bot")
+        case "remember": return L("Taking a note")
+        case "search_plugins": return L("Searching plugins")
+        case "install_plugin": return L("Installing a plugin")
         default:
             // A plugin tool: "Using GitHub", whether the call is running or just finished, so
             // a run of quick calls never flashes back to "Working" between them.
             if let pluginName {
-                return "Using \(pluginName)"
+                return L("Using %@", pluginName)
             }
             if tool.name.contains("__"), tool.summary.hasPrefix("Using ") {
                 return String(tool.summary.dropLast(tool.summary.hasSuffix("…") ? 1 : 0))
             }
-            return "Working"
+            return L("Working")
         }
     }
 
@@ -364,7 +364,7 @@ final class HandoffCellView: NSTableCellView {
         arrow.image = NSImage(systemSymbolName: "arrow.right", accessibilityDescription: nil)
         arrow.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 9, weight: .semibold)
         arrow.contentTintColor = .tertiaryLabelColor
-        lead.stringValue = "Message from"
+        lead.stringValue = L("Message from")
 
         addSubview(lead.framePositioned())
         addSubview(fromAvatar.framePositioned())
@@ -392,7 +392,7 @@ final class HandoffCellView: NSTableCellView {
         case let .incoming(from), let .outgoing(to: from):
             incoming = true
             let verb: String
-            if case .incoming = mode { verb = "Message from" } else { verb = "Messaged" }
+            if case .incoming = mode { verb = L("Message from") } else { verb = L("Messaged") }
             lead.stringValue = verb
             fromAvatar.content = avatar(from)
             lead.isHidden = false
@@ -409,7 +409,7 @@ final class HandoffCellView: NSTableCellView {
             lead.isHidden = true
             arrow.isHidden = false
             toAvatar.isHidden = false
-            label.stringValue = "\(from?.name ?? "?") handed off to \(to?.name ?? "?")"
+            label.stringValue = L("%@ handed off to %@", from?.name ?? "?", to?.name ?? "?")
             label.textColor = .secondaryLabelColor
             label.font = .systemFont(ofSize: 11.5)
             setAccessibilityLabel("\(label.stringValue): \(fullText)")
@@ -612,7 +612,7 @@ final class PermissionCellView: NSTableCellView {
         icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)
         icon.contentTintColor = .controlAccentColor
         summary.lineBreakMode = .byWordWrapping
-        for (button, label, decision) in [(allowButton, "Allow once", "allow"), (alwaysButton, "Always allow", "always"), (denyButton, "Deny", "deny")] {
+        for (button, label, decision) in [(allowButton, L("Allow once"), "allow"), (alwaysButton, L("Always allow"), "always"), (denyButton, L("Deny"), "deny")] {
             button.title = label
             button.bezelStyle = .rounded
             button.controlSize = .small
@@ -662,12 +662,12 @@ final class PermissionCellView: NSTableCellView {
         link = request.link
         code = request.code
         hasReason = request.isPending && request.reason != nil
-        summaryText = request.isPending ? request.summary : (hasCode ? "Enter this code at \(URL(string: request.link ?? "")?.host ?? "the link"), then come back." : "\(request.decisionText) · \(request.summary)")
-        summary.stringValue = hasReason ? "\(summaryText)\nAuto-review: \(request.reason ?? "")" : summaryText
+        summaryText = request.isPending ? request.summary : (hasCode ? L("Enter this code at %@, then come back.", URL(string: request.link ?? "")?.host ?? L("the link")) : "\(request.decisionText) · \(request.summary)")
+        summary.stringValue = hasReason ? "\(summaryText)\n" + L("Auto-review: %@", request.reason ?? "") : summaryText
         summary.toolTip = request.summary
         codeLabel.stringValue = request.code ?? ""
         codeLabel.isHidden = !hasCode
-        openButton.title = "Copy code and open \(URL(string: request.link ?? "")?.host ?? "link")"
+        openButton.title = L("Copy code and open %@", URL(string: request.link ?? "")?.host ?? L("link"))
         openButton.isHidden = !hasCode
         // The buttons follow the card's kind: Sign in / Not now, Allow / Deny, or the three.
         let buttons = [allowButton, alwaysButton, denyButton]

@@ -292,7 +292,7 @@ final class AppStore {
         case "job.retry":
             guard let retry = decode(Wire.JobRetry.self) else { return }
             let seconds = max(1, Int((Double(retry.delayMs) / 1000).rounded()))
-            retryNotes[retry.chatId] = "Retrying (\(retry.attempt) of \(retry.maxAttempts)) in \(seconds) s"
+            retryNotes[retry.chatId] = L("Retrying (%d of %d) in %d s", retry.attempt, retry.maxAttempts, seconds)
             emit(.respondingChanged(retry.chatId))
 
         case "chat.usage":
@@ -392,19 +392,19 @@ final class AppStore {
     func title(for chat: Chat) -> String {
         if let custom = chat.customTitle, !custom.isEmpty { return custom }
         let names = chat.botIDs.compactMap { bot($0)?.name }
-        return names.isEmpty ? "New Chat" : names.joined(separator: ", ")
+        return names.isEmpty ? L("New Chat") : names.joined(separator: ", ")
     }
 
     func subtitle(for chat: Chat) -> String {
         let members = bots(in: chat)
         if chat.isDM, let only = members.first {
-            let host = device(only.runnerID)?.name ?? "unassigned"
-            return "\(only.provider.rawValue) on \(host)"
+            let host = device(only.runnerID)?.name ?? L("unassigned")
+            return L("%@ on %@", only.provider.rawValue, host)
         }
         let hosts = Set(members.compactMap { device($0.runnerID)?.name })
-        let runnerLabel = hosts.count == 1 ? (hosts.first ?? "") : "\(hosts.count) Runners"
-        let botLabel = members.count == 1 ? "1 bot" : "\(members.count) bots"
-        return "Group · \(botLabel) · \(runnerLabel)"
+        let runnerLabel = hosts.count == 1 ? (hosts.first ?? "") : L("%d Runners", hosts.count)
+        let botLabel = members.count == 1 ? L("1 bot") : L("%d bots", members.count)
+        return L("Group · %@ · %@", botLabel, runnerLabel)
     }
 
     func preview(for chat: Chat) -> String {
@@ -413,18 +413,18 @@ final class AppStore {
             if case let .tool(tool) = message.body { return tool.isSentMessage }
             return true
         }
-        guard let last = shown else { return "No messages yet" }
+        guard let last = shown else { return L("No messages yet") }
         let body: String
         switch last.body {
         case let .text(value): body = value.isEmpty ? Attachment.summary(last.attachments) : value
-        case let .tool(tool): body = "Messaged \(tool.recipientName): \(tool.detail)"
+        case let .tool(tool): body = L("Messaged %@: %@", tool.recipientName, tool.detail)
         case let .handoff(from, to, reason):
             body = !chat.isGroup && chat.botIDs.contains(to)
-                ? "Message from \(bot(from)?.name ?? "a teammate"): \(reason)"
-                : "Handed off to \(bot(to)?.name ?? "a teammate")"
+                ? L("Message from %@: %@", bot(from)?.name ?? L("a teammate"), reason)
+                : L("Handed off to %@", bot(to)?.name ?? L("a teammate"))
         case let .notice(value): body = value
         case let .permission(request):
-            let who = bot(last.author.botID ?? "")?.name ?? "A bot"
+            let who = bot(last.author.botID ?? "")?.name ?? L("A bot")
             body = "\(who) \(request.verbPhrase)"
         }
 
@@ -435,7 +435,7 @@ final class AppStore {
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
         if chat.isGroup, case let .bot(id) = last.author, case .text = last.body {
-            return "\(bot(id)?.name ?? "Bot"): \(flattened)"
+            return "\(bot(id)?.name ?? L("Bot")): \(flattened)"
         }
         return flattened
     }
@@ -684,7 +684,7 @@ final class AppStore {
         update(messageID, in: chatID) { message in
             guard case var .permission(request) = message.body else { return }
             request.decision = decision == "always" ? .always : (decision == "deny" ? .denied : .allowed)
-            if request.isConnect, request.decision == .allowed { request.summary = "Starting the sign-in…" }
+            if request.isConnect, request.decision == .allowed { request.summary = L("Starting the sign-in…") }
             message.body = .permission(request)
         }
         perform("chats.permission", ["chat_id": chatID, "message_id": messageID, "decision": decision])

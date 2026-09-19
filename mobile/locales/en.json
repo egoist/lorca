@@ -1,0 +1,6 @@
+{
+  "NSCameraUsageDescription": "Lorca scans the pairing code your Mac shows.",
+  "NSMicrophoneUsageDescription": "Lorca listens while you dictate a message.",
+  "NSSpeechRecognitionUsageDescription": "Lorca turns what you say into the message text.",
+  "NSPhotoLibraryUsageDescription": "Lorca attaches photos you pick to a message."
+}

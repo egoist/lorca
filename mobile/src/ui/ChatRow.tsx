@@ -4,6 +4,7 @@
 import { memo } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import type { Bot, Chat } from "../core/model";
+import { t } from "../i18n";
 import { AvatarCluster } from "./Avatar";
 import { lastActivity, preview, stamp } from "./format";
 import { Symbol } from "./Symbol";
@@ -34,7 +35,7 @@ export const ChatRow = memo(function ChatRow({ chat, bots, title, working, onPre
             {preview(chat, bots)}
           </Text>
           {unread > 0 && (
-            <View style={[styles.badge, { backgroundColor: p.tertiaryLabel }]} accessibilityLabel={`${unread} unread`}>
+            <View style={[styles.badge, { backgroundColor: p.tertiaryLabel }]} accessibilityLabel={t("{count} unread", { count: unread })}>
               <Text style={styles.badgeText}>{unread > 999 ? "999+" : unread}</Text>
             </View>
           )}

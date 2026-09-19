@@ -4,19 +4,19 @@ enum MainMenu {
     static func build() -> NSMenu {
         let main = NSMenu()
         main.addItem(submenu(appMenu(), title: "Lorca"))
-        main.addItem(submenu(fileMenu(), title: "File"))
-        main.addItem(submenu(editMenu(), title: "Edit"))
-        main.addItem(submenu(viewMenu(), title: "View"))
-        main.addItem(submenu(chatMenu(), title: "Chat"))
+        main.addItem(submenu(fileMenu(), title: L("File")))
+        main.addItem(submenu(editMenu(), title: L("Edit")))
+        main.addItem(submenu(viewMenu(), title: L("View")))
+        main.addItem(submenu(chatMenu(), title: L("Chat")))
 
         let window = windowMenu()
-        main.addItem(submenu(window, title: "Window"))
+        main.addItem(submenu(window, title: L("Window")))
         NSApp.windowsMenu = window
 
         main.addItem(submenu(debugMenu(), title: "Debug"))
 
         let help = helpMenu()
-        main.addItem(submenu(help, title: "Help"))
+        main.addItem(submenu(help, title: L("Help")))
         NSApp.helpMenu = help
 
         return main
@@ -51,62 +51,62 @@ enum MainMenu {
 
     private static func appMenu() -> NSMenu {
         let menu = NSMenu()
-        add(menu, "About Lorca", #selector(NSApplication.orderFrontStandardAboutPanel(_:)))
+        add(menu, L("About Lorca"), #selector(NSApplication.orderFrontStandardAboutPanel(_:)))
         if Updater.isEnabled {
-            add(menu, "Check for Updates…", #selector(AppDelegate.checkForUpdates(_:)))
+            add(menu, L("Check for Updates…"), #selector(AppDelegate.checkForUpdates(_:)))
         }
         menu.addItem(.separator())
-        add(menu, "Settings…", #selector(AppDelegate.showSettings(_:)), ",")
+        add(menu, L("Settings…"), #selector(AppDelegate.showSettings(_:)), ",")
         menu.addItem(.separator())
 
-        let services = NSMenu(title: "Services")
-        let servicesItem = NSMenuItem(title: "Services", action: nil, keyEquivalent: "")
+        let services = NSMenu(title: L("Services"))
+        let servicesItem = NSMenuItem(title: L("Services"), action: nil, keyEquivalent: "")
         servicesItem.submenu = services
         menu.addItem(servicesItem)
         NSApp.servicesMenu = services
 
         menu.addItem(.separator())
-        add(menu, "Hide Lorca", #selector(NSApplication.hide(_:)), "h")
+        add(menu, L("Hide Lorca"), #selector(NSApplication.hide(_:)), "h")
         add(
-            menu, "Hide Others", #selector(NSApplication.hideOtherApplications(_:)), "h",
+            menu, L("Hide Others"), #selector(NSApplication.hideOtherApplications(_:)), "h",
             modifiers: [.command, .option])
-        add(menu, "Show All", #selector(NSApplication.unhideAllApplications(_:)))
+        add(menu, L("Show All"), #selector(NSApplication.unhideAllApplications(_:)))
         menu.addItem(.separator())
-        add(menu, "Quit Lorca", #selector(NSApplication.terminate(_:)), "q")
+        add(menu, L("Quit Lorca"), #selector(NSApplication.terminate(_:)), "q")
         return menu
     }
 
     private static func fileMenu() -> NSMenu {
         let menu = NSMenu()
-        add(menu, "New Bot…", #selector(AppDelegate.newBot(_:)), "n")
-        add(menu, "New Group Chat…", #selector(AppDelegate.newGroupChat(_:)), "n", modifiers: [.command, .shift])
+        add(menu, L("New Bot…"), #selector(AppDelegate.newBot(_:)), "n")
+        add(menu, L("New Group Chat…"), #selector(AppDelegate.newGroupChat(_:)), "n", modifiers: [.command, .shift])
         menu.addItem(.separator())
-        add(menu, "Pair a Device…", #selector(AppDelegate.pairDevice(_:)), "p", modifiers: [.command, .shift])
+        add(menu, L("Pair a Device…"), #selector(AppDelegate.pairDevice(_:)), "p", modifiers: [.command, .shift])
         menu.addItem(.separator())
-        add(menu, "Close Window", #selector(NSWindow.performClose(_:)), "w")
+        add(menu, L("Close Window"), #selector(NSWindow.performClose(_:)), "w")
         return menu
     }
 
     private static func editMenu() -> NSMenu {
         let menu = NSMenu()
-        add(menu, "Undo", Selector(("undo:")), "z")
-        add(menu, "Redo", Selector(("redo:")), "z", modifiers: [.command, .shift])
+        add(menu, L("Undo"), Selector(("undo:")), "z")
+        add(menu, L("Redo"), Selector(("redo:")), "z", modifiers: [.command, .shift])
         menu.addItem(.separator())
-        add(menu, "Cut", #selector(NSText.cut(_:)), "x")
-        add(menu, "Copy", #selector(NSText.copy(_:)), "c")
-        add(menu, "Paste", #selector(NSText.paste(_:)), "v")
+        add(menu, L("Cut"), #selector(NSText.cut(_:)), "x")
+        add(menu, L("Copy"), #selector(NSText.copy(_:)), "c")
+        add(menu, L("Paste"), #selector(NSText.paste(_:)), "v")
         add(
-            menu, "Paste and Match Style", #selector(NSTextView.pasteAsPlainText(_:)), "v",
+            menu, L("Paste and Match Style"), #selector(NSTextView.pasteAsPlainText(_:)), "v",
             modifiers: [.command, .option, .shift])
-        add(menu, "Select All", #selector(NSText.selectAll(_:)), "a")
+        add(menu, L("Select All"), #selector(NSText.selectAll(_:)), "a")
         menu.addItem(.separator())
-        add(menu, "Find…", #selector(AppDelegate.find(_:)), "f")
+        add(menu, L("Find…"), #selector(AppDelegate.find(_:)), "f")
         menu.addItem(.separator())
 
-        let speech = NSMenu(title: "Speech")
-        add(speech, "Start Speaking", #selector(NSTextView.startSpeaking(_:)))
-        add(speech, "Stop Speaking", #selector(NSTextView.stopSpeaking(_:)))
-        let speechItem = NSMenuItem(title: "Speech", action: nil, keyEquivalent: "")
+        let speech = NSMenu(title: L("Speech"))
+        add(speech, L("Start Speaking"), #selector(NSTextView.startSpeaking(_:)))
+        add(speech, L("Stop Speaking"), #selector(NSTextView.stopSpeaking(_:)))
+        let speechItem = NSMenuItem(title: L("Speech"), action: nil, keyEquivalent: "")
         speechItem.submenu = speech
         menu.addItem(speechItem)
         return menu
@@ -114,33 +114,33 @@ enum MainMenu {
 
     private static func viewMenu() -> NSMenu {
         let menu = NSMenu()
-        add(menu, "Toggle Sidebar", #selector(NSSplitViewController.toggleSidebar(_:)), "b")
+        add(menu, L("Toggle Sidebar"), #selector(NSSplitViewController.toggleSidebar(_:)), "b")
         add(
-            menu, "Toggle Inspector", #selector(RootSplitViewController.toggleInspector(_:)), "b",
+            menu, L("Toggle Inspector"), #selector(RootSplitViewController.toggleInspector(_:)), "b",
             modifiers: [.command, .shift])
         menu.addItem(.separator())
-        add(menu, "Scroll to Latest", #selector(ChatViewController.scrollToLatest(_:)), "j")
+        add(menu, L("Scroll to Latest"), #selector(ChatViewController.scrollToLatest(_:)), "j")
         menu.addItem(.separator())
         add(
-            menu, "Enter Full Screen", #selector(NSWindow.toggleFullScreen(_:)), "f",
+            menu, L("Enter Full Screen"), #selector(NSWindow.toggleFullScreen(_:)), "f",
             modifiers: [.command, .control])
         return menu
     }
 
     private static func chatMenu() -> NSMenu {
         let menu = NSMenu()
-        add(menu, "Add Bot…", #selector(RootSplitViewController.addBotToChat(_:)), "b", modifiers: [.command, .option])
-        add(menu, "Rename Chat…", #selector(RootSplitViewController.renameChat(_:)), "r")
-        add(menu, "Pin Chat", #selector(RootSplitViewController.togglePinChat(_:)), "p")
+        add(menu, L("Add Bot…"), #selector(RootSplitViewController.addBotToChat(_:)), "b", modifiers: [.command, .option])
+        add(menu, L("Rename Chat…"), #selector(RootSplitViewController.renameChat(_:)), "r")
+        add(menu, L("Pin Chat"), #selector(RootSplitViewController.togglePinChat(_:)), "p")
         menu.addItem(.separator())
-        add(menu, "Stop Responding", #selector(ChatViewController.stopResponding(_:)), ".")
+        add(menu, L("Stop Responding"), #selector(ChatViewController.stopResponding(_:)), ".")
         menu.addItem(.separator())
-        add(menu, "Delete Chat", #selector(RootSplitViewController.deleteChat(_:)), "\u{8}")
+        add(menu, L("Delete Chat"), #selector(RootSplitViewController.deleteChat(_:)), "\u{8}")
 
         // ⌘1–⌘9 open the first nine chats in the sidebar, which shows the numbers while ⌘ is held.
         for number in 1...9 {
             let item = add(
-                menu, "Go to Chat \(number)", #selector(RootSplitViewController.goToChat(_:)), "\(number)",
+                menu, L("Go to Chat %d", number), #selector(RootSplitViewController.goToChat(_:)), "\(number)",
                 tag: number)
             item.isHidden = true
             item.allowsKeyEquivalentWhenHidden = true
@@ -150,10 +150,10 @@ enum MainMenu {
 
     private static func windowMenu() -> NSMenu {
         let menu = NSMenu()
-        add(menu, "Minimize", #selector(NSWindow.performMiniaturize(_:)), "m")
-        add(menu, "Zoom", #selector(NSWindow.performZoom(_:)))
+        add(menu, L("Minimize"), #selector(NSWindow.performMiniaturize(_:)), "m")
+        add(menu, L("Zoom"), #selector(NSWindow.performZoom(_:)))
         menu.addItem(.separator())
-        add(menu, "Bring All to Front", #selector(NSApplication.arrangeInFront(_:)))
+        add(menu, L("Bring All to Front"), #selector(NSApplication.arrangeInFront(_:)))
         return menu
     }
 
@@ -170,8 +170,8 @@ enum MainMenu {
 
     private static func helpMenu() -> NSMenu {
         let menu = NSMenu()
-        add(menu, "Lorca Help", #selector(AppDelegate.showHelp(_:)), "?")
-        add(menu, "Architecture Notes", #selector(AppDelegate.showArchitecture(_:)))
+        add(menu, L("Lorca Help"), #selector(AppDelegate.showHelp(_:)), "?")
+        add(menu, L("Architecture Notes"), #selector(AppDelegate.showArchitecture(_:)))
         return menu
     }
 }

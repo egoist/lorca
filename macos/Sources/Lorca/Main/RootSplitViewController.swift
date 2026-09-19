@@ -461,7 +461,7 @@ final class RootSplitViewController: NSSplitViewController {
             return
         }
         let sheet = BotPickerViewController(
-            title: "Add a bot to \(store.title(for: chat))",
+            title: L("Add a bot to %@", store.title(for: chat)),
             bots: available
         ) { [weak self] botID in
             self?.store.addBot(botID, to: chatID)
@@ -475,14 +475,14 @@ final class RootSplitViewController: NSSplitViewController {
             return
         }
         let alert = NSAlert()
-        alert.messageText = "Rename Chat"
-        alert.informativeText = "Chat names live inside the encrypted roster blob, never on the relay."
-        alert.addButton(withTitle: "Rename")
-        alert.addButton(withTitle: "Cancel")
+        alert.messageText = L("Rename Chat")
+        alert.informativeText = L("Chat names live inside the encrypted roster blob, never on the relay.")
+        alert.addButton(withTitle: L("Rename"))
+        alert.addButton(withTitle: L("Cancel"))
 
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
         field.stringValue = store.title(for: chat)
-        field.placeholderString = "Chat name"
+        field.placeholderString = L("Chat name")
         alert.accessoryView = field
 
         guard let window = view.window else { return }
@@ -515,11 +515,11 @@ final class RootSplitViewController: NSSplitViewController {
             return
         }
         let alert = NSAlert()
-        alert.messageText = "Delete \"\(store.title(for: chat))\"?"
-        alert.informativeText = "The transcript is removed from this Device and from paired Devices."
+        alert.messageText = L("Delete \"%@\"?", store.title(for: chat))
+        alert.informativeText = L("The transcript is removed from this Device and from paired Devices.")
         alert.alertStyle = .warning
-        alert.addButton(withTitle: "Delete")
-        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: L("Delete"))
+        alert.addButton(withTitle: L("Cancel"))
         alert.buttons.first?.hasDestructiveAction = true
         alert.beginSheetModal(for: window) { [weak self] response in
             guard response == .alertFirstButtonReturn else { return }

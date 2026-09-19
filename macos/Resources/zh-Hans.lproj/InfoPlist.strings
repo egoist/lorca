@@ -1,0 +1,2 @@
+"NSMicrophoneUsageDescription" = "Lorca 在你听写消息时收听。";
+"NSSpeechRecognitionUsageDescription" = "Lorca 把你说的话转成消息文字。";

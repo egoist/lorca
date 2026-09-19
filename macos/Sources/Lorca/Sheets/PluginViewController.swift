@@ -9,10 +9,10 @@ final class PluginViewController: SheetViewController {
     private let runner: Device
     private let bot: Bot?
 
-    private let status = SectionView(title: "Status")
-    private let signIn = SectionView(title: "Sign-in")
-    private let variables = SectionView(title: "Setup")
-    private let skills = SectionView(title: "Skills")
+    private let status = SectionView(title: L("Status"))
+    private let signIn = SectionView(title: L("Sign-in"))
+    private let variables = SectionView(title: L("Setup", context: "plugin variables"))
+    private let skills = SectionView(title: L("Skills"))
     private let saveButton = NSButton()
     private let removeButton = NSButton()
     private let note = Build.label(
@@ -28,7 +28,7 @@ final class PluginViewController: SheetViewController {
         let plugin = runner.plugins.first { $0.id == pluginID }
         super.init(
             title: plugin?.name ?? pluginID,
-            subtitle: [plugin?.description ?? "", "Installed on \(runner.name)."].filter {
+            subtitle: [plugin?.description ?? "", L("Installed on %@.", runner.name)].filter {
                 !$0.isEmpty
             }.joined(separator: " "),
             width: 520
@@ -40,11 +40,11 @@ final class PluginViewController: SheetViewController {
 
     override func loadView() {
         super.loadView()
-        saveButton.title = "Save"
+        saveButton.title = L("Save")
         saveButton.bezelStyle = .rounded
         saveButton.target = self
         saveButton.action = #selector(save)
-        removeButton.title = "Remove…"
+        removeButton.title = L("Remove…")
         removeButton.bezelStyle = .rounded
         removeButton.target = self
         removeButton.action = #selector(confirmRemove)
@@ -63,16 +63,16 @@ final class PluginViewController: SheetViewController {
             note.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
             actions.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
         ])
-        setButtons(confirm: "Done", cancel: nil)
-        status.setRows([KeyValueRow(key: "State", value: "Loading…", tint: .secondaryLabelColor)])
+        setButtons(confirm: L("Done"), cancel: nil)
+        status.setRows([KeyValueRow(key: L("State"), value: L("Loading…"), tint: .secondaryLabelColor)])
         signIn.isHidden = true
         variables.isHidden = true
         skills.isHidden = true
         saveButton.isHidden = true
         note.stringValue =
             runner.isThisDevice
-            ? "Keys and sign-ins stay on this device."
-            : "Keys and sign-ins are sent sealed to \(runner.name) and stay there. A sign-in opens the browser on \(runner.name)."
+            ? L("Keys and sign-ins stay on this device.")
+            : L("Keys and sign-ins are sent sealed to %@ and stay there. A sign-in opens the browser on %@.", runner.name, runner.name)
         load()
     }
 
@@ -98,7 +98,7 @@ final class PluginViewController: SheetViewController {
                 self.render(detail)
             } catch {
                 self.status.setRows([
-                    KeyValueRow(key: "State", value: error.localizedDescription, tint: .systemRed)
+                    KeyValueRow(key: L("State"), value: error.localizedDescription, tint: .systemRed)
                 ])
                 self.fitSheetToContent()
             }
@@ -107,14 +107,14 @@ final class PluginViewController: SheetViewController {
 
     private func render(_ detail: PluginDetail) {
         var statusRows: [NSView] = [
-            KeyValueRow(key: "State", value: detail.status.detail, tint: detail.status.stateColor)
+            KeyValueRow(key: L("State"), value: detail.status.detail, tint: detail.status.stateColor)
         ]
         let rules = store.autoReview.rules.filter { $0.tool?.hasPrefix("\(pluginID)/") == true }
         if !rules.isEmpty {
             let always = ActionRow(
-                key: "Always allowed",
+                key: L("Always allowed", context: "plugin tools"),
                 value: rules.map { String(($0.tool ?? "").dropFirst(pluginID.count + 1)) }.joined(
-                    separator: ", "), tint: .labelColor, actionTitle: "Reset")
+                    separator: ", "), tint: .labelColor, actionTitle: L("Reset"))
             always.onAction = { [weak self] in
                 guard let self else { return }
                 var review = self.store.autoReview
@@ -126,8 +126,8 @@ final class PluginViewController: SheetViewController {
         }
         if let homepage = detail.homepage, let url = URL(string: homepage) {
             let site = ActionRow(
-                key: "Site", value: url.host ?? homepage, tint: .secondaryLabelColor,
-                actionTitle: "Open")
+                key: L("Site"), value: url.host ?? homepage, tint: .secondaryLabelColor,
+                actionTitle: L("Open"))
             site.onAction = { NSWorkspace.shared.open(url) }
             statusRows.append(site)
         }
@@ -138,10 +138,10 @@ final class PluginViewController: SheetViewController {
         signIn.setRows(
             oauthServers.map { server in
                 let row = ActionRow(
-                    key: oauthServers.count > 1 ? server.name : "Account",
-                    value: server.signedIn ? "Signed in" : "Not signed in",
+                    key: oauthServers.count > 1 ? server.name : L("Account"),
+                    value: server.signedIn ? L("Signed in") : L("Not signed in"),
                     tint: server.signedIn ? .systemGreen : .secondaryLabelColor,
-                    actionTitle: server.signedIn ? "Sign in again" : "Sign in")
+                    actionTitle: server.signedIn ? L("Sign in again") : L("Sign in"))
                 row.onAction = { [weak self] in self?.connect() }
                 return row
             })
@@ -154,8 +154,8 @@ final class PluginViewController: SheetViewController {
                 let field: NSTextField = variable.secret ? NSSecureTextField() : NSTextField()
                 field.placeholderString =
                     variable.secret
-                    ? (variable.isSet ? "Set · type to replace" : "Not set")
-                    : (variable.isSet ? "" : "Not set")
+                    ? (variable.isSet ? L("Set · type to replace") : L("Not set"))
+                    : (variable.isSet ? "" : L("Not set"))
                 field.stringValue = variable.secret ? "" : (variable.value ?? "")
                 field.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
                 field.controlSize = .small
@@ -186,7 +186,7 @@ final class PluginViewController: SheetViewController {
                     self.pluginID, on: self.runner.id, variables: values)
                 self.load()
             } catch {
-                self.alert("Couldn't save", error.localizedDescription)
+                self.alert(L("Couldn't save"), error.localizedDescription)
             }
         }
     }
@@ -197,11 +197,11 @@ final class PluginViewController: SheetViewController {
             do {
                 let message = try await self.store.connectPlugin(self.pluginID, on: self.runner.id)
                 self.status.setRows([
-                    KeyValueRow(key: "State", value: message, tint: .controlAccentColor)
+                    KeyValueRow(key: L("State"), value: message, tint: .controlAccentColor)
                 ])
                 self.fitSheetToContent()
             } catch {
-                self.alert("Couldn't start the sign-in", error.localizedDescription)
+                self.alert(L("Couldn't start the sign-in"), error.localizedDescription)
             }
         }
     }
@@ -210,11 +210,11 @@ final class PluginViewController: SheetViewController {
         guard let window = view.window else { return }
         let name = runner.plugins.first { $0.id == pluginID }?.name ?? pluginID
         let alert = NSAlert()
-        alert.messageText = "Remove \(name) from \(runner.name)?"
+        alert.messageText = L("Remove %@ from %@?", name, runner.name)
         alert.informativeText =
-            "Every bot on \(runner.name) loses it, and its keys and sign-ins there are forgotten."
-        alert.addButton(withTitle: "Remove")
-        alert.addButton(withTitle: "Cancel")
+            L("Every bot on %@ loses it, and its keys and sign-ins there are forgotten.", runner.name)
+        alert.addButton(withTitle: L("Remove"))
+        alert.addButton(withTitle: L("Cancel"))
         alert.alertStyle = .warning
         alert.beginSheetModal(for: window) { [weak self] response in
             guard let self, response == .alertFirstButtonReturn else { return }
@@ -224,7 +224,7 @@ final class PluginViewController: SheetViewController {
                     try await self.store.uninstallPlugin(self.pluginID, on: self.runner.id)
                     self.dismiss(nil)
                 } catch {
-                    self.alert("Couldn't remove it", error.localizedDescription)
+                    self.alert(L("Couldn't remove it"), error.localizedDescription)
                 }
             }
         }

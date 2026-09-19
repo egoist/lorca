@@ -1,6 +1,8 @@
 // The domain model as the core reports it over the JSON API (crates/cli/src/model.rs and the
 // snapshot in app.rs). Field names are the wire names.
 
+import { t } from "../i18n";
+
 export const MAX_GROUP_BOTS = 6;
 export const ONLINE_WINDOW_SECS = 150;
 
@@ -117,8 +119,8 @@ export function isImage(attachment: Attachment): boolean {
 export function attachmentSummary(attachments: Attachment[]): string {
   const first = attachments[0];
   if (!first) return "";
-  if (attachments.length === 1) return isImage(first) ? "Photo" : first.name;
-  return attachments.every(isImage) ? `${attachments.length} photos` : `${attachments.length} files`;
+  if (attachments.length === 1) return isImage(first) ? t("Photo") : first.name;
+  return attachments.every(isImage) ? t("{count} photos", { count: attachments.length }) : t("{count} files", { count: attachments.length });
 }
 
 export function fileSize(bytes: number): string {
@@ -236,5 +238,14 @@ export const THINKING_LEVELS: Record<string, string[]> = {
 };
 
 export function thinkingLabel(level: string): string {
-  return level === "xhigh" ? "Extra high" : level.charAt(0).toUpperCase() + level.slice(1);
+  const labels: Record<string, string> = {
+    off: t("Off"),
+    minimal: t("Minimal"),
+    low: t("Low"),
+    medium: t("Medium"),
+    high: t("High"),
+    xhigh: t("Extra high"),
+    max: t("Max"),
+  };
+  return labels[level] ?? level.charAt(0).toUpperCase() + level.slice(1);
 }

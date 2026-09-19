@@ -221,16 +221,16 @@ final class ComposerView: NSView {
         textView = ComposerTextView(frame: .zero, textContainer: container)
 
         attachButton = ComposerButton(
-            symbol: "plus", pointSize: 14, weight: .medium, tooltip: "Attach files",
+            symbol: "plus", pointSize: 14, weight: .medium, tooltip: L("Attach files"),
             target: nil, action: #selector(attach))
         voiceButton = ComposerButton(
-            symbol: "mic.fill", pointSize: 13, weight: .medium, tooltip: "Dictate · right-click for the language",
+            symbol: "mic.fill", pointSize: 13, weight: .medium, tooltip: L("Dictate · right-click for the language"),
             target: nil, action: #selector(voice))
         sendButton = ComposerButton(
-            symbol: "arrow.up", pointSize: 13, weight: .bold, tooltip: "Send",
+            symbol: "arrow.up", pointSize: 13, weight: .bold, tooltip: L("Send"),
             target: nil, action: #selector(send))
         stopButton = ComposerButton(
-            symbol: "stop.fill", pointSize: 11, weight: .bold, tooltip: "Stop responding (⌘.)",
+            symbol: "stop.fill", pointSize: 11, weight: .bold, tooltip: L("Stop responding (⌘.)"),
             target: nil, action: #selector(stop))
         trailing = Build.stack([voiceButton, sendButton, stopButton], orientation: .horizontal, spacing: 4)
 
@@ -420,8 +420,8 @@ final class ComposerView: NSView {
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = true
-        panel.message = "Attach files to your message"
-        panel.prompt = "Attach"
+        panel.message = L("Attach files to your message")
+        panel.prompt = L("Attach")
         panel.beginSheetModal(for: window) { [weak self] response in
             guard response == .OK, let self else { return }
             _ = addFiles(panel.urls)
@@ -438,7 +438,7 @@ final class ComposerView: NSView {
         var added = false
         for url in urls {
             if attachments.count >= OutgoingAttachment.maxCount {
-                problems.append("At most \(OutgoingAttachment.maxCount) files per message.")
+                problems.append(L("At most %d files per message.", OutgoingAttachment.maxCount))
                 break
             }
             do {
@@ -451,7 +451,7 @@ final class ComposerView: NSView {
         if added { updateAttachments() }
         if !problems.isEmpty, let window {
             let alert = NSAlert()
-            alert.messageText = "Some files were not attached"
+            alert.messageText = L("Some files were not attached")
             alert.informativeText = problems.joined(separator: "\n")
             alert.beginSheetModal(for: window)
         }
@@ -586,11 +586,11 @@ final class ComposerView: NSView {
     private func report(_ failure: Dictation.Failure) {
         guard let window else { return }
         let alert = NSAlert()
-        alert.messageText = "Dictation could not start"
+        alert.messageText = L("Dictation could not start")
         alert.informativeText = failure.localizedDescription
-        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: L("OK"))
         if failure.settingsPane != nil {
-            alert.addButton(withTitle: "Open System Settings")
+            alert.addButton(withTitle: L("Open System Settings"))
         }
         alert.beginSheetModal(for: window) { response in
             if response == .alertSecondButtonReturn, let pane = failure.settingsPane,
@@ -710,11 +710,11 @@ final class ComposerView: NSView {
         voiceButton.isHidden = listening
         // Dictation is the primary action only while nothing else is.
         voiceButton.style = sendButton.isHidden && stopButton.isHidden ? .primary : .plain
-        let mentionHint = mentionableBots.count > 1 ? " · @ to mention" : ""
+        let mentionHint = mentionableBots.count > 1 ? L(" · @ to mention") : ""
         sendButton.toolTip =
             Preferences.sendOnReturn
-            ? "Send (Return) · Shift-Return for a new line\(mentionHint)"
-            : "Send (⌘Return)\(mentionHint)"
+            ? L("Send (Return) · Shift-Return for a new line") + mentionHint
+            : L("Send (⌘Return)") + mentionHint
     }
 
     // MARK: - Mentions
@@ -823,7 +823,7 @@ extension ComposerView: NSMenuDelegate {
         menu.removeAllItems()
         let chosen = Preferences.dictationLanguage
         let automatic = NSMenuItem(
-            title: "Automatic (\(Dictation.displayName(Dictation.automaticLocale())))", action: #selector(chooseLanguage(_:)), keyEquivalent: "")
+            title: L("Automatic (%@)", Dictation.displayName(Dictation.automaticLocale())), action: #selector(chooseLanguage(_:)), keyEquivalent: "")
         automatic.target = self
         automatic.state = chosen == nil ? .on : .off
         menu.addItem(automatic)
@@ -859,10 +859,10 @@ final class RecordingPill: BackgroundView {
         fillColor = Theme.composerControl.withAlphaComponent(0.1)
         stop.image = Glyph.symbol("stop.fill", pointSize: 10, weight: .bold, color: .labelColor)
         stop.translatesAutoresizingMaskIntoConstraints = false
-        toolTip = "Stop recording"
+        toolTip = L("Stop recording")
         setAccessibilityElement(true)
         setAccessibilityRole(.button)
-        setAccessibilityLabel("Stop recording")
+        setAccessibilityLabel(L("Stop recording"))
         elapsed.textColor = .labelColor
         elapsed.setContentCompressionResistancePriority(.required, for: .horizontal)
         let stack = Build.stack([stop, elapsed, bars], orientation: .horizontal, spacing: 6)

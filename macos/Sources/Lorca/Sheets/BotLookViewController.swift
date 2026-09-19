@@ -46,8 +46,8 @@ final class BotLookViewController: SheetViewController {
         symbolName = bot?.symbolName ?? "sparkles"
         accent = bot?.accent ?? .indigo
         super.init(
-            title: "Look",
-            subtitle: "Pick a symbol and a color, or use an image of your own. Paired Devices see the same look.",
+            title: L("Look"),
+            subtitle: L("Pick a symbol and a color, or use an image of your own. Paired Devices see the same look."),
             width: 400
         )
     }
@@ -93,14 +93,14 @@ final class BotLookViewController: SheetViewController {
             symbolGrid.bottomAnchor.constraint(equalTo: symbolRow.bottomAnchor),
         ])
 
-        chooseButton.title = "Choose Image…"
+        chooseButton.title = L("Choose Image…")
         chooseButton.bezelStyle = .rounded
         chooseButton.controlSize = .regular
         chooseButton.target = self
         chooseButton.action = #selector(chooseImage)
         chooseButton.translatesAutoresizingMaskIntoConstraints = false
 
-        removeButton.title = "Remove Image"
+        removeButton.title = L("Remove Image")
         removeButton.bezelStyle = .rounded
         removeButton.controlSize = .regular
         removeButton.target = self
@@ -111,11 +111,11 @@ final class BotLookViewController: SheetViewController {
 
         let rows: [NSView] = [
             previewRow,
-            heading("Symbol"),
+            heading(L("Symbol")),
             symbolRow,
-            heading("Color"),
+            heading(L("Color")),
             accentRow,
-            heading("Image"),
+            heading(L("Image")),
             imageRow,
             caption,
         ]
@@ -130,7 +130,7 @@ final class BotLookViewController: SheetViewController {
         contentStack.setCustomSpacing(16, after: accentRow)
         contentStack.setCustomSpacing(6, after: rows[5])
 
-        setButtons(confirm: "Save")
+        setButtons(confirm: L("Save"))
         refresh()
     }
 
@@ -166,13 +166,26 @@ final class BotLookViewController: SheetViewController {
         for accent in Accent.allCases {
             let tile = LookTile(size: NSSize(width: 26, height: 26), cornerRadius: 13)
             tile.fill = accent.color
-            tile.toolTip = accent.rawValue.capitalized
+            tile.toolTip = Self.title(for: accent)
             tile.onClick = { [weak self] in
                 self?.accent = accent
                 self?.refresh()
             }
             accentTiles.append(tile)
             accentRow.addArrangedSubview(tile)
+        }
+    }
+
+    private static func title(for accent: Accent) -> String {
+        switch accent {
+        case .indigo: L("Indigo")
+        case .blue: L("Blue")
+        case .teal: L("Teal")
+        case .green: L("Green")
+        case .orange: L("Orange")
+        case .pink: L("Pink")
+        case .purple: L("Purple")
+        case .red: L("Red")
         }
     }
 
@@ -201,8 +214,8 @@ final class BotLookViewController: SheetViewController {
 
         removeButton.isHidden = !hasImage
         caption.stringValue = hasImage
-            ? "The image shows in place of the symbol and color. It is resized to \(Int(Self.imageSide)) px and shared encrypted, like an attachment."
-            : "Images are resized to \(Int(Self.imageSide)) px and shared encrypted, like an attachment."
+            ? L("The image shows in place of the symbol and color. It is resized to %d px and shared encrypted, like an attachment.", Int(Self.imageSide))
+            : L("Images are resized to %d px and shared encrypted, like an attachment.", Int(Self.imageSide))
         fitSheetToContent()
     }
 
@@ -212,12 +225,12 @@ final class BotLookViewController: SheetViewController {
         panel.allowedContentTypes = [.image]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
-        panel.message = "Choose an image for this bot."
+        panel.message = L("Choose an image for this bot.")
         panel.beginSheetModal(for: window) { [weak self] response in
             guard let self, response == .OK, let url = panel.url else { return }
             guard let prepared = Self.prepare(imageAt: url) else {
                 let alert = NSAlert()
-                alert.messageText = "That file could not be read as an image."
+                alert.messageText = L("That file could not be read as an image.")
                 alert.runModal()
                 return
             }

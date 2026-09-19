@@ -19,7 +19,7 @@ final class SettingsWindowController: NSWindowController {
         }
 
         let window = NSWindow(contentViewController: tabController)
-        window.title = "Settings"
+        window.title = L("Settings")
         window.styleMask.insert(.closable)
         window.styleMask.remove(.resizable)
         window.setContentSize(NSSize(width: 560, height: 420))
@@ -120,17 +120,18 @@ class SettingsPaneViewController: NSViewController {
 
 final class GeneralSettingsViewController: SettingsPaneViewController {
     private let appearance = SettingsPopUpButton()
+    private let appLanguage = SettingsPopUpButton()
     private let dictationLanguage = SettingsPopUpButton()
     private lazy var version = ActionRow(
-        key: SettingsEntry.version.row, value: "", tint: .secondaryLabelColor, actionTitle: "Check for Updates…")
+        key: SettingsEntry.version.row, value: "", tint: .secondaryLabelColor, actionTitle: L("Check for Updates…"))
     private lazy var automaticDownloads = toggle(
         Updater.shared.automaticallyDownloadsUpdates, #selector(toggleAutomaticDownloads))
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        title = "General"
+        title = L("General")
 
-        let chats = SectionView(title: "Chats")
+        let chats = SectionView(title: L("Chats"))
         chats.setRows([
             AccessoryRow(
                 key: SettingsEntry.sendOnReturn.row,
@@ -141,20 +142,36 @@ final class GeneralSettingsViewController: SettingsPaneViewController {
         ])
         addSection(chats)
 
-        appearance.addItems(withTitles: ["System", "Light", "Dark"])
+        appearance.addItems(withTitles: [L("System"), L("Light"), L("Dark")])
         switch NSApp.appearance?.name {
         case .aqua?: appearance.selectItem(at: 1)
         case .darkAqua?: appearance.selectItem(at: 2)
         default: appearance.selectItem(at: 0)
         }
         configure(appearance, action: #selector(changeAppearance))
-        let look = SectionView(title: "Appearance")
-        look.setRows([AccessoryRow(key: SettingsEntry.appearance.row, accessory: appearance)])
+        let look = SectionView(title: L("Appearance"))
+        // The app's own language. Each one is named in itself, so it reads whatever is showing.
+        appLanguage.addItem(withTitle: L("System"))
+        appLanguage.menu?.addItem(.separator())
+        for (code, name) in [("en", "English"), ("zh-Hans", "简体中文")] {
+            appLanguage.addItem(withTitle: name)
+            appLanguage.lastItem?.representedObject = code
+        }
+        if let chosen = AppLanguage.chosen,
+            let item = appLanguage.itemArray.first(where: { $0.representedObject as? String == chosen })
+        {
+            appLanguage.select(item)
+        }
+        configure(appLanguage, action: #selector(changeAppLanguage))
+        look.setRows([
+            AccessoryRow(key: SettingsEntry.appearance.row, accessory: appearance),
+            AccessoryRow(key: SettingsEntry.appLanguage.row, accessory: appLanguage),
+        ])
         addSection(look)
 
         // The language the Dictate button listens in. Automatic follows the keyboard input
         // source, then the system languages.
-        dictationLanguage.addItem(withTitle: "Automatic (\(Dictation.displayName(Dictation.automaticLocale())))")
+        dictationLanguage.addItem(withTitle: L("Automatic (%@)", Dictation.displayName(Dictation.automaticLocale())))
         dictationLanguage.menu?.addItem(.separator())
         for locale in Dictation.supportedLocales {
             dictationLanguage.addItem(withTitle: Dictation.displayName(locale))
@@ -166,14 +183,14 @@ final class GeneralSettingsViewController: SettingsPaneViewController {
             dictationLanguage.select(item)
         }
         configure(dictationLanguage, action: #selector(changeDictationLanguage))
-        let dictation = SectionView(title: "Dictation")
+        let dictation = SectionView(title: L("Dictation"))
         dictation.setRows([AccessoryRow(key: SettingsEntry.dictationLanguage.row, accessory: dictationLanguage)])
         addSection(dictation)
 
         if Updater.isEnabled {
             version.onAction = { Updater.shared.checkForUpdates() }
             automaticDownloads.isEnabled = Updater.shared.automaticallyChecksForUpdates
-            let updates = SectionView(title: "Updates")
+            let updates = SectionView(title: L("Updates"))
             updates.setRows([
                 version,
                 AccessoryRow(
@@ -188,7 +205,7 @@ final class GeneralSettingsViewController: SettingsPaneViewController {
         }
 
         addFootnote(
-            "Lorca talks only to the CLI on this Mac. Nothing here is synced; each Device keeps its own settings."
+            L("Lorca talks only to the CLI on this Mac. Nothing here is synced; each Device keeps its own settings.")
         )
     }
 
@@ -231,6 +248,12 @@ final class GeneralSettingsViewController: SettingsPaneViewController {
         Preferences.dictationLanguage = dictationLanguage.selectedItem?.representedObject as? String
     }
 
+    /// The app says everything again in the new language: `AppDelegate` rebuilds the menu and
+    /// the window, and lands back on this pane.
+    @objc private func changeAppLanguage() {
+        AppLanguage.choose(appLanguage.selectedItem?.representedObject as? String)
+    }
+
     @objc private func changeAppearance() {
         switch appearance.indexOfSelectedItem {
         case 1: NSApp.appearance = NSAppearance(named: .aqua)
@@ -248,7 +271,7 @@ final class AdvancedSettingsViewController: SettingsPaneViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        title = "Advanced"
+        title = L("Advanced")
 
         relay.field.stringValue = AppStore.shared.relayURL ?? Preferences.relayURL
         port.field.stringValue = "\(Preferences.cliPort)"
@@ -256,22 +279,22 @@ final class AdvancedSettingsViewController: SettingsPaneViewController {
             row.field.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
             row.onCommit = { [weak self] in self?.commit() }
         }
-        let connection = SectionView(title: "Connection")
+        let connection = SectionView(title: L("Connection"))
         connection.setRows([relay, port])
         addSection(connection)
         addFootnote(
-            "Self-hosting the relay is a URL change: clients sign their requests and upload ciphertext, so the relay has nothing to trust. Leave it empty to run on this Mac alone."
+            L("Self-hosting the relay is a URL change: clients sign their requests and upload ciphertext, so the relay has nothing to trust. Leave it empty to run on this Mac alone.")
         )
 
         let onboarding = ActionRow(
-            key: SettingsEntry.onboarding.row, value: "", tint: .secondaryLabelColor, actionTitle: "Show Onboarding Again")
+            key: SettingsEntry.onboarding.row, value: "", tint: .secondaryLabelColor, actionTitle: L("Show Onboarding Again"))
         // Onboarding closes the window this row is in, so the click returns first.
         onboarding.onAction = {
             DispatchQueue.main.async {
                 NSApp.sendAction(#selector(AppDelegate.showOnboarding(_:)), to: nil, from: nil)
             }
         }
-        let setup = SectionView(title: "Setup")
+        let setup = SectionView(title: L("Setup"))
         setup.setRows([onboarding])
         addSection(setup)
     }

@@ -18,8 +18,10 @@ final class MemoryViewController: SheetViewController {
         self.bot = bot
         self.memory = memory
         super.init(
-            title: "\(bot.name)'s memory",
-            subtitle: "MEMORY.md opens at the start of every turn: the first \(memory.maxLines) lines or \(Format.kilobytes(memory.maxBytes)), whichever cuts first. Longer notes belong in memory/<topic>.md files the bot reads on demand.",
+            title: L("%@'s memory", bot.name),
+            subtitle: L(
+                "MEMORY.md opens at the start of every turn: the first %d lines or %@, whichever cuts first. Longer notes belong in memory/<topic>.md files the bot reads on demand.",
+                memory.maxLines, Format.kilobytes(memory.maxBytes)),
             width: 560
         )
     }
@@ -58,7 +60,7 @@ final class MemoryViewController: SheetViewController {
             gauge.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
         ])
 
-        setButtons(confirm: "Save")
+        setButtons(confirm: L("Save"))
         updateGauge()
     }
 
@@ -74,10 +76,17 @@ final class MemoryViewController: SheetViewController {
         let bytes = text.utf8.count
         let overLines = lines > memory.maxLines
         let overBytes = bytes > memory.maxBytes
-        var status = "\(lines) \(lines == 1 ? "line" : "lines") of \(memory.maxLines) · \(Format.kilobytes(bytes)) of \(Format.kilobytes(memory.maxBytes))"
+        var status =
+            lines == 1
+            ? L("%d line of %d · %@ of %@", lines, memory.maxLines, Format.kilobytes(bytes), Format.kilobytes(memory.maxBytes))
+            : L("%d lines of %d · %@ of %@", lines, memory.maxLines, Format.kilobytes(bytes), Format.kilobytes(memory.maxBytes))
         if overLines || overBytes {
             let hidden = overLines ? lines - memory.maxLines : 0
-            status += hidden > 0 ? " · \(hidden) \(hidden == 1 ? "line" : "lines") past the budget will not load" : " · the end will not load"
+            status += " · " + (hidden > 0
+                ? (hidden == 1
+                    ? L("%d line past the budget will not load", hidden)
+                    : L("%d lines past the budget will not load", hidden))
+                : L("the end will not load"))
             gauge.textColor = .systemRed
         } else if Double(lines) >= Double(memory.maxLines) * 0.8 || Double(bytes) >= Double(memory.maxBytes) * 0.8 {
             gauge.textColor = .systemOrange
@@ -106,7 +115,7 @@ final class MemoryViewController: SheetViewController {
                     self.resolveConflict()
                 } else {
                     let alert = NSAlert()
-                    alert.messageText = "Couldn't save the memory"
+                    alert.messageText = L("Couldn't save the memory")
                     alert.informativeText = error.localizedDescription
                     alert.beginSheetModal(for: self.view.window!, completionHandler: nil)
                 }
@@ -117,11 +126,11 @@ final class MemoryViewController: SheetViewController {
     /// The bot wrote while the user was editing: show the bot's version, or write over it.
     private func resolveConflict() {
         let alert = NSAlert()
-        alert.messageText = "\(bot.name) changed this file while you were editing"
-        alert.informativeText = "Reload shows \(bot.name)'s version and discards your draft. Overwrite saves yours over it."
-        alert.addButton(withTitle: "Reload")
-        alert.addButton(withTitle: "Overwrite with mine")
-        alert.addButton(withTitle: "Cancel")
+        alert.messageText = L("%@ changed this file while you were editing", bot.name)
+        alert.informativeText = L("Reload shows %@'s version and discards your draft. Overwrite saves yours over it.", bot.name)
+        alert.addButton(withTitle: L("Reload"))
+        alert.addButton(withTitle: L("Overwrite with mine"))
+        alert.addButton(withTitle: L("Cancel"))
         guard let window = view.window else { return }
         alert.beginSheetModal(for: window) { [weak self] response in
             guard let self else { return }

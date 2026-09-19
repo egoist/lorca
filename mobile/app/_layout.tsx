@@ -6,6 +6,7 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { engine } from "../src/core/engine";
 import { useStore } from "../src/core/store";
+import { t, useLanguage } from "../src/i18n";
 import { usePalette } from "../src/ui/theme";
 
 export default function RootLayout() {
@@ -13,6 +14,7 @@ export default function RootLayout() {
   const paired = useStore((s) => s.paired);
   const p = usePalette();
   const scheme = useColorScheme();
+  const { language } = useLanguage();
 
   useEffect(() => {
     void engine.start();
@@ -36,7 +38,8 @@ export default function RootLayout() {
       <KeyboardProvider>
         <StatusBar style={scheme === "dark" ? "light" : "dark"} />
         {/* The native bar takes its light/dark appearance from the navigation theme, not the OS. */}
-        <ThemeProvider value={p.dark ? DarkTheme : DefaultTheme}>
+        {/* A new language mounts the screens again, so every title and label is said anew. */}
+        <ThemeProvider key={language} value={p.dark ? DarkTheme : DefaultTheme}>
           <Stack
             screenOptions={{
               headerTintColor: p.tint as any,
@@ -46,7 +49,7 @@ export default function RootLayout() {
             }}
           >
             <Stack.Protected guard={paired}>
-              <Stack.Screen name="index" options={{ title: "Chats", headerTitle: "", headerLargeTitle: false, headerShadowVisible: false, headerTransparent: Platform.OS === "ios" }} />
+              <Stack.Screen name="index" options={{ title: t("Chats"), headerTitle: "", headerLargeTitle: false, headerShadowVisible: false, headerTransparent: Platform.OS === "ios" }} />
               <Stack.Screen name="chat/[id]" options={{ headerTransparent: Platform.OS === "ios" }} />
               <Stack.Screen name="chat-info" options={{ ...sheet, headerShown: false, sheetAllowedDetents: [0.7, 1], sheetGrabberVisible: true }} />
               <Stack.Screen name="message/[id]" options={{ ...sheet, sheetAllowedDetents: [0.5, 1], sheetGrabberVisible: true }} />

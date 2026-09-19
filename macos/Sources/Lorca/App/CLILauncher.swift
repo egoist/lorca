@@ -15,10 +15,10 @@ final class CLILauncher {
 
         var message: String {
             switch self {
-            case .idle: "Waiting to start the CLI"
-            case .probing: "Looking for the CLI…"
-            case .starting: "Starting the CLI…"
-            case let .running(external): external ? "Using the CLI already running on this Mac" : "CLI started by the app"
+            case .idle: L("Waiting to start the CLI")
+            case .probing: L("Looking for the CLI…")
+            case .starting: L("Starting the CLI…")
+            case let .running(external): external ? L("Using the CLI already running on this Mac") : L("CLI started by the app")
             case let .failed(reason): reason
             }
         }
@@ -94,7 +94,7 @@ final class CLILauncher {
 
     private func spawn() {
         guard let binary = Self.locateBinary() else {
-            status = .failed("The lorca CLI is not bundled with this build and is not on PATH.")
+            status = .failed(L("The lorca CLI is not bundled with this build and is not on PATH."))
             return
         }
         status = .starting
@@ -125,7 +125,7 @@ final class CLILauncher {
                 self.logHandle = nil
                 guard !self.stopping else { return }
                 let code = finished.terminationStatus
-                self.status = .failed("The CLI exited with code \(code). See \(logURL.path).")
+                self.status = .failed(L("The CLI exited with code %d. See %@.", Int(code), logURL.path))
                 let delay = self.restartDelay
                 self.restartDelay = min(self.restartDelay * 2, 15)
                 try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
@@ -138,7 +138,7 @@ final class CLILauncher {
             self.process = process
             status = .running(external: false)
         } catch {
-            status = .failed("Could not start \(binary.path): \(error.localizedDescription)")
+            status = .failed(L("Could not start %@: %@", binary.path, error.localizedDescription))
         }
     }
 

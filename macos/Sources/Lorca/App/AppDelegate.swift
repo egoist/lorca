@@ -20,6 +20,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         store.observe(self) { [weak self] event in
             if case .identityChanged = event { self?.identityStateChanged() }
         }
+        NotificationCenter.default.addObserver(forName: AppLanguage.didChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.languageChanged() }
+        }
         Notifier.shared.visibleChat = { [weak self] in
             guard let controller = self?.mainWindowController, let window = controller.window, window.isVisible, !window.isMiniaturized,
                 case let .chat(id) = controller.root.selection
@@ -97,6 +100,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mainWindowController?.showWindow(nil)
         mainWindowController?.window?.makeKeyAndOrderFront(nil)
         activate()
+    }
+
+    /// Views take their words when they are built, so a new language builds them again: the
+    /// menu bar, then the window in the same place on the same selection (Settings › General,
+    /// where the language is picked), or the small settings window while onboarding is up.
+    private func languageChanged() {
+        NSApp.mainMenu = MainMenu.build()
+        if let old = mainWindowController {
+            let selection = old.root.selection
+            let wasVisible = old.window?.isVisible == true
+            old.window?.saveFrame(usingName: "LorcaMainWindow")
+            old.close()
+            let controller = MainWindowController()
+            mainWindowController = controller
+            if wasVisible {
+                controller.showWindow(nil)
+                controller.window?.makeKeyAndOrderFront(nil)
+            }
+            controller.root.select(selection)
+        }
+        if let old = settingsWindowController {
+            let frame = old.window?.frame
+            old.close()
+            let controller = SettingsWindowController()
+            settingsWindowController = controller
+            controller.showWindow(nil)
+            if let frame { controller.window?.setFrame(frame, display: true) }
+            controller.window?.makeKeyAndOrderFront(nil)
+        }
     }
 
     private func presentOnboarding() {
@@ -178,28 +210,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func showHelp(_ sender: Any?) {
         presentNote(
-            title: "Lorca runs on Devices you own",
-            body: """
-                Every bot is assigned to a Runner: a Device running macOS, Linux, or Windows. That machine's CLI \
-                runs the turn with your account's provider credentials, so a bot on an offline Runner waits \
-                until it reconnects. Phones and tablets pair as Devices but never run bots.
-
-                The app talks only to the local CLI on 127.0.0.1:\(Preferences.cliPort). Start it with \
-                `lorca serve`; the CLI holds your keys and provider credentials, which reach your other Devices encrypted.
-                """
+            title: L("Lorca runs on Devices you own"),
+            body: L(
+                "Every bot is assigned to a Runner: a Device running macOS, Linux, or Windows. That machine's CLI runs the turn with your account's provider credentials, so a bot on an offline Runner waits until it reconnects. Phones and tablets pair as Devices but never run bots.\n\nThe app talks only to the local CLI on 127.0.0.1:%@. Start it with `lorca serve`; the CLI holds your keys and provider credentials, which reach your other Devices encrypted.",
+                String(Preferences.cliPort))
         )
     }
 
     @objc func showArchitecture(_ sender: Any?) {
         presentNote(
-            title: "Three processes",
-            body: """
-                The app talks only to the local CLI over a localhost websocket. The CLI holds the keys, \
-                runs the agent loop, and syncs ciphertext with the relay. The relay stores public keys \
-                and opaque blobs.
-
-                Full notes live in ARCHITECTURE.md.
-                """
+            title: L("Three processes"),
+            body: L(
+                "The app talks only to the local CLI over a localhost websocket. The CLI holds the keys, runs the agent loop, and syncs ciphertext with the relay. The relay stores public keys and opaque blobs.\n\nFull notes live in ARCHITECTURE.md.")
         )
     }
 
@@ -208,7 +230,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.messageText = title
         alert.informativeText = body
         alert.alertStyle = .informational
-        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: L("OK"))
         if let window = NSApp.keyWindow {
             alert.beginSheetModal(for: window)
         } else {

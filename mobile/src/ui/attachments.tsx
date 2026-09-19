@@ -9,6 +9,7 @@ import { Pressable, StyleSheet, Text, View, type ColorValue } from "react-native
 import { engine } from "../core/engine";
 import { fileSize, isImage, type Attachment } from "../core/model";
 import { useStore } from "../core/store";
+import { t } from "../i18n";
 import { Symbol } from "./Symbol";
 import { Font, usePalette } from "./theme";
 
@@ -69,7 +70,7 @@ function AttachmentTile({ attachment, onUserBubble, maxWidth }: { attachment: At
         <Text style={[styles.name, { color: foreground }]} numberOfLines={1}>
           {attachment.name}
         </Text>
-        <Text style={[styles.size, { color: foreground, opacity: 0.7 }]}>{uri ? fileSize(attachment.size) : `${fileSize(attachment.size)} · fetching…`}</Text>
+        <Text style={[styles.size, { color: foreground, opacity: 0.7 }]}>{uri ? fileSize(attachment.size) : `${fileSize(attachment.size)} · ${t("fetching…")}`}</Text>
       </View>
     </View>
   );

@@ -20,6 +20,7 @@ import type { PickedFile } from "../core/engine";
 import { fileSize, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS, type Bot } from "../core/model";
 import { BotAvatar } from "./Avatar";
 import { pickDictationLanguage, supportedLanguages, useDictationLanguage } from "./dictation";
+import { t } from "../i18n";
 import { joinDictation } from "./format";
 import { Symbol } from "./Symbol";
 import { Font, usePalette } from "./theme";
@@ -125,7 +126,7 @@ export function Composer({
   }, [text, isGroup, members]);
 
   function insertMention(bot: Bot) {
-    setText((t) => t.replace(/@(\w*)$/, `@${bot.name} `));
+    setText((current) => current.replace(/@(\w*)$/, `@${bot.name} `));
   }
 
   function send() {
@@ -150,18 +151,18 @@ export function Composer({
       const next = [...current];
       for (const file of files) {
         if (next.length >= MAX_ATTACHMENTS) {
-          problems.push(`At most ${MAX_ATTACHMENTS} files per message.`);
+          problems.push(t("At most {count} files per message.", { count: MAX_ATTACHMENTS }));
           break;
         }
         if (file.size !== undefined && file.size > MAX_ATTACHMENT_BYTES) {
-          problems.push(`${file.name} is larger than ${MAX_ATTACHMENT_BYTES / 1024 / 1024} MB.`);
+          problems.push(t("{name} is larger than {size} MB.", { name: file.name, size: MAX_ATTACHMENT_BYTES / 1024 / 1024 }));
           continue;
         }
         next.push(file);
       }
       return next;
     });
-    if (problems.length) Alert.alert("Some files were not attached", problems.join("\n"));
+    if (problems.length) Alert.alert(t("Some files were not attached"), problems.join("\n"));
   }
 
   async function pickPhotos() {
@@ -178,9 +179,9 @@ export function Composer({
   async function takePhoto() {
     const permission = await ImagePicker.requestCameraPermissionsAsync();
     if (!permission.granted) {
-      Alert.alert("Camera access is off", "Allow the camera for Lorca in Settings to take a photo.", [
-        { text: "Settings", onPress: () => void Linking.openSettings() },
-        { text: "OK", style: "cancel" },
+      Alert.alert(t("Camera access is off"), t("Allow the camera for Lorca in Settings to take a photo."), [
+        { text: t("Settings"), onPress: () => void Linking.openSettings() },
+        { text: t("OK"), style: "cancel" },
       ]);
       return;
     }
@@ -203,14 +204,14 @@ export function Composer({
   }
 
   const sources: AttachSource[] = [
-    { title: "Photo Library", icon: "photo.on.rectangle", run: () => void pickPhotos() },
-    { title: "Take Photo", icon: "camera", run: () => void takePhoto() },
-    { title: "Choose File", icon: "folder", run: () => void pickFiles() },
+    { title: t("Photo Library"), icon: "photo.on.rectangle", run: () => void pickPhotos() },
+    { title: t("Take Photo"), icon: "camera", run: () => void takePhoto() },
+    { title: t("Choose File"), icon: "folder", run: () => void pickFiles() },
   ];
 
   // Android has no native pull-down menu here; a dialog lists the same sources.
   function attachDialog() {
-    Alert.alert("Attach", undefined, [...sources.map((a) => ({ text: a.title, onPress: a.run })), { text: "Cancel", style: "cancel" as const }]);
+    Alert.alert(t("Attach"), undefined, [...sources.map((a) => ({ text: a.title, onPress: a.run })), { text: t("Cancel"), style: "cancel" as const }]);
   }
 
   // MARK: - Dictation
@@ -250,7 +251,7 @@ export function Composer({
     if (words) setText(next);
     if (problem) {
       pendingSend.current = false;
-      Alert.alert("Dictation stopped", problem);
+      Alert.alert(t("Dictation stopped"), problem);
       return;
     }
     if (pendingSend.current) {
@@ -271,9 +272,9 @@ export function Composer({
     }
     const permission = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
     if (!permission.granted) {
-      Alert.alert("Dictation needs the microphone", "Allow the microphone and speech recognition for Lorca in Settings.", [
-        { text: "Settings", onPress: () => void Linking.openSettings() },
-        { text: "OK", style: "cancel" },
+      Alert.alert(t("Dictation needs the microphone"), t("Allow the microphone and speech recognition for Lorca in Settings."), [
+        { text: t("Settings"), onPress: () => void Linking.openSettings() },
+        { text: t("OK"), style: "cancel" },
       ]);
       return;
     }
@@ -301,7 +302,7 @@ export function Composer({
     Platform.OS === "ios" ? (
       <AttachMenu key="plus" sources={sources} tint={p.fill} label={p.label} />
     ) : (
-      <Pressable key="plus" onPress={attachDialog} style={({ pressed }) => [styles.disc, { backgroundColor: p.fill, opacity: pressed ? 0.6 : 1 }]} accessibilityLabel="Attach">
+      <Pressable key="plus" onPress={attachDialog} style={({ pressed }) => [styles.disc, { backgroundColor: p.fill, opacity: pressed ? 0.6 : 1 }]} accessibilityLabel={t("Attach")}>
         <Symbol name="plus" size={18} color={p.label} weight="medium" />
       </Pressable>
     );
@@ -312,7 +313,7 @@ export function Composer({
       onPress={() => ExpoSpeechRecognitionModule.stop()}
       style={({ pressed }) => [styles.pill, { backgroundColor: p.fill, opacity: pressed ? 0.7 : 1 }]}
       accessibilityRole="button"
-      accessibilityLabel={`Stop recording, ${elapsed} seconds`}
+      accessibilityLabel={t("Stop recording, {seconds} seconds", { seconds: elapsed })}
     >
       <View style={styles.stop}>
         <Symbol name="stop.fill" size={11} color={p.label} weight="bold" />
@@ -347,7 +348,7 @@ export function Composer({
       onBlur={() => setFocused(false)}
       keyboardAppearance={p.dark ? "dark" : "light"}
       style={[styles.input, expanded && styles.inputExpanded, { color: p.label, lineHeight, minHeight, maxHeight }]}
-      accessibilityLabel="Message"
+      accessibilityLabel={t("Message")}
     />
   );
 
@@ -357,8 +358,8 @@ export function Composer({
       onPress={primary === "send" ? send : () => void dictate()}
       onLongPress={primary === "dictate" ? () => void pickDictationLanguage() : undefined}
       style={({ pressed }) => [styles.disc, { backgroundColor: primary === "send" ? p.tint : p.fill, opacity: pressed ? 0.7 : 1 }]}
-      accessibilityLabel={primary === "send" ? "Send" : "Dictate"}
-      accessibilityHint={primary === "dictate" ? "Long press to choose the language" : undefined}
+      accessibilityLabel={primary === "send" ? t("Send") : t("Dictate")}
+      accessibilityHint={primary === "dictate" ? t("Long press to choose the language") : undefined}
     >
       <Symbol name={primary === "send" ? "arrow.up" : "mic.fill"} size={16} color={primary === "send" ? "#FFFFFF" : p.label} weight="bold" />
     </Pressable>
@@ -402,7 +403,7 @@ export function Composer({
                   onPress={() => setAttachments((current) => current.filter((_, i) => i !== index))}
                   hitSlop={8}
                   style={styles.remove}
-                  accessibilityLabel={`Remove ${file.name}`}
+                  accessibilityLabel={t("Remove {name}", { name: file.name })}
                 >
                   <Symbol name="xmark" size={9} color="#FFFFFF" weight="bold" />
                 </Pressable>

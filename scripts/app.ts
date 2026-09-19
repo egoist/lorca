@@ -1,9 +1,10 @@
 import { existsSync, readFileSync } from "node:fs"
-import { rm, mkdir, chmod, readdir, readFile, rename, writeFile } from "node:fs/promises"
+import { cp, rm, mkdir, chmod, readdir, readFile, rename, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 
 export const ROOT = resolve(import.meta.dir, "..")
 export const PACKAGE_DIR = join(ROOT, "macos")
+export const RESOURCES_DIR = join(PACKAGE_DIR, "Resources")
 export const SOURCES_DIR = join(PACKAGE_DIR, "Sources")
 
 export const CRATES_DIR = join(ROOT, "crates")
@@ -65,6 +66,11 @@ function infoPlist(version: string) {
 	<string>${APP_NAME}</string>
 	<key>CFBundleIdentifier</key>
 	<string>${BUNDLE_ID}</string>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>en</string>
+		<string>zh-Hans</string>
+	</array>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
@@ -286,6 +292,14 @@ export async function buildApp(config: Config, options: BuildOptions = {}): Prom
   await mkdir(join(bundle, "Contents", "Resources"), { recursive: true })
   await Bun.write(join(bundle, "Contents", "Info.plist"), infoPlist(readVersion()))
   await Bun.write(join(bundle, "Contents", "PkgInfo"), "APPL????")
+
+  // The string tables (macos/Resources/<language>.lproj): what `L()` reads through Bundle.main.
+  for (const entry of await readdir(RESOURCES_DIR)) {
+    if (!entry.endsWith(".lproj")) continue
+    const target = join(bundle, "Contents", "Resources", entry)
+    await rm(target, { recursive: true, force: true })
+    await cp(join(RESOURCES_DIR, entry), target, { recursive: true })
+  }
 
   // Unlink before writing: macOS refuses to overwrite a running executable in place.
   const destination = join(macos, APP_NAME)

@@ -13,8 +13,8 @@ final class NewGroupChatViewController: SheetViewController {
     init(onCreate: @escaping ([Bot.ID], String?) -> Void) {
         self.onCreate = onCreate
         super.init(
-            title: "New Group Chat",
-            subtitle: "Pick up to six bots to talk with together.",
+            title: L("New Group Chat"),
+            subtitle: L("Pick up to six bots to talk with together."),
             width: 440
         )
     }
@@ -25,17 +25,17 @@ final class NewGroupChatViewController: SheetViewController {
     override func loadView() {
         super.loadView()
 
-        nameField.placeholderString = "Group name (optional)"
+        nameField.placeholderString = L("Group name (optional)")
         nameField.translatesAutoresizingMaskIntoConstraints = false
 
-        let list = SectionView(title: "Bots")
+        let list = SectionView(title: L("Bots"))
         list.setRows(
             store.bots.map { bot in
                 let host = store.device(bot.runnerID)
                 let row = SelectableBotRow()
                 row.configure(
                     bot: bot,
-                    detail: "\(bot.label) · \(host?.name ?? "unassigned")",
+                    detail: "\(bot.label) · \(host?.name ?? L("unassigned"))",
                     isOffline: host?.status == .offline
                 )
                 row.onToggle = { [weak self] in self?.toggle(bot.id) }
@@ -51,7 +51,7 @@ final class NewGroupChatViewController: SheetViewController {
             nameField.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
         ])
 
-        setButtons(confirm: "Create")
+        setButtons(confirm: L("Create"))
         if let first = store.bots.first { toggle(first.id) }
         updateState()
     }
@@ -94,7 +94,7 @@ final class BotPickerViewController: SheetViewController {
     init(title: String, bots: [Bot], onPick: @escaping (Bot.ID) -> Void) {
         self.bots = bots
         self.onPick = onPick
-        super.init(title: title, subtitle: "A group chat holds up to six bots.", width: 420)
+        super.init(title: title, subtitle: L("A group chat holds up to six bots."), width: 420)
     }
 
     @available(*, unavailable)
@@ -104,14 +104,14 @@ final class BotPickerViewController: SheetViewController {
         super.loadView()
 
         let store = AppStore.shared
-        let list = SectionView(title: "Available")
+        let list = SectionView(title: L("Available"))
         list.setRows(
             bots.map { bot in
                 let host = store.device(bot.runnerID)
                 let row = SelectableBotRow()
                 row.configure(
                     bot: bot,
-                    detail: "\(bot.label) · \(host?.name ?? "unassigned")",
+                    detail: "\(bot.label) · \(host?.name ?? L("unassigned"))",
                     isOffline: host?.status == .offline
                 )
                 row.onToggle = { [weak self] in self?.select(bot.id) }
@@ -122,7 +122,7 @@ final class BotPickerViewController: SheetViewController {
         contentStack.addArrangedSubview(list)
         list.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
 
-        setButtons(confirm: "Add")
+        setButtons(confirm: L("Add"))
         if let first = bots.first { select(first.id) }
     }
 
@@ -145,7 +145,7 @@ final class SelectableBotRow: NSView {
     private let name = Build.label("", font: .systemFont(ofSize: 13, weight: .medium))
     private let detail = Build.label("", font: Theme.Font.caption, color: .secondaryLabelColor)
     private let offline = Build.label(
-        "offline", font: .systemFont(ofSize: 10, weight: .medium), color: .systemOrange)
+        L("offline"), font: .systemFont(ofSize: 10, weight: .medium), color: .systemOrange)
     private var tracking: NSTrackingArea?
     private var isHovered = false { didSet { needsDisplay = true } }
 

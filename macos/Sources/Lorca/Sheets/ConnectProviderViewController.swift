@@ -22,11 +22,11 @@ final class ConnectProviderViewController: SheetViewController {
         self.onDone = onDone
         let subtitle =
             if kind.usesAPIKey {
-                "The key is checked against \(kind.rawValue), then shared with your paired Devices, encrypted with your account key. Bots on any Runner use it."
+                L("The key is checked against %@, then shared with your paired Devices, encrypted with your account key. Bots on any Runner use it.", kind.rawValue)
             } else {
-                "Your browser opens a \(kind.rawValue) sign-in. The tokens are shared with your paired Devices, encrypted with your account key; the relay cannot read them."
+                L("Your browser opens a %@ sign-in. The tokens are shared with your paired Devices, encrypted with your account key; the relay cannot read them.", kind.rawValue)
             }
-        super.init(title: "Connect \(kind.rawValue)", subtitle: subtitle, width: 420)
+        super.init(title: L("Connect %@", kind.rawValue), subtitle: subtitle, width: 420)
     }
 
     @available(*, unavailable)
@@ -56,23 +56,26 @@ final class ConnectProviderViewController: SheetViewController {
             baseURLField.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
             baseURLField.translatesAutoresizingMaskIntoConstraints = false
             let baseURLNote = Build.label(
-                "API base URL. Leave it empty for \(kind.rawValue); set it for a proxy or a compatible server.",
+                L("API base URL. Leave it empty for %@; set it for a proxy or a compatible server.", kind.rawValue),
                 font: Theme.Font.caption, color: .tertiaryLabelColor, lines: 0)
             contentStack.addArrangedSubview(baseURLField)
             contentStack.addArrangedSubview(baseURLNote)
             contentStack.setCustomSpacing(4, after: baseURLField)
             baseURLField.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
             baseURLNote.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
-            setButtons(confirm: "Connect")
+            setButtons(confirm: L("Connect"))
             confirmButton.isEnabled = false
         } else {
-            let flow = kind == .chatgpt ? "the same OAuth flow as the Codex CLI" : "the same OAuth flow as xAI's Grok CLI"
+            let flow =
+                kind == .chatgpt
+                ? L("Sign-in uses the same OAuth flow as the Codex CLI.")
+                : L("Sign-in uses the same OAuth flow as xAI's Grok CLI.")
             let note = Build.label(
-                "Sign-in uses \(flow). \(kind.signInRequirement)",
+                "\(flow) \(kind.signInRequirement)",
                 font: Theme.Font.caption, color: .tertiaryLabelColor, lines: 0)
             contentStack.addArrangedSubview(note)
             note.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
-            setButtons(confirm: "Sign in with \(kind.rawValue)…")
+            setButtons(confirm: L("Sign in with %@…", kind.rawValue))
         }
 
         contentStack.addArrangedSubview(statusRow)
@@ -83,7 +86,7 @@ final class ConnectProviderViewController: SheetViewController {
         confirmButton.isEnabled = false
         spinner.startAnimation(nil)
         status.textColor = .secondaryLabelColor
-        status.stringValue = kind.usesAPIKey ? "Checking the key with \(kind.rawValue)…" : "Waiting for the browser…"
+        status.stringValue = kind.usesAPIKey ? L("Checking the key with %@…", kind.rawValue) : L("Waiting for the browser…")
 
         let key = keyField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         task = Task { [weak self] in
@@ -96,7 +99,7 @@ final class ConnectProviderViewController: SheetViewController {
                 }
                 self.spinner.stopAnimation(nil)
                 self.status.textColor = .systemGreen
-                self.status.stringValue = "\(self.kind.rawValue) connected."
+                self.status.stringValue = L("%@ connected.", self.kind.rawValue)
                 try? await Task.sleep(nanoseconds: 600_000_000)
                 self.dismiss(nil)
                 self.onDone()

@@ -52,12 +52,12 @@ final class Updater {
     }
 
     var lastCheckDescription: String {
-        guard let date = updater?.lastUpdateCheckDate else { return "Never checked" }
+        guard let date = updater?.lastUpdateCheckDate else { return L("Never checked") }
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
         formatter.timeStyle = .short
         formatter.doesRelativeDateFormatting = true
-        return "Last checked \(formatter.string(from: date))"
+        return L("Last checked %@", formatter.string(from: date))
     }
 
     // Sparkle keeps these in UserDefaults; the switches read and write through.

@@ -5,15 +5,18 @@ import { Alert, ScrollView, StyleSheet, Text, View } from "react-native";
 import { engine } from "../../src/core/engine";
 import { isRunner, providerLabel } from "../../src/core/model";
 import { deviceIsOnline, useStore } from "../../src/core/store";
+import { deviceLanguage, languageNames, languages, setAppLanguage, t, useLanguage } from "../../src/i18n";
 import { FieldRow, Row, Section, ToggleRow } from "../../src/ui/forms";
 import { lastSeen } from "../../src/ui/format";
 import { Symbol } from "../../src/ui/Symbol";
 import { usePalette } from "../../src/ui/theme";
 import { deviceSymbol } from "../../src/ui/devices";
 import {
+  automaticLanguage,
   languageName,
-  pickDictationLanguage,
+  setDictationLanguage,
   useDictationLanguage,
+  useSupportedLanguages,
 } from "../../src/ui/dictation";
 
 export default function SettingsScreen() {
@@ -29,6 +32,21 @@ export default function SettingsScreen() {
   const thisDevice = devices.find((d) => d.is_this_device);
   const [name, setName] = useState(thisDevice?.name ?? "");
   const dictation = useDictationLanguage();
+  const appLanguage = useLanguage();
+
+  // The Mac app's pop-up: Automatic with the language it resolves to, a separator, then every
+  // language the recognizer knows, by name.
+  const dictationLanguages = useSupportedLanguages();
+  const automaticDictation = t("Automatic ({language})", { language: languageName(automaticLanguage()) });
+  const dictationChoices = [
+    { title: automaticDictation, selected: !dictation.setting, onPress: () => setDictationLanguage(undefined), dividerAfter: true },
+    ...dictationLanguages.map((tag) => ({ title: languageName(tag), selected: dictation.setting === tag, onPress: () => setDictationLanguage(tag) })),
+  ];
+  const systemLanguage = t("System ({language})", { language: languageNames[deviceLanguage()] });
+  const appLanguageChoices = [
+    { title: systemLanguage, selected: !appLanguage.chosen, onPress: () => setAppLanguage(undefined) },
+    ...languages.map((code) => ({ title: languageNames[code], selected: appLanguage.chosen === code, onPress: () => setAppLanguage(code) })),
+  ];
   const thisId = engine.deviceId;
   const sorted = [...devices].sort((a, b) =>
     a.id === thisId ? -1 : b.id === thisId ? 1 : a.name.localeCompare(b.name),
@@ -40,13 +58,13 @@ export default function SettingsScreen() {
   }
 
   function addRule() {
-    Alert.prompt("New rule", "When a bot wants to…", [
-      { text: "Cancel", style: "cancel" },
+    Alert.prompt(t("New rule"), t("When a bot wants to…"), [
+      { text: t("Cancel"), style: "cancel" },
       {
-        text: "Allow automatically",
+        text: t("Allow automatically"),
         onPress: (text?: string) => saveRule(text, "allow"),
       },
-      { text: "Ask first", onPress: (text?: string) => saveRule(text, "ask") },
+      { text: t("Ask first"), onPress: (text?: string) => saveRule(text, "ask") },
     ]);
   }
 
@@ -66,11 +84,11 @@ export default function SettingsScreen() {
       rule.behavior === "allow" ? "ask" : "allow";
     Alert.alert(
       rule.text,
-      rule.behavior === "allow" ? "Allow automatically" : "Ask first",
+      rule.behavior === "allow" ? t("Allow automatically") : t("Ask first"),
       [
-        { text: "Cancel", style: "cancel" },
+        { text: t("Cancel"), style: "cancel" },
         {
-          text: flipped === "allow" ? "Allow automatically" : "Ask first",
+          text: flipped === "allow" ? t("Allow automatically") : t("Ask first"),
           onPress: () =>
             engine.setAutoReview({
               ...autoReview,
@@ -80,7 +98,7 @@ export default function SettingsScreen() {
             }),
         },
         {
-          text: "Delete",
+          text: t("Delete"),
           style: "destructive",
           onPress: () =>
             engine.setAutoReview({
@@ -94,12 +112,12 @@ export default function SettingsScreen() {
 
   function confirmUnpair() {
     Alert.alert(
-      "Unpair this phone?",
-      "Its keys and the synced chats are removed from this phone. Your Mac keeps everything, and you can pair again any time.",
+      t("Unpair this phone?"),
+      t("Its keys and the synced chats are removed from this phone. Your Mac keeps everything, and you can pair again any time."),
       [
-        { text: "Cancel", style: "cancel" },
+        { text: t("Cancel"), style: "cancel" },
         {
-          text: "Unpair",
+          text: t("Unpair"),
           style: "destructive",
           onPress: () => {
             // Forgetting the identity flips `paired`, and the guarded stack swaps to the pair
@@ -113,10 +131,10 @@ export default function SettingsScreen() {
 
   return (
     <>
-      <Stack.Screen options={{ title: "Settings" }} />
+      <Stack.Screen options={{ title: t("Settings") }} />
       <Stack.Toolbar placement="right">
         <Stack.Toolbar.Button variant="done" onPress={() => router.dismiss()}>
-          Done
+          {t("Done")}
         </Stack.Toolbar.Button>
       </Stack.Toolbar>
       <ScrollView
@@ -125,50 +143,50 @@ export default function SettingsScreen() {
         keyboardDismissMode="on-drag"
       >
         <Section
-          title="This phone"
-          footer="How this phone shows up in the Device list on your other Devices."
+          title={t("This phone")}
+          footer={t("How this phone shows up in the Device list on your other Devices.")}
         >
           <FieldRow
-            label="Name"
+            label={t("Name")}
             value={name}
             onChangeText={setName}
             onBlur={commitName}
             onSubmitEditing={commitName}
             returnKeyType="done"
             autoCapitalize="words"
+            // A value among values: on the trailing edge in their color, as Role and App Language are.
+            style={{ textAlign: "right", color: p.secondaryLabel }}
           />
-          <Row title="Role" detail="Device" />
+          <Row title={t("Role")} detail={t("Device")} />
           <Row
-            title="Dictation Language"
-            detail={
-              dictation.setting
-                ? languageName(dictation.setting)
-                : `Automatic (${languageName(dictation.language)})`
-            }
-            chevron
-            onPress={() => void pickDictationLanguage()}
+            title={t("App Language")}
+            menu={{ title: t("App Language"), value: appLanguage.chosen ? languageNames[appLanguage.chosen] : systemLanguage, choices: appLanguageChoices }}
           />
         </Section>
 
-        <Section title="Account">
-          <Row title="Identity" detail={identity ?? "—"} />
+        <Section title={t("Dictation")}>
+          <Row title={t("Language")} menu={{ title: t("Dictation Language"), value: dictation.setting ? languageName(dictation.setting) : automaticDictation, choices: dictationChoices }} />
+        </Section>
+
+        <Section title={t("Account")}>
+          <Row title={t("Identity")} detail={identity ?? "—"} />
           <Row
-            title="Relay"
+            title={t("Relay")}
             detail={relayUrl?.replace(/^https?:\/\//, "") ?? "—"}
-            subtitle={relayConnected ? "Connected" : "Connecting…"}
+            subtitle={relayConnected ? t("Connected") : t("Connecting…")}
           />
         </Section>
 
         <Section
-          title="Auto-review"
+          title={t("Auto-review")}
           footer={
             autoReview.is_enabled
-              ? 'Lorca checks each plugin action before it runs and asks you first when needed. Add rules to customize what bots can do automatically; "Ask first" wins if rules conflict. Built-in safety checks always apply.'
-              : "Off: every plugin action that changes something asks you first."
+              ? t('Lorca checks each plugin action before it runs and asks you first when needed. Add rules to customize what bots can do automatically; "Ask first" wins if rules conflict. Built-in safety checks always apply.')
+              : t("Off: every plugin action that changes something asks you first.")
           }
         >
           <ToggleRow
-            title="Check actions before they run"
+            title={t("Check actions before they run")}
             value={autoReview.is_enabled}
             onValueChange={(v) =>
               engine.setAutoReview({ ...autoReview, is_enabled: v })
@@ -179,17 +197,17 @@ export default function SettingsScreen() {
               key={rule.id}
               title={rule.text}
               detail={
-                rule.behavior === "allow" ? "Allow automatically" : "Ask first"
+                rule.behavior === "allow" ? t("Allow automatically") : t("Ask first")
               }
               onPress={() => editRule(rule.id)}
             />
           ))}
-          <Row title="Add rule…" onPress={addRule} />
+          <Row title={t("Add rule…")} onPress={addRule} />
         </Section>
 
         <Section
-          title="Providers"
-          footer="Credentials belong to your account and reach every paired Device encrypted."
+          title={t("Providers")}
+          footer={t("Credentials belong to your account and reach every paired Device encrypted.")}
         >
           {providers.map((provider) => (
             <Row
@@ -198,29 +216,29 @@ export default function SettingsScreen() {
               subtitle={
                 provider.is_connected ? provider.detail || undefined : undefined
               }
-              detail={provider.is_connected ? "Connected" : "Not connected"}
+              detail={provider.is_connected ? t("Connected") : t("Not connected")}
             />
           ))}
         </Section>
 
         <Section
-          title="Devices"
-          footer="Desktop Devices are Runners: they run bots with your account's provider credentials. Phones and tablets read and write chats."
+          title={t("Devices")}
+          footer={t("Desktop Devices are Runners: they run bots with your account's provider credentials. Phones and tablets read and write chats.")}
         >
           {sorted.map((device) => (
             <Row
               key={device.id}
               title={
                 device.id === thisId
-                  ? `${device.name} (this phone)`
+                  ? t("{name} (this phone)", { name: device.name })
                   : device.name
               }
               onPress={() => router.push(`/settings/device/${device.id}`)}
               chevron
               subtitle={[
                 device.model,
-                isRunner(device) ? "Runner" : "Device",
-                device.id === thisId ? "Online" : lastSeen(seen[device.id]),
+                isRunner(device) ? t("Runner") : t("Device"),
+                device.id === thisId ? t("Online") : lastSeen(seen[device.id]),
               ]
                 .filter(Boolean)
                 .join(" · ")}
@@ -251,7 +269,7 @@ export default function SettingsScreen() {
 
         <Section>
           <Row
-            title="Unpair This Phone"
+            title={t("Unpair This Phone")}
             icon="xmark"
             destructive
             onPress={confirmUnpair}

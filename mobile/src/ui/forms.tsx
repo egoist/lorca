@@ -1,8 +1,11 @@
 // Inset grouped lists, the way Settings and Contacts lay out forms: a section title, rounded
 // cells on the grouped background, hairline separators.
 
+import { Button as MenuButton, Divider, HStack, Host, Image as MenuImage, Menu, Text as MenuText } from "@expo/ui/swift-ui";
+import { foregroundStyle, frame, lineLimit, tint, truncationMode } from "@expo/ui/swift-ui/modifiers";
 import type { ReactNode } from "react";
-import { Pressable, StyleSheet, Switch, Text, TextInput, View, type StyleProp, type TextInputProps, type ViewStyle } from "react-native";
+import { Alert, Platform, Pressable, StyleSheet, Switch, Text, TextInput, View, type StyleProp, type TextInputProps, type ViewStyle } from "react-native";
+import { t } from "../i18n";
 import { Symbol } from "./Symbol";
 import { Font, usePalette } from "./theme";
 
@@ -25,11 +28,58 @@ export function Section({ title, footer, children, style }: { title?: string; fo
   );
 }
 
+export interface MenuChoice {
+  title: string;
+  selected: boolean;
+  onPress: () => void;
+  /// A separator under this choice, as under "Automatic" in the Mac app's pop-ups.
+  dividerAfter?: boolean;
+}
+
+/// A row's value that drops a native menu of choices on tap, as a pop-up button does in iOS
+/// Settings: the value with the up-down chevrons, a checkmark on the choice in force. It is a
+/// `Row`'s `menu`: the row keeps its title whole and the value takes what is left, cut at the
+/// tail when it is long. Android has no such menu and asks in an alert.
+function MenuAccessory({ value, title, choices }: { value: string; title: string; choices: MenuChoice[] }) {
+  const p = usePalette();
+  if (Platform.OS !== "ios") {
+    const ask = () =>
+      Alert.alert(title, undefined, [...choices.map((choice) => ({ text: choice.title, onPress: choice.onPress })), { text: t("Cancel"), style: "cancel" as const }]);
+    return (
+      <Pressable onPress={ask} hitSlop={8} style={styles.menu}>
+        <Text style={[styles.rowDetail, { color: p.secondaryLabel, maxWidth: undefined, textAlign: "right" }]} numberOfLines={1}>
+          {value}
+        </Text>
+      </Pressable>
+    );
+  }
+  return (
+    <Host matchContents={{ vertical: true }} style={styles.menu}>
+      {/* A menu's label takes the accent color unless the menu is tinted and its parts colored. */}
+      <Menu
+        modifiers={[tint(p.secondaryLabel as any), frame({ maxWidth: 10000, alignment: "trailing" })]}
+        label={
+          <HStack spacing={4}>
+            <MenuText modifiers={[foregroundStyle(p.secondaryLabel as any), lineLimit(1), truncationMode("tail")]}>{value}</MenuText>
+            <MenuImage systemName="chevron.up.chevron.down" size={12} color={p.secondaryLabel} />
+          </HStack>
+        }
+      >
+        {choices.flatMap((choice) => [
+          <MenuButton key={choice.title} label={choice.title} systemImage={choice.selected ? "checkmark" : undefined} onPress={choice.onPress} />,
+          choice.dividerAfter ? <Divider key={`${choice.title}-divider`} /> : null,
+        ])}
+      </Menu>
+    </Host>
+  );
+}
+
 export function Row({
   title,
   detail,
   icon,
   accessory,
+  menu,
   onPress,
   destructive,
   chevron,
@@ -42,6 +92,8 @@ export function Row({
   icon?: string;
   leading?: ReactNode;
   accessory?: ReactNode;
+  /// The row's value as a native menu of choices.
+  menu?: { value: string; title: string; choices: MenuChoice[] };
   onPress?: () => void;
   destructive?: boolean;
   chevron?: boolean;
@@ -51,7 +103,7 @@ export function Row({
   return (
     <Pressable onPress={onPress} disabled={!onPress} style={({ pressed }) => [styles.row, pressed && { backgroundColor: p.fill }]}>
       {leading ?? (icon ? <Symbol name={icon} size={20} color={color} /> : null)}
-      <View style={styles.rowText}>
+      <View style={menu ? styles.rowTextWhole : styles.rowText}>
         <Text style={[styles.rowTitle, { color }]} numberOfLines={1}>
           {title}
         </Text>
@@ -61,6 +113,7 @@ export function Row({
           </Text>
         ) : null}
       </View>
+      {menu ? <MenuAccessory {...menu} /> : null}
       {detail ? (
         <Text style={[styles.rowDetail, { color: p.secondaryLabel }]} numberOfLines={1}>
           {detail}
@@ -127,6 +180,8 @@ const styles = StyleSheet.create({
   row: { flexDirection: "row", alignItems: "center", minHeight: 44, paddingHorizontal: 16, paddingVertical: 10, gap: 12 },
   rowMultiline: { alignItems: "flex-start" },
   rowText: { flex: 1, gap: 2 },
+  rowTextWhole: { flexShrink: 0, gap: 2 },
+  menu: { flex: 1, minWidth: 0 },
   rowTitle: { fontSize: Font.body },
   rowSubtitle: { fontSize: Font.small },
   rowDetail: { fontSize: Font.body, maxWidth: "55%" },

@@ -29,7 +29,7 @@ final class AvatarView: NSView {
     /// Set, a click on the avatar calls this and the pointer becomes a hand over it.
     var onClick: (() -> Void)? {
         didSet {
-            toolTip = onClick == nil ? nil : "Change look"
+            toolTip = onClick == nil ? nil : L("Change look")
             window?.invalidateCursorRects(for: self)
         }
     }

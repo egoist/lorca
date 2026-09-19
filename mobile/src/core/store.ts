@@ -6,6 +6,7 @@ import { useMemo } from "react";
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import type { AutoReview, Bot, Chat, ChatMeta, ChatUsage, Device, Message, ProviderStatus, Routine } from "./model";
+import { t } from "../i18n";
 import { savePrefs } from "./prefs";
 
 export interface Running {
@@ -185,7 +186,7 @@ export function upsertMessage(message: Message): { added: boolean } {
     let chats = s.chats;
     if (!chats.some((c) => c.id === message.chat_id)) {
       // Roster not here yet: keep the message under a placeholder until it is.
-      chats = [...chats, { id: message.chat_id, kind: "group", title: "Chat", bot_ids: [], is_pinned: false, created_at: message.created_at, messages: [], unread_count: 0 }];
+      chats = [...chats, { id: message.chat_id, kind: "group", title: t("Chat"), bot_ids: [], is_pinned: false, created_at: message.created_at, messages: [], unread_count: 0 }];
     }
     chats = chats.map((chat) => {
       if (chat.id !== message.chat_id) return chat;

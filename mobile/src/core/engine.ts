@@ -5,6 +5,7 @@
 
 import { AppState, type AppStateStatus } from "react-native";
 import * as core from "../../modules/lorca-core";
+import { t } from "../i18n";
 import { hostFacts } from "./host";
 import type { Attachment, AutoReview, Bot, Chat, ChatMeta, ChatUsage, Message } from "./model";
 import { coreHome, loadPrefs, pathOf, wipePrefs } from "./prefs";
@@ -137,7 +138,7 @@ class Engine {
     const last = [...chat.messages].reverse().find((m) => m.body.kind === "text" || m.body.kind === "handoff");
     if (last?.author.kind === "you") {
       const name = chat.kind === "dm" ? botById(chat.bot_ids[0] ?? "")?.name : undefined;
-      setStatus(chatId, `${name ?? chatTitle(chat)} stopped without replying`);
+      setStatus(chatId, t("{name} stopped without replying", { name: name ?? chatTitle(chat) }));
     }
   }
 
@@ -339,6 +340,6 @@ export const engine = new Engine();
 export function chatTitle(chat: ChatMeta): string {
   if (chat.title?.trim()) return chat.title.trim();
   const names = chat.bot_ids.map((id) => botById(id)?.name).filter((n): n is string => !!n);
-  if (chat.kind === "dm") return names[0] ?? "Chat";
-  return names.length ? names.join(", ") : "Group";
+  if (chat.kind === "dm") return names[0] ?? t("Chat");
+  return names.length ? names.join(", ") : t("Group");
 }

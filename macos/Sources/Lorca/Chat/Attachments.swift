@@ -17,8 +17,8 @@ struct OutgoingAttachment: Hashable {
 
         var errorDescription: String? {
             switch self {
-            case let .notAFile(name): "\(name) is not a file."
-            case let .tooLarge(name): "\(name) is larger than \(OutgoingAttachment.maxBytes / 1024 / 1024) MB."
+            case let .notAFile(name): L("%@ is not a file.", name)
+            case let .tooLarge(name): L("%@ is larger than %d MB.", name, OutgoingAttachment.maxBytes / 1024 / 1024)
             }
         }
     }
@@ -113,7 +113,7 @@ final class AttachmentTile: NSView {
 
     func configure(_ attachment: Attachment, url: URL?, onUserBubble: Bool) {
         self.url = url
-        toolTip = url == nil ? "\(attachment.name) · fetching…" : attachment.name
+        toolTip = url == nil ? L("%@ · fetching…", attachment.name) : attachment.name
         let foreground: NSColor = onUserBubble ? Theme.userBubbleText : .labelColor
         let fill = onUserBubble ? NSColor.white.withAlphaComponent(0.16) : NSColor.labelColor.withAlphaComponent(0.06)
         if attachment.isImage {
@@ -300,7 +300,7 @@ final class ComposerAttachmentStrip: NSView {
             remove.layer?.cornerRadius = 9
             remove.target = self
             remove.action = #selector(removeTapped)
-            remove.toolTip = "Remove"
+            remove.toolTip = L("Remove")
             addSubview(thumbnail.framePositioned())
             addSubview(card.framePositioned())
             card.addSubview(icon.framePositioned())

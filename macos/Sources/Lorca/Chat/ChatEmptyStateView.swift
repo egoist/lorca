@@ -40,14 +40,14 @@ final class ChatEmptyStateView: NSView {
         if chat.isDM, let only = bots.first {
             let host = store.device(only.runnerID)
             subtitle.stringValue =
-                "\(only.label)\nRuns on \(host?.name ?? "an unassigned Runner") with \(only.provider.rawValue)"
+                "\(only.label)\n" + L("Runs on %@ with %@", host?.name ?? L("an unassigned Runner"), only.provider.rawValue)
         } else if bots.count > 1 {
-            let names = bots.map(\.name).joined(separator: ", ")
-            subtitle.stringValue = "\(names)\nAddress one with @, or say @everyone to hear from all of them."
+            let names = bots.map(\.name).joined(separator: L(", "))
+            subtitle.stringValue = "\(names)\n" + L("Address one with @, or say @everyone to hear from all of them.")
         } else if let only = bots.first {
-            subtitle.stringValue = "\(only.label)\nA group of one for now. Add bots from the inspector."
+            subtitle.stringValue = "\(only.label)\n" + L("A group of one for now. Add bots from the inspector.")
         } else {
-            subtitle.stringValue = "No bots in this group yet."
+            subtitle.stringValue = L("No bots in this group yet.")
         }
 
         rebuildSuggestions(for: bots)
@@ -70,16 +70,16 @@ final class ChatEmptyStateView: NSView {
         guard let first = bots.first else { return [] }
         if bots.count > 1 {
             return [
-                "@\(first.name) break this down and hand off what you can",
-                "@everyone what would you check first?",
+                L("@%@ break this down and hand off what you can", first.name),
+                L("@everyone what would you check first?"),
             ]
         }
         switch first.id {
-        case "bot-patch": return ["Write the smallest version that works", "What would you delete first?"]
-        case "bot-scout": return ["Find the prior art and cite it", "What do we not know yet?"]
-        case "bot-quill": return ["Rewrite this without adjectives", "One paragraph, no hype"]
-        case "bot-ember": return ["What is the blast radius?", "Status on the last deploy"]
-        default: return ["What should I work on next?", "Plan this and delegate the parts"]
+        case "bot-patch": return [L("Write the smallest version that works"), L("What would you delete first?")]
+        case "bot-scout": return [L("Find the prior art and cite it"), L("What do we not know yet?")]
+        case "bot-quill": return [L("Rewrite this without adjectives"), L("One paragraph, no hype")]
+        case "bot-ember": return [L("What is the blast radius?"), L("Status on the last deploy")]
+        default: return [L("What should I work on next?"), L("Plan this and delegate the parts")]
         }
     }
 }

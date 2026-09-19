@@ -40,6 +40,19 @@ enum Preferences {
         set { defaults.set(newValue, forKey: Key.dictationLanguage) }
     }
 
+    /// The language the app's own words are in ("en", "zh-Hans"); nil follows the system. It is
+    /// the app's `AppleLanguages` default, the one System Settings › Language & Region writes
+    /// per app, so either place changes it and the other shows it. Read at launch.
+    static var appLanguage: String? {
+        get {
+            let domain = Bundle.main.bundleIdentifier.flatMap { defaults.persistentDomain(forName: $0) }
+            return (domain?["AppleLanguages"] as? [String])?.first
+        }
+        set {
+            if let newValue { defaults.set([newValue], forKey: "AppleLanguages") } else { defaults.removeObject(forKey: "AppleLanguages") }
+        }
+    }
+
     static var relayURL: String {
         get { defaults.string(forKey: Key.relayURL) ?? "https://lorca.app" }
         set { defaults.set(newValue, forKey: Key.relayURL) }

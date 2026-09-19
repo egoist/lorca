@@ -35,7 +35,7 @@ final class ChatViewController: NSViewController {
         scrollView.contentView.postsBoundsChangedNotifications = true
 
         jumpButton.image = NSImage(
-            systemSymbolName: "arrow.down", accessibilityDescription: "Scroll to latest")
+            systemSymbolName: "arrow.down", accessibilityDescription: L("Scroll to latest"))
         jumpButton.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 11, weight: .semibold)
         // A glass disc on macOS 26+, like the composer it floats above.
         if #available(macOS 26, *) {
@@ -46,7 +46,7 @@ final class ChatViewController: NSViewController {
         }
         jumpButton.target = self
         jumpButton.action = #selector(scrollToLatest(_:))
-        jumpButton.toolTip = "Scroll to latest (⌘J)"
+        jumpButton.toolTip = L("Scroll to latest (⌘J)")
         jumpButton.isHidden = true
         jumpButton.translatesAutoresizingMaskIntoConstraints = false
 
@@ -199,10 +199,10 @@ final class ChatViewController: NSViewController {
     private func placeholder(for chat: Chat) -> String {
         let members = store.bots(in: chat)
         if chat.isDM, let only = members.first {
-            return "Message \(only.name)"
+            return L("Message %@", only.name)
         }
         let title = store.title(for: chat)
-        return members.count > 1 ? "Message \(title) — @ to address one bot" : "Message \(title)"
+        return members.count > 1 ? L("Message %@ — @ to address one bot", title) : L("Message %@", title)
     }
 
     private func rebuildRows() {
@@ -285,7 +285,7 @@ final class ChatViewController: NSViewController {
             if !store.isResponding(in: chatID), let chat = store.chat(chatID),
                 case .you = chat.messages.last?.author
             {
-                stoppedNotice = "\(store.title(for: chat)) stopped without replying"
+                stoppedNotice = L("%@ stopped without replying", store.title(for: chat))
             }
             let wasPinned = isPinnedToBottom
             rebuildRows()
@@ -572,7 +572,7 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
                 let name: String
                 let nameColor: NSColor
                 if showsName, case let .bot(botID) = message.author {
-                    name = store.bot(botID)?.name ?? "Bot"
+                    name = store.bot(botID)?.name ?? L("Bot")
                     nameColor = store.bot(botID)?.accent.color ?? .secondaryLabelColor
                 } else {
                     name = ""
@@ -621,7 +621,7 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
                 let permissionCell = cell as? PermissionCellView
                 permissionCell?.configure(
                     request: request,
-                    botName: message.author.botID.flatMap(store.bot)?.name ?? "The bot",
+                    botName: message.author.botID.flatMap(store.bot)?.name ?? L("The bot"),
                     groupStart: groupStart)
                 permissionCell?.onDecision = { [weak self] decision in
                     guard let self else { return }

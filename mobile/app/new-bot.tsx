@@ -5,6 +5,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { engine } from "../src/core/engine";
 import { connectedProviders, isRunner, providerLabel, THINKING_LEVELS, thinkingLabel } from "../src/core/model";
 import { deviceIsOnline, useStore } from "../src/core/store";
+import { t } from "../src/i18n";
 import { CheckRow, FieldRow, Section } from "../src/ui/forms";
 import { BOT_SYMBOLS, Symbol } from "../src/ui/Symbol";
 import { ACCENTS, accentColors, usePalette } from "../src/ui/theme";
@@ -65,19 +66,19 @@ export default function NewBotScreen() {
       router.dismiss();
       router.push(`/chat/${chatId}`);
     } catch (error) {
-      Alert.alert("Could not create the bot", error instanceof Error ? error.message : String(error));
+      Alert.alert(t("Could not create the bot"), error instanceof Error ? error.message : String(error));
     }
   }
 
   return (
     <>
-      <Stack.Screen options={{ title: "New Bot" }} />
+      <Stack.Screen options={{ title: t("New Bot") }} />
       <Stack.Toolbar placement="left">
-        <Stack.Toolbar.Button onPress={() => router.dismiss()}>Cancel</Stack.Toolbar.Button>
+        <Stack.Toolbar.Button onPress={() => router.dismiss()}>{t("Cancel")}</Stack.Toolbar.Button>
       </Stack.Toolbar>
       <Stack.Toolbar placement="right">
         <Stack.Toolbar.Button variant="done" disabled={!canSave} onPress={() => void save()}>
-          Create
+          {t("Create")}
         </Stack.Toolbar.Button>
       </Stack.Toolbar>
       <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={{ paddingBottom: 40 }} keyboardDismissMode="on-drag" keyboardShouldPersistTaps="handled">
@@ -87,14 +88,14 @@ export default function NewBotScreen() {
           </LinearGradient>
         </View>
         <Section>
-          <FieldRow label="Name" value={name} onChangeText={setName} placeholder="Scout" autoFocus autoCapitalize="words" returnKeyType="next" />
-          <FieldRow label="Label" value={label} onChangeText={setLabel} placeholder="Research" autoCapitalize="sentences" />
-          <FieldRow label="Description" value={description} onChangeText={setDescription} placeholder="Finds and summarizes sources" autoCapitalize="sentences" />
+          <FieldRow label={t("Name")} value={name} onChangeText={setName} placeholder="Scout" autoFocus autoCapitalize="words" returnKeyType="next" />
+          <FieldRow label={t("Label")} value={label} onChangeText={setLabel} placeholder={t("Research")} autoCapitalize="sentences" />
+          <FieldRow label={t("Description")} value={description} onChangeText={setDescription} placeholder={t("Finds and summarizes sources")} autoCapitalize="sentences" />
         </Section>
-        <Section title="Instructions" footer="What this bot is for and how it should work. It also gets the team tools and the coding tools on its Runner.">
-          <FieldRow value={instructions} onChangeText={setInstructions} placeholder="You are…" multiline autoCapitalize="sentences" />
+        <Section title={t("Instructions")} footer={t("What this bot is for and how it should work. It also gets the team tools and the coding tools on its Runner.")}>
+          <FieldRow value={instructions} onChangeText={setInstructions} placeholder={t("You are…")} multiline autoCapitalize="sentences" />
         </Section>
-        <Section title="Look">
+        <Section title={t("Look")}>
           <View style={styles.grid}>
             {BOT_SYMBOLS.map((s) => (
               <Pressable key={s} onPress={() => setSymbol(s)} style={[styles.symbolCell, { backgroundColor: s === symbol ? p.tint : p.fill }]} accessibilityLabel={s}>
@@ -110,12 +111,12 @@ export default function NewBotScreen() {
             ))}
           </View>
         </Section>
-        <Section title="Runs on" footer={runners.length ? "Bots run on a paired desktop Device with the CLI, using your account's provider credentials." : "Pair a Mac, Linux, or Windows machine first. Phones never run bots."}>
+        <Section title={t("Runs on")} footer={runners.length ? t("Bots run on a paired desktop Device with the CLI, using your account's provider credentials.") : t("Pair a Mac, Linux, or Windows machine first. Phones never run bots.")}>
           {runners.map((r) => (
             <CheckRow
               key={r.id}
               title={r.name}
-              subtitle={`${r.model} · ${deviceIsOnline(r.id) ? "Online" : "Offline"}`}
+              subtitle={`${r.model} · ${deviceIsOnline(r.id) ? t("Online") : t("Offline")}`}
               checked={r.id === runnerId}
               onPress={() => setRunnerId(r.id)}
               leading={<Symbol name={deviceSymbol(r.os, r.model)} size={22} color={p.label} />}
@@ -123,23 +124,23 @@ export default function NewBotScreen() {
           ))}
         </Section>
         {runner && (
-          <Section title="Provider" footer={connected.length ? undefined : "No provider is connected yet; connect one from Lorca on a Mac before this bot answers."}>
+          <Section title={t("Provider")} footer={connected.length ? undefined : t("No provider is connected yet; connect one from Lorca on a Mac before this bot answers.")}>
             {providers.map((kind) => (
               <CheckRow key={kind} title={providerLabel(kind)} checked={kind === effectiveProvider} onPress={() => { setProvider(kind); setModel(undefined); setThinking(undefined); }} />
             ))}
           </Section>
         )}
         {runner && MODELS[effectiveProvider] && (
-          <Section title="Model">
-            <CheckRow title="Default" subtitle={MODELS[effectiveProvider][0].label} checked={!model} onPress={() => setModel(undefined)} />
+          <Section title={t("Model")}>
+            <CheckRow title={t("Default")} subtitle={MODELS[effectiveProvider][0].label} checked={!model} onPress={() => setModel(undefined)} />
             {MODELS[effectiveProvider].slice(1).map((m) => (
               <CheckRow key={m.id} title={m.label} subtitle={m.id} checked={model === m.id} onPress={() => setModel(m.id)} />
             ))}
           </Section>
         )}
         {runner && THINKING_LEVELS[effectiveProvider] && (
-          <Section title="Thinking" footer="How much the model reasons before it answers. Higher levels are slower and cost more.">
-            <CheckRow title="Default" checked={!thinking} onPress={() => setThinking(undefined)} />
+          <Section title={t("Thinking")} footer={t("How much the model reasons before it answers. Higher levels are slower and cost more.")}>
+            <CheckRow title={t("Default")} checked={!thinking} onPress={() => setThinking(undefined)} />
             {THINKING_LEVELS[effectiveProvider].map((level) => (
               <CheckRow key={level} title={thinkingLabel(level)} checked={thinking === level} onPress={() => setThinking(level)} />
             ))}

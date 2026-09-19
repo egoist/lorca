@@ -16,9 +16,9 @@ final class Dictation {
 
         var errorDescription: String? {
             switch self {
-            case .speechDenied: "Speech recognition is turned off for Lorca."
-            case .microphoneDenied: "Lorca cannot use the microphone."
-            case .unavailable: "Speech recognition is not available for this language right now."
+            case .speechDenied: L("Speech recognition is turned off for Lorca.")
+            case .microphoneDenied: L("Lorca cannot use the microphone.")
+            case .unavailable: L("Speech recognition is not available for this language right now.")
             case let .engine(error): error.localizedDescription
             }
         }
@@ -49,12 +49,26 @@ final class Dictation {
 
     // MARK: - Language
 
+    /// The recognizer knows some sixty locales; the menus offer the ones most people speak, the
+    /// same list as the phone (`COMMON` in `mobile/src/ui/dictation.ts`).
+    private static let common: Set<String> = [
+        "ar-SA", "yue-CN", "zh-CN", "zh-HK", "zh-TW", "nl-NL", "en-AU", "en-IN", "en-GB", "en-US", "fr-FR", "de-DE",
+        "hi-IN", "id-ID", "it-IT", "ja-JP", "ko-KR", "pt-BR", "ru-RU", "es-MX", "es-ES", "th-TH", "tr-TR", "vi-VN",
+    ]
+
+    /// The languages the menus list, by name: the common ones the recognizer supports, and the
+    /// one in the preference when it is another.
     static var supportedLocales: [Locale] {
-        SFSpeechRecognizer.supportedLocales().sorted { displayName($0) < displayName($1) }
+        SFSpeechRecognizer.supportedLocales()
+            .filter { locale in
+                let tag = locale.identifier.replacingOccurrences(of: "_", with: "-")
+                return common.contains(tag) || locale.identifier == Preferences.dictationLanguage
+            }
+            .sorted { displayName($0).compare(displayName($1), locale: AppLanguage.locale) == .orderedAscending }
     }
 
     static func displayName(_ locale: Locale) -> String {
-        Locale.current.localizedString(forIdentifier: locale.identifier) ?? locale.identifier
+        AppLanguage.locale.localizedString(forIdentifier: locale.identifier) ?? locale.identifier
     }
 
     /// The locale to listen in: the preference, else the language of the keyboard input source

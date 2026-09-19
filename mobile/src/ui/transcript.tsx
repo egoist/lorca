@@ -8,6 +8,7 @@ import { Linking, Pressable, StyleSheet, Text, useWindowDimensions, View } from 
 import * as Clipboard from "expo-clipboard";
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withDelay, withRepeat, withSequence, withTiming } from "react-native-reanimated";
 import { isSentMessage, recipientName, type Body, type Bot, type Chat, type Message } from "../core/model";
+import { language, t } from "../i18n";
 import { AttachmentBlock } from "./attachments";
 import { BotAvatar } from "./Avatar";
 import { daySeparator, firstLine } from "./format";
@@ -62,7 +63,7 @@ export function buildRows(chat: Chat, bots: Map<string, Bot>, workingBotIds: str
         break;
       }
       case "tool":
-        rows.push({ key: message.id, type: "marker", text: `Messaged`, bot: bots.get(botIdNamed(bots, recipientName(message.body))), tooltip: message.body.detail, groupStart });
+        rows.push({ key: message.id, type: "marker", text: t("Messaged"), bot: bots.get(botIdNamed(bots, recipientName(message.body))), tooltip: message.body.detail, groupStart });
         previousAuthorKey = null;
         break;
       case "handoff": {
@@ -70,7 +71,7 @@ export function buildRows(chat: Chat, bots: Map<string, Bot>, workingBotIds: str
         rows.push({
           key: message.id,
           type: "marker",
-          text: incoming ? "Message from" : "Handed off to",
+          text: incoming ? t("Message from") : t("Handed off to"),
           bot: bots.get(incoming ? message.body.from : message.body.to),
           tooltip: message.body.reason,
           groupStart,
@@ -127,7 +128,7 @@ export function MessageRow({ row, bots, isGroup }: { row: Extract<Row, { type: "
       <View style={[styles.bubbleColumn, isYou && styles.bubbleColumnYou]}>
         {showsName && (
           <Text style={[styles.author, { color: p.secondaryLabel }]} numberOfLines={1}>
-            {bot?.name ?? "Bot"}
+            {bot?.name ?? t("Bot")}
           </Text>
         )}
         <View
@@ -160,12 +161,12 @@ export function MarkerRow({ row, onPress }: { row: Extract<Row, { type: "marker"
       onPress={preview ? () => onPress?.(row) : undefined}
       disabled={!preview}
       accessibilityRole={preview ? "button" : undefined}
-      accessibilityLabel={`${row.text} ${row.bot?.name ?? "a teammate"}${preview ? `: ${row.tooltip}` : ""}`}
+      accessibilityLabel={`${row.text} ${row.bot?.name ?? t("a teammate")}${preview ? `: ${row.tooltip}` : ""}`}
     >
       <View style={styles.markerLine}>
         <Text style={[styles.caption, { color: p.secondaryLabel }]}>{row.text} </Text>
         <BotAvatar bot={row.bot} size={14} />
-        <Text style={[styles.caption, { color: p.secondaryLabel, fontWeight: "600" }]}> {row.bot?.name ?? "a teammate"}</Text>
+        <Text style={[styles.caption, { color: p.secondaryLabel, fontWeight: "600" }]}> {row.bot?.name ?? t("a teammate")}</Text>
       </View>
       {preview ? (
         <Text style={[styles.caption, { color: p.tertiaryLabel, marginTop: 3, maxWidth: 300, textAlign: "center" }]} numberOfLines={1}>
@@ -194,22 +195,28 @@ export function PermissionRow({ row, onDecide }: { row: Extract<Row, { type: "pe
   const p = usePalette();
   const pending = row.body.decision === "pending";
   const connect = row.body.tool === "connect";
-  const verb = connect ? "needs a sign-in to" : row.body.tool === "install" ? "wants to install" : "wants to use";
-  const decided: Record<string, string> = connect
-    ? { allowed: "Signing in", denied: "Not now", connected: "Signed in", failed: "Sign-in failed" }
-    : { allowed: "Allowed once", always: "Always allowed", denied: "Denied", expired: "No answer in time" };
-  const choices: [string, "allow" | "always" | "deny"][] = connect
-    ? [["Sign in", "allow"], ["Not now", "deny"]]
+  const who = row.bot?.name ?? t("The bot");
+  const plugin = row.body.plugin_name;
+  const title = connect
+    ? t("{who} needs a sign-in to {plugin}", { who, plugin })
     : row.body.tool === "install"
-      ? [["Allow", "allow"], ["Deny", "deny"]]
-      : [["Allow once", "allow"], ["Always allow", "always"], ["Deny", "deny"]];
+      ? t("{who} wants to install {plugin}", { who, plugin })
+      : t("{who} wants to use {plugin}", { who, plugin });
+  const decided: Record<string, string> = connect
+    ? { allowed: t("Signing in"), denied: t("Not now"), connected: t("Signed in"), failed: t("Sign-in failed") }
+    : { allowed: t("Allowed once"), always: t("Always allowed"), denied: t("Denied"), expired: t("No answer in time") };
+  const choices: [string, "allow" | "always" | "deny"][] = connect
+    ? [[t("Sign in"), "allow"], [t("Not now"), "deny"]]
+    : row.body.tool === "install"
+      ? [[t("Allow"), "allow"], [t("Deny"), "deny"]]
+      : [[t("Allow once"), "allow"], [t("Always allow"), "always"], [t("Deny"), "deny"]];
   return (
     <View style={{ paddingTop: row.groupStart ? 14 : 6, paddingHorizontal: INSET }}>
       <View style={[styles.permission, { backgroundColor: p.cell, borderColor: p.separator }]}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
           <Symbol name={connect ? "person.crop.circle.badge.checkmark" : row.body.tool === "install" ? "puzzlepiece.extension" : "hand.raised"} size={16} color={row.body.decision === "failed" ? p.red : row.body.decision === "connected" ? p.green : p.tint} />
           <Text style={[styles.permissionTitle, { color: p.label }]} numberOfLines={2}>
-            {row.bot?.name ?? "The bot"} {verb} {row.body.plugin_name}
+            {title}
           </Text>
         </View>
         <Text style={[styles.caption, { color: p.secondaryLabel }]} numberOfLines={3}>
@@ -217,7 +224,7 @@ export function PermissionRow({ row, onDecide }: { row: Extract<Row, { type: "pe
         </Text>
         {pending && row.body.reason ? (
           <Text style={[styles.caption, { color: p.secondaryLabel }]} numberOfLines={2}>
-            Auto-review: {row.body.reason}
+            {t("Auto-review: {reason}", { reason: row.body.reason })}
           </Text>
         ) : null}
         {row.body.decision === "allowed" && row.body.code ? (
@@ -230,7 +237,7 @@ export function PermissionRow({ row, onDecide }: { row: Extract<Row, { type: "pe
               }}
               style={({ pressed }) => [styles.permissionButton, { backgroundColor: pressed ? p.separator : p.fill }]}
             >
-              <Text style={{ color: p.tint, fontSize: 13, fontWeight: "600" }}>Copy code and open</Text>
+              <Text style={{ color: p.tint, fontSize: 13, fontWeight: "600" }}>{t("Copy code and open")}</Text>
             </Pressable>
           </View>
         ) : null}
@@ -263,7 +270,12 @@ export function StatusRow({ text }: { text: string }) {
 export function WorkingRow({ bots, isGroup }: { bots: Bot[]; isGroup: boolean }) {
   const p = usePalette();
   const names = bots.map((b) => b.name);
-  const label = names.length === 0 ? "Working…" : names.length === 1 ? `${names[0]} is working…` : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]} are working…`;
+  const label =
+    names.length === 0
+      ? t("Working…")
+      : names.length === 1
+        ? t("{name} is working…", { name: names[0] })
+        : t("{names} and {last} are working…", { names: names.slice(0, -1).join(language === "zh" ? "、" : ", "), last: names[names.length - 1] });
   return (
     <View style={[styles.messageRow, styles.messageRowBot, { paddingTop: 14, alignItems: "center" }]}>
       {isGroup ? (

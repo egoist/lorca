@@ -18,51 +18,53 @@ struct SettingsEntry: Hashable {
         self.keywords = keywords
     }
 
-    static let sendOnReturn = SettingsEntry(
-        .general, "Return sends the message", keywords: ["enter", "send", "newline", "keyboard", "chats"])
-    static let timestamps = SettingsEntry(
-        .general, "Show timestamps in transcripts", keywords: ["time", "date", "messages", "chats"])
-    static let appearance = SettingsEntry(
-        .general, "Appearance", keywords: ["theme", "dark mode", "light mode", "system"])
-    static let dictationLanguage = SettingsEntry(
-        .general, "Dictation Language", row: "Language",
-        keywords: ["dictate", "speech", "voice", "microphone", "locale"])
-    static let version = SettingsEntry(
-        .general, "Check for Updates", row: "Version", keywords: ["update", "upgrade", "release", "sparkle"])
-    static let automaticChecks = SettingsEntry(
-        .general, "Check for updates automatically", keywords: ["update", "upgrade", "background"])
-    static let automaticDownloads = SettingsEntry(
-        .general, "Download and install updates automatically", keywords: ["update", "upgrade", "background"])
+    static var sendOnReturn: SettingsEntry { SettingsEntry(
+        .general, L("Return sends the message"), keywords: [L("enter send newline keyboard chats")]) }
+    static var timestamps: SettingsEntry { SettingsEntry(
+        .general, L("Show timestamps in transcripts"), keywords: [L("time date messages chats")]) }
+    static var appearance: SettingsEntry { SettingsEntry(
+        .general, L("Appearance"), keywords: [L("theme dark mode light mode system")]) }
+    static var appLanguage: SettingsEntry { SettingsEntry(
+        .general, L("App Language"), keywords: [L("language locale english chinese translation")]) }
+    static var dictationLanguage: SettingsEntry { SettingsEntry(
+        .general, L("Dictation Language"), row: L("Language"),
+        keywords: [L("dictate speech voice microphone locale")]) }
+    static var version: SettingsEntry { SettingsEntry(
+        .general, L("Check for Updates"), row: L("Version"), keywords: [L("update upgrade release sparkle")]) }
+    static var automaticChecks: SettingsEntry { SettingsEntry(
+        .general, L("Check for updates automatically"), keywords: [L("update upgrade background")]) }
+    static var automaticDownloads: SettingsEntry { SettingsEntry(
+        .general, L("Download and install updates automatically"), keywords: [L("update upgrade background")]) }
 
-    static let autoReviewSwitch = SettingsEntry(
-        .autoReview, "Check actions before they run",
-        keywords: ["auto-review", "approve", "approval", "permission", "plugin", "ask"])
-    static let autoReviewRules = SettingsEntry(
-        .autoReview, "Auto-review Rules", keywords: ["rule", "allow automatically", "ask first", "always allow"])
+    static var autoReviewSwitch: SettingsEntry { SettingsEntry(
+        .autoReview, L("Check actions before they run"),
+        keywords: [L("auto-review approve approval permission plugin ask")]) }
+    static var autoReviewRules: SettingsEntry { SettingsEntry(
+        .autoReview, L("Auto-review Rules"), keywords: [L("rule allow automatically ask first always allow")]) }
 
-    static let relayURL = SettingsEntry(
-        .advanced, "Relay URL", keywords: ["server", "self-host", "sync", "pairing", "connection"])
-    static let cliPort = SettingsEntry(
-        .advanced, "CLI port", keywords: ["localhost", "127.0.0.1", "serve", "connection"])
-    static let onboarding = SettingsEntry(
-        .advanced, "Onboarding", keywords: ["show onboarding again", "setup", "welcome", "restore"])
+    static var relayURL: SettingsEntry { SettingsEntry(
+        .advanced, L("Relay URL"), keywords: [L("server self-host sync pairing connection")]) }
+    static var cliPort: SettingsEntry { SettingsEntry(
+        .advanced, L("CLI port"), keywords: [L("localhost 127.0.0.1 serve connection")]) }
+    static var onboarding: SettingsEntry { SettingsEntry(
+        .advanced, L("Onboarding"), keywords: [L("show onboarding again setup welcome restore")]) }
 
-    static let machineKey = SettingsEntry(
-        .device, "Machine key", keywords: ["device", "os", "role", "runner", "last seen", "relay"])
-    static let pairing = SettingsEntry(.device, "Pairing", keywords: ["unpair", "remove device", "paired"])
+    static var machineKey: SettingsEntry { SettingsEntry(
+        .device, L("Machine key"), keywords: [L("device os role runner last seen relay")]) }
+    static var pairing: SettingsEntry { SettingsEntry(.device, L("Pairing"), keywords: [L("unpair remove device paired")]) }
 
     static func bot(_ bot: Bot) -> SettingsEntry {
-        SettingsEntry(.bots, bot.name, keywords: [bot.label, bot.provider.rawValue, "bot", "runner"])
+        SettingsEntry(.bots, bot.name, keywords: [bot.label, bot.provider.rawValue, L("bot runner")])
     }
 
     static func plugin(_ plugin: InstalledPlugin) -> SettingsEntry {
-        SettingsEntry(.plugins, plugin.name, keywords: [plugin.description, "plugin", "mcp", "marketplace"])
+        SettingsEntry(.plugins, plugin.name, keywords: [plugin.description, L("plugin mcp marketplace")])
     }
 
     static func provider(_ kind: ProviderCredential.Kind) -> SettingsEntry {
         SettingsEntry(
             .providers, kind.rawValue,
-            keywords: [kind.subtitle, "credential", "connect", "disconnect", "sign in", "model"])
+            keywords: [kind.subtitle, L("credential connect disconnect sign in model")])
     }
 
     func matches(_ query: String) -> Bool {
@@ -82,7 +84,7 @@ enum SettingsSearch {
     static func entries(in pane: SettingsPane, device: Device?, store: AppStore) -> [SettingsEntry] {
         switch pane {
         case .general:
-            [.sendOnReturn, .timestamps, .appearance, .dictationLanguage]
+            [.sendOnReturn, .timestamps, .appearance, .appLanguage, .dictationLanguage]
                 + (Updater.isEnabled ? [.version, .automaticChecks, .automaticDownloads] : [])
         case .autoReview: [.autoReviewSwitch, .autoReviewRules]
         case .advanced: [.relayURL, .cliPort, .onboarding]

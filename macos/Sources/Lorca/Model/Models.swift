@@ -19,8 +19,8 @@ struct ProviderCredential: Hashable, Identifiable {
 
         var subtitle: String {
             switch self {
-            case .deepseek, .anthropic: "API key"
-            case .chatgpt, .grok: "Subscription"
+            case .deepseek, .anthropic: L("API key")
+            case .chatgpt, .grok: L("Subscription")
             }
         }
 
@@ -30,8 +30,8 @@ struct ProviderCredential: Hashable, Identifiable {
         /// What the sign-in needs, for the subscription providers.
         var signInRequirement: String {
             switch self {
-            case .chatgpt: "It needs a ChatGPT subscription."
-            case .grok: "It needs a SuperGrok or X Premium+ subscription."
+            case .chatgpt: L("It needs a ChatGPT subscription.")
+            case .grok: L("It needs a SuperGrok or X Premium+ subscription.")
             case .deepseek, .anthropic: ""
             }
         }
@@ -48,8 +48,8 @@ struct ProviderCredential: Hashable, Identifiable {
         /// Placeholder for the key field, naming where the key comes from.
         var keyPlaceholder: String {
             switch self {
-            case .deepseek: "sk-… from platform.deepseek.com"
-            case .anthropic: "sk-ant-… from console.anthropic.com"
+            case .deepseek: L("sk-… from platform.deepseek.com")
+            case .anthropic: L("sk-ant-… from console.anthropic.com")
             case .chatgpt, .grok: ""
             }
         }
@@ -88,7 +88,16 @@ struct ProviderCredential: Hashable, Identifiable {
         }
 
         static func thinkingLabel(_ level: String) -> String {
-            level == "xhigh" ? "Extra high" : level.prefix(1).uppercased() + level.dropFirst()
+            switch level {
+            case "off": L("Off")
+            case "minimal": L("Minimal")
+            case "low": L("Low")
+            case "medium": L("Medium")
+            case "high": L("High")
+            case "xhigh": L("Extra high")
+            case "max": L("Max")
+            default: level.prefix(1).uppercased() + level.dropFirst()
+            }
         }
 
         /// Model ids this provider accepts, first is the default the CLI uses.
@@ -174,9 +183,9 @@ struct Device: Identifiable, Hashable {
 
         var label: String {
             switch self {
-            case .online: "Online"
-            case .offline: "Offline"
-            case .pairing: "Pairing"
+            case .online: L("Online")
+            case .offline: L("Offline")
+            case .pairing: L("Pairing", context: "device state")
             }
         }
     }
@@ -196,7 +205,7 @@ struct Device: Identifiable, Hashable {
     /// Derived from `os` alone: a desktop Device is a Runner and can be assigned bots.
     var isRunner: Bool { os.isDesktop }
 
-    var roleLabel: String { isRunner ? "Runner" : "Device" }
+    var roleLabel: String { isRunner ? L("Runner") : L("Device") }
 }
 
 // MARK: - Bot
@@ -232,7 +241,7 @@ struct AutoReviewRule: Hashable, Identifiable {
         case allow
         case ask
 
-        var title: String { self == .allow ? "Allow automatically" : "Ask first" }
+        var title: String { self == .allow ? L("Allow automatically") : L("Ask first") }
     }
 
     var id: String
@@ -354,27 +363,27 @@ struct PermissionRequest: Hashable {
 
     /// "wants to use GitHub" / "wants to install GitHub" / "needs a sign-in to GitHub"
     var verbPhrase: String {
-        if isConnect { return "needs a sign-in to \(pluginName)" }
-        return isInstall ? "wants to install \(pluginName)" : "wants to use \(pluginName)"
+        if isConnect { return L("needs a sign-in to %@", pluginName) }
+        return isInstall ? L("wants to install %@", pluginName) : L("wants to use %@", pluginName)
     }
 
     var decisionText: String {
         switch decision {
-        case .pending: "Waiting for you"
-        case .allowed: isConnect ? "Signing in" : "Allowed once"
-        case .always: "Always allowed"
-        case .denied: isConnect ? "Not now" : "Denied"
-        case .expired: "No answer in time"
-        case .connected: "Signed in"
-        case .failed: "Sign-in failed"
+        case .pending: L("Waiting for you")
+        case .allowed: isConnect ? L("Signing in") : L("Allowed once")
+        case .always: L("Always allowed")
+        case .denied: isConnect ? L("Not now") : L("Denied")
+        case .expired: L("No answer in time")
+        case .connected: L("Signed in")
+        case .failed: L("Sign-in failed")
         }
     }
 
     /// The buttons a pending card offers: (title, decision).
     var choices: [(String, String)] {
-        if isConnect { return [("Sign in", "allow"), ("Not now", "deny")] }
-        if isInstall { return [("Allow", "allow"), ("Deny", "deny")] }
-        return [("Allow once", "allow"), ("Always allow", "always"), ("Deny", "deny")]
+        if isConnect { return [(L("Sign in"), "allow"), (L("Not now"), "deny")] }
+        if isInstall { return [(L("Allow"), "allow"), (L("Deny"), "deny")] }
+        return [(L("Allow once"), "allow"), (L("Always allow"), "always"), (L("Deny"), "deny")]
     }
 }
 
@@ -397,16 +406,18 @@ struct BotMemory {
 
     /// "12 lines · 1.2 KB of 24 KB", or "Empty".
     var budgetSummary: String {
-        guard lines > 0 else { return "Empty" }
-        return "\(lines) \(lines == 1 ? "line" : "lines") · \(Format.kilobytes(bytes)) of \(Format.kilobytes(maxBytes))"
+        guard lines > 0 else { return L("Empty") }
+        return lines == 1
+            ? L("%d line · %@ of %@", lines, Format.kilobytes(bytes), Format.kilobytes(maxBytes))
+            : L("%d lines · %@ of %@", lines, Format.kilobytes(bytes), Format.kilobytes(maxBytes))
     }
 
     /// "2 topics · 5 days of logs"
     var filesSummary: String {
         var parts: [String] = []
-        if !topics.isEmpty { parts.append("\(topics.count) \(topics.count == 1 ? "topic" : "topics")") }
-        if !logs.isEmpty { parts.append("\(logs.count) \(logs.count == 1 ? "day" : "days") of logs") }
-        return parts.isEmpty ? "No other notes yet" : parts.joined(separator: " · ")
+        if !topics.isEmpty { parts.append(topics.count == 1 ? L("%d topic", topics.count) : L("%d topics", topics.count)) }
+        if !logs.isEmpty { parts.append(logs.count == 1 ? L("%d day of logs", logs.count) : L("%d days of logs", logs.count)) }
+        return parts.isEmpty ? L("No other notes yet") : parts.joined(separator: " · ")
     }
 }
 
@@ -436,20 +447,20 @@ struct Routine: Identifiable, Hashable {
 
     /// The line under the name in the inspector: the schedule, then what is going on.
     var detail: String {
-        if isRunning { return "\(scheduleText) · Running…" }
-        guard isEnabled else { return pausedReason == "away" ? "\(scheduleText) · Paused while you were away" : "\(scheduleText) · Paused" }
-        if let nextRunAt { return "\(scheduleText) · Next \(Format.upcoming(nextRunAt))" }
+        if isRunning { return L("%@ · Running…", scheduleText) }
+        guard isEnabled else { return pausedReason == "away" ? L("%@ · Paused while you were away", scheduleText) : L("%@ · Paused", scheduleText) }
+        if let nextRunAt { return L("%@ · Next %@", scheduleText, Format.upcoming(nextRunAt)) }
         return scheduleText
     }
 
     /// "Today 9:00 AM · replied", "Never", "Yesterday 6:00 PM · nothing to report".
     var lastRunSummary: String {
-        guard let lastRunAt else { return "Never" }
+        guard let lastRunAt else { return L("Never") }
         let when = Format.daySeparator(lastRunAt)
         switch lastOutcome {
-        case "sent": return "\(when) · replied"
-        case "pass": return "\(when) · nothing to report"
-        case "error": return "\(when) · failed"
+        case "sent": return L("%@ · replied", when)
+        case "pass": return L("%@ · nothing to report", when)
+        case "error": return L("%@ · failed", when)
         default: return when
         }
     }
@@ -507,8 +518,8 @@ struct Attachment: Hashable, Identifiable {
     /// "Photo", "3 photos", "report.pdf", "2 files": the preview of a message with no text.
     static func summary(_ attachments: [Attachment]) -> String {
         guard let first = attachments.first else { return "" }
-        if attachments.count == 1 { return first.isImage ? "Photo" : first.name }
-        return attachments.allSatisfy(\.isImage) ? "\(attachments.count) photos" : "\(attachments.count) files"
+        if attachments.count == 1 { return first.isImage ? L("Photo") : first.name }
+        return attachments.allSatisfy(\.isImage) ? L("%d photos", attachments.count) : L("%d files", attachments.count)
     }
 
     static func sizeText(_ bytes: Int) -> String {
@@ -649,13 +660,13 @@ struct ChatUsage: Hashable {
     var contextSummary: String {
         guard contextWindow > 0 else { return Format.tokens(contextTokens) }
         let percent = Int((Double(contextTokens) / Double(contextWindow) * 100).rounded())
-        return "\(Format.tokens(contextTokens)) of \(Format.tokens(contextWindow)) · \(percent)%"
+        return L("%@ of %@ · %d%%", Format.tokens(contextTokens), Format.tokens(contextWindow), percent)
     }
 
     /// "$0.42 · 18 turns"
     var spendSummary: String {
         let dollars = costUSD < 0.01 && costUSD > 0 ? "<$0.01" : String(format: "$%.2f", costUSD)
-        return "\(dollars) · \(turns) \(turns == 1 ? "turn" : "turns")"
+        return turns == 1 ? L("%@ · %d turn", dollars, turns) : L("%@ · %d turns", dollars, turns)
     }
 }
 
@@ -663,15 +674,13 @@ extension Format {
     /// "today 9:00 AM", "tomorrow 9:00 AM", "Monday 9:00 AM", "Oct 1 9:00 AM": when a run is due.
     static func upcoming(_ date: Date) -> String {
         let calendar = Calendar.current
-        if calendar.isDateInToday(date) { return "today \(time(date))" }
-        if calendar.isDateInTomorrow(date) { return "tomorrow \(time(date))" }
+        if calendar.isDateInToday(date) { return L("today %@", time(date)) }
+        if calendar.isDateInTomorrow(date) { return L("tomorrow %@", time(date)) }
         if date.timeIntervalSinceNow < 60 * 60 * 24 * 6 {
-            let weekday = DateFormatter()
-            weekday.dateFormat = "EEEE"
+            let weekday = Format.formatter("EEEE")
             return "\(weekday.string(from: date)) \(time(date))"
         }
-        let day = DateFormatter()
-        day.dateFormat = "MMM d"
+        let day = Format.formatter("MMMd")
         return "\(day.string(from: date)) \(time(date))"
     }
 

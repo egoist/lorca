@@ -643,7 +643,7 @@ final class SwitchRow: NSView {
             symbol: symbol,
             tint: routine.isRunning ? .controlAccentColor : (routine.isEnabled ? .secondaryLabelColor : .tertiaryLabelColor),
             title: routine.name, detail: routine.detail, isOn: routine.isEnabled,
-            toggleTooltip: routine.isEnabled ? "Pause \(routine.name)" : "Resume \(routine.name)", tooltip: routine.prompt)
+            toggleTooltip: routine.isEnabled ? L("Pause %@", routine.name) : L("Resume %@", routine.name), tooltip: routine.prompt)
     }
 
     func configure(symbol: String, tint: NSColor, title: String, detail detailText: String, isOn: Bool, toggleTooltip: String, tooltip: String) {

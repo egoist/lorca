@@ -9,8 +9,8 @@ final class RoutineViewController: SheetViewController {
     private let routineID: Routine.ID
     private let bot: Bot
 
-    private let schedule = SectionView(title: "Schedule")
-    private let task = SectionView(title: "Task")
+    private let schedule = SectionView(title: L("Schedule"))
+    private let task = SectionView(title: L("Task"))
     private let prompt = NSTextView()
     private let runButton = NSButton()
     private let pauseButton = NSButton()
@@ -25,8 +25,8 @@ final class RoutineViewController: SheetViewController {
         self.bot = bot
         let routine = AppStore.shared.routine(routineID)
         super.init(
-            title: routine?.name ?? "Routine",
-            subtitle: "A task \(bot.name) runs on its own in this chat. \(bot.name) set it up and can change it: ask in chat.",
+            title: routine?.name ?? L("Routine"),
+            subtitle: L("A task %@ runs on its own in this chat. %@ set it up and can change it: ask in chat.", bot.name, bot.name),
             width: 520
         )
     }
@@ -56,10 +56,10 @@ final class RoutineViewController: SheetViewController {
         task.setRows([scroll])
 
         for (button, title, action) in [
-            (runButton, "Run Now", #selector(runNow)),
-            (pauseButton, "Pause", #selector(togglePaused)),
-            (editButton, "Edit in Chat…", #selector(editInChat)),
-            (deleteButton, "Delete…", #selector(confirmDelete)),
+            (runButton, L("Run Now"), #selector(runNow)),
+            (pauseButton, L("Pause"), #selector(togglePaused)),
+            (editButton, L("Edit in Chat…"), #selector(editInChat)),
+            (deleteButton, L("Delete…"), #selector(confirmDelete)),
         ] {
             button.title = title
             button.bezelStyle = .rounded
@@ -81,7 +81,7 @@ final class RoutineViewController: SheetViewController {
             scroll.heightAnchor.constraint(equalToConstant: 96),
         ])
 
-        setButtons(confirm: "Done", cancel: nil)
+        setButtons(confirm: L("Done"), cancel: nil)
         refresh()
     }
 
@@ -106,21 +106,21 @@ final class RoutineViewController: SheetViewController {
         }
         let state: (String, NSColor) =
             routine.isRunning
-            ? ("Running…", .controlAccentColor)
-            : routine.isEnabled ? ("On", .systemGreen) : (routine.pausedReason == "away" ? "Paused while you were away" : "Paused", .secondaryLabelColor)
-        let scheduleRow = KeyValueRow(key: "Schedule", value: routine.scheduleText)
+            ? (L("Running…"), .controlAccentColor)
+            : routine.isEnabled ? (L("On"), .systemGreen) : (routine.pausedReason == "away" ? L("Paused while you were away") : L("Paused"), .secondaryLabelColor)
+        let scheduleRow = KeyValueRow(key: L("Schedule"), value: routine.scheduleText)
         scheduleRow.toolTip = routine.schedule
         schedule.setRows([
-            KeyValueRow(key: "State", value: state.0, tint: state.1),
+            KeyValueRow(key: L("State"), value: state.0, tint: state.1),
             scheduleRow,
-            KeyValueRow(key: "Next run", value: routine.nextRunAt.map { Format.upcoming($0) } ?? "—"),
-            KeyValueRow(key: "Last run", value: routine.lastRunSummary),
+            KeyValueRow(key: L("Next run"), value: routine.nextRunAt.map { Format.upcoming($0) } ?? "—"),
+            KeyValueRow(key: L("Last run"), value: routine.lastRunSummary),
         ])
         if prompt.string != routine.prompt { prompt.string = routine.prompt }
-        pauseButton.title = routine.isEnabled ? "Pause" : "Resume"
+        pauseButton.title = routine.isEnabled ? L("Pause") : L("Resume")
         runButton.isEnabled = !routine.isRunning
         let runner = store.device(bot.runnerID)
-        runButton.toolTip = runner.map { "Runs on \($0.name) now" } ?? "Runs on the bot's Runner now"
+        runButton.toolTip = runner.map { L("Runs on %@ now", $0.name) } ?? L("Runs on the bot's Runner now")
         fitSheetToContent()
     }
 
@@ -135,17 +135,17 @@ final class RoutineViewController: SheetViewController {
 
     @objc private func editInChat() {
         guard let routine = store.routine(routineID) else { return }
-        onEditInChat?("Edit my routine \"\(routine.name)\": ")
+        onEditInChat?(L("Edit my routine \"%@\": ", routine.name))
         dismiss(nil)
     }
 
     @objc private func confirmDelete() {
         guard let routine = store.routine(routineID), let window = view.window else { return }
         let alert = NSAlert()
-        alert.messageText = "Delete “\(routine.name)”?"
-        alert.informativeText = "This deletes the routine and stops its future runs. This can't be undone."
-        alert.addButton(withTitle: "Delete routine")
-        alert.addButton(withTitle: "Cancel")
+        alert.messageText = L("Delete “%@”?", routine.name)
+        alert.informativeText = L("This deletes the routine and stops its future runs. This can't be undone.")
+        alert.addButton(withTitle: L("Delete routine"))
+        alert.addButton(withTitle: L("Cancel"))
         alert.alertStyle = .warning
         alert.beginSheetModal(for: window) { [weak self] response in
             guard let self, response == .alertFirstButtonReturn else { return }

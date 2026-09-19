@@ -39,21 +39,21 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         // The sidebar buttons form a leading titlebar accessory, so they keep their place beside
         // the traffic lights when the sidebar collapses.
         let createButton = HoverButton(
-            symbol: "plus", tooltip: "Create", target: nil, action: #selector(AppDelegate.newBot(_:)))
+            symbol: "plus", tooltip: L("Create"), target: nil, action: #selector(AppDelegate.newBot(_:)))
         createButton.menu = Self.createMenu()
         self.createButton = createButton
         window.addTitlebarAccessoryViewController(
             Self.leadingAccessory([
                 HoverButton(
-                    symbol: "sidebar.leading", tooltip: "Toggle Sidebar (⌘B)", target: root,
+                    symbol: "sidebar.leading", tooltip: L("Toggle Sidebar (⌘B)"), target: root,
                     action: #selector(NSSplitViewController.toggleSidebar(_:))),
                 createButton,
             ]))
 
         devicePicker.target = self
         devicePicker.action = #selector(pickDevice)
-        devicePicker.setAccessibilityLabel("Device")
-        devicePicker.toolTip = "The Device this page shows"
+        devicePicker.setAccessibilityLabel(L("Device"))
+        devicePicker.toolTip = L("The Device this page shows")
 
         root.onSelectionChange = { [weak self] in
             self?.updateTitle()
@@ -121,13 +121,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         for device in AppStore.shared.devices {
             devicePicker.addItem(withTitle: "")
             guard let item = devicePicker.lastItem else { continue }
-            item.title = device.isThisDevice ? "\(device.name) (This Mac)" : device.name
+            item.title = device.isThisDevice ? L("%@ (This Mac)", device.name) : device.name
             item.representedObject = device.id
             item.image = NSImage(systemSymbolName: device.symbolName, accessibilityDescription: nil)
         }
         selectPickedDevice()
         devicePicker.menu?.addItem(.separator())
-        let pair = NSMenuItem(title: "Pair a Device…", action: #selector(pairDevice), keyEquivalent: "")
+        let pair = NSMenuItem(title: L("Pair a Device…"), action: #selector(pairDevice), keyEquivalent: "")
         pair.target = self
         devicePicker.menu?.addItem(pair)
         devicePicker.sizeToFit()
@@ -203,9 +203,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     /// through the responder chain to the same actions as the File menu.
     private static func createMenu() -> NSMenu {
         let menu = NSMenu()
-        menu.addItem(withTitle: "Create New Bot…", action: #selector(AppDelegate.newBot(_:)), keyEquivalent: "")
+        menu.addItem(withTitle: L("Create New Bot…"), action: #selector(AppDelegate.newBot(_:)), keyEquivalent: "")
         menu.addItem(
-            withTitle: "Create Group Chat…", action: #selector(AppDelegate.newGroupChat(_:)), keyEquivalent: "")
+            withTitle: L("Create Group Chat…"), action: #selector(AppDelegate.newGroupChat(_:)), keyEquivalent: "")
         return menu
     }
 
@@ -293,9 +293,9 @@ extension MainWindowController: NSToolbarDelegate {
                 images: ["chevron.left", "chevron.right"].map {
                     NSImage(systemSymbolName: $0, accessibilityDescription: nil)!
                 },
-                selectionMode: .momentary, labels: ["Back", "Forward"], target: self,
+                selectionMode: .momentary, labels: [L("Back"), L("Forward")], target: self,
                 action: #selector(navigateSettings(_:)))
-            group.label = "Back/Forward"
+            group.label = L("Back/Forward")
             group.isNavigational = true
             group.autovalidates = false
             for item in group.subitems { item.autovalidates = false }
@@ -305,7 +305,7 @@ extension MainWindowController: NSToolbarDelegate {
         }
         if identifier == .devicePicker {
             let item = NSToolbarItem(itemIdentifier: identifier)
-            item.label = "Device"
+            item.label = L("Device")
             // A plain container gets no platter from the toolbar; the pop-up sits on a glass
             // capsule of its own inside it, so hiding the capsule leaves nothing behind and the
             // toolbar's layout stays as it is.
@@ -342,9 +342,9 @@ extension MainWindowController: NSToolbarDelegate {
         }
         guard identifier == .inspectorToggle else { return nil }
         let item = NSToolbarItem(itemIdentifier: identifier)
-        item.label = "Inspector"
+        item.label = L("Inspector")
         item.view = HoverButton(
-            symbol: "sidebar.trailing", tooltip: "Toggle Inspector (⇧⌘B)", target: root,
+            symbol: "sidebar.trailing", tooltip: L("Toggle Inspector (⇧⌘B)"), target: root,
             action: #selector(RootSplitViewController.toggleInspector(_:)))
         item.isBordered = false
         return item

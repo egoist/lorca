@@ -75,7 +75,7 @@ final class CLIClient: NSObject {
     private func close() {
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
-        failPending("The CLI connection closed")
+        failPending(L("The CLI connection closed"))
         if state != .disconnected {
             state = .disconnected
             onStateChange?(.disconnected)
@@ -103,7 +103,7 @@ final class CLIClient: NSObject {
 
     private func dropped() {
         task = nil
-        failPending("The CLI connection dropped")
+        failPending(L("The CLI connection dropped"))
         if state != .disconnected {
             state = .disconnected
             onStateChange?(.disconnected)
@@ -142,7 +142,7 @@ final class CLIClient: NSObject {
 
         guard let id = object["id"] as? Int, let continuation = pending.removeValue(forKey: id) else { return }
         if let error = object["error"] as? [String: Any] {
-            continuation.resume(throwing: RequestError(message: error["message"] as? String ?? "Request failed"))
+            continuation.resume(throwing: RequestError(message: error["message"] as? String ?? L("Request failed")))
             return
         }
         let result = object["result"] ?? NSNull()
@@ -155,7 +155,7 @@ final class CLIClient: NSObject {
     /// Sends a request and returns the JSON-encoded `result`.
     func request(_ method: String, _ params: [String: Any] = [:]) async throws -> Data {
         guard let task, state != .disconnected else {
-            throw RequestError(message: "The Lorca CLI is not running")
+            throw RequestError(message: L("The Lorca CLI is not running"))
         }
         let id = nextID
         nextID += 1

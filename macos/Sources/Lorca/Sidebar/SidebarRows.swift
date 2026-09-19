@@ -109,13 +109,13 @@ final class SidebarHeaderCell: NSTableCellView {
 extension SettingsPane {
     var title: String {
         switch self {
-        case .general: "General"
-        case .autoReview: "Auto-review"
-        case .advanced: "Advanced"
-        case .bots: "Bots"
-        case .providers: "Providers"
-        case .plugins: "Plugins"
-        case .device: "Devices"
+        case .general: L("General")
+        case .autoReview: L("Auto-review")
+        case .advanced: L("Advanced")
+        case .bots: L("Bots")
+        case .providers: L("Providers")
+        case .plugins: L("Plugins")
+        case .device: L("Devices")
         }
     }
 
@@ -245,7 +245,7 @@ final class SidebarChatCell: NSTableCellView {
     init() {
         super.init(frame: .zero)
 
-        pin.image = NSImage(systemSymbolName: "pin.fill", accessibilityDescription: "Pinned")
+        pin.image = NSImage(systemSymbolName: "pin.fill", accessibilityDescription: L("Pinned"))
         pin.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 9, weight: .medium)
         pin.contentTintColor = .tertiaryLabelColor
         pin.translatesAutoresizingMaskIntoConstraints = false
@@ -313,12 +313,12 @@ final class SidebarChatCell: NSTableCellView {
         let unread = chat.unreadCount
         badge.isHidden = unread == 0
         count.stringValue = unread > 999 ? "999+" : String(unread)
-        let unreadLabel = unread > 0 ? "\(unread) unread" : nil
+        let unreadLabel = unread > 0 ? L("%d unread", unread) : nil
         badge.setAccessibilityLabel(unreadLabel)
         previewBeforeBadge.isActive = unread > 0
         previewBeforeEdge.isActive = unread == 0
         setAccessibilityLabel(
-            [title.stringValue, unreadLabel, avatars.isWorking ? "Working" : nil]
+            [title.stringValue, unreadLabel, avatars.isWorking ? L("Working") : nil]
                 .compactMap { $0 }.joined(separator: ", "))
         applyBackgroundStyle()
     }

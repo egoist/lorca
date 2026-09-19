@@ -32,11 +32,11 @@ class DevicePaneViewController: SettingsPaneViewController {
 
     /// The one row a Runner's section shows for a Device that is not one, or before the CLI answers.
     func placeholderRows(for device: Device?) -> [NSView]? {
-        guard let device else { return [KeyValueRow(key: "Waiting for the CLI", value: "")] }
+        guard let device else { return [KeyValueRow(key: L("Waiting for the CLI"), value: "")] }
         guard !device.isRunner else { return nil }
         return [
             NoteRow(
-                text: "\(device.os.displayName) Devices hold your keys and chats but never run a bot. Pick a Runner: a Device running macOS, Linux, or Windows.")
+                text: L("%@ Devices hold your keys and chats but never run a bot. Pick a Runner: a Device running macOS, Linux, or Windows.", device.os.displayName))
         ]
     }
 }
@@ -44,18 +44,18 @@ class DevicePaneViewController: SettingsPaneViewController {
 // MARK: - Bots
 
 final class BotsSettingsViewController: DevicePaneViewController {
-    private let section = SectionView(title: "Bots")
+    private let section = SectionView(title: L("Bots"))
     var onOpenChat: ((Chat.ID) -> Void)?
 
     override func viewDidLoad() {
-        title = "Bots"
+        title = L("Bots")
         addSection(section)
-        addFootnote("A bot runs on the Runner it is assigned to, with your account's credentials and that Runner's plugins.")
+        addFootnote(L("A bot runs on the Runner it is assigned to, with your account's credentials and that Runner's plugins."))
         super.viewDidLoad()
     }
 
     override func reload() {
-        section.title = device.map { "Bots on \($0.name)" } ?? "Bots"
+        section.title = device.map { L("Bots on %@", $0.name) } ?? L("Bots")
         if let rows = placeholderRows(for: device) {
             section.setRows(rows)
             return
@@ -67,16 +67,16 @@ final class BotsSettingsViewController: DevicePaneViewController {
                 bot: bot,
                 detailText: "\(bot.label) · \(bot.provider.rawValue)",
                 accessorySymbol: "bubble.left",
-                tooltip: "Open chat"
+                tooltip: L("Open chat")
             )
             row.onAccessory = { [weak self] in self?.openChat(with: bot) }
             row.onClick = { [weak self] in self?.openChat(with: bot) }
             return row
         }
         if rows.isEmpty {
-            rows.append(KeyValueRow(key: "No bots assigned", value: "", tint: .secondaryLabelColor))
+            rows.append(KeyValueRow(key: L("No bots assigned"), value: "", tint: .secondaryLabelColor))
         }
-        let add = ActionRow(key: "New", value: "", tint: .secondaryLabelColor, actionTitle: "New Bot…")
+        let add = ActionRow(key: L("New"), value: "", tint: .secondaryLabelColor, actionTitle: L("New Bot…"))
         add.onAction = { NSApp.sendAction(#selector(AppDelegate.newBot(_:)), to: nil, from: nil) }
         rows.append(add)
         section.setRows(rows)
@@ -92,13 +92,13 @@ final class BotsSettingsViewController: DevicePaneViewController {
 /// The account's provider credentials: connected on any Mac, used by every Runner.
 final class ProvidersSettingsViewController: SettingsPaneViewController {
     private let store = AppStore.shared
-    private let section = SectionView(title: "Credentials")
+    private let section = SectionView(title: L("Credentials"))
 
     override func viewDidLoad() {
-        title = "Providers"
+        title = L("Providers")
         addSection(section)
         addFootnote(
-            "Credentials belong to your account. They reach your paired Devices encrypted with the account key, so a bot uses them on whichever Runner it is assigned to; the relay stores ciphertext.")
+            L("Credentials belong to your account. They reach your paired Devices encrypted with the account key, so a bot uses them on whichever Runner it is assigned to; the relay stores ciphertext."))
         super.viewDidLoad()
         store.observe(self) { [weak self] event in
             switch event {
@@ -111,7 +111,7 @@ final class ProvidersSettingsViewController: SettingsPaneViewController {
 
     private func reload() {
         guard !store.providers.isEmpty else {
-            section.setRows([KeyValueRow(key: "Waiting for the CLI", value: "")])
+            section.setRows([KeyValueRow(key: L("Waiting for the CLI"), value: "")])
             return
         }
         section.setRows(
@@ -121,9 +121,9 @@ final class ProvidersSettingsViewController: SettingsPaneViewController {
                     symbol: credential.kind.symbolName,
                     title: credential.kind.rawValue,
                     subtitle: "\(credential.kind.subtitle) · \(credential.detail)",
-                    state: credential.isConnected ? "Connected" : nil,
+                    state: credential.isConnected ? L("Connected") : nil,
                     stateColor: .systemGreen,
-                    actionTitle: credential.isConnected ? "Disconnect" : "Connect…",
+                    actionTitle: credential.isConnected ? L("Disconnect") : L("Connect…"),
                     destructive: credential.isConnected
                 )
                 row.onAction = { [weak self] in
@@ -143,17 +143,17 @@ final class ProvidersSettingsViewController: SettingsPaneViewController {
 
 /// What the picked Runner has installed, with each plugin's state, and the marketplace.
 final class PluginsSettingsViewController: DevicePaneViewController {
-    private let section = SectionView(title: "Plugins")
+    private let section = SectionView(title: L("Plugins"))
 
     override func viewDidLoad() {
-        title = "Plugins"
+        title = L("Plugins")
         addSection(section)
-        addFootnote("Plugins are installed on a Runner, and the bots assigned to it use them. An action that changes something goes through Auto-review first.")
+        addFootnote(L("Plugins are installed on a Runner, and the bots assigned to it use them. An action that changes something goes through Auto-review first."))
         super.viewDidLoad()
     }
 
     override func reload() {
-        section.title = device.map { "Plugins on \($0.name)" } ?? "Plugins"
+        section.title = device.map { L("Plugins on %@", $0.name) } ?? L("Plugins")
         if let rows = placeholderRows(for: device) {
             section.setRows(rows)
             return
@@ -173,9 +173,9 @@ final class PluginsSettingsViewController: DevicePaneViewController {
             return row
         }
         if rows.isEmpty {
-            rows.append(KeyValueRow(key: "No plugins installed", value: "", tint: .secondaryLabelColor))
+            rows.append(KeyValueRow(key: L("No plugins installed"), value: "", tint: .secondaryLabelColor))
         }
-        let add = ActionRow(key: "Marketplace", value: "", tint: .secondaryLabelColor, actionTitle: "Add from Plugins…")
+        let add = ActionRow(key: L("Marketplace"), value: "", tint: .secondaryLabelColor, actionTitle: L("Add from Plugins…"))
         add.onAction = { [weak self] in self?.presentAsSheet(PluginsMarketplaceViewController(runner: device, bot: nil)) }
         rows.append(add)
         section.setRows(rows)
@@ -192,10 +192,10 @@ final class PluginsSettingsViewController: DevicePaneViewController {
 /// The picked Device itself: what it is, whether it is online, its machine key, and Unpair.
 final class AboutDeviceSettingsViewController: DevicePaneViewController {
     private let header = DeviceHeaderView()
-    private let machineSection = SectionView(title: "Machine")
+    private let machineSection = SectionView(title: L("Machine"))
 
     override func viewDidLoad() {
-        title = "Devices"
+        title = L("Devices")
         add(header)
         addSection(machineSection)
         super.viewDidLoad()
@@ -207,22 +207,22 @@ final class AboutDeviceSettingsViewController: DevicePaneViewController {
 
         var rows: [NSView] = [
             KeyValueRow(key: SettingsEntry.machineKey.row, value: device.machineKey, monospaced: true),
-            KeyValueRow(key: "OS", value: "\(device.os.rawValue) · \(device.osVersion)"),
+            KeyValueRow(key: L("OS"), value: "\(device.os.rawValue) · \(device.osVersion)"),
             KeyValueRow(
-                key: "Role",
-                value: device.isRunner ? "Runner · runs bots with its own credentials" : "Device · never runs bots"),
+                key: L("Role"),
+                value: device.isRunner ? L("Runner · runs bots with its own credentials") : L("Device · never runs bots")),
             KeyValueRow(
-                key: "Last seen",
-                value: device.status == .online ? "Active now" : Format.lastSeen(device.lastSeen)),
+                key: L("Last seen"),
+                value: device.status == .online ? L("Active now") : Format.lastSeen(device.lastSeen)),
             KeyValueRow(
-                key: "Relay",
-                value: store.relayURL.map { store.relayConnected ? $0 : "\($0) · offline" } ?? "Not configured",
+                key: L("Relay"),
+                value: store.relayURL.map { store.relayConnected ? $0 : L("%@ · offline", $0) } ?? L("Not configured"),
                 monospaced: true),
         ]
         if !device.isThisDevice {
             let unpair = ActionRow(
-                key: SettingsEntry.pairing.row, value: "Paired to this account", tint: .secondaryLabelColor,
-                actionTitle: "Unpair…")
+                key: SettingsEntry.pairing.row, value: L("Paired to this account"), tint: .secondaryLabelColor,
+                actionTitle: L("Unpair…"))
             unpair.onAction = { [weak self] in UnpairDevice.confirm(device, in: self?.view.window) }
             rows.append(unpair)
         }
@@ -276,19 +276,19 @@ final class DeviceHeaderView: NSView {
         case .online:
             status.stringValue =
                 if device.isThisDevice {
-                    "This Mac · CLI running"
+                    L("This Mac · CLI running")
                 } else if device.isRunner {
-                    "Online · paired"
+                    L("Online · paired")
                 } else {
-                    "Online · paired · not a Runner"
+                    L("Online · paired · not a Runner")
                 }
             status.textColor = .systemGreen
         case .pairing:
-            status.stringValue = "Pairing…"
+            status.stringValue = L("Pairing…")
             status.textColor = .systemOrange
         case .offline:
             status.stringValue =
-                Format.lastSeen(device.lastSeen) + (device.isRunner ? " · jobs wait on the relay" : "")
+                Format.lastSeen(device.lastSeen) + (device.isRunner ? L(" · jobs wait on the relay") : "")
             status.textColor = .secondaryLabelColor
         }
     }

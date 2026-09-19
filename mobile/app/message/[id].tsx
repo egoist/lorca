@@ -3,6 +3,7 @@
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { useChat } from "../../src/core/store";
+import { t } from "../../src/i18n";
 import { Markdown } from "../../src/ui/Markdown";
 import { usePalette } from "../../src/ui/theme";
 
@@ -17,14 +18,14 @@ export default function MessageScreen() {
   const text = body?.kind === "tool" ? body.detail : body?.kind === "handoff" ? body.reason : "";
   return (
     <View style={styles.screen}>
-      <Stack.Screen options={{ title: title ?? "Message" }} />
+      <Stack.Screen options={{ title: title ?? t("Message") }} />
       <Stack.Toolbar placement="right">
         <Stack.Toolbar.Button variant="done" onPress={() => router.dismiss()}>
-          Done
+          {t("Done")}
         </Stack.Toolbar.Button>
       </Stack.Toolbar>
       <ScrollView contentContainerStyle={styles.content} contentInsetAdjustmentBehavior="automatic">
-        {text ? <Markdown text={text} color={p.label} maxWidth={width - 40} /> : <Text style={{ color: p.secondaryLabel }}>This message is no longer available.</Text>}
+        {text ? <Markdown text={text} color={p.label} maxWidth={width - 40} /> : <Text style={{ color: p.secondaryLabel }}>{t("This message is no longer available.")}</Text>}
       </ScrollView>
     </View>
   );
