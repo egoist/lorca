@@ -107,7 +107,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         }
         // The item keeps its place and width; only the pop-up inside shows and hides, so the
         // toolbar never lays out again between panes.
-        (devicePlatter ?? devicePicker).isHidden = !isScoped
+        // The platter exists once the item was made. Before that this hides the pop-up itself,
+        // which must not stay hidden inside a platter that shows.
+        if let devicePlatter {
+            devicePlatter.isHidden = !isScoped
+            devicePicker.isHidden = false
+        } else {
+            devicePicker.isHidden = !isScoped
+        }
         guard isScoped else { return }
 
         devicePicker.removeAllItems()
