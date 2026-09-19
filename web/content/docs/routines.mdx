@@ -1,0 +1,39 @@
+---
+title: Routines
+description: A routine is a task a bot runs on a schedule, such as a morning brief, an hourly check, or a weekly report.
+icon: CalendarClock
+---
+
+A routine is work a bot does on its own, on a schedule, in its direct chat with you.
+
+## Set one up
+
+Ask the bot:
+
+> Every weekday at 9, check the CI status of my three repos and tell me what is red.
+
+The bot creates the routine: a name, a schedule, and a prompt it writes as an instruction to itself. Edit, pause, or delete it the same way: "Move my morning brief to 8:30."
+
+## Schedules
+
+A routine runs at an interval (every 30 minutes, every 2 hours, every day) or at set times (weekdays at 9:00, the 1st of every month at 8:30). Times are in the Runner's local time. The shortest interval is five minutes.
+
+## What a run looks like
+
+A run opens with a **Routine · Name** marker in the bot's direct chat. The bot does the work and replies with what you should know. If there is nothing worth saying, it passes and only the marker remains.
+
+You get a notification for a run that says something, like any other reply.
+
+<Callout title="Routines and permissions">
+  Nobody is there to answer a permission card during a run. A routine can only take plugin actions that [Auto-review](/docs/auto-review) or one of your rules allows; anything that would ask is refused.
+</Callout>
+
+## Manage routines
+
+The bot's inspector has a **Routines** section: each routine with its schedule in words, its next run, and a switch that pauses or resumes it. Click one for its prompt, its last run, and **Run Now**, **Pause**, **Edit in Chat**, and **Delete**. The phone shows the same list in the chat's details.
+
+Routines run on the bot's Runner, so that computer has to be awake. A run that was due while it slept happens when it wakes.
+
+## When you are away
+
+If you have not written in any chat for seven days, due routines pause themselves and leave a note in the bot's chat, so nothing keeps spending on results nobody reads. Flip the switch to turn one back on.

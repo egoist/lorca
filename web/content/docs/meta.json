@@ -1,0 +1,24 @@
+{
+  "title": "Lorca",
+  "pages": [
+    "index",
+    "get-started",
+    "---Work with Lorca---",
+    "bots",
+    "chats",
+    "group-chats",
+    "tools",
+    "memory",
+    "routines",
+    "plugins",
+    "auto-review",
+    "---Your devices---",
+    "devices",
+    "providers",
+    "mobile",
+    "---Security and hosting---",
+    "security",
+    "relay",
+    "cli"
+  ]
+}

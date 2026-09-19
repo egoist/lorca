@@ -33,7 +33,8 @@ export const Route = createRootRoute({
 function RootDocument({ children }: { children: React.ReactNode }) {
   const lng = languageOf(useLocation({ select: (location) => location.pathname }))
   return (
-    <html lang={htmlLang[lng]}>
+    // The docs' theme provider keeps a class on <html> in step with the system's appearance.
+    <html lang={htmlLang[lng]} suppressHydrationWarning>
       <head>
         <HeadContent />
       </head>

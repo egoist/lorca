@@ -11,6 +11,7 @@ export const zh: Messages = {
     relay: '中继',
     tools: '工具',
     faq: '常见问题',
+    docs: '文档',
     download: '下载 Mac 版',
   },
   hero: {

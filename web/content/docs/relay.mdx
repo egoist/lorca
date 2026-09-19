@@ -1,0 +1,45 @@
+---
+title: Relay
+description: The relay is a mailbox for ciphertext between your devices. Run your own with one binary.
+icon: Server
+---
+
+The relay stores and forwards encrypted blobs between your devices. One device needs no relay at all. You need one to pair a second computer or a phone.
+
+Because everything is [encrypted before upload](/docs/security), a relay needs no trust beyond staying up.
+
+## Point Lorca at a relay
+
+Set **Settings › Advanced › Relay URL** on your first device, or the `LORCA_RELAY_URL` environment variable for the CLI. Devices you pair afterwards learn the URL from the pairing code.
+
+## Run your own
+
+The relay is a single binary, `lorca-relay`, with SQLite built in:
+
+```bash
+lorca-relay --bind 0.0.0.0:8787 --db lorca-relay.db
+```
+
+Put it behind HTTPS with a reverse proxy such as Caddy or nginx (WebSocket upgrades must pass through), and add `--trust-proxy` so rate limits see real client addresses.
+
+| Option | What it does |
+| --- | --- |
+| `--bind` | Address and port to listen on. |
+| `--db` | A SQLite file path, or a `postgres://` URL. |
+| `LORCA_RELAY_SECRET` | Signs session tokens. Set it so tokens survive a restart. |
+| `--quota-bytes` | Storage cap per identity. `0` for none. |
+| `--files-dir` | Where attachment ciphertext goes. Defaults to a folder beside the database. |
+| `--s3-bucket`, `--s3-endpoint` | Keep attachments in S3, R2, or MinIO instead. |
+| `--ip-per-minute`, `--identity-per-second` | Rate limits. |
+
+### Postgres
+
+Use a `postgres://` URL to run several relay processes against one database, for deploys without a gap. They must share `LORCA_RELAY_SECRET` and keep attachments in an S3-compatible bucket.
+
+### Push notifications
+
+To send pushes to the phone app, give the relay an APNs key (`--apns-key`, `--apns-key-id`, `--apns-team-id`) or a Firebase service account (`--fcm-service-account`). Without them everything else works and phones get no pushes.
+
+## Limits
+
+A message blob is up to 4 MB and an attachment up to 24 MB of ciphertext.

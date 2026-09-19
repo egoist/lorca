@@ -1,0 +1,33 @@
+---
+title: Memory
+description: Every bot keeps its own long-term memory as plain Markdown on its Runner. You can read and edit all of it.
+icon: Brain
+---
+
+Each bot remembers across chats. Its memory is a folder of Markdown files on its Runner. They never leave that computer unless you open them from another device, and then they travel encrypted.
+
+## What a bot keeps
+
+- **Curated memory** (`MEMORY.md`): dated facts the bot has decided are worth keeping. "The user prefers short replies." "Invoices go out on the 1st." The start of this file is in front of the bot on every turn.
+- **Topic notes**: longer notes the bot opens when it needs them.
+- **A daily log**: a diary of what happened: one line per finished turn, plus events the bot adds. Logs are searched, never loaded whole.
+
+When a fact changes, the bot strikes the old entry through and adds the new one, so the file shows what changed and when.
+
+Anything that looks like a credential, such as an API key, a token, or a password, is redacted before it is written.
+
+## Recall
+
+A bot can search its memory and every chat it is in, by words and by time: "what did we decide about pricing last week?" It also starts every turn knowing the latest thing it said in each of its other chats over the last two days, so a bot in a group knows what it did in its direct chat an hour ago.
+
+## Tell a bot to remember
+
+Just say it: "Remember that staging deploys need a ticket." The same goes for forgetting and correcting.
+
+Before a long chat is [compacted](/docs/bots#context-and-cost), the bot quietly saves anything durable that was only ever said in conversation.
+
+## Read and edit memory
+
+Open the bot's chat, toggle the inspector, and find **Memory**. You can read the curated memory, see how much of its load budget it uses, edit it, and open the folder in Finder. If the bot changed the file while you were editing, Lorca shows its version and asks whether to reload or overwrite.
+
+This works for a bot on another Runner too, as long as that Runner is online.

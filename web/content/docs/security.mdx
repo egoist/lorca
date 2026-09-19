@@ -1,0 +1,54 @@
+---
+title: Security
+description: Your identity is a key pair you hold. Everything that leaves a device is encrypted first.
+icon: Lock
+---
+
+Lorca has no accounts, no passwords, and no server that can read your data. Its security model follows [Happy's](https://happy.engineering/docs/security/).
+
+## Your identity is a key
+
+Creating an identity makes a 32-byte secret on your first Mac. Everything else is derived from it. The **backup phrase** is that secret written as thirteen groups of four characters.
+
+- The secret stays on the device that created or restored it.
+- Whoever holds the phrase holds the account. Lorca cannot recover it for you.
+
+## What is encrypted
+
+Everything with meaning: bot names and instructions, chat titles, messages, attachments, device names, provider credentials, and the contents of push notifications. Each is encrypted on your device with your account key (XChaCha20-Poly1305) before upload. Work sent to a bot on another computer is sealed to that computer's public key, so only it can open the job.
+
+## What the relay sees
+
+| The relay stores | The relay never sees |
+| --- | --- |
+| Your identity's public key and your devices' public keys | Names, titles, messages, files |
+| Encrypted blobs with their size, order, and timestamps | Bot profiles and instructions |
+| Random ids that group a chat's blobs together | Provider API keys and tokens |
+| Which device keys are online, and when they last connected | Which devices are Runners |
+| A phone's push token | What a notification says |
+
+Devices prove who they are by signing a challenge with their key. There is nothing to phish.
+
+## Pairing
+
+A pairing code carries a one-time public key. The new device sends its keys sealed to that one-time key; the existing device answers with the account key sealed to the new device. The relay passes both messages without being able to open either. A code expires after ten minutes or when you cancel it.
+
+## Unpairing
+
+Unpairing a device makes the relay refuse its key for good. The device deletes its keys, credentials, and chats the next time it connects.
+
+## On your computer
+
+- Keys, credentials, and chats are files under `~/.lorca/`, readable only by your user.
+- Bots run as your user. See the warning in [Tools](/docs/tools).
+- Plugin secrets and sign-ins stay on the Runner where the plugin is installed.
+- Bot memory is scrubbed of anything that looks like a credential before it is written.
+- The desktop app talks only to its own local service on `127.0.0.1`. That service is the only thing that talks to the relay and to AI providers.
+
+## What AI providers see
+
+A bot's turn sends the conversation, its instructions, and its tool results to the provider you connected, under that provider's terms. That traffic goes straight from the Runner to the provider, never through the relay.
+
+## Updates
+
+The Mac app is signed and notarized. Updates are verified against a signing key built into the app before they install.

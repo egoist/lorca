@@ -1,0 +1,54 @@
+---
+title: Plugins
+description: Connect bots to GitHub, Linear, Notion, Sentry, a browser, or any MCP server.
+icon: Plug
+---
+
+A plugin gives bots tools for a service or an app. Under the hood a plugin is one or more [MCP](https://modelcontextprotocol.io) servers.
+
+## The marketplace
+
+Lorca ships with plugins for **GitHub**, **Linear**, **Notion**, **Sentry**, **Context7** (library documentation), and **Browser** (a headless browser the bot drives).
+
+Plugins are installed **per Runner**. Every bot on that computer can use every plugin installed there. Secrets and sign-ins stay on that Runner; your other devices only see the plugin's name and state.
+
+## Install a plugin
+
+- **From a chat:** ask the bot. "Install the GitHub plugin." It finds the plugin and posts a card asking your permission before it installs anything.
+- **From the app:** open the bot's inspector, find **Plugins**, and choose **Add from Plugins…**. Or go to **Settings › Plugins** and pick the Runner in the toolbar.
+
+You can install a plugin on your Mac from your phone. The request travels to the Runner encrypted.
+
+## Sign in
+
+A plugin that needs an account posts a sign-in card in the chat: **Sign in** or **Not now**.
+
+- GitHub shows a short code and a link. Enter the code on github.com from any device.
+- Other services open a sign-in page in the browser **on the Runner**. If you are on another device, the card tells you to finish there.
+
+Some plugins take a pasted token instead, such as a GitHub personal access token or a Context7 API key. Fill it in on the plugin's sheet. Secret fields are write-only: once saved they are never shown again.
+
+## Add your own MCP server
+
+In the marketplace sheet choose **Add MCP Server…** and paste the server's JSON, the same shape other MCP clients use:
+
+```json
+{
+  "mcpServers": {
+    "weather": {
+      "command": "npx",
+      "args": ["-y", "weather-mcp"]
+    }
+  }
+}
+```
+
+Both local (`command`) and remote (`url`) servers work.
+
+## What a plugin may do
+
+Reading runs right away. Anything that changes something, such as creating an issue, posting a comment, or deleting a page, goes through [Auto-review](/docs/auto-review), and asks you first when it should.
+
+## Manage a plugin
+
+A plugin's sheet shows its state, its sign-in, its settings, the actions you have always allowed (with **Reset**), and **Remove**. Marketplace plugins update themselves and keep your settings and sign-ins.

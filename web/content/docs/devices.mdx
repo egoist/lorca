@@ -1,0 +1,61 @@
+---
+title: Devices and Runners
+description: Pair your computers and your phone. Desktop devices run bots; every device reads and writes chats.
+icon: MonitorSmartphone
+---
+
+Every Mac, PC, or phone you pair is a **Device**. A Device with a desktop OS (macOS, Linux, or Windows) is also a **Runner**: bots can be assigned to it. Phones and tablets hold your keys and your chats, and never run bots.
+
+| | Runner (macOS, Linux, Windows) | Phone or tablet |
+| --- | --- | --- |
+| Read and write chats | Yes | Yes |
+| Create bots and pair devices | Yes | Yes |
+| Run bots, plugins, and routines | Yes | No |
+
+## Pair a device
+
+Pairing needs a [relay](/docs/relay) that both devices can reach. Set it in **Settings › Advanced › Relay URL** first.
+
+<Steps>
+<Step>
+
+### Show a pairing code
+
+On a device that is already set up, choose **File › Pair a Device…** (⇧⌘P), or **Pair a Device** at the foot of the device pop-up in Settings. Lorca shows a QR code and a pairing string, good for ten minutes.
+
+</Step>
+<Step>
+
+### Enter it on the new device
+
+On a new Mac, choose **Pair** during onboarding and paste the string. On a phone, scan the QR code. On a computer with only the CLI:
+
+```bash
+lorca pair 'lorca://pair?…'
+```
+
+</Step>
+<Step>
+
+### Wait for the sync
+
+The new device receives your account key, then your bots, provider credentials, and chats. A Runner is ready for bots as soon as the credentials arrive.
+
+</Step>
+</Steps>
+
+**Cancel** on the pairing sheet retires the code at once.
+
+## Manage devices
+
+**Settings › Devices** shows each device's role, when it was last seen, and its machine key. **Settings › Bots** and **Settings › Plugins** show what the device picked in the toolbar has.
+
+## Unpair a device
+
+Any device can unpair any other, so you can remove a lost Mac from your phone. The unpaired device is refused by the relay for good, and the next time it runs it deletes its keys, credentials, and chats. Pairing it again gives it a new key.
+
+To sign a device out yourself, unpair it from its own Devices pane.
+
+## Restore on a new Mac
+
+Choose **Restore** during onboarding and enter your backup phrase. Lorca rebuilds your keys and pulls your account from the relay. Bots that ran on the old Mac need a new Runner; their memory and working files stayed on the old disk.

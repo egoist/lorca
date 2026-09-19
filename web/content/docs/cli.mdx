@@ -1,0 +1,50 @@
+---
+title: Command line
+description: The lorca CLI holds your keys and runs your bots. The desktop app is a window onto it, and a Runner needs nothing else.
+icon: Terminal
+---
+
+`lorca` is the program that does the work: it holds your keys, talks to the relay and the AI providers, and runs the bots. The desktop app bundles it and runs it for you. On a computer without the app, run it yourself and that computer is a Runner.
+
+The binary lives inside the app at `Lorca.app/Contents/Resources/bin/lorca`.
+
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| `lorca serve` | Runs the service. The default when no command is given. |
+| `lorca identity new` | Creates an identity and prints the backup phrase. |
+| `lorca identity restore <phrase>` | Restores an identity from its phrase. |
+| `lorca identity show` | Shows this device's identity. |
+| `lorca pair` | Shows a pairing string and waits for the other device. |
+| `lorca pair <string>` | Joins an account with a pairing string. |
+| `lorca provider set <kind> [api-key]` | Connects `deepseek`, `anthropic`, `chatgpt`, or `grok`. The key is read from stdin when omitted; `--base-url` sets a custom endpoint. |
+| `lorca provider remove <kind>` | Disconnects a provider on every device. |
+| `lorca provider list` | Lists the connected providers. |
+| `lorca status` | Prints this device's state as JSON: devices, bots, chats, providers. |
+| `lorca doctor` | Checks the home folder, identity, port, and relay, and says what is wrong. |
+
+## A headless Runner
+
+```bash
+export LORCA_RELAY_URL=https://relay.example.com
+lorca pair 'lorca://pair?…'   # the string from Pair a Device… on your Mac
+lorca serve
+```
+
+The computer shows up in your device list, and you can create bots for it from your Mac or phone.
+
+## Environment
+
+| Variable | What it sets |
+| --- | --- |
+| `LORCA_HOME` | Where keys, credentials, and chats live. Default `~/.lorca`. |
+| `LORCA_PORT` | The local port the app connects to. Default `4862`. |
+| `LORCA_RELAY_URL` | The relay. |
+| `LORCA_DEEPSEEK_MODEL`, `LORCA_ANTHROPIC_MODEL`, `LORCA_CHATGPT_MODEL`, `LORCA_GROK_MODEL` | The default model for bots that do not pick one. |
+
+## Files
+
+Everything is under `~/.lorca/`, readable only by your user: your identity and machine keys, provider credentials, settings, chats, attachments, plugins, and one workspace folder per bot with its memory.
+
+The app logs the service to `~/Library/Logs/Lorca/cli.log`.

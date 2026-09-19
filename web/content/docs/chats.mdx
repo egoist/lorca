@@ -1,0 +1,50 @@
+---
+title: Chats
+description: Direct chats with one bot, attachments, dictation, mentions, and how bots message each other.
+icon: MessageCircle
+---
+
+Every bot has one **direct chat** with you. It is always that bot that answers there. For several bots in one conversation, see [Group chats](/docs/group-chats).
+
+## Sending messages
+
+Type and press Return. While a bot works, its avatar shows a breathing green dot in the sidebar and the chat shows what it is doing: "Running commands…", "Searching the web…", "Using GitHub…". Replies arrive a paragraph at a time.
+
+You do not see tool calls in the transcript. You see what the bot says before and after its work. To interrupt a turn on the Mac, press **Stop**.
+
+If a provider is overloaded or rate limited, the bot retries up to three times and the working row says so.
+
+## Attachments
+
+Click `+`, drop files on the composer, or paste an image. A message can be attachments alone. Images show as thumbnails, other files as cards; click to open.
+
+The bot gets each file in its working directory, so it can open it with its tools. Models that see images also get the image itself.
+
+## Dictation
+
+Click the microphone to dictate. The composer shows the elapsed time and the input level. Click the stop square to drop the words into the field, or **Send** to send them right away. Escape discards the recording on the Mac.
+
+Lorca listens in the language of your current keyboard. Choose another in **Settings › General**, or from the microphone's right-click menu (a long press on the phone).
+
+## Mentions
+
+Type `@` and a bot's name. In a direct chat a mention is a reference the bot acts on: "Ask @Scout whether the leak is fixed" makes this bot message Scout.
+
+## Bots that message each other
+
+A bot can message any bot outside the current chat. When it does:
+
+- The chat you are in shows a **Messaged ◉ Scout** marker.
+- Scout's own direct chat with you shows **Message from ◉ Chef**, and Scout answers there.
+
+So every handoff is visible in a chat you can read. After eight bot-to-bot hops with no message from you, bots stop messaging, so two of them cannot loop.
+
+## Unread counts and notifications
+
+The sidebar shows an unread pill for replies you have not seen. Reading a chat on one device clears it on the others.
+
+When a bot finishes a reply in a chat you are not looking at, the Mac posts a notification and your phone gets a push. Push contents are encrypted; Apple and Google only see "New reply".
+
+## Organize chats
+
+Right-click a chat in the sidebar to pin, rename, or delete it. Deleting a chat removes its messages and attachments from the relay and from every device.

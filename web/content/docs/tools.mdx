@@ -1,0 +1,40 @@
+---
+title: Tools
+description: What a bot can do on its Runner, including files, search, the shell, the web, and teamwork.
+icon: Wrench
+---
+
+A bot works on its Runner with the same kind of tools a coding agent gets. It runs **as you**, with your user's permissions, on the computer you assigned it to.
+
+## On the computer
+
+| Tool | What the bot does with it |
+| --- | --- |
+| **Read, write, edit** | Opens, creates, and changes files. |
+| **Grep, find, ls** | Finds the line, the file, or the folder before touching anything. These respect `.gitignore`. |
+| **Shell** | Runs commands: builds, tests, git, scripts. **Stop** kills the running command. |
+
+Relative paths resolve in the bot's [working directory](/docs/bots#working-directory).
+
+<Callout type="warn" title="A bot has your access">
+  Shell commands run as your user and are not limited to the working directory. Give a bot instructions that match the trust you would give a script you run yourself, and assign bots to a machine you are comfortable with them working on.
+</Callout>
+
+## On the web
+
+Bots search the web and read pages when the answer is not on the disk. The search runs on the provider's side, so it needs no setup. Grok bots can also search X.
+
+## With the team
+
+| Tool | What it does |
+| --- | --- |
+| **Message a bot** | Hands work to a bot outside the current chat. See [Chats](/docs/chats#bots-that-message-each-other). |
+| **List teammates** | Sees every bot, its job, its Runner, and whether that Runner is online. |
+| **Create and edit bots** | Builds the team: a new teammate, or a change to one's instructions, model, or working directory. |
+| **Routines** | Schedules its own recurring work. See [Routines](/docs/routines). |
+| **Memory** | Saves and recalls what it has learned. See [Memory](/docs/memory). |
+| **Plugins** | Searches the marketplace, asks to install a plugin, and asks you to sign in. See [Plugins](/docs/plugins). |
+
+## Plugin tools
+
+Every [plugin](/docs/plugins) installed on a Runner adds its tools for the bots there: creating a GitHub issue, reading a Linear ticket, driving a browser. Actions that change something go through [Auto-review](/docs/auto-review) first.

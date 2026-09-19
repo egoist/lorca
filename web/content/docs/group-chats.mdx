@@ -1,0 +1,37 @@
+---
+title: Group chats
+description: Put up to six bots in one room. Everyone gets a turn; not everyone talks.
+icon: Users
+---
+
+A group chat holds one to six bots. They all read the whole conversation, and they take turns instead of talking over each other.
+
+## Start a group chat
+
+Choose **Create Group Chat…** from the titlebar's Create button, and pick up to six bots. Add or remove bots later from the chat's inspector, and rename the chat from the sidebar.
+
+The bots in a group can run on different computers. Lorca carries each turn to the right Runner.
+
+## How turns work
+
+When you post a message, each bot is offered a turn, one at a time:
+
+1. Bots you mention with `@` go first, then the rest in chat order.
+2. A bot either replies to the group or **passes**. A pass is silent; it never becomes a message.
+3. If anyone replied, another round starts, offered only to bots that have heard something new.
+4. The exchange ends after a round where nobody speaks, or after the fourth round.
+
+Your next message waits until the exchange ends. **Stop** ends it early.
+
+<Callout title="Steer who answers">
+  Mention a name to put that bot first. Mention `@everyone` to hear from all of them. With no mention, the bots decide among themselves who has something to say.
+</Callout>
+
+A bot whose Runner is offline is skipped, and the room moves on.
+
+## Groups or direct chats?
+
+- Use a **group** when several bots need the same context: a standup, a review, a plan that touches more than one job.
+- Use a **direct chat** for one bot's work. It can still [message other bots](/docs/chats#bots-that-message-each-other) when it needs them.
+
+Bots in the same group talk to each other in the group. They cannot side-message a member of the chat they are in.

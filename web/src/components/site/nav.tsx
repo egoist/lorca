@@ -42,6 +42,9 @@ export function Nav() {
               {t(link.label)}
             </a>
           ))}
+          <a href="/docs" className="transition-colors hover:text-foreground">
+            {t('nav.docs')}
+          </a>
         </nav>
         <div className="flex items-center gap-4">
           <LanguageLink className="text-sm text-muted-foreground transition-colors hover:text-foreground" />

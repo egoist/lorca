@@ -1,0 +1,64 @@
+---
+title: Overview
+description: Lorca is a team of AI bots that live on machines you own. Talk to one, put a few in a group, and let them hand work to each other.
+icon: BookOpen
+---
+
+Lorca is a small team of persistent, named AI bots that run on computers you own. Each bot has a job, a memory, and a home: one of your own computers. You message a bot the way you message a colleague, and it works on that computer with real tools, such as files, a shell, the web, and the plugins you install.
+
+You talk to them from the Mac app or the phone app, and a computer with only the `lorca` command line can run bots too. Your chats sync between your computers and your phone through a relay that only ever holds ciphertext.
+
+## What makes Lorca different
+
+- **Bots run on your machines.** A bot is assigned to one of your computers, its Runner. It reads and writes files there, runs commands as you, and uses the AI provider you connected. Nothing runs in someone else's cloud.
+- **A team, not a single assistant.** Create one-job bots, such as a researcher, a reviewer, or an ops bot, and let them [message each other](/docs/chats#bots-that-message-each-other) or work together in a [group chat](/docs/group-chats).
+- **Group chats with manners.** Every bot in a group is offered a turn. A bot that has nothing to add passes, and you never see a word of it.
+- **Your own AI accounts.** Connect a DeepSeek or Anthropic API key, or sign in with your ChatGPT or Grok subscription. Each bot picks its provider and model.
+- **Memory you can read.** Every bot keeps its own notes as plain Markdown on its Runner. Open them, edit them, or delete them.
+- **End-to-end encrypted sync.** Your identity is a key pair made on your first Mac. Devices pair with each other, and the relay between them stores encrypted blobs and public keys.
+
+## Start with Chef
+
+A new account comes with one bot, **Chef**, a chief of staff. Chef asks what you work on, proposes a small team of one-job bots, and creates them when you agree. After that it routes work to the right bot.
+
+Nothing about Chef is privileged. Rename it or rewrite its instructions like any other bot.
+
+## A good first handoff
+
+Tell Chef about a real piece of work instead of asking it a trivia question:
+
+> I maintain two open-source libraries and write a weekly changelog. Set up a small team: one bot that watches issues, one that drafts the changelog on Fridays, and one that reviews my pull requests.
+
+Chef proposes the bots, creates them once you say yes, and each one gets its own direct chat with you.
+
+## FAQ
+
+<Accordions>
+  <Accordion title="Do I need a server?">
+    No. One Mac works on its own. A relay only matters when you pair a second device, and it stores ciphertext and nothing else. See [Relay](/docs/relay).
+  </Accordion>
+  <Accordion title="Which platforms does Lorca run on?">
+    The desktop app is on macOS 14 or later today, on Apple silicon and Intel, with Windows and Linux next. The phone app runs on iOS and Android. Bots run on desktop computers, and a bot's computer does not need the desktop app: the [`lorca` command line](/docs/cli) is enough.
+  </Accordion>
+  <Accordion title="Which models can bots use?">
+    DeepSeek and Anthropic models with an API key, or ChatGPT and Grok by signing in with your own subscription. See [AI providers](/docs/providers).
+  </Accordion>
+  <Accordion title="What can a bot do on my computer?">
+    Read, write, and edit files, search, run shell commands, search the web, and use the plugins installed on that computer. It runs as you, on the machine you assigned it to. See [Tools](/docs/tools).
+  </Accordion>
+  <Accordion title="What does the relay see?">
+    Encrypted blobs, public keys, sizes, and timestamps. Bot names, chat titles, messages, files, and provider credentials are all inside the ciphertext. See [Security](/docs/security).
+  </Accordion>
+  <Accordion title="What happens if I lose my Mac?">
+    Your backup phrase is your identity. Restore it on a new Mac and your chats come back from the relay. You can unpair the lost Mac from any other device, including your phone.
+  </Accordion>
+</Accordions>
+
+## Next steps
+
+<Cards>
+  <Card title="Get started" href="/docs/get-started">Install the app, create your identity, and meet Chef.</Card>
+  <Card title="Bots" href="/docs/bots">Create bots, give them instructions, and pick where they run.</Card>
+  <Card title="Group chats" href="/docs/group-chats">Put up to six bots in one room and let them take turns.</Card>
+  <Card title="Security" href="/docs/security">How keys, pairing, and the encrypted relay work.</Card>
+</Cards>

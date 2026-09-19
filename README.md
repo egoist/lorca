@@ -45,7 +45,7 @@ bun run mobile:ios   # build and run on the iOS simulator (Xcode)
 
 ## Website
 
-The landing page lives in `web/` (TanStack Start on a Cloudflare Worker, shadcn/ui).
+The landing page lives in `web/` (TanStack Start on a Cloudflare Worker, shadcn/ui). The product docs at `/docs` are MDX files in `web/content/docs`, rendered with Fumadocs.
 
 ```bash
 bun run web          # dev server on http://localhost:3000

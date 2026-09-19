@@ -9,6 +9,7 @@ export const en = {
     relay: 'Relay',
     tools: 'Tools',
     faq: 'FAQ',
+    docs: 'Docs',
     download: 'Download for Mac',
   },
   hero: {

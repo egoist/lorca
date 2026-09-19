@@ -242,6 +242,7 @@ export function Footer() {
         <nav className="flex gap-6">
           <a href="#relay" className="hover:text-foreground">{t('footer.privacy')}</a>
           <a href="#faq" className="hover:text-foreground">{t('footer.faq')}</a>
+          <a href="/docs" className="hover:text-foreground">{t('nav.docs')}</a>
           <a href={DOWNLOAD} className="hover:text-foreground">{t('footer.download')}</a>
           <LanguageLink className="hover:text-foreground" />
         </nav>

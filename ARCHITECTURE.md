@@ -139,7 +139,7 @@ If B is offline, the envelope waits on the relay until B fetches it. The UI infe
 
 ## Website
 
-`web/` is the app's site: TanStack Start (React, file routes under `web/src/routes`), Tailwind and shadcn/ui components, built with Vite and served by a Cloudflare Worker (`web/wrangler.jsonc`, `@cloudflare/vite-plugin`, static assets alongside the SSR entry). One page: hero, screenshots of the app in `LORCA_MOCK=1` mode (`web/public/screens`), features, how it works, privacy, FAQ. `bun run web` serves it locally on port 3000; `bun run web:deploy` builds and runs `wrangler deploy`.
+`web/` is the app's site: TanStack Start (React, file routes under `web/src/routes`), Tailwind and shadcn/ui components, built with Vite and served by a Cloudflare Worker (`web/wrangler.jsonc`, `@cloudflare/vite-plugin`, static assets alongside the SSR entry). One page: hero, screenshots of the app in `LORCA_MOCK=1` mode (`web/public/screens`), features, how it works, privacy, FAQ. The product docs are at `/docs`: MDX under `web/content/docs` (`meta.json` orders the sidebar), compiled by the `fumadocsMdx` Vite plugin and loaded in `src/lib/source.ts`, rendered by Fumadocs UI in `src/routes/docs/$.tsx` with the site's own color tokens (`fumadocs-ui/css/shadcn.css`) and the system's appearance. `/api/search` is the Orama index built from the same source; `/docs/<page>.md`, `/llms.txt`, and `/llms-full.txt` serve the pages as Markdown. `bun run web` serves it locally on port 3000; `bun run web:deploy` builds and runs `wrangler deploy`.
 
 ## Phone app
 

@@ -1,0 +1,50 @@
+---
+title: AI providers
+description: Connect DeepSeek, Anthropic, ChatGPT, or Grok once, and every Runner on your account can use it.
+icon: Sparkles
+---
+
+Bots think with your own AI accounts. Connect a provider once, on any Mac, and it reaches every paired device encrypted with your account key.
+
+| Provider | How you connect | Default model |
+| --- | --- | --- |
+| **DeepSeek** | API key | `deepseek-flash` |
+| **Anthropic** | API key | `claude-opus-5` |
+| **ChatGPT** | Sign in with your ChatGPT subscription | `gpt-5.6-terra` |
+| **Grok** | Sign in with SuperGrok or X Premium+ | `grok-4.6` |
+
+All four search the web on the provider's side. Grok also searches X.
+
+## Connect
+
+Open **Settings › Providers** and click **Connect**.
+
+- **API key:** paste the key. Lorca checks it against the provider before saving.
+- **Sign-in:** your browser opens the provider's own sign-in page. Lorca never sees your password.
+
+From a terminal:
+
+```bash
+lorca provider set deepseek
+lorca provider set anthropic
+lorca provider set chatgpt
+lorca provider list
+```
+
+### Custom API endpoint
+
+For a proxy or a compatible server, fill in **Base URL** when you connect a DeepSeek or Anthropic key. The key is checked against that endpoint.
+
+## Pick a model per bot
+
+Each bot chooses its provider, model, and thinking level in the New Bot sheet or under **Runs with** in its inspector. A bot with no model set uses the provider's default.
+
+If a bot's provider is not connected, its turn ends with a note that says to connect it in Settings.
+
+## Disconnect
+
+**Disconnect** removes the credential from every device. For Grok it also revokes the sign-in.
+
+## Cost
+
+API-key providers bill you per token; the inspector shows what each chat has spent. ChatGPT and Grok sign-ins use your subscription, and the figure shown is what the work would cost at API rates.

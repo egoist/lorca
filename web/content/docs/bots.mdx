@@ -1,0 +1,47 @@
+---
+title: Bots
+description: A bot is a persistent, named teammate with its own instructions, memory, model, and a computer it runs on.
+icon: Bot
+---
+
+A bot is a teammate with one job. It has a name, instructions, a model, its own [memory](/docs/memory), and a **Runner**: the computer it works on. Every bot has one direct chat with you, and can join [group chats](/docs/group-chats).
+
+## Create a bot
+
+Choose **Create New Bot…** from the titlebar's Create button (or **File › New Bot…**), then fill in:
+
+| Field | What it is |
+| --- | --- |
+| **Name** | What you call it, and what you type after `@` to mention it. |
+| **Label** | Its role in a word or two, such as Research, Ops, or Writing. |
+| **Description** | A sentence or two about what it does. Other bots read this to decide who gets a piece of work. |
+| **Instructions** | How it should work: its job, its standards, what to avoid. |
+| **Runner** | The computer it runs on. Any paired Mac, Linux, or Windows device. |
+| **Provider** and **Model** | Which AI account and model it uses. Leave the model on Default to follow the provider's default. |
+| **Thinking** | How much the model reasons before answering, from off to max. |
+
+You can also ask a bot to do it. Chef, or any bot, can create a teammate for you: "Create a bot that reviews my pull requests." The new bot appears in the sidebar with its own chat. A bot created from inside a group chat joins that group.
+
+## Edit a bot
+
+Open the bot's chat and toggle the inspector. From there you can change its profile, the model it **runs with**, its [routines](/docs/routines), [plugins](/docs/plugins), and [memory](/docs/memory). Changes apply from the bot's next turn.
+
+Click the avatar in the inspector to open **Look**: pick a symbol and an accent color, or use an image of your own. The look syncs to all your devices.
+
+Bots can edit each other too. "Chef, make Scout's replies shorter" changes Scout's instructions.
+
+## Where a bot runs
+
+A bot runs on exactly one Runner. Its files, shell commands, plugins, and memory all live on that computer. If the Runner is asleep or offline, your message waits on the relay and the bot answers when the Runner is back.
+
+You can create a bot for any of your Runners from any device, including your phone.
+
+## Working directory
+
+Every bot has a working directory on its Runner. Relative paths in its file and shell tools resolve there. By default it is a folder Lorca makes for the bot; point it at a project folder when the bot's job is that project.
+
+## Context and cost
+
+The inspector shows how full the bot's context window is ("Context 128k of 1M · 13%") and what the chat has cost ("Spent $0.42 · 18 turns"). For ChatGPT and Grok subscriptions the figure is what the work would have cost at API rates; you are not billed per token.
+
+Long chats compact themselves: when a chat nears the model's window, the older part is summarized and the recent messages stay as they are. Before that happens the bot saves anything durable to its memory. **Compact** in the inspector does it by hand.

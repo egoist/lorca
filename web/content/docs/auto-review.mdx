@@ -1,0 +1,46 @@
+---
+title: Auto-review
+description: Lorca checks each plugin action before it runs and asks you first when it should.
+icon: ShieldCheck
+---
+
+Auto-review sits between a bot and the plugin actions that change things. It decides, one action at a time, whether to run it or to ask you.
+
+## Permission cards
+
+When an action needs your say, the bot posts a card in the chat:
+
+> Chef wants to use GitHub · create_issue · repo: acme/api
+
+with the reason it paused and three answers:
+
+- **Allow once** runs this action.
+- **Always allow** runs it and adds a rule, so that exact tool never asks again.
+- **Deny** refuses it. The bot is told not to retry.
+
+You can answer from any device. The bot waits up to ten minutes.
+
+## How it decides
+
+With Auto-review **on**, each action is judged against your rules, your latest message, and built-in checks:
+
+- **Asks first:** deleting or overwriting, posting where other people see it, anything involving money or access, bulk or irreversible changes.
+- **Runs:** contained, reversible work you asked for.
+
+With Auto-review **off**, every action that changes something asks.
+
+Read-only actions, such as listing issues or fetching a page, never ask.
+
+## Rules
+
+Open **Settings › Auto-review** to turn it on or off and to write rules in plain language:
+
+> When a bot wants to: comment on a pull request → **Ask first**
+>
+> When a bot wants to: label issues in my own repos → **Allow automatically**
+
+When two rules disagree, Ask first wins. Rules sync to all your devices and apply to every bot.
+
+## Routines
+
+A [routine](/docs/routines) runs with nobody watching, so an action that would ask is refused instead. Add an allow rule for what a routine needs to do on its own.

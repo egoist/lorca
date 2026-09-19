@@ -1,5 +1,8 @@
 @import 'tailwindcss';
 @import 'tw-animate-css';
+/* The docs (Fumadocs UI), colored from the tokens below. */
+@import 'fumadocs-ui/css/shadcn.css';
+@import 'fumadocs-ui/css/preset.css';
 
 @custom-variant dark (@media (prefers-color-scheme: dark));
 
@@ -24,6 +27,13 @@
   --border: oklch(0 0 0 / 10%);
   --input: oklch(0 0 0 / 14%);
   --ring: oklch(0.6 0.02 285);
+  --sidebar: oklch(0.975 0.003 285);
+  --sidebar-foreground: var(--foreground);
+  --sidebar-border: var(--border);
+  --sidebar-accent: oklch(0.93 0.004 285);
+  --sidebar-accent-foreground: var(--foreground);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-ring: var(--ring);
   --violet: #6b66f5;
   --azure: #3d85f0;
   --cyan: #2eb3dc;
@@ -50,6 +60,8 @@
     --destructive: oklch(0.66 0.2 25);
     --border: oklch(1 0 0 / 10%);
     --input: oklch(1 0 0 / 14%);
+    --sidebar: oklch(0.15 0.005 285);
+    --sidebar-accent: oklch(0.24 0.006 285);
     --window-shadow: 0 40px 120px -30px rgba(0, 0, 0, 0.8);
     color-scheme: dark;
   }
