@@ -29,9 +29,42 @@ final class RootSplitViewController: NSSplitViewController {
 
     var onSelectionChange: (() -> Void)?
 
+    /// The panes visited since Settings opened, for the toolbar's back and forward.
+    private var paneHistory: [SettingsPane] = []
+    private var paneIndex = 0
+    private var isWalkingHistory = false
+
+    var canGoBack: Bool { paneIndex > 0 }
+    var canGoForward: Bool { paneIndex < paneHistory.count - 1 }
+
+    func goBack() { walkHistory(to: paneIndex - 1) }
+    func goForward() { walkHistory(to: paneIndex + 1) }
+
+    private func walkHistory(to index: Int) {
+        guard paneHistory.indices.contains(index) else { return }
+        paneIndex = index
+        isWalkingHistory = true
+        select(.settings(paneHistory[index]))
+        isWalkingHistory = false
+        onSelectionChange?()
+    }
+
+    private func recordHistory() {
+        guard case let .settings(pane) = selection else {
+            paneHistory = []
+            paneIndex = 0
+            return
+        }
+        guard !isWalkingHistory else { return }
+        paneHistory = Array(paneHistory.prefix(paneIndex + 1))
+        if paneHistory.last != pane { paneHistory.append(pane) }
+        paneIndex = paneHistory.count - 1
+    }
+
     private(set) var selection: Selection? {
         didSet {
             guard selection != oldValue else { return }
+            recordHistory()
             if case let .chat(id) = oldValue { lastChatID = id }
             Preferences.selection = encode(selection)
             updateContent()

@@ -7,6 +7,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private let devicePicker = NSPopUpButton()
     /// Creating bots and chats belongs to the chats; Settings hides it.
     private var createButton: HoverButton?
+    private weak var navigation: NSToolbarItemGroup?
+    /// The picker's glass capsule, where the pop-up has one of its own.
+    private var devicePlatter: NSView?
 
     init() {
         let window = NSWindow(
@@ -54,28 +57,36 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
         root.onSelectionChange = { [weak self] in
             self?.updateTitle()
-            self?.updateDevicePicker()
+            self?.updateToolbar()
             Notifier.shared.watchingChanged()
         }
         AppStore.shared.observe(self) { [weak self] event in
             switch event {
-            case .rosterChanged, .snapshotReplaced: self?.updateDevicePicker()
+            case .rosterChanged, .snapshotReplaced: self?.updateToolbar()
             default: break
             }
         }
         updateTitle()
-        updateDevicePicker()
+        updateToolbar()
     }
 
-    // MARK: - Device picker
+    // MARK: - Settings toolbar
 
-    private func updateDevicePicker() {
+    private func updateToolbar() {
         guard let toolbar = window?.toolbar else { return }
         var isScoped = false
         if case let .settings(pane) = root.selection { isScoped = pane.isDeviceScoped }
 
         // Settings has no inspector and nothing to create.
         let isSettings = root.selection?.isSettings == true
+        let arrows = toolbar.items.firstIndex { $0.itemIdentifier == .settingsNavigation }
+        if isSettings, arrows == nil {
+            let at = toolbar.items.firstIndex { $0.itemIdentifier == .sidebarTrackingSeparator }.map { $0 + 1 } ?? 0
+            toolbar.insertItem(withItemIdentifier: .settingsNavigation, at: at)
+        } else if !isSettings, let arrows {
+            toolbar.removeItem(at: arrows)
+        }
+        updateNavigation()
         createButton?.isHidden = isSettings
         let toggle = toolbar.items.firstIndex { $0.itemIdentifier == .inspectorToggle }
         if isSettings, let toggle {
@@ -84,14 +95,19 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             toolbar.insertItem(withItemIdentifier: .inspectorToggle, at: toolbar.items.count)
         }
 
+        // The picker joins the toolbar with Settings. An item entering, leaving, or hiding makes
+        // the toolbar lay its glass out again, which blinks the back and forward buttons.
         let index = toolbar.items.firstIndex { $0.itemIdentifier == .devicePicker }
-        if isScoped, index == nil {
+        if isSettings, index == nil {
             // At the content area's trailing edge, ahead of the inspector's section.
             let at = toolbar.items.firstIndex { $0.itemIdentifier == .inspectorTrackingSeparator } ?? toolbar.items.count
             toolbar.insertItem(withItemIdentifier: .devicePicker, at: at)
-        } else if !isScoped, let index {
+        } else if !isSettings, let index {
             toolbar.removeItem(at: index)
         }
+        // The item keeps its place and width; only the pop-up inside shows and hides, so the
+        // toolbar never lays out again between panes.
+        (devicePlatter ?? devicePicker).isHidden = !isScoped
         guard isScoped else { return }
 
         devicePicker.removeAllItems()
@@ -108,6 +124,26 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         pair.target = self
         devicePicker.menu?.addItem(pair)
         devicePicker.sizeToFit()
+    }
+
+    /// Back and forward follow the pane history. Only a state that changed is written, to the
+    /// group's segmented control when it has one.
+    private func updateNavigation() {
+        guard let navigation else { return }
+        let enabled = [root.canGoBack, root.canGoForward]
+        if let control = navigation.view as? NSSegmentedControl {
+            for (index, isEnabled) in enabled.enumerated() where control.isEnabled(forSegment: index) != isEnabled {
+                control.setEnabled(isEnabled, forSegment: index)
+            }
+        } else {
+            for (index, item) in navigation.subitems.enumerated() where item.isEnabled != enabled[index] {
+                item.isEnabled = enabled[index]
+            }
+        }
+    }
+
+    @objc private func navigateSettings(_ sender: NSToolbarItemGroup) {
+        if sender.selectedIndex == 0 { root.goBack() } else { root.goForward() }
     }
 
     private func selectPickedDevice() {
@@ -217,6 +253,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 extension NSToolbarItem.Identifier {
     static let inspectorToggle = NSToolbarItem.Identifier("lorca.inspectorToggle")
     static let devicePicker = NSToolbarItem.Identifier("lorca.devicePicker")
+    static let settingsNavigation = NSToolbarItem.Identifier("lorca.settingsNavigation")
 }
 
 // Standard toolbar items sit on glass platters; a borderless custom-view item doesn't. AppKit moves
@@ -234,7 +271,7 @@ extension MainWindowController: NSToolbarDelegate {
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        toolbarDefaultItemIdentifiers(toolbar) + [.devicePicker]
+        toolbarDefaultItemIdentifiers(toolbar) + [.devicePicker, .settingsNavigation]
     }
 
     func toolbar(
@@ -242,10 +279,58 @@ extension MainWindowController: NSToolbarDelegate {
         itemForItemIdentifier identifier: NSToolbarItem.Identifier,
         willBeInsertedIntoToolbar flag: Bool
     ) -> NSToolbarItem? {
+        if identifier == .settingsNavigation {
+            // Back and forward through the settings panes, ahead of the title as in System Settings.
+            let group = NSToolbarItemGroup(
+                itemIdentifier: identifier,
+                images: ["chevron.left", "chevron.right"].map {
+                    NSImage(systemSymbolName: $0, accessibilityDescription: nil)!
+                },
+                selectionMode: .momentary, labels: ["Back", "Forward"], target: self,
+                action: #selector(navigateSettings(_:)))
+            group.label = "Back/Forward"
+            group.isNavigational = true
+            group.autovalidates = false
+            for item in group.subitems { item.autovalidates = false }
+            navigation = group
+            updateNavigation()
+            return group
+        }
         if identifier == .devicePicker {
             let item = NSToolbarItem(itemIdentifier: identifier)
             item.label = "Device"
-            item.view = devicePicker
+            // A plain container gets no platter from the toolbar; the pop-up sits on a glass
+            // capsule of its own inside it, so hiding the capsule leaves nothing behind and the
+            // toolbar's layout stays as it is.
+            if #available(macOS 26.0, *) {
+                devicePicker.isBordered = false
+                devicePicker.font = .systemFont(ofSize: 13)
+                devicePicker.translatesAutoresizingMaskIntoConstraints = false
+                let padded = NSView()
+                padded.addSubview(devicePicker)
+                let glass = NSGlassEffectView()
+                glass.cornerRadius = 18
+                glass.contentView = padded
+                glass.translatesAutoresizingMaskIntoConstraints = false
+                let container = NSView()
+                container.translatesAutoresizingMaskIntoConstraints = false
+                container.addSubview(glass)
+                NSLayoutConstraint.activate([
+                    devicePicker.leadingAnchor.constraint(equalTo: padded.leadingAnchor, constant: 12),
+                    devicePicker.trailingAnchor.constraint(equalTo: padded.trailingAnchor, constant: -10),
+                    devicePicker.centerYAnchor.constraint(equalTo: padded.centerYAnchor),
+                    glass.heightAnchor.constraint(equalToConstant: 36),
+                    glass.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+                    glass.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+                    glass.topAnchor.constraint(equalTo: container.topAnchor),
+                    glass.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+                ])
+                devicePlatter = glass
+                item.view = container
+                item.isBordered = false
+            } else {
+                item.view = devicePicker
+            }
             return item
         }
         guard identifier == .inspectorToggle else { return nil }

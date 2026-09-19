@@ -20,6 +20,13 @@ final class SectionView: NSView {
     private var headerLeading: NSLayoutConstraint!
     private var cardTop: NSLayoutConstraint!
 
+    // Row hover fills are plain rectangles; the stack fills the card, so clipping it to the
+    // same radius keeps them inside the corners.
+    private func setCornerRadius(_ radius: CGFloat) {
+        card.cornerRadius = radius
+        rows.layer?.cornerRadius = radius
+    }
+
     private func applyStyle() {
         switch style {
         case .caption:
@@ -29,6 +36,7 @@ final class SectionView: NSView {
             headerLeading.constant = 4
             cardTop.constant = 6
             card.borderColor = Theme.botBubbleBorder
+            setCornerRadius(9)
         case .heading:
             header.stringValue = title
             header.font = .systemFont(ofSize: 13, weight: .bold)
@@ -37,6 +45,7 @@ final class SectionView: NSView {
             cardTop.constant = 9
             // System Settings' cards are a fill alone.
             card.borderColor = nil
+            setCornerRadius(12)
         }
         for (index, end) in dividerEnds.enumerated() {
             end.constant = index.isMultiple(of: 2) ? dividerInset : -dividerInset
