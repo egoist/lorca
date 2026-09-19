@@ -78,7 +78,7 @@ The relay's machine list is the list of paired Devices. Every sync cycle refresh
 
 ### Devices and Runners
 
-Every Device writes its `os` into its machine metadata blob. Values: `macos`, `linux`, `windows`, `ios`, `ipados`, `android`. The client sets it at pairing and re-sends it with presence.
+Every Device writes its `os` into its machine metadata blob. Values: `macos`, `linux`, `windows`, `ios`, `ipados`, `android`. The client sets it at pairing and re-sends it with presence. `model` is the name a person knows the machine by ("MacBook Air (M5)": `system_profiler`'s machine name and chip on a Mac, where `hw.model` is an identifier such as `Mac17,3`). A CLI reads its model and OS version from the host on every run rather than from `machine.json`, and uploads its `machine` blob again when they change.
 
 `os` decides the Device’s role:
 
@@ -355,7 +355,7 @@ The app starts the bundled `lorca` (Contents/MacOS/lorca; `LORCA_CLI` overrides,
 
 First run: the CLI answers `hello` with `has_identity: false`, and the app shows onboarding: create (the CLI returns the phrase), restore (phrase → relay), or pair (paste the string from the identity Mac). After create, the user names the first bot (the CLI's default Chef, edited through `bots.update`), then connects a provider on this Mac (a DeepSeek or Anthropic key, or a ChatGPT or Grok sign-in; skippable). Restore and pair go straight to the provider step, since the roster syncs.
 
-Settings is a mode of the main window (⌘, or a click on this Mac's name at the foot of the sidebar). The sidebar gives way to the settings sidebar: Back (or Escape) on top, the panes (General, Providers, Auto-review, Advanced), and the paired Devices, each opening its Device page in the content area; the Devices header carries Pair a Device. The selection says which sidebar shows (`Selection` is `chat`, `settings(pane)`, or `device`), so opening a Device from the inspector lands in Settings too, and Back returns to the chat that was open. The panes show while the CLI is not answering, since the CLI port and the relay URL live there. While onboarding is up there is no main window, and ⌘, opens General and Advanced in a small window of their own.
+Settings is a mode of the main window. The foot of the sidebar has two icons: the gear opens General (as ⌘, does), and this Mac's icon, red while the CLI is not answering, opens its Device page there. The sidebar gives way to the settings sidebar: Back (or Escape) on top, the panes (General, Providers, Auto-review, Advanced), and the paired Devices, each opening its Device page in the content area; the Devices header carries Pair a Device. The selection says which sidebar shows (`Selection` is `chat`, `settings(pane)`, or `device`), so opening a Device from the inspector lands in Settings too, and Back returns to the chat that was open. The panes show while the CLI is not answering, since the CLI port and the relay URL live there. While onboarding is up there is no main window, and ⌘, opens General and Advanced in a small window of their own.
 
 Chrome: split view, vibrancy, bubbles, `@` mentions. The titlebar is AppKit's own: the transcript, the settings panes, and the Device pages run their scroll views under it, so the header has no background at rest and gets the scroll-edge effect and its separator once content is beneath it. The app renders CLI events and applies its own edits optimistically; `LORCA_MOCK=1` runs the seeded demo instead. Keys stay in the CLI.
 

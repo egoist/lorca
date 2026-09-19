@@ -317,12 +317,15 @@ impl App {
     pub fn local_device(&self) -> Option<Device> {
         let machine = self.machine_file()?;
         let keys = machine.machine().ok()?;
+        // The model and the OS version are this host's as it is now, so an OS update reaches the
+        // roster; the name is the user's to change, and `os` decided the Device's role at pairing.
+        let (_, _, os_version, model) = host_facts();
         Some(Device {
             id: keys.pubkey(),
             name: machine.name.clone(),
-            model: machine.model.clone(),
+            model,
             os: machine.os.clone(),
-            os_version: machine.os_version.clone(),
+            os_version,
             box_pubkey: keys.box_pubkey(),
             providers_connected: self.credentials.lock().unwrap().connected_kinds(),
             plugins: self.plugins.lock().unwrap().statuses(),

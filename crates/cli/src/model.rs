@@ -528,11 +528,30 @@ pub fn set_host_facts(name: String, os: String, os_version: String, model: Strin
     let _ = HOST_FACTS.set((name, os, os_version, model));
 }
 
-/// Machine facts for this host: what the app set, or probed from the system.
+/// Machine facts for this host: what the app set, or probed from the system once per process.
 pub fn host_facts() -> (String, String, String, String) {
-    if let Some(facts) = HOST_FACTS.get() {
-        return facts.clone();
+    static PROBED: std::sync::OnceLock<(String, String, String, String)> = std::sync::OnceLock::new();
+    HOST_FACTS.get().unwrap_or_else(|| PROBED.get_or_init(probe_host)).clone()
+}
+
+/// A Mac's marketing name with its chip, "MacBook Air (M5)". `hw.model` is an identifier such as
+/// `Mac17,3` on current Macs, which says nothing a person or an icon can use.
+fn mac_model_name() -> Option<String> {
+    let output = std::process::Command::new("system_profiler").args(["SPHardwareDataType", "-json"]).output().ok()?;
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
+    let hardware = json.get("SPHardwareDataType")?.get(0)?;
+    let name = hardware.get("machine_name")?.as_str()?.trim();
+    if name.is_empty() {
+        return None;
     }
+    let chip = hardware.get("chip_type").and_then(|c| c.as_str()).map(|c| c.trim_start_matches("Apple ").trim()).filter(|c| !c.is_empty());
+    Some(match chip {
+        Some(chip) => format!("{name} ({chip})"),
+        None => name.to_string(),
+    })
+}
+
+fn probe_host() -> (String, String, String, String) {
     let name = std::process::Command::new("scutil")
         .args(["--get", "ComputerName"])
         .output()
@@ -558,13 +577,16 @@ pub fn host_facts() -> (String, String, String, String) {
         .and_then(|o| String::from_utf8(o.stdout).ok())
         .map(|s| format!("macOS {}", s.trim()))
         .unwrap_or_else(|| os.to_string());
-    let model = std::process::Command::new("sysctl")
-        .args(["-n", "hw.model"])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+    let model = mac_model_name()
+        .or_else(|| {
+            std::process::Command::new("sysctl")
+                .args(["-n", "hw.model"])
+                .output()
+                .ok()
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        })
         .unwrap_or_else(|| std::env::consts::ARCH.to_string());
     (name, os.to_string(), os_version, model)
 }

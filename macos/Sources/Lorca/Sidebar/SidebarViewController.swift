@@ -34,8 +34,11 @@ final class SidebarViewController: NSViewController {
             self?.setSearchQuery(query)
         }
 
-        // This Mac's page is listed by the settings sidebar, so the click lands there.
-        footer.onClick = { [weak self] in
+        // Both land in the settings sidebar, which lists the panes and this Mac's page.
+        footer.onSettings = { [weak self] in
+            self?.onSelect?(.settings(.general))
+        }
+        footer.onDevice = { [weak self] in
             guard let id = self?.store.thisDevice?.id else { return }
             self?.onSelect?(.device(id))
         }
@@ -117,12 +120,9 @@ final class SidebarViewController: NSViewController {
     // MARK: - Data
 
     private func rebuild() {
-        let chatsHeader = SidebarNode(.header("Chats"))
-        chatsHeader.children = filteredChats().map { SidebarNode(.chat($0.id)) }
+        let fresh = filteredChats().map { SidebarNode(.chat($0.id)) }
 
-        let fresh = [chatsHeader].filter { !$0.children.isEmpty || searchQuery.isEmpty }
-
-        if shape(of: fresh) == shape(of: nodes) {
+        if fresh.map(\.kind) == nodes.map(\.kind) {
             // Same rows in the same order (an unread count cleared, a pin toggled): update the
             // cells in place. A full reload replaces the row views, and a row view built while
             // the outline view is still handling the click that selected it draws its selection
@@ -135,14 +135,9 @@ final class SidebarViewController: NSViewController {
             let previous = currentSelection()
             nodes = fresh
             outlineView.reloadData()
-            for node in nodes { outlineView.expandItem(node) }
             if let previous { setSelection(previous) }
         }
         footer.update()
-    }
-
-    private func shape(of nodes: [SidebarNode]) -> [[SidebarNode.Kind]] {
-        nodes.map { [$0.kind] + $0.children.map(\.kind) }
     }
 
     private func refreshVisibleCells() {
@@ -228,24 +223,15 @@ extension SidebarViewController: NSOutlineViewDataSource {
     }
 
     func outlineView(_ outlineView: NSOutlineView, isItemExpandable item: Any) -> Bool {
-        (item as? SidebarNode)?.isHeader ?? false
+        false
     }
 }
 
 // MARK: - Delegate
 
 extension SidebarViewController: NSOutlineViewDelegate {
-    func outlineView(_ outlineView: NSOutlineView, isGroupItem item: Any) -> Bool {
-        (item as? SidebarNode)?.isHeader ?? false
-    }
-
-    func outlineView(_ outlineView: NSOutlineView, shouldSelectItem item: Any) -> Bool {
-        !((item as? SidebarNode)?.isHeader ?? false)
-    }
-
     func outlineView(_ outlineView: NSOutlineView, heightOfRowByItem item: Any) -> CGFloat {
-        guard let node = item as? SidebarNode else { return 32 }
-        return node.isHeader ? 28 : 54
+        54
     }
 
     func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any)
@@ -254,17 +240,6 @@ extension SidebarViewController: NSOutlineViewDelegate {
         guard let node = item as? SidebarNode else { return nil }
 
         switch node.kind {
-        case let .header(title):
-            let cell =
-                outlineView.makeView(withIdentifier: SidebarHeaderCell.identifier, owner: self)
-                as? SidebarHeaderCell ?? {
-                    let new = SidebarHeaderCell()
-                    new.identifier = SidebarHeaderCell.identifier
-                    return new
-                }()
-            cell.configure(title)
-            return cell
-
         case let .chat(id):
             guard let chat = store.chat(id) else { return nil }
             let cell =
@@ -277,7 +252,7 @@ extension SidebarViewController: NSOutlineViewDelegate {
             cell.configure(chat: chat, store: store)
             return cell
 
-        case .pane, .device:
+        case .header, .pane, .device:
             return nil
         }
     }
@@ -426,67 +401,51 @@ final class SidebarSearchBar: NSView, NSSearchFieldDelegate {
 
 // MARK: - Footer
 
+/// Two buttons at the foot of the sidebar: Settings, and this Mac, whose icon turns red while
+/// the CLI is not answering.
 final class SidebarFooterView: NSView {
-    private let dot = StatusDotView(size: 7)
-    private let label = Build.label("", font: .systemFont(ofSize: 11), color: .secondaryLabelColor)
-    private let detail = Build.label("", font: Theme.Font.caption, color: .tertiaryLabelColor)
-    private var tracking: NSTrackingArea?
-    private var isHovered = false { didSet { needsDisplay = true } }
+    private lazy var settings = HoverButton(
+        symbol: "gearshape", tooltip: "Settings (⌘,)", target: self, action: #selector(openSettings))
+    private lazy var device = HoverButton(
+        symbol: "laptopcomputer", tooltip: "", target: self, action: #selector(openDevice))
 
-    var onClick: (() -> Void)?
+    var onSettings: (() -> Void)?
+    var onDevice: (() -> Void)?
 
     init() {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
-        wantsLayer = true
 
-        let text = Build.stack([label, detail], spacing: 0)
-        addSubview(dot)
-        addSubview(text)
+        let buttons = Build.stack([settings, device], orientation: .horizontal, spacing: 4)
+        addSubview(buttons)
 
         NSLayoutConstraint.activate([
-            dot.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
-            dot.centerYAnchor.constraint(equalTo: centerYAnchor),
-            text.leadingAnchor.constraint(equalTo: dot.trailingAnchor, constant: 8),
-            text.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -10),
-            text.centerYAnchor.constraint(equalTo: centerYAnchor),
+            buttons.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            buttons.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    override var allowsVibrancy: Bool { true }
-
     func update() {
         let store = AppStore.shared
         let connected = store.isConnected
-        dot.status = connected ? .online : .offline
-        label.stringValue = store.thisDevice?.name ?? "This Mac"
-        detail.stringValue =
-            connected
-            ? "CLI on 127.0.0.1:\(Preferences.cliPort)"
-            : "CLI not running"
-        detail.textColor = connected ? .tertiaryLabelColor : .systemRed
-        toolTip = connected ? "Connected to the local Lorca CLI" : "Start the CLI with: lorca serve"
+        let name = store.thisDevice?.name ?? "This Mac"
+        let status = connected ? "CLI on 127.0.0.1:\(Preferences.cliPort)" : "CLI not running · start it with: lorca serve"
+        // Device symbols fill their screen in monochrome, which sits heavier than the gear's
+        // outline; a palette with a clear second layer leaves the outline alone. The iMac's chin
+        // stays solid either way, so a desktop shows as a plain display here.
+        let symbol = store.thisDevice?.symbolName ?? "laptopcomputer"
+        device.image = NSImage(
+            systemSymbolName: symbol == "desktopcomputer" ? "display" : symbol, accessibilityDescription: name)
+        let tint: NSColor = connected ? .secondaryLabelColor : .systemRed
+        device.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
+            .applying(.init(paletteColors: [tint, .clear]))
+        device.toolTip = "\(name) · \(status)"
+        device.setAccessibilityLabel(name)
     }
 
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let tracking { removeTrackingArea(tracking) }
-        let area = NSTrackingArea(
-            rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow], owner: self)
-        addTrackingArea(area)
-        tracking = area
-    }
-
-    override func mouseEntered(with event: NSEvent) { isHovered = true }
-    override func mouseExited(with event: NSEvent) { isHovered = false }
-    override func mouseDown(with event: NSEvent) { onClick?() }
-
-    override func draw(_ dirtyRect: NSRect) {
-        guard isHovered else { return }
-        NSColor.labelColor.withAlphaComponent(0.06).setFill()
-        NSBezierPath(roundedRect: bounds.insetBy(dx: 6, dy: 4), xRadius: 6, yRadius: 6).fill()
-    }
+    @objc private func openSettings() { onSettings?() }
+    @objc private func openDevice() { onDevice?() }
 }
