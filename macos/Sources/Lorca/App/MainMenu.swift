@@ -111,12 +111,10 @@ enum MainMenu {
 
     private static func viewMenu() -> NSMenu {
         let menu = NSMenu()
+        add(menu, "Toggle Sidebar", #selector(NSSplitViewController.toggleSidebar(_:)), "b")
         add(
-            menu, "Toggle Sidebar", #selector(NSSplitViewController.toggleSidebar(_:)), "s",
-            modifiers: [.command, .control])
-        add(
-            menu, "Toggle Inspector", #selector(RootSplitViewController.toggleInspector(_:)), "i",
-            modifiers: [.command, .option])
+            menu, "Toggle Inspector", #selector(RootSplitViewController.toggleInspector(_:)), "b",
+            modifiers: [.command, .shift])
         menu.addItem(.separator())
         add(menu, "Scroll to Latest", #selector(ChatViewController.scrollToLatest(_:)), "j")
         menu.addItem(.separator())
@@ -128,7 +126,7 @@ enum MainMenu {
 
     private static func chatMenu() -> NSMenu {
         let menu = NSMenu()
-        add(menu, "Add Bot…", #selector(RootSplitViewController.addBotToChat(_:)), "b", modifiers: [.command, .shift])
+        add(menu, "Add Bot…", #selector(RootSplitViewController.addBotToChat(_:)), "b", modifiers: [.command, .option])
         add(menu, "Rename Chat…", #selector(RootSplitViewController.renameChat(_:)), "r")
         add(menu, "Pin Chat", #selector(RootSplitViewController.togglePinChat(_:)), "p")
         menu.addItem(.separator())

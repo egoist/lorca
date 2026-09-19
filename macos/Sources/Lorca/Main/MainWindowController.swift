@@ -45,7 +45,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         window.addTitlebarAccessoryViewController(
             Self.leadingAccessory([
                 HoverButton(
-                    symbol: "sidebar.leading", tooltip: "Toggle Sidebar (⌃⌘S)", target: root,
+                    symbol: "sidebar.leading", tooltip: "Toggle Sidebar (⌘B)", target: root,
                     action: #selector(NSSplitViewController.toggleSidebar(_:))),
                 createButton,
             ]))
@@ -337,7 +337,7 @@ extension MainWindowController: NSToolbarDelegate {
         let item = NSToolbarItem(itemIdentifier: identifier)
         item.label = "Inspector"
         item.view = HoverButton(
-            symbol: "sidebar.trailing", tooltip: "Toggle Inspector (⌥⌘I)", target: root,
+            symbol: "sidebar.trailing", tooltip: "Toggle Inspector (⇧⌘B)", target: root,
             action: #selector(RootSplitViewController.toggleInspector(_:)))
         item.isBordered = false
         return item

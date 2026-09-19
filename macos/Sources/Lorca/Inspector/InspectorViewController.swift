@@ -15,7 +15,6 @@ final class InspectorViewController: NSViewController {
     private let routines = SectionView(title: "Routines")
     private let plugins = SectionView(title: "Plugins")
     private let routing = SectionView(title: "Where turns run")
-    private let security = SectionView(title: "Encryption")
     private let addButton = NSButton()
 
     private var selection: Selection?
@@ -58,7 +57,6 @@ final class InspectorViewController: NSViewController {
         column.addArrangedSubview(routines)
         column.addArrangedSubview(plugins)
         column.addArrangedSubview(routing)
-        column.addArrangedSubview(security)
         column.setCustomSpacing(10, after: participants)
 
         // Flipped so short content sits at the top of the pane, not the bottom.
@@ -95,7 +93,6 @@ final class InspectorViewController: NSViewController {
             routines.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             plugins.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             routing.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
-            security.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
         ])
 
         view = container
@@ -212,12 +209,6 @@ final class InspectorViewController: NSViewController {
                 row.identifier = NSUserInterfaceItemIdentifier(runner.id)
                 return row
             })
-
-        security.setRows([
-            KeyValueRow(key: "Transcript", value: "Encrypted on device"),
-            KeyValueRow(key: "Relay sees", value: "Ciphertext only", tint: .systemGreen),
-            KeyValueRow(key: "Chat blob", value: "chat · seq \(chat.messages.count)", monospaced: true),
-        ])
     }
 
     /// Saves the profile rows when one of them finishes editing. An emptied name or label keeps
