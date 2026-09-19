@@ -1,32 +1,58 @@
 @import 'tailwindcss';
 @import 'tw-animate-css';
 
-@custom-variant dark (&:is(.dark *));
+@custom-variant dark (@media (prefers-color-scheme: dark));
 
-/* Dark stage by default, like the app's own night side. */
+/* Day side by default; the night side follows the system. */
 :root {
   --radius: 0.75rem;
-  --background: oklch(0.13 0.005 285);
-  --foreground: oklch(0.97 0.002 285);
-  --card: oklch(0.17 0.005 285);
-  --card-foreground: oklch(0.97 0.002 285);
-  --popover: oklch(0.17 0.005 285);
-  --popover-foreground: oklch(0.97 0.002 285);
-  --primary: oklch(0.97 0.002 285);
-  --primary-foreground: oklch(0.15 0.005 285);
-  --secondary: oklch(0.24 0.006 285);
-  --secondary-foreground: oklch(0.97 0.002 285);
-  --muted: oklch(0.24 0.006 285);
-  --muted-foreground: oklch(0.68 0.01 285);
-  --accent: oklch(0.24 0.006 285);
-  --accent-foreground: oklch(0.97 0.002 285);
-  --destructive: oklch(0.66 0.2 25);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 14%);
+  --background: oklch(0.985 0.002 285);
+  --foreground: oklch(0.17 0.005 285);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.17 0.005 285);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.17 0.005 285);
+  --primary: oklch(0.17 0.005 285);
+  --primary-foreground: oklch(0.985 0.002 285);
+  --secondary: oklch(0.95 0.003 285);
+  --secondary-foreground: oklch(0.17 0.005 285);
+  --muted: oklch(0.95 0.003 285);
+  --muted-foreground: oklch(0.48 0.01 285);
+  --accent: oklch(0.95 0.003 285);
+  --accent-foreground: oklch(0.17 0.005 285);
+  --destructive: oklch(0.58 0.22 25);
+  --border: oklch(0 0 0 / 10%);
+  --input: oklch(0 0 0 / 14%);
   --ring: oklch(0.6 0.02 285);
   --violet: #6b66f5;
   --azure: #3d85f0;
   --cyan: #2eb3dc;
+  --window-shadow: 0 40px 100px -30px rgba(30, 27, 75, 0.35);
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: oklch(0.13 0.005 285);
+    --foreground: oklch(0.97 0.002 285);
+    --card: oklch(0.17 0.005 285);
+    --card-foreground: oklch(0.97 0.002 285);
+    --popover: oklch(0.17 0.005 285);
+    --popover-foreground: oklch(0.97 0.002 285);
+    --primary: oklch(0.97 0.002 285);
+    --primary-foreground: oklch(0.15 0.005 285);
+    --secondary: oklch(0.24 0.006 285);
+    --secondary-foreground: oklch(0.97 0.002 285);
+    --muted: oklch(0.24 0.006 285);
+    --muted-foreground: oklch(0.68 0.01 285);
+    --accent: oklch(0.24 0.006 285);
+    --accent-foreground: oklch(0.97 0.002 285);
+    --destructive: oklch(0.66 0.2 25);
+    --border: oklch(1 0 0 / 10%);
+    --input: oklch(1 0 0 / 14%);
+    --window-shadow: 0 40px 120px -30px rgba(0, 0, 0, 0.8);
+    color-scheme: dark;
+  }
 }
 
 @theme inline {
@@ -69,7 +95,6 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
-    color-scheme: dark;
   }
   body {
     @apply bg-background text-foreground;
@@ -84,7 +109,7 @@
 @layer utilities {
   /* A section as a stage: rounded, hairline edge, a little lift. */
   .panel {
-    @apply rounded-[28px] border border-white/10 bg-card;
+    @apply rounded-[28px] border bg-card;
   }
   .display {
     letter-spacing: -0.035em;
@@ -108,23 +133,14 @@
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)' opacity='0.6'/%3E%3C/svg%3E");
   }
   .window-frame {
-    @apply rounded-xl border border-white/15 shadow-[0_40px_120px_-30px_rgba(0,0,0,0.8)] sm:rounded-2xl;
+    @apply rounded-xl border border-white/15 sm:rounded-2xl;
+    box-shadow: var(--window-shadow);
   }
 }
 
-@keyframes breathe {
-  0%, 100% { transform: scale(1); opacity: 1; }
-  50% { transform: scale(0.78); opacity: 0.85; }
-}
-@keyframes rise {
-  from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: translateY(0); }
-}
 @keyframes travel {
   0% { offset-distance: 0%; opacity: 0; }
   10% { opacity: 1; }
   90% { opacity: 1; }
   100% { offset-distance: 100%; opacity: 0; }
 }
-.breathe { animation: breathe 2.4s ease-in-out infinite; }
-.rise { animation: rise 0.5s cubic-bezier(0.2, 0.7, 0.2, 1) both; }

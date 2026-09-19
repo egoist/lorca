@@ -1,8 +1,8 @@
 /// Three Macs, one relay: sealed envelopes travel along the lines, and the box in the middle
 /// only ever holds ciphertext.
 const machines = [
-  { name: 'Workbench', bots: 'Nova', x: 60, y: 60 },
-  { name: 'Studio', bots: 'Patch · Scout', x: 640, y: 60 },
+  { name: 'Workbench', bots: 'Nova', x: 90, y: 60 },
+  { name: 'Studio', bots: 'Patch · Scout', x: 610, y: 60 },
   { name: 'Closet mini', bots: 'Ember', x: 350, y: 300 },
 ]
 const relay = { x: 350, y: 170 }
@@ -11,7 +11,7 @@ export function RelayDiagram() {
   return (
     <svg viewBox="0 0 700 360" className="w-full" role="img" aria-label="Three Macs exchange sealed envelopes through a relay that stores ciphertext only.">
       <defs>
-        <linearGradient id="wire" x1="0" x2="1">
+        <linearGradient id="wire" gradientUnits="userSpaceOnUse" x1="0" x2="700">
           <stop offset="0" stopColor="#6b66f5" />
           <stop offset="1" stopColor="#2eb3dc" />
         </linearGradient>

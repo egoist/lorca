@@ -14,7 +14,7 @@ const links = [
 
 export function Nav() {
   return (
-    <header className="sticky top-0 z-40 border-b border-white/8 bg-background/70 backdrop-blur-xl">
+    <header className="sticky top-0 z-40 border-b bg-background/70 backdrop-blur-xl">
       <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-5">
         <a href="#top" className="flex items-center gap-2.5 font-semibold tracking-tight">
           <Logo className="size-7" />

@@ -5,7 +5,6 @@ import {
   AccordionTrigger,
 } from '#/components/ui/accordion'
 import { Button } from '#/components/ui/button'
-import { ChatDemo } from './demo'
 import { RelayDiagram } from './diagram'
 import { Logo } from './logo'
 import { DOWNLOAD } from './nav'
@@ -13,39 +12,30 @@ import { Pixels } from './pixels'
 
 export function Hero() {
   return (
-    <section id="top" className="mx-auto max-w-6xl px-5 pt-16 sm:pt-24">
-      <div className="grid gap-12 lg:grid-cols-[1.05fr_1fr] lg:items-center">
-        <div>
-          <p className="mb-5 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs font-medium text-zinc-300">
-            <span className="size-1.5 rounded-full bg-emerald-400" />
-            Now on macOS · Windows and Linux next
-          </p>
-          <h1 className="display text-[3.4rem] text-balance sm:text-[4.6rem] lg:text-[5.2rem]">
-            Bots that live
-            <br />
-            on <span className="serif-accent text-[1.12em] text-zinc-200">your</span> machines.
-          </h1>
-          <p className="mt-7 max-w-xl text-lg text-pretty text-zinc-400 sm:text-xl">
-            A small team of AI bots, each on a machine you own. Talk to one, put a few in a group and
-            let them take turns, hand work between them. Every message is encrypted before it leaves
-            your computer.
-          </p>
-          <div className="mt-9 flex flex-col gap-3 sm:flex-row">
-            <Button asChild size="lg" className="h-12 rounded-full px-7 text-base">
-              <a href={DOWNLOAD}>Download for Mac</a>
-            </Button>
-            <Button asChild size="lg" variant="outline" className="h-12 rounded-full border-white/15 bg-transparent px-6 text-base hover:bg-white/5">
-              <a href="#turns">See how it works</a>
-            </Button>
-          </div>
-          <p className="mt-4 text-sm text-zinc-500">macOS 14 or later today · Windows and Linux on the way</p>
-        </div>
-        <div className="relative">
-          <div aria-hidden="true" className="absolute -inset-8 -z-10 rounded-[40px] bg-[radial-gradient(70%_60%_at_60%_40%,rgba(107,102,245,0.35),transparent)] blur-2xl" />
-          <ChatDemo />
-          <p className="mt-3 text-center text-xs text-zinc-500">Live. This is how a group chat plays out.</p>
-        </div>
+    <section id="top" className="mx-auto max-w-4xl px-5 pt-20 text-center sm:pt-28">
+      <p className="mb-5 inline-flex items-center gap-2 rounded-full border bg-foreground/5 px-3 py-1 text-xs font-medium text-foreground/80">
+        <span className="size-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400" />
+        Now on macOS · Windows and Linux next
+      </p>
+      <h1 className="display text-[3.4rem] text-balance sm:text-[4.6rem] lg:text-[5.2rem]">
+        Bots that live
+        <br />
+        on <span className="serif-accent text-[1.12em] text-foreground/85">your</span> machines.
+      </h1>
+      <p className="mx-auto mt-7 max-w-2xl text-lg text-pretty text-muted-foreground sm:text-xl">
+        A small team of AI bots, each on a machine you own. Talk to one, put a few in a group and
+        let them take turns, hand work between them. Every message is encrypted before it leaves
+        your computer.
+      </p>
+      <div className="mt-9 flex flex-col justify-center gap-3 sm:flex-row">
+        <Button asChild size="lg" className="h-12 rounded-full px-7 text-base">
+          <a href={DOWNLOAD}>Download for Mac</a>
+        </Button>
+        <Button asChild size="lg" variant="outline" className="h-12 rounded-full bg-transparent px-6 text-base shadow-none hover:bg-foreground/5 dark:bg-transparent dark:hover:bg-foreground/5">
+          <a href="#turns">See how it works</a>
+        </Button>
       </div>
+      <p className="mt-4 text-sm text-muted-foreground/80">macOS 14 or later today · Windows and Linux on the way</p>
     </section>
   )
 }
@@ -71,9 +61,9 @@ function Stage({
     <section id={id} className="mx-auto max-w-6xl px-5 py-10">
       <div className="panel overflow-hidden">
         <div className="px-6 pt-10 pb-8 sm:px-12 sm:pt-14">
-          <p className="text-xs font-semibold tracking-[0.18em] text-zinc-500 uppercase">{eyebrow}</p>
+          <p className="text-xs font-semibold tracking-[0.18em] text-muted-foreground/80 uppercase">{eyebrow}</p>
           <h2 className="display mt-3 max-w-3xl text-4xl sm:text-5xl">{title}</h2>
-          <p className="mt-5 max-w-3xl text-lg leading-relaxed text-zinc-400">{body}</p>
+          <p className="mt-5 max-w-3xl text-lg leading-relaxed text-muted-foreground">{body}</p>
         </div>
         <div className={`grain relative ${flip ? 'bg-zinc-950' : ''}`}>
           {!flip && <Pixels seed={seed} className="absolute inset-0 h-full w-full" />}
@@ -92,7 +82,7 @@ export function Turns() {
       eyebrow="Group chats"
       title={
         <>
-          Everyone gets a turn. <span className="serif-accent text-zinc-300">Not everyone talks.</span>
+          Everyone gets a turn. <span className="serif-accent text-foreground/80">Not everyone talks.</span>
         </>
       }
       body="Post in a group and each bot is offered a turn, one at a time, in order. A bot answers when the message is for it or when it knows something the others need. Otherwise it passes and you never see a word. Rounds continue while anyone has something to add, then the room goes quiet. Mention a name to put that bot first; mention @everyone to hear from all of them."
@@ -126,7 +116,7 @@ export function Relay() {
       eyebrow="Your machines"
       title={
         <>
-          The relay is a mailbox, <span className="serif-accent text-zinc-300">not a reader.</span>
+          The relay is a mailbox, <span className="serif-accent text-foreground/80">not a reader.</span>
         </>
       }
       body="Your identity is a key pair made on your first machine; the backup is a phrase you write down. Pair the next computer with a string, and from then on chats sync through a relay that only ever holds ciphertext. When a bot on another machine has a turn, the job travels as an envelope sealed to that machine's key. Provider credentials travel the same way: connect a provider once, and your other machines get it encrypted with your account key, which the relay never holds."
@@ -154,7 +144,7 @@ export function Tools() {
       eyebrow="Real tools"
       title={
         <>
-          Hands on the machine <span className="serif-accent text-zinc-300">you chose.</span>
+          Hands on the machine <span className="serif-accent text-foreground/80">you chose.</span>
         </>
       }
       body="Every bot has a working directory on its Runner and the same tools a coding agent gets: read, write, edit, grep, find, ls, and a shell. It runs as you, on the machine you assigned, and says what it ran. Each bot also keeps its own memory across chats, so the second time you ask, it already knows."
@@ -187,11 +177,11 @@ export function Chef() {
     <section className="mx-auto max-w-6xl px-5 py-10">
       <div className="panel grid gap-10 px-6 py-12 sm:px-12 lg:grid-cols-[1fr_1fr] lg:items-center">
         <div>
-          <p className="text-xs font-semibold tracking-[0.18em] text-zinc-500 uppercase">Day one</p>
+          <p className="text-xs font-semibold tracking-[0.18em] text-muted-foreground/80 uppercase">Day one</p>
           <h2 className="display mt-3 text-4xl sm:text-5xl">
-            Start with one bot. <span className="serif-accent text-zinc-300">It hires the rest.</span>
+            Start with one bot. <span className="serif-accent text-foreground/80">It hires the rest.</span>
           </h2>
-          <p className="mt-5 text-lg leading-relaxed text-zinc-400">
+          <p className="mt-5 text-lg leading-relaxed text-muted-foreground">
             A new identity comes with Chef, a chief of staff. Chef asks what you work on, proposes a
             small team of one-job bots, and creates them when you agree. Rename it, replace it,
             delete it. Nothing about it is special except that it was there first.
@@ -204,11 +194,11 @@ export function Chef() {
             ['Meet Chef', 'Describe your week. Say yes to the team it proposes.'],
             ['Pair the next machine', 'Paste the pairing string. Assign a bot to it.'],
           ].map(([title, body], i) => (
-            <li key={title} className="flex gap-4 rounded-2xl border border-white/8 bg-white/[0.03] p-4">
-              <span className="font-mono text-sm text-zinc-500">0{i + 1}</span>
+            <li key={title} className="flex gap-4 rounded-2xl border bg-foreground/[0.03] p-4">
+              <span className="font-mono text-sm text-muted-foreground/80">0{i + 1}</span>
               <div>
                 <p className="font-semibold">{title}</p>
-                <p className="mt-1 text-sm text-zinc-400">{body}</p>
+                <p className="mt-1 text-sm text-muted-foreground">{body}</p>
               </div>
             </li>
           ))}
@@ -232,9 +222,9 @@ export function FAQ() {
       <h2 className="display text-4xl sm:text-5xl">Questions</h2>
       <Accordion type="single" collapsible className="mt-8">
         {faq.map(([q, a]) => (
-          <AccordionItem key={q} value={q} className="border-white/10">
+          <AccordionItem key={q} value={q}>
             <AccordionTrigger className="text-base hover:no-underline">{q}</AccordionTrigger>
-            <AccordionContent className="text-base text-zinc-400">{a}</AccordionContent>
+            <AccordionContent className="text-base text-muted-foreground">{a}</AccordionContent>
           </AccordionItem>
         ))}
       </Accordion>
@@ -262,8 +252,8 @@ export function CallToAction() {
 
 export function Footer() {
   return (
-    <footer className="border-t border-white/8">
-      <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 px-5 py-8 text-sm text-zinc-500 sm:flex-row">
+    <footer className="border-t">
+      <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 px-5 py-8 text-sm text-muted-foreground/80 sm:flex-row">
         <div className="flex items-center gap-2">
           <Logo className="size-5" />
           <span>© {new Date().getFullYear()} Lorca</span>
