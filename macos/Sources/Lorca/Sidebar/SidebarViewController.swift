@@ -15,6 +15,14 @@ final class SidebarViewController: NSViewController {
     private var isApplyingSelection = false
     private var isNotifyingSelection = false
 
+    /// ⌘1–⌘9 open the first nine rows.
+    private static let shortcutCount = 9
+    private var flagsMonitor: Any?
+    private var pendingShortcutHints: DispatchWorkItem?
+    private var showsShortcutHints = false {
+        didSet { if showsShortcutHints != oldValue { refreshShortcutHints() } }
+    }
+
     var onSelect: ((Selection?) -> Void)?
     var onDoubleClick: ((Selection) -> Void)?
 
@@ -132,6 +140,11 @@ final class SidebarViewController: NSViewController {
                 break
             }
         }
+        observeCommandKey()
+    }
+
+    deinit {
+        if let flagsMonitor { NSEvent.removeMonitor(flagsMonitor) }
     }
 
     // MARK: - Data
@@ -164,6 +177,7 @@ final class SidebarViewController: NSViewController {
             else { continue }
             if case let .chat(id) = node.kind, let cell = cell as? SidebarChatCell, let chat = store.chat(id) {
                 cell.configure(chat: chat, store: store)
+                cell.shortcutNumber = shortcutNumber(forRow: row)
             }
         }
     }
@@ -207,6 +221,68 @@ final class SidebarViewController: NSViewController {
             isApplyingSelection = false
             return
         }
+    }
+
+    // MARK: - Shortcuts
+
+    /// The chat ⌘`number` opens: the row at that place in the list as it shows, filtered or not.
+    func chatSelection(forShortcut number: Int) -> Selection? {
+        guard (1...Self.shortcutCount).contains(number), number <= nodes.count else { return nil }
+        return nodes[number - 1].selection
+    }
+
+    func scrollSelectionToVisible() {
+        guard outlineView.selectedRow >= 0 else { return }
+        outlineView.scrollRowToVisible(outlineView.selectedRow)
+    }
+
+    private func shortcutNumber(forRow row: Int) -> Int? {
+        showsShortcutHints && row < Self.shortcutCount ? row + 1 : nil
+    }
+
+    private func refreshShortcutHints() {
+        for row in 0..<min(Self.shortcutCount, outlineView.numberOfRows) {
+            let cell = outlineView.view(atColumn: 0, row: row, makeIfNecessary: false) as? SidebarChatCell
+            cell?.shortcutNumber = shortcutNumber(forRow: row)
+        }
+    }
+
+    /// Holding ⌘ alone puts each row's number in its stamp. The hints wait a moment, so a quick
+    /// ⌘C leaves the stamps alone, and go when the window stops taking keys: the release of a
+    /// ⌘-Tab never arrives here.
+    private func observeCommandKey() {
+        flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            self?.commandKeyChanged(event)
+            return event
+        }
+        let center = NotificationCenter.default
+        center.addObserver(
+            self, selector: #selector(hideShortcutHints), name: NSApplication.didResignActiveNotification,
+            object: nil)
+        center.addObserver(
+            self, selector: #selector(hideShortcutHints), name: NSWindow.didResignKeyNotification, object: nil)
+    }
+
+    private func commandKeyChanged(_ event: NSEvent) {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            .subtracting([.capsLock, .numericPad, .function])
+        guard flags == .command, view.window?.isKeyWindow == true else {
+            hideShortcutHints()
+            return
+        }
+        guard !showsShortcutHints, pendingShortcutHints == nil else { return }
+        let work = DispatchWorkItem { [weak self] in
+            self?.pendingShortcutHints = nil
+            self?.showsShortcutHints = true
+        }
+        pendingShortcutHints = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
+    }
+
+    @objc private func hideShortcutHints() {
+        pendingShortcutHints?.cancel()
+        pendingShortcutHints = nil
+        showsShortcutHints = false
     }
 
     @objc private func handleDoubleClick() {
@@ -267,6 +343,7 @@ extension SidebarViewController: NSOutlineViewDelegate {
                     return new
                 }()
             cell.configure(chat: chat, store: store)
+            cell.shortcutNumber = nodes.firstIndex { $0 === node }.flatMap(shortcutNumber(forRow:))
             return cell
 
         case .header, .pane, .setting, .device:

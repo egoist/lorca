@@ -218,6 +218,12 @@ final class SidebarChatCell: NSTableCellView {
     /// Unread activity: a dot, not a count.
     private let badge = BackgroundView()
 
+    /// The row's ⌘-number, shown in the stamp's place while ⌘ is held.
+    var shortcutNumber: Int? {
+        didSet { if shortcutNumber != oldValue { updateStamp() } }
+    }
+    private var stampText = ""
+
     // Hidden views still occupy their intrinsic width in Auto Layout, so the title
     // and preview claim the reclaimed space by switching which view they stop at.
     private lazy var titleBeforePin = title.trailingAnchor.constraint(
@@ -285,7 +291,8 @@ final class SidebarChatCell: NSTableCellView {
         avatars.isWorking = chat.botIDs.contains { store.isWorking($0) }
         title.stringValue = store.title(for: chat)
         preview.stringValue = store.preview(for: chat)
-        stamp.stringValue = Format.stamp(chat.lastActivity)
+        stampText = Format.stamp(chat.lastActivity)
+        updateStamp()
 
         pin.isHidden = !chat.isPinned
         titleBeforePin.isActive = chat.isPinned
@@ -300,6 +307,10 @@ final class SidebarChatCell: NSTableCellView {
             [title.stringValue, unread > 0 ? "Unread activity" : nil, avatars.isWorking ? "Working" : nil]
                 .compactMap { $0 }.joined(separator: ", "))
         applyBackgroundStyle()
+    }
+
+    private func updateStamp() {
+        stamp.stringValue = shortcutNumber.map { "⌘\($0)" } ?? stampText
     }
 
     override var backgroundStyle: NSView.BackgroundStyle {

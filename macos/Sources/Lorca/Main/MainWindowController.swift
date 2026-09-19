@@ -93,6 +93,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         root.focusSearch()
     }
 
+    /// A window coming on screen starts with the keyboard in its content, whatever held it when
+    /// the window closed and whichever key view AppKit would pick for a new one.
+    override func showWindow(_ sender: Any?) {
+        let isOpening = window?.isVisible != true
+        super.showWindow(sender)
+        if isOpening { root.focusContent() }
+    }
+
     private func updateTitle() {
         guard let window else { return }
         switch root.selection {

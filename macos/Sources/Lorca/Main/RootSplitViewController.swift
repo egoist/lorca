@@ -20,6 +20,8 @@ final class RootSplitViewController: NSSplitViewController {
     private var settingsControllers: [SettingsPane: NSViewController] = [:]
     /// The chat Back returns to.
     private var lastChatID: Chat.ID?
+    /// What held the keyboard when Settings opened, to hand it back on the way out.
+    private weak var focusBeforeSettings: NSView?
     private let offlineController = OfflineViewController()
     private let placeholderController = PlaceholderViewController()
 
@@ -145,6 +147,9 @@ final class RootSplitViewController: NSSplitViewController {
     // MARK: - Selection
 
     func select(_ newSelection: Selection?) {
+        if newSelection?.isSettings == true, selection?.isSettings != true {
+            focusBeforeSettings = view.window?.firstResponder as? NSView
+        }
         selection = newSelection
         if case let .chat(id) = newSelection {
             store.markRead(id)
@@ -175,8 +180,9 @@ final class RootSplitViewController: NSSplitViewController {
         closeSettings()
     }
 
-    /// Shows the sidebar the selection belongs to, with its row selected. The list takes the
-    /// keyboard when the sidebars trade places, so the selected row draws emphasized.
+    /// Shows the sidebar the selection belongs to, with its row selected. When the sidebars trade
+    /// places the keyboard moves with them: to the settings list on the way in, back to whatever
+    /// had it on the way out.
     private func syncSidebar() {
         let isSettings = selection?.isSettings == true
         let wasSettings = settingsSidebar.parent != nil
@@ -190,7 +196,38 @@ final class RootSplitViewController: NSSplitViewController {
         guard isSettings != wasSettings else { return }
         if !isSettings { settingsSidebar.resetSearch() }
         guard !sidebarItem.isCollapsed else { return }
-        if isSettings { settingsSidebar.focusList() } else { sidebar.focusList() }
+        if isSettings { settingsSidebar.focusList() } else { restoreFocusAfterSettings() }
+    }
+
+    // MARK: - Focus
+
+    /// Where the keyboard goes when the user has not put it anywhere: the composer in a chat,
+    /// the settings list on a settings or Device page. With no chat to type in (the offline
+    /// page, an empty roster) the window holds it, so the chat that shows next finds the
+    /// keyboard free and takes it in `ChatViewController.viewDidAppear`.
+    func focusContent() {
+        guard let window = view.window else { return }
+        if selection?.isSettings == true {
+            settingsSidebar.focusList()
+        } else if let chatController, chatController.view.window === window {
+            chatController.focusComposer()
+        } else {
+            window.makeFirstResponder(nil)
+        }
+    }
+
+    /// AppKit hands the keyboard to the window when the view that had it leaves. Nothing the
+    /// user does puts it there, so a window found holding it gives it to the content.
+    func reclaimFocusIfLost() {
+        guard let window = view.window, window.firstResponder === window else { return }
+        focusContent()
+    }
+
+    private func restoreFocusAfterSettings() {
+        let held = focusBeforeSettings
+        focusBeforeSettings = nil
+        if let held, let window = view.window, held.window === window, window.makeFirstResponder(held) { return }
+        focusContent()
     }
 
     /// The showing sidebar's bars, above and below its list. The list fills the pane and scrolls
@@ -223,6 +260,7 @@ final class RootSplitViewController: NSSplitViewController {
 
     func windowBecameKey() {
         if case let .chat(id) = selection { store.markRead(id) }
+        reclaimFocusIfLost()
     }
 
     private func handle(_ event: StoreEvent) {
@@ -404,6 +442,14 @@ final class RootSplitViewController: NSSplitViewController {
         DispatchQueue.main.async { alert.window.makeFirstResponder(field) }
     }
 
+    /// ⌘1–⌘9: the menu item's tag is the chat's place in the sidebar. The composer takes the
+    /// keyboard, ready for a reply.
+    @objc func goToChat(_ sender: NSMenuItem) {
+        guard case let .chat(chatID) = sidebar.chatSelection(forShortcut: sender.tag) else { return }
+        open(chatID)
+        sidebar.scrollSelectionToVisible()
+    }
+
     @objc func togglePinChat(_ sender: Any?) {
         guard case let .chat(chatID) = selection else { return }
         store.togglePin(chatID)
@@ -472,6 +518,9 @@ extension RootSplitViewController: NSMenuItemValidation {
         if menuItem.action == #selector(addBotToChat(_:)) {
             guard case let .chat(id) = selection, let chat = store.chat(id) else { return false }
             return !botsAvailableToAdd(to: chat).isEmpty
+        }
+        if menuItem.action == #selector(goToChat(_:)) {
+            return sidebar.chatSelection(forShortcut: menuItem.tag) != nil
         }
         return true
     }

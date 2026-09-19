@@ -135,6 +135,15 @@ enum MainMenu {
         add(menu, "Stop Responding", #selector(ChatViewController.stopResponding(_:)), ".")
         menu.addItem(.separator())
         add(menu, "Delete Chat", #selector(RootSplitViewController.deleteChat(_:)), "\u{8}")
+
+        // ⌘1–⌘9 open the first nine chats in the sidebar, which shows the numbers while ⌘ is held.
+        for number in 1...9 {
+            let item = add(
+                menu, "Go to Chat \(number)", #selector(RootSplitViewController.goToChat(_:)), "\(number)",
+                tag: number)
+            item.isHidden = true
+            item.allowsKeyEquivalentWhenHidden = true
+        }
         return menu
     }
 
