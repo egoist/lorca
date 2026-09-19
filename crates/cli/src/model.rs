@@ -431,6 +431,31 @@ pub enum ChatBlob {
     ClearUnread { chat_id: String },
 }
 
+impl ChatBlob {
+    /// Versions of a message share a slot, and so does its removal, which leaves the relay
+    /// nothing of the message but the removal. A chat's read marks share another.
+    pub fn slot(&self) -> crate::app::Slot {
+        match self {
+            ChatBlob::Upsert { message } => crate::app::Slot::first_and_latest(slot_name(&message.id)),
+            ChatBlob::Remove { message_id, .. } => crate::app::Slot::latest(slot_name(message_id)),
+            ChatBlob::ClearUnread { chat_id } => crate::app::Slot::latest(slot_name(&format!("read-{chat_id}"))),
+        }
+    }
+}
+
+/// The relay takes 1–64 characters of `[A-Za-z0-9._-]`; any other name goes up as its hash.
+fn slot_name(name: &str) -> String {
+    let plain = !name.is_empty()
+        && name.len() <= 64
+        && name != "."
+        && name != ".."
+        && name.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'));
+    if plain {
+        return name.to_string();
+    }
+    <sha2::Sha256 as sha2::Digest>::digest(name.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
+}
+
 /// `kind = machine`: a Device's own metadata and presence claims.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MachineBlob {

@@ -146,12 +146,17 @@ impl RelayClient {
         self.authenticate(url, machine).await
     }
 
-    pub async fn put_blob(&self, url: &str, token: &str, id: &str, kind: &str, recipient: Option<&str>, ciphertext_b64: &str) -> RelayResult<i64> {
+    pub async fn put_blob(&self, url: &str, token: &str, item: &crate::app::OutboxItem) -> RelayResult<i64> {
+        let mut body = json!({ "id": item.id, "kind": item.kind, "recipient_machine_pubkey": item.recipient, "ciphertext": item.ciphertext });
+        if let Some(slot) = &item.slot {
+            body["slot"] = json!(slot.name);
+            body["keep_first"] = json!(slot.keep_first);
+        }
         let value = Self::check(
             self.http
                 .put(format!("{url}/v1/blobs"))
                 .bearer_auth(token)
-                .json(&json!({ "id": id, "kind": kind, "recipient_machine_pubkey": recipient, "ciphertext": ciphertext_b64 }))
+                .json(&body)
                 .send()
                 .await?,
         )

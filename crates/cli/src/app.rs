@@ -26,6 +26,29 @@ pub struct OutboxItem {
     pub recipient: Option<String>,
     /// base64url
     pub ciphertext: String,
+    /// What this blob is a version of. The relay drops the versions it supersedes.
+    #[serde(default)]
+    pub slot: Option<Slot>,
+}
+
+/// A blob's place among the versions of one thing: a message, the roster, this Device's
+/// metadata. The relay keeps the latest blob of a slot, and with `keep_first` the oldest too:
+/// its seq holds a message's place in the log for a Device that replays it from the start.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Slot {
+    pub name: String,
+    #[serde(default)]
+    pub keep_first: bool,
+}
+
+impl Slot {
+    pub fn latest(name: impl Into<String>) -> Slot {
+        Slot { name: name.into(), keep_first: false }
+    }
+
+    pub fn first_and_latest(name: impl Into<String>) -> Slot {
+        Slot { name: name.into(), keep_first: true }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -342,14 +365,31 @@ impl App {
     /// Queues a blob under a chosen id: a `file` blob carries its attachment's id so any
     /// Device can fetch it by that id later.
     pub fn push_blob_as(&self, id: String, kind: &str, recipient: Option<String>, ciphertext: Vec<u8>) -> String {
+        self.queue_blob(OutboxItem { id: id.clone(), kind: kind.to_string(), recipient, ciphertext: keys::b64(&ciphertext), slot: None });
+        id
+    }
+
+    /// Queues a version of `slot`. A version still waiting in the outbox gives way to this
+    /// one, in its place in the queue, so a Device that was offline uploads each message once.
+    pub fn push_slot_blob(&self, kind: &str, slot: Slot, ciphertext: Vec<u8>) {
+        let id = uuid::Uuid::new_v4().to_string();
+        self.queue_blob(OutboxItem { id, kind: kind.to_string(), recipient: None, ciphertext: keys::b64(&ciphertext), slot: Some(slot) });
+    }
+
+    fn queue_blob(&self, item: OutboxItem) {
         {
             let mut state = self.state.lock().unwrap();
-            state.outbox.push(OutboxItem { id: id.clone(), kind: kind.to_string(), recipient, ciphertext: keys::b64(&ciphertext) });
-            remember_applied(&mut state, &id);
+            remember_applied(&mut state, &item.id);
+            let waiting = item.slot.as_ref().and_then(|slot| {
+                state.outbox.iter().position(|queued| queued.slot.as_ref().is_some_and(|s| s.name == slot.name))
+            });
+            match waiting {
+                Some(index) => state.outbox[index] = item,
+                None => state.outbox.push(item),
+            }
         }
         self.save_state();
         self.outbox_notify.notify_waiters();
-        id
     }
 
     pub fn push_roster(&self) {
@@ -366,7 +406,7 @@ impl App {
         };
         match crate::crypto::encrypt_json(&dek, "roster", &roster) {
             Ok(ciphertext) => {
-                self.push_blob("roster", None, ciphertext);
+                self.push_slot_blob("roster", Slot::latest("roster"), ciphertext);
             }
             Err(error) => tracing::error!(%error, "encrypting roster"),
         }
@@ -376,7 +416,7 @@ impl App {
         let Some(dek) = self.dek() else { return };
         match crate::crypto::encrypt_json(&dek, "chat", op) {
             Ok(ciphertext) => {
-                self.push_blob("chat", None, ciphertext);
+                self.push_slot_blob("chat", op.slot(), ciphertext);
             }
             Err(error) => tracing::error!(%error, "encrypting chat op"),
         }
@@ -409,9 +449,10 @@ impl App {
         if !changed {
             return;
         }
+        let device_id = device.id.clone();
         match crate::crypto::encrypt_json(&dek, "machine", &MachineBlob { device }) {
             Ok(ciphertext) => {
-                self.push_blob("machine", None, ciphertext);
+                self.push_slot_blob("machine", Slot::latest(format!("machine-{}", device_id)), ciphertext);
             }
             Err(error) => tracing::error!(%error, "encrypting machine blob"),
         }

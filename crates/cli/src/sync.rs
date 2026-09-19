@@ -80,6 +80,14 @@ async fn cycle(app: &Arc<App>) -> Result<(), RelayError> {
     refresh_presence(app, &url, &token).await?;
 
     let since = app.state.lock().unwrap().last_seq;
+    // The relay keeps the latest roster, so in a replay from the start it comes after the
+    // messages. It is taken first, and the chats have their names and bots when those land.
+    if since == 0 {
+        let (blobs, _head) = app.relay.list_blobs(&url, &token, 0, "roster,machine", 0).await?;
+        for blob in blobs {
+            apply_blob(app, &machine_file, &blob);
+        }
+    }
     let poll = app.relay.list_blobs(&url, &token, since, POLL_KINDS, POLL_WAIT_SECS);
     let (blobs, _head) = tokio::select! {
         result = poll => result?,
@@ -144,7 +152,7 @@ pub async fn ensure_registered(app: &Arc<App>, url: &str) -> Result<(), RelayErr
 async fn drain_outbox(app: &Arc<App>, url: &str, token: &str) -> Result<(), RelayError> {
     loop {
         let Some(item) = app.state.lock().unwrap().outbox.first().cloned() else { return Ok(()) };
-        match app.relay.put_blob(url, token, &item.id, &item.kind, item.recipient.as_deref(), &item.ciphertext).await {
+        match app.relay.put_blob(url, token, &item).await {
             Ok(_) => {}
             Err(error) if error.is_client_error() && !error.is_unauthorized() => {
                 tracing::warn!(%error, kind = %item.kind, "relay rejected blob; dropping");

@@ -95,6 +95,7 @@ The relay stores:
 
 - Identity public key and content public key; machine signing and box public keys with the identity’s attestation
 - Blob ids, kinds, sequence numbers, timestamps, size
+- A blob's slot: the random id of the message it is a version of, `roster`, `machine-<machine public key>`, or `read-<chat id>`
 - Recipient machine public key on an envelope (so a Runner can fetch its jobs)
 - Last-seen of a machine public key (presence: online within 150 s)
 - Keys of unpaired machines, refused for good
@@ -383,6 +384,8 @@ What the apps get of a chat is a view of it (`Message::for_app`, `message_page` 
 - PUT/GET blobs; body is ciphertext. `roster` is a whole-roster snapshot of bots, chats, and routines (latest wins); `chat` is one upsert or removal of a message; `machine` is a Device’s metadata; `key` is the DEK sealed to the content key.
 - Jobs: `kind=job` with `recipient_machine_pubkey`, sealed to that machine’s box key, deleted by the Runner after the turn.
 - Questions: `kind=request` sealed to one Runner (`crates/cli/src/requests.rs`: `{ id, verb, requested_by, body }`), answered with a `kind=response` sealed to the Device that asked (`{ request_id, body, error? }`); each side deletes the blob it consumed, and the asker gives up after 20 s. The verbs are `memory.read` and `memory.write`, so a bot's memory can be shown and edited from a Device that is not its Runner; `plugins.install` / `plugins.uninstall` / `plugins.variables` / `plugins.connect` / `plugins.detail`, so plugins on a Runner are managed from any Device; and `permission.answer`, so a permission card is answered from any Device. A request is refused up front when the Runner is unknown or offline.
+- Slots: a `roster`, `chat`, or `machine` blob goes up with a `slot` (`Slot` in `app.rs`, `ChatBlob::slot`), and the relay deletes the blobs of that slot it supersedes, so the log holds a message once and not once per streamed chunk. A message's versions and its removal share the slot named by the message id. An upsert sets `keep_first`, which spares the slot's oldest blob: its seq holds the message's place in the log, so a Device that replays from the start gets the transcript in order, first the early version and later the final one. A removal supersedes every version. The outbox does the same before upload: a queued version gives way, in place, to a newer one of its slot.
+- `GET /v1/blobs?since=` answers a page of up to 8 MiB of ciphertext (and at least one blob); a Device asks again from the last seq it got. A Device at seq 0 first takes `roster,machine` alone, so chats have their names and bots before their messages land.
 - Every Device keeps `last_seq` and an outbox; uploads retry until the relay accepts them.
 
 ```
@@ -411,19 +414,19 @@ lorca/
 
 `bun run mobile` starts the Expo dev server; `bun run mobile:ios` / `mobile:android` build and run the dev client; `cd mobile && bun run core` rebuilds the Rust core for both platforms first.
 
-`bun run dev` rebuilds the CLI and the app on Rust or Swift changes (the generated markdown bindings under `macos/Sources/LorcaMarkdown` are left out of the watch, and rewritten only when they differ) and relaunches the app through `open`, so the app is its own responsible process for TCC: a binary spawned from the terminal is charged to the terminal app, whose Info.plist decides whether a microphone or speech request aborts. `bun run build` produces a release bundle. The bundle step restamps the app binary's SDK version (`stampSDK` in `scripts/app.ts`, through `vtool`): the Swift Build engine writes the deployment target (14.0) there, and AppKit gives a binary stamped below the macOS 26 SDK its older look, with a flat sidebar and an opaque titlebar strip. `bun run relay` runs a local relay.
+`bun run dev` rebuilds the CLI and the app on Rust or Swift changes (the generated markdown bindings under `macos/Sources/LorcaMarkdown` are left out of the watch, and rewritten only when they differ) and relaunches the app through `open`, so the app is its own responsible process for TCC: a binary spawned from the terminal is charged to the terminal app, whose Info.plist decides whether a microphone or speech request aborts. `bun run build` produces a release bundle. The bundle step restamps the app binary's SDK version (`stampSDK` in `scripts/app.ts`, through `vtool`): the Swift Build engine writes the deployment target (14.0) there, and AppKit gives a binary stamped below the macOS 26 SDK its older look, with a flat sidebar and an opaque titlebar strip. `bun run relay` runs a local relay. `bun run mobile:dev` (`scripts/mobile.ts`) is the phone app's loop on the iOS Simulator, or on `--device <name or udid>`: it fingerprints the crates the phone links, the prebuild inputs (`app.json`, `package.json`, plugins, targets), the pod inputs with the checkout's path, and the native module sources (stamps in `mobile/.expo/dev-stamps.json`), rebuilds what is stale (`bun run core ios`, a clean `expo prebuild`, `pod install`, `expo run:ios`), starts Metro, and opens the dev client on it. A Rust save while it runs rebuilds the core and installs the app again. The Mac loop leaves the Simulator's Lorca process alone, so both loops run side by side.
 
 ## Status
 
 Done: crypto and blob protocol, relay, CLI (identity, pairing, restore, local WS, DeepSeek and Anthropic keys, ChatGPT and Grok OAuth adapters, server-side web search, agent loop, encrypt-before-upload, group chats, cross-Runner jobs and handoffs, stop, routines, plugins over MCP with a marketplace and permission cards, encrypted pushes for finished replies), app wiring and the bundled CLI launcher.
 
-Next: steering mid-turn, keychain storage, relay blob GC, a cost budget per chat.
+Next: steering mid-turn, keychain storage, relay GC for the blobs of deleted chats, a cost budget per chat.
 
 The phone app (`mobile/`) pairs as a Device with `os` `ios`, `ipados`, or `android`; it is never a Runner and does not hold the master secret. The first Mac is the identity device.
 
 ## Open points
 
-- Relay blob compaction / GC
+- Relay GC for the blobs of deleted chats (the relay cannot tell which chat a message slot belongs to)
 - Model ids move: DeepSeek defaults to `deepseek-flash` (`deepseek-v4-pro` for reasoning), Anthropic to `claude-opus-5` (`claude-sonnet-5`, `claude-fable-5-1`, `claude-opus-4-8`, `claude-haiku-4-5` offered), ChatGPT sign-ins default to `gpt-5.6-terra` (`gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-luna`, `gpt-5.5` also accepted; `*-codex` ids are rejected for ChatGPT accounts), Grok sign-ins to `grok-4.6` (`grok-4.5`, `grok-4.3`, `grok-4.20-0309-reasoning`, `grok-build-0.1` offered). Each bot carries an optional `model` and `thinking` level (New Bot sheet, and the DM inspector's "Runs with" section); `LORCA_DEEPSEEK_MODEL` / `LORCA_ANTHROPIC_MODEL` / `LORCA_CHATGPT_MODEL` / `LORCA_GROK_MODEL` override the defaults for bots without one
 - Keychain instead of 0600 files for the master secret and credentials
 

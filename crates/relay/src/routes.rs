@@ -19,6 +19,9 @@ const MAX_BODY_BYTES: usize = 40 * 1024 * 1024;
 const CHALLENGE_TTL: i64 = 120;
 const PAIRING_TTL: i64 = 10 * 60;
 const MAX_WAIT_SECONDS: u64 = 30;
+/// Ciphertext in one page of `GET /v1/blobs`. A Device that replays a long history gets it in
+/// pages this size, so the relay never builds a response out of hundreds of 4 MiB blobs.
+const MAX_PAGE_BYTES: i64 = 8 * 1024 * 1024;
 /// APNs takes 4 KB in all; the ciphertext rides in it as base64url beside the fixed alert.
 const MAX_PUSH_BYTES: usize = 2560;
 
@@ -184,6 +187,9 @@ struct VerifyRequest {
 }
 
 async fn auth_verify(State(state): State<AppState>, Json(body): Json<VerifyRequest>) -> ApiResult<Json<Value>> {
+    // Checked before the writer is taken: when every Device signs in again after a restart,
+    // the signature checks run side by side instead of one at a time.
+    verify_signature(&body.machine_pubkey, body.nonce.as_bytes(), &body.signature)?;
     let machine = state
         .db
         .write(move |db| {
@@ -193,7 +199,6 @@ async fn auth_verify(State(state): State<AppState>, Json(body): Json<VerifyReque
             if machine_pubkey != body.machine_pubkey || expires_at < now() {
                 return Err(ApiError::unauthorized("Challenge expired"));
             }
-            verify_signature(&body.machine_pubkey, body.nonce.as_bytes(), &body.signature)?;
             let machine = db::machine(db, &body.machine_pubkey)?.ok_or_else(|| ApiError::not_found("Unknown machine"))?;
             db::touch_machine(db, &machine.machine_pubkey)?;
             Ok(machine)
@@ -257,6 +262,11 @@ struct PutBlob {
     recipient_machine_pubkey: Option<String>,
     /// base64url ciphertext
     ciphertext: String,
+    /// See `db::Slot`.
+    #[serde(default)]
+    slot: Option<String>,
+    #[serde(default)]
+    keep_first: bool,
 }
 
 /// Ids are client-chosen (uuids, `msg-<uuid>`) and become object keys, so only a plain charset.
@@ -276,6 +286,15 @@ async fn put_blob(State(state): State<AppState>, auth: Auth, Json(body): Json<Pu
     if !valid_id(&id) {
         return Err(ApiError::bad_request("Blob id must be 1–64 characters of [A-Za-z0-9._-]"));
     }
+    if let Some(slot) = &body.slot {
+        if !valid_id(slot) {
+            return Err(ApiError::bad_request("Slot must be 1–64 characters of [A-Za-z0-9._-]"));
+        }
+        // A superseded `file` would leave its object behind.
+        if body.kind == "file" {
+            return Err(ApiError::bad_request("A file blob takes no slot"));
+        }
+    }
     let max = if body.kind == "file" { MAX_FILE_BLOB_BYTES } else { MAX_BLOB_BYTES };
     // Decoding a 24 MB attachment is work for the blocking pool, and it happens before the
     // writer is taken so other writes are not held up by it.
@@ -289,6 +308,7 @@ async fn put_blob(State(state): State<AppState>, auth: Auth, Json(body): Json<Pu
     let quota = state.quota_bytes;
     let kind = body.kind.clone();
     let recipient = body.recipient_machine_pubkey.clone();
+    let (slot, keep_first) = (body.slot.clone(), body.keep_first);
 
     let inserted = match body.kind.as_str() {
         "file" => {
@@ -317,7 +337,7 @@ async fn put_blob(State(state): State<AppState>, auth: Auth, Json(body): Json<Pu
             let inserted = state
                 .db
                 .write(move |db| {
-                    db::insert_blob(db, &identity, &stored_id, &kind, recipient.as_deref(), db::Payload::InFileStore { size }, quota)
+                    db::insert_blob(db, &identity, &stored_id, &kind, recipient.as_deref(), None, db::Payload::InFileStore { size }, quota)
                 })
                 .await;
             match inserted {
@@ -336,7 +356,8 @@ async fn put_blob(State(state): State<AppState>, auth: Auth, Json(body): Json<Pu
             state
                 .db
                 .write(move |db| {
-                    db::insert_blob(db, &identity, &stored_id, &kind, recipient.as_deref(), db::Payload::Inline(&ciphertext), quota)
+                    let slot = slot.as_deref().map(|name| db::Slot { name, keep_first });
+                    db::insert_blob(db, &identity, &stored_id, &kind, recipient.as_deref(), slot, db::Payload::Inline(&ciphertext), quota)
                 })
                 .await?
         }
@@ -427,7 +448,7 @@ async fn list_blobs(State(state): State<AppState>, auth: Auth, Query(query): Que
         let (mut rows, head) = state
             .db
             .read(move |db| {
-                let rows = db::blobs_since(db, &identity, &machine, since, &kinds, limit)?;
+                let rows = db::blobs_since(db, &identity, &machine, since, &kinds, limit, MAX_PAGE_BYTES)?;
                 Ok((rows, db::current_seq(db, &identity)?))
             })
             .await?;

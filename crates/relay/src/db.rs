@@ -55,6 +55,7 @@ const SCHEMA: &str = "
         ciphertext BLOB NOT NULL,
         size INTEGER NOT NULL,
         created_at INTEGER NOT NULL,
+        slot TEXT,
         PRIMARY KEY (identity_pubkey, id)
     );
     CREATE INDEX IF NOT EXISTS blobs_identity_seq ON blobs(identity_pubkey, seq);
@@ -99,6 +100,7 @@ impl Db {
     pub fn open(path: &str) -> anyhow::Result<Db> {
         let writer = Connection::open(path)?;
         writer.execute_batch(SCHEMA)?;
+        migrate(&writer)?;
 
         let count = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(4, 16);
         let mut readers = Vec::with_capacity(count);
@@ -144,6 +146,15 @@ impl Db {
         })
         .await
     }
+}
+
+/// Brings a database made by an earlier relay up to `SCHEMA`.
+fn migrate(connection: &Connection) -> rusqlite::Result<()> {
+    let has_slot = connection.prepare("SELECT 1 FROM pragma_table_info('blobs') WHERE name = 'slot'")?.exists([])?;
+    if !has_slot {
+        connection.execute_batch("ALTER TABLE blobs ADD COLUMN slot TEXT;")?;
+    }
+    connection.execute_batch("CREATE INDEX IF NOT EXISTS blobs_identity_slot ON blobs(identity_pubkey, slot) WHERE slot IS NOT NULL;")
 }
 
 /// Runs CPU- or disk-bound work off the async workers.
@@ -489,13 +500,18 @@ impl BlobRow {
 const BLOB_COLUMNS: &str = "id, kind, recipient_machine_pubkey, seq, ciphertext, created_at";
 
 fn blob_row(row: &rusqlite::Row) -> rusqlite::Result<BlobRow> {
+    blob_row_at(row, 0)
+}
+
+/// `BLOB_COLUMNS` starting at column `at`.
+fn blob_row_at(row: &rusqlite::Row, at: usize) -> rusqlite::Result<BlobRow> {
     Ok(BlobRow {
-        id: row.get(0)?,
-        kind: row.get(1)?,
-        recipient_machine_pubkey: row.get(2)?,
-        seq: row.get(3)?,
-        ciphertext: row.get(4)?,
-        created_at: row.get(5)?,
+        id: row.get(at)?,
+        kind: row.get(at + 1)?,
+        recipient_machine_pubkey: row.get(at + 2)?,
+        seq: row.get(at + 3)?,
+        ciphertext: row.get(at + 4)?,
+        created_at: row.get(at + 5)?,
     })
 }
 
@@ -526,14 +542,42 @@ pub enum Payload<'a> {
     InFileStore { size: i64 },
 }
 
+/// A blob's place among the versions of one thing: a message, the roster, a Device's
+/// metadata. A new blob in a slot supersedes the earlier ones, so the log holds the latest
+/// version instead of every version. `keep_first` spares the oldest, whose seq holds a
+/// message's place in the log for a Device that replays it from the start.
+pub struct Slot<'a> {
+    pub name: &'a str,
+    pub keep_first: bool,
+}
+
+/// Deletes the blobs `slot` supersedes and gives their bytes back to the identity's usage.
+fn supersede(tx: &Connection, identity_pubkey: &str, slot: &Slot<'_>) -> rusqlite::Result<()> {
+    let first: Option<i64> = tx
+        .prepare_cached("SELECT MIN(seq) FROM blobs WHERE identity_pubkey = ?1 AND slot = ?2")?
+        .query_row(params![identity_pubkey, slot.name], |row| row.get(0))?;
+    let Some(first) = first else { return Ok(()) };
+    let floor = if slot.keep_first { first } else { 0 };
+    let freed: i64 = tx
+        .prepare_cached("SELECT COALESCE(SUM(size), 0) FROM blobs WHERE identity_pubkey = ?1 AND slot = ?2 AND seq > ?3")?
+        .query_row(params![identity_pubkey, slot.name, floor], |row| row.get(0))?;
+    tx.prepare_cached("DELETE FROM blobs WHERE identity_pubkey = ?1 AND slot = ?2 AND seq > ?3")?
+        .execute(params![identity_pubkey, slot.name, floor])?;
+    tx.prepare_cached("UPDATE usage SET bytes = MAX(bytes - ?1, 0) WHERE identity_pubkey = ?2")?
+        .execute(params![freed, identity_pubkey])?;
+    Ok(())
+}
+
 /// Stores a blob under the identity's next sequence number. A known id returns its existing
 /// seq. `quota_bytes` of 0 means unlimited.
+#[allow(clippy::too_many_arguments)]
 pub fn insert_blob(
     connection: &mut Connection,
     identity_pubkey: &str,
     id: &str,
     kind: &str,
     recipient_machine_pubkey: Option<&str>,
+    slot: Option<Slot<'_>>,
     payload: Payload<'_>,
     quota_bytes: u64,
 ) -> ApiResult<Inserted> {
@@ -551,6 +595,11 @@ pub fn insert_blob(
     if let Some(seq) = blob_seq(&tx, identity_pubkey, id)? {
         return Ok(Inserted { seq, existing: true });
     }
+    // Before the quota check, so a new version of a message fits where the old one was. A
+    // refusal below rolls this back with the rest.
+    if let Some(slot) = &slot {
+        supersede(&tx, identity_pubkey, slot)?;
+    }
     if quota_bytes > 0 && (usage(&tx, identity_pubkey)? + size) as u64 > quota_bytes {
         return Err(ApiError::too_large("Storage quota exceeded"));
     }
@@ -563,10 +612,10 @@ pub fn insert_blob(
         .prepare_cached("SELECT seq FROM sequences WHERE identity_pubkey = ?1")?
         .query_row(params![identity_pubkey], |row| row.get(0))?;
     tx.prepare_cached(
-        "INSERT INTO blobs (id, identity_pubkey, kind, recipient_machine_pubkey, seq, ciphertext, size, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        "INSERT INTO blobs (id, identity_pubkey, kind, recipient_machine_pubkey, seq, ciphertext, size, created_at, slot)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
     )?
-    .execute(params![id, identity_pubkey, kind, recipient_machine_pubkey, seq, ciphertext, size, now()])?;
+    .execute(params![id, identity_pubkey, kind, recipient_machine_pubkey, seq, ciphertext, size, now(), slot.map(|s| s.name)])?;
     tx.prepare_cached(
         "INSERT INTO usage (identity_pubkey, bytes) VALUES (?1, ?2)
          ON CONFLICT(identity_pubkey) DO UPDATE SET bytes = bytes + excluded.bytes",
@@ -586,6 +635,8 @@ pub fn current_seq(connection: &Connection, identity_pubkey: &str) -> rusqlite::
 
 /// Blobs after `since` that this machine may see: unaddressed ones and its own envelopes.
 /// The kind filter is part of the query, so a poll that leaves `file` out never loads a file.
+/// A page ends at `limit` rows or before the row that would take it past `max_bytes`, and
+/// always holds one row when there is one; the caller asks again from the last seq it got.
 pub fn blobs_since(
     connection: &Connection,
     identity_pubkey: &str,
@@ -593,9 +644,10 @@ pub fn blobs_since(
     since: i64,
     kinds: &[String],
     limit: i64,
+    max_bytes: i64,
 ) -> rusqlite::Result<Vec<BlobRow>> {
     let mut sql = format!(
-        "SELECT {BLOB_COLUMNS} FROM blobs
+        "SELECT size, {BLOB_COLUMNS} FROM blobs
          WHERE identity_pubkey = ?1 AND seq > ?2
            AND (recipient_machine_pubkey IS NULL OR recipient_machine_pubkey = ?3)"
     );
@@ -607,7 +659,18 @@ pub fn blobs_since(
     let mut values: Vec<Value> =
         vec![identity_pubkey.to_string().into(), since.into(), machine_pubkey.to_string().into(), limit.into()];
     values.extend(kinds.iter().map(|kind| Value::from(kind.clone())));
-    connection.prepare_cached(&sql)?.query_map(params_from_iter(values), blob_row)?.collect()
+    let mut statement = connection.prepare_cached(&sql)?;
+    let mut rows = statement.query(params_from_iter(values))?;
+    let (mut page, mut bytes) = (Vec::new(), 0i64);
+    // The size is read before the ciphertext, so the row that ends the page is never loaded.
+    while let Some(row) = rows.next()? {
+        bytes += row.get::<_, i64>(0)?;
+        if bytes > max_bytes && !page.is_empty() {
+            break;
+        }
+        page.push(blob_row_at(row, 1)?);
+    }
+    Ok(page)
 }
 
 pub fn blob(connection: &Connection, identity_pubkey: &str, machine_pubkey: &str, id: &str) -> rusqlite::Result<Option<BlobRow>> {
@@ -689,4 +752,71 @@ pub fn expire(connection: &Connection) -> rusqlite::Result<()> {
     connection.execute("DELETE FROM challenges WHERE expires_at < ?1", params![now])?;
     connection.execute("DELETE FROM pairings WHERE expires_at < ?1", params![now])?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn open() -> Connection {
+        let connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch(SCHEMA).unwrap();
+        migrate(&connection).unwrap();
+        connection
+    }
+
+    fn put(connection: &mut Connection, id: &str, slot: Option<Slot<'_>>, bytes: &[u8]) -> i64 {
+        insert_blob(connection, "identity", id, "chat", None, slot, Payload::Inline(bytes), 0).map_err(|e| format!("{e:?}")).unwrap().seq
+    }
+
+    fn ids(connection: &Connection, since: i64, max_bytes: i64) -> Vec<String> {
+        blobs_since(connection, "identity", "machine", since, &[], 500, max_bytes).unwrap().into_iter().map(|row| row.id).collect()
+    }
+
+    #[test]
+    fn a_slot_keeps_its_first_and_latest_blob() {
+        let mut db = open();
+        put(&mut db, "v1", Some(Slot { name: "message", keep_first: true }), b"a");
+        put(&mut db, "other", None, b"other");
+        put(&mut db, "v2", Some(Slot { name: "message", keep_first: true }), b"ab");
+        put(&mut db, "v3", Some(Slot { name: "message", keep_first: true }), b"abc");
+        assert_eq!(ids(&db, 0, i64::MAX), ["v1", "other", "v3"]);
+        assert_eq!(usage(&db, "identity").unwrap(), 1 + 5 + 3);
+
+        // A removal supersedes every version.
+        put(&mut db, "gone", Some(Slot { name: "message", keep_first: false }), b"x");
+        assert_eq!(ids(&db, 0, i64::MAX), ["other", "gone"]);
+        assert_eq!(usage(&db, "identity").unwrap(), 5 + 1);
+    }
+
+    #[test]
+    fn a_put_of_a_known_id_supersedes_nothing() {
+        let mut db = open();
+        put(&mut db, "v1", Some(Slot { name: "roster", keep_first: false }), b"a");
+        let seq = put(&mut db, "v2", Some(Slot { name: "roster", keep_first: false }), b"b");
+        assert_eq!(put(&mut db, "v2", Some(Slot { name: "roster", keep_first: false }), b"b"), seq);
+        assert_eq!(ids(&db, 0, i64::MAX), ["v2"]);
+    }
+
+    #[test]
+    fn a_refused_put_leaves_the_slot_alone() {
+        let mut db = open();
+        let slot = || Some(Slot { name: "roster", keep_first: false });
+        insert_blob(&mut db, "identity", "v1", "roster", None, slot(), Payload::Inline(b"abc"), 4).map_err(|e| format!("{e:?}")).unwrap();
+        assert!(insert_blob(&mut db, "identity", "v2", "roster", None, slot(), Payload::Inline(b"abcde"), 4).is_err());
+        assert_eq!(ids(&db, 0, i64::MAX), ["v1"]);
+        assert_eq!(usage(&db, "identity").unwrap(), 3);
+    }
+
+    #[test]
+    fn a_page_stops_at_its_byte_budget() {
+        let mut db = open();
+        for id in ["a", "b", "c"] {
+            put(&mut db, id, None, &[0; 40]);
+        }
+        assert_eq!(ids(&db, 0, 100), ["a", "b"]);
+        assert_eq!(ids(&db, 2, 100), ["c"]);
+        // One row always goes out, however large.
+        assert_eq!(ids(&db, 0, 10), ["a"]);
+    }
 }

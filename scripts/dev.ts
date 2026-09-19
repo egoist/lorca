@@ -26,10 +26,20 @@ async function lorcaPids(): Promise<number[]> {
   const proc = Bun.spawn(["pgrep", "-x", APP_NAME], { stdout: "pipe", stderr: "pipe" })
   const text = await new Response(proc.stdout).text()
   await proc.exited
-  return text
+  const pids = text
     .split("\n")
     .map((line) => Number(line.trim()))
     .filter((pid) => Number.isInteger(pid) && pid > 0)
+  // The phone app in the iOS Simulator is a host process with the same name. It belongs to
+  // `bun run mobile:dev`.
+  const mac: number[] = []
+  for (const pid of pids) {
+    const ps = Bun.spawn(["ps", "-o", "command=", "-p", String(pid)], { stdout: "pipe", stderr: "pipe" })
+    const command = await new Response(ps.stdout).text()
+    await ps.exited
+    if (!command.includes("/CoreSimulator/")) mac.push(pid)
+  }
+  return mac
 }
 
 function killPid(pid: number, signal: NodeJS.Signals) {
