@@ -25,7 +25,9 @@ struct Args {
     #[arg(long, env = "LORCA_RELAY_BIND", default_value = "127.0.0.1:8787")]
     bind: SocketAddr,
 
-    /// SQLite database path.
+    /// The database: a SQLite path, or a `postgres://` URL. SQLite belongs to one relay
+    /// process. Postgres is shared by as many as run, so a deploy can overlap the old process
+    /// with the new one; give them the same --secret and an S3 bucket for files.
     #[arg(long, env = "LORCA_RELAY_DB", default_value = "lorca-relay.db")]
     db: String,
 
@@ -127,7 +129,8 @@ fn pusher(args: &Args) -> anyhow::Result<push::Pusher> {
 
 fn file_store(args: &Args) -> anyhow::Result<store::FileStore> {
     let Some(bucket) = &args.s3_bucket else {
-        let dir = args.files_dir.clone().unwrap_or_else(|| std::path::PathBuf::from(&args.db).with_extension("files"));
+        let beside = if args.db.contains("://") { "lorca-relay.db" } else { args.db.as_str() };
+        let dir = args.files_dir.clone().unwrap_or_else(|| std::path::PathBuf::from(beside).with_extension("files"));
         std::fs::create_dir_all(&dir)?;
         return Ok(store::FileStore::Local { dir });
     };
@@ -153,16 +156,16 @@ fn file_store(args: &Args) -> anyhow::Result<store::FileStore> {
 
 #[derive(Clone)]
 pub struct AppState {
-    pub db: Arc<db::Db>,
+    pub db: Arc<dyn db::Store>,
     pub secret: Arc<[u8; 32]>,
-    /// The sync sockets: who is online, and whom to tell about a new blob.
-    pub hub: Arc<hub::Hub>,
-    /// Keys of unpaired machines; their tokens are refused.
-    pub revoked: Arc<db::Revoked>,
+    /// This process's sync sockets and the keys of unpaired machines, whose tokens are refused.
+    pub local: Arc<db::Local>,
     pub quota_bytes: u64,
     pub ip_limiter: Arc<limit::RateLimiter>,
     pub identity_limiter: Arc<limit::RateLimiter>,
     pub trust_proxy: bool,
+    /// Cancelled when the process is told to stop; the sync sockets end on it.
+    pub stopping: tokio_util::sync::CancellationToken,
     /// Where `file` ciphertext goes. The database holds only the row.
     pub file_store: Arc<store::FileStore>,
     /// APNs and FCM, for the phones of an identity.
@@ -176,13 +179,13 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let args = Args::parse();
-    let db = Arc::new(db::Db::open(&args.db)?);
+    let local = Arc::new(db::Local::default());
+    let db = db::open(&args.db, local.clone()).await?;
     let file_store = Arc::new(file_store(&args)?);
     let pusher = Arc::new(pusher(&args)?);
-    let revoked = Arc::new(db::Revoked::load(db.read(|db| Ok(db::revoked_machines(db)?)).await.map_err(|e| anyhow::anyhow!("{e:?}"))?));
 
     let mut secret = [0u8; 32];
-    match args.secret {
+    match &args.secret {
         Some(text) => {
             let digest = <sha2::Sha256 as sha2::Digest>::digest(text.as_bytes());
             secret.copy_from_slice(&digest);
@@ -193,8 +196,7 @@ async fn main() -> anyhow::Result<()> {
     let state = AppState {
         db: db.clone(),
         secret: Arc::new(secret),
-        hub: Arc::new(hub::Hub::default()),
-        revoked,
+        local,
         quota_bytes: args.quota_bytes,
         ip_limiter: Arc::new(limit::RateLimiter::new(args.ip_per_minute as f64 / 60.0, args.ip_per_minute)),
         identity_limiter: Arc::new(limit::RateLimiter::new(
@@ -202,30 +204,52 @@ async fn main() -> anyhow::Result<()> {
             args.identity_per_second.saturating_mul(10),
         )),
         trust_proxy: args.trust_proxy,
+        stopping: tokio_util::sync::CancellationToken::new(),
         file_store: file_store.clone(),
         pusher: pusher.clone(),
     };
 
+    let ticking = db.clone();
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
         loop {
             tick.tick().await;
-            if let Err(error) = db.write(|db| Ok(db::expire(db)?)).await {
-                tracing::warn!(?error, "expiring challenges and pairings");
+            if let Err(error) = ticking.tick().await {
+                tracing::warn!(?error, "housekeeping");
             }
         }
     });
 
+    let stopping = state.stopping.clone();
     let app = routes::router(state);
     let listener = tokio::net::TcpListener::bind(args.bind).await?;
     tracing::info!(
         bind = %args.bind,
-        db = %args.db,
+        db = %db.describe(),
         quota_bytes = args.quota_bytes,
         files = %file_store.describe(),
         push = %pusher.describe(),
         "lorca-relay listening"
     );
-    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await?;
+    let shared = args.db.contains("://");
+    if shared && args.secret.is_none() {
+        tracing::warn!("no --secret: a token from one relay process will not verify on another");
+    }
+    if shared && args.s3_bucket.is_none() {
+        tracing::warn!("files are in a local directory: relay processes on other hosts will not find them");
+    }
+    // A deploy stops the process with SIGTERM. The sockets close, so the Devices connect to
+    // the process that replaces this one, and with Postgres this one's presence rows go.
+    let serve = axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).with_graceful_shutdown(async move {
+        let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("a SIGTERM handler");
+        tokio::select! {
+            _ = terminate.recv() => {}
+            _ = tokio::signal::ctrl_c() => {}
+        }
+        tracing::info!("stopping");
+        stopping.cancel();
+    });
+    serve.await?;
+    db.close().await;
     Ok(())
 }

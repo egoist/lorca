@@ -39,8 +39,11 @@ pub async fn run(app: Arc<App>) {
                 failures = failures.saturating_add(1);
                 let delay = (2u64.pow(failures.min(5))).min(60);
                 tracing::warn!(%error, retry_in = delay, "relay");
+                // Up to a second on top, so the Devices a relay restart dropped together do
+                // not all come back in the same instant.
+                let jitter = std::time::Duration::from_millis(rand::Rng::gen_range(&mut rand::thread_rng(), 0..1000));
                 tokio::select! {
-                    _ = tokio::time::sleep(std::time::Duration::from_secs(delay)) => {}
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(delay) + jitter) => {}
                     _ = app.outbox_notify.notified() => {}
                 }
             }

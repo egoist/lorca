@@ -77,6 +77,16 @@ impl Hub {
         self.signal(identity_pubkey, Signal::Machines, |_| true);
     }
 
+    /// Every socket here looks again: this process may have missed events.
+    pub fn everyone(&self) {
+        for connections in self.lock().values() {
+            for connection in connections {
+                let _ = connection.signals.try_send(Signal::Blobs);
+                let _ = connection.signals.try_send(Signal::Machines);
+            }
+        }
+    }
+
     /// Closes a machine's sockets: their senders go, and each socket task ends on that.
     pub fn kick(&self, identity_pubkey: &str, machine_pubkey: &str) {
         if let Some(connections) = self.lock().get_mut(identity_pubkey) {

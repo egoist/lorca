@@ -155,20 +155,7 @@ async fn register_identity(State(state): State<AppState>, Json(signed): Json<Sig
     }
     let attestation = serde_json::to_string(&json!({ "payload": signed.payload, "signature": signed.signature })).unwrap();
     let machine_pubkey = body.machine.machine_pubkey.clone();
-    let identity = identity_pubkey.clone();
-    state
-        .db
-        .write(move |db| {
-            db::register_identity(
-                db,
-                &identity,
-                &body.content_pubkey,
-                &body.machine.machine_pubkey,
-                &body.machine.box_pubkey,
-                &attestation,
-            )
-        })
-        .await?;
+    state.db.register_identity(&identity_pubkey, &body.content_pubkey, &body.machine.machine_pubkey, &body.machine.box_pubkey, &attestation).await?;
     Ok(Json(json!({ "identity_pubkey": identity_pubkey, "machine_pubkey": machine_pubkey })))
 }
 
@@ -179,8 +166,7 @@ struct ChallengeRequest {
 
 async fn auth_challenge(State(state): State<AppState>, Json(body): Json<ChallengeRequest>) -> ApiResult<Json<Value>> {
     let nonce = random_nonce(32);
-    let stored = nonce.clone();
-    state.db.write(move |db| db::create_challenge(db, &stored, &body.machine_pubkey, now() + CHALLENGE_TTL)).await?;
+    state.db.create_challenge(&nonce, &body.machine_pubkey, now() + CHALLENGE_TTL).await?;
     Ok(Json(json!({ "nonce": nonce, "expires_in": CHALLENGE_TTL })))
 }
 
@@ -195,20 +181,7 @@ async fn auth_verify(State(state): State<AppState>, Json(body): Json<VerifyReque
     // Checked before the writer is taken: when every Device signs in again after a restart,
     // the signature checks run side by side instead of one at a time.
     verify_signature(&body.machine_pubkey, body.nonce.as_bytes(), &body.signature)?;
-    let machine = state
-        .db
-        .write(move |db| {
-            let Some((machine_pubkey, expires_at)) = db::take_challenge(db, &body.nonce)? else {
-                return Err(ApiError::unauthorized("Unknown challenge"));
-            };
-            if machine_pubkey != body.machine_pubkey || expires_at < now() {
-                return Err(ApiError::unauthorized("Challenge expired"));
-            }
-            let machine = db::machine(db, &body.machine_pubkey)?.ok_or_else(|| ApiError::not_found("Unknown machine"))?;
-            db::touch_machine(db, &machine.machine_pubkey)?;
-            Ok(machine)
-        })
-        .await?;
+    let machine = state.db.redeem_challenge(&body.nonce, &body.machine_pubkey).await?;
     let (token, token_expires) = issue_token(&state.secret, &machine.identity_pubkey, &machine.machine_pubkey);
     Ok(Json(json!({
         "token": token,
@@ -229,10 +202,10 @@ struct MachineOut {
 }
 
 async fn list_machines(State(state): State<AppState>, auth: Auth) -> ApiResult<Json<Value>> {
-    let online = state.hub.online(&auth.identity_pubkey);
+    let online = state.db.online(&auth.identity_pubkey).await?;
     let machines: Vec<MachineOut> = state
         .db
-        .read(move |db| Ok(db::machines_for(db, &auth.identity_pubkey)?))
+        .machines_for(&auth.identity_pubkey)
         .await?
         .into_iter()
         .map(|m| MachineOut {
@@ -250,14 +223,10 @@ async fn list_machines(State(state): State<AppState>, auth: Auth) -> ApiResult<J
 /// authenticates again, its pending envelopes go, and its sync socket closes. The other
 /// Devices are told to refresh their machine list now.
 async fn revoke_machine(State(state): State<AppState>, auth: Auth, Path(machine_pubkey): Path<String>) -> ApiResult<StatusCode> {
-    let (identity, target) = (auth.identity_pubkey.clone(), machine_pubkey.clone());
-    let removed = state.db.write(move |db| Ok(db::revoke_machine(db, &identity, &target)?)).await?;
-    if !removed {
+    if !state.db.revoke_machine(&auth.identity_pubkey, &machine_pubkey).await? {
         return Err(ApiError::not_found("Not a machine of this identity"));
     }
-    state.revoked.insert(&machine_pubkey);
-    state.hub.kick(&auth.identity_pubkey, &machine_pubkey);
-    state.hub.machines(&auth.identity_pubkey);
+    state.db.publish(db::Event::Revoked { identity: auth.identity_pubkey.clone(), machine: machine_pubkey }).await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -320,50 +289,29 @@ async fn put_blob(State(state): State<AppState>, auth: Auth, Json(body): Json<Pu
         return Err(ApiError::bad_request("Ciphertext size out of range"));
     }
 
-    let identity = auth.identity_pubkey.clone();
-    let stored_id = id.clone();
     let quota = state.quota_bytes;
-    let kind = body.kind.clone();
-    let recipient = body.recipient_machine_pubkey.clone();
-    let (slot, keep_first) = (body.slot.clone(), body.keep_first);
-    let group = body.group.clone();
+    let blob = |payload| db::NewBlob {
+        identity_pubkey: auth.identity_pubkey.clone(),
+        id: id.clone(),
+        kind: body.kind.clone(),
+        recipient_machine_pubkey: body.recipient_machine_pubkey.clone(),
+        slot: body.slot.clone().map(|name| db::Slot { name, keep_first: body.keep_first }),
+        group: body.group.clone(),
+        payload,
+    };
 
     let inserted = match body.kind.as_str() {
         "file" => {
-            // The object goes up before the row, outside the writer. A cheap check first
-            // saves an upload the row would refuse; the transaction decides for real.
+            // The object goes up before the row. A cheap check first saves an upload the row
+            // would refuse; the insert decides for real.
             let store = &state.file_store;
             let size = ciphertext.len() as i64;
-            let (precheck_identity, precheck_id, precheck_group) = (identity.clone(), stored_id.clone(), group.clone());
-            let refused = state
-                .db
-                .read(move |db| {
-                    if let Some(seq) = db::blob_seq(db, &precheck_identity, &precheck_id)? {
-                        return Ok(Some(db::Inserted { seq, existing: true }));
-                    }
-                    if let Some(group) = &precheck_group {
-                        if db::group_deleted(db, &precheck_identity, group)? {
-                            return Err(ApiError::conflict("Group was deleted"));
-                        }
-                    }
-                    if quota > 0 && (db::usage(db, &precheck_identity)? + size) as u64 > quota {
-                        return Err(ApiError::too_large("Storage quota exceeded"));
-                    }
-                    Ok(None)
-                })
-                .await?;
-            if let Some(existing) = refused {
+            if let Some(existing) = state.db.precheck_blob(&auth.identity_pubkey, &id, body.group.as_deref(), size, quota).await? {
                 return Ok(Json(json!({ "id": id, "seq": existing.seq, "existing": true })));
             }
-            let key = crate::store::key(&identity, &stored_id);
+            let key = crate::store::key(&auth.identity_pubkey, &id);
             store.put(&key, ciphertext).await?;
-            let inserted = state
-                .db
-                .write(move |db| {
-                    db::insert_blob(db, &identity, &stored_id, &kind, recipient.as_deref(), None, group.as_deref(), db::Payload::InFileStore { size }, quota)
-                })
-                .await;
-            match inserted {
+            match state.db.insert_blob(blob(db::Payload::InFileStore { size }), quota).await {
                 Ok(inserted) => inserted,
                 Err(error) => {
                     // The row was refused, so the object is an orphan. A concurrent put of the
@@ -375,20 +323,12 @@ async fn put_blob(State(state): State<AppState>, auth: Auth, Json(body): Json<Pu
                 }
             }
         }
-        _ => {
-            state
-                .db
-                .write(move |db| {
-                    let slot = slot.as_deref().map(|name| db::Slot { name, keep_first });
-                    db::insert_blob(db, &identity, &stored_id, &kind, recipient.as_deref(), slot, group.as_deref(), db::Payload::Inline(&ciphertext), quota)
-                })
-                .await?
-        }
+        _ => state.db.insert_blob(blob(db::Payload::Inline(ciphertext)), quota).await?,
     };
     if inserted.existing {
         return Ok(Json(json!({ "id": id, "seq": inserted.seq, "existing": true })));
     }
-    state.hub.blobs(&auth.identity_pubkey, body.recipient_machine_pubkey.as_deref());
+    state.db.publish(db::Event::Blobs { identity: auth.identity_pubkey.clone(), recipient: body.recipient_machine_pubkey.clone() }).await;
     Ok(Json(json!({ "id": id, "seq": inserted.seq })))
 }
 
@@ -453,14 +393,7 @@ async fn list_blobs(State(state): State<AppState>, auth: Auth, Query(query): Que
         return Err(ApiError::bad_request("Unknown blob kind"));
     }
     let limit = query.limit.unwrap_or(200).clamp(1, 500);
-    let (identity, machine, since) = (auth.identity_pubkey.clone(), auth.machine_pubkey.clone(), query.since);
-    let (mut rows, head) = state
-        .db
-        .read(move |db| {
-            let rows = db::blobs_since(db, &identity, &machine, since, &kinds, limit, MAX_PAGE_BYTES)?;
-            Ok((rows, db::current_seq(db, &identity)?))
-        })
-        .await?;
+    let (mut rows, head) = state.db.blobs_since(&auth.identity_pubkey, &auth.machine_pubkey, query.since, &kinds, limit, MAX_PAGE_BYTES).await?;
     load_files(&state, &auth.identity_pubkey, &mut rows).await?;
     let blobs: Vec<BlobOut> = rows.into_iter().map(BlobOut::from).collect();
     Ok(Json(json!({ "blobs": blobs, "seq": head })))
@@ -475,23 +408,27 @@ async fn sync_socket(State(state): State<AppState>, auth: Auth, upgrade: WebSock
 }
 
 async fn touch(state: &AppState, machine_pubkey: &str) {
-    let machine_pubkey = machine_pubkey.to_string();
-    if let Err(error) = state.db.write(move |db| Ok(db::touch_machine(db, &machine_pubkey)?)).await {
+    if let Err(error) = state.db.touch_machine(machine_pubkey).await {
         tracing::warn!(?error, "writing last_seen");
     }
 }
 
 async fn serve_socket(state: AppState, auth: Auth, mut socket: WebSocket) {
-    let mut seat = state.hub.join(&auth.identity_pubkey, &auth.machine_pubkey);
-    if seat.came_online {
-        touch(&state, &auth.machine_pubkey).await;
-        state.hub.machines(&auth.identity_pubkey);
+    let (identity, machine) = (&auth.identity_pubkey, &auth.machine_pubkey);
+    let mut seat = state.local.hub.join(identity, machine);
+    // A backend that cannot answer leaves presence to what this process knows.
+    let came_online = state.db.socket_opened(identity, machine, seat.id, seat.came_online).await.unwrap_or(seat.came_online);
+    if came_online {
+        touch(&state, machine).await;
+        state.db.publish(db::Event::Machines { identity: identity.clone() }).await;
     }
     let mut ping = tokio::time::interval(std::time::Duration::from_secs(PING_SECONDS));
     ping.tick().await;
     let mut heard = tokio::time::Instant::now();
     loop {
         tokio::select! {
+            // The process is stopping: the Device connects to the one that replaces it.
+            _ = state.stopping.cancelled() => break,
             signal = seat.signals.recv() => {
                 // The hub dropped this seat: the machine was unpaired.
                 let Some(signal) = signal else { break };
@@ -510,17 +447,20 @@ async fn serve_socket(state: AppState, auth: Auth, mut socket: WebSocket) {
             },
         }
     }
-    if state.hub.leave(&auth.identity_pubkey, seat.id) && !state.revoked.contains(&auth.machine_pubkey) {
-        touch(&state, &auth.machine_pubkey).await;
-        state.hub.machines(&auth.identity_pubkey);
+    let last_here = state.local.hub.leave(identity, seat.id);
+    let went_offline = state.db.socket_closed(identity, machine, seat.id, last_here).await.unwrap_or(last_here);
+    // A process that is stopping says so once per identity in `Store::close`, and its Devices
+    // are about to connect to the one that replaces it.
+    if went_offline && !state.local.revoked.contains(machine) && !state.stopping.is_cancelled() {
+        touch(&state, machine).await;
+        state.db.publish(db::Event::Machines { identity: identity.clone() }).await;
     }
 }
 
 /// One blob by id, for kinds a Device does not take in its poll: a `file` is fetched when a
 /// transcript needs it, by the Runner that runs the turn and by Devices that show it.
 async fn get_blob(State(state): State<AppState>, auth: Auth, Path(id): Path<String>) -> ApiResult<Json<BlobOut>> {
-    let (identity, machine) = (auth.identity_pubkey.clone(), auth.machine_pubkey.clone());
-    let row = state.db.read(move |db| Ok(db::blob(db, &identity, &machine, &id)?)).await?;
+    let row = state.db.blob(&auth.identity_pubkey, &auth.machine_pubkey, &id).await?;
     let Some(row) = row else { return Err(ApiError::not_found("No such blob")) };
     let mut rows = [row];
     load_files(&state, &auth.identity_pubkey, &mut rows).await?;
@@ -529,8 +469,7 @@ async fn get_blob(State(state): State<AppState>, auth: Auth, Path(id): Path<Stri
 }
 
 async fn delete_blob(State(state): State<AppState>, auth: Auth, Path(id): Path<String>) -> ApiResult<StatusCode> {
-    let (identity, row_id) = (auth.identity_pubkey.clone(), id.clone());
-    let deleted = state.db.write(move |db| Ok(db::delete_blob(db, &identity, &row_id)?)).await?;
+    let deleted = state.db.delete_blob(&auth.identity_pubkey, &id).await?;
     let Some(kind) = deleted else { return Err(ApiError::not_found("No such blob")) };
     if kind == "file" {
         // The row is gone either way; a leftover object is logged, not surfaced.
@@ -549,8 +488,7 @@ async fn delete_group(State(state): State<AppState>, auth: Auth, Path(group): Pa
     if !valid_id(&group) {
         return Err(ApiError::bad_request("Group must be 1–64 characters of [A-Za-z0-9._-]"));
     }
-    let identity = auth.identity_pubkey.clone();
-    let files = state.db.write(move |db| Ok(db::delete_group(db, &identity, &group)?)).await?;
+    let files = state.db.delete_group(&auth.identity_pubkey, &group).await?;
     for id in files {
         // The rows are gone either way; a leftover object is logged, not surfaced.
         let key = crate::store::key(&auth.identity_pubkey, &id);
@@ -591,12 +529,12 @@ async fn put_push_token(State(state): State<AppState>, auth: Auth, Json(body): J
         _ => "production",
     };
     let token = db::PushToken { machine_pubkey: auth.machine_pubkey.clone(), platform: body.platform, token: body.token, environment: environment.into() };
-    state.db.write(move |db| Ok(db::set_push_token(db, &auth.identity_pubkey, &token)?)).await?;
+    state.db.set_push_token(&auth.identity_pubkey, &token).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 async fn delete_push_token(State(state): State<AppState>, auth: Auth) -> ApiResult<StatusCode> {
-    state.db.write(move |db| Ok(db::delete_push_token(db, &auth.machine_pubkey)?)).await?;
+    state.db.delete_push_token(&auth.machine_pubkey).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -607,10 +545,9 @@ async fn send_push(State(state): State<AppState>, auth: Auth, Json(body): Json<C
     if ciphertext.is_empty() || ciphertext.len() > MAX_PUSH_BYTES {
         return Err(ApiError::bad_request("Push size out of range"));
     }
-    let (identity, machine) = (auth.identity_pubkey.clone(), auth.machine_pubkey.clone());
     let tokens: Vec<db::PushToken> = state
         .db
-        .read(move |db| Ok(db::push_tokens_for(db, &identity, &machine)?))
+        .push_tokens_for(&auth.identity_pubkey, &auth.machine_pubkey)
         .await?
         .into_iter()
         .filter(|token| state.pusher.takes(&token.platform))
@@ -621,8 +558,7 @@ async fn send_push(State(state): State<AppState>, auth: Auth, Json(body): Json<C
             match state.pusher.send(&token, &ciphertext).await {
                 crate::push::Delivery::Sent => {}
                 crate::push::Delivery::Gone => {
-                    let machine = token.machine_pubkey.clone();
-                    if let Err(error) = state.db.write(move |db| Ok(db::delete_push_token(db, &machine)?)).await {
+                    if let Err(error) = state.db.delete_push_token(&token.machine_pubkey).await {
                         tracing::warn!(?error, "forgetting a dead push token");
                     }
                 }
@@ -638,23 +574,14 @@ async fn send_push(State(state): State<AppState>, auth: Auth, Json(body): Json<C
 async fn create_pairing(State(state): State<AppState>, auth: Auth) -> ApiResult<Json<Value>> {
     let nonce = random_nonce(16);
     let expires_at = now() + PAIRING_TTL;
-    let stored = nonce.clone();
-    state.db.write(move |db| Ok(db::create_pairing(db, &stored, &auth.identity_pubkey, expires_at)?)).await?;
+    state.db.create_pairing(&nonce, &auth.identity_pubkey, expires_at).await?;
     Ok(Json(json!({ "nonce": nonce, "expires_at": expires_at })))
 }
 
 /// The identity retires a pairing it no longer waits on. The mailbox goes, so a Device still
 /// polling it learns the code is dead instead of waiting out the TTL.
 async fn delete_pairing(State(state): State<AppState>, auth: Auth, Path(nonce): Path<String>) -> ApiResult<StatusCode> {
-    state
-        .db
-        .write(move |db| {
-            if db::pairing_owner(db, &nonce)? != auth.identity_pubkey {
-                return Err(ApiError::forbidden("Not your pairing"));
-            }
-            Ok(db::delete_pairing(db, &nonce)?)
-        })
-        .await?;
+    state.db.delete_pairing(&nonce, &auth.identity_pubkey).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -673,29 +600,12 @@ async fn post_pair_request(
     if ciphertext.len() > 64 * 1024 {
         return Err(ApiError::bad_request("Pairing request too large"));
     }
-    state
-        .db
-        .write(move |db| {
-            db::pairing_owner(db, &nonce)?;
-            if !db::set_pairing_request(db, &nonce, &ciphertext)? {
-                return Err(ApiError::conflict("Pairing already has a request"));
-            }
-            Ok(())
-        })
-        .await?;
+    state.db.post_pair_request(&nonce, &ciphertext).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 async fn get_pair_request(State(state): State<AppState>, auth: Auth, Path(nonce): Path<String>) -> ApiResult<Json<Value>> {
-    let request = state
-        .db
-        .read(move |db| {
-            if db::pairing_owner(db, &nonce)? != auth.identity_pubkey {
-                return Err(ApiError::forbidden("Not your pairing"));
-            }
-            Ok(db::pairing_request(db, &nonce)?)
-        })
-        .await?;
+    let request = state.db.pair_request(&nonce, &auth.identity_pubkey).await?;
     Ok(Json(json!({ "ciphertext": request.map(|bytes| b64url_encode(&bytes)) })))
 }
 
@@ -709,26 +619,12 @@ async fn post_pair_reply(
     if ciphertext.len() > 64 * 1024 {
         return Err(ApiError::bad_request("Pairing reply too large"));
     }
-    state
-        .db
-        .write(move |db| {
-            if db::pairing_owner(db, &nonce)? != auth.identity_pubkey {
-                return Err(ApiError::forbidden("Not your pairing"));
-            }
-            Ok(db::set_pairing_reply(db, &nonce, &ciphertext)?)
-        })
-        .await?;
+    state.db.post_pair_reply(&nonce, &auth.identity_pubkey, &ciphertext).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 /// The joining Device polls for the sealed reply. No auth; only its box key can open it.
 async fn get_pair_reply(State(state): State<AppState>, Path(nonce): Path<String>) -> ApiResult<Json<Value>> {
-    let reply = state
-        .db
-        .read(move |db| {
-            db::pairing_owner(db, &nonce)?;
-            Ok(db::pairing_reply(db, &nonce)?)
-        })
-        .await?;
+    let reply = state.db.pair_reply(&nonce).await?;
     Ok(Json(json!({ "ciphertext": reply.map(|bytes| b64url_encode(&bytes)) })))
 }

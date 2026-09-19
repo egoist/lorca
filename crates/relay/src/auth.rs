@@ -111,7 +111,7 @@ impl FromRequestParts<AppState> for Auth {
             .ok_or_else(|| ApiError::unauthorized("Missing bearer token"))?;
         let token = header.strip_prefix("Bearer ").ok_or_else(|| ApiError::unauthorized("Missing bearer token"))?;
         let auth = parse_token(&state.secret, token)?;
-        if state.revoked.contains(&auth.machine_pubkey) {
+        if state.local.revoked.contains(&auth.machine_pubkey) {
             return Err(ApiError::gone("Machine was unpaired"));
         }
         if let Err(retry_after) = state.identity_limiter.check(&auth.identity_pubkey) {

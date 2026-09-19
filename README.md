@@ -14,7 +14,7 @@ Identity is a local key pair. Devices pair to each other. Traffic to the network
 - CLI: Rust websocket service (`crates/cli`)
   - agent loop after pi-agent-core (`crates/agent`), with Grok-style bot orchestration
   - identity, pairing, E2E (X25519/Ed25519 key pairs + XChaCha20-Poly1305 DEK); signed requests and opaque blobs to the relay
-- relay: Rust, axum, SQLite (`crates/relay`)
+- relay: Rust, axum, SQLite or Postgres (`crates/relay`)
 - phone app: Expo (React Native, expo-router) for iOS and Android (`mobile/`); pairs as a Device and speaks the relay protocol itself
 
 ## Run it

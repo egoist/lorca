@@ -1,0 +1,210 @@
+//! One suite for both backends. SQLite always runs, on a file in the temp directory. Postgres
+//! runs when `LORCA_RELAY_TEST_POSTGRES` names a database, e.g.
+//! `postgres://postgres:lorca@127.0.0.1:55432/lorca`. Identities are random, so runs share it.
+
+use super::*;
+
+async fn backends() -> Vec<(Arc<dyn Store>, Arc<Local>)> {
+    let mut backends = Vec::new();
+    let path = std::env::temp_dir().join(format!("lorca-relay-test-{}.db", uuid::Uuid::new_v4()));
+    let local = Arc::new(Local::default());
+    backends.push((open(path.to_str().unwrap(), local.clone()).await.unwrap(), local));
+    if let Ok(url) = std::env::var("LORCA_RELAY_TEST_POSTGRES") {
+        let local = Arc::new(Local::default());
+        backends.push((open(&url, local.clone()).await.unwrap(), local));
+    }
+    backends
+}
+
+fn name(prefix: &str) -> String {
+    format!("{prefix}-{}", uuid::Uuid::new_v4().simple())
+}
+
+fn blob(identity: &str, id: &str, bytes: &[u8]) -> NewBlob {
+    NewBlob {
+        identity_pubkey: identity.into(),
+        id: id.into(),
+        kind: "chat".into(),
+        recipient_machine_pubkey: None,
+        slot: None,
+        group: None,
+        payload: Payload::Inline(bytes.to_vec()),
+    }
+}
+
+fn slot(name: &str, keep_first: bool) -> Option<Slot> {
+    Some(Slot { name: name.into(), keep_first })
+}
+
+async fn ids(store: &Arc<dyn Store>, identity: &str, machine: &str, since: i64, max_bytes: i64) -> Vec<String> {
+    store.blobs_since(identity, machine, since, &[], 500, max_bytes).await.map_err(|e| format!("{e:?}")).unwrap().0.into_iter().map(|row| row.id).collect()
+}
+
+async fn used(store: &Arc<dyn Store>, identity: &str, more: i64, quota: u64) -> bool {
+    // The quota check is the one window on usage the trait has.
+    store.precheck_blob(identity, &name("probe"), None, more, quota).await.is_ok()
+}
+
+macro_rules! ok {
+    ($e:expr) => {
+        $e.await.map_err(|e| format!("{e:?}")).unwrap()
+    };
+}
+
+#[tokio::test]
+async fn a_slot_keeps_its_first_and_latest_blob() {
+    for (store, _) in backends().await {
+        let who = name("identity");
+        ok!(store.insert_blob(NewBlob { slot: slot("message", true), ..blob(&who, "v1", b"a") }, 0));
+        ok!(store.insert_blob(blob(&who, "other", b"other"), 0));
+        ok!(store.insert_blob(NewBlob { slot: slot("message", true), ..blob(&who, "v2", b"ab") }, 0));
+        ok!(store.insert_blob(NewBlob { slot: slot("message", true), ..blob(&who, "v3", b"abc") }, 0));
+        assert_eq!(ids(&store, &who, "m", 0, i64::MAX).await, ["v1", "other", "v3"], "{}", store.describe());
+        // 1 + 5 + 3 bytes are stored: one more fits a quota of 10, two do not.
+        assert!(used(&store, &who, 1, 10).await && !used(&store, &who, 2, 10).await, "{}", store.describe());
+
+        // A removal supersedes every version.
+        ok!(store.insert_blob(NewBlob { slot: slot("message", false), ..blob(&who, "gone", b"x") }, 0));
+        assert_eq!(ids(&store, &who, "m", 0, i64::MAX).await, ["other", "gone"]);
+        assert!(used(&store, &who, 4, 10).await && !used(&store, &who, 5, 10).await);
+
+        // A put of a known id answers with its seq and supersedes nothing.
+        let again = ok!(store.insert_blob(NewBlob { slot: slot("message", false), ..blob(&who, "gone", b"x") }, 0));
+        assert!(again.existing);
+        assert_eq!(ids(&store, &who, "m", 0, i64::MAX).await, ["other", "gone"]);
+    }
+}
+
+#[tokio::test]
+async fn a_refused_put_leaves_the_slot_alone() {
+    for (store, _) in backends().await {
+        let who = name("identity");
+        ok!(store.insert_blob(NewBlob { slot: slot("roster", false), ..blob(&who, "v1", b"abc") }, 4));
+        assert!(store.insert_blob(NewBlob { slot: slot("roster", false), ..blob(&who, "v2", b"abcde") }, 4).await.is_err());
+        assert_eq!(ids(&store, &who, "m", 0, i64::MAX).await, ["v1"], "{}", store.describe());
+        assert!(used(&store, &who, 1, 4).await && !used(&store, &who, 2, 4).await);
+    }
+}
+
+#[tokio::test]
+async fn a_deleted_group_takes_its_blobs_and_stays_deleted() {
+    for (store, _) in backends().await {
+        let (who, other) = (name("identity"), name("identity"));
+        let grouped = |identity: &str, id: &str, group: &str, bytes: &[u8]| NewBlob { group: Some(group.into()), ..blob(identity, id, bytes) };
+        ok!(store.insert_blob(grouped(&who, "m1", "chat-a", b"hello"), 0));
+        ok!(store.insert_blob(NewBlob { kind: "file".into(), payload: Payload::InFileStore { size: 100 }, ..grouped(&who, "photo", "chat-a", b"") }, 0));
+        ok!(store.insert_blob(grouped(&who, "m2", "chat-b", b"stays"), 0));
+        ok!(store.insert_blob(blob(&who, "loose", b"x"), 0));
+
+        assert_eq!(ok!(store.delete_group(&who, "chat-a")), ["photo"], "{}", store.describe());
+        assert_eq!(ids(&store, &who, "m", 0, i64::MAX).await, ["m2", "loose"]);
+        assert!(used(&store, &who, 4, 10).await && !used(&store, &who, 5, 10).await);
+        // A turn that finishes after the delete has nowhere to land.
+        assert!(store.insert_blob(grouped(&who, "late", "chat-a", b"late"), 0).await.is_err());
+        assert!(store.precheck_blob(&who, "late-file", Some("chat-a"), 1, 0).await.is_err());
+        // Another identity's group of the same name is its own.
+        ok!(store.insert_blob(grouped(&other, "m", "chat-a", b"ok"), 0));
+        assert!(ok!(store.delete_group(&who, "chat-a")).is_empty());
+        assert_eq!(ids(&store, &other, "m", 0, i64::MAX).await, ["m"]);
+    }
+}
+
+#[tokio::test]
+async fn a_page_stops_at_its_byte_budget() {
+    for (store, _) in backends().await {
+        let who = name("identity");
+        for id in ["a", "b", "c"] {
+            ok!(store.insert_blob(blob(&who, id, &[0; 40]), 0));
+        }
+        assert_eq!(ids(&store, &who, "m", 0, 100).await, ["a", "b"], "{}", store.describe());
+        assert_eq!(ids(&store, &who, "m", 2, 100).await, ["c"]);
+        // One row always goes out, however large.
+        assert_eq!(ids(&store, &who, "m", 0, 10).await, ["a"]);
+        let (rows, head) = ok!(store.blobs_since(&who, "m", 0, &["roster".to_string()], 500, i64::MAX));
+        assert!(rows.is_empty() && head == 3, "the kind filter applies and the head is the identity's");
+    }
+}
+
+#[tokio::test]
+async fn machines_challenges_envelopes_and_revocation() {
+    for (store, _) in backends().await {
+        let (who, mac, phone) = (name("identity"), name("mac"), name("phone"));
+        ok!(store.register_identity(&who, "content", &mac, "box", "attestation"));
+        ok!(store.register_identity(&who, "content", &phone, "box", "attestation"));
+        assert_eq!(store.register_identity(&who, "another", &mac, "box", "attestation").await.is_err(), true, "{}", store.describe());
+        assert_eq!(ok!(store.machines_for(&who)).len(), 2);
+
+        assert!(store.create_challenge("n0", &name("stranger"), now() + 60).await.is_err());
+        let nonce = name("nonce");
+        ok!(store.create_challenge(&nonce, &mac, now() + 60));
+        assert!(store.redeem_challenge(&nonce, &phone).await.is_err(), "another machine's challenge");
+        assert!(store.redeem_challenge(&nonce, &mac).await.is_err(), "a nonce is good once");
+        let nonce = name("nonce");
+        ok!(store.create_challenge(&nonce, &mac, now() + 60));
+        assert_eq!(ok!(store.redeem_challenge(&nonce, &mac)).identity_pubkey, who);
+
+        // An envelope is its recipient's alone, and a stranger's key takes none.
+        ok!(store.insert_blob(NewBlob { recipient_machine_pubkey: Some(phone.clone()), ..blob(&who, "job", b"sealed") }, 0));
+        assert!(store.insert_blob(NewBlob { recipient_machine_pubkey: Some(name("stranger")), ..blob(&who, "lost", b"sealed") }, 0).await.is_err());
+        assert_eq!(ids(&store, &who, &phone, 0, i64::MAX).await, ["job"]);
+        assert!(ids(&store, &who, &mac, 0, i64::MAX).await.is_empty());
+        assert!(ok!(store.blob(&who, &mac, "job")).is_none());
+
+        ok!(store.set_push_token(&who, &PushToken { machine_pubkey: phone.clone(), platform: "apns".into(), token: name("token"), environment: "production".into() }));
+        assert_eq!(ok!(store.push_tokens_for(&who, &mac)).len(), 1);
+
+        assert!(ok!(store.revoke_machine(&who, &phone)));
+        assert!(!ok!(store.revoke_machine(&who, &phone)));
+        assert!(ok!(store.revoked_machines()).contains(&phone));
+        assert!(ok!(store.push_tokens_for(&who, &mac)).is_empty());
+        assert!(used(&store, &who, 10, 10).await, "the envelope's bytes came back");
+        assert!(store.register_identity(&who, "content", &phone, "box", "attestation").await.is_err(), "a revoked key stays out");
+        assert!(store.create_challenge(&name("nonce"), &phone, now() + 60).await.is_err());
+    }
+}
+
+#[tokio::test]
+async fn the_pairing_mailbox() {
+    for (store, _) in backends().await {
+        let (who, nonce) = (name("identity"), name("nonce"));
+        ok!(store.create_pairing(&nonce, &who, now() + 60));
+        assert!(ok!(store.pair_request(&nonce, &who)).is_none());
+        assert!(store.pair_request(&nonce, "someone-else").await.is_err(), "{}", store.describe());
+        ok!(store.post_pair_request(&nonce, b"request"));
+        assert!(store.post_pair_request(&nonce, b"second").await.is_err());
+        assert_eq!(ok!(store.pair_request(&nonce, &who)).as_deref(), Some(&b"request"[..]));
+        assert!(ok!(store.pair_reply(&nonce)).is_none());
+        ok!(store.post_pair_reply(&nonce, &who, b"reply"));
+        assert_eq!(ok!(store.pair_reply(&nonce)).as_deref(), Some(&b"reply"[..]));
+        ok!(store.delete_pairing(&nonce, &who));
+        assert!(store.pair_reply(&nonce).await.is_err());
+
+        let expired = name("nonce");
+        ok!(store.create_pairing(&expired, &who, now() - 1));
+        assert!(store.post_pair_request(&expired, b"late").await.is_err());
+        ok!(store.tick());
+    }
+}
+
+#[tokio::test]
+async fn presence_and_events_reach_the_sockets() {
+    for (store, local) in backends().await {
+        let (who, mac) = (name("identity"), name("mac"));
+        let mut seat = local.hub.join(&who, &mac);
+        assert!(ok!(store.socket_opened(&who, &mac, seat.id, seat.came_online)), "{}", store.describe());
+        assert!(ok!(store.online(&who)).contains(&mac));
+
+        store.publish(Event::Blobs { identity: who.clone(), recipient: None }).await;
+        let signal = tokio::time::timeout(std::time::Duration::from_secs(5), seat.signals.recv()).await;
+        assert_eq!(signal.ok().flatten(), Some(crate::hub::Signal::Blobs), "{}", store.describe());
+
+        // Unpairing reaches the process that holds the socket: the key dies and the seat goes.
+        store.publish(Event::Revoked { identity: who.clone(), machine: mac.clone() }).await;
+        let closed = tokio::time::timeout(std::time::Duration::from_secs(5), async { while seat.signals.recv().await.is_some() {} }).await;
+        assert!(closed.is_ok() && local.revoked.contains(&mac), "{}", store.describe());
+
+        let last_here = local.hub.leave(&who, seat.id);
+        ok!(store.socket_closed(&who, &mac, seat.id, last_here));
+        assert!(!ok!(store.online(&who)).contains(&mac));
+    }
+}

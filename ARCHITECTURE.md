@@ -28,14 +28,14 @@ Identity is a **key pair**. Devices pair. The relay stores public keys and ciphe
                                                               ▼
                                                  ┌──────────────────────────┐
                                                  │  Relay (Rust, axum +     │
-                                                 │  SQLite)                 │
+                                                 │  SQLite or Postgres)     │
                                                  │  public keys + blobs     │
                                                  └──────────────────────────┘
 ```
 
 - **App:** native chat UI. Create or restore identity, pair, through the CLI. Launches the bundled CLI as a child process and restarts it if it exits.
 - **CLI:** identity and machine keys, local websocket, encrypt/decrypt, agent loop, this Runner’s provider credentials, sync with the relay.
-- **Relay:** store-and-forward API. Rust, axum, SQLite (`crates/relay`). Self-host it anywhere; clients point `LORCA_RELAY_URL` at it.
+- **Relay:** store-and-forward API. Rust, axum, SQLite or Postgres (`crates/relay`). Self-host it anywhere; clients point `LORCA_RELAY_URL` at it.
 
 If the CLI is down, the app shows a native empty state with the launcher’s status and the manual `lorca serve` command.
 
@@ -163,9 +163,15 @@ The UI is native: a native stack with large titles, search, and toolbar items; a
 
 ## Relay
 
-`crates/relay`: Rust, axum, rusqlite (bundled SQLite). `lorca-relay --bind 127.0.0.1:8787 --db lorca-relay.db`; `LORCA_RELAY_SECRET` signs bearer tokens (random per boot when unset); `--quota-bytes` (`LORCA_RELAY_QUOTA_BYTES`) caps stored ciphertext per identity, 0 for none.
+`crates/relay`: Rust, axum, rusqlite (bundled SQLite) or tokio-postgres. `lorca-relay --bind 127.0.0.1:8787 --db lorca-relay.db` (or `--db postgres://…`); `LORCA_RELAY_SECRET` signs bearer tokens (random per boot when unset); `--quota-bytes` (`LORCA_RELAY_QUOTA_BYTES`) caps stored ciphertext per identity, 0 for none.
 
-Storage is one WAL database (`synchronous = NORMAL`) behind a single writer connection and a pool of reader connections, one per core; every query runs on tokio's blocking pool. All SQL lives in `db.rs`; `routes.rs` only decides what to ask for. The sync sockets live in `hub.rs`, grouped by identity: a blob write signals the sockets of its identity alone, and an envelope sealed to one machine signals that machine alone. A signal is a nudge with no data, so a socket's queue holds four and drops the rest. `last_seen` is written when a machine's first socket opens and when its last one closes. The hosted relay is one process; a second instance would need a shared store and a shared hub, which is when a Postgres backend replaces this one.
+Storage sits behind one trait (`Store` in `db.rs`) with two backends, picked by `--db` / `LORCA_RELAY_DB`: a path opens SQLite, a `postgres://` URL opens Postgres. All SQL lives in a backend; `routes.rs` only decides what to ask for. One suite (`db/tests.rs`) runs against both; Postgres joins when `LORCA_RELAY_TEST_POSTGRES` names a database.
+
+SQLite (`db/sqlite.rs`) is one WAL database (`synchronous = NORMAL`) behind a single writer connection and a pool of reader connections, one per core; every query runs on tokio's blocking pool. One relay process owns the file, so a deploy stops the old process before the new one starts, and the Devices reconnect after a few seconds.
+
+Postgres (`db/postgres.rs`) is shared by as many relay processes as run, so a deploy overlaps the old process with the new one. An identity's writes are serialized with a transaction-scoped advisory lock, which orders them the way SQLite's single writer does. What a lone process keeps in memory goes through the database: an event (`Event`: a new blob, a changed machine list, an unpaired machine) travels by `NOTIFY` to every process, each of which signals its own sockets, drops the unpaired key's tokens, and closes its sockets; presence is the `relay_sockets` table; each process beats in `relay_instances` once a minute, and the sockets of one silent for 150 s stop counting. A listener that lost its connection tells all its sockets to look again when it is back. The processes share `--secret`, or a token from one does not verify on another, and keep files in an S3 bucket. TLS to the database follows `sslmode` and checks certificates against the web's roots; a database on a private network takes `sslmode=disable`.
+
+The sync sockets live in `hub.rs`, grouped by identity: a blob write signals the sockets of its identity alone, and an envelope sealed to one machine signals that machine alone. A signal is a nudge with no data, so a socket's queue holds four and drops the rest. `last_seen` is written when a machine's first socket opens and when its last one closes. On SIGTERM the relay stops taking connections and closes its sockets, and the Devices connect again, after a backoff with up to a second of jitter, to whichever process is serving.
 
 `file` ciphertext never enters the database (`store.rs`): it goes to a directory (`--files-dir`, default `lorca-relay.files` beside the database) or, with `--s3-bucket` and `--s3-endpoint` (access keys from `LORCA_RELAY_S3_*` or `AWS_*`), to an S3-compatible bucket (AWS, R2, MinIO) over SigV4 with path-style URLs. Objects are keyed `<identity pubkey>/<blob id>`; the row keeps the metadata with an empty `ciphertext`. The object goes up before the row and is removed when the row is refused or deleted.
 
@@ -409,7 +415,7 @@ lorca/
   crates/agent/        # lorca-agent: loop, tools, providers (Anthropic Messages for DeepSeek and Anthropic, ChatGPT, Grok)
   crates/cli/          # lorca: the Device core as a library (keys, relay sync, jobs, the JSON API) + runner and server features + the binary
   crates/mobile/       # lorca-mobile: the core for the phone over UniFFI
-  crates/relay/        # lorca-relay: axum + SQLite
+  crates/relay/        # lorca-relay: axum + SQLite or Postgres
   macos/               # AppKit SPM app; the build bundles the CLI
   mobile/              # Expo app for iOS and Android: a paired Device over the core (modules/lorca-core)
   web/                 # the site
