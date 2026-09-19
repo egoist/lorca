@@ -39,6 +39,14 @@ export const zh: Messages = {
     eyebrow: '真正的工具',
     title: '动手干活，<accent>就在你选的机器上。</accent>',
     body: '每个机器人在它的 Runner 上都有一个工作目录，以及编程智能体标配的那些工具：read、write、edit、grep、find、ls，还有一个 shell。它用你的权限、在你指定的机器上运行，并告诉你它跑了什么。每个机器人在各次聊天之间还留着自己的记忆，所以你第二次问的时候，它已经知道了。',
+    kinds: {
+      files: { title: '文件', body: '在你给它的工作目录里打开、新建和修改文件。' },
+      search: { title: '搜索', body: '动手之前，先找到那一行、那个文件、那个目录。' },
+      shell: { title: 'Shell', body: '以你的权限运行命令：构建、测试、git，活儿需要什么就跑什么。' },
+      web: { title: '网络', body: '答案不在磁盘上的时候，就去搜索和阅读网页。' },
+      memory: { title: '记忆', body: '跨聊天保留自己的笔记，就是你能直接打开的 Markdown。' },
+      plugins: { title: '插件', body: 'GitHub、Linear、Notion，或任何 MCP 服务器。动手之前会先问你。' },
+    },
   },
   chef: {
     eyebrow: '第一天',

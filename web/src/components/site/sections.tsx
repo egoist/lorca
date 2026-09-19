@@ -1,3 +1,4 @@
+import { Brain, FilePen, Globe, Plug, Search, SquareTerminal } from 'lucide-react'
 import { Trans, useTranslation } from 'react-i18next'
 
 import {
@@ -51,6 +52,7 @@ function Stage({
   body,
   children,
   flip = false,
+  bare = false,
 }: {
   id: string
   seed: 2 | 8 | 11
@@ -59,6 +61,8 @@ function Stage({
   body: string
   children: React.ReactNode
   flip?: boolean
+  /// No backdrop: the children sit on the panel's own surface, edge to edge.
+  bare?: boolean
 }) {
   return (
     <section id={id} className="mx-auto max-w-6xl px-5 py-10">
@@ -68,10 +72,14 @@ function Stage({
           <h2 className="display mt-3 max-w-3xl text-4xl sm:text-5xl">{title}</h2>
           <p className="mt-5 max-w-3xl text-lg leading-relaxed text-muted-foreground">{body}</p>
         </div>
-        <div className={`grain relative ${flip ? 'bg-zinc-950' : ''}`}>
-          {!flip && <Pixels seed={seed} className="absolute inset-0 h-full w-full" />}
-          <div className="relative px-4 py-10 sm:px-12 sm:py-14">{children}</div>
-        </div>
+        {bare ? (
+          children
+        ) : (
+          <div className={`grain relative ${flip ? 'bg-zinc-950' : ''}`}>
+            {!flip && <Pixels seed={seed} className="absolute inset-0 h-full w-full" />}
+            <div className="relative px-4 py-10 sm:px-12 sm:py-14">{children}</div>
+          </div>
+        )}
       </div>
     </section>
   )
@@ -118,13 +126,15 @@ export function Relay() {
   )
 }
 
-const toolLog = [
-  ['grep', 'blobs.title', '2 matches · crates/relay/src/db.rs, routes.rs'],
-  ['read', 'crates/relay/src/db.rs', '188 lines'],
-  ['edit', 'crates/relay/src/db.rs', '−1 +0 · dropped the title column'],
-  ['bash', 'cargo test -p lorca-relay', 'ok · 10 passed'],
-  ['remember', 'Titles live in the roster blob now.', 'saved to MEMORY.md'],
-]
+/// What a bot can reach for on its Runner. The tool names are the ones the model calls.
+const toolKinds = [
+  { key: 'files', icon: FilePen, names: 'read · write · edit' },
+  { key: 'search', icon: Search, names: 'grep · find · ls' },
+  { key: 'shell', icon: SquareTerminal, names: 'bash' },
+  { key: 'web', icon: Globe, names: 'web_search · web_fetch' },
+  { key: 'memory', icon: Brain, names: 'MEMORY.md' },
+  { key: 'plugins', icon: Plug, names: 'MCP' },
+] as const
 
 export function Tools() {
   const { t } = useTranslation()
@@ -132,29 +142,24 @@ export function Tools() {
     <Stage
       id="tools"
       seed={8}
+      bare
       eyebrow={t('tools.eyebrow')}
       title={<Trans i18nKey="tools.title" components={{ accent: <Accent /> }} />}
       body={t('tools.body')}
     >
-      <div className="window-frame mx-auto max-w-3xl overflow-hidden bg-[#0f0f12] font-mono text-[13px]">
-        <div className="flex items-center gap-2 border-b border-white/8 px-4 py-2.5 text-zinc-500">
-          <span className="flex gap-1.5">
-            <span className="size-3 rounded-full bg-[#ff5f57]" />
-            <span className="size-3 rounded-full bg-[#febc2e]" />
-            <span className="size-3 rounded-full bg-[#28c840]" />
-          </span>
-          <span className="ml-2">Patch · Studio · ~/.lorca/workspaces/patch</span>
-        </div>
-        <ul className="divide-y divide-white/6">
-          {toolLog.map(([tool, target, result]) => (
-            <li key={tool + target} className="grid grid-cols-[84px_1fr] gap-3 px-4 py-3 sm:grid-cols-[84px_1fr_1fr]">
-              <span className="text-violet-300">{tool}</span>
-              <span className="truncate text-zinc-200">{target}</span>
-              <span className="col-span-2 text-zinc-500 sm:col-span-1">{result}</span>
-            </li>
-          ))}
-        </ul>
-      </div>
+      {/* Hairlines are the grid's own background showing through one-pixel gaps. */}
+      <ul className="grid gap-px bg-border pt-px sm:grid-cols-2 lg:grid-cols-3">
+        {toolKinds.map(({ key, icon: Icon, names }) => (
+          <li key={key} className="bg-card px-6 py-8 sm:px-12">
+            <Icon className="size-5 text-violet" strokeWidth={1.75} />
+            <p className="mt-5 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+              <span className="font-semibold">{t(`tools.kinds.${key}.title`)}</span>
+              <span className="font-mono text-xs text-muted-foreground/80">{names}</span>
+            </p>
+            <p className="mt-2 leading-relaxed text-muted-foreground">{t(`tools.kinds.${key}.body`)}</p>
+          </li>
+        ))}
+      </ul>
     </Stage>
   )
 }

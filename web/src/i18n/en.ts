@@ -37,6 +37,14 @@ export const en = {
     eyebrow: 'Real tools',
     title: 'Hands on the machine <accent>you chose.</accent>',
     body: 'Every bot has a working directory on its Runner and the same tools a coding agent gets: read, write, edit, grep, find, ls, and a shell. It runs as you, on the machine you assigned, and says what it ran. Each bot also keeps its own memory across chats, so the second time you ask, it already knows.',
+    kinds: {
+      files: { title: 'Files', body: 'Opens, creates, and changes files in the working directory you gave it.' },
+      search: { title: 'Search', body: 'Finds the line, the file, or the folder before it touches anything.' },
+      shell: { title: 'Shell', body: 'Runs commands as you: builds, tests, git, whatever the job takes.' },
+      web: { title: 'Web', body: 'Searches and reads pages when the answer is not on the disk.' },
+      memory: { title: 'Memory', body: 'Keeps its own notes across chats, as plain Markdown you can open.' },
+      plugins: { title: 'Plugins', body: 'GitHub, Linear, Notion, or any MCP server. It asks before it acts.' },
+    },
   },
   chef: {
     eyebrow: 'Day one',
