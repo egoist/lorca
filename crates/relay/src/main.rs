@@ -15,92 +15,91 @@ mod store;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use clap::Parser;
 use rand::RngCore;
 
-#[derive(Parser, Debug)]
-#[command(name = "lorca-relay", about = "Lorca relay server")]
+#[derive(usage::Cli, Debug)]
+#[usage(bin = "lorca-relay", about = "Lorca relay server", unknown_flags = "error")]
 struct Args {
     /// Address to listen on.
-    #[arg(long, env = "LORCA_RELAY_BIND", default_value = "127.0.0.1:8787")]
+    #[usage(long, env = "LORCA_RELAY_BIND", default = "127.0.0.1:8787")]
     bind: SocketAddr,
 
     /// The database: a SQLite path, or a `postgres://` URL. SQLite belongs to one relay
     /// process. Postgres is shared by as many as run, so a deploy can overlap the old process
     /// with the new one; give them the same --secret and an S3 bucket for files.
-    #[arg(long, env = "LORCA_RELAY_DB", default_value = "lorca-relay.db")]
+    #[usage(long, env = "LORCA_RELAY_DB", default = "lorca-relay.db")]
     db: String,
 
     /// Secret used to sign bearer tokens. Random per boot when unset, which logs every
     /// client out on restart.
-    #[arg(long, env = "LORCA_RELAY_SECRET")]
+    #[usage(long, env = "LORCA_RELAY_SECRET")]
     secret: Option<String>,
 
     /// Stored ciphertext allowed per identity, in bytes. 0 means no limit.
-    #[arg(long, env = "LORCA_RELAY_QUOTA_BYTES", default_value_t = 0)]
+    #[usage(long, env = "LORCA_RELAY_QUOTA_BYTES", default = "0")]
     quota_bytes: u64,
 
     /// Requests per minute one IP may make to the routes that need no token (registration,
     /// auth, pairing mailbox), with a burst of the same size. 0 disables the limit.
-    #[arg(long, env = "LORCA_RELAY_IP_PER_MINUTE", default_value_t = 60)]
+    #[usage(long, env = "LORCA_RELAY_IP_PER_MINUTE", default = "60")]
     ip_per_minute: u32,
 
     /// Requests per second one identity may make with a bearer token, across all its
     /// machines, with a burst of ten times that. 0 disables the limit.
-    #[arg(long, env = "LORCA_RELAY_IDENTITY_PER_SECOND", default_value_t = 50)]
+    #[usage(long, env = "LORCA_RELAY_IDENTITY_PER_SECOND", default = "50")]
     identity_per_second: u32,
 
     /// Take the client IP from the last `X-Forwarded-For` hop. Set it only behind a proxy
     /// that overwrites that header.
-    #[arg(long, env = "LORCA_RELAY_TRUST_PROXY", default_value_t = false)]
+    #[usage(long, env = "LORCA_RELAY_TRUST_PROXY", default = "false")]
     trust_proxy: bool,
 
     /// Directory for `file` ciphertext. Defaults to the database path with a `.files`
     /// extension (`lorca-relay.files`).
-    #[arg(long, env = "LORCA_RELAY_FILES_DIR", conflicts_with = "s3_bucket")]
+    #[usage(long, env = "LORCA_RELAY_FILES_DIR", conflicts("--s3-bucket"))]
     files_dir: Option<std::path::PathBuf>,
 
     /// Keep `file` ciphertext in this S3-compatible bucket (AWS, R2, MinIO) instead of a
     /// directory. Needs --s3-endpoint and the access keys.
-    #[arg(long, env = "LORCA_RELAY_S3_BUCKET", requires = "s3_endpoint")]
+    #[usage(long, env = "LORCA_RELAY_S3_BUCKET", requires("--s3-endpoint"))]
     s3_bucket: Option<String>,
 
     /// `https://<account>.r2.cloudflarestorage.com`, `https://s3.us-east-1.amazonaws.com`, …
-    #[arg(long, env = "LORCA_RELAY_S3_ENDPOINT")]
+    #[usage(long, env = "LORCA_RELAY_S3_ENDPOINT")]
     s3_endpoint: Option<String>,
 
     /// SigV4 region. R2 takes `auto`.
-    #[arg(long, env = "LORCA_RELAY_S3_REGION", default_value = "auto")]
+    #[usage(long, env = "LORCA_RELAY_S3_REGION", default = "auto")]
     s3_region: String,
 
     /// Key prefix inside the bucket.
-    #[arg(long, env = "LORCA_RELAY_S3_PREFIX", default_value = "")]
+    #[usage(long, env = "LORCA_RELAY_S3_PREFIX", default = "")]
     s3_prefix: String,
 
     /// Falls back to AWS_ACCESS_KEY_ID.
-    #[arg(long, env = "LORCA_RELAY_S3_ACCESS_KEY", hide_env_values = true)]
+    #[usage(long, env = "LORCA_RELAY_S3_ACCESS_KEY", hide_env_values = true)]
     s3_access_key: Option<String>,
 
     /// Falls back to AWS_SECRET_ACCESS_KEY.
-    #[arg(long, env = "LORCA_RELAY_S3_SECRET_KEY", hide_env_values = true)]
+    #[usage(long, env = "LORCA_RELAY_S3_SECRET_KEY", hide_env_values = true)]
     s3_secret_key: Option<String>,
 
     /// Apple's `.p8` push key, for pushes to iPhones. Needs --apns-key-id and --apns-team-id.
-    #[arg(long, env = "LORCA_RELAY_APNS_KEY", requires_all = ["apns_key_id", "apns_team_id"])]
+    #[usage(long, env = "LORCA_RELAY_APNS_KEY", requires("--apns-key-id", "--apns-team-id"))]
     apns_key: Option<std::path::PathBuf>,
 
-    #[arg(long, env = "LORCA_RELAY_APNS_KEY_ID")]
+    #[usage(long, env = "LORCA_RELAY_APNS_KEY_ID")]
     apns_key_id: Option<String>,
 
-    #[arg(long, env = "LORCA_RELAY_APNS_TEAM_ID")]
+    #[usage(long, env = "LORCA_RELAY_APNS_TEAM_ID")]
     apns_team_id: Option<String>,
 
     /// The phone app's bundle id.
-    #[arg(long, env = "LORCA_RELAY_APNS_TOPIC", default_value = "app.lorca")]
+    #[usage(long, env = "LORCA_RELAY_APNS_TOPIC", default = "app.lorca")]
     apns_topic: String,
 
     /// A Firebase service account JSON file, for pushes to Android phones.
-    #[arg(long, env = "LORCA_RELAY_FCM_SERVICE_ACCOUNT")]
+    #[usage(long, env = "LORCA_RELAY_FCM_SERVICE_ACCOUNT")]
     fcm_service_account: Option<std::path::PathBuf>,
 }
 
@@ -110,8 +109,8 @@ fn pusher(args: &Args) -> anyhow::Result<push::Pusher> {
     let apns = match &args.apns_key {
         Some(path) => Some(push::Apns::new(
             &std::fs::read_to_string(path).map_err(|e| anyhow::anyhow!("reading {}: {e}", path.display()))?,
-            args.apns_key_id.clone().expect("clap requires the key id"),
-            args.apns_team_id.clone().expect("clap requires the team id"),
+            args.apns_key_id.clone().expect("the parser requires the key id"),
+            args.apns_team_id.clone().expect("the parser requires the team id"),
             args.apns_topic.clone(),
             std::env::var("LORCA_RELAY_APNS_URL").ok(),
         )?),
@@ -145,7 +144,7 @@ fn file_store(args: &Args) -> anyhow::Result<store::FileStore> {
         .or_else(|| std::env::var("AWS_SECRET_ACCESS_KEY").ok())
         .ok_or_else(|| anyhow::anyhow!("--s3-bucket needs LORCA_RELAY_S3_SECRET_KEY or AWS_SECRET_ACCESS_KEY"))?;
     Ok(store::FileStore::S3(store::S3::new(
-        args.s3_endpoint.clone().expect("clap requires the endpoint"),
+        args.s3_endpoint.clone().expect("the parser requires the endpoint"),
         bucket.clone(),
         args.s3_region.clone(),
         args.s3_prefix.clone(),

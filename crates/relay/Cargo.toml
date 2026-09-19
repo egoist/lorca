@@ -16,7 +16,7 @@ deadpool-postgres.workspace = true
 futures.workspace = true
 axum.workspace = true
 base64.workspace = true
-clap.workspace = true
+usage = { package = "usage-rs", version = "6" }
 ed25519-dalek.workspace = true
 hmac.workspace = true
 rand.workspace = true

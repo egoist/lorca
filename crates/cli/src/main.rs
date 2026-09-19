@@ -2,39 +2,39 @@
 
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use usage::Subcommands;
 
 use lorca::app::App;
 use lorca::config::Config;
 use lorca::{identity, keys, pairing, routines, runtime, sync, ws};
 
-#[derive(Parser, Debug)]
-#[command(name = "lorca", version, about = "Lorca CLI: identity, local API, agent loop, relay sync")]
+#[derive(usage::Cli, Debug)]
+#[usage(bin = "lorca", version, about = "Lorca CLI: identity, local API, agent loop, relay sync", unknown_flags = "error")]
 struct Cli {
     /// Data directory (default ~/.lorca).
-    #[arg(long, env = "LORCA_HOME", global = true)]
+    #[usage(long, env = "LORCA_HOME", global)]
     home: Option<PathBuf>,
 
     /// Local websocket port for the app.
-    #[arg(long, env = "LORCA_PORT", global = true)]
+    #[usage(long, env = "LORCA_PORT", global)]
     port: Option<u16>,
 
-    #[command(subcommand)]
+    #[usage(subcommand)]
     command: Option<Command>,
 }
 
-#[derive(Subcommand, Debug)]
+#[derive(Subcommands, Debug)]
 enum Command {
     /// Run the local API the app connects to (default).
     Serve {
         /// Exit when this process is gone. The app passes its own pid so a killed app never
         /// leaves a stale CLI holding the port.
-        #[arg(long)]
+        #[usage(long)]
         parent_pid: Option<u32>,
     },
     /// Manage this identity.
     Identity {
-        #[command(subcommand)]
+        #[usage(subcommand)]
         command: IdentityCommand,
     },
     /// Pair another Device.
@@ -42,12 +42,12 @@ enum Command {
         /// A pairing string from the Device that holds the identity. Omit to create one here.
         pairing_string: Option<String>,
         /// Name for this Device when joining.
-        #[arg(long)]
+        #[usage(long)]
         name: Option<String>,
     },
     /// Manage the account's provider credentials.
     Provider {
-        #[command(subcommand)]
+        #[usage(subcommand)]
         command: ProviderCommand,
     },
     /// Show identity, Devices, bots, and relay state.
@@ -56,24 +56,24 @@ enum Command {
     Doctor,
 }
 
-#[derive(Subcommand, Debug)]
+#[derive(Subcommands, Debug)]
 enum IdentityCommand {
     /// Create a new identity on this Device and print the backup phrase.
     New {
-        #[arg(long)]
+        #[usage(long)]
         name: Option<String>,
     },
     /// Restore from a backup phrase. Needs a relay.
     Restore {
         phrase: Vec<String>,
-        #[arg(long)]
+        #[usage(long)]
         name: Option<String>,
     },
     /// Print the identity id and public keys.
     Show,
 }
 
-#[derive(Subcommand, Debug)]
+#[derive(Subcommands, Debug)]
 enum ProviderCommand {
     /// Connect a provider: an API key for deepseek and anthropic, a browser sign-in for
     /// chatgpt and grok.
@@ -83,7 +83,7 @@ enum ProviderCommand {
         /// The API key. Omit to read it from stdin, which keeps it out of the shell history.
         api_key: Option<String>,
         /// The API root to call instead of the provider's own: a proxy or a compatible server.
-        #[arg(long)]
+        #[usage(long)]
         base_url: Option<String>,
     },
     /// Disconnect a provider on every Device.

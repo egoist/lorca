@@ -17,7 +17,7 @@ required-features = ["cli"]
 [features]
 default = ["cli"]
 # The command-line binary: everything.
-cli = ["runner", "server", "dep:clap", "dep:tracing-subscriber"]
+cli = ["runner", "server", "dep:usage", "dep:tracing-subscriber"]
 # Running bots: the agent loop, providers, tools. Off for a Device that only takes part.
 runner = ["dep:lorca-agent", "dep:open", "dep:rmcp", "dep:mcp_http"]
 # The local websocket the desktop app connects to.
@@ -30,7 +30,7 @@ async-trait.workspace = true
 axum = { workspace = true, optional = true }
 base64.workspace = true
 chacha20poly1305.workspace = true
-clap = { workspace = true, optional = true }
+usage = { package = "usage-rs", version = "6", optional = true }
 crypto_box.workspace = true
 data-encoding.workspace = true
 dirs.workspace = true
