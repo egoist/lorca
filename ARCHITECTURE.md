@@ -222,6 +222,7 @@ Commands:
 - `lorca serve` — default; the app connects here
 - `lorca identity new` / `identity restore <phrase>` / `identity show`
 - `lorca pair` — show a pairing string and wait; `lorca pair <string>` joins
+- `lorca provider set <kind> [api-key] [--base-url <url>]` — connect a provider: the key is checked against the API first, and read from stdin when omitted; `chatgpt` and `grok` open the browser sign-in. `provider remove <kind>` / `provider list`. A running `lorca serve` carries out the change over the local websocket; with none, the command changes `credentials.json` itself and runs one sync pass
 - `lorca status` / `doctor`
 
 Bind: `127.0.0.1:4862` (`--port`, `LORCA_PORT`). Relay: `LORCA_RELAY_URL`. If the port is busy the CLI fails loudly.

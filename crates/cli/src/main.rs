@@ -45,6 +45,11 @@ enum Command {
         #[arg(long)]
         name: Option<String>,
     },
+    /// Manage the account's provider credentials.
+    Provider {
+        #[command(subcommand)]
+        command: ProviderCommand,
+    },
     /// Show identity, Devices, bots, and relay state.
     Status,
     /// Check the local setup.
@@ -66,6 +71,25 @@ enum IdentityCommand {
     },
     /// Print the identity id and public keys.
     Show,
+}
+
+#[derive(Subcommand, Debug)]
+enum ProviderCommand {
+    /// Connect a provider: an API key for deepseek and anthropic, a browser sign-in for
+    /// chatgpt and grok.
+    Set {
+        /// deepseek, anthropic, chatgpt, or grok.
+        kind: String,
+        /// The API key. Omit to read it from stdin, which keeps it out of the shell history.
+        api_key: Option<String>,
+        /// The API root to call instead of the provider's own: a proxy or a compatible server.
+        #[arg(long)]
+        base_url: Option<String>,
+    },
+    /// Disconnect a provider on every Device.
+    Remove { kind: String },
+    /// List the providers and what is connected.
+    List,
 }
 
 #[tokio::main]
@@ -148,6 +172,7 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         },
+        Command::Provider { command } => provider(&app, command).await,
         Command::Status => {
             let snapshot = app.snapshot();
             println!("{}", serde_json::to_string_pretty(&snapshot)?);
@@ -158,6 +183,86 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
     }
+}
+
+/// Runs a provider command in the running `lorca serve` when there is one, so the app sees the
+/// change at once; otherwise here, followed by one sync pass.
+async fn provider(app: &std::sync::Arc<App>, command: ProviderCommand) -> anyhow::Result<()> {
+    let (method, params) = match command {
+        ProviderCommand::Set { kind, api_key, base_url } => {
+            if !lorca::credentials::PROVIDER_KINDS.contains(&kind.as_str()) {
+                anyhow::bail!("Unknown provider {kind}. Use one of: {}", lorca::credentials::PROVIDER_KINDS.join(", "));
+            }
+            let params = if matches!(kind.as_str(), "chatgpt" | "grok") {
+                if api_key.is_some() || base_url.is_some() {
+                    anyhow::bail!("{kind} connects with a browser sign-in and takes no API key");
+                }
+                println!("Finish the sign-in in the browser…");
+                serde_json::json!({})
+            } else {
+                let api_key = match api_key {
+                    Some(api_key) => api_key,
+                    None => read_api_key()?,
+                };
+                serde_json::json!({ "api_key": api_key, "base_url": base_url })
+            };
+            (format!("providers.connect_{kind}"), params)
+        }
+        ProviderCommand::Remove { kind } => ("providers.disconnect".to_string(), serde_json::json!({ "kind": kind })),
+        ProviderCommand::List => {
+            // A running serve holds the same set: both load and save the one credentials file.
+            print_providers(&serde_json::to_value(app.credentials.lock().unwrap().statuses())?);
+            return Ok(());
+        }
+    };
+    let result = match serve_call(app.config.port, &method, &params).await? {
+        Some(result) => result,
+        None => {
+            let result = lorca::api::dispatch(app, &method, params).await;
+            flush_outbox_once(app).await;
+            result
+        }
+    };
+    let result = result.map_err(|message| anyhow::anyhow!(message))?;
+    print_providers(&result["providers"]);
+    Ok(())
+}
+
+fn read_api_key() -> anyhow::Result<String> {
+    use std::io::IsTerminal;
+    if std::io::stdin().is_terminal() {
+        eprint!("API key: ");
+    }
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line)?;
+    Ok(line.trim().to_string())
+}
+
+fn print_providers(providers: &serde_json::Value) {
+    for provider in providers.as_array().into_iter().flatten() {
+        println!("{:<10} {}", provider["kind"].as_str().unwrap_or_default(), provider["detail"].as_str().unwrap_or_default());
+    }
+}
+
+/// One request to the `lorca serve` on `port`; `None` when nothing listens there.
+async fn serve_call(port: u16, method: &str, params: &serde_json::Value) -> anyhow::Result<Option<Result<serde_json::Value, String>>> {
+    use futures::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+    let Ok((mut socket, _)) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/ws")).await else { return Ok(None) };
+    socket.send(Message::Text(serde_json::json!({ "id": 1, "method": method, "params": params }).to_string().into())).await?;
+    // Events share the socket; the reply is the message with our id.
+    while let Some(message) = socket.next().await {
+        let Message::Text(text) = message? else { continue };
+        let value: serde_json::Value = serde_json::from_str(&text)?;
+        if value["id"] != 1 {
+            continue;
+        }
+        return Ok(Some(match value.get("error") {
+            Some(error) => Err(error["message"].as_str().unwrap_or("request failed").to_string()),
+            None => Ok(value["result"].clone()),
+        }));
+    }
+    anyhow::bail!("lorca serve closed the connection")
 }
 
 /// Exits once the parent process is gone.
