@@ -1,21 +1,41 @@
 import AppKit
 
-/// The sidebar while Settings is open: Back, a search field, and the panes. A query narrows the
+/// The sidebar while Settings is open: a search field, the panes, and Back in the footer, where
+/// the chats' sidebar has the way in. A query narrows the
 /// list to the panes and settings that match; a setting opens its pane with the row in view.
 final class SettingsSidebarViewController: NSViewController {
     private let store = AppStore.shared
 
     private let outlineView = NSOutlineView()
     private let scrollView = NSScrollView()
-    private let backBar = SidebarBackBar()
     private let searchBar = SidebarSearchBar()
-    /// Back over the search field. Where the sidebar's chrome floats, the root hangs it on the
-    /// split view item; otherwise it is laid out in this view.
-    private(set) lazy var header: NSView = {
-        let stack = Build.stack([backBar, searchBar], spacing: 0)
-        stack.alignment = .width
-        return stack
+    /// The search field, in the place the chats' one has. Where the sidebar's chrome floats, the
+    /// root hangs it on the split view item; otherwise it is laid out in this view.
+    var header: NSView { searchBar }
+    /// Back to the chats, in the place of the chats' footer. Hung on the split view item where
+    /// the sidebar's chrome floats, like the header.
+    private(set) lazy var footer: NSView = {
+        let back = HoverButton(
+            symbol: "chevron.left", pointSize: 12, title: "Back", tooltip: "Back to Chats (esc)", target: self,
+            action: #selector(back))
+        back.setAccessibilityLabel("Back to Chats")
+        back.translatesAutoresizingMaskIntoConstraints = false
+        let bar = NSView()
+        bar.translatesAutoresizingMaskIntoConstraints = false
+        bar.addSubview(back)
+        NSLayoutConstraint.activate([
+            bar.heightAnchor.constraint(equalToConstant: 38),
+            back.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 10),
+            back.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+        ])
+        return bar
     }()
+
+    var onBack: (() -> Void)?
+
+    @objc private func back() {
+        onBack?()
+    }
     private let noResults = Build.label(
         "", font: .systemFont(ofSize: 12), color: .secondaryLabelColor, lines: 0, alignment: .center)
 
@@ -30,7 +50,6 @@ final class SettingsSidebarViewController: NSViewController {
     var onSelect: ((Selection) -> Void)?
     /// A search result was picked: its pane is selected, and this brings the row into view.
     var onReveal: ((SettingsEntry) -> Void)?
-    var onBack: (() -> Void)?
 
     override func loadView() {
         let container = NSView()
@@ -44,9 +63,7 @@ final class SettingsSidebarViewController: NSViewController {
         scrollView.drawsBackground = false
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.automaticallyAdjustsContentInsets = false
-        scrollView.contentInsets = NSEdgeInsets(top: 2, left: 0, bottom: 8, right: 0)
-
-        backBar.onClick = { [weak self] in self?.onBack?() }
+        scrollView.contentInsets = NSEdgeInsets(top: 7, left: 0, bottom: 8, right: 0)
 
         searchBar.onQueryChange = { [weak self] query in
             self?.searchQuery = query.trimmingCharacters(in: .whitespaces)
@@ -69,11 +86,15 @@ final class SettingsSidebarViewController: NSViewController {
             // The list runs the pane's full height under the header, inset by the safe area.
             scrollView.automaticallyAdjustsContentInsets = true
             scrollView.contentInsets = NSEdgeInsets()
+            // The gap between the search bar and the first pane, as the chats' sidebar has it.
+            container.additionalSafeAreaInsets.top = 5
             scrollView.pin(to: container)
         } else {
+            let divider = HairlineView()
             container.addSubview(header)
+            container.addSubview(divider)
+            container.addSubview(footer)
             NSLayoutConstraint.activate([
-                // Pane content under the titlebar gets no clicks, so Back starts at the safe area.
                 header.topAnchor.constraint(equalTo: container.safeAreaLayoutGuide.topAnchor),
                 header.leadingAnchor.constraint(equalTo: container.leadingAnchor),
                 header.trailingAnchor.constraint(equalTo: container.trailingAnchor),
@@ -81,7 +102,15 @@ final class SettingsSidebarViewController: NSViewController {
                 scrollView.topAnchor.constraint(equalTo: header.bottomAnchor),
                 scrollView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
                 scrollView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-                scrollView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+                scrollView.bottomAnchor.constraint(equalTo: divider.topAnchor),
+
+                divider.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+                divider.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+                divider.bottomAnchor.constraint(equalTo: footer.topAnchor),
+
+                footer.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+                footer.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+                footer.bottomAnchor.constraint(equalTo: container.bottomAnchor),
             ])
         }
 
@@ -325,94 +354,5 @@ extension SettingsSidebarViewController: NSOutlineViewDelegate {
         defer { isNotifyingSelection = false }
         onSelect?(picked)
         if case let .setting(entry) = node.kind { onReveal?(entry) }
-    }
-}
-
-// MARK: - Back
-
-/// The strip where the main sidebar has its search field: a chevron and "Back", returning to chats.
-final class SidebarBackBar: NSView {
-    private let chevron = NSImageView()
-    private let label = Build.label("Back", font: .systemFont(ofSize: 13), color: .secondaryLabelColor)
-    private var tracking: NSTrackingArea?
-    private var isHovered = false { didSet { needsDisplay = true } }
-    private var isPressed = false { didSet { needsDisplay = true } }
-
-    var onClick: (() -> Void)?
-
-    init() {
-        super.init(frame: .zero)
-        translatesAutoresizingMaskIntoConstraints = false
-        wantsLayer = true
-
-        chevron.image = NSImage(systemSymbolName: "chevron.left", accessibilityDescription: nil)
-        chevron.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 12, weight: .medium)
-        chevron.contentTintColor = .secondaryLabelColor
-        chevron.translatesAutoresizingMaskIntoConstraints = false
-
-        addSubview(chevron)
-        addSubview(label)
-
-        NSLayoutConstraint.activate([
-            heightAnchor.constraint(equalToConstant: 36),
-            chevron.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 18),
-            chevron.centerYAnchor.constraint(equalTo: centerYAnchor),
-            label.leadingAnchor.constraint(equalTo: chevron.trailingAnchor, constant: 6),
-            label.centerYAnchor.constraint(equalTo: centerYAnchor),
-            label.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -10),
-        ])
-
-        setAccessibilityElement(true)
-        setAccessibilityRole(.button)
-        setAccessibilityLabel("Back to Chats")
-        toolTip = "Back to Chats (esc)"
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError() }
-
-    override var allowsVibrancy: Bool { true }
-
-    override func accessibilityPerformPress() -> Bool {
-        onClick?()
-        return true
-    }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let tracking { removeTrackingArea(tracking) }
-        let area = NSTrackingArea(
-            rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow], owner: self)
-        addTrackingArea(area)
-        tracking = area
-        // A tracking area replaced under the pointer sends no exit event; the pointer decides.
-        if let window {
-            isHovered =
-                window.isKeyWindow
-                && bounds.contains(convert(window.mouseLocationOutsideOfEventStream, from: nil))
-        }
-    }
-
-    // The click swaps the sidebar, so the bar leaves the window mid-hover without an exit event.
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        if window == nil { isHovered = false }
-    }
-
-    override func mouseEntered(with event: NSEvent) { isHovered = true }
-    override func mouseExited(with event: NSEvent) { isHovered = false }
-
-    // The click counts on release inside the bar, like a button.
-    override func mouseDown(with event: NSEvent) { isPressed = true }
-
-    override func mouseUp(with event: NSEvent) {
-        isPressed = false
-        if bounds.contains(convert(event.locationInWindow, from: nil)) { onClick?() }
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        guard isHovered || isPressed else { return }
-        NSColor.labelColor.withAlphaComponent(isPressed ? 0.1 : 0.06).setFill()
-        NSBezierPath(roundedRect: bounds.insetBy(dx: 10, dy: 4), xRadius: 7, yRadius: 7).fill()
     }
 }

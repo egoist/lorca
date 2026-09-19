@@ -254,7 +254,7 @@ final class RootSplitViewController: NSSplitViewController {
     @available(macOS 26.0, *)
     private func syncSidebarAccessories(isSettings: Bool) {
         let top = accessory(for: isSettings ? settingsSidebar.header : sidebar.searchBar)
-        let bottom = isSettings ? [] : [accessory(for: sidebar.footer)]
+        let bottom = [accessory(for: isSettings ? settingsSidebar.footer : sidebar.footer)]
         if sidebarItem.topAlignedAccessoryViewControllers != [top] {
             sidebarItem.topAlignedAccessoryViewControllers = [top]
         }

@@ -195,11 +195,17 @@ final class HoverButton: NSButton {
     private var tracking: NSTrackingArea?
     private var isHovered = false { didSet { needsDisplay = true } }
 
-    init(symbol: String, pointSize: CGFloat = 15, tooltip: String, target: AnyObject?, action: Selector) {
+    /// With a `title` the button is the symbol and the word, as wide as they need.
+    init(
+        symbol: String, pointSize: CGFloat = 15, title: String? = nil, tooltip: String, target: AnyObject?,
+        action: Selector
+    ) {
         super.init(frame: .zero)
         image = NSImage(systemSymbolName: symbol, accessibilityDescription: tooltip)
         symbolConfiguration = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .regular)
+        label = title
         imagePosition = .imageOnly
+        if let title { setAccessibilityTitle(title) }
         isBordered = false
         contentTintColor = .secondaryLabelColor
         toolTip = tooltip
@@ -210,7 +216,33 @@ final class HoverButton: NSButton {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    override var intrinsicContentSize: NSSize { NSSize(width: 28, height: 28) }
+    /// The word after the symbol. The two are drawn here as one line of text, the symbol as an
+    /// attachment: the text system sets it on the capitals' center line and in the text's color,
+    /// where the button cell places and tints a symbol and a title each on its own.
+    private var label: String?
+    private static let labelFont = NSFont.systemFont(ofSize: 13)
+    private static let labelPadding: CGFloat = 8
+    private static let symbolLift: CGFloat = 0.5
+
+    private var labelText: NSAttributedString? {
+        guard let label, let image else { return nil }
+        let attachment = NSTextAttachment()
+        attachment.image = image.withSymbolConfiguration(symbolConfiguration ?? .init())
+        let text = NSMutableAttributedString(attachment: attachment)
+        // The text system sets the symbol under the capitals' center by this much.
+        text.addAttribute(.baselineOffset, value: Self.symbolLift, range: NSRange(location: 0, length: text.length))
+        text.append(NSAttributedString(string: " ", attributes: [.kern: 3]))
+        text.append(NSAttributedString(string: label))
+        text.addAttributes(
+            [.font: Self.labelFont, .foregroundColor: NSColor.secondaryLabelColor],
+            range: NSRange(location: 0, length: text.length))
+        return text
+    }
+
+    override var intrinsicContentSize: NSSize {
+        guard let labelText else { return NSSize(width: 28, height: 28) }
+        return NSSize(width: ceil(labelText.size().width) + 2 * Self.labelPadding, height: 28)
+    }
 
     // The push bezel's layout padding would stretch the square hover fill into a rectangle.
     override var alignmentRectInsets: NSEdgeInsets { NSEdgeInsets() }
@@ -256,7 +288,15 @@ final class HoverButton: NSButton {
             NSColor.labelColor.withAlphaComponent(isHighlighted ? 0.14 : 0.08).setFill()
             NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6).fill()
         }
-        super.draw(dirtyRect)
+        guard let labelText else { return super.draw(dirtyRect) }
+        // The capitals sit on the button's center line. NSButton is flipped, so the line's top is
+        // the baseline less the ascender.
+        let font = Self.labelFont
+        let baseline = bounds.midY + font.capHeight / 2
+        // The lifted symbol makes the line that much taller, above the baseline.
+        let top = baseline - font.ascender - Self.symbolLift
+        let scale = window?.backingScaleFactor ?? 2
+        labelText.draw(at: NSPoint(x: Self.labelPadding, y: (top * scale).rounded() / scale))
     }
 }
 
