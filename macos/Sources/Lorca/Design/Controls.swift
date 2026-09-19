@@ -230,6 +230,13 @@ final class HoverButton: NSButton {
         }
     }
 
+    // A button whose click removes it from the window (the sidebar swap) never gets its exit event
+    // either, and would come back drawn hovered.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window == nil { isHovered = false }
+    }
+
     override func mouseEntered(with event: NSEvent) { isHovered = true }
     override func mouseExited(with event: NSEvent) { isHovered = false }
 

@@ -334,6 +334,18 @@ final class SidebarBackBar: NSView {
             rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow], owner: self)
         addTrackingArea(area)
         tracking = area
+        // A tracking area replaced under the pointer sends no exit event; the pointer decides.
+        if let window {
+            isHovered =
+                window.isKeyWindow
+                && bounds.contains(convert(window.mouseLocationOutsideOfEventStream, from: nil))
+        }
+    }
+
+    // The click swaps the sidebar, so the bar leaves the window mid-hover without an exit event.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window == nil { isHovered = false }
     }
 
     override func mouseEntered(with event: NSEvent) { isHovered = true }
