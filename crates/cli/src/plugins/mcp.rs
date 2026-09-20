@@ -1,7 +1,7 @@
 //! The MCP side of plugins on this Runner: a pool of connected servers (`rmcp`, stdio or
-//! streamable HTTP), the OAuth sign-in for a remote server, and the tools a turn gets from a
-//! plugins installed on its Runner, each behind Auto-review (`review.rs`) and the permission gate: a read-only tool runs, anything
-//! else asks the user in the chat first, after Grok Bot.
+//! streamable HTTP), on-demand tool discovery for a turn, the OAuth sign-in for a remote
+//! server, and Auto-review (`review.rs`) at the execution boundary. A read-only tool runs;
+//! anything else asks the user in the chat first, after Grok Bot.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
@@ -35,6 +35,17 @@ const SIGN_IN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5 * 
 const DEVICE_TOKEN_REFRESH_BUFFER_SECS: f64 = 5.0 * 60.0;
 /// The most text a tool result carries to the model.
 const MAX_RESULT_CHARS: usize = 50_000;
+/// fx-style discovery bounds: metadata stays small, while matching executable schemas are
+/// admitted only for the next model step.
+const MAX_CAPABILITY_QUERY_BYTES: usize = 4 * 1024;
+const CAPABILITY_RESULT_LIMIT: usize = 5;
+const MAX_SEARCH_IDENTITY_BYTES: usize = 256;
+const MAX_SEARCH_DESCRIPTION_BYTES: usize = 1024;
+const MAX_SEARCH_INDEX_DESCRIPTION_BYTES: usize = 2 * 1024;
+const MAX_SEARCH_SCHEMA_BYTES: usize = 4 * 1024;
+const MAX_SERVER_INSTRUCTIONS_BYTES: usize = 2 * 1024;
+const MAX_SEARCH_RESULT_BYTES: usize = 16 * 1024;
+const MCP_SCHEMA_LOAD_BUDGET_BYTES: usize = 64 * 1024;
 
 // MARK: - Pool
 
@@ -706,78 +717,603 @@ pub struct PluginTool {
     server: Arc<Server>,
     tool: rmcp::model::Tool,
     name: String,
+    /// The model also sees bounded server instructions in `description`; permission review
+    /// keeps using the server's own tool description as before.
+    review_description: String,
     description: String,
     read_only: bool,
 }
 
-/// The tools of every plugin installed on this Runner, connected now, for a bot that runs
-/// here. A plugin that cannot connect is skipped with a warning; the bot is told in its prompt.
-pub async fn tools_for(app: &Arc<App>, chat_id: &str, bot: &Bot, unattended: bool) -> (Vec<Arc<dyn Tool>>, Vec<PluginBrief>) {
-    let mut tools: Vec<Arc<dyn Tool>> = Vec::new();
-    let mut briefs = Vec::new();
-    let installed: Vec<super::Installed> = app.plugins.lock().unwrap().installed().to_vec();
-    for plugin in &installed {
-        let plugin_id = &plugin.manifest.id;
-        let status = app.plugins.lock().unwrap().status(plugin_id);
-        let mut brief = PluginBrief {
-            id: plugin_id.clone(),
-            name: plugin.manifest.name.clone(),
-            description: plugin.manifest.description.clone(),
-            tools: Vec::new(),
-            instructions: Vec::new(),
-            skills: plugin.manifest.skills.iter().map(|s| (s.name.clone(), s.description.clone(), app.config.plugins_dir().join(plugin_id).join("skills").join(format!("{}.md", super::slug(&s.name))))).collect(),
-            problem: None,
-        };
-        if let Some(status) = status.filter(|s| s.state == "needs_setup" || s.state == "needs_auth") {
-            brief.problem = Some(status.detail.clone());
-            briefs.push(brief);
-            continue;
-        }
-        let servers = app.mcp.servers_of(app, plugin_id).await;
-        if servers.is_empty() {
-            brief.problem = Some(app.plugins.lock().unwrap().status(plugin_id).map(|s| s.detail).unwrap_or_else(|| "Could not connect".into()));
-        }
-        for server in servers {
-            if let Some(instructions) = &server.instructions {
-                brief.instructions.push(instructions.clone());
-            }
-            for tool in &server.tools {
-                let name = tool_name(plugin_id, &tool.name);
-                let read_only = tool.annotations.as_ref().and_then(|a| a.read_only_hint).unwrap_or(false)
-                    || plugin.manifest.tools.readonly.iter().any(|p| pattern_matches(p, &tool.name));
-                brief.tools.push((tool.name.to_string(), read_only));
-                tools.push(Arc::new(PluginTool {
-                    app: app.clone(),
-                    chat_id: chat_id.to_string(),
-                    bot_id: bot.id.clone(),
-                    unattended,
-                    plugin_id: plugin_id.clone(),
-                    plugin_name: plugin.manifest.name.clone(),
-                    server: server.clone(),
-                    tool: tool.clone(),
-                    description: tool.description.as_deref().unwrap_or("").to_string(),
-                    name,
-                    read_only,
-                }));
-            }
-        }
-        briefs.push(brief);
-    }
-    (tools, briefs)
+/// One connected MCP tool in this turn's searchable catalog. Its executable schema stays out
+/// of model context until discovery selects it.
+struct CatalogTool {
+    name: String,
+    original_name: String,
+    plugin_id: String,
+    plugin_name: String,
+    server_name: String,
+    description: String,
+    search_schema: String,
+    server_instructions: String,
+    read_only: bool,
+    schema_bytes: usize,
+    executable: Arc<dyn Tool>,
 }
 
-/// What the system prompt says about one installed plugin.
+#[derive(Default)]
+struct TurnToolsState {
+    catalog: HashMap<String, Arc<CatalogTool>>,
+    selected: BTreeMap<String, Arc<dyn Tool>>,
+}
+
+/// MCP discovery state for one agent turn. Installed plugin names are cheap prompt metadata;
+/// servers connect only when `capability_search` or `mcp_select_tool` needs them, and selected
+/// schemas join the agent loop on its next model step.
+pub struct TurnTools {
+    app: Arc<App>,
+    chat_id: String,
+    bot_id: String,
+    unattended: bool,
+    state: Mutex<TurnToolsState>,
+}
+
+impl TurnTools {
+    fn new(app: Arc<App>, chat_id: &str, bot: &Bot, unattended: bool) -> Self {
+        TurnTools {
+            app,
+            chat_id: chat_id.to_string(),
+            bot_id: bot.id.clone(),
+            unattended,
+            state: Mutex::new(TurnToolsState::default()),
+        }
+    }
+
+    /// The two fixed, small schemas a model sees before it asks for any MCP capability.
+    pub fn discovery_tools(self: &Arc<Self>) -> Vec<Arc<dyn Tool>> {
+        vec![
+            Arc::new(CapabilitySearch { turn: self.clone() }),
+            Arc::new(McpSelectTool { turn: self.clone() }),
+        ]
+    }
+
+    /// Adds every schema selected so far, preserving the fixed tool order and avoiding a
+    /// duplicate when this is called on a context already updated by the loop hook.
+    pub fn tools_with_selected(&self, base: &[Arc<dyn Tool>]) -> Vec<Arc<dyn Tool>> {
+        let selected: Vec<Arc<dyn Tool>> = self.state.lock().unwrap().selected.values().cloned().collect();
+        let mut tools = base.to_vec();
+        for tool in selected {
+            if !tools.iter().any(|candidate| candidate.name() == tool.name()) {
+                tools.push(tool);
+            }
+        }
+        tools
+    }
+
+    /// The label for a dynamic tool's working row.
+    pub fn plugin_name(&self, tool_name: &str) -> Option<String> {
+        self.state.lock().unwrap().catalog.get(tool_name).map(|tool| tool.plugin_name.clone())
+    }
+
+    async fn load_plugin(&self, plugin: &Installed, cancel: &CancellationToken) -> Result<Vec<String>, ToolError> {
+        let status = self.app.plugins.lock().unwrap().status(&plugin.manifest.id);
+        if let Some(status) = status.filter(|status| status.state == "needs_setup" || status.state == "needs_auth") {
+            return Ok(vec![status.detail]);
+        }
+
+        let mut problems = Vec::new();
+        for server_name in plugin.manifest.servers.keys() {
+            let connection = self.app.mcp.server(&self.app, &plugin.manifest.id, server_name);
+            let server = tokio::select! {
+                result = connection => match result {
+                    Ok(server) => server,
+                    Err(error) => {
+                        tracing::warn!(%error, plugin = %plugin.manifest.id, server = %server_name, "connecting a plugin server for capability discovery");
+                        problems.push(error);
+                        continue;
+                    }
+                },
+                _ = cancel.cancelled() => return Err(ToolError("Stopped".into())),
+            };
+            self.catalog_server(plugin, server);
+        }
+        Ok(problems)
+    }
+
+    fn catalog_server(&self, plugin: &Installed, server: Arc<Server>) {
+        let mut state = self.state.lock().unwrap();
+        for tool in &server.tools {
+            if plugin.manifest.tools.hide.iter().any(|pattern| pattern_matches(pattern, &tool.name)) {
+                continue;
+            }
+            let original_name = tool.name.to_string();
+            if state.catalog.values().any(|known| {
+                known.plugin_id == plugin.manifest.id && known.server_name == server.name && known.original_name == original_name
+            }) {
+                continue;
+            }
+
+            let base_name = tool_name(&plugin.manifest.id, &original_name);
+            let name = unique_tool_name(&base_name, &state.catalog);
+            let server_instructions = server
+                .instructions
+                .as_deref()
+                .map(|text| utf8_prefix(text, MAX_SERVER_INSTRUCTIONS_BYTES).to_string())
+                .unwrap_or_default();
+            let plain_description = tool.description.as_deref().unwrap_or("").to_string();
+            let description = if server_instructions.is_empty() {
+                plain_description.clone()
+            } else if plain_description.is_empty() {
+                format!("Server instructions: {server_instructions}")
+            } else {
+                format!("{plain_description}\n\nServer instructions: {server_instructions}")
+            };
+            let read_only = tool.annotations.as_ref().and_then(|annotations| annotations.read_only_hint).unwrap_or(false)
+                || plugin.manifest.tools.readonly.iter().any(|pattern| pattern_matches(pattern, &original_name));
+            let executable: Arc<dyn Tool> = Arc::new(PluginTool {
+                app: self.app.clone(),
+                chat_id: self.chat_id.clone(),
+                bot_id: self.bot_id.clone(),
+                unattended: self.unattended,
+                plugin_id: plugin.manifest.id.clone(),
+                plugin_name: plugin.manifest.name.clone(),
+                server: server.clone(),
+                tool: tool.clone(),
+                name: name.clone(),
+                review_description: plain_description.clone(),
+                description,
+                read_only,
+            });
+            let schema_bytes = serde_json::to_vec(&executable.spec()).map(|json| json.len()).unwrap_or(usize::MAX);
+            let raw_search_schema = serde_json::to_string(&Value::Object((*tool.input_schema).clone())).unwrap_or_default();
+            let search_schema = utf8_prefix(&raw_search_schema, MAX_SEARCH_SCHEMA_BYTES).to_string();
+            let search_description = utf8_prefix(&plain_description, MAX_SEARCH_INDEX_DESCRIPTION_BYTES).to_string();
+            state.catalog.insert(
+                name.clone(),
+                Arc::new(CatalogTool {
+                    name,
+                    original_name,
+                    plugin_id: plugin.manifest.id.clone(),
+                    plugin_name: plugin.manifest.name.clone(),
+                    server_name: server.name.clone(),
+                    description: search_description,
+                    search_schema,
+                    server_instructions,
+                    read_only,
+                    schema_bytes,
+                    executable,
+                }),
+            );
+        }
+    }
+
+    async fn search(&self, query: &str, plugin_id: Option<&str>, cancel: &CancellationToken) -> Result<Value, ToolError> {
+        if query.is_empty() {
+            return Err(ToolError("capability_search requires a non-empty query".into()));
+        }
+        if query.len() > MAX_CAPABILITY_QUERY_BYTES {
+            return Err(ToolError(format!("capability_search query exceeds {MAX_CAPABILITY_QUERY_BYTES} bytes")));
+        }
+
+        let installed = self.app.plugins.lock().unwrap().installed().to_vec();
+        let plugins: Vec<Installed> = match plugin_id {
+            Some(id) => installed.into_iter().filter(|plugin| plugin.manifest.id == id).collect(),
+            None => installed,
+        };
+        if plugin_id.is_some() && plugins.is_empty() {
+            return Ok(json!({
+                "tools": [],
+                "count": 0,
+                "total_matches": 0,
+                "state": "plugin_not_found"
+            }));
+        }
+
+        let mut problems = Vec::new();
+        for plugin in &plugins {
+            for problem in self.load_plugin(plugin, cancel).await? {
+                if problems.len() < CAPABILITY_RESULT_LIMIT {
+                    problems.push(json!({
+                        "plugin": bounded_json_text(&plugin.manifest.id, MAX_SEARCH_IDENTITY_BYTES),
+                        "message": bounded_json_text(&problem, 512)
+                    }));
+                }
+            }
+        }
+
+        let candidates: Vec<Arc<CatalogTool>> = self
+            .state
+            .lock()
+            .unwrap()
+            .catalog
+            .values()
+            .filter(|tool| plugin_id.is_none_or(|id| tool.plugin_id == id))
+            .cloned()
+            .collect();
+        let ranked = rank_tools(query, &candidates, plugin_id.is_some());
+        let total_matches = ranked.len();
+        let matches: Vec<Arc<CatalogTool>> = ranked.into_iter().take(CAPABILITY_RESULT_LIMIT).collect();
+        let (loaded, rejected, schema_budget_exhausted) = self.select_search_matches(&matches);
+        let rows: Vec<Value> = matches
+            .iter()
+            .map(|tool| {
+                json!({
+                    "name": tool.name,
+                    "plugin": bounded_json_text(&tool.plugin_id, MAX_SEARCH_IDENTITY_BYTES),
+                    "server": bounded_json_text(&tool.server_name, MAX_SEARCH_IDENTITY_BYTES),
+                    "description": bounded_json_text(&tool.description, MAX_SEARCH_DESCRIPTION_BYTES),
+                    "read_only": tool.read_only,
+                })
+            })
+            .collect();
+        let state = if total_matches == 0 {
+            if candidates.is_empty() && !problems.is_empty() { "unavailable" } else { "no_match" }
+        } else {
+            "ready"
+        };
+        let value = json!({
+            "tools": rows,
+            "count": matches.len(),
+            "total_matches": total_matches,
+            "more_available": total_matches > matches.len(),
+            "schemas_loaded": loaded,
+            "schemas_rejected": rejected,
+            "schema_budget_exhausted": schema_budget_exhausted,
+            "problems": problems,
+            "state": state,
+        });
+        let encoded = serde_json::to_vec(&value).unwrap_or_default();
+        if encoded.len() > MAX_SEARCH_RESULT_BYTES {
+            return Err(ToolError("capability_search result exceeded its context budget; use a narrower query or plugin".into()));
+        }
+        Ok(value)
+    }
+
+    fn select_search_matches(&self, matches: &[Arc<CatalogTool>]) -> (Vec<String>, Vec<String>, bool) {
+        let mut state = self.state.lock().unwrap();
+        let mut remaining = MCP_SCHEMA_LOAD_BUDGET_BYTES;
+        let mut loaded = Vec::new();
+        let mut rejected = Vec::new();
+        let mut exhausted = false;
+        for tool in matches {
+            if state.selected.contains_key(&tool.name) {
+                loaded.push(tool.name.clone());
+                continue;
+            }
+            if tool.schema_bytes > MCP_SCHEMA_LOAD_BUDGET_BYTES {
+                rejected.push(tool.name.clone());
+                continue;
+            }
+            if tool.schema_bytes > remaining {
+                exhausted = true;
+                break;
+            }
+            remaining -= tool.schema_bytes;
+            state.selected.insert(tool.name.clone(), tool.executable.clone());
+            loaded.push(tool.name.clone());
+        }
+        (loaded, rejected, exhausted)
+    }
+
+    async fn select_exact(&self, name: &str, cancel: &CancellationToken) -> Result<String, ToolError> {
+        if !self.state.lock().unwrap().catalog.contains_key(name) {
+            if let Some((plugin_id, _)) = name.split_once("__") {
+                let plugin = self
+                    .app
+                    .plugins
+                    .lock()
+                    .unwrap()
+                    .installed()
+                    .iter()
+                    .find(|plugin| plugin.manifest.id == plugin_id)
+                    .cloned();
+                if let Some(plugin) = plugin {
+                    let _ = self.load_plugin(&plugin, cancel).await?;
+                }
+            }
+        }
+        let mut state = self.state.lock().unwrap();
+        let tool = state
+            .catalog
+            .get(name)
+            .cloned()
+            .ok_or_else(|| ToolError(format!("Dynamic MCP tool not found: {name}. Use capability_search and copy an exact returned name.")))?;
+        if tool.schema_bytes > MCP_SCHEMA_LOAD_BUDGET_BYTES {
+            return Err(ToolError(format!(
+                "The schema for {name} is {} bytes, over the {}-byte MCP schema limit.",
+                tool.schema_bytes, MCP_SCHEMA_LOAD_BUDGET_BYTES
+            )));
+        }
+        state.selected.insert(tool.name.clone(), tool.executable.clone());
+        Ok(tool.plugin_name.clone())
+    }
+}
+
+/// Creates the cheap per-turn catalog plus the prompt metadata for installed plugins. No MCP
+/// process or HTTP connection starts here.
+pub fn turn_tools(app: &Arc<App>, chat_id: &str, bot: &Bot, unattended: bool) -> (Arc<TurnTools>, Vec<PluginBrief>) {
+    let briefs = {
+        let store = app.plugins.lock().unwrap();
+        store
+            .installed()
+            .iter()
+            .map(|plugin| {
+                let status = store.status(&plugin.manifest.id);
+                PluginBrief {
+                    id: plugin.manifest.id.clone(),
+                    name: plugin.manifest.name.clone(),
+                    state: status.as_ref().map(|status| status.state.clone()).unwrap_or_else(|| "ready".into()),
+                    detail: status.map(|status| status.detail).unwrap_or_default(),
+                    skills: plugin
+                        .manifest
+                        .skills
+                        .iter()
+                        .map(|skill| {
+                            (
+                                skill.name.clone(),
+                                skill.description.clone(),
+                                app.config
+                                    .plugins_dir()
+                                    .join(&plugin.manifest.id)
+                                    .join("skills")
+                                    .join(format!("{}.md", super::slug(&skill.name))),
+                            )
+                        })
+                        .collect(),
+                }
+            })
+            .collect()
+    };
+    (Arc::new(TurnTools::new(app.clone(), chat_id, bot, unattended)), briefs)
+}
+
+/// What the system prompt says about one installed plugin. Tool names, descriptions, schemas,
+/// and server instructions arrive only through capability discovery.
 pub struct PluginBrief {
     pub id: String,
     pub name: String,
-    pub description: String,
-    /// (tool name, read-only)
-    pub tools: Vec<(String, bool)>,
-    pub instructions: Vec<String>,
+    pub state: String,
+    pub detail: String,
     /// (name, description, path)
     pub skills: Vec<(String, String, std::path::PathBuf)>,
-    /// Why the plugin is unusable right now.
-    pub problem: Option<String>,
+}
+
+struct CapabilitySearch {
+    turn: Arc<TurnTools>,
+}
+
+#[async_trait]
+impl Tool for CapabilitySearch {
+    fn name(&self) -> &str {
+        "capability_search"
+    }
+    fn description(&self) -> &str {
+        "Find tools in installed plugins for a capability needed by the current task. Optionally restrict the search to one exact plugin id. Matching MCP schemas load automatically within a bounded budget and become callable on the next model step. Results describe only this query; no_match does not rule out a better query. Use exact returned names and never guess them."
+    }
+    fn parameters(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "query": { "type": "string", "description": "Natural-language capability needed for the current task", "minLength": 1, "maxLength": MAX_CAPABILITY_QUERY_BYTES },
+                "plugin": { "type": "string", "description": "Optional exact installed plugin id from the prompt catalog", "minLength": 1 }
+            },
+            "required": ["query"],
+            "additionalProperties": false
+        })
+    }
+    fn execution_mode(&self) -> Option<ToolExecutionMode> {
+        Some(ToolExecutionMode::Sequential)
+    }
+    async fn execute(&self, _id: &str, args: Value, cancel: CancellationToken, _on_update: ToolUpdateFn) -> Result<ToolResult, ToolError> {
+        let query = args["query"].as_str().unwrap_or("").trim();
+        let plugin = args["plugin"].as_str().map(str::trim).filter(|value| !value.is_empty());
+        let result = self.turn.search(query, plugin, &cancel).await?;
+        let count = result["count"].as_u64().unwrap_or(0);
+        let text = serde_json::to_string(&result).unwrap_or_default();
+        Ok(ToolResult::text(text).with_details(json!({ "summary": format!("Found {count} plugin tools") })))
+    }
+}
+
+struct McpSelectTool {
+    turn: Arc<TurnTools>,
+}
+
+#[async_trait]
+impl Tool for McpSelectTool {
+    fn name(&self) -> &str {
+        "mcp_select_tool"
+    }
+    fn description(&self) -> &str {
+        "Select one exact dynamic MCP tool name returned by capability_search so its executable schema is advertised on the next model step. Do not use partial names, guess a name, select built-in tools, or treat this as executing the selected tool."
+    }
+    fn parameters(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": { "name": { "type": "string", "description": "Exact dynamic MCP tool name returned by capability_search", "minLength": 1 } },
+            "required": ["name"],
+            "additionalProperties": false
+        })
+    }
+    fn execution_mode(&self) -> Option<ToolExecutionMode> {
+        Some(ToolExecutionMode::Sequential)
+    }
+    async fn execute(&self, _id: &str, args: Value, cancel: CancellationToken, _on_update: ToolUpdateFn) -> Result<ToolResult, ToolError> {
+        let name = args["name"].as_str().unwrap_or("").trim();
+        if name.is_empty() {
+            return Err(ToolError("mcp_select_tool requires an exact dynamic tool name".into()));
+        }
+        let plugin = self.turn.select_exact(name, &cancel).await?;
+        Ok(ToolResult::text(format!(
+            "Selected dynamic MCP tool `{name}` from {plugin}. Its schema is available on the next model step; call `{name}` then with arguments matching that schema."
+        ))
+        .with_details(json!({ "summary": format!("Selected {name}") })))
+    }
+}
+
+fn unique_tool_name(base: &str, catalog: &HashMap<String, Arc<CatalogTool>>) -> String {
+    if !catalog.contains_key(base) {
+        return base.to_string();
+    }
+    for index in 2.. {
+        let suffix = format!("_{index}");
+        let keep = 64usize.saturating_sub(suffix.len()).min(base.len());
+        let candidate = format!("{}{}", &base[..keep], suffix);
+        if !catalog.contains_key(&candidate) {
+            return candidate;
+        }
+    }
+    unreachable!()
+}
+
+fn utf8_prefix(text: &str, max_bytes: usize) -> &str {
+    if text.len() <= max_bytes {
+        return text;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
+/// A JSON string scalar whose encoded representation fits the model-output budget. Control
+/// characters expand when escaped, so a raw byte prefix alone is not enough.
+fn bounded_json_text(text: &str, max_bytes: usize) -> String {
+    if serde_json::to_string(text).map(|encoded| encoded.len()).unwrap_or(usize::MAX) <= max_bytes {
+        return text.to_string();
+    }
+    let mut end = utf8_prefix(text, max_bytes).len();
+    while end > 0 {
+        let candidate = &text[..end];
+        if serde_json::to_string(candidate).map(|encoded| encoded.len()).unwrap_or(usize::MAX) <= max_bytes {
+            return candidate.to_string();
+        }
+        end -= 1;
+        while end > 0 && !text.is_char_boundary(end) {
+            end -= 1;
+        }
+    }
+    String::new()
+}
+
+fn query_tokens(query: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut start = None;
+    for (index, byte) in query.bytes().enumerate() {
+        if byte.is_ascii_alphanumeric() {
+            start.get_or_insert(index);
+        } else if let Some(token_start) = start.take() {
+            let token = query[token_start..index].to_ascii_lowercase();
+            if !tokens.contains(&token) {
+                tokens.push(token);
+            }
+        }
+    }
+    if let Some(token_start) = start {
+        let token = query[token_start..].to_ascii_lowercase();
+        if !tokens.contains(&token) {
+            tokens.push(token);
+        }
+    }
+    tokens
+}
+
+fn term_frequency(text: &str, token: &str) -> usize {
+    if token.is_empty() || token.len() > text.len() {
+        return 0;
+    }
+    let text = text.as_bytes();
+    let token = token.as_bytes();
+    let mut count = 0;
+    let mut start = 0;
+    while start + token.len() <= text.len() {
+        let end = start + token.len();
+        let equal = text[start..end].iter().zip(token).all(|(left, right)| left.eq_ignore_ascii_case(right));
+        let left_boundary = start == 0 || !text[start - 1].is_ascii_alphanumeric();
+        let right_boundary = end == text.len() || !text[end].is_ascii_alphanumeric();
+        if equal && left_boundary && right_boundary {
+            count += 1;
+            start = end;
+        } else {
+            start += 1;
+        }
+    }
+    count
+}
+
+fn contains_complete_identity(query: &str, identity: &str) -> bool {
+    if identity.is_empty() || identity.len() > query.len() {
+        return false;
+    }
+    let query = query.as_bytes();
+    let identity = identity.as_bytes();
+    for start in 0..=query.len() - identity.len() {
+        let end = start + identity.len();
+        let equal = query[start..end].iter().zip(identity).all(|(left, right)| left.eq_ignore_ascii_case(right));
+        let identity_byte = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-';
+        if equal && (start == 0 || !identity_byte(query[start - 1])) && (end == query.len() || !identity_byte(query[end])) {
+            return true;
+        }
+    }
+    false
+}
+
+fn rank_tools(query: &str, candidates: &[Arc<CatalogTool>], scoped: bool) -> Vec<Arc<CatalogTool>> {
+    let tokens = query_tokens(query);
+    let mut document_frequencies = vec![0usize; tokens.len()];
+    for (token_index, token) in tokens.iter().enumerate() {
+        document_frequencies[token_index] = candidates
+            .iter()
+            .filter(|tool| {
+                let primary = [&tool.plugin_id, &tool.plugin_name, &tool.original_name, &tool.name];
+                let secondary = [&tool.description, &tool.search_schema, &tool.server_instructions];
+                primary.iter().any(|field| term_frequency(field, token) > 0)
+                    || secondary.iter().any(|field| term_frequency(field, token) > 0)
+            })
+            .count();
+    }
+
+    let mut ranked: Vec<(Arc<CatalogTool>, bool, f64, usize)> = Vec::new();
+    for tool in candidates {
+        let exact = [&tool.original_name, &tool.name, &tool.plugin_id]
+            .iter()
+            .any(|identity| contains_complete_identity(query, identity));
+        let primary = [&tool.plugin_id, &tool.plugin_name, &tool.original_name, &tool.name];
+        let secondary = [&tool.description, &tool.search_schema, &tool.server_instructions];
+        let mut primary_hits = 0usize;
+        let mut secondary_hits = 0usize;
+        let mut score = 0.0;
+        for (index, token) in tokens.iter().enumerate() {
+            let primary_frequency: usize = primary.iter().map(|field| term_frequency(field, token)).sum();
+            let secondary_frequency: usize = secondary.iter().map(|field| term_frequency(field, token)).sum();
+            if primary_frequency > 0 {
+                primary_hits += 1;
+            }
+            let secondary_is_evidence = secondary_frequency > 0
+                && (scoped || (token.len() >= 4 && document_frequencies[index] < candidates.len()));
+            if secondary_is_evidence {
+                secondary_hits += 1;
+            }
+            if primary_frequency > 0 || secondary_frequency > 0 {
+                let count = candidates.len().max(1) as f64;
+                let frequency = document_frequencies[index] as f64;
+                let idf = (1.0 + (count - frequency + 0.5) / (frequency + 0.5)).ln();
+                score += idf * (3.0 * primary_frequency as f64 + secondary_frequency as f64);
+            }
+        }
+        let clear_match = exact || (tokens.len() == 1 && primary_hits > 0) || primary_hits + secondary_hits >= 2;
+        if clear_match {
+            ranked.push((tool.clone(), exact, score, primary_hits));
+        }
+    }
+    ranked.sort_by(|left, right| {
+        right
+            .1
+            .cmp(&left.1)
+            .then_with(|| right.2.partial_cmp(&left.2).unwrap_or(std::cmp::Ordering::Equal))
+            .then_with(|| right.3.cmp(&left.3))
+            .then_with(|| left.0.name.to_ascii_lowercase().cmp(&right.0.name.to_ascii_lowercase()))
+    });
+    ranked.into_iter().map(|(tool, _, _, _)| tool).collect()
 }
 
 #[async_trait]
@@ -801,7 +1337,18 @@ impl Tool for PluginTool {
         let tool = self.tool.name.to_string();
         if !self.read_only {
             let bot = self.app.bot(&self.bot_id).ok_or_else(|| ToolError("The bot is gone".into()))?;
-            let outcome = super::review::decide(&self.app, &bot, &self.chat_id, &self.plugin_id, &self.plugin_name, &tool, &self.description, &args, &cancel).await;
+            let outcome = super::review::decide(
+                &self.app,
+                &bot,
+                &self.chat_id,
+                &self.plugin_id,
+                &self.plugin_name,
+                &tool,
+                &self.review_description,
+                &args,
+                &cancel,
+            )
+            .await;
             if let super::review::Outcome::Ask { reason } = outcome {
                 if self.unattended {
                     return Err(ToolError(format!(
@@ -1021,6 +1568,50 @@ pub fn answer(app: &Arc<App>, message_id: &str, decision: Decision) -> bool {
 mod tests {
     use super::*;
 
+    struct StubTool {
+        name: String,
+        description: String,
+        parameters: Value,
+    }
+
+    #[async_trait::async_trait]
+    impl Tool for StubTool {
+        fn name(&self) -> &str {
+            &self.name
+        }
+        fn description(&self) -> &str {
+            &self.description
+        }
+        fn parameters(&self) -> Value {
+            self.parameters.clone()
+        }
+        async fn execute(&self, _id: &str, _args: Value, _cancel: CancellationToken, _on_update: ToolUpdateFn) -> Result<ToolResult, ToolError> {
+            Ok(ToolResult::text("ok"))
+        }
+    }
+
+    fn catalog_tool(plugin_id: &str, plugin_name: &str, original_name: &str, description: &str, schema: &str) -> Arc<CatalogTool> {
+        let name = tool_name(plugin_id, original_name);
+        let executable: Arc<dyn Tool> = Arc::new(StubTool {
+            name: name.clone(),
+            description: description.into(),
+            parameters: serde_json::from_str(schema).unwrap(),
+        });
+        Arc::new(CatalogTool {
+            name,
+            original_name: original_name.into(),
+            plugin_id: plugin_id.into(),
+            plugin_name: plugin_name.into(),
+            server_name: "test".into(),
+            description: description.into(),
+            search_schema: schema.into(),
+            server_instructions: String::new(),
+            read_only: true,
+            schema_bytes: serde_json::to_vec(&executable.spec()).unwrap().len(),
+            executable,
+        })
+    }
+
     async fn token_endpoint(body: &str) -> (String, tokio::sync::oneshot::Receiver<String>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -1066,6 +1657,99 @@ mod tests {
         assert_eq!(call_summary("get_me", &json!({})), "get_me");
         assert_eq!(Decision::parse("always"), Some(Decision::Always));
         assert_eq!(Decision::parse("nope"), None);
+    }
+
+    #[test]
+    fn capability_search_ranks_intent_and_exact_identity() {
+        let tools = vec![
+            catalog_tool(
+                "github",
+                "GitHub",
+                "create_issue",
+                "Create an issue in a GitHub repository",
+                r#"{"type":"object","properties":{"repo":{"type":"string"},"title":{"type":"string"}}}"#,
+            ),
+            catalog_tool(
+                "github",
+                "GitHub",
+                "list_pull_requests",
+                "List pull requests in a repository",
+                r#"{"type":"object","properties":{"repo":{"type":"string"}}}"#,
+            ),
+            catalog_tool(
+                "linear",
+                "Linear",
+                "create_issue",
+                "Create an issue in a Linear team",
+                r#"{"type":"object","properties":{"team":{"type":"string"},"title":{"type":"string"}}}"#,
+            ),
+        ];
+
+        let ranked = rank_tools("create a GitHub issue", &tools, false);
+        assert_eq!(ranked.first().map(|tool| tool.name.as_str()), Some("github__create_issue"));
+
+        let exact = rank_tools("use github__list_pull_requests", &tools, false);
+        assert_eq!(exact.first().map(|tool| tool.name.as_str()), Some("github__list_pull_requests"));
+        assert!(rank_tools("send a calendar invitation", &tools, false).is_empty());
+    }
+
+    #[test]
+    fn discovery_bounds_utf8_and_names_without_retargeting() {
+        assert_eq!(utf8_prefix("aéz", 2), "a");
+        let bounded = bounded_json_text(&"\n".repeat(1_000), 128);
+        assert!(serde_json::to_string(&bounded).unwrap().len() <= 128);
+        assert_eq!(query_tokens("GitHub github issue"), vec!["github", "issue"]);
+
+        let first = catalog_tool("github", "GitHub", "create.issue", "Create", r#"{"type":"object"}"#);
+        let mut catalog = HashMap::new();
+        catalog.insert(first.name.clone(), first.clone());
+        assert_eq!(unique_tool_name(&first.name, &catalog), "github__create_issue_2");
+    }
+
+    #[test]
+    fn selected_schemas_join_the_next_context_once() {
+        let home = std::env::temp_dir().join(format!("lorca-mcp-turn-{}", uuid::Uuid::new_v4()));
+        let app = App::load(crate::config::Config { home: home.clone(), port: 0 }).unwrap();
+        let bot = Bot {
+            id: "bot".into(),
+            name: "Chef".into(),
+            label: String::new(),
+            description: String::new(),
+            symbol_name: String::new(),
+            accent: String::new(),
+            avatar: None,
+            runner_id: "runner".into(),
+            provider: "deepseek".into(),
+            model: None,
+            thinking: None,
+            instructions: String::new(),
+            workdir: None,
+            created_at: 0.0,
+        };
+        let turn = Arc::new(TurnTools::new(app.clone(), "chat", &bot, false));
+        let discovery = turn.discovery_tools();
+        assert_eq!(discovery.iter().map(|tool| tool.name()).collect::<Vec<_>>(), vec!["capability_search", "mcp_select_tool"]);
+        assert!(discovery.iter().map(|tool| serde_json::to_vec(&tool.spec()).unwrap().len()).sum::<usize>() < 4 * 1024);
+        let base: Arc<dyn Tool> = Arc::new(StubTool {
+            name: "base".into(),
+            description: "base".into(),
+            parameters: json!({ "type": "object" }),
+        });
+        let dynamic = catalog_tool("github", "GitHub", "create_issue", "Create an issue", r#"{"type":"object"}"#);
+        turn.state.lock().unwrap().catalog.insert(dynamic.name.clone(), dynamic.clone());
+
+        assert_eq!(turn.tools_with_selected(std::slice::from_ref(&base)).len(), 1);
+        let (loaded, rejected, exhausted) = turn.select_search_matches(std::slice::from_ref(&dynamic));
+        assert_eq!(loaded, vec!["github__create_issue"]);
+        assert!(rejected.is_empty());
+        assert!(!exhausted);
+        let tools = turn.tools_with_selected(std::slice::from_ref(&base));
+        assert_eq!(tools.iter().map(|tool| tool.name()).collect::<Vec<_>>(), vec!["base", "github__create_issue"]);
+        assert_eq!(turn.tools_with_selected(&tools).len(), 2);
+
+        drop(turn);
+        drop(app);
+        let _ = std::fs::remove_dir_all(home);
     }
 
     #[tokio::test]

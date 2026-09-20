@@ -12,6 +12,10 @@ Lorca ships with plugins for **GitHub**, **Linear**, **Notion**, **Sentry**, **C
 
 Plugins are installed **per Runner**. Every bot on that computer can use every plugin installed there. Secrets and sign-ins stay on that Runner; your other devices only see the plugin's name and state.
 
+## On-demand tools
+
+A bot starts a turn with only a small catalog of the plugins installed on its Runner. Lorca connects an MCP server and gives the model matching tool schemas only when the task needs that capability. The selected tools remain available for the rest of that turn, while unrelated plugin catalogs stay out of the model's context.
+
 ## Install a plugin
 
 - **From a chat:** ask the bot. "Install the GitHub plugin." It finds the plugin and posts a card asking your permission before it installs anything.
