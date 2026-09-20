@@ -673,6 +673,9 @@ final class AppStore {
         let rules: [[String: Any]] = value.rules.map { rule in
             var row: [String: Any] = ["id": rule.id, "text": rule.text, "behavior": rule.behavior.rawValue]
             if let tool = rule.tool { row["tool"] = tool }
+            if let runnerID = rule.runnerID { row["runner_id"] = runnerID }
+            if let workdir = rule.workdir { row["workdir"] = workdir }
+            if let command = rule.command { row["command"] = command }
             return row
         }
         perform("auto_review.set", ["is_enabled": value.isEnabled, "rules": rules])

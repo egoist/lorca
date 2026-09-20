@@ -195,7 +195,7 @@ export default function SettingsScreen() {
           {autoReview.rules.map((rule) => (
             <Row
               key={rule.id}
-              title={rule.text}
+              title={rule.command ?? rule.text}
               detail={
                 rule.behavior === "allow" ? t("Allow automatically") : t("Ask first")
               }

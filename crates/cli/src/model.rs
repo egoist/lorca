@@ -102,6 +102,15 @@ pub struct AutoReviewRule {
     pub behavior: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool: Option<String>,
+    /// Scope metadata for an exact local shell rule. Matching uses the exact action key; these
+    /// fields keep the human-readable rule and private-workspace cleanup tied to the Runner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runner_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workdir: Option<String>,
+    /// The complete reviewed shell command. Present only on exact local shell rules.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
 }
 
 /// Auto-review, after Grok Bot: with it on, a Runner checks effectful plugin actions and shell

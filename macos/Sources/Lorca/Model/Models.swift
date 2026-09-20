@@ -283,6 +283,11 @@ struct AutoReviewRule: Hashable, Identifiable {
     var text: String
     var behavior: Behavior
     var tool: String? = nil
+    /// Scope metadata for an exact local shell rule.
+    var runnerID: String? = nil
+    var workdir: String? = nil
+    /// The complete reviewed command for an exact local shell rule.
+    var command: String? = nil
 }
 
 /// The check on effectful plugin actions and shell commands, shared by every Device through

@@ -152,7 +152,7 @@ export type Body =
 
 /// One Auto-review rule: what a bot wants to do, in the user's words, and whether that runs on
 /// its own or asks first. A rule from a card's Always allow also names its exact action key.
-export type AutoReviewRule = { id: string; text: string; behavior: "allow" | "ask"; tool?: string };
+export type AutoReviewRule = { id: string; text: string; behavior: "allow" | "ask"; tool?: string; runner_id?: string; workdir?: string; command?: string };
 
 /// The check on effectful plugin actions and shell commands, shared through the roster.
 export type AutoReview = { is_enabled: boolean; rules: AutoReviewRule[] };

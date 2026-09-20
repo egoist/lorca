@@ -1,16 +1,12 @@
 import AppKit
 
 /// Settings → Auto-review, after Grok Bot's: the switch and the rules, shared by every Device
-/// through the roster. A rule is "When a bot wants to: …" with Allow automatically or Ask
-/// first; a card's Always allow adds one here too.
+/// through the roster. Add and Edit use sheets; a card's Always allow adds an exact rule here.
 final class AutoReviewSettingsViewController: SettingsPaneViewController {
     private let store = AppStore.shared
     private let check = SectionView(title: L("Auto-review"))
     private let rules = SectionView(title: SettingsEntry.autoReviewRules.row)
     private let toggle = NSSwitch()
-    private let draft = NSTextField()
-    private let draftBehavior = SettingsPopUpButton()
-    private var rows: [(rule: AutoReviewRule, field: NSTextField, popup: NSPopUpButton)] = []
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -18,14 +14,10 @@ final class AutoReviewSettingsViewController: SettingsPaneViewController {
         toggle.controlSize = .small
         toggle.target = self
         toggle.action = #selector(toggled)
-        draft.placeholderString = L("When a bot wants to…")
-        draft.controlSize = .small
-        draft.font = .systemFont(ofSize: 12)
-        draft.delegate = self
-        for behavior in [AutoReviewRule.Behavior.allow, .ask] {
-            draftBehavior.addItem(withTitle: behavior.title)
-            draftBehavior.lastItem?.representedObject = behavior.rawValue
-        }
+        let add = HoverButton(
+            symbol: "plus", pointSize: 11, tooltip: L("Add rule"), target: self,
+            action: #selector(showAddRule))
+        rules.setHeaderAccessory(add)
         addSection(check)
         addSection(rules)
         addFootnote(L("Auto-review checks effectful plugin actions and every shell command before they run, using the bot's own model, and asks you in the chat when an action needs a look. Safe commands normally run automatically; risky commands ask. Off, every such action asks. Write one short, natural-language rule for each action; \"Ask first\" takes priority if rules conflict. Built-in safety checks always apply."))
@@ -45,43 +37,28 @@ final class AutoReviewSettingsViewController: SettingsPaneViewController {
         let switchRow = AccessoryRow(key: SettingsEntry.autoReviewSwitch.row, accessory: toggle)
         check.setRows([switchRow, description])
 
-        rows = []
         var ruleRows: [NSView] = review.rules.map { rule in
-            let field: NSTextField
-            if rule.tool == nil {
-                let input = NSTextField()
-                input.stringValue = rule.text
-                input.isEditable = true
-                input.delegate = self
-                field = input
+            let content: NSView
+            let scope: String?
+            if rule.tool?.hasPrefix("computer/bash/") == true {
+                let runner = rule.runnerID.flatMap { store.device($0) }?.name ?? L("Runner")
+                scope = [runner, rule.workdir].compactMap { $0 }.joined(separator: " · ")
+                content = ExactShellCommandView(command: rule.command ?? rule.text)
             } else {
-                let label = NSTextField(labelWithString: rule.text)
-                label.lineBreakMode = .byTruncatingTail
-                label.maximumNumberOfLines = 1
-                label.toolTip = rule.text
-                field = label
+                let label = Build.label(rule.text, font: .systemFont(ofSize: 12), lines: 0)
+                label.isSelectable = true
+                content = label
+                scope = nil
             }
-            field.controlSize = .small
-            field.font = .systemFont(ofSize: 12)
-            let popup = SettingsPopUpButton()
-            for behavior in [AutoReviewRule.Behavior.allow, .ask] {
-                popup.addItem(withTitle: behavior.title)
-                popup.lastItem?.representedObject = behavior.rawValue
-            }
-            popup.selectItem(at: rule.behavior == .allow ? 0 : 1)
-            popup.target = self
-            popup.action = #selector(behaviorChanged(_:))
-            rows.append((rule, field, popup))
-            let row = RuleRow(field: field, popup: popup)
+            let detail = [scope, rule.behavior.title].compactMap { $0 }.joined(separator: " · ")
+            let row = AutoReviewRuleRow(content: content, detail: detail)
+            row.onEdit = { [weak self] in self?.showEditRule(rule) }
             row.onDelete = { [weak self] in self?.delete(rule.id) }
             return row
         }
         if ruleRows.isEmpty {
             ruleRows.append(NoteRow(text: L("No rules yet. Always allow on a card adds one, or write one below.")))
         }
-        let add = RuleRow(field: draft, popup: draftBehavior, addTitle: L("Add rule"))
-        add.onAdd = { [weak self] in self?.addRule() }
-        ruleRows.append(add)
         rules.setRows(ruleRows)
     }
 
@@ -91,19 +68,30 @@ final class AutoReviewSettingsViewController: SettingsPaneViewController {
         store.setAutoReview(review)
     }
 
-    @objc private func behaviorChanged(_ sender: NSPopUpButton) {
-        save()
+    @objc private func showAddRule() {
+        presentRuleEditor(nil)
     }
 
-    private func addRule() {
-        let text = draft.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        var review = store.autoReview
-        let behavior = AutoReviewRule.Behavior(rawValue: draftBehavior.selectedItem?.representedObject as? String ?? "allow") ?? .allow
-        review.rules.append(AutoReviewRule(id: "", text: text, behavior: behavior))
-        draft.stringValue = ""
-        draftBehavior.selectItem(at: 0)
-        store.setAutoReview(review)
+    private func showEditRule(_ rule: AutoReviewRule) {
+        presentRuleEditor(rule)
+    }
+
+    private func presentRuleEditor(_ rule: AutoReviewRule?) {
+        let editor = AutoReviewRuleEditorViewController(rule: rule)
+        editor.onSave = { [weak self] text, behavior in
+            guard let self else { return }
+            var review = self.store.autoReview
+            if let rule, let index = review.rules.firstIndex(where: { $0.id == rule.id }) {
+                var updated = review.rules[index]
+                if updated.tool == nil { updated.text = text }
+                updated.behavior = behavior
+                review.rules[index] = updated
+            } else {
+                review.rules.append(AutoReviewRule(id: "", text: text, behavior: behavior))
+            }
+            self.store.setAutoReview(review)
+        }
+        presentAsSheet(editor)
     }
 
     private func delete(_ id: String) {
@@ -111,31 +99,174 @@ final class AutoReviewSettingsViewController: SettingsPaneViewController {
         review.rules.removeAll { $0.id == id }
         store.setAutoReview(review)
     }
+}
 
-    /// Writes every row back: the texts as edited and the behaviors as picked.
-    private func save() {
-        var review = store.autoReview
-        review.rules = rows.compactMap { row in
-            let text = row.field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !text.isEmpty else { return nil }
-            var rule = row.rule
-            rule.text = text
-            rule.behavior = AutoReviewRule.Behavior(rawValue: row.popup.selectedItem?.representedObject as? String ?? "allow") ?? .allow
-            return rule
+/// Add and Edit share one sheet. User-written rule text is editable; an exact tool or shell
+/// identity stays fixed, while its Allow/Ask behavior can still change.
+final class AutoReviewRuleEditorViewController: SheetViewController, NSTextFieldDelegate {
+    private let rule: AutoReviewRule?
+    private let text = NSTextField()
+    private let behavior = SettingsPopUpButton()
+    private let canEditText: Bool
+    private let originalText: String
+
+    var onSave: ((String, AutoReviewRule.Behavior) -> Void)?
+
+    init(rule: AutoReviewRule?) {
+        self.rule = rule
+        canEditText = rule?.tool == nil
+        originalText = rule?.text ?? ""
+        let exact = rule?.tool != nil
+        super.init(
+            title: rule == nil ? L("Add rule") : L("Edit rule"),
+            subtitle: exact
+                ? L("Exact actions cannot be changed. Delete this rule and allow a different action instead.")
+                : L("Describe when a bot should be allowed automatically or asked first."),
+            width: 500
+        )
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func loadView() {
+        super.loadView()
+
+        let value = rule?.command ?? rule?.text ?? ""
+        let ruleContent: NSView
+        if let command = rule?.command {
+            let ruleSection = SectionView(title: L("Command"))
+            ruleSection.setRows([ExactShellCommandView(command: command, maxLines: 0)])
+            ruleContent = ruleSection
+        } else {
+            text.stringValue = value
+            text.isEditable = canEditText
+            text.isSelectable = true
+            text.font = .systemFont(ofSize: 12)
+            text.textColor = .labelColor
+            text.isBezeled = true
+            text.bezelStyle = .roundedBezel
+            text.drawsBackground = true
+            text.backgroundColor = .textBackgroundColor
+            text.maximumNumberOfLines = 0
+            text.lineBreakMode = .byWordWrapping
+            text.cell?.wraps = true
+            text.cell?.usesSingleLineMode = false
+            text.cell?.isScrollable = false
+            text.delegate = self
+            text.translatesAutoresizingMaskIntoConstraints = false
+            let caption = Build.label(
+                L("Rule").uppercased(), font: .systemFont(ofSize: 10, weight: .semibold),
+                color: .tertiaryLabelColor)
+            let field = Build.stack([caption, text], spacing: 6)
+            text.widthAnchor.constraint(equalTo: field.widthAnchor).isActive = true
+            text.heightAnchor.constraint(equalToConstant: 90).isActive = true
+            ruleContent = field
         }
-        if review != store.autoReview { store.setAutoReview(review) }
+
+        for choice in [AutoReviewRule.Behavior.allow, .ask] {
+            behavior.addItem(withTitle: choice.title)
+            behavior.lastItem?.representedObject = choice.rawValue
+        }
+        behavior.selectItem(at: rule?.behavior == .ask ? 1 : 0)
+        let behaviorSection = SectionView(title: L("Behavior"))
+        behaviorSection.setRows([AccessoryRow(key: L("Auto-review"), accessory: behavior)])
+
+        contentStack.addArrangedSubview(ruleContent)
+        contentStack.addArrangedSubview(behaviorSection)
+        NSLayoutConstraint.activate([
+            ruleContent.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
+            behaviorSection.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
+        ])
+        setButtons(confirm: rule == nil ? L("Add rule") : L("Save"))
+    }
+
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        if canEditText { view.window?.makeFirstResponder(text) }
+    }
+
+    override func confirmTapped() {
+        let value = (canEditText ? text.stringValue : originalText).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else {
+            NSSound.beep()
+            return
+        }
+        let selected = behavior.selectedItem?.representedObject as? String ?? "allow"
+        onSave?(value, AutoReviewRule.Behavior(rawValue: selected) ?? .allow)
+        dismissSheet()
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        guard control === text, commandSelector == #selector(NSResponder.insertNewline(_:)) else { return false }
+        textView.insertNewlineIgnoringFieldEditor(nil)
+        return true
     }
 }
 
-extension AutoReviewSettingsViewController: NSTextFieldDelegate {
-    func controlTextDidEndEditing(_ obj: Notification) {
-        guard let field = obj.object as? NSTextField else { return }
-        if field === draft {
-            if (obj.userInfo?["NSTextMovement"] as? Int) == NSReturnTextMovement { addRule() }
-        } else {
-            save()
+/// A complete command in a bounded wrapping code block.
+final class ExactShellCommandView: NSView {
+    private let command: NSTextField
+    private let maxLines: Int
+    private var renderedWidth: CGFloat = 0
+    private static let commandFont = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+
+    init(command commandText: String, maxLines: Int = 2) {
+        self.maxLines = maxLines
+        command = NSTextField(wrappingLabelWithString: commandText)
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        command.translatesAutoresizingMaskIntoConstraints = false
+        command.font = Self.commandFont
+        command.textColor = .labelColor
+        command.maximumNumberOfLines = maxLines
+        command.lineBreakMode = maxLines == 0 ? .byCharWrapping : .byTruncatingTail
+        command.cell?.wraps = true
+        command.cell?.usesSingleLineMode = false
+        command.cell?.isScrollable = false
+        command.cell?.truncatesLastVisibleLine = maxLines != 0
+        command.isSelectable = true
+        command.toolTip = commandText
+        command.preferredMaxLayoutWidth = 640
+        command.setContentHuggingPriority(.init(1), for: .horizontal)
+        command.setContentCompressionResistancePriority(.init(1), for: .horizontal)
+        let box = BackgroundView()
+        box.fillColor = Theme.codeBackground
+        box.cornerRadius = 6
+        addSubview(box)
+        box.addSubview(command)
+        NSLayoutConstraint.activate([
+            box.topAnchor.constraint(equalTo: topAnchor),
+            box.leadingAnchor.constraint(equalTo: leadingAnchor),
+            box.trailingAnchor.constraint(equalTo: trailingAnchor),
+            box.bottomAnchor.constraint(equalTo: bottomAnchor),
+            command.topAnchor.constraint(equalTo: box.topAnchor, constant: 7),
+            command.leadingAnchor.constraint(equalTo: box.leadingAnchor, constant: 8),
+            command.trailingAnchor.constraint(equalTo: box.trailingAnchor, constant: -8),
+            command.bottomAnchor.constraint(equalTo: box.bottomAnchor, constant: -7),
+        ])
+    }
+
+    override func layout() {
+        super.layout()
+        let available = bounds.width - 16
+        if available > 0, renderedWidth != available {
+            renderedWidth = available
+            command.preferredMaxLayoutWidth = available
+            invalidateIntrinsicContentSize()
+            needsLayout = true
         }
     }
+
+    override var intrinsicContentSize: NSSize {
+        let lineHeight = ceil(Self.commandFont.boundingRectForFont.height)
+        return NSSize(
+            width: NSView.noIntrinsicMetric,
+            height: maxLines == 0 ? command.intrinsicContentSize.height + 14 : lineHeight * CGFloat(maxLines) + 14)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
 }
 
 /// Key on the left, any control on the right, inside a section card.
@@ -160,58 +291,63 @@ final class AccessoryRow: NSView {
     required init?(coder: NSCoder) { fatalError() }
 }
 
-/// One rule: "When a bot wants to:" field, "It should:" popup, and a delete or Add button.
-final class RuleRow: NSView {
+/// One rule in two levels: content across the full width, then metadata and actions below.
+final class AutoReviewRuleRow: NSView {
+    var onEdit: (() -> Void)?
     var onDelete: (() -> Void)?
-    var onAdd: (() -> Void)?
 
-    init(field: NSTextField, popup: NSPopUpButton, addTitle: String? = nil) {
+    init(content: NSView, detail: String) {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
-        field.translatesAutoresizingMaskIntoConstraints = false
-        popup.translatesAutoresizingMaskIntoConstraints = false
-        let button: NSButton
-        if let addTitle {
-            let add = NSButton(title: addTitle, target: nil, action: #selector(add))
-            add.bezelStyle = .rounded
-            add.controlSize = .small
-            add.font = .systemFont(ofSize: 11)
-            button = add
-        } else {
-            button = HoverButton(
-                symbol: "trash", pointSize: 12, tooltip: L("Delete rule"), target: nil,
-                action: #selector(delete))
-        }
-        button.target = self
-        button.translatesAutoresizingMaskIntoConstraints = false
-        field.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        popup.setContentHuggingPriority(.required, for: .horizontal)
-        button.setContentHuggingPriority(.required, for: .horizontal)
-        button.setContentCompressionResistancePriority(.required, for: .horizontal)
-        addSubview(field)
-        addSubview(popup)
-        addSubview(button)
-        var constraints = [
-            heightAnchor.constraint(greaterThanOrEqualToConstant: 36),
-            field.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            field.trailingAnchor.constraint(equalTo: popup.leadingAnchor, constant: -8),
-            field.centerYAnchor.constraint(equalTo: centerYAnchor),
-            popup.widthAnchor.constraint(equalToConstant: 150),
-            popup.trailingAnchor.constraint(equalTo: button.leadingAnchor, constant: -8),
-            popup.centerYAnchor.constraint(equalTo: centerYAnchor),
-            button.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
-            button.centerYAnchor.constraint(equalTo: centerYAnchor),
-        ]
-        if addTitle == nil {
-            constraints.append(button.widthAnchor.constraint(equalToConstant: 28))
-        }
-        NSLayoutConstraint.activate(constraints)
+        content.translatesAutoresizingMaskIntoConstraints = false
+        content.setContentHuggingPriority(.init(1), for: .horizontal)
+        content.setContentCompressionResistancePriority(.init(1), for: .horizontal)
+
+        let detailLabel = Build.label(
+            detail, font: .systemFont(ofSize: 10.5), color: .secondaryLabelColor)
+        detailLabel.toolTip = detail
+        detailLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let edit = HoverButton(
+            symbol: "square.and.pencil", pointSize: 11, tooltip: L("Edit rule"), target: self,
+            action: #selector(edit))
+        let delete = HoverButton(
+            symbol: "trash", pointSize: 11, tooltip: L("Delete rule"), target: self,
+            action: #selector(delete))
+        edit.translatesAutoresizingMaskIntoConstraints = false
+        delete.translatesAutoresizingMaskIntoConstraints = false
+
+        addSubview(content)
+        addSubview(detailLabel)
+        addSubview(edit)
+        addSubview(delete)
+        let fillWidth = content.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12)
+        fillWidth.priority = .init(999)
+        NSLayoutConstraint.activate([
+            content.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            content.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -12),
+            content.widthAnchor.constraint(lessThanOrEqualToConstant: 900),
+            fillWidth,
+            content.topAnchor.constraint(equalTo: topAnchor, constant: 10),
+
+            detailLabel.topAnchor.constraint(equalTo: content.bottomAnchor, constant: 7),
+            detailLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            detailLabel.trailingAnchor.constraint(lessThanOrEqualTo: edit.leadingAnchor, constant: -8),
+            detailLabel.centerYAnchor.constraint(equalTo: edit.centerYAnchor),
+            detailLabel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
+
+            edit.trailingAnchor.constraint(equalTo: delete.leadingAnchor, constant: -4),
+            edit.widthAnchor.constraint(equalToConstant: 28),
+            edit.heightAnchor.constraint(equalToConstant: 24),
+            delete.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            delete.widthAnchor.constraint(equalToConstant: 28),
+            delete.heightAnchor.constraint(equalToConstant: 24),
+            delete.centerYAnchor.constraint(equalTo: edit.centerYAnchor),
+        ])
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    @objc private func add() { onAdd?() }
+    @objc private func edit() { onEdit?() }
     @objc private func delete() { onDelete?() }
 }

@@ -167,13 +167,17 @@ impl App {
         let credentials = Credentials::load(&config);
         let plugins = crate::plugins::Store::load(&config);
         let mut state: State = config::read_json(&config.state_path()).unwrap_or_default();
+        let bots = state.bots.clone();
+        let chats = state.chats.clone();
+        let mut migrated_auto_review = normalize_auto_review_rules(&bots, &mut state.auto_review);
+        migrated_auto_review |= restore_exact_shell_commands(&chats, &mut state.auto_review);
         // Upload this Device's metadata once per launch: a relay that changed or was reset
         // since the last upload has no copy, and every newly paired Device needs one.
         state.machine_blob_hash = None;
         let (events, _) = broadcast::channel(512);
         let http = reqwest::Client::builder().timeout(std::time::Duration::from_secs(60)).build()?;
 
-        Ok(Arc::new(App {
+        let app = Arc::new(App {
             config,
             settings: Mutex::new(settings),
             identity: Mutex::new(identity),
@@ -200,7 +204,11 @@ impl App {
             #[cfg(feature = "runner")]
             mcp: crate::plugins::mcp::Pool::new(),
             http,
-        }))
+        });
+        if migrated_auto_review {
+            app.save_state_now();
+        }
+        Ok(app)
     }
 
     // MARK: - Persistence
@@ -608,8 +616,12 @@ impl App {
     }
 
     /// Replaces the Auto-review setting and publishes the roster.
-    pub fn set_auto_review(&self, auto_review: AutoReview) {
-        self.state.lock().unwrap().auto_review = auto_review;
+    pub fn set_auto_review(&self, mut auto_review: AutoReview) {
+        let mut state = self.state.lock().unwrap();
+        normalize_auto_review_rules(&state.bots, &mut auto_review);
+        restore_exact_shell_commands(&state.chats, &mut auto_review);
+        state.auto_review = auto_review;
+        drop(state);
         self.roster_changed(true);
     }
 
@@ -660,12 +672,27 @@ impl App {
     pub fn delete_bot(&self, id: &str) -> anyhow::Result<()> {
         let removed_chat_ids = {
             let mut state = self.state.lock().unwrap();
-            if !state.bots.iter().any(|bot| bot.id == id) {
-                anyhow::bail!("Unknown bot");
-            }
+            let deleted_bot = state.bots.iter().find(|bot| bot.id == id).cloned().ok_or_else(|| anyhow::anyhow!("Unknown bot"))?;
+            let deleted_private_workdir = deleted_bot
+                .workdir
+                .is_none()
+                .then(|| canonical_workdir(deleted_bot.working_directory(&self.config.home)));
 
             state.bots.retain(|bot| bot.id != id);
             state.routines.retain(|routine| routine.bot_id != id);
+            if let Some(workdir) = deleted_private_workdir {
+                let scope_is_still_used = state.bots.iter().any(|bot| {
+                    bot.runner_id == deleted_bot.runner_id && canonical_workdir(bot.working_directory(&self.config.home)) == workdir
+                });
+                if !scope_is_still_used {
+                    state.auto_review.rules.retain(|rule| {
+                        rule.runner_id.as_deref() != Some(deleted_bot.runner_id.as_str())
+                            || rule.workdir.as_deref() != Some(workdir.as_str())
+                    });
+                }
+            }
+            let remaining_bots = state.bots.clone();
+            normalize_auto_review_rules(&remaining_bots, &mut state.auto_review);
 
             let mut removed = Vec::new();
             for chat in &mut state.chats {
@@ -1105,6 +1132,105 @@ impl App {
     }
 }
 
+/// Adds Runner/workdir scope metadata to exact local shell rules by reading their old labels, and
+/// drops rules for default workspaces whose bot no longer exists. Older Devices may omit the new
+/// metadata, so this normalization also runs when Auto-review is replaced or synced.
+pub(crate) fn normalize_auto_review_rules(bots: &[Bot], auto_review: &mut AutoReview) -> bool {
+    let mut changed = false;
+    auto_review.rules.retain_mut(|rule| {
+        if !rule.tool.as_deref().is_some_and(|tool| tool.starts_with("computer/bash/")) {
+            return true;
+        }
+
+        let parsed_workdir = exact_shell_rule_workdir(&rule.text);
+        let workdir = rule.workdir.clone().or(parsed_workdir);
+        let legacy_label = workdir.as_deref().is_some_and(|workdir| {
+            rule.text.contains(&format!(" in {workdir} on "))
+                || rule.text.starts_with("Exact shell command starting with ")
+        });
+        if rule.command.is_none() && !legacy_label {
+            rule.command = Some(rule.text.clone());
+            changed = true;
+        }
+        if let Some(workdir) = workdir.as_ref() {
+            if rule.workdir.is_none() {
+                rule.workdir = Some(workdir.clone());
+                changed = true;
+            }
+            if let Some(bot_id) = default_workspace_bot_id(workdir) {
+                let bot = bots
+                    .iter()
+                    .find(|bot| bot.id == bot_id)
+                    .or_else(|| bots.iter().find(|bot| bot.workdir.as_deref() == Some(workdir.as_str())));
+                let Some(bot) = bot else {
+                    changed = true;
+                    return false;
+                };
+                if rule.runner_id.is_none() {
+                    rule.runner_id = Some(bot.runner_id.clone());
+                    changed = true;
+                }
+            } else if rule.runner_id.is_none() {
+                if let Some(bot) = bots.iter().find(|bot| bot.workdir.as_deref() == Some(workdir.as_str())) {
+                    rule.runner_id = Some(bot.runner_id.clone());
+                    changed = true;
+                }
+            }
+        }
+        true
+    });
+    changed
+}
+
+/// Older exact rules stored only a hash and a short label. Their permission cards still carry
+/// the reviewed arguments, so use the same Runner/workdir/action key to restore the full command.
+pub(crate) fn restore_exact_shell_commands(chats: &[Chat], auto_review: &mut AutoReview) -> bool {
+    let mut changed = false;
+    for rule in &mut auto_review.rules {
+        if rule.command.is_some() || !rule.tool.as_deref().is_some_and(|tool| tool.starts_with("computer/bash/")) {
+            continue;
+        }
+        let (Some(rule_key), Some(runner_id), Some(workdir)) = (rule.tool.as_deref(), rule.runner_id.as_deref(), rule.workdir.as_deref()) else {
+            continue;
+        };
+        let command = chats.iter().flat_map(|chat| &chat.messages).find_map(|message| {
+            let Body::Permission { plugin_id, tool, arguments, .. } = &message.body else { return None };
+            if plugin_id != "computer" || tool != "bash" || crate::local_review::scoped_rule_key(runner_id, std::path::Path::new(workdir), arguments) != rule_key {
+                return None;
+            }
+            arguments.get("command").and_then(Value::as_str).map(str::to_string)
+        });
+        if let Some(command) = command {
+            rule.text = command.clone();
+            rule.command = Some(command);
+            changed = true;
+        }
+    }
+    changed
+}
+
+fn canonical_workdir(workdir: std::path::PathBuf) -> String {
+    std::fs::canonicalize(&workdir).unwrap_or(workdir).display().to_string()
+}
+
+fn exact_shell_rule_workdir(text: &str) -> Option<String> {
+    let (scope, _) = text.rsplit_once(" on ")?;
+    if let Some((_, workdir)) = scope.split_once(" in ") {
+        return Some(workdir.to_string());
+    }
+    let scope = scope.strip_prefix("Exact shell command starting with ")?;
+    let (_, workdir) = scope.split_once(" from ")?;
+    Some(workdir.to_string())
+}
+
+fn default_workspace_bot_id(workdir: &str) -> Option<&str> {
+    ["/workspaces/", "\\workspaces\\"].into_iter().find_map(|marker| {
+        let (_, rest) = workdir.rsplit_once(marker)?;
+        let id = rest.split(['/', '\\']).next()?;
+        id.starts_with("bot-").then_some(id)
+    })
+}
+
 /// Drops everything still waiting to upload for these chats and queues their relay groups for
 /// deletion. The sync cycle retries each group until the relay accepts it.
 fn queue_chat_deletes(state: &mut State, chat_ids: &[String]) {
@@ -1246,6 +1372,8 @@ mod tests {
     fn deleting_a_bot_removes_its_dm_routines_and_group_memberships() {
         let scratch = scratch_app();
         let app = &scratch.0;
+        let b1_workdir = canonical_workdir(app.config.home.join("workspaces").join("b1"));
+        let b2_workdir = canonical_workdir(app.config.home.join("workspaces").join("b2"));
         {
             let mut state = app.state.lock().unwrap();
             state.bots = vec![bot("b1"), bot("b2")];
@@ -1257,6 +1385,44 @@ mod tests {
             ];
             state.routines = vec![routine("r1", "b1"), routine("r2", "b2")];
             state.outbox = ["dm-b1", "dm-b2", "shared", "solo"].into_iter().map(queued_message).collect();
+            state.auto_review.rules = vec![
+                AutoReviewRule {
+                    id: "shell-b1".into(),
+                    text: "cargo test".into(),
+                    behavior: "allow".into(),
+                    tool: Some("computer/bash/one".into()),
+                    runner_id: Some("runner".into()),
+                    workdir: Some(b1_workdir),
+                    command: Some("cargo test".into()),
+                },
+                AutoReviewRule {
+                    id: "shell-b2".into(),
+                    text: "cargo test".into(),
+                    behavior: "allow".into(),
+                    tool: Some("computer/bash/two".into()),
+                    runner_id: Some("runner".into()),
+                    workdir: Some(b2_workdir),
+                    command: Some("cargo test".into()),
+                },
+                AutoReviewRule {
+                    id: "plugin".into(),
+                    text: "use GitHub create_issue".into(),
+                    behavior: "allow".into(),
+                    tool: Some("github/create_issue".into()),
+                    runner_id: None,
+                    workdir: None,
+                    command: None,
+                },
+                AutoReviewRule {
+                    id: "shell-shared".into(),
+                    text: "cargo test".into(),
+                    behavior: "allow".into(),
+                    tool: Some("computer/bash/shared".into()),
+                    runner_id: Some("runner".into()),
+                    workdir: Some("/work/shared".into()),
+                    command: Some("cargo test".into()),
+                },
+            ];
         }
 
         app.delete_bot("b1").unwrap();
@@ -1272,8 +1438,100 @@ mod tests {
             state.outbox.iter().filter_map(|item| item.group.as_deref()).collect::<Vec<_>>(),
             vec!["dm-b2", "shared"]
         );
+        assert_eq!(
+            state.auto_review.rules.iter().map(|rule| rule.id.as_str()).collect::<Vec<_>>(),
+            vec!["shell-b2", "plugin", "shell-shared"]
+        );
         assert!(state.group_deletes.contains(&"dm-b1".into()));
         assert!(state.group_deletes.contains(&"solo".into()));
+    }
+
+    #[test]
+    fn legacy_exact_shell_rules_gain_runner_scope_and_deleted_workspaces_are_removed() {
+        let mut shared_scope_bot = bot("bot-shared");
+        shared_scope_bot.workdir = Some("/Users/me/.lorca/workspaces/bot-deleted".into());
+        let bots = vec![bot("bot-current"), shared_scope_bot];
+        let command = "ls ~/dev; echo done";
+        let arguments = json!({ "command": command });
+        let current_key = crate::local_review::scoped_rule_key(
+            "runner",
+            std::path::Path::new("/Users/me/.lorca/workspaces/bot-current"),
+            &arguments,
+        );
+        let mut auto_review = AutoReview {
+            is_enabled: true,
+            rules: vec![
+                AutoReviewRule {
+                    id: "current".into(),
+                    text: "ls in /Users/me/.lorca/workspaces/bot-current on My Mac".into(),
+                    behavior: "allow".into(),
+                    tool: Some(current_key),
+                    runner_id: None,
+                    workdir: None,
+                    command: None,
+                },
+                AutoReviewRule {
+                    id: "shared".into(),
+                    text: "cd in /Users/me/.lorca/workspaces/bot-deleted on My Mac".into(),
+                    behavior: "allow".into(),
+                    tool: Some("computer/bash/shared".into()),
+                    runner_id: None,
+                    workdir: None,
+                    command: None,
+                },
+                AutoReviewRule {
+                    id: "orphan".into(),
+                    text: "pwd in /Users/me/.lorca/workspaces/bot-orphan on My Mac".into(),
+                    behavior: "allow".into(),
+                    tool: Some("computer/bash/orphan".into()),
+                    runner_id: None,
+                    workdir: None,
+                    command: None,
+                },
+                AutoReviewRule {
+                    id: "plugin".into(),
+                    text: "use GitHub create_issue".into(),
+                    behavior: "allow".into(),
+                    tool: Some("github/create_issue".into()),
+                    runner_id: None,
+                    workdir: None,
+                    command: None,
+                },
+            ],
+        };
+
+        assert!(normalize_auto_review_rules(&bots, &mut auto_review));
+        assert_eq!(
+            auto_review.rules.iter().map(|rule| rule.id.as_str()).collect::<Vec<_>>(),
+            vec!["current", "shared", "plugin"]
+        );
+        let current = &auto_review.rules[0];
+        assert_eq!(current.runner_id.as_deref(), Some("runner"));
+        assert_eq!(current.workdir.as_deref(), Some("/Users/me/.lorca/workspaces/bot-current"));
+        let shared = &auto_review.rules[1];
+        assert_eq!(shared.runner_id.as_deref(), Some("runner"));
+        assert_eq!(shared.workdir.as_deref(), Some("/Users/me/.lorca/workspaces/bot-deleted"));
+
+        let mut permission_chat = chat("permissions", "dm", &["bot-current"], Some("bot-current"));
+        permission_chat.messages.push(Message::new(
+            "permissions",
+            Author::Bot { bot_id: "bot-current".into() },
+            Body::Permission {
+                plugin_id: "computer".into(),
+                plugin_name: "My Mac".into(),
+                tool: "bash".into(),
+                summary: command.into(),
+                arguments,
+                decision: "always".into(),
+                reason: None,
+                link: None,
+                code: None,
+            },
+        ));
+        assert!(restore_exact_shell_commands(&[permission_chat], &mut auto_review));
+        let current = &auto_review.rules[0];
+        assert_eq!(current.command.as_deref(), Some(command));
+        assert_eq!(current.text, command);
     }
 
     #[test]

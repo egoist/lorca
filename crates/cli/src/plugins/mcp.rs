@@ -1497,6 +1497,9 @@ pub async fn ask(app: &Arc<App>, chat_id: &str, bot_id: &str, plugin_id: &str, p
         text: format!("use {plugin_name} {tool}"),
         behavior: "allow".into(),
         tool: Some(format!("{plugin_id}/{tool}")),
+        runner_id: None,
+        workdir: None,
+        command: None,
     });
     ask_with_rule(app, chat_id, bot_id, plugin_id, plugin_name, tool, summary, arguments, reason, always_rule, cancel).await
 }

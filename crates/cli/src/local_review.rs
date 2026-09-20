@@ -81,9 +81,12 @@ pub async fn before_tool_call(
 
     let always_rule = AutoReviewRule {
         id: uuid::Uuid::new_v4().to_string(),
-        text: scoped_rule_label(command, &workdir, &runner_name),
+        text: command.to_string(),
         behavior: "allow".into(),
         tool: Some(rule_key),
+        runner_id: Some(runner_id),
+        workdir: Some(workdir.display().to_string()),
+        command: Some(command.to_string()),
     };
     match mcp::ask_with_rule(
         app,
@@ -110,7 +113,7 @@ fn blocked(reason: String) -> BeforeToolCallResult {
     BeforeToolCallResult { block: true, reason: Some(reason), args: None, terminate: false }
 }
 
-fn scoped_rule_key(runner_id: &str, workdir: &Path, args: &Value) -> String {
+pub(crate) fn scoped_rule_key(runner_id: &str, workdir: &Path, args: &Value) -> String {
     let mut digest = Sha256::new();
     digest.update(runner_id.as_bytes());
     digest.update([0]);
@@ -120,30 +123,6 @@ fn scoped_rule_key(runner_id: &str, workdir: &Path, args: &Value) -> String {
     let hash = digest.finalize();
     let short: String = hash[..16].iter().map(|byte| format!("{byte:02x}")).collect();
     format!("computer/bash/{short}")
-}
-
-fn scoped_rule_label(command: &str, workdir: &Path, runner: &str) -> String {
-    let action = match command_and_args(command) {
-        Some((command, args)) => match safe_rule_subcommand(&command, &args) {
-            Some(subcommand) => format!("{command} {subcommand}"),
-            None => command,
-        },
-        None => "shell command".into(),
-    };
-    format!("{action} in {} on {runner}", workdir.display())
-}
-
-fn safe_rule_subcommand<'a>(command: &str, args: &'a [String]) -> Option<&'a str> {
-    let candidate = args.iter().find(|arg| !arg.starts_with('-'))?.as_str();
-    let known = match command {
-        "git" => ["status", "diff", "log", "show", "add", "commit", "checkout", "switch", "restore", "reset", "clean", "fetch", "pull", "push", "clone"].as_slice(),
-        "cargo" => ["build", "check", "test", "run", "fmt", "clippy", "fetch", "update", "install", "publish"].as_slice(),
-        "npm" | "pnpm" | "yarn" | "bun" => ["run", "test", "build", "install", "add", "remove", "publish"].as_slice(),
-        "gh" => ["api", "auth", "issue", "pr", "repo", "release", "run", "workflow"].as_slice(),
-        "kubectl" => ["get", "describe", "logs", "diff", "apply", "create", "delete", "edit", "exec", "port-forward"].as_slice(),
-        _ => return None,
-    };
-    known.contains(&candidate).then_some(candidate)
 }
 
 fn command_summary(command: &str) -> String {
@@ -451,15 +430,13 @@ mod tests {
     }
 
     #[test]
-    fn exact_rules_are_bound_to_runner_workspace_and_arguments_without_storing_secrets() {
+    fn exact_rules_are_bound_to_runner_workspace_and_arguments() {
         let args = serde_json::json!({ "command": "git status" });
         let one = scoped_rule_key("runner-a", Path::new("/work/a"), &args);
         assert_eq!(one, scoped_rule_key("runner-a", Path::new("/work/a"), &args));
         assert_ne!(one, scoped_rule_key("runner-b", Path::new("/work/a"), &args));
         assert_ne!(one, scoped_rule_key("runner-a", Path::new("/work/b"), &args));
         assert_ne!(one, scoped_rule_key("runner-a", Path::new("/work/a"), &serde_json::json!({ "command": "git reset --hard" })));
-        let label = scoped_rule_label("ACCESS_TOKEN=top-secret curl https://example.com/?token=top-secret", Path::new("/work/a"), "Runner");
-        assert_eq!(label, "curl in /work/a on Runner");
     }
 
     #[tokio::test]
@@ -488,6 +465,9 @@ mod tests {
         app.add_auto_review_rule(AutoReviewRule {
             id: "allow".into(), text: "cargo test in this workspace".into(), behavior: "allow".into(),
             tool: Some(scoped_rule_key("runner", &canonical, &args)),
+            runner_id: Some("runner".into()),
+            workdir: Some(canonical.display().to_string()),
+            command: Some("cargo test".into()),
         });
         let ctx = BeforeToolCallContext { assistant_message: &assistant, tool_call: &call, args: &args, context: &context, cancel: &cancel };
         assert!(before_tool_call(&app, "chat", &bot, &work, true, ctx).await.is_none());

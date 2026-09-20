@@ -428,8 +428,9 @@ fn apply_blob_contents(app: &Arc<App>, machine_file: &crate::keys::MachineFile, 
     }
 }
 
-fn apply_roster(app: &Arc<App>, roster: RosterBlob) {
+fn apply_roster(app: &Arc<App>, mut roster: RosterBlob) {
     let removed: Vec<String>;
+    let mut normalized_auto_review = crate::app::normalize_auto_review_rules(&roster.bots, &mut roster.auto_review);
     {
         let mut state = app.state.lock().unwrap();
         let local_updated = state.chats.iter().map(|_| 0.0).fold(0.0, f64::max);
@@ -437,6 +438,8 @@ fn apply_roster(app: &Arc<App>, roster: RosterBlob) {
         state.bots = roster.bots;
         state.routines = roster.routines;
         state.auto_review = roster.auto_review;
+        let chats = state.chats.clone();
+        normalized_auto_review |= crate::app::restore_exact_shell_commands(&chats, &mut state.auto_review);
         let incoming_ids: Vec<String> = roster.chats.iter().map(|c| c.id.clone()).collect();
         removed = state.chats.iter().filter(|c| !incoming_ids.contains(&c.meta.id)).map(|c| c.meta.id.clone()).collect();
         state.chats.retain(|c| incoming_ids.contains(&c.meta.id));
@@ -452,12 +455,13 @@ fn apply_roster(app: &Arc<App>, roster: RosterBlob) {
         app.emit(Event::ChatRemoved { chat_id });
     }
     crate::runtime::prime_names(app);
-    app.roster_changed(false);
+    app.roster_changed(normalized_auto_review);
 }
 
 fn apply_chat_op(app: &Arc<App>, op: ChatBlob) {
     match op {
         ChatBlob::Upsert { message } => {
+            let may_restore_command = matches!(&message.body, Body::Permission { .. });
             {
                 let mut state = app.state.lock().unwrap();
                 if !state.chats.iter().any(|c| c.meta.id == message.chat_id) {
@@ -473,6 +477,16 @@ fn apply_chat_op(app: &Arc<App>, op: ChatBlob) {
             }
             // The cycle saves state once after the page.
             app.upsert_message(message, false);
+            if may_restore_command {
+                let restored = {
+                    let mut state = app.state.lock().unwrap();
+                    let chats = state.chats.clone();
+                    crate::app::restore_exact_shell_commands(&chats, &mut state.auto_review)
+                };
+                if restored {
+                    app.roster_changed(true);
+                }
+            }
         }
         ChatBlob::Remove { chat_id, message_id } => app.remove_message(&chat_id, &message_id, false),
         ChatBlob::ClearUnread { chat_id } => app.mark_read(&chat_id, false),

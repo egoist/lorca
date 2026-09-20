@@ -19,6 +19,8 @@ final class SectionView: NSView {
 
     private var headerLeading: NSLayoutConstraint!
     private var cardTop: NSLayoutConstraint!
+    private var headerAccessory: NSView?
+    private var headerAccessoryConstraints: [NSLayoutConstraint] = []
 
     // Row hover fills are plain rectangles; the stack fills the card, so clipping it to the
     // same radius keeps them inside the corners.
@@ -135,6 +137,23 @@ final class SectionView: NSView {
             rows.addArrangedSubview(view)
             view.widthAnchor.constraint(equalTo: rows.widthAnchor).isActive = true
         }
+    }
+
+    /// A small action beside the section title, such as Settings' add buttons.
+    func setHeaderAccessory(_ view: NSView?) {
+        NSLayoutConstraint.deactivate(headerAccessoryConstraints)
+        headerAccessoryConstraints = []
+        headerAccessory?.removeFromSuperview()
+        headerAccessory = view
+        guard let view else { return }
+        view.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(view)
+        headerAccessoryConstraints = [
+            header.trailingAnchor.constraint(lessThanOrEqualTo: view.leadingAnchor, constant: -8),
+            view.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            view.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+        ]
+        NSLayoutConstraint.activate(headerAccessoryConstraints)
     }
 
     /// The row showing `label`, or the whole card when `label` is this section's title.

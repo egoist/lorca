@@ -105,6 +105,7 @@
 "Automatic (%@)" = "自动（%@）";
 "Available" = "可添加";
 "Back" = "返回";
+"Behavior" = "行为";
 "Back to Chats" = "返回聊天";
 "Back to Chats (esc)" = "返回聊天 (esc)";
 "Back/Forward" = "返回/前进";
@@ -140,6 +141,7 @@
 "Color" = "颜色";
 "Command Palette" = "命令面板";
 "Command Palette…" = "命令面板…";
+"Command" = "命令";
 "Compact" = "压缩";
 "Connect" = "接入";
 "Connect %@" = "接入 %@";
@@ -199,12 +201,15 @@
 "Dictation Language" = "听写语言";
 "Disconnect" = "断开";
 "Done" = "完成";
+"Describe when a bot should be allowed automatically or asked first." = "描述智能体在什么情况下应自动获准或先询问。";
 "Download and install updates automatically" = "自动下载并安装更新";
 "Drafting a file" = "正在撰写文件";
 "Edit" = "编辑";
+"Edit rule" = "编辑规则";
 "Edit in Chat…" = "在聊天中编辑…";
 "Edit my routine \"%@\": " = "修改我的例行任务“%@”：";
 "Edit…" = "编辑…";
+"Exact actions cannot be changed. Delete this rule and allow a different action instead." = "无法更改精确操作；请删除此规则，再允许另一个操作。";
 "Empty" = "空";
 "Enter Full Screen" = "进入全屏幕";
 "enter send newline keyboard chats" = "回车 发送 换行 键盘 聊天 enter send newline keyboard chats";
@@ -426,6 +431,7 @@
 "rule allow automatically ask first always allow" = "规则 自动允许 先询问 始终允许 rule allow automatically ask first always allow";
 "Run Now" = "立即运行";
 "Runner" = "Runner";
+"Rule" = "规则";
 "Runner · runs bots with its own credentials" = "Runner · 用自己的凭证运行智能体";
 "Running commands" = "正在运行命令";
 "Running…" = "正在运行…";
@@ -566,7 +572,6 @@
 "What it is for" = "它的用途";
 "What should I work on next?" = "我接下来该做什么？";
 "What would you delete first?" = "你会先删掉什么？";
-"When a bot wants to…" = "当智能体想要…";
 "Where turns run" = "运行位置";
 "Window" = "窗口";
 "Working" = "正在工作";
