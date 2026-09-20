@@ -30,6 +30,9 @@ pub const PERMISSION_TIMEOUT: std::time::Duration = std::time::Duration::from_se
 const CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 /// How long the sign-in page may take.
 const SIGN_IN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+/// Reconnect a device-flow server before its bearer expires. A turn that starts inside this
+/// window gets a fresh token, so the static bearer cannot expire midway through ordinary work.
+const DEVICE_TOKEN_REFRESH_BUFFER_SECS: f64 = 5.0 * 60.0;
 /// The most text a tool result carries to the model.
 const MAX_RESULT_CHARS: usize = 50_000;
 
@@ -44,6 +47,9 @@ pub struct Server {
     pub instructions: Option<String>,
     /// The OAuth manager behind the transport, to persist tokens it refreshed.
     auth: Option<Arc<tokio::sync::Mutex<AuthorizationManager>>>,
+    /// Device-flow tokens are plain bearers. Drop this pooled server before its bearer expires;
+    /// the next connection refreshes and persists the rotating token pair itself.
+    bearer_expires_at: Option<f64>,
 }
 
 /// Connected servers by `plugin/server`, connected on first use and dropped when the plugin
@@ -73,14 +79,28 @@ impl Pool {
         self.servers.lock().unwrap().retain(|key, _| !key.starts_with(&format!("{plugin_id}/")));
     }
 
+    fn cached_server(&self, key: &str) -> Option<Arc<Server>> {
+        let mut servers = self.servers.lock().unwrap();
+        let expiring = servers
+            .get(key)
+            .and_then(|server| server.bearer_expires_at)
+            .is_some_and(|expires_at| expires_at <= now_secs() + DEVICE_TOKEN_REFRESH_BUFFER_SECS);
+        if expiring {
+            servers.remove(key);
+            None
+        } else {
+            servers.get(key).cloned()
+        }
+    }
+
     /// The connected server, connecting it first when needed.
     pub async fn server(&self, app: &Arc<App>, plugin_id: &str, name: &str) -> Result<Arc<Server>, String> {
         let key = format!("{plugin_id}/{name}");
-        if let Some(server) = self.servers.lock().unwrap().get(&key).cloned() {
+        if let Some(server) = self.cached_server(&key) {
             return Ok(server);
         }
         let _guard = self.connecting.lock().await;
-        if let Some(server) = self.servers.lock().unwrap().get(&key).cloned() {
+        if let Some(server) = self.cached_server(&key) {
             return Ok(server);
         }
         let (plugin, values) = {
@@ -125,6 +145,7 @@ async fn connect(app: &Arc<App>, plugin: &Installed, name: &str, spec: &ServerSp
     let mut info = ClientConfig::default();
     info.client_info = implementation;
     let mut auth = None;
+    let mut bearer_expires_at = None;
     let service = match spec {
         ServerSpec::Stdio { command, args, env } => {
             let mut cmd = tokio::process::Command::new(command);
@@ -156,23 +177,36 @@ async fn connect(app: &Arc<App>, plugin: &Installed, name: &str, spec: &ServerSp
                     let transport = StreamableHttpClientTransport::with_client(app.mcp.http.clone(), config.auth_header(token));
                     info.serve(transport).await.map_err(|e| describe_connect_error(&e.to_string(), url))?
                 }
-                (None, Some(AuthSpec::Oauth { .. }), Some(stored)) => {
-                    // A token that cannot be refreshed (a device-flow token, or a server whose
-                    // metadata cannot be found again) is sent as a plain bearer.
-                    let refreshable = stored["tokens"]["refresh_token"].as_str().is_some_and(|r| !r.is_empty());
-                    let restored = if refreshable { restore_manager(app, url, &stored).await } else { Err("no refresh token".into()) };
-                    match restored {
-                        Ok(manager) => {
-                            let client = AuthClient::new(app.mcp.http.clone(), manager);
-                            auth = Some(client.auth_manager.clone());
-                            let transport = StreamableHttpClientTransport::with_client(client, config);
-                            info.serve(transport).await.map_err(|e| describe_connect_error(&e.to_string(), url))?
-                        }
-                        Err(why) => {
-                            tracing::debug!(%why, plugin = %plugin.manifest.id, "using the saved access token as a bearer");
-                            let token = stored["tokens"]["access_token"].as_str().ok_or("The saved sign-in has no access token")?.to_string();
-                            let transport = StreamableHttpClientTransport::with_client(app.mcp.http.clone(), config.auth_header(token));
-                            info.serve(transport).await.map_err(|e| describe_connect_error(&e.to_string(), url))?
+                (None, Some(oauth @ AuthSpec::Oauth { .. }), Some(stored)) => {
+                    if stored["device_flow"].as_bool() == Some(true) {
+                        // GitHub's refresh endpoint has its own contract: no `scope` or MCP
+                        // `resource`. Refresh it here, then give the transport a plain bearer.
+                        let token_endpoint = match oauth {
+                            AuthSpec::Oauth { token_endpoint: Some(endpoint), .. } => endpoint,
+                            _ => return Err(format!("{}'s saved sign-in cannot be refreshed. Sign in again.", plugin.manifest.name)),
+                        };
+                        let bearer = device_bearer(app, &plugin.manifest.id, name, &plugin.manifest.name, token_endpoint, &stored).await?;
+                        bearer_expires_at = bearer.expires_at;
+                        let transport = StreamableHttpClientTransport::with_client(app.mcp.http.clone(), config.auth_header(bearer.access_token));
+                        info.serve(transport).await.map_err(|e| describe_connect_error(&e.to_string(), url))?
+                    } else {
+                        // A token whose server metadata cannot be found again, or which has no
+                        // refresh token, is sent as a plain bearer.
+                        let refreshable = stored["tokens"]["refresh_token"].as_str().is_some_and(|r| !r.is_empty());
+                        let restored = if refreshable { restore_manager(app, url, &stored).await } else { Err("no refresh token".into()) };
+                        match restored {
+                            Ok(manager) => {
+                                let client = AuthClient::new(app.mcp.http.clone(), manager);
+                                auth = Some(client.auth_manager.clone());
+                                let transport = StreamableHttpClientTransport::with_client(client, config);
+                                info.serve(transport).await.map_err(|e| describe_connect_error(&e.to_string(), url))?
+                            }
+                            Err(why) => {
+                                tracing::debug!(%why, plugin = %plugin.manifest.id, "using the saved access token as a bearer");
+                                let token = stored["tokens"]["access_token"].as_str().ok_or("The saved sign-in has no access token")?.to_string();
+                                let transport = StreamableHttpClientTransport::with_client(app.mcp.http.clone(), config.auth_header(token));
+                                info.serve(transport).await.map_err(|e| describe_connect_error(&e.to_string(), url))?
+                            }
                         }
                     }
                 }
@@ -185,11 +219,16 @@ async fn connect(app: &Arc<App>, plugin: &Installed, name: &str, spec: &ServerSp
             }
         }
     };
+    if let Some(manager) = &auth {
+        // The handshake itself may have refreshed and rotated the pair. Save it before the
+        // next request can fail, the connection can sit unused, or the process can exit.
+        persist_refreshed(app, &plugin.manifest.id, name, manager).await;
+    }
     let instructions = service.peer_info().and_then(|i| i.instructions.clone());
     let mut tools = service.list_all_tools().await.map_err(|e| format!("{} could not list its tools: {e}", plugin.manifest.name))?;
     tools.retain(|t| !plugin.manifest.tools.hide.iter().any(|h| pattern_matches(h, &t.name)));
     tracing::info!(plugin = %plugin.manifest.id, server = name, tools = tools.len(), "connected an MCP server");
-    Ok(Server { plugin_id: plugin.manifest.id.clone(), name: name.to_string(), service, tools, instructions, auth })
+    Ok(Server { plugin_id: plugin.manifest.id.clone(), name: name.to_string(), service, tools, instructions, auth, bearer_expires_at })
 }
 
 fn describe_connect_error(error: &str, url: &str) -> String {
@@ -207,6 +246,112 @@ async fn restore_manager(app: &Arc<App>, url: &str, stored: &Value) -> Result<Au
     let mut state = OAuthState::new(url, Some(app.mcp.http.clone())).await.map_err(|e| e.to_string())?;
     state.set_credentials(client_id, tokens).await.map_err(|e| format!("Restoring the sign-in: {e}"))?;
     state.into_authorization_manager().ok_or_else(|| "Restoring the sign-in".to_string())
+}
+
+#[derive(Debug)]
+struct DeviceBearer {
+    access_token: String,
+    expires_at: Option<f64>,
+}
+
+fn token_expires_at(stored: &Value) -> Option<f64> {
+    let received_at = stored["signed_in_at"].as_f64()?;
+    let expires_in = stored["tokens"]["expires_in"].as_f64()?;
+    (received_at.is_finite() && expires_in.is_finite() && expires_in > 0.0).then_some(received_at + expires_in)
+}
+
+/// GitHub normally honors `Accept: application/json`, but its OAuth endpoint's default wire
+/// format is form-encoded. Accept both so a successful rotating refresh is never discarded just
+/// because the response format changed.
+fn parse_token_response(body: &[u8]) -> Option<Value> {
+    if let Ok(json) = serde_json::from_slice(body) {
+        return Some(json);
+    }
+    let text = std::str::from_utf8(body).ok()?;
+    if !text.contains('=') {
+        return None;
+    }
+    let mut url = reqwest::Url::parse("http://localhost/").ok()?;
+    url.set_query(Some(text));
+    let mut object = serde_json::Map::new();
+    for (key, value) in url.query_pairs() {
+        let value = if matches!(key.as_ref(), "expires_in" | "refresh_token_expires_in") {
+            value.parse::<u64>().map(|number| json!(number)).unwrap_or_else(|_| json!(value.as_ref()))
+        } else {
+            json!(value.as_ref())
+        };
+        object.insert(key.into_owned(), value);
+    }
+    (!object.is_empty()).then_some(Value::Object(object))
+}
+
+/// Return a device-flow bearer, refreshing an expiring one with the provider's device-flow
+/// client. The updated value is returned separately so callers can persist a rotated pair before
+/// using it.
+async fn refresh_device_bearer(http: &reqwest::Client, token_endpoint: &str, name: &str, stored: &Value) -> Result<(DeviceBearer, Option<Value>), String> {
+    let access_token = stored["tokens"]["access_token"].as_str().ok_or("The saved sign-in has no access token")?.to_string();
+    let expires_at = token_expires_at(stored);
+    if !expires_at.is_some_and(|expires_at| expires_at <= now_secs() + DEVICE_TOKEN_REFRESH_BUFFER_SECS) {
+        return Ok((DeviceBearer { access_token, expires_at }, None));
+    }
+
+    let client_id = stored["client_id"].as_str().ok_or("The saved sign-in has no client id")?;
+    let refresh_token = stored["tokens"]["refresh_token"]
+        .as_str()
+        .filter(|token| !token.is_empty())
+        .ok_or_else(|| format!("The {name} sign-in expired. Sign in again."))?;
+    let response = http
+        .post(token_endpoint)
+        .header("accept", "application/json")
+        .form(&[("client_id", client_id), ("grant_type", "refresh_token"), ("refresh_token", refresh_token)])
+        .send()
+        .await
+        .map_err(|e| format!("{name} could not refresh its sign-in: {e}"))?;
+    let status = response.status();
+    let body = response.bytes().await.map_err(|e| format!("{name} sent an unreadable token refresh response: {e}"))?;
+    let refreshed = parse_token_response(&body).ok_or_else(|| format!("{name} sent an unreadable token refresh response."))?;
+    if !status.is_success() || refreshed["access_token"].as_str().is_none() {
+        let reason = refreshed["error_description"].as_str().or(refreshed["error"].as_str()).unwrap_or("the refresh was refused");
+        return Err(if refreshed["error"].as_str() == Some("bad_refresh_token") {
+            format!("The {name} sign-in expired. Sign in again.")
+        } else {
+            format!("{name} could not refresh its sign-in: {reason}")
+        });
+    }
+
+    let mut saved = stored.as_object().cloned().ok_or("The saved sign-in is unreadable")?;
+    let mut tokens = stored["tokens"].as_object().cloned().ok_or("The saved sign-in tokens are unreadable")?;
+    tokens.insert("access_token".into(), refreshed["access_token"].clone());
+    for key in ["token_type", "refresh_token", "scope"] {
+        if refreshed.get(key).is_some_and(|value| !value.is_null()) {
+            tokens.insert(key.into(), refreshed[key].clone());
+        }
+    }
+    // These durations are relative to this response. An omitted duration means the new token has
+    // no advertised expiry; retaining the old duration would invent one from the wrong epoch.
+    for key in ["expires_in", "refresh_token_expires_in"] {
+        if refreshed.get(key).is_some_and(|value| !value.is_null()) {
+            tokens.insert(key.into(), refreshed[key].clone());
+        } else {
+            tokens.remove(key);
+        }
+    }
+    saved.insert("tokens".into(), Value::Object(tokens));
+    saved.insert("signed_in_at".into(), json!(now_secs()));
+    let saved = Value::Object(saved);
+    let bearer = DeviceBearer {
+        access_token: saved["tokens"]["access_token"].as_str().unwrap_or_default().to_string(),
+        expires_at: token_expires_at(&saved),
+    };
+    Ok((bearer, Some(saved)))
+}
+
+async fn device_bearer(app: &Arc<App>, plugin_id: &str, server: &str, name: &str, token_endpoint: &str, stored: &Value) -> Result<DeviceBearer, String> {
+    let (bearer, refreshed) = refresh_device_bearer(&app.http, token_endpoint, name, stored).await?;
+    if let Some(refreshed) = refreshed {
+        super::set_oauth(app, plugin_id, server, Some(refreshed))?;
+    }
+    Ok(bearer)
 }
 
 // MARK: - Sign-in
@@ -392,6 +537,7 @@ async fn device_sign_in(app: &Arc<App>, device_endpoint: &str, token_endpoint: &
                 "token_type": polled["token_type"].as_str().unwrap_or("bearer"),
                 "refresh_token": polled["refresh_token"],
                 "expires_in": polled["expires_in"],
+                "refresh_token_expires_in": polled["refresh_token_expires_in"],
                 "scope": polled["scope"],
             });
             return Ok(json!({ "client_id": client_id, "tokens": tokens, "signed_in_at": now_secs(), "device_flow": true }));
@@ -737,7 +883,7 @@ async fn persist_refreshed(app: &Arc<App>, plugin_id: &str, server: &str, auth: 
     if let Ok((client_id, Some(tokens))) = credentials {
         let key = format!("oauth:{server}");
         let saved = app.plugins.lock().unwrap().secret(plugin_id, &key);
-        let fresh = json!({ "client_id": client_id, "tokens": tokens, "signed_in_at": saved.as_ref().and_then(|s| s["signed_in_at"].as_f64()).unwrap_or_else(now_secs) });
+        let fresh = json!({ "client_id": client_id, "tokens": tokens, "signed_in_at": now_secs() });
         if saved.as_ref().map(|s| s["tokens"] != fresh["tokens"]).unwrap_or(true) {
             let _ = super::set_oauth(app, plugin_id, server, Some(fresh));
         }
@@ -875,6 +1021,41 @@ pub fn answer(app: &Arc<App>, message_id: &str, decision: Decision) -> bool {
 mod tests {
     use super::*;
 
+    async fn token_endpoint(body: &str) -> (String, tokio::sync::oneshot::Receiver<String>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let response_body = body.to_string();
+        let (seen_tx, seen_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 4096];
+            loop {
+                let count = socket.read(&mut buffer).await.unwrap();
+                if count == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..count]);
+                let Some(header_end) = request.windows(4).position(|part| part == b"\r\n\r\n").map(|position| position + 4) else { continue };
+                let headers = String::from_utf8_lossy(&request[..header_end]);
+                let content_length = headers
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length").then(|| value.trim().parse::<usize>().ok()).flatten()
+                    })
+                    .unwrap_or(0);
+                if request.len() >= header_end + content_length {
+                    break;
+                }
+            }
+            let _ = seen_tx.send(String::from_utf8_lossy(&request).into_owned());
+            let reply = format!("HTTP/1.1 200 OK\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response_body}", response_body.len());
+            socket.write_all(reply.as_bytes()).await.unwrap();
+        });
+        (format!("http://{address}/token"), seen_rx)
+    }
+
     #[test]
     fn tool_names_fit_the_providers() {
         assert_eq!(tool_name("github", "create_issue"), "github__create_issue");
@@ -885,5 +1066,68 @@ mod tests {
         assert_eq!(call_summary("get_me", &json!({})), "get_me");
         assert_eq!(Decision::parse("always"), Some(Decision::Always));
         assert_eq!(Decision::parse("nope"), None);
+    }
+
+    #[tokio::test]
+    async fn device_bearer_refreshes_with_githubs_request_shape_and_rotates_tokens() {
+        let (endpoint, seen) = token_endpoint(
+            "access_token=new-access&expires_in=28800&refresh_token=new-refresh&refresh_token_expires_in=15897600&scope=repo%2Cread%3Auser&token_type=bearer",
+        )
+        .await;
+        let stored = json!({
+            "client_id": "client-id",
+            "device_flow": true,
+            "signed_in_at": 1,
+            "tokens": {
+                "access_token": "old-access",
+                "expires_in": 1,
+                "refresh_token": "old-refresh",
+                "scope": "repo,read:user",
+                "token_type": "bearer"
+            }
+        });
+
+        let (bearer, saved) = refresh_device_bearer(&reqwest::Client::new(), &endpoint, "GitHub", &stored).await.unwrap();
+        let saved = saved.expect("an expired bearer is refreshed");
+        assert_eq!(bearer.access_token, "new-access");
+        assert!(bearer.expires_at.is_some_and(|expires_at| expires_at > now_secs() + 28_000.0));
+        assert_eq!(saved["tokens"]["refresh_token"], json!("new-refresh"));
+        assert_eq!(saved["tokens"]["refresh_token_expires_in"], json!(15_897_600));
+        assert_eq!(saved["tokens"]["scope"], json!("repo,read:user"));
+
+        let request = seen.await.unwrap();
+        let lower = request.to_ascii_lowercase();
+        assert!(lower.contains("accept: application/json"));
+        let body = request.split("\r\n\r\n").nth(1).unwrap_or_default();
+        assert!(body.contains("client_id=client-id"));
+        assert!(body.contains("grant_type=refresh_token"));
+        assert!(body.contains("refresh_token=old-refresh"));
+        assert!(!body.contains("scope=") && !body.contains("resource="));
+    }
+
+    #[tokio::test]
+    async fn fresh_device_bearer_needs_no_refresh_endpoint() {
+        let stored = json!({
+            "client_id": "client-id",
+            "device_flow": true,
+            "signed_in_at": now_secs(),
+            "tokens": { "access_token": "access", "expires_in": 28_800, "refresh_token": "refresh" }
+        });
+        let (bearer, saved) = refresh_device_bearer(&reqwest::Client::new(), "not a URL", "GitHub", &stored).await.unwrap();
+        assert_eq!(bearer.access_token, "access");
+        assert!(saved.is_none());
+    }
+
+    #[tokio::test]
+    async fn rejected_device_refresh_asks_for_a_new_sign_in() {
+        let (endpoint, _) = token_endpoint("error=bad_refresh_token&error_description=expired").await;
+        let stored = json!({
+            "client_id": "client-id",
+            "device_flow": true,
+            "signed_in_at": 1,
+            "tokens": { "access_token": "access", "expires_in": 1, "refresh_token": "refresh" }
+        });
+        let error = refresh_device_bearer(&reqwest::Client::new(), &endpoint, "GitHub", &stored).await.unwrap_err();
+        assert_eq!(error, "The GitHub sign-in expired. Sign in again.");
     }
 }
