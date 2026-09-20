@@ -30,33 +30,40 @@ pub async fn before_tool_call(
     }
     let command = ctx.args.get("command").and_then(Value::as_str).unwrap_or("");
     let inspection = inspect_shell(command);
+    let reusable_patterns = inspection.force_ask.is_none();
     let workdir = std::fs::canonicalize(workdir).unwrap_or_else(|_| workdir.to_path_buf());
     let runner_id = app.this_device_id().unwrap_or_else(|| bot.runner_id.clone());
     let runner_name = app.device(&runner_id).map(|device| device.name).unwrap_or_else(|| "this Runner".into());
     let rule_key = scoped_rule_key(&runner_id, &workdir, ctx.args);
-    let has_exact_rule = app.auto_review().rules.iter().any(|rule| rule.tool.as_deref() == Some(&rule_key));
+    let auto_review = app.auto_review();
+    let has_exact_rule = auto_review.rules.iter().any(|rule| rule.tool.as_deref() == Some(&rule_key));
+    let pattern_outcome = auto_review
+        .is_enabled
+        .then(|| shell_rule_outcome(&auto_review.rules, &runner_id, &workdir, command))
+        .flatten();
     let description = format!(
         "Run this shell command as the user on {runner_name}, with full filesystem, process, credential, and network access. Working directory: {}. Parsed review: {}",
         workdir.display(), inspection.summary
     );
-    let outcome = if !has_exact_rule {
-        match inspection.force_ask {
-            Some(reason) => Outcome::Ask { reason: Some(reason) },
-            None => {
-                review::decide_with_rule_key(
-                    app,
-                    bot,
-                    chat_id,
-                    Some(&rule_key),
-                    &runner_name,
-                    "bash",
-                    &description,
-                    ctx.args,
-                    ctx.cancel,
-                )
-                .await
-            }
-        }
+    let outcome = if let Some(Outcome::Ask { reason }) = &pattern_outcome {
+        Outcome::Ask { reason: reason.clone() }
+    } else if has_exact_rule {
+        review::decide_with_rule_key(
+            app,
+            bot,
+            chat_id,
+            Some(&rule_key),
+            &runner_name,
+            "bash",
+            &description,
+            ctx.args,
+            ctx.cancel,
+        )
+        .await
+    } else if let Some(reason) = inspection.force_ask {
+        Outcome::Ask { reason: Some(reason) }
+    } else if let Some(outcome) = pattern_outcome {
+        outcome
     } else {
         review::decide_with_rule_key(
             app,
@@ -79,6 +86,7 @@ pub async fn before_tool_call(
         )));
     }
 
+    let patterns = if reusable_patterns { shell_patterns(command) } else { Vec::new() };
     let always_rule = AutoReviewRule {
         id: uuid::Uuid::new_v4().to_string(),
         text: command.to_string(),
@@ -87,6 +95,7 @@ pub async fn before_tool_call(
         runner_id: Some(runner_id),
         workdir: Some(workdir.display().to_string()),
         command: Some(command.to_string()),
+        patterns,
     };
     match mcp::ask_with_rule(
         app,
@@ -125,6 +134,133 @@ pub(crate) fn scoped_rule_key(runner_id: &str, workdir: &Path, args: &Value) -> 
     format!("computer/bash/{short}")
 }
 
+/// OpenCode-style reusable prefixes for the visible commands in one shell call. The exact
+/// command remains on the rule for audit and as a narrow fallback; these patterns let ordinary
+/// variations such as `git status --short` reuse an approval for `git status *`.
+pub(crate) fn shell_patterns(command: &str) -> Vec<String> {
+    shell_actions(command).into_iter().map(|(_, pattern)| pattern).fold(Vec::new(), |mut out, pattern| {
+        if !out.contains(&pattern) {
+            out.push(pattern);
+        }
+        out
+    })
+}
+
+pub(crate) fn reusable_shell_patterns(command: &str) -> Vec<String> {
+    inspect_shell(command).force_ask.is_none().then(|| shell_patterns(command)).unwrap_or_default()
+}
+
+fn shell_rule_outcome(rules: &[AutoReviewRule], runner_id: &str, workdir: &Path, command: &str) -> Option<Outcome> {
+    let resources: Vec<String> = shell_actions(command).into_iter().map(|(resource, _)| resource).collect();
+    if resources.is_empty() {
+        return None;
+    }
+    let workdir = workdir.to_string_lossy();
+    let scoped: Vec<&AutoReviewRule> = rules
+        .iter()
+        .filter(|rule| {
+            !rule.patterns.is_empty()
+                && rule.runner_id.as_deref() == Some(runner_id)
+                && rule.workdir.as_deref() == Some(workdir.as_ref())
+        })
+        .collect();
+    if scoped.is_empty() {
+        return None;
+    }
+    if let Some((rule, pattern)) = scoped
+        .iter()
+        .filter(|rule| rule.behavior == "ask")
+        .find_map(|rule| matching_pattern(rule, &resources).map(|pattern| (*rule, pattern)))
+    {
+        return Some(Outcome::Ask { reason: Some(format!("Your shell rule asks first for {pattern}: {}", rule.text)) });
+    }
+    let covered = resources.iter().all(|resource| {
+        scoped
+            .iter()
+            .filter(|rule| rule.behavior == "allow")
+            .any(|rule| rule.patterns.iter().any(|pattern| shell_pattern_matches(resource, pattern)))
+    });
+    covered.then_some(Outcome::Allow)
+}
+
+fn matching_pattern<'a>(rule: &'a AutoReviewRule, resources: &[String]) -> Option<&'a str> {
+    rule.patterns
+        .iter()
+        .find(|pattern| resources.iter().any(|resource| shell_pattern_matches(resource, pattern)))
+        .map(String::as_str)
+}
+
+fn shell_pattern_matches(resource: &str, pattern: &str) -> bool {
+    if pattern == "*" {
+        return true;
+    }
+    if let Some(prefix) = pattern.strip_suffix(" *") {
+        return resource == prefix || resource.strip_prefix(prefix).is_some_and(|tail| tail.starts_with(' '));
+    }
+    resource == pattern
+}
+
+fn shell_actions(command: &str) -> Vec<(String, String)> {
+    let (stages, _) = parsed_shell(command);
+    let mut out = Vec::new();
+    for stage in stages {
+        let Some((command, args)) = command_and_args(&stage) else { continue };
+        if matches!(
+            command.as_str(),
+            "cd" | "chdir" | "pushd" | "popd" | "for" | "while" | "until" | "case" | "esac" | "if" | "then" | "else" | "elif" | "fi"
+                | "do" | "done" | "select" | "function" | "{" | "}" | "[" | "[["
+        ) {
+            continue;
+        }
+        let resource = std::iter::once(command.as_str()).chain(args.iter().map(String::as_str)).collect::<Vec<_>>().join(" ");
+        let prefix = shell_pattern_prefix(&command, &args);
+        if !prefix.is_empty() {
+            out.push((resource, format!("{prefix} *")));
+        }
+    }
+    out
+}
+
+fn shell_pattern_prefix(command: &str, args: &[String]) -> String {
+    let positionals = positional_arguments(command, args);
+    let first = positionals.first().map(String::as_str);
+    let arity: usize = match command {
+        "aws" | "az" | "doctl" | "gcloud" | "gh" | "sfdx" => 3,
+        "git" if matches!(first, Some("config" | "remote" | "stash")) => 3,
+        "cargo" if matches!(first, Some("add" | "run")) => 3,
+        "npm" | "pnpm" | "yarn" | "bun" if matches!(first, Some("run" | "exec" | "dlx" | "x" | "init" | "view")) => 3,
+        "docker" | "podman" if matches!(first, Some("builder" | "compose" | "container" | "image" | "network" | "volume")) => 3,
+        "kubectl" if matches!(first, Some("kustomize" | "rollout")) => 3,
+        "cargo" | "npm" | "pnpm" | "yarn" | "bun" | "deno" | "docker" | "podman" | "kubectl" | "helm" | "terraform" | "git" | "go"
+        | "make" | "cmake" | "gradle" | "mvn" | "swift" | "brew" | "pip" | "pip3" | "poetry" | "rustup" | "systemctl" => 2,
+        _ => 1,
+    };
+    std::iter::once(command)
+        .chain(positionals.iter().take(arity.saturating_sub(1)).map(String::as_str))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn positional_arguments(command: &str, args: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut skip_next = false;
+    for arg in args {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        if command == "git" && matches!(arg.as_str(), "-C" | "-c" | "--git-dir" | "--work-tree") {
+            skip_next = true;
+            continue;
+        }
+        if arg.starts_with('-') {
+            continue;
+        }
+        out.push(arg.clone());
+    }
+    out
+}
+
 fn command_summary(command: &str) -> String {
     let one_line = command.split_whitespace().collect::<Vec<_>>().join(" ");
     let shown: String = one_line.chars().take(180).collect();
@@ -135,11 +271,12 @@ fn command_summary(command: &str) -> String {
 struct ShellInspection {
     force_ask: Option<String>,
     summary: String,
+    read_only: bool,
 }
 
 fn inspect_shell(command: &str) -> ShellInspection {
-    let (stages, dynamic) = shell_stages(command);
-    let redirection = has_write_redirection(command);
+    let (stages, dynamic) = parsed_shell(command);
+    let redirection = has_effectful_redirection(command);
     let read_only = !command.trim().is_empty() && !dynamic && !redirection && stages.iter().all(|stage| safe_stage(stage));
     let may_network = dynamic || stages.iter().any(|stage| stage_may_network(stage));
     let force_ask = shell_danger_reason(&stages, dynamic);
@@ -154,12 +291,12 @@ fn inspect_shell(command: &str) -> ShellInspection {
     } else {
         "runs code or may change files or processes".into()
     };
-    ShellInspection { force_ask, summary }
+    ShellInspection { force_ask, summary, read_only }
 }
 
 fn shell_danger_reason(stages: &[String], dynamic: bool) -> Option<String> {
     if dynamic {
-        return Some("The command contains shell grouping or dynamic evaluation, so its effects cannot be bounded from the text alone.".into());
+        return Some("The command contains dynamic evaluation, so its effects cannot be bounded from the text alone.".into());
     }
     for stage in stages {
         let Some((command, args)) = command_and_args(stage) else { continue };
@@ -167,12 +304,15 @@ fn shell_danger_reason(stages: &[String], dynamic: bool) -> Option<String> {
             command.as_str(),
             "rm" | "rmdir" | "sudo" | "doas" | "su" | "chmod" | "chown" | "chgrp" | "dd" | "mkfs" | "diskutil" | "shutdown" | "reboot" | "launchctl"
                 | "systemctl" | "kill" | "pkill" | "killall" | "eval" | "source" | "bash" | "sh" | "zsh" | "fish" | "python" | "python3" | "node"
-                | "deno" | "bun" | "ruby" | "perl" | "php" | "osascript" | "xargs" | "security" | "docker" | "podman" | "ssh" | "open" | "xdg-open"
+                | "deno" | "bun" | "ruby" | "perl" | "php" | "osascript" | "security" | "docker" | "podman" | "ssh" | "open" | "xdg-open"
                 | "shortcuts" | "mount" | "umount" | "npx" | "bunx" | "pipx" | "uvx" | "env" | "command" | "timeout" | "nice" | "nohup" | "setsid"
                 | "xcrun"
         ) || command == "."
         {
             return Some(format!("The command uses {command}, which can execute opaque code, delete data, change access, elevate privileges, or alter running services."));
+        }
+        if command == "xargs" && !safe_xargs(&args) {
+            return Some("The xargs command can execute another command for every input item.".into());
         }
         if command == "find" && args.iter().any(|arg| matches!(arg.as_str(), "-delete" | "-exec" | "-execdir" | "-ok" | "-okdir")) {
             return Some("The find command can delete files or execute another command for every match.".into());
@@ -206,6 +346,168 @@ fn shell_danger_reason(stages: &[String], dynamic: bool) -> Option<String> {
     None
 }
 
+/// Parses visible command substitutions recursively, replacing each result in its outer command
+/// with a value placeholder. A substitution used as an argument or assignment can then stay
+/// read-only, while every command inside it is reviewed as its own stage.
+fn parsed_shell(command: &str) -> (Vec<String>, bool) {
+    let (outer, substitutions, mut dynamic) = extract_command_substitutions(command);
+    let (mut stages, outer_dynamic) = shell_stages(&outer);
+    dynamic |= outer_dynamic;
+    for substitution in substitutions {
+        let (nested, nested_dynamic) = parsed_shell(&substitution);
+        stages.extend(nested);
+        dynamic |= nested_dynamic;
+    }
+    (stages, dynamic)
+}
+
+fn extract_command_substitutions(command: &str) -> (String, Vec<String>, bool) {
+    let chars: Vec<char> = command.chars().collect();
+    let mut outer = String::with_capacity(command.len());
+    let mut substitutions = Vec::new();
+    let mut quote = None;
+    let mut escaped = false;
+    let mut dynamic = false;
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if escaped {
+            outer.push(c);
+            escaped = false;
+            i += 1;
+            continue;
+        }
+        if c == '\\' && quote != Some('\'') {
+            outer.push(c);
+            escaped = true;
+            i += 1;
+            continue;
+        }
+        if c == '`' && quote != Some('\'') {
+            match backtick_substitution(&chars, i) {
+                Some((body, end)) => {
+                    substitutions.push(body);
+                    outer.push_str("__substitution_value__");
+                    i = end + 1;
+                }
+                None => {
+                    dynamic = true;
+                    outer.push(c);
+                    i += 1;
+                }
+            }
+            continue;
+        }
+        if c == '$' && chars.get(i + 1) == Some(&'(') && quote != Some('\'') {
+            if chars.get(i + 2) == Some(&'(') {
+                match command_substitution(&chars, i + 1) {
+                    Some((_, end)) => {
+                        outer.push_str("__arithmetic_value__");
+                        i = end + 1;
+                    }
+                    None => {
+                        dynamic = true;
+                        outer.push(c);
+                        i += 1;
+                    }
+                }
+                continue;
+            }
+            match command_substitution(&chars, i + 1) {
+                Some((body, end)) => {
+                    substitutions.push(body);
+                    outer.push_str("__substitution_value__");
+                    i = end + 1;
+                    continue;
+                }
+                None => {
+                    dynamic = true;
+                    outer.push(c);
+                    i += 1;
+                    continue;
+                }
+            }
+        }
+        if let Some(q) = quote {
+            outer.push(c);
+            if c == q {
+                quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        if matches!(c, '\'' | '"') {
+            quote = Some(c);
+        }
+        outer.push(c);
+        i += 1;
+    }
+    (outer, substitutions, dynamic)
+}
+
+fn command_substitution(chars: &[char], open: usize) -> Option<(String, usize)> {
+    let mut depth = 1;
+    let mut quote = None;
+    let mut escaped = false;
+    let mut i = open + 1;
+    while i < chars.len() {
+        let c = chars[i];
+        if escaped {
+            escaped = false;
+            i += 1;
+            continue;
+        }
+        if c == '\\' && quote != Some('\'') {
+            escaped = true;
+            i += 1;
+            continue;
+        }
+        if let Some(q) = quote {
+            if c == q {
+                quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        match c {
+            '\'' | '"' | '`' => quote = Some(c),
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((chars[open + 1..i].iter().collect(), i));
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+fn backtick_substitution(chars: &[char], open: usize) -> Option<(String, usize)> {
+    let mut escaped = false;
+    let mut i = open + 1;
+    while i < chars.len() {
+        let c = chars[i];
+        if escaped {
+            escaped = false;
+            i += 1;
+            continue;
+        }
+        if c == '\\' {
+            escaped = true;
+            i += 1;
+            continue;
+        }
+        if c == '`' {
+            return Some((chars[open + 1..i].iter().collect(), i));
+        }
+        i += 1;
+    }
+    None
+}
+
 /// Splits `&&`, `||`, pipes, semicolons, and newlines outside quotes. The command is still run
 /// as one unit, but every stage is classified before any process starts.
 fn shell_stages(command: &str) -> (Vec<String>, bool) {
@@ -234,7 +536,7 @@ fn shell_stages(command: &str) -> (Vec<String>, bool) {
             current.push(c);
             if c == q {
                 quote = None;
-            } else if q == '"' && ((c == '$' && chars.get(i + 1) == Some(&'(')) || c == '`') {
+            } else if q == '"' && c == '`' {
                 dynamic = true;
             }
             i += 1;
@@ -249,10 +551,6 @@ fn shell_stages(command: &str) -> (Vec<String>, bool) {
                 dynamic = true;
                 current.push(c);
             }
-            '$' if chars.get(i + 1) == Some(&'(') => {
-                dynamic = true;
-                current.push(c);
-            }
             ';' | '\n' | '|' | '&' => {
                 if !current.trim().is_empty() {
                     stages.push(current.trim().to_string());
@@ -263,8 +561,12 @@ fn shell_stages(command: &str) -> (Vec<String>, bool) {
                 }
             }
             '(' | ')' => {
-                dynamic = true;
-                current.push(c);
+                // Plain subshell grouping is visible syntax, not opaque evaluation. Treat its
+                // boundary like the other stage separators. `$(` was marked dynamic above.
+                if !current.trim().is_empty() {
+                    stages.push(current.trim().to_string());
+                    current.clear();
+                }
             }
             _ => current.push(c),
         }
@@ -320,8 +622,17 @@ fn shell_words(stage: &str) -> Vec<String> {
 
 fn command_and_args(stage: &str) -> Option<(String, Vec<String>)> {
     let mut words = shell_words(stage);
-    while words.first().is_some_and(|word| is_assignment(word)) {
-        words.remove(0);
+    loop {
+        while words.first().is_some_and(|word| is_assignment(word)) {
+            words.remove(0);
+        }
+        match words.first().map(String::as_str) {
+            Some("then" | "do" | "else" | "elif" | "if" | "while" | "until" | "!") => {
+                words.remove(0);
+            }
+            Some("for" | "select" | "case" | "esac" | "fi" | "done" | "{" | "}") | None => return None,
+            _ => break,
+        }
     }
     let command = words.first()?.rsplit('/').next().unwrap_or(&words[0]).to_ascii_lowercase();
     Some((command, words.into_iter().skip(1).collect()))
@@ -334,14 +645,54 @@ fn is_assignment(word: &str) -> bool {
 
 fn safe_stage(stage: &str) -> bool {
     let Some((command, args)) = command_and_args(stage) else {
-        return shell_words(stage).iter().all(|word| is_assignment(word));
+        // `command_and_args` removes assignments and recognizes inert control syntax such as
+        // `for …`, `do`, and `done`; with no executable left, this stage has no effect itself.
+        return true;
     };
     match command.as_str() {
-        "pwd" | "true" | "false" | "whoami" | "id" | "uname" | "date" | "printf" | "echo" | "cat" | "head" | "tail" | "wc" | "stat" | "file"
-        | "du" | "df" | "which" | "type" | "basename" | "dirname" | "realpath" | "sort" | "uniq" | "cut" | "tr" | "jq" | "ls" | "grep" => true,
+        "cd" => true,
+        "xargs" => safe_xargs(&args),
+        _ => safe_command(&command, &args),
+    }
+}
+
+fn safe_xargs(args: &[String]) -> bool {
+    let mut i = 0;
+    while let Some(arg) = args.get(i) {
+        if matches!(arg.as_str(), "-0" | "--null" | "-r" | "--no-run-if-empty" | "-t" | "--verbose" | "-x") {
+            i += 1;
+            continue;
+        }
+        if matches!(
+            arg.as_str(),
+            "-n" | "--max-args" | "-P" | "--max-procs" | "-L" | "--max-lines" | "-s" | "--max-chars" | "-d" | "--delimiter" | "-E" | "--eof"
+                | "-I" | "--replace"
+        ) {
+            i += 2;
+            continue;
+        }
+        if arg.starts_with('-') {
+            return false;
+        }
+        let command = arg.rsplit('/').next().unwrap_or(arg).to_ascii_lowercase();
+        return safe_command(&command, &args[i + 1..]);
+    }
+    false
+}
+
+fn safe_command(command: &str, args: &[String]) -> bool {
+    match command {
+        "pwd" | "true" | "false" | "whoami" | "id" | "uname" | "date" | "printf" | "echo" | "cat" | "head" | "tail" | "wc" | "stat"
+        | "file" | "du" | "df" | "which" | "type" | "basename" | "dirname" | "realpath" | "sort" | "uniq" | "cut" | "tr" | "jq" | "ls"
+        | "grep" | "test" | "[" | "[[" => true,
         "rg" => !args.iter().any(|arg| matches!(arg.as_str(), "-z" | "--search-zip" | "--pre" | "--pre-glob" | "--hostname-bin")),
+        "sed" => !args.iter().any(|arg| arg == "-i" || arg.starts_with("-i") || arg == "--in-place" || arg.starts_with("--in-place=")),
+        "awk" => !args.iter().any(|arg| {
+            let lower = arg.to_ascii_lowercase();
+            lower.contains("system(") || lower.contains("| getline") || lower.contains("@load") || lower.contains('>') || arg == "-f"
+        }),
         "find" => !args.iter().any(|arg| matches!(arg.as_str(), "-delete" | "-exec" | "-execdir" | "-ok" | "-okdir")),
-        "git" => safe_git(&args),
+        "git" => safe_git(args),
         _ => false,
     }
 }
@@ -351,7 +702,14 @@ fn safe_git(args: &[String]) -> bool {
         return false;
     }
     let Some(subcommand) = args.iter().find(|arg| !arg.starts_with('-')) else { return false };
-    matches!(subcommand.as_str(), "status" | "diff" | "log" | "show" | "rev-parse" | "describe" | "blame" | "ls-files" | "ls-tree" | "cat-file")
+    if matches!(subcommand.as_str(), "status" | "diff" | "log" | "show" | "rev-parse" | "describe" | "blame" | "ls-files" | "ls-tree" | "cat-file") {
+        return true;
+    }
+    subcommand == "branch"
+        && args
+            .iter()
+            .filter(|arg| *arg != "branch")
+            .all(|arg| matches!(arg.as_str(), "-a" | "--all" | "-r" | "--remotes" | "-v" | "-vv" | "--verbose" | "--list" | "--show-current"))
 }
 
 fn stage_may_network(stage: &str) -> bool {
@@ -377,29 +735,60 @@ fn stage_may_network(stage: &str) -> bool {
     lower.contains("http://") || lower.contains("https://") || lower.contains("/dev/tcp/") || lower.contains("/dev/udp/")
 }
 
-fn has_write_redirection(command: &str) -> bool {
+fn has_effectful_redirection(command: &str) -> bool {
     let mut quote = None;
     let mut escaped = false;
-    for c in command.chars() {
+    let chars: Vec<char> = command.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
         if escaped {
             escaped = false;
+            i += 1;
             continue;
         }
         if c == '\\' && quote != Some('\'') {
             escaped = true;
+            i += 1;
             continue;
         }
         if let Some(q) = quote {
             if c == q {
                 quote = None;
             }
+            i += 1;
             continue;
         }
         match c {
             '\'' | '"' => quote = Some(c),
-            '>' => return true,
+            '>' => {
+                i += 1;
+                if chars.get(i) == Some(&'>') {
+                    i += 1;
+                }
+                while chars.get(i).is_some_and(|c| c.is_whitespace()) {
+                    i += 1;
+                }
+                if chars.get(i) == Some(&'&') {
+                    i += 1;
+                    while chars.get(i).is_some_and(|c| c.is_ascii_digit() || *c == '-') {
+                        i += 1;
+                    }
+                    continue;
+                }
+                let start = i;
+                while chars.get(i).is_some_and(|c| !c.is_whitespace() && !matches!(*c, ';' | '|' | '&')) {
+                    i += 1;
+                }
+                let target: String = chars[start..i].iter().collect();
+                if target.trim_matches(|c| c == '\'' || c == '"') != "/dev/null" {
+                    return true;
+                }
+                continue;
+            }
             _ => {}
         }
+        i += 1;
     }
     false
 }
@@ -427,6 +816,50 @@ mod tests {
         assert!(quoted.summary.contains("read-only"));
         let literal = inspect_shell("printf '%s' '$(curl https://example.com)' | wc -c");
         assert!(literal.summary.contains("read-only"));
+
+        let inventory_command = concat!(
+            r#"cd ~/dev/quickgui && echo "---AGENTS---" && head -30 AGENTS.md && echo "---docs---" && ls docs && "#,
+            r#"(find src go crates packages extensions website -type f \( -name '*.rs' -o -name '*.go' -o -name '*.ts' \) 2>/dev/null | "#,
+            r#"grep -v node_modules | sed 's/.*\.//' | sort | uniq -c | sort -rn) && "#,
+            r#"(find src go crates packages extensions -type f \( -name '*.rs' -o -name '*.go' \) 2>/dev/null | "#,
+            r#"grep -v node_modules | xargs wc -l 2>/dev/null | tail -1) && git branch -a | head && git rev-parse --abbrev-ref HEAD"#,
+        );
+        let inventory = inspect_shell(inventory_command);
+        assert_eq!(inventory.force_ask, None);
+        assert!(inventory.summary.contains("read-only"), "{}", inventory.summary);
+        let patterns = shell_patterns(inventory_command);
+        for expected in ["echo *", "head *", "ls *", "find *", "grep *", "sed *", "sort *", "uniq *", "xargs *", "tail *", "git branch *", "git rev-parse *"] {
+            assert!(patterns.iter().any(|pattern| pattern == expected), "missing {expected}: {patterns:?}");
+        }
+
+        let xargs_delete = inspect_shell("find . -print0 | xargs -0 rm -rf");
+        assert!(xargs_delete.force_ask.as_deref().is_some_and(|reason| reason.contains("xargs")));
+        assert!(inspect_shell("find . -print0 | xargs -0 wc -l").summary.contains("read-only"));
+        assert!(inspect_shell("echo ok > report.txt").summary.contains("redirection"));
+
+        let loop_inventory = concat!(
+            r#"cd ~/dev/quickgui && echo "=== LOC by area ===" && for d in src crates go packages website extensions tests; "#,
+            r#"do n=$(find $d -type f \( -name '*.rs' -o -name '*.go' -o -name '*.ts' -o -name '*.tsx' \) "#,
+            r#"-not -path '*/node_modules/*' -not -path '*/vendor/*' -not -path '*/target/*' 2>/dev/null | "#,
+            r#"xargs wc -l 2>/dev/null | tail -1 | awk '{print $1}'); echo "$d: $n"; done && "#,
+            r#"echo "=== crates ===" && ls crates/quickgui-host/src crates/quickgui-extension-sdk/src 2>/dev/null | head -40"#,
+        );
+        let loop_review = inspect_shell(loop_inventory);
+        assert_eq!(loop_review.force_ask, None);
+        let (loop_stages, loop_dynamic) = parsed_shell(loop_inventory);
+        assert!(
+            loop_review.summary.contains("read-only"),
+            "{}; dynamic={loop_dynamic}; stages={:?}",
+            loop_review.summary,
+            loop_stages.iter().map(|stage| (stage, safe_stage(stage))).collect::<Vec<_>>()
+        );
+        let loop_patterns = shell_patterns(loop_inventory);
+        for expected in ["echo *", "find *", "xargs *", "tail *", "awk *", "ls *", "head *"] {
+            assert!(loop_patterns.iter().any(|pattern| pattern == expected), "missing {expected}: {loop_patterns:?}");
+        }
+        assert!(inspect_shell(r#"echo "$(rm -rf report)""#).force_ask.as_deref().is_some_and(|reason| reason.contains("rm")));
+        assert!(inspect_shell("echo `pwd` $((1 + 2))").summary.contains("read-only"));
+        assert!(inspect_shell("echo `rm -rf report`").force_ask.as_deref().is_some_and(|reason| reason.contains("rm")));
     }
 
     #[test]
@@ -437,6 +870,34 @@ mod tests {
         assert_ne!(one, scoped_rule_key("runner-b", Path::new("/work/a"), &args));
         assert_ne!(one, scoped_rule_key("runner-a", Path::new("/work/b"), &args));
         assert_ne!(one, scoped_rule_key("runner-a", Path::new("/work/a"), &serde_json::json!({ "command": "git reset --hard" })));
+    }
+
+    #[test]
+    fn always_allow_uses_reusable_command_prefixes() {
+        assert_eq!(
+            shell_patterns("git status --short && npm run test -- --watch && ls"),
+            vec!["git status *", "npm run test *", "ls *"]
+        );
+        assert!(shell_pattern_matches("git status", "git status *"));
+        assert!(shell_pattern_matches("git status --short", "git status *"));
+        assert!(!shell_pattern_matches("git push", "git status *"));
+        assert!(reusable_shell_patterns("rm -rf report").is_empty());
+
+        let rule = AutoReviewRule {
+            id: "patterns".into(),
+            text: "approved from a shell prompt".into(),
+            behavior: "allow".into(),
+            tool: None,
+            runner_id: Some("runner".into()),
+            workdir: Some("/work".into()),
+            command: None,
+            patterns: vec!["git status *".into(), "rg *".into()],
+        };
+        assert_eq!(
+            shell_rule_outcome(&[rule.clone()], "runner", Path::new("/work"), "git status --short && rg TODO src"),
+            Some(Outcome::Allow)
+        );
+        assert_eq!(shell_rule_outcome(&[rule], "runner", Path::new("/work"), "git status && rm report"), None);
     }
 
     #[tokio::test]
@@ -468,8 +929,30 @@ mod tests {
             runner_id: Some("runner".into()),
             workdir: Some(canonical.display().to_string()),
             command: Some("cargo test".into()),
+            patterns: Vec::new(),
         });
         let ctx = BeforeToolCallContext { assistant_message: &assistant, tool_call: &call, args: &args, context: &context, cancel: &cancel };
+        assert!(before_tool_call(&app, "chat", &bot, &work, true, ctx).await.is_none());
+
+        app.add_auto_review_rule(AutoReviewRule {
+            id: "pattern".into(),
+            text: "cargo test *".into(),
+            behavior: "allow".into(),
+            tool: Some("computer/bash/pattern".into()),
+            runner_id: Some("runner".into()),
+            workdir: Some(canonical.display().to_string()),
+            command: Some("cargo test".into()),
+            patterns: vec!["cargo test *".into()],
+        });
+        let varied_args = serde_json::json!({ "command": "cargo test --workspace" });
+        let varied_call = ToolCall { id: "2".into(), name: "bash".into(), arguments: varied_args.clone() };
+        let ctx = BeforeToolCallContext {
+            assistant_message: &assistant,
+            tool_call: &varied_call,
+            args: &varied_args,
+            context: &context,
+            cancel: &cancel,
+        };
         assert!(before_tool_call(&app, "chat", &bot, &work, true, ctx).await.is_none());
 
         let mut review = app.auto_review();

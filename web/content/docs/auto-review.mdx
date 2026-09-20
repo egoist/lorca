@@ -19,7 +19,7 @@ or:
 with the reason it paused and three answers:
 
 - **Allow once** runs this action.
-- **Always allow** runs it and adds a narrow rule. Plugin rules name the exact tool; local rules are bound to that Runner, working directory, and exact action. Settings shows the complete reviewed command with its Runner and working directory.
+- **Always allow** runs it and adds a reusable rule. Plugin rules name the exact tool. Shell rules are bound to that Runner and working directory and cover human-sized command prefixes such as `git status *` or `npm run test *`; Settings shows those patterns and keeps the original reviewed command for inspection.
 - **Deny** refuses it. The bot is told not to retry.
 
 You can answer from any device. The bot waits up to ten minutes.
@@ -33,7 +33,7 @@ With Auto-review **on**, each action is judged against your rules, your latest m
 
 With Auto-review **off**, every shell command and every effectful plugin action asks.
 
-Read-only plugin actions never ask. Every shell command enters Auto-review, including inspection commands such as `git status`, `rg`, and `wc`; they are normally allowed automatically. Lorca parses all stages of a compound command before reviewing it. Destructive commands, privilege or access changes, opaque interpreters and wrappers, uploads, remote execution channels, and force pushes always ask unless you already saved an exact rule.
+Read-only plugin actions never ask. Every shell command enters Auto-review, including inspection commands such as `git status`, `rg`, and `wc`; the parser identifies concrete risks, then the bot's model applies your rules and latest request. Lorca parses all stages of a compound command before reviewing it. Plain subshell grouping, visible command substitutions, and read-only `xargs` pipelines remain inspectable instead of forcing a prompt. Destructive commands, privilege or access changes, opaque interpreters and wrappers, uploads, remote execution channels, and force pushes always ask unless you already saved that exact action.
 
 ## Shell access
 
@@ -53,4 +53,4 @@ When two rules disagree, Ask first wins. Rules sync to all your devices and appl
 
 ## Routines
 
-A [routine](/docs/routines) runs with nobody watching, so an action that would ask is refused instead. Commands that Auto-review allows still run; add a narrow exact rule for a command the routine needs but Auto-review holds.
+A [routine](/docs/routines) runs with nobody watching, so an action that would ask is refused instead. Commands that Auto-review or one of your scoped patterns allows still run.

@@ -270,7 +270,7 @@ struct Bot: Identifiable, Hashable {
 // MARK: - Auto-review
 
 /// One Auto-review rule: what a bot wants to do, in the user's words, and whether that runs on
-/// its own or asks first. A rule from a card's Always allow also names its exact action key.
+/// its own or asks first. A rule from Always allow also carries a structured tool key or shell patterns.
 struct AutoReviewRule: Hashable, Identifiable {
     enum Behavior: String, Hashable {
         case allow
@@ -288,6 +288,8 @@ struct AutoReviewRule: Hashable, Identifiable {
     var workdir: String? = nil
     /// The complete reviewed command for an exact local shell rule.
     var command: String? = nil
+    /// Reusable shell command prefixes, scoped by Runner and working directory.
+    var patterns: [String] = []
 }
 
 /// The check on effectful plugin actions and shell commands, shared by every Device through

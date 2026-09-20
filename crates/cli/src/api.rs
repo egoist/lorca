@@ -444,6 +444,10 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
                             runner_id: r["runner_id"].as_str().map(str::to_string),
                             workdir: r["workdir"].as_str().map(str::to_string),
                             command: r["command"].as_str().map(str::to_string),
+                            patterns: r["patterns"]
+                                .as_array()
+                                .map(|patterns| patterns.iter().filter_map(|pattern| pattern.as_str().map(str::to_string)).collect())
+                                .unwrap_or_default(),
                         })
                     })
                     .collect();

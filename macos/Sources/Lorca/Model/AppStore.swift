@@ -676,6 +676,7 @@ final class AppStore {
             if let runnerID = rule.runnerID { row["runner_id"] = runnerID }
             if let workdir = rule.workdir { row["workdir"] = workdir }
             if let command = rule.command { row["command"] = command }
+            if !rule.patterns.isEmpty { row["patterns"] = rule.patterns }
             return row
         }
         perform("auto_review.set", ["is_enabled": value.isEnabled, "rules": rules])

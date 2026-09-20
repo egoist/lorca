@@ -1,7 +1,7 @@
 import AppKit
 
 /// Settings → Auto-review, after Grok Bot's: the switch and the rules, shared by every Device
-/// through the roster. Add and Edit use sheets; a card's Always allow adds an exact rule here.
+/// through the roster. Add and Edit use sheets; a card's Always allow adds a structured rule here.
 final class AutoReviewSettingsViewController: SettingsPaneViewController {
     private let store = AppStore.shared
     private let check = SectionView(title: L("Auto-review"))
@@ -20,7 +20,7 @@ final class AutoReviewSettingsViewController: SettingsPaneViewController {
         rules.setHeaderAccessory(add)
         addSection(check)
         addSection(rules)
-        addFootnote(L("Auto-review checks effectful plugin actions and every shell command before they run, using the bot's own model, and asks you in the chat when an action needs a look. Safe commands normally run automatically; risky commands ask. Off, every such action asks. Write one short, natural-language rule for each action; \"Ask first\" takes priority if rules conflict. Built-in safety checks always apply."))
+        addFootnote(L("Auto-review checks effectful plugin actions and every shell command before they run. The parser identifies concrete risks; the bot's model applies your rules and latest request, so safe commands normally run automatically and risky commands ask. Off, every such action asks. Write one short, natural-language rule for each action; \"Ask first\" takes priority if rules conflict. Built-in safety checks always apply."))
         store.observe(self) { [weak self] event in
             switch event {
             case .rosterChanged, .snapshotReplaced: self?.render()
@@ -50,7 +50,10 @@ final class AutoReviewSettingsViewController: SettingsPaneViewController {
                 content = label
                 scope = nil
             }
-            let detail = [scope, rule.behavior.title].compactMap { $0 }.joined(separator: " · ")
+            let patternCount = rule.patterns.isEmpty
+                ? nil
+                : (rule.patterns.count == 1 ? L("1 pattern") : L("%d patterns", rule.patterns.count))
+            let detail = [scope, patternCount, rule.behavior.title].compactMap { $0 }.joined(separator: " · ")
             let row = AutoReviewRuleRow(content: content, detail: detail)
             row.onEdit = { [weak self] in self?.showEditRule(rule) }
             row.onDelete = { [weak self] in self?.delete(rule.id) }
@@ -173,11 +176,16 @@ final class AutoReviewRuleEditorViewController: SheetViewController, NSTextField
         behaviorSection.setRows([AccessoryRow(key: L("Auto-review"), accessory: behavior)])
 
         contentStack.addArrangedSubview(ruleContent)
+        var fullWidth: [NSView] = [ruleContent]
+        if let patterns = rule?.patterns, !patterns.isEmpty {
+            let patternSection = SectionView(title: L("Allowed patterns"))
+            patternSection.setRows([ExactShellCommandView(command: patterns.joined(separator: "\n"), maxLines: 0)])
+            contentStack.addArrangedSubview(patternSection)
+            fullWidth.append(patternSection)
+        }
         contentStack.addArrangedSubview(behaviorSection)
-        NSLayoutConstraint.activate([
-            ruleContent.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
-            behaviorSection.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
-        ])
+        fullWidth.append(behaviorSection)
+        NSLayoutConstraint.activate(fullWidth.map { $0.widthAnchor.constraint(equalTo: contentStack.widthAnchor) })
         setButtons(confirm: rule == nil ? L("Add rule") : L("Save"))
     }
 

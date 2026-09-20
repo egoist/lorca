@@ -1152,6 +1152,15 @@ pub(crate) fn normalize_auto_review_rules(bots: &[Bot], auto_review: &mut AutoRe
             rule.command = Some(rule.text.clone());
             changed = true;
         }
+        if rule.patterns.is_empty() {
+            if let Some(command) = &rule.command {
+                let patterns = crate::local_review::reusable_shell_patterns(command);
+                if !patterns.is_empty() {
+                    rule.patterns = patterns;
+                    changed = true;
+                }
+            }
+        }
         if let Some(workdir) = workdir.as_ref() {
             if rule.workdir.is_none() {
                 rule.workdir = Some(workdir.clone());
@@ -1202,6 +1211,7 @@ pub(crate) fn restore_exact_shell_commands(chats: &[Chat], auto_review: &mut Aut
         });
         if let Some(command) = command {
             rule.text = command.clone();
+            rule.patterns = crate::local_review::reusable_shell_patterns(&command);
             rule.command = Some(command);
             changed = true;
         }
@@ -1394,6 +1404,7 @@ mod tests {
                     runner_id: Some("runner".into()),
                     workdir: Some(b1_workdir),
                     command: Some("cargo test".into()),
+                    patterns: Vec::new(),
                 },
                 AutoReviewRule {
                     id: "shell-b2".into(),
@@ -1403,6 +1414,7 @@ mod tests {
                     runner_id: Some("runner".into()),
                     workdir: Some(b2_workdir),
                     command: Some("cargo test".into()),
+                    patterns: Vec::new(),
                 },
                 AutoReviewRule {
                     id: "plugin".into(),
@@ -1412,6 +1424,7 @@ mod tests {
                     runner_id: None,
                     workdir: None,
                     command: None,
+                    patterns: Vec::new(),
                 },
                 AutoReviewRule {
                     id: "shell-shared".into(),
@@ -1421,6 +1434,7 @@ mod tests {
                     runner_id: Some("runner".into()),
                     workdir: Some("/work/shared".into()),
                     command: Some("cargo test".into()),
+                    patterns: Vec::new(),
                 },
             ];
         }
@@ -1469,6 +1483,7 @@ mod tests {
                     runner_id: None,
                     workdir: None,
                     command: None,
+                    patterns: Vec::new(),
                 },
                 AutoReviewRule {
                     id: "shared".into(),
@@ -1478,6 +1493,7 @@ mod tests {
                     runner_id: None,
                     workdir: None,
                     command: None,
+                    patterns: Vec::new(),
                 },
                 AutoReviewRule {
                     id: "orphan".into(),
@@ -1487,6 +1503,7 @@ mod tests {
                     runner_id: None,
                     workdir: None,
                     command: None,
+                    patterns: Vec::new(),
                 },
                 AutoReviewRule {
                     id: "plugin".into(),
@@ -1496,6 +1513,7 @@ mod tests {
                     runner_id: None,
                     workdir: None,
                     command: None,
+                    patterns: Vec::new(),
                 },
             ],
         };
@@ -1532,6 +1550,7 @@ mod tests {
         let current = &auto_review.rules[0];
         assert_eq!(current.command.as_deref(), Some(command));
         assert_eq!(current.text, command);
+        assert_eq!(current.patterns, vec!["ls *", "echo *"]);
     }
 
     #[test]

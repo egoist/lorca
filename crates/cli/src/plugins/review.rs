@@ -31,7 +31,9 @@ other people will see (a message, an email, a comment, a reply, a review), spend
 has access, affects many items at once, runs with elevated privileges, reads credentials or private keys, uploads local \
 data, changes system configuration, executes downloaded or obfuscated code, writes outside the bot's working directory, \
 or cannot be undone easily. Allow contained, reversible work in the user's own space that the user's request plainly \
-calls for: creating a draft, an issue, a page, a branch, or a task; editing or closing something the bot itself just \
+calls for. Allow ordinary read-only inspection, including compound pipelines, loops, grouping, and visible command \
+substitutions; syntax complexity alone is not a risk when every visible command is read-only. Also allow creating a \
+draft, an issue, a page, a branch, or a task; editing or closing something the bot itself just \
 made; updating a field the user asked to change; building or testing inside the named working directory. The user's rules come first: \
 an allow rule that covers the action means allow, an ask rule that covers it means ask, and ask wins when both apply. \
 When unsure, ask. The reason is shown to the user, so write it about the action, not about yourself.";

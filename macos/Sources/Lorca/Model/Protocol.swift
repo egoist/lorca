@@ -43,9 +43,10 @@ enum Wire {
         var runnerId: String?
         var workdir: String?
         var command: String?
+        var patterns: [String]?
 
         func toModel() -> Lorca.AutoReviewRule {
-            Lorca.AutoReviewRule(id: id, text: text, behavior: behavior == "ask" ? .ask : .allow, tool: tool, runnerID: runnerId, workdir: workdir, command: command)
+            Lorca.AutoReviewRule(id: id, text: text, behavior: behavior == "ask" ? .ask : .allow, tool: tool, runnerID: runnerId, workdir: workdir, command: command, patterns: patterns ?? [])
         }
     }
 

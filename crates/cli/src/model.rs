@@ -92,8 +92,8 @@ pub struct Bot {
 }
 
 /// One Auto-review rule: what a bot wants to do, in the user's words, and whether that runs
-/// on its own or asks first. A rule made from a card's Always allow also carries an exact
-/// action key, matched without another model review.
+/// on its own or asks first. A rule made from a card's Always allow also carries a structured
+/// tool key or reusable shell patterns, matched without another model review.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AutoReviewRule {
     pub id: String,
@@ -102,15 +102,18 @@ pub struct AutoReviewRule {
     pub behavior: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool: Option<String>,
-    /// Scope metadata for an exact local shell rule. Matching uses the exact action key; these
-    /// fields keep the human-readable rule and private-workspace cleanup tied to the Runner.
+    /// Scope metadata for a local shell rule. These fields keep its reusable patterns and
+    /// private-workspace cleanup tied to the Runner.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runner_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workdir: Option<String>,
-    /// The complete reviewed shell command. Present only on exact local shell rules.
+    /// The complete reviewed shell command that produced a local shell rule.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
+    /// Reusable shell command prefixes such as `git status *`, scoped by Runner and workdir.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub patterns: Vec<String>,
 }
 
 /// Auto-review, after Grok Bot: with it on, a Runner checks effectful plugin actions and shell
