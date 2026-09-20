@@ -325,9 +325,13 @@ final class BotRow: NSView {
 final class StatusRow: NSView {
     private let icon = NSImageView()
     private let title = Build.label("", font: .systemFont(ofSize: 12.5, weight: .medium))
-    private let subtitle = Build.label("", font: Theme.Font.caption, color: .secondaryLabelColor)
+    private let subtitle = Build.label(
+        "", font: Theme.Font.caption, color: .secondaryLabelColor, lines: 0)
     private let state = Build.label("", font: .systemFont(ofSize: 11, weight: .medium), alignment: .right)
     private let action = NSButton()
+    private var textTrailingPlain: NSLayoutConstraint!
+    private var textTrailingState: NSLayoutConstraint!
+    private var textTrailingAction: NSLayoutConstraint!
 
     var onAction: (() -> Void)?
 
@@ -343,12 +347,21 @@ final class StatusRow: NSView {
         action.action = #selector(actionTapped)
         action.translatesAutoresizingMaskIntoConstraints = false
         action.isHidden = true
+        action.setContentHuggingPriority(.required, for: .horizontal)
+        action.setContentCompressionResistancePriority(.required, for: .horizontal)
+        state.setContentHuggingPriority(.required, for: .horizontal)
+        state.setContentCompressionResistancePriority(.required, for: .horizontal)
 
         let text = Build.stack([title, subtitle], spacing: 1)
         addSubview(icon)
         addSubview(text)
         addSubview(state)
         addSubview(action)
+
+        textTrailingPlain = text.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12)
+        textTrailingState = text.trailingAnchor.constraint(equalTo: state.leadingAnchor, constant: -8)
+        textTrailingAction = text.trailingAnchor.constraint(equalTo: action.leadingAnchor, constant: -8)
+        textTrailingPlain.isActive = true
 
         NSLayoutConstraint.activate([
             heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
@@ -357,7 +370,8 @@ final class StatusRow: NSView {
             icon.widthAnchor.constraint(equalToConstant: 18),
             text.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 10),
             text.centerYAnchor.constraint(equalTo: centerYAnchor),
-            text.trailingAnchor.constraint(lessThanOrEqualTo: state.leadingAnchor, constant: -8),
+            text.topAnchor.constraint(greaterThanOrEqualTo: topAnchor, constant: 8),
+            text.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -8),
             state.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
             state.centerYAnchor.constraint(equalTo: centerYAnchor),
             action.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
@@ -385,6 +399,7 @@ final class StatusRow: NSView {
         state.textColor = stateColor
         state.isHidden = stateText == nil
 
+        NSLayoutConstraint.deactivate([textTrailingPlain, textTrailingState, textTrailingAction])
         if let actionTitle {
             // The same bezel for both; a destructive action has a red title. Neither
             // `contentTintColor` nor `hasDestructiveAction` colors a rounded bezel's title, so
@@ -394,8 +409,10 @@ final class StatusRow: NSView {
             action.attributedTitle = NSAttributedString(string: actionTitle, attributes: [.foregroundColor: color, .font: font])
             action.isHidden = false
             state.isHidden = true
+            textTrailingAction.isActive = true
         } else {
             action.isHidden = true
+            (stateText == nil ? textTrailingPlain : textTrailingState).isActive = true
         }
     }
 
