@@ -137,7 +137,7 @@ enum MainMenu {
         menu.addItem(.separator())
         add(menu, L("Stop Responding"), #selector(ChatViewController.stopResponding(_:)), ".")
         menu.addItem(.separator())
-        add(menu, L("Delete Chat"), #selector(RootSplitViewController.deleteChat(_:)), "\u{8}")
+        add(menu, L("Delete Chat"), #selector(RootSplitViewController.deleteChat(_:)))
 
         // ⌘1–⌘9 open the first nine chats in the sidebar, which shows the numbers while ⌘ is held.
         for number in 1...9 {
