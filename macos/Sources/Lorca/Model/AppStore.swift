@@ -746,9 +746,55 @@ final class AppStore {
     }
 
     func deleteChat(_ id: Chat.ID) {
+        guard let chat = chat(id) else { return }
+
+        // A bot owns its DM, so deleting that row deletes the bot as one roster operation.
+        // Groups keep their other members; a group with nobody left is removed too.
+        if chat.isDM, let botID = chat.botIDs.first, bot(botID) != nil {
+            let relatedChatIDs = chats.filter { $0.botIDs.contains(botID) }.map(\.id)
+            for chatID in relatedChatIDs { replyEngine?.cancel(chatID: chatID) }
+
+            var removedChatIDs = Set<Chat.ID>()
+            var changedChatIDs: [Chat.ID] = []
+            chats = chats.compactMap { existing in
+                guard existing.botIDs.contains(botID) else { return existing }
+                if existing.isDM {
+                    removedChatIDs.insert(existing.id)
+                    return nil
+                }
+                var updated = existing
+                updated.botIDs.removeAll { $0 == botID }
+                guard !updated.botIDs.isEmpty else {
+                    removedChatIDs.insert(existing.id)
+                    return nil
+                }
+                changedChatIDs.append(existing.id)
+                return updated
+            }
+
+            bots.removeAll { $0.id == botID }
+            routines.removeAll { $0.botID == botID }
+            let cancelledJobs = runningJobs.filter {
+                $0.botID == botID || removedChatIDs.contains($0.chatID)
+            }
+            let cancelledJobIDs = Set(cancelledJobs.map(\.id))
+            runningJobs.removeAll { cancelledJobIDs.contains($0.id) }
+            for job in cancelledJobs { jobStarts.removeValue(forKey: job.id) }
+            for chatID in removedChatIDs { retryNotes.removeValue(forKey: chatID) }
+
+            emit(.rosterChanged)
+            for chatID in changedChatIDs { emit(.chatChanged(chatID)) }
+            emit(.chatsChanged)
+            perform("bots.delete", ["id": botID])
+            return
+        }
+
         replyEngine?.cancel(chatID: id)
         chats.removeAll { $0.id == id }
+        let cancelledJobs = runningJobs.filter { $0.chatID == id }
         runningJobs.removeAll { $0.chatID == id }
+        for job in cancelledJobs { jobStarts.removeValue(forKey: job.id) }
+        retryNotes.removeValue(forKey: id)
         emit(.chatsChanged)
         perform("chats.delete", ["chat_id": id])
     }

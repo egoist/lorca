@@ -186,6 +186,10 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             .map_err(|e| e.to_string())?;
             Ok(json!({ "bot": bot }))
         }
+        "bots.delete" => {
+            app.delete_bot(&string(&params, "id")?).map_err(|e| e.to_string())?;
+            Ok(Value::Null)
+        }
 
         "chats.create" => {
             let bot_ids: Vec<String> = serde_json::from_value(params["bot_ids"].clone()).unwrap_or_default();

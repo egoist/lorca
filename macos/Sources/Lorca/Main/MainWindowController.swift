@@ -10,6 +10,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private weak var navigation: NSToolbarItemGroup?
     /// The picker's glass capsule, where the pop-up has one of its own.
     private var devicePlatter: NSView?
+    private var palette: CommandPalette?
 
     init() {
         let window = NSWindow(
@@ -214,6 +215,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
     func focusSearch() {
         root.focusSearch()
+    }
+
+    func toggleCommandPalette() {
+        guard let window else { return }
+        let palette = palette ?? CommandPalette(parent: window, root: root)
+        self.palette = palette
+        palette.toggle()
     }
 
     /// A window coming on screen starts with the keyboard in its content, whatever held it when

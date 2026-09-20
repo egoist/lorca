@@ -184,6 +184,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mainWindowController?.focusSearch()
     }
 
+    @objc func toggleCommandPalette(_ sender: Any?) {
+        showMainWindow()
+        mainWindowController?.toggleCommandPalette()
+    }
+
     @objc func checkForUpdates(_ sender: Any?) {
         Updater.shared.checkForUpdates()
     }
@@ -247,6 +252,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if menuItem.tag == MenuTag.replayMock {
             return store.isMock
+        }
+        if menuItem.action == #selector(toggleCommandPalette(_:)) {
+            return onboardingWindowController == nil
         }
         if menuItem.action == #selector(checkForUpdates(_:)) {
             return Updater.shared.canCheckForUpdates

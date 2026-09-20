@@ -114,6 +114,8 @@ enum MainMenu {
 
     private static func viewMenu() -> NSMenu {
         let menu = NSMenu()
+        add(menu, L("Command Palette…"), #selector(AppDelegate.toggleCommandPalette(_:)), "k")
+        menu.addItem(.separator())
         add(menu, L("Toggle Sidebar"), #selector(NSSplitViewController.toggleSidebar(_:)), "b")
         add(
             menu, L("Toggle Inspector"), #selector(RootSplitViewController.toggleInspector(_:)), "b",

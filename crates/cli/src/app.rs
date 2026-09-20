@@ -655,6 +655,60 @@ impl App {
         Ok(bot)
     }
 
+    /// Deletes a bot, its direct chat and routines, and its memberships in group chats. A
+    /// group whose last bot was deleted goes with it; the other groups keep their transcript.
+    pub fn delete_bot(&self, id: &str) -> anyhow::Result<()> {
+        let removed_chat_ids = {
+            let mut state = self.state.lock().unwrap();
+            if !state.bots.iter().any(|bot| bot.id == id) {
+                anyhow::bail!("Unknown bot");
+            }
+
+            state.bots.retain(|bot| bot.id != id);
+            state.routines.retain(|routine| routine.bot_id != id);
+
+            let mut removed = Vec::new();
+            for chat in &mut state.chats {
+                if !chat.meta.bot_ids.iter().any(|bot_id| bot_id == id) {
+                    continue;
+                }
+                // A DM belongs to its bot. Groups survive with their remaining members, and
+                // move ownership when the deleted bot held it.
+                if !chat.meta.is_group() {
+                    removed.push(chat.meta.id.clone());
+                    continue;
+                }
+                chat.meta.bot_ids.retain(|bot_id| bot_id != id);
+                chat.compactions.retain(|compaction| compaction.bot_id != id);
+                if chat.meta.owner_bot_id.as_deref() == Some(id) {
+                    chat.meta.owner_bot_id = chat.meta.bot_ids.first().cloned();
+                }
+                if chat.meta.bot_ids.is_empty() {
+                    removed.push(chat.meta.id.clone());
+                }
+            }
+
+            state.chats.retain(|chat| !removed.contains(&chat.meta.id));
+            queue_chat_deletes(&mut state, &removed);
+            removed
+        };
+
+        // Stop this bot after the roster mutation is committed. A room job has no bot id and
+        // keeps going when its group survives; it reads the changed membership before offering
+        // another member a turn. A room whose last bot was deleted is cancelled with its chat.
+        for job in self.running_jobs.lock().unwrap().values() {
+            if job.bot_id == id || removed_chat_ids.contains(&job.chat_id) {
+                job.cancel.cancel();
+            }
+        }
+        for chat_id in &removed_chat_ids {
+            self.emit(Event::ChatRemoved { chat_id: chat_id.clone() });
+        }
+        self.roster_changed(true);
+        crate::runtime::prime_names(self);
+        Ok(())
+    }
+
     fn insert_bot(&self, mut bot: Bot) -> anyhow::Result<Bot> {
         let runner = self.device(&bot.runner_id).ok_or_else(|| anyhow::anyhow!("Unknown Runner"))?;
         if !runner.is_runner() {
@@ -748,11 +802,7 @@ impl App {
             // The relay drops the chat's messages, read marks, and attachments in one call,
             // made by the sync cycle and retried until it lands. What was still waiting to go
             // up goes nowhere.
-            let group = crate::model::relay_name(chat_id);
-            state.outbox.retain(|item| item.group.as_deref() != Some(group.as_str()));
-            if !state.group_deletes.contains(&group) {
-                state.group_deletes.push(group);
-            }
+            queue_chat_deletes(&mut state, &[chat_id.to_string()]);
         }
         self.emit(Event::ChatRemoved { chat_id: chat_id.to_string() });
         self.roster_changed(true);
@@ -1040,6 +1090,18 @@ impl App {
     }
 }
 
+/// Drops everything still waiting to upload for these chats and queues their relay groups for
+/// deletion. The sync cycle retries each group until the relay accepts it.
+fn queue_chat_deletes(state: &mut State, chat_ids: &[String]) {
+    for chat_id in chat_ids {
+        let group = crate::model::relay_name(chat_id);
+        state.outbox.retain(|item| item.group.as_deref() != Some(group.as_str()));
+        if !state.group_deletes.contains(&group) {
+            state.group_deletes.push(group);
+        }
+    }
+}
+
 /// A chat as a snapshot carries it: its newest messages in the apps' form, and `has_more`
 /// when older ones are left to ask for with `chats.messages`.
 fn chat_for_app(chat: &Chat) -> Value {
@@ -1080,5 +1142,145 @@ pub fn remember_applied(state: &mut State, id: &str) {
     if state.applied_blob_ids.len() > 2000 {
         let excess = state.applied_blob_ids.len() - 2000;
         state.applied_blob_ids.drain(..excess);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct ScratchApp(Arc<App>, std::path::PathBuf);
+
+    impl Drop for ScratchApp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.1);
+        }
+    }
+
+    fn scratch_app() -> ScratchApp {
+        let home = std::env::temp_dir().join(format!("lorca-app-{}", uuid::Uuid::new_v4()));
+        let app = App::load(Config { home: home.clone(), port: 0 }).unwrap();
+        ScratchApp(app, home)
+    }
+
+    fn bot(id: &str) -> Bot {
+        Bot {
+            id: id.into(),
+            name: id.into(),
+            label: String::new(),
+            description: String::new(),
+            symbol_name: "sparkles".into(),
+            accent: "indigo".into(),
+            avatar: None,
+            runner_id: "runner".into(),
+            provider: "deepseek".into(),
+            model: None,
+            thinking: None,
+            instructions: String::new(),
+            workdir: None,
+            created_at: 1.0,
+        }
+    }
+
+    fn chat(id: &str, kind: &str, bot_ids: &[&str], owner: Option<&str>) -> Chat {
+        Chat {
+            meta: ChatMeta {
+                id: id.into(),
+                kind: kind.into(),
+                title: None,
+                bot_ids: bot_ids.iter().map(|id| id.to_string()).collect(),
+                owner_bot_id: owner.map(str::to_string),
+                is_pinned: false,
+                created_at: 1.0,
+            },
+            messages: Vec::new(),
+            unread_count: 0,
+            usage: None,
+            compactions: Vec::new(),
+        }
+    }
+
+    fn routine(id: &str, bot_id: &str) -> Routine {
+        Routine {
+            id: id.into(),
+            bot_id: bot_id.into(),
+            name: id.into(),
+            prompt: String::new(),
+            schedule: "every 1h".into(),
+            is_enabled: true,
+            enabled_at: 1.0,
+            last_run_at: None,
+            last_outcome: None,
+            paused_reason: None,
+            created_at: 1.0,
+        }
+    }
+
+    fn queued_message(chat_id: &str) -> OutboxItem {
+        OutboxItem {
+            id: format!("out-{chat_id}"),
+            kind: "chat".into(),
+            recipient: None,
+            ciphertext: String::new(),
+            slot: None,
+            group: Some(crate::model::relay_name(chat_id)),
+        }
+    }
+
+    #[test]
+    fn deleting_a_bot_removes_its_dm_routines_and_group_memberships() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        {
+            let mut state = app.state.lock().unwrap();
+            state.bots = vec![bot("b1"), bot("b2")];
+            state.chats = vec![
+                chat("dm-b1", "dm", &["b1"], Some("b1")),
+                chat("dm-b2", "dm", &["b2"], Some("b2")),
+                chat("shared", "group", &["b1", "b2"], Some("b1")),
+                chat("solo", "group", &["b1"], Some("b1")),
+            ];
+            state.routines = vec![routine("r1", "b1"), routine("r2", "b2")];
+            state.outbox = ["dm-b1", "dm-b2", "shared", "solo"].into_iter().map(queued_message).collect();
+        }
+
+        app.delete_bot("b1").unwrap();
+
+        let state = app.state.lock().unwrap();
+        assert_eq!(state.bots.iter().map(|bot| bot.id.as_str()).collect::<Vec<_>>(), vec!["b2"]);
+        assert_eq!(state.routines.iter().map(|routine| routine.id.as_str()).collect::<Vec<_>>(), vec!["r2"]);
+        assert_eq!(state.chats.iter().map(|chat| chat.meta.id.as_str()).collect::<Vec<_>>(), vec!["dm-b2", "shared"]);
+        let shared = state.chats.iter().find(|chat| chat.meta.id == "shared").unwrap();
+        assert_eq!(shared.meta.bot_ids, vec!["b2"]);
+        assert_eq!(shared.meta.owner_bot_id.as_deref(), Some("b2"));
+        assert_eq!(
+            state.outbox.iter().filter_map(|item| item.group.as_deref()).collect::<Vec<_>>(),
+            vec!["dm-b2", "shared"]
+        );
+        assert!(state.group_deletes.contains(&"dm-b1".into()));
+        assert!(state.group_deletes.contains(&"solo".into()));
+    }
+
+    #[test]
+    fn deleting_a_group_does_not_delete_its_bots() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        {
+            let mut state = app.state.lock().unwrap();
+            state.bots = vec![bot("b1"), bot("b2")];
+            state.chats = vec![
+                chat("dm-b1", "dm", &["b1"], Some("b1")),
+                chat("group", "group", &["b1", "b2"], Some("b1")),
+            ];
+            state.routines = vec![routine("r1", "b1")];
+        }
+
+        app.delete_chat("group");
+
+        let state = app.state.lock().unwrap();
+        assert_eq!(state.bots.len(), 2);
+        assert_eq!(state.routines.len(), 1);
+        assert_eq!(state.chats.iter().map(|chat| chat.meta.id.as_str()).collect::<Vec<_>>(), vec!["dm-b1"]);
+        assert!(state.group_deletes.contains(&"group".into()));
     }
 }

@@ -11,7 +11,6 @@ final class SidebarViewController: NSViewController {
     let footer = SidebarFooterView()
 
     private var nodes: [SidebarNode] = []
-    private var searchQuery = ""
     private var isApplyingSelection = false
     private var isNotifyingSelection = false
 
@@ -41,12 +40,8 @@ final class SidebarViewController: NSViewController {
         scrollView.automaticallyAdjustsContentInsets = false
         scrollView.contentInsets = NSEdgeInsets(top: 7, left: 0, bottom: 8, right: 0)
 
-        searchBar.onQueryChange = { [weak self] query in
-            self?.setSearchQuery(query)
-        }
-        searchBar.onMoveDown = { [weak self] in
-            self?.focusList()
-        }
+        // The palette searches the chats, so the field opens it instead of taking the keyboard.
+        searchBar.onActivate = { [weak self] in self?.focusSearch() }
 
         // Both land in Settings: General, or this Mac's About pane.
         footer.onSettings = { [weak self] in
@@ -101,7 +96,7 @@ final class SidebarViewController: NSViewController {
     }
 
     func focusSearch() {
-        searchBar.window?.makeFirstResponder(searchBar.field)
+        NSApp.sendAction(#selector(AppDelegate.toggleCommandPalette(_:)), to: nil, from: nil)
     }
 
     func focusList() {
@@ -151,7 +146,7 @@ final class SidebarViewController: NSViewController {
     // MARK: - Data
 
     private func rebuild() {
-        let fresh = filteredChats().map { SidebarNode(.chat($0.id)) }
+        let fresh = store.chats.map { SidebarNode(.chat($0.id)) }
 
         if fresh.map(\.kind) == nodes.map(\.kind) {
             // Same rows in the same order (an unread count cleared, a pin toggled): update the
@@ -181,23 +176,6 @@ final class SidebarViewController: NSViewController {
                 cell.shortcutNumber = shortcutNumber(forRow: row)
             }
         }
-    }
-
-    private func filteredChats() -> [Chat] {
-        guard !searchQuery.isEmpty else { return store.chats }
-        return store.chats.filter { chat in
-            let haystack = [
-                store.title(for: chat),
-                store.preview(for: chat),
-                store.bots(in: chat).map(\.name).joined(separator: " "),
-            ].joined(separator: " ")
-            return haystack.localizedCaseInsensitiveContains(searchQuery)
-        }
-    }
-
-    func setSearchQuery(_ query: String) {
-        searchQuery = query.trimmingCharacters(in: .whitespaces)
-        rebuild()
     }
 
     // MARK: - Selection
@@ -386,7 +364,9 @@ extension SidebarViewController: NSMenuDelegate {
             menu.addItem(item(L("Add Bot…"), #selector(RootSplitViewController.addBotToChat(_:))))
         }
         menu.addItem(.separator())
-        menu.addItem(item(L("Delete"), #selector(RootSplitViewController.deleteChat(_:))))
+        menu.addItem(
+            item(chat?.isDM == true ? L("Delete Bot") : L("Delete"),
+                 #selector(RootSplitViewController.deleteChat(_:))))
     }
 
     private func item(_ title: String, _ action: Selector) -> NSMenuItem {
@@ -413,8 +393,15 @@ enum SidebarChrome {
 /// The strip at the top of a sidebar holding a standard search field, which brings AppKit's
 /// capsule, magnifier, clear button and focus ring.
 final class SidebarSearchBar: NSView, NSSearchFieldDelegate {
-    let field = NSSearchField()
+    let field: NSSearchField = ActivatingSearchField()
     private var query = ""
+
+    /// Set where the field is the way into a search elsewhere: a click calls this, and the field
+    /// never takes the keyboard.
+    var onActivate: (() -> Void)? {
+        get { (field as? ActivatingSearchField)?.onActivate }
+        set { (field as? ActivatingSearchField)?.onActivate = newValue }
+    }
 
     var onQueryChange: ((String) -> Void)?
     /// Down arrow in the field: the list below takes the keyboard.
@@ -478,6 +465,17 @@ final class SidebarSearchBar: NSView, NSSearchFieldDelegate {
         guard field.stringValue != query else { return }
         query = field.stringValue
         onQueryChange?(query)
+    }
+}
+
+private final class ActivatingSearchField: NSSearchField {
+    var onActivate: (() -> Void)?
+
+    override var acceptsFirstResponder: Bool { onActivate == nil && super.acceptsFirstResponder }
+
+    override func mouseDown(with event: NSEvent) {
+        guard let onActivate else { return super.mouseDown(with: event) }
+        onActivate()
     }
 }
 

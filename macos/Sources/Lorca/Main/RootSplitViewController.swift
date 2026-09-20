@@ -201,6 +201,17 @@ final class RootSplitViewController: NSSplitViewController {
         select(.settings(.general))
     }
 
+    func showSettings(_ pane: SettingsPane) {
+        if sidebarItem.isCollapsed { sidebarItem.animator().isCollapsed = false }
+        select(.settings(pane))
+    }
+
+    /// Opens a setting's pane, scrolls to its row, and flashes it.
+    func reveal(_ entry: SettingsEntry) {
+        showSettings(entry.pane)
+        (settingsController(for: entry.pane) as? SettingsPaneViewController)?.reveal(entry)
+    }
+
     /// The Devices pane on that Device, with the other Device panes on it too.
     func openDevice(_ id: Device.ID) {
         showSettingsDevice(id)
@@ -433,7 +444,7 @@ final class RootSplitViewController: NSSplitViewController {
         presentAsSheet(sheet)
     }
 
-    private func open(_ chatID: Chat.ID) {
+    func open(_ chatID: Chat.ID) {
         select(.chat(chatID))
         chatController?.focusComposer()
     }
@@ -516,9 +527,12 @@ final class RootSplitViewController: NSSplitViewController {
         }
         let alert = NSAlert()
         alert.messageText = L("Delete \"%@\"?", store.title(for: chat))
-        alert.informativeText = L("The transcript is removed from this Device and from paired Devices.")
+        let deletesBot = chat.isDM && chat.botIDs.first.flatMap(store.bot) != nil
+        alert.informativeText = deletesBot
+            ? L("The bot, its routines, and this direct chat are removed from this Device and from paired Devices.")
+            : L("The transcript is removed from this Device and from paired Devices.")
         alert.alertStyle = .warning
-        alert.addButton(withTitle: L("Delete"))
+        alert.addButton(withTitle: deletesBot ? L("Delete Bot") : L("Delete"))
         alert.addButton(withTitle: L("Cancel"))
         alert.buttons.first?.hasDestructiveAction = true
         alert.beginSheetModal(for: window) { [weak self] response in
@@ -560,6 +574,11 @@ final class ContentContainerViewController: NSViewController {
 
 extension RootSplitViewController: NSMenuItemValidation {
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(deleteChat(_:)) {
+            guard case let .chat(id) = selection, let chat = store.chat(id) else { return false }
+            menuItem.title = chat.isDM ? L("Delete Bot") : L("Delete Chat")
+            return true
+        }
         if menuItem.action == #selector(addBotToChat(_:)) {
             guard case let .chat(id) = selection, let chat = store.chat(id) else { return false }
             return !botsAvailableToAdd(to: chat).isEmpty

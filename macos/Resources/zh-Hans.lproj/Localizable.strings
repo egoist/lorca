@@ -65,6 +65,7 @@
 "a teammate" = "队友";
 "About Lorca" = "关于 Lorca";
 "Account" = "账户";
+"Actions" = "操作";
 "Active now" = "当前在线";
 "Add" = "添加";
 "Add a bot to %@" = "将智能体添加到“%@”";
@@ -137,6 +138,8 @@
 "CLI started by the app" = "CLI 已由 App 启动";
 "Close Window" = "关闭窗口";
 "Color" = "颜色";
+"Command Palette" = "命令面板";
+"Command Palette…" = "命令面板…";
 "Compact" = "压缩";
 "Connect" = "接入";
 "Connect %@" = "接入 %@";
@@ -177,6 +180,7 @@
 "Delete" = "删除";
 "Delete \"%@\"?" = "要删除“%@”吗？";
 "Delete “%@”?" = "要删除“%@”吗？";
+"Delete Bot" = "删除智能体";
 "Delete Chat" = "删除聊天";
 "Delete routine" = "删除例行任务";
 "Delete rule" = "删除规则";
@@ -309,6 +313,7 @@
 "No plugin matches." = "没有匹配的插件。";
 "No plugins installed" = "未安装插件";
 "No plugins on %@ yet. Add one from the marketplace, or ask %@ to find one." = "%1$@ 上还没有插件。从插件市场添加一个，或让 %2$@ 找一个。";
+"No Results" = "无结果";
 "No Results for “%@”" = "没有“%@”的结果";
 "No rules yet. Always allow on a card adds one, or write one below." = "还没有规则。在卡片上点“始终允许”会添加一条，也可以在下方写一条。";
 "No Runner is paired. Bots run on a Device with macOS, Linux, or Windows." = "尚未配对 Runner。智能体运行在装有 macOS、Linux 或 Windows 的设备上。";
@@ -434,6 +439,7 @@
 "Scroll to Latest" = "滚动到最新消息";
 "Scroll to latest (⌘J)" = "滚动到最新 (⌘J)";
 "Search" = "搜索";
+"Search actions, chats, and settings" = "搜索操作、聊天和设置";
 "Search plugins" = "搜索插件";
 "Searching files" = "正在搜索文件";
 "Searching plugins" = "正在搜索插件";
@@ -512,6 +518,7 @@
 "The Lorca CLI isn't answering" = "Lorca CLI 没有响应";
 "The marketplace isn't available right now." = "插件市场暂时不可用。";
 "the other Device" = "另一台设备";
+"The bot, its routines, and this direct chat are removed from this Device and from paired Devices." = "该智能体、其例行任务和此直接聊天将从这台设备和已配对的设备上移除。";
 "The transcript is removed from this Device and from paired Devices." = "聊天记录将从这台设备和已配对的设备上移除。";
 "The two Devices run a handshake; the relay only carries the ciphertext. This Mac joins as a Runner." = "两台设备之间进行握手，中继只传递密文。这台 Mac 将作为 Runner 加入。";
 "theme dark mode light mode system" = "主题 深色模式 浅色模式 跟随系统 theme dark mode light mode system";
