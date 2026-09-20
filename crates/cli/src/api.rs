@@ -276,7 +276,7 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
         }
         "chats.rename" => {
             let title = params["title"].as_str().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-            app.update_chat_meta(&string(&params, "chat_id")?, |meta| meta.title = title).map_err(|e| e.to_string())?;
+            app.rename_chat(&string(&params, "chat_id")?, title).map_err(|e| e.to_string())?;
             Ok(Value::Null)
         }
         "chats.pin" => {

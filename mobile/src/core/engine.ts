@@ -217,7 +217,8 @@ class Engine {
     return { ...chat, messages: chat.messages ?? [], unread_count: chat.unread_count ?? 0 };
   }
 
-  renameChat(chatId: string, title: string) {
+  renameGroup(chatId: string, title: string) {
+    if (chatById(chatId)?.kind !== "group") return;
     this.patchChat(chatId, (meta) => ({ ...meta, title: title.trim() || null }));
     void core.request("chats.rename", { chat_id: chatId, title });
   }
@@ -338,7 +339,7 @@ export const engine = new Engine();
 // MARK: - Helpers
 
 export function chatTitle(chat: ChatMeta): string {
-  if (chat.title?.trim()) return chat.title.trim();
+  if (chat.kind === "group" && chat.title?.trim()) return chat.title.trim();
   const names = chat.bot_ids.map((id) => botById(id)?.name).filter((n): n is string => !!n);
   if (chat.kind === "dm") return names[0] ?? t("Chat");
   return names.length ? names.join(", ") : t("Group");

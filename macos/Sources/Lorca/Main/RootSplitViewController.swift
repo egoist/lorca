@@ -103,7 +103,8 @@ final class RootSplitViewController: NSSplitViewController {
             self?.select(selection)
         }
         sidebar.onDoubleClick = { [weak self] selection in
-            if case .chat = selection { self?.renameChat(nil) }
+            guard let self, case let .chat(id) = selection, store.chat(id)?.isGroup == true else { return }
+            renameChat(nil)
         }
         settingsSidebar.onSelect = { [weak self] selection in
             self?.select(selection)
@@ -481,7 +482,7 @@ final class RootSplitViewController: NSSplitViewController {
     }
 
     @objc func renameChat(_ sender: Any?) {
-        guard case let .chat(chatID) = selection, let chat = store.chat(chatID) else {
+        guard case let .chat(chatID) = selection, let chat = store.chat(chatID), chat.isGroup else {
             NSSound.beep()
             return
         }
@@ -582,6 +583,10 @@ extension RootSplitViewController: NSMenuItemValidation {
         if menuItem.action == #selector(addBotToChat(_:)) {
             guard case let .chat(id) = selection, let chat = store.chat(id) else { return false }
             return !botsAvailableToAdd(to: chat).isEmpty
+        }
+        if menuItem.action == #selector(renameChat(_:)) {
+            guard case let .chat(id) = selection, let chat = store.chat(id) else { return false }
+            return chat.isGroup
         }
         if menuItem.action == #selector(goToChat(_:)) {
             return sidebar.chatSelection(forShortcut: menuItem.tag) != nil

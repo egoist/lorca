@@ -983,7 +983,8 @@ fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job, store: &Memo
     }
     prompt.push_str(&format!(
         "Relative paths resolve against your working directory {}. Work there unless the user names another path. \
-         Commands run as the user on that machine with its full filesystem, process, and network access. Every bash call \
+         Commands run as the user on that machine with its full filesystem, process, and network access. Never scan the \
+         user's home directory recursively, because it may trigger macOS TCC permission dialogs. Every bash call \
          goes through Auto-review first and may pause on a permission card. Treat destructive commands with care and say \
          what you ran.\n",
         workdir.display()

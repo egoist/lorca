@@ -518,10 +518,11 @@ extension Wire.Message {
 
 extension Wire.Chat {
     func toModel(existingMessages: [Message]? = nil, existingUnread: Int = 0, existingHasMore: Bool = false) -> Chat {
-        Chat(
+        let modelKind: Chat.Kind = kind == "dm" ? .dm : .group
+        return Chat(
             id: id,
-            kind: kind == "dm" ? .dm : .group,
-            customTitle: title,
+            kind: modelKind,
+            customTitle: modelKind == .group ? title : nil,
             botIDs: botIds,
             messages: messages.map { $0.map { $0.toModel() } } ?? existingMessages ?? [],
             unreadCount: unreadCount ?? existingUnread,

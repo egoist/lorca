@@ -51,7 +51,7 @@ export default function ChatInfoScreen() {
   const candidates = allBots.filter((b) => !chat.bot_ids.includes(b.id));
 
   function commitTitle() {
-    if ((title.trim() || null) !== (chat!.title?.trim() || null)) engine.renameChat(chat!.id, title);
+    if ((title.trim() || null) !== (chat!.title?.trim() || null)) engine.renameGroup(chat!.id, title);
   }
 
   function confirmDelete() {

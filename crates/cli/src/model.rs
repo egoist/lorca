@@ -299,6 +299,7 @@ pub struct ChatMeta {
     pub id: String,
     /// `dm` or `group`.
     pub kind: String,
+    /// A group's optional custom title. A direct chat is named after its bot.
     #[serde(default)]
     pub title: Option<String>,
     pub bot_ids: Vec<String>,

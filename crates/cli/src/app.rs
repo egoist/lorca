@@ -738,6 +738,7 @@ impl App {
             meta.created_at = config::now_secs();
         }
         let ids: Vec<String> = if meta.kind == "dm" {
+            meta.title = None;
             meta.bot_ids.iter().take(1).cloned().collect()
         } else {
             meta.kind = "group".into();
@@ -813,6 +814,20 @@ impl App {
             let mut state = self.state.lock().unwrap();
             let chat = state.chats.iter_mut().find(|c| c.meta.id == chat_id).ok_or_else(|| anyhow::anyhow!("Unknown chat"))?;
             update(&mut chat.meta);
+        }
+        self.roster_changed(true);
+        Ok(())
+    }
+
+    /// Sets the optional title of a group. A direct chat is always named after its one bot.
+    pub fn rename_chat(&self, chat_id: &str, title: Option<String>) -> anyhow::Result<()> {
+        {
+            let mut state = self.state.lock().unwrap();
+            let chat = state.chats.iter_mut().find(|c| c.meta.id == chat_id).ok_or_else(|| anyhow::anyhow!("Unknown chat"))?;
+            if !chat.meta.is_group() {
+                anyhow::bail!("Only group chats can be renamed");
+            }
+            chat.meta.title = title;
         }
         self.roster_changed(true);
         Ok(())
@@ -1282,5 +1297,25 @@ mod tests {
         assert_eq!(state.routines.len(), 1);
         assert_eq!(state.chats.iter().map(|chat| chat.meta.id.as_str()).collect::<Vec<_>>(), vec!["dm-b1"]);
         assert!(state.group_deletes.contains(&"group".into()));
+    }
+
+    #[test]
+    fn only_group_chats_can_be_renamed() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        {
+            let mut state = app.state.lock().unwrap();
+            state.chats = vec![
+                chat("dm", "dm", &["b1"], Some("b1")),
+                chat("group", "group", &["b1"], Some("b1")),
+            ];
+        }
+
+        assert_eq!(app.rename_chat("dm", Some("Alias".into())).unwrap_err().to_string(), "Only group chats can be renamed");
+        app.rename_chat("group", Some("Standup".into())).unwrap();
+
+        let state = app.state.lock().unwrap();
+        assert_eq!(state.chats[0].meta.title, None);
+        assert_eq!(state.chats[1].meta.title.as_deref(), Some("Standup"));
     }
 }

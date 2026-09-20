@@ -390,7 +390,7 @@ final class AppStore {
     }
 
     func title(for chat: Chat) -> String {
-        if let custom = chat.customTitle, !custom.isEmpty { return custom }
+        if chat.isGroup, let custom = chat.customTitle, !custom.isEmpty { return custom }
         let names = chat.botIDs.compactMap { bot($0)?.name }
         return names.isEmpty ? L("New Chat") : names.joined(separator: ", ")
     }
@@ -841,7 +841,7 @@ final class AppStore {
     }
 
     func rename(_ id: Chat.ID, to title: String) {
-        guard let index = chats.firstIndex(where: { $0.id == id }) else { return }
+        guard let index = chats.firstIndex(where: { $0.id == id }), chats[index].isGroup else { return }
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         chats[index].customTitle = trimmed
         emit(.chatChanged(id))
