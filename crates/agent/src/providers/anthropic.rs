@@ -124,7 +124,13 @@ impl AnthropicProvider {
     fn thinking_fields(&self, max_tokens: u64) -> (Option<Value>, Option<Value>, u64) {
         let Some(level) = self.thinking_level else { return (self.thinking.clone(), None, max_tokens) };
         let mode = self.info.map(|i| i.thinking).unwrap_or(if legacy_model(&self.model) { ThinkingMode::Budget } else { ThinkingMode::Adaptive });
-        let level = self.info.and_then(|i| i.clamp_level(level)).unwrap_or(level);
+        let level = match self.info {
+            Some(info) => match info.clamp_level(level) {
+                Some(level) => level,
+                None => return (self.thinking.clone(), None, max_tokens),
+            },
+            None => level,
+        };
         match (mode, level) {
             (ThinkingMode::Budget, ThinkingLevel::Off) => (None, None, max_tokens),
             (ThinkingMode::Budget, level) => {

@@ -20,6 +20,8 @@ pub const DEEPSEEK_BASE_URL: &str = "https://api.deepseek.com";
 /// `deepseek-chat` / `deepseek-reasoner` names were retired in 2026.
 pub const DEEPSEEK_DEFAULT_MODEL: &str = "deepseek-flash";
 
+const USER_AGENT: &str = concat!("lorca-agent/", env!("CARGO_PKG_VERSION"));
+
 pub struct OpenAiCompatProvider {
     pub provider_id: String,
     pub base_url: String,
@@ -87,7 +89,12 @@ impl OpenAiCompatProvider {
         if let Some(session_id) = &request.options.session_id {
             body["prompt_cache_key"] = Value::String(session_id.clone());
         }
-        let effort = match self.thinking_level {
+        let level = self.thinking_level.and_then(|level| match self.info {
+            Some(info) => info.clamp_level(level),
+            None if level == ThinkingLevel::Off => None,
+            None => Some(level),
+        });
+        let effort = match level {
             None | Some(ThinkingLevel::Off) => None,
             Some(ThinkingLevel::Minimal) => Some("minimal"),
             Some(ThinkingLevel::Low) => Some("low"),
@@ -246,7 +253,11 @@ impl StreamState {
         let Some(choice) = chunk["choices"].as_array().and_then(|c| c.first()) else { return };
         let delta = &choice["delta"];
 
-        if let Some(reasoning) = delta["reasoning_content"].as_str().filter(|s| !s.is_empty()) {
+        if let Some(reasoning) = delta["reasoning_content"]
+            .as_str()
+            .or_else(|| delta["reasoning"].as_str())
+            .filter(|s| !s.is_empty())
+        {
             self.close_text(tx).await;
             let index = match self.thinking {
                 Some(index) => index,
@@ -340,7 +351,7 @@ impl Provider for OpenAiCompatProvider {
         let info = self.info;
 
         tokio::spawn(async move {
-            let build = || options.apply_to(client.post(&url).bearer_auth(&api_key)).json(&body);
+            let build = || options.apply_to(client.post(&url).bearer_auth(&api_key).header("User-Agent", USER_AGENT)).json(&body);
             let response = match send_with_retry(build, max_retries, max_retry_delay_ms, &cancel).await {
                 Ok(response) => {
                     options.report(&response);
@@ -407,4 +418,19 @@ impl Provider for OpenAiCompatProvider {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
 
+    #[tokio::test]
+    async fn gateway_reasoning_field_streams_as_thinking() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let mut state = StreamState::default();
+        state
+            .apply_chunk(&json!({ "choices": [{ "delta": { "reasoning": "considering" } }] }), &tx)
+            .await;
+        drop(tx);
+        assert!(matches!(rx.recv().await, Some(AssistantEvent::ThinkingStart { index: 0 })));
+        assert!(matches!(rx.recv().await, Some(AssistantEvent::ThinkingDelta { index: 0, delta }) if delta == "considering"));
+    }
+}

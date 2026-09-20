@@ -7,14 +7,62 @@ use async_trait::async_trait;
 
 use lorca_agent::providers::anthropic::{ANTHROPIC_BASE_URL, ANTHROPIC_VERSION};
 use lorca_agent::providers::grok::oauth as grok_oauth;
-use lorca_agent::providers::{AnthropicProvider, ChatGptProvider, ChatGptTokens, GrokProvider, GrokTokenSource, GrokTokens, TokenSource};
-use lorca_agent::{models, Provider, ThinkingLevel};
+use lorca_agent::providers::{
+    AnthropicProvider, ChatGptProvider, ChatGptTokens, GrokProvider, GrokTokenSource, GrokTokens, OpenAiCompatProvider,
+    OpenAiResponsesProvider, TokenSource,
+};
+use lorca_agent::{models, AssistantEventStream, ModelRequest, Provider, ThinkingLevel};
+use tokio_util::sync::CancellationToken;
 
 use crate::app::App;
 use crate::config;
 
 /// The provider kinds an account can hold, in the order the apps list them.
 pub use crate::credentials::{ApiKeyCredential, Credentials, PROVIDER_KINDS};
+
+pub const OPENCODE_BASE_URL: &str = "https://opencode.ai/zen";
+pub const OPENCODE_DEFAULT_MODEL: &str = "deepseek-v4.1-flash";
+pub const OPENCODE_GO_BASE_URL: &str = "https://opencode.ai/zen/go";
+pub const OPENCODE_GO_DEFAULT_MODEL: &str = "glm-5.3-flash";
+
+const USER_AGENT: &str = concat!("lorca/", env!("CARGO_PKG_VERSION"));
+
+/// Identifies Lorca to OpenCode and sends the session header it uses for routing and prompt
+/// caching. The regular request options also send `x-session-affinity`.
+struct OpenCodeHeaders {
+    inner: Arc<dyn Provider>,
+}
+
+#[async_trait]
+impl Provider for OpenCodeHeaders {
+    fn provider_id(&self) -> &str {
+        self.inner.provider_id()
+    }
+
+    fn model_id(&self) -> &str {
+        self.inner.model_id()
+    }
+
+    fn supports_images(&self) -> bool {
+        self.inner.supports_images()
+    }
+
+    fn model_info(&self) -> Option<&'static lorca_agent::models::ModelInfo> {
+        self.inner.model_info()
+    }
+
+    async fn stream(&self, mut request: ModelRequest, cancel: CancellationToken) -> AssistantEventStream {
+        request.options.headers.insert("User-Agent".into(), USER_AGENT.into());
+        if let Some(session_id) = request.options.session_id.clone() {
+            request.options.headers.insert("x-opencode-session".into(), session_id);
+        }
+        self.inner.stream(request, cancel).await
+    }
+}
+
+fn opencode_headers(inner: Arc<dyn Provider>) -> Arc<dyn Provider> {
+    Arc::new(OpenCodeHeaders { inner })
+}
 
 /// Reads ChatGPT tokens from the account's credentials and hands refreshed ones to every Device.
 pub struct AppTokenSource(pub Arc<App>);
@@ -56,6 +104,16 @@ pub fn supports_vision(kind: &str, model: Option<&str>) -> bool {
         "chatgpt" | "anthropic" => true,
         "grok" => !model.contains("build"),
         "deepseek" => model.contains("vl") || model.contains("vision"),
+        "opencode" | "opencode-go" => {
+            model.contains("claude")
+                || model.contains("gpt")
+                || model.contains("gemini")
+                || model.contains("grok")
+                || model.contains("kimi")
+                || model.contains("vision")
+                || model.contains("qwen")
+                || model.contains("glm")
+        }
         _ => false,
     }
 }
@@ -67,6 +125,8 @@ pub fn default_model(kind: &str) -> &'static str {
         "anthropic" => lorca_agent::providers::anthropic::ANTHROPIC_DEFAULT_MODEL,
         "chatgpt" => lorca_agent::providers::chatgpt::CHATGPT_DEFAULT_MODEL,
         "grok" => lorca_agent::providers::grok::GROK_DEFAULT_MODEL,
+        "opencode" => OPENCODE_DEFAULT_MODEL,
+        "opencode-go" => OPENCODE_GO_DEFAULT_MODEL,
         _ => "",
     }
 }
@@ -104,6 +164,34 @@ pub fn provider_for(app: &Arc<App>, kind: &str, model: Option<&str>, thinking: O
             let base_url = key.base_url.clone().unwrap_or_else(anthropic_base_url);
             Ok(Arc::new(AnthropicProvider::anthropic(&key.api_key, model.as_deref()).with_base_url(&base_url).with_thinking(thinking)))
         }
+        "opencode" => {
+            let key = app
+                .credentials
+                .lock()
+                .unwrap()
+                .opencode
+                .clone()
+                .ok_or_else(|| "OpenCode Zen is not connected".to_string())?;
+            let model = model.or_else(|| std::env::var("LORCA_OPENCODE_MODEL").ok()).unwrap_or_else(|| OPENCODE_DEFAULT_MODEL.into());
+            let root = key.base_url.clone().or_else(|| env_url("LORCA_OPENCODE_BASE_URL")).unwrap_or_else(|| OPENCODE_BASE_URL.into());
+            opencode_provider("opencode", &root, &key.api_key, &model, thinking)
+        }
+        "opencode-go" => {
+            let key = app
+                .credentials
+                .lock()
+                .unwrap()
+                .opencode_go
+                .clone()
+                .ok_or_else(|| "OpenCode Go is not connected".to_string())?;
+            let model = model.or_else(|| std::env::var("LORCA_OPENCODE_GO_MODEL").ok()).unwrap_or_else(|| OPENCODE_GO_DEFAULT_MODEL.into());
+            let root = key
+                .base_url
+                .clone()
+                .or_else(|| env_url("LORCA_OPENCODE_GO_BASE_URL"))
+                .unwrap_or_else(|| OPENCODE_GO_BASE_URL.into());
+            opencode_provider("opencode-go", &root, &key.api_key, &model, thinking)
+        }
         "chatgpt" => {
             if app.credentials.lock().unwrap().chatgpt.is_none() {
                 return Err("ChatGPT is not connected".into());
@@ -127,6 +215,65 @@ pub fn provider_for(app: &Arc<App>, kind: &str, model: Option<&str>, thinking: O
         }
         other => Err(format!("Unknown provider {other}")),
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OpenCodeWire {
+    ChatCompletions,
+    Messages,
+    Responses,
+    Unsupported,
+}
+
+/// OpenCode publishes the wire protocol beside every model. Zen and Go differ for MiniMax,
+/// while their GPT, Grok, and Muse families use Responses and their Qwen family uses Messages.
+fn opencode_wire(kind: &str, model: &str) -> OpenCodeWire {
+    let model = model.to_ascii_lowercase();
+    if (kind == "opencode" && model.starts_with("gemini-")) || model.starts_with("jev-") {
+        return OpenCodeWire::Unsupported;
+    }
+    if model.starts_with("gpt-") || model.starts_with("grok-") || model.starts_with("muse-spark-") {
+        return OpenCodeWire::Responses;
+    }
+    if model.starts_with("qwen") || (kind == "opencode-go" && model.starts_with("minimax-")) || model.starts_with("claude-") {
+        return OpenCodeWire::Messages;
+    }
+    OpenCodeWire::ChatCompletions
+}
+
+/// Removes an optional `/v1` from a custom OpenCode root; each adapter adds the path its wire
+/// protocol needs.
+fn opencode_root(root: &str) -> &str {
+    root.trim_end_matches('/').strip_suffix("/v1").unwrap_or_else(|| root.trim_end_matches('/'))
+}
+
+fn opencode_provider(
+    kind: &str,
+    root: &str,
+    api_key: &str,
+    model: &str,
+    thinking: Option<ThinkingLevel>,
+) -> Result<Arc<dyn Provider>, String> {
+    let root = opencode_root(root);
+    let provider: Arc<dyn Provider> = match opencode_wire(kind, model) {
+        OpenCodeWire::ChatCompletions => {
+            let mut provider = OpenAiCompatProvider::new(kind, &format!("{root}/v1"), api_key, model).with_thinking(thinking);
+            provider.supports_images = supports_vision(kind, Some(model));
+            Arc::new(provider)
+        }
+        OpenCodeWire::Messages => {
+            let mut provider = AnthropicProvider::new(kind, root, api_key, model).with_thinking(thinking);
+            provider.supports_images = supports_vision(kind, Some(model));
+            provider.eager_tool_streaming = false;
+            provider.max_tokens = 32_000;
+            Arc::new(provider)
+        }
+        OpenCodeWire::Responses => Arc::new(OpenAiResponsesProvider::new(kind, &format!("{root}/v1"), api_key, model).with_thinking(thinking)),
+        OpenCodeWire::Unsupported => {
+            return Err(format!("{model} uses an OpenCode endpoint Lorca does not support"));
+        }
+    };
+    Ok(opencode_headers(provider))
 }
 
 /// DeepSeek's API root when the credential has none: `LORCA_DEEPSEEK_BASE_URL` (a proxy or a
@@ -192,6 +339,46 @@ pub async fn connect_anthropic(app: &Arc<App>, api_key: &str, base_url: Option<&
     save_api_key(app, "anthropic", key, base_url)
 }
 
+/// Checks an OpenCode Zen key. The model catalog is public, so the account check uses Go's
+/// authenticated usage endpoint; a valid Zen key without a Go subscription answers 403 after
+/// authentication and is still a valid Zen credential.
+pub async fn connect_opencode(app: &Arc<App>, api_key: &str, base_url: Option<&str>) -> Result<(), String> {
+    let key = api_key.trim();
+    if key.is_empty() {
+        return Err("Paste an OpenCode Zen API key".into());
+    }
+    let base_url = custom_base_url(base_url)?;
+    let configured = base_url.clone().or_else(|| env_url("LORCA_OPENCODE_BASE_URL"));
+    let root = configured.as_deref().map(opencode_root).unwrap_or(OPENCODE_BASE_URL);
+    if root == OPENCODE_BASE_URL {
+        let request = app.http.get(format!("{root}/go/v1/usage")).bearer_auth(key);
+        check_opencode_key("OpenCode Zen", request, false).await?;
+    } else {
+        check_key("OpenCode Zen", app.http.get(format!("{root}/v1/models")).bearer_auth(key)).await?;
+    }
+    save_api_key(app, "opencode", key, base_url)
+}
+
+/// Checks both the OpenCode key and its Go entitlement against the authenticated usage route.
+pub async fn connect_opencode_go(app: &Arc<App>, api_key: &str, base_url: Option<&str>) -> Result<(), String> {
+    let key = api_key.trim();
+    if key.is_empty() {
+        return Err("Paste an OpenCode Go API key".into());
+    }
+    let base_url = custom_base_url(base_url)?;
+    let root = base_url
+        .clone()
+        .or_else(|| env_url("LORCA_OPENCODE_GO_BASE_URL"))
+        .unwrap_or_else(|| OPENCODE_GO_BASE_URL.into());
+    let root = opencode_root(&root);
+    if root == OPENCODE_GO_BASE_URL {
+        check_opencode_key("OpenCode Go", app.http.get(format!("{root}/v1/usage")).bearer_auth(key), true).await?;
+    } else {
+        check_key("OpenCode Go", app.http.get(format!("{root}/v1/models")).bearer_auth(key)).await?;
+    }
+    save_api_key(app, "opencode-go", key, base_url)
+}
+
 async fn check_key(name: &str, request: reqwest::RequestBuilder) -> Result<(), String> {
     let response = request.send().await.map_err(|e| format!("{name} unreachable: {e}"))?;
     match response.status() {
@@ -201,11 +388,25 @@ async fn check_key(name: &str, request: reqwest::RequestBuilder) -> Result<(), S
     }
 }
 
+async fn check_opencode_key(name: &str, request: reqwest::RequestBuilder, requires_go: bool) -> Result<(), String> {
+    let response = request.send().await.map_err(|e| format!("{name} unreachable: {e}"))?;
+    match response.status() {
+        reqwest::StatusCode::UNAUTHORIZED => Err(format!("{name} rejected that key")),
+        reqwest::StatusCode::FORBIDDEN if requires_go => Err("OpenCode Go needs an active subscription".into()),
+        reqwest::StatusCode::FORBIDDEN => Ok(()),
+        status if status.is_success() => Ok(()),
+        status => Err(format!("{name} answered {status}")),
+    }
+}
+
 fn save_api_key(app: &Arc<App>, kind: &str, key: &str, base_url: Option<String>) -> Result<(), String> {
     let credential = Some(ApiKeyCredential { api_key: key.to_string(), base_url, connected_at: config::now_unix() });
     let update = |credentials: &mut Credentials| match kind {
         "deepseek" => credentials.deepseek = credential,
-        _ => credentials.anthropic = credential,
+        "anthropic" => credentials.anthropic = credential,
+        "opencode" => credentials.opencode = credential,
+        "opencode-go" => credentials.opencode_go = credential,
+        _ => unreachable!(),
     };
     app.update_credentials(kind, update).map_err(|e| e.to_string())
 }
@@ -246,8 +447,10 @@ pub fn disconnect(app: &Arc<App>, kind: &str) -> Result<(), String> {
         match kind {
             "deepseek" => credentials.deepseek = None,
             "anthropic" => credentials.anthropic = None,
+            "opencode" => credentials.opencode = None,
+            "opencode-go" => credentials.opencode_go = None,
             "chatgpt" => credentials.chatgpt = None,
-            _ => {
+            "grok" => {
                 // Tell xAI the sign-in is over; the removal stands either way.
                 if let Some(tokens) = credentials.grok.take() {
                     let http = app.http.clone();
@@ -259,7 +462,67 @@ pub fn disconnect(app: &Arc<App>, kind: &str) -> Result<(), String> {
                     });
                 }
             }
+            _ => unreachable!(),
         }
     })
     .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    struct CaptureProvider(Arc<Mutex<Option<ModelRequest>>>);
+
+    #[async_trait]
+    impl Provider for CaptureProvider {
+        fn provider_id(&self) -> &str {
+            "capture"
+        }
+
+        fn model_id(&self) -> &str {
+            "capture"
+        }
+
+        async fn stream(&self, request: ModelRequest, _cancel: CancellationToken) -> AssistantEventStream {
+            *self.0.lock().unwrap() = Some(request);
+            Box::pin(futures::stream::empty())
+        }
+    }
+
+    #[test]
+    fn opencode_models_use_their_published_wire_protocols() {
+        assert_eq!(opencode_wire("opencode", "gpt-5.6-terra"), OpenCodeWire::Responses);
+        assert_eq!(opencode_wire("opencode", "claude-sonnet-5"), OpenCodeWire::Messages);
+        assert_eq!(opencode_wire("opencode", "deepseek-v4.1-flash"), OpenCodeWire::ChatCompletions);
+        assert_eq!(opencode_wire("opencode", "gemini-3.8-flash"), OpenCodeWire::Unsupported);
+        assert_eq!(opencode_wire("opencode-go", "minimax-m3"), OpenCodeWire::Messages);
+        assert_eq!(opencode_wire("opencode-go", "grok-4.6"), OpenCodeWire::Responses);
+    }
+
+    #[test]
+    fn defaults_are_the_first_catalog_models_and_roots_accept_v1() {
+        assert_eq!(models::for_provider("opencode")[0].id, OPENCODE_DEFAULT_MODEL);
+        assert_eq!(models::for_provider("opencode-go")[0].id, OPENCODE_GO_DEFAULT_MODEL);
+        assert_eq!(opencode_root("https://opencode.ai/zen/v1/"), OPENCODE_BASE_URL);
+        assert_eq!(opencode_root("https://opencode.ai/zen"), OPENCODE_BASE_URL);
+    }
+
+    #[tokio::test]
+    async fn opencode_requests_identify_lorca_and_carry_the_conversation() {
+        let seen = Arc::new(Mutex::new(None));
+        let provider = opencode_headers(Arc::new(CaptureProvider(seen.clone())));
+        let request = ModelRequest {
+            system_prompt: String::new(),
+            messages: Vec::new(),
+            tools: Vec::new(),
+            max_tokens: None,
+            options: lorca_agent::RequestOptions::default().with_session_id("chat-1"),
+        };
+        let _ = provider.stream(request, CancellationToken::new()).await;
+        let request = seen.lock().unwrap().take().unwrap();
+        assert_eq!(request.options.headers.get("User-Agent").map(String::as_str), Some(USER_AGENT));
+        assert_eq!(request.options.headers.get("x-opencode-session").map(String::as_str), Some("chat-1"));
+    }
 }

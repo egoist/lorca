@@ -60,6 +60,8 @@ enum MockData {
         [
             ProviderCredential(kind: .deepseek, isConnected: true, detail: "sk-live…4f2c"),
             ProviderCredential(kind: .anthropic, isConnected: false, detail: "Not connected"),
+            ProviderCredential(kind: .opencode, isConnected: false, detail: "Not connected"),
+            ProviderCredential(kind: .opencodeGo, isConnected: false, detail: "Not connected"),
             ProviderCredential(kind: .chatgpt, isConnected: true, detail: "you@lorca.app"),
             ProviderCredential(kind: .grok, isConnected: false, detail: "Not connected"),
         ]

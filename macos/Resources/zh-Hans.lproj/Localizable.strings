@@ -86,6 +86,7 @@
 "an unassigned Runner" = "未分配的 Runner";
 "API base URL. Leave it empty for %@; set it for a proxy or a compatible server." = "API 基础 URL。使用 %@ 时留空；使用代理或兼容服务器时填写。";
 "API key" = "API 密钥";
+"API key from opencode.ai/auth" = "来自 opencode.ai/auth 的 API 密钥";
 "App Language" = "应用语言";
 "Appearance" = "外观";
 "Architecture Notes" = "架构说明";

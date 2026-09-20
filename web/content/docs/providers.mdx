@@ -1,6 +1,6 @@
 ---
 title: AI providers
-description: Connect DeepSeek, Anthropic, ChatGPT, or Grok once, and every Runner on your account can use it.
+description: Connect an API-key provider or subscription once, and every Runner on your account can use it.
 icon: Sparkles
 ---
 
@@ -10,10 +10,12 @@ Bots think with your own AI accounts. Connect a provider once, on any Mac, and i
 | --- | --- | --- |
 | **DeepSeek** | API key | `deepseek-flash` |
 | **Anthropic** | API key | `claude-opus-5` |
+| **OpenCode Zen** | API key, pay as you go | `deepseek-v4.1-flash` |
+| **OpenCode Go** | API key and Go subscription | `glm-5.3-flash` |
 | **ChatGPT** | Sign in with your ChatGPT subscription | `gpt-5.6-terra` |
 | **Grok** | Sign in with SuperGrok or X Premium+ | `grok-4.6` |
 
-All four search the web on the provider's side. Grok also searches X.
+DeepSeek, Anthropic, ChatGPT, and Grok search the web on the provider's side. Grok also searches X.
 
 ## Connect
 
@@ -27,13 +29,15 @@ From a terminal:
 ```bash
 lorca provider set deepseek
 lorca provider set anthropic
+lorca provider set opencode
+lorca provider set opencode-go
 lorca provider set chatgpt
 lorca provider list
 ```
 
 ### Custom API endpoint
 
-For a proxy or a compatible server, fill in **Base URL** when you connect a DeepSeek or Anthropic key. The key is checked against that endpoint.
+For a proxy or a compatible server, fill in **Base URL** when you connect any API-key provider. The key is checked against that endpoint.
 
 ## Pick a model per bot
 
@@ -47,4 +51,4 @@ If a bot's provider is not connected, its turn ends with a note that says to con
 
 ## Cost
 
-API-key providers bill you per token; the inspector shows what each chat has spent. ChatGPT and Grok sign-ins use your subscription, and the figure shown is what the work would cost at API rates.
+DeepSeek, Anthropic, and OpenCode Zen bill by usage; OpenCode Go applies usage to its subscription limits. The inspector shows what each chat has spent. ChatGPT and Grok sign-ins use your subscription, and the figure shown is what the work would cost at API rates.

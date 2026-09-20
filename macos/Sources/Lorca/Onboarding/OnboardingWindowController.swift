@@ -319,11 +319,11 @@ final class OnboardingViewController: NSViewController {
     /// Provider picker plus the credential control for the chosen provider. Switching providers
     /// swaps only the credential row, so the page never re-renders.
     private func providerRows() -> [(String, NSView)] {
-        let picker = NSSegmentedControl(
-            labels: ProviderCredential.Kind.allCases.map(\.rawValue), trackingMode: .selectOne,
-            target: self, action: #selector(providerPicked(_:)))
-        picker.selectedSegment = ProviderCredential.Kind.allCases.firstIndex(of: providerKind) ?? 0
-        picker.segmentStyle = .rounded
+        let picker = NSPopUpButton()
+        picker.addItems(withTitles: ProviderCredential.Kind.allCases.map(\.rawValue))
+        picker.selectItem(at: ProviderCredential.Kind.allCases.firstIndex(of: providerKind) ?? 0)
+        picker.target = self
+        picker.action = #selector(providerPicked(_:))
 
         let host = NSView()
         host.translatesAutoresizingMaskIntoConstraints = false
@@ -386,7 +386,7 @@ final class OnboardingViewController: NSViewController {
             grid.addRow(with: [label, control])
             let row = grid.row(at: grid.numberOfRows - 1)
             row.yPlacement = control is NSTextField && !(control as! NSTextField).isEditable ? .top : .center
-            if control is NSTextField || control is NSSegmentedControl || control === credentialHost {
+            if control is NSTextField || control is NSPopUpButton || control === credentialHost {
                 control.widthAnchor.constraint(equalToConstant: 400).isActive = true
             } else if !(control is AvatarView) {
                 control.widthAnchor.constraint(lessThanOrEqualToConstant: 400).isActive = true
@@ -561,8 +561,8 @@ final class OnboardingViewController: NSViewController {
     @objc private func goDone() { transition(to: .done) }
     @objc private func goBot() { transition(to: firstBot == nil ? .provider : .bot) }
 
-    @objc private func providerPicked(_ sender: NSSegmentedControl) {
-        providerKind = ProviderCredential.Kind.allCases[max(0, sender.selectedSegment)]
+    @objc private func providerPicked(_ sender: NSPopUpButton) {
+        providerKind = ProviderCredential.Kind.allCases[max(0, sender.indexOfSelectedItem)]
         renderCredential()
     }
 

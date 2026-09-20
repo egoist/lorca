@@ -81,6 +81,7 @@ An `error` event and HTTP errors become an error message with the server's `erro
 | Adaptive (Opus 5, Sonnet 5, Opus 4.8, Fable 5.1, DeepSeek) | `thinking: { type: "adaptive" }` and `output_config: { effort }` (`minimal` counts as `low`); `Off` is `{ type: "disabled" }`. A model that cannot stop thinking (Fable) runs `Off` at its lowest level. |
 | Budget (Haiku 4.5) | `thinking: { type: "enabled", budget_tokens }` with 1024, 2048, 8192, or 16384 tokens and an output cap that leaves 1024 for the answer; `Off` sends no thinking. |
 | OpenAI-compatible | `reasoning_effort`; `Off` sends nothing. |
+| API-key Responses | `reasoning: { effort }`; `Off` sends nothing. |
 | ChatGPT | `reasoning: { effort, summary: "auto" }` with `low`, `medium`, `high`, or `xhigh`; `Off` sends nothing. |
 | Grok | `reasoning: { effort }` with `low`, `medium`, or `high`, on the models that take it (`grok-4.3`, `grok-4.5`, `grok-4.6`, `grok-4.20-multi-agent`); the others reason on their own and get nothing. `Off` sends nothing. |
 
@@ -117,7 +118,24 @@ It posts to `{base_url}/chat/completions` with bearer auth, `stream: true`, and 
 | Tool result | A `tool` message with the result's text (`(see attached image)` or `(no tool output)` when there is none), then a `user` message with the images, if any. |
 | Tools | `function` tools. |
 
-The transcript goes through the [shared transform](#before-conversion) first. `supports_images` (true by default), `max_retries` (2), and `max_retry_delay_ms` are public fields. From the stream it reads `content` deltas as text, `reasoning_content` deltas as thinking, `tool_calls` deltas as tool calls, `finish_reason` as the stop reason (`length`, `tool_calls`, anything else as stop), and `usage`: `prompt_cache_hit_tokens` or `prompt_tokens_details.cached_tokens` as `cache_read`, `completion_tokens_details.reasoning_tokens` as `reasoning`. HTTP errors become an error message with the status and the server's `error.message`, after the same retries as the Anthropic adapter.
+The transcript goes through the [shared transform](#before-conversion) first. `supports_images` (true by default), `max_retries` (2), and `max_retry_delay_ms` are public fields. From the stream it reads `content` deltas as text, `reasoning_content` or `reasoning` deltas as thinking, `tool_calls` deltas as tool calls, `finish_reason` as the stop reason (`length`, `tool_calls`, anything else as stop), and `usage`: `prompt_cache_hit_tokens` or `prompt_tokens_details.cached_tokens` as `cache_read`, `completion_tokens_details.reasoning_tokens` as `reasoning`. HTTP errors become an error message with the status and the server's `error.message`, after the same retries as the Anthropic adapter.
+
+### OpenAI-compatible Responses
+
+`OpenAiResponsesProvider` speaks an API-key Responses endpoint. Gateways such as OpenCode use it for GPT and Grok model families while ChatGPT and Grok subscription tokens stay in their isolated adapters.
+
+```rust
+use agent::providers::OpenAiResponsesProvider;
+
+let provider = OpenAiResponsesProvider::new(
+    "opencode",
+    "https://opencode.ai/zen/v1",
+    &api_key,
+    "gpt-5.6-terra",
+);
+```
+
+It posts the shared Responses input and function-tool shapes to `{base_url}/responses` with bearer auth, streams text, reasoning, tool calls, and usage through the same parser as the subscription adapters, and maps a selected thinking level to `reasoning.effort` when the model catalog declares effort levels.
 
 ### ChatGPT subscription
 

@@ -185,7 +185,7 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
         tool_execution: ToolExecutionMode::Sequential,
         sink: Some(sink.clone()),
         retry: Some(RetryPolicy::default()),
-        request: Default::default(),
+        request: lorca_agent::RequestOptions::default().with_session_id(&chat.meta.id),
     };
 
     // Events reach the transcript through the sink, in order with the tools' own writes.
@@ -386,7 +386,8 @@ async fn compact_messages(
             memory_flush(app, &chat, bot, provider, messages, skip, settings, cancel).await;
         }
     }
-    let Some(result) = compaction::compact(provider.as_ref(), &messages[skip..], previous.as_deref(), settings, None, &Default::default(), cancel).await? else { return Ok(None) };
+    let options = lorca_agent::RequestOptions::default().with_session_id(chat_id);
+    let Some(result) = compaction::compact(provider.as_ref(), &messages[skip..], previous.as_deref(), settings, None, &options, cancel).await? else { return Ok(None) };
     let first_kept = skip + result.first_kept;
     // The summary stands in for every chat message up to the last one it covers, found by
     // its time: a rebuilt message carries its chat message's time, a message made during this
@@ -490,7 +491,7 @@ async fn memory_flush(
         tool_execution: ToolExecutionMode::Sequential,
         sink: None,
         retry: Some(RetryPolicy::default()),
-        request: Default::default(),
+        request: lorca_agent::RequestOptions::default().with_session_id(&chat.meta.id),
     };
     let (tx, _rx) = mpsc::channel::<AgentEvent>(1);
     drop(_rx);
@@ -571,6 +572,8 @@ fn provider_label(kind: &str) -> &str {
     match kind {
         "deepseek" => "DeepSeek",
         "anthropic" => "Anthropic",
+        "opencode" => "OpenCode Zen",
+        "opencode-go" => "OpenCode Go",
         "chatgpt" => "ChatGPT",
         "grok" => "Grok",
         other => other,
@@ -1596,7 +1599,7 @@ impl Tool for CreateBot {
                 "label": { "type": "string", "description": "One short line under the name: what it is for" },
                 "description": { "type": "string", "description": "A sentence or two about what it does, shown in its profile" },
                 "instructions": { "type": "string", "description": "How it should work: scope, tone, what to ask before acting" },
-                "provider": { "type": "string", "enum": ["deepseek", "anthropic", "chatgpt", "grok"], "description": "Defaults to your own provider" },
+                "provider": { "type": "string", "enum": crate::credentials::PROVIDER_KINDS, "description": "Defaults to your own provider" },
                 "thinking": { "type": "string", "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "max"], "description": "How much the model thinks. Defaults to the provider's default" },
                 "workdir": { "type": "string", "description": "Working directory for its tools. Defaults to a private workspace under the CLI home; give it your own path to share files" }
             },
@@ -1696,7 +1699,7 @@ impl Tool for EditBot {
                 "label": { "type": "string", "description": "New short line under the name: what it is for" },
                 "description": { "type": "string", "description": "New sentence or two about what it does" },
                 "instructions": { "type": "string", "description": "New instructions, complete: they replace the old ones" },
-                "provider": { "type": "string", "enum": ["deepseek", "anthropic", "chatgpt", "grok"] },
+                "provider": { "type": "string", "enum": crate::credentials::PROVIDER_KINDS },
                 "thinking": { "type": "string", "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "max"], "description": "How much the model thinks" },
                 "workdir": { "type": "string", "description": "New working directory for its tools" }
             },
@@ -1736,8 +1739,8 @@ impl Tool for EditBot {
             }
         }
         if let Some(p) = &provider {
-            if !matches!(p.as_str(), "deepseek" | "anthropic" | "chatgpt" | "grok") {
-                return Err(ToolError(format!("Unknown provider {p}. Use deepseek, anthropic, chatgpt, or grok.")));
+            if !crate::credentials::PROVIDER_KINDS.contains(&p.as_str()) {
+                return Err(ToolError(format!("Unknown provider {p}. Use one of: {}.", crate::credentials::PROVIDER_KINDS.join(", "))));
             }
         }
         let changed: Vec<&str> = [

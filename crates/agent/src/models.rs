@@ -1,6 +1,6 @@
 //! What is known about a model ahead of time: its context window and output cap, whether it
 //! reasons or sees images, how it is asked to think, and what its tokens cost. A snapshot of
-//! models.dev (fetched 2026-09-16) for the models Lorca offers. A model that is not listed
+//! models.dev (fetched 2026-09-20) for the models Lorca offers. A model that is not listed
 //! runs with no window, no levels beyond the provider's default, and zero cost.
 
 use crate::types::{Cost, ThinkingLevel, Usage};
@@ -98,6 +98,12 @@ const DEEPSEEK_LEVELS: &[ThinkingLevel] = &[Off, Low, Medium, High, XHigh, Max];
 const CODEX_LEVELS: &[ThinkingLevel] = &[Low, Medium, High, XHigh];
 /// The Grok models that take `reasoning.effort`; the others reason on their own.
 const GROK_LEVELS: &[ThinkingLevel] = &[Low, Medium, High];
+const GROK_XHIGH_LEVELS: &[ThinkingLevel] = &[Low, Medium, High, XHigh];
+const FULL_EFFORT_LEVELS: &[ThinkingLevel] = &[Off, Low, Medium, High, XHigh, Max];
+const ALWAYS_EFFORT_LEVELS: &[ThinkingLevel] = &[Low, Medium, High, XHigh, Max];
+const LOW_HIGH_MAX_LEVELS: &[ThinkingLevel] = &[Low, High, Max];
+const MAX_ONLY_LEVELS: &[ThinkingLevel] = &[Max];
+const QWEN_LEVELS: &[ThinkingLevel] = &[Off, Low, Medium, XHigh];
 const NO_LEVELS: &[ThinkingLevel] = &[];
 
 const fn rates(input: f64, output: f64, cache_read: f64, cache_write: f64) -> Rates {
@@ -114,6 +120,13 @@ macro_rules! tier_272k {
 macro_rules! tier_200k {
     ($input:expr, $output:expr, $cache_read:expr, $cache_write:expr) => {{
         const TIERS: &[CostTier] = &[CostTier { input_tokens_above: 200_000, rates: rates($input, $output, $cache_read, $cache_write) }];
+        TIERS
+    }};
+}
+
+macro_rules! tier_512k {
+    ($input:expr, $output:expr, $cache_read:expr, $cache_write:expr) => {{
+        const TIERS: &[CostTier] = &[CostTier { input_tokens_above: 512_000, rates: rates($input, $output, $cache_read, $cache_write) }];
         TIERS
     }};
 }
@@ -359,6 +372,178 @@ pub const MODELS: &[ModelInfo] = &[
         thinking: ThinkingMode::Effort,
         levels: NO_LEVELS,
     },
+    // OpenCode Zen. Its gateway routes each model to Responses, Messages, or Chat
+    // Completions; the catalog still presents them as one provider.
+    ModelInfo {
+        id: "deepseek-v4.1-flash",
+        name: "DeepSeek V4.1 Flash",
+        provider: "opencode",
+        context_window: 1_000_000,
+        max_output: 384_000,
+        reasoning: true,
+        images: true,
+        rates: rates(0.3, 1.2, 0.006, 0.0),
+        tiers: NO_TIERS,
+        thinking: ThinkingMode::Effort,
+        levels: LOW_HIGH_MAX_LEVELS,
+    },
+    ModelInfo {
+        id: "claude-sonnet-5",
+        name: "Claude Sonnet 5",
+        provider: "opencode",
+        context_window: 1_000_000,
+        max_output: 128_000,
+        reasoning: true,
+        images: true,
+        rates: rates(2.0, 10.0, 0.2, 2.5),
+        tiers: NO_TIERS,
+        thinking: ThinkingMode::Adaptive,
+        levels: ALWAYS_EFFORT_LEVELS,
+    },
+    ModelInfo {
+        id: "gpt-5.6-terra",
+        name: "GPT-5.6 Terra",
+        provider: "opencode",
+        context_window: 1_050_000,
+        max_output: 128_000,
+        reasoning: true,
+        images: true,
+        rates: rates(2.5, 15.0, 0.25, 3.125),
+        tiers: tier_272k!(5.0, 22.5, 0.5, 6.25),
+        thinking: ThinkingMode::Effort,
+        levels: FULL_EFFORT_LEVELS,
+    },
+    ModelInfo {
+        id: "grok-4.6",
+        name: "Grok 4.6",
+        provider: "opencode",
+        context_window: 500_000,
+        max_output: 500_000,
+        reasoning: true,
+        images: true,
+        rates: rates(2.0, 6.0, 0.5, 0.0),
+        tiers: tier_200k!(4.0, 12.0, 1.0, 0.0),
+        thinking: ThinkingMode::Effort,
+        levels: GROK_XHIGH_LEVELS,
+    },
+    ModelInfo {
+        id: "kimi-k3",
+        name: "Kimi K3",
+        provider: "opencode",
+        context_window: 1_048_576,
+        max_output: 131_072,
+        reasoning: true,
+        images: true,
+        rates: rates(3.0, 15.0, 0.3, 0.0),
+        tiers: NO_TIERS,
+        thinking: ThinkingMode::Effort,
+        levels: MAX_ONLY_LEVELS,
+    },
+    ModelInfo {
+        id: "big-pickle",
+        name: "Big Pickle",
+        provider: "opencode",
+        context_window: 200_000,
+        max_output: 32_000,
+        reasoning: true,
+        images: false,
+        rates: rates(0.0, 0.0, 0.0, 0.0),
+        tiers: NO_TIERS,
+        thinking: ThinkingMode::Effort,
+        levels: NO_LEVELS,
+    },
+    // OpenCode Go. The first entry is Lorca's default for the subscription.
+    ModelInfo {
+        id: "glm-5.3-flash",
+        name: "GLM-5.3 Flash",
+        provider: "opencode-go",
+        context_window: 1_000_000,
+        max_output: 131_072,
+        reasoning: true,
+        images: true,
+        rates: rates(0.15, 0.5, 0.03, 0.0),
+        tiers: NO_TIERS,
+        thinking: ThinkingMode::Effort,
+        levels: LOW_HIGH_MAX_LEVELS,
+    },
+    ModelInfo {
+        id: "deepseek-v4.1-flash",
+        name: "DeepSeek V4.1 Flash",
+        provider: "opencode-go",
+        context_window: 1_000_000,
+        max_output: 384_000,
+        reasoning: true,
+        images: true,
+        rates: rates(0.15, 0.6, 0.003, 0.0),
+        tiers: NO_TIERS,
+        thinking: ThinkingMode::Effort,
+        levels: LOW_HIGH_MAX_LEVELS,
+    },
+    ModelInfo {
+        id: "gpt-5.6-luna",
+        name: "GPT-5.6 Luna",
+        provider: "opencode-go",
+        context_window: 1_050_000,
+        max_output: 128_000,
+        reasoning: true,
+        images: true,
+        rates: rates(0.2, 1.2, 0.02, 0.25),
+        tiers: tier_272k!(0.4, 1.8, 0.04, 0.5),
+        thinking: ThinkingMode::Effort,
+        levels: FULL_EFFORT_LEVELS,
+    },
+    ModelInfo {
+        id: "grok-4.6",
+        name: "Grok 4.6",
+        provider: "opencode-go",
+        context_window: 500_000,
+        max_output: 500_000,
+        reasoning: true,
+        images: true,
+        rates: rates(2.0, 6.0, 0.5, 0.0),
+        tiers: tier_200k!(4.0, 12.0, 1.0, 0.0),
+        thinking: ThinkingMode::Effort,
+        levels: GROK_XHIGH_LEVELS,
+    },
+    ModelInfo {
+        id: "kimi-k3",
+        name: "Kimi K3",
+        provider: "opencode-go",
+        context_window: 1_048_576,
+        max_output: 131_072,
+        reasoning: true,
+        images: true,
+        rates: rates(3.0, 15.0, 0.3, 0.0),
+        tiers: NO_TIERS,
+        thinking: ThinkingMode::Effort,
+        levels: MAX_ONLY_LEVELS,
+    },
+    ModelInfo {
+        id: "qwen3.8-flash",
+        name: "Qwen3.8 Flash",
+        provider: "opencode-go",
+        context_window: 1_000_000,
+        max_output: 131_072,
+        reasoning: true,
+        images: true,
+        rates: rates(0.15, 0.47, 0.016, 0.2),
+        tiers: NO_TIERS,
+        thinking: ThinkingMode::Effort,
+        levels: QWEN_LEVELS,
+    },
+    ModelInfo {
+        id: "minimax-m3",
+        name: "MiniMax M3",
+        provider: "opencode-go",
+        context_window: 1_000_000,
+        max_output: 131_072,
+        reasoning: true,
+        images: false,
+        rates: rates(0.3, 1.2, 0.06, 0.0),
+        tiers: tier_512k!(0.6, 2.4, 0.12, 0.0),
+        thinking: ThinkingMode::Effort,
+        levels: NO_LEVELS,
+    },
 ];
 
 /// The catalog entry for a model of a provider: an exact id, or a dated variant of one
@@ -401,6 +586,9 @@ mod tests {
         assert!(find("anthropic", "claude-haiku-4").is_none());
         assert!(find("deepseek", "deepseek-chat").is_none());
         assert_eq!(for_provider("deepseek").first().map(|m| m.id), Some("deepseek-flash"));
+        assert_eq!(for_provider("opencode").first().map(|m| m.id), Some("deepseek-v4.1-flash"));
+        assert_eq!(for_provider("opencode-go").first().map(|m| m.id), Some("glm-5.3-flash"));
+        assert_eq!(find("opencode-go", "qwen3.8-flash").map(|m| m.images), Some(true));
     }
 
     #[test]

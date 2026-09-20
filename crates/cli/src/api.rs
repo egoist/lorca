@@ -468,6 +468,16 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             Ok(json!({ "providers": app.credentials.lock().unwrap().statuses() }))
         }
         #[cfg(feature = "runner")]
+        "providers.connect_opencode" => {
+            providers::connect_opencode(app, &string(&params, "api_key")?, opt_string(&params, "base_url").as_deref()).await?;
+            Ok(json!({ "providers": app.credentials.lock().unwrap().statuses() }))
+        }
+        #[cfg(feature = "runner")]
+        "providers.connect_opencode_go" => {
+            providers::connect_opencode_go(app, &string(&params, "api_key")?, opt_string(&params, "base_url").as_deref()).await?;
+            Ok(json!({ "providers": app.credentials.lock().unwrap().statuses() }))
+        }
+        #[cfg(feature = "runner")]
         "providers.connect_chatgpt" => {
             let tokens = providers::connect_chatgpt(app).await?;
             Ok(json!({ "email": tokens.email, "providers": app.credentials.lock().unwrap().statuses() }))

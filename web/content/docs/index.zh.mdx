@@ -13,7 +13,7 @@ Lorca 是一支常驻的、各有名字的 AI 智能体小团队，运行在你�
 - **智能体跑在你的机器上。** 每个智能体被分配到你的一台电脑，也就是它的 Runner。它在那里读写文件，以你的权限运行命令，使用你接入的 AI 服务商。没有任何东西跑在别人的云上。
 - **是一支团队，不是一个助手。** 创建各司其职的智能体，比如研究员、审查员、运维，让它们[互相发消息](/zh/docs/chats#智能体之间互相发消息)，或者在[群聊](/zh/docs/group-chats)里一起工作。
 - **懂规矩的群聊。** 群里的每个智能体都会被点到一次。没什么可补充的就跳过，你一个字也看不见。
-- **用你自己的 AI 账号。** 填入 DeepSeek 或 Anthropic 的 API 密钥，或用你的 ChatGPT 或 Grok 订阅登录。每个智能体自己选服务商和模型。
+- **用你自己的 AI 账号。** 填入服务商的 API 密钥，或用你的 ChatGPT 或 Grok 订阅登录。每个智能体自己选服务商和模型。
 - **看得见的记忆。** 每个智能体把自己的笔记以 Markdown 文件的形式存在它的 Runner 上。你可以打开、编辑或删除。
 - **端到端加密的同步。** 你的身份是在第一台 Mac 上生成的一对密钥。设备之间互相配对，它们之间的中继只保存加密的数据块和公钥。
 
@@ -41,7 +41,7 @@ Chef 会提议这些智能体，你同意后创建它们，每一个都有自己
     桌面应用目前支持 macOS 14 及以上，Apple 芯片和 Intel 都可以，接下来是 Windows 和 Linux。手机应用支持 iOS 和 Android。智能体运行在桌面电脑上，而且那台电脑不需要装桌面应用：有 [`lorca` 命令行](/zh/docs/cli)就够了。
   </Accordion>
   <Accordion title="智能体可以用哪些模型？">
-    用 API 密钥接入 DeepSeek 和 Anthropic 的模型，或用你自己的订阅登录 ChatGPT 和 Grok。参见 [AI 服务商](/zh/docs/providers)。
+    用 API 密钥接入 DeepSeek、Anthropic、OpenCode Zen 和 OpenCode Go，或用你自己的订阅登录 ChatGPT 和 Grok。参见 [AI 服务商](/zh/docs/providers)。
   </Accordion>
   <Accordion title="智能体能在我的电脑上做什么？">
     读取、写入、编辑文件，搜索，运行 shell 命令，搜索网络，以及使用那台电脑上安装的插件。它用你的权限、在你指定的那台机器上运行。参见[工具](/zh/docs/tools)。

@@ -1048,15 +1048,14 @@ final class AppStore {
         emit(.identityChanged)
     }
 
-    /// Connects an API-key provider (`providers.connect_deepseek`, `providers.connect_anthropic`).
-    /// An empty `baseURL` means the provider's own API.
+    /// Connects an API-key provider. An empty `baseURL` means the provider's own API.
     func connectAPIKey(_ kind: ProviderCredential.Kind, apiKey: String, baseURL: String = "") async throws {
         var params: [String: Any] = ["api_key": apiKey]
         let trimmed = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty {
             params["base_url"] = trimmed
         }
-        _ = try await client.request("providers.connect_\(kind.wireValue)", params)
+        _ = try await client.request("providers.connect_\(kind.connectMethodSuffix)", params)
     }
 
     /// Runs a subscription sign-in (`providers.connect_chatgpt`, `providers.connect_grok`): the

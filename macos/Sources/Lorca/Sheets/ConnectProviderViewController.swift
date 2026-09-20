@@ -1,6 +1,6 @@
 import AppKit
 
-/// Connects a provider for the account. DeepSeek and Anthropic take an API key; ChatGPT and Grok
+/// Connects a provider for the account. API-key providers take a pasted key; ChatGPT and Grok
 /// sign in through the browser, driven by the CLI. The credential reaches every paired Device
 /// encrypted with the account key.
 final class ConnectProviderViewController: SheetViewController {

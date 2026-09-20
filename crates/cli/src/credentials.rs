@@ -17,7 +17,7 @@ pub type ChatGptTokens = serde_json::Value;
 #[cfg(not(feature = "runner"))]
 pub type GrokTokens = serde_json::Value;
 
-pub const PROVIDER_KINDS: [&str; 4] = ["deepseek", "anthropic", "chatgpt", "grok"];
+pub const PROVIDER_KINDS: [&str; 6] = ["deepseek", "anthropic", "opencode", "opencode-go", "chatgpt", "grok"];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiKeyCredential {
@@ -34,6 +34,10 @@ pub struct Credentials {
     pub deepseek: Option<ApiKeyCredential>,
     #[serde(default)]
     pub anthropic: Option<ApiKeyCredential>,
+    #[serde(default)]
+    pub opencode: Option<ApiKeyCredential>,
+    #[serde(default)]
+    pub opencode_go: Option<ApiKeyCredential>,
     #[serde(default)]
     pub chatgpt: Option<ChatGptTokens>,
     #[serde(default)]
@@ -89,8 +93,11 @@ impl Credentials {
                     match kind {
                         "deepseek" => self.deepseek = other.deepseek.clone(),
                         "anthropic" => self.anthropic = other.anthropic.clone(),
+                        "opencode" => self.opencode = other.opencode.clone(),
+                        "opencode-go" => self.opencode_go = other.opencode_go.clone(),
                         "chatgpt" => self.chatgpt = other.chatgpt.clone(),
-                        _ => self.grok = other.grok.clone(),
+                        "grok" => self.grok = other.grok.clone(),
+                        _ => unreachable!(),
                     }
                     self.changed_at.insert(kind.to_string(), theirs);
                     merge.taken.push(kind.to_string());
@@ -110,6 +117,8 @@ impl Credentials {
         match kind {
             "deepseek" => self.deepseek.as_ref(),
             "anthropic" => self.anthropic.as_ref(),
+            "opencode" => self.opencode.as_ref(),
+            "opencode-go" => self.opencode_go.as_ref(),
             _ => None,
         }
     }
@@ -208,5 +217,19 @@ mod tests {
         assert_eq!(ours.merge(&theirs).taken, vec!["deepseek".to_string()]);
         assert!(ours.deepseek.is_none());
         assert!(ours.connected_kinds().is_empty());
+    }
+
+    #[test]
+    fn opencode_credentials_merge_and_report_in_provider_order() {
+        let mut ours = Credentials { opencode: key("zen-old"), ..Default::default() };
+        ours.changed_at.insert("opencode".into(), 1.0);
+        let mut theirs = Credentials { opencode: key("zen-new"), opencode_go: key("go-key"), ..Default::default() };
+        theirs.changed_at.insert("opencode".into(), 2.0);
+        theirs.changed_at.insert("opencode-go".into(), 2.0);
+
+        assert_eq!(ours.merge(&theirs).taken, vec!["opencode".to_string(), "opencode-go".to_string()]);
+        assert_eq!(ours.opencode.as_ref().unwrap().api_key, "zen-new");
+        assert_eq!(ours.opencode_go.as_ref().unwrap().api_key, "go-key");
+        assert_eq!(ours.statuses().into_iter().map(|status| status.kind).collect::<Vec<_>>(), PROVIDER_KINDS);
     }
 }

@@ -6,7 +6,7 @@
 //! - [`Provider`]: a model adapter that turns a request into a stream of [`AssistantEvent`]s.
 //! - [`Tool`]: something the model can call.
 //! - `providers`: Anthropic Messages (Anthropic and DeepSeek, with server-side web search),
-//!   OpenAI-compatible completions, and ChatGPT and Grok (subscription OAuth).
+//!   OpenAI-compatible Chat Completions and Responses, and ChatGPT and Grok (subscription OAuth).
 
 pub mod agent;
 pub mod agent_loop;

@@ -83,7 +83,7 @@ pub async fn decide(app: &Arc<App>, bot: &Bot, chat_id: &str, plugin_id: &str, p
         messages: vec![LlmMessage::User(UserMessage::text(text))],
         tools: Vec::new(),
         max_tokens: Some(200),
-        options: RequestOptions::default(),
+        options: RequestOptions::default().with_session_id(chat_id),
     };
     let mut stream = provider.stream(request, cancel.clone()).await;
     let mut acc = AssistantAccumulator::new(provider.provider_id(), provider.model_id());

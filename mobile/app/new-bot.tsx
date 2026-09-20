@@ -23,6 +23,23 @@ const MODELS: Record<string, { id: string; label: string }[]> = {
     { id: "claude-opus-4-8", label: "Opus 4.8" },
     { id: "claude-haiku-4-5", label: "Haiku 4.5" },
   ],
+  opencode: [
+    { id: "deepseek-v4.1-flash", label: "DeepSeek V4.1 Flash" },
+    { id: "claude-sonnet-5", label: "Claude Sonnet 5" },
+    { id: "gpt-5.6-terra", label: "GPT-5.6 Terra" },
+    { id: "grok-4.6", label: "Grok 4.6" },
+    { id: "kimi-k3", label: "Kimi K3" },
+    { id: "big-pickle", label: "Big Pickle (free)" },
+  ],
+  "opencode-go": [
+    { id: "glm-5.3-flash", label: "GLM-5.3 Flash" },
+    { id: "deepseek-v4.1-flash", label: "DeepSeek V4.1 Flash" },
+    { id: "gpt-5.6-luna", label: "GPT-5.6 Luna" },
+    { id: "grok-4.6", label: "Grok 4.6" },
+    { id: "kimi-k3", label: "Kimi K3" },
+    { id: "qwen3.8-flash", label: "Qwen3.8 Flash" },
+    { id: "minimax-m3", label: "MiniMax M3" },
+  ],
   chatgpt: [
     { id: "gpt-5.6-terra", label: "GPT-5.6 Terra" },
     { id: "gpt-6-astra", label: "GPT-6 Astra" },
@@ -53,7 +70,7 @@ export default function NewBotScreen() {
   const [runnerId, setRunnerId] = useState<string>(() => runners.find((r) => deviceIsOnline(r.id))?.id ?? runners[0]?.id ?? "");
   const runner = runners.find((r) => r.id === runnerId);
   const connected = connectedProviders(useStore((s) => s.providers));
-  const providers = connected.length ? connected : ["deepseek", "anthropic", "chatgpt", "grok"];
+  const providers = connected.length ? connected : ["deepseek", "anthropic", "opencode", "opencode-go", "chatgpt", "grok"];
   const [provider, setProvider] = useState<string>(providers[0]);
   const [model, setModel] = useState<string | undefined>(undefined);
   const [thinking, setThinking] = useState<string | undefined>(undefined);

@@ -75,10 +75,10 @@ enum IdentityCommand {
 
 #[derive(Subcommands, Debug)]
 enum ProviderCommand {
-    /// Connect a provider: an API key for deepseek and anthropic, a browser sign-in for
-    /// chatgpt and grok.
+    /// Connect a provider: an API key for deepseek, anthropic, opencode, and opencode-go;
+    /// a browser sign-in for chatgpt and grok.
     Set {
-        /// deepseek, anthropic, chatgpt, or grok.
+        /// deepseek, anthropic, opencode, opencode-go, chatgpt, or grok.
         kind: String,
         /// The API key. Omit to read it from stdin, which keeps it out of the shell history.
         api_key: Option<String>,
@@ -206,7 +206,8 @@ async fn provider(app: &std::sync::Arc<App>, command: ProviderCommand) -> anyhow
                 };
                 serde_json::json!({ "api_key": api_key, "base_url": base_url })
             };
-            (format!("providers.connect_{kind}"), params)
+            let method_kind = if kind == "opencode-go" { "opencode_go" } else { &kind };
+            (format!("providers.connect_{method_kind}"), params)
         }
         ProviderCommand::Remove { kind } => ("providers.disconnect".to_string(), serde_json::json!({ "kind": kind })),
         ProviderCommand::List => {

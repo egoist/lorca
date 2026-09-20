@@ -7,19 +7,21 @@ struct ProviderCredential: Hashable, Identifiable {
     enum Kind: String, Hashable, CaseIterable {
         case deepseek = "DeepSeek"
         case anthropic = "Anthropic"
+        case opencode = "OpenCode Zen"
+        case opencodeGo = "OpenCode Go"
         case chatgpt = "ChatGPT"
         case grok = "Grok"
 
         var symbolName: String {
             switch self {
-            case .deepseek, .anthropic: "key.fill"
+            case .deepseek, .anthropic, .opencode, .opencodeGo: "key.fill"
             case .chatgpt, .grok: "person.badge.key.fill"
             }
         }
 
         var subtitle: String {
             switch self {
-            case .deepseek, .anthropic: L("API key")
+            case .deepseek, .anthropic, .opencode, .opencodeGo: L("API key")
             case .chatgpt, .grok: L("Subscription")
             }
         }
@@ -32,7 +34,7 @@ struct ProviderCredential: Hashable, Identifiable {
             switch self {
             case .chatgpt: L("It needs a ChatGPT subscription.")
             case .grok: L("It needs a SuperGrok or X Premium+ subscription.")
-            case .deepseek, .anthropic: ""
+            case .deepseek, .anthropic, .opencode, .opencodeGo: ""
             }
         }
 
@@ -41,6 +43,8 @@ struct ProviderCredential: Hashable, Identifiable {
             switch self {
             case .deepseek: "https://api.deepseek.com"
             case .anthropic: "https://api.anthropic.com"
+            case .opencode: "https://opencode.ai/zen"
+            case .opencodeGo: "https://opencode.ai/zen/go"
             case .chatgpt, .grok: ""
             }
         }
@@ -50,6 +54,7 @@ struct ProviderCredential: Hashable, Identifiable {
             switch self {
             case .deepseek: L("sk-… from platform.deepseek.com")
             case .anthropic: L("sk-ant-… from console.anthropic.com")
+            case .opencode, .opencodeGo: L("API key from opencode.ai/auth")
             case .chatgpt, .grok: ""
             }
         }
@@ -59,6 +64,8 @@ struct ProviderCredential: Hashable, Identifiable {
             switch self {
             case .deepseek: "deepseek"
             case .anthropic: "anthropic"
+            case .opencode: "opencode"
+            case .opencodeGo: "opencode-go"
             case .chatgpt: "chatgpt"
             case .grok: "grok"
             }
@@ -68,10 +75,18 @@ struct ProviderCredential: Hashable, Identifiable {
             switch wireValue {
             case "deepseek": self = .deepseek
             case "anthropic": self = .anthropic
+            case "opencode": self = .opencode
+            case "opencode-go": self = .opencodeGo
             case "chatgpt": self = .chatgpt
             case "grok": self = .grok
             default: return nil
             }
+        }
+
+        /// Provider connect methods use underscores even when the stored provider id has a
+        /// hyphen.
+        var connectMethodSuffix: String {
+            self == .opencodeGo ? "opencode_go" : wireValue
         }
 
         /// The thinking levels this provider's models take, lowest first. nil on a bot means
@@ -81,6 +96,7 @@ struct ProviderCredential: Hashable, Identifiable {
                 switch self {
                 case .deepseek: ["off", "low", "medium", "high", "xhigh", "max"]
                 case .anthropic: ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
+                case .opencode, .opencodeGo: ["off", "low", "medium", "high", "xhigh", "max"]
                 case .chatgpt: ["low", "medium", "high", "xhigh"]
                 case .grok: ["low", "medium", "high"]
                 }
@@ -115,6 +131,25 @@ struct ProviderCredential: Hashable, Identifiable {
                     ("claude-fable-5-1", "Fable 5.1"),
                     ("claude-opus-4-8", "Opus 4.8"),
                     ("claude-haiku-4-5", "Haiku 4.5"),
+                ]
+            case .opencode:
+                [
+                    ("deepseek-v4.1-flash", "DeepSeek V4.1 Flash"),
+                    ("claude-sonnet-5", "Claude Sonnet 5"),
+                    ("gpt-5.6-terra", "GPT-5.6 Terra"),
+                    ("grok-4.6", "Grok 4.6"),
+                    ("kimi-k3", "Kimi K3"),
+                    ("big-pickle", "Big Pickle (free)"),
+                ]
+            case .opencodeGo:
+                [
+                    ("glm-5.3-flash", "GLM-5.3 Flash"),
+                    ("deepseek-v4.1-flash", "DeepSeek V4.1 Flash"),
+                    ("gpt-5.6-luna", "GPT-5.6 Luna"),
+                    ("grok-4.6", "Grok 4.6"),
+                    ("kimi-k3", "Kimi K3"),
+                    ("qwen3.8-flash", "Qwen3.8 Flash"),
+                    ("minimax-m3", "MiniMax M3"),
                 ]
             case .chatgpt:
                 [
