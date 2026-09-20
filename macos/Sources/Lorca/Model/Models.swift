@@ -270,7 +270,7 @@ struct Bot: Identifiable, Hashable {
 // MARK: - Auto-review
 
 /// One Auto-review rule: what a bot wants to do, in the user's words, and whether that runs on
-/// its own or asks first. A rule from a card's Always allow also names the exact `plugin/tool`.
+/// its own or asks first. A rule from a card's Always allow also names its exact action key.
 struct AutoReviewRule: Hashable, Identifiable {
     enum Behavior: String, Hashable {
         case allow
@@ -285,8 +285,8 @@ struct AutoReviewRule: Hashable, Identifiable {
     var tool: String? = nil
 }
 
-/// The check on plugin actions that change something, shared by every Device through the
-/// roster: on, the bot's model checks each one and asks only when needed; off, every one asks.
+/// The check on effectful plugin actions and shell commands, shared by every Device through
+/// the roster: on, the bot's model asks only when needed; off, each one asks.
 struct AutoReview: Hashable {
     var isEnabled: Bool = true
     var rules: [AutoReviewRule] = []
@@ -367,7 +367,7 @@ struct PluginDetail {
     var skills: [(name: String, description: String)]
 }
 
-/// A bot asking before a plugin tool runs, or before a plugin is installed.
+/// A bot asking before a plugin or shell action runs, or before a plugin is installed.
 struct PermissionRequest: Hashable {
     enum Decision: String, Hashable {
         case pending

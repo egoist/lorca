@@ -416,7 +416,7 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             let runner_id = string(&params, "runner_id")?;
             crate::plugins::on_runner(app, &runner_id, "plugins.detail", json!({ "plugin_id": string(&params, "plugin_id")? })).await
         }
-        // Auto-review: the check on plugin actions and its rules, shared through the roster.
+        // Auto-review: the check on plugin and shell actions, shared through the roster.
         // `rules` replaces the list; a rule without an id gets one.
         "auto_review.set" => {
             let mut auto_review = app.auto_review();

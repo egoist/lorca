@@ -181,8 +181,8 @@ export default function SettingsScreen() {
           title={t("Auto-review")}
           footer={
             autoReview.is_enabled
-              ? t('Lorca checks each plugin action before it runs and asks you first when needed. Add rules to customize what bots can do automatically; "Ask first" wins if rules conflict. Built-in safety checks always apply.')
-              : t("Off: every plugin action that changes something asks you first.")
+              ? t('Lorca checks effectful plugin actions and every shell command before they run. Safe commands normally run automatically; risky commands ask you first. Add rules to customize what bots can do automatically; "Ask first" wins if rules conflict.')
+              : t("Off: every shell command and effectful plugin action asks you first.")
           }
         >
           <ToggleRow

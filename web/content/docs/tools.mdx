@@ -17,8 +17,10 @@ A bot works on its Runner with the same kind of tools a coding agent gets. It ru
 Relative paths resolve in the bot's [working directory](/docs/bots#working-directory).
 
 <Callout type="warn" title="A bot has your access">
-  Shell commands run as your user and are not limited to the working directory. Give a bot instructions that match the trust you would give a script you run yourself, and assign bots to a machine you are comfortable with them working on.
+  Shell commands run as your user and are not limited to the working directory. They can control files, processes, credentials, applications, and the network. Give a bot instructions that match the trust you would give a script you run yourself, and assign bots to a machine you are comfortable with them controlling.
 </Callout>
+
+Before a shell command starts, Lorca parses all of its stages and sends the complete command through [Auto-review](/docs/auto-review). Safe work runs automatically; risky work posts a permission card. An allowed command retains your user's full access.
 
 ## On the web
 

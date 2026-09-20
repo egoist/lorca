@@ -40,7 +40,7 @@ Unpairing a device makes the relay refuse its key for good. The device deletes i
 ## On your computer
 
 - Keys, credentials, and chats are files under `~/.lorca/`, readable only by your user.
-- Bots run as your user. See the warning in [Tools](/docs/tools).
+- Bots run as your user and shell commands retain that user's full computer access after Auto-review allows them. See [Tools](/docs/tools).
 - Plugin secrets and sign-ins stay on the Runner where the plugin is installed.
 - Bot memory is scrubbed of anything that looks like a credential before it is written.
 - The desktop app talks only to its own local service on `127.0.0.1`. That service is the only thing that talks to the relay and to AI providers.

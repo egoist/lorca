@@ -28,7 +28,7 @@ final class AutoReviewSettingsViewController: SettingsPaneViewController {
         }
         addSection(check)
         addSection(rules)
-        addFootnote(L("Auto-review checks a plugin action that changes something before it runs, using the bot's own model, and asks you in the chat when the action needs a look. Off, every such action asks. Write one short, natural-language rule for each action; \"Ask first\" takes priority if rules conflict. Built-in safety checks always apply."))
+        addFootnote(L("Auto-review checks effectful plugin actions and every shell command before they run, using the bot's own model, and asks you in the chat when an action needs a look. Safe commands normally run automatically; risky commands ask. Off, every such action asks. Write one short, natural-language rule for each action; \"Ask first\" takes priority if rules conflict. Built-in safety checks always apply."))
         store.observe(self) { [weak self] event in
             switch event {
             case .rosterChanged, .snapshotReplaced: self?.render()
@@ -47,13 +47,22 @@ final class AutoReviewSettingsViewController: SettingsPaneViewController {
 
         rows = []
         var ruleRows: [NSView] = review.rules.map { rule in
-            let field = NSTextField()
-            field.stringValue = rule.text
+            let field: NSTextField
+            if rule.tool == nil {
+                let input = NSTextField()
+                input.stringValue = rule.text
+                input.isEditable = true
+                input.delegate = self
+                field = input
+            } else {
+                let label = NSTextField(labelWithString: rule.text)
+                label.lineBreakMode = .byTruncatingTail
+                label.maximumNumberOfLines = 1
+                label.toolTip = rule.text
+                field = label
+            }
             field.controlSize = .small
             field.font = .systemFont(ofSize: 12)
-            field.isEditable = rule.tool == nil
-            field.delegate = self
-            field.toolTip = rule.tool.map { L("Made from Always allow on a card, for %@.", $0) }
             let popup = SettingsPopUpButton()
             for behavior in [AutoReviewRule.Behavior.allow, .ask] {
                 popup.addItem(withTitle: behavior.title)
@@ -161,36 +170,43 @@ final class RuleRow: NSView {
         translatesAutoresizingMaskIntoConstraints = false
         field.translatesAutoresizingMaskIntoConstraints = false
         popup.translatesAutoresizingMaskIntoConstraints = false
-        let button = NSButton()
-        button.bezelStyle = .rounded
-        button.controlSize = .small
-        button.font = .systemFont(ofSize: 11)
+        let button: NSButton
         if let addTitle {
-            button.title = addTitle
-            button.action = #selector(add)
+            let add = NSButton(title: addTitle, target: nil, action: #selector(add))
+            add.bezelStyle = .rounded
+            add.controlSize = .small
+            add.font = .systemFont(ofSize: 11)
+            button = add
         } else {
-            button.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: L("Delete rule"))
-            button.bezelStyle = .accessoryBarAction
-            button.isBordered = false
-            button.action = #selector(delete)
+            button = HoverButton(
+                symbol: "trash", pointSize: 12, tooltip: L("Delete rule"), target: nil,
+                action: #selector(delete))
         }
         button.target = self
         button.translatesAutoresizingMaskIntoConstraints = false
+        field.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        popup.setContentHuggingPriority(.required, for: .horizontal)
+        button.setContentHuggingPriority(.required, for: .horizontal)
+        button.setContentCompressionResistancePriority(.required, for: .horizontal)
         addSubview(field)
         addSubview(popup)
         addSubview(button)
-        NSLayoutConstraint.activate([
+        var constraints = [
             heightAnchor.constraint(greaterThanOrEqualToConstant: 36),
             field.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            field.trailingAnchor.constraint(equalTo: popup.leadingAnchor, constant: -8),
             field.centerYAnchor.constraint(equalTo: centerYAnchor),
-            popup.leadingAnchor.constraint(equalTo: field.trailingAnchor, constant: 8),
             popup.widthAnchor.constraint(equalToConstant: 150),
+            popup.trailingAnchor.constraint(equalTo: button.leadingAnchor, constant: -8),
             popup.centerYAnchor.constraint(equalTo: centerYAnchor),
-            button.leadingAnchor.constraint(equalTo: popup.trailingAnchor, constant: 8),
             button.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
             button.centerYAnchor.constraint(equalTo: centerYAnchor),
-            button.widthAnchor.constraint(greaterThanOrEqualToConstant: 24),
-        ])
+        ]
+        if addTitle == nil {
+            constraints.append(button.widthAnchor.constraint(equalToConstant: 28))
+        }
+        NSLayoutConstraint.activate(constraints)
     }
 
     @available(*, unavailable)

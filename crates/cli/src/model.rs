@@ -92,8 +92,8 @@ pub struct Bot {
 }
 
 /// One Auto-review rule: what a bot wants to do, in the user's words, and whether that runs
-/// on its own or asks first. A rule made from a card's Always allow also carries the exact
-/// `plugin/tool`, matched without a review.
+/// on its own or asks first. A rule made from a card's Always allow also carries an exact
+/// action key, matched without another model review.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AutoReviewRule {
     pub id: String,
@@ -104,8 +104,8 @@ pub struct AutoReviewRule {
     pub tool: Option<String>,
 }
 
-/// Auto-review, after Grok Bot: with it on, a Runner checks each plugin action that changes
-/// something before it runs and asks the user only when needed; off, every such action asks.
+/// Auto-review, after Grok Bot: with it on, a Runner checks effectful plugin actions and shell
+/// commands before they run and asks the user only when needed; off, every such action asks.
 /// Shared by every Device through the roster.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AutoReview {
@@ -201,7 +201,7 @@ pub enum Body {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         routine_id: Option<String>,
     },
-    /// The bot asks before using a plugin tool that is not read-only (or before installing a
+    /// The bot asks before a reviewed plugin or shell action (or before installing a
     /// plugin, with `tool` = `install`). The turn waits for `decision`: `pending`, `allowed`
     /// (once), `always`, `denied`, or `expired`.
     Permission {

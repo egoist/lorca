@@ -1,10 +1,10 @@
 ---
 title: Auto-review
-description: Lorca checks each plugin action before it runs and asks you first when it should.
+description: Lorca checks plugin actions and shell commands before they run and asks you first when it should.
 icon: ShieldCheck
 ---
 
-Auto-review sits between a bot and the plugin actions that change things. It decides, one action at a time, whether to run it or to ask you.
+Auto-review sits between a bot and effectful plugin actions or shell commands on its Runner. It decides, one action at a time, whether to run it or to ask you.
 
 ## Permission cards
 
@@ -12,10 +12,14 @@ When an action needs your say, the bot posts a card in the chat:
 
 > Chef wants to use GitHub · create_issue · repo: acme/api
 
+or:
+
+> Chef wants to use MacBook Pro · `$ cargo publish`
+
 with the reason it paused and three answers:
 
 - **Allow once** runs this action.
-- **Always allow** runs it and adds a rule, so that exact tool never asks again.
+- **Always allow** runs it and adds a narrow rule. Plugin rules name the exact tool; local rules are bound to that Runner, working directory, and exact action.
 - **Deny** refuses it. The bot is told not to retry.
 
 You can answer from any device. The bot waits up to ten minutes.
@@ -27,9 +31,15 @@ With Auto-review **on**, each action is judged against your rules, your latest m
 - **Asks first:** deleting or overwriting, posting where other people see it, anything involving money or access, bulk or irreversible changes.
 - **Runs:** contained, reversible work you asked for.
 
-With Auto-review **off**, every action that changes something asks.
+With Auto-review **off**, every shell command and every effectful plugin action asks.
 
-Read-only actions, such as listing issues or fetching a page, never ask.
+Read-only plugin actions never ask. Every shell command enters Auto-review, including inspection commands such as `git status`, `rg`, and `wc`; they are normally allowed automatically. Lorca parses all stages of a compound command before reviewing it. Destructive commands, privilege or access changes, opaque interpreters and wrappers, uploads, remote execution channels, and force pushes always ask unless you already saved an exact rule.
+
+## Shell access
+
+An allowed shell command runs as your user with your normal filesystem, process, credentials, and network access. Its working directory is context, not a security boundary. This full-computer access is what lets a skill drive installed CLIs, applications, builds, services, and files outside its workspace.
+
+Auto-review and the permission card are the boundary. Lorca reviews the complete command before starting it; denying a held action means none of its stages run.
 
 ## Rules
 
@@ -43,4 +53,4 @@ When two rules disagree, Ask first wins. Rules sync to all your devices and appl
 
 ## Routines
 
-A [routine](/docs/routines) runs with nobody watching, so an action that would ask is refused instead. Add an allow rule for what a routine needs to do on its own.
+A [routine](/docs/routines) runs with nobody watching, so an action that would ask is refused instead. Commands that Auto-review allows still run; add a narrow exact rule for a command the routine needs but Auto-review holds.

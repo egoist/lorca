@@ -7,7 +7,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use lorca_agent::agent_loop::{
-    run_agent_loop_continue, AgentContext, AgentLoopConfig, EventSink, LoopHooks, PrepareNextTurnContext, ToolExecutionMode, TurnUpdate,
+    run_agent_loop_continue, AgentContext, AgentLoopConfig, BeforeToolCallContext, BeforeToolCallResult, EventSink, LoopHooks,
+    PrepareNextTurnContext, ToolExecutionMode, TurnUpdate,
 };
 use lorca_agent::compaction::{self, CompactionSettings};
 use lorca_agent::estimate::{context_tokens, estimate_context_tokens, estimate_text_tokens};
@@ -137,6 +138,7 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
     } else if messages.last().map(AgentMessage::is_assistant).unwrap_or(true) {
         messages.push(AgentMessage::User(UserMessage::text("Continue.")));
     }
+    let unattended = routine.is_some();
     let mut tools: Vec<Arc<dyn Tool>> = vec![
         Arc::new(ListTeammates { app: app.clone(), chat_id: chat.meta.id.clone() }),
         Arc::new(MessageBot { app: app.clone(), chat_id: chat.meta.id.clone(), bot: bot.clone(), hops: job.hops }),
@@ -144,7 +146,7 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
         Arc::new(EditBot { app: app.clone(), bot: bot.clone() }),
         Arc::new(Routines { app: app.clone(), bot: bot.clone() }),
         Arc::new(SearchPlugins { app: app.clone() }),
-        Arc::new(InstallPlugin { app: app.clone(), chat_id: chat.meta.id.clone(), bot: bot.clone(), unattended: routine.is_some() }),
+        Arc::new(InstallPlugin { app: app.clone(), chat_id: chat.meta.id.clone(), bot: bot.clone(), unattended }),
         Arc::new(ConnectPlugin { app: app.clone(), chat_id: chat.meta.id.clone(), bot: bot.clone() }),
     ];
     let plugin_names: std::collections::HashMap<String, String> = plugin_tools.iter().map(|t| (t.name().to_string(), t.label().to_string())).collect();
@@ -178,6 +180,8 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
         provider: provider.clone(),
         window,
         settings: settings.clone(),
+        workdir: workdir.clone(),
+        unattended,
     });
     let config = AgentLoopConfig {
         provider: provider.clone(),
@@ -310,6 +314,8 @@ struct TurnHooks {
     provider: Arc<dyn Provider>,
     window: u64,
     settings: CompactionSettings,
+    workdir: std::path::PathBuf,
+    unattended: bool,
 }
 
 /// How the model sees a transcript that may open with a compaction summary.
@@ -337,6 +343,18 @@ impl LoopHooks for QuietHooks {
 impl LoopHooks for TurnHooks {
     fn convert_to_llm(&self, messages: &[AgentMessage]) -> Vec<LlmMessage> {
         convert_with_compaction(messages)
+    }
+
+    async fn before_tool_call(&self, ctx: BeforeToolCallContext<'_>) -> Option<BeforeToolCallResult> {
+        crate::local_review::before_tool_call(
+            &self.app,
+            &self.chat_id,
+            &self.bot,
+            &self.workdir,
+            self.unattended,
+            ctx,
+        )
+        .await
     }
 
     async fn prepare_next_turn(&self, ctx: PrepareNextTurnContext<'_>) -> Option<TurnUpdate> {
@@ -957,7 +975,9 @@ fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job, store: &Memo
     }
     prompt.push_str(&format!(
         "Relative paths resolve against your working directory {}. Work there unless the user names another path. \
-         Commands run as the user on that machine, so treat destructive commands with care and say what you ran.\n",
+         Commands run as the user on that machine with its full filesystem, process, and network access. Every bash call \
+         goes through Auto-review first and may pause on a permission card. Treat destructive commands with care and say \
+         what you ran.\n",
         workdir.display()
     ));
     if let Some(runner) = runner {

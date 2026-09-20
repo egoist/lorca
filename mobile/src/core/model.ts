@@ -147,14 +147,14 @@ export type Body =
     }
   | { kind: "handoff"; from: string; to: string; reason: string }
   | { kind: "notice"; text: string; routine_id?: string }
-  /// The bot asks before a plugin tool runs, or before installing a plugin (`tool` is `install`).
+  /// The bot asks before a plugin or shell action, or before installing a plugin (`tool` is `install`).
   | { kind: "permission"; plugin_id: string; plugin_name: string; tool: string; summary: string; decision: "pending" | "allowed" | "always" | "denied" | "expired" | "connected" | "failed"; reason?: string; link?: string; code?: string };
 
 /// One Auto-review rule: what a bot wants to do, in the user's words, and whether that runs on
-/// its own or asks first. A rule from a card's Always allow also names the exact `plugin/tool`.
+/// its own or asks first. A rule from a card's Always allow also names its exact action key.
 export type AutoReviewRule = { id: string; text: string; behavior: "allow" | "ask"; tool?: string };
 
-/// The check on plugin actions that change something, shared through the roster.
+/// The check on effectful plugin actions and shell commands, shared through the roster.
 export type AutoReview = { is_enabled: boolean; rules: AutoReviewRule[] };
 
 export type MessageState =

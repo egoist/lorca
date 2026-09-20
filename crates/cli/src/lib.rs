@@ -12,6 +12,8 @@ pub mod events;
 pub mod files;
 pub mod identity;
 pub mod keys;
+#[cfg(feature = "runner")]
+pub mod local_review;
 pub mod memory;
 pub mod model;
 pub mod pairing;

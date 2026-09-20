@@ -799,6 +799,31 @@ impl Decision {
 /// Auto-review rule for the exact tool before answering.
 #[allow(clippy::too_many_arguments)]
 pub async fn ask(app: &Arc<App>, chat_id: &str, bot_id: &str, plugin_id: &str, plugin_name: &str, tool: &str, summary: &str, arguments: Value, reason: Option<String>, cancel: &CancellationToken) -> Decision {
+    let always_rule = (tool != "install").then(|| AutoReviewRule {
+        id: uuid::Uuid::new_v4().to_string(),
+        text: format!("use {plugin_name} {tool}"),
+        behavior: "allow".into(),
+        tool: Some(format!("{plugin_id}/{tool}")),
+    });
+    ask_with_rule(app, chat_id, bot_id, plugin_id, plugin_name, tool, summary, arguments, reason, always_rule, cancel).await
+}
+
+/// A permission card whose Always allow choice saves the supplied scoped rule. Local computer
+/// actions use this with a key bound to their Runner, workspace, and exact reviewed action.
+#[allow(clippy::too_many_arguments)]
+pub async fn ask_with_rule(
+    app: &Arc<App>,
+    chat_id: &str,
+    bot_id: &str,
+    plugin_id: &str,
+    plugin_name: &str,
+    tool: &str,
+    summary: &str,
+    arguments: Value,
+    reason: Option<String>,
+    always_rule: Option<AutoReviewRule>,
+    cancel: &CancellationToken,
+) -> Decision {
     let message = Message::new(
         chat_id,
         Author::Bot { bot_id: bot_id.to_string() },
@@ -823,13 +848,10 @@ pub async fn ask(app: &Arc<App>, chat_id: &str, bot_id: &str, plugin_id: &str, p
         _ = cancel.cancelled() => Decision::Denied,
     };
     app.pending_permissions.lock().unwrap().remove(&message.id);
-    if decision == Decision::Always && tool != "install" {
-        app.add_auto_review_rule(AutoReviewRule {
-            id: uuid::Uuid::new_v4().to_string(),
-            text: format!("use {plugin_name} {tool}"),
-            behavior: "allow".into(),
-            tool: Some(format!("{plugin_id}/{tool}")),
-        });
+    if decision == Decision::Always {
+        if let Some(rule) = always_rule {
+            app.add_auto_review_rule(rule);
+        }
     }
     if let Some(mut message) = app.message(chat_id, &message.id) {
         if let Body::Permission { decision: d, .. } = &mut message.body {

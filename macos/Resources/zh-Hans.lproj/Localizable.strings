@@ -98,7 +98,7 @@
 "Attach files to your message" = "为消息添加附件";
 "Auto-review" = "自动审查";
 "auto-review approve approval permission plugin ask" = "自动审查 批准 许可 权限 插件 询问 auto-review approve approval permission plugin ask";
-"Auto-review checks a plugin action that changes something before it runs, using the bot's own model, and asks you in the chat when the action needs a look. Off, every such action asks. Write one short, natural-language rule for each action; \"Ask first\" takes priority if rules conflict. Built-in safety checks always apply." = "自动审查会在插件执行有改动的操作之前，用智能体自己的模型检查一遍，需要你过目时在聊天中询问你。关闭后，每个这样的操作都会询问。为每种操作写一条简短的自然语言规则；规则冲突时以“先询问”为准。内置的安全检查始终生效。";
+"Auto-review checks effectful plugin actions and every shell command before they run, using the bot's own model, and asks you in the chat when an action needs a look. Safe commands normally run automatically; risky commands ask. Off, every such action asks. Write one short, natural-language rule for each action; \"Ask first\" takes priority if rules conflict. Built-in safety checks always apply." = "自动审查会在会产生影响的插件操作和每个 shell 命令运行前，用智能体自己的模型检查一遍，需要你过目时在聊天中询问你。安全命令通常会自动运行；有风险的命令会询问。关闭后，每个这样的操作都会询问。为每种操作写一条简短的自然语言规则；规则冲突时以“先询问”为准。内置安全检查始终生效。";
 "Auto-review Rules" = "自动审查规则";
 "Auto-review: %@" = "自动审查：%@";
 "Automatic (%@)" = "自动（%@）";
@@ -270,7 +270,6 @@
 "Low" = "低";
 "Machine" = "机器";
 "Machine key" = "机器密钥";
-"Made from Always allow on a card, for %@." = "由卡片上的“始终允许”生成，适用于 %@。";
 "Marketplace" = "插件市场";
 "Max" = "最高";
 "Medium" = "中";

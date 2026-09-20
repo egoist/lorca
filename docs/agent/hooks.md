@@ -128,7 +128,7 @@ impl LoopHooks for Guard {
 
 The hook is async, so it can wait for a person to approve the call.
 
-`BeforeToolCallContext` has `assistant_message`, `tool_call`, `args` (the arguments after coercion and validation, which is what the tool will run with), and `context` (the loop's `AgentContext`). A run cancelled while the hook waits gets an `Operation aborted` result for the call.
+`BeforeToolCallContext` has `assistant_message`, `tool_call`, `args` (the arguments after coercion and validation, which is what the tool will run with), `context` (the loop's `AgentContext`), and the run's `cancel` token. A hook waiting for a person should select on that token; the loop also checks it again before execution and turns cancellation into an `Operation aborted` result.
 
 ### `after_tool_call`
 

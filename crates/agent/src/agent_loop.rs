@@ -61,6 +61,9 @@ pub struct BeforeToolCallContext<'a> {
     pub tool_call: &'a ToolCall,
     pub args: &'a Value,
     pub context: &'a AgentContext,
+    /// Cancels while a policy hook is waiting for a person or another reviewer. Hooks should
+    /// stop promptly when it fires; the loop checks it again before any tool executes.
+    pub cancel: &'a CancellationToken,
 }
 
 pub struct AfterToolCallContext<'a> {
@@ -676,7 +679,7 @@ async fn prepare_tool_call(
     let mut args = args;
     if let Some(before) = config
         .hooks
-        .before_tool_call(BeforeToolCallContext { assistant_message: assistant, tool_call, args: &args, context })
+        .before_tool_call(BeforeToolCallContext { assistant_message: assistant, tool_call, args: &args, context, cancel })
         .await
     {
         if cancel.is_cancelled() {
