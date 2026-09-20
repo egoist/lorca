@@ -117,24 +117,26 @@ A slow sink slows the run: the model stream is not read while the sink handles a
 
 ## Steering and follow-ups without `Agent`
 
-Implement `steering_messages` and `follow_up_messages` on your hooks and read from wherever new input arrives:
+Use `AgentMessageQueue` when the host calls the loop directly. Retain a clone wherever new input arrives and drain it from the hooks:
 
 ```rust
-use std::sync::Mutex;
-
-use agent::{AgentMessage, LoopHooks};
+use agent::{AgentMessage, AgentMessageQueue, LoopHooks, QueueMode, UserMessage};
 use async_trait::async_trait;
 
 struct Inbox {
-    steering: Mutex<Vec<AgentMessage>>,
+    steering: AgentMessageQueue,
 }
 
 #[async_trait]
 impl LoopHooks for Inbox {
     async fn steering_messages(&self) -> Vec<AgentMessage> {
-        std::mem::take(&mut *self.steering.lock().unwrap())
+        self.steering.drain()
     }
 }
+
+let steering = AgentMessageQueue::new(QueueMode::All);
+let hooks = Inbox { steering: steering.clone() };
+steering.push(AgentMessage::User(UserMessage::text("change direction")));
 ```
 
 See [Hooks](hooks.md#queues) for when each is polled.

@@ -112,6 +112,8 @@ pub struct RunningJob {
     pub bot_id: String,
     /// Set when the turn is a run of a routine.
     pub routine_id: Option<String>,
+    /// The other Runner executing this job, when this Device sent it there.
+    pub runner_id: Option<String>,
     pub cancel: CancellationToken,
 }
 
@@ -138,6 +140,9 @@ pub struct App {
     pub accepting: Mutex<Option<CancellationToken>>,
     /// By job id.
     pub running_jobs: Mutex<HashMap<String, RunningJob>>,
+    /// The direct-chat agent loop that currently owns each chat lock: `(job id, queue)`.
+    #[cfg(feature = "runner")]
+    pub steering_queues: Mutex<HashMap<String, (String, lorca_agent::AgentMessageQueue)>>,
     pub chat_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// The chat on screen in the local app while it is frontmost; a reply there needs no push.
     pub watched_chat: Mutex<Option<String>>,
@@ -193,6 +198,8 @@ impl App {
             pairings: Mutex::new(HashMap::new()),
             accepting: Mutex::new(None),
             running_jobs: Mutex::new(HashMap::new()),
+            #[cfg(feature = "runner")]
+            steering_queues: Mutex::new(HashMap::new()),
             chat_locks: Mutex::new(HashMap::new()),
             watched_chat: Mutex::new(None),
             pending_results: Mutex::new(HashMap::new()),
@@ -388,6 +395,8 @@ impl App {
         for job in self.running_jobs.lock().unwrap().values() {
             job.cancel.cancel();
         }
+        #[cfg(feature = "runner")]
+        self.steering_queues.lock().unwrap().clear();
         *self.identity.lock().unwrap() = None;
         *self.machine.lock().unwrap() = None;
         *self.credentials.lock().unwrap() = Credentials::default();
@@ -1072,13 +1081,77 @@ impl App {
 
     // MARK: - Jobs
 
-    pub fn cancel_chat(&self, chat_id: &str) {
+    /// Cancels every active or waiting job in a chat and returns the jobs this Device sent to
+    /// another Runner, so the caller can forward the cancellation there too.
+    pub fn cancel_chat(&self, chat_id: &str) -> Vec<(String, String)> {
         let jobs = self.running_jobs.lock().unwrap();
-        for job in jobs.values() {
+        let mut remote = Vec::new();
+        for (id, job) in jobs.iter() {
             if job.chat_id == chat_id {
                 job.cancel.cancel();
+                if let Some(runner_id) = &job.runner_id {
+                    remote.push((id.clone(), runner_id.clone()));
+                }
             }
         }
+        remote
+    }
+
+    /// Cancels one job on this Runner. A cancellation envelope can arrive while the job is
+    /// waiting for the chat lock because jobs register before they begin.
+    pub fn cancel_job(&self, job_id: &str) {
+        if let Some(job) = self.running_jobs.lock().unwrap().get(job_id) {
+            job.cancel.cancel();
+        }
+    }
+
+    /// Marks a user message as consumed by the turn that was already running. Returns false
+    /// when another active turn claimed it first.
+    pub fn claim_steering_message(&self, chat_id: &str, message_id: &str) -> bool {
+        let promoted = {
+            let mut state = self.state.lock().unwrap();
+            state
+                .chats
+                .iter_mut()
+                .find(|chat| chat.meta.id == chat_id)
+                .and_then(|chat| chat.messages.iter_mut().find(|message| message.id == message_id))
+                .and_then(|message| {
+                    if message.promoted_at.is_some() {
+                        return None;
+                    }
+                    message.promoted_at = Some(config::now_secs());
+                    Some(message.clone())
+                })
+        };
+        let Some(message) = promoted else { return false };
+        self.save_state();
+        self.push_chat_op(&ChatBlob::Upsert { message });
+        true
+    }
+
+    /// A replacement user job calls this after it reaches the chat lock. True means an older
+    /// turn already handled the message, so this job is only the durable wake-up and may exit.
+    /// `promoted_at` preserves that decision across a process restart.
+    pub fn take_steering_message(&self, chat_id: &str, message_id: &str) -> bool {
+        self.message(chat_id, message_id).is_some_and(|message| message.promoted_at.is_some())
+    }
+
+    #[cfg(feature = "runner")]
+    pub fn register_steering_queue(&self, chat_id: &str, job_id: &str, queue: lorca_agent::AgentMessageQueue) {
+        self.steering_queues.lock().unwrap().insert(chat_id.to_string(), (job_id.to_string(), queue));
+    }
+
+    #[cfg(feature = "runner")]
+    pub fn unregister_steering_queue(&self, chat_id: &str, job_id: &str) {
+        let mut queues = self.steering_queues.lock().unwrap();
+        if queues.get(chat_id).is_some_and(|(active, _)| active == job_id) {
+            queues.remove(chat_id);
+        }
+    }
+
+    #[cfg(feature = "runner")]
+    pub fn steering_queue(&self, chat_id: &str) -> Option<lorca_agent::AgentMessageQueue> {
+        self.steering_queues.lock().unwrap().get(chat_id).map(|(_, queue)| queue.clone())
     }
 
     // MARK: - Snapshot

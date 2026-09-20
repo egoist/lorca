@@ -232,7 +232,9 @@ final class ComposerView: NSView {
         stopButton = ComposerButton(
             symbol: "stop.fill", pointSize: 11, weight: .bold, tooltip: L("Stop responding (⌘.)"),
             target: nil, action: #selector(stop))
-        trailing = Build.stack([voiceButton, sendButton, stopButton], orientation: .horizontal, spacing: 4)
+        // Send stays at the trailing edge when a draft steers work in progress; Stop sits just
+        // before it as the separate hard-cancel action.
+        trailing = Build.stack([voiceButton, stopButton, sendButton], orientation: .horizontal, spacing: 4)
 
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
@@ -704,9 +706,11 @@ final class ComposerView: NSView {
 
     private func updateButtons() {
         let listening = dictation.isListening
-        // While recording, Send stays: it commits the words and sends them.
-        sendButton.isHidden = isResponding || (!hasContent && !listening)
+        // While recording, Send commits the words. While a turn runs, another message steers
+        // it, so Send remains available beside the separate hard Stop control.
+        sendButton.isHidden = !hasContent && !listening
         stopButton.isHidden = !isResponding
+        stopButton.style = sendButton.isHidden ? .primary : .secondary
         voiceButton.isHidden = listening
         // Dictation is the primary action only while nothing else is.
         voiceButton.style = sendButton.isHidden && stopButton.isHidden ? .primary : .plain

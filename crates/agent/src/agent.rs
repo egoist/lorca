@@ -41,9 +41,45 @@ impl PendingQueue {
     }
 }
 
+/// A thread-safe queue the low-level agent loop's host can use for steering or follow-ups.
+/// [`Agent`] uses the same type internally; hosts that call `run_agent_loop*` directly can
+/// retain a clone and drain it from their [`LoopHooks`] implementation.
+#[derive(Clone)]
+pub struct AgentMessageQueue {
+    inner: Arc<Mutex<PendingQueue>>,
+}
+
+impl AgentMessageQueue {
+    pub fn new(mode: QueueMode) -> Self {
+        AgentMessageQueue {
+            inner: Arc::new(Mutex::new(PendingQueue { mode, messages: VecDeque::new() })),
+        }
+    }
+
+    pub fn push(&self, message: AgentMessage) {
+        self.inner.lock().unwrap().messages.push_back(message);
+    }
+
+    pub fn drain(&self) -> Vec<AgentMessage> {
+        self.inner.lock().unwrap().drain()
+    }
+
+    pub fn clear(&self) {
+        self.inner.lock().unwrap().messages.clear();
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.inner.lock().unwrap().messages.is_empty()
+    }
+
+    pub fn set_mode(&self, mode: QueueMode) {
+        self.inner.lock().unwrap().mode = mode;
+    }
+}
+
 struct Queues {
-    steering: Mutex<PendingQueue>,
-    follow_up: Mutex<PendingQueue>,
+    steering: AgentMessageQueue,
+    follow_up: AgentMessageQueue,
 }
 
 /// Cheap handle for steering, follow-ups, and aborting from other tasks.
@@ -56,20 +92,20 @@ pub struct AgentHandle {
 impl AgentHandle {
     /// Queue a message to inject after the current assistant turn finishes its tool calls.
     pub fn steer(&self, message: AgentMessage) {
-        self.queues.steering.lock().unwrap().messages.push_back(message);
+        self.queues.steering.push(message);
     }
 
     /// Queue a message to run only after the agent would otherwise stop.
     pub fn follow_up(&self, message: AgentMessage) {
-        self.queues.follow_up.lock().unwrap().messages.push_back(message);
+        self.queues.follow_up.push(message);
     }
 
     pub fn clear_steering_queue(&self) {
-        self.queues.steering.lock().unwrap().messages.clear();
+        self.queues.steering.clear();
     }
 
     pub fn clear_follow_up_queue(&self) {
-        self.queues.follow_up.lock().unwrap().messages.clear();
+        self.queues.follow_up.clear();
     }
 
     pub fn clear_all_queues(&self) {
@@ -78,8 +114,7 @@ impl AgentHandle {
     }
 
     pub fn has_queued_messages(&self) -> bool {
-        !self.queues.steering.lock().unwrap().messages.is_empty()
-            || !self.queues.follow_up.lock().unwrap().messages.is_empty()
+        !self.queues.steering.is_empty() || !self.queues.follow_up.is_empty()
     }
 
     /// Abort the current run, if one is active.
@@ -116,11 +151,11 @@ impl LoopHooks for AgentHooks {
         if self.skip_initial_steering_poll.swap(false, Ordering::SeqCst) {
             return Vec::new();
         }
-        self.queues.steering.lock().unwrap().drain()
+        self.queues.steering.drain()
     }
 
     async fn follow_up_messages(&self) -> Vec<AgentMessage> {
-        self.queues.follow_up.lock().unwrap().drain()
+        self.queues.follow_up.drain()
     }
 
     async fn before_tool_call(&self, ctx: BeforeToolCallContext<'_>) -> Option<BeforeToolCallResult> {
@@ -212,8 +247,8 @@ impl Agent {
             request: options.request,
             hooks: options.hooks,
             queues: Arc::new(Queues {
-                steering: Mutex::new(PendingQueue { mode: options.steering_mode, messages: VecDeque::new() }),
-                follow_up: Mutex::new(PendingQueue { mode: options.follow_up_mode, messages: VecDeque::new() }),
+                steering: AgentMessageQueue::new(options.steering_mode),
+                follow_up: AgentMessageQueue::new(options.follow_up_mode),
             }),
             active: Arc::new(Mutex::new(None)),
             streaming_message: None,
@@ -243,11 +278,11 @@ impl Agent {
     }
 
     pub fn set_steering_mode(&self, mode: QueueMode) {
-        self.queues.steering.lock().unwrap().mode = mode;
+        self.queues.steering.set_mode(mode);
     }
 
     pub fn set_follow_up_mode(&self, mode: QueueMode) {
-        self.queues.follow_up.lock().unwrap().mode = mode;
+        self.queues.follow_up.set_mode(mode);
     }
 
     /// Clear transcript, runtime state, and queued messages.
@@ -280,11 +315,11 @@ impl Agent {
         }
         let Some(last) = self.messages.last() else { return Err(AgentError::NoMessages) };
         if last.is_assistant() {
-            let steering = self.queues.steering.lock().unwrap().drain();
+            let steering = self.queues.steering.drain();
             if !steering.is_empty() {
                 return self.run(Some(steering), true, events).await;
             }
-            let follow_ups = self.queues.follow_up.lock().unwrap().drain();
+            let follow_ups = self.queues.follow_up.drain();
             if !follow_ups.is_empty() {
                 return self.run(Some(follow_ups), false, events).await;
             }
@@ -534,6 +569,18 @@ mod tests {
         ) -> Result<ToolResult, ToolError> {
             Ok(ToolResult::text(args["text"].as_str().unwrap_or("").to_string()))
         }
+    }
+
+    #[test]
+    fn public_message_queue_uses_the_selected_drain_mode() {
+        let queue = AgentMessageQueue::new(QueueMode::OneAtATime);
+        queue.push(AgentMessage::User(UserMessage::text("one")));
+        queue.push(AgentMessage::User(UserMessage::text("two")));
+        assert_eq!(queue.drain().len(), 1);
+        queue.set_mode(QueueMode::All);
+        queue.push(AgentMessage::User(UserMessage::text("three")));
+        assert_eq!(queue.drain().len(), 2);
+        assert!(queue.is_empty());
     }
 
     #[tokio::test]

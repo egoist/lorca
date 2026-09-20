@@ -3,8 +3,9 @@
 // inside its right edge a disc is Dictate while the field is empty and Send once there is
 // something to send; between them a multiline input grows to five lines. Focus, text, or
 // attached files expand the pill: the text takes its own row above the discs, and chips wrap
-// above the text. @-mention chips in a group. There is no Stop, as in Grok Bot: a turn runs to its end. Where liquid glass
-// is not available (older iOS, Android) the pill is a plain filled field.
+// above the text. @-mention chips in a group. There is no hard Stop on the phone; sending a
+// message while a turn runs steers it. Where liquid glass is not available (older iOS, Android)
+// the pill is a plain filled field.
 
 import { Button as MenuButton, Host, Image as MenuImage, Menu, type ButtonProps } from "@expo/ui/swift-ui";
 import { background, frame, shapes } from "@expo/ui/swift-ui/modifiers";

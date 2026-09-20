@@ -7,6 +7,8 @@ final class ReplyEngine {
     private unowned let store: AppStore
     private var tasks: [Chat.ID: Task<Void, Never>] = [:]
     private var working: [Chat.ID: Bot.ID] = [:]
+    /// Messages typed during a mock turn, promoted together at its next tool/answer boundary.
+    private var steering: [Chat.ID: [(prompt: String, chat: Chat)]] = [:]
     private var turnCount = 0
 
     init(store: AppStore) {
@@ -20,6 +22,7 @@ final class ReplyEngine {
     func cancel(chatID: Chat.ID) {
         tasks[chatID]?.cancel()
         tasks[chatID] = nil
+        steering[chatID] = nil
         setWorking(nil, in: chatID)
     }
 
@@ -32,19 +35,38 @@ final class ReplyEngine {
     }
 
     func respond(to prompt: String, in chat: Chat) {
-        cancel(chatID: chat.id)
+        if tasks[chat.id] != nil {
+            steering[chat.id, default: []].append((prompt, chat))
+            return
+        }
+        start(prompt: prompt, chat: chat)
+    }
+
+    private func start(prompt: String, chat: Chat) {
         let script = makeScript(prompt: prompt, chat: chat)
         guard !script.isEmpty else { return }
 
         turnCount += 1
         let chatID = chat.id
         tasks[chatID] = Task { [weak self] in
-            for step in script {
+            guard let self else { return }
+            var steps = script
+            while !steps.isEmpty {
                 if Task.isCancelled { break }
-                await self?.run(step, in: chatID)
+                let step = steps.removeFirst()
+                await run(step, in: chatID)
+                if step.isSteeringBoundary, let steered = takeSteering(in: chatID) {
+                    turnCount += 1
+                    steps = makeScript(prompt: steered.prompt, chat: steered.chat)
+                }
             }
-            self?.finish(chatID: chatID)
+            finish(chatID: chatID)
         }
+    }
+
+    private func takeSteering(in chatID: Chat.ID) -> (prompt: String, chat: Chat)? {
+        guard let queued = steering.removeValue(forKey: chatID), let last = queued.last else { return nil }
+        return (queued.map(\.prompt).joined(separator: "\n"), last.chat)
     }
 
     private func finish(chatID: Chat.ID) {
@@ -59,6 +81,13 @@ final class ReplyEngine {
         case say(Bot.ID, String)
         case tool(Bot.ID, ToolInvocation, seconds: Double)
         case handoff(from: Bot.ID, to: Bot.ID, reason: String)
+
+        var isSteeringBoundary: Bool {
+            switch self {
+            case .think: false
+            case .say, .tool, .handoff: true
+            }
+        }
     }
 
     private func run(_ step: Step, in chatID: Chat.ID) async {

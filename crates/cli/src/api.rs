@@ -235,7 +235,7 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             Ok(json!({ "path": path }))
         }
         "chats.stop" => {
-            app.cancel_chat(&string(&params, "chat_id")?);
+            runtime::cancel_chat(app, &string(&params, "chat_id")?);
             Ok(Value::Null)
         }
         #[cfg(feature = "runner")]

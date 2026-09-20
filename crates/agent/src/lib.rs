@@ -26,7 +26,7 @@ pub mod tools;
 pub mod transform;
 pub mod types;
 
-pub use agent::{Agent, AgentError, AgentHandle, AgentOptions, QueueMode};
+pub use agent::{Agent, AgentError, AgentHandle, AgentMessageQueue, AgentOptions, QueueMode};
 pub use agent_loop::{
     agent_loop, run_agent_loop, run_agent_loop_continue, AfterToolCallContext, AfterToolCallResult,
     AgentContext, AgentLoopConfig, BeforeToolCallContext, BeforeToolCallResult, EventSink, LoopHooks, NoHooks,

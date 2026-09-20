@@ -260,6 +260,10 @@ pub struct Message {
     pub state: MessageState,
     /// Unix seconds.
     pub created_at: f64,
+    /// A user message typed during a turn becomes model-visible at the next safe boundary.
+    /// The apps keep showing when it was typed; transcript rebuilding uses this later time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub promoted_at: Option<f64>,
 }
 
 /// How much of a tool call's detail the apps get: enough for the "Messaged ◉ X" marker.
@@ -291,6 +295,7 @@ impl Message {
             body,
             state: MessageState::Complete,
             created_at: crate::config::now_secs(),
+            promoted_at: None,
         }
     }
 
@@ -528,6 +533,14 @@ pub struct JobResult {
     pub bot_id: String,
     /// `sent`, `pass`, or `error`.
     pub outcome: String,
+}
+
+/// `kind = job_cancel`, sealed to the Runner's box key: the hard Stop control reaches a job
+/// that another Device dispatched there. The job registers before waiting for its chat lock,
+/// so Stop also removes admitted work that has not begun yet.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct JobCancel {
+    pub job_id: String,
 }
 
 /// `kind = request`: a question for one Runner from another Device, sealed to the Runner's box

@@ -14,7 +14,7 @@ const BULK_BLOBS: usize = 20;
 
 /// What a pull takes. `file` blobs are left out: a transcript fetches them by id when it
 /// needs them, so a photo sent to one bot is not downloaded by every Device.
-pub const POLL_KINDS: &str = "roster,chat,machine,credentials,job,job_result,request,response";
+pub const POLL_KINDS: &str = "roster,chat,machine,credentials,job,job_cancel,job_result,request,response";
 
 pub async fn run(app: Arc<App>) {
     let mut failures: u32 = 0;
@@ -403,6 +403,18 @@ fn apply_blob_contents(app: &Arc<App>, machine_file: &crate::keys::MachineFile, 
                 Err(error) => tracing::warn!(%error, "job envelope"),
             }
         }
+        "job_cancel" => {
+            let Ok(machine) = machine_file.machine() else { return };
+            match crate::crypto::unseal_json::<JobCancel>(&machine.box_secret, &ciphertext) {
+                Ok(cancel) => {
+                    app.cancel_job(&cancel.job_id);
+                    let app = app.clone();
+                    let blob_id = blob.id.clone();
+                    tokio::spawn(async move { delete_remote_blob(&app, &blob_id).await });
+                }
+                Err(error) => tracing::warn!(%error, "job cancellation envelope"),
+            }
+        }
         "job_result" => {
             let Ok(machine) = machine_file.machine() else { return };
             match crate::crypto::unseal_json::<JobResult>(&machine.box_secret, &ciphertext) {
@@ -461,6 +473,9 @@ fn apply_roster(app: &Arc<App>, mut roster: RosterBlob) {
 fn apply_chat_op(app: &Arc<App>, op: ChatBlob) {
     match op {
         ChatBlob::Upsert { message } => {
+            #[cfg(feature = "runner")]
+            let steering = (message.author == Author::You && app.message(&message.chat_id, &message.id).is_none())
+                .then(|| message.clone());
             let may_restore_command = matches!(&message.body, Body::Permission { .. });
             {
                 let mut state = app.state.lock().unwrap();
@@ -477,6 +492,10 @@ fn apply_chat_op(app: &Arc<App>, op: ChatBlob) {
             }
             // The cycle saves state once after the page.
             app.upsert_message(message, false);
+            #[cfg(feature = "runner")]
+            if let Some(message) = steering {
+                crate::turns::steer_message(app, &message);
+            }
             if may_restore_command {
                 let restored = {
                     let mut state = app.state.lock().unwrap();

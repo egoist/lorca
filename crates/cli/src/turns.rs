@@ -16,8 +16,8 @@ use lorca_agent::provider::{is_server_tool, AssistantEvent, WEB_FETCH_TOOL};
 use lorca_agent::retry::{is_context_overflow, RetryPolicy};
 use lorca_agent::{LlmMessage, Provider};
 use lorca_agent::{
-    AgentEvent, AgentMessage, AssistantMessage, AssistantPart, ContentPart, StopReason, Tool, ToolCall, ToolError,
-    ToolResult, ToolResultMessage, ToolUpdateFn, UserMessage,
+    AgentEvent, AgentMessage, AgentMessageQueue, AssistantMessage, AssistantPart, ContentPart, QueueMode,
+    StopReason, Tool, ToolCall, ToolError, ToolResult, ToolResultMessage, ToolUpdateFn, UserMessage,
 };
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -134,6 +134,23 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
             Err(error) => tracing::warn!(%error, "compacting before the turn"),
         }
     }
+    // If this job waited behind an older turn, its initial transcript may already include
+    // later user messages. It answers them in this run; their own admitted jobs become no-ops
+    // when they reach the chat lock.
+    let mut claimed_initial_steering = false;
+    if !chat.meta.is_group() && !job.trigger_message_id.is_empty() {
+        if let Some(trigger) = chat.messages.iter().position(|message| message.id == job.trigger_message_id) {
+            for message in &chat.messages[trigger + 1..] {
+                if message.author == Author::You && message.is_complete() {
+                    claimed_initial_steering |= app.claim_steering_message(&chat.meta.id, &message.id);
+                }
+            }
+        }
+    }
+    if claimed_initial_steering {
+        chat = app.chat(&job.chat_id).unwrap_or(chat);
+        messages = transcript_for(app, &chat, &bot, &workdir);
+    }
     if job.kind == "room_turn" {
         messages.push(AgentMessage::User(UserMessage::text(room_turn_cue(&chat, &bot, job))));
     } else if messages.last().map(AgentMessage::is_assistant).unwrap_or(true) {
@@ -173,6 +190,7 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
         shown_len: 0,
         last_flush: std::time::Instant::now(),
     })));
+    let steering = (!chat.meta.is_group()).then(|| AgentMessageQueue::new(QueueMode::All));
     let hooks = Arc::new(TurnHooks {
         app: app.clone(),
         chat_id: chat.meta.id.clone(),
@@ -183,6 +201,7 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
         workdir: workdir.clone(),
         unattended,
         plugin_tools: plugin_tools.clone(),
+        steering: steering.clone(),
     });
     let config = AgentLoopConfig {
         provider: provider.clone(),
@@ -196,6 +215,9 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
     // Events reach the transcript through the sink, in order with the tools' own writes.
     let (tx, _rx) = mpsc::channel::<AgentEvent>(1);
     drop(_rx);
+    if let Some(queue) = &steering {
+        app.register_steering_queue(&chat.meta.id, &job.id, queue.clone());
+    }
     let mut failed = false;
     let mut recovered = false;
     loop {
@@ -241,6 +263,9 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
             }
         }
         break;
+    }
+    if steering.is_some() {
+        app.unregister_steering_queue(&chat.meta.id, &job.id);
     }
     let mut state = sink.0.lock().unwrap();
     state.finish();
@@ -322,6 +347,9 @@ struct TurnHooks {
     workdir: std::path::PathBuf,
     unattended: bool,
     plugin_tools: Arc<crate::plugins::mcp::TurnTools>,
+    /// Direct chats drain this queue at the agent loop's safe steering boundaries. Group rooms
+    /// steer by yielding between member jobs so a new mention can reorder the replacement room.
+    steering: Option<AgentMessageQueue>,
 }
 
 /// How the model sees a transcript that may open with a compaction summary.
@@ -333,6 +361,79 @@ fn convert_with_compaction(messages: &[AgentMessage]) -> Vec<LlmMessage> {
             other => other.as_llm(),
         })
         .collect()
+}
+
+/// One newly arrived user message in the shape the active agent loop accepts at a steering
+/// boundary. Its chat row already exists; the loop event is context-only and does not add it
+/// to the transcript a second time.
+fn steering_message(
+    app: &App,
+    message: &Message,
+    workdir: &std::path::Path,
+    pixels: bool,
+) -> Option<AgentMessage> {
+    let (Author::You, Body::Text { text, attachments }) = (&message.author, &message.body) else { return None };
+    let timestamp = (message.promoted_at.unwrap_or(message.created_at) * 1000.0) as u64;
+    if attachments.is_empty() {
+        return Some(user(text, timestamp));
+    }
+    let mut content = Vec::new();
+    if !text.is_empty() {
+        content.push(ContentPart::text(text));
+    }
+    for attachment in attachments {
+        content.extend(crate::files::content_parts(app, attachment, workdir, pixels));
+    }
+    Some(AgentMessage::User(UserMessage { content, timestamp }))
+}
+
+const STEERING_MESSAGE_KIND: &str = "lorca_steering";
+
+/// Offers a durable Lorca user message to the direct-chat loop that currently owns the lock.
+/// The separately admitted Job remains the fallback when there is no active queue or this
+/// message arrives after the loop's final steering poll.
+pub(crate) fn steer_message(app: &App, message: &Message) -> bool {
+    if message.author != Author::You || !message.is_complete() {
+        return false;
+    }
+    let Some(queue) = app.steering_queue(&message.chat_id) else { return false };
+    let Ok(data) = serde_json::to_value(message) else { return false };
+    queue.push(AgentMessage::Custom {
+        kind: STEERING_MESSAGE_KIND.into(),
+        data,
+        timestamp: (message.created_at * 1000.0) as u64,
+    });
+    true
+}
+
+async fn materialize_steering_messages(
+    app: &Arc<App>,
+    bot: &Bot,
+    workdir: &std::path::Path,
+    messages: Vec<AgentMessage>,
+) -> Vec<AgentMessage> {
+    let pixels = providers::supports_vision(&bot.provider, bot.model.as_deref());
+    let mut out = Vec::with_capacity(messages.len());
+    for message in messages {
+        let AgentMessage::Custom { kind, data, .. } = &message else {
+            out.push(message);
+            continue;
+        };
+        if kind != STEERING_MESSAGE_KIND {
+            out.push(message);
+            continue;
+        }
+        let Ok(chat_message) = serde_json::from_value::<Message>(data.clone()) else { continue };
+        let attachments = match &chat_message.body {
+            Body::Text { attachments, .. } => attachments.as_slice(),
+            _ => &[],
+        };
+        crate::files::prefetch(app, attachments).await;
+        if let Some(message) = steering_message(app, &chat_message, workdir, pixels) {
+            out.push(message);
+        }
+    }
+    out
 }
 
 /// Hooks for a housekeeping run that must not compact or steer: the memory flush.
@@ -347,8 +448,16 @@ impl LoopHooks for QuietHooks {
 
 #[async_trait]
 impl LoopHooks for TurnHooks {
+    async fn transform_context(&self, messages: Vec<AgentMessage>, _cancel: &CancellationToken) -> Vec<AgentMessage> {
+        materialize_steering_messages(&self.app, &self.bot, &self.workdir, messages).await
+    }
+
     fn convert_to_llm(&self, messages: &[AgentMessage]) -> Vec<LlmMessage> {
         convert_with_compaction(messages)
+    }
+
+    async fn steering_messages(&self) -> Vec<AgentMessage> {
+        self.steering.as_ref().map(AgentMessageQueue::drain).unwrap_or_default()
     }
 
     async fn before_tool_call(&self, ctx: BeforeToolCallContext<'_>) -> Option<BeforeToolCallResult> {
@@ -365,8 +474,9 @@ impl LoopHooks for TurnHooks {
 
     async fn prepare_next_turn(&self, ctx: PrepareNextTurnContext<'_>) -> Option<TurnUpdate> {
         let mut context = ctx.context.clone();
+        context.messages = materialize_steering_messages(&self.app, &self.bot, &self.workdir, context.messages).await;
         context.tools = self.plugin_tools.tools_with_selected(&context.tools);
-        let tools_changed = context.tools.len() != ctx.context.tools.len();
+        let context_changed = context.messages != ctx.context.messages || context.tools.len() != ctx.context.tools.len();
 
         if self.window > 0 && self.settings.enabled {
             let size = estimate_context_tokens(&context.messages).tokens + estimate_text_tokens(&context.system_prompt);
@@ -384,7 +494,7 @@ impl LoopHooks for TurnHooks {
             }
         }
 
-        tools_changed.then_some(TurnUpdate { context: Some(context), provider: None })
+        context_changed.then_some(TurnUpdate { context: Some(context), provider: None })
     }
 }
 
@@ -418,7 +528,18 @@ async fn compact_messages(
     // turn the time it was made, and the chat rows follow the same order.
     let covered_until = messages[..first_kept].iter().map(AgentMessage::timestamp).max().unwrap_or(0);
     if let Some(chat) = app.chat(chat_id) {
-        let after = chat.messages.iter().rev().find(|m| (m.created_at * 1000.0) as u64 <= covered_until).map(|m| m.id.clone());
+        let after = chat
+            .messages
+            .iter()
+            .filter(|message| {
+                (message.promoted_at.unwrap_or(message.created_at) * 1000.0) as u64 <= covered_until
+            })
+            .max_by(|a, b| {
+                a.promoted_at
+                    .unwrap_or(a.created_at)
+                    .total_cmp(&b.promoted_at.unwrap_or(b.created_at))
+            })
+            .map(|message| message.id.clone());
         if let Some(after_message_id) = after {
             app.set_compaction(
                 chat_id,
@@ -669,6 +790,13 @@ fn chunk_boundary(text: &str, shown_len: usize, since_flush: std::time::Duration
 impl TurnState {
     fn handle(&mut self, event: AgentEvent) {
         match event {
+            AgentEvent::MessageEnd {
+                message: AgentMessage::Custom { kind, data, .. },
+            } if kind == STEERING_MESSAGE_KIND => {
+                if let Ok(message) = serde_json::from_value::<Message>(data) {
+                    self.app.claim_steering_message(&message.chat_id, &message.id);
+                }
+            }
             // Replies arrive in chunks, not tokens (after Grok Bot, whose server re-sends the
             // whole message as it grows): the reply so far is shown at paragraph boundaries, or
             // at a sentence boundary once a while has passed, never mid-word. A turn that ends
@@ -1198,14 +1326,21 @@ pub fn transcript_for(app: &App, chat: &Chat, bot: &Bot, workdir: &std::path::Pa
 
 /// Messages the bot's compaction summary does not cover yet.
 fn uncovered_count(chat: &Chat, bot: &Bot) -> usize {
+    let mut ordered: Vec<(usize, &Message)> = chat.messages.iter().enumerate().collect();
+    ordered.sort_by(|(a_index, a), (b_index, b)| {
+        a.promoted_at
+            .unwrap_or(a.created_at)
+            .total_cmp(&b.promoted_at.unwrap_or(b.created_at))
+            .then_with(|| a_index.cmp(b_index))
+    });
     let covered = chat
         .compactions
         .iter()
         .find(|c| c.bot_id == bot.id)
-        .and_then(|c| chat.messages.iter().position(|m| m.id == c.after_message_id))
+        .and_then(|c| ordered.iter().position(|(_, message)| message.id == c.after_message_id))
         .map(|index| index + 1)
         .unwrap_or(0);
-    chat.messages.len().saturating_sub(covered)
+    ordered.len().saturating_sub(covered)
 }
 
 /// `transcript_for` with the window of messages kept as they are made explicit: `None` is the
@@ -1213,25 +1348,32 @@ fn uncovered_count(chat: &Chat, bot: &Bot) -> usize {
 fn transcript_bounded(app: &App, chat: &Chat, bot: &Bot, workdir: &std::path::Path, max_messages: Option<usize>) -> Vec<AgentMessage> {
     let mut out = Vec::new();
     let pixels = providers::supports_vision(&bot.provider, bot.model.as_deref());
+    let mut ordered: Vec<(usize, &Message)> = chat.messages.iter().enumerate().collect();
+    ordered.sort_by(|(a_index, a), (b_index, b)| {
+        a.promoted_at
+            .unwrap_or(a.created_at)
+            .total_cmp(&b.promoted_at.unwrap_or(b.created_at))
+            .then_with(|| a_index.cmp(b_index))
+    });
     // A compaction summary stands in for everything up to its message; without one, a window
     // of recent messages.
     let compaction = chat.compactions.iter().find(|c| c.bot_id == bot.id);
-    let covered = compaction.and_then(|c| chat.messages.iter().position(|m| m.id == c.after_message_id));
+    let covered = compaction.and_then(|c| ordered.iter().position(|(_, message)| message.id == c.after_message_id));
     let start = match (compaction, covered) {
         (Some(c), Some(index)) => {
             out.push(compaction::summary_message(&c.summary, c.tokens_before));
             index + 1
         }
-        _ => max_messages.map(|max| chat.messages.len().saturating_sub(max)).unwrap_or(0),
+        _ => max_messages.map(|max| ordered.len().saturating_sub(max)).unwrap_or(0),
     };
-    for message in &chat.messages[start..] {
+    for (_, message) in &ordered[start..] {
         if !message.is_complete() {
             if let MessageState::Failed { .. } = message.state {
                 continue;
             }
             continue;
         }
-        let timestamp = (message.created_at * 1000.0) as u64;
+        let timestamp = (message.promoted_at.unwrap_or(message.created_at) * 1000.0) as u64;
         match (&message.author, &message.body) {
             (Author::You, Body::Text { text, attachments }) if attachments.is_empty() => out.push(user(text, timestamp)),
             (Author::You, Body::Text { text, attachments }) => {
@@ -2262,6 +2404,62 @@ mod tests {
         message.created_at = at;
         message.state = MessageState::Complete;
         message
+    }
+
+    #[tokio::test]
+    async fn a_new_user_message_joins_the_active_turn_as_steering() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        let chef = bot("b1", "Chef");
+        let mut dm = chat("chat", "dm", None, &["b1"]);
+        dm.messages.push(said("chat", Author::You, "run the checks", 1.0));
+        {
+            let mut state = app.state.lock().unwrap();
+            state.bots.push(chef.clone());
+            state.chats.push(dm);
+        }
+        let queue = AgentMessageQueue::new(QueueMode::All);
+        app.register_steering_queue("chat", "job", queue.clone());
+        let steer = said("chat", Author::You, "skip the slow suite", 2.0);
+        app.upsert_message(steer.clone(), false);
+
+        assert!(steer_message(app, &steer));
+        let queued = queue.drain();
+        assert_eq!(queued.len(), 1);
+        let messages = materialize_steering_messages(app, &chef, &scratch.1, queued).await;
+
+        assert_eq!(messages.len(), 1);
+        assert!(matches!(
+            &messages[0],
+            AgentMessage::User(message)
+                if message.content.first().and_then(ContentPart::as_text) == Some("skip the slow suite")
+        ));
+        app.claim_steering_message("chat", &steer.id);
+        assert!(app.message("chat", &steer.id).unwrap().promoted_at.is_some());
+        assert!(app.take_steering_message("chat", &steer.id), "the admitted replacement job becomes a no-op");
+        assert!(app.take_steering_message("chat", &steer.id), "the promotion survives a lost in-memory claim");
+    }
+
+    #[test]
+    fn rebuilt_context_keeps_a_promoted_steer_after_the_step_it_interrupted() {
+        let scratch = scratch_app();
+        let chef = bot("b1", "Chef");
+        let mut dm = chat("chat", "dm", None, &["b1"]);
+        dm.messages.push(said("chat", Author::You, "start", 1.0));
+        let mut steer = said("chat", Author::You, "change course", 2.0);
+        steer.promoted_at = Some(4.0);
+        dm.messages.push(steer);
+        dm.messages.push(said("chat", Author::Bot { bot_id: "b1".into() }, "old step settled", 3.0));
+        dm.messages.push(said("chat", Author::Bot { bot_id: "b1".into() }, "changed", 5.0));
+
+        let messages = transcript_for(&scratch.0, &dm, &chef, &scratch.1);
+
+        assert!(matches!(&messages[1], AgentMessage::Assistant(message) if message.text() == "old step settled"));
+        assert!(matches!(
+            &messages[2],
+            AgentMessage::User(message)
+                if message.content.first().and_then(ContentPart::as_text) == Some("change course")
+        ));
     }
 
     #[test]

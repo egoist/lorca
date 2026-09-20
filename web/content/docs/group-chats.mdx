@@ -21,7 +21,7 @@ When you post a message, each bot is offered a turn, one at a time:
 3. If anyone replied, another round starts, offered only to bots that have heard something new.
 4. The exchange ends after a round where nobody speaks, or after the fourth round.
 
-Your next message waits until the exchange ends. **Stop** ends it early.
+Another message steers the room. The bot currently taking its turn finishes that turn, including a running command; then the old exchange yields and a new one starts from your message. **Stop** interrupts immediately.
 
 <Callout title="Steer who answers">
   Mention a name to put that bot first. Mention `@everyone` to hear from all of them. With no mention, the bots decide among themselves who has something to say.

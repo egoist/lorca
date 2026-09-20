@@ -171,6 +171,8 @@ export interface Message {
   state: MessageState;
   /// Unix seconds.
   created_at: number;
+  /** Later model-context position when this message steered work already in flight. */
+  promoted_at?: number;
 }
 
 export function isComplete(message: Message): boolean {
