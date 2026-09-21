@@ -338,24 +338,54 @@ export default function ChatScreen() {
     anchorTarget.current = null;
     syncInsetTop();
   };
+  // Android lays the list out ahead of the events that report it: FlashList can grow the content
+  // above the last rows, which throws them far below the composer until the next pin, while the
+  // last scroll event JS saw still sits on the computed end. So before the list shows, the end
+  // of the content is measured on screen: a marker after the last row has to rest at the
+  // composer's space above the list's bottom edge, or higher.
+  const transcriptRef = useRef<View>(null);
+  const footRef = useRef<View>(null);
+  const foot = useMemo(
+    () => <View ref={footRef} collapsable={false} style={styles.foot} />,
+    [],
+  );
+  const verifyEndRef = useRef<(done: (atEnd: boolean) => void) => void>(() => {});
+  verifyEndRef.current = (done) => {
+    const list = transcriptRef.current;
+    const marker = footRef.current;
+    if (!list || !marker || endOffset() <= 0) return done(true);
+    list.measureInWindow((_x, top) => {
+      marker.measureInWindow((_mx, y) => {
+        done(y - top <= layoutHeight.current - composerBlank.value + 4);
+      });
+    });
+  };
+  const pinToBottomRef = useRef<() => void>(() => {});
+  const unconfirm = useCallback(() => {
+    confirmed.current = false;
+    if (revealTimer.current) clearTimeout(revealTimer.current);
+    revealTimer.current = null;
+  }, []);
   // Shows the list once it has been quiet for a few frames after a confirmed pin: FlashList
   // can re-lay the content out under an offset that was right an instant earlier.
   const scheduleReveal = useCallback(() => {
     if (revealTimer.current) clearTimeout(revealTimer.current);
     revealTimer.current = setTimeout(() => {
       revealTimer.current = null;
-      if (confirmed.current && loaded.current) setRevealed(true);
+      if (!confirmed.current || !loaded.current) return;
+      if (Platform.OS !== "android") return setRevealed(true);
+      verifyEndRef.current((atEnd) => {
+        if (!settling.current) return;
+        if (atEnd && confirmed.current) return setRevealed(true);
+        unconfirm();
+        pinToBottomRef.current();
+      });
     }, 50);
-  }, []);
+  }, [setRevealed, unconfirm]);
   const confirm = useCallback(() => {
     confirmed.current = true;
     scheduleReveal();
   }, [scheduleReveal]);
-  const unconfirm = useCallback(() => {
-    confirmed.current = false;
-    if (revealTimer.current) clearTimeout(revealTimer.current);
-    revealTimer.current = null;
-  }, []);
   const pinToBottom = useCallback(() => {
     if (!settling.current || pinQueued.current) return;
     pinQueued.current = true;
@@ -378,6 +408,7 @@ export default function ChatScreen() {
       listRef.current?.scrollToOffset({ offset, animated: false });
     });
   }, [confirm, endOffset, unconfirm]);
+  pinToBottomRef.current = pinToBottom;
   const stopSettling = useCallback(() => {
     settling.current = false;
     setSettled(true);
@@ -633,7 +664,7 @@ export default function ChatScreen() {
         </View>
       )}
       <View style={{ flex: 1 }}>
-        <Animated.View style={[styles.transcript, revealStyle]}>
+        <Animated.View ref={transcriptRef} style={[styles.transcript, revealStyle]}>
         <SoftScrollEdgeView
           style={styles.transcript}
           onLayout={(e) => {
@@ -687,6 +718,7 @@ export default function ChatScreen() {
             scrollEventThrottle={16}
             onScrollBeginDrag={stopSettling}
             renderItem={renderItem}
+            ListFooterComponent={Platform.OS === "android" ? foot : undefined}
           />
         </SoftScrollEdgeView>
         </Animated.View>
@@ -769,6 +801,7 @@ export default function ChatScreen() {
 
 const styles = StyleSheet.create({
   transcript: { flex: 1 },
+  foot: { height: 0 },
   missing: { flex: 1, alignItems: "center", justifyContent: "center" },
   androidHeader: { position: "absolute", top: 0, left: 0, right: 0, zIndex: 100 },
   androidHeaderControls: { flexDirection: "row", alignItems: "center", paddingHorizontal: 12 },
