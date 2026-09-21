@@ -2,7 +2,7 @@ import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useState } from "react";
 import { Alert, Pressable, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 import { chatTitle, engine } from "../../src/core/engine";
-import { isRunner, providerLabel, thinkingLabel, type Bot, type Routine } from "../../src/core/model";
+import { providerLabel, PROVIDER_KINDS, PROVIDER_MODELS, THINKING_LEVELS, thinkingLabel, type Bot, type Routine } from "../../src/core/model";
 import { deviceIsOnline, useBotMap, useChat, useRoutines, useStore, useWorkingBotIds } from "../../src/core/store";
 import { t } from "../../src/i18n";
 import { AvatarCluster, BotAvatar } from "../../src/ui/Avatar";
@@ -48,6 +48,14 @@ export default function ChatInfoScreen() {
     ]);
   }
   const runner = bot ? devices.find((d) => d.id === bot.runner_id) : undefined;
+  const providerModels = bot ? (PROVIDER_MODELS[bot.provider] ?? []) : [];
+  const thinkingLevels = bot ? (THINKING_LEVELS[bot.provider] ?? []) : [];
+  const defaultModel = providerModels[0]?.label;
+  const modelValue = bot?.model
+    ? providerModels.find((model) => model.id === bot.model)?.label ?? bot.model
+    : defaultModel
+      ? t("Default ({model})", { model: defaultModel })
+      : t("Default");
   const candidates = allBots.filter((b) => !chat.bot_ids.includes(b.id));
 
   function commitTitle() {
@@ -95,6 +103,65 @@ export default function ChatInfoScreen() {
         </Section>
       )}
 
+      {bot && (
+        <Section title={t("Runs with")}>
+          <Row
+            title={t("Provider")}
+            menu={{
+              title: t("Provider"),
+              value: providerLabel(bot.provider),
+              choices: PROVIDER_KINDS.map((kind) => ({
+                title: providerLabel(kind),
+                selected: kind === bot.provider,
+                onPress: () => {
+                  if (kind !== bot.provider) engine.setBotRuntime(bot.id, kind, undefined, undefined);
+                },
+              })),
+            }}
+          />
+          <Row
+            title={t("Model")}
+            menu={{
+              title: t("Model"),
+              value: modelValue,
+              choices: [
+                {
+                  title: defaultModel ? t("Default ({model})", { model: defaultModel }) : t("Default"),
+                  selected: !bot.model,
+                  onPress: () => engine.setBotRuntime(bot.id, bot.provider, undefined, bot.thinking),
+                  dividerAfter: true,
+                },
+                ...providerModels.map((model) => ({
+                  title: model.label,
+                  selected: bot.model === model.id,
+                  onPress: () => engine.setBotRuntime(bot.id, bot.provider, model.id, bot.thinking),
+                })),
+              ],
+            }}
+          />
+          <Row
+            title={t("Thinking")}
+            menu={{
+              title: t("Thinking"),
+              value: bot.thinking ? thinkingLabel(bot.thinking) : t("Default"),
+              choices: [
+                {
+                  title: t("Default"),
+                  selected: !bot.thinking,
+                  onPress: () => engine.setBotRuntime(bot.id, bot.provider, bot.model, undefined),
+                  dividerAfter: true,
+                },
+                ...thinkingLevels.map((level) => ({
+                  title: thinkingLabel(level),
+                  selected: bot.thinking === level,
+                  onPress: () => engine.setBotRuntime(bot.id, bot.provider, bot.model, level),
+                })),
+              ],
+            }}
+          />
+        </Section>
+      )}
+
       {bot && runner && (
         <Section title={t("Runs on")}>
           <Row
@@ -107,8 +174,6 @@ export default function ChatInfoScreen() {
               </View>
             }
           />
-          <Row title={t("Provider")} detail={`${providerLabel(bot.provider)}${bot.model ? ` · ${bot.model}` : ""}`} />
-          <Row title={t("Thinking")} detail={bot.thinking ? thinkingLabel(bot.thinking) : t("Default")} />
         </Section>
       )}
 

@@ -288,6 +288,53 @@ export function providerLabel(kind: string): string {
   return PROVIDER_LABELS[kind] ?? kind;
 }
 
+/** Models offered for each provider, in the same order as the desktop app. */
+export const PROVIDER_MODELS: Record<string, { id: string; label: string }[]> = {
+  deepseek: [
+    { id: "deepseek-flash", label: "V4.1 Flash" },
+    { id: "deepseek-v4-pro", label: "V4 Pro (reasoning)" },
+  ],
+  anthropic: [
+    { id: "claude-opus-5", label: "Opus 5" },
+    { id: "claude-sonnet-5", label: "Sonnet 5" },
+    { id: "claude-fable-5-1", label: "Fable 5.1" },
+    { id: "claude-opus-4-8", label: "Opus 4.8" },
+    { id: "claude-haiku-4-5", label: "Haiku 4.5" },
+  ],
+  opencode: [
+    { id: "deepseek-v4.1-flash", label: "DeepSeek V4.1 Flash" },
+    { id: "claude-sonnet-5", label: "Claude Sonnet 5" },
+    { id: "gpt-5.6-terra", label: "GPT-5.6 Terra" },
+    { id: "grok-4.6", label: "Grok 4.6" },
+    { id: "kimi-k3", label: "Kimi K3" },
+    { id: "big-pickle", label: "Big Pickle (free)" },
+  ],
+  "opencode-go": [
+    { id: "glm-5.3-flash", label: "GLM-5.3 Flash" },
+    { id: "deepseek-v4.1-flash", label: "DeepSeek V4.1 Flash" },
+    { id: "gpt-5.6-luna", label: "GPT-5.6 Luna" },
+    { id: "grok-4.6", label: "Grok 4.6" },
+    { id: "kimi-k3", label: "Kimi K3" },
+    { id: "qwen3.8-flash", label: "Qwen3.8 Flash" },
+    { id: "minimax-m3", label: "MiniMax M3" },
+  ],
+  chatgpt: [
+    { id: "gpt-5.6-terra", label: "GPT-5.6 Terra" },
+    { id: "gpt-6-astra", label: "GPT-6 Astra" },
+    { id: "gpt-5.6-sol", label: "GPT-5.6 Sol" },
+    { id: "gpt-5.6-luna", label: "GPT-5.6 Luna" },
+    { id: "gpt-5.5", label: "GPT-5.5" },
+    { id: "gpt-5.3-codex-spark", label: "Codex Spark (Pro)" },
+  ],
+  grok: [
+    { id: "grok-4.6", label: "Grok 4.6" },
+    { id: "grok-4.5", label: "Grok 4.5" },
+    { id: "grok-4.3", label: "Grok 4.3" },
+    { id: "grok-4.20-0309-reasoning", label: "Grok 4.20 Reasoning" },
+    { id: "grok-build-0.1", label: "Grok Build 0.1" },
+  ],
+};
+
 /** The thinking levels a provider's models take, lowest first. */
 export const THINKING_LEVELS: Record<string, string[]> = {
   deepseek: ["off", "low", "medium", "high", "xhigh", "max"],

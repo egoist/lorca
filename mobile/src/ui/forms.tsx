@@ -3,8 +3,8 @@
 
 import { Button as MenuButton, Divider, HStack, Host, Image as MenuImage, Menu, Text as MenuText } from "@expo/ui/swift-ui";
 import { foregroundStyle, frame, lineLimit, tint, truncationMode } from "@expo/ui/swift-ui/modifiers";
-import type { ReactNode } from "react";
-import { Alert, Platform, Pressable, StyleSheet, Switch, Text, TextInput, View, type StyleProp, type TextInputProps, type ViewStyle } from "react-native";
+import { useState, type ReactNode } from "react";
+import { Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View, type StyleProp, type TextInputProps, type ViewStyle } from "react-native";
 import { t } from "../i18n";
 import { Symbol } from "./Symbol";
 import { Font, usePalette } from "./theme";
@@ -39,18 +39,48 @@ export interface MenuChoice {
 /// A row's value that drops a native menu of choices on tap, as a pop-up button does in iOS
 /// Settings: the value with the up-down chevrons, a checkmark on the choice in force. It is a
 /// `Row`'s `menu`: the row keeps its title whole and the value takes what is left, cut at the
-/// tail when it is long. Android has no such menu and asks in an alert.
+/// tail when it is long. Android uses a scrollable modal with the same choices.
 function MenuAccessory({ value, title, choices }: { value: string; title: string; choices: MenuChoice[] }) {
   const p = usePalette();
+  const [open, setOpen] = useState(false);
   if (Platform.OS !== "ios") {
-    const ask = () =>
-      Alert.alert(title, undefined, [...choices.map((choice) => ({ text: choice.title, onPress: choice.onPress })), { text: t("Cancel"), style: "cancel" as const }]);
     return (
-      <Pressable onPress={ask} hitSlop={8} style={styles.menu}>
-        <Text style={[styles.rowDetail, { color: p.secondaryLabel, maxWidth: undefined, textAlign: "right" }]} numberOfLines={1}>
-          {value}
-        </Text>
-      </Pressable>
+      <>
+        <Pressable onPress={() => setOpen(true)} hitSlop={8} style={styles.menu}>
+          <Text style={[styles.rowDetail, { color: p.secondaryLabel, maxWidth: undefined, textAlign: "right" }]} numberOfLines={1}>
+            {value}
+          </Text>
+        </Pressable>
+        <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
+          <View style={styles.menuOverlay}>
+            <Pressable style={styles.menuBackdrop} onPress={() => setOpen(false)} />
+            <View style={[styles.menuDialog, { backgroundColor: p.cell }]}>
+              <Text style={[styles.menuTitle, { color: p.label }]}>{title}</Text>
+              <ScrollView style={styles.menuChoices}>
+                {choices.map((choice, index) => (
+                  <View key={`${choice.title}-${index}`}>
+                    {index > 0 && !choices[index - 1].dividerAfter ? <View style={[styles.menuChoiceSeparator, { backgroundColor: p.separator }]} /> : null}
+                    <Pressable
+                      onPress={() => {
+                        setOpen(false);
+                        choice.onPress();
+                      }}
+                      style={({ pressed }) => [styles.menuChoice, pressed && { backgroundColor: p.fill }]}
+                    >
+                      <Text style={[styles.rowTitle, { color: p.label, flex: 1 }]}>{choice.title}</Text>
+                      {choice.selected ? <Symbol name="checkmark" size={16} color={p.tint} weight="semibold" /> : null}
+                    </Pressable>
+                    {choice.dividerAfter ? <View style={[styles.menuDivider, { backgroundColor: p.groupedBackground }]} /> : null}
+                  </View>
+                ))}
+              </ScrollView>
+              <Pressable onPress={() => setOpen(false)} style={({ pressed }) => [styles.menuCancel, { borderTopColor: p.separator }, pressed && { backgroundColor: p.fill }]}>
+                <Text style={[styles.rowTitle, { color: p.tint, fontWeight: "600" }]}>{t("Cancel")}</Text>
+              </Pressable>
+            </View>
+          </View>
+        </Modal>
+      </>
     );
   }
   return (
@@ -182,6 +212,15 @@ const styles = StyleSheet.create({
   rowText: { flex: 1, gap: 2 },
   rowTextWhole: { flexShrink: 0, gap: 2 },
   menu: { flex: 1, minWidth: 0 },
+  menuOverlay: { flex: 1, justifyContent: "center", paddingHorizontal: 28 },
+  menuBackdrop: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0, backgroundColor: "rgba(0,0,0,0.35)" },
+  menuDialog: { borderRadius: 16, overflow: "hidden", maxHeight: "75%" },
+  menuTitle: { fontSize: Font.body, fontWeight: "700", paddingHorizontal: 16, paddingTop: 16, paddingBottom: 10 },
+  menuChoices: { flexShrink: 1 },
+  menuChoice: { minHeight: 48, paddingHorizontal: 16, paddingVertical: 12, flexDirection: "row", alignItems: "center", gap: 12 },
+  menuChoiceSeparator: { height: StyleSheet.hairlineWidth, marginLeft: 16 },
+  menuDivider: { height: 8 },
+  menuCancel: { minHeight: 48, borderTopWidth: StyleSheet.hairlineWidth, alignItems: "center", justifyContent: "center" },
   rowTitle: { fontSize: Font.body },
   rowSubtitle: { fontSize: Font.small },
   rowDetail: { fontSize: Font.body, maxWidth: "55%" },

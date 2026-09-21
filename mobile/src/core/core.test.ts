@@ -10,6 +10,7 @@ import {
   providerConnectMethod,
   providerDefaultBaseURL,
   providerUsesAPIKey,
+  PROVIDER_MODELS,
   recipientName,
   type Body,
   type Bot,
@@ -61,6 +62,7 @@ describe("model", () => {
     expect(providerConnectMethod("grok")).toBe("providers.connect_grok");
     expect(providerDefaultBaseURL("deepseek")).toBe("https://api.deepseek.com");
     expect(providerDefaultBaseURL("chatgpt")).toBe("");
+    expect(PROVIDER_MODELS.chatgpt.at(-1)).toEqual({ id: "gpt-5.3-codex-spark", label: "Codex Spark (Pro)" });
   });
 });
 

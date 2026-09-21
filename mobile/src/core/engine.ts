@@ -210,6 +210,19 @@ class Engine {
     void core.request("bots.update", { id, ...update });
   }
 
+  /// Provider, model, and thinking level a bot runs with. Missing model/thinking means the
+  /// provider default; empty strings on the wire clear a value the bot previously stored.
+  setBotRuntime(id: string, provider: string, model?: string, thinking?: string) {
+    const current = useStore.getState().bots.find((bot) => bot.id === id);
+    if (!current || (current.provider === provider && current.model === model && current.thinking === thinking)) return;
+    useStore.setState((s) => ({
+      bots: s.bots.map((bot) => (bot.id === id ? { ...bot, provider, model, thinking } : bot)),
+    }));
+    void core.request("bots.update", { id, provider, model: model ?? "", thinking: thinking ?? "" }).catch((error) => {
+      console.warn("updating bot runtime", error instanceof Error ? error.message : error);
+    });
+  }
+
   /// The bot's symbol and accent, the look under and behind its image.
   async setBotLook(id: string, look: { symbol_name?: string; accent?: string }): Promise<void> {
     await core.request("bots.update", { id, ...look });

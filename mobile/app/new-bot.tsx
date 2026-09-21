@@ -3,58 +3,13 @@ import { useMemo, useState } from "react";
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { engine } from "../src/core/engine";
-import { connectedProviders, isRunner, providerLabel, THINKING_LEVELS, thinkingLabel } from "../src/core/model";
+import { connectedProviders, isRunner, providerLabel, PROVIDER_MODELS, THINKING_LEVELS, thinkingLabel } from "../src/core/model";
 import { deviceIsOnline, useStore } from "../src/core/store";
 import { t } from "../src/i18n";
 import { CheckRow, FieldRow, Section } from "../src/ui/forms";
 import { BOT_SYMBOLS, Symbol } from "../src/ui/Symbol";
 import { ACCENTS, accentColors, usePalette } from "../src/ui/theme";
 import { deviceSymbol } from "../src/ui/devices";
-
-const MODELS: Record<string, { id: string; label: string }[]> = {
-  deepseek: [
-    { id: "deepseek-flash", label: "V4.1 Flash" },
-    { id: "deepseek-v4-pro", label: "V4 Pro (reasoning)" },
-  ],
-  anthropic: [
-    { id: "claude-opus-5", label: "Opus 5" },
-    { id: "claude-sonnet-5", label: "Sonnet 5" },
-    { id: "claude-fable-5-1", label: "Fable 5.1" },
-    { id: "claude-opus-4-8", label: "Opus 4.8" },
-    { id: "claude-haiku-4-5", label: "Haiku 4.5" },
-  ],
-  opencode: [
-    { id: "deepseek-v4.1-flash", label: "DeepSeek V4.1 Flash" },
-    { id: "claude-sonnet-5", label: "Claude Sonnet 5" },
-    { id: "gpt-5.6-terra", label: "GPT-5.6 Terra" },
-    { id: "grok-4.6", label: "Grok 4.6" },
-    { id: "kimi-k3", label: "Kimi K3" },
-    { id: "big-pickle", label: "Big Pickle (free)" },
-  ],
-  "opencode-go": [
-    { id: "glm-5.3-flash", label: "GLM-5.3 Flash" },
-    { id: "deepseek-v4.1-flash", label: "DeepSeek V4.1 Flash" },
-    { id: "gpt-5.6-luna", label: "GPT-5.6 Luna" },
-    { id: "grok-4.6", label: "Grok 4.6" },
-    { id: "kimi-k3", label: "Kimi K3" },
-    { id: "qwen3.8-flash", label: "Qwen3.8 Flash" },
-    { id: "minimax-m3", label: "MiniMax M3" },
-  ],
-  chatgpt: [
-    { id: "gpt-5.6-terra", label: "GPT-5.6 Terra" },
-    { id: "gpt-6-astra", label: "GPT-6 Astra" },
-    { id: "gpt-5.6-sol", label: "GPT-5.6 Sol" },
-    { id: "gpt-5.6-luna", label: "GPT-5.6 Luna" },
-    { id: "gpt-5.5", label: "GPT-5.5" },
-  ],
-  grok: [
-    { id: "grok-4.6", label: "Grok 4.6" },
-    { id: "grok-4.5", label: "Grok 4.5" },
-    { id: "grok-4.3", label: "Grok 4.3" },
-    { id: "grok-4.20-0309-reasoning", label: "Grok 4.20 Reasoning" },
-    { id: "grok-build-0.1", label: "Grok Build 0.1" },
-  ],
-};
 
 export default function NewBotScreen() {
   const router = useRouter();
@@ -147,10 +102,10 @@ export default function NewBotScreen() {
             ))}
           </Section>
         )}
-        {runner && MODELS[effectiveProvider] && (
+        {runner && PROVIDER_MODELS[effectiveProvider] && (
           <Section title={t("Model")}>
-            <CheckRow title={t("Default")} subtitle={MODELS[effectiveProvider][0].label} checked={!model} onPress={() => setModel(undefined)} />
-            {MODELS[effectiveProvider].slice(1).map((m) => (
+            <CheckRow title={t("Default")} subtitle={PROVIDER_MODELS[effectiveProvider][0].label} checked={!model} onPress={() => setModel(undefined)} />
+            {PROVIDER_MODELS[effectiveProvider].map((m) => (
               <CheckRow key={m.id} title={m.label} subtitle={m.id} checked={model === m.id} onPress={() => setModel(m.id)} />
             ))}
           </Section>
