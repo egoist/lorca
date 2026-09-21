@@ -115,6 +115,7 @@ impl FromRequestParts<AppState> for Auth {
             return Err(ApiError::gone("Machine was unpaired"));
         }
         if let Err(retry_after) = state.identity_limiter.check(&auth.identity_pubkey) {
+            crate::metrics::METRICS.rate_limited_identity.add(1);
             return Err(ApiError::too_many(retry_after));
         }
         Ok(auth)

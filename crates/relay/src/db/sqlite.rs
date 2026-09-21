@@ -11,7 +11,7 @@ use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, TransactionBehavior};
 use tokio::sync::Semaphore;
 
-use super::{blocking, now, sealed_kinds_sql, BlobRow, DeletedIdentity, Event, Inserted, Local, Machine, NewBlob, Payload, PushToken, Slot, Store};
+use super::{blocking, now, sealed_kinds_sql, BlobRow, DeletedIdentity, Event, Inserted, Local, Machine, NewBlob, Payload, PushToken, Slot, Stats, Store};
 use crate::routes::{ApiError, ApiResult};
 
 const SCHEMA: &str = "
@@ -96,9 +96,10 @@ const SCHEMA: &str = "
     );
     CREATE INDEX IF NOT EXISTS push_tokens_identity ON push_tokens(identity_pubkey);";
 
-/// Schema changes after `SCHEMA`, in order; `schema_version` records the ones applied. A step
-/// only adds (a table, a nullable column, an index), so the relay a deploy is replacing keeps
-/// working on the new schema. Append; never edit a step that has shipped.
+/// Schema changes after `SCHEMA`, in order. `schema_version` records what was applied:
+/// version 1 is `SCHEMA`, version `n + 2` is `MIGRATIONS[n]`, as in the Postgres backend. A
+/// step only adds (a table, a nullable column, an index). Append; never edit a step that has
+/// shipped.
 const MIGRATIONS: &[&str] = &[];
 
 pub struct Sqlite {
@@ -163,15 +164,17 @@ impl Sqlite {
     }
 }
 
-/// Applies the `MIGRATIONS` this database has not had.
+/// Applies the `MIGRATIONS` this database has not had. `SCHEMA` ran already: it carries the
+/// connection's pragmas, so it runs at every open, and nobody else has the file.
 fn migrate(connection: &Connection) -> rusqlite::Result<()> {
-    let version: i64 = connection.query_row("SELECT COALESCE(MAX(version), 0) FROM schema_version", [], |row| row.get(0))?;
-    for (index, step) in MIGRATIONS.iter().enumerate().skip(version as usize) {
+    connection.execute("INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (1, ?1)", params![now()])?;
+    let version: i64 = connection.query_row("SELECT MAX(version) FROM schema_version", [], |row| row.get(0))?;
+    for (index, step) in MIGRATIONS.iter().enumerate().skip(version as usize - 1) {
         let tx = connection.unchecked_transaction()?;
         tx.execute_batch(step)?;
-        tx.execute("INSERT INTO schema_version (version, applied_at) VALUES (?1, ?2)", params![index as i64 + 1, now()])?;
+        tx.execute("INSERT INTO schema_version (version, applied_at) VALUES (?1, ?2)", params![index as i64 + 2, now()])?;
         tx.commit()?;
-        tracing::info!(version = index + 1, "schema migrated");
+        tracing::info!(version = index + 2, "schema migrated");
     }
     Ok(())
 }
@@ -686,6 +689,28 @@ pub fn sweep(connection: &mut Connection, sealed_before: i64, groups_before: i64
     Ok(gone as u64)
 }
 
+pub fn stats(connection: &Connection) -> rusqlite::Result<Stats> {
+    let count = |sql: &str| connection.query_row(sql, [], |row| row.get::<_, i64>(0));
+    let seen_since = |seconds: i64| connection.query_row("SELECT COUNT(*) FROM machines WHERE last_seen > ?1", params![now() - seconds], |row| row.get::<_, i64>(0));
+    Ok(Stats {
+        identities: count("SELECT COUNT(*) FROM identities")?,
+        machines: count("SELECT COUNT(*) FROM machines")?,
+        active_machines: [seen_since(86_400)?, seen_since(7 * 86_400)?, seen_since(30 * 86_400)?],
+        revoked_machines: count("SELECT COUNT(*) FROM revoked_machines")?,
+        deleted_groups: count("SELECT COUNT(*) FROM deleted_groups")?,
+        blobs: connection
+            .prepare("SELECT kind, COUNT(*), COALESCE(SUM(size), 0) FROM blobs GROUP BY kind ORDER BY kind")?
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+            .collect::<rusqlite::Result<_>>()?,
+        usage_bytes: count("SELECT COALESCE(SUM(bytes), 0) FROM usage")?,
+        largest_identity_bytes: count("SELECT COALESCE(MAX(bytes), 0) FROM usage")?,
+        push_tokens: connection
+            .prepare("SELECT platform, COUNT(*) FROM push_tokens GROUP BY platform ORDER BY platform")?
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?,
+    })
+}
+
 pub fn orphans(connection: &Connection, files: &[(String, String)]) -> rusqlite::Result<Vec<(String, String)>> {
     let mut known = connection.prepare_cached("SELECT 1 FROM identities WHERE pubkey = ?1")?;
     let mut has_row = connection.prepare_cached("SELECT 1 FROM blobs WHERE identity_pubkey = ?1 AND id = ?2")?;
@@ -789,6 +814,10 @@ impl Store for Sqlite {
     async fn orphans(&self, files: &[(String, String)]) -> ApiResult<Vec<(String, String)>> {
         let files = files.to_vec();
         self.read(move |db| Ok(orphans(db, &files)?)).await
+    }
+
+    async fn stats(&self) -> ApiResult<Stats> {
+        self.read(|db| Ok(stats(db)?)).await
     }
 
     async fn sweep(&self, sealed_before: i64, groups_before: i64) -> ApiResult<u64> {

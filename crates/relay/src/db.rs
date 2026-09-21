@@ -130,6 +130,23 @@ pub struct DeletedIdentity {
     pub files: Vec<String>,
 }
 
+/// Totals for `/metrics`. The relay reads no content, so these are all it knows.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Stats {
+    pub identities: i64,
+    pub machines: i64,
+    /// Machines seen in the last day, seven days, and thirty days.
+    pub active_machines: [i64; 3],
+    pub revoked_machines: i64,
+    pub deleted_groups: i64,
+    /// `(kind, count, bytes)`.
+    pub blobs: Vec<(String, i64, i64)>,
+    pub usage_bytes: i64,
+    pub largest_identity_bytes: i64,
+    /// `(platform, count)`.
+    pub push_tokens: Vec<(String, i64)>,
+}
+
 /// Where a phone takes pushes: its APNs or FCM device token, one per machine.
 #[derive(Debug, Clone)]
 pub struct PushToken {
@@ -273,6 +290,8 @@ pub trait Store: Send + Sync {
     /// consumed go, with their bytes given back, and so do the marks of groups deleted before
     /// `groups_before`. Returns how many envelopes went.
     async fn sweep(&self, sealed_before: i64, groups_before: i64) -> ApiResult<u64>;
+
+    async fn stats(&self) -> ApiResult<Stats>;
 
     // Presence and events. `Local` has this process's answer; a shared backend widens it to
     // all of them.

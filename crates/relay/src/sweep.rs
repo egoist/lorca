@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::db::{now, Store};
+use crate::metrics::METRICS;
 use crate::routes::{valid_id, ApiResult};
 use crate::store::{self, FileStore};
 
@@ -22,15 +23,32 @@ pub fn spawn(db: Arc<dyn Store>, files: Arc<FileStore>) {
         for hour in 0u64.. {
             hourly.tick().await;
             match db.sweep(now() - SEALED_TTL, now() - DELETED_GROUP_TTL).await {
-                Ok(0) => {}
-                Ok(envelopes) => tracing::info!(envelopes, "swept stale envelopes"),
-                Err(error) => tracing::warn!(?error, "sweeping"),
+                Ok(envelopes) => {
+                    METRICS.swept_envelopes.add(envelopes);
+                    METRICS.sweep_at.set(now() as u64);
+                    if envelopes > 0 {
+                        tracing::info!(envelopes, "swept stale envelopes");
+                    }
+                }
+                Err(error) => {
+                    METRICS.sweep_failures.add(1);
+                    tracing::warn!(?error, "sweeping");
+                }
             }
             if hour % 24 == 0 {
                 match orphans(db.as_ref(), &files, now() - ORPHAN_AGE).await {
-                    Ok((seen, 0)) => tracing::debug!(seen, "file store matches the database"),
-                    Ok((seen, removed)) => tracing::info!(seen, removed, "removed orphaned file objects"),
-                    Err(error) => tracing::warn!(?error, "sweeping the file store"),
+                    Ok((seen, removed)) => {
+                        METRICS.file_objects.set(seen as u64);
+                        METRICS.swept_orphans.add(removed as u64);
+                        METRICS.file_sweep_at.set(now() as u64);
+                        if removed > 0 {
+                            tracing::info!(seen, removed, "removed orphaned file objects");
+                        }
+                    }
+                    Err(error) => {
+                        METRICS.sweep_failures.add(1);
+                        tracing::warn!(?error, "sweeping the file store");
+                    }
                 }
             }
         }

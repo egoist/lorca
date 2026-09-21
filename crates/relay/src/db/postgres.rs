@@ -16,7 +16,7 @@ use futures::StreamExt;
 use tokio_postgres::types::ToSql;
 use tokio_postgres::{AsyncMessage, Row, Transaction};
 
-use super::{now, sealed_kinds_sql, BlobRow, DeletedIdentity, Event, Inserted, Local, Machine, NewBlob, Payload, PushToken, Store};
+use super::{now, sealed_kinds_sql, BlobRow, DeletedIdentity, Event, Inserted, Local, Machine, NewBlob, Payload, PushToken, Stats, Store};
 use crate::routes::{ApiError, ApiResult};
 
 const CHANNEL: &str = "lorca_relay";
@@ -68,10 +68,6 @@ const SCHEMA: &str = "
         deleted_at BIGINT NOT NULL,
         PRIMARY KEY (identity_pubkey, group_id)
     );
-    CREATE TABLE IF NOT EXISTS schema_version (
-        version BIGINT PRIMARY KEY,
-        applied_at BIGINT NOT NULL
-    );
     CREATE TABLE IF NOT EXISTS sequences (
         identity_pubkey TEXT PRIMARY KEY,
         seq BIGINT NOT NULL
@@ -115,19 +111,37 @@ const SCHEMA: &str = "
     );
     CREATE INDEX IF NOT EXISTS relay_sockets_identity ON relay_sockets(identity_pubkey);";
 
-/// Schema changes after `SCHEMA`, in order; `schema_version` records the ones applied. A
-/// deploy runs the old process beside the new one, so a step only adds (a table, a nullable
-/// column, an index). Append; never edit a step that has shipped.
+/// Schema changes after `SCHEMA`, in order. `schema_version` records what was applied:
+/// version 1 is `SCHEMA`, version `n + 2` is `MIGRATIONS[n]`. A deploy runs the old process
+/// beside the new one, so a step only adds (a table, a nullable column, an index). Append;
+/// never edit a step that has shipped.
 const MIGRATIONS: &[&str] = &[];
 
+/// Applies the steps this database has not had. DDL locks whole tables, and the process this
+/// one replaces is writing to them meanwhile, so a step runs once and not at every start, and
+/// one that lost a deadlock to a write runs again.
 async fn migrate(client: &mut Object) -> Result<(), tokio_postgres::Error> {
-    client.batch_execute(SCHEMA).await?;
+    client.batch_execute("CREATE TABLE IF NOT EXISTS schema_version (version BIGINT PRIMARY KEY, applied_at BIGINT NOT NULL)").await?;
     let version: i64 = client.query_one("SELECT COALESCE(MAX(version), 0) FROM schema_version", &[]).await?.get(0);
-    for (index, step) in MIGRATIONS.iter().enumerate().skip(version as usize) {
-        let tx = client.transaction().await?;
-        tx.batch_execute(step).await?;
-        tx.execute("INSERT INTO schema_version (version, applied_at) VALUES ($1, $2)", &[&(index as i64 + 1), &now()]).await?;
-        tx.commit().await?;
+    for (index, step) in std::iter::once(&SCHEMA).chain(MIGRATIONS).enumerate().skip(version as usize) {
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let tx = client.transaction().await?;
+            let applied = async {
+                tx.batch_execute(step).await?;
+                tx.execute("INSERT INTO schema_version (version, applied_at) VALUES ($1, $2)", &[&(index as i64 + 1), &now()]).await
+            }
+            .await;
+            match applied {
+                Ok(_) => break tx.commit().await?,
+                Err(error) if error.code() == Some(&tokio_postgres::error::SqlState::T_R_DEADLOCK_DETECTED) && attempt < 5 => {
+                    tracing::warn!(version = index + 1, "schema step lost a deadlock; again");
+                    drop(tx);
+                }
+                Err(error) => return Err(error),
+            }
+        }
         tracing::info!(version = index + 1, "schema migrated");
     }
     Ok(())
@@ -447,6 +461,33 @@ impl Store for Postgres {
             )
             .await?;
         Ok(rows.iter().map(|row| (row.get(0), row.get(1))).collect())
+    }
+
+    async fn stats(&self) -> ApiResult<Stats> {
+        let client = self.client().await?;
+        let totals = client
+            .query_one(
+                "SELECT (SELECT COUNT(*) FROM identities), (SELECT COUNT(*) FROM machines),
+                        (SELECT COUNT(*) FROM machines WHERE last_seen > $1), (SELECT COUNT(*) FROM machines WHERE last_seen > $2),
+                        (SELECT COUNT(*) FROM machines WHERE last_seen > $3), (SELECT COUNT(*) FROM revoked_machines),
+                        (SELECT COUNT(*) FROM deleted_groups), (SELECT COALESCE(SUM(bytes), 0)::BIGINT FROM usage),
+                        (SELECT COALESCE(MAX(bytes), 0) FROM usage)",
+                &[&(now() - 86_400), &(now() - 7 * 86_400), &(now() - 30 * 86_400)],
+            )
+            .await?;
+        let blobs = client.query("SELECT kind, COUNT(*), COALESCE(SUM(size), 0)::BIGINT FROM blobs GROUP BY kind ORDER BY kind", &[]).await?;
+        let push_tokens = client.query("SELECT platform, COUNT(*) FROM push_tokens GROUP BY platform ORDER BY platform", &[]).await?;
+        Ok(Stats {
+            identities: totals.get(0),
+            machines: totals.get(1),
+            active_machines: [totals.get(2), totals.get(3), totals.get(4)],
+            revoked_machines: totals.get(5),
+            deleted_groups: totals.get(6),
+            usage_bytes: totals.get(7),
+            largest_identity_bytes: totals.get(8),
+            blobs: blobs.iter().map(|row| (row.get(0), row.get(1), row.get(2))).collect(),
+            push_tokens: push_tokens.iter().map(|row| (row.get(0), row.get(1))).collect(),
+        })
     }
 
     async fn sweep(&self, sealed_before: i64, groups_before: i64) -> ApiResult<u64> {

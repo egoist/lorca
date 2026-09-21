@@ -16,6 +16,10 @@ async fn backends() -> Vec<(Arc<dyn Store>, Arc<Local>)> {
     backends
 }
 
+/// A sweep is the one write that reaches past its own identity: on the shared Postgres it
+/// takes every old group mark. The sweep test writes here; a test that counts on a mark reads.
+static MARKS: tokio::sync::RwLock<()> = tokio::sync::RwLock::const_new(());
+
 fn name(prefix: &str) -> String {
     format!("{prefix}-{}", uuid::Uuid::new_v4().simple())
 }
@@ -88,6 +92,7 @@ async fn a_refused_put_leaves_the_slot_alone() {
 
 #[tokio::test]
 async fn a_deleted_group_takes_its_blobs_and_stays_deleted() {
+    let _marks = MARKS.read().await;
     for (store, _) in backends().await {
         let (who, other) = (name("identity"), name("identity"));
         let grouped = |identity: &str, id: &str, group: &str, bytes: &[u8]| NewBlob { group: Some(group.into()), ..blob(identity, id, bytes) };
@@ -211,6 +216,7 @@ async fn presence_and_events_reach_the_sockets() {
 
 #[tokio::test]
 async fn a_sweep_drops_stale_envelopes_and_old_group_marks() {
+    let _marks = MARKS.write().await;
     for (store, _) in backends().await {
         let (who, machine) = (name("identity"), name("machine"));
         ok!(store.register_identity(&who, "content", &machine, "box", "attestation"));
@@ -274,5 +280,26 @@ async fn a_deleted_identity_leaves_revoked_machines_and_nothing_else() {
         ok!(store.register_identity(&who, "content-2", &name("machine"), "box", "attestation"));
 
         assert_eq!(ids(&store, &other, &theirs, 0, i64::MAX).await, ["message"]);
+    }
+}
+
+#[tokio::test]
+async fn stats_count_what_is_stored() {
+    for (store, _) in backends().await {
+        let who = name("identity");
+        ok!(store.register_identity(&who, "content", &name("machine"), "box", "attestation"));
+        ok!(store.insert_blob(blob(&who, "message", b"abc"), 0));
+        ok!(store.insert_blob(NewBlob { kind: "file".into(), payload: Payload::InFileStore { size: 100 }, ..blob(&who, "photo", b"") }, 0));
+        let stats = ok!(store.stats());
+        let of = |kind: &str| stats.blobs.iter().find(|(k, _, _)| k == kind).map(|(_, count, bytes)| (*count, *bytes)).unwrap_or_default();
+        if store.describe().starts_with("sqlite") {
+            // This test's own file, so the totals are exact.
+            let expected = Stats { identities: 1, machines: 1, active_machines: [1, 1, 1], blobs: vec![("chat".into(), 1, 3), ("file".into(), 1, 100)], usage_bytes: 103, largest_identity_bytes: 103, ..Stats::default() };
+            assert_eq!(stats, expected);
+        } else {
+            // The other tests write to the shared database meanwhile.
+            assert!(stats.identities >= 1 && stats.machines >= 1 && stats.active_machines[0] >= 1, "{stats:?}");
+            assert!(of("chat").0 >= 1 && of("file") >= (1, 100) && stats.usage_bytes >= 103 && stats.largest_identity_bytes >= 103, "{stats:?}");
+        }
     }
 }

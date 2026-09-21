@@ -32,6 +32,7 @@ Put it behind HTTPS with a reverse proxy such as Caddy or nginx (WebSocket upgra
 | `--files-dir` | Where attachment ciphertext goes. Defaults to a folder beside the database. |
 | `--s3-bucket`, `--s3-endpoint` | Keep attachments in S3, R2, or MinIO instead. |
 | `--ip-per-minute`, `--identity-per-second` | Rate limits. |
+| `LORCA_RELAY_METRICS_TOKEN` | Serves `GET /metrics` for Prometheus to whoever sends this bearer token. |
 
 ### Postgres
 
@@ -40,6 +41,10 @@ Use a `postgres://` URL to run several relay processes against one database, for
 ### Push notifications
 
 To send pushes to the phone app, give the relay an APNs key (`--apns-key`, `--apns-key-id`, `--apns-team-id`) or a Firebase service account (`--fcm-service-account`). Each key is the path of its file or the text itself, so `LORCA_RELAY_APNS_KEY` and `LORCA_RELAY_FCM_SERVICE_ACCOUNT` can carry them where there is no disk to keep a file on. Without them everything else works and phones get no pushes.
+
+### Monitoring
+
+With `LORCA_RELAY_METRICS_TOKEN` set, `GET /metrics` answers a scraper that sends the token as a bearer with Prometheus text: identities and machines, blobs and bytes by kind, open sockets, requests by route and status, rate-limit refusals, pushes sent and failed, and what the housekeeping sweeps removed. The relay cannot read what it stores, so these numbers are what there is to watch.
 
 ## Limits
 

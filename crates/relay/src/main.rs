@@ -8,6 +8,7 @@ mod auth;
 mod db;
 mod hub;
 mod limit;
+mod metrics;
 mod push;
 mod routes;
 mod store;
@@ -49,6 +50,11 @@ struct Args {
     /// machines, with a burst of ten times that. 0 disables the limit.
     #[usage(long, env = "LORCA_RELAY_IDENTITY_PER_SECOND", default = "50")]
     identity_per_second: u32,
+
+    /// Serve `GET /metrics` (Prometheus text: counts, bytes, sockets, pushes, sweeps) to
+    /// whoever sends this as a bearer token. Unset, the route does not exist.
+    #[usage(long, env = "LORCA_RELAY_METRICS_TOKEN", hide_env_values = true)]
+    metrics_token: Option<String>,
 
     /// Uploads over 1 MiB handled at once. Each holds its body in memory (a 24 MB attachment
     /// is some 80 MB while it is decoded and sent on), so this bounds what attachments cost;
@@ -188,6 +194,10 @@ pub struct AppState {
     pub trust_proxy: bool,
     /// Places for uploads over `limit::LARGE_UPLOAD`; `None` when they are not limited.
     pub uploads: Option<Arc<tokio::sync::Semaphore>>,
+    pub metrics_token: Option<Arc<str>>,
+    pub stats: Arc<metrics::StatsCache>,
+    /// This process, as a label on what only it counted.
+    pub instance: Arc<str>,
     /// Cancelled when the process is told to stop; the sync sockets end on it.
     pub stopping: tokio_util::sync::CancellationToken,
     /// Where `file` ciphertext goes. The database holds only the row.
@@ -228,6 +238,9 @@ async fn main() -> anyhow::Result<()> {
             args.identity_per_second.saturating_mul(10),
         )),
         trust_proxy: args.trust_proxy,
+        metrics_token: args.metrics_token.as_deref().filter(|token| !token.is_empty()).map(Arc::from),
+        stats: Arc::default(),
+        instance: uuid::Uuid::new_v4().simple().to_string()[..8].into(),
         uploads: (args.concurrent_uploads > 0).then(|| Arc::new(tokio::sync::Semaphore::new(args.concurrent_uploads))),
         stopping: tokio_util::sync::CancellationToken::new(),
         file_store: file_store.clone(),

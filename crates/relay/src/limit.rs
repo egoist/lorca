@@ -79,6 +79,7 @@ pub async fn per_ip(State(state): State<AppState>, request: Request, next: Next)
         Ok(()) => next.run(request).await,
         Err(retry_after) => {
             tracing::debug!(%ip, path = %request.uri().path(), "rate limited");
+            crate::metrics::METRICS.rate_limited_ip.add(1);
             ApiError::too_many(retry_after).into_response()
         }
     }
@@ -99,6 +100,7 @@ pub async fn large_uploads(State(state): State<AppState>, request: Request, next
     match tokio::time::timeout(UPLOAD_WAIT, uploads.acquire_owned()).await {
         Ok(Ok(_place)) => next.run(request).await,
         _ => {
+            crate::metrics::METRICS.uploads_refused.add(1);
             let mut response = ApiError::unavailable("Too many uploads at once; try again").into_response();
             response.headers_mut().insert(axum::http::header::RETRY_AFTER, axum::http::HeaderValue::from_static("5"));
             response

@@ -98,6 +98,12 @@ impl Hub {
         self.lock().get(identity_pubkey).map(|connections| connections.iter().map(|c| c.machine_pubkey.clone()).collect()).unwrap_or_default()
     }
 
+    /// How many sockets are open here, and for how many identities.
+    pub fn sockets(&self) -> (usize, usize) {
+        let identities = self.lock();
+        (identities.values().map(Vec::len).sum(), identities.len())
+    }
+
     fn signal(&self, identity_pubkey: &str, signal: Signal, to: impl Fn(&Connection) -> bool) {
         if let Some(connections) = self.lock().get(identity_pubkey) {
             for connection in connections.iter().filter(|c| to(c)) {

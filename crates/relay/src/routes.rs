@@ -105,6 +105,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/", get(root))
         .route("/v1/health", get(health))
+        .route("/metrics", get(crate::metrics::serve))
         .route("/v1/sync", get(sync_socket))
         .route("/v1/identity", axum::routing::delete(delete_identity))
         .route("/v1/machines", get(list_machines))
@@ -120,6 +121,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/pair/{nonce}/reply", post(post_pair_reply))
         .merge(public)
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
+        .layer(axum::middleware::from_fn(crate::metrics::count_requests))
         .with_state(state)
 }
 
@@ -584,14 +586,19 @@ async fn send_push(State(state): State<AppState>, auth: Auth, Json(body): Json<C
     let queued = tokens.len();
     tokio::spawn(async move {
         for token in tokens {
+            let platform = crate::metrics::platform(&token.platform);
             match state.pusher.send(&token, &ciphertext).await {
-                crate::push::Delivery::Sent => {}
+                crate::push::Delivery::Sent => crate::metrics::METRICS.push_sent[platform].add(1),
                 crate::push::Delivery::Gone => {
+                    crate::metrics::METRICS.push_gone[platform].add(1);
                     if let Err(error) = state.db.delete_push_token(&token.machine_pubkey).await {
                         tracing::warn!(?error, "forgetting a dead push token");
                     }
                 }
-                crate::push::Delivery::Failed(error) => tracing::warn!(%error, platform = %token.platform, "push"),
+                crate::push::Delivery::Failed(error) => {
+                    crate::metrics::METRICS.push_failed[platform].add(1);
+                    tracing::warn!(%error, platform = %token.platform, "push");
+                }
             }
         }
     });
