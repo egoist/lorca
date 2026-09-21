@@ -58,7 +58,7 @@ export interface Bot {
   name: string;
   /** One short line under the name: what the bot is for. */
   label: string;
-  /** A sentence or two about the bot. */
+  /** What the bot does and how it should work. */
   description: string;
   /** SF Symbol on the accent gradient: the look when there is no image. */
   symbol_name: string;
@@ -70,7 +70,6 @@ export interface Bot {
   model?: string;
   /** How much the model thinks: off, minimal, low, medium, high, xhigh, max. */
   thinking?: string;
-  instructions: string;
   workdir?: string;
   created_at: number;
 }

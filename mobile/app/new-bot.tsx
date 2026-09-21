@@ -19,7 +19,6 @@ export default function NewBotScreen() {
   const [name, setName] = useState("");
   const [label, setLabel] = useState("");
   const [description, setDescription] = useState("");
-  const [instructions, setInstructions] = useState("");
   const [symbol, setSymbol] = useState("sparkles");
   const [accent, setAccent] = useState("indigo");
   const [runnerId, setRunnerId] = useState<string>(() => runners.find((r) => deviceIsOnline(r.id))?.id ?? runners[0]?.id ?? "");
@@ -34,7 +33,7 @@ export default function NewBotScreen() {
 
   async function save() {
     try {
-      const { chatId } = await engine.createBot({ name, label, description, instructions, symbol_name: symbol, accent, runner_id: runnerId, provider: effectiveProvider, model, thinking });
+      const { chatId } = await engine.createBot({ name, label, description, symbol_name: symbol, accent, runner_id: runnerId, provider: effectiveProvider, model, thinking });
       router.dismiss();
       router.push(`/chat/${chatId}`);
     } catch (error) {
@@ -62,10 +61,9 @@ export default function NewBotScreen() {
         <Section>
           <FieldRow label={t("Name")} value={name} onChangeText={setName} placeholder="Scout" autoFocus autoCapitalize="words" returnKeyType="next" />
           <FieldRow label={t("Label")} value={label} onChangeText={setLabel} placeholder={t("Research")} autoCapitalize="sentences" />
-          <FieldRow label={t("Description")} value={description} onChangeText={setDescription} placeholder={t("Finds and summarizes sources")} autoCapitalize="sentences" />
         </Section>
-        <Section title={t("Instructions")} footer={t("What this bot is for and how it should work. It also gets the team tools and the coding tools on its Runner.")}>
-          <FieldRow value={instructions} onChangeText={setInstructions} placeholder={t("You are…")} multiline autoCapitalize="sentences" />
+        <Section title={t("Description")} footer={t("What this bot is for and how it should work. It also gets the team tools and the coding tools on its Runner.")}>
+          <FieldRow value={description} onChangeText={setDescription} placeholder={t("Finds and summarizes sources")} multiline autoCapitalize="sentences" />
         </Section>
         <Section title={t("Look")}>
           <View style={styles.grid}>

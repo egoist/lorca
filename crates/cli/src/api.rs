@@ -172,7 +172,9 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
                 provider: opt_string(&params, "provider").unwrap_or_else(|| "deepseek".into()),
                 model: opt_string(&params, "model"),
                 thinking: opt_string(&params, "thinking"),
-                instructions: opt_string(&params, "instructions").unwrap_or_default(),
+                // Older apps sent a second behavioral field. `insert_bot` folds it into the
+                // description, then clears this rolling-upgrade slot.
+                legacy_instructions: opt_string(&params, "instructions").unwrap_or_default(),
                 workdir: opt_string(&params, "workdir"),
                 created_at: 0.0,
             };
@@ -192,8 +194,13 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
                 if let Some(v) = opt_string(&params, "symbol_name") { bot.symbol_name = v; }
                 if let Some(v) = opt_string(&params, "accent") { bot.accent = v; }
                 if let Some(v) = avatar { bot.avatar = v; }
-                if let Some(v) = params["description"].as_str() { bot.description = v.trim().to_string(); }
-                if let Some(v) = params["instructions"].as_str() { bot.instructions = v.to_string(); }
+                if let Some(v) = params["description"].as_str() {
+                    bot.description = v.trim().to_string();
+                } else if let Some(v) = params["instructions"].as_str() {
+                    // Compatibility for an older app updating the retired field.
+                    bot.description = v.trim().to_string();
+                }
+                bot.legacy_instructions.clear();
                 if let Some(v) = opt_string(&params, "provider") { bot.provider = v; }
                 if let Some(v) = params["model"].as_str() { bot.model = Some(v.trim().to_string()).filter(|m| !m.is_empty()); }
                 if let Some(v) = params["thinking"].as_str() { bot.thinking = Some(v.trim().to_string()).filter(|t| !t.is_empty()); }

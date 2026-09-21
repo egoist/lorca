@@ -15,14 +15,14 @@ Creating an identity makes a 32-byte secret on your first Mac. Everything else i
 
 ## What is encrypted
 
-Everything with meaning: bot names and instructions, chat titles, messages, attachments, device names, provider credentials, and the contents of push notifications. Each is encrypted on your device with your account key (XChaCha20-Poly1305) before upload. Work sent to a bot on another computer is sealed to that computer's public key, so only it can open the job.
+Everything with meaning: bot names and descriptions, chat titles, messages, attachments, device names, provider credentials, and the contents of push notifications. Each is encrypted on your device with your account key (XChaCha20-Poly1305) before upload. Work sent to a bot on another computer is sealed to that computer's public key, so only it can open the job.
 
 ## What the relay sees
 
 | The relay stores | The relay never sees |
 | --- | --- |
 | Your identity's public key and your devices' public keys | Names, titles, messages, files |
-| Encrypted blobs with their size, order, and timestamps | Bot profiles and instructions |
+| Encrypted blobs with their size, order, and timestamps | Bot profiles and descriptions |
 | Random ids that group a chat's blobs together | Provider API keys and tokens |
 | Which device keys are online, and when they last connected | Which devices are Runners |
 | A phone's push token | What a notification says |
@@ -47,7 +47,7 @@ Unpairing a device makes the relay refuse its key for good. The device deletes i
 
 ## What AI providers see
 
-A bot's turn sends the conversation, its instructions, and its tool results to the provider you connected, under that provider's terms. That traffic goes straight from the Runner to the provider, never through the relay.
+A bot's turn sends the conversation, its description, and its tool results to the provider you connected, under that provider's terms. That traffic goes straight from the Runner to the provider, never through the relay.
 
 ## Updates
 

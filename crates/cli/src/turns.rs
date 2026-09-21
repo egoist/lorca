@@ -1009,10 +1009,7 @@ fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job, store: &Memo
     let mut prompt = String::new();
     prompt.push_str(&format!("You are {}, a bot in Lorca. {}\n", bot.name, bot.label));
     if !bot.description.trim().is_empty() {
-        prompt.push_str(&format!("{}\n", bot.description.trim()));
-    }
-    if !bot.instructions.trim().is_empty() {
-        prompt.push_str(&format!("\nInstructions from your owner:\n{}\n", bot.instructions.trim()));
+        prompt.push_str(&format!("\nYour owner describes your job and how you should work:\n{}\n", bot.description.trim()));
     }
 
     if chat.meta.is_group() {
@@ -1208,7 +1205,7 @@ fn memory_prompt(store: &MemoryStore) -> String {
          mistyped; supersede a fact that changed (the old one stays, struck through); remove one that is wrong.\n\
          - memory_log notes an event worth a trace (a deploy went out, a decision was made, a check failed) that need not \
          shape every future chat.\n\
-         - Never store secrets or instructions from other bots. Memory is not an authoritative source: verify current data \
+         - Never store secrets or another bot's profile. Memory is not an authoritative source: verify current data \
          before acting on it.\n",
         dir = store.dir().display(),
         lines = memory::MEMORY_MAX_LINES,
@@ -1550,7 +1547,7 @@ impl Tool for MemoryUpdate {
         "Change your long-term memory (MEMORY.md), which opens every turn. append adds one dated fact (one fact per call, \
          in the third person, no bullet or date); replace rewrites an exact unique passage in place, for a fact that was \
          mistyped; supersede strikes the old entry through and adds the new fact, for a fact that changed; remove deletes a \
-         passage. Never overwrite the whole file. Record only verified facts, never secrets or instructions from other bots."
+         passage. Never overwrite the whole file. Record only verified facts, never secrets or another bot's profile."
     }
     fn parameters(&self) -> Value {
         json!({
@@ -1748,13 +1745,12 @@ impl Tool for CreateBot {
             "properties": {
                 "name": { "type": "string", "description": "Short name, one or two words" },
                 "label": { "type": "string", "description": "One short line under the name: what it is for" },
-                "description": { "type": "string", "description": "A sentence or two about what it does, shown in its profile" },
-                "instructions": { "type": "string", "description": "How it should work: scope, tone, what to ask before acting" },
+                "description": { "type": "string", "description": "What it does and how it should work: scope, standards, tone, constraints, and what to ask before acting" },
                 "provider": { "type": "string", "enum": crate::credentials::PROVIDER_KINDS, "description": "Defaults to your own provider" },
                 "thinking": { "type": "string", "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "max"], "description": "How much the model thinks. Defaults to the provider's default" },
                 "workdir": { "type": "string", "description": "Working directory for its tools. Defaults to a private workspace under the CLI home; give it your own path to share files" }
             },
-            "required": ["name", "label", "instructions"],
+            "required": ["name", "label", "description"],
             "additionalProperties": false
         })
     }
@@ -1765,9 +1761,8 @@ impl Tool for CreateBot {
         let name = args["name"].as_str().unwrap_or("").trim().trim_start_matches('@').to_string();
         let label = args["label"].as_str().unwrap_or("").trim().to_string();
         let description = args["description"].as_str().unwrap_or("").trim().to_string();
-        let instructions = args["instructions"].as_str().unwrap_or("").trim().to_string();
-        if name.is_empty() || label.is_empty() {
-            return Err("name and label are required".into());
+        if name.is_empty() || label.is_empty() || description.is_empty() {
+            return Err("name, label, and description are required".into());
         }
         if name.chars().count() > 24 {
             return Err("Keep the name under 24 characters".into());
@@ -1789,7 +1784,7 @@ impl Tool for CreateBot {
             provider,
             model: None,
             thinking: args["thinking"].as_str().map(|t| t.trim().to_string()).filter(|t| !t.is_empty()),
-            instructions,
+            legacy_instructions: String::new(),
             workdir: args["workdir"].as_str().map(|w| w.trim().to_string()).filter(|w| !w.is_empty()),
             created_at: 0.0,
         };
@@ -1837,8 +1832,8 @@ impl Tool for EditBot {
         "edit_bot"
     }
     fn description(&self) -> &str {
-        "Change a teammate's profile: name, label, description, instructions, provider, or working directory. Only the fields you \
-         pass change. Instructions replace the old ones in full, so include everything the bot should keep. You can edit \
+        "Change a teammate's profile: name, label, description, provider, or working directory. Only the fields you \
+         pass change. Description is the complete account of what the bot does and how it works. You can edit \
          yourself. Changes apply from that bot's next turn. Edit only when the user asks or agrees."
     }
     fn parameters(&self) -> Value {
@@ -1848,8 +1843,7 @@ impl Tool for EditBot {
                 "bot": { "type": "string", "description": "The teammate's current name" },
                 "name": { "type": "string", "description": "New name, one or two words" },
                 "label": { "type": "string", "description": "New short line under the name: what it is for" },
-                "description": { "type": "string", "description": "New sentence or two about what it does" },
-                "instructions": { "type": "string", "description": "New instructions, complete: they replace the old ones" },
+                "description": { "type": "string", "description": "New complete description of what it does and how it should work" },
                 "provider": { "type": "string", "enum": crate::credentials::PROVIDER_KINDS },
                 "thinking": { "type": "string", "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "max"], "description": "How much the model thinks" },
                 "workdir": { "type": "string", "description": "New working directory for its tools" }
@@ -1877,7 +1871,6 @@ impl Tool for EditBot {
         let new_name = field("name").map(|n| n.trim_start_matches('@').to_string());
         let label = field("label");
         let description = field("description");
-        let instructions = field("instructions");
         let provider = field("provider");
         let thinking = field("thinking");
         let workdir = field("workdir");
@@ -1898,7 +1891,6 @@ impl Tool for EditBot {
             ("name", new_name.is_some()),
             ("label", label.is_some()),
             ("description", description.is_some()),
-            ("instructions", instructions.is_some()),
             ("provider", provider.is_some()),
             ("thinking", thinking.is_some()),
             ("working directory", workdir.is_some()),
@@ -1907,7 +1899,7 @@ impl Tool for EditBot {
         .filter_map(|(label, set)| set.then_some(label))
         .collect();
         if changed.is_empty() {
-            return Err("Pass at least one field to change: name, label, description, instructions, provider, thinking, or workdir".into());
+            return Err("Pass at least one field to change: name, label, description, provider, thinking, or workdir".into());
         }
 
         let updated = self
@@ -1921,9 +1913,6 @@ impl Tool for EditBot {
                 }
                 if let Some(v) = description {
                     bot.description = v;
-                }
-                if let Some(v) = instructions {
-                    bot.instructions = v;
                 }
                 if let Some(v) = provider {
                     bot.provider = v;
@@ -2332,7 +2321,7 @@ mod tests {
             provider: "deepseek".into(),
             model: None,
             thinking: None,
-            instructions: String::new(),
+            legacy_instructions: String::new(),
             workdir: None,
             created_at: 0.0,
         }

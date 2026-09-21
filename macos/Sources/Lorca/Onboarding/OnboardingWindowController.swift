@@ -281,9 +281,15 @@ final class OnboardingViewController: NSViewController {
         labelField.stringValue = firstBot?.label ?? "Chief of staff"
         labelField.placeholderString = L("What it is for")
         labelField.identifier = NSUserInterfaceItemIdentifier("botLabel")
-        let descriptionField = NSTextField()
+        let descriptionField = WrappingTextField()
         descriptionField.stringValue = firstBot?.description ?? "Learns what you work on, proposes a small team of one-job bots, and routes work to them."
-        descriptionField.placeholderString = L("A sentence or two about what it does")
+        descriptionField.placeholderString = L("What it does and how it should work")
+        descriptionField.usesSingleLineMode = false
+        descriptionField.maximumNumberOfLines = 0
+        descriptionField.lineBreakMode = .byWordWrapping
+        descriptionField.cell?.wraps = true
+        descriptionField.cell?.isScrollable = false
+        descriptionField.heightAnchor.constraint(greaterThanOrEqualToConstant: 54).isActive = true
         descriptionField.identifier = NSUserInterfaceItemIdentifier("botDescription")
 
         let grid = formGrid([
@@ -385,7 +391,7 @@ final class OnboardingViewController: NSViewController {
             if control === credentialHost { credentialLabel = label }
             grid.addRow(with: [label, control])
             let row = grid.row(at: grid.numberOfRows - 1)
-            row.yPlacement = control is NSTextField && !(control as! NSTextField).isEditable ? .top : .center
+            row.yPlacement = control is WrappingTextField || (control is NSTextField && !(control as! NSTextField).isEditable) ? .top : .center
             if control is NSTextField || control is NSPopUpButton || control === credentialHost {
                 control.widthAnchor.constraint(equalToConstant: 400).isActive = true
             } else if !(control is AvatarView) {

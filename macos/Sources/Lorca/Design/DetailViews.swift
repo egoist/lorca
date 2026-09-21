@@ -539,6 +539,70 @@ final class ActionRow: NSView {
 }
 
 
+/// A key and action on the first line, with a wrapping two-line preview below them.
+final class SummaryActionRow: NSView {
+    private let value: NSTextField
+    private let button = NSButton()
+    var onAction: (() -> Void)?
+
+    init(key keyText: String, value valueText: String, actionTitle: String) {
+        let key = Build.label(keyText, font: .systemFont(ofSize: 12), color: .secondaryLabelColor)
+        value = Build.label(valueText, font: Theme.Font.caption, color: .secondaryLabelColor, lines: 2)
+        value.lineBreakMode = .byTruncatingTail
+        value.cell?.wraps = true
+        value.cell?.truncatesLastVisibleLine = true
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+
+        button.title = actionTitle
+        button.isBordered = false
+        button.font = .systemFont(ofSize: 12, weight: .medium)
+        button.contentTintColor = .controlAccentColor
+        button.target = self
+        button.action = #selector(tapped)
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let header = Build.stack([key, spacer, button], orientation: .horizontal, spacing: 8)
+        addSubview(header)
+        addSubview(value)
+        NSLayoutConstraint.activate([
+            heightAnchor.constraint(greaterThanOrEqualToConstant: 32),
+            header.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            header.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            header.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            value.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 2),
+            value.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            value.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            value.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    func setValue(_ text: String) {
+        value.stringValue = text
+    }
+
+    override func layout() {
+        super.layout()
+        let width = bounds.width - 24
+        if width > 0, value.preferredMaxLayoutWidth != width {
+            value.preferredMaxLayoutWidth = width
+            invalidateIntrinsicContentSize()
+            needsLayout = true
+        }
+    }
+
+    @objc private func tapped() {
+        onAction?()
+    }
+}
+
+
 /// Key on the left, an editable value on the right. Looks like a value until it is clicked;
 /// commits when editing ends (Return, Tab, or focus leaving the field).
 final class EditableRow: NSView, NSTextFieldDelegate {

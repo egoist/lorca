@@ -73,7 +73,7 @@ fn create_lead_bot(app: &Arc<App>) {
         id: String::new(),
         name: LEAD_BOT_NAME.into(),
         label: "Chief of staff".into(),
-        description: "Learns what you work on, proposes a small team of one-job bots, and routes work to them.".into(),
+        description: "You are the user's chief of staff and the bot they talk to most. Learn what they work on and what keeps coming back. Propose a small team of specialist bots, one clear job each, and create them with create_bot once the user agrees. Refine any bot's profile with edit_bot when the user asks. In group chats, route work to the right teammate with message_bot and keep the user informed. Be direct and concrete, and never invent results.".into(),
         symbol_name: "sparkles".into(),
         accent: "indigo".into(),
         avatar: None,
@@ -81,11 +81,7 @@ fn create_lead_bot(app: &Arc<App>) {
         provider: "deepseek".into(),
         model: None,
         thinking: None,
-        instructions: "You are the user's chief of staff and the bot they talk to most. Start by learning what they work on and \
-            what keeps coming back. Propose a small team of specialist bots, one clear job each, and create them with create_bot \
-            once the user agrees, and refine any bot's profile with edit_bot when the user asks. In group chats, route work to the right teammate with message_bot and keep the user informed. \
-            Be direct and concrete, and never invent results."
-            .into(),
+        legacy_instructions: String::new(),
         workdir: None,
             created_at: 0.0,
     };

@@ -1,4 +1,4 @@
-// The chat info sheet's own stack: Details first, and the bot's Look sliding in from its avatar,
+// The chat info sheet's own stack: Details first, with Look and Description editors sliding in
 // inside the one form sheet the root presents.
 
 import { Stack } from "expo-router";
@@ -20,6 +20,7 @@ export default function ChatInfoLayout() {
     >
       <Stack.Screen name="[id]" />
       <Stack.Screen name="look/[id]" />
+      <Stack.Screen name="description/[id]" />
     </Stack>
   );
 }

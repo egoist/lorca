@@ -20,7 +20,7 @@ final class NewBotViewController: SheetViewController {
     private let store = AppStore.shared
     private let nameField = NSTextField()
     private let labelField = NSTextField()
-    private let descriptionField = NSTextField()
+    private let descriptionField = WrappingTextField()
     private let runnerPopup = NSPopUpButton()
     private let providerPopup = NSPopUpButton()
     private let modelPopup = NSPopUpButton()
@@ -50,7 +50,12 @@ final class NewBotViewController: SheetViewController {
 
         nameField.placeholderString = L("Name")
         labelField.placeholderString = L("What it is for")
-        descriptionField.placeholderString = L("A sentence or two about what it does")
+        descriptionField.placeholderString = L("What it does and how it should work")
+        descriptionField.usesSingleLineMode = false
+        descriptionField.maximumNumberOfLines = 0
+        descriptionField.lineBreakMode = .byWordWrapping
+        descriptionField.cell?.wraps = true
+        descriptionField.cell?.isScrollable = false
         for field in [nameField, labelField, descriptionField] {
             field.translatesAutoresizingMaskIntoConstraints = false
             field.delegate = self
@@ -80,7 +85,7 @@ final class NewBotViewController: SheetViewController {
         let rows = [
             labeled(L("Name"), nameField),
             labeled(L("Label"), labelField),
-            labeled(L("Description"), descriptionField),
+            labeled(L("Description"), descriptionField, topAligned: true),
             labeled(L("Look"), lookRow),
             labeled(L("Runner"), runnerPopup),
             labeled(L("Provider"), providerPopup),
@@ -99,15 +104,18 @@ final class NewBotViewController: SheetViewController {
         runnerChanged()
     }
 
-    private func labeled(_ title: String, _ control: NSView) -> NSView {
+    private func labeled(_ title: String, _ control: NSView, topAligned: Bool = false) -> NSView {
         let container = NSView()
         container.translatesAutoresizingMaskIntoConstraints = false
         let label = Build.label(title, font: .systemFont(ofSize: 12), color: .secondaryLabelColor)
         container.addSubview(label)
         container.addSubview(control)
+        let labelAlignment = topAligned
+            ? label.topAnchor.constraint(equalTo: control.topAnchor, constant: 6)
+            : label.centerYAnchor.constraint(equalTo: control.centerYAnchor)
         NSLayoutConstraint.activate([
             label.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            label.centerYAnchor.constraint(equalTo: control.centerYAnchor),
+            labelAlignment,
             label.widthAnchor.constraint(equalToConstant: 76),
             control.leadingAnchor.constraint(equalTo: label.trailingAnchor, constant: 10),
             control.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor),
@@ -116,6 +124,9 @@ final class NewBotViewController: SheetViewController {
         ])
         if control is NSTextField || control is NSPopUpButton {
             control.trailingAnchor.constraint(equalTo: container.trailingAnchor).isActive = true
+        }
+        if control === descriptionField {
+            control.heightAnchor.constraint(greaterThanOrEqualToConstant: 54).isActive = true
         }
         return container
     }

@@ -90,8 +90,8 @@ describe("attachments", () => {
 
 describe("format", () => {
   const bots = new Map<string, Bot>([
-    ["b1", { id: "b1", name: "Chef", label: "", description: "", symbol_name: "sparkles", accent: "indigo", runner_id: "r", provider: "deepseek", instructions: "", created_at: 0 }],
-    ["b2", { id: "b2", name: "Scout", label: "", description: "", symbol_name: "magnifyingglass", accent: "teal", runner_id: "r", provider: "deepseek", instructions: "", created_at: 0 }],
+    ["b1", { id: "b1", name: "Chef", label: "", description: "", symbol_name: "sparkles", accent: "indigo", runner_id: "r", provider: "deepseek", created_at: 0 }],
+    ["b2", { id: "b2", name: "Scout", label: "", description: "", symbol_name: "magnifyingglass", accent: "teal", runner_id: "r", provider: "deepseek", created_at: 0 }],
   ]);
   const chat = (kind: "dm" | "group", messages: Chat["messages"]): Chat => ({ id: "c", kind, bot_ids: ["b1", "b2"], is_pinned: false, created_at: 0, messages, unread_count: 0 });
   const msg = (author: Chat["messages"][number]["author"], body: Body): Chat["messages"][number] => ({ id: uuid(), chat_id: "c", author, body, state: { kind: "complete" }, created_at: 1 });

@@ -62,7 +62,6 @@
 "A bot runs on the Runner it is assigned to, with your account's credentials and that Runner's plugins." = "智能体在分配给它的 Runner 上运行，使用你账户的凭证和该 Runner 的插件。";
 "A group chat holds up to six bots." = "一个群聊最多容纳六个智能体。";
 "A group of one for now. Add bots from the inspector." = "目前群里只有一个智能体。可在检查器中添加智能体。";
-"A sentence or two about what it does" = "用一两句话说明它做什么";
 "A task %@ runs on its own in this chat. %@ set it up and can change it: ask in chat." = "%1$@ 在这个聊天中自行运行的任务。它由 %2$@ 设置，也可以由它修改：在聊天中提出即可。";
 "a teammate" = "队友";
 "About Lorca" = "关于 Lorca";
@@ -574,6 +573,7 @@
 "wants to use %@" = "想要使用 %@";
 "What do we not know yet?" = "我们还有哪些不知道的？";
 "What is the blast radius?" = "影响范围有多大？";
+"What it does and how it should work" = "它做什么以及应该如何工作";
 "What it is for" = "它的用途";
 "What should I work on next?" = "我接下来该做什么？";
 "What would you delete first?" = "你会先删掉什么？";

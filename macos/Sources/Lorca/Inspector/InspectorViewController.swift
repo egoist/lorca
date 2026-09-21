@@ -9,7 +9,7 @@ final class InspectorViewController: NSViewController {
     private let profile = SectionView(title: L("Profile"))
     private let nameRow = EditableRow(key: L("Name"), placeholder: L("Name"))
     private let labelRow = EditableRow(key: L("Label"), placeholder: L("What it is for"))
-    private let descriptionRow = EditableRow(key: L("Description"), placeholder: L("A sentence or two about what it does"), multiline: true)
+    private let descriptionRow = SummaryActionRow(key: L("Description"), value: "", actionTitle: L("Edit…"))
     private let runtime = SectionView(title: L("Runs with"))
     private let memory = SectionView(title: L("Memory"))
     private let routines = SectionView(title: L("Routines"))
@@ -47,6 +47,9 @@ final class InspectorViewController: NSViewController {
         addButton.action = #selector(addBot)
         addButton.translatesAutoresizingMaskIntoConstraints = false
 
+        nameRow.field.alignment = .right
+        labelRow.field.alignment = .right
+        descriptionRow.onAction = { [weak self] in self?.editDescription() }
         profile.setRows([nameRow, labelRow, descriptionRow])
 
         column.addArrangedSubview(participants)
@@ -187,7 +190,6 @@ final class InspectorViewController: NSViewController {
             let commit: () -> Void = { [weak self] in self?.commitProfile(of: bot.id) }
             nameRow.onCommit = commit
             labelRow.onCommit = commit
-            descriptionRow.onCommit = commit
             runtime.setRows(runtimeRows(for: bot, in: chat))
         }
 
@@ -211,17 +213,23 @@ final class InspectorViewController: NSViewController {
             })
     }
 
-    /// Saves the profile rows when one of them finishes editing. An emptied name or label keeps
-    /// the old value; the description may be cleared.
+    /// Saves the compact profile rows when one of them finishes editing. An emptied value keeps
+    /// the old one; Description has its own sheet.
     private func commitProfile(of id: Bot.ID) {
         guard let bot = store.bot(id) else { return }
         let name = nameRow.value.isEmpty ? bot.name : nameRow.value
         let label = labelRow.value.isEmpty ? bot.label : labelRow.value
-        let description = descriptionRow.value
         nameRow.setValue(name)
         labelRow.setValue(label)
-        guard name != bot.name || label != bot.label || description != bot.description else { return }
-        store.updateBot(id, name: name, label: label, description: description)
+        guard name != bot.name || label != bot.label else { return }
+        store.updateBot(id, name: name, label: label)
+    }
+
+    private func editDescription() {
+        guard case let .chat(chatID) = selection, let chat = store.chat(chatID), chat.isDM,
+            let bot = store.bots(in: chat).first
+        else { return }
+        presentAsSheet(BotDescriptionViewController(botID: bot.id))
     }
 
     private func runtimeRows(for bot: Bot, in chat: Chat) -> [NSView] {

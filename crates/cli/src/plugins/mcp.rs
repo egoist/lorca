@@ -1726,7 +1726,7 @@ mod tests {
             provider: "deepseek".into(),
             model: None,
             thinking: None,
-            instructions: String::new(),
+            legacy_instructions: String::new(),
             workdir: None,
             created_at: 0.0,
         };

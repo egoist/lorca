@@ -911,7 +911,7 @@ mod tests {
         let app = App::load(crate::config::Config { home: home.clone(), port: 0 }).unwrap();
         let bot = Bot {
             id: "bot".into(), name: "Bot".into(), label: String::new(), description: String::new(), symbol_name: String::new(), accent: String::new(), avatar: None,
-            runner_id: "runner".into(), provider: "deepseek".into(), model: None, thinking: None, instructions: String::new(), workdir: Some(work.display().to_string()), created_at: 0.0,
+            runner_id: "runner".into(), provider: "deepseek".into(), model: None, thinking: None, legacy_instructions: String::new(), workdir: Some(work.display().to_string()), created_at: 0.0,
         };
         let assistant = AssistantMessage::empty("test", "test");
         let context = AgentContext { system_prompt: String::new(), messages: Vec::new(), tools: Vec::new() };

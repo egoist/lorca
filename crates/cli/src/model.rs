@@ -65,7 +65,7 @@ pub struct Bot {
     pub name: String,
     /// One short line under the name: what the bot is for.
     pub label: String,
-    /// A sentence or two about the bot, shown in its profile and its prompt.
+    /// What the bot does and how it should work, shown in its profile and used in its prompt.
     pub description: String,
     /// SF Symbol drawn on the accent gradient; the look when there is no image.
     pub symbol_name: String,
@@ -83,7 +83,11 @@ pub struct Bot {
     /// `None` means the provider's default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking: Option<String>,
-    pub instructions: String,
+    /// Compatibility with profiles written before Description became the single behavioral
+    /// field. It remains on the wire for one-version rolling upgrades, but is folded into
+    /// `description` as soon as the profile is read.
+    #[serde(default, rename = "instructions")]
+    pub legacy_instructions: String,
     /// Working directory for the coding tools on the Runner. Defaults to
     /// `<LORCA_HOME>/workspaces/<bot id>`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -141,6 +145,26 @@ impl AutoReview {
 }
 
 impl Bot {
+    /// Folds the old Instructions field into Description once. Existing paired Devices may
+    /// still send the old field during a rolling upgrade, so an empty compatibility value is
+    /// kept on the wire while current clients expose only Description.
+    pub fn normalize_description(&mut self) -> bool {
+        let legacy = self.legacy_instructions.trim();
+        if legacy.is_empty() {
+            return false;
+        }
+        let description = self.description.trim();
+        if description.is_empty() {
+            self.description = legacy.to_string();
+        } else if description != legacy && !description.ends_with(&format!("\n\n{legacy}")) {
+            self.description = format!("{description}\n\n{legacy}");
+        } else {
+            self.description = description.to_string();
+        }
+        self.legacy_instructions.clear();
+        true
+    }
+
     /// Where this bot's tools run, keyed by id so renames never move files. Created on first use.
     pub fn working_directory(&self, lorca_home: &std::path::Path) -> std::path::PathBuf {
         let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
@@ -652,6 +676,22 @@ fn probe_host() -> (String, String, String, String) {
 #[cfg(test)]
 mod app_view_tests {
     use super::*;
+
+    #[test]
+    fn old_bot_instructions_become_part_of_the_description_once() {
+        let mut bot: Bot = serde_json::from_value(serde_json::json!({
+            "id": "bot", "name": "Scout", "label": "Research", "description": "Find sources.",
+            "symbol_name": "binoculars", "accent": "teal", "runner_id": "runner",
+            "provider": "deepseek", "instructions": "Cite every claim.", "created_at": 1.0
+        }))
+        .unwrap();
+
+        assert!(bot.normalize_description());
+        assert_eq!(bot.description, "Find sources.\n\nCite every claim.");
+        assert!(bot.legacy_instructions.is_empty());
+        assert!(!bot.normalize_description());
+        assert_eq!(serde_json::to_value(bot).unwrap()["instructions"], "");
+    }
 
     #[test]
     fn the_apps_get_a_tool_row_without_its_payload() {

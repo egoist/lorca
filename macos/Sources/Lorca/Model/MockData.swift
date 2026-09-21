@@ -114,62 +114,55 @@ enum MockData {
                 id: "bot-nova",
                 name: "Nova",
                 label: "Generalist",
-                description: "Plans the work and delegates it to the team.",
+                description: "Plans the work and delegates it to the team. Breaks work down, hands it off with message_bot, and summarizes what came back.",
                 symbolName: "sparkles",
                 accent: .indigo,
                 runnerID: "dev-workbench",
                 provider: .chatgpt,
-                instructions:
-                    "You coordinate the other bots. Break work down, hand off with message_bot, and summarize what came back.",
                 createdAt: minutesAgo(60 * 24 * 21)
             ),
             Bot(
                 id: "bot-patch",
                 name: "Patch",
                 label: "Rust and Swift",
-                description: "Writes the diff, one small change at a time.",
+                description: "Implements changes in small diffs, explains the tradeoff in one line, and never invents APIs.",
                 symbolName: "chevron.left.forwardslash.chevron.right",
                 accent: .blue,
                 runnerID: "dev-studio",
                 provider: .deepseek,
-                instructions:
-                    "You implement changes. Prefer small diffs, explain the tradeoff in one line, never invent APIs.",
                 createdAt: minutesAgo(60 * 24 * 18)
             ),
             Bot(
                 id: "bot-scout",
                 name: "Scout",
                 label: "Research",
-                description: "Reads the sources before it answers and cites them.",
+                description: "Gathers context, reads the sources before answering, cites them, and says when it is unsure.",
                 symbolName: "binoculars.fill",
                 accent: .teal,
                 runnerID: "dev-studio",
                 provider: .deepseek,
-                instructions: "You gather context and cite where it came from. Say when you are unsure.",
                 createdAt: minutesAgo(60 * 24 * 12)
             ),
             Bot(
                 id: "bot-quill",
                 name: "Quill",
                 label: "Writing",
-                description: "Docs, copy, and release notes in plain language.",
+                description: "Writes docs, copy, and release notes in plain language: short sentences, no filler, and no exclamation marks.",
                 symbolName: "pencil.and.scribble",
                 accent: .pink,
                 runnerID: "dev-workbench",
                 provider: .deepseek,
-                instructions: "You write plainly. Short sentences. No filler, no exclamation marks.",
                 createdAt: minutesAgo(60 * 24 * 9)
             ),
             Bot(
                 id: "bot-ember",
                 name: "Ember",
                 label: "Ops",
-                description: "Deploys and watches the relay.",
+                description: "Handles deploys and incident triage, watches the relay, and always states the blast radius first.",
                 symbolName: "bolt.horizontal.fill",
                 accent: .orange,
                 runnerID: "dev-closet",
                 provider: .deepseek,
-                instructions: "You handle deploys and incident triage. Always state the blast radius first.",
                 createdAt: minutesAgo(60 * 24 * 4)
             ),
         ]

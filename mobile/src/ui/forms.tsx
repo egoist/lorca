@@ -114,11 +114,13 @@ export function Row({
   destructive,
   chevron,
   subtitle,
+  subtitleLines = 1,
   leading,
 }: {
   title: string;
   detail?: string;
   subtitle?: string;
+  subtitleLines?: number;
   icon?: string;
   leading?: ReactNode;
   accessory?: ReactNode;
@@ -138,7 +140,7 @@ export function Row({
           {title}
         </Text>
         {subtitle ? (
-          <Text style={[styles.rowSubtitle, { color: p.secondaryLabel }]} numberOfLines={1}>
+          <Text style={[styles.rowSubtitle, { color: p.secondaryLabel }]} numberOfLines={subtitleLines} ellipsizeMode="tail">
             {subtitle}
           </Text>
         ) : null}

@@ -174,6 +174,9 @@ impl App {
         let plugins = crate::plugins::Store::load(&config);
         let store = LocalStore::open(&config.database_path())?;
         let mut state = store.load_state()?;
+        for bot in &mut state.bots {
+            bot.normalize_description();
+        }
         let chat_ids: Vec<String> = state.chats.iter().map(|chat| chat.meta.id.clone()).collect();
         store.retain_chats(&chat_ids)?;
         let bots = state.bots.clone();
@@ -686,6 +689,7 @@ impl App {
             let mut state = self.state.lock().unwrap();
             let bot = state.bots.iter_mut().find(|b| b.id == id).ok_or_else(|| anyhow::anyhow!("Unknown bot"))?;
             update(bot);
+            bot.normalize_description();
             bot.clone()
         };
         self.roster_changed(true);
@@ -765,6 +769,7 @@ impl App {
     }
 
     fn insert_bot(&self, mut bot: Bot) -> anyhow::Result<Bot> {
+        bot.normalize_description();
         let runner = self.device(&bot.runner_id).ok_or_else(|| anyhow::anyhow!("Unknown Runner"))?;
         if !runner.is_runner() {
             anyhow::bail!("{} runs {} and cannot run bots", runner.name, runner.os);
@@ -1430,7 +1435,7 @@ mod tests {
             provider: "deepseek".into(),
             model: None,
             thinking: None,
-            instructions: String::new(),
+            legacy_instructions: String::new(),
             workdir: None,
             created_at: 1.0,
         }

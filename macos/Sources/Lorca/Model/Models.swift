@@ -250,7 +250,7 @@ struct Bot: Identifiable, Hashable {
     var name: String
     /// One short line under the name: what the bot is for.
     var label: String
-    /// A sentence or two about the bot.
+    /// What the bot does and how it should work.
     var description: String
     var symbolName: String
     var accent: Accent
@@ -263,7 +263,6 @@ struct Bot: Identifiable, Hashable {
     /// A custom profile image, kept as a `file` blob like a message attachment. Shown in place
     /// of the symbol and accent once this Mac has the bytes.
     var avatar: Attachment? = nil
-    var instructions: String
     var createdAt: Date
 }
 

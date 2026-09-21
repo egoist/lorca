@@ -529,7 +529,6 @@ final class AppStore {
             runnerID: runnerID,
             provider: provider,
             model: model,
-            instructions: "",
             createdAt: Date()
         )
         bots.append(bot)

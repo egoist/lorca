@@ -1,5 +1,5 @@
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Alert, Pressable, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 import { chatTitle, engine } from "../../src/core/engine";
 import { providerLabel, PROVIDER_KINDS, PROVIDER_MODELS, THINKING_LEVELS, thinkingLabel, type Bot, type Routine } from "../../src/core/model";
@@ -22,14 +22,19 @@ export default function ChatInfoScreen() {
   const devices = useStore((s) => s.devices);
   const seen = useStore((s) => s.device_seen);
   const working = useWorkingBotIds();
+  const members = chat?.bot_ids.map((botID) => bots.get(botID)).filter((bot): bot is Bot => !!bot) ?? [];
+  const isGroup = chat?.kind === "group";
+  const bot = isGroup ? undefined : members[0];
   const [adding, setAdding] = useState(false);
   const [title, setTitle] = useState(chat?.title ?? "");
+  const [botName, setBotName] = useState(bot?.name ?? "");
+  const [botLabel, setBotLabel] = useState(bot?.label ?? "");
   const routines = useRoutines(chat?.kind === "dm" ? chat.bot_ids[0] : undefined);
 
+  useEffect(() => setBotName(bot?.name ?? ""), [bot?.id, bot?.name]);
+  useEffect(() => setBotLabel(bot?.label ?? ""), [bot?.id, bot?.label]);
+
   if (!chat) return null;
-  const members = chat.bot_ids.map((b) => bots.get(b)).filter((b): b is Bot => !!b);
-  const isGroup = chat.kind === "group";
-  const bot = isGroup ? undefined : members[0];
 
   /// A routine's actions, as a sheet: run it now, or delete it. The bot edits it on request.
   function showRoutine(routine: Routine) {
@@ -60,6 +65,34 @@ export default function ChatInfoScreen() {
 
   function commitTitle() {
     if ((title.trim() || null) !== (chat!.title?.trim() || null)) engine.renameGroup(chat!.id, title);
+  }
+
+  async function commitBotName() {
+    if (!bot) return;
+    const name = botName.trim() || bot.name;
+    setBotName(name);
+    if (name === bot.name) return;
+    try {
+      const updated = await engine.updateBot(bot.id, { name });
+      setBotName(updated.name);
+    } catch (error) {
+      setBotName(bot.name);
+      Alert.alert(t("Could not update the bot"), error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function commitBotLabel() {
+    if (!bot) return;
+    const label = botLabel.trim() || bot.label;
+    setBotLabel(label);
+    if (label === bot.label) return;
+    try {
+      const updated = await engine.updateBot(bot.id, { label });
+      setBotLabel(updated.label);
+    } catch (error) {
+      setBotLabel(bot.label);
+      Alert.alert(t("Could not update the bot"), error instanceof Error ? error.message : String(error));
+    }
   }
 
   function confirmDelete() {
@@ -96,6 +129,14 @@ export default function ChatInfoScreen() {
         <Text style={[styles.heroTitle, { color: p.label }]}>{chatTitle(chat)}</Text>
         {bot ? <Text style={[styles.heroSubtitle, { color: p.secondaryLabel }]}>{bot.label}</Text> : <Text style={[styles.heroSubtitle, { color: p.secondaryLabel }]}>{members.length === 1 ? t("{count} bot", { count: members.length }) : t("{count} bots", { count: members.length })}</Text>}
       </View>
+
+      {bot && (
+        <Section>
+          <FieldRow label={t("Name")} value={botName} onChangeText={setBotName} onBlur={() => void commitBotName()} autoCapitalize="words" returnKeyType="done" submitBehavior="blurAndSubmit" textAlign="right" />
+          <FieldRow label={t("Label")} value={botLabel} onChangeText={setBotLabel} onBlur={() => void commitBotLabel()} autoCapitalize="sentences" returnKeyType="done" submitBehavior="blurAndSubmit" textAlign="right" />
+          <Row title={t("Description")} subtitle={bot.description || undefined} subtitleLines={2} chevron onPress={() => router.push(`/chat-info/description/${bot.id}`)} />
+        </Section>
+      )}
 
       {isGroup && (
         <Section title={t("Name")}>
@@ -205,14 +246,6 @@ export default function ChatInfoScreen() {
         </Section>
       )}
 
-      {bot && bot.instructions ? (
-        <Section title={t("Instructions")}>
-          <View style={styles.instructions}>
-            <Text style={{ color: p.label, fontSize: 15, lineHeight: 21 }}>{bot.instructions}</Text>
-          </View>
-        </Section>
-      ) : null}
-
       {isGroup && (
         <Section title={t("Members")} footer={chat.bot_ids.length >= 6 ? t("A group holds up to six bots.") : t("Bots in a group take turns answering; @mention one to hear from it first.")}>
           {members.map((member) => (
@@ -273,5 +306,4 @@ const styles = StyleSheet.create({
   heroSubtitle: { fontSize: 15, textAlign: "center", paddingHorizontal: 32 },
   deviceIcon: { width: 32, alignItems: "center" },
   deviceDot: { position: "absolute", right: 0, bottom: -2, width: 10, height: 10, borderRadius: 5, borderWidth: 2 },
-  instructions: { paddingHorizontal: 16, paddingVertical: 12 },
 });
