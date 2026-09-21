@@ -158,6 +158,7 @@
 "Copy command" = "拷贝命令";
 "Copy pairing string" = "拷贝配对字符串";
 "Copy Phrase" = "拷贝短语";
+"Copied" = "已拷贝";
 "Could not start %@: %@" = "无法启动 %1$@：%2$@";
 "Couldn't add it: %@" = "无法添加：%@";
 "Couldn't install %@: %@" = "无法安装 %1$@：%2$@";

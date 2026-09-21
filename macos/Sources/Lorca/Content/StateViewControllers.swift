@@ -35,9 +35,15 @@ final class OfflineViewController: NSViewController {
         commandBox.fillColor = Theme.codeBackground
         let commandLabel = Build.label("$ \(command)", font: Theme.Font.code, color: .labelColor)
         commandLabel.isSelectable = true
-        let copyButton = Build.imageButton(
-            symbol: "doc.on.doc", pointSize: 12, tooltip: L("Copy command"), target: self,
-            action: #selector(copyCommand))
+        let copyButton = CopyFeedbackButton()
+        copyButton.image = NSImage(systemSymbolName: "doc.on.doc", accessibilityDescription: L("Copy command"))
+        copyButton.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 12, weight: .medium)
+        copyButton.bezelStyle = .accessoryBarAction
+        copyButton.isBordered = false
+        copyButton.toolTip = L("Copy command")
+        copyButton.target = self
+        copyButton.action = #selector(copyCommand(_:))
+        copyButton.translatesAutoresizingMaskIntoConstraints = false
         commandBox.addSubview(commandLabel)
         commandBox.addSubview(copyButton)
 
@@ -82,9 +88,11 @@ final class OfflineViewController: NSViewController {
         }
     }
 
-    @objc private func copyCommand() {
+    @objc private func copyCommand(_ sender: CopyFeedbackButton) {
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(command, forType: .string)
+        if NSPasteboard.general.setString(command, forType: .string) {
+            sender.showCopied()
+        }
     }
 
     @objc private func retry() {

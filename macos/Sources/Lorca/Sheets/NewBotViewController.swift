@@ -272,7 +272,7 @@ final class PairingSheetViewController: SheetViewController {
     /// Covers the code once a Device has used it: a code pairs one Device, and scanning it
     /// again would only fail on the phone.
     private let pairedOverlay = BackgroundView()
-    private var copy: NSButton?
+    private var copy: CopyFeedbackButton?
     private var task: Task<Void, Never>?
 
     init() {
@@ -313,9 +313,15 @@ final class PairingSheetViewController: SheetViewController {
         codeBox.fillColor = Theme.codeBackground
         code.isSelectable = true
         code.lineBreakMode = .byCharWrapping
-        let copy = Build.imageButton(
-            symbol: "doc.on.doc", pointSize: 11, tooltip: L("Copy pairing string"), target: self,
-            action: #selector(copyPairingString))
+        let copy = CopyFeedbackButton()
+        copy.image = NSImage(systemSymbolName: "doc.on.doc", accessibilityDescription: L("Copy pairing string"))
+        copy.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 11, weight: .medium)
+        copy.bezelStyle = .accessoryBarAction
+        copy.isBordered = false
+        copy.toolTip = L("Copy pairing string")
+        copy.target = self
+        copy.action = #selector(copyPairingString(_:))
+        copy.translatesAutoresizingMaskIntoConstraints = false
         self.copy = copy
         codeBox.addSubview(code)
         codeBox.addSubview(copy)
@@ -411,9 +417,11 @@ final class PairingSheetViewController: SheetViewController {
         statusLabel.textColor = .systemGreen
     }
 
-    @objc private func copyPairingString() {
+    @objc private func copyPairingString(_ sender: CopyFeedbackButton) {
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(pairingString, forType: .string)
+        if NSPasteboard.general.setString(pairingString, forType: .string) {
+            sender.showCopied()
+        }
     }
 
     /// Cancel retires the code: the CLI stops waiting and the relay drops the mailbox, so a

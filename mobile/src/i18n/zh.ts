@@ -71,6 +71,7 @@ export const zh: Record<string, string> = {
   "Connecting…": "正在连接…",
   "Copy code and open": "复制验证码并打开",
   "Copy a pairing code from Lorca on another computer first.": "请先从另一台电脑上的 Lorca 复制配对码。",
+  "Copied": "已复制",
   "Could not create the bot": "无法创建智能体",
   "Could not update the bot": "无法更新智能体",
   "Could not create the group": "无法创建群聊",

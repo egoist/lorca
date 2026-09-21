@@ -3,7 +3,7 @@
 // fifteen minutes of silence, the "is working" row, "Chef stopped without replying", and the
 // centered "Message from ◉ Name" / "Messaged ◉ Name" markers. Tool calls never render.
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Linking, Pressable, StyleSheet, Text, View } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withDelay, withRepeat, withSequence, withTiming } from "react-native-reanimated";
@@ -197,6 +197,7 @@ export function NoticeRow({ row }: { row: Extract<Row, { type: "notice" }> }) {
 /// one line, and Allow once / Always allow / Deny while it waits, then the answer.
 export function PermissionRow({ row, onDecide }: { row: Extract<Row, { type: "permission" }>; onDecide: (decision: "allow" | "always" | "deny") => void }) {
   const p = usePalette();
+  const [copied, setCopied] = useState(false);
   const pending = row.body.decision === "pending";
   const connect = row.body.tool === "connect";
   const who = row.bot?.name ?? t("The bot");
@@ -214,6 +215,11 @@ export function PermissionRow({ row, onDecide }: { row: Extract<Row, { type: "pe
     : row.body.tool === "install"
       ? [[t("Allow"), "allow"], [t("Deny"), "deny"]]
       : [[t("Allow once"), "allow"], [t("Always allow"), "always"], [t("Deny"), "deny"]];
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(false), 1500);
+    return () => clearTimeout(timer);
+  }, [copied]);
   return (
     <View style={{ paddingTop: row.groupStart ? 14 : 6, paddingHorizontal: INSET }}>
       <View style={[styles.permission, { backgroundColor: p.cell, borderColor: p.separator }]}>
@@ -235,13 +241,23 @@ export function PermissionRow({ row, onDecide }: { row: Extract<Row, { type: "pe
           <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginTop: 4 }}>
             <Text selectable style={{ color: p.label, fontSize: 17, fontWeight: "700", fontFamily: "Menlo" }}>{row.body.code}</Text>
             <Pressable
-              onPress={() => {
-                if (row.body.code) void Clipboard.setStringAsync(row.body.code);
+              onPress={async () => {
+                if (row.body.code) {
+                  await Clipboard.setStringAsync(row.body.code);
+                  setCopied(true);
+                }
                 if (row.body.link) void Linking.openURL(row.body.link);
               }}
               style={({ pressed }) => [styles.permissionButton, { backgroundColor: pressed ? p.separator : p.fill }]}
+              accessibilityRole="button"
+              accessibilityLabel={copied ? t("Copied") : t("Copy code and open")}
             >
-              <Text style={{ color: p.tint, fontSize: 13, fontWeight: "600" }}>{t("Copy code and open")}</Text>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
+                {copied ? <Symbol name="checkmark" size={13} color={p.green} weight="semibold" /> : null}
+                <Text style={{ color: copied ? p.green : p.tint, fontSize: 13, fontWeight: "600" }}>
+                  {copied ? t("Copied") : t("Copy code and open")}
+                </Text>
+              </View>
             </Pressable>
           </View>
         ) : null}

@@ -11,7 +11,7 @@ final class OnboardingWindowController: NSWindowController {
         let controller = OnboardingViewController(onFinish: onFinish)
         self.controller = controller
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 660, height: 520),
+            contentRect: NSRect(x: 0, y: 0, width: 660, height: 560),
             styleMask: [.titled, .closable, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -70,7 +70,7 @@ final class OnboardingViewController: NSViewController {
         root.addSubview(container)
         NSLayoutConstraint.activate([
             root.widthAnchor.constraint(equalToConstant: 660),
-            root.heightAnchor.constraint(equalToConstant: 520),
+            root.heightAnchor.constraint(equalToConstant: 560),
             container.topAnchor.constraint(equalTo: root.topAnchor, constant: 28),
             container.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 44),
             container.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -44),
@@ -169,7 +169,7 @@ final class OnboardingViewController: NSViewController {
 
         let grid = phraseGrid(words: phrase)
 
-        let copy = NSButton(title: L("Copy Phrase"), target: self, action: #selector(copyPhrase))
+        let copy = CopyFeedbackButton(title: L("Copy Phrase"), target: self, action: #selector(copyPhrase(_:)))
         copy.bezelStyle = .rounded
 
         let confirm = NSButton(
@@ -282,10 +282,10 @@ final class OnboardingViewController: NSViewController {
         labelField.placeholderString = L("What it is for")
         labelField.identifier = NSUserInterfaceItemIdentifier("botLabel")
         let descriptionField = WrappingTextField()
-        descriptionField.stringValue = firstBot?.description ?? "Learns what you work on, proposes a small team of one-job bots, and routes work to them."
+        descriptionField.stringValue = firstBot?.description ?? "A general-purpose assistant for planning work and getting things done."
         descriptionField.placeholderString = L("What it does and how it should work")
         descriptionField.usesSingleLineMode = false
-        descriptionField.maximumNumberOfLines = 0
+        descriptionField.maximumNumberOfLines = 3
         descriptionField.lineBreakMode = .byWordWrapping
         descriptionField.cell?.wraps = true
         descriptionField.cell?.isScrollable = false
@@ -400,7 +400,7 @@ final class OnboardingViewController: NSViewController {
         }
         // Columns exist only once a row is added.
         grid.column(at: 0).xPlacement = .trailing
-        grid.column(at: 0).width = 64
+        grid.column(at: 0).width = 76
         return grid
     }
 
@@ -534,6 +534,7 @@ final class OnboardingViewController: NSViewController {
             body.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 26),
             body.leadingAnchor.constraint(equalTo: host.leadingAnchor),
             body.trailingAnchor.constraint(lessThanOrEqualTo: host.trailingAnchor),
+            body.bottomAnchor.constraint(lessThanOrEqualTo: buttons.topAnchor, constant: -20),
 
             buttons.trailingAnchor.constraint(equalTo: host.trailingAnchor),
             buttons.bottomAnchor.constraint(equalTo: host.bottomAnchor),
@@ -708,9 +709,11 @@ final class OnboardingViewController: NSViewController {
         onFinish()
     }
 
-    @objc private func copyPhrase() {
+    @objc private func copyPhrase(_ sender: CopyFeedbackButton) {
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(phrase.joined(separator: " "), forType: .string)
+        if NSPasteboard.general.setString(phrase.joined(separator: " "), forType: .string) {
+            sender.showCopied()
+        }
     }
 
     private func setStatus(_ text: String, color: NSColor) {

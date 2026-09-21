@@ -593,7 +593,7 @@ final class PermissionCellView: NSTableCellView {
     private let alwaysButton = NSButton()
     private let denyButton = NSButton()
     private let codeLabel = Build.label("", font: .monospacedSystemFont(ofSize: 15, weight: .semibold))
-    private let openButton = NSButton()
+    private let openButton = CopyFeedbackButton()
     private var groupStart = true
     private var pending = true
     private var summaryText = ""
@@ -633,16 +633,18 @@ final class PermissionCellView: NSTableCellView {
         openButton.controlSize = .small
         openButton.font = .systemFont(ofSize: 11)
         openButton.target = self
-        openButton.action = #selector(openLink)
+        openButton.action = #selector(openLink(_:))
         addSubview(codeLabel.framePositioned())
         addSubview(openButton.framePositioned())
     }
 
     /// Copies the code and opens the sign-in page, so the code is one paste away.
-    @objc private func openLink() {
+    @objc private func openLink(_ sender: CopyFeedbackButton) {
         if let code {
             NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(code, forType: .string)
+            if NSPasteboard.general.setString(code, forType: .string) {
+                sender.showCopied()
+            }
         }
         if let link, let url = URL(string: link) { NSWorkspace.shared.open(url) }
     }
@@ -653,6 +655,7 @@ final class PermissionCellView: NSTableCellView {
     override var isFlipped: Bool { true }
 
     func configure(request: PermissionRequest, botName: String, groupStart: Bool) {
+        openButton.resetCopyFeedback()
         self.groupStart = groupStart
         pending = request.isPending
         icon.image = NSImage(systemSymbolName: request.isConnect ? "person.crop.circle.badge.checkmark" : (request.isInstall ? "puzzlepiece.extension" : "hand.raised"), accessibilityDescription: nil)

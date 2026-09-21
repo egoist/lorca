@@ -69,6 +69,62 @@ enum Build {
     }
 }
 
+/// A button that briefly confirms a successful clipboard write without needing a separate
+/// status label beside every place the app offers Copy.
+final class CopyFeedbackButton: NSButton {
+    private struct Appearance {
+        let title: String
+        let image: NSImage?
+        let imagePosition: NSControl.ImagePosition
+        let tint: NSColor?
+        let toolTip: String?
+    }
+
+    private var normalAppearance: Appearance?
+    private var resetWork: DispatchWorkItem?
+
+    func showCopied() {
+        resetCopyFeedback()
+        normalAppearance = Appearance(
+            title: title,
+            image: image,
+            imagePosition: imagePosition,
+            tint: contentTintColor,
+            toolTip: toolTip
+        )
+
+        let copied = L("Copied")
+        image = NSImage(systemSymbolName: "checkmark", accessibilityDescription: copied)
+        if title.isEmpty {
+            imagePosition = .imageOnly
+        } else {
+            title = copied
+            imagePosition = .imageLeading
+        }
+        contentTintColor = .systemGreen
+        toolTip = copied
+
+        let work = DispatchWorkItem { [weak self] in
+            self?.resetCopyFeedback()
+        }
+        resetWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: work)
+    }
+
+    /// Cell reuse and other state changes can restore the ordinary label immediately.
+    func resetCopyFeedback() {
+        resetWork?.cancel()
+        resetWork = nil
+        guard let normalAppearance else { return }
+        title = normalAppearance.title
+        image = normalAppearance.image
+        imagePosition = normalAppearance.imagePosition
+        contentTintColor = normalAppearance.tint
+        toolTip = normalAppearance.toolTip
+        self.normalAppearance = nil
+    }
+}
+
 /// Layer-backed rectangle with an optional border; used for bubbles, chips and cards.
 class BackgroundView: NSView {
     var fillColor: NSColor = .clear { didSet { needsDisplay = true } }
