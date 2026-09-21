@@ -10,6 +10,7 @@ import { CheckRow, FieldRow, Section } from "../src/ui/forms";
 import { BOT_SYMBOLS, Symbol } from "../src/ui/Symbol";
 import { ACCENTS, accentColors, usePalette } from "../src/ui/theme";
 import { deviceSymbol } from "../src/ui/devices";
+import { FormToolbar } from "../src/ui/navigation";
 
 export default function NewBotScreen() {
   const router = useRouter();
@@ -44,14 +45,7 @@ export default function NewBotScreen() {
   return (
     <>
       <Stack.Screen options={{ title: t("New Bot") }} />
-      <Stack.Toolbar placement="left">
-        <Stack.Toolbar.Button onPress={() => router.dismiss()}>{t("Cancel")}</Stack.Toolbar.Button>
-      </Stack.Toolbar>
-      <Stack.Toolbar placement="right">
-        <Stack.Toolbar.Button variant="done" disabled={!canSave} onPress={() => void save()}>
-          {t("Create")}
-        </Stack.Toolbar.Button>
-      </Stack.Toolbar>
+      <FormToolbar cancelLabel={t("Cancel")} saveLabel={t("Create")} saveDisabled={!canSave} onCancel={() => router.dismiss()} onSave={() => void save()} />
       <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={{ paddingBottom: 40 }} keyboardDismissMode="on-drag" keyboardShouldPersistTaps="handled">
         <View style={styles.hero}>
           <LinearGradient colors={accentColors(accent, p.dark)} start={{ x: 0.3, y: 0 }} end={{ x: 0.7, y: 1 }} style={styles.heroAvatar}>
@@ -69,7 +63,7 @@ export default function NewBotScreen() {
           <View style={styles.grid}>
             {BOT_SYMBOLS.map((s) => (
               <Pressable key={s} onPress={() => setSymbol(s)} style={[styles.symbolCell, { backgroundColor: s === symbol ? p.tint : p.fill }]} accessibilityLabel={s}>
-                <Symbol name={s} size={20} color={s === symbol ? "#FFFFFF" : p.label} />
+                <Symbol name={s} size={20} color={s === symbol ? p.userBubbleText : p.label} />
               </Pressable>
             ))}
           </View>

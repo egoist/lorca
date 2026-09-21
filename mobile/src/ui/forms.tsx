@@ -3,9 +3,9 @@
 
 import { Button as MenuButton, Divider, HStack, Host, Image as MenuImage, Menu, Text as MenuText } from "@expo/ui/swift-ui";
 import { foregroundStyle, frame, lineLimit, tint, truncationMode } from "@expo/ui/swift-ui/modifiers";
-import { useState, type ReactNode } from "react";
-import { Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View, type StyleProp, type TextInputProps, type ViewStyle } from "react-native";
-import { t } from "../i18n";
+import { MenuView, type MenuAction } from "@expo/ui/community/menu";
+import { type ReactNode } from "react";
+import { Platform, Pressable, StyleSheet, Switch, Text, TextInput, useWindowDimensions, View, type StyleProp, type TextInputProps, type ViewStyle } from "react-native";
 import { Symbol } from "./Symbol";
 import { Font, usePalette } from "./theme";
 
@@ -14,7 +14,7 @@ export function Section({ title, footer, children, style }: { title?: string; fo
   const items = Array.isArray(children) ? children.filter(Boolean) : [children];
   return (
     <View style={[styles.section, style]}>
-      {title ? <Text style={[styles.sectionTitle, { color: p.secondaryLabel }]}>{title.toUpperCase()}</Text> : null}
+      {title ? <Text style={[styles.sectionTitle, { color: p.secondaryLabel }]}>{Platform.OS === "ios" ? title.toUpperCase() : title}</Text> : null}
       <View style={[styles.group, { backgroundColor: p.cell }]}>
         {items.map((child, index) => (
           <View key={index}>
@@ -39,48 +39,30 @@ export interface MenuChoice {
 /// A row's value that drops a native menu of choices on tap, as a pop-up button does in iOS
 /// Settings: the value with the up-down chevrons, a checkmark on the choice in force. It is a
 /// `Row`'s `menu`: the row keeps its title whole and the value takes what is left, cut at the
-/// tail when it is long. Android uses a scrollable modal with the same choices.
+/// tail when it is long. Android uses a Material 3 dropdown menu from Jetpack Compose.
 function MenuAccessory({ value, title, choices }: { value: string; title: string; choices: MenuChoice[] }) {
   const p = usePalette();
-  const [open, setOpen] = useState(false);
+  const { width } = useWindowDimensions();
   if (Platform.OS !== "ios") {
+    const actions: MenuAction[] = choices.map((choice, index) => ({
+      id: String(index),
+      title: choice.title,
+      state: choice.selected ? "on" : "off",
+    }));
     return (
-      <>
-        <Pressable onPress={() => setOpen(true)} hitSlop={8} style={styles.menu}>
-          <Text style={[styles.rowDetail, { color: p.secondaryLabel, maxWidth: undefined, textAlign: "right" }]} numberOfLines={1}>
+      <MenuView
+        title={title}
+        actions={actions}
+        style={styles.androidMenu}
+        onPressAction={({ nativeEvent }) => choices[Number(nativeEvent.event)]?.onPress()}
+      >
+        <View style={styles.androidMenuTrigger} accessible accessibilityRole="button" accessibilityLabel={`${title}, ${value}`}>
+          <Text style={[styles.rowDetail, { color: p.secondaryLabel, maxWidth: Math.min(220, width * 0.52), textAlign: "right" }]} numberOfLines={1}>
             {value}
           </Text>
-        </Pressable>
-        <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
-          <View style={styles.menuOverlay}>
-            <Pressable style={styles.menuBackdrop} onPress={() => setOpen(false)} />
-            <View style={[styles.menuDialog, { backgroundColor: p.cell }]}>
-              <Text style={[styles.menuTitle, { color: p.label }]}>{title}</Text>
-              <ScrollView style={styles.menuChoices}>
-                {choices.map((choice, index) => (
-                  <View key={`${choice.title}-${index}`}>
-                    {index > 0 && !choices[index - 1].dividerAfter ? <View style={[styles.menuChoiceSeparator, { backgroundColor: p.separator }]} /> : null}
-                    <Pressable
-                      onPress={() => {
-                        setOpen(false);
-                        choice.onPress();
-                      }}
-                      style={({ pressed }) => [styles.menuChoice, pressed && { backgroundColor: p.fill }]}
-                    >
-                      <Text style={[styles.rowTitle, { color: p.label, flex: 1 }]}>{choice.title}</Text>
-                      {choice.selected ? <Symbol name="checkmark" size={16} color={p.tint} weight="semibold" /> : null}
-                    </Pressable>
-                    {choice.dividerAfter ? <View style={[styles.menuDivider, { backgroundColor: p.groupedBackground }]} /> : null}
-                  </View>
-                ))}
-              </ScrollView>
-              <Pressable onPress={() => setOpen(false)} style={({ pressed }) => [styles.menuCancel, { borderTopColor: p.separator }, pressed && { backgroundColor: p.fill }]}>
-                <Text style={[styles.rowTitle, { color: p.tint, fontWeight: "600" }]}>{t("Cancel")}</Text>
-              </Pressable>
-            </View>
-          </View>
-        </Modal>
-      </>
+          <Symbol name="chevron.up.chevron.down" size={16} color={p.secondaryLabel} />
+        </View>
+      </MenuView>
     );
   }
   return (
@@ -163,7 +145,12 @@ export function ToggleRow({ title, value, onValueChange, icon }: { title: string
     <View style={styles.row}>
       {icon ? <Symbol name={icon} size={20} color={p.label} /> : null}
       <Text style={[styles.rowTitle, { color: p.label, flex: 1 }]}>{title}</Text>
-      <Switch value={value} onValueChange={onValueChange} />
+      <Switch
+        value={value}
+        onValueChange={onValueChange}
+        trackColor={Platform.OS === "android" ? { false: p.fill, true: p.secondaryFill } : undefined}
+        thumbColor={Platform.OS === "android" ? p.tint : undefined}
+      />
     </View>
   );
 }
@@ -204,25 +191,18 @@ export function CheckRow({ title, subtitle, checked, onPress, leading }: { title
 }
 
 const styles = StyleSheet.create({
-  section: { paddingHorizontal: 16, paddingTop: 20 },
-  sectionTitle: { fontSize: 13, marginLeft: 16, marginBottom: 7, letterSpacing: 0.2 },
-  footer: { fontSize: 13, marginLeft: 16, marginTop: 7, lineHeight: 18 },
-  group: { borderRadius: 12, overflow: "hidden" },
+  section: { paddingHorizontal: 16, paddingTop: Platform.OS === "android" ? 24 : 20 },
+  sectionTitle: { fontSize: Platform.OS === "android" ? 14 : 13, marginLeft: Platform.OS === "android" ? 0 : 16, marginBottom: 7, letterSpacing: Platform.OS === "android" ? 0 : 0.2, fontWeight: Platform.OS === "android" ? "600" : "400" },
+  footer: { fontSize: 13, marginLeft: Platform.OS === "android" ? 0 : 16, marginTop: 7, lineHeight: 18 },
+  group: { borderRadius: Platform.OS === "android" ? 16 : 12, overflow: "hidden" },
   separator: { height: StyleSheet.hairlineWidth, marginLeft: 16 },
-  row: { flexDirection: "row", alignItems: "center", minHeight: 44, paddingHorizontal: 16, paddingVertical: 10, gap: 12 },
+  row: { flexDirection: "row", alignItems: "center", minHeight: Platform.OS === "android" ? 56 : 44, paddingHorizontal: 16, paddingVertical: 10, gap: 12 },
   rowMultiline: { alignItems: "flex-start" },
   rowText: { flex: 1, gap: 2 },
   rowTextWhole: { flexShrink: 0, gap: 2 },
   menu: { flex: 1, minWidth: 0 },
-  menuOverlay: { flex: 1, justifyContent: "center", paddingHorizontal: 28 },
-  menuBackdrop: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0, backgroundColor: "rgba(0,0,0,0.35)" },
-  menuDialog: { borderRadius: 16, overflow: "hidden", maxHeight: "75%" },
-  menuTitle: { fontSize: Font.body, fontWeight: "700", paddingHorizontal: 16, paddingTop: 16, paddingBottom: 10 },
-  menuChoices: { flexShrink: 1 },
-  menuChoice: { minHeight: 48, paddingHorizontal: 16, paddingVertical: 12, flexDirection: "row", alignItems: "center", gap: 12 },
-  menuChoiceSeparator: { height: StyleSheet.hairlineWidth, marginLeft: 16 },
-  menuDivider: { height: 8 },
-  menuCancel: { minHeight: 48, borderTopWidth: StyleSheet.hairlineWidth, alignItems: "center", justifyContent: "center" },
+  androidMenu: { flex: 1, minWidth: 0, alignItems: "flex-end" },
+  androidMenuTrigger: { minHeight: 36, maxWidth: "100%", flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: 4, paddingLeft: 8 },
   rowTitle: { fontSize: Font.body },
   rowSubtitle: { fontSize: Font.small },
   rowDetail: { fontSize: Font.body, maxWidth: "55%" },

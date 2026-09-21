@@ -4,7 +4,7 @@
 
 import { getLocales } from "expo-localization";
 import { ExpoSpeechRecognitionModule } from "expo-speech-recognition";
-import { ActionSheetIOS, Alert, Platform } from "react-native";
+import { ActionSheetIOS } from "react-native";
 import { mutate, useStore } from "../core/store";
 import { useEffect, useState } from "react";
 import { language as appLanguage, t } from "../i18n";
@@ -110,20 +110,14 @@ export function useSupportedLanguages(): string[] {
   return languages;
 }
 
-/// The language sheet, from Settings or a long press on the microphone.
+/// The iOS language sheet opened by a long press on the microphone. Android hosts the same
+/// complete list in a Material dropdown anchored to the microphone in `Composer`.
 export async function pickDictationLanguage() {
   const languages = await supportedLanguages();
   const automatic = t("Automatic ({language})", { language: languageName(automaticLanguage(languages)) });
   const options = [automatic, ...languages.map(languageName)];
   const choose = (index: number) => setDictationLanguage(index === 0 ? undefined : languages[index - 1]);
-  if (Platform.OS === "ios") {
-    ActionSheetIOS.showActionSheetWithOptions({ options: [...options, t("Cancel")], cancelButtonIndex: options.length, title: t("Dictation language") }, (index) => {
-      if (index < options.length) choose(index);
-    });
-  } else {
-    Alert.alert(t("Dictation language"), undefined, [
-      ...options.slice(0, 8).map((title, index) => ({ text: title, onPress: () => choose(index) })),
-      { text: t("Cancel"), style: "cancel" as const },
-    ]);
-  }
+  ActionSheetIOS.showActionSheetWithOptions({ options: [...options, t("Cancel")], cancelButtonIndex: options.length, title: t("Dictation language") }, (index) => {
+    if (index < options.length) choose(index);
+  });
 }

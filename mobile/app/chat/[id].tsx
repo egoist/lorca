@@ -50,6 +50,7 @@ import { AvatarCluster } from "../../src/ui/Avatar";
 import { Composer, Surface } from "../../src/ui/Composer";
 import { Symbol } from "../../src/ui/Symbol";
 import { usePalette } from "../../src/ui/theme";
+import { AndroidIcons } from "../../src/ui/navigation";
 import {
   buildRows,
   DayRow,
@@ -571,7 +572,7 @@ export default function ChatScreen() {
       </Stack.Title>
       <Stack.Toolbar placement="right">
         <Stack.Toolbar.Button
-          icon="ellipsis"
+          icon={Platform.OS === "android" ? AndroidIcons.more : "ellipsis"}
           accessibilityLabel={t("Chat info")}
           onPress={() => router.push(`/chat-info/${id}`)}
         />

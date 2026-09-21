@@ -1,7 +1,9 @@
 import * as Application from "expo-application";
+import { AlertDialog, Column, Host, OutlinedTextField, RadioButton, Row as ComposeRow, Text as ComposeText, TextButton } from "@expo/ui/jetpack-compose";
+import { clickable, fillMaxWidth, padding } from "@expo/ui/jetpack-compose/modifiers";
 import { Stack, useRouter } from "expo-router";
 import { useState } from "react";
-import { Alert, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Alert, Platform, ScrollView, StyleSheet, Text, View } from "react-native";
 import { engine } from "../../src/core/engine";
 import { isRunner, providerLabel } from "../../src/core/model";
 import { deviceIsOnline, useStore } from "../../src/core/store";
@@ -11,6 +13,7 @@ import { lastSeen } from "../../src/ui/format";
 import { Symbol } from "../../src/ui/Symbol";
 import { usePalette } from "../../src/ui/theme";
 import { deviceSymbol } from "../../src/ui/devices";
+import { CloseToolbar } from "../../src/ui/navigation";
 import {
   automaticLanguage,
   languageName,
@@ -31,6 +34,9 @@ export default function SettingsScreen() {
   const providers = useStore((s) => s.providers);
   const thisDevice = devices.find((d) => d.is_this_device);
   const [name, setName] = useState(thisDevice?.name ?? "");
+  const [addingRule, setAddingRule] = useState(false);
+  const [ruleText, setRuleText] = useState("");
+  const [ruleBehavior, setRuleBehavior] = useState<"allow" | "ask">("allow");
   const dictation = useDictationLanguage();
   const appLanguage = useLanguage();
 
@@ -58,6 +64,12 @@ export default function SettingsScreen() {
   }
 
   function addRule() {
+    if (Platform.OS === "android") {
+      setRuleText("");
+      setRuleBehavior("allow");
+      setAddingRule(true);
+      return;
+    }
     Alert.prompt(t("New rule"), t("When a bot wants to…"), [
       { text: t("Cancel"), style: "cancel" },
       {
@@ -132,11 +144,7 @@ export default function SettingsScreen() {
   return (
     <>
       <Stack.Screen options={{ title: t("Settings") }} />
-      <Stack.Toolbar placement="right">
-        <Stack.Toolbar.Button variant="done" onPress={() => router.dismiss()}>
-          {t("Done")}
-        </Stack.Toolbar.Button>
-      </Stack.Toolbar>
+      <CloseToolbar label={Platform.OS === "android" ? t("Close") : t("Done")} onClose={() => router.dismiss()} />
       <ScrollView
         contentInsetAdjustmentBehavior="automatic"
         contentContainerStyle={{ paddingBottom: 40 }}
@@ -283,6 +291,54 @@ export default function SettingsScreen() {
           {Application.nativeBuildVersion ?? ""})
         </Text>
       </ScrollView>
+      {Platform.OS === "android" && addingRule ? (
+        <Host style={styles.dialogHost} pointerEvents="box-none">
+          <AlertDialog onDismissRequest={() => setAddingRule(false)}>
+            <AlertDialog.Title>
+              <ComposeText style={{ typography: "headlineSmall" }}>{t("New rule")}</ComposeText>
+            </AlertDialog.Title>
+            <AlertDialog.Text>
+              <Column verticalArrangement={{ spacedBy: 12 }} modifiers={[fillMaxWidth()]}>
+                <OutlinedTextField autoFocus singleLine onValueChange={setRuleText} modifiers={[fillMaxWidth()]}>
+                  <OutlinedTextField.Placeholder>
+                    <ComposeText>{t("When a bot wants to…")}</ComposeText>
+                  </OutlinedTextField.Placeholder>
+                </OutlinedTextField>
+                <ComposeRow
+                  verticalAlignment="center"
+                  modifiers={[fillMaxWidth(), clickable(() => setRuleBehavior("allow")), padding(0, 4, 0, 4)]}
+                >
+                  <RadioButton selected={ruleBehavior === "allow"} onClick={() => setRuleBehavior("allow")} />
+                  <ComposeText>{t("Allow automatically")}</ComposeText>
+                </ComposeRow>
+                <ComposeRow
+                  verticalAlignment="center"
+                  modifiers={[fillMaxWidth(), clickable(() => setRuleBehavior("ask")), padding(0, 4, 0, 4)]}
+                >
+                  <RadioButton selected={ruleBehavior === "ask"} onClick={() => setRuleBehavior("ask")} />
+                  <ComposeText>{t("Ask first")}</ComposeText>
+                </ComposeRow>
+              </Column>
+            </AlertDialog.Text>
+            <AlertDialog.ConfirmButton>
+              <TextButton
+                enabled={!!ruleText.trim()}
+                onClick={() => {
+                  saveRule(ruleText, ruleBehavior);
+                  setAddingRule(false);
+                }}
+              >
+                <ComposeText>{t("Create")}</ComposeText>
+              </TextButton>
+            </AlertDialog.ConfirmButton>
+            <AlertDialog.DismissButton>
+              <TextButton onClick={() => setAddingRule(false)}>
+                <ComposeText>{t("Cancel")}</ComposeText>
+              </TextButton>
+            </AlertDialog.DismissButton>
+          </AlertDialog>
+        </Host>
+      ) : null}
     </>
   );
 }
@@ -299,4 +355,5 @@ const styles = StyleSheet.create({
     borderWidth: 2,
   },
   version: { textAlign: "center", fontSize: 12, marginTop: 28 },
+  dialogHost: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0 },
 });

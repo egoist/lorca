@@ -5,6 +5,7 @@ import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { StyleSheet, View } from "react-native";
 import { useStore } from "../../src/core/store";
 import { t } from "../../src/i18n";
+import { IconCloseToolbar } from "../../src/ui/navigation";
 
 export default function AttachmentScreen() {
   const { id, name } = useLocalSearchParams<{ id: string; name?: string }>();
@@ -13,9 +14,7 @@ export default function AttachmentScreen() {
   return (
     <View style={styles.screen}>
       <Stack.Screen options={{ title: name ?? t("Photo") }} />
-      <Stack.Toolbar placement="left">
-        <Stack.Toolbar.Button icon="xmark" accessibilityLabel={t("Close")} onPress={() => router.back()} />
-      </Stack.Toolbar>
+      <IconCloseToolbar label={t("Close")} onClose={() => router.back()} />
       {uri && <Image source={{ uri }} style={styles.image} contentFit="contain" />}
     </View>
   );

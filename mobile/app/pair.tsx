@@ -129,8 +129,8 @@ export default function PairScreen() {
           ) : (
             <>
               <Pressable onPress={scan} style={({ pressed }) => [styles.primary, { backgroundColor: p.tint, opacity: pressed ? 0.85 : 1 }]}>
-                <Symbol name="qrcode.viewfinder" size={20} color="#FFFFFF" weight="semibold" />
-                <Text style={styles.primaryText}>{t("Scan Code")}</Text>
+                <Symbol name="qrcode.viewfinder" size={20} color={p.userBubbleText} weight="semibold" />
+                <Text style={[styles.primaryText, { color: p.userBubbleText }]}>{t("Scan Code")}</Text>
               </Pressable>
               <Pressable onPress={paste} style={({ pressed }) => [styles.secondary, { backgroundColor: p.fill, opacity: pressed ? 0.7 : 1 }]}>
                 <Symbol name="doc.on.clipboard" size={18} color={p.tint} />
@@ -201,7 +201,7 @@ const styles = StyleSheet.create({
   input: { fontSize: Font.body, paddingVertical: 4 },
   codeInput: { minHeight: 56, fontFamily: Platform.select({ ios: "Menlo", default: "monospace" }), fontSize: 13 },
   primary: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, borderRadius: 14, paddingVertical: 15 },
-  primaryText: { color: "#fff", fontSize: Font.body, fontWeight: "600" },
+  primaryText: { fontSize: Font.body, fontWeight: "600" },
   secondary: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, borderRadius: 14, paddingVertical: 14 },
   secondaryText: { fontSize: Font.body, fontWeight: "600" },
   progress: { flexDirection: "row", alignItems: "center", gap: 12 },

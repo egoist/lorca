@@ -8,6 +8,7 @@ import { engine } from "../../../src/core/engine";
 import { useBotMap } from "../../../src/core/store";
 import { t } from "../../../src/i18n";
 import { FieldRow, Section } from "../../../src/ui/forms";
+import { SaveToolbar } from "../../../src/ui/navigation";
 
 export default function BotDescriptionScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -39,11 +40,7 @@ export default function BotDescriptionScreen() {
   return (
     <>
       <Stack.Screen options={{ title: t("Description") }} />
-      <Stack.Toolbar placement="right">
-        <Stack.Toolbar.Button variant="done" disabled={saving} onPress={() => void save()}>
-          {t("Done")}
-        </Stack.Toolbar.Button>
-      </Stack.Toolbar>
+      <SaveToolbar label={t("Done")} disabled={saving} onSave={() => void save()} />
       <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.content} keyboardDismissMode="on-drag" keyboardShouldPersistTaps="handled">
         <Section footer={t("What this bot is for and how it should work. It also gets the team tools and the coding tools on its Runner.")}>
           <FieldRow value={description} onChangeText={setDescription} placeholder={t("Finds and summarizes sources")} multiline autoFocus autoCapitalize="sentences" style={styles.editor} />

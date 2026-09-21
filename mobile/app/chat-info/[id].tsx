@@ -1,6 +1,6 @@
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
-import { Alert, Pressable, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
+import { Alert, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 import { chatTitle, engine } from "../../src/core/engine";
 import { providerLabel, PROVIDER_KINDS, PROVIDER_MODELS, THINKING_LEVELS, thinkingLabel, type Bot, type Routine } from "../../src/core/model";
 import { deviceIsOnline, useBotMap, useChat, useRoutines, useStore, useWorkingBotIds } from "../../src/core/store";
@@ -11,6 +11,7 @@ import { lastRunSummary, lastSeen, routineDetail } from "../../src/ui/format";
 import { Symbol } from "../../src/ui/Symbol";
 import { usePalette } from "../../src/ui/theme";
 import { deviceSymbol } from "../../src/ui/devices";
+import { CloseToolbar } from "../../src/ui/navigation";
 
 export default function ChatInfoScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -112,11 +113,7 @@ export default function ChatInfoScreen() {
   return (
     <>
       <Stack.Screen options={{ title: isGroup ? t("Group Info") : t("Details") }} />
-      <Stack.Toolbar placement="right">
-        <Stack.Toolbar.Button variant="done" onPress={() => router.dismiss()}>
-          {t("Done")}
-        </Stack.Toolbar.Button>
-      </Stack.Toolbar>
+      <CloseToolbar label={Platform.OS === "android" ? t("Close") : t("Done")} onClose={() => router.dismiss()} />
     <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={{ paddingBottom: 40 }} keyboardDismissMode="on-drag">
       <View style={styles.hero}>
         {bot ? (
@@ -226,7 +223,14 @@ export default function ChatInfoScreen() {
               title={routine.name}
               subtitle={routineDetail(routine)}
               icon={routine.is_running ? "arrow.triangle.2.circlepath" : routine.is_enabled ? "clock" : "pause.circle"}
-              accessory={<Switch value={routine.is_enabled} onValueChange={(v) => engine.setRoutineEnabled(routine.id, v)} />}
+              accessory={
+                <Switch
+                  value={routine.is_enabled}
+                  onValueChange={(v) => engine.setRoutineEnabled(routine.id, v)}
+                  trackColor={Platform.OS === "android" ? { false: p.fill, true: p.secondaryFill } : undefined}
+                  thumbColor={Platform.OS === "android" ? p.tint : undefined}
+                />
+              }
               onPress={() => showRoutine(routine)}
             />
           ))}

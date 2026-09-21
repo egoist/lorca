@@ -1,11 +1,12 @@
 // The whole bot-to-bot message behind a transcript marker ("Messaged ◉ Paddock"), as a sheet.
 
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
-import { ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
+import { Platform, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { useChat } from "../../src/core/store";
 import { t } from "../../src/i18n";
 import { Markdown } from "../../src/ui/Markdown";
 import { usePalette } from "../../src/ui/theme";
+import { CloseToolbar } from "../../src/ui/navigation";
 
 export default function MessageScreen() {
   const { id, chat: chatId, title } = useLocalSearchParams<{ id: string; chat: string; title?: string }>();
@@ -19,11 +20,7 @@ export default function MessageScreen() {
   return (
     <View style={styles.screen}>
       <Stack.Screen options={{ title: title ?? t("Message") }} />
-      <Stack.Toolbar placement="right">
-        <Stack.Toolbar.Button variant="done" onPress={() => router.dismiss()}>
-          {t("Done")}
-        </Stack.Toolbar.Button>
-      </Stack.Toolbar>
+      <CloseToolbar label={Platform.OS === "android" ? t("Close") : t("Done")} onClose={() => router.dismiss()} />
       <ScrollView contentContainerStyle={styles.content} contentInsetAdjustmentBehavior="automatic">
         {text ? <Markdown text={text} color={p.label} maxWidth={width - 40} /> : <Text style={{ color: p.secondaryLabel }}>{t("This message is no longer available.")}</Text>}
       </ScrollView>

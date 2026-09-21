@@ -1,7 +1,8 @@
 import { FlashList } from "@shopify/flash-list";
+import { MenuView, type MenuAction, type MenuComponentRef } from "@expo/ui/community/menu";
 import * as Haptics from "expo-haptics";
 import { Link, Stack, useRouter } from "expo-router";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Platform, Pressable, StyleSheet, Text, type StyleProp, type TextStyle, View } from "react-native";
 import { chatTitle, engine } from "../src/core/engine";
 import type { Bot, Chat, ChatSearchResults } from "../src/core/model";
@@ -13,6 +14,7 @@ import { ChatRow } from "../src/ui/ChatRow";
 import { lastActivity, preview, stamp } from "../src/ui/format";
 import { Symbol } from "../src/ui/Symbol";
 import { Font, usePalette } from "../src/ui/theme";
+import { AndroidIcons } from "../src/ui/navigation";
 
 export default function ChatsScreen() {
   const p = usePalette();
@@ -104,20 +106,36 @@ export default function ChatsScreen() {
 
   return (
     <>
-      <Stack.SearchBar placeholder={t("Search chats and messages")} onChangeText={(e) => updateQuery(e.nativeEvent.text)} onCancelButtonPress={() => updateQuery("")} hideWhenScrolling autoCapitalize="none" />
-      <Stack.Toolbar placement="left">
-        <Stack.Toolbar.Button icon="gearshape" accessibilityLabel={t("Settings")} onPress={() => router.push("/settings")} />
-      </Stack.Toolbar>
-      <Stack.Toolbar placement="right">
-        <Stack.Toolbar.Menu icon="square.and.pencil" accessibilityLabel={t("New")}>
-          <Stack.Toolbar.MenuAction icon="person.2.fill" onPress={() => router.push("/new-group")}>
-            {t("New Group Chat")}
-          </Stack.Toolbar.MenuAction>
-          <Stack.Toolbar.MenuAction icon="person.badge.plus" onPress={() => router.push("/new-bot")}>
-            {t("New Bot")}
-          </Stack.Toolbar.MenuAction>
-        </Stack.Toolbar.Menu>
-      </Stack.Toolbar>
+      <Stack.SearchBar placeholder={t("Search chats and messages")} onChangeText={(e) => updateQuery(e.nativeEvent.text)} onCancelButtonPress={() => updateQuery("")} hideWhenScrolling autoCapitalize="none" headerIconColor={Platform.OS === "android" ? p.secondaryLabel : undefined} />
+      {Platform.OS === "ios" ? (
+        <>
+          <Stack.Toolbar placement="left">
+            <Stack.Toolbar.Button icon="gearshape" accessibilityLabel={t("Settings")} onPress={() => router.push("/settings")} />
+          </Stack.Toolbar>
+          <Stack.Toolbar placement="right">
+            <Stack.Toolbar.Menu icon="square.and.pencil" accessibilityLabel={t("New")}>
+              <Stack.Toolbar.MenuAction icon="person.2.fill" onPress={() => router.push("/new-group")}>
+                {t("New Group Chat")}
+              </Stack.Toolbar.MenuAction>
+              <Stack.Toolbar.MenuAction icon="person.badge.plus" onPress={() => router.push("/new-bot")}>
+                {t("New Bot")}
+              </Stack.Toolbar.MenuAction>
+            </Stack.Toolbar.Menu>
+          </Stack.Toolbar>
+        </>
+      ) : (
+        <Stack.Toolbar placement="right" tintColor={p.secondaryLabel}>
+          <Stack.Toolbar.Button icon={AndroidIcons.settings} accessibilityLabel={t("Settings")} onPress={() => router.push("/settings")} />
+          <Stack.Toolbar.Menu icon={AndroidIcons.edit} accessibilityLabel={t("New")}>
+            <Stack.Toolbar.MenuAction icon={AndroidIcons.group} onPress={() => router.push("/new-group")}>
+              {t("New Group Chat")}
+            </Stack.Toolbar.MenuAction>
+            <Stack.Toolbar.MenuAction icon={AndroidIcons.personAdd} onPress={() => router.push("/new-bot")}>
+              {t("New Bot")}
+            </Stack.Toolbar.MenuAction>
+          </Stack.Toolbar.Menu>
+        </Stack.Toolbar>
+      )}
       <FlashList
         data={data}
         keyExtractor={(item) => ("key" in item ? item.key : item.id)}
@@ -145,8 +163,27 @@ export default function ChatsScreen() {
           }
           const chat = item;
           const title = chatTitle(chat);
-          const row = <ChatRow chat={chat} bots={bots} title={title} working={isWorking(chat)} onPress={() => router.push(`/chat/${chat.id}`)} />;
-          if (Platform.OS !== "ios") return row;
+          if (Platform.OS === "android") {
+            return (
+              <AndroidChatRow
+                chat={chat}
+                bots={bots}
+                title={title}
+                working={isWorking(chat)}
+                onPress={() => router.push(`/chat/${chat.id}`)}
+                onDelete={() => confirmDelete(chat)}
+              />
+            );
+          }
+          const row = (
+            <ChatRow
+              chat={chat}
+              bots={bots}
+              title={title}
+              working={isWorking(chat)}
+              onPress={() => router.push(`/chat/${chat.id}`)}
+            />
+          );
           return (
             <Link href={`/chat/${chat.id}`} asChild>
               <Link.Trigger>{row}</Link.Trigger>
@@ -177,6 +214,35 @@ export default function ChatsScreen() {
         refreshing={false}
       />
     </>
+  );
+}
+
+function AndroidChatRow({ chat, bots, title, working, onPress, onDelete }: { chat: Chat; bots: Map<string, Bot>; title: string; working: boolean; onPress: () => void; onDelete: () => void }) {
+  const menuRef = useRef<MenuComponentRef>(null);
+  const actions: MenuAction[] = [
+    { id: "pin", title: chat.is_pinned ? t("Unpin") : t("Pin"), image: AndroidIcons.pin, state: chat.is_pinned ? "on" : "off" },
+    ...(chat.unread_count > 0 ? [{ id: "read", title: t("Mark as Read"), image: AndroidIcons.read } satisfies MenuAction] : []),
+    { id: "delete", title: t("Delete"), image: AndroidIcons.delete, attributes: { destructive: true } },
+  ];
+  return (
+    <View style={styles.androidChatRow}>
+      <ChatRow chat={chat} bots={bots} title={title} working={working} onPress={onPress} onLongPress={() => menuRef.current?.show()} />
+      {/* The native Compose popup needs an anchor. Keep a one-pixel anchor near the row's
+          trailing edge; the whole React Native row remains normally measured and pressable. */}
+      <MenuView
+        ref={menuRef}
+        actions={actions}
+        style={styles.contextMenuAnchor}
+        onOpenMenu={() => void Haptics.selectionAsync()}
+        onPressAction={({ nativeEvent }) => {
+          if (nativeEvent.event === "pin") void engine.pinChat(chat.id, !chat.is_pinned);
+          else if (nativeEvent.event === "read") markRead(chat.id);
+          else if (nativeEvent.event === "delete") onDelete();
+        }}
+      >
+        <View style={styles.contextMenuTarget} accessible={false} />
+      </MenuView>
+    </View>
   );
 }
 
@@ -242,4 +308,7 @@ const styles = StyleSheet.create({
   searchTitle: { flex: 1, fontSize: Font.body, fontWeight: "600" },
   searchStamp: { fontSize: 14 },
   searchSnippet: { fontSize: 15, lineHeight: 20 },
+  androidChatRow: { alignSelf: "stretch" },
+  contextMenuAnchor: { position: "absolute", top: 32, right: 24, width: 1, height: 1 },
+  contextMenuTarget: { width: 1, height: 1 },
 });

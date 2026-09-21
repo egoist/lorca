@@ -9,6 +9,7 @@
 
 import { Button as MenuButton, Host, Image as MenuImage, Menu, type ButtonProps } from "@expo/ui/swift-ui";
 import { background, frame, shapes } from "@expo/ui/swift-ui/modifiers";
+import { MenuView, type MenuAction, type MenuComponentRef } from "@expo/ui/community/menu";
 import * as DocumentPicker from "expo-document-picker";
 import { GlassView, isLiquidGlassAvailable } from "expo-glass-effect";
 import * as Haptics from "expo-haptics";
@@ -16,15 +17,16 @@ import { Image } from "expo-image";
 import * as ImagePicker from "expo-image-picker";
 import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from "expo-speech-recognition";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View, type ColorValue, type StyleProp, type ViewStyle } from "react-native";
+import { Alert, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View, type ColorValue, type ImageSourcePropType, type StyleProp, type ViewStyle } from "react-native";
 import type { PickedFile } from "../core/engine";
 import { fileSize, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS, type Bot } from "../core/model";
 import { BotAvatar } from "./Avatar";
-import { pickDictationLanguage, supportedLanguages, useDictationLanguage } from "./dictation";
+import { automaticLanguage, languageName, pickDictationLanguage, setDictationLanguage, useDictationLanguage, useSupportedLanguages } from "./dictation";
 import { t } from "../i18n";
 import { joinDictation } from "./format";
 import { Symbol } from "./Symbol";
 import { Font, usePalette } from "./theme";
+import { AndroidIcons } from "./navigation";
 
 const MAX_LINES = 5;
 const CHIP = 56;
@@ -55,6 +57,7 @@ export function Surface({ style, children, tint, edge, onPress }: { style: Style
 interface AttachSource {
   title: string;
   icon: NonNullable<ButtonProps["systemImage"]>;
+  androidIcon: ImageSourcePropType;
   run: () => void;
 }
 
@@ -113,7 +116,9 @@ export function Composer({
   const transcript = useRef("");
   const pendingSend = useRef(false);
   const inputRef = useRef<TextInput>(null);
-  const { language } = useDictationLanguage();
+  const dictationMenuRef = useRef<MenuComponentRef>(null);
+  const { language, setting: dictationSetting } = useDictationLanguage();
+  const dictationLanguages = useSupportedLanguages();
   const canSend = text.trim().length > 0 || attachments.length > 0;
   const lineHeight = Font.body * 1.3;
 
@@ -205,21 +210,12 @@ export function Composer({
   }
 
   const sources: AttachSource[] = [
-    { title: t("Photo Library"), icon: "photo.on.rectangle", run: () => void pickPhotos() },
-    { title: t("Take Photo"), icon: "camera", run: () => void takePhoto() },
-    { title: t("Choose File"), icon: "folder", run: () => void pickFiles() },
+    { title: t("Photo Library"), icon: "photo.on.rectangle", androidIcon: AndroidIcons.photos, run: () => void pickPhotos() },
+    { title: t("Take Photo"), icon: "camera", androidIcon: AndroidIcons.camera, run: () => void takePhoto() },
+    { title: t("Choose File"), icon: "folder", androidIcon: AndroidIcons.folder, run: () => void pickFiles() },
   ];
 
-  // Android has no native pull-down menu here; a dialog lists the same sources.
-  function attachDialog() {
-    Alert.alert(t("Attach"), undefined, [...sources.map((a) => ({ text: a.title, onPress: a.run })), { text: t("Cancel"), style: "cancel" as const }]);
-  }
-
   // MARK: - Dictation
-
-  useEffect(() => {
-    void supportedLanguages();
-  }, []);
 
   useEffect(() => {
     if (!listening) return;
@@ -303,9 +299,16 @@ export function Composer({
     Platform.OS === "ios" ? (
       <AttachMenu key="plus" sources={sources} tint={p.fill} label={p.label} />
     ) : (
-      <Pressable key="plus" onPress={attachDialog} style={({ pressed }) => [styles.disc, { backgroundColor: p.fill, opacity: pressed ? 0.6 : 1 }]} accessibilityLabel={t("Attach")}>
-        <Symbol name="plus" size={18} color={p.label} weight="medium" />
-      </Pressable>
+      <MenuView
+        key="plus"
+        actions={sources.map((source, index) => ({ id: String(index), title: source.title, image: source.androidIcon }))}
+        onPressAction={({ nativeEvent }) => sources[Number(nativeEvent.event)]?.run()}
+        style={styles.androidDiscHost}
+      >
+        <View style={[styles.disc, styles.androidDisc, { backgroundColor: p.fill }]} accessible accessibilityRole="button" accessibilityLabel={t("Attach")}>
+          <Symbol name="plus" size={18} color={p.label} weight="medium" />
+        </View>
+      </MenuView>
     );
 
   const recording = (
@@ -353,18 +356,47 @@ export function Composer({
     />
   );
 
-  const primaryDisc = (
+  const primaryButton = (
     <Pressable
       key="primary"
       onPress={primary === "send" ? send : () => void dictate()}
-      onLongPress={primary === "dictate" ? () => void pickDictationLanguage() : undefined}
-      style={({ pressed }) => [styles.disc, { backgroundColor: primary === "send" ? p.tint : p.fill, opacity: pressed ? 0.7 : 1 }]}
+      onLongPress={
+        primary !== "dictate"
+          ? undefined
+          : Platform.OS === "ios"
+            ? () => void pickDictationLanguage()
+            : () => dictationMenuRef.current?.show()
+      }
+      style={({ pressed }) => [styles.disc, Platform.OS === "android" && styles.androidDisc, { backgroundColor: primary === "send" ? p.tint : p.fill, opacity: pressed ? 0.7 : 1 }]}
       accessibilityLabel={primary === "send" ? t("Send") : t("Dictate")}
       accessibilityHint={primary === "dictate" ? t("Long press to choose the language") : undefined}
     >
-      <Symbol name={primary === "send" ? "arrow.up" : "mic.fill"} size={16} color={primary === "send" ? "#FFFFFF" : p.label} weight="bold" />
+      <Symbol name={primary === "send" ? "arrow.up" : "mic.fill"} size={16} color={primary === "send" ? p.userBubbleText : p.label} weight="bold" />
     </Pressable>
   );
+  const dictationActions: MenuAction[] = [
+    {
+      id: "automatic",
+      title: t("Automatic ({language})", { language: languageName(automaticLanguage(dictationLanguages)) }),
+      state: dictationSetting ? "off" : "on",
+    },
+    ...dictationLanguages.map((tag) => ({ id: tag, title: languageName(tag), state: dictationSetting === tag ? ("on" as const) : ("off" as const) })),
+  ];
+  const primaryDisc =
+    Platform.OS === "android" && primary === "dictate" ? (
+      <MenuView
+        key="primary"
+        ref={dictationMenuRef}
+        actions={dictationActions}
+        shouldOpenOnLongPress
+        onPressAction={({ nativeEvent }) => setDictationLanguage(nativeEvent.event === "automatic" ? undefined : nativeEvent.event)}
+        style={styles.androidDiscHost}
+      >
+        {primaryButton}
+      </MenuView>
+    ) : (
+      primaryButton
+    );
 
   return (
     <View style={styles.wrap} pointerEvents="box-none">
@@ -470,6 +502,8 @@ const styles = StyleSheet.create({
   bars: { flexDirection: "row", alignItems: "center", gap: 2.5, height: 14 },
   levelBar: { width: 3, borderRadius: 1.5, opacity: 0.85 },
   disc: { width: DISC, height: DISC, borderRadius: DISC / 2, alignItems: "center", justifyContent: "center", overflow: "hidden" },
+  androidDisc: { width: DISC - 1, height: DISC - 1, borderRadius: (DISC - 1) / 2 },
+  androidDiscHost: { width: DISC + 1, height: DISC + 1, alignItems: "center", justifyContent: "center" },
   chips: { paddingHorizontal: 12, paddingBottom: 8, gap: 8 },
   chip: { flexDirection: "row", alignItems: "center", gap: 6, paddingLeft: 4, paddingRight: 10, paddingVertical: 4, borderRadius: 14 },
   chipText: { fontSize: 14, fontWeight: "500" },

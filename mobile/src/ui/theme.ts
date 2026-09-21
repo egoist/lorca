@@ -1,6 +1,7 @@
-// Colors and type. On iOS the semantic colors are the system's own (PlatformColor), so light,
-// dark, and accessibility settings follow the OS; Android gets matching hex tokens.
+// Colors and type. Each platform uses its own semantic system colors: UIKit colors on iOS and
+// Material 3 dynamic colors on Android, including the user's wallpaper palette on Android 12+.
 
+import { Color } from "expo-router";
 import { Platform, PlatformColor, useColorScheme, type ColorValue } from "react-native";
 import type { Accent } from "../core/model";
 
@@ -54,49 +55,28 @@ export function usePalette(): Palette {
       dark,
     };
   }
-  return dark
-    ? {
-        label: "#F2F2F2",
-        secondaryLabel: "rgba(235,235,245,0.6)",
-        tertiaryLabel: "rgba(235,235,245,0.3)",
-        separator: "rgba(255,255,255,0.15)",
-        background: "#000000",
-        groupedBackground: "#000000",
-        cell: "#1C1C1E",
-        fill: "rgba(120,120,128,0.36)",
-        secondaryFill: "rgba(120,120,128,0.32)",
-        tint: "#0A84FF",
-        userBubble: "#0A84FF",
-        userBubbleText: "#FFFFFF",
-        botBubble: "rgba(255,255,255,0.10)",
-        botBubbleText: "#F2F2F2",
-        code: "rgba(0,0,0,0.28)",
-        green: "#30D158",
-        red: "#FF453A",
-        link: "#0A84FF",
-        dark,
-      }
-    : {
-        label: "#000000",
-        secondaryLabel: "rgba(60,60,67,0.6)",
-        tertiaryLabel: "rgba(60,60,67,0.3)",
-        separator: "rgba(60,60,67,0.29)",
-        background: "#FFFFFF",
-        groupedBackground: "#F2F2F7",
-        cell: "#FFFFFF",
-        fill: "rgba(120,120,128,0.2)",
-        secondaryFill: "rgba(120,120,128,0.16)",
-        tint: "#007AFF",
-        userBubble: "#007AFF",
-        userBubbleText: "#FFFFFF",
-        botBubble: "#E9E9EB",
-        botBubbleText: "#000000",
-        code: "rgba(0,0,0,0.06)",
-        green: "#34C759",
-        red: "#FF3B30",
-        link: "#007AFF",
-        dark,
-      };
+  const material = Color.android.dynamic;
+  return {
+    label: material.onSurface,
+    secondaryLabel: material.onSurfaceVariant,
+    tertiaryLabel: material.outline,
+    separator: material.outlineVariant,
+    background: material.surface,
+    groupedBackground: material.surfaceContainerLow,
+    cell: material.surfaceContainer,
+    fill: material.surfaceContainerHighest,
+    secondaryFill: material.secondaryContainer,
+    tint: material.primary,
+    userBubble: material.primary,
+    userBubbleText: material.onPrimary,
+    botBubble: material.surfaceContainerHigh,
+    botBubbleText: material.onSurface,
+    code: material.surfaceContainerHighest,
+    green: dark ? "#66DB89" : "#146C2E",
+    red: material.error,
+    link: material.primary,
+    dark,
+  };
 }
 
 /// The eight bot accents, as the Mac app's system colors, with a lifted twin for gradients.
@@ -121,10 +101,10 @@ export function accentColor(accent: string, dark: boolean): string {
 }
 
 export const Font = {
-  body: 17,
-  message: 16.5,
+  body: Platform.OS === "android" ? 16 : 17,
+  message: Platform.OS === "android" ? 16 : 16.5,
   caption: 12,
-  author: 13,
-  small: 13,
+  author: Platform.OS === "android" ? 12 : 13,
+  small: Platform.OS === "android" ? 12 : 13,
   code: 14,
 } as const;

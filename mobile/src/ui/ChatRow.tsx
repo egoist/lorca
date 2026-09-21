@@ -10,12 +10,12 @@ import { lastActivity, preview, stamp } from "./format";
 import { Symbol } from "./Symbol";
 import { Font, usePalette } from "./theme";
 
-export const ChatRow = memo(function ChatRow({ chat, bots, title, working, onPress }: { chat: Chat; bots: Map<string, Bot>; title: string; working: boolean; onPress: () => void }) {
+export const ChatRow = memo(function ChatRow({ chat, bots, title, working, onPress, onLongPress }: { chat: Chat; bots: Map<string, Bot>; title: string; working: boolean; onPress: () => void; onLongPress?: () => void }) {
   const p = usePalette();
   const members = chat.bot_ids.map((id) => bots.get(id)).filter((b): b is Bot => !!b);
   const unread = chat.unread_count;
   return (
-    <Pressable onPress={onPress} style={({ pressed }) => [styles.row, { backgroundColor: pressed ? p.fill : "transparent" }]}>
+    <Pressable onPress={onPress} onLongPress={onLongPress} style={({ pressed }) => [styles.row, { backgroundColor: pressed ? p.fill : "transparent" }]}>
       <AvatarCluster bots={members} size={50} working={working} />
       <View style={styles.text}>
         <View style={styles.titleLine}>
