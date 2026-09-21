@@ -4,9 +4,9 @@ description: lorca 命令行持有你的密钥、运行你的智能体。桌面�
 icon: Terminal
 ---
 
-`lorca` 才是真正干活的程序：它持有你的密钥，和中继、AI 服务商通信，并运行智能体。桌面应用内置了它，并替你启动。在没有桌面应用的电脑上，自己运行它，那台电脑就是一个 Runner。
+`lorca` 才是真正干活的程序：它持有你的密钥，和中继、AI 服务商通信，并运行智能体。它支持 macOS、Linux 和 Windows。桌面应用内置了它，并替你启动；在没有桌面应用的电脑上，自己运行 CLI，那台电脑就是一个 Runner。
 
-可执行文件在应用内部：`Lorca.app/Contents/Resources/bin/lorca`。
+在 macOS 上，应用自带的可执行文件位于 `Lorca.app/Contents/Resources/bin/lorca`。
 
 ## 命令
 
@@ -28,11 +28,11 @@ icon: Terminal
 
 ```bash
 export LORCA_RELAY_URL=https://relay.example.com
-lorca pair 'lorca://pair?…'   # 来自 Mac 上 Pair a Device… 的字符串
+lorca pair 'lorca://pair?…'   # 来自已有设备上的“配对设备…”或 `lorca pair`
 lorca serve
 ```
 
-这台电脑会出现在你的设备列表里，你可以从 Mac 或手机为它创建智能体。
+这台电脑会出现在你的设备列表里，你可以从桌面应用或手机为它创建智能体。
 
 ## 环境变量
 
@@ -47,4 +47,4 @@ lorca serve
 
 一切都在 `~/.lorca/` 下，只有你的用户可读：身份和机器密钥、服务商凭据、设置、聊天、附件、插件，以及每个智能体一个的工作区文件夹（里面有它的记忆）。
 
-应用把服务的日志写到 `~/Library/Logs/Lorca/cli.log`。
+macOS 应用把服务的日志写到 `~/Library/Logs/Lorca/cli.log`。

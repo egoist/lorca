@@ -1,6 +1,6 @@
 //! Questions one Device asks a Runner through the relay: a `request` blob sealed to the Runner's
 //! box key, answered with a `response` blob sealed back to the Device that asked. The verbs read
-//! and write a bot's memory, which lives on the bot's Runner, so the Mac and the phone show and
+//! and write a bot's memory, which lives on the bot's Runner, so the desktop app and phone show and
 //! edit it for a bot that runs on another machine. A turn's `job` / `job_result` pair works the
 //! same way; this is the same idea for questions with an answer.
 

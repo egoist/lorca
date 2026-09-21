@@ -1,6 +1,6 @@
 # Lorca
 
-Lorca is a Grok bot alternative: a native macOS AppKit app and a Rust CLI. The CLI is a localhost websocket service and the agent loop; the app is the UI for that CLI and launches it from its own bundle.
+Lorca is a Grok bot alternative: a Rust CLI for macOS, Linux, and Windows, a native macOS AppKit client, and phone apps. The CLI is a localhost websocket service and the agent loop; the AppKit client is a UI for that CLI and launches the bundled binary.
 
 You create bots, talk to them 1:1, or put them in a group chat. Bots can hand work to each other and orchestrate, in the same spirit as Grok Bot.
 
@@ -36,7 +36,7 @@ Architecture: [ARCHITECTURE.md](./ARCHITECTURE.md). Read it before implementing.
 
 ## Phone app
 
-`mobile/` is an Expo app for iOS and Android. It pairs with your Mac by scanning the pairing code and then talks to the relay directly with the Rust Device core: the same keys, envelopes, and jobs as the CLI. A phone is a Device, never a Runner: it reads and writes chats, attaches photos and files, dictates messages, configures the account's provider credentials, creates bots for your Runners, and starts turns; the bots keep running on your machines.
+`mobile/` is an Expo app for iOS and Android. It pairs with an existing Device by scanning a QR code from the desktop app or pasting a string from `lorca pair`, then talks to the relay directly with the Rust Device core: the same keys, envelopes, and jobs as the CLI. A phone is a Device, never a Runner: it reads and writes chats, attaches photos and files, dictates messages, configures the account's provider credentials, creates bots for your Runners, and starts turns; the bots keep running on your machines.
 
 ```bash
 bun run mobile       # Metro for the dev client

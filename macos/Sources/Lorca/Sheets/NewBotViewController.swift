@@ -64,7 +64,7 @@ final class NewBotViewController: SheetViewController {
         runnerPopup.translatesAutoresizingMaskIntoConstraints = false
         for device in store.runners {
             let title =
-                device.isThisDevice ? L("%@ (this Mac)", device.name) : device.name
+                device.isThisDevice ? L("%@ (this computer)", device.name) : device.name
             runnerPopup.addItem(withTitle: title)
         }
         runnerPopup.target = self

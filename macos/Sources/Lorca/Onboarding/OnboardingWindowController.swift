@@ -128,7 +128,7 @@ final class OnboardingViewController: NSViewController {
         let title = Build.label(
             AppInfo.name, font: .systemFont(ofSize: 30, weight: .bold), alignment: .center)
         let subtitle = Build.label(
-            L("Bots that run on Macs you own. Your identity is a key pair on this machine — no account, no server that can read your chats."),
+            L("Bots that run on computers you own. Your identity is a key pair on this computer — no account, no server that can read your chats."),
             font: .systemFont(ofSize: 13), color: .secondaryLabelColor, lines: 0, alignment: .center
         )
 
@@ -178,7 +178,7 @@ final class OnboardingViewController: NSViewController {
         confirm.state = savedPhrase ? .on : .off
         confirm.translatesAutoresizingMaskIntoConstraints = false
 
-        // The identity already exists on this Mac; there is no way back from here.
+        // The identity already exists on this computer; there is no way back from here.
         let back = secondaryButton(L("Back"), action: #selector(goWelcome))
         back.isHidden = true
         let next = primaryButton(L("Continue"), action: #selector(goBot))
@@ -230,9 +230,9 @@ final class OnboardingViewController: NSViewController {
     }
 
     private func pairView() -> NSView {
-        let title = Build.label(L("Pair with another Mac"), font: .systemFont(ofSize: 22, weight: .semibold))
+        let title = Build.label(L("Pair this computer"), font: .systemFont(ofSize: 22, weight: .semibold))
         let subtitle = Build.label(
-            L("On the Mac that already has your identity, choose File › Pair a Device and paste the code it shows here."),
+            L("On a computer that already has your identity, choose File › Pair a Device in the desktop app or run lorca pair in a terminal, then paste the code here."),
             font: .systemFont(ofSize: 12.5), color: .secondaryLabelColor, lines: 0
         )
 
@@ -245,7 +245,7 @@ final class OnboardingViewController: NSViewController {
         field.identifier = NSUserInterfaceItemIdentifier("pairing")
 
         let status = Build.label(
-            L("The two Devices run a handshake; the relay only carries the ciphertext. This Mac joins as a Runner."),
+            L("The two Devices run a handshake; the relay only carries the ciphertext. This computer joins as a Runner."),
             font: Theme.Font.caption, color: .tertiaryLabelColor, lines: 0)
         status.widthAnchor.constraint(equalToConstant: 560).isActive = true
         status.identifier = NSUserInterfaceItemIdentifier("status")
@@ -266,7 +266,7 @@ final class OnboardingViewController: NSViewController {
     private func botView() -> NSView {
         let title = Build.label(L("Your first bot"), font: .systemFont(ofSize: 22, weight: .semibold))
         let subtitle = Build.label(
-            L("It runs on this Mac, plans your work, and builds the rest of the team when you ask. Give it a name and the credentials it runs with."),
+            L("It runs on this computer, plans your work, and builds the rest of the team when you ask. Give it a name and the credentials it runs with."),
             font: .systemFont(ofSize: 12.5), color: .secondaryLabelColor, lines: 0
         )
 
@@ -427,11 +427,11 @@ final class OnboardingViewController: NSViewController {
         icon.translatesAutoresizingMaskIntoConstraints = false
 
         let title = Build.label(
-            L("This Mac is your first Device"), font: .systemFont(ofSize: 22, weight: .semibold),
+            L("This computer is your first Device"), font: .systemFont(ofSize: 22, weight: .semibold),
             alignment: .center)
         let subtitle = Build.label(
-            firstBot.map { L("%@ is ready to talk to. Pair another Mac any time from the File menu.", $0.name) }
-                ?? L("Bots you create here run on this machine with your account's provider credentials. Pair another Mac any time from the File menu."),
+            firstBot.map { L("%@ is ready to talk to. Pair another Device any time from the File menu.", $0.name) }
+                ?? L("Bots you create here run on this computer with your account's provider credentials. Pair another Device any time from the File menu."),
             font: .systemFont(ofSize: 12.5), color: .secondaryLabelColor, lines: 0, alignment: .center
         )
 
@@ -672,7 +672,7 @@ final class OnboardingViewController: NSViewController {
         }
     }
 
-    /// A Mac that joined an account gets its credentials with the first sync, so the provider
+    /// A computer that joined an account gets its credentials with the first sync, so the provider
     /// step shows only when none arrive.
     private func continueAfterJoining() async {
         for _ in 0..<15 where !store.providers.contains(where: \.isConnected) {

@@ -1,5 +1,5 @@
 // The phone's side of the core: starts it once with the app's folder and this phone's facts,
-// turns its events into store changes, and offers the screens the same verbs the Mac app has.
+// turns its events into store changes, and offers the screens the same verbs the macOS app has.
 // Every call is one request over the JSON API the desktop app speaks to the CLI; the Rust
 // core does the keys, the relay, jobs, rooms, and questions to Runners.
 
@@ -384,7 +384,7 @@ class Engine {
   }
 
   /// Joins the identity the pairing string names. The core posts the request (`pair.posted`
-  /// marks that) and waits for the Mac to accept; `signal` aborts the wait in the core too,
+  /// marks that) and waits for the other Device to accept; `signal` aborts the wait in the core too,
   /// which answers "Pairing cancelled".
   async pair(pairingString: string, deviceName: string | undefined, onProgress?: (progress: PairProgress) => void, signal?: AbortSignal) {
     onProgress?.({ phase: "posting" });

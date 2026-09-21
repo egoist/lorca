@@ -272,7 +272,7 @@ final class ReplyEngine {
         case "bot-quill":
             pool = [
                 """
-                Draft: "Your bots run on your Macs. Assign one to a Runner, and it works there with that machine's key. The relay carries ciphertext and nothing else."
+                Draft: "Your bots run on computers you own. Assign one to a Runner, and it works there with your account's encrypted provider credentials. The relay carries ciphertext and nothing else."
 
                 Three sentences, no adjectives doing work they haven't earned.
                 """,

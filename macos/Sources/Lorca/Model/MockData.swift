@@ -409,7 +409,7 @@ enum MockData {
                 author: .bot("bot-quill"),
                 body: .text(
                     """
-                    Lorca runs your bots on machines you own. Create a bot, give it a job, and it works on the Mac you assigned it to — with that machine's API key, not ours. Bots can hand work to each other. Everything that crosses the network is encrypted before it leaves the device, and the relay only ever sees ciphertext.
+                    Lorca runs your bots on computers you own. Create a bot, give it a job, and it works on the Runner you assigned it to — with your account's encrypted provider credentials, not ours. Bots can hand work to each other. Everything that crosses the network is encrypted before it leaves the Device, and the relay only ever sees ciphertext.
                     """),
                 createdAt: minutesAgo(698)
             ),

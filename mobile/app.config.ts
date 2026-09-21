@@ -26,7 +26,7 @@ export default (): ExpoConfig => {
       bundleIdentifier: appId,
       supportsTablet: true,
       infoPlist: {
-        NSCameraUsageDescription: "Lorca scans the pairing code your Mac shows.",
+        NSCameraUsageDescription: "Lorca scans a pairing QR code from another Device.",
         NSMicrophoneUsageDescription: "Lorca listens while you dictate a message.",
         NSSpeechRecognitionUsageDescription: "Lorca turns what you say into the message text.",
         NSPhotoLibraryUsageDescription: "Lorca attaches photos you pick to a message.",
@@ -70,7 +70,7 @@ export default (): ExpoConfig => {
       [
         "expo-camera",
         {
-          cameraPermission: "Lorca scans the pairing code your Mac shows.",
+          cameraPermission: "Lorca scans a pairing QR code from another Device.",
         },
       ],
       [

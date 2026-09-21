@@ -89,7 +89,7 @@ final class BotsSettingsViewController: DevicePaneViewController {
 
 // MARK: - Providers
 
-/// The account's provider credentials: connected on any Mac, used by every Runner.
+/// The account's provider credentials: connected on any Device, used by every Runner.
 final class ProvidersSettingsViewController: SettingsPaneViewController {
     private let store = AppStore.shared
     private let section = SectionView(title: L("Credentials"))
@@ -276,7 +276,7 @@ final class DeviceHeaderView: NSView {
         case .online:
             status.stringValue =
                 if device.isThisDevice {
-                    L("This Mac · CLI running")
+                    L("This computer · CLI running")
                 } else if device.isRunner {
                     L("Online · paired")
                 } else {

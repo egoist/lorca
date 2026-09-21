@@ -65,7 +65,7 @@ pub fn create(app: &Arc<App>, device_name: Option<String>) -> anyhow::Result<Vec
 
 pub const LEAD_BOT_NAME: &str = "Chef";
 
-/// A new account starts with one bot to talk to: a chief of staff on this Mac that proposes
+/// A new account starts with one bot to talk to: a chief of staff on this Runner that proposes
 /// and builds the rest of the team. It is an ordinary bot with a default profile.
 fn create_lead_bot(app: &Arc<App>) {
     let Some(runner_id) = app.this_device_id() else { return };

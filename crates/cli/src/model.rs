@@ -642,7 +642,7 @@ fn probe_host() -> (String, String, String, String) {
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .or_else(|| std::env::var("HOSTNAME").ok())
-        .unwrap_or_else(|| "This Mac".to_string());
+        .unwrap_or_else(|| "This Computer".to_string());
     let os = if cfg!(target_os = "macos") {
         "macos"
     } else if cfg!(target_os = "linux") {

@@ -641,7 +641,7 @@ pub fn bundled() -> Vec<Manifest> {
 // MARK: - Where a verb runs
 
 /// Runs a plugin verb on `runner_id`: here when that is this Device, else as a request sealed
-/// to that Runner (`crate::requests`), so a phone installs a plugin on a Mac without the relay
+/// to that Runner (`crate::requests`), so a phone installs a plugin on another computer without the relay
 /// seeing the manifest or a secret.
 pub async fn on_runner(app: &Arc<App>, runner_id: &str, verb: &str, body: Value) -> Result<Value, String> {
     if app.this_device_id().as_deref() == Some(runner_id) {

@@ -125,7 +125,7 @@ export default function SettingsScreen() {
   function confirmUnpair() {
     Alert.alert(
       t("Unpair this phone?"),
-      t("Its keys and the synced chats are removed from this phone. Your Mac keeps everything, and you can pair again any time."),
+      t("Its keys and the synced chats are removed from this phone. Your other paired Devices keep everything, and you can pair again any time."),
       [
         { text: t("Cancel"), style: "cancel" },
         {

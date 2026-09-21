@@ -75,7 +75,7 @@ export default function NewBotScreen() {
             ))}
           </View>
         </Section>
-        <Section title={t("Runs on")} footer={runners.length ? t("Bots run on a paired desktop Device with the CLI, using your account's provider credentials.") : t("Pair a Mac, Linux, or Windows machine first. Phones never run bots.")}>
+        <Section title={t("Runs on")} footer={runners.length ? t("Bots run on a paired desktop Device with the CLI, using your account's provider credentials.") : t("Pair a computer running macOS, Linux, or Windows first. Phones never run bots.")}>
           {runners.map((r) => (
             <CheckRow
               key={r.id}

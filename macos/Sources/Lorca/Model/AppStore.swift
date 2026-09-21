@@ -29,7 +29,7 @@ enum SettingsPane: String, CaseIterable {
     case advanced
 
     /// Bots and plugins live on a Runner, so these panes show one Device, picked at the top of
-    /// the page. The others hold this Mac's settings and the account's: the shared roster and
+    /// the page. The others hold this computer's settings and the account's: the shared roster and
     /// the provider credentials.
     var isDeviceScoped: Bool {
         switch self {
@@ -579,7 +579,7 @@ final class AppStore {
         perform("bots.update", ["id": id, "symbol_name": symbolName, "accent": accent.rawValue])
     }
 
-    /// A custom profile image from a file on this Mac (nil removes the current one). The CLI
+    /// A custom profile image from a file on this computer (nil removes the current one). The CLI
     /// copies it into its store, uploads it as a `file` blob, and names it in the roster, which
     /// comes back as the bot's `avatar` for every Device.
     func setBotAvatar(_ id: Bot.ID, fileURL: URL?) {
@@ -720,11 +720,11 @@ final class AppStore {
     }
 
     /// A bot's memory, read from its Runner. Answers with `here == false` when the bot runs on
-    /// another Device, whose disk this Mac cannot read.
+    /// another Device, whose disk this computer cannot read.
     func botMemory(_ id: Bot.ID) async throws -> BotMemory {
         if isMock {
             return BotMemory(
-                botID: id, here: true, runner: "This Mac", path: "~/.lorca/workspaces/\(id)",
+                botID: id, here: true, runner: "This computer", path: "~/.lorca/workspaces/\(id)",
                 text: "- 2026-09-10 · from your chat with the user · the user prefers short replies\n- 2026-09-12 · invoices are reconciled on Mondays\n",
                 hash: "mock", lines: 2, bytes: 128, truncated: false, maxLines: 200, maxBytes: 24_000,
                 topics: ["clients.md"], logs: ["2026-09-12", "2026-09-15"])
@@ -962,7 +962,7 @@ final class AppStore {
     /// Decoded profile images by attachment id, so avatars draw without touching the disk.
     private var avatarImages: [Attachment.ID: NSImage] = [:]
 
-    /// The bot's profile image once this Mac has it. The first ask for one that is not here
+    /// The bot's profile image once this computer has it. The first ask for one that is not here
     /// fetches the blob and redraws the roster when it lands; until then callers draw the
     /// symbol and accent.
     func avatarImage(for bot: Bot) -> NSImage? {
@@ -994,7 +994,7 @@ final class AppStore {
         return nil
     }
 
-    /// Where an attachment's bytes are on this Mac. A file sent from here is known at once; one
+    /// Where an attachment's bytes are on this computer. A file sent from here is known at once; one
     /// sent from another Device is fetched through the CLI, and the message reloads when it lands.
     private var attachmentURLs: [Attachment.ID: URL] = [:]
     private var fetchingAttachments: Set<Attachment.ID> = []
@@ -1114,7 +1114,7 @@ final class AppStore {
     }
 
     /// Runs a subscription sign-in (`providers.connect_chatgpt`, `providers.connect_grok`): the
-    /// CLI opens the browser on this Mac and the tokens go to the whole account.
+    /// CLI opens the browser on this computer and the tokens go to the whole account.
     func connectSignIn(_ kind: ProviderCredential.Kind) async throws {
         _ = try await client.request("providers.connect_\(kind.wireValue)")
     }

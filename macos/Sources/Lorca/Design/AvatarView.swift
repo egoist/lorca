@@ -179,7 +179,7 @@ final class AvatarView: NSView {
         }
     }
 
-    /// The bot's image when it has one and this Mac has the bytes (the store fetches them and
+    /// The bot's image when it has one and this computer has the bytes (the store fetches them and
     /// redraws otherwise), else its symbol on its accent.
     @MainActor
     static func content(for bot: Bot, store: AppStore? = nil) -> Content {

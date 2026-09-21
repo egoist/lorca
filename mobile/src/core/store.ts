@@ -1,5 +1,5 @@
 // The phone's view of the account: what the core last said. Pure data and reducers fed by the
-// core's events (engine.ts applies them), the way the Mac app's AppStore mirrors the CLI. The
+// core's events (engine.ts applies them), the way the macOS app's AppStore mirrors the CLI. The
 // core keeps the truth on disk; nothing here is persisted except the phone's own prefs.
 
 import { useMemo } from "react";

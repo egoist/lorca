@@ -5,7 +5,7 @@ import { Button } from '#/components/ui/button'
 import { type Language, languages, names, paths } from '#/i18n'
 import { Logo } from './logo'
 
-/// Where the installer lives. macOS ships first; the same button will offer the other platforms.
+/// Where the macOS app installer lives. Other desktop computers run the CLI directly.
 export const DOWNLOAD = '/download'
 export const SITE = 'https://lorca.app'
 

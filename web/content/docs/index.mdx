@@ -6,7 +6,7 @@ icon: BookOpen
 
 Lorca is a small team of persistent, named AI bots that run on computers you own. Each bot has a job, a memory, and a home: one of your own computers. You message a bot the way you message a colleague, and it works on that computer with real tools, such as files, a shell, the web, and the plugins you install.
 
-You talk to them from the Mac app or the phone app, and a computer with only the `lorca` command line can run bots too. Your chats sync between your computers and your phone through a relay that only ever holds ciphertext.
+You talk to them from the desktop app or the phone app. A computer needs only the `lorca` command line to run bots, whether it uses macOS, Linux, or Windows. Your chats sync between your computers and your phone through a relay that only ever holds ciphertext.
 
 ## What makes Lorca different
 
@@ -15,7 +15,7 @@ You talk to them from the Mac app or the phone app, and a computer with only the
 - **Group chats with manners.** Every bot in a group is offered a turn. A bot that has nothing to add passes, and you never see a word of it.
 - **Your own AI accounts.** Connect a provider API key, or sign in with your ChatGPT or Grok subscription. Each bot picks its provider and model.
 - **Memory you can read.** Every bot keeps its own notes as plain Markdown on its Runner. Open them, edit them, or delete them.
-- **End-to-end encrypted sync.** Your identity is a key pair made on your first Mac. Devices pair with each other, and the relay between them stores encrypted blobs and public keys.
+- **End-to-end encrypted sync.** Your identity is a key pair made on your first Device. Devices pair with each other, and the relay between them stores encrypted blobs and public keys.
 
 ## Start with Chef
 
@@ -35,10 +35,10 @@ Chef proposes the bots, creates them once you say yes, and each one gets its own
 
 <Accordions>
   <Accordion title="Do I need a server?">
-    No. One Mac works on its own. A relay only matters when you pair a second device, and it stores ciphertext and nothing else. See [Relay](/docs/relay).
+    No. One computer works on its own. A relay only matters when you pair a second Device, and it stores ciphertext and nothing else. See [Relay](/docs/relay).
   </Accordion>
   <Accordion title="Which platforms does Lorca run on?">
-    The desktop app is on macOS 14 or later today, on Apple silicon and Intel, with Windows and Linux next. The phone app runs on iOS and Android. Bots run on desktop computers, and a bot's computer does not need the desktop app: the [`lorca` command line](/docs/cli) is enough.
+    The desktop app runs on macOS 14 or later, on Apple silicon and Intel. The phone app runs on iOS and Android. The [`lorca` command line](/docs/cli) runs bots on macOS, Linux, and Windows, so a bot's computer does not need the desktop app.
   </Accordion>
   <Accordion title="Which models can bots use?">
     DeepSeek, Anthropic, OpenCode Zen, and OpenCode Go with an API key, or ChatGPT and Grok by signing in with your own subscription. See [AI providers](/docs/providers).
@@ -49,8 +49,8 @@ Chef proposes the bots, creates them once you say yes, and each one gets its own
   <Accordion title="What does the relay see?">
     Encrypted blobs, public keys, sizes, and timestamps. Bot names, chat titles, messages, files, and provider credentials are all inside the ciphertext. See [Security](/docs/security).
   </Accordion>
-  <Accordion title="What happens if I lose my Mac?">
-    Your backup phrase is your identity. Restore it on a new Mac and your chats come back from the relay. You can unpair the lost Mac from any other device, including your phone.
+  <Accordion title="What happens if I lose a computer?">
+    Your backup phrase is your identity. Restore it on another computer and your chats come back from the relay. You can unpair the lost computer from any other Device, including your phone.
   </Accordion>
 </Accordions>
 

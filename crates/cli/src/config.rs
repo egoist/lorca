@@ -91,7 +91,7 @@ impl Settings {
 pub const DEV_RELAY_PORT: u16 = 8787;
 
 /// In dev (`LORCA_DEV=1`, set by the dev loop), a Device with no relay configured uses the
-/// relay the dev loop runs on this machine, addressed by this Mac's LAN IP so a phone on the
+/// relay the dev loop runs on this machine, addressed by this computer's LAN IP so a phone on the
 /// same network can reach it through the pairing code.
 pub fn dev_relay_url() -> Option<String> {
     if std::env::var("LORCA_DEV").ok().filter(|v| !v.is_empty() && v != "0").is_none() {

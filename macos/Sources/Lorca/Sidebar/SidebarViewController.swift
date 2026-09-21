@@ -43,7 +43,7 @@ final class SidebarViewController: NSViewController {
         // The palette searches the chats, so the field opens it instead of taking the keyboard.
         searchBar.onActivate = { [weak self] in self?.focusSearch() }
 
-        // Both land in Settings: General, or this Mac's About pane.
+        // Both land in Settings: General, or this computer's About pane.
         footer.onSettings = { [weak self] in
             self?.onSelect?(.settings(.general))
         }
@@ -483,7 +483,7 @@ private final class ActivatingSearchField: NSSearchField {
 
 // MARK: - Footer
 
-/// Two buttons at the foot of the sidebar: Settings, and this Mac, whose icon turns red while
+/// Two buttons at the foot of the sidebar: Settings, and this computer, whose icon turns red while
 /// the CLI is not answering.
 final class SidebarFooterView: NSView {
     private lazy var settings = HoverButton(
@@ -514,7 +514,7 @@ final class SidebarFooterView: NSView {
     func update() {
         let store = AppStore.shared
         let connected = store.isConnected
-        let name = store.thisDevice?.name ?? L("This Mac")
+        let name = store.thisDevice?.name ?? L("This computer")
         let status = connected
             ? L("CLI on 127.0.0.1:%@", String(Preferences.cliPort))
             : L("CLI not running · start it with: lorca serve")

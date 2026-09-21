@@ -1,5 +1,5 @@
 {
-  "NSCameraUsageDescription": "Lorca 用相机扫描 Mac 上显示的配对码。",
+  "NSCameraUsageDescription": "Lorca 使用相机扫描另一台设备上的配对二维码。",
   "NSMicrophoneUsageDescription": "Lorca 在你听写消息时收听。",
   "NSSpeechRecognitionUsageDescription": "Lorca 把你说的话转成消息文字。",
   "NSPhotoLibraryUsageDescription": "Lorca 把你选的照片附在消息里。"

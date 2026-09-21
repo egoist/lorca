@@ -264,7 +264,7 @@ final class BotLookViewController: SheetViewController {
     }
 
     /// A square, center-cropped PNG of at most `imageSide` px, written to a temporary file the
-    /// CLI copies into its store. The bytes that leave the Mac are these, not the original.
+    /// CLI copies into its store. The bytes that leave the computer are these, not the original.
     static func prepare(imageAt url: URL) -> (url: URL, image: NSImage)? {
         guard let source = NSImage(contentsOf: url), source.isValid else { return nil }
         guard let representation = source.representations.max(by: { $0.pixelsWide < $1.pixelsWide }) else { return nil }

@@ -18,7 +18,7 @@ final class CLILauncher {
             case .idle: L("Waiting to start the CLI")
             case .probing: L("Looking for the CLI…")
             case .starting: L("Starting the CLI…")
-            case let .running(external): external ? L("Using the CLI already running on this Mac") : L("CLI started by the app")
+            case let .running(external): external ? L("Using the CLI already running on this computer") : L("CLI started by the app")
             case let .failed(reason): reason
             }
         }

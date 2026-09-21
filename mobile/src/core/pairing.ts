@@ -1,4 +1,4 @@
-// The pairing string the identity Mac shows (as a QR code or text):
+// The pairing string an existing Device shows (as a QR code or text):
 // `lorca://pair?relay=…&id=<identity pubkey>&ek=<ephemeral pubkey>&n=<nonce>`. The core does
 // the pairing itself; this only checks a scanned or pasted string before it is handed over.
 

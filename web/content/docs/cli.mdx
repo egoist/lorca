@@ -4,9 +4,9 @@ description: The lorca CLI holds your keys and runs your bots. The desktop app i
 icon: Terminal
 ---
 
-`lorca` is the program that does the work: it holds your keys, talks to the relay and the AI providers, and runs the bots. The desktop app bundles it and runs it for you. On a computer without the app, run it yourself and that computer is a Runner.
+`lorca` is the program that does the work: it holds your keys, talks to the relay and the AI providers, and runs the bots. It runs on macOS, Linux, and Windows. The desktop app bundles it and runs it for you; on a computer without the app, run the CLI yourself and that computer is a Runner.
 
-The binary lives inside the app at `Lorca.app/Contents/Resources/bin/lorca`.
+On macOS, the bundled binary lives inside the app at `Lorca.app/Contents/Resources/bin/lorca`.
 
 ## Commands
 
@@ -28,11 +28,11 @@ The binary lives inside the app at `Lorca.app/Contents/Resources/bin/lorca`.
 
 ```bash
 export LORCA_RELAY_URL=https://relay.example.com
-lorca pair 'lorca://pair?…'   # the string from Pair a Device… on your Mac
+lorca pair 'lorca://pair?…'   # from Pair a Device… or `lorca pair` on an existing Device
 lorca serve
 ```
 
-The computer shows up in your device list, and you can create bots for it from your Mac or phone.
+The computer shows up in your Device list, and you can create bots for it from the desktop app or your phone.
 
 ## Environment
 
@@ -47,4 +47,4 @@ The computer shows up in your device list, and you can create bots for it from y
 
 Everything is under `~/.lorca/`, readable only by your user: your identity and machine keys, provider credentials, settings, chats, attachments, plugins, and one workspace folder per bot with its memory.
 
-The app logs the service to `~/Library/Logs/Lorca/cli.log`.
+The macOS app logs the service to `~/Library/Logs/Lorca/cli.log`.

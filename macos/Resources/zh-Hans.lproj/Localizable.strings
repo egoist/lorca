@@ -17,8 +17,8 @@
 "%@ · Paused while you were away" = "%@ · 你离开期间已暂停";
 "%@ · replied" = "%@ · 已回复";
 "%@ · Running…" = "%@ · 正在运行…";
-"%@ (this Mac)" = "%@（这台 Mac）";
-"%@ (This Mac)" = "%@（这台 Mac）";
+"%@ (this computer)" = "%@（这台电脑）";
+"%@ (This computer)" = "%@（这台电脑）";
 "%@ added to %@." = "%1$@ 已添加到 %2$@。";
 "%@ and %@ are working…" = "%1$@ 和 %2$@ 正在工作…";
 "%@ changed this file while you were editing" = "在你编辑期间，%@ 修改了这个文件";
@@ -30,7 +30,7 @@
 "%@ is not a file." = "“%@”不是文件。";
 "%@ is not connected yet. The bot is created now and its first turn waits until you connect it in Settings." = "%@ 尚未接入。智能体会立即创建，它的第一轮会等到你在“设置”中接入后再开始。";
 "%@ is ready for every bot on %@." = "%1$@ 已可供 %2$@ 上的所有智能体使用。";
-"%@ is ready to talk to. Pair another Mac any time from the File menu." = "%@ 已准备好与你对话。你可以随时从“文件”菜单配对另一台 Mac。";
+"%@ is ready to talk to. Pair another Device any time from the File menu." = "%@ 已准备好与你对话。你可以随时从“文件”菜单配对另一台设备。";
 "%@ is working" = "%@ 正在工作";
 "%@ is working…" = "%@ 正在工作…";
 "%@ needs a sign-in: open it and click Sign in." = "%@ 需要登录：打开它并点按“登录”。";
@@ -117,8 +117,8 @@
 "Bots" = "智能体";
 "Bots in this chat" = "此聊天中的智能体";
 "Bots on %@" = "%@ 上的智能体";
-"Bots that run on Macs you own. Your identity is a key pair on this machine — no account, no server that can read your chats." = "智能体运行在你自己的 Mac 上。你的身份是这台电脑上的一对密钥——没有账户，也没有任何服务器能读到你的聊天。";
-"Bots you create here run on this machine with your account's provider credentials. Pair another Mac any time from the File menu." = "你在这里创建的智能体会使用你账户的服务商凭证在这台电脑上运行。你可以随时从“文件”菜单配对另一台 Mac。";
+"Bots that run on computers you own. Your identity is a key pair on this computer — no account, no server that can read your chats." = "智能体运行在你自己的电脑上。你的身份是这台电脑上的一对密钥——没有账户，也没有任何服务器能读到你的聊天。";
+"Bots you create here run on this computer with your account's provider credentials. Pair another Device any time from the File menu." = "你在这里创建的智能体会使用你账户的服务商凭证在这台电脑上运行。你可以随时从“文件”菜单配对另一台设备。";
 "Bring All to Front" = "前置全部窗口";
 "Cancel" = "取消";
 "Change" = "更改";
@@ -253,7 +253,7 @@
 "It loses its keys and synced chats the next time it connects. You can pair it again any time." = "它下次连接时会失去密钥和已同步的聊天。你可以随时重新配对。";
 "It needs a ChatGPT subscription." = "需要 ChatGPT 订阅。";
 "It needs a SuperGrok or X Premium+ subscription." = "需要 SuperGrok 或 X Premium+ 订阅。";
-"It runs on this Mac, plans your work, and builds the rest of the team when you ask. Give it a name and the credentials it runs with." = "它运行在这台 Mac 上，为你规划工作，并在你需要时组建团队的其他成员。给它起个名字，并提供它运行所用的凭证。";
+"It runs on this computer, plans your work, and builds the rest of the team when you ask. Give it a name and the credentials it runs with." = "它运行在这台电脑上，为你规划工作，并在你需要时组建团队的其他成员。给它起个名字，并提供它运行所用的凭证。";
 "its Runner" = "它的 Runner";
 "Keys and sign-ins are sent sealed to %@ and stay there. A sign-in opens the browser on %@." = "密钥和登录信息会密封发送到 %1$@ 并保留在那里。登录时会在 %2$@ 上打开浏览器。";
 "Keys and sign-ins stay on this device." = "密钥和登录信息只保留在这台设备上。";
@@ -277,7 +277,7 @@
 "Lorca checks each action before it runs and asks you first when needed. Add rules to customize what bots can do automatically." = "Lorca 会在每个操作执行前进行检查，必要时先询问你。添加规则可自定智能体能自动执行的操作。";
 "Lorca Help" = "Lorca 帮助";
 "Lorca runs on Devices you own" = "Lorca 运行在你自己的设备上";
-"Lorca talks only to the CLI on this Mac. Nothing here is synced; each Device keeps its own settings." = "Lorca 只与这台 Mac 上的 CLI 通信。这里的设置不会同步，每台设备各自保存。";
+"Lorca talks only to the CLI on this computer. Nothing here is synced; each Device keeps its own settings." = "Lorca 只与这台电脑上的 CLI 通信。这里的设置不会同步，每台设备各自保存。";
 "Low" = "低";
 "Machine" = "机器";
 "Machine key" = "机器密钥";
@@ -338,7 +338,7 @@
 "On" = "开启";
 "on %@" = "位于 %@";
 "On %@" = "已安装在 %@";
-"On the Mac that already has your identity, choose File › Pair a Device and paste the code it shows here." = "在已有你身份的那台 Mac 上，选取“文件 › 配对设备”，然后把它显示的配对码粘贴到这里。";
+"On a computer that already has your identity, choose File › Pair a Device in the desktop app or run lorca pair in a terminal, then paste the code here." = "在已有你身份的电脑上，在桌面应用中选取“文件 › 配对设备”，或在终端运行 lorca pair，然后把显示的配对码粘贴到这里。";
 "On the other Device, choose Pair in onboarding (or run `lorca pair <code>`) and paste this code. The Devices run a handshake; the relay only carries ciphertext." = "在另一台设备上，于初始设置中选取“配对”（或运行 `lorca pair <code>`），然后粘贴此配对码。两台设备之间会进行握手；中继只传递密文。";
 "Onboarding" = "引导";
 "One paragraph, no hype" = "写一段话，不要夸大";
@@ -358,7 +358,7 @@
 "Pair a Device" = "配对设备";
 "Pair a Device…" = "配对设备…";
 "Pair with Another Device" = "与其他设备配对";
-"Pair with another Mac" = "与另一台 Mac 配对";
+"Pair this computer" = "配对这台电脑";
 "Paired" = "已配对";
 "Paired to this account" = "已与此账户配对";
 "Paired with %@. This code is used up; pair another Device with a fresh one." = "已与%@配对。此配对码已用完；要配对其他设备，请使用新的配对码。";
@@ -455,7 +455,7 @@
 "Searching plugins" = "正在搜索插件";
 "Searching the web" = "正在搜索网页";
 "Select All" = "全选";
-"Self-hosting the relay is a URL change: clients sign their requests and upload ciphertext, so the relay has nothing to trust. Leave it empty to run on this Mac alone." = "自建中继只需更改 URL：客户端会为请求签名并只上传密文，中继无需被信任。留空则仅在这台 Mac 上运行。";
+"Self-hosting the relay is a URL change: clients sign their requests and upload ciphertext, so the relay has nothing to trust. Leave it empty to run on this computer alone." = "自建中继只需更改 URL：客户端会为请求签名并只上传密文，中继无需被信任。留空则仅在这台电脑上运行。";
 "Send" = "发送";
 "Send (⌘Return)" = "发送 (⌘Return)";
 "Send (Return) · Shift-Return for a new line" = "发送 (Return) · Shift-Return 换行";
@@ -530,13 +530,13 @@
 "the other Device" = "另一台设备";
 "The bot, its routines, and this direct chat are removed from this Device and from paired Devices." = "该智能体、其例行任务和此直接聊天将从这台设备和已配对的设备上移除。";
 "The transcript is removed from this Device and from paired Devices." = "聊天记录将从这台设备和已配对的设备上移除。";
-"The two Devices run a handshake; the relay only carries the ciphertext. This Mac joins as a Runner." = "两台设备之间进行握手，中继只传递密文。这台 Mac 将作为 Runner 加入。";
+"The two Devices run a handshake; the relay only carries the ciphertext. This computer joins as a Runner." = "两台设备之间进行握手，中继只传递密文。这台电脑将作为 Runner 加入。";
 "theme dark mode light mode system" = "主题 深色模式 浅色模式 跟随系统 theme dark mode light mode system";
 "Thinking" = "思考";
 "This deletes the routine and stops its future runs. This can't be undone." = "这会删除该例行任务并停止它今后的运行。此操作无法撤销。";
-"This Mac" = "这台 Mac";
-"This Mac · CLI running" = "这台 Mac · CLI 运行中";
-"This Mac is your first Device" = "这台 Mac 是你的第一台设备";
+"This computer" = "这台电脑";
+"This computer · CLI running" = "这台电脑 · CLI 运行中";
+"This computer is your first Device" = "这台电脑是你的第一台设备";
 "This phrase is your master secret. It re-derives every key and unwraps everything on the relay. Write it down — nobody can reset it for you." = "这组短语是你的主密钥。它能重新派生所有密钥，并解开中继上的全部内容。请把它抄写下来——没有人能替你重置。";
 "Three processes" = "三个进程";
 "time date messages chats" = "时间 日期 消息 聊天 time date messages chats";
@@ -560,7 +560,7 @@
 "Updates" = "更新";
 "Updating a bot" = "正在更新智能体";
 "Using %@" = "正在使用 %@";
-"Using the CLI already running on this Mac" = "正在使用这台 Mac 上已运行的 CLI";
+"Using the CLI already running on this computer" = "正在使用这台电脑上已运行的 CLI";
 "Version" = "版本";
 "View" = "显示";
 "Waiting for the browser…" = "正在等待浏览器…";
@@ -584,7 +584,7 @@
 "Yesterday" = "昨天";
 "Yesterday %@" = "昨天 %@";
 "Your backup phrase" = "你的备份短语";
-"Your bots, keys and transcripts live in the CLI on this Mac. The app starts it on its own; you can also run it from a terminal, and this window reconnects either way." = "你的智能体、密钥和聊天记录都保存在这台 Mac 的 CLI 中。App 会自行启动它；你也可以在终端中运行，无论哪种方式，此窗口都会重新连接。";
+"Your bots, keys and transcripts live in the CLI on this computer. The app starts it on its own; you can also run it from a terminal, and this window reconnects either way." = "你的智能体、密钥和聊天记录都保存在这台电脑的 CLI 中。App 会自行启动它；你也可以在终端中运行，无论哪种方式，此窗口都会重新连接。";
 "Your browser opens a %@ sign-in when you continue. %@" = "继续后，浏览器会打开 %1$@ 登录页面。%2$@";
 "Your browser opens a %@ sign-in. The tokens are shared with your paired Devices, encrypted with your account key; the relay cannot read them." = "浏览器会打开 %@ 的登录页面。令牌会用你的账户密钥加密，共享给你已配对的设备；中继无法读取它们。";
 "Your first bot" = "你的第一个智能体";

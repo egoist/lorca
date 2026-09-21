@@ -79,7 +79,7 @@ pub struct SyncSocket {
     stream: tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
 }
 
-/// The relay pings every 25 s. A socket silent for this long is dead: the Mac slept, the
+/// The relay pings every 25 s. A socket silent for this long is dead: the computer slept, the
 /// phone changed networks.
 const SOCKET_SILENCE: std::time::Duration = std::time::Duration::from_secs(70);
 

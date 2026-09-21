@@ -122,7 +122,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         for device in AppStore.shared.devices {
             devicePicker.addItem(withTitle: "")
             guard let item = devicePicker.lastItem else { continue }
-            item.title = device.isThisDevice ? L("%@ (This Mac)", device.name) : device.name
+            item.title = device.isThisDevice ? L("%@ (This computer)", device.name) : device.name
             item.representedObject = device.id
             item.image = NSImage(systemSymbolName: device.symbolName, accessibilityDescription: nil)
         }

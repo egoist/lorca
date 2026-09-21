@@ -17,7 +17,7 @@ final class RootSplitViewController: NSSplitViewController {
     private var userWantsInspector = true
     private var chatController: ChatViewController?
     /// The Device the Plugins, Bots, and Devices panes show, picked in the window's
-    /// toolbar. This Mac until another is picked.
+    /// toolbar. This computer until another is picked.
     private(set) var settingsDeviceID: Device.ID?
     private var settingsControllers: [SettingsPane: NSViewController] = [:]
     /// The chat Back returns to.
@@ -340,7 +340,7 @@ final class RootSplitViewController: NSSplitViewController {
                 select(store.chats.first.map { .chat($0.id) })
             }
         case .rosterChanged:
-            // An unpaired Device leaves the pickers, which go back to this Mac.
+            // An unpaired Device leaves the pickers, which go back to this computer.
             showSettingsDevice(settingsDeviceID)
         case let .chatChanged(id):
             if case .chat(id) = selection {
@@ -355,7 +355,7 @@ final class RootSplitViewController: NSSplitViewController {
     private func updateContent() {
         guard isViewLoaded else { return }
 
-        // The relay URL and the CLI port are what a Mac with no CLI answering needs, so the
+        // The relay URL and the CLI port are what a computer with no CLI answering needs, so the
         // panes show either way.
         if case let .settings(pane) = selection {
             content.show(settingsController(for: pane))

@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next'
 
-/// Three Macs, one relay: sealed envelopes travel along the lines, and the box in the middle
+/// Three computers, one relay: sealed envelopes travel along the lines, and the box in the middle
 /// only ever holds ciphertext. Machine names come from `relay.machines`, in this order.
 const machines = [
   { bots: 'Nova', x: 90, y: 60 },

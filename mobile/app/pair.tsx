@@ -36,7 +36,7 @@ export default function PairScreen() {
   const lastFailed = useRef<string | null>(null);
   const busy = phase !== "idle";
   // A pairing code opened as a link (`lorca://pair?…`, from the Camera app or a tap on the
-  // Mac's code) lands here with its fields as params: pair with it right away.
+  // another Device's code) lands here with its fields as params: pair with it right away.
   const params = useLocalSearchParams<{ relay?: string; id?: string; ek?: string; n?: string }>();
   useEffect(() => {
     if (!params.relay || !params.id || !params.ek || !params.n || inFlight.current) return;
@@ -55,7 +55,7 @@ export default function PairScreen() {
       return;
     }
     if (lastFailed.current === text.trim()) {
-      Alert.alert(t("Code already used"), t("Each code pairs one Device. Open Pair a Device on your Mac for a fresh one."));
+      Alert.alert(t("Code already used"), t("Each code pairs one Device. Get a fresh code from Lorca on the other computer."));
       return;
     }
     inFlight.current = true;
@@ -94,7 +94,7 @@ export default function PairScreen() {
       setCode(text);
       void pair(text);
     } else {
-      Alert.alert(t("Nothing to paste"), t("Copy the pairing code from Lorca on your Mac first (Devices › Pair a Device)."));
+      Alert.alert(t("Nothing to paste"), t("Copy a pairing code from Lorca on another computer first."));
     }
   }
 
@@ -105,9 +105,9 @@ export default function PairScreen() {
           <View style={styles.logoWrap}>
             <Image source={appIcon} style={styles.logo} accessibilityIgnoresInvertColors />
           </View>
-          <Text style={[styles.title, { color: p.label }]}>{t("Pair with your Mac")}</Text>
+          <Text style={[styles.title, { color: p.label }]}>{t("Pair this phone")}</Text>
           <Text style={[styles.subtitle, { color: p.secondaryLabel }]}>
-            {t("Your bots run on your own machines. This phone joins them with a code from Lorca on your Mac: open Devices, choose Pair a Device, and scan or copy the code.")}
+            {t("Your bots run on your own computers. Get a pairing code from a computer that already has your identity: choose Pair a Device in the desktop app, or run lorca pair in a terminal. Then scan or paste the code.")}
           </Text>
 
           <View style={[styles.card, { backgroundColor: p.cell }]}>
@@ -118,7 +118,7 @@ export default function PairScreen() {
           {busy ? (
             <View style={[styles.card, styles.progress, { backgroundColor: p.cell }]}>
               <ActivityIndicator />
-              <Text style={{ flex: 1, color: p.label, fontSize: Font.body }}>{phase === "posting" ? t("Sending the request…") : t("Waiting for your Mac to accept…")}</Text>
+              <Text style={{ flex: 1, color: p.label, fontSize: Font.body }}>{phase === "posting" ? t("Sending the request…") : t("Waiting for the other Device to accept…")}</Text>
               <Pressable onPress={() => cancel.current?.abort()} hitSlop={10}>
                 <Text style={{ color: p.tint, fontSize: Font.body }}>{t("Cancel")}</Text>
               </Pressable>
@@ -174,7 +174,7 @@ export default function PairScreen() {
             <Pressable onPress={() => setScanning(false)} style={styles.close} hitSlop={10} accessibilityLabel={t("Close")}>
               <Symbol name="xmark" size={16} color="#FFFFFF" weight="bold" />
             </Pressable>
-            <Text style={styles.scanHint}>{t("Point at the pairing code on your Mac")}</Text>
+            <Text style={styles.scanHint}>{t("Point at the pairing QR code")}</Text>
           </View>
           <View pointerEvents="none" style={styles.reticleWrap}>
             <View style={styles.reticle} />

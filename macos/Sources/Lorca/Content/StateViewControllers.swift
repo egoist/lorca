@@ -26,7 +26,7 @@ final class OfflineViewController: NSViewController {
             L("The Lorca CLI isn't answering"), font: .systemFont(ofSize: 18, weight: .semibold),
             alignment: .center)
         let body = Build.label(
-            L("Your bots, keys and transcripts live in the CLI on this Mac. The app starts it on its own; you can also run it from a terminal, and this window reconnects either way."),
+            L("Your bots, keys and transcripts live in the CLI on this computer. The app starts it on its own; you can also run it from a terminal, and this window reconnects either way."),
             font: .systemFont(ofSize: 12.5), color: .secondaryLabelColor, lines: 0, alignment: .center
         )
 

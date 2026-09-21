@@ -23,7 +23,7 @@ let nextId = 0;
 const uuid = () => `m-${++nextId}`;
 
 describe("pairing", () => {
-  test("parses the string the Mac shows", () => {
+  test("parses a pairing string from another Device", () => {
     const target = parsePairingString(
       " lorca://pair?relay=http%3A%2F%2F127.0.0.1%3A18790%2F&id=Clup-vXLfBF6T2JkKpLqNOpyE9hdQbqXjrIWfdDvLbs&ek=nAanQrXTSxfK1tf7m3V2Fg-65OL84r6MeqmQmWw5uhw&n=1qUeEODuTz_A2y5jSZdBqQ \n",
     );
@@ -96,7 +96,7 @@ describe("format", () => {
   const chat = (kind: "dm" | "group", messages: Chat["messages"]): Chat => ({ id: "c", kind, bot_ids: ["b1", "b2"], is_pinned: false, created_at: 0, messages, unread_count: 0 });
   const msg = (author: Chat["messages"][number]["author"], body: Body): Chat["messages"][number] => ({ id: uuid(), chat_id: "c", author, body, state: { kind: "complete" }, created_at: 1 });
 
-  test("previews the way the Mac sidebar does", () => {
+  test("previews the way the desktop sidebar does", () => {
     expect(preview(chat("dm", []), bots)).toBe("No messages yet");
     expect(preview(chat("dm", [msg({ kind: "you" }, { kind: "text", text: "hi\nthere **now**" })]), bots)).toBe("hi there now");
     const photo = { id: "att-1", name: "IMG_1.jpg", mime: "image/jpeg", size: 1 };
