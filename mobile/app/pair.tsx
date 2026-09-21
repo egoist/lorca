@@ -4,7 +4,7 @@ import * as Haptics from "expo-haptics";
 import { LinearGradient } from "expo-linear-gradient";
 import { useEffect, useRef, useState } from "react";
 import { useLocalSearchParams } from "expo-router";
-import { ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, Image, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { engine } from "../src/core/engine";
 import { hostFacts } from "../src/core/host";
@@ -14,6 +14,7 @@ import { Symbol } from "../src/ui/Symbol";
 import { Font, usePalette } from "../src/ui/theme";
 
 type Phase = "idle" | "posting" | "waiting";
+const appIcon = __DEV__ ? require("../assets/icon-dev.png") : require("../assets/icon.png");
 
 export default function PairScreen() {
   const p = usePalette();
@@ -101,12 +102,7 @@ export default function PairScreen() {
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
         <ScrollView contentContainerStyle={[styles.content, { paddingTop: insets.top + 56, paddingBottom: insets.bottom + 24 }]} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
           <View style={styles.logoWrap}>
-            <LinearGradient colors={["#6b66f5", "#3d85f0", "#2eb3dc"]} style={styles.logo}>
-              <View style={styles.face}>
-                <View style={styles.eye} />
-                <View style={styles.eye} />
-              </View>
-            </LinearGradient>
+            <Image source={appIcon} style={styles.logo} accessibilityIgnoresInvertColors />
           </View>
           <Text style={[styles.title, { color: p.label }]}>{t("Pair with your Mac")}</Text>
           <Text style={[styles.subtitle, { color: p.secondaryLabel }]}>
@@ -192,9 +188,7 @@ const styles = StyleSheet.create({
   // A column of a phone's width, centered in a wider window.
   content: { paddingHorizontal: 24, gap: 12, width: "100%", maxWidth: 520, alignSelf: "center" },
   logoWrap: { alignItems: "center", marginBottom: 8 },
-  logo: { width: 88, height: 88, borderRadius: 24, alignItems: "center", justifyContent: "center" },
-  face: { width: 48, height: 38, borderRadius: 14, backgroundColor: "#fff", flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10 },
-  eye: { width: 8, height: 8, borderRadius: 4, backgroundColor: "#4576f2" },
+  logo: { width: 88, height: 88, borderRadius: 24 },
   title: { fontSize: 30, fontWeight: "700", textAlign: "center", letterSpacing: -0.4 },
   subtitle: { fontSize: 16, lineHeight: 22, textAlign: "center", marginBottom: 12 },
   card: { borderRadius: 14, padding: 14, gap: 6 },

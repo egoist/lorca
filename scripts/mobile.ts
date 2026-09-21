@@ -2,7 +2,7 @@
 // iPhone paired with this Mac, `--device <name or udid>` for any other.
 //
 // The installed app holds two things Metro cannot reload: the Rust core (crates/mobile over
-// UniFFI, built into modules/lorca-core) and the native project (ios/, from app.json, the
+// UniFFI, built into modules/lorca-core) and the native project (ios/, from the Expo config, the
 // plugins, and the native modules in package.json). This script fingerprints the inputs of
 // each, rebuilds what is stale, installs the app, starts Metro, and opens the app on it. A
 // Rust save while it runs rebuilds the core and installs the app again.
@@ -18,7 +18,12 @@ const METRO_PORT = 8081
 const DEBOUNCE_MS = 500
 // CocoaPods dies on a non-UTF-8 locale, and the CommandLineTools SDK breaks the pod install
 // and the build with "unknown architecture" from tapi.
-const NATIVE_ENV = { LANG: "en_US.UTF-8", LC_ALL: "en_US.UTF-8", DEVELOPER_DIR: "/Applications/Xcode.app/Contents/Developer" }
+const NATIVE_ENV = {
+  LANG: "en_US.UTF-8",
+  LC_ALL: "en_US.UTF-8",
+  DEVELOPER_DIR: "/Applications/Xcode.app/Contents/Developer",
+  LORCA_MOBILE_VARIANT: "development",
+}
 
 /** `apps` is per device: an app installed on the simulator says nothing about the phone. */
 type Stamps = { core?: string; project?: string; pods?: string; apps?: Record<string, string> }
@@ -78,7 +83,13 @@ function coreInputs(): string[] {
 /** What `expo prebuild` and `pod install` read. */
 function projectInputs(): string[] {
   const any = () => true
-  return [join(MOBILE, "app.json"), join(MOBILE, "package.json"), ...files(join(MOBILE, "plugins"), any), ...files(join(MOBILE, "targets"), any)]
+  return [
+    join(MOBILE, "app.config.ts"),
+    join(MOBILE, "package.json"),
+    ...files(join(MOBILE, "assets"), any),
+    ...files(join(MOBILE, "plugins"), any),
+    ...files(join(MOBILE, "targets"), any),
+  ]
 }
 
 /** What `pod install` resolves, and where: Pods holds absolute paths into this checkout, so
@@ -163,7 +174,7 @@ async function build(reason: string): Promise<boolean> {
   const project = fingerprint(projectInputs())
   const hasProject = existsSync(join(MOBILE, "ios", "Podfile"))
   if (!hasProject || (stamps.project !== undefined && stamps.project !== project)) {
-    log(`${color.bold("prebuild")} ${color.dim(hasProject ? "app.json, package.json, or a plugin changed" : "no ios/ yet")}`)
+    log(`${color.bold("prebuild")} ${color.dim(hasProject ? "Expo config, assets, package.json, or a plugin changed" : "no ios/ yet")}`)
     if (!(await run(["bunx", "expo", "prebuild", "--platform", "ios", "--clean", "--no-install"], MOBILE, NATIVE_ENV))) return false
     stamps.pods = undefined
   }
