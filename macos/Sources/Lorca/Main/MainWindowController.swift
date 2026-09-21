@@ -200,13 +200,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         return accessory
     }
 
-    /// A new bot opens its own direct chat, so the menu offers only bots and groups. Items go
-    /// through the responder chain to the same actions as the File menu.
+    /// A new bot opens its own direct chat, so the menu offers bots and groups, then pairing.
+    /// Items go through the responder chain to the same actions as the File menu.
     private static func createMenu() -> NSMenu {
         let menu = NSMenu()
         menu.addItem(withTitle: L("Create New Bot…"), action: #selector(AppDelegate.newBot(_:)), keyEquivalent: "")
         menu.addItem(
             withTitle: L("Create Group Chat…"), action: #selector(AppDelegate.newGroupChat(_:)), keyEquivalent: "")
+        menu.addItem(.separator())
+        menu.addItem(withTitle: L("Pair a Device…"), action: #selector(AppDelegate.pairDevice(_:)), keyEquivalent: "")
         return menu
     }
 
