@@ -32,7 +32,9 @@ export default (): ExpoConfig => {
         NSPhotoLibraryUsageDescription: "Lorca attaches photos you pick to a message.",
         CFBundleAllowMixedLocalizations: true,
       },
-      buildNumber: "1",
+      // scripts/release-ios.ts sets a fresh one for every upload; the notify extension takes the
+      // same number through CURRENT_PROJECT_VERSION.
+      buildNumber: process.env.LORCA_IOS_BUILD_NUMBER ?? "1",
       entitlements: {
         "com.apple.security.application-groups": [appGroup],
       },
