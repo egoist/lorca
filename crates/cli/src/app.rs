@@ -118,6 +118,9 @@ pub struct App {
     pub events: broadcast::Sender<Event>,
     pub relay: RelayClient,
     pub outbox_notify: Notify,
+    /// Held from a message's local write to its outbox enqueue, so a chat's `position` order
+    /// and the order its messages reach the relay log are the same on every Device.
+    message_order: Mutex<()>,
     pub relay_connected: AtomicBool,
     /// A `machine` blob named a key the last presence refresh did not list: a Device that
     /// just paired, or one unpaired since. The cycle refreshes presence again to tell.
@@ -200,6 +203,7 @@ impl App {
             events,
             relay: RelayClient::new(http.clone()),
             outbox_notify: Notify::new(),
+            message_order: Mutex::new(()),
             relay_connected: AtomicBool::new(false),
             presence_stale: AtomicBool::new(false),
             bulk_sync: AtomicBool::new(false),
@@ -1024,6 +1028,7 @@ impl App {
         if !self.state.lock().unwrap().chats.iter().any(|chat| chat.meta.id == message.chat_id) {
             return;
         }
+        let _order = self.message_order.lock().unwrap();
         // A phone never runs a bot and never rebuilds model context. Keeping only the app view
         // avoids duplicating large tool arguments and results on every mobile Device.
         #[cfg(feature = "runner")]
@@ -1084,6 +1089,7 @@ impl App {
     }
 
     pub fn remove_message(&self, chat_id: &str, message_id: &str, upload: bool) {
+        let _order = self.message_order.lock().unwrap();
         let removed = match self.store.remove(chat_id, message_id) {
             Ok(removed) => removed,
             Err(error) => {
@@ -1797,5 +1803,40 @@ mod tests {
         let state = app.state.lock().unwrap();
         assert_eq!(state.chats[0].meta.title, None);
         assert_eq!(state.chats[1].meta.title.as_deref(), Some("Standup"));
+    }
+
+    #[test]
+    fn concurrent_messages_queue_in_transcript_order() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        crate::identity::create(app, Some("Workbench".into())).unwrap();
+        app.state.lock().unwrap().chats.push(chat("chat", "dm", &["b1"], Some("b1")));
+
+        std::thread::scope(|scope| {
+            for thread in 0..8 {
+                scope.spawn(move || {
+                    for index in 0..40 {
+                        let author = if thread % 2 == 0 { Author::You } else { Author::System };
+                        let mut message = Message::new("chat", author, Body::text(format!("{thread}-{index}")));
+                        app.upsert_message(message.clone(), true);
+                        // A streaming update takes the queued version's place.
+                        message.body = Body::text(format!("{thread}-{index} done"));
+                        app.upsert_message(message, true);
+                    }
+                });
+            }
+        });
+
+        let stored: Vec<String> = app.messages("chat").into_iter().map(|message| message.id).collect();
+        let queued: Vec<String> = app
+            .store
+            .outbox()
+            .unwrap()
+            .into_iter()
+            .filter(|item| item.kind == "chat" && item.slot.as_ref().is_some_and(|slot| slot.keep_first))
+            .map(|item| item.slot.unwrap().name)
+            .collect();
+        assert_eq!(stored.len(), 320);
+        assert_eq!(queued, stored);
     }
 }
