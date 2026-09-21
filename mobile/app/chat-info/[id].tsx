@@ -29,11 +29,9 @@ export default function ChatInfoScreen() {
   const [adding, setAdding] = useState(false);
   const [title, setTitle] = useState(chat?.title ?? "");
   const [botName, setBotName] = useState(bot?.name ?? "");
-  const [botLabel, setBotLabel] = useState(bot?.label ?? "");
   const routines = useRoutines(chat?.kind === "dm" ? chat.bot_ids[0] : undefined);
 
   useEffect(() => setBotName(bot?.name ?? ""), [bot?.id, bot?.name]);
-  useEffect(() => setBotLabel(bot?.label ?? ""), [bot?.id, bot?.label]);
 
   if (!chat) return null;
 
@@ -82,20 +80,6 @@ export default function ChatInfoScreen() {
     }
   }
 
-  async function commitBotLabel() {
-    if (!bot) return;
-    const label = botLabel.trim() || bot.label;
-    setBotLabel(label);
-    if (label === bot.label) return;
-    try {
-      const updated = await engine.updateBot(bot.id, { label });
-      setBotLabel(updated.label);
-    } catch (error) {
-      setBotLabel(bot.label);
-      Alert.alert(t("Could not update the bot"), error instanceof Error ? error.message : String(error));
-    }
-  }
-
   function confirmDelete() {
     Alert.alert(t("Delete “{name}”?", { name: chatTitle(chat!) }), t("The chat and its messages are removed from every paired Device."), [
       { text: t("Cancel"), style: "cancel" },
@@ -124,13 +108,12 @@ export default function ChatInfoScreen() {
           <AvatarCluster bots={members} size={72} working={members.some((m) => working.has(m.id))} />
         )}
         <Text style={[styles.heroTitle, { color: p.label }]}>{chatTitle(chat)}</Text>
-        {bot ? <Text style={[styles.heroSubtitle, { color: p.secondaryLabel }]}>{bot.label}</Text> : <Text style={[styles.heroSubtitle, { color: p.secondaryLabel }]}>{members.length === 1 ? t("{count} bot", { count: members.length }) : t("{count} bots", { count: members.length })}</Text>}
+        {!bot ? <Text style={[styles.heroSubtitle, { color: p.secondaryLabel }]}>{members.length === 1 ? t("{count} bot", { count: members.length }) : t("{count} bots", { count: members.length })}</Text> : null}
       </View>
 
       {bot && (
         <Section>
           <FieldRow label={t("Name")} value={botName} onChangeText={setBotName} onBlur={() => void commitBotName()} autoCapitalize="words" returnKeyType="done" submitBehavior="blurAndSubmit" textAlign="right" />
-          <FieldRow label={t("Label")} value={botLabel} onChangeText={setBotLabel} onBlur={() => void commitBotLabel()} autoCapitalize="sentences" returnKeyType="done" submitBehavior="blurAndSubmit" textAlign="right" />
           <Row title={t("Description")} subtitle={bot.description || undefined} subtitleLines={2} chevron onPress={() => router.push(`/chat-info/description/${bot.id}`)} />
         </Section>
       )}
@@ -256,7 +239,7 @@ export default function ChatInfoScreen() {
             <Row
               key={member.id}
               title={member.name}
-              subtitle={member.label}
+              subtitle={providerLabel(member.provider)}
               leading={<BotAvatar bot={member} size={36} working={working.has(member.id)} />}
               accessory={
                 chat.owner_bot_id === member.id ? (
@@ -280,7 +263,7 @@ export default function ChatInfoScreen() {
             <CheckRow
               key={candidate.id}
               title={candidate.name}
-              subtitle={candidate.label}
+              subtitle={providerLabel(candidate.provider)}
               checked={false}
               leading={<BotAvatar bot={candidate} size={36} />}
               onPress={() => {

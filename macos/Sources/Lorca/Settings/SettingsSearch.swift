@@ -54,7 +54,7 @@ struct SettingsEntry: Hashable {
     static var pairing: SettingsEntry { SettingsEntry(.device, L("Pairing"), keywords: [L("unpair remove device paired")]) }
 
     static func bot(_ bot: Bot) -> SettingsEntry {
-        SettingsEntry(.bots, bot.name, keywords: [bot.label, bot.provider.rawValue, L("bot runner")])
+        SettingsEntry(.bots, bot.name, keywords: [bot.description, bot.provider.rawValue, L("bot runner")])
     }
 
     static func plugin(_ plugin: InstalledPlugin) -> SettingsEntry {

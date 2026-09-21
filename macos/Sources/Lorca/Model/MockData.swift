@@ -113,7 +113,6 @@ enum MockData {
             Bot(
                 id: "bot-nova",
                 name: "Nova",
-                label: "Generalist",
                 description: "Plans the work and delegates it to the team. Breaks work down, hands it off with message_bot, and summarizes what came back.",
                 symbolName: "sparkles",
                 accent: .indigo,
@@ -124,7 +123,6 @@ enum MockData {
             Bot(
                 id: "bot-patch",
                 name: "Patch",
-                label: "Rust and Swift",
                 description: "Implements changes in small diffs, explains the tradeoff in one line, and never invents APIs.",
                 symbolName: "chevron.left.forwardslash.chevron.right",
                 accent: .blue,
@@ -135,7 +133,6 @@ enum MockData {
             Bot(
                 id: "bot-scout",
                 name: "Scout",
-                label: "Research",
                 description: "Gathers context, reads the sources before answering, cites them, and says when it is unsure.",
                 symbolName: "binoculars.fill",
                 accent: .teal,
@@ -146,7 +143,6 @@ enum MockData {
             Bot(
                 id: "bot-quill",
                 name: "Quill",
-                label: "Writing",
                 description: "Writes docs, copy, and release notes in plain language: short sentences, no filler, and no exclamation marks.",
                 symbolName: "pencil.and.scribble",
                 accent: .pink,
@@ -157,7 +153,6 @@ enum MockData {
             Bot(
                 id: "bot-ember",
                 name: "Ember",
-                label: "Ops",
                 description: "Handles deploys and incident triage, watches the relay, and always states the blast radius first.",
                 symbolName: "bolt.horizontal.fill",
                 accent: .orange,

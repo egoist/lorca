@@ -56,7 +56,7 @@ final class BotDescriptionViewController: SheetViewController {
         }
         let description = textView.string.trimmingCharacters(in: .whitespacesAndNewlines)
         if description != bot.description {
-            store.updateBot(bot.id, name: bot.name, label: bot.label, description: description)
+            store.updateBot(bot.id, name: bot.name, description: description)
         }
         dismiss(nil)
     }

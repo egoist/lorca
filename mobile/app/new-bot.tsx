@@ -18,7 +18,6 @@ export default function NewBotScreen() {
   const devices = useStore((s) => s.devices);
   const runners = useMemo(() => devices.filter(isRunner), [devices]);
   const [name, setName] = useState("");
-  const [label, setLabel] = useState("");
   const [description, setDescription] = useState("");
   const [symbol, setSymbol] = useState("sparkles");
   const [accent, setAccent] = useState("indigo");
@@ -34,7 +33,7 @@ export default function NewBotScreen() {
 
   async function save() {
     try {
-      const { chatId } = await engine.createBot({ name, label, description, symbol_name: symbol, accent, runner_id: runnerId, provider: effectiveProvider, model, thinking });
+      const { chatId } = await engine.createBot({ name, description, symbol_name: symbol, accent, runner_id: runnerId, provider: effectiveProvider, model, thinking });
       router.dismiss();
       router.push(`/chat/${chatId}`);
     } catch (error) {
@@ -54,7 +53,6 @@ export default function NewBotScreen() {
         </View>
         <Section>
           <FieldRow label={t("Name")} value={name} onChangeText={setName} placeholder="Scout" autoFocus autoCapitalize="words" returnKeyType="next" />
-          <FieldRow label={t("Label")} value={label} onChangeText={setLabel} placeholder={t("Research")} autoCapitalize="sentences" />
         </Section>
         <Section title={t("Description")} footer={t("What this bot is for and how it should work. It also gets the team tools and the coding tools on its Runner.")}>
           <FieldRow value={description} onChangeText={setDescription} placeholder={t("Finds and summarizes sources")} multiline autoCapitalize="sentences" />

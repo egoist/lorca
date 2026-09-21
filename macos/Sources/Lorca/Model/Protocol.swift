@@ -214,7 +214,6 @@ enum Wire {
     struct Bot: Decodable {
         var id: String
         var name: String
-        var label: String
         var description: String
         var symbolName: String
         var accent: String
@@ -474,7 +473,6 @@ extension Wire.Bot {
         Bot(
             id: id,
             name: name,
-            label: label,
             description: description,
             symbolName: symbolName,
             accent: Accent(rawValue: accent) ?? .indigo,

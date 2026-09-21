@@ -1007,7 +1007,7 @@ fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job, store: &Memo
     let runner = app.device(&bot.runner_id);
     let workdir = bot.working_directory(&app.config.home);
     let mut prompt = String::new();
-    prompt.push_str(&format!("You are {}, a bot in Lorca. {}\n", bot.name, bot.label));
+    prompt.push_str(&format!("You are {}, a bot in Lorca.\n", bot.name));
     if !bot.description.trim().is_empty() {
         prompt.push_str(&format!("\nYour owner describes your job and how you should work:\n{}\n", bot.description.trim()));
     }
@@ -1019,7 +1019,11 @@ fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job, store: &Memo
             let host = app.device(&member.runner_id).map(|d| d.name).unwrap_or_else(|| "unassigned".into());
             let marker = if member.id == bot.id { " (you)" } else { "" };
             let owner = if chat.meta.owner_bot_id.as_deref() == Some(member.id.as_str()) { " · owner" } else { "" };
-            prompt.push_str(&format!("- {}{marker}{owner}: {} · runs on {host}\n", member.name, member.label));
+            if let Some(description) = first_line(&member.description, 160) {
+                prompt.push_str(&format!("- {}{marker}{owner}: {description} · runs on {host}\n", member.name));
+            } else {
+                prompt.push_str(&format!("- {}{marker}{owner} · runs on {host}\n", member.name));
+            }
         }
         prompt.push_str(
             "\nEveryone here, including the user, reads every message. After each new message the bots take turns in that \
@@ -1430,7 +1434,6 @@ impl Tool for ListTeammates {
                 let runner = self.app.device(&bot.runner_id);
                 json!({
                     "name": bot.name,
-                    "label": bot.label,
                     "description": bot.description,
                     "runner": runner.as_ref().map(|d| d.name.clone()).unwrap_or_else(|| "unassigned".into()),
                     "provider": bot.provider,
@@ -1744,13 +1747,12 @@ impl Tool for CreateBot {
             "type": "object",
             "properties": {
                 "name": { "type": "string", "description": "Short name, one or two words" },
-                "label": { "type": "string", "description": "One short line under the name: what it is for" },
                 "description": { "type": "string", "description": "What it does and how it should work: scope, standards, tone, constraints, and what to ask before acting" },
                 "provider": { "type": "string", "enum": crate::credentials::PROVIDER_KINDS, "description": "Defaults to your own provider" },
                 "thinking": { "type": "string", "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "max"], "description": "How much the model thinks. Defaults to the provider's default" },
                 "workdir": { "type": "string", "description": "Working directory for its tools. Defaults to a private workspace under the CLI home; give it your own path to share files" }
             },
-            "required": ["name", "label", "description"],
+            "required": ["name", "description"],
             "additionalProperties": false
         })
     }
@@ -1759,10 +1761,9 @@ impl Tool for CreateBot {
     }
     async fn execute(&self, _id: &str, args: Value, _cancel: CancellationToken, _on_update: ToolUpdateFn) -> Result<ToolResult, ToolError> {
         let name = args["name"].as_str().unwrap_or("").trim().trim_start_matches('@').to_string();
-        let label = args["label"].as_str().unwrap_or("").trim().to_string();
         let description = args["description"].as_str().unwrap_or("").trim().to_string();
-        if name.is_empty() || label.is_empty() || description.is_empty() {
-            return Err("name, label, and description are required".into());
+        if name.is_empty() || description.is_empty() {
+            return Err("name and description are required".into());
         }
         if name.chars().count() > 24 {
             return Err("Keep the name under 24 characters".into());
@@ -1775,7 +1776,6 @@ impl Tool for CreateBot {
         let bot = Bot {
             id: String::new(),
             name: name.clone(),
-            label,
             description,
             symbol_name,
             accent,
@@ -1832,7 +1832,7 @@ impl Tool for EditBot {
         "edit_bot"
     }
     fn description(&self) -> &str {
-        "Change a teammate's profile: name, label, description, provider, or working directory. Only the fields you \
+        "Change a teammate's profile: name, description, provider, or working directory. Only the fields you \
          pass change. Description is the complete account of what the bot does and how it works. You can edit \
          yourself. Changes apply from that bot's next turn. Edit only when the user asks or agrees."
     }
@@ -1842,7 +1842,6 @@ impl Tool for EditBot {
             "properties": {
                 "bot": { "type": "string", "description": "The teammate's current name" },
                 "name": { "type": "string", "description": "New name, one or two words" },
-                "label": { "type": "string", "description": "New short line under the name: what it is for" },
                 "description": { "type": "string", "description": "New complete description of what it does and how it should work" },
                 "provider": { "type": "string", "enum": crate::credentials::PROVIDER_KINDS },
                 "thinking": { "type": "string", "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "max"], "description": "How much the model thinks" },
@@ -1869,7 +1868,6 @@ impl Tool for EditBot {
 
         let field = |key: &str| args[key].as_str().map(str::trim).filter(|v| !v.is_empty()).map(str::to_string);
         let new_name = field("name").map(|n| n.trim_start_matches('@').to_string());
-        let label = field("label");
         let description = field("description");
         let provider = field("provider");
         let thinking = field("thinking");
@@ -1889,7 +1887,6 @@ impl Tool for EditBot {
         }
         let changed: Vec<&str> = [
             ("name", new_name.is_some()),
-            ("label", label.is_some()),
             ("description", description.is_some()),
             ("provider", provider.is_some()),
             ("thinking", thinking.is_some()),
@@ -1899,7 +1896,7 @@ impl Tool for EditBot {
         .filter_map(|(label, set)| set.then_some(label))
         .collect();
         if changed.is_empty() {
-            return Err("Pass at least one field to change: name, label, description, provider, thinking, or workdir".into());
+            return Err("Pass at least one field to change: name, description, provider, thinking, or workdir".into());
         }
 
         let updated = self
@@ -1907,9 +1904,6 @@ impl Tool for EditBot {
             .update_bot(&target.id, |bot| {
                 if let Some(v) = new_name {
                     bot.name = v;
-                }
-                if let Some(v) = label {
-                    bot.label = v;
                 }
                 if let Some(v) = description {
                     bot.description = v;
@@ -2312,7 +2306,6 @@ mod tests {
         Bot {
             id: id.into(),
             name: name.into(),
-            label: String::new(),
             description: String::new(),
             symbol_name: String::new(),
             accent: String::new(),

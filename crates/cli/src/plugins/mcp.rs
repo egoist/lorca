@@ -1717,7 +1717,6 @@ mod tests {
         let bot = Bot {
             id: "bot".into(),
             name: "Chef".into(),
-            label: String::new(),
             description: String::new(),
             symbol_name: String::new(),
             accent: String::new(),

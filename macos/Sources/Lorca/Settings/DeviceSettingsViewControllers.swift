@@ -65,7 +65,7 @@ final class BotsSettingsViewController: DevicePaneViewController {
             let row = BotRow()
             row.configure(
                 bot: bot,
-                detailText: "\(bot.label) · \(bot.provider.rawValue)",
+                detailText: bot.provider.rawValue,
                 accessorySymbol: "bubble.left",
                 tooltip: L("Open chat")
             )

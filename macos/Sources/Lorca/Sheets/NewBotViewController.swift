@@ -19,7 +19,6 @@ final class NewBotViewController: SheetViewController {
 
     private let store = AppStore.shared
     private let nameField = NSTextField()
-    private let labelField = NSTextField()
     private let descriptionField = WrappingTextField()
     private let runnerPopup = NSPopUpButton()
     private let providerPopup = NSPopUpButton()
@@ -49,14 +48,13 @@ final class NewBotViewController: SheetViewController {
         super.loadView()
 
         nameField.placeholderString = L("Name")
-        labelField.placeholderString = L("What it is for")
         descriptionField.placeholderString = L("What it does and how it should work")
         descriptionField.usesSingleLineMode = false
         descriptionField.maximumNumberOfLines = 0
         descriptionField.lineBreakMode = .byWordWrapping
         descriptionField.cell?.wraps = true
         descriptionField.cell?.isScrollable = false
-        for field in [nameField, labelField, descriptionField] {
+        for field in [nameField, descriptionField] {
             field.translatesAutoresizingMaskIntoConstraints = false
             field.delegate = self
         }
@@ -84,7 +82,6 @@ final class NewBotViewController: SheetViewController {
 
         let rows = [
             labeled(L("Name"), nameField),
-            labeled(L("Label"), labelField),
             labeled(L("Description"), descriptionField, topAligned: true),
             labeled(L("Look"), lookRow),
             labeled(L("Runner"), runnerPopup),
@@ -227,12 +224,10 @@ final class NewBotViewController: SheetViewController {
         let name = nameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return }
         let look = Self.looks[selectedLook]
-        let label = labelField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let description = descriptionField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
 
         let botID = store.createBot(
             name: name,
-            label: label.isEmpty ? L("New bot") : label,
             description: description,
             symbolName: look.symbolName,
             accent: look.accent,

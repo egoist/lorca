@@ -277,12 +277,8 @@ final class OnboardingViewController: NSViewController {
         nameField.stringValue = firstBot?.name ?? "Chef"
         nameField.placeholderString = L("Name")
         nameField.identifier = NSUserInterfaceItemIdentifier("botName")
-        let labelField = NSTextField()
-        labelField.stringValue = firstBot?.label ?? "Chief of staff"
-        labelField.placeholderString = L("What it is for")
-        labelField.identifier = NSUserInterfaceItemIdentifier("botLabel")
         let descriptionField = WrappingTextField()
-        descriptionField.stringValue = firstBot?.description ?? "A general-purpose assistant for planning work and getting things done."
+        descriptionField.stringValue = firstBot?.description ?? "A general-purpose chief of staff for planning work and getting things done."
         descriptionField.placeholderString = L("What it does and how it should work")
         descriptionField.usesSingleLineMode = false
         descriptionField.maximumNumberOfLines = 3
@@ -295,7 +291,6 @@ final class OnboardingViewController: NSViewController {
         let grid = formGrid([
             ("", avatar),
             (L("Name"), nameField),
-            (L("Label"), labelField),
             (L("Description"), descriptionField),
         ] + providerRows())
 
@@ -579,15 +574,14 @@ final class OnboardingViewController: NSViewController {
             return
         }
         let name = find(NSTextField.self, "botName")?.stringValue.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let label = find(NSTextField.self, "botLabel")?.stringValue.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let description = find(NSTextField.self, "botDescription")?.stringValue.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !name.isEmpty else {
             setStatus(L("Give the bot a name."), color: .systemRed)
             return
         }
         // The bot runs with the provider chosen here, not the CLI's default.
-        if name != bot.name || label != bot.label || description != bot.description || providerKind != bot.provider {
-            store.updateBot(bot.id, name: name, label: label.isEmpty ? bot.label : label, description: description, provider: providerKind)
+        if name != bot.name || description != bot.description || providerKind != bot.provider {
+            store.updateBot(bot.id, name: name, description: description, provider: providerKind)
         }
         connectProvider()
     }

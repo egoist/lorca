@@ -163,7 +163,6 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             let bot = Bot {
                 id: opt_string(&params, "id").unwrap_or_default(),
                 name: string(&params, "name")?,
-                label: opt_string(&params, "label").unwrap_or_else(|| "New bot".into()),
                 description: opt_string(&params, "description").unwrap_or_default(),
                 symbol_name: opt_string(&params, "symbol_name").unwrap_or_else(|| "sparkles".into()),
                 accent: opt_string(&params, "accent").unwrap_or_else(|| "indigo".into()),
@@ -190,7 +189,6 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             let avatar = store_avatar(app, &params)?;
             let bot = app.update_bot(&id, |bot| {
                 if let Some(v) = opt_string(&params, "name") { bot.name = v; }
-                if let Some(v) = opt_string(&params, "label") { bot.label = v; }
                 if let Some(v) = opt_string(&params, "symbol_name") { bot.symbol_name = v; }
                 if let Some(v) = opt_string(&params, "accent") { bot.accent = v; }
                 if let Some(v) = avatar { bot.avatar = v; }
@@ -366,7 +364,7 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
                         let mut parts = chat.meta.title.clone().into_iter().collect::<Vec<_>>();
                         for id in &chat.meta.bot_ids {
                             if let Some(bot) = bots.get(id.as_str()) {
-                                parts.extend([bot.name.clone(), bot.label.clone(), bot.description.clone()]);
+                                parts.extend([bot.name.clone(), bot.description.clone()]);
                             }
                         }
                         let text = parts.join(" ");

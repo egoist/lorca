@@ -1426,7 +1426,6 @@ mod tests {
         Bot {
             id: id.into(),
             name: id.into(),
-            label: String::new(),
             description: String::new(),
             symbol_name: "sparkles".into(),
             accent: "indigo".into(),

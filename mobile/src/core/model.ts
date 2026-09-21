@@ -56,8 +56,6 @@ export type Accent = "indigo" | "blue" | "teal" | "green" | "orange" | "pink" | 
 export interface Bot {
   id: string;
   name: string;
-  /** One short line under the name: what the bot is for. */
-  label: string;
   /** What the bot does and how it should work. */
   description: string;
   /** SF Symbol on the accent gradient: the look when there is no image. */

@@ -248,8 +248,6 @@ struct Device: Identifiable, Hashable {
 struct Bot: Identifiable, Hashable {
     let id: String
     var name: String
-    /// One short line under the name: what the bot is for.
-    var label: String
     /// What the bot does and how it should work.
     var description: String
     var symbolName: String

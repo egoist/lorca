@@ -39,13 +39,12 @@ final class ChatEmptyStateView: NSView {
 
         if chat.isDM, let only = bots.first {
             let host = store.device(only.runnerID)
-            subtitle.stringValue =
-                "\(only.label)\n" + L("Runs on %@ with %@", host?.name ?? L("an unassigned Runner"), only.provider.rawValue)
+            subtitle.stringValue = L("Runs on %@ with %@", host?.name ?? L("an unassigned Runner"), only.provider.rawValue)
         } else if bots.count > 1 {
             let names = bots.map(\.name).joined(separator: L(", "))
             subtitle.stringValue = "\(names)\n" + L("Address one with @, or say @everyone to hear from all of them.")
-        } else if let only = bots.first {
-            subtitle.stringValue = "\(only.label)\n" + L("A group of one for now. Add bots from the inspector.")
+        } else if !bots.isEmpty {
+            subtitle.stringValue = L("A group of one for now. Add bots from the inspector.")
         } else {
             subtitle.stringValue = L("No bots in this group yet.")
         }

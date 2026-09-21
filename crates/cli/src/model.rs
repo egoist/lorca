@@ -63,8 +63,6 @@ impl Device {
 pub struct Bot {
     pub id: String,
     pub name: String,
-    /// One short line under the name: what the bot is for.
-    pub label: String,
     /// What the bot does and how it should work, shown in its profile and used in its prompt.
     pub description: String,
     /// SF Symbol drawn on the accent gradient; the look when there is no image.
@@ -680,7 +678,7 @@ mod app_view_tests {
     #[test]
     fn old_bot_instructions_become_part_of_the_description_once() {
         let mut bot: Bot = serde_json::from_value(serde_json::json!({
-            "id": "bot", "name": "Scout", "label": "Research", "description": "Find sources.",
+            "id": "bot", "name": "Scout", "description": "Find sources.",
             "symbol_name": "binoculars", "accent": "teal", "runner_id": "runner",
             "provider": "deepseek", "instructions": "Cite every claim.", "created_at": 1.0
         }))
@@ -690,7 +688,9 @@ mod app_view_tests {
         assert_eq!(bot.description, "Find sources.\n\nCite every claim.");
         assert!(bot.legacy_instructions.is_empty());
         assert!(!bot.normalize_description());
-        assert_eq!(serde_json::to_value(bot).unwrap()["instructions"], "");
+        let value = serde_json::to_value(bot).unwrap();
+        assert!(value.get("label").is_none());
+        assert_eq!(value["instructions"], "");
     }
 
     #[test]

@@ -201,12 +201,12 @@ class Engine {
     }
   }
 
-  async createBot(input: { name: string; label: string; description: string; symbol_name: string; accent: string; runner_id: string; provider: string; model?: string; thinking?: string }): Promise<{ bot: Bot; chatId: string }> {
+  async createBot(input: { name: string; description: string; symbol_name: string; accent: string; runner_id: string; provider: string; model?: string; thinking?: string }): Promise<{ bot: Bot; chatId: string }> {
     const { bot, chat_id } = await core.request<{ bot: Bot; chat_id: string }>("bots.create", input);
     return { bot, chatId: chat_id };
   }
 
-  async updateBot(id: string, update: Partial<Pick<Bot, "name" | "label" | "description">>): Promise<Bot> {
+  async updateBot(id: string, update: Partial<Pick<Bot, "name" | "description">>): Promise<Bot> {
     const { bot } = await core.request<{ bot: Bot }>("bots.update", { id, ...update });
     useStore.setState((s) => ({ bots: s.bots.map((current) => (current.id === id ? bot : current)) }));
     return bot;

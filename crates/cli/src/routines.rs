@@ -281,7 +281,6 @@ mod tests {
             state.bots.push(Bot {
                 id: "b1".into(),
                 name: "Chef".into(),
-                label: String::new(),
                 description: String::new(),
                 symbol_name: String::new(),
                 accent: String::new(),

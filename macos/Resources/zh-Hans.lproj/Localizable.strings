@@ -258,7 +258,6 @@
 "its Runner" = "它的 Runner";
 "Keys and sign-ins are sent sealed to %@ and stay there. A sign-in opens the browser on %@." = "密钥和登录信息会密封发送到 %1$@ 并保留在那里。登录时会在 %2$@ 上打开浏览器。";
 "Keys and sign-ins stay on this device." = "密钥和登录信息只保留在这台设备上。";
-"Label" = "标签";
 "Language" = "语言";
 "language locale english chinese translation" = "语言 中文 英文 翻译 界面 language locale english chinese translation";
 "Last checked %@" = "上次检查：%@";
@@ -306,7 +305,6 @@
 "Never" = "从未";
 "Never checked" = "从未检查";
 "New" = "新建";
-"New bot" = "新智能体";
 "New Bot" = "新建智能体";
 "New Bot…" = "新建智能体…";
 "New Chat" = "新聊天";
@@ -575,7 +573,6 @@
 "What do we not know yet?" = "我们还有哪些不知道的？";
 "What is the blast radius?" = "影响范围有多大？";
 "What it does and how it should work" = "它做什么以及应该如何工作";
-"What it is for" = "它的用途";
 "What should I work on next?" = "我接下来该做什么？";
 "What would you delete first?" = "你会先删掉什么？";
 "Where turns run" = "运行位置";

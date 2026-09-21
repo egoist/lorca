@@ -72,8 +72,7 @@ fn create_lead_bot(app: &Arc<App>) {
     let bot = crate::model::Bot {
         id: String::new(),
         name: LEAD_BOT_NAME.into(),
-        label: "Chief of staff".into(),
-        description: "A general-purpose assistant for planning work and getting things done.".into(),
+        description: "A general-purpose chief of staff for planning work and getting things done.".into(),
         symbol_name: "sparkles".into(),
         accent: "indigo".into(),
         avatar: None,
