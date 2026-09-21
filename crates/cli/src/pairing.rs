@@ -298,6 +298,7 @@ async fn join(app: &Arc<App>, pairing_string: &str, device_name: Option<String>)
         *state = Default::default();
         upsert_device(&mut state.devices, device.clone());
     }
+    app.store.clear()?;
     app.save_state();
     app.push_machine_blob_if_changed();
     app.emit(Event::IdentityChanged { has_identity: true });

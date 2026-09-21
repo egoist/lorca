@@ -1,4 +1,4 @@
-//! Process-wide state: keys, the plaintext store, the outbox to the relay, and the event bus.
+//! Process-wide state: keys, the in-memory view of the local SQLite store, and the event bus.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -13,6 +13,7 @@ use crate::config::{self, Config, Settings};
 use crate::events::{ChatSummary, Event};
 use crate::keys::{self, IdentityFile, MachineFile};
 use crate::model::*;
+use crate::local_store::LocalStore;
 use crate::credentials::Credentials;
 use crate::relay::RelayClient;
 
@@ -53,39 +54,26 @@ impl Slot {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// The process's in-memory projection of the local SQLite tables.
+#[derive(Debug, Clone, Default)]
 pub struct State {
-    #[serde(default)]
     pub devices: Vec<Device>,
-    #[serde(default)]
     pub bots: Vec<Bot>,
-    #[serde(default)]
     pub chats: Vec<Chat>,
-    #[serde(default)]
     pub routines: Vec<Routine>,
-    #[serde(default)]
     pub auto_review: AutoReview,
-    #[serde(default)]
     pub last_seq: i64,
-    #[serde(default)]
-    pub outbox: Vec<OutboxItem>,
     /// Chats deleted here whose blobs the relay still has to drop.
-    #[serde(default)]
     pub group_deletes: Vec<String>,
-    #[serde(default)]
     pub machine_blob_hash: Option<String>,
     /// Whether the relay has had this Device's credentials since they last changed here.
-    #[serde(default)]
     pub credentials_uploaded: bool,
     /// machine pubkey → last seen (unix), from the relay's machine list.
-    #[serde(default)]
     pub device_seen: HashMap<String, i64>,
     /// The machines with a sync socket open on the relay, as of the last machine list. Not
     /// kept across runs: it is only good while this Device's own socket is open.
-    #[serde(skip)]
     pub device_online: std::collections::HashSet<String>,
     /// Relay blob ids this device produced or already applied, so its own echoes are no-ops.
-    #[serde(default)]
     pub applied_blob_ids: Vec<String>,
 }
 
@@ -124,6 +112,7 @@ pub struct App {
     pub machine: Mutex<Option<MachineFile>>,
     pub credentials: Mutex<Credentials>,
     pub state: Mutex<State>,
+    pub store: LocalStore,
     pub events: broadcast::Sender<Event>,
     pub relay: RelayClient,
     pub outbox_notify: Notify,
@@ -166,16 +155,25 @@ pub struct App {
 impl App {
     pub fn load(config: Config) -> anyhow::Result<Arc<App>> {
         config.ensure_home()?;
+        // This storage layout intentionally has no migration path. Remove the two superseded
+        // local stores so plaintext account data is not left behind beside the database.
+        for name in ["state.json", "transcript.sqlite3", "transcript.sqlite3-wal", "transcript.sqlite3-shm"] {
+            let path = config.home.join(name);
+            if path.is_file() {
+                std::fs::remove_file(path)?;
+            }
+        }
         let settings = Settings::load(&config);
         let identity: Option<IdentityFile> = config::read_json(&config.identity_path());
         let machine: Option<MachineFile> = config::read_json(&config.machine_path());
         let credentials = Credentials::load(&config);
         let plugins = crate::plugins::Store::load(&config);
-        let mut state: State = config::read_json(&config.state_path()).unwrap_or_default();
+        let store = LocalStore::open(&config.database_path())?;
+        let mut state = store.load_state()?;
+        let chat_ids: Vec<String> = state.chats.iter().map(|chat| chat.meta.id.clone()).collect();
+        store.retain_chats(&chat_ids)?;
         let bots = state.bots.clone();
-        let chats = state.chats.clone();
-        let mut migrated_auto_review = normalize_auto_review_rules(&bots, &mut state.auto_review);
-        migrated_auto_review |= restore_exact_shell_commands(&chats, &mut state.auto_review);
+        normalize_auto_review_rules(&bots, &mut state.auto_review);
         // Upload this Device's metadata once per launch: a relay that changed or was reset
         // since the last upload has no copy, and every newly paired Device needs one.
         state.machine_blob_hash = None;
@@ -189,6 +187,7 @@ impl App {
             machine: Mutex::new(machine),
             credentials: Mutex::new(credentials),
             state: Mutex::new(state),
+            store,
             events,
             relay: RelayClient::new(http.clone()),
             outbox_notify: Notify::new(),
@@ -212,9 +211,8 @@ impl App {
             mcp: crate::plugins::mcp::Pool::new(),
             http,
         });
-        if migrated_auto_review {
-            app.save_state_now();
-        }
+        // Normalize and persist the in-memory view before background work begins.
+        app.save_state_now();
         Ok(app)
     }
 
@@ -230,7 +228,7 @@ impl App {
 
     pub fn save_state_now(&self) {
         let snapshot = self.state.lock().unwrap().clone();
-        if let Err(error) = config::write_json_private(&self.config.state_path(), &snapshot) {
+        if let Err(error) = self.store.save_state(&snapshot) {
             tracing::error!(%error, "saving state");
         }
     }
@@ -401,11 +399,12 @@ impl App {
         *self.machine.lock().unwrap() = None;
         *self.credentials.lock().unwrap() = Credentials::default();
         *self.state.lock().unwrap() = State::default();
+        self.store.clear()?;
         self.settings.lock().unwrap().relay_url = None;
         self.relay.forget_token();
         // The sync session ends on this instead of waiting for its socket to say something.
         self.outbox_notify.notify_waiters();
-        for path in [self.config.identity_path(), self.config.machine_path(), self.config.credentials_path(), self.config.state_path(), self.config.settings_path()] {
+        for path in [self.config.identity_path(), self.config.machine_path(), self.config.credentials_path(), self.config.settings_path()] {
             if path.exists() {
                 std::fs::remove_file(&path)?;
             }
@@ -466,18 +465,16 @@ impl App {
     }
 
     fn queue_blob(&self, item: OutboxItem) {
-        {
+        let snapshot = {
             let mut state = self.state.lock().unwrap();
             remember_applied(&mut state, &item.id);
-            let waiting = item.slot.as_ref().and_then(|slot| {
-                state.outbox.iter().position(|queued| queued.slot.as_ref().is_some_and(|s| s.name == slot.name))
-            });
-            match waiting {
-                Some(index) => state.outbox[index] = item,
-                None => state.outbox.push(item),
-            }
+            state.clone()
+        };
+        if let Err(error) = self.store.queue_outbox_with_state(&item, &snapshot) {
+            self.state.lock().unwrap().applied_blob_ids.retain(|id| id != &item.id);
+            tracing::error!(%error, kind = %item.kind, "queueing relay blob");
+            return;
         }
-        self.save_state();
         self.outbox_notify.notify_waiters();
     }
 
@@ -626,11 +623,9 @@ impl App {
 
     /// Replaces the Auto-review setting and publishes the roster.
     pub fn set_auto_review(&self, mut auto_review: AutoReview) {
-        let mut state = self.state.lock().unwrap();
-        normalize_auto_review_rules(&state.bots, &mut auto_review);
-        restore_exact_shell_commands(&state.chats, &mut auto_review);
-        state.auto_review = auto_review;
-        drop(state);
+        let bots = self.state.lock().unwrap().bots.clone();
+        normalize_auto_review_rules(&bots, &mut auto_review);
+        self.state.lock().unwrap().auto_review = auto_review;
         self.roster_changed(true);
     }
 
@@ -728,6 +723,8 @@ impl App {
             queue_chat_deletes(&mut state, &removed);
             removed
         };
+        let snapshot = self.state.lock().unwrap().clone();
+        self.store.save_state_deleting_chats(&snapshot, &removed_chat_ids)?;
 
         // Stop this bot after the roster mutation is committed. A room job has no bot id and
         // keeps going when its group survives; it reads the changed membership before offering
@@ -795,7 +792,7 @@ impl App {
                 }
             }
         }
-        let chat = Chat { meta, messages: Vec::new(), unread_count: 0, usage: None, compactions: Vec::new() };
+        let chat = Chat { meta, unread_count: 0, usage: None, compactions: Vec::new() };
         {
             let mut state = self.state.lock().unwrap();
             if let Some(existing) = state.chats.iter().find(|c| c.meta.id == chat.meta.id) {
@@ -840,6 +837,10 @@ impl App {
             // made by the sync cycle and retried until it lands. What was still waiting to go
             // up goes nowhere.
             queue_chat_deletes(&mut state, &[chat_id.to_string()]);
+        }
+        let snapshot = self.state.lock().unwrap().clone();
+        if let Err(error) = self.store.save_state_deleting_chats(&snapshot, &[chat_id.to_string()]) {
+            tracing::error!(%error, %chat_id, "deleting chat state");
         }
         self.emit(Event::ChatRemoved { chat_id: chat_id.to_string() });
         self.roster_changed(true);
@@ -974,31 +975,51 @@ impl App {
     /// One that finishes while the user looks at its chat is read here, and so everywhere.
     /// A message the user sends, from any Device, says they have read what came before it.
     pub fn upsert_message(&self, message: Message, upload: bool) {
+        if !self.state.lock().unwrap().chats.iter().any(|chat| chat.meta.id == message.chat_id) {
+            return;
+        }
+        // A phone never runs a bot and never rebuilds model context. Keeping only the app view
+        // avoids duplicating large tool arguments and results on every mobile Device.
+        #[cfg(feature = "runner")]
+        let stored = message.clone();
+        #[cfg(not(feature = "runner"))]
+        let stored = message.for_app();
+        let stored_upsert = match self.store.upsert(&stored) {
+            Ok(upsert) => upsert,
+            Err(error) => {
+                tracing::error!(%error, message_id = %message.id, "storing transcript message");
+                return;
+            }
+        };
+        if !stored_upsert.changed {
+            return;
+        }
         let watching = self.is_watching(&message.chat_id);
-        let (added, changed, finished, read) = {
+        let outcome = {
             let mut state = self.state.lock().unwrap();
-            let Some(chat) = state.chats.iter_mut().find(|c| c.meta.id == message.chat_id) else { return };
-            let (added, changed, counted) = match chat.messages.iter_mut().find(|m| m.id == message.id) {
-                Some(existing) => {
-                    let changed = *existing != message;
-                    let counted = existing.counts_unread();
-                    *existing = message.clone();
-                    (false, changed, counted)
+            match state.chats.iter_mut().find(|c| c.meta.id == message.chat_id) {
+                Some(chat) => {
+                    let added = stored_upsert.previous.is_none();
+                    let changed = stored_upsert.changed;
+                    let counted = stored_upsert.previous.as_ref().is_some_and(Message::counts_unread);
+                    let finished = !counted && message.counts_unread();
+                    if finished && !watching {
+                        chat.unread_count += 1;
+                    }
+                    let read = added && message.author == Author::You && chat.unread_count > 0;
+                    if read {
+                        chat.unread_count = 0;
+                    }
+                    Some((added, changed, finished, read))
                 }
-                None => {
-                    chat.messages.push(message.clone());
-                    (true, true, false)
-                }
-            };
-            let finished = !counted && message.counts_unread();
-            if finished && !watching {
-                chat.unread_count += 1;
+                None => None,
             }
-            let read = added && message.author == Author::You && chat.unread_count > 0;
-            if read {
-                chat.unread_count = 0;
-            }
-            (added, changed, finished, read)
+        };
+        let Some((added, changed, finished, read)) = outcome else {
+            // The chat was deleted between the optimistic existence check and the SQLite
+            // write. Do not leave an unreachable row behind.
+            let _ = self.store.remove(&message.chat_id, &message.id);
+            return;
         };
         if added {
             self.emit(Event::MessageAdded { chat_id: message.chat_id.clone(), message: message.for_app() });
@@ -1009,7 +1030,6 @@ impl App {
             self.emit(self.roster_summary());
         }
         if upload {
-            self.save_state();
             self.push_chat_op(&ChatBlob::Upsert { message: message.clone() });
         }
         if finished && watching {
@@ -1018,16 +1038,15 @@ impl App {
     }
 
     pub fn remove_message(&self, chat_id: &str, message_id: &str, upload: bool) {
-        let removed = {
-            let mut state = self.state.lock().unwrap();
-            let Some(chat) = state.chats.iter_mut().find(|c| c.meta.id == chat_id) else { return };
-            let before = chat.messages.len();
-            chat.messages.retain(|m| m.id != message_id);
-            before != chat.messages.len()
+        let removed = match self.store.remove(chat_id, message_id) {
+            Ok(removed) => removed,
+            Err(error) => {
+                tracing::error!(%error, %chat_id, %message_id, "removing transcript message");
+                false
+            }
         };
         if removed {
             self.emit(Event::MessageRemoved { chat_id: chat_id.to_string(), message_id: message_id.to_string() });
-            self.save_state();
             if upload {
                 self.push_chat_op(&ChatBlob::Remove { chat_id: chat_id.to_string(), message_id: message_id.to_string() });
             }
@@ -1035,8 +1054,22 @@ impl App {
     }
 
     pub fn message(&self, chat_id: &str, message_id: &str) -> Option<Message> {
-        let state = self.state.lock().unwrap();
-        state.chats.iter().find(|c| c.meta.id == chat_id)?.messages.iter().find(|m| m.id == message_id).cloned()
+        self.store.message(chat_id, message_id).map_err(|error| tracing::error!(%error, %chat_id, %message_id, "reading transcript message")).ok().flatten()
+    }
+
+    #[cfg(test)]
+    pub fn messages(&self, chat_id: &str) -> Vec<Message> {
+        self.store.all(chat_id).map_err(|error| tracing::error!(%error, %chat_id, "reading transcript")).unwrap_or_default()
+    }
+
+    pub fn message_page(&self, chat_id: &str, before: Option<&str>, limit: usize) -> (Vec<Message>, bool) {
+        match self.store.page(chat_id, before, limit) {
+            Ok((messages, more)) => (messages.into_iter().map(|message| message.for_app()).collect(), more),
+            Err(error) => {
+                tracing::error!(%error, %chat_id, "paging transcript");
+                (Vec::new(), false)
+            }
+        }
     }
 
     pub fn notice(&self, chat_id: &str, text: impl Into<String>) {
@@ -1108,23 +1141,18 @@ impl App {
     /// Marks a user message as consumed by the turn that was already running. Returns false
     /// when another active turn claimed it first.
     pub fn claim_steering_message(&self, chat_id: &str, message_id: &str) -> bool {
-        let promoted = {
-            let mut state = self.state.lock().unwrap();
-            state
-                .chats
-                .iter_mut()
-                .find(|chat| chat.meta.id == chat_id)
-                .and_then(|chat| chat.messages.iter_mut().find(|message| message.id == message_id))
-                .and_then(|message| {
-                    if message.promoted_at.is_some() {
-                        return None;
-                    }
-                    message.promoted_at = Some(config::now_secs());
-                    Some(message.clone())
-                })
-        };
+        let promoted = self.message(chat_id, message_id).and_then(|mut message| {
+            if message.promoted_at.is_some() {
+                return None;
+            }
+            message.promoted_at = Some(config::now_secs());
+            Some(message)
+        });
         let Some(message) = promoted else { return false };
-        self.save_state();
+        if let Err(error) = self.store.upsert(&message) {
+            tracing::error!(%error, %chat_id, %message_id, "promoting steering message");
+            return false;
+        }
         self.push_chat_op(&ChatBlob::Upsert { message });
         true
     }
@@ -1182,8 +1210,25 @@ impl App {
             .collect()
     }
 
+    /// A chat as a snapshot carries it: its newest messages in the apps' form, and `has_more`
+    /// when older ones remain in SQLite for `chats.messages` to page.
+    fn chat_for_app(&self, chat: &Chat) -> Value {
+        let (messages, has_more) = self.message_page(&chat.meta.id, None, SNAPSHOT_MESSAGES);
+        let mut out = serde_json::to_value(ChatSummary {
+            meta: chat.meta.clone(),
+            unread_count: chat.unread_count,
+            usage: chat.usage.clone(),
+        })
+        .unwrap_or_default();
+        out["messages"] = json!(messages);
+        out["has_more"] = json!(has_more);
+        out
+    }
+
     pub fn snapshot(&self) -> Value {
-        let state = self.state.lock().unwrap();
+        // Do not hold the metadata lock while paging SQLite: message writes take the locks in
+        // the opposite order when they update unread state.
+        let state = self.state.lock().unwrap().clone();
         let identity_id = self.machine_file().map(|m| keys::identity_id(&m.identity_pubkey));
         json!({
             "version": config::VERSION,
@@ -1195,7 +1240,7 @@ impl App {
             "relay_connected": self.relay_connected.load(Ordering::Relaxed),
             "devices": self.devices_out(&state),
             "bots": state.bots,
-            "chats": state.chats.iter().map(chat_for_app).collect::<Vec<_>>(),
+            "chats": state.chats.iter().map(|chat| self.chat_for_app(chat)).collect::<Vec<_>>(),
             "routines": self.routines_out(&state),
             "auto_review": state.auto_review,
             "providers": self.credentials.lock().unwrap().statuses(),
@@ -1226,6 +1271,7 @@ pub(crate) fn normalize_auto_review_rules(bots: &[Bot], auto_review: &mut AutoRe
             changed = true;
         }
         if rule.patterns.is_empty() {
+            #[cfg(feature = "runner")]
             if let Some(command) = &rule.command {
                 let patterns = crate::local_review::reusable_shell_patterns(command);
                 if !patterns.is_empty() {
@@ -1264,34 +1310,6 @@ pub(crate) fn normalize_auto_review_rules(bots: &[Bot], auto_review: &mut AutoRe
     changed
 }
 
-/// Older exact rules stored only a hash and a short label. Their permission cards still carry
-/// the reviewed arguments, so use the same Runner/workdir/action key to restore the full command.
-pub(crate) fn restore_exact_shell_commands(chats: &[Chat], auto_review: &mut AutoReview) -> bool {
-    let mut changed = false;
-    for rule in &mut auto_review.rules {
-        if rule.command.is_some() || !rule.tool.as_deref().is_some_and(|tool| tool.starts_with("computer/bash/")) {
-            continue;
-        }
-        let (Some(rule_key), Some(runner_id), Some(workdir)) = (rule.tool.as_deref(), rule.runner_id.as_deref(), rule.workdir.as_deref()) else {
-            continue;
-        };
-        let command = chats.iter().flat_map(|chat| &chat.messages).find_map(|message| {
-            let Body::Permission { plugin_id, tool, arguments, .. } = &message.body else { return None };
-            if plugin_id != "computer" || tool != "bash" || crate::local_review::scoped_rule_key(runner_id, std::path::Path::new(workdir), arguments) != rule_key {
-                return None;
-            }
-            arguments.get("command").and_then(Value::as_str).map(str::to_string)
-        });
-        if let Some(command) = command {
-            rule.text = command.clone();
-            rule.patterns = crate::local_review::reusable_shell_patterns(&command);
-            rule.command = Some(command);
-            changed = true;
-        }
-    }
-    changed
-}
-
 fn canonical_workdir(workdir: std::path::PathBuf) -> String {
     std::fs::canonicalize(&workdir).unwrap_or(workdir).display().to_string()
 }
@@ -1319,21 +1337,10 @@ fn default_workspace_bot_id(workdir: &str) -> Option<&str> {
 fn queue_chat_deletes(state: &mut State, chat_ids: &[String]) {
     for chat_id in chat_ids {
         let group = crate::model::relay_name(chat_id);
-        state.outbox.retain(|item| item.group.as_deref() != Some(group.as_str()));
         if !state.group_deletes.contains(&group) {
             state.group_deletes.push(group);
         }
     }
-}
-
-/// A chat as a snapshot carries it: its newest messages in the apps' form, and `has_more`
-/// when older ones are left to ask for with `chats.messages`.
-fn chat_for_app(chat: &Chat) -> Value {
-    let (messages, has_more) = message_page(&chat.messages, None, SNAPSHOT_MESSAGES);
-    let mut out = serde_json::to_value(ChatSummary { meta: chat.meta.clone(), unread_count: chat.unread_count, usage: chat.usage.clone() }).unwrap_or_default();
-    out["messages"] = json!(messages);
-    out["has_more"] = json!(has_more);
-    out
 }
 
 pub fn short_key(key: &str) -> String {
@@ -1362,6 +1369,7 @@ pub fn upsert_device(devices: &mut Vec<Device>, device: Device) -> bool {
 }
 
 pub fn remember_applied(state: &mut State, id: &str) {
+    state.applied_blob_ids.retain(|existing| existing != id);
     state.applied_blob_ids.push(id.to_string());
     if state.applied_blob_ids.len() > 2000 {
         let excess = state.applied_blob_ids.len() - 2000;
@@ -1417,7 +1425,6 @@ mod tests {
                 is_pinned: false,
                 created_at: 1.0,
             },
-            messages: Vec::new(),
             unread_count: 0,
             usage: None,
             compactions: Vec::new(),
@@ -1452,6 +1459,63 @@ mod tests {
     }
 
     #[test]
+    fn superseded_local_stores_are_discarded() {
+        let home = std::env::temp_dir().join(format!("lorca-old-store-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&home).unwrap();
+        for name in ["state.json", "transcript.sqlite3", "transcript.sqlite3-wal", "transcript.sqlite3-shm"] {
+            std::fs::write(home.join(name), b"obsolete").unwrap();
+        }
+
+        let scratch = ScratchApp(App::load(Config { home: home.clone(), port: 0 }).unwrap(), home.clone());
+
+        for name in ["state.json", "transcript.sqlite3", "transcript.sqlite3-wal", "transcript.sqlite3-shm"] {
+            assert!(!home.join(name).exists());
+        }
+        assert!(scratch.0.config.database_path().is_file());
+    }
+
+    #[test]
+    fn durable_state_and_transcripts_live_in_one_database() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        {
+            let mut state = app.state.lock().unwrap();
+            state.bots.push(bot("b1"));
+            state.chats.push(chat("chat", "dm", &["b1"], Some("b1")));
+            state.routines.push(routine("routine", "b1"));
+            state.last_seq = 42;
+            state.group_deletes.push("deleted-chat".into());
+            state.machine_blob_hash = Some("machine-hash".into());
+            state.credentials_uploaded = true;
+            state.device_seen.insert("device".into(), 99);
+            state.applied_blob_ids = vec!["blob-1".into(), "blob-2".into()];
+        }
+        let message = Message::new("chat", Author::You, Body::text("kept in SQLite"));
+        let id = message.id.clone();
+        app.upsert_message(message, false);
+        app.save_state_now();
+
+        assert!(!scratch.1.join("state.json").exists());
+        assert!(app.config.database_path().is_file());
+
+        let reloaded = App::load(Config { home: scratch.1.clone(), port: 0 }).unwrap();
+        assert!(reloaded.chat("chat").is_some());
+        let state = reloaded.state.lock().unwrap();
+        assert_eq!(state.bots.iter().map(|bot| bot.id.as_str()).collect::<Vec<_>>(), vec!["b1"]);
+        assert_eq!(state.routines.iter().map(|routine| routine.id.as_str()).collect::<Vec<_>>(), vec!["routine"]);
+        assert_eq!(state.last_seq, 42);
+        assert_eq!(state.group_deletes, vec!["deleted-chat"]);
+        assert!(state.credentials_uploaded);
+        assert_eq!(state.device_seen.get("device"), Some(&99));
+        assert_eq!(state.applied_blob_ids, vec!["blob-1", "blob-2"]);
+        drop(state);
+        assert_eq!(reloaded.message("chat", &id).and_then(|message| match message.body {
+            Body::Text { text, .. } => Some(text),
+            _ => None,
+        }).as_deref(), Some("kept in SQLite"));
+    }
+
+    #[test]
     fn deleting_a_bot_removes_its_dm_routines_and_group_memberships() {
         let scratch = scratch_app();
         let app = &scratch.0;
@@ -1467,7 +1531,6 @@ mod tests {
                 chat("solo", "group", &["b1"], Some("b1")),
             ];
             state.routines = vec![routine("r1", "b1"), routine("r2", "b2")];
-            state.outbox = ["dm-b1", "dm-b2", "shared", "solo"].into_iter().map(queued_message).collect();
             state.auto_review.rules = vec![
                 AutoReviewRule {
                     id: "shell-b1".into(),
@@ -1511,6 +1574,9 @@ mod tests {
                 },
             ];
         }
+        for chat_id in ["dm-b1", "dm-b2", "shared", "solo"] {
+            app.store.queue_outbox(&queued_message(chat_id)).unwrap();
+        }
 
         app.delete_bot("b1").unwrap();
 
@@ -1522,15 +1588,16 @@ mod tests {
         assert_eq!(shared.meta.bot_ids, vec!["b2"]);
         assert_eq!(shared.meta.owner_bot_id.as_deref(), Some("b2"));
         assert_eq!(
-            state.outbox.iter().filter_map(|item| item.group.as_deref()).collect::<Vec<_>>(),
-            vec!["dm-b2", "shared"]
-        );
-        assert_eq!(
             state.auto_review.rules.iter().map(|rule| rule.id.as_str()).collect::<Vec<_>>(),
             vec!["shell-b2", "plugin", "shell-shared"]
         );
         assert!(state.group_deletes.contains(&"dm-b1".into()));
         assert!(state.group_deletes.contains(&"solo".into()));
+        drop(state);
+        assert_eq!(
+            app.store.outbox().unwrap().iter().filter_map(|item| item.group.as_deref()).collect::<Vec<_>>(),
+            vec!["dm-b2", "shared"]
+        );
     }
 
     #[test]
@@ -1603,27 +1670,6 @@ mod tests {
         assert_eq!(shared.runner_id.as_deref(), Some("runner"));
         assert_eq!(shared.workdir.as_deref(), Some("/Users/me/.lorca/workspaces/bot-deleted"));
 
-        let mut permission_chat = chat("permissions", "dm", &["bot-current"], Some("bot-current"));
-        permission_chat.messages.push(Message::new(
-            "permissions",
-            Author::Bot { bot_id: "bot-current".into() },
-            Body::Permission {
-                plugin_id: "computer".into(),
-                plugin_name: "My Mac".into(),
-                tool: "bash".into(),
-                summary: command.into(),
-                arguments,
-                decision: "always".into(),
-                reason: None,
-                link: None,
-                code: None,
-            },
-        ));
-        assert!(restore_exact_shell_commands(&[permission_chat], &mut auto_review));
-        let current = &auto_review.rules[0];
-        assert_eq!(current.command.as_deref(), Some(command));
-        assert_eq!(current.text, command);
-        assert_eq!(current.patterns, vec!["ls *", "echo *"]);
     }
 
     #[test]
@@ -1639,6 +1685,9 @@ mod tests {
             ];
             state.routines = vec![routine("r1", "b1")];
         }
+        let message = Message::new("group", Author::You, Body::text("remove with the group"));
+        let message_id = message.id.clone();
+        app.upsert_message(message, false);
 
         app.delete_chat("group");
 
@@ -1647,6 +1696,8 @@ mod tests {
         assert_eq!(state.routines.len(), 1);
         assert_eq!(state.chats.iter().map(|chat| chat.meta.id.as_str()).collect::<Vec<_>>(), vec!["dm-b1"]);
         assert!(state.group_deletes.contains(&"group".into()));
+        drop(state);
+        assert!(app.message("group", &message_id).is_none());
     }
 
     #[test]

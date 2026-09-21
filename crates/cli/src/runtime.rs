@@ -186,9 +186,14 @@ fn start_room(app: Arc<App>, chat_id: String, trigger: String, members: Vec<Bot>
 
 /// Whether another user instruction follows this room's trigger in the durable transcript.
 fn has_newer_user_message(app: &App, chat_id: &str, trigger: &str) -> bool {
-    let Some(chat) = app.chat(chat_id) else { return false };
-    let Some(index) = chat.messages.iter().position(|message| message.id == trigger) else { return false };
-    chat.messages[index + 1..].iter().any(|message| message.author == Author::You && message.is_complete())
+    if app.chat(chat_id).is_none() {
+        return false;
+    }
+    app.store
+        .messages_after(chat_id, trigger)
+        .unwrap_or_default()
+        .iter()
+        .any(|message| message.author == Author::You && message.is_complete())
 }
 
 /// One group exchange: each member gets a turn in order and either speaks or passes; the room
@@ -223,7 +228,7 @@ async fn run_room(
             if !chat.meta.bot_ids.contains(&bot.id) {
                 continue;
             }
-            if round > 1 && seen.get(&bot.id) == Some(&heard_count(&chat, &bot.id)) {
+            if round > 1 && seen.get(&bot.id) == Some(&heard_count(&app, &chat.meta.id, &bot.id)) {
                 continue;
             }
             let job = Job {
@@ -245,7 +250,7 @@ async fn run_room(
                 break 'rounds;
             }
             if let Some(chat) = app.chat(&chat_id) {
-                seen.insert(bot.id.clone(), heard_count(&chat, &bot.id));
+                seen.insert(bot.id.clone(), heard_count(&app, &chat.meta.id, &bot.id));
             }
             if outcome == TurnOutcome::Sent {
                 any_sent = true;
@@ -260,13 +265,8 @@ async fn run_room(
 }
 
 /// Messages in the chat that `bot_id` did not write itself.
-fn heard_count(chat: &Chat, bot_id: &str) -> usize {
-    chat.messages
-        .iter()
-        .filter(|m| m.is_complete())
-        .filter(|m| matches!(m.body, Body::Text { .. } | Body::Handoff { .. }))
-        .filter(|m| !matches!(&m.author, Author::Bot { bot_id: id } if id == bot_id))
-        .count()
+fn heard_count(app: &App, chat_id: &str, bot_id: &str) -> usize {
+    app.store.heard_count(chat_id, bot_id).unwrap_or(0)
 }
 
 /// Runs one member's turn here or on its Runner and waits for the outcome.
@@ -527,7 +527,6 @@ mod tests {
                 is_pinned: false,
                 created_at: 1.0,
             },
-            messages: Vec::new(),
             unread_count: 0,
             usage: None,
             compactions: Vec::new(),
@@ -557,9 +556,7 @@ mod tests {
         assert!(!cancel.is_cancelled());
         assert_eq!(message.author, Author::You);
         assert_eq!(
-            app.chat("chat")
-                .unwrap()
-                .messages
+            app.messages("chat")
                 .last()
                 .map(|message| message.id.as_str()),
             Some(message.id.as_str())
@@ -596,7 +593,7 @@ mod tests {
         cancel_chat(app, "chat");
 
         assert!(cancel.is_cancelled());
-        let queued = app.state.lock().unwrap().outbox.last().cloned().unwrap();
+        let queued = app.store.last_outbox().unwrap().unwrap();
         assert_eq!(queued.kind, "job_cancel");
         assert_eq!(queued.recipient.as_deref(), Some("runner"));
         let ciphertext = crate::keys::unb64(&queued.ciphertext).unwrap();
@@ -609,11 +606,11 @@ mod tests {
     async fn a_replacement_job_exits_after_its_message_was_steered() {
         let scratch = scratch_app();
         let app = &scratch.0;
-        let mut chat = empty_chat("chat");
+        let chat = empty_chat("chat");
         let mut message = Message::new("chat", Author::You, Body::text("steer"));
         message.id = "message".into();
-        chat.messages.push(message);
         app.state.lock().unwrap().chats.push(chat);
+        app.upsert_message(message, false);
         assert!(app.claim_steering_message("chat", "message"));
         let job = Job {
             id: "replacement".into(),

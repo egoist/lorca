@@ -275,14 +275,19 @@ impl Message {
     /// The message as the apps get it. A tool row keeps what they show (the name, the summary,
     /// whether it runs) and drops what only a later turn's context needs: the arguments and
     /// the result, which run to hundreds of kilobytes for a file read or a command's output.
+    /// Permission cards likewise keep their summary and decision, not their reviewed payload.
     pub fn for_app(&self) -> Message {
         let mut message = self.clone();
-        if let Body::Tool { detail, arguments, result, .. } = &mut message.body {
-            *arguments = serde_json::Value::Null;
-            *result = None;
-            if detail.chars().count() > APP_TOOL_DETAIL_CHARS {
-                *detail = detail.chars().take(APP_TOOL_DETAIL_CHARS).collect();
+        match &mut message.body {
+            Body::Tool { detail, arguments, result, .. } => {
+                *arguments = serde_json::Value::Null;
+                *result = None;
+                if detail.chars().count() > APP_TOOL_DETAIL_CHARS {
+                    *detail = detail.chars().take(APP_TOOL_DETAIL_CHARS).collect();
+                }
             }
+            Body::Permission { arguments, .. } => *arguments = serde_json::Value::Null,
+            _ => {}
         }
         message
     }
@@ -335,20 +340,10 @@ impl ChatMeta {
     }
 }
 
-/// A page of a chat's messages for the apps, oldest first: the `limit` newest ones before
-/// `before` (a message id; the end of the chat when absent), and whether older ones remain.
-pub fn message_page(messages: &[Message], before: Option<&str>, limit: usize) -> (Vec<Message>, bool) {
-    let end = before.and_then(|id| messages.iter().position(|m| m.id == id)).unwrap_or(messages.len());
-    let start = end.saturating_sub(limit);
-    (messages[start..end].iter().map(Message::for_app).collect(), start > 0)
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Chat {
     #[serde(flatten)]
     pub meta: ChatMeta,
-    #[serde(default)]
-    pub messages: Vec<Message>,
     #[serde(default)]
     pub unread_count: u32,
     /// What the turns run here used. Kept on this Runner, never synced.
@@ -659,17 +654,6 @@ mod app_view_tests {
     use super::*;
 
     #[test]
-    fn pages_run_oldest_first_and_say_when_more_is_left() {
-        let messages: Vec<Message> = (0..5).map(|i| Message { id: format!("m{i}"), ..Message::new("c", Author::You, Body::text(format!("{i}"))) }).collect();
-        let (newest, more) = message_page(&messages, None, 2);
-        assert_eq!(newest.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["m3", "m4"]);
-        assert!(more);
-        let (older, more) = message_page(&messages, Some("m3"), 10);
-        assert_eq!(older.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["m0", "m1", "m2"]);
-        assert!(!more);
-    }
-
-    #[test]
     fn the_apps_get_a_tool_row_without_its_payload() {
         let tool = Message::new("c", Author::Bot { bot_id: "b".into() }, Body::Tool {
             name: "read".into(), summary: "Read a file".into(), detail: "x".repeat(5000), is_running: false,
@@ -677,5 +661,16 @@ mod app_view_tests {
         });
         let Body::Tool { detail, arguments, result, summary, .. } = tool.for_app().body else { panic!() };
         assert_eq!((detail.len(), arguments.is_null(), result, summary.as_str()), (400, true, None, "Read a file"));
+    }
+
+    #[test]
+    fn permission_cards_drop_the_reviewed_payload() {
+        let permission = Message::new("c", Author::Bot { bot_id: "b".into() }, Body::Permission {
+            plugin_id: "computer".into(), plugin_name: "Mac".into(), tool: "bash".into(), summary: "Run a command".into(),
+            arguments: serde_json::json!({ "command": "secret" }), decision: "pending".into(), reason: None, link: None, code: None,
+        });
+        let Body::Permission { arguments, summary, .. } = permission.for_app().body else { panic!() };
+        assert!(arguments.is_null());
+        assert_eq!(summary, "Run a command");
     }
 }

@@ -160,6 +160,47 @@ mod tests {
         let device = &snapshot["result"]["devices"][0];
         assert_eq!(device["os"], "ios");
         assert_eq!(device["name"], "Phone");
+
+        // The Device build shares SQLite with the desktop core, but stores only the app view
+        // of tool activity because a phone never rebuilds a model transcript.
+        let chat_id = "mobile-chat";
+        core.app.state.lock().unwrap().chats.push(lorca::model::Chat {
+            meta: lorca::model::ChatMeta {
+                id: chat_id.into(),
+                kind: "group".into(),
+                title: None,
+                bot_ids: Vec::new(),
+                owner_bot_id: None,
+                is_pinned: false,
+                created_at: 1.0,
+            },
+            unread_count: 0,
+            usage: None,
+            compactions: Vec::new(),
+        });
+        let tool = lorca::model::Message::new(
+            chat_id,
+            lorca::model::Author::Bot { bot_id: "bot".into() },
+            lorca::model::Body::Tool {
+                name: "bash".into(),
+                summary: "Ran a command".into(),
+                detail: "d".repeat(1_000),
+                is_running: false,
+                call_id: "call".into(),
+                arguments: serde_json::json!({ "command": "echo secret" }),
+                result: Some("secret output".into()),
+                is_error: false,
+            },
+        );
+        let tool_id = tool.id.clone();
+        core.app.upsert_message(tool, false);
+        let stored = core.app.message(chat_id, &tool_id).unwrap();
+        let lorca::model::Body::Tool { detail, arguments, result, .. } = stored.body else { panic!("a tool row") };
+        assert_eq!(detail.chars().count(), 400);
+        assert!(arguments.is_null());
+        assert_eq!(result, None);
+        assert!(home.join("lorca.sqlite3").is_file());
+
         std::thread::sleep(std::time::Duration::from_millis(200));
         let events = listener.0.lock().unwrap();
         assert!(events.iter().any(|e| e.contains("\"identity.changed\"")), "{events:?}");

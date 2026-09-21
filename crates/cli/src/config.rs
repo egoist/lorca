@@ -33,8 +33,8 @@ impl Config {
     pub fn credentials_path(&self) -> PathBuf {
         self.home.join("credentials.json")
     }
-    pub fn state_path(&self) -> PathBuf {
-        self.home.join("state.json")
+    pub fn database_path(&self) -> PathBuf {
+        self.home.join("lorca.sqlite3")
     }
     pub fn settings_path(&self) -> PathBuf {
         self.home.join("settings.json")

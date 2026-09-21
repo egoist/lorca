@@ -91,11 +91,10 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
         tracing::warn!(%error, dir = %workdir.display(), "creating the bot's working directory");
     }
     // Attachments another Device sent are fetched before the transcript names them.
-    let attachments: Vec<Attachment> = chat
-        .messages
+    let recent_messages = app.store.page(&chat.meta.id, None, MAX_CONTEXT_MESSAGES).map(|(messages, _)| messages).unwrap_or_default();
+    let attachments: Vec<Attachment> = recent_messages
         .iter()
         .rev()
-        .take(MAX_CONTEXT_MESSAGES)
         .filter_map(|m| match (&m.author, &m.body) {
             (Author::You, Body::Text { attachments, .. }) => Some(attachments.clone()),
             _ => None,
@@ -122,7 +121,7 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
         let size = estimate_context_tokens(&messages).tokens + estimate_text_tokens(&system_prompt);
         compaction::should_compact(size, window, &settings)
     };
-    let too_many = settings.enabled && uncovered_count(&chat, &bot) > MAX_CONTEXT_MESSAGES;
+    let too_many = settings.enabled && uncovered_count(app, &chat, &bot) > MAX_CONTEXT_MESSAGES;
     if too_long || too_many {
         match compact_chat(app, &chat, &bot, &provider, &settings, &cancel).await {
             Ok(Some(tokens_before)) => {
@@ -139,11 +138,9 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
     // when they reach the chat lock.
     let mut claimed_initial_steering = false;
     if !chat.meta.is_group() && !job.trigger_message_id.is_empty() {
-        if let Some(trigger) = chat.messages.iter().position(|message| message.id == job.trigger_message_id) {
-            for message in &chat.messages[trigger + 1..] {
-                if message.author == Author::You && message.is_complete() {
-                    claimed_initial_steering |= app.claim_steering_message(&chat.meta.id, &message.id);
-                }
+        for message in app.store.messages_after(&chat.meta.id, &job.trigger_message_id).unwrap_or_default() {
+            if message.author == Author::You && message.is_complete() {
+                claimed_initial_steering |= app.claim_steering_message(&chat.meta.id, &message.id);
             }
         }
     }
@@ -152,7 +149,7 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
         messages = transcript_for(app, &chat, &bot, &workdir);
     }
     if job.kind == "room_turn" {
-        messages.push(AgentMessage::User(UserMessage::text(room_turn_cue(&chat, &bot, job))));
+        messages.push(AgentMessage::User(UserMessage::text(room_turn_cue(app, &chat, &bot, job))));
     } else if messages.last().map(AgentMessage::is_assistant).unwrap_or(true) {
         messages.push(AgentMessage::User(UserMessage::text("Continue.")));
     }
@@ -527,26 +524,12 @@ async fn compact_messages(
     // its time: a rebuilt message carries its chat message's time, a message made during this
     // turn the time it was made, and the chat rows follow the same order.
     let covered_until = messages[..first_kept].iter().map(AgentMessage::timestamp).max().unwrap_or(0);
-    if let Some(chat) = app.chat(chat_id) {
-        let after = chat
-            .messages
-            .iter()
-            .filter(|message| {
-                (message.promoted_at.unwrap_or(message.created_at) * 1000.0) as u64 <= covered_until
-            })
-            .max_by(|a, b| {
-                a.promoted_at
-                    .unwrap_or(a.created_at)
-                    .total_cmp(&b.promoted_at.unwrap_or(b.created_at))
-            })
-            .map(|message| message.id.clone());
-        if let Some(after_message_id) = after {
-            app.set_compaction(
-                chat_id,
-                &bot.id,
-                Some(Compaction { bot_id: bot.id.clone(), summary: result.summary.clone(), after_message_id, tokens_before: result.tokens_before, created_at: now_secs() }),
-            );
-        }
+    if let Ok(Some(after_message_id)) = app.store.last_at_or_before(chat_id, covered_until) {
+        app.set_compaction(
+            chat_id,
+            &bot.id,
+            Some(Compaction { bot_id: bot.id.clone(), summary: result.summary.clone(), after_message_id, tokens_before: result.tokens_before, created_at: now_secs() }),
+        );
     }
     let mut kept = vec![compaction::summary_message(&result.summary, result.tokens_before)];
     kept.extend(messages[first_kept..].iter().cloned());
@@ -666,15 +649,8 @@ fn memory_tools(store: &MemoryStore, chat: &Chat) -> Vec<Arc<dyn Tool>> {
 
 /// The ephemeral note that opens a member's turn in a group. It is not stored, so the next
 /// turn rebuilds it from the transcript.
-fn room_turn_cue(chat: &Chat, bot: &Bot, job: &Job) -> String {
-    let last_own = chat
-        .messages
-        .iter()
-        .rposition(|m| matches!(&m.author, Author::Bot { bot_id } if bot_id == &bot.id) && matches!(m.body, Body::Text { .. }));
-    let new_count = chat.messages[last_own.map(|i| i + 1).unwrap_or(0)..]
-        .iter()
-        .filter(|m| m.is_complete() && matches!(m.body, Body::Text { .. } | Body::Handoff { .. }))
-        .count();
+fn room_turn_cue(app: &App, chat: &Chat, bot: &Bot, job: &Job) -> String {
+    let new_count = app.store.new_count_since_bot_spoke(&chat.meta.id, &bot.id).unwrap_or(0);
     let mut cue = format!(
         "[Your turn in the group, round {}. {new_count} new message(s) since you last spoke. Reply to the group, or answer with exactly PASS to stay silent.",
         job.round
@@ -1273,12 +1249,7 @@ fn recent_work_brief(app: &App, bot: &Bot, current_chat_id: &str, now: i64) -> O
     let chats: Vec<Chat> = app.state.lock().unwrap().chats.iter().filter(|c| c.meta.id != current_chat_id && c.meta.bot_ids.contains(&bot.id)).cloned().collect();
     let mut rows: Vec<(i64, String)> = Vec::new();
     for chat in &chats {
-        let Some(message) = chat
-            .messages
-            .iter()
-            .rev()
-            .find(|m| m.is_complete() && matches!(&m.author, Author::Bot { bot_id } if bot_id == &bot.id) && matches!(m.body, Body::Text { .. }))
-        else {
+        let Some(message) = app.store.last_bot_text(&chat.meta.id, &bot.id).unwrap_or(None) else {
             continue;
         };
         let at = message.created_at as i64;
@@ -1325,22 +1296,9 @@ pub fn transcript_for(app: &App, chat: &Chat, bot: &Bot, workdir: &std::path::Pa
 }
 
 /// Messages the bot's compaction summary does not cover yet.
-fn uncovered_count(chat: &Chat, bot: &Bot) -> usize {
-    let mut ordered: Vec<(usize, &Message)> = chat.messages.iter().enumerate().collect();
-    ordered.sort_by(|(a_index, a), (b_index, b)| {
-        a.promoted_at
-            .unwrap_or(a.created_at)
-            .total_cmp(&b.promoted_at.unwrap_or(b.created_at))
-            .then_with(|| a_index.cmp(b_index))
-    });
-    let covered = chat
-        .compactions
-        .iter()
-        .find(|c| c.bot_id == bot.id)
-        .and_then(|c| ordered.iter().position(|(_, message)| message.id == c.after_message_id))
-        .map(|index| index + 1)
-        .unwrap_or(0);
-    ordered.len().saturating_sub(covered)
+fn uncovered_count(app: &App, chat: &Chat, bot: &Bot) -> usize {
+    let after = chat.compactions.iter().find(|c| c.bot_id == bot.id).map(|c| c.after_message_id.as_str());
+    app.store.count_after(&chat.meta.id, after).unwrap_or(0)
 }
 
 /// `transcript_for` with the window of messages kept as they are made explicit: `None` is the
@@ -1348,25 +1306,22 @@ fn uncovered_count(chat: &Chat, bot: &Bot) -> usize {
 fn transcript_bounded(app: &App, chat: &Chat, bot: &Bot, workdir: &std::path::Path, max_messages: Option<usize>) -> Vec<AgentMessage> {
     let mut out = Vec::new();
     let pixels = providers::supports_vision(&bot.provider, bot.model.as_deref());
-    let mut ordered: Vec<(usize, &Message)> = chat.messages.iter().enumerate().collect();
-    ordered.sort_by(|(a_index, a), (b_index, b)| {
-        a.promoted_at
-            .unwrap_or(a.created_at)
-            .total_cmp(&b.promoted_at.unwrap_or(b.created_at))
-            .then_with(|| a_index.cmp(b_index))
-    });
     // A compaction summary stands in for everything up to its message; without one, a window
     // of recent messages.
     let compaction = chat.compactions.iter().find(|c| c.bot_id == bot.id);
-    let covered = compaction.and_then(|c| ordered.iter().position(|(_, message)| message.id == c.after_message_id));
-    let start = match (compaction, covered) {
-        (Some(c), Some(index)) => {
+    let (messages, cursor_found) = app
+        .store
+        .context(&chat.meta.id, compaction.map(|c| c.after_message_id.as_str()), max_messages)
+        .unwrap_or_else(|error| {
+            tracing::error!(%error, chat_id = %chat.meta.id, "building transcript context");
+            (Vec::new(), false)
+        });
+    if cursor_found {
+        if let Some(c) = compaction {
             out.push(compaction::summary_message(&c.summary, c.tokens_before));
-            index + 1
         }
-        _ => max_messages.map(|max| ordered.len().saturating_sub(max)).unwrap_or(0),
-    };
-    for (_, message) in &ordered[start..] {
+    }
+    for message in &messages {
         if !message.is_complete() {
             if let MessageState::Failed { .. } = message.state {
                 continue;
@@ -1753,15 +1708,9 @@ fn chat_hits(app: &App, bot: &Bot, regex: Option<&regex::Regex>, since: Option<i
     let mut hits = Vec::new();
     for chat in &chats {
         let source = chat_source(chat);
-        for message in &chat.messages {
-            if !message.is_complete() {
-                continue;
-            }
+        for message in app.store.text_messages(&chat.meta.id, since, until).unwrap_or_default() {
             let Body::Text { text, .. } = &message.body else { continue };
             let at = message.created_at as i64;
-            if since.is_some_and(|s| at < s) || until.is_some_and(|u| at > u) {
-                continue;
-            }
             if regex.is_some_and(|r| !r.is_match(text)) {
                 continue;
             }
@@ -2392,7 +2341,6 @@ mod tests {
     fn chat(id: &str, kind: &str, title: Option<&str>, bot_ids: &[&str]) -> Chat {
         Chat {
             meta: ChatMeta { id: id.into(), kind: kind.into(), title: title.map(str::to_string), bot_ids: bot_ids.iter().map(|b| b.to_string()).collect(), owner_bot_id: None, is_pinned: false, created_at: 0.0 },
-            messages: Vec::new(),
             unread_count: 0,
             usage: None,
             compactions: Vec::new(),
@@ -2411,13 +2359,13 @@ mod tests {
         let scratch = scratch_app();
         let app = &scratch.0;
         let chef = bot("b1", "Chef");
-        let mut dm = chat("chat", "dm", None, &["b1"]);
-        dm.messages.push(said("chat", Author::You, "run the checks", 1.0));
+        let dm = chat("chat", "dm", None, &["b1"]);
         {
             let mut state = app.state.lock().unwrap();
             state.bots.push(chef.clone());
             state.chats.push(dm);
         }
+        app.upsert_message(said("chat", Author::You, "run the checks", 1.0), false);
         let queue = AgentMessageQueue::new(QueueMode::All);
         app.register_steering_queue("chat", "job", queue.clone());
         let steer = said("chat", Author::You, "skip the slow suite", 2.0);
@@ -2443,16 +2391,20 @@ mod tests {
     #[test]
     fn rebuilt_context_keeps_a_promoted_steer_after_the_step_it_interrupted() {
         let scratch = scratch_app();
+        let app = &scratch.0;
         let chef = bot("b1", "Chef");
-        let mut dm = chat("chat", "dm", None, &["b1"]);
-        dm.messages.push(said("chat", Author::You, "start", 1.0));
+        let dm = chat("chat", "dm", None, &["b1"]);
+        let start = said("chat", Author::You, "start", 1.0);
         let mut steer = said("chat", Author::You, "change course", 2.0);
         steer.promoted_at = Some(4.0);
-        dm.messages.push(steer);
-        dm.messages.push(said("chat", Author::Bot { bot_id: "b1".into() }, "old step settled", 3.0));
-        dm.messages.push(said("chat", Author::Bot { bot_id: "b1".into() }, "changed", 5.0));
+        let settled = said("chat", Author::Bot { bot_id: "b1".into() }, "old step settled", 3.0);
+        let changed = said("chat", Author::Bot { bot_id: "b1".into() }, "changed", 5.0);
+        app.state.lock().unwrap().chats.push(dm.clone());
+        for message in [start, steer, settled, changed] {
+            app.upsert_message(message, false);
+        }
 
-        let messages = transcript_for(&scratch.0, &dm, &chef, &scratch.1);
+        let messages = transcript_for(app, &dm, &chef, &scratch.1);
 
         assert!(matches!(&messages[1], AgentMessage::Assistant(message) if message.text() == "old step settled"));
         assert!(matches!(
@@ -2469,20 +2421,24 @@ mod tests {
         let chef = bot("b1", "Chef");
         let scout = bot("b2", "Scout");
         let now = memory::local_unix("2026-09-17", Some("12:00")).unwrap();
-        let mut dm = chat("c1", "dm", None, &["b1"]);
-        dm.messages.push(said("c1", Author::You, "reconcile the invoices", (now - 7_200) as f64));
-        dm.messages.push(said("c1", Author::Bot { bot_id: "b1".into() }, "Sent the three flagged invoices to finance.", (now - 7_000) as f64));
-        let mut standup = chat("c2", "group", Some("Standup"), &["b1", "b2"]);
-        standup.messages.push(said("c2", Author::Bot { bot_id: "b1".into() }, "Morning. Invoices first today.", (now - 3_600) as f64));
-        standup.messages.push(said("c2", Author::Bot { bot_id: "b2".into() }, "Research is queued.", (now - 3_500) as f64));
-        let mut old = chat("c3", "group", Some("Archive"), &["b1"]);
-        old.messages.push(said("c3", Author::Bot { bot_id: "b1".into() }, "Long ago.", (now - 3 * 86_400) as f64));
-        let mut current = chat("c4", "dm", None, &["b1"]);
-        current.messages.push(said("c4", Author::Bot { bot_id: "b1".into() }, "Right here.", now as f64));
+        let dm = chat("c1", "dm", None, &["b1"]);
+        let standup = chat("c2", "group", Some("Standup"), &["b1", "b2"]);
+        let old = chat("c3", "group", Some("Archive"), &["b1"]);
+        let current = chat("c4", "dm", None, &["b1"]);
         {
             let mut state = app.state.lock().unwrap();
             state.bots = vec![chef.clone(), scout];
             state.chats = vec![dm, standup, old, current];
+        }
+        for message in [
+            said("c1", Author::You, "reconcile the invoices", (now - 7_200) as f64),
+            said("c1", Author::Bot { bot_id: "b1".into() }, "Sent the three flagged invoices to finance.", (now - 7_000) as f64),
+            said("c2", Author::Bot { bot_id: "b1".into() }, "Morning. Invoices first today.", (now - 3_600) as f64),
+            said("c2", Author::Bot { bot_id: "b2".into() }, "Research is queued.", (now - 3_500) as f64),
+            said("c3", Author::Bot { bot_id: "b1".into() }, "Long ago.", (now - 3 * 86_400) as f64),
+            said("c4", Author::Bot { bot_id: "b1".into() }, "Right here.", now as f64),
+        ] {
+            app.upsert_message(message, false);
         }
         prime_names(app);
 
@@ -2515,17 +2471,23 @@ mod tests {
 
     #[test]
     fn uncovered_messages_are_those_after_the_summary() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
         let chef = bot("b1", "Chef");
         let mut dm = chat("c1", "dm", None, &["b1"]);
+        app.state.lock().unwrap().chats.push(dm.clone());
+        let mut ids = Vec::new();
         for i in 0..5 {
-            dm.messages.push(said("c1", Author::You, &format!("m{i}"), i as f64));
+            let message = said("c1", Author::You, &format!("m{i}"), i as f64);
+            ids.push(message.id.clone());
+            app.upsert_message(message, false);
         }
-        assert_eq!(uncovered_count(&dm, &chef), 5);
-        let after = dm.messages[2].id.clone();
+        assert_eq!(uncovered_count(app, &dm, &chef), 5);
+        let after = ids[2].clone();
         dm.compactions.push(Compaction { bot_id: "b1".into(), summary: "s".into(), after_message_id: after, tokens_before: 0, created_at: 0.0 });
-        assert_eq!(uncovered_count(&dm, &chef), 2);
+        assert_eq!(uncovered_count(app, &dm, &chef), 2);
         dm.compactions[0].after_message_id = "gone".into();
-        assert_eq!(uncovered_count(&dm, &chef), 5, "a summary whose message is gone covers nothing");
+        assert_eq!(uncovered_count(app, &dm, &chef), 5, "a summary whose message is gone covers nothing");
     }
 
     #[test]

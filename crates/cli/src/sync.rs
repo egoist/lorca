@@ -216,7 +216,13 @@ pub async fn ensure_registered(app: &Arc<App>, url: &str) -> Result<(), RelayErr
 
 async fn drain_outbox(app: &Arc<App>, url: &str, token: &str) -> Result<(), RelayError> {
     loop {
-        let Some(item) = app.state.lock().unwrap().outbox.first().cloned() else { return Ok(()) };
+        let Some(item) = app
+            .store
+            .first_outbox()
+            .map_err(|error| RelayError { status: None, message: error.to_string() })?
+        else {
+            return Ok(());
+        };
         match app.relay.put_blob(url, token, &item).await {
             Ok(_) => {}
             Err(error) if error.is_client_error() && !error.is_unauthorized() => {
@@ -227,8 +233,10 @@ async fn drain_outbox(app: &Arc<App>, url: &str, token: &str) -> Result<(), Rela
             }
             Err(error) => return Err(error),
         }
-        app.state.lock().unwrap().outbox.retain(|i| i.id != item.id);
-        app.save_state();
+        let snapshot = app.state.lock().unwrap().clone();
+        app.store
+            .remove_outbox_with_state(&item.id, &snapshot)
+            .map_err(|error| RelayError { status: None, message: error.to_string() })?;
     }
 }
 
@@ -442,7 +450,7 @@ fn apply_blob_contents(app: &Arc<App>, machine_file: &crate::keys::MachineFile, 
 
 fn apply_roster(app: &Arc<App>, mut roster: RosterBlob) {
     let removed: Vec<String>;
-    let mut normalized_auto_review = crate::app::normalize_auto_review_rules(&roster.bots, &mut roster.auto_review);
+    let normalized_auto_review = crate::app::normalize_auto_review_rules(&roster.bots, &mut roster.auto_review);
     {
         let mut state = app.state.lock().unwrap();
         let local_updated = state.chats.iter().map(|_| 0.0).fold(0.0, f64::max);
@@ -450,17 +458,19 @@ fn apply_roster(app: &Arc<App>, mut roster: RosterBlob) {
         state.bots = roster.bots;
         state.routines = roster.routines;
         state.auto_review = roster.auto_review;
-        let chats = state.chats.clone();
-        normalized_auto_review |= crate::app::restore_exact_shell_commands(&chats, &mut state.auto_review);
         let incoming_ids: Vec<String> = roster.chats.iter().map(|c| c.id.clone()).collect();
         removed = state.chats.iter().filter(|c| !incoming_ids.contains(&c.meta.id)).map(|c| c.meta.id.clone()).collect();
         state.chats.retain(|c| incoming_ids.contains(&c.meta.id));
         for meta in roster.chats {
             match state.chats.iter_mut().find(|c| c.meta.id == meta.id) {
                 Some(chat) => chat.meta = meta,
-                None => state.chats.push(Chat { meta, messages: Vec::new(), unread_count: 0, usage: None, compactions: Vec::new() }),
+                None => state.chats.push(Chat { meta, unread_count: 0, usage: None, compactions: Vec::new() }),
             }
         }
+    }
+    let snapshot = app.state.lock().unwrap().clone();
+    if let Err(error) = app.store.save_state_deleting_chats(&snapshot, &removed) {
+        tracing::error!(%error, "saving synced roster");
     }
     for chat_id in removed {
         app.cancel_chat(&chat_id);
@@ -476,14 +486,12 @@ fn apply_chat_op(app: &Arc<App>, op: ChatBlob) {
             #[cfg(feature = "runner")]
             let steering = (message.author == Author::You && app.message(&message.chat_id, &message.id).is_none())
                 .then(|| message.clone());
-            let may_restore_command = matches!(&message.body, Body::Permission { .. });
             {
                 let mut state = app.state.lock().unwrap();
                 if !state.chats.iter().any(|c| c.meta.id == message.chat_id) {
                     // Roster not here yet: keep the message under a placeholder until it is.
                     state.chats.push(Chat {
                         meta: ChatMeta { id: message.chat_id.clone(), kind: "group".into(), title: Some("Chat".into()), bot_ids: vec![], owner_bot_id: None, is_pinned: false, created_at: message.created_at },
-                        messages: Vec::new(),
                         unread_count: 0,
                         usage: None,
                         compactions: Vec::new(),
@@ -495,16 +503,6 @@ fn apply_chat_op(app: &Arc<App>, op: ChatBlob) {
             #[cfg(feature = "runner")]
             if let Some(message) = steering {
                 crate::turns::steer_message(app, &message);
-            }
-            if may_restore_command {
-                let restored = {
-                    let mut state = app.state.lock().unwrap();
-                    let chats = state.chats.clone();
-                    crate::app::restore_exact_shell_commands(&chats, &mut state.auto_review)
-                };
-                if restored {
-                    app.roster_changed(true);
-                }
             }
         }
         ChatBlob::Remove { chat_id, message_id } => app.remove_message(&chat_id, &message_id, false),

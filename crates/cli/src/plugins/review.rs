@@ -13,7 +13,7 @@ use lorca_agent::{ModelRequest, RequestOptions};
 use tokio_util::sync::CancellationToken;
 
 use crate::app::App;
-use crate::model::{Author, Body, Bot};
+use crate::model::Bot;
 
 /// What happens to the action: it runs, or the user is asked, with why when Auto-review
 /// itself paused it.
@@ -146,11 +146,8 @@ fn parse_verdict(reply: &str) -> Option<(bool, String)> {
 }
 
 fn last_user_text(app: &App, chat_id: &str) -> Option<String> {
-    let chat = app.chat(chat_id)?;
-    let text = chat.messages.iter().rev().find_map(|m| match (&m.author, &m.body) {
-        (Author::You, Body::Text { text, .. }) if !text.trim().is_empty() => Some(text.trim().to_string()),
-        _ => None,
-    })?;
+    app.chat(chat_id)?;
+    let text = app.store.last_user_text(chat_id).ok().flatten()?;
     Some(text.chars().take(600).collect())
 }
 

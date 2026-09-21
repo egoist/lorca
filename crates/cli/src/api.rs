@@ -324,9 +324,12 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
         }
         // Older messages than the snapshot carried, a page at a time, oldest first.
         "chats.messages" => {
-            let chat = app.chat(&string(&params, "chat_id")?).ok_or("No such chat")?;
+            let chat_id = string(&params, "chat_id")?;
+            if app.chat(&chat_id).is_none() {
+                return Err("No such chat".into());
+            }
             let limit = params["limit"].as_u64().unwrap_or(SNAPSHOT_MESSAGES as u64).clamp(1, 200) as usize;
-            let (messages, has_more) = message_page(&chat.messages, params["before"].as_str(), limit);
+            let (messages, has_more) = app.message_page(&chat_id, params["before"].as_str(), limit);
             Ok(json!({ "messages": messages, "has_more": has_more }))
         }
         "chats.mark_read" => {

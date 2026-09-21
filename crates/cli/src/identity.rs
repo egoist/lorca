@@ -45,6 +45,7 @@ pub fn create(app: &Arc<App>, device_name: Option<String>) -> anyhow::Result<Vec
         let mut state = app.state.lock().unwrap();
         *state = Default::default();
     }
+    app.store.clear()?;
     if let Some(device) = app.local_device() {
         upsert_device(&mut app.state.lock().unwrap().devices, device);
     }
@@ -118,6 +119,7 @@ pub async fn restore(app: &Arc<App>, phrase: &str, device_name: Option<String>) 
         let mut state = app.state.lock().unwrap();
         *state = Default::default();
     }
+    app.store.clear()?;
     if let Some(device) = app.local_device() {
         upsert_device(&mut app.state.lock().unwrap().devices, device);
     }

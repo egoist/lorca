@@ -226,15 +226,8 @@ pub fn tick(app: &Arc<App>) {
 /// from the newest routine, so a fresh account is never "away".
 #[cfg(any(feature = "runner", test))]
 fn user_away(app: &Arc<App>, now: i64) -> bool {
-    let state = app.state.lock().unwrap();
-    let last_message = state
-        .chats
-        .iter()
-        .flat_map(|c| c.messages.iter())
-        .filter(|m| matches!(m.author, Author::You))
-        .map(|m| m.created_at as i64)
-        .max();
-    let last_routine = state.routines.iter().map(|r| r.created_at.max(r.enabled_at) as i64).max();
+    let last_routine = app.state.lock().unwrap().routines.iter().map(|r| r.created_at.max(r.enabled_at) as i64).max();
+    let last_message = app.store.last_user_at().unwrap_or(None);
     let last_activity = last_message.max(last_routine).unwrap_or(now);
     now - last_activity > AWAY_AFTER_SECS
 }
@@ -380,8 +373,7 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
         assert_eq!(app.routine(&hourly.id).unwrap().last_outcome.as_deref(), Some("error"));
-        let chat = app.chat(&dm.meta.id).unwrap();
-        let notices: Vec<String> = chat.messages.iter().filter_map(|m| match &m.body { Body::Notice { text, .. } => Some(text.clone()), _ => None }).collect();
+        let notices: Vec<String> = app.messages(&dm.meta.id).iter().filter_map(|m| match &m.body { Body::Notice { text, .. } => Some(text.clone()), _ => None }).collect();
         assert_eq!(notices[0], "Routine · Hourly", "the marker opens the run");
         assert!(notices[1].starts_with("Chef cannot run yet"), "{notices:?}");
         assert_eq!(notices.len(), 2, "one run, one marker: {notices:?}");
@@ -404,8 +396,8 @@ mod tests {
         let paused = app.routine(&brief.id).unwrap();
         assert!(!paused.is_enabled && paused.paused_reason.as_deref() == Some("away") && paused.last_run_at.is_none());
         let dm = app.dm_with("b1", None).unwrap();
-        let chat = app.chat(&dm.meta.id).unwrap();
-        let Body::Notice { text, routine_id } = &chat.messages[0].body else { panic!("a notice") };
+        let messages = app.messages(&dm.meta.id);
+        let Body::Notice { text, routine_id } = &messages[0].body else { panic!("a notice") };
         assert!(text.starts_with("Routines paused while you were away: Brief."), "{text}");
         assert_eq!(routine_id, &None);
         // Resuming arms it from now, so it is not due again at once.

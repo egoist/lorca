@@ -27,6 +27,7 @@ pub mod routines;
 pub mod runtime;
 pub mod schedule;
 pub mod sync;
+pub mod local_store;
 #[cfg(feature = "runner")]
 pub mod turns;
 #[cfg(feature = "server")]
