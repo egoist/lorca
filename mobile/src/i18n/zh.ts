@@ -217,7 +217,7 @@ export const zh: Record<string, string> = {
   "Runs with": "运行方式",
   "Runs post here. Ask {name} in chat to change one.": "运行结果会发到这里。在聊天中让 {name} 修改例行任务。",
   "Scan Code": "扫描配对码",
-  "Search chats and messages": "搜索聊天和消息",
+  "Search": "搜索",
   "Searching…": "正在搜索…",
   "Send": "发送",
   "Sending the request…": "正在发送请求…",

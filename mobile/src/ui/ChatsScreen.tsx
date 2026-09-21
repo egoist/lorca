@@ -133,7 +133,7 @@ export function ChatsScreen({ sidebar = false }: { sidebar?: boolean }) {
       {/* The sidebar has its own field at its foot. */}
       {floatingSearch ? null : (
         <Stack.SearchBar
-          placeholder={t("Search chats and messages")}
+          placeholder={t("Search")}
           onChangeText={(e) => updateQuery(e.nativeEvent.text)}
           onCancelButtonPress={() => updateQuery("")}
           hideWhenScrolling
@@ -258,7 +258,7 @@ export function ChatsScreen({ sidebar = false }: { sidebar?: boolean }) {
           }}
           refreshing={false}
         />
-        {floatingSearch ? <SidebarSearch value={query} placeholder={t("Search chats and messages")} onChangeText={updateQuery} /> : null}
+        {floatingSearch ? <SidebarSearch value={query} placeholder={t("Search")} onChangeText={updateQuery} /> : null}
       </View>
     </>
   );
