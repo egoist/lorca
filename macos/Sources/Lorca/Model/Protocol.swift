@@ -15,6 +15,7 @@ enum Wire {
         var deviceId: String?
         var relayUrl: String?
         var relayConnected: Bool
+        var relayUpdateRequired: Bool?
     }
 
     struct Snapshot: Decodable {
@@ -25,6 +26,7 @@ enum Wire {
         var thisDeviceId: String?
         var relayUrl: String?
         var relayConnected: Bool
+        var relayUpdateRequired: Bool?
         var devices: [Device]
         var bots: [Bot]
         var chats: [Chat]
@@ -403,6 +405,7 @@ enum Wire {
     struct RelayStatus: Decodable {
         var connected: Bool
         var url: String?
+        var updateRequired: Bool?
     }
 
     struct IdentityChanged: Decodable {

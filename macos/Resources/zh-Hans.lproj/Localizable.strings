@@ -17,6 +17,7 @@
 "%@ · Paused while you were away" = "%@ · 你离开期间已暂停";
 "%@ · replied" = "%@ · 已回复";
 "%@ · Running…" = "%@ · 正在运行…";
+"%@ · update Lorca to sync" = "%@ · 更新 Lorca 后才能同步";
 "%@ (this computer)" = "%@（这台电脑）";
 "%@ (This computer)" = "%@（这台电脑）";
 "%@ added to %@." = "%1$@ 已添加到 %2$@。";
@@ -272,6 +273,7 @@
 "Last seen %dd ago" = "%d 天前在线";
 "Last seen %dh ago" = "%d 小时前在线";
 "Last seen %dm ago" = "%d 分钟前在线";
+"Later" = "稍后";
 "Light" = "浅色";
 "link" = "链接";
 "Loading the marketplace…" = "正在载入插件市场…";
@@ -535,6 +537,7 @@
 "The marketplace isn't available right now." = "插件市场暂时不可用。";
 "the other Device" = "另一台设备";
 "The relay deletes everything it holds for the account, and every paired Device, this one included, forgets its keys and chats. This can’t be undone." = "中继会删除它为此账户保存的全部内容，每台已配对设备（包括这一台）都会清除密钥和聊天。此操作无法撤销。";
+"The relay no longer works with this version. Chats on this Mac stay as they are, and nothing syncs with your other Devices until you update." = "中继已不再支持此版本。这台 Mac 上的聊天保持原样，但在更新之前不会与你的其他设备同步。";
 "The transcript is removed from this Device and from paired Devices." = "聊天记录将从这台设备和已配对的设备上移除。";
 "The two Devices run a handshake; the relay only carries the ciphertext. This computer joins as a Runner." = "两台设备之间进行握手，中继只传递密文。这台电脑将作为 Runner 加入。";
 "theme dark mode light mode system" = "主题 深色模式 浅色模式 跟随系统 theme dark mode light mode system";
@@ -561,6 +564,7 @@
 "unpair remove device paired" = "取消配对 移除设备 已配对 unpair remove device paired";
 "Unpair…" = "取消配对…";
 "Unpin" = "取消置顶";
+"Update Lorca to keep syncing" = "更新 Lorca 以继续同步";
 "update upgrade background" = "更新 升级 后台 update upgrade background";
 "update upgrade release sparkle" = "更新 升级 版本 发布 update upgrade release sparkle";
 "Updates" = "更新";

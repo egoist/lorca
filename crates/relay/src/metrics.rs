@@ -48,6 +48,8 @@ pub struct Metrics {
     pub rate_limited_identity: Counter,
     /// Large uploads that waited out their 30 s and got `503`.
     pub uploads_refused: Counter,
+    /// Requests answered `426`: a client below `--min-protocol`.
+    pub outdated_clients: Counter,
     pub push_sent: [Counter; 2],
     pub push_gone: [Counter; 2],
     pub push_failed: [Counter; 2],
@@ -69,6 +71,7 @@ pub static METRICS: Metrics = Metrics {
     rate_limited_ip: Counter::new(),
     rate_limited_identity: Counter::new(),
     uploads_refused: Counter::new(),
+    outdated_clients: Counter::new(),
     push_sent: [Counter::new(), Counter::new()],
     push_gone: [Counter::new(), Counter::new()],
     push_failed: [Counter::new(), Counter::new()],
@@ -212,6 +215,8 @@ fn render(stats: Option<&Stats>, sockets: usize, connected_identities: usize, in
     page.sample("rate_limited_total", &[("by", "ip"), ("instance", instance)], METRICS.rate_limited_ip.get());
     page.sample("rate_limited_total", &[("by", "identity"), ("instance", instance)], METRICS.rate_limited_identity.get());
     page.one("uploads_refused_total", "counter", "Large uploads that found no place in 30 s.", &here, METRICS.uploads_refused.get());
+
+    page.one("outdated_clients_total", "counter", "Requests from a client below the minimum protocol.", &here, METRICS.outdated_clients.get());
 
     page.family("pushes_total", "counter", "Pushes handed to APNs and FCM, by what came of them.");
     for (index, name) in PLATFORMS.iter().enumerate() {

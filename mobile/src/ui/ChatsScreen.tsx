@@ -32,6 +32,7 @@ export function ChatsScreen({ sidebar = false }: { sidebar?: boolean }) {
   const chats = useStore((s) => s.chats);
   const running = useStore((s) => s.running);
   const connecting = useConnecting();
+  const updateRequired = useStore((s) => s.relayUpdateRequired);
   const bots = useBotMap();
   const workingBots = useWorkingBotIds();
   const [query, setQuery] = useState("");
@@ -174,7 +175,15 @@ export function ChatsScreen({ sidebar = false }: { sidebar?: boolean }) {
         </>
       )}
       {/* The relay status sits in the bar's title slot, so the list never moves. */}
-      {connecting ? (
+      {updateRequired ? (
+        <Stack.Title asChild>
+          <View style={styles.status} accessibilityRole="header" accessibilityLabel={t("Update Lorca to sync")}>
+            <Text style={[styles.statusText, { color: p.secondaryLabel }]} numberOfLines={1}>
+              {t("Update Lorca to sync")}
+            </Text>
+          </View>
+        </Stack.Title>
+      ) : connecting ? (
         <Stack.Title asChild>
           <View style={styles.status} accessibilityRole="header" accessibilityLabel={t("Connecting…")}>
             <ActivityIndicator size="small" color={p.secondaryLabel as any} />

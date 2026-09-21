@@ -122,6 +122,8 @@ pub struct App {
     /// and the order its messages reach the relay log are the same on every Device.
     message_order: Mutex<()>,
     pub relay_connected: AtomicBool,
+    /// The relay answered `426`: it no longer serves the protocol this build speaks.
+    pub relay_update_required: AtomicBool,
     /// A `machine` blob named a key the last presence refresh did not list: a Device that
     /// just paired, or one unpaired since. The cycle refreshes presence again to tell.
     pub presence_stale: AtomicBool,
@@ -201,10 +203,11 @@ impl App {
             state: Mutex::new(state),
             store,
             events,
-            relay: RelayClient::new(http.clone()),
+            relay: RelayClient::new()?,
             outbox_notify: Notify::new(),
             message_order: Mutex::new(()),
             relay_connected: AtomicBool::new(false),
+            relay_update_required: AtomicBool::new(false),
             presence_stale: AtomicBool::new(false),
             bulk_sync: AtomicBool::new(false),
             pairings: Mutex::new(HashMap::new()),
@@ -391,6 +394,10 @@ impl App {
         settings.save(&self.config)?;
         drop(settings);
         self.relay.forget_token();
+        // Another relay may serve this build; the sync loop wakes and finds out.
+        if self.relay_update_required.swap(false, Ordering::Relaxed) {
+            self.emit_relay_status();
+        }
         self.outbox_notify.notify_waiters();
         Ok(())
     }
@@ -670,6 +677,15 @@ impl App {
             state.auto_review.rules.push(rule);
         }
         self.roster_changed(true);
+    }
+
+    /// Tells the app where the relay connection stands.
+    pub fn emit_relay_status(&self) {
+        self.emit(Event::RelayStatus {
+            connected: self.relay_connected.load(Ordering::Relaxed),
+            url: self.relay_url(),
+            update_required: self.relay_update_required.load(Ordering::Relaxed),
+        });
     }
 
     pub fn roster_changed(&self, upload: bool) {
@@ -1296,6 +1312,7 @@ impl App {
             "this_device_id": self.this_device_id(),
             "relay_url": self.relay_url(),
             "relay_connected": self.relay_connected.load(Ordering::Relaxed),
+            "relay_update_required": self.relay_update_required.load(Ordering::Relaxed),
             "devices": self.devices_out(&state),
             "bots": state.bots,
             "chats": state.chats.iter().map(|chat| self.chat_for_app(chat)).collect::<Vec<_>>(),

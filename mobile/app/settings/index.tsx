@@ -28,6 +28,7 @@ export default function SettingsScreen() {
   const devices = useStore((s) => s.devices);
   const seen = useStore((s) => s.device_seen);
   const relayConnected = useStore((s) => s.relayConnected);
+  const relayUpdateRequired = useStore((s) => s.relayUpdateRequired);
   const relayUrl = useStore((s) => s.relayUrl);
   const identity = useStore((s) => s.identityId);
   const autoReview = useStore((s) => s.auto_review);
@@ -181,7 +182,7 @@ export default function SettingsScreen() {
           <Row
             title={t("Relay")}
             detail={relayUrl?.replace(/^https?:\/\//, "") ?? "—"}
-            subtitle={relayConnected ? t("Connected") : t("Connecting…")}
+            subtitle={relayUpdateRequired ? t("Update Lorca to sync") : relayConnected ? t("Connected") : t("Connecting…")}
           />
         </Section>
 

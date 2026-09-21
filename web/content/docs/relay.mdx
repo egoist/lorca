@@ -31,6 +31,7 @@ Put it behind HTTPS with a reverse proxy such as Caddy or nginx (WebSocket upgra
 | `--concurrent-uploads` | Attachments over 1 MiB handled at once (3 by default), which bounds the memory they take. |
 | `--files-dir` | Where attachment ciphertext goes. Defaults to a folder beside the database. |
 | `--s3-bucket`, `--s3-endpoint` | Keep attachments in S3, R2, or MinIO instead. |
+| `--min-protocol` | Turns away Lorca versions that speak an older relay protocol; their apps ask for an update. |
 | `--inactive-days` | Deletes an account nothing has touched for this long (365 by default; `0` for never). Devices keep their own copy. |
 | `--ip-per-minute`, `--identity-per-second` | Rate limits. |
 | `LORCA_RELAY_METRICS_TOKEN` | Serves `GET /metrics` for Prometheus to whoever sends this bearer token. |

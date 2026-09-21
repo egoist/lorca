@@ -31,6 +31,7 @@ lorca-relay --bind 0.0.0.0:8787 --db lorca-relay.db
 | `--concurrent-uploads` | 同时处理的超过 1 MiB 的附件数量（默认 3），用来限制附件占用的内存。 |
 | `--files-dir` | 附件密文存放的位置。默认是数据库旁边的一个文件夹。 |
 | `--s3-bucket`、`--s3-endpoint` | 改为把附件存到 S3、R2 或 MinIO。 |
+| `--min-protocol` | 拒绝使用更旧中继协议的 Lorca 版本，这些版本的应用会提示更新。 |
 | `--inactive-days` | 账户在这么多天内没有任何活动就会被删除（默认 365，`0` 表示永不删除）。各设备上的本地数据不受影响。 |
 | `LORCA_RELAY_METRICS_TOKEN` | 设置后，携带此 Bearer 令牌即可从 `GET /metrics` 读取 Prometheus 格式的指标。 |
 | `--ip-per-minute`、`--identity-per-second` | 限流。 |

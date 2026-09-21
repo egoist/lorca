@@ -216,7 +216,9 @@ final class AboutDeviceSettingsViewController: DevicePaneViewController {
                 value: device.status == .online ? L("Active now") : Format.lastSeen(device.lastSeen)),
             KeyValueRow(
                 key: L("Relay"),
-                value: store.relayURL.map { store.relayConnected ? $0 : L("%@ · offline", $0) } ?? L("Not configured"),
+                value: store.relayURL.map {
+                    store.relayUpdateRequired ? L("%@ · update Lorca to sync", $0) : store.relayConnected ? $0 : L("%@ · offline", $0)
+                } ?? L("Not configured"),
                 monospaced: true),
         ]
         if !device.isThisDevice {

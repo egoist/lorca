@@ -68,6 +68,7 @@ Both keys go in as text, so the service needs no volume and the Postgres setup k
 | `LORCA_RELAY_CONCURRENT_UPLOADS` | `3` | Uploads over 1 MiB handled at once. Each takes some 80 MB while it is decoded and sent to the bucket; lower it on a small container. `0` means no limit. |
 | `LORCA_RELAY_IP_PER_MINUTE` | `60` | Requests per minute one IP may make to registration, auth, and the pairing mailbox. |
 | `LORCA_RELAY_IDENTITY_PER_SECOND` | `50` | Requests per second one identity may make across its machines, with a burst of ten times that. |
+| `LORCA_RELAY_MIN_PROTOCOL` | `0` | Clients that speak an older relay protocol get `426`, and their apps ask for an update. `/v1/health` shows the protocol this relay speaks. Raise it only once the Lorca versions you care about have shipped the newer one. |
 | `LORCA_RELAY_INACTIVE_DAYS` | `365` | An identity with no machine seen, no blob written, and no socket open for this many days is deleted with its attachments. Its Devices keep what they hold and register again if they come back. `0` keeps every identity. |
 | `LORCA_RELAY_METRICS_TOKEN` | unset | Serves `GET /metrics` in Prometheus' text format to a scraper that sends this as a bearer token: `openssl rand -hex 32`. Unset, the route answers `404`. With more than one replica a scrape reaches one of them; request, push, and sweep counters carry its `instance`, and the totals are the same from each. |
 | `RUST_LOG` | `info` | `info,lorca_relay=debug` also logs each rate-limited request with the address it counted against. |

@@ -93,6 +93,23 @@ impl IntoResponse for ApiError {
 
 pub type ApiResult<T> = Result<T, ApiError>;
 
+/// The protocol this relay speaks, in `/v1/health`. A client sends the one it speaks as
+/// `Lorca-Protocol`. 1: group paging, `DELETE /v1/identity`.
+pub const PROTOCOL: u32 = 1;
+
+/// Turns away a client older than `--min-protocol` before anything else looks at it. The
+/// answer is the same on every route, the sync socket's upgrade included, so a client learns
+/// it wherever it knocks first. `/`, the healthcheck, and `/metrics` are not clients.
+async fn require_protocol(State(state): State<AppState>, request: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    let speaks = request.headers().get("lorca-protocol").and_then(|value| value.to_str().ok()).and_then(|value| value.trim().parse::<u32>().ok()).unwrap_or(0);
+    if speaks < state.min_protocol && request.uri().path().starts_with("/v1/") && request.uri().path() != "/v1/health" {
+        crate::metrics::METRICS.outdated_clients.add(1);
+        let body = Json(json!({ "error": "This relay needs a newer Lorca", "min_protocol": state.min_protocol, "protocol": PROTOCOL }));
+        return (StatusCode::UPGRADE_REQUIRED, body).into_response();
+    }
+    next.run(request).await
+}
+
 pub fn router(state: AppState) -> Router {
     // Routes anyone can call are limited per IP; the rest are limited per identity in `Auth`.
     let public = Router::new()
@@ -122,6 +139,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/pair/{nonce}/reply", post(post_pair_reply))
         .merge(public)
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
+        .layer(axum::middleware::from_fn_with_state(state.clone(), require_protocol))
         .layer(axum::middleware::from_fn(crate::metrics::count_requests))
         .with_state(state)
 }
@@ -132,7 +150,7 @@ async fn root() -> &'static str {
 }
 
 async fn health() -> Json<Value> {
-    Json(json!({ "ok": true, "service": "lorca-relay" }))
+    Json(json!({ "ok": true, "service": "lorca-relay", "protocol": PROTOCOL }))
 }
 
 fn random_nonce(len: usize) -> String {

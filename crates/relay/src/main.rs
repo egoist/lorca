@@ -51,6 +51,12 @@ struct Args {
     #[usage(long, env = "LORCA_RELAY_IDENTITY_PER_SECOND", default = "50")]
     identity_per_second: u32,
 
+    /// Refuse clients that speak an older protocol than this with `426`, which their apps show
+    /// as "update required". A client says which it speaks in `Lorca-Protocol`; one that says
+    /// nothing speaks 0. Raise it when the relay stops serving what old clients rely on.
+    #[usage(long, env = "LORCA_RELAY_MIN_PROTOCOL", default = "0")]
+    min_protocol: u32,
+
     /// Delete an identity after this many days with no sign of life: no machine seen, no blob
     /// written, no socket open. Its Devices keep what they hold and register again if they
     /// come back. 0 keeps every identity.
@@ -200,6 +206,7 @@ pub struct AppState {
     pub trust_proxy: bool,
     /// Places for uploads over `limit::LARGE_UPLOAD`; `None` when they are not limited.
     pub uploads: Option<Arc<tokio::sync::Semaphore>>,
+    pub min_protocol: u32,
     pub metrics_token: Option<Arc<str>>,
     pub stats: Arc<metrics::StatsCache>,
     /// This process, as a label on what only it counted.
@@ -244,6 +251,7 @@ async fn main() -> anyhow::Result<()> {
             args.identity_per_second.saturating_mul(10),
         )),
         trust_proxy: args.trust_proxy,
+        min_protocol: args.min_protocol,
         metrics_token: args.metrics_token.as_deref().filter(|token| !token.is_empty()).map(Arc::from),
         stats: Arc::default(),
         instance: uuid::Uuid::new_v4().simple().to_string()[..8].into(),

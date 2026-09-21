@@ -29,6 +29,11 @@ impl RelayError {
     pub fn is_unpaired(&self) -> bool {
         self.status == Some(410)
     }
+    /// The relay no longer serves the protocol this build speaks. Trying again changes
+    /// nothing; a newer Lorca does.
+    pub fn is_update_required(&self) -> bool {
+        self.status == Some(426)
+    }
     pub fn is_client_error(&self) -> bool {
         matches!(self.status, Some(400..=499))
     }
@@ -143,14 +148,27 @@ fn tls() -> Arc<rustls::ClientConfig> {
         .clone()
 }
 
+/// The relay protocol this client speaks, sent as `Lorca-Protocol` with every request. A
+/// relay may refuse one it no longer serves with `426`. 1: group paging, `DELETE /v1/identity`.
+pub const PROTOCOL: u32 = 1;
+
 pub struct RelayClient {
     http: reqwest::Client,
     token: Mutex<Option<(String, i64)>>,
 }
 
 impl RelayClient {
-    pub fn new(http: reqwest::Client) -> Self {
-        RelayClient { http, token: Mutex::new(None) }
+    /// The relay's own client: what it says about this build goes to the relay and never to
+    /// a provider.
+    pub fn new() -> anyhow::Result<Self> {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("lorca-protocol", reqwest::header::HeaderValue::from(PROTOCOL));
+        let http = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(60))
+            .user_agent(format!("lorca/{} ({})", crate::config::VERSION, std::env::consts::OS))
+            .default_headers(headers)
+            .build()?;
+        Ok(RelayClient { http, token: Mutex::new(None) })
     }
 
     pub fn forget_token(&self) {
@@ -259,6 +277,7 @@ impl RelayClient {
         let mut request = address.into_client_request().map_err(socket_error)?;
         let bearer = format!("Bearer {token}").parse().map_err(|_| RelayError { status: None, message: "token is not a header value".into() })?;
         request.headers_mut().insert("authorization", bearer);
+        request.headers_mut().insert("lorca-protocol", PROTOCOL.into());
         let connector = tokio_tungstenite::Connector::Rustls(tls());
         let connect = tokio_tungstenite::connect_async_tls_with_config(request, None, false, Some(connector));
         let (stream, _) = tokio::time::timeout(std::time::Duration::from_secs(20), connect)

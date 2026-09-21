@@ -66,6 +66,7 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             "device_id": app.this_device_id(),
             "relay_url": app.relay_url(),
             "relay_connected": app.relay_connected.load(std::sync::atomic::Ordering::Relaxed),
+            "relay_update_required": app.relay_update_required.load(std::sync::atomic::Ordering::Relaxed),
         })),
         "bootstrap" => {
             runtime::prime_names(app);

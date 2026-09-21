@@ -24,6 +24,8 @@ export interface StoreState {
   identityId: string | null;
   relayUrl: string | null;
   relayConnected: boolean;
+  /** The relay refused this build's protocol: it syncs again once the app is updated. */
+  relayUpdateRequired: boolean;
   devices: Device[];
   /// Device id → last seen (unix seconds), from the devices list.
   device_seen: Record<string, number>;
@@ -53,6 +55,7 @@ function empty(): Omit<StoreState, "ready" | "dictation_lang"> {
     identityId: null,
     relayUrl: null,
     relayConnected: false,
+    relayUpdateRequired: false,
     devices: [],
     device_seen: {},
     bots: [],
@@ -112,6 +115,7 @@ export function replaceSnapshot(snapshot: {
   this_device_id: string | null;
   relay_url: string | null;
   relay_connected: boolean;
+  relay_update_required?: boolean;
   devices: Device[];
   bots: Bot[];
   chats: Chat[];
@@ -129,6 +133,7 @@ export function replaceSnapshot(snapshot: {
     identityId: snapshot.identity_id,
     relayUrl: snapshot.relay_url,
     relayConnected: snapshot.relay_connected,
+    relayUpdateRequired: !!snapshot.relay_update_required,
     devices: snapshot.devices,
     device_seen: seenOf(snapshot.devices),
     bots: snapshot.bots,

@@ -3,6 +3,7 @@ import AppKit
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var mainWindowController: MainWindowController?
+    private var saidUpdateRequired = false
     private var onboardingWindowController: OnboardingWindowController?
     private var settingsWindowController: SettingsWindowController?
 
@@ -19,6 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // its offline state after a grace period instead of flashing before onboarding.
         store.observe(self) { [weak self] event in
             if case .identityChanged = event { self?.identityStateChanged() }
+            if case .rosterChanged = event { self?.relayStateChanged() }
         }
         NotificationCenter.default.addObserver(forName: AppLanguage.didChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.languageChanged() }
@@ -187,6 +189,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func toggleCommandPalette(_ sender: Any?) {
         showMainWindow()
         mainWindowController?.toggleCommandPalette()
+    }
+
+    /// The relay turned this build away. Said once per launch, since every sync attempt gets
+    /// the same answer until Lorca is updated.
+    private func relayStateChanged() {
+        guard store.relayUpdateRequired, !saidUpdateRequired, let window = mainWindowController?.window, window.isVisible else { return }
+        saidUpdateRequired = true
+        let alert = NSAlert()
+        alert.messageText = L("Update Lorca to keep syncing")
+        alert.informativeText = L("The relay no longer works with this version. Chats on this Mac stay as they are, and nothing syncs with your other Devices until you update.")
+        if Updater.isEnabled {
+            alert.addButton(withTitle: L("Check for Updates…"))
+        }
+        alert.addButton(withTitle: Updater.isEnabled ? L("Later") : L("OK"))
+        alert.beginSheetModal(for: window) { response in
+            if Updater.isEnabled, response == .alertFirstButtonReturn {
+                Updater.shared.checkForUpdates()
+            }
+        }
     }
 
     @objc func checkForUpdates(_ sender: Any?) {

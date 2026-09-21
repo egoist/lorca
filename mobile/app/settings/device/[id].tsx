@@ -40,6 +40,7 @@ export default function DeviceScreen() {
   const allBots = useStore((s) => s.bots);
   const chats = useStore((s) => s.chats);
   const relayConnected = useStore((s) => s.relayConnected);
+  const relayUpdateRequired = useStore((s) => s.relayUpdateRequired);
   const relayUrl = useStore((s) => s.relayUrl);
 
   if (!device) return null;
@@ -112,7 +113,7 @@ export default function DeviceScreen() {
           <Row title={t("OS")} detail={device.os_version || osName} />
           <Row title={t("Role")} detail={runner ? t("Runner") : t("Device")} />
           <Row title={t("Last seen")} detail={online ? t("Active now") : lastSeen(seen)} />
-          <Row title={t("Relay")} detail={relay ? (relayConnected ? relay : t("{relay} · offline", { relay })) : t("Not configured")} />
+          <Row title={t("Relay")} detail={relay ? (relayUpdateRequired ? t("{relay} · update Lorca to sync", { relay }) : relayConnected ? relay : t("{relay} · offline", { relay })) : t("Not configured")} />
         </Section>
 
         {!isThis && (

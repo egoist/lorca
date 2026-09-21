@@ -78,6 +78,8 @@ final class AppStore {
     private(set) var isIdentityDevice = false
     private(set) var identityID: String?
     private(set) var relayConnected = false
+    /// The relay refused this build's protocol: it syncs again once Lorca is updated.
+    private(set) var relayUpdateRequired = false
     private(set) var relayURL: String?
 
     /// Turns in flight, by job id: the chat and the bot (empty while a group exchange is between
@@ -173,6 +175,7 @@ final class AppStore {
             isIdentityDevice = hello.isIdentityDevice
             relayURL = hello.relayUrl
             relayConnected = hello.relayConnected
+            relayUpdateRequired = hello.relayUpdateRequired ?? false
             let snapshot = try await client.request("bootstrap", as: Wire.Snapshot.self)
             apply(snapshot: snapshot)
             isConnected = true
@@ -189,6 +192,7 @@ final class AppStore {
         identityID = snapshot.identityId
         relayURL = snapshot.relayUrl
         relayConnected = snapshot.relayConnected
+        relayUpdateRequired = snapshot.relayUpdateRequired ?? false
         devices = snapshot.devices.map { $0.toModel() }
         bots = snapshot.bots.map { $0.toModel() }
         // A snapshot carries each chat's newest messages. Older pages this app already loaded
@@ -305,6 +309,7 @@ final class AppStore {
         case "relay.status":
             guard let status = decode(Wire.RelayStatus.self) else { return }
             relayConnected = status.connected
+            relayUpdateRequired = status.updateRequired ?? false
             relayURL = status.url ?? relayURL
             emit(.rosterChanged)
 

@@ -36,8 +36,14 @@ pub async fn run(app: Arc<App>) {
                     failures = 0;
                     continue;
                 }
+                // The relay no longer serves this build. The app says so, and the next try
+                // waits: the answer stays the same until Lorca is updated or the relay changes.
+                let outdated = error.is_update_required();
+                if outdated && !app.relay_update_required.swap(true, Ordering::Relaxed) {
+                    app.emit_relay_status();
+                }
                 failures = failures.saturating_add(1);
-                let delay = (2u64.pow(failures.min(5))).min(60);
+                let delay = if outdated { 900 } else { (2u64.pow(failures.min(5))).min(60) };
                 tracing::warn!(%error, retry_in = delay, "relay");
                 // Up to a second on top, so the Devices a relay restart dropped together do
                 // not all come back in the same instant.
@@ -54,7 +60,7 @@ pub async fn run(app: Arc<App>) {
 /// Without its own socket this Device knows nothing of the others' presence.
 fn disconnected(app: &Arc<App>) {
     if app.relay_connected.swap(false, Ordering::Relaxed) {
-        app.emit(Event::RelayStatus { connected: false, url: app.relay_url() });
+        app.emit_relay_status();
     }
     let had_online = {
         let mut state = app.state.lock().unwrap();
@@ -92,8 +98,9 @@ async fn session(app: &Arc<App>) -> Result<(), RelayError> {
     // The socket opens before the first pull, so no blob lands unseen between the two.
     let token = token_or_register(app, &url, &machine).await?;
     let mut socket = app.relay.sync_socket(&url, &token).await?;
-    if !app.relay_connected.swap(true, Ordering::Relaxed) {
-        app.emit(Event::RelayStatus { connected: true, url: Some(url.clone()) });
+    let was_refused = app.relay_update_required.swap(false, Ordering::Relaxed);
+    if !app.relay_connected.swap(true, Ordering::Relaxed) || was_refused {
+        app.emit_relay_status();
     }
 
     let (mut pull, mut refresh) = (true, true);
