@@ -3,7 +3,7 @@ import { Platform, type ImageSourcePropType } from "react-native";
 
 export const AndroidIcons = {
   settings: require("../../assets/material/settings.xml") as ImageSourcePropType,
-  edit: require("../../assets/material/edit.xml") as ImageSourcePropType,
+  add: require("../../assets/material/add.xml") as ImageSourcePropType,
   close: require("../../assets/material/close.xml") as ImageSourcePropType,
   check: require("../../assets/material/check.xml") as ImageSourcePropType,
   group: require("../../assets/material/group.xml") as ImageSourcePropType,

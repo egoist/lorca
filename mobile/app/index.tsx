@@ -1,10 +1,9 @@
 import { FlashList } from "@shopify/flash-list";
 import { MenuView, type MenuAction, type MenuComponentRef } from "@expo/ui/community/menu";
-import { DropdownMenu, DropdownMenuItem, FloatingActionButton, Host, Icon, Text as ComposeText } from "@expo/ui/jetpack-compose";
 import * as Haptics from "expo-haptics";
 import { Link, Stack, useRouter } from "expo-router";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Platform, Pressable, StyleSheet, Text, type StyleProp, type TextStyle, View } from "react-native";
+import { Alert, Platform, Pressable, StyleSheet, Text, useWindowDimensions, type StyleProp, type TextStyle, View } from "react-native";
 import { chatTitle, engine } from "../src/core/engine";
 import type { Bot, Chat, ChatSearchResults } from "../src/core/model";
 import { markRead, useBotMap, useStore, useWorkingBotIds } from "../src/core/store";
@@ -16,7 +15,6 @@ import { lastActivity, preview, stamp } from "../src/ui/format";
 import { Symbol } from "../src/ui/Symbol";
 import { Font, usePalette } from "../src/ui/theme";
 import { AndroidIcons } from "../src/ui/navigation";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 export default function ChatsScreen() {
   const p = usePalette();
@@ -29,7 +27,6 @@ export default function ChatsScreen() {
   const [query, setQuery] = useState("");
   const [matches, setMatches] = useState<ChatSearchResults>({ chats: [], messages: [] });
   const [searching, setSearching] = useState(false);
-  const [searchOpen, setSearchOpen] = useState(false);
 
   function updateQuery(value: string) {
     setQuery(value);
@@ -112,12 +109,7 @@ export default function ChatsScreen() {
       <Stack.SearchBar
         placeholder={t("Search chats and messages")}
         onChangeText={(e) => updateQuery(e.nativeEvent.text)}
-        onOpen={() => setSearchOpen(true)}
-        onClose={() => setSearchOpen(false)}
-        onCancelButtonPress={() => {
-          updateQuery("");
-          setSearchOpen(false);
-        }}
+        onCancelButtonPress={() => updateQuery("")}
         hideWhenScrolling
         autoCapitalize="none"
         headerIconColor={Platform.OS === "android" ? p.secondaryLabel : undefined}
@@ -139,9 +131,21 @@ export default function ChatsScreen() {
           </Stack.Toolbar>
         </>
       ) : (
-        <Stack.Toolbar placement="right" tintColor={p.secondaryLabel}>
-          <Stack.Toolbar.Button icon={AndroidIcons.settings} accessibilityLabel={t("Settings")} onPress={() => router.push("/settings")} />
-        </Stack.Toolbar>
+        <>
+          <Stack.Toolbar placement="left" tintColor={p.secondaryLabel}>
+            <Stack.Toolbar.Button icon={AndroidIcons.settings} accessibilityLabel={t("Settings")} onPress={() => router.push("/settings")} />
+          </Stack.Toolbar>
+          <Stack.Toolbar placement="right" tintColor={p.secondaryLabel}>
+            <Stack.Toolbar.Menu icon={AndroidIcons.add} accessibilityLabel={t("New")}>
+              <Stack.Toolbar.MenuAction icon={AndroidIcons.group} onPress={() => router.push("/new-group")}>
+                {t("New Group Chat")}
+              </Stack.Toolbar.MenuAction>
+              <Stack.Toolbar.MenuAction icon={AndroidIcons.personAdd} onPress={() => router.push("/new-bot")}>
+                {t("New Bot")}
+              </Stack.Toolbar.MenuAction>
+            </Stack.Toolbar.Menu>
+          </Stack.Toolbar>
+        </>
       )}
       <View style={styles.screen}>
         <FlashList
@@ -150,7 +154,7 @@ export default function ChatsScreen() {
           keyExtractor={(item) => ("key" in item ? item.key : item.id)}
           contentInsetAdjustmentBehavior="automatic"
           keyboardDismissMode="on-drag"
-          contentContainerStyle={{ paddingBottom: Platform.OS === "android" ? 96 : 24 }}
+          contentContainerStyle={{ paddingBottom: 24 }}
           ListHeaderComponent={
             relayConnected ? null : (
               <View style={[styles.banner, { backgroundColor: p.fill }]}>
@@ -222,7 +226,6 @@ export default function ChatsScreen() {
           }}
           refreshing={false}
         />
-        {Platform.OS === "android" && !searchOpen && !searchingText ? <AndroidCreateFab onNewGroup={() => router.push("/new-group")} onNewBot={() => router.push("/new-bot")} /> : null}
       </View>
     </>
   );
@@ -230,79 +233,29 @@ export default function ChatsScreen() {
 
 function AndroidChatRow({ chat, bots, title, working, onPress, onDelete }: { chat: Chat; bots: Map<string, Bot>; title: string; working: boolean; onPress: () => void; onDelete: () => void }) {
   const menuRef = useRef<MenuComponentRef>(null);
+  const { width } = useWindowDimensions();
   const actions: MenuAction[] = [
     { id: "pin", title: chat.is_pinned ? t("Unpin") : t("Pin"), image: AndroidIcons.pin, state: chat.is_pinned ? "on" : "off" },
     ...(chat.unread_count > 0 ? [{ id: "read", title: t("Mark as Read"), image: AndroidIcons.read } satisfies MenuAction] : []),
     { id: "delete", title: t("Delete"), image: AndroidIcons.delete, attributes: { destructive: true } },
   ];
   return (
-    <View style={styles.androidChatRow}>
-      <ChatRow chat={chat} bots={bots} title={title} working={working} onPress={onPress} onLongPress={() => menuRef.current?.show()} />
-      {/* The native Compose popup needs an anchor. Keep a one-pixel anchor near the row's
-          trailing edge; the whole React Native row remains normally measured and pressable. */}
-      <MenuView
-        ref={menuRef}
-        actions={actions}
-        style={styles.contextMenuAnchor}
-        onOpenMenu={() => void Haptics.selectionAsync()}
-        onPressAction={({ nativeEvent }) => {
-          if (nativeEvent.event === "pin") void engine.pinChat(chat.id, !chat.is_pinned);
-          else if (nativeEvent.event === "read") markRead(chat.id);
-          else if (nativeEvent.event === "delete") onDelete();
-        }}
-      >
-        <View style={styles.contextMenuTarget} accessible={false} />
-      </MenuView>
-    </View>
-  );
-}
-
-function AndroidCreateFab({ onNewGroup, onNewBot }: { onNewGroup: () => void; onNewBot: () => void }) {
-  const [expanded, setExpanded] = useState(false);
-  const insets = useSafeAreaInsets();
-
-  function choose(action: () => void) {
-    setExpanded(false);
-    action();
-  }
-
-  return (
-    <View style={[styles.fab, { bottom: Math.max(insets.bottom, 16) + 16 }]}>
-      <Host matchContents>
-        <DropdownMenu expanded={expanded} onDismissRequest={() => setExpanded(false)}>
-          <DropdownMenu.Trigger>
-            <FloatingActionButton
-              onClick={() => {
-                void Haptics.selectionAsync();
-                setExpanded(true);
-              }}
-            >
-              <FloatingActionButton.Icon>
-                <Icon source={AndroidIcons.edit} size={24} contentDescription={t("New")} />
-              </FloatingActionButton.Icon>
-            </FloatingActionButton>
-          </DropdownMenu.Trigger>
-          <DropdownMenu.Items>
-            <DropdownMenuItem onClick={() => choose(onNewGroup)}>
-              <DropdownMenuItem.Text>
-                <ComposeText>{t("New Group Chat")}</ComposeText>
-              </DropdownMenuItem.Text>
-              <DropdownMenuItem.LeadingIcon>
-                <Icon source={AndroidIcons.group} size={24} />
-              </DropdownMenuItem.LeadingIcon>
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => choose(onNewBot)}>
-              <DropdownMenuItem.Text>
-                <ComposeText>{t("New Bot")}</ComposeText>
-              </DropdownMenuItem.Text>
-              <DropdownMenuItem.LeadingIcon>
-                <Icon source={AndroidIcons.personAdd} size={24} />
-              </DropdownMenuItem.LeadingIcon>
-            </DropdownMenuItem>
-          </DropdownMenu.Items>
-        </DropdownMenu>
-      </Host>
-    </View>
+    <MenuView
+      ref={menuRef}
+      actions={actions}
+      shouldOpenOnLongPress
+      style={{ width }}
+      onOpenMenu={() => void Haptics.selectionAsync()}
+      onPressAction={({ nativeEvent }) => {
+        if (nativeEvent.event === "pin") void engine.pinChat(chat.id, !chat.is_pinned);
+        else if (nativeEvent.event === "read") markRead(chat.id);
+        else if (nativeEvent.event === "delete") onDelete();
+      }}
+    >
+      <View style={{ width }}>
+        <ChatRow chat={chat} bots={bots} title={title} working={working} onPress={onPress} onLongPress={() => menuRef.current?.show()} />
+      </View>
+    </MenuView>
   );
 }
 
@@ -370,8 +323,4 @@ const styles = StyleSheet.create({
   searchTitle: { flex: 1, fontSize: Font.body, fontWeight: "600" },
   searchStamp: { fontSize: 14 },
   searchSnippet: { fontSize: 15, lineHeight: 20 },
-  androidChatRow: { alignSelf: "stretch" },
-  contextMenuAnchor: { position: "absolute", top: 32, right: 24, width: 1, height: 1 },
-  contextMenuTarget: { width: 1, height: 1 },
-  fab: { position: "absolute", right: 16, zIndex: 10 },
 });

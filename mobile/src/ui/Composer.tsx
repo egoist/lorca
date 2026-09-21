@@ -7,9 +7,11 @@
 // message while a turn runs steers it. Where liquid glass is not available (older iOS, Android)
 // the pill is a plain filled field.
 
-import { Button as MenuButton, Host, Image as MenuImage, Menu, type ButtonProps } from "@expo/ui/swift-ui";
+import { Button as MenuButton, Host as SwiftHost, Image as MenuImage, Menu, type ButtonProps } from "@expo/ui/swift-ui";
 import { background, frame, shapes } from "@expo/ui/swift-ui/modifiers";
 import { MenuView, type MenuAction, type MenuComponentRef } from "@expo/ui/community/menu";
+import { Column as ComposeColumn, Host as ComposeHost, Icon as ComposeIcon, ListItem, ModalBottomSheet, Text as ComposeText } from "@expo/ui/jetpack-compose";
+import { clickable, fillMaxWidth, padding } from "@expo/ui/jetpack-compose/modifiers";
 import * as DocumentPicker from "expo-document-picker";
 import { GlassView, isLiquidGlassAvailable } from "expo-glass-effect";
 import * as Haptics from "expo-haptics";
@@ -72,7 +74,7 @@ function AttachMenu({ sources, tint, label }: { sources: AttachSource[]; tint: C
       {/* The hosted view would otherwise avoid the keyboard by itself: SwiftUI treats the keys as
           a safe-area inset and pushes the disc up out of its frame while the sticky composer
           already rides above them. */}
-      <Host style={StyleSheet.absoluteFill} ignoreSafeArea="keyboard" testID="attach">
+      <SwiftHost style={StyleSheet.absoluteFill} ignoreSafeArea="keyboard" testID="attach">
         <Menu
           label={
             <MenuImage
@@ -88,7 +90,7 @@ function AttachMenu({ sources, tint, label }: { sources: AttachSource[]; tint: C
             <MenuButton key={source.title} systemImage={source.icon} label={source.title} onPress={source.run} />
           ))}
         </Menu>
-      </Host>
+      </SwiftHost>
     </View>
   );
 }
@@ -108,6 +110,7 @@ export function Composer({
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<PickedFile[]>([]);
   const [focused, setFocused] = useState(false);
+  const [attachOpen, setAttachOpen] = useState(false);
   const [listening, setListening] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [levels, setLevels] = useState<number[]>([0, 0, 0, 0, 0]);
@@ -116,7 +119,6 @@ export function Composer({
   const transcript = useRef("");
   const pendingSend = useRef(false);
   const inputRef = useRef<TextInput>(null);
-  const attachMenuRef = useRef<MenuComponentRef>(null);
   const dictationMenuRef = useRef<MenuComponentRef>(null);
   const { language, setting: dictationSetting } = useDictationLanguage();
   const dictationLanguages = useSupportedLanguages();
@@ -300,25 +302,18 @@ export function Composer({
     Platform.OS === "ios" ? (
       <AttachMenu key="plus" sources={sources} tint={p.fill} label={p.label} />
     ) : (
-      <View key="plus" style={styles.androidDiscHost}>
-        <Pressable
-          onPress={() => attachMenuRef.current?.show()}
-          style={({ pressed }) => [styles.disc, styles.androidDisc, { backgroundColor: p.fill, opacity: pressed ? 0.7 : 1 }]}
-          accessibilityRole="button"
-          accessibilityLabel={t("Attach")}
-        >
-          <Symbol name="plus" size={18} color={p.label} weight="medium" />
-        </Pressable>
-        <MenuView
-          ref={attachMenuRef}
-          actions={sources.map((source, index) => ({ id: String(index), title: source.title, image: source.androidIcon }))}
-          style={styles.attachMenuAnchor}
-          onOpenMenu={() => void Haptics.selectionAsync()}
-          onPressAction={({ nativeEvent }) => sources[Number(nativeEvent.event)]?.run()}
-        >
-          <View style={styles.menuAnchorTarget} accessible={false} />
-        </MenuView>
-      </View>
+      <Pressable
+        key="plus"
+        onPress={() => {
+          void Haptics.selectionAsync();
+          setAttachOpen(true);
+        }}
+        style={({ pressed }) => [styles.disc, styles.androidDisc, { backgroundColor: p.fill, opacity: pressed ? 0.7 : 1 }]}
+        accessibilityRole="button"
+        accessibilityLabel={t("Attach")}
+      >
+        <Symbol name="plus" size={18} color={p.label} weight="medium" />
+      </Pressable>
     );
 
   const recording = (
@@ -467,6 +462,37 @@ export function Composer({
             : [plus, listening ? recording : input, primaryDisc]}
         </View>
       </Surface>
+      {Platform.OS === "android" && attachOpen ? (
+        <ComposeHost style={StyleSheet.absoluteFill} pointerEvents="box-none">
+          <ModalBottomSheet onDismissRequest={() => setAttachOpen(false)} containerColor={p.cell} contentColor={p.label}>
+            <ComposeColumn modifiers={[fillMaxWidth(), padding(8, 0, 8, 24)]}>
+              <ComposeText style={{ typography: "titleLarge" }} modifiers={[padding(16, 4, 16, 12)]}>
+                {t("Attach")}
+              </ComposeText>
+              {sources.map((source) => (
+                <ListItem
+                  key={source.title}
+                  colors={{ containerColor: p.cell, contentColor: p.label, leadingContentColor: p.secondaryLabel }}
+                  modifiers={[
+                    fillMaxWidth(),
+                    clickable(() => {
+                      setAttachOpen(false);
+                      setTimeout(source.run, 0);
+                    }),
+                  ]}
+                >
+                  <ListItem.HeadlineContent>
+                    <ComposeText>{source.title}</ComposeText>
+                  </ListItem.HeadlineContent>
+                  <ListItem.LeadingContent>
+                    <ComposeIcon source={source.androidIcon} size={24} />
+                  </ListItem.LeadingContent>
+                </ListItem>
+              ))}
+            </ComposeColumn>
+          </ModalBottomSheet>
+        </ComposeHost>
+      ) : null}
     </View>
   );
 }
@@ -514,8 +540,6 @@ const styles = StyleSheet.create({
   disc: { width: DISC, height: DISC, borderRadius: DISC / 2, alignItems: "center", justifyContent: "center", overflow: "hidden" },
   androidDisc: { width: DISC - 1, height: DISC - 1, borderRadius: (DISC - 1) / 2 },
   androidDiscHost: { width: DISC + 1, height: DISC + 1, alignItems: "center", justifyContent: "center" },
-  attachMenuAnchor: { position: "absolute", top: 0, left: 0, width: 1, height: 1 },
-  menuAnchorTarget: { width: 1, height: 1 },
   chips: { paddingHorizontal: 12, paddingBottom: 8, gap: 8 },
   chip: { flexDirection: "row", alignItems: "center", gap: 6, paddingLeft: 4, paddingRight: 10, paddingVertical: 4, borderRadius: 14 },
   chipText: { fontSize: 14, fontWeight: "500" },

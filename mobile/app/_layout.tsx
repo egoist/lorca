@@ -79,7 +79,7 @@ export default function RootLayout() {
             }}
           >
             <Stack.Protected guard={paired}>
-              <Stack.Screen name="index" options={{ title: t("Chats"), headerTitle: Platform.OS === "ios" ? "" : "Lorca", headerLargeTitle: false, headerShadowVisible: false, headerTransparent: Platform.OS === "ios" }} />
+              <Stack.Screen name="index" options={{ title: t("Chats"), headerTitle: "", headerLargeTitle: false, headerShadowVisible: false, headerTransparent: Platform.OS === "ios" }} />
               <Stack.Screen
                 name="chat/[id]"
                 options={Platform.OS === "android" ? { headerShown: false } : { headerTransparent: true, headerShadowVisible: false, headerTitleAlign: "center" }}
