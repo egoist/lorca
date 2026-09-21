@@ -3,7 +3,7 @@ import { MenuView, type MenuAction, type MenuComponentRef } from "@expo/ui/commu
 import * as Haptics from "expo-haptics";
 import { Link, Stack, useRouter } from "expo-router";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Platform, Pressable, StyleSheet, Text, useWindowDimensions, type StyleProp, type TextStyle, View } from "react-native";
+import { ActivityIndicator, Alert, Platform, Pressable, StyleSheet, Text, useWindowDimensions, type StyleProp, type TextStyle, View } from "react-native";
 import { chatTitle, engine } from "../core/engine";
 import type { Bot, Chat, ChatSearchResults } from "../core/model";
 import { markRead, useBotMap, useStore, useWorkingBotIds } from "../core/store";
@@ -25,12 +25,13 @@ export function ChatsScreen({ sidebar = false }: { sidebar?: boolean }) {
   const router = useRouter();
   const openChatId = useStore((s) => s.openChatId);
   const sidebarWidth = useSidebarWidth();
-  // The sidebar's search field is its own, at the foot of the list (see SidebarSearch).
-  const floatingSearch = sidebar;
+  // The search field sits at the foot of the list. An iPhone's native bar puts it there; the
+  // sidebar and Android have their own (see SidebarSearch).
+  const floatingSearch = sidebar || Platform.OS === "android";
   const searchInset = useSidebarSearchInset();
   const chats = useStore((s) => s.chats);
   const running = useStore((s) => s.running);
-  const relayConnected = useStore((s) => s.relayConnected);
+  const connecting = useConnecting();
   const bots = useBotMap();
   const workingBots = useWorkingBotIds();
   const [query, setQuery] = useState("");
@@ -130,15 +131,13 @@ export function ChatsScreen({ sidebar = false }: { sidebar?: boolean }) {
 
   return (
     <>
-      {/* The sidebar has its own field at its foot. */}
-      {floatingSearch ? null : (
+            {floatingSearch ? null : (
         <Stack.SearchBar
           placeholder={t("Search")}
           onChangeText={(e) => updateQuery(e.nativeEvent.text)}
           onCancelButtonPress={() => updateQuery("")}
           hideWhenScrolling
           autoCapitalize="none"
-          headerIconColor={Platform.OS === "android" ? p.secondaryLabel : undefined}
         />
       )}
       {Platform.OS === "ios" ? (
@@ -174,6 +173,17 @@ export function ChatsScreen({ sidebar = false }: { sidebar?: boolean }) {
           </Stack.Toolbar>
         </>
       )}
+      {/* The relay status sits in the bar's title slot, so the list never moves. */}
+      {connecting ? (
+        <Stack.Title asChild>
+          <View style={styles.status} accessibilityRole="header" accessibilityLabel={t("Connecting…")}>
+            <ActivityIndicator size="small" color={p.secondaryLabel as any} />
+            <Text style={[styles.statusText, { color: p.secondaryLabel }]} numberOfLines={1}>
+              {t("Connecting…")}
+            </Text>
+          </View>
+        </Stack.Title>
+      ) : null}
       <View style={styles.screen}>
         <FlashList
           style={styles.list}
@@ -182,14 +192,6 @@ export function ChatsScreen({ sidebar = false }: { sidebar?: boolean }) {
           contentInsetAdjustmentBehavior="automatic"
           keyboardDismissMode="on-drag"
           contentContainerStyle={{ paddingBottom: floatingSearch ? searchInset + 8 : 24 }}
-          ListHeaderComponent={
-            relayConnected ? null : (
-              <View style={[styles.banner, { backgroundColor: p.fill }]}>
-                <Symbol name="antenna.radiowaves.left.and.right" size={14} color={p.secondaryLabel} />
-                <Text style={[styles.bannerText, { color: p.secondaryLabel }]}>{t("Connecting to the relay…")}</Text>
-              </View>
-            )
-          }
           ListEmptyComponent={
             <View style={styles.empty}>
               <Symbol name="sparkles" size={36} color={p.tertiaryLabel} />
@@ -262,6 +264,18 @@ export function ChatsScreen({ sidebar = false }: { sidebar?: boolean }) {
       </View>
     </>
   );
+}
+
+/// True once the relay has been unreachable for a moment: a launch or a quick reconnect shows nothing.
+function useConnecting(): boolean {
+  const relayConnected = useStore((s) => s.relayConnected);
+  const [connecting, setConnecting] = useState(false);
+  useEffect(() => {
+    if (relayConnected) return setConnecting(false);
+    const timer = setTimeout(() => setConnecting(true), 1000);
+    return () => clearTimeout(timer);
+  }, [relayConnected]);
+  return connecting;
 }
 
 /// A row whose long press opens a native menu: every row on Android, a sidebar row on iOS.
@@ -350,8 +364,8 @@ const styles = StyleSheet.create({
   screen: { flex: 1 },
   list: { flex: 1 },
   separator: { height: StyleSheet.hairlineWidth, marginLeft: 78 },
-  banner: { flexDirection: "row", alignItems: "center", gap: 8, marginHorizontal: 16, marginTop: 4, marginBottom: 6, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10 },
-  bannerText: { fontSize: Font.small },
+  status: { flexDirection: "row", alignItems: "center", gap: 8 },
+  statusText: { fontSize: Font.small, fontWeight: "500" },
   empty: { alignItems: "center", paddingTop: 120, paddingHorizontal: 40, gap: 8 },
   emptyTitle: { fontSize: 20, fontWeight: "600", marginTop: 8 },
   emptyText: { fontSize: 15, textAlign: "center", lineHeight: 21 },

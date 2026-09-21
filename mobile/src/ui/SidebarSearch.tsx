@@ -1,15 +1,16 @@
-// The sidebar's search field: a capsule floating at the foot of the list, level with the
-// composer, riding the keyboard. The native bar cannot hold it there. UIKit moves a search bar
-// into the bottom toolbar only on an iPhone. On Android the search action is an item of the
-// activity's one action bar, which react-native-screens hands to whichever stack updated its
-// header last, so the sidebar's item vanishes once the pane beside it opens a chat.
+// The chat list's search field wherever the native bar cannot sit at the foot: a capsule
+// floating under the list, level with the composer, riding the keyboard. UIKit moves a search
+// bar into the bottom toolbar only on an iPhone. On Android the search action is an icon in the
+// header, an item of the activity's one action bar, which react-native-screens hands to
+// whichever stack updated its header last, so a sidebar's item vanishes once the pane beside it
+// opens a chat.
 
 import { useRef } from "react";
 import { Pressable, StyleSheet, TextInput } from "react-native";
-import { KeyboardStickyView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { t } from "../i18n";
 import { Surface } from "./Composer";
+import { KeyboardFoot } from "./KeyboardFoot";
 import { Symbol } from "./Symbol";
 import { Font, usePalette } from "./theme";
 
@@ -31,7 +32,7 @@ export function SidebarSearch({ value, placeholder, onChangeText }: { value: str
   const input = useRef<TextInput>(null);
   const bottom = useFoot();
   return (
-    <KeyboardStickyView style={[styles.wrap, { paddingBottom: bottom }]} offset={{ closed: 0, opened: bottom - 8 }} pointerEvents="box-none">
+    <KeyboardFoot style={[styles.wrap, { paddingBottom: bottom }]} tuck={bottom - 8}>
       <Surface style={styles.field} tint={p.cell} edge={p.dark ? "rgba(255,255,255,0.14)" : "rgba(0,0,0,0.1)"} onPress={() => input.current?.focus()}>
         <Symbol name="magnifyingglass" size={17} color={p.secondaryLabel} />
         <TextInput
@@ -58,7 +59,7 @@ export function SidebarSearch({ value, placeholder, onChangeText }: { value: str
           </Pressable>
         ) : null}
       </Surface>
-    </KeyboardStickyView>
+    </KeyboardFoot>
   );
 }
 

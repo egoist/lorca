@@ -68,7 +68,6 @@ export const zh: Record<string, string> = {
   "Color": "颜色",
   "Connect": "接入",
   "Connected": "已接入",
-  "Connecting to the relay…": "正在连接中继…",
   "Connecting…": "正在连接…",
   "Copy code and open": "复制验证码并打开",
   "Copy the pairing code from Lorca on your Mac first (Devices › Pair a Device).": "请先在 Mac 上的 Lorca 中复制配对码（设备 › 配对设备）。",

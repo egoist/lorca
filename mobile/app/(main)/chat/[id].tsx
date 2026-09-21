@@ -24,7 +24,6 @@ import {
 import {
   KeyboardChatScrollView,
   KeyboardController,
-  KeyboardStickyView,
   useKeyboardHandler,
 } from "react-native-keyboard-controller";
 import Animated, {
@@ -51,6 +50,7 @@ import {
 import { t } from "../../../src/i18n";
 import { AvatarCluster } from "../../../src/ui/Avatar";
 import { Composer, Surface } from "../../../src/ui/Composer";
+import { KeyboardFoot } from "../../../src/ui/KeyboardFoot";
 import { useWide } from "../../../src/ui/layout";
 import { Symbol } from "../../../src/ui/Symbol";
 import { usePalette } from "../../../src/ui/theme";
@@ -95,7 +95,7 @@ export default function ChatScreen() {
   const isWorking = useIsWorking(id);
   const status = useStore((s) => s.statuses[id] ?? null);
   const listRef = useRef<FlashListRef<Row>>(null);
-  // The composer floats over the transcript and rides the keyboard (KeyboardStickyView). The
+  // The composer floats over the transcript and rides the keyboard (KeyboardFoot). The
   // list is never resized: the chat scroll view keeps a bottom inset for the composer and adds
   // the keyboard's height to it frame by frame, lifting the last messages with the keys.
   // `blankSpace` is the inset with the keyboard closed (the composer with its home-indicator
@@ -722,10 +722,9 @@ export default function ChatScreen() {
           />
         </SoftScrollEdgeView>
         </Animated.View>
-        <KeyboardStickyView
+        <KeyboardFoot
           style={[styles.jump, { bottom: composerHeight + 10 }]}
-          offset={{ closed: 0, opened: insets.bottom }}
-          pointerEvents="box-none"
+          tuck={insets.bottom}
         >
           {awayFromEnd && (
             <Animated.View
@@ -748,14 +747,14 @@ export default function ChatScreen() {
               </Pressable>
             </Animated.View>
           )}
-        </KeyboardStickyView>
-        <KeyboardStickyView
+        </KeyboardFoot>
+        <KeyboardFoot
           style={[
             styles.composer,
             { paddingBottom: Math.max(insets.bottom, 8) },
           ]}
           // Open, the composer's home-indicator padding is not needed: it sits on the keys.
-          offset={{ closed: 0, opened: insets.bottom }}
+          tuck={insets.bottom}
           onLayout={(e) => {
             setComposerHeight(e.nativeEvent.layout.height);
             const blank = e.nativeEvent.layout.height + COMPOSER_GAP;
@@ -768,7 +767,6 @@ export default function ChatScreen() {
             syncInsetTop();
             pinToBottom();
           }}
-          pointerEvents="box-none"
         >
           <Composer
             members={members}
@@ -793,7 +791,7 @@ export default function ChatScreen() {
               });
             }}
           />
-        </KeyboardStickyView>
+        </KeyboardFoot>
       </View>
     </View>
   );
