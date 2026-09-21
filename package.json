@@ -17,7 +17,8 @@
     "web:build": "bun run --cwd web build",
     "web:deploy": "bun run --cwd web deploy",
     "mobile:dev": "bun run scripts/mobile.ts",
-    "mobile:phone": "bun run scripts/mobile.ts --phone"
+    "mobile:phone": "bun run scripts/mobile.ts --phone",
+    "android": "bun --cwd mobile android"
   },
   "devDependencies": {
     "@types/bun": "latest"
