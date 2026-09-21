@@ -1,5 +1,6 @@
 import { FlashList } from "@shopify/flash-list";
 import { MenuView, type MenuAction, type MenuComponentRef } from "@expo/ui/community/menu";
+import { DropdownMenu, DropdownMenuItem, FloatingActionButton, Host, Icon, Text as ComposeText } from "@expo/ui/jetpack-compose";
 import * as Haptics from "expo-haptics";
 import { Link, Stack, useRouter } from "expo-router";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -15,6 +16,7 @@ import { lastActivity, preview, stamp } from "../src/ui/format";
 import { Symbol } from "../src/ui/Symbol";
 import { Font, usePalette } from "../src/ui/theme";
 import { AndroidIcons } from "../src/ui/navigation";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 export default function ChatsScreen() {
   const p = usePalette();
@@ -27,6 +29,7 @@ export default function ChatsScreen() {
   const [query, setQuery] = useState("");
   const [matches, setMatches] = useState<ChatSearchResults>({ chats: [], messages: [] });
   const [searching, setSearching] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
 
   function updateQuery(value: string) {
     setQuery(value);
@@ -106,7 +109,19 @@ export default function ChatsScreen() {
 
   return (
     <>
-      <Stack.SearchBar placeholder={t("Search chats and messages")} onChangeText={(e) => updateQuery(e.nativeEvent.text)} onCancelButtonPress={() => updateQuery("")} hideWhenScrolling autoCapitalize="none" headerIconColor={Platform.OS === "android" ? p.secondaryLabel : undefined} />
+      <Stack.SearchBar
+        placeholder={t("Search chats and messages")}
+        onChangeText={(e) => updateQuery(e.nativeEvent.text)}
+        onOpen={() => setSearchOpen(true)}
+        onClose={() => setSearchOpen(false)}
+        onCancelButtonPress={() => {
+          updateQuery("");
+          setSearchOpen(false);
+        }}
+        hideWhenScrolling
+        autoCapitalize="none"
+        headerIconColor={Platform.OS === "android" ? p.secondaryLabel : undefined}
+      />
       {Platform.OS === "ios" ? (
         <>
           <Stack.Toolbar placement="left">
@@ -126,93 +141,89 @@ export default function ChatsScreen() {
       ) : (
         <Stack.Toolbar placement="right" tintColor={p.secondaryLabel}>
           <Stack.Toolbar.Button icon={AndroidIcons.settings} accessibilityLabel={t("Settings")} onPress={() => router.push("/settings")} />
-          <Stack.Toolbar.Menu icon={AndroidIcons.edit} accessibilityLabel={t("New")}>
-            <Stack.Toolbar.MenuAction icon={AndroidIcons.group} onPress={() => router.push("/new-group")}>
-              {t("New Group Chat")}
-            </Stack.Toolbar.MenuAction>
-            <Stack.Toolbar.MenuAction icon={AndroidIcons.personAdd} onPress={() => router.push("/new-bot")}>
-              {t("New Bot")}
-            </Stack.Toolbar.MenuAction>
-          </Stack.Toolbar.Menu>
         </Stack.Toolbar>
       )}
-      <FlashList
-        data={data}
-        keyExtractor={(item) => ("key" in item ? item.key : item.id)}
-        contentInsetAdjustmentBehavior="automatic"
-        keyboardDismissMode="on-drag"
-        contentContainerStyle={{ paddingBottom: 24 }}
-        ListHeaderComponent={
-          relayConnected ? null : (
-            <View style={[styles.banner, { backgroundColor: p.fill }]}>
-              <Symbol name="antenna.radiowaves.left.and.right" size={14} color={p.secondaryLabel} />
-              <Text style={[styles.bannerText, { color: p.secondaryLabel }]}>{t("Connecting to the relay…")}</Text>
-            </View>
-          )
-        }
-        ListEmptyComponent={
-          <View style={styles.empty}>
-            <Symbol name="sparkles" size={36} color={p.tertiaryLabel} />
-            <Text style={[styles.emptyTitle, { color: p.label }]}>{query ? (searching ? t("Searching…") : t("No matches")) : t("No chats yet")}</Text>
-            <Text style={[styles.emptyText, { color: p.secondaryLabel }]}>{query ? t("Try another word.") : t("Your bots and their chats sync from the relay once this phone hears from your Runner.")}</Text>
-          </View>
-        }
-        renderItem={({ item }) => {
-          if ("key" in item) {
-            return <SearchResultRow item={item} bots={bots} query={searchingText} onPress={() => router.push(`/chat/${item.chat.id}`)} />;
+      <View style={styles.screen}>
+        <FlashList
+          style={styles.list}
+          data={data}
+          keyExtractor={(item) => ("key" in item ? item.key : item.id)}
+          contentInsetAdjustmentBehavior="automatic"
+          keyboardDismissMode="on-drag"
+          contentContainerStyle={{ paddingBottom: Platform.OS === "android" ? 96 : 24 }}
+          ListHeaderComponent={
+            relayConnected ? null : (
+              <View style={[styles.banner, { backgroundColor: p.fill }]}>
+                <Symbol name="antenna.radiowaves.left.and.right" size={14} color={p.secondaryLabel} />
+                <Text style={[styles.bannerText, { color: p.secondaryLabel }]}>{t("Connecting to the relay…")}</Text>
+              </View>
+            )
           }
-          const chat = item;
-          const title = chatTitle(chat);
-          if (Platform.OS === "android") {
-            return (
-              <AndroidChatRow
+          ListEmptyComponent={
+            <View style={styles.empty}>
+              <Symbol name="sparkles" size={36} color={p.tertiaryLabel} />
+              <Text style={[styles.emptyTitle, { color: p.label }]}>{query ? (searching ? t("Searching…") : t("No matches")) : t("No chats yet")}</Text>
+              <Text style={[styles.emptyText, { color: p.secondaryLabel }]}>{query ? t("Try another word.") : t("Your bots and their chats sync from the relay once this phone hears from your Runner.")}</Text>
+            </View>
+          }
+          renderItem={({ item }) => {
+            if ("key" in item) {
+              return <SearchResultRow item={item} bots={bots} query={searchingText} onPress={() => router.push(`/chat/${item.chat.id}`)} />;
+            }
+            const chat = item;
+            const title = chatTitle(chat);
+            if (Platform.OS === "android") {
+              return (
+                <AndroidChatRow
+                  chat={chat}
+                  bots={bots}
+                  title={title}
+                  working={isWorking(chat)}
+                  onPress={() => router.push(`/chat/${chat.id}`)}
+                  onDelete={() => confirmDelete(chat)}
+                />
+              );
+            }
+            const row = (
+              <ChatRow
                 chat={chat}
                 bots={bots}
                 title={title}
                 working={isWorking(chat)}
                 onPress={() => router.push(`/chat/${chat.id}`)}
-                onDelete={() => confirmDelete(chat)}
               />
             );
-          }
-          const row = (
-            <ChatRow
-              chat={chat}
-              bots={bots}
-              title={title}
-              working={isWorking(chat)}
-              onPress={() => router.push(`/chat/${chat.id}`)}
-            />
-          );
-          return (
-            <Link href={`/chat/${chat.id}`} asChild>
-              <Link.Trigger>{row}</Link.Trigger>
-              <Link.Preview style={{ width: 340, height: 420 }}>
-                <ChatPeek chat={chat} bots={bots} title={title} />
-              </Link.Preview>
-              <Link.Menu>
-                <Link.MenuAction icon={chat.is_pinned ? "pin.slash" : "pin"} onPress={() => engine.pinChat(chat.id, !chat.is_pinned)}>
-                  {chat.is_pinned ? t("Unpin") : t("Pin")}
-                </Link.MenuAction>
-                {chat.unread_count > 0 ? (
-                  <Link.MenuAction icon="checkmark.circle" onPress={() => markRead(chat.id)}>
-                    {t("Mark as Read")}
+            return (
+              <Link href={`/chat/${chat.id}`} asChild>
+                <Link.Trigger>{row}</Link.Trigger>
+                <Link.Preview style={{ width: 340, height: 420 }}>
+                  <ChatPeek chat={chat} bots={bots} title={title} />
+                </Link.Preview>
+                <Link.Menu>
+                  <Link.MenuAction icon={chat.is_pinned ? "pin.slash" : "pin"} onPress={() => engine.pinChat(chat.id, !chat.is_pinned)}>
+                    {chat.is_pinned ? t("Unpin") : t("Pin")}
                   </Link.MenuAction>
-                ) : null}
-                <Link.MenuAction icon="trash" destructive onPress={() => confirmDelete(chat)}>
-                  {t("Delete")}
-                </Link.MenuAction>
-              </Link.Menu>
-            </Link>
-          );
-        }}
-        ItemSeparatorComponent={() => <View style={[styles.separator, { backgroundColor: p.separator }]} />}
-        onRefresh={() => {
-          void Haptics.selectionAsync();
-          engine.notify();
-        }}
-        refreshing={false}
-      />
+                  {chat.unread_count > 0 ? (
+                    <Link.MenuAction icon="checkmark.circle" onPress={() => markRead(chat.id)}>
+                      {t("Mark as Read")}
+                    </Link.MenuAction>
+                  ) : null}
+                  <Link.MenuAction icon="trash" destructive onPress={() => confirmDelete(chat)}>
+                    {t("Delete")}
+                  </Link.MenuAction>
+                </Link.Menu>
+              </Link>
+            );
+          }}
+          ItemSeparatorComponent={() => <View style={[styles.separator, { backgroundColor: p.separator }]} />}
+          onRefresh={() => {
+            void Haptics.selectionAsync();
+            engine.notify();
+          }}
+          refreshing={false}
+        />
+        {Platform.OS === "android" && !searchOpen && !searchingText ? <AndroidCreateFab onNewGroup={() => router.push("/new-group")} onNewBot={() => router.push("/new-bot")} /> : null}
+      </View>
     </>
   );
 }
@@ -242,6 +253,55 @@ function AndroidChatRow({ chat, bots, title, working, onPress, onDelete }: { cha
       >
         <View style={styles.contextMenuTarget} accessible={false} />
       </MenuView>
+    </View>
+  );
+}
+
+function AndroidCreateFab({ onNewGroup, onNewBot }: { onNewGroup: () => void; onNewBot: () => void }) {
+  const [expanded, setExpanded] = useState(false);
+  const insets = useSafeAreaInsets();
+
+  function choose(action: () => void) {
+    setExpanded(false);
+    action();
+  }
+
+  return (
+    <View style={[styles.fab, { bottom: Math.max(insets.bottom, 16) + 16 }]}>
+      <Host matchContents>
+        <DropdownMenu expanded={expanded} onDismissRequest={() => setExpanded(false)}>
+          <DropdownMenu.Trigger>
+            <FloatingActionButton
+              onClick={() => {
+                void Haptics.selectionAsync();
+                setExpanded(true);
+              }}
+            >
+              <FloatingActionButton.Icon>
+                <Icon source={AndroidIcons.edit} size={24} contentDescription={t("New")} />
+              </FloatingActionButton.Icon>
+            </FloatingActionButton>
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Items>
+            <DropdownMenuItem onClick={() => choose(onNewGroup)}>
+              <DropdownMenuItem.Text>
+                <ComposeText>{t("New Group Chat")}</ComposeText>
+              </DropdownMenuItem.Text>
+              <DropdownMenuItem.LeadingIcon>
+                <Icon source={AndroidIcons.group} size={24} />
+              </DropdownMenuItem.LeadingIcon>
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => choose(onNewBot)}>
+              <DropdownMenuItem.Text>
+                <ComposeText>{t("New Bot")}</ComposeText>
+              </DropdownMenuItem.Text>
+              <DropdownMenuItem.LeadingIcon>
+                <Icon source={AndroidIcons.personAdd} size={24} />
+              </DropdownMenuItem.LeadingIcon>
+            </DropdownMenuItem>
+          </DropdownMenu.Items>
+        </DropdownMenu>
+      </Host>
     </View>
   );
 }
@@ -296,6 +356,8 @@ function HighlightedText({ text, query, style, numberOfLines }: { text: string; 
 }
 
 const styles = StyleSheet.create({
+  screen: { flex: 1 },
+  list: { flex: 1 },
   separator: { height: StyleSheet.hairlineWidth, marginLeft: 78 },
   banner: { flexDirection: "row", alignItems: "center", gap: 8, marginHorizontal: 16, marginTop: 4, marginBottom: 6, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10 },
   bannerText: { fontSize: Font.small },
@@ -311,4 +373,5 @@ const styles = StyleSheet.create({
   androidChatRow: { alignSelf: "stretch" },
   contextMenuAnchor: { position: "absolute", top: 32, right: 24, width: 1, height: 1 },
   contextMenuTarget: { width: 1, height: 1 },
+  fab: { position: "absolute", right: 16, zIndex: 10 },
 });

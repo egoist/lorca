@@ -116,6 +116,7 @@ export function Composer({
   const transcript = useRef("");
   const pendingSend = useRef(false);
   const inputRef = useRef<TextInput>(null);
+  const attachMenuRef = useRef<MenuComponentRef>(null);
   const dictationMenuRef = useRef<MenuComponentRef>(null);
   const { language, setting: dictationSetting } = useDictationLanguage();
   const dictationLanguages = useSupportedLanguages();
@@ -299,16 +300,25 @@ export function Composer({
     Platform.OS === "ios" ? (
       <AttachMenu key="plus" sources={sources} tint={p.fill} label={p.label} />
     ) : (
-      <MenuView
-        key="plus"
-        actions={sources.map((source, index) => ({ id: String(index), title: source.title, image: source.androidIcon }))}
-        onPressAction={({ nativeEvent }) => sources[Number(nativeEvent.event)]?.run()}
-        style={styles.androidDiscHost}
-      >
-        <View style={[styles.disc, styles.androidDisc, { backgroundColor: p.fill }]} accessible accessibilityRole="button" accessibilityLabel={t("Attach")}>
+      <View key="plus" style={styles.androidDiscHost}>
+        <Pressable
+          onPress={() => attachMenuRef.current?.show()}
+          style={({ pressed }) => [styles.disc, styles.androidDisc, { backgroundColor: p.fill, opacity: pressed ? 0.7 : 1 }]}
+          accessibilityRole="button"
+          accessibilityLabel={t("Attach")}
+        >
           <Symbol name="plus" size={18} color={p.label} weight="medium" />
-        </View>
-      </MenuView>
+        </Pressable>
+        <MenuView
+          ref={attachMenuRef}
+          actions={sources.map((source, index) => ({ id: String(index), title: source.title, image: source.androidIcon }))}
+          style={styles.attachMenuAnchor}
+          onOpenMenu={() => void Haptics.selectionAsync()}
+          onPressAction={({ nativeEvent }) => sources[Number(nativeEvent.event)]?.run()}
+        >
+          <View style={styles.menuAnchorTarget} accessible={false} />
+        </MenuView>
+      </View>
     );
 
   const recording = (
@@ -504,6 +514,8 @@ const styles = StyleSheet.create({
   disc: { width: DISC, height: DISC, borderRadius: DISC / 2, alignItems: "center", justifyContent: "center", overflow: "hidden" },
   androidDisc: { width: DISC - 1, height: DISC - 1, borderRadius: (DISC - 1) / 2 },
   androidDiscHost: { width: DISC + 1, height: DISC + 1, alignItems: "center", justifyContent: "center" },
+  attachMenuAnchor: { position: "absolute", top: 0, left: 0, width: 1, height: 1 },
+  menuAnchorTarget: { width: 1, height: 1 },
   chips: { paddingHorizontal: 12, paddingBottom: 8, gap: 8 },
   chip: { flexDirection: "row", alignItems: "center", gap: 6, paddingLeft: 4, paddingRight: 10, paddingVertical: 4, borderRadius: 14 },
   chipText: { fontSize: 14, fontWeight: "500" },

@@ -43,6 +43,7 @@ export const zh: Record<string, string> = {
   "Auto-review": "自动审查",
   "Auto-review: {reason}": "自动审查:{reason}",
   "Automatic ({language})": "自动（{language}）",
+  "Back": "返回",
   "Base URL": "API 基础地址",
   "Bot": "智能体",
   "Bots assigned here": "分配到此设备的智能体",

@@ -13,6 +13,7 @@ const ANDROID: Record<string, string> = {
   gearshape: "settings",
   "square.and.pencil": "edit_square",
   "info.circle": "info",
+  "arrow.left": "arrow_back",
   "arrow.up": "arrow_upward",
   "stop.fill": "stop",
   "pin.fill": "push_pin",

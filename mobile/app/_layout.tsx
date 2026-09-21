@@ -80,7 +80,10 @@ export default function RootLayout() {
           >
             <Stack.Protected guard={paired}>
               <Stack.Screen name="index" options={{ title: t("Chats"), headerTitle: Platform.OS === "ios" ? "" : "Lorca", headerLargeTitle: false, headerShadowVisible: false, headerTransparent: Platform.OS === "ios" }} />
-              <Stack.Screen name="chat/[id]" options={{ headerTransparent: Platform.OS === "ios" }} />
+              <Stack.Screen
+                name="chat/[id]"
+                options={Platform.OS === "android" ? { headerShown: false } : { headerTransparent: true, headerShadowVisible: false, headerTitleAlign: "center" }}
+              />
               <Stack.Screen name="chat-info" options={Platform.OS === "android" ? nestedSheet : { ...nestedSheet, sheetAllowedDetents: [0.7, 1], sheetGrabberVisible: true }} />
               <Stack.Screen name="message/[id]" options={Platform.OS === "android" ? sheet : { ...sheet, sheetAllowedDetents: [0.5, 1], sheetGrabberVisible: true }} />
               <Stack.Screen name="new-bot" options={sheet} />

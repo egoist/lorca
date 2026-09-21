@@ -1,4 +1,5 @@
 import { FlashList, type FlashListRef } from "@shopify/flash-list";
+import { LinearGradient } from "expo-linear-gradient";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useHeaderHeight } from "expo-router/react-navigation";
 import {
@@ -50,7 +51,6 @@ import { AvatarCluster } from "../../src/ui/Avatar";
 import { Composer, Surface } from "../../src/ui/Composer";
 import { Symbol } from "../../src/ui/Symbol";
 import { usePalette } from "../../src/ui/theme";
-import { AndroidIcons } from "../../src/ui/navigation";
 import {
   buildRows,
   DayRow,
@@ -70,6 +70,8 @@ const FOCUS_GROWTH_GUESS = 36;
 /// How far from the end the transcript is scrolled before the jump-to-bottom disc shows.
 const JUMP_DISTANCE = 160;
 const JUMP_DISC = 36;
+const ANDROID_BAR_HEIGHT = 56;
+const ANDROID_FADE_HEIGHT = 24;
 
 export default function ChatScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -77,6 +79,9 @@ export default function ChatScreen() {
   const p = usePalette();
   const insets = useSafeAreaInsets();
   const headerHeight = useHeaderHeight();
+  const visibleHeaderHeight = Platform.OS === "android" ? insets.top + ANDROID_BAR_HEIGHT : headerHeight;
+  const androidHeaderHeight = visibleHeaderHeight + ANDROID_FADE_HEIGHT;
+  const androidHeaderStop = visibleHeaderHeight / androidHeaderHeight;
   const chat = useChat(id);
   const bots = useBotMap();
   const workingBotIds = useWorkingBots(id);
@@ -418,8 +423,8 @@ export default function ChatScreen() {
     syncInsetTop();
     pinToBottom();
   }, [anchored, headerHeight, insetTop, pinToBottom, syncInsetTop, unconfirm]);
-  // The transcript runs under the transparent header on iOS, so it starts below it. The insets
-  // are explicit rather than iOS's automatic ones: the automatic behavior would add the home
+  // The transcript runs under the transparent header on both platforms. On iOS the insets are
+  // explicit rather than automatic: the automatic behavior would add the home
   // indicator's safe area under the composer's inset, which already covers it, leaving a strip
   // of dead scroll past the last message that the native scroll-to-end never reaches.
   const ChatScroll = useMemo(
@@ -555,28 +560,59 @@ export default function ChatScreen() {
   return (
     <View style={{ flex: 1, backgroundColor: p.background }}>
       <Stack.Screen options={{ title }} />
-      <Stack.Title asChild>
-        <Pressable
-          onPress={() => router.push(`/chat-info/${id}`)}
-          style={styles.titleView}
-          accessibilityLabel={t("{title}, info", { title })}
-        >
-          <AvatarCluster bots={members} size={30} working={isWorking} />
-          <Text
-            style={[styles.titleText, { color: p.label }]}
-            numberOfLines={1}
-          >
-            {title}
-          </Text>
-        </Pressable>
-      </Stack.Title>
-      <Stack.Toolbar placement="right">
-        <Stack.Toolbar.Button
-          icon={Platform.OS === "android" ? AndroidIcons.more : "ellipsis"}
-          accessibilityLabel={t("Chat info")}
-          onPress={() => router.push(`/chat-info/${id}`)}
-        />
-      </Stack.Toolbar>
+      {Platform.OS === "ios" ? (
+        <>
+          <Stack.Title asChild>
+            <Pressable
+              onPress={() => router.push(`/chat-info/${id}`)}
+              style={styles.titleView}
+              accessibilityLabel={t("{title}, info", { title })}
+            >
+              <AvatarCluster bots={members} size={30} working={isWorking} />
+              <Text style={[styles.titleText, { color: p.label }]} numberOfLines={1}>
+                {title}
+              </Text>
+            </Pressable>
+          </Stack.Title>
+          <Stack.Toolbar placement="right">
+            <Stack.Toolbar.Button icon="ellipsis" accessibilityLabel={t("Chat info")} onPress={() => router.push(`/chat-info/${id}`)} />
+          </Stack.Toolbar>
+        </>
+      ) : (
+        <View pointerEvents="box-none" style={[styles.androidHeader, { height: androidHeaderHeight }]}>
+          <LinearGradient
+            pointerEvents="none"
+            colors={
+              p.dark
+                ? ["rgba(10,10,12,0.97)", "rgba(10,10,12,0.86)", "rgba(10,10,12,0.68)", "rgba(10,10,12,0)"]
+                : ["rgba(255,255,255,0.97)", "rgba(255,255,255,0.86)", "rgba(255,255,255,0.68)", "rgba(255,255,255,0)"]
+            }
+            locations={[0, androidHeaderStop * 0.55, androidHeaderStop, 1]}
+            start={{ x: 0.5, y: 0 }}
+            end={{ x: 0.5, y: 1 }}
+            style={StyleSheet.absoluteFill}
+          />
+          <View style={[styles.androidHeaderControls, { height: visibleHeaderHeight, paddingTop: insets.top }]}>
+            <Pressable onPress={() => router.back()} style={styles.androidHeaderButton} accessibilityRole="button" accessibilityLabel={t("Back")}>
+              <Symbol name="arrow.left" size={26} color={p.label} />
+            </Pressable>
+            <Pressable
+              onPress={() => router.push(`/chat-info/${id}`)}
+              style={styles.androidHeaderTitle}
+              accessibilityRole="button"
+              accessibilityLabel={t("{title}, info", { title })}
+            >
+              <AvatarCluster bots={members} size={30} working={isWorking} />
+              <Text style={[styles.titleText, { color: p.label }]} numberOfLines={1}>
+                {title}
+              </Text>
+            </Pressable>
+            <Pressable onPress={() => router.push(`/chat-info/${id}`)} style={styles.androidHeaderButton} accessibilityRole="button" accessibilityLabel={t("Chat info")}>
+              <Symbol name="ellipsis" size={24} color={p.label} />
+            </Pressable>
+          </View>
+        </View>
+      )}
       <View style={{ flex: 1 }}>
         <View
           style={{ flex: 1, opacity: revealed ? 1 : 0 }}
@@ -604,7 +640,9 @@ export default function ChatScreen() {
             keyboardDismissMode="interactive"
             maintainVisibleContentPosition={maintainVisibleContentPosition}
             contentContainerStyle={{
-              paddingTop: Platform.OS === "ios" ? 0 : 8,
+              // Android's chat bar is transparent too: the first rows begin below it, then
+              // naturally scroll beneath it. UIKit gets the same spacing from contentInset.
+              paddingTop: Platform.OS === "ios" ? 0 : visibleHeaderHeight + 8,
             }}
             onLoad={() => {
               loaded.current = true;
@@ -713,6 +751,10 @@ export default function ChatScreen() {
 
 const styles = StyleSheet.create({
   missing: { flex: 1, alignItems: "center", justifyContent: "center" },
+  androidHeader: { position: "absolute", top: 0, left: 0, right: 0, zIndex: 100 },
+  androidHeaderControls: { flexDirection: "row", alignItems: "center", paddingHorizontal: 12 },
+  androidHeaderButton: { width: 48, height: ANDROID_BAR_HEIGHT, alignItems: "center", justifyContent: "center" },
+  androidHeaderTitle: { flex: 1, height: ANDROID_BAR_HEIGHT, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingHorizontal: 8 },
   composer: { position: "absolute", left: 0, right: 0, bottom: 0 },
   jump: { position: "absolute", right: 12 },
   jumpDisc: {
