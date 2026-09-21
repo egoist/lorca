@@ -39,5 +39,25 @@ class LorcaCoreModule : Module() {
     Function("wake") {
       core?.wake()
     }
+
+    // The chat on screen, or null. While the app is in front PushService posts nothing for
+    // it, and whatever it posted for it has now been seen.
+    Function("setOpenChat") { chatId: String? ->
+      PushService.openChat = chatId
+      if (chatId != null && PushService.inFront) clearPosted(chatId)
+    }
+
+    OnActivityEntersForeground {
+      PushService.inFront = true
+      PushService.openChat?.let { clearPosted(it) }
+    }
+
+    OnActivityEntersBackground {
+      PushService.inFront = false
+    }
+  }
+
+  private fun clearPosted(chatId: String) {
+    appContext.reactContext?.let { PushService.clear(it, chatId) }
   }
 }

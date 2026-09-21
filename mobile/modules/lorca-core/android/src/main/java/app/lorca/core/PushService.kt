@@ -3,6 +3,7 @@ package app.lorca.core
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import androidx.core.app.NotificationCompat
@@ -21,6 +22,8 @@ class PushService : FirebaseMessagingService() {
     val development = packageName == "app.lorca.dev"
     val home = File(filesDir, "${if (development) "lorca-dev" else "lorca"}/core").absolutePath
     val notice = try { pushOpen(home, sealed) } catch (_: Throwable) { null }
+    // The user is looking at that chat: the reply is arriving in front of them.
+    if (notice != null && inFront && notice.chatId == openChat) return
 
     val manager = getSystemService(NotificationManager::class.java)
     manager.createNotificationChannel(NotificationChannel(CHANNEL, "Replies", NotificationManager.IMPORTANCE_HIGH))
@@ -48,7 +51,22 @@ class PushService : FirebaseMessagingService() {
   // The app registers the current token with the relay each time it starts (src/core/push.ts).
   override fun onNewToken(token: String) {}
 
-  private companion object {
-    const val CHANNEL = "replies"
+  companion object {
+    private const val CHANNEL = "replies"
+
+    /// The chat on screen, or null: the JS side keeps it current through the module's
+    /// `setOpenChat`.
+    @Volatile var openChat: String? = null
+
+    /// Whether the app is in front. The module follows the host's resume and pause here
+    /// rather than through JS: a push can land a moment after the user leaves, while the JS
+    /// thread is still busy with the reply that came with it.
+    @Volatile var inFront = false
+
+    /// Takes down what was posted for a chat; each notification is tagged with its chat.
+    fun clear(context: Context, chatId: String) {
+      val manager = context.getSystemService(NotificationManager::class.java)
+      manager.activeNotifications.filter { it.tag == chatId }.forEach { manager.cancel(it.tag, it.id) }
+    }
   }
 }

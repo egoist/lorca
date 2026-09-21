@@ -40,6 +40,8 @@ export default (): ExpoConfig => {
     },
     android: {
       package: appId,
+      // Firebase project lorca-a03db, with a client for app.lorca and app.lorca.dev: FCM tokens for pushes.
+      googleServicesFile: "./google-services.json",
       adaptiveIcon: {
         backgroundColor: adaptiveIconBackgroundColor,
         foregroundImage: icon,

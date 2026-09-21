@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "811477850883",
+    "project_id": "lorca-a03db",
+    "storage_bucket": "lorca-a03db.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:811477850883:android:2a814e98c69bd6a082e736",
+        "android_client_info": {
+          "package_name": "app.lorca"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDTzQCkhZ0LnpVCRQTbdUaeeshhyA_Cggc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:811477850883:android:13caa508a480128f82e736",
+        "android_client_info": {
+          "package_name": "app.lorca.dev"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDTzQCkhZ0LnpVCRQTbdUaeeshhyA_Cggc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

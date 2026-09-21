@@ -6,6 +6,8 @@ interface Native {
   start(home: string, name: string, os: string, osVersion: string, model: string): void;
   request(method: string, params: string): Promise<string>;
   wake(): void;
+  /// Android only.
+  setOpenChat?(chatId: string | null): void;
   addListener(event: "event", listener: (payload: { json: string }) => void): EventSubscription;
 }
 
@@ -44,4 +46,10 @@ export function onEvent(listener: (frame: Frame) => void): () => void {
 /// The app came to the foreground: sync now rather than after the backoff.
 export function wake() {
   native.wake();
+}
+
+/// Android: the chat on screen, or null. While the app is in front, the native push service
+/// posts nothing for it and clears what it posted for it. iOS asks the notification handler.
+export function setOpenChat(chatId: string | null) {
+  native.setOpenChat?.(chatId);
 }

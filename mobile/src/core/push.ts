@@ -37,6 +37,22 @@ export function installPushHandlers() {
   };
   Notifications.addNotificationResponseReceivedListener(open);
   open(Notifications.getLastNotificationResponse());
+  if (Platform.OS === "android") watchChats();
+}
+
+/// Android posts its own notifications (PushService), so the handler above never sees them.
+/// The native side is told which chat is on screen instead, and it knows when the app is in
+/// front: it posts nothing for that chat then and takes down what it posted for it.
+function watchChats() {
+  let told: string | null | undefined;
+  const update = () => {
+    const chatId = useStore.getState().openChatId;
+    if (chatId === told) return;
+    told = chatId;
+    core.setOpenChat(chatId);
+  };
+  useStore.subscribe(update);
+  update();
 }
 
 /// Asks for permission the first time and registers this phone's token with the relay. Safe
