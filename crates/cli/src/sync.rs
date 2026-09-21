@@ -202,14 +202,30 @@ pub async fn ensure_registered(app: &Arc<App>, url: &str) -> Result<(), RelayErr
         .ok_or_else(|| RelayError { status: None, message: "this Device is not registered and holds no identity key".into() })?;
     let machine = app.machine_file().and_then(|m| m.machine().ok()).ok_or_else(|| RelayError { status: None, message: "no machine".into() })?;
     app.relay.register(url, &identity, &machine.pubkey(), &machine.box_pubkey()).await?;
-    if let Some(file) = app.machine.lock().unwrap().as_mut() {
-        file.registered = true;
-    }
+    let again = app.machine.lock().unwrap().as_mut().is_some_and(|file| std::mem::replace(&mut file.registered, true));
     // A relay that had to be told about this machine has none of its blobs either.
     {
         let mut state = app.state.lock().unwrap();
         state.machine_blob_hash = None;
         state.credentials_uploaded = false;
+        if again {
+            // It numbers its log from one, so the place held in the old log means nothing.
+            state.last_seq = 0;
+        }
+    }
+    // A relay that knew this machine before and lost the account (a reset, or the identity
+    // dropped for inactivity) gets back what a Device pairing or restoring needs: the DEK
+    // sealed to the content key, and the roster. Messages stay on the Devices that have them.
+    if again {
+        if let Some(dek) = app.dek() {
+            match crate::crypto::seal(&identity.content_pubkey(), &dek) {
+                Ok(sealed) => {
+                    app.push_blob("key", None, sealed);
+                }
+                Err(error) => tracing::error!(%error, "sealing the account key"),
+            }
+        }
+        app.push_roster();
     }
     app.save_machine().map_err(|e| RelayError { status: None, message: e.to_string() })?;
     Ok(())

@@ -424,7 +424,7 @@ impl Store for Postgres {
         Ok(true)
     }
 
-    async fn delete_identity(&self, identity_pubkey: &str) -> ApiResult<DeletedIdentity> {
+    async fn delete_identity(&self, identity_pubkey: &str, revoke: bool) -> ApiResult<DeletedIdentity> {
         let mut client = self.client().await?;
         let tx = client.transaction().await?;
         lock_identity(&tx, identity_pubkey).await?;
@@ -432,13 +432,15 @@ impl Store for Postgres {
             tx.query("SELECT machine_pubkey FROM machines WHERE identity_pubkey = $1", &[&identity_pubkey]).await?.iter().map(|row| row.get(0)).collect();
         let files: Vec<String> =
             tx.query("SELECT id FROM blobs WHERE identity_pubkey = $1 AND kind = 'file'", &[&identity_pubkey]).await?.iter().map(|row| row.get(0)).collect();
-        tx.execute(
-            "INSERT INTO revoked_machines (machine_pubkey, identity_pubkey, revoked_at)
-             SELECT machine_pubkey, identity_pubkey, $2 FROM machines WHERE identity_pubkey = $1
-             ON CONFLICT (machine_pubkey) DO UPDATE SET revoked_at = EXCLUDED.revoked_at",
-            &[&identity_pubkey, &now()],
-        )
-        .await?;
+        if revoke {
+            tx.execute(
+                "INSERT INTO revoked_machines (machine_pubkey, identity_pubkey, revoked_at)
+                 SELECT machine_pubkey, identity_pubkey, $2 FROM machines WHERE identity_pubkey = $1
+                 ON CONFLICT (machine_pubkey) DO UPDATE SET revoked_at = EXCLUDED.revoked_at",
+                &[&identity_pubkey, &now()],
+            )
+            .await?;
+        }
         tx.execute("DELETE FROM challenges WHERE machine_pubkey IN (SELECT machine_pubkey FROM machines WHERE identity_pubkey = $1)", &[&identity_pubkey]).await?;
         for table in ["push_tokens", "pairings", "blobs", "deleted_groups", "sequences", "usage", "machines"] {
             tx.execute(&format!("DELETE FROM {table} WHERE identity_pubkey = $1"), &[&identity_pubkey]).await?;
@@ -446,6 +448,39 @@ impl Store for Postgres {
         tx.execute("DELETE FROM identities WHERE pubkey = $1", &[&identity_pubkey]).await?;
         tx.commit().await?;
         Ok(DeletedIdentity { machines, files })
+    }
+
+    async fn inactive_identities(&self, before: i64) -> ApiResult<Vec<String>> {
+        // A machine that never dropped its socket has an old `last_seen` and is here now.
+        let rows = self
+            .client()
+            .await?
+            .query(
+                "SELECT pubkey FROM identities i WHERE created_at < $1
+                   AND NOT EXISTS (SELECT 1 FROM machines m WHERE m.identity_pubkey = i.pubkey AND m.last_seen >= $1)
+                   AND NOT EXISTS (SELECT 1 FROM blobs b WHERE b.identity_pubkey = i.pubkey AND b.created_at >= $1)
+                   AND NOT EXISTS (SELECT 1 FROM relay_sockets s WHERE s.identity_pubkey = i.pubkey)",
+                &[&before],
+            )
+            .await?;
+        Ok(rows.iter().map(|row| row.get(0)).collect())
+    }
+
+    async fn recount_usage(&self) -> ApiResult<u64> {
+        const ACTUAL: &str = "(SELECT COALESCE(SUM(size), 0)::BIGINT FROM blobs WHERE blobs.identity_pubkey = usage.identity_pubkey)";
+        let mut client = self.client().await?;
+        // Found without a lock, so a write in flight may show up here; each is settled under
+        // the identity's lock, where the comparison is exact.
+        let suspects = client.query(&format!("SELECT identity_pubkey FROM usage WHERE bytes <> {ACTUAL}"), &[]).await?;
+        let mut corrected = 0;
+        for row in suspects {
+            let identity: String = row.get(0);
+            let tx = client.transaction().await?;
+            lock_identity(&tx, &identity).await?;
+            corrected += tx.execute(&format!("UPDATE usage SET bytes = {ACTUAL} WHERE identity_pubkey = $1 AND bytes <> {ACTUAL}"), &[&identity]).await?;
+            tx.commit().await?;
+        }
+        Ok(corrected)
     }
 
     async fn orphans(&self, files: &[(String, String)]) -> ApiResult<Vec<(String, String)>> {

@@ -236,9 +236,16 @@ pub trait Store: Send + Sync {
     /// the envelopes sealed to it go with it. False when the identity has no such machine.
     async fn revoke_machine(&self, identity_pubkey: &str, machine_pubkey: &str) -> ApiResult<bool>;
     async fn revoked_machines(&self) -> ApiResult<Vec<String>>;
-    /// Deletes the identity and everything the relay holds for it. Its machines' keys are
-    /// remembered as revoked, so every Device gets `410` and forgets the identity.
-    async fn delete_identity(&self, identity_pubkey: &str) -> ApiResult<DeletedIdentity>;
+    /// Deletes the identity and everything the relay holds for it. With `revoke` its machines'
+    /// keys are remembered as revoked, so every Device gets `410` and forgets the identity;
+    /// without, a Device that comes back registers again and keeps what it has.
+    async fn delete_identity(&self, identity_pubkey: &str, revoke: bool) -> ApiResult<DeletedIdentity>;
+    /// Identities with no sign of life since `before`: registered earlier, every machine last
+    /// seen earlier, the newest blob older, and no socket open now.
+    async fn inactive_identities(&self, before: i64) -> ApiResult<Vec<String>>;
+    /// Sets `usage` to what the blobs add up to wherever the two disagree; returns how many
+    /// identities that was.
+    async fn recount_usage(&self) -> ApiResult<u64>;
 
     // Blobs
 

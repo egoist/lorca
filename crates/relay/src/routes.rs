@@ -247,17 +247,7 @@ async fn revoke_machine(State(state): State<AppState>, auth: Auth, Path(machine_
 /// Any paired machine may ask, as any may unpair the others. Every Device's token dies and
 /// its socket closes; the `410` it gets next makes it forget the identity.
 async fn delete_identity(State(state): State<AppState>, auth: Auth) -> ApiResult<StatusCode> {
-    let deleted = state.db.delete_identity(&auth.identity_pubkey).await?;
-    for machine in deleted.machines {
-        state.db.publish(db::Event::Revoked { identity: auth.identity_pubkey.clone(), machine }).await;
-    }
-    for id in deleted.files {
-        // The rows are gone either way; a leftover object is logged, not surfaced.
-        let key = crate::store::key(&auth.identity_pubkey, &id);
-        if let Err(error) = state.file_store.delete(&key).await {
-            tracing::warn!(?error, key, "deleting a file object");
-        }
-    }
+    crate::sweep::delete_identity(state.db.as_ref(), &state.file_store, &auth.identity_pubkey, true).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -367,10 +357,15 @@ async fn put_blob(State(state): State<AppState>, auth: Auth, Json(body): Json<Pu
 async fn load_files(state: &AppState, identity_pubkey: &str, rows: &mut [db::BlobRow]) -> ApiResult<()> {
     for row in rows.iter_mut().filter(|row| row.in_file_store()) {
         let key = crate::store::key(identity_pubkey, &row.id);
-        row.ciphertext = state.file_store.get(&key).await?.ok_or_else(|| {
-            tracing::error!(key, "file blob's object is missing");
-            ApiError::internal("File object missing")
-        })?;
+        match state.file_store.get(&key).await? {
+            Some(bytes) => row.ciphertext = bytes,
+            // The row stays: a relay pointed at the wrong bucket would otherwise forget every
+            // attachment it was asked for. `/metrics` counts these.
+            None => {
+                crate::metrics::METRICS.missing_objects.add(1);
+                tracing::error!(key, "file blob's object is missing");
+            }
+        }
     }
     Ok(())
 }
@@ -496,6 +491,11 @@ async fn get_blob(State(state): State<AppState>, auth: Auth, Path(id): Path<Stri
     let mut rows = [row];
     load_files(&state, &auth.identity_pubkey, &mut rows).await?;
     let [row] = rows;
+    // A file whose object is gone will not come back: `404` is final to a Device, where an
+    // error would have it ask again for good.
+    if row.in_file_store() && row.ciphertext.is_empty() {
+        return Err(ApiError::not_found("The file is no longer stored"));
+    }
     Ok(Json(BlobOut::from(row)))
 }
 

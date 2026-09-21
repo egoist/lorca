@@ -322,7 +322,7 @@ pub fn revoke_machine(connection: &mut Connection, identity_pubkey: &str, machin
 
 /// Deletes the identity and every row it owns. The machines' keys stay in `revoked_machines`,
 /// so their tokens die and a Device that still holds its attestation gets `410`.
-pub fn delete_identity(connection: &mut Connection, identity_pubkey: &str) -> rusqlite::Result<DeletedIdentity> {
+pub fn delete_identity(connection: &mut Connection, identity_pubkey: &str, revoke: bool) -> rusqlite::Result<DeletedIdentity> {
     let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let machines: Vec<String> = tx
         .prepare_cached("SELECT machine_pubkey FROM machines WHERE identity_pubkey = ?1")?
@@ -332,11 +332,13 @@ pub fn delete_identity(connection: &mut Connection, identity_pubkey: &str) -> ru
         .prepare_cached("SELECT id FROM blobs WHERE identity_pubkey = ?1 AND kind = 'file'")?
         .query_map(params![identity_pubkey], |row| row.get(0))?
         .collect::<rusqlite::Result<_>>()?;
-    tx.prepare_cached(
-        "INSERT OR REPLACE INTO revoked_machines (machine_pubkey, identity_pubkey, revoked_at)
-         SELECT machine_pubkey, identity_pubkey, ?2 FROM machines WHERE identity_pubkey = ?1",
-    )?
-    .execute(params![identity_pubkey, now()])?;
+    if revoke {
+        tx.prepare_cached(
+            "INSERT OR REPLACE INTO revoked_machines (machine_pubkey, identity_pubkey, revoked_at)
+             SELECT machine_pubkey, identity_pubkey, ?2 FROM machines WHERE identity_pubkey = ?1",
+        )?
+        .execute(params![identity_pubkey, now()])?;
+    }
     tx.prepare_cached("DELETE FROM challenges WHERE machine_pubkey IN (SELECT machine_pubkey FROM machines WHERE identity_pubkey = ?1)")?
         .execute(params![identity_pubkey])?;
     for table in ["push_tokens", "pairings", "blobs", "deleted_groups", "sequences", "usage", "machines"] {
@@ -689,6 +691,23 @@ pub fn sweep(connection: &mut Connection, sealed_before: i64, groups_before: i64
     Ok(gone as u64)
 }
 
+/// Identities nothing has touched since `before`. The caller leaves out the ones online.
+pub fn inactive_identities(connection: &Connection, before: i64) -> rusqlite::Result<Vec<String>> {
+    connection
+        .prepare(
+            "SELECT pubkey FROM identities i WHERE created_at < ?1
+               AND NOT EXISTS (SELECT 1 FROM machines m WHERE m.identity_pubkey = i.pubkey AND m.last_seen >= ?1)
+               AND NOT EXISTS (SELECT 1 FROM blobs b WHERE b.identity_pubkey = i.pubkey AND b.created_at >= ?1)",
+        )?
+        .query_map(params![before], |row| row.get(0))?
+        .collect()
+}
+
+pub fn recount_usage(connection: &Connection) -> rusqlite::Result<u64> {
+    const ACTUAL: &str = "(SELECT COALESCE(SUM(size), 0) FROM blobs WHERE blobs.identity_pubkey = usage.identity_pubkey)";
+    Ok(connection.execute(&format!("UPDATE usage SET bytes = {ACTUAL} WHERE bytes != {ACTUAL}"), [])? as u64)
+}
+
 pub fn stats(connection: &Connection) -> rusqlite::Result<Stats> {
     let count = |sql: &str| connection.query_row(sql, [], |row| row.get::<_, i64>(0));
     let seen_since = |seconds: i64| connection.query_row("SELECT COUNT(*) FROM machines WHERE last_seen > ?1", params![now() - seconds], |row| row.get::<_, i64>(0));
@@ -806,9 +825,19 @@ impl Store for Sqlite {
         self.write(move |db| insert_blob(db, &blob, quota_bytes)).await
     }
 
-    async fn delete_identity(&self, identity_pubkey: &str) -> ApiResult<DeletedIdentity> {
+    async fn delete_identity(&self, identity_pubkey: &str, revoke: bool) -> ApiResult<DeletedIdentity> {
         let identity_pubkey = identity_pubkey.to_string();
-        self.write(move |db| Ok(delete_identity(db, &identity_pubkey)?)).await
+        self.write(move |db| Ok(delete_identity(db, &identity_pubkey, revoke)?)).await
+    }
+
+    async fn inactive_identities(&self, before: i64) -> ApiResult<Vec<String>> {
+        let identities = self.read(move |db| Ok(inactive_identities(db, before)?)).await?;
+        // A machine that never dropped its socket has an old `last_seen` and is here now.
+        Ok(identities.into_iter().filter(|identity| self.local.hub.online(identity).is_empty()).collect())
+    }
+
+    async fn recount_usage(&self) -> ApiResult<u64> {
+        self.write(|db| Ok(recount_usage(db)?)).await
     }
 
     async fn orphans(&self, files: &[(String, String)]) -> ApiResult<Vec<(String, String)>> {

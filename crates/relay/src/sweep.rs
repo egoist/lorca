@@ -1,11 +1,12 @@
-//! Hourly housekeeping beyond `Store::tick`: sealed envelopes nobody consumed, the marks of
-//! groups deleted long ago, and, once a day, file objects whose row is gone (a delete the file
-//! store refused, a relay that stopped between an upload and its row).
+//! Hourly housekeeping beyond `Store::tick`: sealed envelopes nobody consumed and the marks of
+//! groups deleted long ago. Once a day: identities nothing has touched in `--inactive-days`,
+//! `usage` rows that drifted from what the blobs add up to, and file objects whose row is gone
+//! (a delete the file store refused, a relay that stopped between an upload and its row).
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::db::{now, Store};
+use crate::db::{now, Event, Store};
 use crate::metrics::METRICS;
 use crate::routes::{valid_id, ApiResult};
 use crate::store::{self, FileStore};
@@ -17,7 +18,7 @@ const DELETED_GROUP_TTL: i64 = 180 * 86_400;
 /// An object goes up before its row, so a young one may only be early.
 const ORPHAN_AGE: i64 = 86_400;
 
-pub fn spawn(db: Arc<dyn Store>, files: Arc<FileStore>) {
+pub fn spawn(db: Arc<dyn Store>, files: Arc<FileStore>, inactive_days: u32) {
     tokio::spawn(async move {
         let mut hourly = tokio::time::interval_at(tokio::time::Instant::now() + Duration::from_secs(600), Duration::from_secs(3600));
         for hour in 0u64.. {
@@ -36,6 +37,27 @@ pub fn spawn(db: Arc<dyn Store>, files: Arc<FileStore>) {
                 }
             }
             if hour % 24 == 0 {
+                if inactive_days > 0 {
+                    match inactive(db.as_ref(), &files, now() - i64::from(inactive_days) * 86_400).await {
+                        Ok(0) => {}
+                        Ok(identities) => tracing::info!(identities, inactive_days, "deleted inactive identities"),
+                        Err(error) => {
+                            METRICS.sweep_failures.add(1);
+                            tracing::warn!(?error, "sweeping inactive identities");
+                        }
+                    }
+                }
+                match db.recount_usage().await {
+                    Ok(0) => {}
+                    Ok(identities) => {
+                        METRICS.usage_corrected.add(identities);
+                        tracing::warn!(identities, "usage had drifted from the stored blobs; corrected");
+                    }
+                    Err(error) => {
+                        METRICS.sweep_failures.add(1);
+                        tracing::warn!(?error, "recounting usage");
+                    }
+                }
                 match orphans(db.as_ref(), &files, now() - ORPHAN_AGE).await {
                     Ok((seen, removed)) => {
                         METRICS.file_objects.set(seen as u64);
@@ -53,6 +75,36 @@ pub fn spawn(db: Arc<dyn Store>, files: Arc<FileStore>) {
             }
         }
     });
+}
+
+/// Deletes an identity's rows and then its `file` objects. With `revoke` its Devices are
+/// thrown out and forget it (the account was deleted); without, its keys stay good, so a
+/// Device that comes back registers again with what it holds.
+pub async fn delete_identity(db: &dyn Store, files: &FileStore, identity: &str, revoke: bool) -> ApiResult<()> {
+    let deleted = db.delete_identity(identity, revoke).await?;
+    if revoke {
+        for machine in deleted.machines {
+            db.publish(Event::Revoked { identity: identity.to_string(), machine }).await;
+        }
+    }
+    for id in deleted.files {
+        // The rows are gone either way; a leftover object is logged, not surfaced.
+        let key = store::key(identity, &id);
+        if let Err(error) = files.delete(&key).await {
+            tracing::warn!(?error, key, "deleting a file object");
+        }
+    }
+    Ok(())
+}
+
+/// Deletes the identities with no sign of life since `before`. Returns how many went.
+pub async fn inactive(db: &dyn Store, files: &FileStore, before: i64) -> ApiResult<usize> {
+    let identities = db.inactive_identities(before).await?;
+    for identity in &identities {
+        delete_identity(db, files, identity, false).await?;
+        METRICS.swept_identities.add(1);
+    }
+    Ok(identities.len())
 }
 
 /// Removes the objects written before `before` that have no row. Returns how many objects

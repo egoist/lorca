@@ -37,6 +37,12 @@ A pairing code carries a one-time public key. The new device sends its keys seal
 
 Unpairing a device makes the relay refuse its key for good. The device deletes its keys, credentials, and chats the next time it connects.
 
+## Deleting your account
+
+**Settings › Advanced › Delete Account** on the Mac removes everything the relay holds for the account (chats, attachments, bots, provider credentials) and unpairs every device, which then deletes its own copy.
+
+A relay also lets go of an account nothing has touched for a year: no device connected, nothing synced. Your devices keep what they have, and the first one that comes back registers the account again.
+
 ## On your computer
 
 - Keys, credentials, and chats are files under `~/.lorca/`, readable only by your user.

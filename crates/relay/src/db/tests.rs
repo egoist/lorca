@@ -263,7 +263,7 @@ async fn a_deleted_identity_leaves_revoked_machines_and_nothing_else() {
         ok!(store.insert_blob(NewBlob { kind: "file".into(), payload: Payload::InFileStore { size: 9 }, ..blob(&who, "photo", b"") }, 0));
         ok!(store.insert_blob(blob(&other, "message", b"abc"), 0));
 
-        let deleted = ok!(store.delete_identity(&who));
+        let deleted = ok!(store.delete_identity(&who, true));
         let mut machines = deleted.machines.clone();
         machines.sort();
         let mut expected = vec![mac.clone(), phone.clone()];
@@ -300,6 +300,51 @@ async fn stats_count_what_is_stored() {
             // The other tests write to the shared database meanwhile.
             assert!(stats.identities >= 1 && stats.machines >= 1 && stats.active_machines[0] >= 1, "{stats:?}");
             assert!(of("chat").0 >= 1 && of("file") >= (1, 100) && stats.usage_bytes >= 103 && stats.largest_identity_bytes >= 103, "{stats:?}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn an_inactive_identity_is_one_nothing_touched() {
+    for (store, local) in backends().await {
+        let (idle, busy, online) = (name("identity"), name("identity"), name("identity"));
+        let (idle_mac, online_mac) = (name("machine"), name("machine"));
+        ok!(store.register_identity(&idle, "content", &idle_mac, "box", "attestation"));
+        ok!(store.register_identity(&busy, "content", &name("machine"), "box", "attestation"));
+        ok!(store.register_identity(&online, "content", &online_mac, "box", "attestation"));
+        ok!(store.insert_blob(blob(&idle, "message", b"abc"), 0));
+        let seat = local.hub.join(&online, &online_mac);
+        ok!(store.socket_opened(&online, &online_mac, seat.id, true));
+
+        // Everything here is seconds old: nobody is inactive as of a minute ago.
+        let inactive = ok!(store.inactive_identities(now() - 60));
+        assert!(![&idle, &busy, &online].iter().any(|who| inactive.contains(who)), "{}", store.describe());
+        // As of a moment from now all three are, but for the one with a socket open.
+        let inactive = ok!(store.inactive_identities(now() + 5));
+        assert!(inactive.contains(&idle) && inactive.contains(&busy) && !inactive.contains(&online), "{}", store.describe());
+
+        // Deleted without revoking: the same machine key registers again.
+        let deleted = ok!(store.delete_identity(&idle, false));
+        assert_eq!(deleted.machines, std::slice::from_ref(&idle_mac));
+        assert!(ids(&store, &idle, &idle_mac, 0, i64::MAX).await.is_empty());
+        assert!(!ok!(store.revoked_machines()).contains(&idle_mac));
+        ok!(store.register_identity(&idle, "content", &idle_mac, "box", "attestation"));
+        ok!(store.socket_closed(&online, &online_mac, seat.id, true));
+    }
+}
+
+#[tokio::test]
+async fn a_recount_leaves_honest_usage_alone() {
+    for (store, _) in backends().await {
+        let who = name("identity");
+        ok!(store.insert_blob(blob(&who, "a", b"abc"), 0));
+        ok!(store.insert_blob(blob(&who, "b", b"defgh"), 0));
+        ok!(store.delete_blob(&who, "a"));
+        ok!(store.recount_usage());
+        // Five bytes stored, before and after.
+        assert!(used(&store, &who, 1, 6).await && !used(&store, &who, 2, 6).await, "{}", store.describe());
+        if store.describe().starts_with("sqlite") {
+            assert_eq!(ok!(store.recount_usage()), 0);
         }
     }
 }

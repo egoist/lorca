@@ -53,6 +53,10 @@ pub struct Metrics {
     pub push_failed: [Counter; 2],
     pub swept_envelopes: Counter,
     pub swept_orphans: Counter,
+    pub swept_identities: Counter,
+    pub usage_corrected: Counter,
+    /// Reads of a `file` whose object the file store did not have.
+    pub missing_objects: Counter,
     pub sweep_failures: Counter,
     /// Objects the last file-store sweep listed, and when it and the hourly sweep last ran.
     pub file_objects: Counter,
@@ -70,6 +74,9 @@ pub static METRICS: Metrics = Metrics {
     push_failed: [Counter::new(), Counter::new()],
     swept_envelopes: Counter::new(),
     swept_orphans: Counter::new(),
+    swept_identities: Counter::new(),
+    usage_corrected: Counter::new(),
+    missing_objects: Counter::new(),
     sweep_failures: Counter::new(),
     file_objects: Counter::new(),
     file_sweep_at: Counter::new(),
@@ -215,6 +222,9 @@ fn render(stats: Option<&Stats>, sockets: usize, connected_identities: usize, in
 
     page.one("swept_envelopes_total", "counter", "Stale sealed envelopes the sweep dropped.", &here, METRICS.swept_envelopes.get());
     page.one("swept_orphans_total", "counter", "File objects with no row the sweep removed.", &here, METRICS.swept_orphans.get());
+    page.one("swept_identities_total", "counter", "Inactive identities the sweep deleted.", &here, METRICS.swept_identities.get());
+    page.one("usage_corrected_total", "counter", "Identities whose usage had drifted from their blobs.", &here, METRICS.usage_corrected.get());
+    page.one("missing_objects_total", "counter", "Reads of a file whose object the file store did not have.", &here, METRICS.missing_objects.get());
     page.one("sweep_failures_total", "counter", "Sweeps that ended in an error.", &here, METRICS.sweep_failures.get());
     page.one("file_objects", "gauge", "Objects the last file-store sweep listed.", &here, METRICS.file_objects.get());
     page.one("sweep_timestamp_seconds", "gauge", "When the hourly sweep last finished; 0 before the first.", &here, METRICS.sweep_at.get());

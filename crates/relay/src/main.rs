@@ -51,6 +51,12 @@ struct Args {
     #[usage(long, env = "LORCA_RELAY_IDENTITY_PER_SECOND", default = "50")]
     identity_per_second: u32,
 
+    /// Delete an identity after this many days with no sign of life: no machine seen, no blob
+    /// written, no socket open. Its Devices keep what they hold and register again if they
+    /// come back. 0 keeps every identity.
+    #[usage(long, env = "LORCA_RELAY_INACTIVE_DAYS", default = "365")]
+    inactive_days: u32,
+
     /// Serve `GET /metrics` (Prometheus text: counts, bytes, sockets, pushes, sweeps) to
     /// whoever sends this as a bearer token. Unset, the route does not exist.
     #[usage(long, env = "LORCA_RELAY_METRICS_TOKEN", hide_env_values = true)]
@@ -258,7 +264,7 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    sweep::spawn(db.clone(), file_store.clone());
+    sweep::spawn(db.clone(), file_store.clone(), args.inactive_days);
 
     let stopping = state.stopping.clone();
     let app = routes::router(state);
