@@ -348,3 +348,33 @@ async fn a_recount_leaves_honest_usage_alone() {
         }
     }
 }
+
+#[tokio::test]
+async fn a_group_pages_backwards_by_where_each_message_began() {
+    for (store, _) in backends().await {
+        let who = name("identity");
+        let message = |id: &str, slot_name: &str, bytes: &[u8]| NewBlob { group: Some("chat".into()), slot: slot(slot_name, true), ..blob(&who, id, bytes) };
+        ok!(store.insert_blob(message("a1", "a", b"a"), 0));
+        ok!(store.insert_blob(message("b1", "b", b"b"), 0));
+        ok!(store.insert_blob(NewBlob { kind: "file".into(), group: Some("chat".into()), payload: Payload::InFileStore { size: 9 }, ..blob(&who, "photo", b"") }, 0));
+        ok!(store.insert_blob(message("c1", "c", b"c"), 0));
+        ok!(store.insert_blob(NewBlob { group: Some("other".into()), ..blob(&who, "elsewhere", b"x") }, 0));
+        // `a` grows after `c` began: it keeps its place, first of the three.
+        ok!(store.insert_blob(message("a2", "a", b"aa"), 0));
+        ok!(store.insert_blob(message("a3", "a", b"aaa"), 0));
+        ok!(store.insert_blob(NewBlob { group: Some("chat".into()), slot: slot("read-chat", false), ..blob(&who, "read", b"r") }, 0));
+
+        let page = |slots: &[GroupSlot]| slots.iter().map(|slot| slot.blobs.iter().map(|row| row.id.clone()).collect::<Vec<_>>().join("+")).collect::<Vec<_>>();
+        let (newest, more) = ok!(store.group_page(&who, "chat", i64::MAX, 2, i64::MAX));
+        assert_eq!((page(&newest), more), (vec!["c1".to_string(), "read".into()], true), "{}", store.describe());
+        let (older, more) = ok!(store.group_page(&who, "chat", newest[0].place, 2, i64::MAX));
+        assert_eq!((page(&older), more), (vec!["a1+a3".to_string(), "b1".into()], false), "{}", store.describe());
+        assert!(older[0].place < older[1].place && older[1].place < newest[0].place);
+
+        // A byte budget ends the page early, and never at nothing.
+        let (tight, more) = ok!(store.group_page(&who, "chat", newest[0].place, 2, 1));
+        assert_eq!((page(&tight), more), (vec!["b1".to_string()], true), "{}", store.describe());
+        let (none, more) = ok!(store.group_page(&who, "nowhere", i64::MAX, 2, i64::MAX));
+        assert!(none.is_empty() && !more);
+    }
+}

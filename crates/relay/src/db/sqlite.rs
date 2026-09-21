@@ -11,7 +11,7 @@ use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, TransactionBehavior};
 use tokio::sync::Semaphore;
 
-use super::{blocking, now, sealed_kinds_sql, BlobRow, DeletedIdentity, Event, Inserted, Local, Machine, NewBlob, Payload, PushToken, Slot, Stats, Store};
+use super::{blocking, now, page_of_slots, sealed_kinds_sql, slots_with_rows, GroupSlot, BlobRow, DeletedIdentity, Event, Inserted, Local, Machine, NewBlob, Payload, PushToken, Slot, Stats, Store};
 use crate::routes::{ApiError, ApiResult};
 
 const SCHEMA: &str = "
@@ -545,6 +545,27 @@ pub fn delete_group(connection: &mut Connection, identity_pubkey: &str, group: &
     Ok(rows.into_iter().filter(|(_, kind, _)| kind == "file").map(|(id, _, _)| id).collect())
 }
 
+pub fn group_page(connection: &Connection, identity_pubkey: &str, group: &str, before: i64, limit: usize, max_bytes: i64) -> rusqlite::Result<(Vec<GroupSlot>, bool)> {
+    // Unsealed `chat` blobs only: a group's files are fetched by id, and nothing else is in one.
+    const IN_GROUP: &str = "identity_pubkey = ?1 AND group_id = ?2 AND kind = 'chat' AND recipient_machine_pubkey IS NULL";
+    let slots: Vec<(String, i64, i64)> = connection
+        .prepare_cached(&format!(
+            "SELECT COALESCE(slot, id), MIN(seq), SUM(size) FROM blobs WHERE {IN_GROUP}
+             GROUP BY 1 HAVING MIN(seq) < ?3 ORDER BY 2 DESC LIMIT ?4"
+        ))?
+        .query_map(params![identity_pubkey, group, before, limit as i64 + 1], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    let (chosen, has_more) = page_of_slots(slots, limit, max_bytes);
+    let marks: Vec<String> = (0..chosen.len()).map(|i| format!("?{}", i + 3)).collect();
+    let mut values: Vec<Value> = vec![identity_pubkey.to_string().into(), group.to_string().into()];
+    values.extend(chosen.iter().map(|(name, _)| Value::from(name.clone())));
+    let rows: Vec<(String, BlobRow)> = connection
+        .prepare(&format!("SELECT COALESCE(slot, id), {BLOB_COLUMNS} FROM blobs WHERE {IN_GROUP} AND COALESCE(slot, id) IN ({}) ORDER BY seq", marks.join(", ")))?
+        .query_map(params_from_iter(values), |row| Ok((row.get(0)?, blob_row_at(row, 1)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok((slots_with_rows(chosen, rows), has_more))
+}
+
 pub fn current_seq(connection: &Connection, identity_pubkey: &str) -> rusqlite::Result<i64> {
     Ok(connection
         .prepare_cached("SELECT seq FROM sequences WHERE identity_pubkey = ?1")?
@@ -860,6 +881,11 @@ impl Store for Sqlite {
             Ok((rows, current_seq(db, &identity_pubkey)?))
         })
         .await
+    }
+
+    async fn group_page(&self, identity_pubkey: &str, group: &str, before: i64, limit: usize, max_bytes: i64) -> ApiResult<(Vec<GroupSlot>, bool)> {
+        let (identity_pubkey, group) = (identity_pubkey.to_string(), group.to_string());
+        self.read(move |db| Ok(group_page(db, &identity_pubkey, &group, before, limit, max_bytes)?)).await
     }
 
     async fn blob(&self, identity_pubkey: &str, machine_pubkey: &str, id: &str) -> ApiResult<Option<BlobRow>> {

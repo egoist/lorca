@@ -16,7 +16,7 @@ use futures::StreamExt;
 use tokio_postgres::types::ToSql;
 use tokio_postgres::{AsyncMessage, Row, Transaction};
 
-use super::{now, sealed_kinds_sql, BlobRow, DeletedIdentity, Event, Inserted, Local, Machine, NewBlob, Payload, PushToken, Stats, Store};
+use super::{now, page_of_slots, sealed_kinds_sql, slots_with_rows, GroupSlot, BlobRow, DeletedIdentity, Event, Inserted, Local, Machine, NewBlob, Payload, PushToken, Stats, Store};
 use crate::routes::{ApiError, ApiResult};
 
 const CHANNEL: &str = "lorca_relay";
@@ -667,6 +667,31 @@ impl Store for Postgres {
         let rows = client.query(&sql, &values).await?;
         let head: i64 = client.query_opt("SELECT seq FROM sequences WHERE identity_pubkey = $1", &[&identity_pubkey]).await?.map(|row| row.get(0)).unwrap_or(0);
         Ok((rows.iter().map(blob_row).collect(), head))
+    }
+
+    async fn group_page(&self, identity_pubkey: &str, group: &str, before: i64, limit: usize, max_bytes: i64) -> ApiResult<(Vec<GroupSlot>, bool)> {
+        // Unsealed `chat` blobs only: a group's files are fetched by id, and nothing else is in one.
+        const IN_GROUP: &str = "identity_pubkey = $1 AND group_id = $2 AND kind = 'chat' AND recipient_machine_pubkey IS NULL";
+        let client = self.client().await?;
+        let slots = client
+            .query(
+                &format!(
+                    "SELECT COALESCE(slot, id), MIN(seq), SUM(size)::BIGINT FROM blobs WHERE {IN_GROUP}
+                     GROUP BY 1 HAVING MIN(seq) < $3 ORDER BY 2 DESC LIMIT $4"
+                ),
+                &[&identity_pubkey, &group, &before, &(limit as i64 + 1)],
+            )
+            .await?;
+        let (chosen, has_more) = page_of_slots(slots.iter().map(|row| (row.get(0), row.get(1), row.get(2))).collect(), limit, max_bytes);
+        let names: Vec<&str> = chosen.iter().map(|(name, _)| name.as_str()).collect();
+        let rows = client
+            .query(
+                &format!("SELECT {BLOB_COLUMNS}, COALESCE(slot, id) FROM blobs WHERE {IN_GROUP} AND COALESCE(slot, id) = ANY($3) ORDER BY seq"),
+                &[&identity_pubkey, &group, &names],
+            )
+            .await?;
+        let rows = rows.iter().map(|row| (row.get(6), blob_row(row))).collect();
+        Ok((slots_with_rows(chosen, rows), has_more))
     }
 
     async fn blob(&self, identity_pubkey: &str, machine_pubkey: &str, id: &str) -> ApiResult<Option<BlobRow>> {

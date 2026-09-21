@@ -113,6 +113,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/blobs", get(list_blobs).put(put_blob.layer(axum::middleware::from_fn_with_state(state.clone(), crate::limit::large_uploads))))
         .route("/v1/blobs/{id}", get(get_blob).delete(delete_blob))
         .route("/v1/groups/{group}", axum::routing::delete(delete_group))
+        .route("/v1/groups/{group}/blobs", get(group_blobs))
         .route("/v1/push", post(send_push))
         .route("/v1/push/token", axum::routing::put(put_push_token).delete(delete_push_token))
         .route("/v1/pair", post(create_pairing))
@@ -528,6 +529,31 @@ async fn delete_group(State(state): State<AppState>, auth: Auth, Path(group): Pa
         }
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Deserialize)]
+struct GroupBlobs {
+    /// Slots placed below this seq; absent for the newest.
+    #[serde(default)]
+    before: Option<i64>,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+/// A chat backwards, a page of messages at a time: a freshly paired Device takes the newest
+/// of each chat instead of replaying the log, and reads further back when someone scrolls
+/// there. `slots` are oldest first, each with its place and its blobs.
+async fn group_blobs(State(state): State<AppState>, auth: Auth, Path(group): Path<String>, Query(query): Query<GroupBlobs>) -> ApiResult<Json<Value>> {
+    if !valid_id(&group) {
+        return Err(ApiError::bad_request("Group must be 1–64 characters of [A-Za-z0-9._-]"));
+    }
+    let limit = query.limit.unwrap_or(100).clamp(1, 500);
+    let (slots, has_more) = state.db.group_page(&auth.identity_pubkey, &group, query.before.unwrap_or(i64::MAX), limit, MAX_PAGE_BYTES).await?;
+    let slots: Vec<Value> = slots
+        .into_iter()
+        .map(|slot| json!({ "place": slot.place, "blobs": slot.blobs.into_iter().map(BlobOut::from).collect::<Vec<_>>() }))
+        .collect();
+    Ok(Json(json!({ "slots": slots, "has_more": has_more })))
 }
 
 // MARK: - Push

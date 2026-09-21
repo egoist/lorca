@@ -410,7 +410,20 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
                 return Err("No such chat".into());
             }
             let limit = params["limit"].as_u64().unwrap_or(SNAPSHOT_MESSAGES as u64).clamp(1, 200) as usize;
-            let (messages, has_more) = app.message_page(&chat_id, params["before"].as_str(), limit);
+            let before = params["before"].as_str();
+            let mut page = app.message_page(&chat_id, before, limit);
+            // The end of what is here, with more on the relay: read a page back and look again.
+            // A relay that cannot be reached ends the chat here for now.
+            if page.0.len() < limit && app.history_is_partial(&chat_id) {
+                match crate::sync::older_messages(app, &chat_id).await {
+                    Ok(_) => page = app.message_page(&chat_id, before, limit),
+                    Err(error) => {
+                        tracing::warn!(%error, %chat_id, "fetching older messages");
+                        page.1 = false;
+                    }
+                }
+            }
+            let (messages, has_more) = page;
             Ok(json!({ "messages": messages, "has_more": has_more }))
         }
         "chats.mark_read" => {

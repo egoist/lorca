@@ -83,6 +83,45 @@ impl BlobRow {
     }
 }
 
+/// One slot of a group with the blobs it holds (a message's first and latest version, or
+/// its removal), oldest first. `place` is the slot's lowest seq: where it sits in the log.
+pub struct GroupSlot {
+    pub place: i64,
+    pub blobs: Vec<BlobRow>,
+}
+
+/// Of `(slot, place, bytes)` newest first and one longer than `limit` when there are more:
+/// the slots of a page, which ends at `limit` or before the slot that would take it past
+/// `max_bytes` and always holds one, and whether older slots remain.
+fn page_of_slots(mut slots: Vec<(String, i64, i64)>, limit: usize, max_bytes: i64) -> (Vec<(String, i64)>, bool) {
+    let mut has_more = slots.len() > limit;
+    slots.truncate(limit);
+    let mut bytes = 0;
+    let fits = slots
+        .iter()
+        .take_while(|(_, _, size)| {
+            bytes += size;
+            bytes <= max_bytes
+        })
+        .count()
+        .max(1)
+        .min(slots.len());
+    has_more |= fits < slots.len();
+    slots.truncate(fits);
+    (slots.into_iter().map(|(name, place, _)| (name, place)).collect(), has_more)
+}
+
+/// `chosen` (newest first) with their `rows`, turned oldest first for the Device to apply.
+fn slots_with_rows(chosen: Vec<(String, i64)>, rows: Vec<(String, BlobRow)>) -> Vec<GroupSlot> {
+    let mut slots: Vec<(String, GroupSlot)> = chosen.into_iter().rev().map(|(name, place)| (name, GroupSlot { place, blobs: Vec::new() })).collect();
+    for (name, row) in rows {
+        if let Some((_, slot)) = slots.iter_mut().find(|(slot, _)| *slot == name) {
+            slot.blobs.push(row);
+        }
+    }
+    slots.into_iter().map(|(_, slot)| slot).filter(|slot| !slot.blobs.is_empty()).collect()
+}
+
 pub struct Inserted {
     pub seq: i64,
     pub existing: bool,
@@ -259,6 +298,11 @@ pub trait Store: Send + Sync {
     /// envelopes), and the identity's head seq. The page ends at `limit` rows or before the
     /// row that would take it past `max_bytes`, and always holds one row when there is one.
     async fn blobs_since(&self, identity_pubkey: &str, machine_pubkey: &str, since: i64, kinds: &[String], limit: i64, max_bytes: i64) -> ApiResult<(Vec<BlobRow>, i64)>;
+    /// A group's `chat` blobs a slot at a time, backwards: the `limit` slots whose place is
+    /// below `before`, oldest first, and whether older ones remain. A message keeps its
+    /// place however late its last version landed, so pages read backwards still give the
+    /// transcript in order.
+    async fn group_page(&self, identity_pubkey: &str, group: &str, before: i64, limit: usize, max_bytes: i64) -> ApiResult<(Vec<GroupSlot>, bool)>;
     async fn blob(&self, identity_pubkey: &str, machine_pubkey: &str, id: &str) -> ApiResult<Option<BlobRow>>;
     /// Deletes a blob and gives its bytes back to the identity's usage. Returns its kind, or
     /// `None` when there was none; the caller removes a `file`'s object afterwards.

@@ -1108,9 +1108,15 @@ impl App {
         self.store.all(chat_id).map_err(|error| tracing::error!(%error, %chat_id, "reading transcript")).unwrap_or_default()
     }
 
+    /// True when the relay holds older messages of this chat than this Device has.
+    pub fn history_is_partial(&self, chat_id: &str) -> bool {
+        self.store.history_before(chat_id).ok().flatten().is_some()
+    }
+
     pub fn message_page(&self, chat_id: &str, before: Option<&str>, limit: usize) -> (Vec<Message>, bool) {
         match self.store.page(chat_id, before, limit) {
-            Ok((messages, more)) => (messages.into_iter().map(|message| message.for_app()).collect(), more),
+            // More may be on the relay than here: `chats.messages` fetches it when asked.
+            Ok((messages, more)) => (messages.into_iter().map(|message| message.for_app()).collect(), more || self.history_is_partial(chat_id)),
             Err(error) => {
                 tracing::error!(%error, %chat_id, "paging transcript");
                 (Vec::new(), false)

@@ -84,6 +84,10 @@ impl LocalStore {
                  id       TEXT PRIMARY KEY NOT NULL,
                  position INTEGER NOT NULL
              );
+             CREATE TABLE IF NOT EXISTS chat_history (
+                 chat_id      TEXT PRIMARY KEY NOT NULL,
+                 before_place INTEGER NOT NULL
+             );
              CREATE TABLE IF NOT EXISTS messages (
                  id            TEXT PRIMARY KEY NOT NULL,
                  chat_id       TEXT NOT NULL,
@@ -178,6 +182,7 @@ impl LocalStore {
         save_state_tx(&tx, state)?;
         for chat_id in chat_ids {
             tx.execute("DELETE FROM messages WHERE chat_id = ?1", [chat_id])?;
+            tx.execute("DELETE FROM chat_history WHERE chat_id = ?1", [chat_id])?;
             tx.execute(
                 "DELETE FROM outbox WHERE group_name = ?1",
                 [crate::model::relay_name(chat_id)],
@@ -261,6 +266,71 @@ impl LocalStore {
             previous,
             changed: true,
         })
+    }
+
+    /// Where this Device's copy of the chat begins in the relay's log, when the relay has
+    /// older messages than the ones here. `None` for a chat that is here whole.
+    pub fn history_before(&self, chat_id: &str) -> anyhow::Result<Option<i64>> {
+        let connection = self.connection.lock().unwrap();
+        connection
+            .query_row("SELECT before_place FROM chat_history WHERE chat_id = ?1", [chat_id], |row| row.get(0))
+            .optional()
+            .map_err(Into::into)
+    }
+
+    /// `Some(place)`: the relay has messages placed below it that are not here. `None`: the
+    /// chat is here whole.
+    pub fn set_history_before(&self, chat_id: &str, before: Option<i64>) -> anyhow::Result<()> {
+        let connection = self.connection.lock().unwrap();
+        match before {
+            Some(place) => connection.execute(
+                "INSERT INTO chat_history (chat_id, before_place) VALUES (?1, ?2)
+                 ON CONFLICT(chat_id) DO UPDATE SET before_place = excluded.before_place",
+                params![chat_id, place],
+            )?,
+            None => connection.execute("DELETE FROM chat_history WHERE chat_id = ?1", [chat_id])?,
+        };
+        Ok(())
+    }
+
+    /// Puts messages read backwards from the relay ahead of everything the chat has here.
+    /// `newest_first` is the page in that order, so each lands before the one after it. One
+    /// that is here already (a late edit arrived through the log and went to the end) moves
+    /// to its place.
+    pub fn insert_older(&self, newest_first: &[Message]) -> anyhow::Result<()> {
+        let mut connection = self.connection.lock().unwrap();
+        let tx = connection.transaction()?;
+        for message in newest_first {
+            let position: i64 = tx.query_row(
+                "SELECT COALESCE(MIN(position), 1) - 1 FROM messages WHERE chat_id = ?1",
+                [&message.chat_id],
+                |row| row.get(0),
+            )?;
+            let (author_kind, author_bot_id) = author_columns(&message.author);
+            let text_nonempty = matches!(&message.body, Body::Text { text, .. } if !text.trim().is_empty());
+            tx.execute(
+                "INSERT INTO messages (
+                     id, chat_id, position, sort_at, created_at, author_kind, author_bot_id,
+                     body_kind, is_complete, text_nonempty, message_json
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                 ON CONFLICT(id) DO UPDATE SET chat_id = excluded.chat_id, position = excluded.position",
+                params![
+                    message.id,
+                    message.chat_id,
+                    position,
+                    message.promoted_at.unwrap_or(message.created_at),
+                    message.created_at,
+                    author_kind,
+                    author_bot_id,
+                    body_kind(&message.body),
+                    message.is_complete(),
+                    text_nonempty,
+                    serde_json::to_string(message)?,
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn message(&self, chat_id: &str, message_id: &str) -> anyhow::Result<Option<Message>> {
@@ -726,6 +796,7 @@ impl LocalStore {
             "device_seen",
             "applied_blobs",
             "messages",
+            "chat_history",
             "outbox",
         ] {
             tx.execute(&format!("DELETE FROM {table}"), [])?;
@@ -1107,6 +1178,30 @@ mod tests {
         message.id = id.into();
         message.created_at = at;
         message
+    }
+
+    #[test]
+    fn older_pages_land_before_what_is_here() {
+        let scratch = scratch();
+        let store = &scratch.0;
+        let said = |id: &str| message(id, 0.0);
+        for id in ["m5", "m6"] {
+            store.upsert(&said(id)).unwrap();
+        }
+        // An edit of an old message came through the log and went to the end.
+        store.upsert(&said("m3")).unwrap();
+        assert_eq!(store.history_before("chat").unwrap(), None);
+        store.set_history_before("chat", Some(40)).unwrap();
+        assert_eq!(store.history_before("chat").unwrap(), Some(40));
+
+        store.insert_older(&[said("m4"), said("m3")]).unwrap();
+        store.insert_older(&[said("m2"), said("m1")]).unwrap();
+        store.set_history_before("chat", None).unwrap();
+        let ids = |messages: Vec<Message>| messages.into_iter().map(|m| m.id).collect::<Vec<_>>();
+        assert_eq!(ids(store.all("chat").unwrap()), ["m1", "m2", "m3", "m4", "m5", "m6"]);
+        let (page, more) = store.page("chat", Some("m5"), 2).unwrap();
+        assert_eq!((ids(page), more), (vec!["m3".to_string(), "m4".into()], true));
+        assert_eq!(store.history_before("chat").unwrap(), None);
     }
 
     #[test]

@@ -42,6 +42,14 @@ impl From<reqwest::Error> for RelayError {
 
 pub type RelayResult<T> = Result<T, RelayError>;
 
+/// One message of a chat as the relay pages it: where it sits in the log, and its first and
+/// latest version (or its removal).
+#[derive(Debug, Clone, Deserialize)]
+pub struct GroupSlot {
+    pub place: i64,
+    pub blobs: Vec<BlobIn>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[allow(dead_code)]
 pub struct BlobIn {
@@ -276,6 +284,21 @@ impl RelayClient {
     }
 
     /// One blob by id; `None` when the relay has no such blob for this identity.
+    /// A chat backwards: the `limit` messages placed below `before` (the newest without it),
+    /// oldest first, and whether older ones remain.
+    pub async fn group_page(&self, url: &str, token: &str, group: &str, before: Option<i64>, limit: usize) -> RelayResult<(Vec<GroupSlot>, bool)> {
+        let mut query = vec![("limit", limit.to_string())];
+        if let Some(before) = before {
+            query.push(("before", before.to_string()));
+        }
+        let value = Self::check(
+            self.http.get(format!("{url}/v1/groups/{group}/blobs")).bearer_auth(token).query(&query).timeout(std::time::Duration::from_secs(60)).send().await?,
+        )
+        .await?;
+        let slots = serde_json::from_value(value["slots"].clone()).map_err(|e| RelayError { status: None, message: format!("group page: {e}") })?;
+        Ok((slots, value["has_more"].as_bool().unwrap_or(false)))
+    }
+
     pub async fn get_blob(&self, url: &str, token: &str, id: &str) -> RelayResult<Option<BlobIn>> {
         let response = self.http.get(format!("{url}/v1/blobs/{id}")).bearer_auth(token).send().await?;
         if response.status() == reqwest::StatusCode::NOT_FOUND {

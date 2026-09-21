@@ -141,13 +141,124 @@ async fn session(app: &Arc<App>) -> Result<(), RelayError> {
     }
 }
 
+/// Everything a Device polls for but the messages.
+const NOT_CHAT_KINDS: &str = "roster,machine,credentials,job,job_cancel,job_result,request,response";
+/// How much of each chat a Device takes when it first syncs: what a bot's turn reads.
+const FIRST_SYNC_MESSAGES: usize = 400;
+/// Messages to a page when reading a chat backwards.
+const OLDER_PAGE: usize = 100;
+
+/// A Device's first sync. The log holds every message of the account, so it is not replayed:
+/// the Device takes the rest of the log, which slots keep short, then the newest messages of
+/// each chat, and follows the log from where it stood when this began. What landed meanwhile
+/// comes again through the log and changes nothing. Older messages stay on the relay until
+/// someone scrolls to them (`older_messages`).
+async fn first_sync(app: &Arc<App>, url: &str, token: &str, machine_file: &crate::keys::MachineFile) -> Result<FirstSync, RelayError> {
+    app.bulk_sync.store(true, Ordering::Relaxed);
+    let synced = first_sync_quietly(app, url, token, machine_file).await;
+    app.bulk_sync.store(false, Ordering::Relaxed);
+    if matches!(synced, Ok(FirstSync::Done)) {
+        app.save_state_now();
+        crate::runtime::prime_names(app);
+        app.emit(Event::Snapshot(app.snapshot()));
+    }
+    synced
+}
+
+#[derive(PartialEq)]
+enum FirstSync {
+    Done,
+    /// The relay's log is empty.
+    NothingThere,
+    /// The relay cannot page a chat: the caller replays the log.
+    CannotPage,
+}
+
+async fn first_sync_quietly(app: &Arc<App>, url: &str, token: &str, machine_file: &crate::keys::MachineFile) -> Result<FirstSync, RelayError> {
+    // The relay keeps the latest roster alone, so the chats have their names and bots before
+    // their messages land.
+    let (mut since, mut head) = (0, None);
+    loop {
+        let (blobs, seq) = app.relay.list_blobs(url, token, since, NOT_CHAT_KINDS).await?;
+        let head = *head.get_or_insert(seq);
+        let Some(last) = blobs.last().map(|blob| blob.seq) else {
+            if head == 0 {
+                return Ok(FirstSync::NothingThere);
+            }
+            break;
+        };
+        for blob in &blobs {
+            apply_blob(app, machine_file, blob);
+        }
+        since = last;
+    }
+    let chats: Vec<String> = app.state.lock().unwrap().chats.iter().map(|chat| chat.meta.id.clone()).collect();
+    for chat_id in chats {
+        let page = app.relay.group_page(url, token, &crate::model::relay_name(&chat_id), None, FIRST_SYNC_MESSAGES).await;
+        let (slots, has_more) = match page {
+            Ok(page) => page,
+            Err(error) if matches!(error.status, Some(404 | 405)) => return Ok(FirstSync::CannotPage),
+            Err(error) => return Err(error),
+        };
+        for blob in slots.iter().flat_map(|slot| &slot.blobs) {
+            apply_blob(app, machine_file, blob);
+        }
+        let before = slots.first().map(|slot| slot.place).filter(|_| has_more);
+        if let Err(error) = app.store.set_history_before(&chat_id, before) {
+            tracing::error!(%error, %chat_id, "recording where the chat begins");
+        }
+        // A page ends early at its byte budget; a bot's turn wants the whole count.
+        let mut here = slots.len();
+        while here < FIRST_SYNC_MESSAGES && app.history_is_partial(&chat_id) {
+            here += older_messages_from(app, url, token, machine_file, &chat_id).await?.max(1);
+        }
+    }
+    app.state.lock().unwrap().last_seq = head.unwrap_or(0);
+    Ok(FirstSync::Done)
+}
+
+/// One chat at a time reads backwards, so two askers do not both take the same page.
+static READING_BACK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Fetches the page of messages before the ones this Device has of a chat. Returns how many
+/// landed; 0 when the chat is here whole.
+pub async fn older_messages(app: &Arc<App>, chat_id: &str) -> Result<usize, String> {
+    let url = app.relay_url().ok_or("No relay configured")?;
+    let machine_file = app.machine_file().ok_or("This Device is not paired")?;
+    let machine = machine_file.machine().map_err(|e| e.to_string())?;
+    let token = token_or_register(app, &url, &machine).await.map_err(|e| e.message)?;
+    older_messages_from(app, &url, &token, &machine_file, chat_id).await.map_err(|e| e.message)
+}
+
+async fn older_messages_from(app: &Arc<App>, url: &str, token: &str, machine_file: &crate::keys::MachineFile, chat_id: &str) -> Result<usize, RelayError> {
+    let _reading = READING_BACK.lock().await;
+    let local = |error: anyhow::Error| RelayError { status: None, message: error.to_string() };
+    let Some(before) = app.store.history_before(chat_id).map_err(local)? else { return Ok(0) };
+    let (slots, has_more) = app.relay.group_page(url, token, &crate::model::relay_name(chat_id), Some(before), OLDER_PAGE).await?;
+    let dek = machine_file.dek().map_err(local)?;
+    // A slot's last blob is the message as it stands. A removal or a read mark is nothing to
+    // show, and a read mark from back then must not clear what is unread now.
+    let newest_first: Vec<Message> = slots
+        .iter()
+        .rev()
+        .filter_map(|slot| slot.blobs.last())
+        .filter_map(|blob| crate::crypto::decrypt_json::<ChatBlob>(&dek, "chat", &unb64(&blob.ciphertext).ok()?).ok())
+        .filter_map(|op| match op {
+            ChatBlob::Upsert { message } if message.chat_id == chat_id => Some(message),
+            _ => None,
+        })
+        .collect();
+    app.store.insert_older(&newest_first).map_err(local)?;
+    let before = slots.first().map(|slot| slot.place).filter(|_| has_more);
+    app.store.set_history_before(chat_id, before).map_err(local)?;
+    Ok(newest_first.len())
+}
+
 /// Pulls the log from `last_seq` until a page comes back empty.
 async fn pull_blobs(app: &Arc<App>, url: &str, token: &str, machine_file: &crate::keys::MachineFile) -> Result<(), RelayError> {
-    // The relay keeps the latest roster, so in a replay from the start it comes after the
-    // messages. It is taken first, and the chats have their names and bots when those land.
-    // It is a preview: the replay applies the same blob again at its place in the log, where
-    // it prunes the placeholder chats that the messages of deleted chats left behind.
-    if app.state.lock().unwrap().last_seq == 0 {
+    if app.state.lock().unwrap().last_seq == 0 && first_sync(app, url, token, machine_file).await? == FirstSync::CannotPage {
+        // A relay that cannot page a chat: replay its log. It keeps the latest roster, which
+        // in a replay comes after the messages, so that is taken first as a preview.
         let (blobs, _head) = app.relay.list_blobs(url, token, 0, "roster,machine").await?;
         for blob in blobs {
             apply_blob_contents(app, machine_file, &blob);
