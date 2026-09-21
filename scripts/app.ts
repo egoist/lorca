@@ -12,6 +12,8 @@ export const CLI_NAME = "lorca"
 
 export const APP_NAME = "Lorca"
 export const BUNDLE_ID = "app.lorca"
+export const APP_ICON_NAME = "Lorca.icns"
+export const DEBUG_APP_ICON_NAME = "Lorca-dev.icns"
 
 /** The root package.json's "version" is the Mac app's version: Info.plist carries it, and Sparkle
  * compares it. scripts/release-mac.ts bumps it. */
@@ -30,6 +32,10 @@ export const FEED_URL = process.env.FEED_URL ?? `${RELEASES_URL}appcast.xml`
 export const SPARKLE_PUBLIC_KEY = "gv9GLMPjH5yMQkZMFXnoNfHOyL8/7KGzl/jzAqlzZZY="
 
 export type Config = "debug" | "release"
+
+export function appIconName(config: Config) {
+  return config === "debug" ? DEBUG_APP_ICON_NAME : APP_ICON_NAME
+}
 
 export function bundlePath(config: Config) {
   return join(PACKAGE_DIR, ".build", "bundle", config, `${APP_NAME}.app`)
@@ -53,7 +59,7 @@ export function log(message: string) {
   console.log(`${color.dim(time)} ${color.cyan("lorca")} ${message}`)
 }
 
-function infoPlist(version: string) {
+function infoPlist(version: string, config: Config) {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -66,6 +72,8 @@ function infoPlist(version: string) {
 	<string>${APP_NAME}</string>
 	<key>CFBundleIdentifier</key>
 	<string>${BUNDLE_ID}</string>
+	<key>CFBundleIconFile</key>
+	<string>${appIconName(config)}</string>
 	<key>CFBundleLocalizations</key>
 	<array>
 		<string>en</string>
@@ -290,7 +298,7 @@ export async function buildApp(config: Config, options: BuildOptions = {}): Prom
   const macos = join(bundle, "Contents", "MacOS")
   await mkdir(macos, { recursive: true })
   await mkdir(join(bundle, "Contents", "Resources"), { recursive: true })
-  await Bun.write(join(bundle, "Contents", "Info.plist"), infoPlist(readVersion()))
+  await Bun.write(join(bundle, "Contents", "Info.plist"), infoPlist(readVersion(), config))
   await Bun.write(join(bundle, "Contents", "PkgInfo"), "APPL????")
 
   // The string tables (macos/Resources/<language>.lproj): what `L()` reads through Bundle.main.
@@ -300,6 +308,10 @@ export async function buildApp(config: Config, options: BuildOptions = {}): Prom
     await rm(target, { recursive: true, force: true })
     await cp(join(RESOURCES_DIR, entry), target, { recursive: true })
   }
+
+  // Finder and AppKit read the application icon from the bundle resource named by Info.plist.
+  const iconName = appIconName(config)
+  await cp(join(RESOURCES_DIR, iconName), join(bundle, "Contents", "Resources", iconName))
 
   // Unlink before writing: macOS refuses to overwrite a running executable in place.
   const destination = join(macos, APP_NAME)
