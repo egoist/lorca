@@ -103,7 +103,8 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 
     private func clear(_ chatID: Chat.ID) {
         guard let center else { return }
-        center.getDeliveredNotifications { delivered in
+        Task {
+            let delivered = await center.deliveredNotifications()
             let ids = delivered.filter { $0.request.content.threadIdentifier == chatID }.map(\.request.identifier)
             if !ids.isEmpty { center.removeDeliveredNotifications(withIdentifiers: ids) }
         }
