@@ -48,6 +48,8 @@ struct SettingsEntry: Hashable {
         .advanced, L("CLI port"), keywords: [L("localhost 127.0.0.1 serve connection")]) }
     static var onboarding: SettingsEntry { SettingsEntry(
         .advanced, L("Onboarding"), keywords: [L("show onboarding again setup welcome restore")]) }
+    static var deleteAccount: SettingsEntry { SettingsEntry(
+        .advanced, L("Delete Account"), row: L("Account"), keywords: [L("erase remove wipe relay data identity")]) }
 
     static var machineKey: SettingsEntry { SettingsEntry(
         .device, L("Machine key"), keywords: [L("device os role runner last seen relay")]) }
@@ -87,7 +89,7 @@ enum SettingsSearch {
             [.sendOnReturn, .timestamps, .appearance, .appLanguage, .dictationLanguage]
                 + (Updater.isEnabled ? [.version, .automaticChecks, .automaticDownloads] : [])
         case .autoReview: [.autoReviewSwitch, .autoReviewRules]
-        case .advanced: [.relayURL, .cliPort, .onboarding]
+        case .advanced: [.relayURL, .cliPort, .onboarding] + (store.hasIdentity == true ? [.deleteAccount] : [])
         case .bots: (device.map { store.bots(on: $0.id) } ?? []).map { .bot($0) }
         case .providers: store.providers.map { .provider($0.kind) }
         case .plugins: (device?.plugins ?? []).map { .plugin($0) }

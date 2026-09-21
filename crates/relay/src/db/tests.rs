@@ -208,3 +208,71 @@ async fn presence_and_events_reach_the_sockets() {
         assert!(!ok!(store.online(&who)).contains(&mac));
     }
 }
+
+#[tokio::test]
+async fn a_sweep_drops_stale_envelopes_and_old_group_marks() {
+    for (store, _) in backends().await {
+        let (who, machine) = (name("identity"), name("machine"));
+        ok!(store.register_identity(&who, "content", &machine, "box", "attestation"));
+        let sealed = |id: &str, kind: &str| NewBlob { kind: kind.into(), recipient_machine_pubkey: Some(machine.clone()), ..blob(&who, id, b"12345") };
+        ok!(store.insert_blob(sealed("job", "job"), 0));
+        ok!(store.insert_blob(sealed("answer", "response"), 0));
+        ok!(store.insert_blob(blob(&who, "message", b"abc"), 0));
+        ok!(store.delete_group(&who, "old-chat"));
+
+        // Nothing is stale yet.
+        assert_eq!(ok!(store.sweep(now() - 60, now() - 60)), 0, "{}", store.describe());
+        assert_eq!(ids(&store, &who, &machine, 0, i64::MAX).await, ["job", "answer", "message"]);
+        assert!(store.insert_blob(NewBlob { group: Some("old-chat".into()), ..blob(&who, "late", b"x") }, 0).await.is_err());
+
+        assert_eq!(ok!(store.sweep(now() + 1, now() + 1)), 2, "{}", store.describe());
+        assert_eq!(ids(&store, &who, &machine, 0, i64::MAX).await, ["message"]);
+        // The ten sealed bytes went back: 3 are stored.
+        assert!(used(&store, &who, 1, 4).await && !used(&store, &who, 2, 4).await, "{}", store.describe());
+        ok!(store.insert_blob(NewBlob { group: Some("old-chat".into()), ..blob(&who, "late", b"x") }, 0));
+    }
+}
+
+#[tokio::test]
+async fn an_orphan_is_a_file_of_a_known_identity_with_no_row() {
+    for (store, _) in backends().await {
+        let (who, stranger) = (name("identity"), name("identity"));
+        ok!(store.register_identity(&who, "content", &name("machine"), "box", "attestation"));
+        ok!(store.insert_blob(NewBlob { kind: "file".into(), payload: Payload::InFileStore { size: 9 }, ..blob(&who, "kept", b"") }, 0));
+        let found = [(who.clone(), "kept".to_string()), (who.clone(), "lost".to_string()), (stranger, "theirs".to_string())];
+        assert_eq!(ok!(store.orphans(&found)), [(who.clone(), "lost".to_string())], "{}", store.describe());
+        assert!(ok!(store.orphans(&[])).is_empty());
+    }
+}
+
+#[tokio::test]
+async fn a_deleted_identity_leaves_revoked_machines_and_nothing_else() {
+    for (store, _) in backends().await {
+        let (who, other) = (name("identity"), name("identity"));
+        let (mac, phone, theirs) = (name("machine"), name("machine"), name("machine"));
+        ok!(store.register_identity(&who, "content", &mac, "box", "attestation"));
+        ok!(store.register_identity(&who, "content", &phone, "box", "attestation"));
+        ok!(store.register_identity(&other, "content", &theirs, "box", "attestation"));
+        ok!(store.insert_blob(blob(&who, "message", b"abc"), 0));
+        ok!(store.insert_blob(NewBlob { kind: "file".into(), payload: Payload::InFileStore { size: 9 }, ..blob(&who, "photo", b"") }, 0));
+        ok!(store.insert_blob(blob(&other, "message", b"abc"), 0));
+
+        let deleted = ok!(store.delete_identity(&who));
+        let mut machines = deleted.machines.clone();
+        machines.sort();
+        let mut expected = vec![mac.clone(), phone.clone()];
+        expected.sort();
+        assert_eq!((machines, deleted.files), (expected, vec!["photo".to_string()]), "{}", store.describe());
+
+        assert!(ok!(store.machines_for(&who)).is_empty());
+        assert!(ids(&store, &who, &mac, 0, i64::MAX).await.is_empty());
+        assert!(used(&store, &who, 4, 4).await, "usage starts over");
+        let revoked = ok!(store.revoked_machines());
+        assert!(revoked.contains(&mac) && revoked.contains(&phone) && !revoked.contains(&theirs));
+        // The old key stays out; the identity may come back on a new one.
+        assert!(store.register_identity(&who, "content", &mac, "box", "attestation").await.is_err());
+        ok!(store.register_identity(&who, "content-2", &name("machine"), "box", "attestation"));
+
+        assert_eq!(ids(&store, &other, &theirs, 0, i64::MAX).await, ["message"]);
+    }
+}

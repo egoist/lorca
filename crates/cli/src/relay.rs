@@ -337,6 +337,12 @@ impl RelayClient {
         Ok(())
     }
 
+    /// Deletes the identity and everything the relay holds for it; every Device gets `410`.
+    pub async fn delete_identity(&self, url: &str, token: &str) -> RelayResult<()> {
+        Self::check(self.http.delete(format!("{url}/v1/identity")).bearer_auth(token).send().await?).await?;
+        Ok(())
+    }
+
     pub async fn pair_create(&self, url: &str, token: &str) -> RelayResult<String> {
         let value = Self::check(self.http.post(format!("{url}/v1/pair")).bearer_auth(token).send().await?).await?;
         Ok(value["nonce"].as_str().unwrap_or_default().to_string())

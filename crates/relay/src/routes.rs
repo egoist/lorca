@@ -102,6 +102,7 @@ pub fn router(state: AppState) -> Router {
         .route("/", get(root))
         .route("/v1/health", get(health))
         .route("/v1/sync", get(sync_socket))
+        .route("/v1/identity", axum::routing::delete(delete_identity))
         .route("/v1/machines", get(list_machines))
         .route("/v1/machines/{machine_pubkey}", axum::routing::delete(revoke_machine))
         .route("/v1/blobs", get(list_blobs).put(put_blob))
@@ -236,6 +237,24 @@ async fn revoke_machine(State(state): State<AppState>, auth: Auth, Path(machine_
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Deletes the caller's identity: its machines, blobs, attachments, push tokens, and usage.
+/// Any paired machine may ask, as any may unpair the others. Every Device's token dies and
+/// its socket closes; the `410` it gets next makes it forget the identity.
+async fn delete_identity(State(state): State<AppState>, auth: Auth) -> ApiResult<StatusCode> {
+    let deleted = state.db.delete_identity(&auth.identity_pubkey).await?;
+    for machine in deleted.machines {
+        state.db.publish(db::Event::Revoked { identity: auth.identity_pubkey.clone(), machine }).await;
+    }
+    for id in deleted.files {
+        // The rows are gone either way; a leftover object is logged, not surfaced.
+        let key = crate::store::key(&auth.identity_pubkey, &id);
+        if let Err(error) = state.file_store.delete(&key).await {
+            tracing::warn!(?error, key, "deleting a file object");
+        }
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
 // MARK: - Blobs
 
 #[derive(Debug, Deserialize)]
@@ -259,7 +278,7 @@ struct PutBlob {
 }
 
 /// Ids are client-chosen (uuids, `msg-<uuid>`) and become object keys, so only a plain charset.
-fn valid_id(id: &str) -> bool {
+pub fn valid_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 64
         && id != "."

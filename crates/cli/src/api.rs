@@ -121,6 +121,12 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             app.forget_identity().map_err(|e| e.to_string())?;
             Ok(Value::Null)
         }
+        // The account goes from the relay first; a relay that cannot be told leaves it in place.
+        "identity.delete" => {
+            crate::sync::delete_identity(app).await?;
+            app.forget_identity().map_err(|e| e.to_string())?;
+            Ok(Value::Null)
+        }
         // The app came back to the foreground: ask the relay again now, not after the backoff.
         "sync.wake" => {
             app.relay.forget_token();

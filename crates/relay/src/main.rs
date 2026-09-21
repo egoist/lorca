@@ -11,6 +11,7 @@ mod limit;
 mod push;
 mod routes;
 mod store;
+mod sweep;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -218,6 +219,8 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     });
+
+    sweep::spawn(db.clone(), file_store.clone());
 
     let stopping = state.stopping.clone();
     let app = routes::router(state);

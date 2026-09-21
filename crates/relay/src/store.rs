@@ -14,6 +14,13 @@ pub enum FileStore {
     S3(S3),
 }
 
+/// An object as a listing shows it.
+pub struct Listed {
+    pub key: String,
+    /// Unix time of the last write; `None` when the store did not say in a form we read.
+    pub modified: Option<i64>,
+}
+
 pub fn key(identity_pubkey: &str, id: &str) -> String {
     format!("{identity_pubkey}/{id}")
 }
@@ -71,6 +78,32 @@ impl FileStore {
         }
     }
 
+    /// A page of the store's objects and, when there are more, what to pass for the next one.
+    pub async fn list(&self, page: Option<String>) -> ApiResult<(Vec<Listed>, Option<String>)> {
+        match self {
+            FileStore::Local { dir } => {
+                let dir = dir.clone();
+                crate::db::blocking(move || Ok((list_dir(&dir).map_err(|error| storage_error("listing", error))?, None))).await
+            }
+            FileStore::S3(s3) => {
+                let mut query = vec![("list-type", "2".to_string()), ("max-keys", "1000".to_string())];
+                if !s3.prefix.is_empty() {
+                    query.push(("prefix", format!("{}/", s3.prefix)));
+                }
+                if let Some(token) = page {
+                    query.push(("continuation-token", token));
+                }
+                let response = s3.send(reqwest::Method::GET, &format!("/{}", uri_encode(&s3.bucket)), &query, Vec::new()).await?;
+                if !response.status().is_success() {
+                    return Err(s3_error("list", response).await);
+                }
+                let body = response.text().await.map_err(|error| storage_error("listing", error))?;
+                let strip = if s3.prefix.is_empty() { String::new() } else { format!("{}/", s3.prefix) };
+                Ok(parse_listing(&body, &strip))
+            }
+        }
+    }
+
     pub async fn delete(&self, key: &str) -> ApiResult<()> {
         match self {
             FileStore::Local { dir } => match tokio::fs::remove_file(dir.join(key)).await {
@@ -87,6 +120,61 @@ impl FileStore {
             }
         }
     }
+}
+
+/// `<identity>/<id>` files under `dir`. A `.…tmp` file is a write in flight.
+fn list_dir(dir: &std::path::Path) -> std::io::Result<Vec<Listed>> {
+    let mut listed = Vec::new();
+    let identities = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(listed),
+        Err(error) => return Err(error),
+    };
+    for identity in identities {
+        let identity = identity?;
+        if !identity.file_type()?.is_dir() {
+            continue;
+        }
+        for file in std::fs::read_dir(identity.path())? {
+            let file = file?;
+            let (Some(identity), Some(name)) = (identity.file_name().to_str().map(str::to_string), file.file_name().to_str().map(str::to_string)) else { continue };
+            if name.starts_with('.') || !file.file_type()?.is_file() {
+                continue;
+            }
+            let modified = file.metadata()?.modified().ok().and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs() as i64);
+            listed.push(Listed { key: key(&identity, &name), modified });
+        }
+    }
+    Ok(listed)
+}
+
+/// The objects and the continuation token of a `ListObjectsV2` answer. Keys lose `strip`, the
+/// bucket prefix; one outside it is left out.
+fn parse_listing(xml: &str, strip: &str) -> (Vec<Listed>, Option<String>) {
+    let mut listed = Vec::new();
+    let mut rest = xml;
+    while let Some((contents, after)) = element(rest, "Contents") {
+        rest = after;
+        let Some(key) = element(contents, "Key").map(|(key, _)| unescape(key)) else { continue };
+        let Some(key) = key.strip_prefix(strip) else { continue };
+        let modified = element(contents, "LastModified").and_then(|(stamp, _)| unix_from_iso8601(stamp));
+        listed.push(Listed { key: key.to_string(), modified });
+    }
+    let truncated = element(xml, "IsTruncated").is_some_and(|(value, _)| value.trim() == "true");
+    let next = element(xml, "NextContinuationToken").map(|(token, _)| unescape(token)).filter(|_| truncated);
+    (listed, next)
+}
+
+/// The text of the first `<name>…</name>` and what follows it.
+fn element<'a>(xml: &'a str, name: &str) -> Option<(&'a str, &'a str)> {
+    let (open, close) = (format!("<{name}>"), format!("</{name}>"));
+    let start = xml.find(&open)? + open.len();
+    let end = start + xml[start..].find(&close)?;
+    Some((&xml[start..end], &xml[end + close.len()..]))
+}
+
+fn unescape(text: &str) -> String {
+    text.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&amp;", "&")
 }
 
 fn storage_error(what: &str, error: impl std::fmt::Display) -> ApiError {
@@ -136,13 +224,25 @@ impl S3 {
     }
 
     async fn request(&self, method: reqwest::Method, key: &str, body: Vec<u8>) -> ApiResult<reqwest::Response> {
-        let path = self.object_path(key);
-        let url = format!("{}{}", self.endpoint, path);
+        self.send(method, &self.object_path(key), &[], body).await
+    }
+
+    #[cfg(test)]
+    pub async fn create_bucket(&self) {
+        let _ = self.send(reqwest::Method::PUT, &format!("/{}", uri_encode(&self.bucket)), &[], Vec::new()).await;
+    }
+
+    /// A signed request to an encoded `path`, with `query` parameters in any order.
+    async fn send(&self, method: reqwest::Method, path: &str, query: &[(&str, String)], body: Vec<u8>) -> ApiResult<reqwest::Response> {
+        let mut query: Vec<String> = query.iter().map(|(name, value)| format!("{}={}", uri_encode(name), uri_encode(value))).collect();
+        query.sort();
+        let query = query.join("&");
+        let url = if query.is_empty() { format!("{}{}", self.endpoint, path) } else { format!("{}{}?{}", self.endpoint, path, query) };
         let host = url::host_of(&self.endpoint);
         let payload_hash = hex(&Sha256::digest(&body));
-        let (amz_date, date) = amz_timestamp(crate::db::now());
+        let (amz_date, _) = amz_timestamp(crate::db::now());
         let headers = [("host", host.as_str()), ("x-amz-content-sha256", payload_hash.as_str()), ("x-amz-date", amz_date.as_str())];
-        let authorization = self.authorization(method.as_str(), &path, &headers, &payload_hash, &amz_date, &date);
+        let authorization = self.authorization(method.as_str(), path, &query, &headers, &payload_hash, &amz_date);
 
         self.http
             .request(method, &url)
@@ -155,12 +255,13 @@ impl S3 {
             .map_err(|error| storage_error("reaching object storage while", error))
     }
 
-    /// SigV4 `Authorization` for a request with no query string. `headers` are the signed
-    /// ones, lowercase names in sorted order, values trimmed.
-    fn authorization(&self, method: &str, path: &str, headers: &[(&str, &str)], payload_hash: &str, amz_date: &str, date: &str) -> String {
+    /// SigV4 `Authorization`. `query` is the canonical query string (encoded, sorted by name);
+    /// `headers` are the signed ones, lowercase names in sorted order, values trimmed.
+    fn authorization(&self, method: &str, path: &str, query: &str, headers: &[(&str, &str)], payload_hash: &str, amz_date: &str) -> String {
+        let date = &amz_date[..8];
         let canonical_headers: String = headers.iter().map(|(name, value)| format!("{name}:{value}\n")).collect();
         let signed_headers = headers.iter().map(|(name, _)| *name).collect::<Vec<_>>().join(";");
-        let canonical_request = format!("{method}\n{path}\n\n{canonical_headers}\n{signed_headers}\n{payload_hash}");
+        let canonical_request = format!("{method}\n{path}\n{query}\n{canonical_headers}\n{signed_headers}\n{payload_hash}");
         let scope = format!("{date}/{}/s3/aws4_request", self.region);
         let string_to_sign = format!("AWS4-HMAC-SHA256\n{amz_date}\n{scope}\n{}", hex(&Sha256::digest(canonical_request.as_bytes())));
         let signing_key = hmac(
@@ -200,6 +301,24 @@ fn uri_encode(segment: &str) -> String {
         }
     }
     out
+}
+
+/// Unix time of `2024-02-29T12:00:00.000Z`, the form S3 gives `LastModified` in.
+fn unix_from_iso8601(stamp: &str) -> Option<i64> {
+    let stamp = stamp.trim();
+    let number = |range: std::ops::Range<usize>| stamp.get(range)?.parse::<i64>().ok();
+    let (y, m, d) = (number(0..4)?, number(5..7)?, number(8..10)?);
+    let (hour, minute, second) = (number(11..13)?, number(14..16)?, number(17..19)?);
+    if !stamp.ends_with('Z') || !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+        return None;
+    }
+    // Days since 1970-01-01 from a civil date (Howard Hinnant's algorithm).
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    Some((era * 146_097 + doe - 719_468) * 86_400 + hour * 3600 + minute * 60 + second)
 }
 
 /// `YYYYMMDDTHHMMSSZ` and `YYYYMMDD` for a unix time.
@@ -250,13 +369,34 @@ mod tests {
             ("x-amz-content-sha256", empty),
             ("x-amz-date", "20130524T000000Z"),
         ];
-        let authorization = s3.authorization("GET", "/test.txt", &headers, empty, "20130524T000000Z", "20130524");
+        let authorization = s3.authorization("GET", "/test.txt", "", &headers, empty, "20130524T000000Z");
         assert_eq!(
             authorization,
             "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request, \
              SignedHeaders=host;range;x-amz-content-sha256;x-amz-date, \
              Signature=f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41"
         );
+    }
+
+    #[test]
+    fn iso8601_reads_back_what_amz_timestamp_writes() {
+        assert_eq!(unix_from_iso8601("1970-01-01T00:00:00.000Z"), Some(0));
+        assert_eq!(unix_from_iso8601("2023-11-14T22:13:20.000Z"), Some(1_700_000_000));
+        assert_eq!(unix_from_iso8601("2024-02-29T00:00:00Z"), Some(1_709_164_800));
+        assert_eq!(unix_from_iso8601("yesterday"), None);
+    }
+
+    #[test]
+    fn a_listing_gives_keys_under_the_prefix_and_the_next_page() {
+        let xml = "<ListBucketResult><IsTruncated>true</IsTruncated>\
+            <Contents><Key>files/abc/photo.1</Key><LastModified>2023-11-14T22:13:20.000Z</LastModified></Contents>\
+            <Contents><Key>elsewhere/x</Key><LastModified>2023-11-14T22:13:20.000Z</LastModified></Contents>\
+            <Contents><Key>files/abc/b</Key><LastModified>soon</LastModified></Contents>\
+            <NextContinuationToken>1a/b+c=&amp;</NextContinuationToken></ListBucketResult>";
+        let (listed, next) = parse_listing(xml, "files/");
+        assert_eq!(listed.iter().map(|o| (o.key.as_str(), o.modified)).collect::<Vec<_>>(), [("abc/photo.1", Some(1_700_000_000)), ("abc/b", None)]);
+        assert_eq!(next.as_deref(), Some("1a/b+c=&"));
+        assert_eq!(parse_listing("<ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>", "").1, None);
     }
 
     #[test]

@@ -32,6 +32,15 @@ pub const KINDS: &[&str] = &[
     "file",
 ];
 
+/// Kinds sealed to one machine, which deletes what it consumed. One left behind (its Runner
+/// never came back) is dropped by `Store::sweep` once it is stale.
+pub const SEALED_KINDS: &[&str] = &["job", "job_cancel", "job_result", "request", "response"];
+
+/// `'job', 'job_cancel', …` for an `IN (…)`.
+fn sealed_kinds_sql() -> String {
+    SEALED_KINDS.iter().map(|kind| format!("'{kind}'")).collect::<Vec<_>>().join(", ")
+}
+
 pub fn now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -112,6 +121,13 @@ pub struct NewBlob {
     /// What the blob belongs to, a chat to the Devices. A deleted group takes no more blobs.
     pub group: Option<String>,
     pub payload: Payload,
+}
+
+/// What a deleted identity leaves for the caller to finish: its machines' tokens and sockets
+/// to end, and its `file` objects to remove.
+pub struct DeletedIdentity {
+    pub machines: Vec<String>,
+    pub files: Vec<String>,
 }
 
 /// Where a phone takes pushes: its APNs or FCM device token, one per machine.
@@ -203,6 +219,9 @@ pub trait Store: Send + Sync {
     /// the envelopes sealed to it go with it. False when the identity has no such machine.
     async fn revoke_machine(&self, identity_pubkey: &str, machine_pubkey: &str) -> ApiResult<bool>;
     async fn revoked_machines(&self) -> ApiResult<Vec<String>>;
+    /// Deletes the identity and everything the relay holds for it. Its machines' keys are
+    /// remembered as revoked, so every Device gets `410` and forgets the identity.
+    async fn delete_identity(&self, identity_pubkey: &str) -> ApiResult<DeletedIdentity>;
 
     // Blobs
 
@@ -223,6 +242,11 @@ pub trait Store: Send + Sync {
     /// Deletes every blob of a group and marks the group deleted for good. Returns the ids of
     /// the `file` blobs among them; the caller removes their objects afterwards.
     async fn delete_group(&self, identity_pubkey: &str, group: &str) -> ApiResult<Vec<String>>;
+
+    /// Of `(identity, blob id)` pairs found in the file store, those with no row although
+    /// their identity is known here. An object of an identity this database never heard of is
+    /// not an orphan: the file store may belong to another database.
+    async fn orphans(&self, files: &[(String, String)]) -> ApiResult<Vec<(String, String)>>;
 
     // Push tokens
 
@@ -245,6 +269,10 @@ pub trait Store: Send + Sync {
     /// Housekeeping, once a minute: expired challenges and pairings go, and with Postgres
     /// this process says it is alive and clears the sockets of processes that are not.
     async fn tick(&self) -> ApiResult<()>;
+    /// Housekeeping, once an hour: sealed envelopes made before `sealed_before` that nobody
+    /// consumed go, with their bytes given back, and so do the marks of groups deleted before
+    /// `groups_before`. Returns how many envelopes went.
+    async fn sweep(&self, sealed_before: i64, groups_before: i64) -> ApiResult<u64>;
 
     // Presence and events. `Local` has this process's answer; a shared backend widens it to
     // all of them.

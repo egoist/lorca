@@ -16,7 +16,7 @@ use futures::StreamExt;
 use tokio_postgres::types::ToSql;
 use tokio_postgres::{AsyncMessage, Row, Transaction};
 
-use super::{now, BlobRow, Event, Inserted, Local, Machine, NewBlob, Payload, PushToken, Store};
+use super::{now, sealed_kinds_sql, BlobRow, DeletedIdentity, Event, Inserted, Local, Machine, NewBlob, Payload, PushToken, Store};
 use crate::routes::{ApiError, ApiResult};
 
 const CHANNEL: &str = "lorca_relay";
@@ -59,6 +59,7 @@ const SCHEMA: &str = "
         PRIMARY KEY (identity_pubkey, id)
     );
     CREATE INDEX IF NOT EXISTS blobs_identity_seq ON blobs(identity_pubkey, seq);
+    CREATE INDEX IF NOT EXISTS blobs_sealed_created ON blobs(created_at) WHERE recipient_machine_pubkey IS NOT NULL;
     CREATE INDEX IF NOT EXISTS blobs_identity_slot ON blobs(identity_pubkey, slot) WHERE slot IS NOT NULL;
     CREATE INDEX IF NOT EXISTS blobs_identity_group ON blobs(identity_pubkey, group_id) WHERE group_id IS NOT NULL;
     CREATE TABLE IF NOT EXISTS deleted_groups (
@@ -66,6 +67,10 @@ const SCHEMA: &str = "
         group_id TEXT NOT NULL,
         deleted_at BIGINT NOT NULL,
         PRIMARY KEY (identity_pubkey, group_id)
+    );
+    CREATE TABLE IF NOT EXISTS schema_version (
+        version BIGINT PRIMARY KEY,
+        applied_at BIGINT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS sequences (
         identity_pubkey TEXT PRIMARY KEY,
@@ -109,6 +114,24 @@ const SCHEMA: &str = "
         PRIMARY KEY (instance_id, socket_id)
     );
     CREATE INDEX IF NOT EXISTS relay_sockets_identity ON relay_sockets(identity_pubkey);";
+
+/// Schema changes after `SCHEMA`, in order; `schema_version` records the ones applied. A
+/// deploy runs the old process beside the new one, so a step only adds (a table, a nullable
+/// column, an index). Append; never edit a step that has shipped.
+const MIGRATIONS: &[&str] = &[];
+
+async fn migrate(client: &mut Object) -> Result<(), tokio_postgres::Error> {
+    client.batch_execute(SCHEMA).await?;
+    let version: i64 = client.query_one("SELECT COALESCE(MAX(version), 0) FROM schema_version", &[]).await?.get(0);
+    for (index, step) in MIGRATIONS.iter().enumerate().skip(version as usize) {
+        let tx = client.transaction().await?;
+        tx.batch_execute(step).await?;
+        tx.execute("INSERT INTO schema_version (version, applied_at) VALUES ($1, $2)", &[&(index as i64 + 1), &now()]).await?;
+        tx.commit().await?;
+        tracing::info!(version = index + 1, "schema migrated");
+    }
+    Ok(())
+}
 
 impl From<tokio_postgres::Error> for ApiError {
     fn from(error: tokio_postgres::Error) -> Self {
@@ -155,9 +178,9 @@ impl Postgres {
         let manager = Manager::from_config(config.clone(), tls(), ManagerConfig { recycling_method: RecyclingMethod::Fast });
         let pool = Pool::builder(manager).max_size(16).build()?;
 
-        let client = pool.get().await?;
+        let mut client = pool.get().await?;
         client.execute("SELECT pg_advisory_lock($1)", &[&SCHEMA_LOCK]).await?;
-        let made = client.batch_execute(SCHEMA).await;
+        let made = migrate(&mut client).await;
         client.execute("SELECT pg_advisory_unlock($1)", &[&SCHEMA_LOCK]).await?;
         made?;
 
@@ -385,6 +408,70 @@ impl Store for Postgres {
         give_back(&tx, identity_pubkey, freed).await?;
         tx.commit().await?;
         Ok(true)
+    }
+
+    async fn delete_identity(&self, identity_pubkey: &str) -> ApiResult<DeletedIdentity> {
+        let mut client = self.client().await?;
+        let tx = client.transaction().await?;
+        lock_identity(&tx, identity_pubkey).await?;
+        let machines: Vec<String> =
+            tx.query("SELECT machine_pubkey FROM machines WHERE identity_pubkey = $1", &[&identity_pubkey]).await?.iter().map(|row| row.get(0)).collect();
+        let files: Vec<String> =
+            tx.query("SELECT id FROM blobs WHERE identity_pubkey = $1 AND kind = 'file'", &[&identity_pubkey]).await?.iter().map(|row| row.get(0)).collect();
+        tx.execute(
+            "INSERT INTO revoked_machines (machine_pubkey, identity_pubkey, revoked_at)
+             SELECT machine_pubkey, identity_pubkey, $2 FROM machines WHERE identity_pubkey = $1
+             ON CONFLICT (machine_pubkey) DO UPDATE SET revoked_at = EXCLUDED.revoked_at",
+            &[&identity_pubkey, &now()],
+        )
+        .await?;
+        tx.execute("DELETE FROM challenges WHERE machine_pubkey IN (SELECT machine_pubkey FROM machines WHERE identity_pubkey = $1)", &[&identity_pubkey]).await?;
+        for table in ["push_tokens", "pairings", "blobs", "deleted_groups", "sequences", "usage", "machines"] {
+            tx.execute(&format!("DELETE FROM {table} WHERE identity_pubkey = $1"), &[&identity_pubkey]).await?;
+        }
+        tx.execute("DELETE FROM identities WHERE pubkey = $1", &[&identity_pubkey]).await?;
+        tx.commit().await?;
+        Ok(DeletedIdentity { machines, files })
+    }
+
+    async fn orphans(&self, files: &[(String, String)]) -> ApiResult<Vec<(String, String)>> {
+        let (identities, ids): (Vec<&str>, Vec<&str>) = files.iter().map(|(identity, id)| (identity.as_str(), id.as_str())).unzip();
+        let rows = self
+            .client()
+            .await?
+            .query(
+                "SELECT f.identity, f.id FROM unnest($1::text[], $2::text[]) AS f(identity, id)
+                 WHERE EXISTS (SELECT 1 FROM identities i WHERE i.pubkey = f.identity)
+                   AND NOT EXISTS (SELECT 1 FROM blobs b WHERE b.identity_pubkey = f.identity AND b.id = f.id)",
+                &[&identities, &ids],
+            )
+            .await?;
+        Ok(rows.iter().map(|row| (row.get(0), row.get(1))).collect())
+    }
+
+    async fn sweep(&self, sealed_before: i64, groups_before: i64) -> ApiResult<u64> {
+        let client = self.client().await?;
+        // One statement, so the bytes go back with the rows. `usage` takes a relative update,
+        // which needs no identity lock.
+        let gone = client
+            .query_one(
+                &format!(
+                    "WITH gone AS (
+                         DELETE FROM blobs WHERE recipient_machine_pubkey IS NOT NULL AND kind IN ({}) AND created_at < $1
+                         RETURNING identity_pubkey, size),
+                     freed AS (SELECT identity_pubkey, SUM(size)::BIGINT AS bytes FROM gone GROUP BY identity_pubkey),
+                     given AS (
+                         UPDATE usage SET bytes = GREATEST(usage.bytes - freed.bytes, 0) FROM freed
+                         WHERE usage.identity_pubkey = freed.identity_pubkey)
+                     SELECT COUNT(*) FROM gone",
+                    sealed_kinds_sql()
+                ),
+                &[&sealed_before],
+            )
+            .await?
+            .get::<_, i64>(0);
+        client.execute("DELETE FROM deleted_groups WHERE deleted_at < $1", &[&groups_before]).await?;
+        Ok(gone as u64)
     }
 
     async fn revoked_machines(&self) -> ApiResult<Vec<String>> {

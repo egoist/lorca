@@ -297,6 +297,40 @@ final class AdvancedSettingsViewController: SettingsPaneViewController {
         let setup = SectionView(title: L("Setup"))
         setup.setRows([onboarding])
         addSection(setup)
+
+        guard AppStore.shared.hasIdentity == true else { return }
+        let delete = ActionRow(
+            key: SettingsEntry.deleteAccount.row, value: "", tint: .secondaryLabelColor, actionTitle: L("Delete Account…"))
+        delete.onAction = { [weak self] in self?.confirmDeleteAccount() }
+        let account = SectionView(title: L("Account"))
+        account.setRows([delete])
+        addSection(account)
+        addFootnote(L("Deletes the account from the relay and from every paired Device: chats, attachments, bots, and provider credentials."))
+    }
+
+    private func confirmDeleteAccount() {
+        guard let window = view.window else { return }
+        let alert = NSAlert()
+        alert.messageText = L("Delete this account?")
+        alert.informativeText = L("The relay deletes everything it holds for the account, and every paired Device, this one included, forgets its keys and chats. This can’t be undone.")
+        alert.alertStyle = .critical
+        alert.addButton(withTitle: L("Delete Account"))
+        alert.addButton(withTitle: L("Cancel"))
+        alert.buttons.first?.hasDestructiveAction = true
+        alert.beginSheetModal(for: window) { response in
+            guard response == .alertFirstButtonReturn else { return }
+            Task { @MainActor in
+                do {
+                    try await AppStore.shared.deleteAccount()
+                } catch {
+                    let failed = NSAlert()
+                    failed.messageText = L("Couldn’t delete the account")
+                    failed.informativeText = error.localizedDescription
+                    failed.addButton(withTitle: L("OK"))
+                    failed.beginSheetModal(for: window) { _ in }
+                }
+            }
+        }
     }
 
     private func commit() {

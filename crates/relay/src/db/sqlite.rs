@@ -11,7 +11,7 @@ use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, TransactionBehavior};
 use tokio::sync::Semaphore;
 
-use super::{blocking, now, BlobRow, Event, Inserted, Local, Machine, NewBlob, Payload, PushToken, Slot, Store};
+use super::{blocking, now, sealed_kinds_sql, BlobRow, DeletedIdentity, Event, Inserted, Local, Machine, NewBlob, Payload, PushToken, Slot, Store};
 use crate::routes::{ApiError, ApiResult};
 
 const SCHEMA: &str = "
@@ -58,6 +58,13 @@ const SCHEMA: &str = "
         PRIMARY KEY (identity_pubkey, group_id)
     );
     CREATE INDEX IF NOT EXISTS blobs_identity_seq ON blobs(identity_pubkey, seq);
+    CREATE INDEX IF NOT EXISTS blobs_identity_slot ON blobs(identity_pubkey, slot) WHERE slot IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS blobs_identity_group ON blobs(identity_pubkey, group_id) WHERE group_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS blobs_sealed_created ON blobs(created_at) WHERE recipient_machine_pubkey IS NOT NULL;
+    CREATE TABLE IF NOT EXISTS schema_version (
+        version INTEGER PRIMARY KEY,
+        applied_at INTEGER NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS sequences (
         identity_pubkey TEXT PRIMARY KEY,
         seq INTEGER NOT NULL
@@ -88,6 +95,11 @@ const SCHEMA: &str = "
         updated_at INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS push_tokens_identity ON push_tokens(identity_pubkey);";
+
+/// Schema changes after `SCHEMA`, in order; `schema_version` records the ones applied. A step
+/// only adds (a table, a nullable column, an index), so the relay a deploy is replacing keeps
+/// working on the new schema. Append; never edit a step that has shipped.
+const MIGRATIONS: &[&str] = &[];
 
 pub struct Sqlite {
     path: String,
@@ -151,20 +163,17 @@ impl Sqlite {
     }
 }
 
-/// Brings a database made by an earlier relay up to `SCHEMA`.
+/// Applies the `MIGRATIONS` this database has not had.
 fn migrate(connection: &Connection) -> rusqlite::Result<()> {
-    let has_slot = connection.prepare("SELECT 1 FROM pragma_table_info('blobs') WHERE name = 'slot'")?.exists([])?;
-    if !has_slot {
-        connection.execute_batch("ALTER TABLE blobs ADD COLUMN slot TEXT;")?;
+    let version: i64 = connection.query_row("SELECT COALESCE(MAX(version), 0) FROM schema_version", [], |row| row.get(0))?;
+    for (index, step) in MIGRATIONS.iter().enumerate().skip(version as usize) {
+        let tx = connection.unchecked_transaction()?;
+        tx.execute_batch(step)?;
+        tx.execute("INSERT INTO schema_version (version, applied_at) VALUES (?1, ?2)", params![index as i64 + 1, now()])?;
+        tx.commit()?;
+        tracing::info!(version = index + 1, "schema migrated");
     }
-    let has_group = connection.prepare("SELECT 1 FROM pragma_table_info('blobs') WHERE name = 'group_id'")?.exists([])?;
-    if !has_group {
-        connection.execute_batch("ALTER TABLE blobs ADD COLUMN group_id TEXT;")?;
-    }
-    connection.execute_batch(
-        "CREATE INDEX IF NOT EXISTS blobs_identity_slot ON blobs(identity_pubkey, slot) WHERE slot IS NOT NULL;
-         CREATE INDEX IF NOT EXISTS blobs_identity_group ON blobs(identity_pubkey, group_id) WHERE group_id IS NOT NULL;",
-    )
+    Ok(())
 }
 
 fn unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -306,6 +315,33 @@ pub fn revoke_machine(connection: &mut Connection, identity_pubkey: &str, machin
         .execute(params![freed, identity_pubkey])?;
     tx.commit()?;
     Ok(true)
+}
+
+/// Deletes the identity and every row it owns. The machines' keys stay in `revoked_machines`,
+/// so their tokens die and a Device that still holds its attestation gets `410`.
+pub fn delete_identity(connection: &mut Connection, identity_pubkey: &str) -> rusqlite::Result<DeletedIdentity> {
+    let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let machines: Vec<String> = tx
+        .prepare_cached("SELECT machine_pubkey FROM machines WHERE identity_pubkey = ?1")?
+        .query_map(params![identity_pubkey], |row| row.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    let files: Vec<String> = tx
+        .prepare_cached("SELECT id FROM blobs WHERE identity_pubkey = ?1 AND kind = 'file'")?
+        .query_map(params![identity_pubkey], |row| row.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    tx.prepare_cached(
+        "INSERT OR REPLACE INTO revoked_machines (machine_pubkey, identity_pubkey, revoked_at)
+         SELECT machine_pubkey, identity_pubkey, ?2 FROM machines WHERE identity_pubkey = ?1",
+    )?
+    .execute(params![identity_pubkey, now()])?;
+    tx.prepare_cached("DELETE FROM challenges WHERE machine_pubkey IN (SELECT machine_pubkey FROM machines WHERE identity_pubkey = ?1)")?
+        .execute(params![identity_pubkey])?;
+    for table in ["push_tokens", "pairings", "blobs", "deleted_groups", "sequences", "usage", "machines"] {
+        tx.prepare_cached(&format!("DELETE FROM {table} WHERE identity_pubkey = ?1"))?.execute(params![identity_pubkey])?;
+    }
+    tx.prepare_cached("DELETE FROM identities WHERE pubkey = ?1")?.execute(params![identity_pubkey])?;
+    tx.commit()?;
+    Ok(DeletedIdentity { machines, files })
 }
 
 /// Registers the identity (idempotent) and attests one machine.
@@ -633,6 +669,35 @@ pub fn expire(connection: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
+/// Drops the sealed envelopes nobody consumed and the marks of groups deleted long ago.
+pub fn sweep(connection: &mut Connection, sealed_before: i64, groups_before: i64) -> rusqlite::Result<u64> {
+    let stale = format!("recipient_machine_pubkey IS NOT NULL AND kind IN ({}) AND created_at < ?1", sealed_kinds_sql());
+    let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    tx.execute(
+        &format!(
+            "UPDATE usage SET bytes = MAX(bytes - (SELECT COALESCE(SUM(size), 0) FROM blobs WHERE blobs.identity_pubkey = usage.identity_pubkey AND {stale}), 0)
+             WHERE identity_pubkey IN (SELECT identity_pubkey FROM blobs WHERE {stale})"
+        ),
+        params![sealed_before],
+    )?;
+    let gone = tx.execute(&format!("DELETE FROM blobs WHERE {stale}"), params![sealed_before])?;
+    tx.execute("DELETE FROM deleted_groups WHERE deleted_at < ?1", params![groups_before])?;
+    tx.commit()?;
+    Ok(gone as u64)
+}
+
+pub fn orphans(connection: &Connection, files: &[(String, String)]) -> rusqlite::Result<Vec<(String, String)>> {
+    let mut known = connection.prepare_cached("SELECT 1 FROM identities WHERE pubkey = ?1")?;
+    let mut has_row = connection.prepare_cached("SELECT 1 FROM blobs WHERE identity_pubkey = ?1 AND id = ?2")?;
+    let mut orphans = Vec::new();
+    for (identity, id) in files {
+        if known.exists(params![identity])? && !has_row.exists(params![identity, id])? {
+            orphans.push((identity.clone(), id.clone()));
+        }
+    }
+    Ok(orphans)
+}
+
 // MARK: - Store
 
 fn not_yours(owner: String, identity_pubkey: &str) -> ApiResult<()> {
@@ -714,6 +779,20 @@ impl Store for Sqlite {
 
     async fn insert_blob(&self, blob: NewBlob, quota_bytes: u64) -> ApiResult<Inserted> {
         self.write(move |db| insert_blob(db, &blob, quota_bytes)).await
+    }
+
+    async fn delete_identity(&self, identity_pubkey: &str) -> ApiResult<DeletedIdentity> {
+        let identity_pubkey = identity_pubkey.to_string();
+        self.write(move |db| Ok(delete_identity(db, &identity_pubkey)?)).await
+    }
+
+    async fn orphans(&self, files: &[(String, String)]) -> ApiResult<Vec<(String, String)>> {
+        let files = files.to_vec();
+        self.read(move |db| Ok(orphans(db, &files)?)).await
+    }
+
+    async fn sweep(&self, sealed_before: i64, groups_before: i64) -> ApiResult<u64> {
+        self.write(move |db| Ok(sweep(db, sealed_before, groups_before)?)).await
     }
 
     async fn blobs_since(&self, identity_pubkey: &str, machine_pubkey: &str, since: i64, kinds: &[String], limit: i64, max_bytes: i64) -> ApiResult<(Vec<BlobRow>, i64)> {

@@ -348,6 +348,20 @@ pub async fn revoke_self(app: &Arc<App>) {
     }
 }
 
+/// Deletes the account on the relay: every Device, this one among them, is unpaired by it.
+/// Unlike `revoke_self` this has to land, or the relay keeps the data the user asked gone.
+pub async fn delete_identity(app: &Arc<App>) -> Result<(), String> {
+    let Some(url) = app.relay_url() else { return Ok(()) };
+    let machine = app.machine_file().and_then(|m| m.machine().ok()).ok_or("This Device has no identity")?;
+    let token = token_or_register(app, &url, &machine).await.map_err(|e| e.message)?;
+    match app.relay.delete_identity(&url, &token).await {
+        Ok(()) => Ok(()),
+        // The relay already dropped this Device, with the account or without it.
+        Err(error) if error.is_unpaired() => Ok(()),
+        Err(error) => Err(error.message),
+    }
+}
+
 fn online(state: &crate::app::State, id: &str) -> bool {
     state.device_online.contains(id)
 }

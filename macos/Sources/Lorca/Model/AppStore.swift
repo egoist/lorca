@@ -1074,6 +1074,12 @@ final class AppStore {
         emit(.rosterChanged)
     }
 
+    /// Deletes the account on the relay and on this Device; the other Devices forget it as the
+    /// relay drops them. Throws when the relay could not be told, and nothing is deleted then.
+    func deleteAccount() async throws {
+        _ = try await client.request("identity.delete")
+    }
+
     func restoreIdentity(phrase: String) async throws {
         _ = try await client.request("identity.restore", ["phrase": phrase])
         hasIdentity = true
