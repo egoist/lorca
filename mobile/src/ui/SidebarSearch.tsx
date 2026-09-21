@@ -1,6 +1,8 @@
-// The sidebar's search field on iOS: a glass capsule floating at the foot of the list, where a
-// phone's bar puts its search field. UIKit moves a search bar into the bottom toolbar only on
-// an iPhone, so the sidebar draws its own, and it rides the keyboard.
+// The sidebar's search field: a capsule floating at the foot of the list, level with the
+// composer, riding the keyboard. The native bar cannot hold it there. UIKit moves a search bar
+// into the bottom toolbar only on an iPhone. On Android the search action is an item of the
+// activity's one action bar, which react-native-screens hands to whichever stack updated its
+// header last, so the sidebar's item vanishes once the pane beside it opens a chat.
 
 import { useRef } from "react";
 import { Pressable, StyleSheet, TextInput } from "react-native";

@@ -25,7 +25,8 @@ export function ChatsScreen({ sidebar = false }: { sidebar?: boolean }) {
   const router = useRouter();
   const openChatId = useStore((s) => s.openChatId);
   const sidebarWidth = useSidebarWidth();
-  const floatingSearch = sidebar && Platform.OS === "ios";
+  // The sidebar's search field is its own, at the foot of the list (see SidebarSearch).
+  const floatingSearch = sidebar;
   const searchInset = useSidebarSearchInset();
   const chats = useStore((s) => s.chats);
   const running = useStore((s) => s.running);
@@ -129,7 +130,7 @@ export function ChatsScreen({ sidebar = false }: { sidebar?: boolean }) {
 
   return (
     <>
-      {/* The iOS sidebar has its own field at its foot, where a phone's bar puts this one. */}
+      {/* The sidebar has its own field at its foot. */}
       {floatingSearch ? null : (
         <Stack.SearchBar
           placeholder={t("Search chats and messages")}
