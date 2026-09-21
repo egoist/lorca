@@ -3,6 +3,7 @@ use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
+use axum::handler::Handler;
 use axum::{Json, Router};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
@@ -65,6 +66,9 @@ impl ApiError {
     pub fn too_many(retry_after: u64) -> Self {
         ApiError { retry_after: Some(retry_after), ..Self::new(StatusCode::TOO_MANY_REQUESTS, "Too many requests") }
     }
+    pub fn unavailable(message: &str) -> Self {
+        Self::new(StatusCode::SERVICE_UNAVAILABLE, message)
+    }
     pub fn internal(message: &str) -> Self {
         Self::new(StatusCode::INTERNAL_SERVER_ERROR, message)
     }
@@ -105,7 +109,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/identity", axum::routing::delete(delete_identity))
         .route("/v1/machines", get(list_machines))
         .route("/v1/machines/{machine_pubkey}", axum::routing::delete(revoke_machine))
-        .route("/v1/blobs", get(list_blobs).put(put_blob))
+        .route("/v1/blobs", get(list_blobs).put(put_blob.layer(axum::middleware::from_fn_with_state(state.clone(), crate::limit::large_uploads))))
         .route("/v1/blobs/{id}", get(get_blob).delete(delete_blob))
         .route("/v1/groups/{group}", axum::routing::delete(delete_group))
         .route("/v1/push", post(send_push))

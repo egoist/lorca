@@ -52,29 +52,20 @@ Attachments go to the bucket because a deploy replaces the container's disk. The
 
 | Variable | Value |
 | --- | --- |
-| `LORCA_RELAY_APNS_KEY` | `/data/apns.p8`: the APNs key from developer.apple.com › Keys (Apple Push Notifications service). |
+| `LORCA_RELAY_APNS_KEY` | The text of the APNs key from developer.apple.com › Keys (Apple Push Notifications service): paste the `.p8` file, `-----BEGIN PRIVATE KEY-----` line included. |
 | `LORCA_RELAY_APNS_KEY_ID` | The key's 10-character id, also in the `.p8` file name. |
 | `LORCA_RELAY_APNS_TEAM_ID` | The Apple team id. |
 | `LORCA_RELAY_APNS_TOPIC` | The phone app's bundle id; `app.lorca` by default. |
-| `LORCA_RELAY_FCM_SERVICE_ACCOUNT` | `/data/fcm.json`: a key from Firebase console › Project settings › Service accounts. |
+| `LORCA_RELAY_FCM_SERVICE_ACCOUNT` | The JSON of a key from Firebase console › Project settings › Service accounts. |
 
-The relay reads both keys from files, so they live on the volume. Copy them in with [`railway ssh`](https://docs.railway.com/cli/ssh) from a directory linked to the project (register an SSH key once with `railway ssh keys add` or `railway ssh keys github`), then set the variables:
-
-```bash
-railway ssh --service <relay service> -- sh -c 'cat > /data/apns.p8' < AuthKey_XXXXXXXXXX.p8
-```
-
-```bash
-railway ssh --service <relay service> -- sh -c 'cat > /data/fcm.json' < service-account.json
-```
-
-Copy the files first: the relay does not start while a key path is missing. Its first log line then shows `push=apns`, `push=fcm`, or `push=apns+fcm`. The Postgres setup has no volume; adding one for the keys brings back deploys that stop the old relay first.
+Both keys go in as text, so the service needs no volume and the Postgres setup keeps its deploys without a gap. A key with `\n` in place of its line breaks works too. Either variable also takes the path of a file (`/data/apns.p8`), for a relay that has a volume anyway. The relay's first log line shows `push=apns`, `push=fcm`, or `push=apns+fcm`.
 
 ### Optional
 
 | Variable | Default | What it does |
 | --- | --- | --- |
-| `LORCA_RELAY_QUOTA_BYTES` | `0` | Stored ciphertext allowed per identity, in bytes. `0` means no limit. |
+| `LORCA_RELAY_QUOTA_BYTES` | `5368709120` | Stored ciphertext allowed per identity, in bytes (5 GiB). `0` means no limit. |
+| `LORCA_RELAY_CONCURRENT_UPLOADS` | `3` | Uploads over 1 MiB handled at once. Each takes some 80 MB while it is decoded and sent to the bucket; lower it on a small container. `0` means no limit. |
 | `LORCA_RELAY_IP_PER_MINUTE` | `60` | Requests per minute one IP may make to registration, auth, and the pairing mailbox. |
 | `LORCA_RELAY_IDENTITY_PER_SECOND` | `50` | Requests per second one identity may make across its machines, with a burst of ten times that. |
 | `RUST_LOG` | `info` | `info,lorca_relay=debug` also logs each rate-limited request with the address it counted against. |

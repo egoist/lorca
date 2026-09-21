@@ -36,8 +36,8 @@ struct Args {
     #[usage(long, env = "LORCA_RELAY_SECRET")]
     secret: Option<String>,
 
-    /// Stored ciphertext allowed per identity, in bytes. 0 means no limit.
-    #[usage(long, env = "LORCA_RELAY_QUOTA_BYTES", default = "0")]
+    /// Stored ciphertext allowed per identity, in bytes; 5 GiB by default. 0 means no limit.
+    #[usage(long, env = "LORCA_RELAY_QUOTA_BYTES", default = "5368709120")]
     quota_bytes: u64,
 
     /// Requests per minute one IP may make to the routes that need no token (registration,
@@ -49,6 +49,12 @@ struct Args {
     /// machines, with a burst of ten times that. 0 disables the limit.
     #[usage(long, env = "LORCA_RELAY_IDENTITY_PER_SECOND", default = "50")]
     identity_per_second: u32,
+
+    /// Uploads over 1 MiB handled at once. Each holds its body in memory (a 24 MB attachment
+    /// is some 80 MB while it is decoded and sent on), so this bounds what attachments cost;
+    /// one that waits 30 s for a place gets `503`. 0 disables the limit.
+    #[usage(long, env = "LORCA_RELAY_CONCURRENT_UPLOADS", default = "3")]
+    concurrent_uploads: usize,
 
     /// Take the client IP from the last `X-Forwarded-For` hop. Set it only behind a proxy
     /// that overwrites that header.
@@ -85,9 +91,11 @@ struct Args {
     #[usage(long, env = "LORCA_RELAY_S3_SECRET_KEY", hide_env_values = true)]
     s3_secret_key: Option<String>,
 
-    /// Apple's `.p8` push key, for pushes to iPhones. Needs --apns-key-id and --apns-team-id.
-    #[usage(long, env = "LORCA_RELAY_APNS_KEY", requires("--apns-key-id", "--apns-team-id"))]
-    apns_key: Option<std::path::PathBuf>,
+    /// Apple's `.p8` push key, for pushes to iPhones: the key's text (`-----BEGIN PRIVATE
+    /// KEY-----…`, with real or `\n` line breaks) or the path of the file. Needs --apns-key-id
+    /// and --apns-team-id.
+    #[usage(long, env = "LORCA_RELAY_APNS_KEY", hide_env_values = true, requires("--apns-key-id", "--apns-team-id"))]
+    apns_key: Option<String>,
 
     #[usage(long, env = "LORCA_RELAY_APNS_KEY_ID")]
     apns_key_id: Option<String>,
@@ -99,17 +107,31 @@ struct Args {
     #[usage(long, env = "LORCA_RELAY_APNS_TOPIC", default = "app.lorca")]
     apns_topic: String,
 
-    /// A Firebase service account JSON file, for pushes to Android phones.
-    #[usage(long, env = "LORCA_RELAY_FCM_SERVICE_ACCOUNT")]
-    fcm_service_account: Option<std::path::PathBuf>,
+    /// A Firebase service account, for pushes to Android phones: the JSON itself or the path
+    /// of the file.
+    #[usage(long, env = "LORCA_RELAY_FCM_SERVICE_ACCOUNT", hide_env_values = true)]
+    fcm_service_account: Option<String>,
+}
+
+/// A key given as its text or as the path of a file. The text form lets a deploy with no
+/// volume carry the key in a variable.
+fn key_text(value: &str) -> anyhow::Result<String> {
+    let text = value.trim();
+    if text.starts_with("-----BEGIN") {
+        return Ok(text.replace("\\n", "\n"));
+    }
+    if text.starts_with('{') {
+        return Ok(text.to_string());
+    }
+    std::fs::read_to_string(text).map_err(|e| anyhow::anyhow!("reading {text}: {e}"))
 }
 
 /// APNs and FCM, each when its key is given. `LORCA_RELAY_APNS_URL` and
 /// `LORCA_RELAY_FCM_URL` point them at a test server.
 fn pusher(args: &Args) -> anyhow::Result<push::Pusher> {
     let apns = match &args.apns_key {
-        Some(path) => Some(push::Apns::new(
-            &std::fs::read_to_string(path).map_err(|e| anyhow::anyhow!("reading {}: {e}", path.display()))?,
+        Some(key) => Some(push::Apns::new(
+            &key_text(key)?,
             args.apns_key_id.clone().expect("the parser requires the key id"),
             args.apns_team_id.clone().expect("the parser requires the team id"),
             args.apns_topic.clone(),
@@ -118,8 +140,8 @@ fn pusher(args: &Args) -> anyhow::Result<push::Pusher> {
         None => None,
     };
     let fcm = match &args.fcm_service_account {
-        Some(path) => Some(push::Fcm::new(
-            &std::fs::read_to_string(path).map_err(|e| anyhow::anyhow!("reading {}: {e}", path.display()))?,
+        Some(account) => Some(push::Fcm::new(
+            &key_text(account)?,
             std::env::var("LORCA_RELAY_FCM_URL").ok(),
         )?),
         None => None,
@@ -164,6 +186,8 @@ pub struct AppState {
     pub ip_limiter: Arc<limit::RateLimiter>,
     pub identity_limiter: Arc<limit::RateLimiter>,
     pub trust_proxy: bool,
+    /// Places for uploads over `limit::LARGE_UPLOAD`; `None` when they are not limited.
+    pub uploads: Option<Arc<tokio::sync::Semaphore>>,
     /// Cancelled when the process is told to stop; the sync sockets end on it.
     pub stopping: tokio_util::sync::CancellationToken,
     /// Where `file` ciphertext goes. The database holds only the row.
@@ -204,6 +228,7 @@ async fn main() -> anyhow::Result<()> {
             args.identity_per_second.saturating_mul(10),
         )),
         trust_proxy: args.trust_proxy,
+        uploads: (args.concurrent_uploads > 0).then(|| Arc::new(tokio::sync::Semaphore::new(args.concurrent_uploads))),
         stopping: tokio_util::sync::CancellationToken::new(),
         file_store: file_store.clone(),
         pusher: pusher.clone(),
@@ -254,4 +279,19 @@ async fn main() -> anyhow::Result<()> {
     serve.await?;
     db.close().await;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::key_text;
+
+    #[test]
+    fn a_key_is_its_text_or_the_path_of_a_file() {
+        assert_eq!(key_text("-----BEGIN PRIVATE KEY-----\\nabc\\n-----END PRIVATE KEY-----").unwrap(), "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----");
+        assert_eq!(key_text(" {\"type\": \"service_account\"}\n").unwrap(), "{\"type\": \"service_account\"}");
+        let path = std::env::temp_dir().join(format!("lorca-relay-key-{}", uuid::Uuid::new_v4()));
+        std::fs::write(&path, "from a file").unwrap();
+        assert_eq!(key_text(path.to_str().unwrap()).unwrap(), "from a file");
+        assert!(key_text("/nonexistent/key.p8").is_err());
+    }
 }

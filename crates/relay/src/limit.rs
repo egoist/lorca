@@ -1,5 +1,6 @@
 //! Rate limits: token buckets per client IP on the routes anyone can call, and per identity
-//! on everything behind a bearer token. Both live in memory; the hosted relay is one process.
+//! on everything behind a bearer token, plus a bound on the large uploads held in memory at
+//! once. All of it is this process's own.
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
@@ -79,6 +80,28 @@ pub async fn per_ip(State(state): State<AppState>, request: Request, next: Next)
         Err(retry_after) => {
             tracing::debug!(%ip, path = %request.uri().path(), "rate limited");
             ApiError::too_many(retry_after).into_response()
+        }
+    }
+}
+
+/// A body this large takes a place in `AppState::uploads` before it is read.
+pub const LARGE_UPLOAD: u64 = 1024 * 1024;
+const UPLOAD_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Holds a large upload until one of the places is free, and the place until the response is
+/// ready, so the bodies in memory at once are bounded. A body of unknown length counts as
+/// large. One that waited too long gets `503`, and the Device's outbox sends it again.
+pub async fn large_uploads(State(state): State<AppState>, request: Request, next: Next) -> Response {
+    let length = request.headers().get(axum::http::header::CONTENT_LENGTH).and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<u64>().ok());
+    let (Some(uploads), true) = (state.uploads.clone(), length.is_none_or(|length| length > LARGE_UPLOAD)) else {
+        return next.run(request).await;
+    };
+    match tokio::time::timeout(UPLOAD_WAIT, uploads.acquire_owned()).await {
+        Ok(Ok(_place)) => next.run(request).await,
+        _ => {
+            let mut response = ApiError::unavailable("Too many uploads at once; try again").into_response();
+            response.headers_mut().insert(axum::http::header::RETRY_AFTER, axum::http::HeaderValue::from_static("5"));
+            response
         }
     }
 }

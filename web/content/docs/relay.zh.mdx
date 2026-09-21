@@ -27,7 +27,8 @@ lorca-relay --bind 0.0.0.0:8787 --db lorca-relay.db
 | `--bind` | 监听的地址和端口。 |
 | `--db` | SQLite 文件路径，或 `postgres://` URL。 |
 | `LORCA_RELAY_SECRET` | 用来签发会话令牌。设置它，令牌才能在重启后继续有效。 |
-| `--quota-bytes` | 每个身份的存储上限。`0` 表示不限。 |
+| `--quota-bytes` | 每个身份的存储上限，默认 5 GiB。`0` 表示不限。 |
+| `--concurrent-uploads` | 同时处理的超过 1 MiB 的附件数量（默认 3），用来限制附件占用的内存。 |
 | `--files-dir` | 附件密文存放的位置。默认是数据库旁边的一个文件夹。 |
 | `--s3-bucket`、`--s3-endpoint` | 改为把附件存到 S3、R2 或 MinIO。 |
 | `--ip-per-minute`、`--identity-per-second` | 限流。 |
@@ -38,7 +39,7 @@ lorca-relay --bind 0.0.0.0:8787 --db lorca-relay.db
 
 ### 推送通知
 
-要给手机应用发推送，需要给中继配置 APNs 密钥（`--apns-key`、`--apns-key-id`、`--apns-team-id`）或 Firebase 服务账号（`--fcm-service-account`）。不配置的话其他功能照常，只是手机收不到推送。
+要给手机应用发推送，需要给中继配置 APNs 密钥（`--apns-key`、`--apns-key-id`、`--apns-team-id`）或 Firebase 服务账号（`--fcm-service-account`）。每个密钥既可以是文件路径，也可以直接是密钥内容，所以在没有磁盘存放文件的环境里，可以用 `LORCA_RELAY_APNS_KEY` 和 `LORCA_RELAY_FCM_SERVICE_ACCOUNT` 变量直接传入。不配置的话其他功能照常，只是手机收不到推送。
 
 ## 限制
 
