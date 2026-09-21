@@ -11,7 +11,9 @@ export const CRATES_DIR = join(ROOT, "crates")
 export const CLI_NAME = "lorca"
 
 export const APP_NAME = "Lorca"
+export const DEBUG_APP_NAME = "Lorca Dev"
 export const BUNDLE_ID = "app.lorca"
+export const DEBUG_BUNDLE_ID = "app.lorca.dev"
 export const APP_ICON_NAME = "Lorca.icns"
 export const DEBUG_APP_ICON_NAME = "Lorca-dev.icns"
 
@@ -33,12 +35,20 @@ export const SPARKLE_PUBLIC_KEY = "gv9GLMPjH5yMQkZMFXnoNfHOyL8/7KGzl/jzAqlzZZY="
 
 export type Config = "debug" | "release"
 
+export function appName(config: Config) {
+  return config === "debug" ? DEBUG_APP_NAME : APP_NAME
+}
+
+export function bundleId(config: Config) {
+  return config === "debug" ? DEBUG_BUNDLE_ID : BUNDLE_ID
+}
+
 export function appIconName(config: Config) {
   return config === "debug" ? DEBUG_APP_ICON_NAME : APP_ICON_NAME
 }
 
 export function bundlePath(config: Config) {
-  return join(PACKAGE_DIR, ".build", "bundle", config, `${APP_NAME}.app`)
+  return join(PACKAGE_DIR, ".build", "bundle", config, `${appName(config)}.app`)
 }
 
 export function executablePath(config: Config) {
@@ -60,6 +70,7 @@ export function log(message: string) {
 }
 
 function infoPlist(version: string, config: Config) {
+  const name = appName(config)
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -67,11 +78,11 @@ function infoPlist(version: string, config: Config) {
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>${APP_NAME}</string>
+	<string>${name}</string>
 	<key>CFBundleExecutable</key>
 	<string>${APP_NAME}</string>
 	<key>CFBundleIdentifier</key>
-	<string>${BUNDLE_ID}</string>
+	<string>${bundleId(config)}</string>
 	<key>CFBundleIconFile</key>
 	<string>${appIconName(config)}</string>
 	<key>CFBundleLocalizations</key>
@@ -82,7 +93,7 @@ function infoPlist(version: string, config: Config) {
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>${APP_NAME}</string>
+	<string>${name}</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -240,8 +251,9 @@ const ENTITLEMENTS = `<?xml version="1.0" encoding="UTF-8"?>
 /** Sign nested code before the bundle around it, innermost first: Sparkle's XPC services,
  * Updater.app and Autoupdate, the framework, the CLI, then the app. A Developer ID identity signs
  * under the hardened runtime with a secure timestamp, which notarization requires. */
-async function signBundle(bundle: string, sparkle: string, identity: string): Promise<boolean> {
+async function signBundle(bundle: string, sparkle: string, identity: string, config: Config): Promise<boolean> {
   const hardened = identity !== "-"
+  const identifier = bundleId(config)
   const flags = hardened ? ["--options", "runtime", "--timestamp"] : []
   const sign = async (path: string, extra: string[] = []) =>
     (await run(["codesign", "--force", ...flags, ...extra, "--sign", identity, path], { capture: true })).exitCode === 0
@@ -254,13 +266,13 @@ async function signBundle(bundle: string, sparkle: string, identity: string): Pr
     if (existsSync(nested) && !(await sign(nested))) return false
   }
   if (!(await sign(version))) return false
-  if (!(await sign(join(bundle, "Contents", "Resources", "bin", CLI_NAME), ["--identifier", `${BUNDLE_ID}.cli`]))) {
+  if (!(await sign(join(bundle, "Contents", "Resources", "bin", CLI_NAME), ["--identifier", `${identifier}.cli`]))) {
     return false
   }
 
   const entitlements = join(PACKAGE_DIR, ".build", "entitlements.plist")
   await Bun.write(entitlements, ENTITLEMENTS)
-  return sign(bundle, ["--identifier", BUNDLE_ID, ...(hardened ? ["--entitlements", entitlements] : [])])
+  return sign(bundle, ["--identifier", identifier, ...(hardened ? ["--entitlements", entitlements] : [])])
 }
 
 export type BuildOptions = {
@@ -334,7 +346,7 @@ export async function buildApp(config: Config, options: BuildOptions = {}): Prom
   options.onStep?.(`bundling the CLI and Sparkle, signing with ${options.signIdentity ?? "an ad-hoc identity"}`)
   const sparkle = await embedSparkle(bundle)
   if (!sparkle) log(color.red("Sparkle.framework not found under .build/artifacts"))
-  if (!sparkle || !(await signBundle(bundle, sparkle, options.signIdentity ?? "-"))) {
+  if (!sparkle || !(await signBundle(bundle, sparkle, options.signIdentity ?? "-", config))) {
     return { ok: false, ms: performance.now() - started }
   }
 

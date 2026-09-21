@@ -13,20 +13,22 @@ import uniffi.lorca_mobile.pushOpen
 
 /// A push is a data message carrying ciphertext (`c`). The core opens it with the account key
 /// under the app's folder, no running core needed, and the notification shows who replied,
-/// where, and the first words. A tap opens the chat through the app's `lorca://chat/<id>` link.
+/// where, and the first words. A tap opens the chat through this build's app link.
 class PushService : FirebaseMessagingService() {
   override fun onMessageReceived(message: RemoteMessage) {
     val sealed = message.data["c"] ?: return
     // The folder the JS side starts the core with (`coreHome()` in src/core/prefs.ts).
-    val home = File(filesDir, "lorca/core").absolutePath
+    val development = packageName == "app.lorca.dev"
+    val home = File(filesDir, "${if (development) "lorca-dev" else "lorca"}/core").absolutePath
     val notice = try { pushOpen(home, sealed) } catch (_: Throwable) { null }
 
     val manager = getSystemService(NotificationManager::class.java)
     manager.createNotificationChannel(NotificationChannel(CHANNEL, "Replies", NotificationManager.IMPORTANCE_HIGH))
-    val open = Intent(Intent.ACTION_VIEW, Uri.parse(if (notice != null) "lorca://chat/${notice.chatId}" else "lorca://")).setPackage(packageName)
+    val scheme = if (development) "lorca-dev" else "lorca"
+    val open = Intent(Intent.ACTION_VIEW, Uri.parse(if (notice != null) "$scheme://chat/${notice.chatId}" else "$scheme://")).setPackage(packageName)
     val tap = PendingIntent.getActivity(this, notice?.chatId.hashCode(), open, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
     val title = when {
-      notice == null -> "Lorca"
+      notice == null -> applicationInfo.loadLabel(packageManager).toString()
       notice.subtitle != null -> "${notice.title} · ${notice.subtitle}"
       else -> notice.title
     }

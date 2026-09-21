@@ -4,7 +4,7 @@ import AppKit
 final class OfflineViewController: NSViewController {
     var onRetry: (() -> Void)?
 
-    private let command = "lorca serve"
+    private let command = AppInfo.cliCommand
     private let hint = Build.label("", font: Theme.Font.caption, color: .tertiaryLabelColor, lines: 0, alignment: .center)
 
     func refreshHint() {

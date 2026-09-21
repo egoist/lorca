@@ -65,7 +65,7 @@ enum Preferences {
                 return port
             }
             let stored = defaults.integer(forKey: Key.cliPort)
-            return stored == 0 ? 4862 : stored
+            return stored == 0 ? AppInfo.defaultCLIPort : stored
         }
         set { defaults.set(newValue, forKey: Key.cliPort) }
     }

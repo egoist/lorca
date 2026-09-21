@@ -219,6 +219,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             body: L(
                 "Every bot is assigned to a Runner: a Device running macOS, Linux, or Windows. That machine's CLI runs the turn with your account's provider credentials, so a bot on an offline Runner waits until it reconnects. Phones and tablets pair as Devices but never run bots.\n\nThe app talks only to the local CLI on 127.0.0.1:%@. Start it with `lorca serve`; the CLI holds your keys and provider credentials, which reach your other Devices encrypted.",
                 String(Preferences.cliPort))
+                .replacingOccurrences(of: "lorca serve", with: AppInfo.cliCommand)
         )
     }
 

@@ -1,19 +1,23 @@
 // Reset Lorca on this Mac: stop the app and CLI, wipe identity, keys, credentials, chats,
-// app preferences, and logs. Use --build to drop build output too, --relay for the local relay
-// database, -y to skip the confirmation.
+// app preferences, and logs. Use --dev for Lorca Dev, --build to drop build output too,
+// --relay for the local relay database, and -y to skip the confirmation.
 import { rm } from "node:fs/promises"
 import { existsSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
-import { APP_NAME, BUNDLE_ID, PACKAGE_DIR, ROOT, color, log } from "./app.ts"
+import { APP_NAME, BUNDLE_ID, DEBUG_APP_NAME, DEBUG_BUNDLE_ID, PACKAGE_DIR, ROOT, color, log } from "./app.ts"
 
 const args = process.argv.slice(2)
 const wipeBuild = args.includes("--build")
 const wipeRelay = args.includes("--relay")
 const yes = args.includes("-y") || args.includes("--yes")
+const development = args.includes("--dev")
 
-const home = process.env.LORCA_HOME ?? join(homedir(), ".lorca")
-const logs = join(homedir(), "Library", "Logs", APP_NAME)
+const appName = development ? DEBUG_APP_NAME : APP_NAME
+const bundleID = development ? DEBUG_BUNDLE_ID : BUNDLE_ID
+const port = development ? 4863 : 4862
+const home = process.env.LORCA_HOME ?? join(homedir(), development ? ".lorca-dev" : ".lorca")
+const logs = join(homedir(), "Library", "Logs", appName)
 
 const targets: { path: string; what: string; on: boolean }[] = [
   { path: home, what: "identity, keys, credentials, chats", on: true },
@@ -37,7 +41,7 @@ async function pids(pattern: string): Promise<number[]> {
 }
 
 async function stopProcesses() {
-  const patterns = [`${APP_NAME}.app/Contents/MacOS/${APP_NAME}`, "lorca serve", "lorca-relay"]
+  const patterns = [`${appName}.app/Contents/MacOS/${APP_NAME}`, `lorca serve --port ${port}`, "lorca-relay"]
   let found: number[] = []
   for (const pattern of patterns) found = found.concat(await pids(pattern))
   found = [...new Set(found)]
@@ -57,7 +61,7 @@ async function stopProcesses() {
 
 async function confirm(): Promise<boolean> {
   if (yes || !process.stdin.isTTY) return yes
-  process.stdout.write(`${color.yellow("Reset Lorca?")} This deletes the identity on this Mac; without the backup phrase it is gone. [y/N] `)
+  process.stdout.write(`${color.yellow(`Reset ${appName}?`)} This deletes the identity on this Mac; without the backup phrase it is gone. [y/N] `)
   for await (const chunk of Bun.stdin.stream()) {
     const answer = new TextDecoder().decode(chunk).trim().toLowerCase()
     return answer === "y" || answer === "yes"
@@ -70,7 +74,7 @@ log(`${color.bold("reset")} ${color.dim(home)}`)
 for (const target of targets.filter((t) => t.on && existsSync(t.path))) {
   console.log(`  ${color.red("✘")} ${target.path} ${color.dim(target.what)}`)
 }
-console.log(`  ${color.red("✘")} defaults ${BUNDLE_ID} ${color.dim("app preferences")}`)
+console.log(`  ${color.red("✘")} defaults ${bundleID} ${color.dim("app preferences")}`)
 console.log()
 
 if (!(await confirm())) {
@@ -86,8 +90,8 @@ for (const target of targets.filter((t) => t.on)) {
   log(`removed ${target.path}`)
 }
 
-const defaults = Bun.spawn(["defaults", "delete", BUNDLE_ID], { stdout: "ignore", stderr: "ignore" })
+const defaults = Bun.spawn(["defaults", "delete", bundleID], { stdout: "ignore", stderr: "ignore" })
 await defaults.exited
-log(`cleared preferences ${color.dim(BUNDLE_ID)}`)
+log(`cleared preferences ${color.dim(bundleID)}`)
 
 log(color.green("done") + color.dim(" — next launch starts at onboarding"))

@@ -3,7 +3,7 @@ import AppKit
 enum MainMenu {
     static func build() -> NSMenu {
         let main = NSMenu()
-        main.addItem(submenu(appMenu(), title: "Lorca"))
+        main.addItem(submenu(appMenu(), title: AppInfo.name))
         main.addItem(submenu(fileMenu(), title: L("File")))
         main.addItem(submenu(editMenu(), title: L("Edit")))
         main.addItem(submenu(viewMenu(), title: L("View")))
@@ -51,7 +51,8 @@ enum MainMenu {
 
     private static func appMenu() -> NSMenu {
         let menu = NSMenu()
-        add(menu, L("About Lorca"), #selector(NSApplication.orderFrontStandardAboutPanel(_:)))
+        let suffix = AppInfo.isDevelopment ? " Dev" : ""
+        add(menu, L("About Lorca") + suffix, #selector(NSApplication.orderFrontStandardAboutPanel(_:)))
         if Updater.isEnabled {
             add(menu, L("Check for Updates…"), #selector(AppDelegate.checkForUpdates(_:)))
         }
@@ -66,13 +67,13 @@ enum MainMenu {
         NSApp.servicesMenu = services
 
         menu.addItem(.separator())
-        add(menu, L("Hide Lorca"), #selector(NSApplication.hide(_:)), "h")
+        add(menu, L("Hide Lorca") + suffix, #selector(NSApplication.hide(_:)), "h")
         add(
             menu, L("Hide Others"), #selector(NSApplication.hideOtherApplications(_:)), "h",
             modifiers: [.command, .option])
         add(menu, L("Show All"), #selector(NSApplication.unhideAllApplications(_:)))
         menu.addItem(.separator())
-        add(menu, L("Quit Lorca"), #selector(NSApplication.terminate(_:)), "q")
+        add(menu, L("Quit Lorca") + suffix, #selector(NSApplication.terminate(_:)), "q")
         return menu
     }
 

@@ -16,6 +16,7 @@ const MODULE = join(MOBILE, "modules", "lorca-core")
 const STAMPS = join(MOBILE, ".expo", "dev-stamps.json")
 const METRO_PORT = 8081
 const DEBOUNCE_MS = 500
+const APP_ID = "app.lorca.dev"
 // CocoaPods dies on a non-UTF-8 locale, and the CommandLineTools SDK breaks the pod install
 // and the build with "unknown architecture" from tapi.
 const NATIVE_ENV = {
@@ -149,7 +150,7 @@ async function device(): Promise<{ id?: string; simulator: boolean }> {
 
 async function installed(udid: string | undefined): Promise<boolean> {
   if (!udid) return false
-  const proc = Bun.spawn(["xcrun", "simctl", "get_app_container", udid, "app.lorca"], { stdout: "ignore", stderr: "ignore" })
+  const proc = Bun.spawn(["xcrun", "simctl", "get_app_container", udid, APP_ID], { stdout: "ignore", stderr: "ignore" })
   return (await proc.exited) === 0
 }
 
@@ -270,7 +271,7 @@ async function openApp() {
   }
   const host = lanAddress()
   if (!host || !target.id) return
-  await run(["xcrun", "devicectl", "device", "process", "launch", "--terminate-existing", "--device", target.id, "--payload-url", client(host), "app.lorca"], ROOT)
+  await run(["xcrun", "devicectl", "device", "process", "launch", "--terminate-existing", "--device", target.id, "--payload-url", client(host), APP_ID], ROOT)
 }
 
 function watchCore() {
@@ -295,7 +296,7 @@ process.on("SIGINT", () => void shutdown())
 process.on("SIGTERM", () => void shutdown())
 
 console.log()
-log(`${color.bold("Lorca mobile")} dev — ${color.dim("a Rust save rebuilds the core and installs the app again")}`)
+log(`${color.bold("Lorca Dev mobile")} — ${color.dim("a Rust save rebuilds the core and installs the app again")}`)
 building = true
 const ok = await build("initial build")
 building = false

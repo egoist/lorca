@@ -2,6 +2,7 @@
 // app's documents directory. Everything about the account lives in the core's own folder.
 
 import { Directory, File, Paths } from "expo-file-system";
+import * as Application from "expo-application";
 
 export interface Prefs {
   /// Speech recognizer language tag; unset follows the phone's preferred languages.
@@ -11,7 +12,7 @@ export interface Prefs {
 }
 
 function root(): Directory {
-  const dir = new Directory(Paths.document, "lorca");
+  const dir = new Directory(Paths.document, Application.applicationId === "app.lorca.dev" ? "lorca-dev" : "lorca");
   if (!dir.exists) dir.create({ intermediates: true, idempotent: true });
   return dir;
 }

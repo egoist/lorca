@@ -2,7 +2,7 @@
 module.exports = (config) => ({
   type: "notification-service",
   name: "LorcaNotify",
-  displayName: "Lorca",
+  displayName: config.name,
   bundleIdentifier: ".notify",
   deploymentTarget: "16.4",
   // The app leaves the push key in the group's keychain; the extension reads it there.

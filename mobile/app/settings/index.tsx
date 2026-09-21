@@ -287,7 +287,7 @@ export default function SettingsScreen() {
         </Section>
 
         <Text style={[styles.version, { color: p.tertiaryLabel }]}>
-          Lorca {Application.nativeApplicationVersion ?? ""} (
+          {Application.applicationName ?? "Lorca"} {Application.nativeApplicationVersion ?? ""} (
           {Application.nativeBuildVersion ?? ""})
         </Text>
       </ScrollView>

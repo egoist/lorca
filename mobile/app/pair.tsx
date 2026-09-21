@@ -1,6 +1,7 @@
 import { CameraView, useCameraPermissions } from "expo-camera";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
+import * as Application from "expo-application";
 import { LinearGradient } from "expo-linear-gradient";
 import { useEffect, useRef, useState } from "react";
 import { useLocalSearchParams } from "expo-router";
@@ -14,7 +15,7 @@ import { Symbol } from "../src/ui/Symbol";
 import { Font, usePalette } from "../src/ui/theme";
 
 type Phase = "idle" | "posting" | "waiting";
-const appIcon = __DEV__ ? require("../assets/icon-dev.png") : require("../assets/icon.png");
+const appIcon = Application.applicationId === "app.lorca.dev" ? require("../assets/icon-dev.png") : require("../assets/icon.png");
 
 export default function PairScreen() {
   const p = usePalette();

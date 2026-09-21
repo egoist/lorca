@@ -1,8 +1,8 @@
-import { APP_NAME, buildApp, bundlePath, color, log } from "./app.ts"
+import { appName, buildApp, bundlePath, color, log } from "./app.ts"
 
 const config = process.argv.includes("--debug") ? "debug" : "release"
 
-log(`${color.bold("building")} ${color.dim(`${APP_NAME} (${config})`)}`)
+log(`${color.bold("building")} ${color.dim(`${appName(config)} (${config})`)}`)
 const result = await buildApp(config)
 
 if (!result.ok) {

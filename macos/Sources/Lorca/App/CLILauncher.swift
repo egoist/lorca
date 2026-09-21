@@ -63,7 +63,7 @@ final class CLILauncher {
     }
 
     static var logURL: URL {
-        let directory = NSHomeDirectory() + "/Library/Logs/Lorca"
+        let directory = NSHomeDirectory() + "/Library/Logs/\(AppInfo.name)"
         try? FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
         return URL(fileURLWithPath: directory).appendingPathComponent("cli.log")
     }
@@ -104,6 +104,7 @@ final class CLILauncher {
         process.arguments = ["serve", "--port", String(port), "--parent-pid", String(ProcessInfo.processInfo.processIdentifier)]
         var environment = ProcessInfo.processInfo.environment
         environment["RUST_LOG"] = environment["RUST_LOG"] ?? "lorca=info"
+        environment["LORCA_HOME"] = environment["LORCA_HOME"] ?? AppInfo.defaultCLIHome.path
         process.environment = environment
 
         let logURL = Self.logURL

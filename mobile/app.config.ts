@@ -4,6 +4,9 @@ export default (): ExpoConfig => {
   const development =
     process.env.LORCA_MOBILE_VARIANT === "development" ||
     process.env.EAS_BUILD_PROFILE === "development";
+  const appName = development ? "Lorca Dev" : "Lorca";
+  const appId = development ? "app.lorca.dev" : "app.lorca";
+  const appGroup = development ? "group.app.lorca.dev" : "group.app.lorca";
   const icon = development ? "./assets/icon-dev.png" : "./assets/icon.png";
   const splash = development ? "./assets/splash-icon-dev.png" : "./assets/splash-icon.png";
   const favicon = development ? "./assets/favicon-dev.png" : "./assets/favicon.png";
@@ -12,21 +15,15 @@ export default (): ExpoConfig => {
   const darkSplashBackgroundColor = "#1c1c1e";
 
   return {
-    name: "Lorca",
+    name: appName,
     slug: "lorca",
     version: "1.0.0",
-    scheme: "lorca",
+    scheme: development ? "lorca-dev" : "lorca",
     orientation: "portrait",
     icon,
     userInterfaceStyle: "automatic",
-    newArchEnabled: true,
-    splash: {
-      image: splash,
-      resizeMode: "contain",
-      backgroundColor: splashBackgroundColor,
-    },
     ios: {
-      bundleIdentifier: "app.lorca",
+      bundleIdentifier: appId,
       supportsTablet: true,
       infoPlist: {
         NSCameraUsageDescription: "Lorca scans the pairing code your Mac shows.",
@@ -37,17 +34,16 @@ export default (): ExpoConfig => {
       },
       buildNumber: "1",
       entitlements: {
-        "com.apple.security.application-groups": ["group.app.lorca"],
+        "com.apple.security.application-groups": [appGroup],
       },
       appleTeamId: "GJE9R5VE87",
     },
     android: {
-      package: "app.lorca",
+      package: appId,
       adaptiveIcon: {
         backgroundColor: adaptiveIconBackgroundColor,
         foregroundImage: icon,
       },
-      edgeToEdgeEnabled: true,
       predictiveBackGestureEnabled: true,
       versionCode: 1,
     },

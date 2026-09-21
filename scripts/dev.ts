@@ -8,6 +8,7 @@ import {
   PACKAGE_DIR,
   ROOT,
   SOURCES_DIR,
+  appName,
   buildApp,
   bundlePath,
   color,
@@ -31,14 +32,15 @@ async function lorcaPids(): Promise<number[]> {
     .split("\n")
     .map((line) => Number(line.trim()))
     .filter((pid) => Number.isInteger(pid) && pid > 0)
-  // The phone app in the iOS Simulator is a host process with the same name. It belongs to
-  // `bun run mobile:dev`.
+  // Only the development Mac bundle belongs to this loop. The production app and the phone
+  // app may both have an executable named Lorca and stay running beside it.
   const mac: number[] = []
+  const developmentExecutable = `${appName(CONFIG)}.app/Contents/MacOS/${APP_NAME}`
   for (const pid of pids) {
     const ps = Bun.spawn(["ps", "-o", "command=", "-p", String(pid)], { stdout: "pipe", stderr: "pipe" })
     const command = await new Response(ps.stdout).text()
     await ps.exited
-    if (!command.includes("/CoreSimulator/")) mac.push(pid)
+    if (command.includes(developmentExecutable)) mac.push(pid)
   }
   return mac
 }
@@ -51,7 +53,7 @@ function killPid(pid: number, signal: NodeJS.Signals) {
   }
 }
 
-/** Quit every Lorca process, not only the pid this script spawned last. */
+/** Quit every Lorca Dev process, not only the pid this script spawned last. */
 async function stopApp() {
   const current = app
   app = null
@@ -189,11 +191,11 @@ async function startApp() {
       if (stopping || app === null) return
       app = null
       const how = signal ? `signal ${signal}` : `code ${exitCode}`
-      log(color.yellow(`${APP_NAME} exited (${how}) — press ${color.bold("r")} to relaunch`))
+      log(color.yellow(`${appName(CONFIG)} exited (${how}) — press ${color.bold("r")} to relaunch`))
     },
   })
   const where = output.startsWith("/dev/") ? "" : ` · output in ${output}`
-  log(`${color.green("running")} ${color.dim(`via open${where}`)}`)
+  log(`${color.green("running")} ${color.dim(`via open · CLI 127.0.0.1:4863${where}`)}`)
 }
 
 async function cycle(reason: string) {
@@ -279,7 +281,7 @@ process.on("SIGINT", () => void shutdown())
 process.on("SIGTERM", () => void shutdown())
 
 console.log()
-log(`${color.bold(APP_NAME)} dev — ${color.dim("r relaunch · b rebuild · q quit")}`)
+log(`${color.bold(appName(CONFIG))} — ${color.dim("r relaunch · b rebuild · q quit")}`)
 await startRelay()
 await cycle("initial build")
 watchSources()

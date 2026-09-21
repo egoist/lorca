@@ -19,7 +19,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             backing: .buffered,
             defer: false
         )
-        window.title = "Lorca"
+        window.title = AppInfo.name
         window.titleVisibility = .visible
         window.toolbarStyle = .unified
         window.titlebarSeparatorStyle = .automatic
@@ -243,7 +243,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             window.title = pane.title
             window.subtitle = ""
         case nil:
-            window.title = "Lorca"
+            window.title = AppInfo.name
             window.subtitle = ""
         }
     }

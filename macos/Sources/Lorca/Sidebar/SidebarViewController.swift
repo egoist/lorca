@@ -515,7 +515,10 @@ final class SidebarFooterView: NSView {
         let store = AppStore.shared
         let connected = store.isConnected
         let name = store.thisDevice?.name ?? L("This Mac")
-        let status = connected ? L("CLI on 127.0.0.1:%@", String(Preferences.cliPort)) : L("CLI not running · start it with: lorca serve")
+        let status = connected
+            ? L("CLI on 127.0.0.1:%@", String(Preferences.cliPort))
+            : L("CLI not running · start it with: lorca serve")
+                .replacingOccurrences(of: "lorca serve", with: AppInfo.cliCommand)
         // Device symbols fill their screen in monochrome, which sits heavier than the gear's
         // outline; a palette with a clear second layer leaves the outline alone. The iMac's chin
         // stays solid either way, so a desktop shows as a plain display here.

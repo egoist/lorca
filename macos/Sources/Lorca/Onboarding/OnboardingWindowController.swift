@@ -126,7 +126,7 @@ final class OnboardingViewController: NSViewController {
         icon.translatesAutoresizingMaskIntoConstraints = false
 
         let title = Build.label(
-            "Lorca", font: .systemFont(ofSize: 30, weight: .bold), alignment: .center)
+            AppInfo.name, font: .systemFont(ofSize: 30, weight: .bold), alignment: .center)
         let subtitle = Build.label(
             L("Bots that run on Macs you own. Your identity is a key pair on this machine — no account, no server that can read your chats."),
             font: .systemFont(ofSize: 13), color: .secondaryLabelColor, lines: 0, alignment: .center
@@ -632,7 +632,9 @@ final class OnboardingViewController: NSViewController {
             return
         }
         guard store.isConnected else {
-            presentError(L("The Lorca CLI is not running. Start it with `lorca serve` and try again."))
+            presentError(
+                L("The Lorca CLI is not running. Start it with `lorca serve` and try again.")
+                    .replacingOccurrences(of: "lorca serve", with: AppInfo.cliCommand))
             return
         }
         busy = true
@@ -719,7 +721,7 @@ final class OnboardingViewController: NSViewController {
 
     private func presentError(_ message: String) {
         let alert = NSAlert()
-        alert.messageText = "Lorca"
+        alert.messageText = AppInfo.name
         alert.informativeText = message
         alert.alertStyle = .warning
         alert.addButton(withTitle: L("OK"))
