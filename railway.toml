@@ -1,9 +1,0 @@
-# Railway deploys the relay (crates/relay). The build context is the repo root, where the
-# Cargo workspace lives; pushes that leave the relay's inputs alone do not redeploy it.
-[build]
-builder = "DOCKERFILE"
-dockerfilePath = "crates/relay/Dockerfile"
-watchPatterns = ["/crates/relay/**", "/Cargo.toml", "/Cargo.lock"]
-
-[deploy]
-healthcheckPath = "/v1/health"

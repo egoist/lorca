@@ -6,7 +6,7 @@ Every flag has an environment variable, listed by `lorca-relay --help`.
 
 ## Deploy on Railway
 
-1. Create a service from this repository and leave **Root Directory** empty. [`railway.toml`](../../railway.toml) at the repo root builds this [`Dockerfile`](Dockerfile) with the whole Cargo workspace as context, redeploys only when `crates/relay/`, `Cargo.toml`, or `Cargo.lock` change, and healthchecks `/v1/health`.
+1. Create a service from this repository and leave **Root Directory** empty: the [`Dockerfile`](Dockerfile) builds with the whole Cargo workspace as context. In the service's **Settings**, set **Healthcheck Path** to `/v1/health`, and **Watch Paths** to `/crates/relay/**`, `/Cargo.toml`, and `/Cargo.lock` so that pushes elsewhere in the repo leave the relay running.
 2. Set the [variables every deploy needs](#variables-every-deploy-needs).
 3. Pick storage: [SQLite on a volume](#sqlite-on-a-volume) or [Postgres and a bucket](#postgres-and-a-bucket).
 4. Generate a domain under **Settings › Networking**.
@@ -18,6 +18,7 @@ Once it is up, `https://<domain>` reads "Lorca Relay is running...", `curl https
 
 | Variable | Value |
 | --- | --- |
+| `RAILWAY_DOCKERFILE_PATH` | `crates/relay/Dockerfile`. Railway builds the service from this file. |
 | `LORCA_RELAY_SECRET` | The output of `openssl rand -hex 32`. It signs bearer tokens; unset, it changes on every boot and invalidates every Device's token. |
 | `LORCA_RELAY_TRUST_PROXY` | `true`. The relay takes the client address from the `X-Forwarded-For` header that Railway's edge sets; otherwise every request comes from the proxy and all clients share one rate limit. |
 

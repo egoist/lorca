@@ -197,7 +197,7 @@ The sync sockets live in `hub.rs`, grouped by identity: a blob write signals the
 
 Rate limits (`limit.rs`) are token buckets in memory: per client IP on the routes that need no token (registration, auth, the pairing mailbox; `--ip-per-minute`, default 60, `--trust-proxy` to read `X-Forwarded-For`), and per identity on everything behind a bearer (`--identity-per-second`, default 50, burst ten times that). Over the limit is 429 with `Retry-After`.
 
-The image (`crates/relay/Dockerfile`) builds from the repo root, since the relay is a workspace member; cargo-chef keeps the dependency layer cached until a manifest or `Cargo.lock` changes. It runs the binary on `debian:trixie-slim` in `/data`, where the SQLite database and the files directory land, and listens on `[::]:$PORT` (8787 without `PORT`; `LORCA_RELAY_BIND` overrides both). `railway.toml` deploys it on Railway, with watch patterns on the relay's inputs and `/v1/health` as the healthcheck. With SQLite, a Railway volume at `/data` keeps the database. With Railway's Postgres, `LORCA_RELAY_DB` is its private `DATABASE_URL` with `?sslmode=disable`, since that server's certificate is self-signed, and files go to an S3 bucket, since the container's disk does not outlive a deploy. [crates/relay/README.md](crates/relay/README.md) lists the variables a Railway service takes.
+The image (`crates/relay/Dockerfile`) builds from the repo root, since the relay is a workspace member; cargo-chef keeps the dependency layer cached until a manifest or `Cargo.lock` changes. It runs the binary on `debian:trixie-slim` in `/data`, where the SQLite database and the files directory land, and listens on `[::]:$PORT` (8787 without `PORT`; `LORCA_RELAY_BIND` overrides both). A Railway service builds it through `RAILWAY_DOCKERFILE_PATH` and healthchecks `/v1/health`. With SQLite, a Railway volume at `/data` keeps the database. With Railway's Postgres, `LORCA_RELAY_DB` is its private `DATABASE_URL` with `?sslmode=disable`, since that server's certificate is self-signed, and files go to an S3 bucket, since the container's disk does not outlive a deploy. [crates/relay/README.md](crates/relay/README.md) lists the variables a Railway service takes.
 
 Auth is per machine:
 
@@ -452,7 +452,6 @@ lorca/
   ARCHITECTURE.md
   README.md
   Cargo.toml           # workspace
-  railway.toml         # Railway deploy of the relay image
   crates/agent/        # lorca-agent: loop, tools, and Messages, Chat Completions, Responses, ChatGPT, and Grok providers
   crates/provider-auth/ # OAuth token types and PKCE flows shared by every Device
   crates/cli/          # lorca: the Device core as a library (keys, relay sync, jobs, the JSON API) + runner and server features + the binary
