@@ -108,7 +108,8 @@ async function strayRelayPid(): Promise<number | null> {
 }
 
 /** A local relay on every interface, so a phone on this network can pair through it. The dev
- * app (LORCA_DEV=1) defaults its relay URL to this Mac's LAN IP on this port. A relay left
+ * app (LORCA_DEV=1) defaults its relay URL to this Mac's LAN IP on this port, and the phone
+ * that pairs is the development build, so APNs pushes go to `app.lorca.dev`. A relay left
  * over from an earlier loop is replaced: it may predate the blob kinds the CLI now syncs, and
  * the CLI fails every cycle against one that rejects them. */
 async function startRelay() {
@@ -131,7 +132,7 @@ async function startRelay() {
     return
   }
   relay = Bun.spawn(
-    [join(ROOT, "target", "debug", "lorca-relay"), "--bind", `0.0.0.0:${RELAY_PORT}`, "--db", join(ROOT, "target", "lorca-relay.db")],
+    [join(ROOT, "target", "debug", "lorca-relay"), "--bind", `0.0.0.0:${RELAY_PORT}`, "--db", join(ROOT, "target", "lorca-relay.db"), "--apns-topic", "app.lorca.dev"],
     {
       cwd: ROOT,
       stdin: "ignore",

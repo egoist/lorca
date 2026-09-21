@@ -4,6 +4,7 @@
 // permission, the token, what shows while the app is open, and the tap that opens the chat.
 
 import * as Application from "expo-application";
+import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
 import { router } from "expo-router";
 import { Platform } from "react-native";
@@ -48,8 +49,10 @@ export async function registerForPushes() {
     if (status !== "granted") return;
     const token = await Notifications.getDevicePushTokenAsync();
     if (typeof token.data !== "string") return;
-    // Only a store or TestFlight build says "production"; a development build and the simulator take sandbox pushes.
-    const environment = Platform.OS === "ios" ? ((await Application.getIosPushNotificationServiceEnvironmentAsync()) === "production" ? "production" : "sandbox") : undefined;
+    // A development build's embedded profile says "development". A store or TestFlight build ships without
+    // one and reads null, as the simulator does, but only the simulator takes sandbox pushes.
+    const aps = Platform.OS === "ios" ? await Application.getIosPushNotificationServiceEnvironmentAsync() : null;
+    const environment = Platform.OS === "ios" ? (aps === "development" || !Device.isDevice ? "sandbox" : "production") : undefined;
     await core.request("push.register", { platform: Platform.OS === "ios" ? "apns" : "fcm", token: token.data, environment });
   } catch (error) {
     console.warn("registering for pushes", error instanceof Error ? error.message : error);
