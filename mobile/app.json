@@ -70,7 +70,8 @@
       "expo-localization",
       "expo-notifications",
       "@bacons/apple-targets",
-      "./plugins/with-scene-lifecycle"
+      "./plugins/with-scene-lifecycle",
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true

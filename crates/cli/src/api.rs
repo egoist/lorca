@@ -8,8 +8,8 @@ use serde_json::{json, Value};
 
 use crate::app::App;
 use crate::model::*;
-#[cfg(feature = "runner")]
-use crate::providers;
+#[cfg(feature = "provider-auth")]
+use crate::provider_auth;
 use crate::{identity, pairing, requests, routines, runtime};
 
 fn string(params: &Value, key: &str) -> Result<String, String> {
@@ -18,6 +18,23 @@ fn string(params: &Value, key: &str) -> Result<String, String> {
 
 fn opt_string(params: &Value, key: &str) -> Option<String> {
     params[key].as_str().map(str::to_string).filter(|s| !s.is_empty())
+}
+
+/// A Runner opens provider OAuth in its browser. A phone emits the URL to the Expo app,
+/// whose in-app browser keeps the core alive for the localhost callback.
+#[cfg(feature = "provider-auth")]
+fn open_provider_auth(app: &Arc<App>, kind: &str, url: &str) -> Result<(), String> {
+    #[cfg(feature = "runner")]
+    {
+        let _ = app;
+        let _ = kind;
+        open::that(url).map_err(|e| format!("Cannot open the browser: {e}"))
+    }
+    #[cfg(not(feature = "runner"))]
+    {
+        app.emit(crate::events::Event::ProviderAuth { kind: kind.to_string(), url: url.to_string() });
+        Ok(())
+    }
 }
 
 /// A bot's profile image from the `avatar` param: `None` when the param is absent (leave it),
@@ -524,39 +541,57 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             crate::plugins::on_runner(app, &bot.runner_id, "permission.answer", body).await
         }
 
-        #[cfg(feature = "runner")]
+        #[cfg(feature = "provider-auth")]
         "providers.connect_deepseek" => {
-            providers::connect_deepseek(app, &string(&params, "api_key")?, opt_string(&params, "base_url").as_deref()).await?;
+            provider_auth::connect_deepseek(app, &string(&params, "api_key")?, opt_string(&params, "base_url").as_deref()).await?;
             Ok(json!({ "providers": app.credentials.lock().unwrap().statuses() }))
         }
-        #[cfg(feature = "runner")]
+        #[cfg(feature = "provider-auth")]
         "providers.connect_anthropic" => {
-            providers::connect_anthropic(app, &string(&params, "api_key")?, opt_string(&params, "base_url").as_deref()).await?;
+            provider_auth::connect_anthropic(app, &string(&params, "api_key")?, opt_string(&params, "base_url").as_deref()).await?;
             Ok(json!({ "providers": app.credentials.lock().unwrap().statuses() }))
         }
-        #[cfg(feature = "runner")]
+        #[cfg(feature = "provider-auth")]
         "providers.connect_opencode" => {
-            providers::connect_opencode(app, &string(&params, "api_key")?, opt_string(&params, "base_url").as_deref()).await?;
+            provider_auth::connect_opencode(app, &string(&params, "api_key")?, opt_string(&params, "base_url").as_deref()).await?;
             Ok(json!({ "providers": app.credentials.lock().unwrap().statuses() }))
         }
-        #[cfg(feature = "runner")]
+        #[cfg(feature = "provider-auth")]
         "providers.connect_opencode_go" => {
-            providers::connect_opencode_go(app, &string(&params, "api_key")?, opt_string(&params, "base_url").as_deref()).await?;
+            provider_auth::connect_opencode_go(app, &string(&params, "api_key")?, opt_string(&params, "base_url").as_deref()).await?;
             Ok(json!({ "providers": app.credentials.lock().unwrap().statuses() }))
         }
-        #[cfg(feature = "runner")]
+        #[cfg(feature = "provider-auth")]
         "providers.connect_chatgpt" => {
-            let tokens = providers::connect_chatgpt(app).await?;
+            let cancel = app.begin_provider_auth();
+            let opener = app.clone();
+            let login = provider_auth::connect_chatgpt(app, move |url| open_provider_auth(&opener, "chatgpt", url));
+            let tokens = tokio::select! {
+                result = login => result?,
+                _ = cancel.cancelled() => return Err("Sign-in cancelled".into()),
+            };
             Ok(json!({ "email": tokens.email, "providers": app.credentials.lock().unwrap().statuses() }))
         }
-        #[cfg(feature = "runner")]
+        #[cfg(feature = "provider-auth")]
         "providers.connect_grok" => {
-            let tokens = providers::connect_grok(app).await?;
+            let cancel = app.begin_provider_auth();
+            let opener = app.clone();
+            let login = provider_auth::connect_grok(app, move |url| open_provider_auth(&opener, "grok", url));
+            let tokens = tokio::select! {
+                result = login => result?,
+                _ = cancel.cancelled() => return Err("Sign-in cancelled".into()),
+            };
             Ok(json!({ "email": tokens.email, "providers": app.credentials.lock().unwrap().statuses() }))
         }
-        #[cfg(feature = "runner")]
+        #[cfg(feature = "provider-auth")]
+        "providers.auth.cancel" => {
+            app.cancel_provider_auth();
+            Ok(Value::Null)
+        }
+        #[cfg(feature = "provider-auth")]
         "providers.disconnect" => {
-            providers::disconnect(app, &string(&params, "kind")?)?;
+            app.cancel_provider_auth();
+            provider_auth::disconnect(app, &string(&params, "kind")?)?;
             Ok(json!({ "providers": app.credentials.lock().unwrap().statuses() }))
         }
 

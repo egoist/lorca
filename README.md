@@ -36,7 +36,7 @@ Architecture: [ARCHITECTURE.md](./ARCHITECTURE.md). Read it before implementing.
 
 ## Phone app
 
-`mobile/` is an Expo app for iOS and Android. It pairs with your Mac by scanning the pairing code and then talks to the relay directly: the same keys, envelopes, and jobs as the CLI, ported to TypeScript. A phone is a Device, never a Runner: it reads and writes chats, attaches photos and files, dictates messages, creates bots for your Runners, and starts turns; the bots keep running on your machines.
+`mobile/` is an Expo app for iOS and Android. It pairs with your Mac by scanning the pairing code and then talks to the relay directly with the Rust Device core: the same keys, envelopes, and jobs as the CLI. A phone is a Device, never a Runner: it reads and writes chats, attaches photos and files, dictates messages, configures the account's provider credentials, creates bots for your Runners, and starts turns; the bots keep running on your machines.
 
 ```bash
 bun run mobile       # Metro for the dev client

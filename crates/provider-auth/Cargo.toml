@@ -1,0 +1,15 @@
+[package]
+name = "lorca-provider-auth"
+description = "Provider OAuth tokens and PKCE flows shared by Lorca Devices and Runners"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+base64.workspace = true
+rand.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true

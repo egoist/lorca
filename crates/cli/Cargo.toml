@@ -18,13 +18,16 @@ required-features = ["cli"]
 default = ["cli"]
 # The command-line binary: everything.
 cli = ["runner", "server", "dep:usage", "dep:tracing-subscriber"]
+# Connecting and disconnecting account providers. Devices use this without the agent loop.
+provider-auth = ["dep:lorca-provider-auth"]
 # Running bots: the agent loop, providers, tools. Off for a Device that only takes part.
-runner = ["dep:lorca-agent", "dep:open", "dep:rmcp", "dep:mcp_http"]
+runner = ["provider-auth", "dep:lorca-agent", "dep:open", "dep:rmcp", "dep:mcp_http"]
 # The local websocket the desktop app connects to.
 server = ["dep:axum"]
 
 [dependencies]
 lorca-agent = { path = "../agent", optional = true }
+lorca-provider-auth = { path = "../provider-auth", optional = true }
 anyhow.workspace = true
 async-trait.workspace = true
 axum = { workspace = true, optional = true }

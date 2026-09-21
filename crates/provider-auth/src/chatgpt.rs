@@ -1,19 +1,51 @@
 //! ChatGPT sign-in: OAuth authorization code with PKCE and a localhost callback, the same flow
-//! the Codex CLI uses. Runs on the Runner; tokens never leave it.
+//! the Codex CLI uses. A Device runs the flow and stores the tokens in the account's encrypted
+//! credentials.
 
 use base64::Engine;
 use rand::RngCore;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
-use super::ChatGptTokens;
+/// Tokens from a ChatGPT login. Devices carry them in the account's encrypted credentials.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ChatGptTokens {
+    pub access_token: String,
+    pub refresh_token: String,
+    #[serde(default)]
+    pub id_token: Option<String>,
+    pub account_id: String,
+    #[serde(default)]
+    pub email: Option<String>,
+    /// Unix seconds.
+    pub expires_at: u64,
+}
+
+impl ChatGptTokens {
+    pub fn is_expired(&self) -> bool {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        now + 60 >= self.expires_at
+    }
+}
 
 pub const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 pub const ISSUER: &str = "https://auth.openai.com";
 pub const CALLBACK_PORT: u16 = 1455;
 pub const SCOPES: &str = "openid profile email offline_access";
+
+struct AbortOnDrop(tokio::task::AbortHandle);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
 
 fn redirect_uri() -> String {
     format!("http://localhost:{CALLBACK_PORT}/auth/callback")
@@ -227,8 +259,8 @@ async fn tokens_from_response(response: reqwest::Response) -> Result<ChatGptToke
     Ok(ChatGptTokens { access_token, refresh_token, id_token, account_id, email, expires_at: now + expires_in })
 }
 
-/// Decodes the payload of a JWT without verifying it. The relay never sees these; the only
-/// consumer is this Runner picking its account id out of a token it just received over TLS.
+/// Decodes the payload of a JWT without verifying it. The relay never sees these; the Device
+/// is picking its account id out of a token it just received over TLS.
 pub fn jwt_claims(token: &str) -> Option<Value> {
     let payload = token.split('.').nth(1)?;
     let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload).ok()?;
@@ -247,6 +279,7 @@ pub async fn login(
     let state = flow.state.clone();
     // Bind before the browser opens so the redirect never races the listener.
     let callback = tokio::spawn(async move { wait_for_callback(&state, timeout).await });
+    let _abort_on_drop = AbortOnDrop(callback.abort_handle());
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     open_url(&url)?;
     let code = callback.await.map_err(|e| e.to_string())??;
@@ -269,5 +302,15 @@ mod tests {
     #[test]
     fn decodes_query() {
         assert_eq!(urldecode("a%20b+c"), "a b c");
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_login_releases_the_callback_port() {
+        let client = reqwest::Client::new();
+        for _ in 0..2 {
+            let error = login(&client, |_| Err("browser closed".into()), std::time::Duration::from_secs(1)).await.unwrap_err();
+            assert_eq!(error, "browser closed");
+            tokio::task::yield_now().await;
+        }
     }
 }

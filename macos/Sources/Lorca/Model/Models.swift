@@ -176,7 +176,7 @@ struct ProviderCredential: Hashable, Identifiable {
     var kind: Kind
     var isConnected: Bool
     var detail: String
-    /// A custom API root, when the credential on the Runner has one.
+    /// A custom API root, when the account credential has one.
     var baseURL: String? = nil
 }
 

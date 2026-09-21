@@ -3,11 +3,12 @@
 // Every call is one request over the JSON API the desktop app speaks to the CLI; the Rust
 // core does the keys, the relay, jobs, rooms, and questions to Runners.
 
-import { AppState, type AppStateStatus } from "react-native";
+import * as WebBrowser from "expo-web-browser";
+import { AppState, Platform, type AppStateStatus } from "react-native";
 import * as core from "../../modules/lorca-core";
 import { t } from "../i18n";
 import { hostFacts } from "./host";
-import type { Attachment, AutoReview, Bot, Chat, ChatMeta, ChatSearchResults, ChatUsage, Message } from "./model";
+import { providerConnectMethod, type Attachment, type AutoReview, type Bot, type Chat, type ChatMeta, type ChatSearchResults, type ChatUsage, type Message, type ProviderKind, type ProviderStatus } from "./model";
 import { coreHome, loadPrefs, pathOf, wipePrefs } from "./prefs";
 import { installPushHandlers, registerForPushes } from "./push";
 import {
@@ -49,6 +50,8 @@ class Engine {
   private started = false;
   private fetchingFiles = new Set<string>();
   private loadingOlder = new Set<string>();
+  private providerBrowserOpen = false;
+  private dismissingProviderAuth = false;
 
   // MARK: - Lifecycle
 
@@ -120,6 +123,9 @@ class Engine {
         break;
       case "relay.status":
         useStore.setState((s) => ({ relayConnected: !!data.connected, relayUrl: data.url ?? s.relayUrl }));
+        break;
+      case "provider.auth":
+        this.openProviderAuth(data.url);
         break;
       case "identity.changed":
         if (!data.has_identity) resetStore();
@@ -258,6 +264,65 @@ class Engine {
   setAutoReview(value: AutoReview) {
     useStore.setState({ auto_review: value });
     void core.request("auto_review.set", { is_enabled: value.is_enabled, rules: value.rules });
+  }
+
+  // MARK: - Providers
+
+  /// Checks and saves an API key, or runs a subscription sign-in in the phone's in-app
+  /// browser. The core writes the encrypted account credential and publishes it to every
+  /// paired Device.
+  async connectProvider(kind: ProviderKind, input: { apiKey?: string; baseURL?: string } = {}): Promise<void> {
+    const params = input.apiKey === undefined ? {} : { api_key: input.apiKey, base_url: input.baseURL?.trim() || undefined };
+    try {
+      const { providers } = await core.request<{ providers: ProviderStatus[] }>(providerConnectMethod(kind), params);
+      useStore.setState({ providers });
+    } finally {
+      if (kind === "chatgpt" || kind === "grok") this.dismissProviderAuth();
+    }
+  }
+
+  async disconnectProvider(kind: ProviderKind): Promise<void> {
+    const { providers } = await core.request<{ providers: ProviderStatus[] }>("providers.disconnect", { kind });
+    useStore.setState({ providers });
+  }
+
+  private openProviderAuth(url: string) {
+    // iOS keeps the core alive behind SFSafariViewController. Android's auth-session
+    // polyfill also watches AppState, so closing the custom tab can cancel the Rust wait.
+    this.providerBrowserOpen = true;
+    const browser = Platform.OS === "android" ? WebBrowser.openAuthSessionAsync(url) : WebBrowser.openBrowserAsync(url);
+    void browser
+      .then((result) => {
+        if (!this.dismissingProviderAuth && (result.type === "cancel" || result.type === "dismiss"))
+          void core.request("providers.auth.cancel").catch(() => {});
+      })
+      .catch((error) => {
+        console.warn("opening provider sign-in", error instanceof Error ? error.message : error);
+        void core.request("providers.auth.cancel").catch(() => {});
+      })
+      .finally(() => {
+        this.providerBrowserOpen = false;
+        this.dismissingProviderAuth = false;
+      });
+  }
+
+  private dismissProviderAuth() {
+    if (!this.providerBrowserOpen) {
+      this.dismissingProviderAuth = false;
+      return;
+    }
+    this.dismissingProviderAuth = true;
+    // Chrome Custom Tabs have no programmatic dismiss. Its success page stays up until the
+    // user closes it; the promise above then clears this flag without cancelling the login.
+    if (Platform.OS === "android") return;
+    try {
+      void WebBrowser.dismissBrowser().catch(() => {
+        this.dismissingProviderAuth = false;
+      });
+    } catch {
+      // The browser may already be gone on this platform.
+      this.dismissingProviderAuth = false;
+    }
   }
 
   // MARK: - Plugins

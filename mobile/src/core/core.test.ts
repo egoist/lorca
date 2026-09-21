@@ -2,7 +2,19 @@
 // pairing-string check, the model helpers, and the formatting the transcript and list share.
 
 import { describe, expect, test } from "bun:test";
-import { attachmentSummary, fileSize, isSentMessage, recipientName, type Body, type Chat, type Bot } from "./model";
+import {
+  attachmentSummary,
+  fileSize,
+  isProviderKind,
+  isSentMessage,
+  providerConnectMethod,
+  providerDefaultBaseURL,
+  providerUsesAPIKey,
+  recipientName,
+  type Body,
+  type Bot,
+  type Chat,
+} from "./model";
 import { parsePairingString } from "./pairing";
 import { daySeparator, joinDictation, preview, stamp, time } from "../ui/format";
 
@@ -38,6 +50,17 @@ describe("model", () => {
     expect(isSentMessage(running)).toBe(false);
     expect(isSentMessage(failed)).toBe(false);
     expect(isSentMessage({ kind: "text", text: "Messaged Scout" })).toBe(false);
+  });
+
+  test("describes provider credential setup", () => {
+    expect(isProviderKind("opencode-go")).toBe(true);
+    expect(isProviderKind("unknown")).toBe(false);
+    expect(providerUsesAPIKey("anthropic")).toBe(true);
+    expect(providerUsesAPIKey("chatgpt")).toBe(false);
+    expect(providerConnectMethod("opencode-go")).toBe("providers.connect_opencode_go");
+    expect(providerConnectMethod("grok")).toBe("providers.connect_grok");
+    expect(providerDefaultBaseURL("deepseek")).toBe("https://api.deepseek.com");
+    expect(providerDefaultBaseURL("chatgpt")).toBe("");
   });
 });
 

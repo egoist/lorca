@@ -7,7 +7,7 @@ export const MAX_GROUP_BOTS = 6;
 export const ONLINE_WINDOW_SECS = 150;
 
 export interface ProviderStatus {
-  kind: string;
+  kind: ProviderKind | string;
   is_connected: boolean;
   detail: string;
   base_url?: string;
@@ -233,6 +233,56 @@ export const PROVIDER_LABELS: Record<string, string> = {
   chatgpt: "ChatGPT",
   grok: "Grok",
 };
+
+export const PROVIDER_KINDS = ["deepseek", "anthropic", "opencode", "opencode-go", "chatgpt", "grok"] as const;
+export type ProviderKind = (typeof PROVIDER_KINDS)[number];
+
+export function isProviderKind(kind: string): kind is ProviderKind {
+  return (PROVIDER_KINDS as readonly string[]).includes(kind);
+}
+
+export function providerUsesAPIKey(kind: ProviderKind): boolean {
+  return kind !== "chatgpt" && kind !== "grok";
+}
+
+export function providerConnectMethod(kind: ProviderKind): string {
+  return `providers.connect_${kind === "opencode-go" ? "opencode_go" : kind}`;
+}
+
+export function providerDefaultBaseURL(kind: ProviderKind): string {
+  switch (kind) {
+    case "deepseek":
+      return "https://api.deepseek.com";
+    case "anthropic":
+      return "https://api.anthropic.com";
+    case "opencode":
+      return "https://opencode.ai/zen";
+    case "opencode-go":
+      return "https://opencode.ai/zen/go";
+    default:
+      return "";
+  }
+}
+
+export function providerKeyPlaceholder(kind: ProviderKind): string {
+  switch (kind) {
+    case "deepseek":
+      return t("sk-… from platform.deepseek.com");
+    case "anthropic":
+      return t("sk-ant-… from console.anthropic.com");
+    case "opencode":
+    case "opencode-go":
+      return t("API key from opencode.ai/auth");
+    default:
+      return "";
+  }
+}
+
+export function providerSignInRequirement(kind: ProviderKind): string {
+  if (kind === "chatgpt") return t("It needs a ChatGPT subscription.");
+  if (kind === "grok") return t("It needs a SuperGrok or X Premium+ subscription.");
+  return "";
+}
 
 export function providerLabel(kind: string): string {
   return PROVIDER_LABELS[kind] ?? kind;

@@ -217,6 +217,8 @@ export default function SettingsScreen() {
                 provider.is_connected ? provider.detail || undefined : undefined
               }
               detail={provider.is_connected ? t("Connected") : t("Not connected")}
+              onPress={() => router.push(`/settings/provider/${provider.kind}`)}
+              chevron
             />
           ))}
         </Section>

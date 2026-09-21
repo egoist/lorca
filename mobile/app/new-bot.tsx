@@ -141,7 +141,7 @@ export default function NewBotScreen() {
           ))}
         </Section>
         {runner && (
-          <Section title={t("Provider")} footer={connected.length ? undefined : t("No provider is connected yet; connect one from Lorca on a Mac before this bot answers.")}>
+          <Section title={t("Provider")} footer={connected.length ? undefined : t("No provider is connected yet; connect one in Settings before this bot answers.")}>
             {providers.map((kind) => (
               <CheckRow key={kind} title={providerLabel(kind)} checked={kind === effectiveProvider} onPress={() => { setProvider(kind); setModel(undefined); setThinking(undefined); }} />
             ))}

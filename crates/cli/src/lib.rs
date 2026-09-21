@@ -18,6 +18,8 @@ pub mod memory;
 pub mod model;
 pub mod pairing;
 pub mod plugins;
+#[cfg(feature = "provider-auth")]
+pub mod provider_auth;
 #[cfg(feature = "runner")]
 pub mod providers;
 pub mod push;

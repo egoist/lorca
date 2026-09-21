@@ -1,12 +1,12 @@
 //! ChatGPT subscription adapter. Isolated from the API-key providers: it authenticates with
 //! the OAuth tokens a ChatGPT login yields and calls the Codex responses backend.
 
-pub mod oauth;
+pub use lorca_provider_auth::chatgpt as oauth;
+pub use lorca_provider_auth::chatgpt::ChatGptTokens;
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -23,30 +23,6 @@ pub const CHATGPT_RESPONSES_URL: &str = "https://chatgpt.com/backend-api/codex/r
 /// ChatGPT account: `gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-luna`, `gpt-5.5`. The `*-codex`
 /// ids and `gpt-5.4` are rejected for ChatGPT accounts.
 pub const CHATGPT_DEFAULT_MODEL: &str = "gpt-5.6-terra";
-
-/// Tokens from a ChatGPT login. The CLI persists these on the Runner.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ChatGptTokens {
-    pub access_token: String,
-    pub refresh_token: String,
-    #[serde(default)]
-    pub id_token: Option<String>,
-    pub account_id: String,
-    #[serde(default)]
-    pub email: Option<String>,
-    /// Unix seconds.
-    pub expires_at: u64,
-}
-
-impl ChatGptTokens {
-    pub fn is_expired(&self) -> bool {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        now + 60 >= self.expires_at
-    }
-}
 
 /// Where the adapter reads tokens from and writes refreshed ones back to.
 #[async_trait]

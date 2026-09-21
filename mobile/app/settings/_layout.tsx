@@ -20,6 +20,7 @@ export default function SettingsLayout() {
     >
       <Stack.Screen name="index" />
       <Stack.Screen name="device/[id]" />
+      <Stack.Screen name="provider/[kind]" />
     </Stack>
   );
 }

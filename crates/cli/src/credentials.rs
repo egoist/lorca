@@ -1,6 +1,7 @@
 //! The account's provider credentials: API keys with an optional base URL, and the ChatGPT
 //! and Grok sign-ins. They travel as one `credentials` blob under the account DEK, so every
-//! Device holds the same set; a Runner builds its providers from them (`runner` feature).
+//! Device holds the same set in its private core folder; a Runner builds its providers from
+//! them (`runner` feature).
 
 use std::collections::BTreeMap;
 
@@ -9,12 +10,12 @@ use serde::{Deserialize, Serialize};
 use crate::config::{self, Config};
 use crate::model::ProviderStatus;
 
-#[cfg(feature = "runner")]
-pub use lorca_agent::providers::{ChatGptTokens, GrokTokens};
-/// Without the runner the tokens are carried as they are and never used.
-#[cfg(not(feature = "runner"))]
+#[cfg(feature = "provider-auth")]
+pub use lorca_provider_auth::{chatgpt::ChatGptTokens, grok::GrokTokens};
+/// Builds without provider setup carry subscription tokens as opaque JSON.
+#[cfg(not(feature = "provider-auth"))]
 pub type ChatGptTokens = serde_json::Value;
-#[cfg(not(feature = "runner"))]
+#[cfg(not(feature = "provider-auth"))]
 pub type GrokTokens = serde_json::Value;
 
 pub const PROVIDER_KINDS: [&str; 6] = ["deepseek", "anthropic", "opencode", "opencode-go", "chatgpt", "grok"];
@@ -161,22 +162,22 @@ pub fn mask_key(key: &str) -> String {
 }
 
 
-#[cfg(feature = "runner")]
+#[cfg(feature = "provider-auth")]
 fn chatgpt_email(tokens: &ChatGptTokens) -> Option<String> {
     tokens.email.clone()
 }
 
-#[cfg(not(feature = "runner"))]
+#[cfg(not(feature = "provider-auth"))]
 fn chatgpt_email(tokens: &ChatGptTokens) -> Option<String> {
     tokens["email"].as_str().map(str::to_string)
 }
 
-#[cfg(feature = "runner")]
+#[cfg(feature = "provider-auth")]
 fn grok_email(tokens: &GrokTokens) -> Option<String> {
     tokens.email.clone()
 }
 
-#[cfg(not(feature = "runner"))]
+#[cfg(not(feature = "provider-auth"))]
 fn grok_email(tokens: &GrokTokens) -> Option<String> {
     tokens["email"].as_str().map(str::to_string)
 }

@@ -33,6 +33,10 @@ pub enum Event {
     ChatUsageChanged { chat_id: String, usage: ChatUsage },
     #[serde(rename = "relay.status")]
     RelayStatus { connected: bool, url: Option<String> },
+    /// A Device opens this provider authorization URL while the core waits on its loopback
+    /// callback. Runners open the same URL themselves.
+    #[serde(rename = "provider.auth")]
+    ProviderAuth { kind: String, url: String },
     /// This Device's pairing request reached the relay; the other Device has yet to accept.
     #[serde(rename = "pair.posted")]
     PairPosted { nonce: String },

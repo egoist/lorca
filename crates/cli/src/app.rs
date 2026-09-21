@@ -127,6 +127,10 @@ pub struct App {
     pub pairings: Mutex<HashMap<String, PendingPairing>>,
     /// The pairing this Device is joining, while `pair.accept` waits for the reply.
     pub accepting: Mutex<Option<CancellationToken>>,
+    /// The provider browser sign-in in flight on this Device. A newer one, or the browser
+    /// closing on a phone, cancels the old wait.
+    #[cfg(feature = "provider-auth")]
+    pub provider_auth: Mutex<CancellationToken>,
     /// By job id.
     pub running_jobs: Mutex<HashMap<String, RunningJob>>,
     /// The direct-chat agent loop that currently owns each chat lock: `(job id, queue)`.
@@ -196,6 +200,8 @@ impl App {
             bulk_sync: AtomicBool::new(false),
             pairings: Mutex::new(HashMap::new()),
             accepting: Mutex::new(None),
+            #[cfg(feature = "provider-auth")]
+            provider_auth: Mutex::new(CancellationToken::new()),
             running_jobs: Mutex::new(HashMap::new()),
             #[cfg(feature = "runner")]
             steering_queues: Mutex::new(HashMap::new()),
@@ -252,6 +258,20 @@ impl App {
     pub fn save_credentials(&self) -> anyhow::Result<()> {
         let credentials = self.credentials.lock().unwrap().clone();
         credentials.save(&self.config)
+    }
+
+    /// Starts one provider browser sign-in, cancelling a previous wait if there was one.
+    #[cfg(feature = "provider-auth")]
+    pub fn begin_provider_auth(&self) -> CancellationToken {
+        let next = CancellationToken::new();
+        let previous = std::mem::replace(&mut *self.provider_auth.lock().unwrap(), next.clone());
+        previous.cancel();
+        next
+    }
+
+    #[cfg(feature = "provider-auth")]
+    pub fn cancel_provider_auth(&self) {
+        self.provider_auth.lock().unwrap().cancel();
     }
 
     /// Changes the account's credential of `kind`: saved here, sent to the other Devices, and
@@ -393,6 +413,8 @@ impl App {
         for job in self.running_jobs.lock().unwrap().values() {
             job.cancel.cancel();
         }
+        #[cfg(feature = "provider-auth")]
+        self.cancel_provider_auth();
         #[cfg(feature = "runner")]
         self.steering_queues.lock().unwrap().clear();
         *self.identity.lock().unwrap() = None;

@@ -19,7 +19,7 @@ required-features = ["bindgen"]
 bindgen = ["uniffi/cli"]
 
 [dependencies]
-lorca = { path = "../cli", default-features = false }
+lorca = { path = "../cli", default-features = false, features = ["provider-auth"] }
 uniffi = "0.32"
 serde_json.workspace = true
 thiserror.workspace = true

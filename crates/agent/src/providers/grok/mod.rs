@@ -2,12 +2,12 @@
 //! OAuth tokens a Grok sign-in yields (a SuperGrok or X Premium+ account) and calls xAI's
 //! Responses API with them.
 
-pub mod oauth;
+pub use lorca_provider_auth::grok as oauth;
+pub use lorca_provider_auth::grok::GrokTokens;
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -23,34 +23,6 @@ pub const GROK_BASE_URL: &str = "https://api.x.ai/v1";
 /// xAI's current reasoning model. Others a subscription runs: `grok-4.5`, `grok-4.3`,
 /// `grok-4.20-0309-reasoning`, `grok-build-0.1`.
 pub const GROK_DEFAULT_MODEL: &str = "grok-4.6";
-
-/// Tokens from a Grok sign-in. The CLI persists these on the Runner.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct GrokTokens {
-    pub access_token: String,
-    pub refresh_token: String,
-    #[serde(default)]
-    pub id_token: Option<String>,
-    /// The account's `sub`, when the sign-in named it.
-    #[serde(default)]
-    pub account_id: Option<String>,
-    #[serde(default)]
-    pub email: Option<String>,
-    /// Unix seconds.
-    pub expires_at: u64,
-}
-
-impl GrokTokens {
-    /// Access tokens last about six hours; one within five minutes of its end is refreshed
-    /// before it is used.
-    pub fn is_expired(&self) -> bool {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        now + 5 * 60 >= self.expires_at
-    }
-}
 
 /// Where the adapter reads tokens from and writes refreshed ones back to.
 #[async_trait]

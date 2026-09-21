@@ -1,16 +1,43 @@
 //! Grok sign-in: OAuth 2.0 authorization code with PKCE against `auth.x.ai`, the flow xAI's own
-//! Grok CLI runs, on a loopback callback with a port chosen at sign-in. Runs on the Runner;
-//! tokens never leave it.
+//! Grok CLI runs, on a loopback callback with a port chosen at sign-in. A Device runs the flow
+//! and stores the tokens in the account's encrypted credentials.
 
 use base64::Engine;
 use rand::RngCore;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 
-use super::GrokTokens;
+/// Tokens from a Grok sign-in. Devices carry them in the account's encrypted credentials.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GrokTokens {
+    pub access_token: String,
+    pub refresh_token: String,
+    #[serde(default)]
+    pub id_token: Option<String>,
+    /// The account's `sub`, when the sign-in named it.
+    #[serde(default)]
+    pub account_id: Option<String>,
+    #[serde(default)]
+    pub email: Option<String>,
+    /// Unix seconds.
+    pub expires_at: u64,
+}
+
+impl GrokTokens {
+    /// Access tokens last about six hours; one within five minutes of its end is refreshed
+    /// before it is used.
+    pub fn is_expired(&self) -> bool {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        now + 5 * 60 >= self.expires_at
+    }
+}
 
 /// xAI's public desktop client, the one the Grok CLI and other agents sign in with. It has no
 /// secret; PKCE stands in for one.
@@ -20,6 +47,14 @@ pub const ISSUER: &str = "https://auth.x.ai";
 pub const SCOPES: &str = "openid profile email offline_access grok-cli:access api:access";
 /// Attribution xAI asks clients to send on the authorize URL.
 pub const REFERRER: &str = "lorca";
+
+struct AbortOnDrop(tokio::task::AbortHandle);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
 
 fn b64url(bytes: &[u8]) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
@@ -413,8 +448,8 @@ async fn fill_identity(client: &reqwest::Client, endpoints: &Endpoints, tokens: 
     }
 }
 
-/// Decodes the payload of a JWT without verifying it. The only consumer is this Runner picking
-/// the account's id and email out of a token it just received over TLS.
+/// Decodes the payload of a JWT without verifying it. The Device is picking the account's id
+/// and email out of a token it just received over TLS.
 pub fn jwt_claims(token: &str) -> Option<Value> {
     let payload = token.split('.').nth(1)?;
     let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload).ok()?;
@@ -435,6 +470,7 @@ pub async fn login(
     let url = flow.authorize_url(endpoints, &redirect_uri);
     let state = flow.state.clone();
     let waiter = tokio::spawn(async move { callback.wait(&state, timeout).await });
+    let _abort_on_drop = AbortOnDrop(waiter.abort_handle());
     open_url(&url)?;
     let code = waiter.await.map_err(|e| e.to_string())??;
     exchange_code(client, endpoints, &code, &flow.verifier, &redirect_uri).await

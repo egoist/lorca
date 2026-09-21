@@ -1787,6 +1787,7 @@ dependencies = [
  "if-addrs",
  "libc",
  "lorca-agent",
+ "lorca-provider-auth",
  "open",
  "rand 0.8.8",
  "regex",
@@ -1822,12 +1823,12 @@ dependencies = [
  "ignore",
  "jsonschema",
  "libc",
+ "lorca-provider-auth",
  "rand 0.8.8",
  "regex",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
- "sha2 0.10.9",
  "thiserror 2.0.20",
  "tokio",
  "tokio-util",
@@ -1856,6 +1857,19 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uniffi",
+]
+
+[[package]]
+name = "lorca-provider-auth"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "rand 0.8.8",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
 ]
 
 [[package]]

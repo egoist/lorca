@@ -161,6 +161,35 @@ mod tests {
         assert_eq!(device["os"], "ios");
         assert_eq!(device["name"], "Phone");
 
+        // Provider credentials can be configured on a Device build. The phone checks the key,
+        // stores it locally, and returns the account-wide status without gaining Runner code.
+        let provider_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base_url = format!("http://{}", provider_listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let (mut socket, _) = provider_listener.accept().unwrap();
+            let mut request = [0u8; 2048];
+            let read = socket.read(&mut request).unwrap();
+            let request = String::from_utf8_lossy(&request[..read]);
+            assert!(request.starts_with("GET /models "));
+            assert!(request.to_ascii_lowercase().contains("authorization: bearer phone-key"));
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}").unwrap();
+        });
+        let connected: serde_json::Value = serde_json::from_str(&core.request(
+            "providers.connect_deepseek".into(),
+            serde_json::json!({ "api_key": "phone-key", "base_url": base_url }).to_string(),
+        ))
+        .unwrap();
+        assert_eq!(connected["result"]["providers"][0]["is_connected"], true);
+        assert!(connected["result"]["providers"][0]["detail"].as_str().unwrap().starts_with("pho…-key · http://127.0.0.1:"));
+        server.join().unwrap();
+        let disconnected: serde_json::Value = serde_json::from_str(&core.request(
+            "providers.disconnect".into(),
+            serde_json::json!({ "kind": "deepseek" }).to_string(),
+        ))
+        .unwrap();
+        assert_eq!(disconnected["result"]["providers"][0]["is_connected"], false);
+
         // The Device build shares SQLite with the desktop core, but stores only the app view
         // of tool activity because a phone never rebuilds a model transcript.
         let chat_id = "mobile-chat";
