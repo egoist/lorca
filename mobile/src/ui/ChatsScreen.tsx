@@ -4,21 +4,29 @@ import * as Haptics from "expo-haptics";
 import { Link, Stack, useRouter } from "expo-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Platform, Pressable, StyleSheet, Text, useWindowDimensions, type StyleProp, type TextStyle, View } from "react-native";
-import { chatTitle, engine } from "../src/core/engine";
-import type { Bot, Chat, ChatSearchResults } from "../src/core/model";
-import { markRead, useBotMap, useStore, useWorkingBotIds } from "../src/core/store";
-import { t } from "../src/i18n";
-import { AvatarCluster } from "../src/ui/Avatar";
-import { ChatPeek } from "../src/ui/ChatPeek";
-import { ChatRow } from "../src/ui/ChatRow";
-import { lastActivity, preview, stamp } from "../src/ui/format";
-import { Symbol } from "../src/ui/Symbol";
-import { Font, usePalette } from "../src/ui/theme";
-import { AndroidIcons } from "../src/ui/navigation";
+import { chatTitle, engine } from "../core/engine";
+import type { Bot, Chat, ChatSearchResults } from "../core/model";
+import { markRead, useBotMap, useStore, useWorkingBotIds } from "../core/store";
+import { t } from "../i18n";
+import { AvatarCluster } from "./Avatar";
+import { ChatPeek } from "./ChatPeek";
+import { ChatRow } from "./ChatRow";
+import { PaneWidth, useSidebarWidth } from "./layout";
+import { lastActivity, preview, stamp } from "./format";
+import { SidebarSearch, useSidebarSearchInset } from "./SidebarSearch";
+import { Symbol } from "./Symbol";
+import { Font, usePalette } from "./theme";
+import { AndroidIcons } from "./navigation";
 
-export default function ChatsScreen() {
+/// The chat list: the first screen of a narrow window, the sidebar of a wide one. In the sidebar
+/// a chat opens in the pane beside the list, in place of the one open there, and its row stays lit.
+export function ChatsScreen({ sidebar = false }: { sidebar?: boolean }) {
   const p = usePalette();
   const router = useRouter();
+  const openChatId = useStore((s) => s.openChatId);
+  const sidebarWidth = useSidebarWidth();
+  const floatingSearch = sidebar && Platform.OS === "ios";
+  const searchInset = useSidebarSearchInset();
   const chats = useStore((s) => s.chats);
   const running = useStore((s) => s.running);
   const relayConnected = useStore((s) => s.relayConnected);
@@ -97,23 +105,41 @@ export default function ChatsScreen() {
     return Object.values(running).some((r) => r.chatId === chat.id) || chat.bot_ids.some((id) => workingBots.has(id));
   }
 
+  function openChat(chat: Chat) {
+    if (!sidebar) return router.push(`/chat/${chat.id}`);
+    if (chat.id === openChatId) return;
+    if (openChatId) router.replace(`/chat/${chat.id}`);
+    else router.push(`/chat/${chat.id}`);
+  }
+
   function confirmDelete(chat: Chat) {
     Alert.alert(t("Delete “{name}”?", { name: chatTitle(chat) }), t("The chat and its messages are removed from every paired Device."), [
       { text: t("Cancel"), style: "cancel" },
-      { text: t("Delete"), style: "destructive", onPress: () => engine.deleteChat(chat.id) },
+      {
+        text: t("Delete"),
+        style: "destructive",
+        onPress: () => {
+          // The pane beside the sidebar goes back to empty with its chat.
+          if (sidebar && chat.id === openChatId) router.dismissTo("/");
+          engine.deleteChat(chat.id);
+        },
+      },
     ]);
   }
 
   return (
     <>
-      <Stack.SearchBar
-        placeholder={t("Search chats and messages")}
-        onChangeText={(e) => updateQuery(e.nativeEvent.text)}
-        onCancelButtonPress={() => updateQuery("")}
-        hideWhenScrolling
-        autoCapitalize="none"
-        headerIconColor={Platform.OS === "android" ? p.secondaryLabel : undefined}
-      />
+      {/* The iOS sidebar has its own field at its foot, where a phone's bar puts this one. */}
+      {floatingSearch ? null : (
+        <Stack.SearchBar
+          placeholder={t("Search chats and messages")}
+          onChangeText={(e) => updateQuery(e.nativeEvent.text)}
+          onCancelButtonPress={() => updateQuery("")}
+          hideWhenScrolling
+          autoCapitalize="none"
+          headerIconColor={Platform.OS === "android" ? p.secondaryLabel : undefined}
+        />
+      )}
       {Platform.OS === "ios" ? (
         <>
           <Stack.Toolbar placement="left">
@@ -154,7 +180,7 @@ export default function ChatsScreen() {
           keyExtractor={(item) => ("key" in item ? item.key : item.id)}
           contentInsetAdjustmentBehavior="automatic"
           keyboardDismissMode="on-drag"
-          contentContainerStyle={{ paddingBottom: 24 }}
+          contentContainerStyle={{ paddingBottom: floatingSearch ? searchInset + 8 : 24 }}
           ListHeaderComponent={
             relayConnected ? null : (
               <View style={[styles.banner, { backgroundColor: p.fill }]}>
@@ -172,18 +198,21 @@ export default function ChatsScreen() {
           }
           renderItem={({ item }) => {
             if ("key" in item) {
-              return <SearchResultRow item={item} bots={bots} query={searchingText} onPress={() => router.push(`/chat/${item.chat.id}`)} />;
+              return <SearchResultRow item={item} bots={bots} query={searchingText} onPress={() => openChat(item.chat)} />;
             }
             const chat = item;
             const title = chatTitle(chat);
-            if (Platform.OS === "android") {
+            // A sidebar row has no peek: the chat opens beside it.
+            if (Platform.OS === "android" || sidebar) {
               return (
-                <AndroidChatRow
+                <MenuChatRow
                   chat={chat}
                   bots={bots}
                   title={title}
                   working={isWorking(chat)}
-                  onPress={() => router.push(`/chat/${chat.id}`)}
+                  selected={sidebar ? chat.id === openChatId : undefined}
+                  width={sidebar ? sidebarWidth : undefined}
+                  onPress={() => openChat(chat)}
                   onDelete={() => confirmDelete(chat)}
                 />
               );
@@ -201,7 +230,9 @@ export default function ChatsScreen() {
               <Link href={`/chat/${chat.id}`} asChild>
                 <Link.Trigger>{row}</Link.Trigger>
                 <Link.Preview style={{ width: 340, height: 420 }}>
-                  <ChatPeek chat={chat} bots={bots} title={title} />
+                  <PaneWidth value={340}>
+                    <ChatPeek chat={chat} bots={bots} title={title} />
+                  </PaneWidth>
                 </Link.Preview>
                 <Link.Menu>
                   <Link.MenuAction icon={chat.is_pinned ? "pin.slash" : "pin"} onPress={() => engine.pinChat(chat.id, !chat.is_pinned)}>
@@ -226,19 +257,25 @@ export default function ChatsScreen() {
           }}
           refreshing={false}
         />
+        {floatingSearch ? <SidebarSearch value={query} placeholder={t("Search chats and messages")} onChangeText={updateQuery} /> : null}
       </View>
     </>
   );
 }
 
-function AndroidChatRow({ chat, bots, title, working, onPress, onDelete }: { chat: Chat; bots: Map<string, Bot>; title: string; working: boolean; onPress: () => void; onDelete: () => void }) {
+/// A row whose long press opens a native menu: every row on Android, a sidebar row on iOS.
+function MenuChatRow({ chat, bots, title, working, selected, width: fixedWidth, onPress, onDelete }: { chat: Chat; bots: Map<string, Bot>; title: string; working: boolean; selected?: boolean; width?: number; onPress: () => void; onDelete: () => void }) {
   const menuRef = useRef<MenuComponentRef>(null);
-  const { width } = useWindowDimensions();
+  const { width: windowWidth } = useWindowDimensions();
+  const width = fixedWidth ?? windowWidth;
+  // iOS says pinned through the Unpin title and glyph, as its Link menu does; Android checks the item.
+  const ios = Platform.OS === "ios";
   const actions: MenuAction[] = [
-    { id: "pin", title: chat.is_pinned ? t("Unpin") : t("Pin"), image: AndroidIcons.pin, state: chat.is_pinned ? "on" : "off" },
-    ...(chat.unread_count > 0 ? [{ id: "read", title: t("Mark as Read"), image: AndroidIcons.read } satisfies MenuAction] : []),
-    { id: "delete", title: t("Delete"), image: AndroidIcons.delete, attributes: { destructive: true } },
+    { id: "pin", title: chat.is_pinned ? t("Unpin") : t("Pin"), image: ios ? (chat.is_pinned ? "pin.slash" : "pin") : AndroidIcons.pin, state: !ios && chat.is_pinned ? "on" : "off" },
+    ...(chat.unread_count > 0 ? [{ id: "read", title: t("Mark as Read"), image: ios ? "checkmark.circle" : AndroidIcons.read } satisfies MenuAction] : []),
+    { id: "delete", title: t("Delete"), image: ios ? "trash" : AndroidIcons.delete, attributes: { destructive: true } },
   ];
+
   return (
     <MenuView
       ref={menuRef}
@@ -253,7 +290,7 @@ function AndroidChatRow({ chat, bots, title, working, onPress, onDelete }: { cha
       }}
     >
       <View style={{ width }}>
-        <ChatRow chat={chat} bots={bots} title={title} working={working} onPress={onPress} onLongPress={() => menuRef.current?.show()} />
+        <ChatRow chat={chat} bots={bots} title={title} working={working} selected={selected} onPress={onPress} onLongPress={ios ? undefined : () => menuRef.current?.show()} />
       </View>
     </MenuView>
   );

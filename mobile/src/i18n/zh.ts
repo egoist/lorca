@@ -57,6 +57,8 @@ export const zh: Record<string, string> = {
   "Chat": "聊天",
   "Chat info": "聊天信息",
   "Chats": "聊天",
+  "Clear": "清除",
+  "Select a chat": "选择一个聊天",
   "Check actions before they run": "运行前检查操作",
   "Choose a bot": "选取智能体",
   "Choose File": "选取文件",

@@ -189,7 +189,8 @@ export default function PairScreen() {
 }
 
 const styles = StyleSheet.create({
-  content: { paddingHorizontal: 24, gap: 12 },
+  // A column of a phone's width, centered in a wider window.
+  content: { paddingHorizontal: 24, gap: 12, width: "100%", maxWidth: 520, alignSelf: "center" },
   logoWrap: { alignItems: "center", marginBottom: 8 },
   logo: { width: 88, height: 88, borderRadius: 24, alignItems: "center", justifyContent: "center" },
   face: { width: 48, height: 38, borderRadius: 14, backgroundColor: "#fff", flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10 },

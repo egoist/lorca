@@ -7,6 +7,7 @@ import { KeyboardProvider } from "react-native-keyboard-controller";
 import { engine } from "../src/core/engine";
 import { useStore } from "../src/core/store";
 import { t, useLanguage } from "../src/i18n";
+import { useStackScreenOptions } from "../src/ui/navigation";
 import { usePalette } from "../src/ui/theme";
 
 export default function RootLayout() {
@@ -15,6 +16,7 @@ export default function RootLayout() {
   const p = usePalette();
   const scheme = useColorScheme();
   const { language } = useLanguage();
+  const screenOptions = useStackScreenOptions();
 
   useEffect(() => {
     void engine.start();
@@ -69,21 +71,9 @@ export default function RootLayout() {
         {/* The native bar takes its light/dark appearance from the navigation theme, not the OS. */}
         {/* A new language mounts the screens again, so every title and label is said anew. */}
         <ThemeProvider key={language} value={navigationTheme}>
-          <Stack
-            screenOptions={{
-              headerTintColor: (Platform.OS === "android" ? p.label : p.tint) as any,
-              headerTitleStyle: { color: p.label as any },
-              headerTitleAlign: Platform.OS === "android" ? "left" : undefined,
-              headerBackButtonDisplayMode: "minimal",
-              contentStyle: { backgroundColor: p.background },
-            }}
-          >
+          <Stack screenOptions={screenOptions}>
             <Stack.Protected guard={paired}>
-              <Stack.Screen name="index" options={{ title: t("Chats"), headerTitle: "", headerLargeTitle: false, headerShadowVisible: false, headerTransparent: Platform.OS === "ios" }} />
-              <Stack.Screen
-                name="chat/[id]"
-                options={Platform.OS === "android" ? { headerShown: false } : { headerTransparent: true, headerShadowVisible: false, headerTitleAlign: "center" }}
-              />
+              <Stack.Screen name="(main)" options={{ headerShown: false }} />
               <Stack.Screen name="chat-info" options={Platform.OS === "android" ? nestedSheet : { ...nestedSheet, sheetAllowedDetents: [0.7, 1], sheetGrabberVisible: true }} />
               <Stack.Screen name="message/[id]" options={Platform.OS === "android" ? sheet : { ...sheet, sheetAllowedDetents: [0.5, 1], sheetGrabberVisible: true }} />
               <Stack.Screen name="new-bot" options={sheet} />

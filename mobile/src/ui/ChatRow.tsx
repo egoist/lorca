@@ -10,12 +10,13 @@ import { lastActivity, preview, stamp } from "./format";
 import { Symbol } from "./Symbol";
 import { Font, usePalette } from "./theme";
 
-export const ChatRow = memo(function ChatRow({ chat, bots, title, working, onPress, onLongPress }: { chat: Chat; bots: Map<string, Bot>; title: string; working: boolean; onPress: () => void; onLongPress?: () => void }) {
+/// `selected` is set in a sidebar, where the open chat's row stays lit and no row points onward.
+export const ChatRow = memo(function ChatRow({ chat, bots, title, working, selected, onPress, onLongPress }: { chat: Chat; bots: Map<string, Bot>; title: string; working: boolean; selected?: boolean; onPress: () => void; onLongPress?: () => void }) {
   const p = usePalette();
   const members = chat.bot_ids.map((id) => bots.get(id)).filter((b): b is Bot => !!b);
   const unread = chat.unread_count;
   return (
-    <Pressable onPress={onPress} onLongPress={onLongPress} style={({ pressed }) => [styles.row, { backgroundColor: pressed ? p.fill : "transparent" }]}>
+    <Pressable onPress={onPress} onLongPress={onLongPress} style={({ pressed }) => [styles.row, { backgroundColor: pressed || selected ? p.fill : "transparent" }]}>
       <AvatarCluster bots={members} size={50} working={working} />
       <View style={styles.text}>
         <View style={styles.titleLine}>
@@ -27,7 +28,7 @@ export const ChatRow = memo(function ChatRow({ chat, bots, title, working, onPre
           </View>
           <View style={styles.stampLine}>
             <Text style={[styles.stamp, { color: p.secondaryLabel }]}>{stamp(new Date(lastActivity(chat) * 1000))}</Text>
-            <Symbol name="chevron.right" size={11} color={p.tertiaryLabel} weight="semibold" />
+            {selected === undefined && <Symbol name="chevron.right" size={11} color={p.tertiaryLabel} weight="semibold" />}
           </View>
         </View>
         <View style={styles.previewLine}>

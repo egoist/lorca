@@ -35,9 +35,10 @@ import Animated, {
   ZoomOut,
 } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { chatTitle, engine } from "../../src/core/engine";
-import type { Bot } from "../../src/core/model";
-import { clearPushes } from "../../src/core/push";
+import { SoftScrollEdgeView } from "../../../modules/lorca-core/SoftScrollEdgeView";
+import { chatTitle, engine } from "../../../src/core/engine";
+import type { Bot } from "../../../src/core/model";
+import { clearPushes } from "../../../src/core/push";
 import {
   markRead,
   useBotMap,
@@ -45,12 +46,13 @@ import {
   useIsWorking,
   useStore,
   useWorkingBots,
-} from "../../src/core/store";
-import { t } from "../../src/i18n";
-import { AvatarCluster } from "../../src/ui/Avatar";
-import { Composer, Surface } from "../../src/ui/Composer";
-import { Symbol } from "../../src/ui/Symbol";
-import { usePalette } from "../../src/ui/theme";
+} from "../../../src/core/store";
+import { t } from "../../../src/i18n";
+import { AvatarCluster } from "../../../src/ui/Avatar";
+import { Composer, Surface } from "../../../src/ui/Composer";
+import { useWide } from "../../../src/ui/layout";
+import { Symbol } from "../../../src/ui/Symbol";
+import { usePalette } from "../../../src/ui/theme";
 import {
   buildRows,
   DayRow,
@@ -61,7 +63,7 @@ import {
   StatusRow,
   WorkingRow,
   type Row,
-} from "../../src/ui/transcript";
+} from "../../../src/ui/transcript";
 
 /// Breathing room between the last message and the composer, as on the Mac.
 const COMPOSER_GAP = 14;
@@ -77,6 +79,7 @@ export default function ChatScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const p = usePalette();
+  const wide = useWide();
   const insets = useSafeAreaInsets();
   const headerHeight = useHeaderHeight();
   const visibleHeaderHeight = Platform.OS === "android" ? insets.top + ANDROID_BAR_HEIGHT : headerHeight;
@@ -593,9 +596,14 @@ export default function ChatScreen() {
             style={StyleSheet.absoluteFill}
           />
           <View style={[styles.androidHeaderControls, { height: visibleHeaderHeight, paddingTop: insets.top }]}>
-            <Pressable onPress={() => router.back()} style={styles.androidHeaderButton} accessibilityRole="button" accessibilityLabel={t("Back")}>
-              <Symbol name="arrow.left" size={26} color={p.label} />
-            </Pressable>
+            {wide ? (
+              // Beside the sidebar there is nothing to go back to; the title stays centered.
+              <View style={styles.androidHeaderButton} />
+            ) : (
+              <Pressable onPress={() => router.back()} style={styles.androidHeaderButton} accessibilityRole="button" accessibilityLabel={t("Back")}>
+                <Symbol name="arrow.left" size={26} color={p.label} />
+              </Pressable>
+            )}
             <Pressable
               onPress={() => router.push(`/chat-info/${id}`)}
               style={styles.androidHeaderTitle}
@@ -614,7 +622,7 @@ export default function ChatScreen() {
         </View>
       )}
       <View style={{ flex: 1 }}>
-        <View
+        <SoftScrollEdgeView
           style={{ flex: 1, opacity: revealed ? 1 : 0 }}
           onLayout={(e) => {
             if (e.nativeEvent.layout.height !== layoutHeight.current)
@@ -671,7 +679,7 @@ export default function ChatScreen() {
             onScrollBeginDrag={stopSettling}
             renderItem={renderItem}
           />
-        </View>
+        </SoftScrollEdgeView>
         <KeyboardStickyView
           style={[styles.jump, { bottom: composerHeight + 10 }]}
           offset={{ closed: 0, opened: insets.bottom }}

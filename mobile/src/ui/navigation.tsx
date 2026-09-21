@@ -1,5 +1,7 @@
 import { Stack } from "expo-router";
+import { useMemo } from "react";
 import { Platform, type ImageSourcePropType } from "react-native";
+import { usePalette } from "./theme";
 
 export const AndroidIcons = {
   settings: require("../../assets/material/settings.xml") as ImageSourcePropType,
@@ -15,6 +17,21 @@ export const AndroidIcons = {
   camera: require("../../assets/material/camera.xml") as ImageSourcePropType,
   folder: require("../../assets/material/folder.xml") as ImageSourcePropType,
 } as const;
+
+/** The bar every stack shares: tinted on iOS, Material's plain label color on Android. */
+export function useStackScreenOptions() {
+  const p = usePalette();
+  return useMemo(
+    () => ({
+      headerTintColor: (Platform.OS === "android" ? p.label : p.tint) as any,
+      headerTitleStyle: { color: p.label as any },
+      headerTitleAlign: Platform.OS === "android" ? ("left" as const) : undefined,
+      headerBackButtonDisplayMode: "minimal" as const,
+      contentStyle: { backgroundColor: p.background },
+    }),
+    [p.dark],
+  );
+}
 
 /** Cancel + commit actions for a presented editor. Android uses Material icon actions. */
 export function FormToolbar({

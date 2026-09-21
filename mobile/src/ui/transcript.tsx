@@ -4,7 +4,7 @@
 // centered "Message from ◉ Name" / "Messaged ◉ Name" markers. Tool calls never render.
 
 import { useEffect } from "react";
-import { Linking, Pressable, StyleSheet, Text, useWindowDimensions, View } from "react-native";
+import { Linking, Pressable, StyleSheet, Text, View } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withDelay, withRepeat, withSequence, withTiming } from "react-native-reanimated";
 import { isSentMessage, recipientName, type Body, type Bot, type Chat, type Message } from "../core/model";
@@ -14,11 +14,14 @@ import { BotAvatar } from "./Avatar";
 import { daySeparator, firstLine } from "./format";
 import { Markdown } from "./Markdown";
 import { Symbol } from "./Symbol";
+import { usePaneWidth } from "./layout";
 import { Font, usePalette } from "./theme";
 
 export const SEPARATOR_GAP_SECS = 15 * 60;
 const AVATAR = 28;
 const GUTTER = 8;
+/// A bubble stops growing here in a wide pane.
+const BUBBLE_COLUMN_MAX = 620;
 const INSET = 12;
 
 export type Row =
@@ -111,7 +114,7 @@ export function DayRow({ at }: { at: number }) {
 
 export function MessageRow({ row, bots, isGroup }: { row: Extract<Row, { type: "message" }>; bots: Map<string, Bot>; isGroup: boolean }) {
   const p = usePalette();
-  const { width: screenWidth } = useWindowDimensions();
+  const paneWidth = usePaneWidth();
   const { message, groupStart, groupEnd, showsName } = row;
   const isYou = message.author.kind === "you";
   const bot = message.author.kind === "bot" ? bots.get(message.author.bot_id) : undefined;
@@ -119,13 +122,14 @@ export function MessageRow({ row, bots, isGroup }: { row: Extract<Row, { type: "
   const attachments = message.body.kind === "text" ? (message.body.attachments ?? []) : [];
   const failed = message.state.kind === "failed";
   const showsAvatar = isGroup && !isYou;
-  // The bubble column is 80% of the screen; the bubble pads 13 a side. Attachments and the
-  // text both fit that width.
-  const attachmentWidth = Math.floor(screenWidth * 0.8) - 26 - (showsAvatar ? AVATAR + GUTTER : 0);
+  // The bubble column is 80% of the pane, up to a readable line; the bubble pads 13 a side.
+  // Attachments and the text both fit that width.
+  const columnWidth = Math.min(Math.floor(paneWidth * 0.8), BUBBLE_COLUMN_MAX);
+  const attachmentWidth = columnWidth - 26 - (showsAvatar ? AVATAR + GUTTER : 0);
   return (
     <View style={[styles.messageRow, { paddingTop: groupStart ? 14 : 3 }, isYou ? styles.messageRowYou : styles.messageRowBot]}>
       {showsAvatar && <View style={{ width: AVATAR + GUTTER, alignSelf: "flex-end" }}>{groupEnd && <BotAvatar bot={bot} size={AVATAR} />}</View>}
-      <View style={[styles.bubbleColumn, isYou && styles.bubbleColumnYou]}>
+      <View style={[styles.bubbleColumn, { maxWidth: columnWidth }, isYou && styles.bubbleColumnYou]}>
         {showsName && (
           <Text style={[styles.author, { color: p.secondaryLabel }]} numberOfLines={1}>
             {bot?.name ?? t("Bot")}

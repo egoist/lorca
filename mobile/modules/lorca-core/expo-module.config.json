@@ -6,7 +6,9 @@
   "apple": {
     "modules": [
       "LorcaCoreModule",
-      "MarkdownViewModule"
+      "MarkdownViewModule",
+      "CompactWidthViewModule",
+      "SoftScrollEdgeViewModule"
     ]
   },
   "android": {

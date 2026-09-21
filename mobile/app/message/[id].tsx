@@ -1,6 +1,7 @@
 // The whole bot-to-bot message behind a transcript marker ("Messaged ◉ Paddock"), as a sheet.
 
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
+import { useState } from "react";
 import { Platform, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { useChat } from "../../src/core/store";
 import { t } from "../../src/i18n";
@@ -13,12 +14,14 @@ export default function MessageScreen() {
   const router = useRouter();
   const p = usePalette();
   const chat = useChat(chatId);
-  const { width } = useWindowDimensions();
+  // A form sheet on a tablet is narrower than the window.
+  const { width: windowWidth } = useWindowDimensions();
+  const [width, setWidth] = useState(windowWidth);
   const message = chat?.messages.find((m) => m.id === id);
   const body = message?.body;
   const text = body?.kind === "tool" ? body.detail : body?.kind === "handoff" ? body.reason : "";
   return (
-    <View style={styles.screen}>
+    <View style={styles.screen} onLayout={(e) => setWidth(e.nativeEvent.layout.width)}>
       <Stack.Screen options={{ title: title ?? t("Message") }} />
       <CloseToolbar label={Platform.OS === "android" ? t("Close") : t("Done")} onClose={() => router.dismiss()} />
       <ScrollView contentContainerStyle={styles.content} contentInsetAdjustmentBehavior="automatic">
