@@ -114,6 +114,7 @@ async fn session(app: &Arc<App>) -> Result<(), RelayError> {
         app.push_machine_blob_if_changed();
         drain_outbox(app, &url, &token).await?;
         drain_group_deletes(app, &url, &token).await?;
+        drain_blob_deletes(app, &url, &token).await?;
         if refresh {
             refresh_presence(app, &url, &token).await?;
         }
@@ -253,6 +254,24 @@ async fn drain_group_deletes(app: &Arc<App>, url: &str, token: &str) -> Result<(
             Err(error) => return Err(error),
         }
         app.state.lock().unwrap().group_deletes.retain(|g| g != &group);
+        app.save_state();
+    }
+}
+
+/// Tells the relay to drop the `file` blobs of the avatars dropped here. One the relay does
+/// not have (never uploaded, or deleted by another Device) is done; a relay that is away is
+/// asked on the next cycle.
+async fn drain_blob_deletes(app: &Arc<App>, url: &str, token: &str) -> Result<(), RelayError> {
+    loop {
+        let Some(id) = app.state.lock().unwrap().blob_deletes.first().cloned() else { return Ok(()) };
+        match app.relay.delete_blob(url, token, &id).await {
+            Ok(()) => {}
+            Err(error) if error.is_client_error() && !error.is_unauthorized() && !error.is_unpaired() => {
+                tracing::debug!(%error, id, "relay had no such avatar blob; dropping");
+            }
+            Err(error) => return Err(error),
+        }
+        app.state.lock().unwrap().blob_deletes.retain(|queued| queued != &id);
         app.save_state();
     }
 }

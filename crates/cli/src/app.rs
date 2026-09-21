@@ -65,6 +65,8 @@ pub struct State {
     pub last_seq: i64,
     /// Chats deleted here whose blobs the relay still has to drop.
     pub group_deletes: Vec<String>,
+    /// Avatars dropped here whose `file` blobs the relay still has to drop.
+    pub blob_deletes: Vec<String>,
     pub machine_blob_hash: Option<String>,
     /// Whether the relay has had this Device's credentials since they last changed here.
     pub credentials_uploaded: bool,
@@ -688,9 +690,14 @@ impl App {
         let bot = {
             let mut state = self.state.lock().unwrap();
             let bot = state.bots.iter_mut().find(|b| b.id == id).ok_or_else(|| anyhow::anyhow!("Unknown bot"))?;
+            let old_avatar = bot.avatar.as_ref().map(|avatar| avatar.id.clone());
             update(bot);
             bot.normalize_description();
-            bot.clone()
+            let bot = bot.clone();
+            if let Some(old) = old_avatar.filter(|old| bot.avatar.as_ref().map(|avatar| &avatar.id) != Some(old)) {
+                self.drop_avatar(&mut state, &old);
+            }
+            bot
         };
         self.roster_changed(true);
         crate::runtime::prime_names(self);
@@ -710,6 +717,9 @@ impl App {
 
             state.bots.retain(|bot| bot.id != id);
             state.routines.retain(|routine| routine.bot_id != id);
+            if let Some(avatar) = &deleted_bot.avatar {
+                self.drop_avatar(&mut state, &avatar.id);
+            }
             if let Some(workdir) = deleted_private_workdir {
                 let scope_is_still_used = state.bots.iter().any(|bot| {
                     bot.runner_id == deleted_bot.runner_id && canonical_workdir(bot.working_directory(&self.config.home)) == workdir
@@ -766,6 +776,15 @@ impl App {
         self.roster_changed(true);
         crate::runtime::prime_names(self);
         Ok(())
+    }
+
+    /// An avatar no bot shows any more: its local copy goes, and its `file` blob is queued for
+    /// deletion on the relay. It belongs to no group, so no chat deletion takes it along.
+    fn drop_avatar(&self, state: &mut State, attachment_id: &str) {
+        let _ = std::fs::remove_file(self.config.files_dir().join(attachment_id));
+        if !state.blob_deletes.iter().any(|id| id == attachment_id) {
+            state.blob_deletes.push(attachment_id.to_string());
+        }
     }
 
     fn insert_bot(&self, mut bot: Bot) -> anyhow::Result<Bot> {
@@ -1511,6 +1530,7 @@ mod tests {
             state.routines.push(routine("routine", "b1"));
             state.last_seq = 42;
             state.group_deletes.push("deleted-chat".into());
+            state.blob_deletes.push("old-avatar".into());
             state.machine_blob_hash = Some("machine-hash".into());
             state.credentials_uploaded = true;
             state.device_seen.insert("device".into(), 99);
@@ -1531,6 +1551,7 @@ mod tests {
         assert_eq!(state.routines.iter().map(|routine| routine.id.as_str()).collect::<Vec<_>>(), vec!["routine"]);
         assert_eq!(state.last_seq, 42);
         assert_eq!(state.group_deletes, vec!["deleted-chat"]);
+        assert_eq!(state.blob_deletes, vec!["old-avatar"]);
         assert!(state.credentials_uploaded);
         assert_eq!(state.device_seen.get("device"), Some(&99));
         assert_eq!(state.applied_blob_ids, vec!["blob-1", "blob-2"]);
@@ -1624,6 +1645,32 @@ mod tests {
             app.store.outbox().unwrap().iter().filter_map(|item| item.group.as_deref()).collect::<Vec<_>>(),
             vec!["dm-b2", "shared"]
         );
+    }
+
+    #[test]
+    fn a_dropped_avatar_is_queued_for_deletion_on_the_relay() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        let avatar = |id: &str| crate::model::Attachment { id: id.into(), name: "a.png".into(), mime: "image/png".into(), size: 1, width: None, height: None };
+        let mut b1 = bot("b1");
+        b1.avatar = Some(avatar("first"));
+        app.state.lock().unwrap().bots.push(b1);
+        std::fs::create_dir_all(app.config.files_dir()).unwrap();
+        for id in ["first", "second"] {
+            std::fs::write(app.config.files_dir().join(id), b"png").unwrap();
+        }
+
+        app.update_bot("b1", |bot| bot.name = "Renamed".into()).unwrap();
+        assert!(app.state.lock().unwrap().blob_deletes.is_empty());
+
+        app.update_bot("b1", |bot| bot.avatar = Some(avatar("second"))).unwrap();
+        assert_eq!(app.state.lock().unwrap().blob_deletes, vec!["first"]);
+        assert!(!app.config.files_dir().join("first").exists());
+        assert!(app.config.files_dir().join("second").exists());
+
+        app.delete_bot("b1").unwrap();
+        assert_eq!(app.state.lock().unwrap().blob_deletes, vec!["first", "second"]);
+        assert!(!app.config.files_dir().join("second").exists());
     }
 
     #[test]

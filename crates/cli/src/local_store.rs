@@ -72,6 +72,10 @@ impl LocalStore {
                  id       TEXT PRIMARY KEY NOT NULL,
                  position INTEGER NOT NULL
              );
+             CREATE TABLE IF NOT EXISTS blob_deletes (
+                 id       TEXT PRIMARY KEY NOT NULL,
+                 position INTEGER NOT NULL
+             );
              CREATE TABLE IF NOT EXISTS device_seen (
                  id      TEXT PRIMARY KEY NOT NULL,
                  seen_at INTEGER NOT NULL
@@ -147,6 +151,7 @@ impl LocalStore {
             auto_review,
             last_seq,
             group_deletes: load_ordered_ids(&connection, "group_deletes")?,
+            blob_deletes: load_ordered_ids(&connection, "blob_deletes")?,
             machine_blob_hash,
             credentials_uploaded,
             device_seen: load_device_seen(&connection)?,
@@ -717,6 +722,7 @@ impl LocalStore {
             "chats",
             "routines",
             "group_deletes",
+            "blob_deletes",
             "device_seen",
             "applied_blobs",
             "messages",
@@ -802,6 +808,7 @@ fn save_state_tx(tx: &Transaction<'_>, state: &State) -> anyhow::Result<()> {
             .collect::<Vec<_>>(),
     )?;
     sync_ordered_ids(tx, "group_deletes", &state.group_deletes)?;
+    sync_ordered_ids(tx, "blob_deletes", &state.blob_deletes)?;
     sync_ordered_ids(tx, "applied_blobs", &state.applied_blob_ids)?;
     sync_device_seen(tx, &state.device_seen)?;
     Ok(())
