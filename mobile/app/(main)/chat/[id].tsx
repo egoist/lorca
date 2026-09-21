@@ -72,6 +72,9 @@ const FOCUS_GROWTH_GUESS = 36;
 /// How far from the end the transcript is scrolled before the jump-to-bottom disc shows.
 const JUMP_DISTANCE = 160;
 const JUMP_DISC = 36;
+/// How near the computed end a scroll offset counts as there. Android rounds the composer's
+/// space to whole pixels.
+const END_TOLERANCE = Platform.OS === "ios" ? 1 : 2;
 const ANDROID_BAR_HEIGHT = 56;
 const ANDROID_FADE_HEIGHT = 24;
 
@@ -350,20 +353,21 @@ export default function ChatScreen() {
     requestAnimationFrame(() => {
       pinQueued.current = false;
       if (!settling.current) return;
-      if (Platform.OS === "ios") {
-        if (layoutHeight.current === 0 || contentHeight.current === 0) return;
-        pinIssued.current = true;
-        const offset = endOffset();
-        // Already there: the native side skips the no-op scroll, so no event will confirm it.
-        const already =
-          lastOffset.current !== null &&
-          Math.abs(lastOffset.current - offset) <= 1;
-        if (already) confirm();
-        else unconfirm();
+      if (layoutHeight.current === 0 || contentHeight.current === 0) return;
+      pinIssued.current = true;
+      const offset = endOffset();
+      // Already there: the native side skips the no-op scroll, so no event will confirm it.
+      const already =
+        lastOffset.current !== null &&
+        Math.abs(lastOffset.current - offset) <= END_TOLERANCE;
+      if (already) confirm();
+      else unconfirm();
+      // Android's end counts the scroll view's bottom padding, which is how the composer's
+      // space reaches it, and that padding lands a frame or more after JS sets it: a pin sent
+      // before then stops short, under the composer, and the scroll event sends another.
+      if (Platform.OS === "ios")
         listRef.current?.scrollToOffset({ offset, animated: false });
-      } else {
-        listRef.current?.scrollToEnd({ animated: false });
-      }
+      else listRef.current?.scrollToEnd({ animated: false });
     });
   }, [confirm, endOffset, unconfirm]);
   const stopSettling = useCallback(() => {
@@ -406,13 +410,12 @@ export default function ChatScreen() {
           ? restingEnd() - contentOffset.y
           : contentSize.height - layoutMeasurement.height - contentOffset.y;
       setAwayFromEnd(!settling.current && distance > JUMP_DISTANCE);
-      if (Platform.OS !== "ios") return;
       lastOffset.current = contentOffset.y;
       if (!settling.current) return;
       // Only a pin can confirm: the list's own first scroll can sit at the computed end by
       // coincidence while the content height is still unknown.
       if (!pinIssued.current) return;
-      if (Math.abs(e.nativeEvent.contentOffset.y - endOffset()) <= 1) {
+      if (Math.abs(contentOffset.y - endOffset()) <= END_TOLERANCE) {
         confirm();
       } else {
         unconfirm();
@@ -656,9 +659,6 @@ export default function ChatScreen() {
               loaded.current = true;
               pinToBottom();
               if (confirmed.current) scheduleReveal();
-              // Android has no confirming scroll event: the pin is a frame away, so show then.
-              if (Platform.OS !== "ios")
-                setTimeout(() => setRevealed(true), 50);
               if (settleTimer.current) clearTimeout(settleTimer.current);
               settleTimer.current = setTimeout(stopSettling, 1500);
             }}
