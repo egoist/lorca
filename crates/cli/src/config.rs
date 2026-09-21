@@ -87,6 +87,15 @@ impl Settings {
     }
 }
 
+/// The relay the launching app ships with (`LORCA_DEFAULT_RELAY_URL`), used when nothing else
+/// names one.
+pub fn default_relay_url() -> Option<String> {
+    std::env::var("LORCA_DEFAULT_RELAY_URL")
+        .ok()
+        .map(|url| url.trim().trim_end_matches('/').to_string())
+        .filter(|url| !url.is_empty())
+}
+
 /// The relay port `bun run dev` and `bun run relay` listen on.
 pub const DEV_RELAY_PORT: u16 = 8787;
 

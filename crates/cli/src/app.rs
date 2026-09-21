@@ -379,13 +379,15 @@ impl App {
     }
 
     /// Settings, then `LORCA_RELAY_URL`, then the URL pairing handed this Device, then, in
-    /// dev, the relay the dev loop runs on this machine.
+    /// dev, the relay the dev loop runs on this machine, then `LORCA_DEFAULT_RELAY_URL`, the
+    /// relay the app that launched this CLI ships with.
     pub fn relay_url(&self) -> Option<String> {
         let from_settings = self.settings.lock().unwrap().effective_relay_url();
         from_settings
             .or_else(|| std::env::var("LORCA_RELAY_URL").ok().filter(|s| !s.is_empty()))
             .or_else(|| self.machine_file().and_then(|m| m.relay_url))
             .or_else(config::dev_relay_url)
+            .or_else(config::default_relay_url)
     }
 
     pub fn set_relay_url(&self, url: Option<String>) -> anyhow::Result<()> {

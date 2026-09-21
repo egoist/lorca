@@ -54,7 +54,7 @@ enum Preferences {
     }
 
     static var relayURL: String {
-        get { defaults.string(forKey: Key.relayURL) ?? "https://lorca.app" }
+        get { defaults.string(forKey: Key.relayURL) ?? "" }
         set { defaults.set(newValue, forKey: Key.relayURL) }
     }
 

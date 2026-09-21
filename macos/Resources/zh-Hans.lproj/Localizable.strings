@@ -462,7 +462,7 @@
 "Searching the web" = "正在搜索网页";
 "Searching…" = "正在搜索…";
 "Select All" = "全选";
-"Self-hosting the relay is a URL change: clients sign their requests and upload ciphertext, so the relay has nothing to trust. Leave it empty to run on this computer alone." = "自建中继只需更改 URL：客户端会为请求签名并只上传密文，中继无需被信任。留空则仅在这台电脑上运行。";
+"Self-hosting the relay is a URL change: clients sign their requests and upload ciphertext, so the relay has nothing to trust. Leave it empty to use Lorca’s relay." = "自建中继只需更改 URL：客户端会为请求签名并只上传密文，中继无需被信任。留空则使用 Lorca 的中继。";
 "Send" = "发送";
 "Send (⌘Return)" = "发送 (⌘Return)";
 "Send (Return) · Shift-Return for a new line" = "发送 (Return) · Shift-Return 换行";

@@ -105,6 +105,10 @@ final class CLILauncher {
         var environment = ProcessInfo.processInfo.environment
         environment["RUST_LOG"] = environment["RUST_LOG"] ?? "lorca=info"
         environment["LORCA_HOME"] = environment["LORCA_HOME"] ?? AppInfo.defaultCLIHome.path
+        // The fallback when neither Settings, `LORCA_RELAY_URL`, nor pairing names a relay.
+        if !AppInfo.isDevelopment, environment["LORCA_DEFAULT_RELAY_URL"] == nil {
+            environment["LORCA_DEFAULT_RELAY_URL"] = AppInfo.productionRelayURL
+        }
         process.environment = environment
 
         let logURL = Self.logURL

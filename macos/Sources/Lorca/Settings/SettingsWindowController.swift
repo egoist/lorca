@@ -266,7 +266,7 @@ final class GeneralSettingsViewController: SettingsPaneViewController {
 // MARK: - Advanced
 
 final class AdvancedSettingsViewController: SettingsPaneViewController {
-    private let relay = EditableRow(key: SettingsEntry.relayURL.row, placeholder: "https://relay.example.com")
+    private let relay = EditableRow(key: SettingsEntry.relayURL.row, placeholder: AppInfo.productionRelayURL)
     private let port = EditableRow(key: SettingsEntry.cliPort.row, placeholder: "4862")
 
     override func viewDidLoad() {
@@ -283,7 +283,7 @@ final class AdvancedSettingsViewController: SettingsPaneViewController {
         connection.setRows([relay, port])
         addSection(connection)
         addFootnote(
-            L("Self-hosting the relay is a URL change: clients sign their requests and upload ciphertext, so the relay has nothing to trust. Leave it empty to run on this computer alone.")
+            L("Self-hosting the relay is a URL change: clients sign their requests and upload ciphertext, so the relay has nothing to trust. Leave it empty to use Lorca’s relay.")
         )
 
         let onboarding = ActionRow(
