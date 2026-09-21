@@ -30,6 +30,7 @@ import {
 import Animated, {
   runOnJS,
   useAnimatedReaction,
+  useAnimatedStyle,
   useSharedValue,
   ZoomIn,
   ZoomOut,
@@ -176,7 +177,15 @@ export default function ChatScreen() {
   const confirmed = useRef(false);
   const lastOffset = useRef<number | null>(null);
   const [settled, setSettled] = useState(false);
-  const [revealed, setRevealed] = useState(false);
+  // The reveal is a shared value: showing the list costs no render of the screen.
+  const reveal = useSharedValue(0);
+  const setRevealed = useCallback(
+    (shown: boolean) => {
+      reveal.value = shown ? 1 : 0;
+    },
+    [reveal],
+  );
+  const revealStyle = useAnimatedStyle(() => ({ opacity: reveal.value }));
   const settleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const revealTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const layoutHeight = useRef(0);
@@ -362,12 +371,11 @@ export default function ChatScreen() {
         Math.abs(lastOffset.current - offset) <= END_TOLERANCE;
       if (already) confirm();
       else unconfirm();
-      // Android's end counts the scroll view's bottom padding, which is how the composer's
-      // space reaches it, and that padding lands a frame or more after JS sets it: a pin sent
-      // before then stops short, under the composer, and the scroll event sends another.
-      if (Platform.OS === "ios")
-        listRef.current?.scrollToOffset({ offset, animated: false });
-      else listRef.current?.scrollToEnd({ animated: false });
+      // The offset rather than scrollToEnd, which FlashList does in two scrolls a tick apart.
+      // On Android the composer's space is the scroll view's bottom padding and lands a frame
+      // or more after JS sets it: a pin sent before then is clamped short, under the composer,
+      // and the scroll event sends another.
+      listRef.current?.scrollToOffset({ offset, animated: false });
     });
   }, [confirm, endOffset, unconfirm]);
   const stopSettling = useCallback(() => {
@@ -625,8 +633,9 @@ export default function ChatScreen() {
         </View>
       )}
       <View style={{ flex: 1 }}>
+        <Animated.View style={[styles.transcript, revealStyle]}>
         <SoftScrollEdgeView
-          style={{ flex: 1, opacity: revealed ? 1 : 0 }}
+          style={styles.transcript}
           onLayout={(e) => {
             if (e.nativeEvent.layout.height !== layoutHeight.current)
               unconfirm();
@@ -680,6 +689,7 @@ export default function ChatScreen() {
             renderItem={renderItem}
           />
         </SoftScrollEdgeView>
+        </Animated.View>
         <KeyboardStickyView
           style={[styles.jump, { bottom: composerHeight + 10 }]}
           offset={{ closed: 0, opened: insets.bottom }}
@@ -758,6 +768,7 @@ export default function ChatScreen() {
 }
 
 const styles = StyleSheet.create({
+  transcript: { flex: 1 },
   missing: { flex: 1, alignItems: "center", justifyContent: "center" },
   androidHeader: { position: "absolute", top: 0, left: 0, right: 0, zIndex: 100 },
   androidHeaderControls: { flexDirection: "row", alignItems: "center", paddingHorizontal: 12 },
