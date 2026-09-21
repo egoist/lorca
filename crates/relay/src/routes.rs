@@ -99,6 +99,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/pair/{nonce}/reply", get(get_pair_reply))
         .route_layer(axum::middleware::from_fn_with_state(state.clone(), crate::limit::per_ip));
     Router::new()
+        .route("/", get(root))
         .route("/v1/health", get(health))
         .route("/v1/sync", get(sync_socket))
         .route("/v1/machines", get(list_machines))
@@ -115,6 +116,11 @@ pub fn router(state: AppState) -> Router {
         .merge(public)
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .with_state(state)
+}
+
+/// What a browser opening the relay's address sees.
+async fn root() -> &'static str {
+    "Lorca Relay is running..."
 }
 
 async fn health() -> Json<Value> {
