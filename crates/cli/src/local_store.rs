@@ -20,6 +20,14 @@ pub struct Upsert {
     pub changed: bool,
 }
 
+pub struct MessageSearchHit {
+    pub chat_id: String,
+    pub message_id: String,
+    pub snippet: String,
+    pub author: Author,
+    pub created_at: f64,
+}
+
 impl LocalStore {
     pub fn open(path: &Path) -> anyhow::Result<Self> {
         if let Some(parent) = path.parent() {
@@ -504,6 +512,45 @@ impl LocalStore {
         collect_messages(rows)
     }
 
+    pub fn search_messages(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> anyhow::Result<Vec<MessageSearchHit>> {
+        let terms = search_terms(query);
+        if terms.is_empty() {
+            return Ok(Vec::new());
+        }
+        let connection = self.connection.lock().unwrap();
+        let mut statement = connection.prepare(
+            "SELECT message_json FROM messages
+             WHERE body_kind IN ('text', 'handoff', 'notice', 'permission')
+             ORDER BY created_at DESC, position DESC",
+        )?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+        let mut hits = Vec::new();
+        for row in rows {
+            let message: Message = serde_json::from_str(&row?).context("decoding search result")?;
+            let Some(text) = message_search_text(&message) else {
+                continue;
+            };
+            if !search_matches(&text, &terms) {
+                continue;
+            }
+            hits.push(MessageSearchHit {
+                message_id: message.id,
+                chat_id: message.chat_id,
+                snippet: search_snippet(&text, &terms),
+                author: message.author,
+                created_at: message.created_at,
+            });
+            if hits.len() >= limit {
+                break;
+            }
+        }
+        Ok(hits)
+    }
+
     pub fn heard_count(&self, chat_id: &str, bot_id: &str) -> anyhow::Result<usize> {
         let connection = self.connection.lock().unwrap();
         let count = connection.query_row(
@@ -539,10 +586,11 @@ impl LocalStore {
 
     pub fn remove(&self, chat_id: &str, message_id: &str) -> anyhow::Result<bool> {
         let connection = self.connection.lock().unwrap();
-        Ok(connection.execute(
+        let removed = connection.execute(
             "DELETE FROM messages WHERE chat_id = ?1 AND id = ?2",
             params![chat_id, message_id],
-        )? > 0)
+        )? > 0;
+        Ok(removed)
     }
 
     /// Remove rows whose chat metadata no longer exists. The chat table is authoritative;
@@ -604,15 +652,7 @@ impl LocalStore {
                 .map(|device| (device.id.clone(), serde_json::to_string(device)))
                 .collect::<Vec<_>>(),
         )?;
-        sync_json_table(
-            &tx,
-            "chats",
-            state
-                .chats
-                .iter()
-                .map(|chat| (chat.meta.id.clone(), serde_json::to_string(chat)))
-                .collect::<Vec<_>>(),
-        )?;
+        sync_chats(&tx, state)?;
         append_applied_blob_tx(&tx, &item.id)?;
         queue_outbox_tx(&tx, item)?;
         tx.commit()?;
@@ -751,15 +791,7 @@ fn save_state_tx(tx: &Transaction<'_>, state: &State) -> anyhow::Result<()> {
             .map(|bot| (bot.id.clone(), serde_json::to_string(bot)))
             .collect::<Vec<_>>(),
     )?;
-    sync_json_table(
-        tx,
-        "chats",
-        state
-            .chats
-            .iter()
-            .map(|chat| (chat.meta.id.clone(), serde_json::to_string(chat)))
-            .collect::<Vec<_>>(),
-    )?;
+    sync_chats(tx, state)?;
     sync_json_table(
         tx,
         "routines",
@@ -792,6 +824,72 @@ fn save_metadata_tx(tx: &Transaction<'_>, state: &State) -> anyhow::Result<()> {
         ],
     )?;
     Ok(())
+}
+
+fn sync_chats(tx: &Transaction<'_>, state: &State) -> anyhow::Result<()> {
+    sync_json_table(
+        tx,
+        "chats",
+        state
+            .chats
+            .iter()
+            .map(|chat| (chat.meta.id.clone(), serde_json::to_string(chat)))
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn message_search_text(message: &Message) -> Option<String> {
+    let text = match &message.body {
+        Body::Text { text, attachments } => {
+            let names = attachments
+                .iter()
+                .map(|attachment| attachment.name.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
+            format!("{text} {names}")
+        }
+        Body::Handoff { reason, .. } => reason.clone(),
+        Body::Notice { text, .. } => text.clone(),
+        Body::Permission { summary, .. } => summary.clone(),
+        Body::Tool { .. } => return None,
+    };
+    let text = text.trim().to_string();
+    (!text.is_empty()).then_some(text)
+}
+
+pub(crate) fn search_terms(input: &str) -> Vec<String> {
+    input
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|term| !term.is_empty())
+        .map(str::to_lowercase)
+        .collect()
+}
+
+pub(crate) fn search_matches(text: &str, terms: &[String]) -> bool {
+    let text = text.to_lowercase();
+    terms.iter().all(|term| text.contains(term))
+}
+
+pub(crate) fn search_snippet(text: &str, terms: &[String]) -> String {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    if words.is_empty() {
+        return String::new();
+    }
+    let matched = words
+        .iter()
+        .position(|word| {
+            let word = word.to_lowercase();
+            terms.iter().any(|term| word.contains(term))
+        })
+        .unwrap_or(0);
+    let start = matched.saturating_sub(8);
+    let end = (matched + 16).min(words.len());
+    format!(
+        "{}{}{}",
+        if start > 0 { "… " } else { "" },
+        words[start..end].join(" "),
+        if end < words.len() { " …" } else { "" }
+    )
 }
 
 fn append_applied_blob_tx(tx: &Transaction<'_>, id: &str) -> anyhow::Result<()> {
@@ -1107,6 +1205,32 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["own", "other"]
         );
+    }
+
+    #[test]
+    fn plain_text_search_scans_visible_message_text() {
+        let scratch = scratch();
+        let mut deployed = message("deployed", 2.0);
+        deployed.body = Body::text("Deployed the resume service successfully");
+        scratch.0.upsert(&deployed).unwrap();
+
+        let message_hits = scratch.0.search_messages("deploy resume", 10).unwrap();
+        assert_eq!(message_hits[0].message_id, "deployed");
+        assert!(message_hits[0].snippet.contains("Deployed"));
+        assert!(scratch.0.search_messages("\" OR *", 10).unwrap().is_empty());
+        let terms = search_terms("release infra");
+        assert!(search_matches("Release Room Infrastructure", &terms));
+        assert!(search_snippet("Release Room Infrastructure", &terms).contains("Release"));
+
+        deployed.body = Body::text("Finished something else");
+        scratch.0.upsert(&deployed).unwrap();
+        assert!(scratch.0.search_messages("deploy", 10).unwrap().is_empty());
+        scratch.0.remove("chat", "deployed").unwrap();
+        assert!(scratch
+            .0
+            .search_messages("finished", 10)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

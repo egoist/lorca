@@ -245,6 +245,26 @@ enum Wire {
         var hasMore: Bool
     }
 
+    struct SearchResults: Decodable {
+        struct ChatHit: Decodable {
+            var chatId: String
+            var snippet: String
+        }
+
+        struct MessageHit: Decodable {
+            var chatId: String
+            var messageId: String
+            var snippet: String
+            var author: Author
+            var createdAt: Double
+        }
+
+        var chats: [ChatHit]
+        var messages: [MessageHit]
+
+        static let empty = SearchResults(chats: [], messages: [])
+    }
+
     struct ChatUsage: Decodable {
         var contextTokens: Int
         var contextWindow: Int

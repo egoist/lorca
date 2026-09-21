@@ -100,6 +100,11 @@ export interface Routine {
 
 export type Author = { kind: "you" } | { kind: "bot"; bot_id: string } | { kind: "system" };
 
+export interface ChatSearchResults {
+  chats: { chat_id: string; snippet: string }[];
+  messages: { chat_id: string; message_id: string; snippet: string; author: Author; created_at: number }[];
+}
+
 /// A file sent with a message. Its bytes travel as a `file` blob under this id, encrypted with
 /// the account key; the phone keeps a copy in its documents directory once it has them.
 export interface Attachment {

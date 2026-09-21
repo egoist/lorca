@@ -7,7 +7,7 @@ import { AppState, type AppStateStatus } from "react-native";
 import * as core from "../../modules/lorca-core";
 import { t } from "../i18n";
 import { hostFacts } from "./host";
-import type { Attachment, AutoReview, Bot, Chat, ChatMeta, ChatUsage, Message } from "./model";
+import type { Attachment, AutoReview, Bot, Chat, ChatMeta, ChatSearchResults, ChatUsage, Message } from "./model";
 import { coreHome, loadPrefs, pathOf, wipePrefs } from "./prefs";
 import { installPushHandlers, registerForPushes } from "./push";
 import {
@@ -173,6 +173,12 @@ class Engine {
     } finally {
       this.loadingOlder.delete(chatId);
     }
+  }
+
+  async searchChats(query: string): Promise<ChatSearchResults> {
+    const value = query.trim();
+    if (!value) return { chats: [], messages: [] };
+    return core.request<ChatSearchResults>("chats.search", { query: value, limit: 24 });
   }
 
   /// The attachment's bytes, from this phone's copy or the relay, as a file URI in the store.

@@ -32,6 +32,9 @@ final class CommandPalette: NSObject {
     private let emptyLabel = Build.label(L("No Results"), font: .systemFont(ofSize: 13), color: .secondaryLabelColor)
 
     private var sections: [PaletteSection] = []
+    private var searchResults = Wire.SearchResults.empty
+    private var searchTask: Task<Void, Never>?
+    private var isSearching = false
     private var rows: [Row] = []
     private var isClosing = false
 
@@ -58,6 +61,9 @@ final class CommandPalette: NSObject {
         // The menu validates against the main window's responder chain, so the commands are
         // read before the panel takes the keyboard.
         sections = PaletteIndex.sections(root: root, store: AppStore.shared)
+        searchResults = .empty
+        searchTask?.cancel()
+        isSearching = false
         field.stringValue = ""
         reload()
 
@@ -68,6 +74,7 @@ final class CommandPalette: NSObject {
 
     func close() {
         guard isVisible, !isClosing else { return }
+        searchTask?.cancel()
         isClosing = true
         defer { isClosing = false }
         panel.parent?.removeChildWindow(panel)
@@ -103,7 +110,7 @@ final class CommandPalette: NSObject {
         field.drawsBackground = false
         field.focusRingType = .none
         field.font = .systemFont(ofSize: 19)
-        field.placeholderString = L("Search actions, chats, and settings")
+        field.placeholderString = L("Search actions, chats, messages, and settings")
         field.cell?.usesSingleLineMode = true
         field.cell?.isScrollable = true
         field.delegate = self
@@ -200,17 +207,55 @@ final class CommandPalette: NSObject {
     // MARK: - List
 
     private func reload() {
-        let matched = PaletteIndex.filter(sections, query: field.stringValue)
+        var matched = PaletteIndex.filter(sections, query: field.stringValue)
+        if !field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            merge(PaletteIndex.searchSections(searchResults, root: root, store: AppStore.shared), into: &matched)
+        }
         rows = matched.flatMap { section in
             [.header(section.title)] + section.items.map { Row.item($0) }
         }
         tableView.reloadData()
         tableView.restingPointer = NSEvent.mouseLocation
+        emptyLabel.stringValue = isSearching ? L("Searching…") : L("No Results")
         emptyLabel.isHidden = !rows.isEmpty
         scrollView.isHidden = rows.isEmpty
         layoutPanel()
         select(rows.firstIndex { if case .item = $0 { true } else { false } } ?? -1, scroll: false)
         tableView.scroll(.zero)
+    }
+
+    private func merge(_ incoming: [PaletteSection], into sections: inout [PaletteSection]) {
+        for section in incoming {
+            if section.title == L("Chats"), let index = sections.firstIndex(where: { $0.title == section.title }) {
+                let known = Set(sections[index].items.compactMap(\.chatID))
+                sections[index].items.append(contentsOf: section.items.filter { item in
+                    item.chatID.map { !known.contains($0) } ?? true
+                })
+            } else {
+                sections.append(section)
+            }
+        }
+    }
+
+    private func searchMessages() {
+        searchTask?.cancel()
+        let query = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else {
+            searchResults = .empty
+            isSearching = false
+            return
+        }
+        searchTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(140))
+            guard !Task.isCancelled, let self else { return }
+            let results = try? await AppStore.shared.searchChats(query)
+            guard !Task.isCancelled,
+                query == self.field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            else { return }
+            self.searchResults = results ?? .empty
+            self.isSearching = false
+            self.reload()
+        }
     }
 
     /// The panel is as tall as its rows, up to a limit, and keeps its top edge where it is: a
@@ -270,7 +315,10 @@ final class CommandPalette: NSObject {
 
 extension CommandPalette: NSTextFieldDelegate {
     func controlTextDidChange(_ notification: Notification) {
+        searchResults = .empty
+        isSearching = !field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         reload()
+        searchMessages()
     }
 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
@@ -318,7 +366,7 @@ extension CommandPalette: NSTableViewDataSource, NSTableViewDelegate {
         case let .item(item):
             let cell = tableView.makeView(withIdentifier: PaletteItemCell.identifier, owner: nil) as? PaletteItemCell
                 ?? PaletteItemCell()
-            cell.configure(item)
+            cell.configure(item, query: field.stringValue)
             return cell
         }
     }
@@ -437,7 +485,7 @@ private final class PaletteItemCell: NSTableCellView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(_ item: PaletteItem) {
+    func configure(_ item: PaletteItem, query: String) {
         switch item.icon {
         case let .symbol(name):
             symbol.image = NSImage(systemSymbolName: name, accessibilityDescription: nil)
@@ -448,10 +496,37 @@ private final class PaletteItemCell: NSTableCellView {
             avatars.isHidden = false
             symbol.isHidden = true
         }
-        title.stringValue = item.title
-        subtitle.stringValue = item.subtitle
+        title.attributedStringValue = Self.highlighted(
+            item.title, query: query, font: .systemFont(ofSize: 13))
+        subtitle.attributedStringValue = Self.highlighted(
+            item.subtitle, query: query, font: .systemFont(ofSize: 12))
         shortcut.stringValue = item.shortcut
         syncTint()
+    }
+
+    private static func highlighted(
+        _ text: String, query: String, font: NSFont
+    ) -> NSAttributedString {
+        let output = NSMutableAttributedString(
+            string: text, attributes: [.font: font])
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: font.pointSize, weight: .semibold),
+            .backgroundColor: NSColor.controlAccentColor.withAlphaComponent(0.2),
+        ]
+        let terms = query.split { !$0.isLetter && !$0.isNumber }.map(String.init)
+        let source = text as NSString
+        for term in terms where !term.isEmpty {
+            var remaining = NSRange(location: 0, length: source.length)
+            while remaining.length > 0 {
+                let match = source.range(
+                    of: term, options: [.caseInsensitive, .diacriticInsensitive], range: remaining)
+                guard match.location != NSNotFound else { break }
+                output.addAttributes(attributes, range: match)
+                let next = NSMaxRange(match)
+                remaining = NSRange(location: next, length: source.length - next)
+            }
+        }
+        return output
     }
 
     override var backgroundStyle: NSView.BackgroundStyle {

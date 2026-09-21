@@ -322,6 +322,59 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             .map_err(|e| e.to_string())?;
             Ok(Value::Null)
         }
+        "chats.search" => {
+            let query = string(&params, "query")?;
+            let limit = params["limit"].as_u64().unwrap_or(20).clamp(1, 50) as usize;
+            let terms = crate::local_store::search_terms(&query);
+            if terms.is_empty() {
+                return Ok(json!({ "chats": [], "messages": [] }));
+            }
+            let (chat_ids, chats) = {
+                let state = app.state.lock().unwrap();
+                let bots: std::collections::HashMap<&str, &Bot> =
+                    state.bots.iter().map(|bot| (bot.id.as_str(), bot)).collect();
+                let ids: std::collections::HashSet<String> =
+                    state.chats.iter().map(|chat| chat.meta.id.clone()).collect();
+                let chats = state
+                    .chats
+                    .iter()
+                    .filter_map(|chat| {
+                        let mut parts = chat.meta.title.clone().into_iter().collect::<Vec<_>>();
+                        for id in &chat.meta.bot_ids {
+                            if let Some(bot) = bots.get(id.as_str()) {
+                                parts.extend([bot.name.clone(), bot.label.clone(), bot.description.clone()]);
+                            }
+                        }
+                        let text = parts.join(" ");
+                        crate::local_store::search_matches(&text, &terms).then(|| {
+                            json!({
+                                "chat_id": chat.meta.id,
+                                "snippet": crate::local_store::search_snippet(&text, &terms),
+                            })
+                        })
+                    })
+                    .take(limit)
+                    .collect::<Vec<_>>();
+                (ids, chats)
+            };
+            let messages: Vec<Value> = app
+                .store
+                .search_messages(&query, limit)
+                .map_err(|error| error.to_string())?
+                .into_iter()
+                .filter(|hit| chat_ids.contains(&hit.chat_id))
+                .map(|hit| {
+                    json!({
+                        "chat_id": hit.chat_id,
+                        "message_id": hit.message_id,
+                        "snippet": hit.snippet,
+                        "author": hit.author,
+                        "created_at": hit.created_at,
+                    })
+                })
+                .collect();
+            Ok(json!({ "chats": chats, "messages": messages }))
+        }
         // Older messages than the snapshot carried, a page at a time, oldest first.
         "chats.messages" => {
             let chat_id = string(&params, "chat_id")?;

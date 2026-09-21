@@ -828,6 +828,12 @@ final class AppStore {
         }
     }
 
+    /// Full-text chat and message matches from the local SQLite index.
+    func searchChats(_ query: String) async throws -> Wire.SearchResults {
+        guard !isMock else { return .empty }
+        return try await client.request("chats.search", ["query": query, "limit": 24], as: Wire.SearchResults.self)
+    }
+
     /// Tells the CLI which chat the user is looking at (nil when none, or the app is not
     /// frontmost), so a reply they watch arrive is not pushed to their phone.
     func setWatchedChat(_ id: Chat.ID?) {

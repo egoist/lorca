@@ -16,6 +16,7 @@ struct PaletteItem {
     var keywords: [String] = []
     /// Left out of the list until a query finds it.
     var isSearchOnly = false
+    var chatID: Chat.ID? = nil
     let run: () -> Void
 }
 
@@ -77,7 +78,7 @@ enum PaletteIndex {
             let bots = store.bots(in: chat)
             return PaletteItem(
                 icon: .chat(bots), title: store.title(for: chat), subtitle: store.subtitle(for: chat),
-                keywords: bots.map(\.name) + [store.preview(for: chat)]
+                keywords: bots.map(\.name) + [store.preview(for: chat)], chatID: chat.id
             ) { [weak root] in
                 root?.open(chat.id)
             }
@@ -103,6 +104,33 @@ enum PaletteIndex {
             }
         }
         return panes + entries
+    }
+
+    static func searchSections(
+        _ results: Wire.SearchResults, root: RootSplitViewController, store: AppStore
+    ) -> [PaletteSection] {
+        let chats = results.chats.compactMap { hit -> PaletteItem? in
+            guard let chat = store.chat(hit.chatId) else { return nil }
+            return PaletteItem(
+                icon: .chat(store.bots(in: chat)), title: store.title(for: chat), subtitle: hit.snippet,
+                isSearchOnly: true, chatID: chat.id
+            ) { [weak root] in
+                root?.open(chat.id)
+            }
+        }
+        let messages = results.messages.compactMap { hit -> PaletteItem? in
+            guard let chat = store.chat(hit.chatId) else { return nil }
+            return PaletteItem(
+                icon: .chat(store.bots(in: chat)), title: store.title(for: chat), subtitle: hit.snippet,
+                isSearchOnly: true, chatID: chat.id
+            ) { [weak root] in
+                root?.open(chat.id)
+            }
+        }
+        return [
+            PaletteSection(title: L("Chats"), items: chats),
+            PaletteSection(title: L("Messages"), items: messages),
+        ].filter { !$0.items.isEmpty }
     }
 
     // MARK: - Menu items

@@ -292,6 +292,7 @@
 "Message %@ — @ to address one bot" = "发消息给 %@ — 用 @ 指定某个智能体";
 "Message from" = "来自";
 "Message from %@: %@" = "来自 %1$@ 的消息：%2$@";
+"Messages" = "消息";
 "Messaged" = "已发消息给";
 "Messaged %@: %@" = "已发消息给 %1$@：%2$@";
 "Messaging %@" = "正在给 %@ 发消息";
@@ -448,8 +449,9 @@
 "Scroll to Latest" = "滚动到最新消息";
 "Scroll to latest (⌘J)" = "滚动到最新 (⌘J)";
 "Search" = "搜索";
-"Search actions, chats, and settings" = "搜索操作、聊天和设置";
+"Search actions, chats, messages, and settings" = "搜索操作、聊天、消息和设置";
 "Search plugins" = "搜索插件";
+"Searching…" = "正在搜索…";
 "Searching files" = "正在搜索文件";
 "Searching plugins" = "正在搜索插件";
 "Searching the web" = "正在搜索网页";

@@ -200,6 +200,14 @@ mod tests {
         assert!(arguments.is_null());
         assert_eq!(result, None);
         assert!(home.join("lorca.sqlite3").is_file());
+        let searchable = lorca::model::Message::new(chat_id, lorca::model::Author::You, lorca::model::Body::text("a searchable mobile needle"));
+        let searchable_id = searchable.id.clone();
+        core.app.upsert_message(searchable, false);
+        let search: serde_json::Value = serde_json::from_str(
+            &core.request("chats.search".into(), r#"{"query":"needle"}"#.into()),
+        )
+        .unwrap();
+        assert_eq!(search["result"]["messages"][0]["message_id"], searchable_id);
 
         std::thread::sleep(std::time::Duration::from_millis(200));
         let events = listener.0.lock().unwrap();
