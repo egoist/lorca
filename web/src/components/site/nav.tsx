@@ -37,7 +37,7 @@ export function Nav() {
   const { t, i18n } = useTranslation()
   return (
     <header className="sticky top-4 z-40 mt-4 px-4">
-      <div className="mx-auto flex h-12 max-w-4xl items-center justify-between rounded-full border bg-background/75 pr-2 pl-4 shadow-xs backdrop-blur-xl dark:bg-background/60 dark:shadow-none">
+      <div className="mx-auto flex h-14 max-w-4xl items-center justify-between rounded-full pr-4 pl-5 bg-zinc-200/50 backdrop-blur-xl dark:bg-zinc-900/80 dark:border">
         <a href="#top" className="flex items-center gap-2 font-semibold tracking-tight">
           <Logo className="size-6" />
           Lorca
