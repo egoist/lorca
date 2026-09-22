@@ -1,5 +1,28 @@
 import AppKit
 
+/// The first window is ready while the CLI starts and loads the account.
+final class LoadingViewController: NSViewController {
+    override func loadView() {
+        let container = BackgroundView()
+        container.fillColor = Theme.transcriptBackground
+        container.cornerRadius = 0
+
+        let progress = NSProgressIndicator()
+        progress.style = .spinning
+        progress.controlSize = .regular
+        progress.startAnimation(nil)
+        let label = Build.label(L("Loading…"), font: .systemFont(ofSize: 13), color: .secondaryLabelColor, alignment: .center)
+        let column = Build.stack([progress, label], spacing: 12)
+        column.alignment = .centerX
+        container.addSubview(column)
+        NSLayoutConstraint.activate([
+            column.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+            column.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+        ])
+        view = container
+    }
+}
+
 /// Shown when the local CLI is not answering on 127.0.0.1.
 final class OfflineViewController: NSViewController {
     var onRetry: (() -> Void)?

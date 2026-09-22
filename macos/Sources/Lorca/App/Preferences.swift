@@ -4,6 +4,7 @@ enum Preferences {
     private enum Key {
         static let onboarded = "lorca.onboarded"
         static let selection = "lorca.selection"
+        static let showsInspector = "lorca.showsInspector"
         static let sendOnReturn = "lorca.sendOnReturn"
         static let relayURL = "lorca.relayURL"
         static let cliPort = "lorca.cliPort"
@@ -22,6 +23,11 @@ enum Preferences {
     static var selection: String? {
         get { defaults.string(forKey: Key.selection) }
         set { defaults.set(newValue, forKey: Key.selection) }
+    }
+
+    static var showsInspector: Bool {
+        get { defaults.object(forKey: Key.showsInspector) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: Key.showsInspector) }
     }
 
     static var sendOnReturn: Bool {

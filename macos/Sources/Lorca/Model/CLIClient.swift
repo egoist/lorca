@@ -20,6 +20,8 @@ final class CLIClient: NSObject {
     var onStateChange: ((ConnectionState) -> Void)?
     /// Called on the main actor for every event frame, with the raw JSON.
     var onEvent: ((String, Data) -> Void)?
+    /// The launcher makes the endpoint ready before the next connection attempt.
+    var onReconnectNeeded: (() -> Void)?
 
     private var session: URLSession!
     private var task: URLSessionWebSocketTask?
@@ -27,6 +29,7 @@ final class CLIClient: NSObject {
     private var nextID = 1
     private var wantsConnection = false
     private var reconnectDelay: TimeInterval = 0.4
+    private var reconnectTask: Task<Void, Never>?
     private var generation = 0
 
     override init() {
@@ -42,6 +45,8 @@ final class CLIClient: NSObject {
 
     func connect() {
         wantsConnection = true
+        reconnectTask?.cancel()
+        reconnectTask = nil
         guard task == nil else { return }
         open()
     }
@@ -56,7 +61,7 @@ final class CLIClient: NSObject {
         wantsConnection = true
         reconnectDelay = 0.4
         close()
-        open()
+        requestReconnect()
     }
 
     private func open() {
@@ -73,6 +78,9 @@ final class CLIClient: NSObject {
     }
 
     private func close() {
+        generation += 1
+        reconnectTask?.cancel()
+        reconnectTask = nil
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
         failPending(L("The CLI connection closed"))
@@ -102,6 +110,7 @@ final class CLIClient: NSObject {
     }
 
     private func dropped() {
+        generation += 1
         task = nil
         failPending(L("The CLI connection dropped"))
         if state != .disconnected {
@@ -115,11 +124,17 @@ final class CLIClient: NSObject {
         guard wantsConnection, task == nil else { return }
         let delay = reconnectDelay
         reconnectDelay = min(reconnectDelay * 1.6, 5)
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+        reconnectTask?.cancel()
+        reconnectTask = Task { @MainActor [weak self] in
+            do { try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) } catch { return }
             guard let self, self.wantsConnection, self.task == nil else { return }
-            self.open()
+            self.reconnectTask = nil
+            self.requestReconnect()
         }
+    }
+
+    private func requestReconnect() {
+        if let onReconnectNeeded { onReconnectNeeded() } else { open() }
     }
 
     private func failPending(_ reason: String) {

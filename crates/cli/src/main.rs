@@ -31,6 +31,9 @@ enum Command {
         /// leaves a stale CLI holding the port.
         #[usage(long)]
         parent_pid: Option<u32>,
+        /// Write a JSON readiness message to stdout once the local server is listening.
+        #[usage(long)]
+        ready_stdout: bool,
     },
     /// Manage this identity.
     Identity {
@@ -97,14 +100,15 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "lorca=info,lorca_agent=info".into()))
         .with_target(false)
+        .with_writer(std::io::stderr)
         .init();
 
     let cli = Cli::parse();
     let config = Config::load(cli.home, cli.port);
     let app = App::load(config)?;
 
-    match cli.command.unwrap_or(Command::Serve { parent_pid: None }) {
-        Command::Serve { parent_pid } => {
+    match cli.command.unwrap_or(Command::Serve { parent_pid: None, ready_stdout: false }) {
+        Command::Serve { parent_pid, ready_stdout } => {
             runtime::prime_names(&app);
             // Installed marketplace plugins follow the index this build ships.
             lorca::plugins::refresh_installed(&app, &lorca::plugins::bundled());
@@ -113,7 +117,7 @@ async fn main() -> anyhow::Result<()> {
             }
             tokio::spawn(sync::run(app.clone()));
             tokio::spawn(routines::run(app.clone()));
-            ws::serve(app).await
+            ws::serve(app, ready_stdout).await
         }
         Command::Identity { command } => match command {
             IdentityCommand::New { name } => {

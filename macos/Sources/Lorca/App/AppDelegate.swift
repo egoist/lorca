@@ -6,19 +6,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var saidUpdateRequired = false
     private var onboardingWindowController: OnboardingWindowController?
     private var settingsWindowController: SettingsWindowController?
+    private var servicesStarted = false
 
     private let store = AppStore.shared
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        StartupTrace.mark("did finish launching")
         NSApp.appearance = nil
-        NSApp.applicationIconImage = AppIcon.make()
         NSApp.mainMenu = MainMenu.build()
         updateDockBadge()
         installSignalHandlers()
 
-        // No window until the CLI answers `hello`: a Device with an identity gets the main
-        // window, one without gets onboarding. If the CLI stays silent, the main window shows
-        // its offline state after a grace period instead of flashing before onboarding.
+        // The window opens independently of the CLI. Its loading state gives way to chats
+        // or onboarding once the CLI answers.
         store.observe(self) { [weak self] event in
             switch event {
             case .identityChanged:
@@ -31,6 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             default:
                 break
             }
+            self?.startServicesWhenReady()
         }
         NotificationCenter.default.addObserver(forName: AppLanguage.didChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.languageChanged() }
@@ -45,18 +46,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.showMainWindow()
             self?.mainWindowController?.root.select(.chat(id))
         }
-        Notifier.shared.start()
         store.start()
-        Updater.shared.start()
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 2_500_000_000)
-            guard let self, self.store.hasIdentity == nil, self.onboardingWindowController == nil else { return }
-            self.showMainWindow()
+        showMainWindow()
+        StartupTrace.mark("window shown")
+    }
+
+    private func startServicesWhenReady() {
+        guard !servicesStarted, !store.isStarting else { return }
+        servicesStarted = true
+        DispatchQueue.main.async {
+            Notifier.shared.start()
+            Updater.shared.start()
+            StartupTrace.mark("notifications and updater started")
         }
     }
 
-    /// Activation happens when a window exists to bring forward. Activating at launch, before
-    /// the CLI has answered, leaves the window that appears later behind other apps.
+    /// Activate after ordering a window front so it comes forward with the app.
     private func activate() {
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -71,7 +76,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func identityStateChanged() {
         switch store.hasIdentity {
         case .some(true):
-            if onboardingWindowController == nil { showMainWindow() }
+            if onboardingWindowController == nil, mainWindowController == nil { showMainWindow() }
         case .some(false):
             guard onboardingWindowController == nil else { return }
             mainWindowController?.close()

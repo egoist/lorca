@@ -11,6 +11,8 @@ final class SidebarViewController: NSViewController {
     let footer = SidebarFooterView()
 
     private var nodes: [SidebarNode] = []
+    /// The root can restore selection before the first snapshot has created the outline rows.
+    private var selection: Selection?
     private var isApplyingSelection = false
     private var isNotifyingSelection = false
 
@@ -158,10 +160,11 @@ final class SidebarViewController: NSViewController {
             DispatchQueue.main.async { [weak self] in self?.rebuild() }
             return
         } else {
-            let previous = currentSelection()
+            isApplyingSelection = true
             nodes = fresh
             outlineView.reloadData()
-            if let previous { setSelection(previous) }
+            setSelection(selection)
+            isApplyingSelection = false
         }
         footer.update()
     }
@@ -187,6 +190,10 @@ final class SidebarViewController: NSViewController {
     }
 
     func setSelection(_ selection: Selection?) {
+        self.selection = selection
+        let wasApplyingSelection = isApplyingSelection
+        isApplyingSelection = true
+        defer { isApplyingSelection = wasApplyingSelection }
         guard let selection else {
             outlineView.deselectAll(nil)
             return
@@ -195,9 +202,7 @@ final class SidebarViewController: NSViewController {
             guard let node = outlineView.item(atRow: row) as? SidebarNode,
                 node.selection == selection
             else { continue }
-            isApplyingSelection = true
             outlineView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
-            isApplyingSelection = false
             return
         }
     }
@@ -334,7 +339,8 @@ extension SidebarViewController: NSOutlineViewDelegate {
         guard !isApplyingSelection else { return }
         isNotifyingSelection = true
         defer { isNotifyingSelection = false }
-        onSelect?(currentSelection())
+        selection = currentSelection()
+        onSelect?(selection)
     }
 }
 

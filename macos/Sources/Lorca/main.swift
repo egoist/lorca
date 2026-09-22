@@ -1,5 +1,6 @@
 import AppKit
 
+MainActor.assumeIsolated { StartupTrace.mark("main") }
 let application = NSApplication.shared
 
 // NSApplication holds its delegate weakly, so this global keeps it alive.

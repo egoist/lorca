@@ -16,6 +16,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 
     private let store = AppStore.shared
     private var didAsk = false
+    private var started = false
 
     /// `UNUserNotificationCenter` needs a bundle; a bare binary (`swift run`) has none.
     private var center: UNUserNotificationCenter? {
@@ -23,6 +24,8 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     }
 
     func start() {
+        guard !started else { return }
+        started = true
         center?.delegate = self
         store.observe(self) { [weak self] event in
             switch event {
@@ -36,6 +39,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
                 MainActor.assumeIsolated { self?.watchingChanged() }
             }
         }
+        watchingChanged()
     }
 
     /// The chat the user is looking at: the app is frontmost and its window shows the chat.
@@ -45,6 +49,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 
     /// Call when the selection or the window's visibility changes.
     func watchingChanged() {
+        guard started else { return }
         let watched = watchedChat
         store.setWatchedChat(watched)
         // Whatever was posted for the chat now on screen has been seen.

@@ -1,6 +1,7 @@
 //! Local websocket for the app. JSON requests `{ id, method, params }` get `{ id, result }` or
 //! `{ id, error }`; events arrive as `{ event, data }`.
 
+use std::io::Write;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -26,7 +27,7 @@ struct Request {
     params: Value,
 }
 
-pub async fn serve(app: Arc<App>) -> anyhow::Result<()> {
+pub async fn serve(app: Arc<App>, ready_stdout: bool) -> anyhow::Result<()> {
     let addr: SocketAddr = ([127, 0, 0, 1], app.config.port).into();
     let router = Router::new()
         .route("/", get(index))
@@ -36,6 +37,13 @@ pub async fn serve(app: Arc<App>) -> anyhow::Result<()> {
         .await
         .map_err(|e| anyhow::anyhow!("cannot bind {addr}: {e}. Is another lorca serve running?"))?;
     tracing::info!(%addr, "lorca serve");
+    if ready_stdout {
+        // The parent connects only after this record. Logs go to stderr so stdout is a
+        // machine-readable startup channel, independent of tracing filters and formatting.
+        let mut stdout = std::io::stdout().lock();
+        writeln!(stdout, "{}", json!({ "event": "ready", "port": listener.local_addr()?.port() }))?;
+        stdout.flush()?;
+    }
     axum::serve(listener, router).await?;
     Ok(())
 }

@@ -7,14 +7,28 @@ final class RootSplitViewController: NSSplitViewController {
     private let sidebar = SidebarViewController()
     private let settingsSidebar = SettingsSidebarViewController()
     private let content = ContentContainerViewController()
-    private let inspector = InspectorViewController()
+    private let inspectorContainer = ContentContainerViewController()
+    private lazy var inspector: InspectorViewController = {
+        let controller = InspectorViewController()
+        controller.onOpenDevice = { [weak self] id in self?.openDevice(id) }
+        controller.onRemoveBot = { [weak self] botID in
+            guard case let .chat(chatID) = self?.selection else { return }
+            self?.store.removeBot(botID, from: chatID)
+        }
+        controller.onAddBot = { [weak self] in self?.addBotToChat(nil) }
+        controller.onComposePrompt = { [weak self] text in self?.chatController?.prefill(text) }
+        return controller
+    }()
 
     private var sidebarItem: NSSplitViewItem!
     private var inspectorItem: NSSplitViewItem!
     /// The sidebars' bars as split view item accessories, made on first use, keyed by the bar.
     private var sidebarAccessories: [ObjectIdentifier: NSViewController] = [:]
 
-    private var userWantsInspector = true
+    private var userWantsInspector = Preferences.showsInspector
+    private var displayedConnection: Bool?
+    private var displayedStarting: Bool?
+    private var displayedChatID: Chat.ID?
     private var chatController: ChatViewController?
     /// The Device the Plugins, Bots, and Devices panes show, picked in the window's
     /// toolbar. This computer until another is picked.
@@ -25,6 +39,7 @@ final class RootSplitViewController: NSSplitViewController {
     /// What held the keyboard when Settings opened, to hand it back on the way out.
     private weak var focusBeforeSettings: NSView?
     private let offlineController = OfflineViewController()
+    private let loadingController = LoadingViewController()
     private let placeholderController = PlaceholderViewController()
 
     var onSelectionChange: (() -> Void)?
@@ -91,9 +106,10 @@ final class RootSplitViewController: NSSplitViewController {
         contentItem.minimumThickness = 460
         contentItem.canCollapse = false
 
-        inspectorItem = NSSplitViewItem(inspectorWithViewController: inspector)
+        inspectorItem = NSSplitViewItem(inspectorWithViewController: inspectorContainer)
         inspectorItem.minimumThickness = 268
         inspectorItem.maximumThickness = 320
+        inspectorItem.isCollapsed = !userWantsInspector || Preferences.selection?.hasPrefix("settings:") == true
 
         addSplitViewItem(sidebarItem)
         addSplitViewItem(contentItem)
@@ -118,19 +134,6 @@ final class RootSplitViewController: NSSplitViewController {
         sidebar.onOpenDevice = { [weak self] deviceID in
             self?.openDevice(deviceID)
         }
-        inspector.onOpenDevice = { [weak self] deviceID in
-            self?.openDevice(deviceID)
-        }
-        inspector.onRemoveBot = { [weak self] botID in
-            guard case let .chat(chatID) = self?.selection else { return }
-            self?.store.removeBot(botID, from: chatID)
-        }
-        inspector.onAddBot = { [weak self] in
-            self?.addBotToChat(nil)
-        }
-        inspector.onComposePrompt = { [weak self] text in
-            self?.chatController?.prefill(text)
-        }
         offlineController.onRetry = { [weak self] in
             self?.store.reconnect()
         }
@@ -144,15 +147,16 @@ final class RootSplitViewController: NSSplitViewController {
 
         showSettingsDevice(nil)
         restoreSelection()
-        updateContent()
     }
 
     private func restoreSelection() {
+        let restored: Selection?
         if let encoded = Preferences.selection, let decoded = decode(encoded), exists(decoded) {
-            selection = decoded
+            restored = decoded
         } else {
-            selection = store.chats.first.map { .chat($0.id) }
+            restored = store.chats.first.map { .chat($0.id) }
         }
+        if restored == selection { updateContent() } else { selection = restored }
         syncSidebar()
     }
 
@@ -330,11 +334,10 @@ final class RootSplitViewController: NSSplitViewController {
     private func handle(_ event: StoreEvent) {
         switch event {
         case .connectionChanged:
-            updateContent()
+            if displayedConnection != store.isConnected || displayedStarting != store.isStarting { updateContent() }
         case .snapshotReplaced:
             showSettingsDevice(settingsDeviceID)
             restoreSelection()
-            updateContent()
         case .chatsChanged:
             if case let .chat(id) = selection, store.chat(id) == nil {
                 select(store.chats.first.map { .chat($0.id) })
@@ -354,6 +357,8 @@ final class RootSplitViewController: NSSplitViewController {
 
     private func updateContent() {
         guard isViewLoaded else { return }
+        displayedConnection = store.isConnected
+        displayedStarting = store.isStarting
 
         // The relay URL and the CLI port are what a computer with no CLI answering needs, so the
         // panes show either way.
@@ -364,8 +369,10 @@ final class RootSplitViewController: NSSplitViewController {
         }
 
         guard store.isConnected else {
-            content.show(offlineController)
-            setInspector(visible: false)
+            content.show(store.isStarting ? loadingController : offlineController)
+            // Keep the saved inspector width throughout startup. Only its contents wait for
+            // the snapshot, so the transcript never expands and then shrinks on first load.
+            if !store.isStarting, displayedChatID != nil { setInspector(visible: false) }
             return
         }
 
@@ -375,9 +382,13 @@ final class RootSplitViewController: NSSplitViewController {
             let controller = chatController ?? ChatViewController()
             controller.onRedirect = { [weak self] chatID in self?.select(.chat(chatID)) }
             chatController = controller
-            controller.show(chatID: chat.id)
-            content.show(controller)
-            inspector.show(selection: .chat(chat.id))
+            if content.children.first !== controller || displayedChatID != chat.id {
+                controller.show(chatID: chat.id)
+                content.show(controller)
+                inspectorContainer.show(inspector)
+                inspector.show(selection: .chat(chat.id))
+                displayedChatID = chat.id
+            }
             setInspector(visible: userWantsInspector)
 
         case .settings:
@@ -413,7 +424,7 @@ final class RootSplitViewController: NSSplitViewController {
 
     private func setInspector(visible: Bool) {
         guard inspectorItem.isCollapsed == visible else { return }
-        inspectorItem.animator().isCollapsed = !visible
+        inspectorItem.isCollapsed = !visible
     }
 
     // MARK: - Actions
@@ -421,6 +432,7 @@ final class RootSplitViewController: NSSplitViewController {
     override func toggleInspector(_ sender: Any?) {
         guard case .chat = selection, store.isConnected else { NSSound.beep(); return }
         userWantsInspector = inspectorItem.isCollapsed
+        Preferences.showsInspector = userWantsInspector
         super.toggleInspector(sender)
     }
 

@@ -522,6 +522,7 @@
 "The bot" = "智能体";
 "The bot, its routines, and this direct chat are removed from this Device and from paired Devices." = "该智能体、其例行任务和此直接聊天将从这台设备和已配对的设备上移除。";
 "The CLI connection closed" = "CLI 连接已关闭";
+"The CLI closed its startup channel before becoming ready. See %@." = "CLI 在就绪前关闭了启动通道。详见 %@。";
 "The CLI connection dropped" = "CLI 连接已中断";
 "The CLI exited with code %d. See %@." = "CLI 已退出，退出码 %1$d。详见 %2$@。";
 "The Device this page shows" = "此页面显示的设备";

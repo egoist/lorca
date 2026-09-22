@@ -73,7 +73,9 @@ final class AppStore {
 
     /// True when the CLI answers on localhost (mock: toggled from the Debug menu).
     private(set) var isConnected = false
-    /// nil until the CLI has answered `hello`.
+    /// The first connection is still loading. The window is visible throughout this phase.
+    private(set) var isStarting = true
+    /// nil until the CLI has supplied the initial snapshot.
     private(set) var hasIdentity: Bool?
     private(set) var isIdentityDevice = false
     private(set) var identityID: String?
@@ -94,6 +96,11 @@ final class AppStore {
     private var loadingOlder: Set<Chat.ID> = []
     private var replyEngine: ReplyEngine?
     private var started = false
+    private var startupTask: Task<Void, Never>?
+    private var bootstrapGeneration = 0
+    private var isBootstrapping = true
+    private var bootstrapEvents: [(name: String, data: Data)] = []
+    private var isApplyingBootstrap = false
 
     private struct Subscription {
         weak var owner: AnyObject?
@@ -112,10 +119,12 @@ final class AppStore {
 
     func start() {
         guard !started else { return }
+        StartupTrace.mark("store starting")
         started = true
         if isMock {
             resetMockData()
             isConnected = true
+            finishStartup()
             hasIdentity = true
             isIdentityDevice = true
             emit(.connectionChanged)
@@ -123,35 +132,74 @@ final class AppStore {
             return
         }
 
+        // A slow or silent CLI leaves the user with the offline recovery controls. This
+        // deadline bounds the loading state, never the time until a window is shown.
+        startupTask = Task { [weak self] in
+            do { try await Task.sleep(nanoseconds: 2_500_000_000) } catch { return }
+            guard let self else { return }
+            self.finishStartup()
+            self.emit(.connectionChanged)
+        }
+
         client.onStateChange = { [weak self] state in
             guard let self else { return }
             switch state {
             case .connected:
-                Task { await self.bootstrap() }
+                StartupTrace.mark("websocket connected")
+                self.bootstrapGeneration += 1
+                let generation = self.bootstrapGeneration
+                Task { await self.bootstrap(generation: generation) }
             case .disconnected, .connecting:
+                self.bootstrapGeneration += 1
+                self.isBootstrapping = true
+                self.bootstrapEvents.removeAll()
                 self.reportedWatchedChat = nil
                 if self.isConnected {
                     self.isConnected = false
                     self.runningJobs.removeAll()
                     self.emit(.connectionChanged)
                 }
-                // The CLI went away (a stale instance stopped, or it crashed): start ours.
-                if state == .disconnected { self.launcher.ensureRunning() }
             }
         }
         client.onEvent = { [weak self] name, data in
-            self?.handle(event: name, data: data)
+            guard let self else { return }
+            if self.isBootstrapping {
+                self.bootstrapEvents.append((name, data))
+            } else {
+                self.handle(event: name, data: data)
+            }
         }
-        launcher.onStatusChange = { [weak self] _ in
-            self?.emit(.connectionChanged)
+        launcher.onStatusChange = { [weak self] status in
+            guard let self else { return }
+            // A child that is starting or restarting owns the next connection attempt.
+            // Cancel any socket retry left over from the previous process.
+            switch status {
+            case .probing: StartupTrace.mark("CLI probe started")
+            case .starting:
+                StartupTrace.mark("CLI starting")
+                self.client.disconnect()
+            case .running: StartupTrace.mark("CLI listening")
+            case .failed: self.client.disconnect()
+            default: break
+            }
+            if case .failed = status { self.finishStartup() }
+            self.emit(.connectionChanged)
         }
+        launcher.onReady = { [weak self] in self?.client.connect() }
+        client.onReconnectNeeded = { [weak self] in self?.launcher.ensureRunning() }
         launcher.ensureRunning()
-        client.connect()
     }
 
     func stop() {
+        finishStartup()
         client.disconnect()
         launcher.stop()
+    }
+
+    private func finishStartup() {
+        startupTask?.cancel()
+        startupTask = nil
+        isStarting = false
     }
 
     /// What the offline state should say while the CLI is not answering.
@@ -164,24 +212,32 @@ final class AppStore {
             setConnected(true)
             return
         }
-        launcher.ensureRunning()
         client.reconnect()
     }
 
-    private func bootstrap() async {
+    private func bootstrap(generation: Int) async {
         do {
-            let hello = try await client.request("hello", as: Wire.Hello.self)
-            hasIdentity = hello.hasIdentity
-            isIdentityDevice = hello.isIdentityDevice
-            relayURL = hello.relayUrl
-            relayConnected = hello.relayConnected
-            relayUpdateRequired = hello.relayUpdateRequired ?? false
+            // The snapshot includes identity and connection state as well as messages. Publish
+            // them together, so roster events cannot expose empty previews before it arrives.
             let snapshot = try await client.request("bootstrap", as: Wire.Snapshot.self)
+            guard generation == bootstrapGeneration else { return }
+            StartupTrace.mark("snapshot received")
+            isApplyingBootstrap = true
             apply(snapshot: snapshot)
+            for event in bootstrapEvents { handle(event: event.name, data: event.data) }
+            bootstrapEvents.removeAll()
+            isApplyingBootstrap = false
+            isBootstrapping = false
             isConnected = true
+            finishStartup()
+            emit(.snapshotReplaced)
             emit(.connectionChanged)
             emit(.identityChanged)
+            StartupTrace.mark("snapshot presented")
         } catch {
+            guard generation == bootstrapGeneration else { return }
+            finishStartup()
+            emit(.connectionChanged)
             NSLog("bootstrap failed: \(error.localizedDescription)")
         }
     }
@@ -344,6 +400,7 @@ final class AppStore {
     }
 
     private func emit(_ event: StoreEvent) {
+        guard !isApplyingBootstrap else { return }
         subscriptions.removeAll { $0.owner == nil }
         for subscription in subscriptions {
             subscription.handler(event)
@@ -476,6 +533,7 @@ final class AppStore {
     private func sortChats() {
         chats.sort { lhs, rhs in
             if lhs.isPinned != rhs.isPinned { return lhs.isPinned }
+            if lhs.lastActivity == rhs.lastActivity { return lhs.id < rhs.id }
             return lhs.lastActivity > rhs.lastActivity
         }
     }
