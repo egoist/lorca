@@ -1,4 +1,4 @@
-import { Brain, FilePen, Globe, Plug, Search, SquareTerminal } from 'lucide-react'
+import { Brain, FilePen, Globe, Plug } from 'lucide-react'
 import { Trans, useTranslation } from 'react-i18next'
 
 import {
@@ -22,7 +22,7 @@ export function Hero() {
         {t('hero.badge')}
       </p>
       <h1 className="display text-[3.4rem] text-balance sm:text-[4.6rem] lg:text-[5.2rem]">
-        <Trans i18nKey="hero.title" components={{ accent: <span className="serif-accent text-[1.12em] text-foreground/85" /> }} />
+        <Trans i18nKey="hero.title" components={{ accent: <span className="brush" /> }} />
       </h1>
       <p className="mx-auto mt-7 max-w-2xl text-lg text-pretty text-muted-foreground sm:text-xl">
         {t('hero.body')}
@@ -40,10 +40,6 @@ export function Hero() {
   )
 }
 
-function Accent({ children }: { children?: React.ReactNode }) {
-  return <span className="serif-accent text-foreground/80">{children}</span>
-}
-
 function Stage({
   id,
   seed,
@@ -51,7 +47,6 @@ function Stage({
   title,
   body,
   children,
-  flip = false,
   bare = false,
 }: {
   id: string
@@ -60,7 +55,6 @@ function Stage({
   title: React.ReactNode
   body: string
   children: React.ReactNode
-  flip?: boolean
   /// No backdrop: the children sit on the panel's own surface, edge to edge.
   bare?: boolean
 }) {
@@ -75,8 +69,8 @@ function Stage({
         {bare ? (
           children
         ) : (
-          <div className={`grain relative ${flip ? 'bg-zinc-950' : ''}`}>
-            {!flip && <Pixels seed={seed} className="absolute inset-0 h-full w-full" />}
+          <div className="grain relative">
+            <Pixels seed={seed} className="absolute inset-0 h-full w-full" />
             <div className="relative px-4 py-10 sm:px-12 sm:py-14">{children}</div>
           </div>
         )}
@@ -92,7 +86,7 @@ export function Turns() {
       id="turns"
       seed={2}
       eyebrow={t('turns.eyebrow')}
-      title={<Trans i18nKey="turns.title" components={{ accent: <Accent /> }} />}
+      title={t('turns.title')}
       body={t('turns.body')}
     >
       <img
@@ -114,9 +108,8 @@ export function Relay() {
     <Stage
       id="relay"
       seed={8}
-      flip
       eyebrow={t('relay.eyebrow')}
-      title={<Trans i18nKey="relay.title" components={{ accent: <Accent /> }} />}
+      title={t('relay.title')}
       body={t('relay.body')}
     >
       <div className="mx-auto max-w-4xl">
@@ -126,14 +119,12 @@ export function Relay() {
   )
 }
 
-/// What a bot can reach for on its Runner. The tool names are the ones the model calls.
+/// What a bot can do once it has a folder, in the words a first-time visitor uses.
 const toolKinds = [
-  { key: 'files', icon: FilePen, names: 'read · write · edit' },
-  { key: 'search', icon: Search, names: 'grep · find · ls' },
-  { key: 'shell', icon: SquareTerminal, names: 'bash' },
-  { key: 'web', icon: Globe, names: 'web_search · web_fetch' },
-  { key: 'memory', icon: Brain, names: 'MEMORY.md' },
-  { key: 'plugins', icon: Plug, names: 'MCP' },
+  { key: 'files', icon: FilePen },
+  { key: 'web', icon: Globe },
+  { key: 'memory', icon: Brain },
+  { key: 'plugins', icon: Plug },
 ] as const
 
 export function Tools() {
@@ -144,18 +135,15 @@ export function Tools() {
       seed={8}
       bare
       eyebrow={t('tools.eyebrow')}
-      title={<Trans i18nKey="tools.title" components={{ accent: <Accent /> }} />}
+      title={t('tools.title')}
       body={t('tools.body')}
     >
       {/* Hairlines are the grid's own background showing through one-pixel gaps. */}
-      <ul className="grid gap-px bg-border pt-px sm:grid-cols-2 lg:grid-cols-3">
-        {toolKinds.map(({ key, icon: Icon, names }) => (
-          <li key={key} className="bg-card px-6 py-8 sm:px-12">
+      <ul className="grid gap-px bg-border pt-px sm:grid-cols-2 lg:grid-cols-4">
+        {toolKinds.map(({ key, icon: Icon }) => (
+          <li key={key} className="bg-card px-6 py-8 sm:px-8">
             <Icon className="size-5 text-violet" strokeWidth={1.75} />
-            <p className="mt-5 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-              <span className="font-semibold">{t(`tools.kinds.${key}.title`)}</span>
-              <span className="font-mono text-xs text-muted-foreground/80">{names}</span>
-            </p>
+            <p className="mt-5 font-semibold">{t(`tools.kinds.${key}.title`)}</p>
             <p className="mt-2 leading-relaxed text-muted-foreground">{t(`tools.kinds.${key}.body`)}</p>
           </li>
         ))}
@@ -167,13 +155,11 @@ export function Tools() {
 export function Chef() {
   const { t } = useTranslation()
   return (
-    <section className="mx-auto max-w-6xl px-5 py-10">
+    <section id="start" className="mx-auto max-w-6xl px-5 py-10">
       <div className="panel grid gap-10 px-6 py-12 sm:px-12 lg:grid-cols-[1fr_1fr] lg:items-center">
         <div>
           <p className="text-xs font-semibold tracking-[0.18em] text-muted-foreground/80 uppercase">{t('chef.eyebrow')}</p>
-          <h2 className="display mt-3 text-4xl sm:text-5xl">
-            <Trans i18nKey="chef.title" components={{ accent: <Accent /> }} />
-          </h2>
+          <h2 className="display mt-3 text-4xl sm:text-5xl">{t('chef.title')}</h2>
           <p className="mt-5 text-lg leading-relaxed text-muted-foreground">
             {t('chef.body')}
           </p>
