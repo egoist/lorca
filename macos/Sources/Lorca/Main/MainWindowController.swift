@@ -4,7 +4,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     let root = RootSplitViewController()
     /// The Device the Plugins, Bots, and Devices panes show. Its toolbar item is in the
     /// toolbar only while one of those panes is up.
-    private let devicePicker = NSPopUpButton()
+    private lazy var devicePicker: NSPopUpButton = {
+        let picker = NSPopUpButton()
+        picker.target = self
+        picker.action = #selector(pickDevice)
+        picker.setAccessibilityLabel(L("Device"))
+        picker.toolTip = L("The Device this page shows")
+        return picker
+    }()
     /// Creating bots and chats belongs to the chats; Settings hides it.
     private var createButton: HoverButton?
     private weak var navigation: NSToolbarItemGroup?
@@ -13,20 +20,22 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private var palette: CommandPalette?
 
     init() {
+        StartupTrace.mark("window objects initialized")
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1180, height: 760),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
-            defer: false
+            defer: true
         )
+        StartupTrace.mark("NSWindow created")
         window.title = AppInfo.name
         window.titleVisibility = .visible
         window.toolbarStyle = .unified
         window.titlebarSeparatorStyle = .automatic
         window.minSize = NSSize(width: 860, height: 520)
-        window.contentViewController = root
         window.setFrameAutosaveName("LorcaMainWindow")
         window.tabbingMode = .disallowed
+        window.animationBehavior = .none
 
         super.init(window: window)
         window.delegate = self
@@ -36,6 +45,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         toolbar.displayMode = .iconOnly
         toolbar.allowsUserCustomization = false
         window.toolbar = toolbar
+        StartupTrace.mark("toolbar installed")
 
         // The sidebar buttons form a leading titlebar accessory, so they keep their place beside
         // the traffic lights when the sidebar collapses.
@@ -51,10 +61,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
                 createButton,
             ]))
 
-        devicePicker.target = self
-        devicePicker.action = #selector(pickDevice)
-        devicePicker.setAccessibilityLabel(L("Device"))
-        devicePicker.toolTip = L("The Device this page shows")
+        StartupTrace.mark("titlebar accessories installed")
+
+        // Attach the split view once the saved frame and titlebar are configured, so its
+        // first layout uses the final content area instead of relaying out for each change.
+        window.contentViewController = root
+        StartupTrace.mark("window content attached")
 
         root.onSelectionChange = { [weak self] in
             self?.updateTitle()
@@ -69,6 +81,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         }
         updateTitle()
         updateToolbar()
+        StartupTrace.mark("window configured")
     }
 
     // MARK: - Settings toolbar
@@ -113,7 +126,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         if let devicePlatter {
             devicePlatter.isHidden = !isScoped
             devicePicker.isHidden = false
-        } else {
+        } else if isSettings {
             devicePicker.isHidden = !isScoped
         }
         guard isScoped else { return }
@@ -231,6 +244,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     override func showWindow(_ sender: Any?) {
         let isOpening = window?.isVisible != true
         super.showWindow(sender)
+        StartupTrace.mark("window ordered front")
         if isOpening { root.focusContent() }
     }
 

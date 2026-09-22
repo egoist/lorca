@@ -3,8 +3,10 @@ import AppKit
 final class SidebarViewController: NSViewController {
     private let store = AppStore.shared
 
-    private let outlineView = NSOutlineView()
-    private let scrollView = NSScrollView()
+    private lazy var outlineView = NSOutlineView()
+    private lazy var scrollView = NSScrollView()
+    private let listHost = NSView()
+    private var listInstalled = false
     /// The views above and below the list. Where the sidebar's chrome floats, the root hangs them
     /// on the split view item; otherwise they are laid out in this view.
     let searchBar = SidebarSearchBar()
@@ -32,15 +34,7 @@ final class SidebarViewController: NSViewController {
         let container = NSView()
         container.translatesAutoresizingMaskIntoConstraints = false
 
-        configureOutlineView()
-
-        scrollView.documentView = outlineView
-        scrollView.hasVerticalScroller = true
-        scrollView.autohidesScrollers = true
-        scrollView.drawsBackground = false
-        scrollView.translatesAutoresizingMaskIntoConstraints = false
-        scrollView.automaticallyAdjustsContentInsets = false
-        scrollView.contentInsets = NSEdgeInsets(top: 7, left: 0, bottom: 8, right: 0)
+        listHost.translatesAutoresizingMaskIntoConstraints = false
 
         // The palette searches the chats, so the field opens it instead of taking the keyboard.
         searchBar.onActivate = { [weak self] in self?.focusSearch() }
@@ -57,12 +51,10 @@ final class SidebarViewController: NSViewController {
         if SidebarChrome.floats {
             // The root hangs the search bar and the footer on the split view item, and the list
             // runs the pane's full height beneath them, inset by the safe area they extend.
-            scrollView.automaticallyAdjustsContentInsets = true
-            scrollView.contentInsets = NSEdgeInsets()
             // The gap between the search bar and the first chat.
             container.additionalSafeAreaInsets.top = 5
-            container.addSubview(scrollView)
-            scrollView.pin(to: container)
+            container.addSubview(listHost)
+            listHost.pin(to: container)
             view = container
             return
         }
@@ -70,7 +62,7 @@ final class SidebarViewController: NSViewController {
         let divider = HairlineView()
 
         container.addSubview(searchBar)
-        container.addSubview(scrollView)
+        container.addSubview(listHost)
         container.addSubview(divider)
         container.addSubview(footer)
 
@@ -80,10 +72,10 @@ final class SidebarViewController: NSViewController {
             searchBar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             searchBar.trailingAnchor.constraint(equalTo: container.trailingAnchor),
 
-            scrollView.topAnchor.constraint(equalTo: searchBar.bottomAnchor),
-            scrollView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            scrollView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            scrollView.bottomAnchor.constraint(equalTo: divider.topAnchor),
+            listHost.topAnchor.constraint(equalTo: searchBar.bottomAnchor),
+            listHost.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            listHost.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            listHost.bottomAnchor.constraint(equalTo: divider.topAnchor),
 
             divider.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             divider.trailingAnchor.constraint(equalTo: container.trailingAnchor),
@@ -102,7 +94,24 @@ final class SidebarViewController: NSViewController {
     }
 
     func focusList() {
+        guard listInstalled else { return }
         view.window?.makeFirstResponder(outlineView)
+    }
+
+    /// The loading sidebar needs its chrome, but no empty table to build and lay out twice.
+    private func installList() {
+        guard !listInstalled else { return }
+        listInstalled = true
+        configureOutlineView()
+        scrollView.documentView = outlineView
+        scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.drawsBackground = false
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.automaticallyAdjustsContentInsets = SidebarChrome.floats
+        scrollView.contentInsets = SidebarChrome.floats ? NSEdgeInsets() : NSEdgeInsets(top: 7, left: 0, bottom: 8, right: 0)
+        listHost.addSubview(scrollView)
+        scrollView.pin(to: listHost)
     }
 
     private func configureOutlineView() {
@@ -149,6 +158,7 @@ final class SidebarViewController: NSViewController {
 
     private func rebuild() {
         let fresh = store.chats.map { SidebarNode(.chat($0.id)) }
+        if !fresh.isEmpty { installList() }
 
         if fresh.map(\.kind) == nodes.map(\.kind) {
             // Same rows in the same order (an unread count cleared, a pin toggled): update the
@@ -170,6 +180,7 @@ final class SidebarViewController: NSViewController {
     }
 
     private func refreshVisibleCells() {
+        guard listInstalled else { return }
         for row in 0..<outlineView.numberOfRows {
             guard let node = outlineView.item(atRow: row) as? SidebarNode,
                 let cell = outlineView.view(atColumn: 0, row: row, makeIfNecessary: false)
@@ -184,6 +195,7 @@ final class SidebarViewController: NSViewController {
     // MARK: - Selection
 
     private func currentSelection() -> Selection? {
+        guard listInstalled else { return nil }
         let row = outlineView.selectedRow
         guard row >= 0, let node = outlineView.item(atRow: row) as? SidebarNode else { return nil }
         return node.selection
@@ -191,6 +203,7 @@ final class SidebarViewController: NSViewController {
 
     func setSelection(_ selection: Selection?) {
         self.selection = selection
+        guard listInstalled else { return }
         let wasApplyingSelection = isApplyingSelection
         isApplyingSelection = true
         defer { isApplyingSelection = wasApplyingSelection }
@@ -216,7 +229,7 @@ final class SidebarViewController: NSViewController {
     }
 
     func scrollSelectionToVisible() {
-        guard outlineView.selectedRow >= 0 else { return }
+        guard listInstalled, outlineView.selectedRow >= 0 else { return }
         outlineView.scrollRowToVisible(outlineView.selectedRow)
     }
 
@@ -225,6 +238,7 @@ final class SidebarViewController: NSViewController {
     }
 
     private func refreshShortcutHints() {
+        guard listInstalled else { return }
         for row in 0..<min(Self.shortcutCount, outlineView.numberOfRows) {
             let cell = outlineView.view(atColumn: 0, row: row, makeIfNecessary: false) as? SidebarChatCell
             cell?.shortcutNumber = shortcutNumber(forRow: row)

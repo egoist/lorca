@@ -1,8 +1,8 @@
 import Foundation
 
 /// Opt-in launch timings (`LORCA_TRACE_STARTUP=1`), measured from entering main.
-@MainActor
 enum StartupTrace {
+    private static let lock = NSLock()
     private static let started = ProcessInfo.processInfo.systemUptime
     private static let enabled = ProcessInfo.processInfo.environment["LORCA_TRACE_STARTUP"] == "1"
     private static var phases: Set<String> = []
@@ -16,7 +16,10 @@ enum StartupTrace {
     }()
 
     static func mark(_ phase: String) {
-        guard enabled, phases.insert(phase).inserted else { return }
+        guard enabled else { return }
+        lock.lock()
+        defer { lock.unlock() }
+        guard phases.insert(phase).inserted else { return }
         let start = started
         let elapsed = (ProcessInfo.processInfo.systemUptime - start) * 1_000
         let line = String(format: "+%.1f ms: %@\n", elapsed, phase)

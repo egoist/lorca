@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         StartupTrace.mark("did finish launching")
         NSApp.appearance = nil
         NSApp.mainMenu = MainMenu.build()
+        StartupTrace.mark("main menu built")
         updateDockBadge()
         installSignalHandlers()
 
@@ -117,11 +118,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showMainWindow() {
         if mainWindowController == nil {
+            StartupTrace.mark("window construction started")
             mainWindowController = MainWindowController()
         }
         mainWindowController?.showWindow(nil)
-        mainWindowController?.window?.makeKeyAndOrderFront(nil)
+        StartupTrace.mark("window controller shown")
         activate()
+        StartupTrace.mark("application activated")
     }
 
     /// Views take their words when they are built, so a new language builds them again: the

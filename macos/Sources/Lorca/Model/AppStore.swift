@@ -174,12 +174,7 @@ final class AppStore {
             // A child that is starting or restarting owns the next connection attempt.
             // Cancel any socket retry left over from the previous process.
             switch status {
-            case .probing: StartupTrace.mark("CLI probe started")
-            case .starting:
-                StartupTrace.mark("CLI starting")
-                self.client.disconnect()
-            case .running: StartupTrace.mark("CLI listening")
-            case .failed: self.client.disconnect()
+            case .starting, .failed: self.client.disconnect()
             default: break
             }
             if case .failed = status { self.finishStartup() }

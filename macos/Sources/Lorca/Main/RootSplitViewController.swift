@@ -5,7 +5,19 @@ final class RootSplitViewController: NSSplitViewController {
 
     private let sidebarContainer = ContentContainerViewController()
     private let sidebar = SidebarViewController()
-    private let settingsSidebar = SettingsSidebarViewController()
+    private var settingsSidebarStorage: SettingsSidebarViewController?
+    private var settingsSidebar: SettingsSidebarViewController {
+        if let controller = settingsSidebarStorage { return controller }
+        let controller = SettingsSidebarViewController()
+        controller.onSelect = { [weak self] selection in self?.select(selection) }
+        controller.onReveal = { [weak self] entry in
+            (self?.settingsController(for: entry.pane) as? SettingsPaneViewController)?.reveal(entry)
+        }
+        controller.onBack = { [weak self] in self?.closeSettings() }
+        controller.setDevice(settingsDeviceID)
+        settingsSidebarStorage = controller
+        return controller
+    }
     private let content = ContentContainerViewController()
     private let inspectorContainer = ContentContainerViewController()
     private lazy var inspector: InspectorViewController = {
@@ -38,9 +50,17 @@ final class RootSplitViewController: NSSplitViewController {
     private var lastChatID: Chat.ID?
     /// What held the keyboard when Settings opened, to hand it back on the way out.
     private weak var focusBeforeSettings: NSView?
-    private let offlineController = OfflineViewController()
+    private lazy var offlineController: OfflineViewController = {
+        let controller = OfflineViewController()
+        controller.onRetry = { [weak self] in self?.store.reconnect() }
+        return controller
+    }()
     private let loadingController = LoadingViewController()
-    private let placeholderController = PlaceholderViewController()
+    private lazy var placeholderController: PlaceholderViewController = {
+        let controller = PlaceholderViewController()
+        controller.onNewBot = { [weak self] in self?.presentNewBot() }
+        return controller
+    }()
 
     var onSelectionChange: (() -> Void)?
 
@@ -122,23 +142,8 @@ final class RootSplitViewController: NSSplitViewController {
             guard let self, case let .chat(id) = selection, store.chat(id)?.isGroup == true else { return }
             renameChat(nil)
         }
-        settingsSidebar.onSelect = { [weak self] selection in
-            self?.select(selection)
-        }
-        settingsSidebar.onReveal = { [weak self] entry in
-            (self?.settingsController(for: entry.pane) as? SettingsPaneViewController)?.reveal(entry)
-        }
-        settingsSidebar.onBack = { [weak self] in
-            self?.closeSettings()
-        }
         sidebar.onOpenDevice = { [weak self] deviceID in
             self?.openDevice(deviceID)
-        }
-        offlineController.onRetry = { [weak self] in
-            self?.store.reconnect()
-        }
-        placeholderController.onNewBot = { [weak self] in
-            self?.presentNewBot()
         }
 
         store.observe(self) { [weak self] event in
@@ -226,7 +231,7 @@ final class RootSplitViewController: NSSplitViewController {
 
     func showSettingsDevice(_ id: Device.ID?) {
         settingsDeviceID = id.flatMap { store.device($0) }?.id ?? store.thisDevice?.id
-        settingsSidebar.setDevice(settingsDeviceID)
+        settingsSidebarStorage?.setDevice(settingsDeviceID)
         for case let controller as DevicePaneViewController in settingsControllers.values {
             controller.show(deviceID: settingsDeviceID)
         }
@@ -253,7 +258,7 @@ final class RootSplitViewController: NSSplitViewController {
     /// had it on the way out.
     private func syncSidebar() {
         let isSettings = selection?.isSettings == true
-        let wasSettings = settingsSidebar.parent != nil
+        let wasSettings = settingsSidebarStorage?.parent != nil
         sidebarContainer.show(isSettings ? settingsSidebar : sidebar)
         if isSettings {
             settingsSidebar.setSelection(selection)
@@ -383,8 +388,8 @@ final class RootSplitViewController: NSSplitViewController {
             controller.onRedirect = { [weak self] chatID in self?.select(.chat(chatID)) }
             chatController = controller
             if content.children.first !== controller || displayedChatID != chat.id {
-                controller.show(chatID: chat.id)
                 content.show(controller)
+                controller.show(chatID: chat.id)
                 inspectorContainer.show(inspector)
                 inspector.show(selection: .chat(chat.id))
                 displayedChatID = chat.id
