@@ -88,7 +88,8 @@
 "Always allowed" = "已始终允许";
 "Always allowed|plugin tools" = "始终允许的操作";
 "an unassigned Runner" = "未分配的 Runner";
-"API base URL. Leave it empty for %@; set it for a proxy or a compatible server." = "API 基础 URL。使用 %@ 时留空；使用代理或兼容服务器时填写。";
+"API base URL" = "API 基础 URL";
+"Leave empty to use %@’s API." = "留空以使用 %@ 的 API。";
 "API key" = "API 密钥";
 "API key from opencode.ai/auth" = "来自 opencode.ai/auth 的 API 密钥";
 "App Language" = "应用语言";
@@ -210,6 +211,9 @@
 "Dictation could not start" = "无法开始听写";
 "Dictation Language" = "听写语言";
 "Disconnect" = "断开";
+"Disconnecting…" = "正在断开…";
+"Hide API key" = "隐藏 API 密钥";
+"Show API key" = "显示 API 密钥";
 "Done" = "完成";
 "Download and install updates automatically" = "自动下载并安装更新";
 "Drafting a file" = "正在撰写文件";
@@ -529,7 +533,7 @@
 "the end will not load" = "末尾部分不会载入";
 "The image shows in place of the symbol and color. It is resized to %d px and shared encrypted, like an attachment." = "图像会取代符号和颜色显示。它会被缩放到 %d px，并像附件一样加密共享。";
 "The key is checked against %@ and shared with your paired Devices, encrypted." = "密钥会向 %@ 验证，并加密共享给你已配对的设备。";
-"The key is checked against %@, then shared with your paired Devices, encrypted with your account key. Bots on any Runner use it." = "密钥会先向 %@ 验证，然后用你的账户密钥加密，共享给你已配对的设备。任何 Runner 上的智能体都可以使用它。";
+"Encrypted and shared with your paired Devices." = "加密共享给你已配对的设备。";
 "the link" = "链接页面";
 "The lorca CLI is not bundled with this build and is not on PATH." = "此版本未内置 lorca CLI，PATH 中也找不到它。";
 "The Lorca CLI is not running" = "Lorca CLI 未运行";

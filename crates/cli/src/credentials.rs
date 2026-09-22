@@ -114,7 +114,7 @@ impl Credentials {
         config::write_json_private(&config.credentials_path(), self)
     }
 
-    fn api_key(&self, kind: &str) -> Option<&ApiKeyCredential> {
+    pub(crate) fn api_key(&self, kind: &str) -> Option<&ApiKeyCredential> {
         match kind {
             "deepseek" => self.deepseek.as_ref(),
             "anthropic" => self.anthropic.as_ref(),

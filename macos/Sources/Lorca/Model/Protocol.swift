@@ -96,6 +96,12 @@ enum Wire {
         var routine: Routine
     }
 
+    /// Fetched only while editing a provider; never stored in the account snapshot.
+    struct ProviderAPIKey: Decodable {
+        var apiKey: String?
+        var baseUrl: String?
+    }
+
     struct Provider: Decodable {
         var kind: String
         var isConnected: Bool

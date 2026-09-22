@@ -279,7 +279,8 @@ final class InspectorViewController: NSViewController {
             actionTitle: connected ? L("Change") : L("Connect")
         )
         status.onAction = { [weak self] in
-            self?.presentAsSheet(ConnectProviderViewController(kind: bot.provider))
+            guard let self else { return }
+            ConnectProviderViewController.present(kind: bot.provider, from: self)
         }
 
         return [providerRow, modelRow, thinkingRow, status] + usageRows

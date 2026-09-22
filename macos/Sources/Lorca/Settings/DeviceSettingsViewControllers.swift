@@ -123,15 +123,15 @@ final class ProvidersSettingsViewController: SettingsPaneViewController {
                     subtitle: "\(credential.kind.subtitle) · \(credential.detail)",
                     state: credential.isConnected ? L("Connected") : nil,
                     stateColor: .systemGreen,
-                    actionTitle: credential.isConnected ? L("Disconnect") : L("Connect…"),
-                    destructive: credential.isConnected
+                    actionTitle: credential.isConnected ? (credential.kind.usesAPIKey ? L("Edit…") : L("Disconnect")) : L("Connect…"),
+                    destructive: credential.isConnected && !credential.kind.usesAPIKey
                 )
                 row.onAction = { [weak self] in
                     guard let self else { return }
-                    if credential.isConnected {
+                    if credential.isConnected && !credential.kind.usesAPIKey {
                         Task { try? await self.store.disconnectProvider(credential.kind) }
                     } else {
-                        self.presentAsSheet(ConnectProviderViewController(kind: credential.kind, baseURL: credential.baseURL))
+                        ConnectProviderViewController.present(kind: credential.kind, from: self, baseURL: credential.baseURL)
                     }
                 }
                 return row

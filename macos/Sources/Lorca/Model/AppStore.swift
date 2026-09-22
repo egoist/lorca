@@ -1164,6 +1164,10 @@ final class AppStore {
         emit(.identityChanged)
     }
 
+    func providerAPIKey(_ kind: ProviderCredential.Kind) async throws -> Wire.ProviderAPIKey {
+        try await client.request("providers.api_key", ["kind": kind.wireValue], as: Wire.ProviderAPIKey.self)
+    }
+
     /// Connects an API-key provider. An empty `baseURL` means the provider's own API.
     func connectAPIKey(_ kind: ProviderCredential.Kind, apiKey: String, baseURL: String = "") async throws {
         var params: [String: Any] = ["api_key": apiKey]

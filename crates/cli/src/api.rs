@@ -566,6 +566,20 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             crate::plugins::on_runner(app, &bot.runner_id, "permission.answer", body).await
         }
 
+        // Read one API key on demand for the local settings editor. Snapshots and events
+        // continue to carry masked provider statuses.
+        "providers.api_key" => {
+            let kind = string(&params, "kind")?;
+            if !matches!(kind.as_str(), "deepseek" | "anthropic" | "opencode" | "opencode-go") {
+                return Err("Not an API-key provider".into());
+            }
+            let credentials = app.credentials.lock().unwrap();
+            let credential = credentials.api_key(&kind);
+            Ok(json!({
+                "api_key": credential.map(|c| &c.api_key),
+                "base_url": credential.and_then(|c| c.base_url.as_ref()),
+            }))
+        }
         #[cfg(feature = "provider-auth")]
         "providers.connect_deepseek" => {
             provider_auth::connect_deepseek(app, &string(&params, "api_key")?, opt_string(&params, "base_url").as_deref()).await?;
