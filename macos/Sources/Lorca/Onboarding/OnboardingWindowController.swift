@@ -274,11 +274,22 @@ final class OnboardingViewController: NSViewController {
         avatar.content = firstBot.map { AvatarView.content(for: $0) } ?? .bot(symbolName: "sparkles", accent: .indigo)
 
         let nameField = NSTextField()
-        nameField.stringValue = firstBot?.name ?? "Chef"
+        // Localize the CLI's default profile while preserving any saved edits.
+        if let name = firstBot?.name, name != "Chef" {
+            nameField.stringValue = name
+        } else {
+            nameField.stringValue = L("Chef", context: "first bot name")
+        }
         nameField.placeholderString = L("Name")
         nameField.identifier = NSUserInterfaceItemIdentifier("botName")
         let descriptionField = WrappingTextField()
-        descriptionField.stringValue = firstBot?.description ?? "A general-purpose chief of staff for planning work and getting things done."
+        if let description = firstBot?.description,
+            description != "A general-purpose chief of staff for planning work and getting things done."
+        {
+            descriptionField.stringValue = description
+        } else {
+            descriptionField.stringValue = L("A general-purpose chief of staff for planning work and getting things done.")
+        }
         descriptionField.placeholderString = L("What it does and how it should work")
         descriptionField.usesSingleLineMode = false
         descriptionField.maximumNumberOfLines = 3

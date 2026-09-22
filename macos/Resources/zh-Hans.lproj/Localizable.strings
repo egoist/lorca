@@ -61,6 +61,7 @@
 "A bot" = "智能体";
 "A bot runs on one Runner and uses that machine's credentials. Phones and tablets are not Runners." = "智能体运行在一个 Runner 上，并使用那台机器的凭证。手机和平板电脑不是 Runner。";
 "A bot runs on the Runner it is assigned to, with your account's credentials and that Runner's plugins." = "智能体在分配给它的 Runner 上运行，使用你账户的凭证和该 Runner 的插件。";
+"A general-purpose chief of staff for planning work and getting things done." = "一位通用型幕僚长，帮你规划工作、推进任务。";
 "A group chat holds up to six bots." = "一个群聊最多容纳六个智能体。";
 "A group of one for now. Add bots from the inspector." = "目前群里只有一个智能体。可在检查器中添加智能体。";
 "A task %@ runs on its own in this chat. %@ set it up and can change it: ask in chat." = "%1$@ 在这个聊天中自行运行的任务。它由 %2$@ 设置，也可以由它修改：在聊天中提出即可。";
@@ -135,6 +136,7 @@
 "Check for Updates…" = "检查更新…";
 "Checking the key with %@…" = "正在向 %@ 验证密钥…";
 "Checking the team" = "正在查看团队";
+"Chef|first bot name" = "幕僚长";
 "Choose an image for this bot." = "为这个智能体选取一张图像。";
 "Choose Image…" = "选取图像…";
 "CLI not running · start it with: lorca serve" = "CLI 未运行 · 用此命令启动：lorca serve";
