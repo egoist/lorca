@@ -13,14 +13,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.appearance = nil
         NSApp.applicationIconImage = AppIcon.make()
         NSApp.mainMenu = MainMenu.build()
+        updateDockBadge()
         installSignalHandlers()
 
         // No window until the CLI answers `hello`: a Device with an identity gets the main
         // window, one without gets onboarding. If the CLI stays silent, the main window shows
         // its offline state after a grace period instead of flashing before onboarding.
         store.observe(self) { [weak self] event in
-            if case .identityChanged = event { self?.identityStateChanged() }
-            if case .rosterChanged = event { self?.relayStateChanged() }
+            switch event {
+            case .identityChanged:
+                self?.identityStateChanged()
+                self?.updateDockBadge()
+            case .snapshotReplaced, .chatsChanged:
+                self?.updateDockBadge()
+            case .rosterChanged:
+                self?.relayStateChanged()
+            default:
+                break
+            }
         }
         NotificationCenter.default.addObserver(forName: AppLanguage.didChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.languageChanged() }
@@ -49,6 +59,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// the CLI has answered, leaves the window that appears later behind other apps.
     private func activate() {
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func updateDockBadge() {
+        let unreadCount = store.hasIdentity == false ? 0 : store.chats.reduce(0) { $0 + $1.unreadCount }
+        NSApp.dockTile.badgeLabel = unreadCount > 0 ? String(unreadCount) : nil
     }
 
     /// Onboarding closes itself through `onFinish`, so the phrase step is never yanked away by
