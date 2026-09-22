@@ -1,6 +1,7 @@
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::handler::Handler;
@@ -13,11 +14,14 @@ use crate::auth::{b64url_decode, b64url_encode, issue_token, verify_signature, A
 use crate::db::{self, now};
 use crate::AppState;
 
+#[cfg(test)]
+mod tests;
+
 const MAX_BLOB_BYTES: usize = 4 * 1024 * 1024;
-/// `file` blobs carry attachments: an encrypted photo or document a Device sent with a message.
-const MAX_FILE_BLOB_BYTES: usize = 24 * 1024 * 1024;
-/// Room for a `file` blob as base64url inside its JSON body.
-const MAX_BODY_BYTES: usize = 40 * 1024 * 1024;
+/// A 100 MiB attachment plus its 24-byte nonce and 16-byte authentication tag.
+const MAX_FILE_BLOB_BYTES: usize = 100 * 1024 * 1024 + 40;
+/// Room for a non-file blob as base64url inside its JSON body.
+const MAX_BODY_BYTES: usize = 6 * 1024 * 1024;
 const CHALLENGE_TTL: i64 = 120;
 const PAIRING_TTL: i64 = 10 * 60;
 /// The relay pings each sync socket this often, and drops one that has been silent for two
@@ -129,6 +133,9 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/machines/{machine_pubkey}", axum::routing::delete(revoke_machine))
         .route("/v1/blobs", get(list_blobs).put(put_blob.layer(axum::middleware::from_fn_with_state(state.clone(), crate::limit::large_uploads))))
         .route("/v1/blobs/{id}", get(get_blob).delete(delete_blob))
+        .route("/v1/files/{id}", get(get_file).put(
+            put_file.layer(axum::middleware::from_fn_with_state(state.clone(), crate::limit::large_uploads))
+        ).layer(DefaultBodyLimit::max(MAX_FILE_BLOB_BYTES)))
         .route("/v1/groups/{group}", axum::routing::delete(delete_group))
         .route("/v1/groups/{group}/blobs", get(group_blobs))
         .route("/v1/push", post(send_push))
@@ -305,6 +312,9 @@ async fn put_blob(State(state): State<AppState>, auth: Auth, Json(body): Json<Pu
     if !db::KINDS.contains(&body.kind.as_str()) {
         return Err(ApiError::bad_request("Unknown blob kind"));
     }
+    if body.kind == "file" {
+        return Err(ApiError::bad_request("Upload attachments with PUT /v1/files/{id}"));
+    }
     let id = body.id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     if !valid_id(&id) {
         return Err(ApiError::bad_request("Blob id must be 1–64 characters of [A-Za-z0-9._-]"));
@@ -313,58 +323,25 @@ async fn put_blob(State(state): State<AppState>, auth: Auth, Json(body): Json<Pu
         if !valid_id(slot) {
             return Err(ApiError::bad_request("Slot must be 1–64 characters of [A-Za-z0-9._-]"));
         }
-        // A superseded `file` would leave its object behind.
-        if body.kind == "file" {
-            return Err(ApiError::bad_request("A file blob takes no slot"));
-        }
     }
     if body.group.as_deref().is_some_and(|group| !valid_id(group)) {
         return Err(ApiError::bad_request("Group must be 1–64 characters of [A-Za-z0-9._-]"));
     }
-    let max = if body.kind == "file" { MAX_FILE_BLOB_BYTES } else { MAX_BLOB_BYTES };
-    // Decoding a 24 MB attachment is work for the blocking pool, and it happens before the
-    // writer is taken so other writes are not held up by it.
     let ciphertext = db::blocking(move || b64url_decode(&body.ciphertext)).await?;
-    if ciphertext.is_empty() || ciphertext.len() > max {
+    if ciphertext.is_empty() || ciphertext.len() > MAX_BLOB_BYTES {
         return Err(ApiError::bad_request("Ciphertext size out of range"));
     }
 
-    let quota = state.quota_bytes;
-    let blob = |payload| db::NewBlob {
+    let blob = db::NewBlob {
         identity_pubkey: auth.identity_pubkey.clone(),
         id: id.clone(),
         kind: body.kind.clone(),
         recipient_machine_pubkey: body.recipient_machine_pubkey.clone(),
         slot: body.slot.clone().map(|name| db::Slot { name, keep_first: body.keep_first }),
         group: body.group.clone(),
-        payload,
+        payload: db::Payload::Inline(ciphertext),
     };
-
-    let inserted = match body.kind.as_str() {
-        "file" => {
-            // The object goes up before the row. A cheap check first saves an upload the row
-            // would refuse; the insert decides for real.
-            let store = &state.file_store;
-            let size = ciphertext.len() as i64;
-            if let Some(existing) = state.db.precheck_blob(&auth.identity_pubkey, &id, body.group.as_deref(), size, quota).await? {
-                return Ok(Json(json!({ "id": id, "seq": existing.seq, "existing": true })));
-            }
-            let key = crate::store::key(&auth.identity_pubkey, &id);
-            store.put(&key, ciphertext).await?;
-            match state.db.insert_blob(blob(db::Payload::InFileStore { size }), quota).await {
-                Ok(inserted) => inserted,
-                Err(error) => {
-                    // The row was refused, so the object is an orphan. A concurrent put of the
-                    // same id would have returned `existing` instead, so it is only ours.
-                    if let Err(cleanup) = store.delete(&key).await {
-                        tracing::warn!(?cleanup, key, "removing an orphaned file object");
-                    }
-                    return Err(error);
-                }
-            }
-        }
-        _ => state.db.insert_blob(blob(db::Payload::Inline(ciphertext)), quota).await?,
-    };
+    let inserted = state.db.insert_blob(blob, state.quota_bytes).await?;
     if inserted.existing {
         return Ok(Json(json!({ "id": id, "seq": inserted.seq, "existing": true })));
     }
@@ -372,21 +349,66 @@ async fn put_blob(State(state): State<AppState>, auth: Auth, Json(body): Json<Pu
     Ok(Json(json!({ "id": id, "seq": inserted.seq })))
 }
 
-/// Fills in the bytes of `file` rows from the file store.
-async fn load_files(state: &AppState, identity_pubkey: &str, rows: &mut [db::BlobRow]) -> ApiResult<()> {
-    for row in rows.iter_mut().filter(|row| row.in_file_store()) {
-        let key = crate::store::key(identity_pubkey, &row.id);
-        match state.file_store.get(&key).await? {
-            Some(bytes) => row.ciphertext = bytes,
-            // The row stays: a relay pointed at the wrong bucket would otherwise forget every
-            // attachment it was asked for. `/metrics` counts these.
-            None => {
-                crate::metrics::METRICS.missing_objects.add(1);
-                tracing::error!(key, "file blob's object is missing");
-            }
-        }
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileQuery {
+    group: Option<String>,
+}
+
+/// An attachment's encrypted bytes, with its id in the path and optional chat group in the
+/// query. Names, MIME types, and dimensions stay inside the encrypted message or roster.
+async fn put_file(State(state): State<AppState>, auth: Auth, Path(id): Path<String>, Query(query): Query<FileQuery>, headers: HeaderMap, ciphertext: Bytes) -> ApiResult<Json<Value>> {
+    if !valid_id(&id) || query.group.as_deref().is_some_and(|group| !valid_id(group)) {
+        return Err(ApiError::bad_request("File id and group must be 1–64 characters of [A-Za-z0-9._-]"));
     }
-    Ok(())
+    if headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()) != Some("application/octet-stream") {
+        return Err(ApiError::new(StatusCode::UNSUPPORTED_MEDIA_TYPE, "Attachments require application/octet-stream"));
+    }
+    if ciphertext.is_empty() {
+        return Err(ApiError::bad_request("Ciphertext must not be empty"));
+    }
+    let size = ciphertext.len() as i64;
+    if let Some(existing) = state.db.precheck_blob(&auth.identity_pubkey, &id, query.group.as_deref(), size, state.quota_bytes).await? {
+        return Ok(Json(json!({ "id": id, "seq": existing.seq, "existing": true })));
+    }
+    let key = crate::store::key(&auth.identity_pubkey, &id);
+    state.file_store.put(&key, ciphertext).await?;
+    let inserted = state.db.insert_blob(db::NewBlob {
+        identity_pubkey: auth.identity_pubkey.clone(),
+        id: id.clone(),
+        kind: "file".into(),
+        recipient_machine_pubkey: None,
+        slot: None,
+        group: query.group,
+        payload: db::Payload::InFileStore { size },
+    }, state.quota_bytes).await;
+    let inserted = match inserted {
+        Ok(inserted) => inserted,
+        Err(error) => {
+            if let Err(cleanup) = state.file_store.delete(&key).await {
+                tracing::warn!(?cleanup, key, "removing an orphaned file object");
+            }
+            return Err(error);
+        }
+    };
+    if !inserted.existing {
+        state.db.publish(db::Event::Blobs { identity: auth.identity_pubkey, recipient: None }).await;
+    }
+    Ok(Json(json!({ "id": id, "seq": inserted.seq, "existing": inserted.existing })))
+}
+
+async fn get_file(State(state): State<AppState>, auth: Auth, Path(id): Path<String>) -> ApiResult<Response> {
+    let row = state.db.blob(&auth.identity_pubkey, &auth.machine_pubkey, &id).await?;
+    if !row.is_some_and(|row| row.kind == "file") {
+        return Err(ApiError::not_found("No such file"));
+    }
+    let key = crate::store::key(&auth.identity_pubkey, &id);
+    let Some(ciphertext) = state.file_store.get(&key).await? else {
+        crate::metrics::METRICS.missing_objects.add(1);
+        tracing::error!(key, "file blob's object is missing");
+        return Err(ApiError::not_found("The file is no longer stored"));
+    };
+    Ok(([(header::CONTENT_TYPE, "application/octet-stream")], ciphertext).into_response())
 }
 
 #[derive(Debug, Deserialize)]
@@ -425,7 +447,7 @@ impl From<db::BlobRow> for BlobOut {
 /// A page of the identity's log after `since`. A Device pulls pages until one comes back
 /// empty, and again whenever its sync socket says `blobs`.
 async fn list_blobs(State(state): State<AppState>, auth: Auth, Query(query): Query<ListBlobs>) -> ApiResult<Json<Value>> {
-    let kinds: Vec<String> = query
+    let mut kinds: Vec<String> = query
         .kinds
         .as_deref()
         .unwrap_or("")
@@ -437,9 +459,14 @@ async fn list_blobs(State(state): State<AppState>, auth: Auth, Query(query): Que
     if kinds.iter().any(|kind| !db::KINDS.contains(&kind.as_str())) {
         return Err(ApiError::bad_request("Unknown blob kind"));
     }
+    if kinds.iter().any(|kind| kind == "file") {
+        return Err(ApiError::bad_request("Download attachments with GET /v1/files/{id}"));
+    }
+    if kinds.is_empty() {
+        kinds = db::KINDS.iter().filter(|&&kind| kind != "file").map(|kind| kind.to_string()).collect();
+    }
     let limit = query.limit.unwrap_or(200).clamp(1, 500);
-    let (mut rows, head) = state.db.blobs_since(&auth.identity_pubkey, &auth.machine_pubkey, query.since, &kinds, limit, MAX_PAGE_BYTES).await?;
-    load_files(&state, &auth.identity_pubkey, &mut rows).await?;
+    let (rows, head) = state.db.blobs_since(&auth.identity_pubkey, &auth.machine_pubkey, query.since, &kinds, limit, MAX_PAGE_BYTES).await?;
     let blobs: Vec<BlobOut> = rows.into_iter().map(BlobOut::from).collect();
     Ok(Json(json!({ "blobs": blobs, "seq": head })))
 }
@@ -502,18 +529,12 @@ async fn serve_socket(state: AppState, auth: Auth, mut socket: WebSocket) {
     }
 }
 
-/// One blob by id, for kinds a Device does not take in its poll: a `file` is fetched when a
-/// transcript needs it, by the Runner that runs the turn and by Devices that show it.
+/// One JSON blob by id. Attachments use the binary file endpoint.
 async fn get_blob(State(state): State<AppState>, auth: Auth, Path(id): Path<String>) -> ApiResult<Json<BlobOut>> {
     let row = state.db.blob(&auth.identity_pubkey, &auth.machine_pubkey, &id).await?;
     let Some(row) = row else { return Err(ApiError::not_found("No such blob")) };
-    let mut rows = [row];
-    load_files(&state, &auth.identity_pubkey, &mut rows).await?;
-    let [row] = rows;
-    // A file whose object is gone will not come back: `404` is final to a Device, where an
-    // error would have it ask again for good.
-    if row.in_file_store() && row.ciphertext.is_empty() {
-        return Err(ApiError::not_found("The file is no longer stored"));
+    if row.kind == "file" {
+        return Err(ApiError::bad_request("Download attachments with GET /v1/files/{id}"));
     }
     Ok(Json(BlobOut::from(row)))
 }

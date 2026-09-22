@@ -358,11 +358,12 @@ async fn drain_outbox(app: &Arc<App>, url: &str, token: &str) -> Result<(), Rela
         else {
             return Ok(());
         };
-        match app.relay.put_blob(url, token, &item).await {
+        let (id, kind) = (item.id.clone(), item.kind.clone());
+        match app.relay.put_blob(url, token, item).await {
             Ok(_) => {}
             Err(error) if error.is_client_error() && !error.is_unauthorized() => {
-                tracing::warn!(%error, kind = %item.kind, "relay rejected blob; dropping");
-                if item.kind == "credentials" {
+                tracing::warn!(%error, %kind, "relay rejected blob; dropping");
+                if kind == "credentials" {
                     app.state.lock().unwrap().credentials_uploaded = false;
                 }
             }
@@ -370,7 +371,7 @@ async fn drain_outbox(app: &Arc<App>, url: &str, token: &str) -> Result<(), Rela
         }
         let snapshot = app.state.lock().unwrap().clone();
         app.store
-            .remove_outbox_with_state(&item.id, &snapshot)
+            .remove_outbox_with_state(&id, &snapshot)
             .map_err(|error| RelayError { status: None, message: error.to_string() })?;
     }
 }

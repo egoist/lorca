@@ -36,3 +36,6 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
 webpki-roots.workspace = true
+
+[dev-dependencies]
+lorca = { path = "../cli", default-features = false }

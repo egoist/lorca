@@ -14,7 +14,7 @@ use lorca_agent::ContentPart;
 use crate::app::App;
 use crate::model::Attachment;
 
-pub const MAX_ATTACHMENT_BYTES: u64 = 20 * 1024 * 1024;
+pub const MAX_ATTACHMENT_BYTES: u64 = 100 * 1024 * 1024;
 /// Images up to this size go to the model as pixels as well as a path.
 #[cfg(feature = "runner")]
 const MAX_IMAGE_PART_BYTES: u64 = 5 * 1024 * 1024;
@@ -113,13 +113,12 @@ pub async fn ensure_local(app: &Arc<App>, attachment: &Attachment) -> anyhow::Re
     let machine = machine_file.machine()?;
     let dek = machine_file.dek()?;
     let token = crate::sync::token_or_register(app, &url, &machine).await.map_err(|e| anyhow::anyhow!(e.message))?;
-    let blob = app
+    let ciphertext = app
         .relay
-        .get_blob(&url, &token, &attachment.id)
+        .get_file(&url, &token, &attachment.id)
         .await
         .map_err(|e| anyhow::anyhow!(e.message))?
         .ok_or_else(|| anyhow::anyhow!("the relay no longer has {}", attachment.name))?;
-    let ciphertext = crate::keys::unb64(&blob.ciphertext)?;
     let bytes = crate::crypto::decrypt(&dek, "file", &ciphertext)?;
     write_local(app, &attachment.id, &bytes)?;
     Ok(path)

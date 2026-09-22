@@ -596,7 +596,7 @@ mod tests {
         let queued = app.store.last_outbox().unwrap().unwrap();
         assert_eq!(queued.kind, "job_cancel");
         assert_eq!(queued.recipient.as_deref(), Some("runner"));
-        let ciphertext = crate::keys::unb64(&queued.ciphertext).unwrap();
+        let ciphertext = queued.ciphertext;
         let payload: JobCancel =
             crate::crypto::unseal_json(&runner_keys.box_secret, &ciphertext).unwrap();
         assert_eq!(payload.job_id, "remote-job");

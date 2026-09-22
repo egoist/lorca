@@ -131,7 +131,7 @@ export function fileSize(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+export const MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024;
 export const MAX_ATTACHMENTS = 10;
 
 export type Body =

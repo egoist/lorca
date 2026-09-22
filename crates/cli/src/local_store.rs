@@ -113,7 +113,7 @@ impl LocalStore {
                  id              TEXT UNIQUE NOT NULL,
                  kind            TEXT NOT NULL,
                  recipient       TEXT,
-                 ciphertext      TEXT NOT NULL,
+                 ciphertext      BLOB NOT NULL,
                  slot_name       TEXT,
                  slot_keep_first INTEGER NOT NULL DEFAULT 0,
                  group_name      TEXT
@@ -1336,13 +1336,36 @@ mod tests {
     }
 
     #[test]
+    fn queued_ciphertext_is_binary_and_survives_reopening() {
+        let scratch = scratch();
+        let ciphertext = vec![0, 255, 128, 13, 10, 34];
+        let item = OutboxItem {
+            id: "att-file".into(), kind: "file".into(), recipient: None,
+            ciphertext: ciphertext.clone(), slot: None, group: Some("chat".into()),
+        };
+        scratch.0.queue_outbox(&item).unwrap();
+        let connection = scratch.0.connection.lock().unwrap();
+        let (kind, length): (String, usize) = connection.query_row(
+            "SELECT typeof(ciphertext), length(ciphertext) FROM outbox WHERE id = 'att-file'",
+            [], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).unwrap();
+        assert_eq!(kind, "blob");
+        assert_eq!(length, ciphertext.len());
+        drop(connection);
+        let reopened = LocalStore::open(&scratch.1.join("lorca.sqlite3")).unwrap();
+        let queued = reopened.first_outbox().unwrap().unwrap();
+        assert_eq!(queued.ciphertext, ciphertext);
+        assert_eq!(queued.group.as_deref(), Some("chat"));
+    }
+
+    #[test]
     fn a_waiting_slot_is_replaced_without_moving_in_the_outbox() {
         let scratch = scratch();
         let item = |id: &str, slot: Option<&str>| OutboxItem {
             id: id.into(),
             kind: "chat".into(),
             recipient: None,
-            ciphertext: id.into(),
+            ciphertext: id.as_bytes().to_vec(),
             slot: slot.map(|name| Slot {
                 name: name.into(),
                 keep_first: true,
@@ -1369,7 +1392,7 @@ mod tests {
         );
         assert_eq!(
             scratch.0.first_outbox().unwrap().unwrap().ciphertext,
-            "latest"
+            b"latest"
         );
     }
 
@@ -1392,7 +1415,7 @@ mod tests {
                     id: id.into(),
                     kind: "chat".into(),
                     recipient: None,
-                    ciphertext: String::new(),
+                    ciphertext: Vec::new(),
                     slot: None,
                     group: Some(group.into()),
                 })

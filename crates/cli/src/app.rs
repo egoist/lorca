@@ -18,19 +18,16 @@ use crate::credentials::Credentials;
 use crate::relay::RelayClient;
 
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct OutboxItem {
     pub id: String,
     pub kind: String,
-    #[serde(default)]
     pub recipient: Option<String>,
-    /// base64url
-    pub ciphertext: String,
+    /// Encrypted bytes, stored as a SQLite BLOB until upload.
+    pub ciphertext: Vec<u8>,
     /// What this blob is a version of. The relay drops the versions it supersedes.
-    #[serde(default)]
     pub slot: Option<Slot>,
     /// The chat this blob belongs to. The relay deletes a group's blobs in one call.
-    #[serde(default)]
     pub group: Option<String>,
 }
 
@@ -486,7 +483,7 @@ impl App {
     /// Queues a blob under a chosen id: a `file` blob carries its attachment's id so any
     /// Device can fetch it by that id later.
     pub fn push_blob_as(&self, id: String, kind: &str, recipient: Option<String>, ciphertext: Vec<u8>) -> String {
-        self.queue_blob(OutboxItem { id: id.clone(), kind: kind.to_string(), recipient, ciphertext: keys::b64(&ciphertext), slot: None, group: None });
+        self.queue_blob(OutboxItem { id: id.clone(), kind: kind.to_string(), recipient, ciphertext, slot: None, group: None });
         id
     }
 
@@ -494,14 +491,14 @@ impl App {
     /// chat; a bot's avatar belongs to none.
     pub fn push_file_blob(&self, id: String, chat_id: Option<&str>, ciphertext: Vec<u8>) {
         let group = chat_id.map(crate::model::relay_name);
-        self.queue_blob(OutboxItem { id, kind: "file".into(), recipient: None, ciphertext: keys::b64(&ciphertext), slot: None, group });
+        self.queue_blob(OutboxItem { id, kind: "file".into(), recipient: None, ciphertext, slot: None, group });
     }
 
     /// Queues a version of `slot`. A version still waiting in the outbox gives way to this
     /// one, in its place in the queue, so a Device that was offline uploads each message once.
     pub fn push_slot_blob(&self, kind: &str, slot: Slot, group: Option<String>, ciphertext: Vec<u8>) {
         let id = uuid::Uuid::new_v4().to_string();
-        self.queue_blob(OutboxItem { id, kind: kind.to_string(), recipient: None, ciphertext: keys::b64(&ciphertext), slot: Some(slot), group });
+        self.queue_blob(OutboxItem { id, kind: kind.to_string(), recipient: None, ciphertext, slot: Some(slot), group });
     }
 
     fn queue_blob(&self, item: OutboxItem) {
@@ -1528,7 +1525,7 @@ mod tests {
             id: format!("out-{chat_id}"),
             kind: "chat".into(),
             recipient: None,
-            ciphertext: String::new(),
+            ciphertext: Vec::new(),
             slot: None,
             group: Some(crate::model::relay_name(chat_id)),
         }

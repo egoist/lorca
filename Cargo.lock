@@ -1884,6 +1884,7 @@ dependencies = [
  "ed25519-dalek",
  "futures",
  "hmac 0.12.1",
+ "lorca",
  "rand 0.8.8",
  "reqwest 0.12.28",
  "ring",

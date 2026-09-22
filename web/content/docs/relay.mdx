@@ -50,4 +50,4 @@ With `LORCA_RELAY_METRICS_TOKEN` set, `GET /metrics` answers a scraper that send
 
 ## Limits
 
-A message blob is up to 4 MB and an attachment up to 24 MB of ciphertext.
+You can attach files up to **100 MiB** each. Attachments transfer as encrypted binary data. The relay accepts the file plus its 40-byte encryption envelope; message and other non-file blobs are limited to **4 MiB** of ciphertext.

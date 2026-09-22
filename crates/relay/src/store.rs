@@ -4,6 +4,7 @@
 
 use std::path::PathBuf;
 
+use axum::body::Bytes;
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 
@@ -33,7 +34,7 @@ impl FileStore {
         }
     }
 
-    pub async fn put(&self, key: &str, bytes: Vec<u8>) -> ApiResult<()> {
+    pub async fn put(&self, key: &str, bytes: Bytes) -> ApiResult<()> {
         match self {
             FileStore::Local { dir } => {
                 let path = dir.join(key);
@@ -57,15 +58,15 @@ impl FileStore {
         }
     }
 
-    pub async fn get(&self, key: &str) -> ApiResult<Option<Vec<u8>>> {
+    pub async fn get(&self, key: &str) -> ApiResult<Option<Bytes>> {
         match self {
             FileStore::Local { dir } => match tokio::fs::read(dir.join(key)).await {
-                Ok(bytes) => Ok(Some(bytes)),
+                Ok(bytes) => Ok(Some(bytes.into())),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
                 Err(error) => Err(storage_error("reading", error)),
             },
             FileStore::S3(s3) => {
-                let response = s3.request(reqwest::Method::GET, key, Vec::new()).await?;
+                let response = s3.request(reqwest::Method::GET, key, Bytes::new()).await?;
                 if response.status() == reqwest::StatusCode::NOT_FOUND {
                     return Ok(None);
                 }
@@ -73,7 +74,7 @@ impl FileStore {
                     return Err(s3_error("get", response).await);
                 }
                 let bytes = response.bytes().await.map_err(|error| storage_error("reading", error))?;
-                Ok(Some(bytes.to_vec()))
+                Ok(Some(bytes))
             }
         }
     }
@@ -93,7 +94,7 @@ impl FileStore {
                 if let Some(token) = page {
                     query.push(("continuation-token", token));
                 }
-                let response = s3.send(reqwest::Method::GET, &format!("/{}", uri_encode(&s3.bucket)), &query, Vec::new()).await?;
+                let response = s3.send(reqwest::Method::GET, &format!("/{}", uri_encode(&s3.bucket)), &query, Bytes::new()).await?;
                 if !response.status().is_success() {
                     return Err(s3_error("list", response).await);
                 }
@@ -112,7 +113,7 @@ impl FileStore {
                 Err(error) => Err(storage_error("deleting", error)),
             },
             FileStore::S3(s3) => {
-                let response = s3.request(reqwest::Method::DELETE, key, Vec::new()).await?;
+                let response = s3.request(reqwest::Method::DELETE, key, Bytes::new()).await?;
                 if !response.status().is_success() && response.status() != reqwest::StatusCode::NOT_FOUND {
                     return Err(s3_error("delete", response).await);
                 }
@@ -223,17 +224,17 @@ impl S3 {
         path
     }
 
-    async fn request(&self, method: reqwest::Method, key: &str, body: Vec<u8>) -> ApiResult<reqwest::Response> {
+    async fn request(&self, method: reqwest::Method, key: &str, body: Bytes) -> ApiResult<reqwest::Response> {
         self.send(method, &self.object_path(key), &[], body).await
     }
 
     #[cfg(test)]
     pub async fn create_bucket(&self) {
-        let _ = self.send(reqwest::Method::PUT, &format!("/{}", uri_encode(&self.bucket)), &[], Vec::new()).await;
+        let _ = self.send(reqwest::Method::PUT, &format!("/{}", uri_encode(&self.bucket)), &[], Bytes::new()).await;
     }
 
     /// A signed request to an encoded `path`, with `query` parameters in any order.
-    async fn send(&self, method: reqwest::Method, path: &str, query: &[(&str, String)], body: Vec<u8>) -> ApiResult<reqwest::Response> {
+    async fn send(&self, method: reqwest::Method, path: &str, query: &[(&str, String)], body: Bytes) -> ApiResult<reqwest::Response> {
         let mut query: Vec<String> = query.iter().map(|(name, value)| format!("{}={}", uri_encode(name), uri_encode(value))).collect();
         query.sort();
         let query = query.join("&");

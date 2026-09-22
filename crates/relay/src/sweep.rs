@@ -166,7 +166,7 @@ mod tests {
             let kept = NewBlob { identity_pubkey: who.clone(), id: "kept".into(), kind: "file".into(), recipient_machine_pubkey: None, slot: None, group: None, payload: Payload::InFileStore { size: 1 } };
             db.insert_blob(kept, 0).await.map_err(|e| format!("{e:?}")).unwrap();
             for key in [store::key(&who, "kept"), store::key(&who, "lost"), store::key("stranger", "theirs")] {
-                files.put(&key, b"x".to_vec()).await.map_err(|e| format!("{e:?}")).unwrap();
+                files.put(&key, axum::body::Bytes::from_static(b"x")).await.map_err(|e| format!("{e:?}")).unwrap();
             }
 
             // Young objects are left alone, whatever the database says.

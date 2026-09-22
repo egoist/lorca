@@ -8,6 +8,8 @@ use rand::RngCore;
 use crate::keys::unb64_32;
 
 const NONCE_LEN: usize = 24;
+/// XChaCha20-Poly1305's nonce and authentication tag around the plaintext.
+pub const ENVELOPE_OVERHEAD: usize = NONCE_LEN + 16;
 
 /// `nonce || ciphertext`, with the blob kind as associated data.
 pub fn encrypt(dek: &[u8; 32], kind: &str, plaintext: &[u8]) -> anyhow::Result<Vec<u8>> {

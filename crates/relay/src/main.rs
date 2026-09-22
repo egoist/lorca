@@ -68,8 +68,8 @@ struct Args {
     #[usage(long, env = "LORCA_RELAY_METRICS_TOKEN", hide_env_values = true)]
     metrics_token: Option<String>,
 
-    /// Uploads over 1 MiB handled at once. Each holds its body in memory (a 24 MB attachment
-    /// is some 80 MB while it is decoded and sent on), so this bounds what attachments cost;
+    /// Uploads over 1 MiB handled at once. Each holds its ciphertext body in memory while
+    /// it is sent to storage, so this bounds what attachments cost;
     /// one that waits 30 s for a place gets `503`. 0 disables the limit.
     #[usage(long, env = "LORCA_RELAY_CONCURRENT_UPLOADS", default = "3")]
     concurrent_uploads: usize,

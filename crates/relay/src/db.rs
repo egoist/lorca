@@ -77,12 +77,6 @@ pub struct BlobRow {
     pub created_at: i64,
 }
 
-impl BlobRow {
-    pub fn in_file_store(&self) -> bool {
-        self.kind == "file"
-    }
-}
-
 /// One slot of a group with the blobs it holds (a message's first and latest version, or
 /// its removal), oldest first. `place` is the slot's lowest seq: where it sits in the log.
 pub struct GroupSlot {

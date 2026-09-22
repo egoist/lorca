@@ -8,7 +8,7 @@ struct OutgoingAttachment: Hashable {
     var attachment: Attachment
     var url: URL
 
-    static let maxBytes = 20 * 1024 * 1024
+    static let maxBytes = 100 * 1024 * 1024
     static let maxCount = 10
 
     enum Problem: LocalizedError {

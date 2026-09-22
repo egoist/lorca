@@ -152,6 +152,8 @@ fn tls() -> Arc<rustls::ClientConfig> {
 /// relay may refuse one it no longer serves with `426`. 1: group paging, `DELETE /v1/identity`.
 pub const PROTOCOL: u32 = 1;
 
+const FILE_TRANSFER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
 pub struct RelayClient {
     http: reqwest::Client,
     token: Mutex<Option<(String, i64)>>,
@@ -245,8 +247,19 @@ impl RelayClient {
         self.authenticate(url, machine).await
     }
 
-    pub async fn put_blob(&self, url: &str, token: &str, item: &crate::app::OutboxItem) -> RelayResult<i64> {
-        let mut body = json!({ "id": item.id, "kind": item.kind, "recipient_machine_pubkey": item.recipient, "ciphertext": item.ciphertext });
+    pub async fn put_blob(&self, url: &str, token: &str, item: crate::app::OutboxItem) -> RelayResult<i64> {
+        if item.kind == "file" {
+            let mut request = self.http.put(format!("{url}/v1/files/{}", item.id))
+                .bearer_auth(token)
+                .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+                .timeout(FILE_TRANSFER_TIMEOUT);
+            if let Some(group) = &item.group {
+                request = request.query(&[("group", group)]);
+            }
+            let value = Self::check(request.body(item.ciphertext).send().await?).await?;
+            return Ok(value["seq"].as_i64().unwrap_or(0));
+        }
+        let mut body = json!({ "id": item.id, "kind": item.kind, "recipient_machine_pubkey": item.recipient, "ciphertext": b64(&item.ciphertext) });
         if let Some(slot) = &item.slot {
             body["slot"] = json!(slot.name);
             body["keep_first"] = json!(slot.keep_first);
@@ -302,7 +315,6 @@ impl RelayClient {
         Ok((blobs, value["seq"].as_i64().unwrap_or(since)))
     }
 
-    /// One blob by id; `None` when the relay has no such blob for this identity.
     /// A chat backwards: the `limit` messages placed below `before` (the newest without it),
     /// oldest first, and whether older ones remain.
     pub async fn group_page(&self, url: &str, token: &str, group: &str, before: Option<i64>, limit: usize) -> RelayResult<(Vec<GroupSlot>, bool)> {
@@ -318,13 +330,32 @@ impl RelayClient {
         Ok((slots, value["has_more"].as_bool().unwrap_or(false)))
     }
 
-    pub async fn get_blob(&self, url: &str, token: &str, id: &str) -> RelayResult<Option<BlobIn>> {
-        let response = self.http.get(format!("{url}/v1/blobs/{id}")).bearer_auth(token).send().await?;
+    /// An attachment's encrypted bytes; `None` when it is no longer stored for this identity.
+    pub async fn get_file(&self, url: &str, token: &str, id: &str) -> RelayResult<Option<Vec<u8>>> {
+        let mut response = self.http.get(format!("{url}/v1/files/{id}")).bearer_auth(token).timeout(FILE_TRANSFER_TIMEOUT).send().await?;
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
         }
-        let value = Self::check(response).await?;
-        Ok(serde_json::from_value(value).ok())
+        if !response.status().is_success() {
+            Self::check(response).await?;
+            unreachable!();
+        }
+        if response.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()) != Some("application/octet-stream") {
+            return Err(RelayError { status: None, message: "Relay returned an invalid attachment content type".into() });
+        }
+        let max = crate::files::MAX_ATTACHMENT_BYTES as usize + crate::crypto::ENVELOPE_OVERHEAD;
+        let too_large = || RelayError { status: None, message: "Relay attachment exceeds the file size limit".into() };
+        if response.content_length().is_some_and(|size| size > max as u64) {
+            return Err(too_large());
+        }
+        let mut bytes = Vec::with_capacity(response.content_length().unwrap_or(0) as usize);
+        while let Some(chunk) = response.chunk().await? {
+            if chunk.len() > max - bytes.len() {
+                return Err(too_large());
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        Ok(Some(bytes))
     }
 
     pub async fn delete_blob(&self, url: &str, token: &str, id: &str) -> RelayResult<()> {
