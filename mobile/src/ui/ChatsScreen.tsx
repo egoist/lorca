@@ -18,6 +18,11 @@ import { Symbol } from "./Symbol";
 import { Font, usePalette } from "./theme";
 import { AndroidIcons } from "./navigation";
 
+// FlashList keeps the first visible row where it is when rows change, which for a list resting at
+// its top means a chat moving to the top pushes the list down by one row: the new first row lands
+// under the bar. The list holds its offset instead, so at the top the new first row shows.
+const KEEP_OFFSET = { disabled: true };
+
 /// The chat list: the first screen of a narrow window, the sidebar of a wide one. In the sidebar
 /// a chat opens in the pane beside the list, in place of the one open there, and its row stays lit.
 export function ChatsScreen({ sidebar = false }: { sidebar?: boolean }) {
@@ -199,6 +204,7 @@ export function ChatsScreen({ sidebar = false }: { sidebar?: boolean }) {
           data={data}
           keyExtractor={(item) => ("key" in item ? item.key : item.id)}
           contentInsetAdjustmentBehavior="automatic"
+          maintainVisibleContentPosition={KEEP_OFFSET}
           keyboardDismissMode="on-drag"
           contentContainerStyle={{ paddingBottom: floatingSearch ? searchInset + 8 : 24 }}
           ListEmptyComponent={

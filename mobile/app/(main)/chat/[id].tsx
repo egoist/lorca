@@ -14,6 +14,7 @@ import {
   Alert,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
+  PixelRatio,
   Platform,
   Pressable,
   type ScrollViewProps,
@@ -206,10 +207,60 @@ export default function ChatScreen() {
   const anchorKey = useRef<string | null>(null);
   const anchorTarget = useRef<number | null>(null);
   const [anchored, setAnchored] = useState(false);
+  // A transcript shorter than the list sits on FlashList's bottom-up padding, which shrinks as
+  // rows come in: every row would move up with each piece of the reply, a frame ahead of any
+  // scroll that answers it. While a message is anchored the padding is held by a header of a
+  // fixed height instead, so the rows stay where they are and only the space below them changes.
+  // The top inset hides the header like the padding; it stays until the chat is left.
+  const [spacer, setSpacer] = useState(0);
+  const spacerRef = useRef(0);
+  // A chat opened empty has nothing to lay out from the bottom, and the first rows it gets come
+  // from a send: FlashList would spend their first 100 ms scrolling to the last row, against the
+  // anchor. There the rows start under the header, where the sent message belongs anyway.
+  const opened = useRef({ id, empty: !chat || chat.messages.length === 0 });
+  if (opened.current.id !== id)
+    opened.current = { id, empty: !chat || chat.messages.length === 0 };
+  const fromBottom = !(Platform.OS === "ios" && opened.current.empty);
+  const fromBottomRef = useRef(fromBottom);
+  fromBottomRef.current = fromBottom;
+  /// What FlashList pads above the rows of a transcript shorter than the list.
+  const paddingOf = useCallback((list: FlashListRef<Row>) => {
+    if (!fromBottomRef.current) return 0;
+    return Math.max(
+      0,
+      list.getWindowSize().height -
+        list.getChildContainerDimensions().height -
+        list.getFirstItemOffset(),
+    );
+  }, []);
   const rowsRef = useRef<Row[]>([]);
+  // The keyboard leaving after a send writes the scroll offset too, and the scroll view clamps
+  // it whenever its insets change; either can stop the scroll to the anchor short. For a moment
+  // after the anchor or its space has changed, unless the user scrolls or the keyboard lifts the
+  // reply, an offset that comes to rest off the anchor is sent there again.
+  const anchorTouched = useRef(false);
+  const anchorLifted = useRef(false);
+  const anchorWatch = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const anchorWatchUntil = useRef(0);
+  const watchAnchor = useCallback((renew = false) => {
+    if (renew) anchorWatchUntil.current = Date.now() + 1500;
+    if (Date.now() > anchorWatchUntil.current) return;
+    if (anchorWatch.current) clearTimeout(anchorWatch.current);
+    anchorWatch.current = setTimeout(() => {
+      anchorWatch.current = null;
+      const target = anchorTarget.current;
+      if (!anchorKey.current || target === null || lastOffset.current === null)
+        return;
+      if (anchorTouched.current || anchorLifted.current) return;
+      if (Math.abs(lastOffset.current - target) <= 1) return;
+      listRef.current?.scrollToOffset({ offset: target, animated: true });
+    }, 120);
+  }, []);
   const releaseAnchor = useCallback(() => {
     anchorKey.current = null;
     anchorTarget.current = null;
+    if (anchorWatch.current) clearTimeout(anchorWatch.current);
+    anchorWatch.current = null;
     setAnchored(false);
   }, []);
   // The space under the transcript with the keyboard down: the composer's, or the padding the
@@ -218,6 +269,53 @@ export default function ChatScreen() {
     () => Math.max(composerSpace.current, composerExtraTarget.value),
     [composerExtraTarget],
   );
+  // The space under an anchored message travels to the scroll view through the UI thread, the
+  // rows it was computed from through a React commit, and either can land first. Too little
+  // space for the rows on screen, even for a frame, and the scroll view clamps its offset: the
+  // message drops. Too much shows nothing. So once an anchor has its space, the space only
+  // shrinks, and only after the rows that call for it have had time to land; when the rows under
+  // the anchor get shorter (the working row leaves), a footer inside the list takes up the
+  // difference, in the same commit as the rows.
+  // What was last handed over is kept here: reading the shared value back asks the UI thread,
+  // which may not have seen the write yet.
+  const blankSet = useRef(composerGuess);
+  const blankPending = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const anchorSpaced = useRef(false);
+  const [hold, setHold] = useState(0);
+  const holdRef = useRef(0);
+  const setBlank = useCallback(
+    (blank: number) => {
+      if (blankPending.current) clearTimeout(blankPending.current);
+      blankPending.current = null;
+      const apply = (value: number) => {
+        blankSet.current = value;
+        composerBlank.value = value;
+        if (anchorKey.current) watchAnchor(true);
+      };
+      let slack = 0;
+      if (
+        Platform.OS !== "ios" ||
+        !anchorKey.current ||
+        !anchorSpaced.current
+      ) {
+        anchorSpaced.current = anchorKey.current !== null;
+        apply(blank);
+      } else if (blank > blankSet.current) {
+        slack = blank - blankSet.current;
+      } else if (blank < blankSet.current) {
+        blankPending.current = setTimeout(() => {
+          blankPending.current = null;
+          apply(blank);
+        }, 50);
+      }
+      if (Math.abs(slack - holdRef.current) > 0.5) {
+        holdRef.current = slack;
+        setHold(slack);
+        if (anchorKey.current) watchAnchor(true);
+      }
+    },
+    [composerBlank, watchAnchor],
+  );
   const blankFor = useCallback(() => {
     const list = listRef.current;
     const key = anchorKey.current;
@@ -225,7 +323,7 @@ export default function ChatScreen() {
     const index = rowsRef.current.findIndex((row) => row.key === key);
     const layout = index < 0 ? undefined : list.getLayout(index);
     // The sent message has not reached the list yet: keep what is there.
-    if (!layout) return composerBlank.value;
+    if (!layout) return null;
     const tail = list.getChildContainerDimensions().height - layout.y;
     const blank = layoutHeight.current - topInsetRef.current - tail;
     if (blank <= restingSpace()) {
@@ -233,55 +331,73 @@ export default function ChatScreen() {
       return restingSpace();
     }
     return blank;
-  }, [composerBlank, releaseAnchor, restingSpace]);
+  }, [releaseAnchor, restingSpace]);
   const topInsetFor = useCallback(() => {
     const list = listRef.current;
     if (Platform.OS !== "ios") return 0;
     if (!list || layoutHeight.current === 0 || contentHeight.current === 0)
       return topInsetRef.current;
-    const padding = Math.max(
-      0,
-      list.getWindowSize().height -
-        list.getChildContainerDimensions().height -
-        list.getFirstItemOffset(),
-    );
+    // The anchor's header is dead space above the first row, as the padding is.
+    const padding = list.getFirstItemOffset() + paddingOf(list);
     const end =
-      contentHeight.current + composerBlank.value - layoutHeight.current;
+      contentHeight.current + blankSet.current - layoutHeight.current;
     return Math.round(
       Math.min(
         topInsetRef.current,
         Math.max(topInsetRef.current - padding, -end),
       ),
     );
-  }, [composerBlank]);
+  }, [paddingOf]);
   const endOffsetRef = useRef<() => number>(() => 0);
   const syncInsetTop = useCallback(() => {
-    composerBlank.value = blankFor();
+    const blank = blankFor();
+    if (blank !== null) setBlank(blank);
     setInsetTop(topInsetFor());
-    if (!anchorKey.current) return;
+    const list = listRef.current;
+    if (!list || !anchorKey.current) return;
+    const index = rowsRef.current.findIndex(
+      (row) => row.key === anchorKey.current,
+    );
+    const layout = index < 0 ? undefined : list.getLayout(index);
+    if (!layout) return;
+    let target = endOffsetRef.current();
+    if (Platform.OS === "ios") {
+      // Where the message sits under the header, from the list's own layout: the content height
+      // reaches JS an event later than the rows it counts.
+      const offset = list.getFirstItemOffset();
+      const padding = paddingOf(list);
+      target = offset + padding + layout.y - topInsetRef.current;
+      // The header takes over what FlashList pads, in whole pixels so none of it is left over.
+      const scale = PixelRatio.get();
+      const taken = Math.ceil((offset + padding) * scale) / scale;
+      if (
+        layout.isHeightMeasured &&
+        padding > 0 &&
+        taken > spacerRef.current
+      ) {
+        spacerRef.current = taken;
+        setSpacer(taken);
+      }
+    }
     // The end moves only when the rows above the anchor are measured anew.
-    const target = endOffsetRef.current();
     if (
       anchorTarget.current !== null &&
       Math.abs(anchorTarget.current - target) <= 1
     )
       return;
-    const index = rowsRef.current.findIndex(
-      (row) => row.key === anchorKey.current,
-    );
-    if (index < 0 || !listRef.current?.getLayout(index)) return;
     anchorTarget.current = target;
-    if (Platform.OS === "ios")
-      listRef.current?.scrollToOffset({ offset: target, animated: true });
-    else listRef.current?.scrollToEnd({ animated: true });
-  }, [blankFor, composerBlank, topInsetFor]);
+    if (Platform.OS === "ios") {
+      list.scrollToOffset({ offset: target, animated: true });
+      watchAnchor(true);
+    } else list.scrollToEnd({ animated: true });
+  }, [blankFor, paddingOf, setBlank, topInsetFor, watchAnchor]);
   const endOffset = useCallback(
     () =>
       Math.max(
         -topInsetFor(),
-        contentHeight.current + composerBlank.value - layoutHeight.current,
+        contentHeight.current + blankSet.current - layoutHeight.current,
       ),
-    [composerBlank, topInsetFor],
+    [topInsetFor],
   );
   endOffsetRef.current = endOffset;
   // Where the transcript rests right now: with the keyboard up its end sits above the composer
@@ -321,6 +437,7 @@ export default function ChatScreen() {
     const covered = height + composerExtraTarget.value;
     const tail = list.getChildContainerDimensions().height - layout.y;
     if (tail <= layoutHeight.current - topInsetRef.current - covered) return;
+    anchorLifted.current = true;
     list.scrollToOffset({
       offset: contentHeight.current + covered - layoutHeight.current,
       animated: true,
@@ -335,6 +452,7 @@ export default function ChatScreen() {
     publishComposerExtra();
     if (!anchorKey.current) return;
     if (height > 0) return liftAnchored(height);
+    anchorLifted.current = false;
     anchorTarget.current = null;
     syncInsetTop();
   };
@@ -356,7 +474,7 @@ export default function ChatScreen() {
     if (!list || !marker || endOffset() <= 0) return done(true);
     list.measureInWindow((_x, top) => {
       marker.measureInWindow((_mx, y) => {
-        done(y - top <= layoutHeight.current - composerBlank.value + 4);
+        done(y - top <= layoutHeight.current - blankSet.current + 4);
       });
     });
   };
@@ -418,6 +536,10 @@ export default function ChatScreen() {
     if (revealTimer.current) clearTimeout(revealTimer.current);
     revealTimer.current = null;
   }, []);
+  const beginDrag = useCallback(() => {
+    anchorTouched.current = true;
+    stopSettling();
+  }, [stopSettling]);
   keyboardStartRef.current = (height) => {
     compactAtKeyboardStart.current =
       composerActual.current <= composerCompact.current + 1;
@@ -431,6 +553,10 @@ export default function ChatScreen() {
     confirmed.current = false;
     lastOffset.current = null;
     releaseAnchor();
+    spacerRef.current = 0;
+    setSpacer(0);
+    holdRef.current = 0;
+    setHold(0);
     setSettled(false);
     setRevealed(false);
     setAwayFromEnd(false);
@@ -438,6 +564,8 @@ export default function ChatScreen() {
     const fallback = setTimeout(() => setRevealed(true), 800);
     return () => {
       clearTimeout(fallback);
+      if (blankPending.current) clearTimeout(blankPending.current);
+      blankPending.current = null;
       stopSettling();
     };
   }, [id, releaseAnchor, stopSettling]);
@@ -450,6 +578,7 @@ export default function ChatScreen() {
           : contentSize.height - layoutMeasurement.height - contentOffset.y;
       setAwayFromEnd(!settling.current && distance > JUMP_DISTANCE);
       lastOffset.current = contentOffset.y;
+      if (anchorKey.current && Platform.OS === "ios") watchAnchor();
       if (!settling.current) return;
       // Only a pin can confirm: the list's own first scroll can sit at the computed end by
       // coincidence while the content height is still unknown.
@@ -493,6 +622,14 @@ export default function ChatScreen() {
   // renders: the state flip on the first drag (stopSettling) re-renders this screen, and a fresh
   // rows array or renderItem there would launch an animated scroll-to-end against the drag.
   const contentInset = useMemo(() => ({ top: insetTop }), [insetTop]);
+  const head = useMemo(
+    () => (spacer > 0 ? <View style={{ height: spacer }} /> : null),
+    [spacer],
+  );
+  const slack = useMemo(
+    () => (hold > 0 ? <View style={{ height: hold }} /> : null),
+    [hold],
+  );
   // The scroll view ends the bar's track where its bottom padding starts, which includes the
   // gap kept above the composer; the bar itself runs down to the composer.
   const scrollIndicatorInsets = useMemo(
@@ -501,13 +638,13 @@ export default function ChatScreen() {
   );
   const maintainVisibleContentPosition = useMemo(
     () => ({
-      startRenderingFromBottom: true,
+      startRenderingFromBottom: fromBottom,
       // An anchored message holds the end still; FlashList's own catch-up would race the
       // shrinking space below it.
       autoscrollToBottomThreshold: anchored ? -1 : 0.25,
       animateAutoScrollToBottom: settled,
     }),
-    [anchored, settled],
+    [anchored, fromBottom, settled],
   );
 
   useEffect(() => {
@@ -688,6 +825,9 @@ export default function ChatScreen() {
             automaticallyAdjustsScrollIndicatorInsets={false}
             scrollIndicatorInsets={scrollIndicatorInsets}
             onCommitLayoutEffect={syncInsetTop}
+            // The space under an anchored message reaches the native scroll view a frame after
+            // JS sets it; a scroll sent meanwhile would be clamped to the range without it.
+            scrollToOverflowEnabled
             keyboardDismissMode="interactive"
             maintainVisibleContentPosition={maintainVisibleContentPosition}
             contentContainerStyle={{
@@ -716,9 +856,11 @@ export default function ChatScreen() {
             onStartReachedThreshold={1}
             onScroll={onScroll}
             scrollEventThrottle={16}
-            onScrollBeginDrag={stopSettling}
+            onScrollBeginDrag={beginDrag}
+            onScrollToTop={beginDrag}
             renderItem={renderItem}
-            ListFooterComponent={Platform.OS === "android" ? foot : undefined}
+            ListHeaderComponent={head}
+            ListFooterComponent={Platform.OS === "android" ? foot : slack}
           />
         </SoftScrollEdgeView>
         </Animated.View>
@@ -775,15 +917,22 @@ export default function ChatScreen() {
             onSend={(text, files) => {
               // The anchor is measured against the screen without the keyboard.
               void KeyboardController.dismiss();
+              // Before the message reaches the list: FlashList notes "near the end" on a commit
+              // made while its catch-up is on, and scrolls to the end on the change after it.
+              setAnchored(true);
               const sent = engine
                 .sendMessage(id, text, files)
                 .then((message) => {
                   stopSettling();
                   anchorKey.current = message.id;
                   anchorTarget.current = null;
-                  setAnchored(true);
+                  anchorTouched.current = false;
+                  anchorLifted.current = false;
+                  anchorSpaced.current = false;
+                  syncInsetTop();
                 });
               sent.catch((error) => {
+                if (!anchorKey.current) releaseAnchor();
                 Alert.alert(
                   t("Could not send"),
                   error instanceof Error ? error.message : String(error),
