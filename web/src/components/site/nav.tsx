@@ -32,16 +32,17 @@ export function LanguageLink({ className }: { className?: string }) {
   )
 }
 
+/// A floating pill, clear of the top edge, that stays put as the page scrolls.
 export function Nav() {
   const { t, i18n } = useTranslation()
   return (
-    <header className="sticky top-0 z-40 border-b bg-background/70 backdrop-blur-xl">
-      <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-5">
-        <a href="#top" className="flex items-center gap-2.5 font-semibold tracking-tight">
-          <Logo className="size-7" />
+    <header className="sticky top-4 z-40 mt-4 px-4">
+      <div className="mx-auto flex h-12 max-w-4xl items-center justify-between rounded-full border bg-background/75 pr-2 pl-4 shadow-xs backdrop-blur-xl dark:bg-background/60 dark:shadow-none">
+        <a href="#top" className="flex items-center gap-2 font-semibold tracking-tight">
+          <Logo className="size-6" />
           Lorca
         </a>
-        <nav className="hidden items-center gap-7 text-sm text-muted-foreground md:flex">
+        <nav className="hidden items-center gap-6 text-sm text-muted-foreground md:flex">
           {links.map((link) => (
             <a key={link.href} href={link.href} className="transition-colors hover:text-foreground">
               {t(link.label)}
@@ -51,7 +52,7 @@ export function Nav() {
             {t('nav.docs')}
           </a>
         </nav>
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
           <LanguageLink className="text-sm text-muted-foreground transition-colors hover:text-foreground" />
           <Button asChild size="sm" className="rounded-full px-4">
             <a href={DOWNLOAD}>{t('nav.download')}</a>

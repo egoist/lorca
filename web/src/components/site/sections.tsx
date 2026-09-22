@@ -59,7 +59,7 @@ function Stage({
   bare?: boolean
 }) {
   return (
-    <section id={id} className="mx-auto max-w-6xl px-5 py-10">
+    <section id={id} className="mx-auto max-w-6xl scroll-mt-8 px-5 py-10">
       <div className="panel overflow-hidden">
         <div className="px-6 pt-10 pb-8 sm:px-12 sm:pt-14">
           <p className="text-xs font-semibold tracking-[0.18em] text-muted-foreground/80 uppercase">{eyebrow}</p>
@@ -155,7 +155,7 @@ export function Tools() {
 export function Chef() {
   const { t } = useTranslation()
   return (
-    <section id="start" className="mx-auto max-w-6xl px-5 py-10">
+    <section id="start" className="mx-auto max-w-6xl scroll-mt-8 px-5 py-10">
       <div className="panel grid gap-10 px-6 py-12 sm:px-12 lg:grid-cols-[1fr_1fr] lg:items-center">
         <div>
           <p className="text-xs font-semibold tracking-[0.18em] text-muted-foreground/80 uppercase">{t('chef.eyebrow')}</p>
@@ -183,7 +183,7 @@ export function Chef() {
 export function FAQ() {
   const { t } = useTranslation()
   return (
-    <section id="faq" className="mx-auto max-w-3xl px-5 py-16">
+    <section id="faq" className="mx-auto max-w-3xl scroll-mt-8 px-5 py-16">
       <h2 className="display text-4xl sm:text-5xl">{t('faq.title')}</h2>
       <Accordion type="single" collapsible className="mt-8">
         {t('faq.items', { returnObjects: true }).map(({ q, a }) => (
