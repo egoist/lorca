@@ -107,7 +107,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         case .notDetermined:
             guard !didAsk else { return false }
             didAsk = true
-            return (try? await center.requestAuthorization(options: [.alert, .sound])) ?? false
+            return (try? await center.requestAuthorization(options: [.alert, .sound, .badge])) ?? false
         default: return false
         }
     }
