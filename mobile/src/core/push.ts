@@ -27,7 +27,8 @@ export function installPushHandlers() {
   installed = true;
   Notifications.setNotificationHandler({
     handleNotification: async (notification) => {
-      const show = chatOf(notification) !== useStore.getState().openChatId;
+      const { appActive, openChatId } = useStore.getState();
+      const show = !appActive || chatOf(notification) !== openChatId;
       return { shouldShowBanner: show, shouldShowList: show, shouldPlaySound: show, shouldSetBadge: false };
     },
   });

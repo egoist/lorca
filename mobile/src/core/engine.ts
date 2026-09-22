@@ -10,7 +10,7 @@ import { t } from "../i18n";
 import { hostFacts } from "./host";
 import { providerConnectMethod, type Attachment, type AutoReview, type Bot, type Chat, type ChatMeta, type ChatSearchResults, type ChatUsage, type Message, type ProviderKind, type ProviderStatus } from "./model";
 import { coreHome, loadPrefs, pathOf, wipePrefs } from "./prefs";
-import { installPushHandlers, registerForPushes } from "./push";
+import { clearPushes, installPushHandlers, registerForPushes } from "./push";
 import {
   applyRoster,
   botById,
@@ -52,6 +52,7 @@ class Engine {
   private loadingOlder = new Set<string>();
   private providerBrowserOpen = false;
   private dismissingProviderAuth = false;
+  private readChatId: string | null = null;
 
   // MARK: - Lifecycle
 
@@ -59,21 +60,35 @@ class Engine {
   async start() {
     if (this.started) return;
     this.started = true;
-    useStore.setState({ dictation_lang: loadPrefs().dictation_lang });
+    useStore.setState({ dictation_lang: loadPrefs().dictation_lang, appActive: AppState.currentState === "active" });
     core.onEvent((frame) => this.apply(frame.event, frame.data));
     core.start(coreHome(), hostFacts());
     AppState.addEventListener("change", (status) => this.onAppState(status));
+    // Read after every store update, including the roster's unread count that follows a
+    // message event, a backlog snapshot, and returning to a chat already mounted on screen.
+    useStore.subscribe(() => this.readVisibleChat());
     replaceSnapshot(await core.request<Snapshot>("bootstrap"));
     installPushHandlers();
     if (useStore.getState().paired) void registerForPushes();
   }
 
   private onAppState(status: AppStateStatus) {
+    useStore.setState({ appActive: status === "active" });
     if (status !== "active") return;
     // Back in the foreground: the poll that was in flight died with the suspension.
     core.wake();
     // The token can change, and permission may have been given in Settings meanwhile.
     if (useStore.getState().paired) void registerForPushes();
+  }
+
+  private readVisibleChat() {
+    const { appActive, paired, openChatId } = useStore.getState();
+    const chatId = appActive && paired ? openChatId : null;
+    if (chatId !== this.readChatId) {
+      this.readChatId = chatId;
+      if (chatId) void clearPushes(chatId);
+    }
+    if (chatId) markRead(chatId);
   }
 
   /// Pull to refresh: ask the relay now.
@@ -101,8 +116,6 @@ class Engine {
       case "message.updated": {
         const message = data.message as Message;
         upsertMessage(message);
-        // A reply into the chat on screen is read as it lands; the core counts it unread.
-        if (message.author.kind === "bot" && useStore.getState().openChatId === message.chat_id) markRead(message.chat_id);
         break;
       }
       case "message.removed":

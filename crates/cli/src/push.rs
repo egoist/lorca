@@ -6,7 +6,7 @@
 //! CryptoKit opens in the notification service extension without the core) under a key
 //! derived from the account DEK, with `push` as associated data.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{ChaCha20Poly1305, Nonce};
@@ -21,6 +21,8 @@ const AAD: &[u8] = b"push";
 /// The relay takes 2560 bytes of ciphertext, so the whole push fits APNs' 4 KB.
 const MAX_SEALED_BYTES: usize = 2400;
 const BODY_CHARS: usize = 280;
+/// Time for a paired Device displaying the reply to send its encrypted read mark back.
+const READ_GRACE: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Notice {
@@ -63,10 +65,10 @@ fn excerpt(text: &str, max: usize) -> String {
 }
 
 /// A bot finished a turn with `text` as the last thing it said. Pushes to the identity's
-/// phones unless the user is looking at that chat in the app on this Runner. Best effort: a
-/// relay without push keys answers that it queued nothing.
+/// phones after a grace period for read marks from any Device. Best effort: a relay without
+/// push keys answers that it queued nothing.
 pub fn reply(app: &Arc<App>, chat: &Chat, bot: &Bot, text: &str) {
-    if app.is_watching(&chat.meta.id) {
+    if !should_notify(app, &chat.meta.id) {
         return;
     }
     let (Some(dek), Some(url), Some(machine)) = (app.dek(), app.relay_url(), app.machine_file().and_then(|m| m.machine().ok())) else { return };
@@ -88,8 +90,20 @@ pub fn reply(app: &Arc<App>, chat: &Chat, bot: &Bot, text: &str) {
     }
     let app = app.clone();
     tokio::spawn(async move {
+        tokio::time::sleep(READ_GRACE).await;
+        // A read mark is about a reply that arrived, so a phone left open or disconnected
+        // before the reply finished cannot suppress future notifications.
+        if app.dek() != Some(dek) || !should_notify(&app, &notice.chat_id) {
+            return;
+        }
         let result = match crate::sync::token_or_register(&app, &url, &machine).await {
-            Ok(token) => app.relay.push(&url, &token, &crate::keys::b64(&sealed)).await,
+            Ok(token) => {
+                // Authentication may have taken longer than the read mark.
+                if app.dek() != Some(dek) || !should_notify(&app, &notice.chat_id) {
+                    return;
+                }
+                app.relay.push(&url, &token, &crate::keys::b64(&sealed)).await
+            }
             Err(error) => Err(error),
         };
         match result {
@@ -97,6 +111,10 @@ pub fn reply(app: &Arc<App>, chat: &Chat, bot: &Bot, text: &str) {
             Err(error) => tracing::debug!(%error, "pushing a reply"),
         }
     });
+}
+
+fn should_notify(app: &App, chat_id: &str) -> bool {
+    !app.is_watching(chat_id) && app.chat(chat_id).is_some_and(|chat| chat.unread_count > 0)
 }
 
 #[cfg(test)]
@@ -122,5 +140,74 @@ mod tests {
         let notice = open(&dek, &sealed).unwrap();
         assert_eq!((notice.title.as_str(), notice.subtitle.as_deref(), notice.chat_id.as_str()), ("Chef", Some("Standup"), "chat-1"));
         assert_eq!(notice.body, "Sent the three flagged invoices.");
+    }
+
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn replies_wait_for_reads_from_paired_devices() {
+        use axum::{routing::post, Json, Router};
+        use crate::{config::Config, keys::MachineFile, model::*};
+
+        let (sent, mut pushes) = tokio::sync::mpsc::unbounded_channel();
+        let server = Router::new()
+            .route("/v1/auth/challenge", post(|| async { Json(serde_json::json!({ "nonce": "test" })) }))
+            .route("/v1/auth/verify", post(|| async { Json(serde_json::json!({ "token": "test" })) }))
+            .route("/v1/push", post(move |Json(body): Json<serde_json::Value>| {
+                let sent = sent.clone();
+                async move {
+                    sent.send(body).unwrap();
+                    Json(serde_json::json!({ "queued": 1 }))
+                }
+            }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, server).await.unwrap() });
+        let home = std::env::temp_dir().join(format!("lorca-push-{}", uuid::Uuid::new_v4()));
+        let app = App::load(Config { home: home.clone(), port: 0 }).unwrap();
+        let dek = crate::keys::random_32();
+        *app.machine.lock().unwrap() = Some(MachineFile {
+            machine_secret: crate::keys::b64(&crate::keys::random_32()), identity_pubkey: "identity".into(),
+            content_pubkey: "content".into(), account_dek: crate::keys::b64(&dek), name: "Runner".into(),
+            os: "macos".into(), os_version: String::new(), model: String::new(), registered: true,
+            relay_url: Some(url.clone()), created_at: 1,
+        });
+        app.settings.lock().unwrap().relay_url = Some(url);
+        let bot = Bot {
+            id: "bot".into(), name: "Chef".into(), description: String::new(), symbol_name: "sparkles".into(),
+            accent: "indigo".into(), avatar: None, runner_id: "runner".into(), provider: "deepseek".into(),
+            model: None, thinking: None, legacy_instructions: String::new(), workdir: None, created_at: 1.0,
+        };
+        for id in ["read-on-phone", "unread", "deleted", "watching"] {
+            let chat = Chat {
+                meta: ChatMeta { id: id.into(), kind: "dm".into(), title: None, bot_ids: vec![bot.id.clone()],
+                    owner_bot_id: None, is_pinned: false, created_at: 1.0 },
+                unread_count: 0, usage: None, compactions: vec![],
+            };
+            app.state.lock().unwrap().chats.push(chat.clone());
+            app.upsert_message(Message::new(id, Author::Bot { bot_id: bot.id.clone() }, Body::text("Done")), false);
+            reply(&app, &chat, &bot, "Done");
+        }
+        assert!(tokio::time::timeout(Duration::from_millis(150), pushes.recv()).await.is_err(), "pushes must wait for read sync");
+        // This is the same operation sync applies for another Device's ClearUnread blob.
+        app.mark_read("read-on-phone", false);
+        app.delete_chat("deleted");
+        app.set_watched_chat(Some("watching".into()));
+        let pushed = tokio::time::timeout(READ_GRACE + Duration::from_secs(2), pushes.recv()).await.unwrap().unwrap();
+        let notice = open(&dek, &crate::keys::unb64(pushed["ciphertext"].as_str().unwrap()).unwrap()).unwrap();
+        assert_eq!(notice.chat_id, "unread", "reading one chat must not suppress another");
+        assert!(tokio::time::timeout(Duration::from_millis(150), pushes.recv()).await.is_err());
+
+        // A prior read and an app that has since left the chat cannot suppress a new reply.
+        app.set_watched_chat(None);
+        let chat = app.chat("read-on-phone").unwrap();
+        app.upsert_message(Message::new(&chat.meta.id, Author::Bot { bot_id: bot.id.clone() }, Body::text("Another reply")), false);
+        reply(&app, &chat, &bot, "Another reply");
+        let pushed = tokio::time::timeout(READ_GRACE + Duration::from_secs(2), pushes.recv()).await.unwrap().unwrap();
+        let notice = open(&dek, &crate::keys::unb64(pushed["ciphertext"].as_str().unwrap()).unwrap()).unwrap();
+        assert_eq!(notice.chat_id, "read-on-phone");
+        assert_eq!(notice.body, "Another reply");
+        server.abort();
+        drop(app);
+        let _ = std::fs::remove_dir_all(home);
     }
 }

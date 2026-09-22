@@ -2,7 +2,7 @@ import AppKit
 import UserNotifications
 
 /// System notifications for finished replies. A turn that ends with something said posts one,
-/// unless the user is looking at that chat; a click brings the app forward on the chat. The
+/// unless it has been read on a paired Device; a click brings the app forward on the chat. The
 /// same "looking at" fact goes to the CLI (`ui.watching`), so a Runner does not push a reply
 /// the user is watching arrive to their phone.
 @MainActor
@@ -54,16 +54,17 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     // MARK: - Posting
 
     private func turnFinished(_ chatID: Chat.ID, _ botID: Bot.ID, _ startedAt: Date) {
-        // A turn on another Runner ends with a job result that can land just ahead of the
-        // last chunk of the reply; give the message a moment.
+        // Give the final reply and read marks from paired Devices three seconds to arrive.
+        let identityID = store.identityID
         Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 400_000_000)
-            self?.post(chatID, botID, startedAt)
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            guard let self, self.store.identityID == identityID else { return }
+            self.post(chatID, botID, startedAt)
         }
     }
 
     private func post(_ chatID: Chat.ID, _ botID: Bot.ID, _ startedAt: Date) {
-        guard watchedChat != chatID, let center, let chat = store.chat(chatID) else { return }
+        guard watchedChat != chatID, let center, let chat = store.chat(chatID), chat.unreadCount > 0 else { return }
         // What the bot said last in this turn. A pass or a failed turn said nothing.
         let said = chat.messages.last { message in
             guard message.author.botID == botID, message.state == .complete, message.createdAt >= startedAt.addingTimeInterval(-5),
@@ -82,8 +83,13 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         content.userInfo = ["chat_id": chatID]
         let request = UNNotificationRequest(identifier: said.id, content: content, trigger: nil)
 
+        let identityID = store.identityID
         Task {
             guard await self.authorized(center) else { return }
+            // Permission can stay open while another Device reads the reply.
+            guard self.store.identityID == identityID, self.watchedChat != chatID,
+                let chat = self.store.chat(chatID), chat.unreadCount > 0
+            else { return }
             do { try await center.add(request) } catch { NSLog("Posting a notification failed: \(error.localizedDescription)") }
         }
     }

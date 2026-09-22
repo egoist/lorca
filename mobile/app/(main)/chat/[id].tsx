@@ -1,6 +1,6 @@
 import { FlashList, type FlashListRef } from "@shopify/flash-list";
 import { LinearGradient } from "expo-linear-gradient";
-import { Stack, useLocalSearchParams, useRouter } from "expo-router";
+import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { useHeaderHeight } from "expo-router/react-navigation";
 import {
   forwardRef,
@@ -39,9 +39,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { SoftScrollEdgeView } from "../../../modules/lorca-core/SoftScrollEdgeView";
 import { chatTitle, engine } from "../../../src/core/engine";
 import type { Bot } from "../../../src/core/model";
-import { clearPushes } from "../../../src/core/push";
 import {
-  markRead,
   useBotMap,
   useChat,
   useIsWorking,
@@ -647,19 +645,13 @@ export default function ChatScreen() {
     [anchored, fromBottom, settled],
   );
 
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
     useStore.setState({ openChatId: id });
-    markRead(id);
-    void clearPushes(id);
     return () => {
       if (useStore.getState().openChatId === id)
         useStore.setState({ openChatId: null });
     };
-  }, [id]);
-
-  useEffect(() => {
-    if (chat && chat.unread_count > 0) markRead(id);
-  }, [chat, id]);
+  }, [id]));
 
   const rows = useMemo(
     () => (chat ? buildRows(chat, bots, workingBotIds, isWorking, status) : []),

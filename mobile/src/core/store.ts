@@ -43,12 +43,14 @@ export interface StoreState {
   statuses: Record<string, string>;
   /// The chat on screen: new replies there do not count as unread.
   openChatId: string | null;
+  /// Only foreground UI can acknowledge a reply as read.
+  appActive: boolean;
   /// Attachment id → file URI, for the bytes this phone has.
   files: Record<string, string>;
   dictation_lang?: string;
 }
 
-function empty(): Omit<StoreState, "ready" | "dictation_lang"> {
+function empty(): Omit<StoreState, "ready" | "dictation_lang" | "appActive"> {
   return {
     paired: false,
     deviceId: null,
@@ -70,7 +72,7 @@ function empty(): Omit<StoreState, "ready" | "dictation_lang"> {
   };
 }
 
-export const useStore = create<StoreState>()(() => ({ ...empty(), ready: false }));
+export const useStore = create<StoreState>()(() => ({ ...empty(), ready: false, appActive: false }));
 
 /// Applies a change to the phone's own prefs and saves them.
 export function mutate(update: (s: StoreState) => Partial<StoreState>) {
@@ -228,6 +230,7 @@ export function setChatUsage(chatId: string, usage: ChatUsage) {
 
 /// The chat is read here; the core clears it everywhere.
 export function markRead(chatId: string) {
+  if (!useStore.getState().appActive) return;
   const chat = chatById(chatId);
   if (!chat || chat.unread_count === 0) return;
   useStore.setState((s) => ({ chats: s.chats.map((c) => (c.id === chatId ? { ...c, unread_count: 0 } : c)) }));
