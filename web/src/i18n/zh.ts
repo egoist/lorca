@@ -25,7 +25,7 @@ export const zh: Messages = {
     eyebrow: '群聊',
     title: '多个智能体，一个群聊。',
     body: '在群里发一条消息，每个智能体会依次轮到一次。消息是发给它的，或者它有有用的信息要补充，它才回复；否则就跳过这一轮。@ 某个智能体的名字，它会先回复。',
-    alt: 'Lorca 群聊：Scout 报告了两处信息泄露，Nova 把 schema 变更交给 Patch，Patch 贴出了迁移。',
+    alt: 'macOS 上的 Lorca：研究员、开发者和项目经理分别在两台运行设备上工作，在群聊中一起准备产品发布。',
   },
   relay: {
     eyebrow: '隐私',

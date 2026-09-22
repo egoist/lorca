@@ -23,7 +23,7 @@ export const en = {
     eyebrow: 'Group chats',
     title: 'Several bots in one chat.',
     body: 'Post in a group and each bot is offered a turn, one at a time. A bot replies when the message is addressed to it or when it has useful information to add. Otherwise it skips its turn. Mention a bot by name and it goes first.',
-    alt: 'A Lorca group chat: Scout reports two leaks, Nova hands the schema change to Patch, Patch posts the migration.',
+    alt: 'Lorca on macOS: a Researcher, Developer, and Project Manager prepare a launch together in a group chat across two Runners.',
   },
   relay: {
     eyebrow: 'Privacy',

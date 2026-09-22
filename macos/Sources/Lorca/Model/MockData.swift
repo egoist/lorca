@@ -59,7 +59,7 @@ enum MockData {
     static func providers() -> [ProviderCredential] {
         [
             ProviderCredential(kind: .deepseek, isConnected: true, detail: "sk-live…4f2c"),
-            ProviderCredential(kind: .anthropic, isConnected: false, detail: "Not connected"),
+            ProviderCredential(kind: .anthropic, isConnected: true, detail: "sk-ant…8d1a"),
             ProviderCredential(kind: .opencode, isConnected: false, detail: "Not connected"),
             ProviderCredential(kind: .opencodeGo, isConnected: false, detail: "Not connected"),
             ProviderCredential(kind: .chatgpt, isConnected: true, detail: "you@lorca.app"),
@@ -94,14 +94,14 @@ enum MockData {
         [
             Routine(
                 id: "rt-brief", botID: "bot-nova", name: "Morning brief",
-                prompt: "Read the overnight messages in every chat you are in and the calendar for today, then post a five-line brief: what needs a decision, what is waiting on someone else, and what you will do first.",
+                prompt: "Read the recent messages in every chat you are in and the launch checklist in the workspace. Post a short brief: what changed, what needs a decision, and what the team will do first.",
                 schedule: "0 9 * * 1-5", scheduleText: "Weekdays at 9:00 AM", isEnabled: true, pausedReason: nil,
                 lastRunAt: minutesAgo(190), lastOutcome: "sent",
                 nextRunAt: Calendar.current.nextDate(after: Date(), matching: DateComponents(hour: 9, minute: 0), matchingPolicy: .nextTime),
                 isRunning: false, createdAt: minutesAgo(60 * 24 * 12)),
             Routine(
-                id: "rt-inbox", botID: "bot-nova", name: "Invoice check",
-                prompt: "Look for invoices that landed since the last run and say which are flagged, or PASS when none did.",
+                id: "rt-checklist", botID: "bot-nova", name: "Launch checklist",
+                prompt: "Review the launch checklist in the workspace and the latest team replies. Report new blockers or completed milestones, or PASS when nothing changed.",
                 schedule: "every 2h", scheduleText: "Every 2 hours", isEnabled: false, pausedReason: nil,
                 lastRunAt: minutesAgo(60 * 30), lastOutcome: "pass", nextRunAt: nil, isRunning: false,
                 createdAt: minutesAgo(60 * 24 * 3)),
@@ -112,9 +112,9 @@ enum MockData {
         [
             Bot(
                 id: "bot-nova",
-                name: "Nova",
+                name: "Project Manager",
                 description: "Plans the work and delegates it to the team. Breaks work down, hands it off with message_bot, and summarizes what came back.",
-                symbolName: "sparkles",
+                symbolName: "list.bullet.clipboard.fill",
                 accent: .indigo,
                 runnerID: "dev-workbench",
                 provider: .chatgpt,
@@ -122,7 +122,7 @@ enum MockData {
             ),
             Bot(
                 id: "bot-patch",
-                name: "Patch",
+                name: "Developer",
                 description: "Implements changes in small diffs, explains the tradeoff in one line, and never invents APIs.",
                 symbolName: "chevron.left.forwardslash.chevron.right",
                 accent: .blue,
@@ -132,9 +132,9 @@ enum MockData {
             ),
             Bot(
                 id: "bot-scout",
-                name: "Scout",
+                name: "Researcher",
                 description: "Gathers context, reads the sources before answering, cites them, and says when it is unsure.",
-                symbolName: "binoculars.fill",
+                symbolName: "magnifyingglass",
                 accent: .teal,
                 runnerID: "dev-studio",
                 provider: .deepseek,
@@ -142,19 +142,19 @@ enum MockData {
             ),
             Bot(
                 id: "bot-quill",
-                name: "Quill",
+                name: "Writer",
                 description: "Writes docs, copy, and release notes in plain language: short sentences, no filler, and no exclamation marks.",
                 symbolName: "pencil.and.scribble",
                 accent: .pink,
                 runnerID: "dev-workbench",
-                provider: .deepseek,
+                provider: .anthropic,
                 createdAt: minutesAgo(60 * 24 * 9)
             ),
             Bot(
                 id: "bot-ember",
-                name: "Ember",
+                name: "DevOps",
                 description: "Handles deploys and incident triage, watches the relay, and always states the blast radius first.",
-                symbolName: "bolt.horizontal.fill",
+                symbolName: "server.rack",
                 accent: .orange,
                 runnerID: "dev-closet",
                 provider: .deepseek,
@@ -168,9 +168,9 @@ enum MockData {
             Chat(
                 id: "chat-relay",
                 kind: .group,
-                customTitle: "Ship the relay",
+                customTitle: "Launch room",
                 botIDs: ["bot-nova", "bot-patch", "bot-scout"],
-                messages: relayThread(),
+                messages: launchRoomThread(),
                 unreadCount: 0,
                 isPinned: true,
                 createdAt: minutesAgo(400)
@@ -180,7 +180,7 @@ enum MockData {
                 kind: .dm,
                 customTitle: nil,
                 botIDs: ["bot-nova"],
-                messages: novaThread(),
+                messages: managerThread(),
                 unreadCount: 0,
                 isPinned: false,
                 createdAt: minutesAgo(60 * 30)
@@ -190,7 +190,7 @@ enum MockData {
                 kind: .dm,
                 customTitle: nil,
                 botIDs: ["bot-patch"],
-                messages: patchThread(),
+                messages: developerThread(),
                 unreadCount: 2,
                 isPinned: false,
                 createdAt: minutesAgo(60 * 26)
@@ -206,11 +206,31 @@ enum MockData {
                 createdAt: minutesAgo(60 * 52)
             ),
             Chat(
+                id: "chat-scout",
+                kind: .dm,
+                customTitle: nil,
+                botIDs: ["bot-scout"],
+                messages: researcherThread(),
+                unreadCount: 1,
+                isPinned: false,
+                createdAt: minutesAgo(60 * 24 * 12)
+            ),
+            Chat(
+                id: "chat-quill",
+                kind: .dm,
+                customTitle: nil,
+                botIDs: ["bot-quill"],
+                messages: writerThread(),
+                unreadCount: 0,
+                isPinned: false,
+                createdAt: minutesAgo(60 * 24 * 9)
+            ),
+            Chat(
                 id: "chat-ember",
                 kind: .dm,
                 customTitle: nil,
                 botIDs: ["bot-ember"],
-                messages: emberThread(),
+                messages: devopsThread(),
                 unreadCount: 0,
                 isPinned: false,
                 createdAt: minutesAgo(60 * 72)
@@ -220,175 +240,127 @@ enum MockData {
 
     // MARK: - Threads
 
-    private static func relayThread() -> [Message] {
+    private static func launchRoomThread() -> [Message] {
         [
             Message(
                 author: .you,
-                body: .text(
-                    "@Nova the relay is still storing plaintext chat titles. Get that fixed before we ship."),
-                createdAt: minutesAgo(64)
-            ),
-            Message(
-                author: .bot("bot-nova"),
-                body: .text(
-                    "Agreed, titles belong inside the roster blob. Let me check who touched that path last."),
-                createdAt: minutesAgo(63)
-            ),
-            Message(
-                author: .bot("bot-nova"),
-                body: .tool(
-                    ToolInvocation(
-                        name: "list_teammates",
-                        summary: "Listed 4 teammates",
-                        detail: """
-                            {
-                              "teammates": [
-                                { "name": "Patch",  "runner": "Studio",      "provider": "DeepSeek" },
-                                { "name": "Scout",  "runner": "Studio",      "provider": "DeepSeek" },
-                                { "name": "Quill",  "runner": "Workbench",   "provider": "DeepSeek" },
-                                { "name": "Ember",  "runner": "Closet mini", "provider": "offline" }
-                              ]
-                            }
-                            """,
-                        isRunning: false
-                    )),
-                createdAt: minutesAgo(63)
-            ),
-            Message(
-                author: .bot("bot-nova"),
-                body: .handoff(
-                    from: "bot-nova", to: "bot-scout",
-                    reason: "Find every place a title leaves the device in the clear"),
-                createdAt: minutesAgo(62)
+                body: .text("Launch review: @Researcher check onboarding, @Developer check the site. @Project Manager pull it together."),
+                createdAt: minutesAgo(14)
             ),
             Message(
                 author: .bot("bot-scout"),
-                body: .text(
-                    """
-                    Two leaks, both on the write path:
-
-                    - `blobs.title` is a real column in the D1 schema, so every PUT writes it in the clear.
-                    - The chat list endpoint returns that column so the sidebar can render without decrypting.
-
-                    Nothing reads it anywhere else. The fix is a schema change plus one client change.
-                    """),
-                createdAt: minutesAgo(61)
+                body: .text("Walked through setup on Mac and iPhone. Pairing is clear. One gap: the guide needs to explain that your Mac runs the bots while you chat from your phone."),
+                createdAt: minutesAgo(12)
+            ),
+            Message(
+                author: .bot("bot-patch"),
+                body: .text("Updated the getting-started guide and checked every download link. The site builds cleanly. The changes are ready to review."),
+                createdAt: minutesAgo(9)
             ),
             Message(
                 author: .bot("bot-nova"),
-                body: .handoff(
-                    from: "bot-nova", to: "bot-patch", reason: "Drop the column and move titles into the blob"),
-                createdAt: minutesAgo(60)
-            ),
-            Message(
-                author: .bot("bot-patch"),
-                body: .text(
-                    """
-                    Done in two pieces. Drizzle migration first:
-
-                    ```ts
-                    export const blobs = sqliteTable("blobs", {
-                      id: text("id").primaryKey(),
-                      identityPubkey: text("identity_pubkey").notNull(),
-                      kind: text("kind", { enum: ["roster", "chat", "job", "machine"] }).notNull(),
-                      seq: integer("seq").notNull(),
-                      ciphertext: blob("ciphertext").notNull(),
-                      nonce: blob("nonce").notNull(),
-                    })
-                    ```
-
-                    The title moves into the roster blob the CLI already decrypts, so the sidebar keeps working and the relay never sees it. `seq` still orders the blobs, which is all the Worker actually needs.
-                    """),
-                createdAt: minutesAgo(58)
+                body: .text("The launch checklist is ready:\n\n- **Onboarding** — reviewed on Mac and iPhone\n- **Website** — guide updated, links checked\n- **Launch copy** — Writer's draft is ready\n\nOnly your final review is left."),
+                createdAt: minutesAgo(7)
             ),
             Message(
                 author: .you,
-                body: .text("Does that break Runners that are still offline?"),
-                createdAt: minutesAgo(40)
+                body: .text("Great. Keep the announcement as a draft until I've reviewed it."),
+                createdAt: minutesAgo(5)
             ),
             Message(
-                author: .bot("bot-patch"),
-                body: .text(
-                    "No. Old blobs keep their row, the column just stops being written and the CLI falls back to the roster title when it is missing. Closet mini will pick it up whenever it comes back."
-                ),
-                createdAt: minutesAgo(39)
+                author: .bot("bot-nova"),
+                body: .text("Saved in `launch/announcement.md`. I'll include the checklist in your morning brief."),
+                createdAt: minutesAgo(4)
             ),
         ]
     }
 
-    private static func novaThread() -> [Message] {
+    private static func managerThread() -> [Message] {
         [
             Message(
                 author: .you,
-                body: .text("What is left before the app can talk to a real CLI?"),
+                body: .text("Give me a short launch brief every weekday at 9. Focus on blockers and decisions."),
+                createdAt: minutesAgo(192)
+            ),
+            Message(
+                author: .bot("bot-nova"),
+                body: .text("Your **Morning brief** runs weekdays at 9:00 AM on Workbench. I'll read our chats and the launch checklist, then post what changed and what needs you."),
+                createdAt: minutesAgo(191)
+            ),
+            Message(
+                author: .system,
+                body: .notice("Routine · Morning brief"),
                 createdAt: minutesAgo(190)
             ),
             Message(
                 author: .bot("bot-nova"),
-                body: .text(
-                    """
-                    Three things, in the order they unblock each other:
-
-                    - **Crypto and the blob protocol** — identity, pairing, wrapping DEKs to each machine key.
-                    - **The relay Worker** — challenge/response auth, then the blob table.
-                    - **The local websocket** — `bootstrap` and `chats.send` are enough to replace the mock snapshot this app runs on.
-
-                    The UI already renders whatever the snapshot contains, so the third one is a swap, not a rewrite.
-                    """),
-                createdAt: minutesAgo(189)
+                body: .text("**Today's focus: the launch.**\n\n- Researcher is reviewing the setup guide.\n- Developer is checking the website and download links.\n- Writer has a first draft of the announcement.\n\nI'll bring their updates together in Launch room."),
+                createdAt: minutesAgo(190)
             ),
             Message(
                 author: .you,
-                body: .text("Good. Keep the mock data shaped like the real snapshot."),
-                createdAt: minutesAgo(180)
+                body: .text("Ask Writer to keep the announcement short and lead with what people can do."),
+                createdAt: minutesAgo(36)
             ),
             Message(
                 author: .bot("bot-nova"),
-                body: .text("That is the rule I am working to. Same field names, same ordering."),
-                createdAt: minutesAgo(179)
-            ),
-            Message(
-                author: .you,
-                body: .text("File the relay title leak as an issue."),
-                createdAt: minutesAgo(3)
+                body: .handoff(from: "bot-nova", to: "bot-quill", reason: "Draft a short launch announcement that leads with what people can do."),
+                createdAt: minutesAgo(35)
             ),
             Message(
                 author: .bot("bot-nova"),
-                body: .permission(
-                    PermissionRequest(
-                        pluginID: "github", pluginName: "GitHub", tool: "create_issue",
-                        summary: "create_issue · repo: lorca, title: Relay stores plaintext chat titles", decision: .pending,
-                        reason: "The issue is public on the repo.")),
-                createdAt: minutesAgo(2)
+                body: .text("Writer has the brief. I'll keep the final draft with the launch checklist for your review."),
+                createdAt: minutesAgo(34)
             ),
         ]
     }
 
-    private static func patchThread() -> [Message] {
+    private static func developerThread() -> [Message] {
         [
             Message(
                 author: .you,
-                body: .text("Why is `lorca serve` binding to 4862 and not something memorable?"),
-                createdAt: minutesAgo(420)
+                body: .text("Check the getting-started page and make sure every download link works."),
+                createdAt: minutesAgo(55)
             ),
             Message(
                 author: .bot("bot-patch"),
-                body: .text(
-                    "It is in the ephemeral-adjacent range that nothing else claims, and it is written down in ARCHITECTURE.md so the app and CLI cannot drift. Changing it means changing both."
-                ),
-                createdAt: minutesAgo(419)
+                body: .text("The Mac download and CLI install links work. I also checked the docs links in both languages."),
+                createdAt: minutesAgo(28)
             ),
             Message(
                 author: .bot("bot-patch"),
-                body: .text(
-                    "One thing worth deciding now: if the port is busy the CLI should fail loudly instead of picking the next free one. A silent second instance holding a second identity is the worst outcome here."
-                ),
-                createdAt: minutesAgo(30)
+                body: .text("The website build passes. I've left the changes ready for review."),
+                createdAt: minutesAgo(27)
+            ),
+        ]
+    }
+
+    private static func researcherThread() -> [Message] {
+        [
+            Message(
+                author: .you,
+                body: .text("Read the setup guide as a new user. What would you want explained sooner?"),
+                createdAt: minutesAgo(80)
             ),
             Message(
-                author: .bot("bot-patch"),
-                body: .text("Want me to write that check into `doctor` as well?"),
-                createdAt: minutesAgo(29)
+                author: .bot("bot-scout"),
+                body: .text("I'd explain the Device roles right after pairing: your Mac runs the bots, and your phone lets you chat with them. I added that note to `research/onboarding.md`."),
+                createdAt: minutesAgo(45)
+            ),
+        ]
+    }
+
+    private static func writerThread() -> [Message] {
+        [
+            Message(
+                author: .bot("bot-nova"),
+                body: .handoff(from: "bot-nova", to: "bot-quill", reason: "Draft a short launch announcement that leads with what people can do."),
+                createdAt: minutesAgo(35)
+            ),
+            Message(
+                author: .bot("bot-quill"),
+                body: .text("Create a team of bots for your everyday work. Give each one a role, bring them into a group chat, and pick up the conversation from your phone. Lorca runs the bots on your computers and encrypts your chats before they sync.\n\nDraft saved to `launch/announcement.md`."),
+                createdAt: minutesAgo(24)
             ),
         ]
     }
@@ -397,42 +369,32 @@ enum MockData {
         [
             Message(
                 author: .you,
-                body: .text("@Quill one paragraph for the site. No hype."),
-                createdAt: minutesAgo(700)
+                body: .text("@Writer write a short welcome for the setup guide. @Project Manager check that it covers the first steps."),
+                createdAt: minutesAgo(110)
             ),
             Message(
                 author: .bot("bot-quill"),
-                body: .text(
-                    """
-                    Lorca runs your bots on computers you own. Create a bot, give it a job, and it works on the Runner you assigned it to — with your account's encrypted provider credentials, not ours. Bots can hand work to each other. Everything that crosses the network is encrypted before it leaves the Device, and the relay only ever sees ciphertext.
-                    """),
-                createdAt: minutesAgo(698)
+                body: .text("Meet your first bot. Give it a name and a job, connect your model provider, and send a message. Add more bots when you need a team, or pair your phone to take the conversation with you."),
+                createdAt: minutesAgo(108)
             ),
             Message(
-                author: .you,
-                body: .text("Cut the last sentence in half."),
-                createdAt: minutesAgo(690)
-            ),
-            Message(
-                author: .bot("bot-quill"),
-                body: .text("\"The relay only ever sees ciphertext.\" That is the half that earns its place."),
-                createdAt: minutesAgo(689)
+                author: .bot("bot-nova"),
+                body: .text("That covers the first session. The pairing guide follows it with a Mac-and-phone walkthrough."),
+                createdAt: minutesAgo(106)
             ),
         ]
     }
 
-    private static func emberThread() -> [Message] {
+    private static func devopsThread() -> [Message] {
         [
             Message(
                 author: .you,
-                body: .text("Ember, status on the Worker deploy?"),
+                body: .text("Check the relay health and disk usage when you're back online."),
                 createdAt: minutesAgo(60 * 4)
             ),
             Message(
                 author: .system,
-                body: .notice(
-                    "Closet mini went offline. Ember's turn is queued on the relay and will run when that Runner reconnects."
-                ),
+                body: .notice("Closet mini is offline. DevOps's turn is queued on the relay and will run when that Runner reconnects."),
                 createdAt: minutesAgo(60 * 3 + 4)
             ),
         ]

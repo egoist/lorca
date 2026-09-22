@@ -294,7 +294,7 @@ final class ReplyEngine {
                 - Then swap the mock store for those events, one screen at a time.
                 - Pairing last, because it is the only part that needs two machines to test.
 
-                Want me to hand the first piece to Patch?
+                Want me to hand the first piece to Developer?
                 """,
                 """
                 The constraint that decides this is **a bot runs on its assigned Runner**. Its files and plugins are there, so the answer is a job envelope, not a call from here.

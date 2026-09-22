@@ -91,8 +91,8 @@ export function Turns() {
     >
       <img
         src="/screens/group.png"
-        width={2400}
-        height={1520}
+        width={1568}
+        height={993}
         alt={t('turns.alt')}
         className="window-frame mx-auto w-full max-w-5xl"
         loading="lazy"
