@@ -39,7 +39,7 @@ export function Nav() {
     <header className="sticky top-4 z-40 mt-4 px-4">
       <div className="mx-auto flex h-14 max-w-4xl items-center justify-between rounded-full pr-4 pl-5 bg-zinc-200/50 backdrop-blur-xl dark:bg-zinc-900/80 dark:border">
         <a href="#top" className="flex items-center gap-2 font-semibold tracking-tight">
-          <Logo className="size-6" />
+          <Logo className="size-10" />
           Lorca
         </a>
         <nav className="hidden items-center gap-6 text-sm text-muted-foreground md:flex">
