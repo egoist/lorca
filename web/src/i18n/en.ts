@@ -27,8 +27,8 @@ export const en = {
   },
   relay: {
     eyebrow: 'Privacy',
-    title: 'Encrypted on your computer.',
-    body: "Add another computer or your phone and your chats sync to it. Data is encrypted on your device and sent through a relay. The relay has no decryption key, so it can't read bot names, chat titles, or messages.",
+    title: 'Runs on your computer.',
+    body: 'Your bots work with files and run commands on your computer, using the AI provider you connect. Pair your phone or another computer to keep chatting across devices. Chats are encrypted before syncing through the relay, so only your devices can decrypt them.',
     alt: 'Encrypted data goes from your computer through the relay to your phone. Only your devices can decrypt it.',
     nodes: {
       computer: { title: 'Your computer', body: 'Encrypted before sending' },
