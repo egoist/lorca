@@ -2,7 +2,7 @@ export const en = {
   meta: {
     title: 'Lorca',
     description:
-      'AI bots that run on your own computer. Chat with one or several at once, let them work with your files, and sync chats between your devices with end-to-end encryption.',
+      'AI teammates that run on your own computer. Chat with one or several at once, let them work with your files, and they coordinate the work among themselves.',
   },
   nav: {
     turns: 'Group chats',
@@ -14,8 +14,8 @@ export const en = {
   },
   hero: {
     badge: 'Now available for Mac',
-    title: 'AI bots that run<br/>on <accent>your</accent> computer.',
-    body: 'Chat with one bot, or put several in a group chat. They can read and edit your files, run commands, and remember what you tell them. Chats are encrypted before they leave your computer.',
+    title: 'AI teammates<br/>for <accent>real</accent> work.',
+    body: 'Chat with one teammate, or put several in a group chat. They can read and edit your files, run commands, and remember what you tell them. Give them a job and they coordinate the work among themselves.',
     how: 'See how it works',
     platforms: 'Also on Linux and Windows, from the command line.',
   },
