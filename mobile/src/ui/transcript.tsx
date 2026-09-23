@@ -23,6 +23,9 @@ const GUTTER = 8;
 /// A bubble stops growing here in a wide pane.
 const BUBBLE_COLUMN_MAX = 620;
 const INSET = 12;
+/// A notice's line, and its icon, which centers on the first line as on the Mac.
+const NOTICE_LINE = 17;
+const NOTICE_ICON = 14;
 
 export type Row =
   | { key: string; type: "day"; at: number }
@@ -186,7 +189,7 @@ export function NoticeRow({ row }: { row: Extract<Row, { type: "notice" }> }) {
   return (
     <View style={[styles.centered, { paddingTop: row.groupStart ? 14 : 6 }]}>
       <View style={[styles.notice, { backgroundColor: p.fill }]}>
-        <Symbol name="info.circle.fill" size={14} color={p.secondaryLabel} />
+        <Symbol name="info.circle.fill" size={NOTICE_ICON} color={p.secondaryLabel} style={styles.noticeIcon} />
         <Text style={[styles.noticeText, { color: p.secondaryLabel }]}>{row.text}</Text>
       </View>
     </View>
@@ -398,6 +401,7 @@ const styles = StyleSheet.create({
   sheetTitle: { fontSize: 17, fontWeight: "600" },
   sheetCommand: { borderRadius: 10, padding: 12 },
   sheetButtons: { flexDirection: "row", justifyContent: "space-between", paddingBottom: 12 },
-  noticeText: { fontSize: 12.5, lineHeight: 17, flexShrink: 1 },
+  noticeIcon: { marginTop: (NOTICE_LINE - NOTICE_ICON) / 2 },
+  noticeText: { fontSize: 12.5, lineHeight: NOTICE_LINE, flexShrink: 1 },
   working: { flexShrink: 1 },
 });
