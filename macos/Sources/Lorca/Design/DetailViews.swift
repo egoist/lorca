@@ -109,8 +109,12 @@ final class SectionView: NSView {
     /// under a heading, as System Settings' do.
     private var dividerInset: CGFloat { style == .heading ? 12 : 0 }
     private var dividerEnds: [NSLayoutConstraint] = []
+    private var shownRows: [NSView] = []
 
     func setRows(_ views: [NSView]) {
+        // The rows it shows already, updated in place, keep their places and dividers.
+        guard !views.elementsEqual(shownRows, by: ===) else { return }
+        shownRows = views
         dividerEnds = []
         for view in rows.arrangedSubviews {
             rows.removeArrangedSubview(view)
@@ -228,6 +232,11 @@ final class KeyValueRow: NSView {
             value.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -8),
             value.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
+    }
+
+    func setValue(_ text: String) {
+        guard value.stringValue != text else { return }
+        value.stringValue = text
     }
 
     // A wrapping label only reports a multi-line intrinsic height once it
@@ -530,6 +539,7 @@ final class ActionRow: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     func setValue(_ text: String) {
+        guard value.stringValue != text else { return }
         value.stringValue = text
     }
 

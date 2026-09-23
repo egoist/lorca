@@ -14,7 +14,7 @@ enum Glyph {
 /// Circular gradient badge with the bot's SF Symbol, or the bot's own image. Also renders
 /// "you" and devices.
 final class AvatarView: NSView {
-    enum Content: Equatable {
+    enum Content: Hashable {
         case bot(symbolName: String, accent: Accent)
         /// A custom profile image, drawn aspect-filled inside the circle.
         case image(NSImage)

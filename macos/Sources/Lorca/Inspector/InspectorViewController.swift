@@ -26,6 +26,32 @@ final class InspectorViewController: NSViewController {
     /// The bot whose plugin rows are showing, for a click on one.
     private var pluginBotID: Bot.ID?
 
+    /// What each section last showed. The store sends events many times a turn, and a section
+    /// they leave as it was keeps its rows: a new row brings new buttons, and each button sizes
+    /// itself with a SwiftUI layout pass.
+    private var shown: [ObjectIdentifier: [AnyHashable]] = [:]
+    /// Rows kept for what they show (a bot, a Runner, a routine, a plugin), so a section that
+    /// changed updates the rows it has instead of making new ones.
+    private var keptRows: [String: NSView] = [:]
+    /// The usage rows under Runs with, which take new values after every turn.
+    private var contextRow: ActionRow?
+    private var spentRow: KeyValueRow?
+    private lazy var noRoutinesRow = NoteRow(
+        text: L("Routines are recurring tasks this bot runs on a schedule. Ask it in chat to set one up."))
+    private lazy var marketplaceRow: ActionRow = {
+        let row = ActionRow(key: L("Marketplace"), value: "", tint: .secondaryLabelColor, actionTitle: L("Add from Plugins…"))
+        row.onAction = { [weak self] in
+            guard let self, let bot = self.pluginBotID.flatMap(self.store.bot), let runner = self.store.device(bot.runnerID)
+            else { return }
+            self.presentAsSheet(PluginsMarketplaceViewController(runner: runner, bot: bot))
+        }
+        return row
+    }()
+    /// Off screen (a collapsed inspector, a closed window), the pane skips reloads and memory
+    /// fetches, and catches up when it appears.
+    private var isOnScreen = false
+    private var isBehind = false
+
     var onOpenDevice: ((Device.ID) -> Void)?
     var onRemoveBot: ((Bot.ID) -> Void)?
     var onAddBot: (() -> Void)?
@@ -107,26 +133,50 @@ final class InspectorViewController: NSViewController {
                 self?.reload()
             case let .respondingChanged(chatID):
                 // A turn ended (or started): what the bot remembers may have moved.
-                guard let self, case .chat(chatID) = self.selection, let chat = self.store.chat(chatID), chat.isDM,
-                    let bot = self.store.bots(in: chat).first, !self.store.isResponding(in: chatID)
-                else { return }
-                self.refreshMemory(of: bot.id)
+                guard let self, case .chat(chatID) = self.selection, !self.store.isResponding(in: chatID) else { return }
+                self.refreshShownMemory()
             default:
                 break
             }
         }
     }
 
+    // The view is still hidden here when the inspector expands, so this marks the pane as on
+    // screen rather than asking the view.
+    override func viewWillAppear() {
+        super.viewWillAppear()
+        isOnScreen = true
+        guard isBehind else { return }
+        isBehind = false
+        reload()
+        refreshShownMemory()
+    }
+
+    override func viewDidDisappear() {
+        super.viewDidDisappear()
+        isOnScreen = false
+    }
+
     func show(selection newSelection: Selection) {
         selection = newSelection
         reload()
-        if case let .chat(chatID) = newSelection, let chat = store.chat(chatID), chat.isDM, let bot = store.bots(in: chat).first {
-            refreshMemory(of: bot.id)
-        }
+        refreshShownMemory()
+    }
+
+    /// Asks for the memory of the bot whose DM is showing.
+    private func refreshShownMemory() {
+        guard case let .chat(chatID) = selection, let chat = store.chat(chatID), chat.isDM,
+            let bot = store.bots(in: chat).first
+        else { return }
+        refreshMemory(of: bot.id)
     }
 
     /// Asks the CLI for the bot's memory and redraws the section when it answers.
     private func refreshMemory(of botID: Bot.ID) {
+        guard isOnScreen else {
+            isBehind = true
+            return
+        }
         guard !store.isMock || memoryByBot[botID] == nil, memoryFetches.insert(botID).inserted else { return }
         Task { [weak self] in
             defer { self?.memoryFetches.remove(botID) }
@@ -144,20 +194,66 @@ final class InspectorViewController: NSViewController {
         }
     }
 
+    /// Brings each section in line with the store. A section whose state is what it last showed
+    /// is left alone, and one that changed reconfigures the rows it keeps.
     func reload() {
         guard isViewLoaded, case let .chat(chatID) = selection, let chat = store.chat(chatID) else {
             return
         }
+        guard isOnScreen else {
+            isBehind = true
+            return
+        }
 
         let members = store.bots(in: chat)
+        showParticipants(members, in: chat)
 
+        // A DM never takes another bot; a group does until it is full or every bot is in it.
+        let canAdd = chat.canAddBot && members.count < store.bots.count
+        if addButton.isHidden != chat.isDM { addButton.isHidden = chat.isDM }
+        if addButton.isEnabled != canAdd { addButton.isEnabled = canAdd }
+
+        // A direct chat is one bot, so its profile, provider, and model are edited right here.
+        let single = chat.isDM && members.count == 1
+        for section in [profile, runtime, memory, routines, plugins] where section.isHidden == single {
+            section.isHidden = !single
+        }
+        if single, let bot = members.first {
+            showProfile(of: bot)
+            showRuntime(of: bot, in: chat)
+            showMemory(of: bot)
+            showRoutines(of: bot)
+            showPlugins(of: bot)
+        }
+        showRouting(members)
+    }
+
+    /// Whether `state` differs from what `section` last showed; records it when it does.
+    private func changed(_ section: SectionView, to state: [AnyHashable]) -> Bool {
+        let key = ObjectIdentifier(section)
+        guard shown[key] != state else { return false }
+        shown[key] = state
+        return true
+    }
+
+    /// The row kept under `key`, made the first time it is asked for.
+    private func keptRow<Row: NSView>(_ key: String, make: () -> Row) -> Row {
+        if let row = keptRows[key] as? Row { return row }
+        let row = make()
+        keptRows[key] = row
+        return row
+    }
+
+    private func showParticipants(_ members: [Bot], in chat: Chat) {
+        let hosts = members.map { store.device($0.runnerID)?.name ?? L("unassigned") }
+        let looks = members.map { AvatarView.content(for: $0) }
+        guard changed(participants, to: [members, looks, hosts, chat.canRemoveBot]) else { return }
         participants.setRows(
-            members.map { bot in
-                let host = store.device(bot.runnerID)
-                let row = BotRow()
+            zip(members, hosts).map { bot, host in
+                let row = keptRow("bot:\(bot.id)") { BotRow() }
                 row.configure(
                     bot: bot,
-                    detailText: "\(bot.provider.rawValue) · \(host?.name ?? L("unassigned"))",
+                    detailText: "\(bot.provider.rawValue) · \(host)",
                     accessorySymbol: chat.canRemoveBot ? "minus.circle" : nil,
                     tooltip: L("Remove from chat")
                 )
@@ -166,45 +262,64 @@ final class InspectorViewController: NSViewController {
                 row.onAvatarClick = { [weak self] in self?.presentAsSheet(BotLookViewController(botID: bot.id)) }
                 return row
             })
+    }
 
-        // A DM never takes another bot; a group does until it is full or every bot is in it.
-        addButton.isHidden = chat.isDM
-        addButton.isEnabled = chat.canAddBot && members.count < store.bots.count
+    private func showProfile(of bot: Bot) {
+        // The Name row keeps what the user is typing, and puts the name back after.
+        nameRow.setValue(bot.name)
+        guard changed(profile, to: [bot.id, bot.description]) else { return }
+        descriptionRow.setValue(bot.description)
+        nameRow.onCommit = { [weak self] in self?.commitProfile(of: bot.id) }
+    }
 
-        // A direct chat is one bot, so its profile, provider, and model are edited right here.
-        let single = chat.isDM && members.count == 1
-        profile.isHidden = !single
-        runtime.isHidden = !single
-        memory.isHidden = !single
-        routines.isHidden = !single
-        plugins.isHidden = !single
-        if single, let bot = members.first {
-            memory.setRows(memoryRows(for: bot))
-            routines.setRows(routineRows(for: bot))
-            plugins.setRows(pluginRows(for: bot))
-            nameRow.setValue(bot.name)
-            descriptionRow.setValue(bot.description)
-            let commit: () -> Void = { [weak self] in self?.commitProfile(of: bot.id) }
-            nameRow.onCommit = commit
+    private func showRuntime(of bot: Bot, in chat: Chat) {
+        let credential = store.credential(for: bot.provider)
+        if changed(runtime, to: [chat.id, bot.id, bot.provider, bot.model, bot.thinking, credential, chat.usage == nil]) {
             runtime.setRows(runtimeRows(for: bot, in: chat))
         }
+        // What the turns used changes after every turn; the rows take the new values in place.
+        if let usage = chat.usage {
+            contextRow?.setValue(usage.contextSummary)
+            spentRow?.setValue(usage.spendSummary)
+        }
+    }
 
+    private func showMemory(of bot: Bot) {
+        // The bot's memory, or why it could not be read, or whether it is on its way.
+        let state: [AnyHashable] =
+            if let known = memoryByBot[bot.id] { [bot.id, known] }
+            else if let error = memoryErrors[bot.id] { [bot.id, error] }
+            else { [bot.id, memoryFetches.contains(bot.id)] }
+        guard changed(memory, to: state) else { return }
+        memory.setRows(memoryRows(for: bot))
+    }
+
+    private func showRouting(_ members: [Bot]) {
         let hosts = Dictionary(grouping: members, by: \.runnerID)
+        let runners = hosts.keys.sorted().compactMap { store.device($0) }
+        let botNames = runners.map { runner in (hosts[runner.id] ?? []).map(\.name).joined(separator: ", ") }
+        let states = runners.map { $0.status == .online ? L("Online") : Format.lastSeen($0.lastSeen) }
+        guard changed(routing, to: [runners, botNames, states]) else { return }
         routing.setRows(
-            hosts.keys.sorted().compactMap { runnerID in
-                guard let runner = store.device(runnerID) else { return nil }
-                let botNames = (hosts[runnerID] ?? []).map(\.name).joined(separator: ", ")
-                let row = StatusRow()
+            runners.indices.map { index in
+                let runner = runners[index]
+                // A label keeps the vibrancy it had when it went into the window, and one turned
+                // from Online's green to the gray of Last seen draws too dark; an online and an
+                // offline Runner each get a row of their own.
+                let online = runner.status == .online
+                let row: StatusRow = keptRow("runner:\(runner.id):\(online)") {
+                    let row = StatusRow()
+                    row.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(openDevice(_:))))
+                    row.identifier = NSUserInterfaceItemIdentifier(runner.id)
+                    return row
+                }
                 row.configure(
                     symbol: runner.symbolName,
                     title: runner.name,
-                    subtitle: botNames,
-                    state: runner.status == .online ? L("Online") : Format.lastSeen(runner.lastSeen),
-                    stateColor: runner.status == .online ? .systemGreen : .secondaryLabelColor
+                    subtitle: botNames[index],
+                    state: states[index],
+                    stateColor: online ? .systemGreen : .secondaryLabelColor
                 )
-                let click = NSClickGestureRecognizer(target: self, action: #selector(openDevice(_:)))
-                row.addGestureRecognizer(click)
-                row.identifier = NSUserInterfaceItemIdentifier(runner.id)
                 return row
             })
     }
@@ -262,11 +377,15 @@ final class InspectorViewController: NSViewController {
 
         // What the turns here have used, and a way to shorten the context by hand.
         var usageRows: [NSView] = []
+        contextRow = nil
+        spentRow = nil
         if let usage = chat.usage {
             let context = ActionRow(key: L("Context"), value: usage.contextSummary, tint: .labelColor, actionTitle: L("Compact"))
             context.onAction = { [weak self] in self?.store.compactChat(chat.id) }
-            usageRows.append(context)
-            usageRows.append(KeyValueRow(key: L("Spent"), value: usage.spendSummary))
+            let spent = KeyValueRow(key: L("Spent"), value: usage.spendSummary)
+            contextRow = context
+            spentRow = spent
+            usageRows = [context, spent]
         }
 
         let credential = store.credential(for: bot.provider)
@@ -308,7 +427,8 @@ final class InspectorViewController: NSViewController {
             ? L("Only the first %d lines or %@ open each turn; the rest is not read.", memory.maxLines, Format.kilobytes(memory.maxBytes))
             : L("MEMORY.md opens at the start of every turn.")
         notes.onAction = { [weak self] in
-            guard let self else { return }
+            // The rows outlive a rename, so the sheet takes the bot as it is now.
+            guard let self, let bot = self.store.bot(bot.id) else { return }
             let editor = MemoryViewController(bot: bot, memory: memory)
             editor.onSaved = { [weak self] in self?.refreshMemory(of: bot.id) }
             self.presentAsSheet(editor)
@@ -329,34 +449,41 @@ final class InspectorViewController: NSViewController {
 
     /// The bot's routines, after Grok Bot's panel: a row per routine with a pause switch, and
     /// the details in a sheet. With none, the sentence that says how to get one.
-    private func routineRows(for bot: Bot) -> [NSView] {
+    private func showRoutines(of bot: Bot) {
         let mine = store.routines(for: bot.id)
-        if mine.isEmpty {
-            return [NoteRow(text: L("Routines are recurring tasks this bot runs on a schedule. Ask it in chat to set one up."))]
+        guard changed(routines, to: [bot.id, mine, mine.map(\.detail)]) else { return }
+        guard !mine.isEmpty else {
+            routines.setRows([noRoutinesRow])
+            return
         }
-        return mine.map { routine in
-            let row = SwitchRow()
-            row.configure(routine: routine)
-            row.onToggle = { [weak self] enabled in self?.store.setRoutineEnabled(routine.id, enabled) }
-            row.onClick = { [weak self] in
-                guard let self else { return }
-                let sheet = RoutineViewController(routineID: routine.id, bot: bot)
-                sheet.onEditInChat = { [weak self] text in self?.onComposePrompt?(text) }
-                self.presentAsSheet(sheet)
-            }
-            return row
-        }
+        routines.setRows(
+            mine.map { routine in
+                let row = keptRow("routine:\(routine.id)") { SwitchRow() }
+                row.configure(routine: routine)
+                row.onToggle = { [weak self] enabled in self?.store.setRoutineEnabled(routine.id, enabled) }
+                row.onClick = { [weak self] in
+                    guard let self, let bot = self.store.bot(bot.id) else { return }
+                    let sheet = RoutineViewController(routineID: routine.id, bot: bot)
+                    sheet.onEditInChat = { [weak self] text in self?.onComposePrompt?(text) }
+                    self.presentAsSheet(sheet)
+                }
+                return row
+            })
     }
 
     /// The plugins the bot's Runner has, which every bot there may use, and a way to the
     /// marketplace. A plugin that needs setup says so; clicking opens it.
-    private func pluginRows(for bot: Bot) -> [NSView] {
+    private func showPlugins(of bot: Bot) {
         let runner = store.device(bot.runnerID)
-        let runnerName = runner?.name ?? L("its Runner")
+        guard changed(plugins, to: [bot.id, bot.name, runner?.id, runner?.name, runner?.plugins]) else { return }
         pluginBotID = bot.id
-        var rows: [NSView] = []
-        for plugin in runner?.plugins ?? [] {
-            let row = StatusRow()
+        var rows: [NSView] = (runner?.plugins ?? []).map { plugin in
+            let row: StatusRow = keptRow("plugin:\(plugin.id)") {
+                let row = StatusRow()
+                row.identifier = NSUserInterfaceItemIdentifier(plugin.id)
+                row.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(openPlugin(_:))))
+                return row
+            }
             row.configure(
                 symbol: plugin.symbolName,
                 title: plugin.name,
@@ -365,20 +492,14 @@ final class InspectorViewController: NSViewController {
                 stateColor: plugin.stateColor
             )
             row.toolTip = L("Open %@", plugin.name)
-            row.identifier = NSUserInterfaceItemIdentifier(plugin.id)
-            row.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(openPlugin(_:))))
-            rows.append(row)
+            return row
         }
         if rows.isEmpty {
+            let runnerName = runner?.name ?? L("its Runner")
             rows.append(NoteRow(text: L("No plugins on %@ yet. Add one from the marketplace, or ask %@ to find one.", runnerName, bot.name)))
         }
-        let add = ActionRow(key: L("Marketplace"), value: "", tint: .secondaryLabelColor, actionTitle: L("Add from Plugins…"))
-        add.onAction = { [weak self] in
-            guard let self, let runner else { return }
-            self.presentAsSheet(PluginsMarketplaceViewController(runner: runner, bot: bot))
-        }
-        rows.append(add)
-        return rows
+        rows.append(marketplaceRow)
+        plugins.setRows(rows)
     }
 
     @objc private func openPlugin(_ sender: NSClickGestureRecognizer) {

@@ -433,7 +433,7 @@ struct PermissionRequest: Hashable {
 
 /// A bot's memory as its Runner reports it: the curated index with its load budget, and the
 /// other files by name. `here` is false when the bot runs elsewhere and only `runner` is known.
-struct BotMemory {
+struct BotMemory: Hashable {
     var botID: Bot.ID
     var here: Bool
     var runner: String
