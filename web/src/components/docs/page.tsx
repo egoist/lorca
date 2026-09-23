@@ -16,7 +16,7 @@ import { Suspense, use } from 'react'
 
 import { useMDXComponents } from '#/components/mdx'
 import { Logo } from '#/components/site/logo'
-import { DOWNLOAD, SITE } from '#/components/site/nav'
+import { downloadPath, SITE } from '#/components/site/nav'
 import { i18nFor, type Language, names, paths } from '#/i18n'
 import { docs, docsI18n, docsRoute, markdownUrl, source } from '#/lib/source'
 
@@ -127,7 +127,7 @@ export function DocsPage({ lang, data }: { lang: Language; data: DocsData }) {
           ),
           url: paths[lang],
         }}
-        links={[{ text: t('nav.download'), url: DOWNLOAD }]}
+        links={[{ text: t('nav.download'), url: downloadPath(lang) }]}
       >
         <Suspense>
           <Content path={path} markdownUrl={markdownUrl} />

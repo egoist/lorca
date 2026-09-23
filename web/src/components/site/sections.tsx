@@ -10,11 +10,11 @@ import {
 import { Button } from '#/components/ui/button'
 import { RelayDiagram } from './diagram'
 import { Logo } from './logo'
-import { DOWNLOAD, LanguageLink, docsPath } from './nav'
+import { LanguageLink, docsPath, downloadPath, homeSection } from './nav'
 import { Pixels } from './pixels'
 
 export function Hero() {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   return (
     <section id="top" className="mx-auto max-w-4xl px-5 pt-20 text-center sm:pt-28">
       <p className="mb-5 inline-flex items-center gap-2 rounded-full border bg-foreground/5 px-3 py-1 text-xs font-medium text-foreground/80">
@@ -29,7 +29,7 @@ export function Hero() {
       </p>
       <div className="mt-9 flex flex-col justify-center gap-3 sm:flex-row">
         <Button asChild size="lg" className="h-12 rounded-full px-7 text-base">
-          <a href={DOWNLOAD}>{t('nav.download')}</a>
+          <a href={downloadPath(i18n.language)}>{t('nav.download')}</a>
         </Button>
         <Button asChild size="lg" variant="outline" className="h-12 rounded-full bg-transparent px-6 text-base shadow-none hover:bg-foreground/5 dark:bg-transparent dark:hover:bg-foreground/5">
           <a href="#turns">{t('hero.how')}</a>
@@ -198,7 +198,7 @@ export function FAQ() {
 }
 
 export function CallToAction() {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   return (
     <section className="mx-auto max-w-6xl px-5 pb-20">
       <div className="grain relative overflow-hidden rounded-[28px]">
@@ -208,7 +208,7 @@ export function CallToAction() {
           <h2 className="display mt-6 text-4xl text-white sm:text-6xl">{t('cta.title')}</h2>
           <p className="mx-auto mt-4 max-w-md text-white/80">{t('cta.body')}</p>
           <Button asChild size="lg" className="mt-8 h-12 rounded-full bg-white px-7 text-base text-zinc-900 hover:bg-white/90">
-            <a href={DOWNLOAD}>{t('nav.download')}</a>
+            <a href={downloadPath(i18n.language)}>{t('nav.download')}</a>
           </Button>
         </div>
       </div>
@@ -226,10 +226,10 @@ export function Footer() {
           <span>© {new Date().getFullYear()} Lorca</span>
         </div>
         <nav className="flex gap-6">
-          <a href="#relay" className="hover:text-foreground">{t('footer.privacy')}</a>
-          <a href="#faq" className="hover:text-foreground">{t('footer.faq')}</a>
+          <a href={homeSection(i18n.language, 'relay')} className="hover:text-foreground">{t('footer.privacy')}</a>
+          <a href={homeSection(i18n.language, 'faq')} className="hover:text-foreground">{t('footer.faq')}</a>
           <a href={docsPath(i18n.language)} className="hover:text-foreground">{t('nav.docs')}</a>
-          <a href={DOWNLOAD} className="hover:text-foreground">{t('footer.download')}</a>
+          <a href={downloadPath(i18n.language)} className="hover:text-foreground">{t('footer.download')}</a>
           <LanguageLink className="hover:text-foreground" />
         </nav>
       </div>

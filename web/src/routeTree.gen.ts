@@ -10,12 +10,14 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as DownloadRouteImport } from './routes/download'
 import { Route as LlmsFullDottxtRouteImport } from './routes/llms-full[.]txt'
 import { Route as LlmsDottxtRouteImport } from './routes/llms[.]txt'
 import { Route as ZhRouteImport } from './routes/zh'
 import { Route as ApiSearchRouteImport } from './routes/api/search'
 import { Route as DocsSplatRouteImport } from './routes/docs/$'
 import { Route as DocsChar123Char125DotmdRouteImport } from './routes/docs/{$}[.]md'
+import { Route as ZhDownloadRouteImport } from './routes/zh_/download'
 import { Route as ZhLlmsFullDottxtRouteImport } from './routes/zh_/llms-full[.]txt'
 import { Route as ZhLlmsDottxtRouteImport } from './routes/zh_/llms[.]txt'
 import { Route as ZhDocsSplatRouteImport } from './routes/zh_/docs/$'
@@ -24,6 +26,11 @@ import { Route as ZhDocsChar123Char125DotmdRouteImport } from './routes/zh_/docs
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DownloadRoute = DownloadRouteImport.update({
+  id: '/download',
+  path: '/download',
   getParentRoute: () => rootRouteImport,
 } as any)
 const LlmsFullDottxtRoute = LlmsFullDottxtRouteImport.update({
@@ -56,6 +63,11 @@ const DocsChar123Char125DotmdRoute = DocsChar123Char125DotmdRouteImport.update({
   path: '/docs/{$}.md',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ZhDownloadRoute = ZhDownloadRouteImport.update({
+  id: '/zh_/download',
+  path: '/zh/download',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ZhLlmsFullDottxtRoute = ZhLlmsFullDottxtRouteImport.update({
   id: '/zh_/llms-full.txt',
   path: '/zh/llms-full.txt',
@@ -80,12 +92,14 @@ const ZhDocsChar123Char125DotmdRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/download': typeof DownloadRoute
   '/llms-full.txt': typeof LlmsFullDottxtRoute
   '/llms.txt': typeof LlmsDottxtRoute
   '/zh': typeof ZhRoute
   '/api/search': typeof ApiSearchRoute
   '/docs/$': typeof DocsSplatRoute
   '/docs/{$}.md': typeof DocsChar123Char125DotmdRoute
+  '/zh/download': typeof ZhDownloadRoute
   '/zh/llms-full.txt': typeof ZhLlmsFullDottxtRoute
   '/zh/llms.txt': typeof ZhLlmsDottxtRoute
   '/zh/docs/$': typeof ZhDocsSplatRoute
@@ -93,12 +107,14 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/download': typeof DownloadRoute
   '/llms-full.txt': typeof LlmsFullDottxtRoute
   '/llms.txt': typeof LlmsDottxtRoute
   '/zh': typeof ZhRoute
   '/api/search': typeof ApiSearchRoute
   '/docs/$': typeof DocsSplatRoute
   '/docs/{$}.md': typeof DocsChar123Char125DotmdRoute
+  '/zh/download': typeof ZhDownloadRoute
   '/zh/llms-full.txt': typeof ZhLlmsFullDottxtRoute
   '/zh/llms.txt': typeof ZhLlmsDottxtRoute
   '/zh/docs/$': typeof ZhDocsSplatRoute
@@ -107,12 +123,14 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/download': typeof DownloadRoute
   '/llms-full.txt': typeof LlmsFullDottxtRoute
   '/llms.txt': typeof LlmsDottxtRoute
   '/zh': typeof ZhRoute
   '/api/search': typeof ApiSearchRoute
   '/docs/$': typeof DocsSplatRoute
   '/docs/{$}.md': typeof DocsChar123Char125DotmdRoute
+  '/zh_/download': typeof ZhDownloadRoute
   '/zh_/llms-full.txt': typeof ZhLlmsFullDottxtRoute
   '/zh_/llms.txt': typeof ZhLlmsDottxtRoute
   '/zh_/docs/$': typeof ZhDocsSplatRoute
@@ -122,12 +140,14 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/download'
     | '/llms-full.txt'
     | '/llms.txt'
     | '/zh'
     | '/api/search'
     | '/docs/$'
     | '/docs/{$}.md'
+    | '/zh/download'
     | '/zh/llms-full.txt'
     | '/zh/llms.txt'
     | '/zh/docs/$'
@@ -135,12 +155,14 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/download'
     | '/llms-full.txt'
     | '/llms.txt'
     | '/zh'
     | '/api/search'
     | '/docs/$'
     | '/docs/{$}.md'
+    | '/zh/download'
     | '/zh/llms-full.txt'
     | '/zh/llms.txt'
     | '/zh/docs/$'
@@ -148,12 +170,14 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/download'
     | '/llms-full.txt'
     | '/llms.txt'
     | '/zh'
     | '/api/search'
     | '/docs/$'
     | '/docs/{$}.md'
+    | '/zh_/download'
     | '/zh_/llms-full.txt'
     | '/zh_/llms.txt'
     | '/zh_/docs/$'
@@ -162,12 +186,14 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  DownloadRoute: typeof DownloadRoute
   LlmsFullDottxtRoute: typeof LlmsFullDottxtRoute
   LlmsDottxtRoute: typeof LlmsDottxtRoute
   ZhRoute: typeof ZhRoute
   ApiSearchRoute: typeof ApiSearchRoute
   DocsSplatRoute: typeof DocsSplatRoute
   DocsChar123Char125DotmdRoute: typeof DocsChar123Char125DotmdRoute
+  ZhDownloadRoute: typeof ZhDownloadRoute
   ZhLlmsFullDottxtRoute: typeof ZhLlmsFullDottxtRoute
   ZhLlmsDottxtRoute: typeof ZhLlmsDottxtRoute
   ZhDocsSplatRoute: typeof ZhDocsSplatRoute
@@ -181,6 +207,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/download': {
+      id: '/download'
+      path: '/download'
+      fullPath: '/download'
+      preLoaderRoute: typeof DownloadRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/llms-full.txt': {
@@ -225,6 +258,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DocsChar123Char125DotmdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/zh_/download': {
+      id: '/zh_/download'
+      path: '/zh/download'
+      fullPath: '/zh/download'
+      preLoaderRoute: typeof ZhDownloadRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/zh_/llms-full.txt': {
       id: '/zh_/llms-full.txt'
       path: '/zh/llms-full.txt'
@@ -258,12 +298,14 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  DownloadRoute: DownloadRoute,
   LlmsFullDottxtRoute: LlmsFullDottxtRoute,
   LlmsDottxtRoute: LlmsDottxtRoute,
   ZhRoute: ZhRoute,
   ApiSearchRoute: ApiSearchRoute,
   DocsSplatRoute: DocsSplatRoute,
   DocsChar123Char125DotmdRoute: DocsChar123Char125DotmdRoute,
+  ZhDownloadRoute: ZhDownloadRoute,
   ZhLlmsFullDottxtRoute: ZhLlmsFullDottxtRoute,
   ZhLlmsDottxtRoute: ZhLlmsDottxtRoute,
   ZhDocsSplatRoute: ZhDocsSplatRoute,

@@ -176,7 +176,9 @@ final class ChatViewController: NSViewController {
 
         if !isSameChat { composer.text = "" }
         isPinnedToBottom = true
-        DispatchQueue.main.async { [weak self] in self?.scrollToBottom(animated: false) }
+        // Before returning, not from a block on the main queue: AppKit can display the window
+        // before that block runs, which shows a long transcript from its first row for a frame.
+        scrollToBottom(animated: false)
     }
 
     /// Puts text in the composer for the user to finish, as the inspector's "Edit in chat" does.

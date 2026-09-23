@@ -25,6 +25,13 @@ export function languageOf(pathname: string): Language {
   return pathname === '/zh' || pathname.startsWith('/zh/') ? 'zh' : 'en'
 }
 
+/// The same page in another language: `/download` is `/zh/download` in Chinese.
+export function pathIn(lng: Language, pathname: string): string {
+  const page = languageOf(pathname) === 'en' ? pathname : pathname.slice(paths.zh.length) || '/'
+  if (lng === 'en') return page
+  return page === '/' ? paths[lng] : paths[lng] + page
+}
+
 const instances = new Map<Language, i18n>()
 
 /// One fixed-language instance per language: requests for different languages share a Worker,

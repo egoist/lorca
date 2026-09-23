@@ -12,7 +12,7 @@ export const zh: Messages = {
     tools: '它能做什么',
     faq: '常见问题',
     docs: '文档',
-    download: '下载 Mac 版',
+    download: '下载',
   },
   hero: {
     badge: 'Mac 版现已推出',
@@ -76,6 +76,43 @@ export const zh: Messages = {
   },
   docs: {
     title: 'Lorca 文档',
+  },
+  download: {
+    title: '下载 Lorca',
+    description: '下载 Lorca Mac 版，通过 TestFlight 加入 iPhone 和 iPad 版测试，或在任意电脑上安装 Lorca CLI。',
+    mac: {
+      title: 'Mac',
+      body: '和智能体聊天，并在你的 Mac 上运行它们。',
+      action: '下载 Mac 版',
+      version: '版本 {{version}}',
+      system: 'macOS {{version}} 或更高版本',
+      appleSilicon: 'Apple 芯片',
+      unavailable: '暂时无法获取最新版本，请刷新页面重试。',
+    },
+    ios: {
+      title: 'iPhone 和 iPad',
+      body: '和智能体聊天，它们继续在你的电脑上运行。扫描桌面应用里的二维码即可配对。',
+      action: '加入 TestFlight 测试',
+      note: '需要先从 App Store 安装 TestFlight。',
+    },
+    windowsLinux: {
+      title: 'Windows 和 Linux',
+      body: '和智能体聊天，并在你的 Windows 或 Linux 电脑上运行它们。',
+    },
+    android: {
+      title: 'Android',
+      body: '在 Android 手机上和智能体聊天。',
+    },
+    soon: '即将推出',
+    cli: {
+      title: 'Lorca CLI',
+      body: '让一台电脑成为 Runner：它运行你的智能体，但没有聊天界面。Mac、Windows 和 Linux 应用都已内置 CLI，只有在没装应用的电脑上才需要单独安装。把它和你的账户配对，再用桌面应用或手机为它创建智能体。',
+      unix: 'macOS 和 Linux',
+      windows: 'Windows（PowerShell）',
+      note: '<docs>CLI 文档</docs>',
+      copy: '复制',
+      copied: '已复制',
+    },
   },
   footer: {
     privacy: '隐私',

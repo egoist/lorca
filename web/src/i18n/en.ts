@@ -10,7 +10,7 @@ export const en = {
     tools: 'What it does',
     faq: 'FAQ',
     docs: 'Docs',
-    download: 'Download for Mac',
+    download: 'Download',
   },
   hero: {
     badge: 'Now available for Mac',
@@ -74,6 +74,43 @@ export const en = {
   },
   docs: {
     title: 'Lorca Docs',
+  },
+  download: {
+    title: 'Download Lorca',
+    description: 'Download Lorca for Mac, join the iPhone and iPad beta on TestFlight, or install the Lorca CLI on any computer.',
+    mac: {
+      title: 'Mac',
+      body: 'Chat with your bots and run them on your Mac.',
+      action: 'Download for Mac',
+      version: 'Version {{version}}',
+      system: 'macOS {{version}} or later',
+      appleSilicon: 'Apple silicon',
+      unavailable: "Couldn't load the latest version. Reload the page to try again.",
+    },
+    ios: {
+      title: 'iPhone and iPad',
+      body: 'Chat with your bots while they keep running on your computer. Scan the QR code in the desktop app to pair.',
+      action: 'Join the TestFlight beta',
+      note: 'Install TestFlight from the App Store first.',
+    },
+    windowsLinux: {
+      title: 'Windows and Linux',
+      body: 'Chat with your bots and run them on your Windows or Linux computer.',
+    },
+    android: {
+      title: 'Android',
+      body: 'Chat with your bots from your Android phone.',
+    },
+    soon: 'Coming soon',
+    cli: {
+      title: 'Lorca CLI',
+      body: 'Makes a computer a Runner: it runs your bots, with no chat window. The Mac, Windows, and Linux apps have it built in, so you need it only on a computer without the app. Pair it with your account, then create bots for it from the desktop app or your phone.',
+      unix: 'macOS and Linux',
+      windows: 'Windows (PowerShell)',
+      note: '<docs>CLI docs</docs>',
+      copy: 'Copy',
+      copied: 'Copied',
+    },
   },
   footer: {
     privacy: 'Privacy',
