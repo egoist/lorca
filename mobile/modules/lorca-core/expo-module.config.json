@@ -8,13 +8,15 @@
       "LorcaCoreModule",
       "MarkdownViewModule",
       "CompactWidthViewModule",
-      "SoftScrollEdgeViewModule"
+      "SoftScrollEdgeViewModule",
+      "ShimmerViewModule"
     ]
   },
   "android": {
     "modules": [
       "app.lorca.core.LorcaCoreModule",
-      "app.lorca.core.MarkdownViewModule"
+      "app.lorca.core.MarkdownViewModule",
+      "app.lorca.core.ShimmerViewModule"
     ]
   }
 }

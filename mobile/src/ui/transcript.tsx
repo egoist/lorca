@@ -6,7 +6,7 @@
 import { useEffect, useState } from "react";
 import { Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import * as Clipboard from "expo-clipboard";
-import Animated, { Easing, useAnimatedStyle, useSharedValue, withDelay, withRepeat, withSequence, withTiming } from "react-native-reanimated";
+import { ShimmerView } from "../../modules/lorca-core/ShimmerView";
 import { isSentMessage, recipientName, type Body, type Bot, type Chat, type Message } from "../core/model";
 import { language, t } from "../i18n";
 import { AttachmentBlock } from "./attachments";
@@ -351,53 +351,26 @@ export function StatusRow({ text }: { text: string }) {
   );
 }
 
-/// The avatar alone in a DM; "Chef is working…" in a group.
+/// "Working…" in a DM and "Chef is working…" in a group, the words shimmering while a turn runs.
 export function WorkingRow({ bots, isGroup }: { bots: Bot[]; isGroup: boolean }) {
   const p = usePalette();
   const names = bots.map((b) => b.name);
   const label =
-    names.length === 0
+    !isGroup || names.length === 0
       ? t("Working…")
       : names.length === 1
         ? t("{name} is working…", { name: names[0] })
         : t("{names} and {last} are working…", { names: names.slice(0, -1).join(language === "zh" ? "、" : ", "), last: names[names.length - 1] });
   return (
     <View style={[styles.messageRow, styles.messageRowBot, { paddingTop: 14, alignItems: "center" }]}>
-      {isGroup ? (
-        <>
-          <View style={{ width: AVATAR + GUTTER }}>{bots[0] && <BotAvatar bot={bots[0]} size={AVATAR} working />}</View>
-          <Text style={[styles.caption, { color: p.secondaryLabel }]}>{label}</Text>
-          <Dots color={p.secondaryLabel} />
-        </>
-      ) : (
-        <>
-          <View style={{ width: AVATAR + GUTTER }}>{bots[0] && <BotAvatar bot={bots[0]} size={AVATAR} working />}</View>
-          <View style={[styles.bubble, { backgroundColor: p.botBubble, paddingVertical: 12 }]}>
-            <Dots color={p.secondaryLabel} />
-          </View>
-        </>
-      )}
+      <View style={{ width: AVATAR + GUTTER }}>{bots[0] && <BotAvatar bot={bots[0]} size={AVATAR} />}</View>
+      <ShimmerView style={styles.working}>
+        <Text style={[styles.caption, { color: p.label }]} numberOfLines={1}>
+          {label}
+        </Text>
+      </ShimmerView>
     </View>
   );
-}
-
-function Dots({ color }: { color: any }) {
-  return (
-    <View style={styles.dots}>
-      {[0, 1, 2].map((i) => (
-        <Dot key={i} delay={i * 160} color={color} />
-      ))}
-    </View>
-  );
-}
-
-function Dot({ delay, color }: { delay: number; color: any }) {
-  const opacity = useSharedValue(0.35);
-  useEffect(() => {
-    opacity.value = withDelay(delay, withRepeat(withSequence(withTiming(1, { duration: 380, easing: Easing.inOut(Easing.ease) }), withTiming(0.35, { duration: 380, easing: Easing.inOut(Easing.ease) }), withTiming(0.35, { duration: 300 })), -1));
-  }, [delay, opacity]);
-  const style = useAnimatedStyle(() => ({ opacity: opacity.value }));
-  return <Animated.View style={[styles.dot, { backgroundColor: color }, style]} />;
 }
 
 const styles = StyleSheet.create({
@@ -426,6 +399,5 @@ const styles = StyleSheet.create({
   sheetCommand: { borderRadius: 10, padding: 12 },
   sheetButtons: { flexDirection: "row", justifyContent: "space-between", paddingBottom: 12 },
   noticeText: { fontSize: 12.5, lineHeight: 17, flexShrink: 1 },
-  dots: { flexDirection: "row", gap: 4, alignItems: "center", marginLeft: 6 },
-  dot: { width: 6, height: 6, borderRadius: 3 },
+  working: { flexShrink: 1 },
 });
