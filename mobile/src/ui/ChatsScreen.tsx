@@ -109,8 +109,11 @@ export function ChatsScreen({ sidebar = false }: { sidebar?: boolean }) {
   const searchingText = query.trim();
   const data: (Chat | SearchRow)[] = searchingText ? searchRows : items;
 
+  // Chats with a turn in flight: their rows read "Working…" in place of the preview.
+  const responding = useMemo(() => new Set(Object.values(running).map((r) => r.chatId)), [running]);
+
   function isWorking(chat: Chat): boolean {
-    return Object.values(running).some((r) => r.chatId === chat.id) || chat.bot_ids.some((id) => workingBots.has(id));
+    return responding.has(chat.id) || chat.bot_ids.some((id) => workingBots.has(id));
   }
 
   function openChat(chat: Chat) {
@@ -228,6 +231,7 @@ export function ChatsScreen({ sidebar = false }: { sidebar?: boolean }) {
                   bots={bots}
                   title={title}
                   working={isWorking(chat)}
+                  responding={responding.has(chat.id)}
                   selected={sidebar ? chat.id === openChatId : undefined}
                   width={sidebar ? sidebarWidth : undefined}
                   onPress={() => openChat(chat)}
@@ -241,6 +245,7 @@ export function ChatsScreen({ sidebar = false }: { sidebar?: boolean }) {
                 bots={bots}
                 title={title}
                 working={isWorking(chat)}
+                responding={responding.has(chat.id)}
                 onPress={() => router.push(`/chat/${chat.id}`)}
               />
             );
@@ -294,7 +299,7 @@ function useConnecting(): boolean {
 }
 
 /// A row whose long press opens a native menu: every row on Android, a sidebar row on iOS.
-function MenuChatRow({ chat, bots, title, working, selected, width: fixedWidth, onPress, onDelete }: { chat: Chat; bots: Map<string, Bot>; title: string; working: boolean; selected?: boolean; width?: number; onPress: () => void; onDelete: () => void }) {
+function MenuChatRow({ chat, bots, title, working, responding, selected, width: fixedWidth, onPress, onDelete }: { chat: Chat; bots: Map<string, Bot>; title: string; working: boolean; responding: boolean; selected?: boolean; width?: number; onPress: () => void; onDelete: () => void }) {
   const menuRef = useRef<MenuComponentRef>(null);
   const { width: windowWidth } = useWindowDimensions();
   const width = fixedWidth ?? windowWidth;
@@ -320,7 +325,7 @@ function MenuChatRow({ chat, bots, title, working, selected, width: fixedWidth, 
       }}
     >
       <View style={{ width }}>
-        <ChatRow chat={chat} bots={bots} title={title} working={working} selected={selected} onPress={onPress} onLongPress={ios ? undefined : () => menuRef.current?.show()} />
+        <ChatRow chat={chat} bots={bots} title={title} working={working} responding={responding} selected={selected} onPress={onPress} onLongPress={ios ? undefined : () => menuRef.current?.show()} />
       </View>
     </MenuView>
   );
