@@ -23,11 +23,14 @@ Compact when the context passes `window - reserve_tokens`, so the summary prompt
 
 ```rust
 use agent::compaction::{compact, summary_message, summary_as_llm};
+use agent::providers::anthropic::drop_bound_thinking;
 
 let result = compact(provider.as_ref(), &messages, previous_summary, &settings, &cancel).await?;
 if let Some(result) = result {
     let mut kept = vec![summary_message(&result.summary, result.tokens_before)];
     kept.extend(messages[result.first_kept..].iter().cloned());
+    // The kept messages' thinking is bound to the history the summary replaced.
+    drop_bound_thinking(provider.model_id(), &mut kept);
     // kept is the context from now on
 }
 ```

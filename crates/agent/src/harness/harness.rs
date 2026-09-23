@@ -377,6 +377,8 @@ async fn compact_transcript(
     };
     let mut kept = vec![compaction::summary_message(&result.summary, result.tokens_before)];
     kept.extend(messages[skip + result.first_kept..].iter().cloned());
+    // The kept messages' thinking is bound to the history the summary replaced.
+    crate::providers::anthropic::drop_bound_thinking(provider.model_id(), &mut kept);
     Ok(Some((kept, result.tokens_before)))
 }
 

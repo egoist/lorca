@@ -280,7 +280,7 @@ struct AutoReviewRule: Hashable, Identifiable {
 }
 
 /// The check on effectful plugin actions and shell commands, shared by every Device through
-/// the roster: on, the bot's model asks only when needed; off, each one asks.
+/// the roster: on, a small model on the bot's provider asks only when needed; off, each one asks.
 struct AutoReview: Hashable {
     var isEnabled: Bool = true
     var rules: [AutoReviewRule] = []

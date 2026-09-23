@@ -792,6 +792,12 @@ impl TurnTools {
         tools
     }
 
+    /// Selects a tool as `mcp_select_tool` does, for tests elsewhere in the crate.
+    #[cfg(test)]
+    pub(crate) fn select(&self, tool: Arc<dyn Tool>) {
+        self.state.lock().unwrap().selected.insert(tool.name().to_string(), tool);
+    }
+
     /// The label for a dynamic tool's working row.
     pub fn plugin_name(&self, tool_name: &str) -> Option<String> {
         self.state.lock().unwrap().catalog.get(tool_name).map(|tool| tool.plugin_name.clone())

@@ -17,7 +17,7 @@ use crate::provider::{
 use crate::retry::{send_with_retry, RequestFailure, DEFAULT_MAX_RETRY_DELAY_MS};
 use crate::sse::SseParser;
 use crate::transform::{transform_messages, TransformOptions};
-use crate::types::{AssistantPart, ContentPart, LlmMessage, StopReason, ThinkingLevel, Usage};
+use crate::types::{AgentMessage, AssistantPart, ContentPart, LlmMessage, StopReason, ThinkingLevel, Usage};
 
 pub const ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com";
 pub const ANTHROPIC_DEFAULT_MODEL: &str = "claude-opus-5";
@@ -322,6 +322,26 @@ fn image_block(data: &str, mime_type: &str) -> Value {
 /// Tool call ids must match `^[a-zA-Z0-9_-]+$` and be at most 64 characters.
 fn normalize_tool_call_id(id: &str) -> String {
     id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' }).take(64).collect()
+}
+
+/// For a model that binds each thinking block to the conversation that produced it (Opus 5.5,
+/// Fable 5.1), drops the thinking from every assistant message in `messages`. Anthropic refuses
+/// a block replayed after the system prompt, the tools, or an earlier message changed, and
+/// always takes a history without thinking. Other models keep theirs.
+pub fn drop_bound_thinking(model: &str, messages: &mut [AgentMessage]) {
+    let model = model.to_ascii_lowercase();
+    if !["claude-opus-5-5", "claude-fable-5-1"].iter().any(|id| model.starts_with(id)) {
+        return;
+    }
+    for message in messages {
+        if let AgentMessage::Assistant(assistant) = message {
+            assistant.content.retain(|part| match part {
+                AssistantPart::Thinking { .. } => false,
+                AssistantPart::ServerBlock { block } => block["type"] != "redacted_thinking",
+                _ => true,
+            });
+        }
+    }
 }
 
 /// Models before adaptive thinking and the filtering web tools: Haiku 4.5 and the 4.5 and
@@ -819,6 +839,40 @@ mod tests {
         let user = messages[2]["content"].as_array().unwrap();
         assert_eq!(user[0], json!({ "type": "tool_result", "tool_use_id": "t1", "is_error": false, "content": "contents" }));
         assert_eq!(user[1], json!({ "type": "text", "text": "and then", "cache_control": { "type": "ephemeral" } }));
+    }
+
+    #[test]
+    fn bound_thinking_is_dropped_only_for_the_models_that_bind_it() {
+        let mut own = AssistantMessage::empty("anthropic", "claude-opus-5-5");
+        own.content = vec![
+            AssistantPart::Thinking { thinking: "hm".into(), signature: Some("sig".into()) },
+            AssistantPart::ServerBlock { block: json!({ "type": "redacted_thinking", "data": "x" }) },
+            AssistantPart::ServerBlock { block: json!({ "type": "server_tool_use", "id": "s1", "name": "web_search", "input": {} }) },
+            AssistantPart::Text { text: "Let me read it.".into() },
+            AssistantPart::ToolCall(ToolCall { id: "t1".into(), name: "read".into(), arguments: json!({ "path": "a" }) }),
+        ];
+        let history = vec![AgentMessage::user("hi"), AgentMessage::Assistant(own)];
+
+        let mut kept = history.clone();
+        drop_bound_thinking("claude-opus-5", &mut kept);
+        assert_eq!(kept, history);
+
+        for model in ["claude-opus-5-5", "claude-fable-5-1"] {
+            let mut dropped = history.clone();
+            drop_bound_thinking(model, &mut dropped);
+            let AgentMessage::Assistant(assistant) = &dropped[1] else { panic!("{model}") };
+            let kinds: Vec<_> = assistant
+                .content
+                .iter()
+                .map(|part| match part {
+                    AssistantPart::ServerBlock { block } => block["type"].as_str().unwrap_or("").to_string(),
+                    AssistantPart::Text { .. } => "text".into(),
+                    AssistantPart::ToolCall(_) => "tool_use".into(),
+                    AssistantPart::Thinking { .. } => "thinking".into(),
+                })
+                .collect();
+            assert_eq!(kinds, ["server_tool_use", "text", "tool_use"], "{model}");
+        }
     }
 
     #[test]

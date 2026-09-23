@@ -125,6 +125,22 @@ pub fn default_model(kind: &str) -> &'static str {
     }
 }
 
+/// The model Auto-review runs on for bots of `kind`, and how much it thinks: a small, fast
+/// model on the same account whatever the bot itself runs, with thinking off where the model
+/// allows it and at its lowest effort where it does not.
+pub fn review_model(kind: &str) -> (&'static str, ThinkingLevel) {
+    let model = match kind {
+        "deepseek" => "deepseek-flash",
+        "anthropic" => "claude-haiku-4-5",
+        "chatgpt" => "gpt-6-luna",
+        "grok" => "grok-4.7",
+        "opencode" | "opencode-go" => "deepseek-v4.1-flash",
+        _ => "",
+    };
+    let thinking = models::find(kind, model).and_then(|info| info.levels.first().copied()).unwrap_or(ThinkingLevel::Off);
+    (model, thinking)
+}
+
 /// A bot's thinking level as stored, or nothing for the provider's default.
 pub fn thinking_level(bot: &crate::model::Bot) -> Option<ThinkingLevel> {
     bot.thinking.as_deref().and_then(|s| s.parse().ok())
@@ -337,6 +353,18 @@ mod tests {
         }
         assert_eq!(opencode_root("https://opencode.ai/zen/v1/"), OPENCODE_BASE_URL);
         assert_eq!(opencode_root("https://opencode.ai/zen"), OPENCODE_BASE_URL);
+    }
+
+    #[test]
+    fn auto_review_runs_a_small_model_that_thinks_least() {
+        for kind in ["deepseek", "anthropic", "chatgpt", "grok", "opencode", "opencode-go"] {
+            assert!(models::find(kind, review_model(kind).0).is_some(), "{kind}");
+        }
+        assert_eq!(review_model("deepseek"), ("deepseek-flash", ThinkingLevel::Off));
+        assert_eq!(review_model("anthropic"), ("claude-haiku-4-5", ThinkingLevel::Off));
+        assert_eq!(review_model("chatgpt"), ("gpt-6-luna", ThinkingLevel::Low));
+        assert_eq!(review_model("grok"), ("grok-4.7", ThinkingLevel::Low));
+        assert_eq!(review_model("opencode-go"), ("deepseek-v4.1-flash", ThinkingLevel::Low));
     }
 
     #[tokio::test]

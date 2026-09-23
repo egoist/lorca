@@ -409,7 +409,7 @@
 "Purple" = "紫色";
 "Quit Lorca" = "退出 Lorca";
 "Re-deriving keys and unwrapping the account key…" = "正在重新派生密钥并解开账户密钥…";
-"Read-only commands and commands inside Lorca's own folders run at once. Auto-review checks effectful plugin actions and every other shell command before they run: the bot's model applies your rules and latest request, so safe work normally runs automatically and risky work asks. Off, every such action asks. Write one short, natural-language rule for each action; \"Ask first\" takes priority if rules conflict. Built-in safety checks always apply." = "只读命令和在 Lorca 自己文件夹内的命令会直接运行。自动审查会在会产生影响的插件操作和其他 shell 命令运行前检查它们：智能体的模型根据你的规则和最近请求作出判断，因此安全的工作通常会自动运行，有风险的会询问。关闭后，每个这样的操作都会询问。为每种操作写一条简短的自然语言规则；规则冲突时以“先询问”为准。内置安全检查始终生效。";
+"Read-only commands and commands inside Lorca's own folders run at once. Auto-review checks effectful plugin actions and every other shell command before they run: a small, fast model on the bot's provider applies your rules and latest request, so safe work normally runs automatically and risky work asks. Off, every such action asks. Write one short, natural-language rule for each action; \"Ask first\" takes priority if rules conflict. Built-in safety checks always apply." = "只读命令和在 Lorca 自己文件夹内的命令会直接运行。自动审查会在会产生影响的插件操作和其他 shell 命令运行前检查它们：智能体所用服务商的一款小型快速模型根据你的规则和最近请求作出判断，因此安全的工作通常会自动运行，有风险的会询问。关闭后，每个这样的操作都会询问。为每种操作写一条简短的自然语言规则；规则冲突时以“先询问”为准。内置安全检查始终生效。";
 "Reading a file" = "正在读取文件";
 "Reading the web" = "正在阅读网页";
 "Red" = "红色";

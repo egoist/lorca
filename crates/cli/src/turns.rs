@@ -13,6 +13,7 @@ use lorca_agent::agent_loop::{
 use lorca_agent::compaction::{self, CompactionSettings};
 use lorca_agent::estimate::{context_tokens, estimate_context_tokens, estimate_text_tokens};
 use lorca_agent::provider::{is_server_tool, AssistantEvent, WEB_FETCH_TOOL};
+use lorca_agent::providers::anthropic::drop_bound_thinking;
 use lorca_agent::retry::{is_context_overflow, RetryPolicy};
 use lorca_agent::{LlmMessage, Provider};
 use lorca_agent::{
@@ -476,7 +477,12 @@ impl LoopHooks for TurnHooks {
         let mut context = ctx.context.clone();
         context.messages = materialize_steering_messages(&self.app, &self.bot, &self.workdir, context.messages).await;
         context.tools = self.plugin_tools.tools_with_selected(&context.tools);
-        let context_changed = context.messages != ctx.context.messages || context.tools.len() != ctx.context.tools.len();
+        let tools_changed = context.tools.len() != ctx.context.tools.len();
+        if tools_changed {
+            // Thinking made before the tools changed is bound to the old ones.
+            drop_bound_thinking(self.provider.model_id(), &mut context.messages);
+        }
+        let context_changed = context.messages != ctx.context.messages || tools_changed;
 
         if self.window > 0 && self.settings.enabled {
             let size = estimate_context_tokens(&context.messages).tokens + estimate_text_tokens(&context.system_prompt);
@@ -536,6 +542,8 @@ async fn compact_messages(
     }
     let mut kept = vec![compaction::summary_message(&result.summary, result.tokens_before)];
     kept.extend(messages[first_kept..].iter().cloned());
+    // The kept messages' thinking is bound to the history the summary replaced.
+    drop_bound_thinking(provider.model_id(), &mut kept);
     Ok(Some((kept, result.tokens_before)))
 }
 
@@ -614,6 +622,8 @@ async fn memory_flush(
     }
     let mut context_messages: Vec<AgentMessage> = messages[..skip].to_vec();
     context_messages.extend(chunk.iter().cloned());
+    // The turn's thinking is bound to the turn's system prompt and tools, not this run's.
+    drop_bound_thinking(provider.model_id(), &mut context_messages);
     context_messages.push(AgentMessage::User(UserMessage::text(MEMORY_FLUSH_PROMPT)));
     let context = AgentContext { system_prompt: system, messages: context_messages, tools: memory_tools(&store, chat) };
     let config = AgentLoopConfig {
@@ -2296,6 +2306,73 @@ mod tests {
         assert!(prompt.contains(r#""state":"ready""#));
         assert!(!prompt.contains("create_issue"));
         assert!(prompt.len() < 6 * 1024);
+    }
+
+    /// A provider that only has a name, for hooks that read it.
+    struct Named(&'static str);
+
+    #[async_trait]
+    impl Provider for Named {
+        fn provider_id(&self) -> &str {
+            "anthropic"
+        }
+
+        fn model_id(&self) -> &str {
+            self.0
+        }
+
+        async fn stream(&self, _request: lorca_agent::ModelRequest, _cancel: CancellationToken) -> lorca_agent::AssistantEventStream {
+            Box::pin(futures::stream::empty())
+        }
+    }
+
+    #[tokio::test]
+    async fn a_plugin_tool_joining_mid_turn_drops_the_thinking_opus_5_5_binds() {
+        let scratch = scratch_app();
+        let chef = bot("b1", "Chef");
+        let mut called = AssistantMessage::empty("anthropic", "");
+        called.content = vec![
+            AssistantPart::Thinking { thinking: "I need GitHub.".into(), signature: Some("sig".into()) },
+            AssistantPart::ToolCall(ToolCall { id: "t1".into(), name: "mcp_select_tool".into(), arguments: json!({ "name": "github__create_issue" }) }),
+        ];
+        let result = ToolResultMessage {
+            tool_call_id: "t1".into(),
+            tool_name: "mcp_select_tool".into(),
+            content: vec![ContentPart::text("Selected.")],
+            details: Value::Null,
+            is_error: false,
+            timestamp: 0,
+        };
+        let context = AgentContext {
+            system_prompt: "be brief".into(),
+            messages: vec![AgentMessage::user("file an issue"), AgentMessage::Assistant(called.clone()), AgentMessage::ToolResult(result.clone())],
+            tools: Vec::new(),
+        };
+        let has_thinking = |messages: &[AgentMessage]| {
+            messages.iter().any(|m| matches!(m, AgentMessage::Assistant(a) if a.content.iter().any(|p| matches!(p, AssistantPart::Thinking { .. }))))
+        };
+
+        for (model, keeps) in [("claude-opus-5-5", false), ("claude-opus-5", true)] {
+            let (plugin_tools, _) = crate::plugins::mcp::turn_tools(&scratch.0, "chat", &chef, false);
+            plugin_tools.select(lorca_agent::tools::coding_tools(scratch.1.clone()).remove(0));
+            let hooks = TurnHooks {
+                app: scratch.0.clone(),
+                chat_id: "chat".into(),
+                bot: chef.clone(),
+                provider: Arc::new(Named(model)),
+                window: 0,
+                settings: compaction_settings(0),
+                workdir: scratch.1.clone(),
+                unattended: false,
+                plugin_tools,
+                steering: None,
+            };
+            let turn = PrepareNextTurnContext { message: &called, tool_results: std::slice::from_ref(&result), context: &context, new_messages: &[] };
+            let next = hooks.prepare_next_turn(turn).await.and_then(|update| update.context).expect(model);
+            assert_eq!(next.tools.len(), 1, "{model}");
+            assert_eq!(has_thinking(&next.messages), keeps, "{model}");
+            assert_eq!(next.messages.len(), 3, "{model}");
+        }
     }
 
     /// An App over a scratch home, removed when the test ends.

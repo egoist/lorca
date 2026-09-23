@@ -39,7 +39,7 @@ With Auto-review **on**, each action is judged against your rules, your latest m
 
 With Auto-review **off**, every shell command and every effectful plugin action asks.
 
-Read-only plugin actions never ask, and neither do read-only shell commands: Lorca parses every stage of a command, and one that only reads, such as `git status`, `ls`, or `rg TODO src | wc -l`, runs at once. A command that writes, deletes, installs, runs code, or reads keys and tokens goes to the bot's model, which applies the built-in checks, your rules, and your latest request. Lorca's own folders, `~/.lorca` and `~/.lorca-dev`, belong to the bots: a command that stays inside them runs without a review, whatever it does there. Temporary folders such as `/tmp` count as scratch space, so cleaning up there doesn't ask.
+Read-only plugin actions never ask, and neither do read-only shell commands: Lorca parses every stage of a command, and one that only reads, such as `git status`, `ls`, or `rg TODO src | wc -l`, runs at once. A command that writes, deletes, installs, runs code, or reads keys and tokens goes to a small, fast model on the bot's provider, such as GPT-6 Luna on ChatGPT or Claude Haiku 4.5 on Anthropic, which applies the built-in checks, your rules, and your latest request. Lorca's own folders, `~/.lorca` and `~/.lorca-dev`, belong to the bots: a command that stays inside them runs without a review, whatever it does there. Temporary folders such as `/tmp` count as scratch space, so cleaning up there doesn't ask.
 
 ## Shell access
 

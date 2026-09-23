@@ -1,7 +1,7 @@
 //! Auto-review: the check a Runner runs before an action that may have effects, after Grok
 //! Bot's. A rule Always allow saved for an exact plugin tool decides at once; otherwise, with
-//! Auto-review on, the bot's own model judges the one action against the user's plain-language
-//! rules and the built-in checks and answers allow or ask. When a shell command asks, the review
+//! Auto-review on, a small model of the bot's provider judges the one action against the user's
+//! plain-language rules and the built-in checks and answers allow or ask. When a shell command asks, the review
 //! also proposes the plain-language rule that Always allow adds. With Auto-review off, every
 //! such action asks.
 
@@ -84,15 +84,16 @@ pub async fn decide(app: &Arc<App>, bot: &Bot, chat_id: &str, plugin_id: &str, p
     review(app, bot, chat_id, action, cancel).await
 }
 
-/// Reviews one action. With Auto-review off it asks; on, the bot's own model (thinking off)
-/// judges it against the user's plain-language rules, the built-in checks, and the user's
-/// latest message.
+/// Reviews one action. With Auto-review off it asks; on, the review model of the bot's provider
+/// ([`review_model`](crate::providers::review_model)) judges it against the user's
+/// plain-language rules, the built-in checks, and the user's latest message.
 pub async fn review(app: &Arc<App>, bot: &Bot, chat_id: &str, action: Action<'_>, cancel: &CancellationToken) -> Outcome {
     let auto_review = app.auto_review();
     if !auto_review.is_enabled {
         return Outcome::Ask { reason: None, rule: None };
     }
-    let provider = match crate::providers::provider_for(app, &bot.provider, bot.model.as_deref(), Some(lorca_agent::types::ThinkingLevel::Off)) {
+    let (model, thinking) = crate::providers::review_model(&bot.provider);
+    let provider = match crate::providers::provider_for(app, &bot.provider, Some(model), Some(thinking)) {
         Ok(provider) => provider,
         Err(error) => return Outcome::ask(format!("Auto-review could not check this action ({error}).")),
     };
@@ -139,7 +140,8 @@ pub async fn review(app: &Arc<App>, bot: &Bot, chat_id: &str, action: Action<'_>
         system_prompt: if action.propose_rule { format!("{SYSTEM_PROMPT}\n\n{RULE_PROMPT}") } else { SYSTEM_PROMPT.into() },
         messages: vec![LlmMessage::User(UserMessage::text(text))],
         tools: Vec::new(),
-        max_tokens: Some(200),
+        // The verdict is short; the rest is room for a model that reasons at its lowest effort.
+        max_tokens: Some(4096),
         options: RequestOptions::default().with_session_id(chat_id),
     };
     let mut stream = provider.stream(request, cancel.clone()).await;
