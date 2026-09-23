@@ -713,6 +713,20 @@ struct RenderedMessage {
 
     var isEmpty: Bool { segments.isEmpty }
 
+    /// The words as shown, without the Markdown: a table row by row, its cells between commas.
+    var plainText: String {
+        segments.map { segment in
+            switch segment {
+            case let .text(attributed, _, _):
+                attributed.string
+            case let .table(content):
+                content.cells.map { row in row.map(\.string).joined(separator: ", ") }.joined(separator: "\n")
+            }
+        }
+        .joined(separator: "\n")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     /// The body at the width it wants, from `minimum` up to `limit`: short text gets a bubble
     /// that hugs it, long text fills the limit. Text that fills it is measured once, at the limit.
     @MainActor

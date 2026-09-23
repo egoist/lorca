@@ -603,6 +603,7 @@
 "Write the smallest version that works" = "写出能用的最小版本";
 "Yesterday" = "昨天";
 "Yesterday %@" = "昨天 %@";
+"You" = "你";
 "Your backup phrase" = "你的备份短语";
 "Your bots, keys and transcripts live in the CLI on this computer. The app starts it on its own; you can also run it from a terminal, and this window reconnects either way." = "你的智能体、密钥和聊天记录都保存在这台电脑的 CLI 中。App 会自行启动它；你也可以在终端中运行，无论哪种方式，此窗口都会重新连接。";
 "Your browser opens a %@ sign-in when you continue. %@" = "继续后，浏览器会打开 %1$@ 登录页面。%2$@";

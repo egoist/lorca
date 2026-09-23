@@ -99,7 +99,7 @@ final class SegmentedTextView: NSView {
 
 /// A user bubble on the right; a bot bubble on the left. In a group the bot's name sits above
 /// its first bubble and its avatar beside the bubble's bottom edge; a DM shows neither.
-final class MessageCellView: NSTableCellView {
+final class MessageCellView: TranscriptCellView {
     static let identifier = NSUserInterfaceItemIdentifier("MessageCell")
 
     private let avatar = AvatarView(diameter: ChatMetrics.avatarSize)
@@ -172,8 +172,6 @@ final class MessageCellView: NSTableCellView {
             stamp.textColor = .tertiaryLabelColor
         }
 
-        let spoken = message.text.isEmpty ? Attachment.summary(message.attachments) : message.text
-        setAccessibilityLabel("\(authorName): \(spoken)")
         needsLayout = true
     }
 
@@ -215,7 +213,7 @@ final class MessageCellView: NSTableCellView {
 
 /// "Chef is working…" after the last message, its words shimmering while a turn runs. A DM,
 /// where only one bot can be at work, reads "Working…".
-final class WorkingCellView: NSTableCellView {
+final class WorkingCellView: TranscriptCellView {
     static let identifier = NSUserInterfaceItemIdentifier("WorkingCell")
 
     private let avatar = AvatarView(diameter: ChatMetrics.avatarSize)
@@ -241,20 +239,24 @@ final class WorkingCellView: NSTableCellView {
         if let first = bots.first {
             avatar.content = AvatarView.content(for: first)
         }
-        let names = bots.map(\.name)
-        let text: String
-        if names.count > 1 {
-            text = L("%@ and %@ are working…", names.dropLast().joined(separator: L(", ")), names.last ?? "")
-        } else if let activity {
-            text = "\(activity)…"
-        } else if showsName, let name = names.first {
-            text = L("%@ is working…", name)
-        } else {
-            text = "\(L("Working"))…"
-        }
-        label.stringValue = text
-        setAccessibilityLabel(names.count == 1 ? L("%@ is working", names[0]) : text)
+        label.stringValue = Self.text(names: bots.map(\.name), activity: activity, showsName: showsName)
         needsLayout = true
+    }
+
+    static func text(names: [String], activity: String?, showsName: Bool) -> String {
+        if names.count > 1 {
+            return L("%@ and %@ are working…", names.dropLast().joined(separator: L(", ")), names.last ?? "")
+        } else if let activity {
+            return "\(activity)…"
+        } else if showsName, let name = names.first {
+            return L("%@ is working…", name)
+        }
+        return "\(L("Working"))…"
+    }
+
+    /// Who is working, for a screen reader: "Chef is working".
+    static func spokenText(names: [String], activity: String?, showsName: Bool) -> String {
+        names.count == 1 ? L("%@ is working", names[0]) : text(names: names, activity: activity, showsName: showsName)
     }
 
     /// What a tool row means while it runs, in the words of the status line. `pluginName` is
@@ -312,7 +314,7 @@ final class WorkingCellView: NSTableCellView {
 // MARK: - Status row
 
 /// A quiet centered line, such as "Chef stopped without replying".
-final class StatusCellView: NSTableCellView {
+final class StatusCellView: TranscriptCellView {
     static let identifier = NSUserInterfaceItemIdentifier("StatusCell")
 
     private let label = Build.label(
@@ -330,7 +332,6 @@ final class StatusCellView: NSTableCellView {
 
     func configure(_ text: String) {
         label.stringValue = text
-        setAccessibilityLabel(text)
         needsLayout = true
     }
 
@@ -348,7 +349,7 @@ final class StatusCellView: NSTableCellView {
 /// "Messaged ◉ Name · first line" where one was sent. The preview is one truncated line; a click on
 /// the marker opens the whole message in a popover. A handoff between two bots in the same chat
 /// keeps both avatars on one line with the same preview and popover.
-final class HandoffCellView: NSTableCellView {
+final class HandoffCellView: TranscriptCellView {
     static let identifier = NSUserInterfaceItemIdentifier("HandoffCell")
 
     /// The preview line never grows past this, so a long message still reads as a marker.
@@ -414,7 +415,6 @@ final class HandoffCellView: NSTableCellView {
             label.stringValue = from?.name ?? "?"
             label.textColor = .labelColor
             label.font = .systemFont(ofSize: 11.5, weight: .medium)
-            setAccessibilityLabel("\(verb) \(from?.name ?? "?"): \(fullText)")
         case let .handoff(from, to):
             incoming = false
             fromAvatar.content = avatar(from)
@@ -425,9 +425,18 @@ final class HandoffCellView: NSTableCellView {
             label.stringValue = L("%@ handed off to %@", from?.name ?? "?", to?.name ?? "?")
             label.textColor = .secondaryLabelColor
             label.font = .systemFont(ofSize: 11.5)
-            setAccessibilityLabel("\(label.stringValue): \(fullText)")
         }
         needsLayout = true
+    }
+
+    /// The marker and the whole message, for a screen reader: "Messaged Writer: Draft a short…"
+    static func spokenText(mode: Mode, reason: String) -> String {
+        let text = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch mode {
+        case let .incoming(from): return "\(L("Message from")) \(from?.name ?? "?"): \(text)"
+        case let .outgoing(to): return "\(L("Messaged")) \(to?.name ?? "?"): \(text)"
+        case let .handoff(from, to): return "\(L("%@ handed off to %@", from?.name ?? "?", to?.name ?? "?")): \(text)"
+        }
     }
 
     override func layout() {
@@ -493,7 +502,7 @@ final class HandoffCellView: NSTableCellView {
 
 // MARK: - Notice cell
 
-final class NoticeCellView: NSTableCellView {
+final class NoticeCellView: TranscriptCellView {
     static let identifier = NSUserInterfaceItemIdentifier("NoticeCell")
 
     private let box = BackgroundView()
@@ -540,7 +549,7 @@ final class NoticeCellView: NSTableCellView {
 
 // MARK: - Day separator
 
-final class DayCellView: NSTableCellView {
+final class DayCellView: TranscriptCellView {
     static let identifier = NSUserInterfaceItemIdentifier("DayCell")
 
     private let pill = BackgroundView()
@@ -586,7 +595,7 @@ final class DayCellView: NSTableCellView {
 /// it waits: the question, the call (a shell command in a code block that opens the whole command
 /// on click), why Auto-review paused it, the answers, and under them the rule Always allow adds.
 /// Once answered, the answer and the call; an Always allow keeps the rule it added.
-final class PermissionCellView: NSTableCellView {
+final class PermissionCellView: TranscriptCellView {
     static let identifier = NSUserInterfaceItemIdentifier("PermissionCell")
 
     static let width: CGFloat = 440
@@ -595,6 +604,21 @@ final class PermissionCellView: NSTableCellView {
     /// from the same `Layout`, so a card is exactly as tall as what it shows.
     static func height(for request: PermissionRequest, rowWidth: CGFloat) -> CGFloat {
         Layout(request: request, rowWidth: rowWidth).height
+    }
+
+    /// The line under the title: the call while it waits, the answer and the call once
+    /// answered, or where to enter a sign-in code.
+    static func summary(for request: PermissionRequest) -> String {
+        if request.isPending { return request.summary }
+        if request.decision == .allowed && request.code != nil {
+            return L("Enter this code at %@, then come back.", URL(string: request.link ?? "")?.host ?? L("the link"))
+        }
+        return "\(request.decisionText) · \(request.summary)"
+    }
+
+    /// The title and the line under it, for a screen reader: "Chef wants to run a command: …"
+    static func spokenText(request: PermissionRequest, botName: String) -> String {
+        "\(botName) \(request.verbPhrase): \(summary(for: request))"
     }
 
     /// What a card says about its rule: the one Always allow would add, or the one it added.
@@ -753,9 +777,7 @@ final class PermissionCellView: NSTableCellView {
         title.toolTip = title.stringValue
         link = request.link
         code = request.code
-        summary.stringValue = request.isPending
-            ? request.summary
-            : (hasCode ? L("Enter this code at %@, then come back.", URL(string: request.link ?? "")?.host ?? L("the link")) : "\(request.decisionText) · \(request.summary)")
+        summary.stringValue = Self.summary(for: request)
         summary.lineBreakMode = request.isPending ? .byTruncatingTail : .byWordWrapping
         summary.toolTip = request.summary
         command.text = request.fullCommand

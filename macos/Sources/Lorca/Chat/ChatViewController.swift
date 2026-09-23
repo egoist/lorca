@@ -117,6 +117,15 @@ final class ChatViewController: NSViewController {
         tableView.dataSource = self
         tableView.delegate = self
         tableView.onLiveResizeEnd = { [weak self] in self?.liveResizeDidEnd() }
+        tableView.rowIdentity = { [weak self] row in
+            guard let self, rows.indices.contains(row) else { return row }
+            return rows[row].identity
+        }
+        tableView.rowSpokenText = { [weak self] row in
+            guard let self, rows.indices.contains(row) else { return "" }
+            return spokenText(for: rows[row])
+        }
+        tableView.scrollRowIntoView = { [weak self] row in self?.scrollIntoView(row: row) }
     }
 
     override func viewDidLoad() {
@@ -522,6 +531,34 @@ final class ChatViewController: NSViewController {
         jumpButton.isHidden = true
     }
 
+    /// Brings a row a screen reader moved to fully into view, clear of the titlebar and the
+    /// composer, or its top when it is taller than the space between them. Near the first
+    /// message this asks for the page before it, as scrolling there does.
+    private func scrollIntoView(row: Int) {
+        guard rows.indices.contains(row) else { return }
+        let clip = scrollView.contentView
+        let insets = scrollView.contentInsets
+        let rect = tableView.rect(ofRow: row)
+        let visibleTop = clip.bounds.minY + insets.top
+        let visibleBottom = clip.bounds.maxY - insets.bottom
+        let y: CGFloat
+        if rect.minY < visibleTop || rect.height > visibleBottom - visibleTop {
+            y = rect.minY - insets.top
+        } else if rect.maxY > visibleBottom {
+            y = rect.maxY + insets.bottom - clip.bounds.height
+        } else {
+            return
+        }
+        let documentHeight = tableView.rect(ofRow: rows.count - 1).maxY
+        let lowest = max(-insets.top, documentHeight + insets.bottom - clip.bounds.height)
+        let origin = NSPoint(x: clip.bounds.origin.x, y: min(max(y, -insets.top), lowest))
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            clip.animator().setBoundsOrigin(origin)
+        }
+        scrollView.reflectScrolledClipView(clip)
+    }
+
     // MARK: - Actions
 
     /// Set by the split view so a message that moves to a new group chat opens it.
@@ -639,6 +676,90 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
         return store.device(bot.runnerID)?.plugins.first { $0.id == pluginID }?.name ?? pluginID.capitalized
     }
 
+    /// What the one working bot is doing, for the working row. The activity is the bot's latest
+    /// tool, running or just finished: between two commands the line keeps reading the last one
+    /// instead of flashing back to the name every time a call ends. It reverts once the bot says
+    /// something, or after a sent message, whose marker already tells the story.
+    private func activity(of botIDs: [Bot.ID], in chat: Chat) -> String? {
+        var activity: String?
+        if botIDs.count == 1, let last = chat.messages.last, last.author == .bot(botIDs[0]),
+            case let .tool(tool) = last.body, !tool.isSentMessage
+        {
+            let target = store.bots.first { tool.detail.localizedCaseInsensitiveContains("\"bot\": \"\($0.name)\"") }
+            activity = WorkingCellView.activity(for: tool, targetName: target?.name, pluginName: pluginName(of: tool, bot: botIDs[0]))
+        }
+        // A model thinking about its next step outranks the last tool.
+        if botIDs.count == 1, store.isThinking(botIDs[0], in: chat.id) {
+            activity = L("Thinking", context: "status")
+        }
+        // A model call being asked again outranks both: the bot is waiting, not working.
+        if let note = store.retryNote(for: chat.id) {
+            activity = note
+        }
+        return activity
+    }
+
+    /// A bot-to-bot marker and the message it carries: a sent message, one that arrived in a
+    /// DM, or a handoff in a group.
+    private func handoff(of message: Message, in chat: Chat) -> (mode: HandoffCellView.Mode, reason: String)? {
+        switch message.body {
+        case let .tool(invocation):
+            let recipient = store.bots.first { $0.name.caseInsensitiveCompare(invocation.recipientName) == .orderedSame }
+            return (.outgoing(to: recipient), invocation.detail)
+        case let .handoff(from, to, reason):
+            let incoming = !chat.isGroup && chat.botIDs.contains(to)
+            let mode: HandoffCellView.Mode = incoming
+                ? .incoming(from: store.bot(from)) : .handoff(from: store.bot(from), to: store.bot(to))
+            return (mode, reason)
+        default:
+            return nil
+        }
+    }
+
+    private func botName(of message: Message) -> String {
+        message.author.botID.flatMap(store.bot)?.name ?? L("The bot")
+    }
+
+    /// What a screen reader says for a row: "Chef: Saved in launch/announcement.md." It comes
+    /// from the chat rather than the cell, so a client reads every row without the table
+    /// building cells, and the cell on screen says the same.
+    private func spokenText(for row: ChatRow) -> String {
+        guard let chatID, let chat = store.chat(chatID) else { return "" }
+        switch row {
+        case let .day(date):
+            return Format.daySeparator(date)
+
+        case let .working(botIDs):
+            return WorkingCellView.spokenText(
+                names: botIDs.compactMap(store.bot).map(\.name), activity: activity(of: botIDs, in: chat),
+                showsName: chat.isGroup)
+
+        case let .status(text):
+            return text
+
+        case let .message(id, _):
+            guard let message = message(for: id) else { return "" }
+            switch message.body {
+            case .text:
+                let author: String
+                switch message.author {
+                case .you: author = L("You")
+                case let .bot(botID): author = store.bot(botID)?.name ?? L("Bot")
+                case .system: author = "Lorca"
+                }
+                let words = layout.rendered(for: message).plainText
+                return "\(author): \(words.isEmpty ? Attachment.summary(message.attachments) : words)"
+            case .tool, .handoff:
+                guard let marker = handoff(of: message, in: chat) else { return "" }
+                return HandoffCellView.spokenText(mode: marker.mode, reason: marker.reason)
+            case let .notice(text):
+                return text
+            case let .permission(request):
+                return PermissionCellView.spokenText(request: request, botName: botName(of: message))
+            }
+        }
+    }
+
     private func configure(cell: NSView, row: ChatRow) {
         switch row {
         case let .day(date):
@@ -646,27 +767,8 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
 
         case let .working(botIDs):
             guard let chatID, let chat = store.chat(chatID) else { return }
-            // The activity is the bot's latest tool, running or just finished: between two
-            // commands the line keeps reading the last one instead of flashing back to the
-            // name every time a call ends. It reverts once the bot says something, or after a
-            // sent message, whose marker already tells the story.
-            var activity: String?
-            if botIDs.count == 1, let last = chat.messages.last, last.author == .bot(botIDs[0]),
-                case let .tool(tool) = last.body, !tool.isSentMessage
-            {
-                let target = store.bots.first { tool.detail.localizedCaseInsensitiveContains("\"bot\": \"\($0.name)\"") }
-                activity = WorkingCellView.activity(for: tool, targetName: target?.name, pluginName: pluginName(of: tool, bot: botIDs[0]))
-            }
-            // A model thinking about its next step outranks the last tool.
-            if botIDs.count == 1, store.isThinking(botIDs[0], in: chatID) {
-                activity = L("Thinking", context: "status")
-            }
-            // A model call being asked again outranks both: the bot is waiting, not working.
-            if let note = store.retryNote(for: chatID) {
-                activity = note
-            }
             (cell as? WorkingCellView)?.configure(
-                bots: botIDs.compactMap(store.bot), activity: activity, showsName: chat.isGroup)
+                bots: botIDs.compactMap(store.bot), activity: activity(of: botIDs, in: chat), showsName: chat.isGroup)
 
         case let .status(text):
             (cell as? StatusCellView)?.configure(text)
@@ -710,16 +812,9 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
                     metrics: metrics
                 )
 
-            case let .tool(invocation):
-                let recipient = store.bots.first { $0.name.caseInsensitiveCompare(invocation.recipientName) == .orderedSame }
-                (cell as? HandoffCellView)?.configure(
-                    mode: .outgoing(to: recipient), reason: invocation.detail, groupStart: groupStart)
-
-            case let .handoff(from, to, reason):
-                let incoming = !chat.isGroup && chat.botIDs.contains(to)
-                (cell as? HandoffCellView)?.configure(
-                    mode: incoming ? .incoming(from: store.bot(from)) : .handoff(from: store.bot(from), to: store.bot(to)),
-                    reason: reason, groupStart: groupStart)
+            case .tool, .handoff:
+                guard let marker = handoff(of: message, in: chat) else { return }
+                (cell as? HandoffCellView)?.configure(mode: marker.mode, reason: marker.reason, groupStart: groupStart)
 
             case let .notice(text):
                 (cell as? NoticeCellView)?.configure(
@@ -730,18 +825,15 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
 
             case let .permission(request):
                 let permissionCell = cell as? PermissionCellView
-                permissionCell?.configure(
-                    request: request,
-                    botName: message.author.botID.flatMap(store.bot)?.name ?? L("The bot"),
-                    groupStart: groupStart)
+                permissionCell?.configure(request: request, botName: botName(of: message), groupStart: groupStart)
                 permissionCell?.onDecision = { [weak self] decision in
                     guard let self else { return }
                     self.store.answerPermission(chatID: chat.id, messageID: message.id, decision: decision)
                 }
                 permissionCell?.onShowCommand = { [weak self] in
-                    let botName = message.author.botID.flatMap { self?.store.bot($0) }?.name ?? L("The bot")
-                    self?.presentAsSheet(CommandSheetViewController(
-                        title: "\(botName) \(request.verbPhrase)", command: request.fullCommand))
+                    guard let self else { return }
+                    presentAsSheet(CommandSheetViewController(
+                        title: "\(botName(of: message)) \(request.verbPhrase)", command: request.fullCommand))
                 }
             }
 
@@ -749,17 +841,6 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
         }
     }
 
-}
-
-/// Tells the transcript when the user stops dragging the window's edge, so the rows it left
-/// measured at an old width catch up.
-final class TranscriptTableView: NSTableView {
-    var onLiveResizeEnd: (() -> Void)?
-
-    override func viewDidEndLiveResize() {
-        super.viewDidEndLiveResize()
-        onLiveResizeEnd?()
-    }
 }
 
 final class TransparentRowView: NSTableRowView {

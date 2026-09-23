@@ -124,7 +124,7 @@ struct NoticeMetrics {
     var labelFrame: NSRect
 }
 
-enum ChatRow: Equatable {
+enum ChatRow: Hashable {
     case day(Date)
     case message(id: Message.ID, groupStart: Bool)
     /// Bots with a turn running, shown after the last message.
@@ -135,6 +135,12 @@ enum ChatRow: Equatable {
     var messageID: Message.ID? {
         if case let .message(id, _) = self { return id }
         return nil
+    }
+
+    /// What stays the same while the rows around it change: a message is its id, whether or
+    /// not an older page takes its group start.
+    var identity: AnyHashable {
+        messageID.map(AnyHashable.init) ?? AnyHashable(self)
     }
 
     /// The one run of rows that differs between `old` and `new`, as its range in each; the rows
