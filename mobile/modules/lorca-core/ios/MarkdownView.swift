@@ -247,6 +247,7 @@ final class MarkdownRenderer {
     ]
     if let x = context.quoteX { base[.quoteBar] = x }
     separator()
+    let start = out.length
     if let marker = context.marker {
       out.append(NSAttributedString(string: marker, attributes: base))
     }
@@ -257,6 +258,12 @@ final class MarkdownRenderer {
       if span.strike { attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
       if let link = span.link, let url = URL(string: link) { attributes[.link] = url }
       out.append(NSAttributedString(string: span.text, attributes: attributes))
+    }
+    // A soft line break sits as close as a wrapped line does, and in a list item the line after
+    // it starts under the item's text, not its marker.
+    styleLines(from: start, like: paragraph) { line, first, last in
+      if !first { line.firstLineHeadIndent = context.indent }
+      if !last { line.paragraphSpacing = 0 }
     }
   }
 
@@ -291,10 +298,40 @@ final class MarkdownRenderer {
     ]
     if let x = context.quoteX { attributes[.quoteBar] = x }
     separator()
+    let start = out.length
     if let marker = context.marker {
       out.append(NSAttributedString(string: marker, attributes: attributes))
     }
     out.append(NSAttributedString(string: text.isEmpty ? " " : text, attributes: attributes))
+    // The room above the box goes to its first line and the room below to its last; the lines
+    // between sit as close as wrapped ones.
+    styleLines(from: start, like: paragraph) { line, first, last in
+      if !first { line.paragraphSpacingBefore = 0 }
+      if !last { line.paragraphSpacing = 0 }
+    }
+  }
+
+  /// Gives each line of the block that starts at `start` its own copy of `style`, which `adjust`
+  /// changes for the block's first and last lines. A line break inside a block (a soft break, a
+  /// line of code) is a `\n`, and TextKit takes a `\n` to end a paragraph: with one style for the
+  /// whole block, its spacing would open up between every line.
+  private func styleLines(
+    from start: Int, like style: NSParagraphStyle,
+    _ adjust: (_ line: NSMutableParagraphStyle, _ first: Bool, _ last: Bool) -> Void
+  ) {
+    let text = out.mutableString
+    let block = NSRange(location: start, length: text.length - start)
+    guard text.rangeOfCharacter(from: .newlines, options: [], range: block).location != NSNotFound else { return }
+    var location = start
+    while location < text.length {
+      var end = 0
+      text.getParagraphStart(nil, end: &end, contentsEnd: nil, for: NSRange(location: location, length: 0))
+      end = max(end, location + 1)
+      let line = style.mutableCopy() as! NSMutableParagraphStyle
+      adjust(line, location == start, end >= text.length)
+      out.addAttribute(.paragraphStyle, value: line, range: NSRange(location: location, length: end - location))
+      location = end
+    }
   }
 
   /// Ends the previous paragraph. The newline takes the previous run's attributes so it never
@@ -339,6 +376,8 @@ final class MarkdownRenderer {
 /// Text and table sizes from standalone TextKit stacks: no views, so the JS thread can ask for
 /// a message's size before the view exists and the view lays out to the same numbers.
 enum MarkdownMeasure {
+  /// The width is the room the lines need to break as they do here: each line's text and its
+  /// paragraph's indents, so a code line keeps the padding of its box and stays on one line.
   static func text(_ text: NSAttributedString, insets: UIEdgeInsets, maxWidth: CGFloat) -> CGSize {
     let storage = NSTextStorage(attributedString: text)
     let manager = NSLayoutManager()
@@ -348,7 +387,17 @@ enum MarkdownMeasure {
     storage.addLayoutManager(manager)
     manager.ensureLayout(for: container)
     let used = manager.usedRect(for: container)
-    return CGSize(width: min(ceil(used.width) + insets.left + insets.right, maxWidth), height: ceil(used.height) + insets.top + insets.bottom)
+    let string = storage.mutableString
+    var needed: CGFloat = 0
+    manager.enumerateLineFragments(forGlyphRange: manager.glyphRange(for: container)) { _, line, _, glyphs, _ in
+      let index = manager.characterIndexForGlyph(at: glyphs.location)
+      let style = storage.attribute(.paragraphStyle, at: index, effectiveRange: nil) as? NSParagraphStyle ?? .default
+      let startsParagraph = string.paragraphRange(for: NSRange(location: index, length: 0)).location == index
+      let leading = startsParagraph ? style.firstLineHeadIndent : style.headIndent
+      // A negative tail indent is measured from the trailing edge.
+      needed = max(needed, leading + line.width + max(0, -style.tailIndent))
+    }
+    return CGSize(width: min(ceil(needed) + insets.left + insets.right, maxWidth), height: ceil(used.height) + insets.top + insets.bottom)
   }
 
   /// The size a whole message takes within `maxWidth`: its segments stacked with the block gap.

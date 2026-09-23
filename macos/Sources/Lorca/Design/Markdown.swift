@@ -226,6 +226,7 @@ final class MarkdownRenderer {
         ]
         if let x = context.quoteX { base[.quoteBar] = x }
         separator()
+        let start = out.length
         if let marker = context.marker {
             out.append(NSAttributedString(string: marker, attributes: base))
         }
@@ -234,6 +235,12 @@ final class MarkdownRenderer {
             if let color { attributes[.foregroundColor] = color }
             if let x = context.quoteX { attributes[.quoteBar] = x }
             out.append(NSAttributedString(string: span.text, attributes: attributes))
+        }
+        // A soft line break sits as close as a wrapped line does, and in a list item the line
+        // after it starts under the item's text, not its marker.
+        styleLines(from: start, like: paragraph) { line, first, last in
+            if !first { line.firstLineHeadIndent = context.indent }
+            if !last { line.paragraphSpacing = 0 }
         }
     }
 
@@ -264,10 +271,40 @@ final class MarkdownRenderer {
         ]
         if let x = context.quoteX { attributes[.quoteBar] = x }
         separator()
+        let start = out.length
         if let marker = context.marker {
             out.append(NSAttributedString(string: marker, attributes: attributes))
         }
         out.append(NSAttributedString(string: text.isEmpty ? " " : text, attributes: attributes))
+        // The room above the box goes to its first line and the room below to its last; the
+        // lines between sit as close as wrapped ones.
+        styleLines(from: start, like: paragraph) { line, first, last in
+            if !first { line.paragraphSpacingBefore = 0 }
+            if !last { line.paragraphSpacing = 0 }
+        }
+    }
+
+    /// Gives each line of the block that starts at `start` its own copy of `style`, which
+    /// `adjust` changes for the block's first and last lines. A line break inside a block (a
+    /// soft break, a line of code) is a `\n`, and TextKit takes a `\n` to end a paragraph: with
+    /// one style for the whole block, its spacing would open up between every line.
+    private func styleLines(
+        from start: Int, like style: NSParagraphStyle,
+        _ adjust: (_ line: NSMutableParagraphStyle, _ first: Bool, _ last: Bool) -> Void
+    ) {
+        let text = out.mutableString
+        let block = NSRange(location: start, length: text.length - start)
+        guard text.rangeOfCharacter(from: .newlines, options: [], range: block).location != NSNotFound else { return }
+        var location = start
+        while location < text.length {
+            var end = 0
+            text.getParagraphStart(nil, end: &end, contentsEnd: nil, for: NSRange(location: location, length: 0))
+            end = max(end, location + 1)
+            let line = style.mutableCopy() as! NSMutableParagraphStyle
+            adjust(line, location == start, end >= text.length)
+            out.addAttribute(.paragraphStyle, value: line, range: NSRange(location: location, length: end - location))
+            location = end
+        }
     }
 
     /// Ends the previous paragraph. The newline takes the previous run's attributes so it
@@ -311,37 +348,10 @@ final class MarkdownRenderer {
     }
 }
 
-// MARK: - Painting
+// MARK: - Text view
 
-/// A TextKit 1 layout manager that paints code block boxes and quote bars behind the text.
-final class MarkdownLayoutManager: NSLayoutManager {
-    override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
-        super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
-        guard let storage = textStorage, let container = textContainers.first else { return }
-        let chars = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
-        storage.enumerateAttribute(.codeBlock, in: chars) { value, range, _ in
-            guard let x = value as? CGFloat else { return }
-            let glyphs = glyphRange(forCharacterRange: range, actualCharacterRange: nil)
-            var rect = boundingRect(forGlyphRange: glyphs, in: container)
-            rect.origin.x = x
-            rect.size.width = container.size.width - x
-            rect = rect.insetBy(dx: 0, dy: -Markdown.codePaddingY).offsetBy(dx: origin.x, dy: origin.y)
-            Theme.codeBackground.setFill()
-            NSBezierPath(roundedRect: rect, xRadius: Markdown.codeCorner, yRadius: Markdown.codeCorner).fill()
-        }
-        storage.enumerateAttribute(.quoteBar, in: chars) { value, range, _ in
-            guard let x = value as? CGFloat else { return }
-            let glyphs = glyphRange(forCharacterRange: range, actualCharacterRange: nil)
-            let rect = boundingRect(forGlyphRange: glyphs, in: container)
-            let bar = NSRect(x: origin.x + x, y: origin.y + rect.minY, width: Markdown.quoteBar, height: rect.height)
-            NSColor.tertiaryLabelColor.setFill()
-            NSBezierPath(roundedRect: bar, xRadius: Markdown.quoteBar / 2, yRadius: Markdown.quoteBar / 2).fill()
-        }
-    }
-}
-
-/// A read-only, selectable text view on a TextKit 1 stack with the painting layout manager.
-/// Its frame is set by its parent; it never sizes itself.
+/// A read-only, selectable text view on a TextKit 1 stack that paints code block boxes and
+/// quote bars behind the text. Its frame is set by its parent; it never sizes itself.
 final class MarkdownTextView: NSTextView {
     /// The run on show. Showing the same run again leaves the text, and the selection, alone.
     private weak var shown: NSAttributedString?
@@ -349,7 +359,7 @@ final class MarkdownTextView: NSTextView {
 
     init(textColor: NSColor) {
         let storage = NSTextStorage()
-        let manager = MarkdownLayoutManager()
+        let manager = NSLayoutManager()
         let container = NSTextContainer(size: NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
         container.lineFragmentPadding = 0
         container.widthTracksTextView = true
@@ -394,6 +404,37 @@ final class MarkdownTextView: NSTextView {
     /// Asymmetric vertical room for a code box at the top or bottom of the run.
     private var insets: (top: CGFloat, bottom: CGFloat) = (0, 0) {
         didSet { needsLayout = true }
+    }
+
+    /// Code boxes and quote bars, under the selection and the text. They are painted here
+    /// rather than by the layout manager, which the text view clips to the text container: a
+    /// box around the run's first line reaches above the container, into the top inset.
+    override func drawBackground(in rect: NSRect) {
+        super.drawBackground(in: rect)
+        guard let storage = textStorage, storage.length > 0, let manager = layoutManager, let container = textContainer
+        else { return }
+        let origin = textContainerOrigin
+        let all = NSRange(location: 0, length: storage.length)
+        storage.enumerateAttribute(.codeBlock, in: all) { value, range, _ in
+            guard let x = value as? CGFloat else { return }
+            let glyphs = manager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            var box = manager.boundingRect(forGlyphRange: glyphs, in: container)
+            box.origin.x = x
+            box.size.width = container.size.width - x
+            box = box.insetBy(dx: 0, dy: -Markdown.codePaddingY).offsetBy(dx: origin.x, dy: origin.y)
+            guard box.intersects(rect) else { return }
+            Theme.codeBackground.setFill()
+            NSBezierPath(roundedRect: box, xRadius: Markdown.codeCorner, yRadius: Markdown.codeCorner).fill()
+        }
+        storage.enumerateAttribute(.quoteBar, in: all) { value, range, _ in
+            guard let x = value as? CGFloat else { return }
+            let glyphs = manager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            let lines = manager.boundingRect(forGlyphRange: glyphs, in: container)
+            let bar = NSRect(x: origin.x + x, y: origin.y + lines.minY, width: Markdown.quoteBar, height: lines.height)
+            guard bar.intersects(rect) else { return }
+            NSColor.tertiaryLabelColor.setFill()
+            NSBezierPath(roundedRect: bar, xRadius: Markdown.quoteBar / 2, yRadius: Markdown.quoteBar / 2).fill()
+        }
     }
 
     override func layout() {
@@ -574,15 +615,29 @@ enum TextMeasure {
     }
 
     /// The size a `MarkdownTextView` uses for `attributed` within `width`: the same TextKit
-    /// stack the view lays out with, so the two never disagree by a line.
+    /// stack the view lays out with, so the two never disagree by a line. The width is the room
+    /// the lines need to break as they do here: each line's text and its paragraph's indents,
+    /// so a code line keeps the padding of its box and the width holds it on one line.
     @MainActor
     static func textSize(of attributed: NSAttributedString, width: CGFloat) -> NSSize {
         guard width > 1, attributed.length > 0 else { return .zero }
-        textSizer.storage.setAttributedString(attributed)
-        textSizer.container.size = NSSize(width: width, height: CGFloat.greatestFiniteMagnitude)
-        textSizer.manager.ensureLayout(for: textSizer.container)
-        let used = textSizer.manager.usedRect(for: textSizer.container)
-        return NSSize(width: ceil(min(used.width, width)), height: ceil(used.height))
+        let (storage, manager, container) = textSizer
+        storage.setAttributedString(attributed)
+        container.size = NSSize(width: width, height: CGFloat.greatestFiniteMagnitude)
+        manager.ensureLayout(for: container)
+        let used = manager.usedRect(for: container)
+        let string = storage.mutableString
+        var needed: CGFloat = 0
+        manager.enumerateLineFragments(forGlyphRange: manager.glyphRange(for: container)) { _, line, _, glyphs, _ in
+            let index = manager.characterIndexForGlyph(at: glyphs.location)
+            let style = storage.attribute(.paragraphStyle, at: index, effectiveRange: nil) as? NSParagraphStyle ?? .default
+            let startsParagraph = string.paragraphRange(for: NSRange(location: index, length: 0)).location == index
+            let leading = startsParagraph ? style.firstLineHeadIndent : style.headIndent
+            // A negative tail indent is measured from the trailing edge.
+            let trailing = max(0, -style.tailIndent)
+            needed = max(needed, leading + line.width + trailing)
+        }
+        return NSSize(width: ceil(min(needed, width)), height: ceil(used.height))
     }
 
     @MainActor private static let textSizer: (storage: NSTextStorage, manager: NSLayoutManager, container: NSTextContainer) = {
