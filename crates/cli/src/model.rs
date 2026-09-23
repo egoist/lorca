@@ -527,6 +527,9 @@ pub fn relay_name(name: &str) -> String {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MachineBlob {
     pub device: Device,
+    /// The turns in flight on this Device, so every other Device shows the bots at work.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub turns: Vec<LiveTurn>,
 }
 
 /// `kind = job`, sealed to the Runner's box key: run one bot turn in one chat.
@@ -572,17 +575,22 @@ pub struct JobResult {
     pub outcome: String,
 }
 
-/// `kind = job_status`, sealed to the requesting Device's box key: what the job's turn is doing
-/// that no message says, so that Device shows the bot at work the way the Runner's own app
-/// does.
+/// A turn in flight on the Device whose machine blob lists it: a bot's turn on its Runner, or
+/// a group exchange on the Device that offers its members their turns.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct JobStatus {
+pub struct LiveTurn {
     pub job_id: String,
     pub chat_id: String,
+    /// Empty while a group exchange is between member turns.
     pub bot_id: String,
-    pub activity: JobActivity,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routine_id: Option<String>,
+    /// What the turn is doing that no message says yet. The bot's next message ends it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity: Option<JobActivity>,
 }
 
+/// What a turn is doing between its messages: the working row's "Thinking…" and "Retrying…".
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum JobActivity {

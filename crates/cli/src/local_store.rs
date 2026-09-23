@@ -8,8 +8,8 @@ use anyhow::Context;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::de::DeserializeOwned;
 
-use crate::app::{OutboxItem, Slot, State};
-use crate::model::{Author, Body, Message};
+use crate::app::{OutboxItem, SentJob, Slot, State};
+use crate::model::{Author, Body, LiveTurn, Message};
 
 pub struct LocalStore {
     connection: Mutex<Connection>,
@@ -120,6 +120,18 @@ impl LocalStore {
              );
              CREATE UNIQUE INDEX IF NOT EXISTS outbox_slot
                  ON outbox(slot_name) WHERE slot_name IS NOT NULL;
+             CREATE TABLE IF NOT EXISTS device_turns (
+                 id   TEXT PRIMARY KEY NOT NULL,
+                 json TEXT NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS sent_jobs (
+                 id         TEXT PRIMARY KEY NOT NULL,
+                 chat_id    TEXT NOT NULL,
+                 bot_id     TEXT NOT NULL,
+                 routine_id TEXT,
+                 runner_id  TEXT NOT NULL,
+                 sent_at    REAL NOT NULL
+             );
              PRAGMA user_version = 1;",
         )?;
         crate::config::set_private(path)?;
@@ -160,6 +172,8 @@ impl LocalStore {
             credentials_uploaded,
             device_seen: load_device_seen(&connection)?,
             device_online: Default::default(),
+            turns_online: Default::default(),
+            device_turns: load_device_turns(&connection)?,
             applied_blob_ids: load_ordered_ids(&connection, "applied_blobs")?,
         })
     }
@@ -770,6 +784,57 @@ impl LocalStore {
             .map_err(Into::into)
     }
 
+    /// The turns another Device's latest machine blob lists; none drops its row.
+    pub fn set_device_turns(&self, device_id: &str, turns: &[LiveTurn]) -> anyhow::Result<()> {
+        let connection = self.connection.lock().unwrap();
+        if turns.is_empty() {
+            connection.execute("DELETE FROM device_turns WHERE id = ?1", [device_id])?;
+        } else {
+            connection.execute(
+                "INSERT INTO device_turns (id, json) VALUES (?1, ?2)
+                 ON CONFLICT(id) DO UPDATE SET json = excluded.json",
+                params![device_id, serde_json::to_string(turns)?],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Keeps a job sealed to another Runner until its wait ends.
+    pub fn insert_sent_job(&self, job: &SentJob) -> anyhow::Result<()> {
+        let connection = self.connection.lock().unwrap();
+        connection.execute(
+            "INSERT OR REPLACE INTO sent_jobs (id, chat_id, bot_id, routine_id, runner_id, sent_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![job.id, job.chat_id, job.bot_id, job.routine_id, job.runner_id, job.sent_at],
+        )?;
+        Ok(())
+    }
+
+    pub fn remove_sent_job(&self, id: &str) -> anyhow::Result<()> {
+        let connection = self.connection.lock().unwrap();
+        connection.execute("DELETE FROM sent_jobs WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    /// The jobs sealed to other Runners that this Device still waits on, oldest first.
+    pub fn sent_jobs(&self) -> anyhow::Result<Vec<SentJob>> {
+        let connection = self.connection.lock().unwrap();
+        let mut statement = connection.prepare(
+            "SELECT id, chat_id, bot_id, routine_id, runner_id, sent_at FROM sent_jobs ORDER BY sent_at",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(SentJob {
+                id: row.get(0)?,
+                chat_id: row.get(1)?,
+                bot_id: row.get(2)?,
+                routine_id: row.get(3)?,
+                runner_id: row.get(4)?,
+                sent_at: row.get(5)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
+    }
+
     #[cfg(test)]
     pub fn outbox(&self) -> anyhow::Result<Vec<OutboxItem>> {
         let connection = self.connection.lock().unwrap();
@@ -798,6 +863,8 @@ impl LocalStore {
             "messages",
             "chat_history",
             "outbox",
+            "sent_jobs",
+            "device_turns",
         ] {
             tx.execute(&format!("DELETE FROM {table}"), [])?;
         }
@@ -1103,6 +1170,18 @@ fn load_ordered_ids(connection: &Connection, table: &str) -> anyhow::Result<Vec<
     let mut statement = connection.prepare(&format!("SELECT id FROM {table} ORDER BY position"))?;
     let rows = statement.query_map([], |row| row.get(0))?;
     rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
+}
+
+fn load_device_turns(
+    connection: &Connection,
+) -> anyhow::Result<std::collections::HashMap<String, Vec<LiveTurn>>> {
+    let mut statement = connection.prepare("SELECT id, json FROM device_turns")?;
+    let rows = statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?;
+    rows.map(|row| {
+        let (id, json) = row?;
+        Ok((id, serde_json::from_str(&json).context("decoding a Device's turns")?))
+    })
+    .collect()
 }
 
 fn load_device_seen(

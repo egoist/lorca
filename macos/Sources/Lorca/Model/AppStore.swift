@@ -333,7 +333,8 @@ final class AppStore {
 
         case "job.started":
             guard let job = decode(Wire.JobEvent.self) else { return }
-            runningJobs.removeAll { $0.id == "pending:\(job.chatId)" }
+            // A snapshot may already list it.
+            runningJobs.removeAll { $0.id == "pending:\(job.chatId)" || $0.id == job.jobId }
             runningJobs.append((job.jobId, job.chatId, job.botId, job.routineId))
             jobStarts[job.jobId] = jobStarts[job.jobId] ?? Date()
             emit(.respondingChanged(job.chatId))

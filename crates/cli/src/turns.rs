@@ -933,10 +933,9 @@ impl TurnState {
         self.app.push_chat_op(&ChatBlob::Upsert { message: message.for_app() });
     }
 
-    /// What the turn is doing that no message says: this Runner's app hears it, and so does
-    /// the Device that asked for the job.
+    /// What the turn is doing that no message says: this Runner's app hears it, and every other
+    /// Device reads it in this Runner's machine blob.
     fn activity(&self, activity: JobActivity) {
-        self.app.emit(activity.event(&self.chat_id, &self.bot_id));
         crate::runtime::report_activity(&self.app, &self.job, activity);
     }
 
@@ -2484,8 +2483,8 @@ mod tests {
             state.bots.push(chef.clone());
             state.chats.push(chat("chat", "dm", None, &["b1"]));
         }
-        let mut events = app.events.subscribe();
         let mut turn = turn_state(app, &chef, "");
+        let mut events = app.events.subscribe();
 
         turn.handle(thinking_starts());
         assert!(matches!(events.try_recv(), Ok(Event::JobThinking { chat_id, bot_id }) if chat_id == "chat" && bot_id == "b1"));
@@ -2502,8 +2501,20 @@ mod tests {
         assert_eq!(descriptions, [Some("Install dependencies".to_string()), None]);
     }
 
-    /// A turn of `bot` in "chat", for a job `requested_by` that Device.
+    /// A turn of `bot` in "chat", for a job `requested_by` that Device, running here.
     fn turn_state(app: &Arc<App>, bot: &Bot, requested_by: &str) -> TurnState {
+        app.running_jobs.lock().unwrap().insert(
+            "job-1".into(),
+            crate::app::RunningJob {
+                chat_id: "chat".into(),
+                bot_id: bot.id.clone(),
+                routine_id: None,
+                runner_id: None,
+                cancel: CancellationToken::new(),
+                activity: None,
+            },
+        );
+        app.local_turns_changed();
         TurnState {
             app: app.clone(),
             job: Job {
@@ -2546,7 +2557,7 @@ mod tests {
     }
 
     #[test]
-    fn the_device_that_asked_hears_what_the_turn_is_doing() {
+    fn every_device_reads_what_the_turn_is_doing_in_the_machine_blob() {
         let scratch = scratch_app();
         let app = &scratch.0;
         crate::identity::create(app, Some("Runner".into())).unwrap();
@@ -2568,22 +2579,25 @@ mod tests {
             });
         }
         let mut turn = turn_state(app, &chef, "phone");
-        let last_status = || {
-            let queued = app.store.last_outbox().unwrap().unwrap();
-            assert_eq!((queued.kind.as_str(), queued.recipient.as_deref()), ("job_status", Some("phone")));
-            crate::crypto::unseal_json::<JobStatus>(&phone_keys.box_secret, &queued.ciphertext).unwrap()
+        let dek = app.dek().unwrap();
+        let listed = || -> Vec<LiveTurn> {
+            let machine = app.store.outbox().unwrap().into_iter().filter(|item| item.kind == "machine").last().unwrap();
+            assert_eq!((machine.recipient, machine.slot.map(|slot| slot.name)), (None, Some(format!("machine-{}", app.this_device_id().unwrap()))));
+            crate::crypto::decrypt_json::<MachineBlob>(&dek, "machine", &machine.ciphertext).unwrap().turns
         };
+        let turn_doing = |activity: Option<JobActivity>| {
+            vec![LiveTurn { job_id: "job-1".into(), chat_id: "chat".into(), bot_id: "b1".into(), routine_id: None, activity }]
+        };
+        assert_eq!(listed(), turn_doing(None));
 
         turn.handle(thinking_starts());
-        let status = last_status();
-        assert_eq!((status.job_id.as_str(), status.chat_id.as_str(), status.bot_id.as_str()), ("job-1", "chat", "b1"));
-        assert_eq!(status.activity, JobActivity::Thinking);
+        assert_eq!(listed(), turn_doing(Some(JobActivity::Thinking)));
 
         turn.handle(AgentEvent::Retry { attempt: 2, max_attempts: 3, delay_ms: 4000, error: "overloaded".into() });
-        assert_eq!(last_status().activity, JobActivity::Retry { attempt: 2, max_attempts: 3, delay_ms: 4000, error: "overloaded".into() });
+        let retry = JobActivity::Retry { attempt: 2, max_attempts: 3, delay_ms: 4000, error: "overloaded".into() };
+        assert_eq!(listed(), turn_doing(Some(retry)));
 
         // The running call goes up as the app sees it, and its finished row replaces it.
-        let dek = app.dek().unwrap();
         let queued_rows = || -> Vec<(Message, bool)> {
             app.store
                 .outbox()
@@ -2602,6 +2616,8 @@ mod tests {
         let Body::Tool { is_running, arguments, detail, description, .. } = &running.body else { panic!("a tool row") };
         assert!(*is_running && arguments.is_null() && detail.chars().count() == 400 && !keep_first);
         assert_eq!(description.as_deref(), Some("Install dependencies"));
+        // The bot's new message says what it is doing now.
+        assert_eq!(listed(), turn_doing(None));
         // The Runner keeps the whole call for later turns.
         let Body::Tool { arguments, .. } = app.message("chat", &running.id).unwrap().body else { panic!("a tool row") };
         assert_eq!(arguments["command"], "bun install");
@@ -2616,22 +2632,6 @@ mod tests {
         let Body::Tool { is_running, arguments, .. } = &finished.body else { panic!("a tool row") };
         assert_eq!((finished.id.as_str(), *is_running, keep_first), (running.id.as_str(), false, false));
         assert_eq!(arguments["command"], "bun install");
-    }
-
-    #[test]
-    fn a_job_this_device_asked_for_sends_no_status() {
-        let scratch = scratch_app();
-        let app = &scratch.0;
-        crate::identity::create(app, Some("Runner".into())).unwrap();
-        let chef = bot("b1", "Chef");
-        app.state.lock().unwrap().bots.push(chef.clone());
-        app.state.lock().unwrap().chats.push(chat("chat", "dm", None, &["b1"]));
-        let here = app.this_device_id().unwrap();
-        let mut turn = turn_state(app, &chef, &here);
-
-        turn.handle(thinking_starts());
-
-        assert!(app.store.outbox().unwrap().iter().all(|item| item.kind != "job_status"));
     }
 
     #[test]

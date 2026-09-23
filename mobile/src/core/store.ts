@@ -13,6 +13,8 @@ export interface Running {
   chatId: string;
   /// Empty while a group exchange is between member turns.
   botId: string;
+  /// Set when the turn is a run of a routine.
+  routineId?: string;
 }
 
 /// A model call that failed in a way worth another try, asked again after `delay_ms`.
@@ -138,10 +140,10 @@ export function replaceSnapshot(snapshot: {
   routines?: Routine[];
   auto_review?: AutoReview;
   providers?: ProviderStatus[];
-  running_turns: { job_id: string; chat_id: string; bot_id: string }[];
+  running_turns: { job_id: string; chat_id: string; bot_id: string; routine_id?: string | null }[];
 }) {
   const running: Record<string, Running> = {};
-  for (const turn of snapshot.running_turns ?? []) running[turn.job_id] = { chatId: turn.chat_id, botId: turn.bot_id };
+  for (const turn of snapshot.running_turns ?? []) running[turn.job_id] = { chatId: turn.chat_id, botId: turn.bot_id, routineId: turn.routine_id ?? undefined };
   const busy = new Set(Object.values(running).map((r) => r.chatId));
   const { thinking, retries } = useStore.getState();
   useStore.setState({
@@ -354,7 +356,10 @@ export function useWorkingBotIds(): Set<string> {
   return useStore(useShallow((s) => new Set(Object.values(s.running).map((r) => r.botId).filter(Boolean))));
 }
 
-/// A bot's routines, oldest first.
+/// A bot's routines, oldest first. One whose run is among the turns in flight is running, as on
+/// the Mac, wherever the run was started.
 export function useRoutines(botId: string | undefined): Routine[] {
-  return useStore(useShallow((s) => s.routines.filter((r) => r.bot_id === botId).sort((a, b) => a.created_at - b.created_at)));
+  const routines = useStore(useShallow((s) => s.routines.filter((r) => r.bot_id === botId).sort((a, b) => a.created_at - b.created_at)));
+  const running = useStore(useShallow((s) => Object.values(s.running).flatMap((r) => (r.routineId ? [r.routineId] : []))));
+  return useMemo(() => routines.map((r) => (r.is_running || !running.includes(r.id) ? r : { ...r, is_running: true })), [routines, running]);
 }

@@ -110,6 +110,7 @@ async fn main() -> anyhow::Result<()> {
     match cli.command.unwrap_or(Command::Serve { parent_pid: None, ready_stdout: false }) {
         Command::Serve { parent_pid, ready_stdout } => {
             runtime::prime_names(&app);
+            runtime::resume_sent_jobs(&app);
             // Installed marketplace plugins follow the index this build ships.
             lorca::plugins::refresh_installed(&app, &lorca::plugins::bundled());
             if let Some(pid) = parent_pid {

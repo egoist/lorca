@@ -6,9 +6,8 @@ use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
 
-use crate::app::{App, RunningJob};
+use crate::app::{App, RunningJob, SentJob};
 use crate::config::now_secs;
-use crate::events::Event;
 use crate::model::*;
 
 /// How a chat is named in a bot's memory: `your chat with the user`, `group "Standup"`.
@@ -144,32 +143,42 @@ fn begin_job(
     runner_id: Option<String>,
     cancel: CancellationToken,
 ) {
+    // A job on another Runner outlives this process; `resume_sent_jobs` picks up its wait.
+    if let Some(runner_id) = &runner_id {
+        let sent = SentJob {
+            id: job_id.to_string(),
+            chat_id: chat_id.to_string(),
+            bot_id: bot_id.to_string(),
+            routine_id: routine_id.clone(),
+            runner_id: runner_id.clone(),
+            sent_at: now_secs(),
+        };
+        if let Err(error) = app.store.insert_sent_job(&sent) {
+            tracing::error!(%error, %job_id, "keeping a job sent to another Runner");
+        }
+    }
     app.running_jobs.lock().unwrap().insert(
         job_id.to_string(),
         RunningJob {
             chat_id: chat_id.to_string(),
             bot_id: bot_id.to_string(),
-            routine_id: routine_id.clone(),
+            routine_id,
             runner_id,
             cancel,
+            activity: None,
         },
     );
-    app.emit(Event::JobStarted {
-        chat_id: chat_id.to_string(),
-        bot_id: bot_id.to_string(),
-        job_id: job_id.to_string(),
-        routine_id,
-    });
+    app.local_turns_changed();
 }
 
-fn finish_job(app: &App, job_id: &str, chat_id: &str, bot_id: &str, routine_id: Option<String>) {
-    app.running_jobs.lock().unwrap().remove(job_id);
-    app.emit(Event::JobFinished {
-        chat_id: chat_id.to_string(),
-        bot_id: bot_id.to_string(),
-        job_id: job_id.to_string(),
-        routine_id,
-    });
+fn finish_job(app: &App, job_id: &str) {
+    let job = app.running_jobs.lock().unwrap().remove(job_id);
+    if job.is_some_and(|job| job.runner_id.is_some()) {
+        if let Err(error) = app.store.remove_sent_job(job_id) {
+            tracing::error!(%error, %job_id, "dropping a job sent to another Runner");
+        }
+    }
+    app.local_turns_changed();
 }
 
 /// Registers a room before it waits for the chat lock. A later message is admitted behind it
@@ -211,7 +220,7 @@ async fn run_room(
     let lock = app.chat_lock(&chat_id);
     let _guard = lock.lock().await;
     if has_newer_user_message(&app, &chat_id, &trigger) {
-        finish_job(&app, &room_id, &chat_id, "", None);
+        finish_job(&app, &room_id);
         return;
     }
 
@@ -261,7 +270,7 @@ async fn run_room(
         }
     }
 
-    finish_job(&app, &room_id, &chat_id, "", None);
+    finish_job(&app, &room_id);
 }
 
 /// Messages in the chat that `bot_id` did not write itself.
@@ -305,49 +314,91 @@ async fn remote_turn_started(
     job: Job,
     cancel: CancellationToken,
 ) -> TurnOutcome {
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    app.pending_results.lock().unwrap().insert(job.id.clone(), tx);
+    let result = expect_result(app, &job.id);
     let job_id = job.id.clone();
-    let chat_id = job.chat_id.clone();
-    let bot_id = job.bot_id.clone();
-    let routine_id = job.routine_id.clone();
     let outcome = if cancel.is_cancelled() {
         TurnOutcome::Skipped
     } else {
         match dispatch_job(app, job) {
-            Dispatch::Sent => {
-                tokio::select! {
-                    result = rx => result.map(|text| TurnOutcome::parse(&text)).unwrap_or(TurnOutcome::Skipped),
-                    _ = tokio::time::sleep(REMOTE_TURN_TIMEOUT) => TurnOutcome::Skipped,
-                    _ = cancel.cancelled() => TurnOutcome::Skipped,
-                }
-            }
+            Dispatch::Sent => wait_for_result(result, REMOTE_TURN_TIMEOUT, &cancel).await,
             Dispatch::Ran | Dispatch::Deferred => TurnOutcome::Skipped,
         }
     };
     app.pending_results.lock().unwrap().remove(&job_id);
-    finish_job(app, &job_id, &chat_id, &bot_id, routine_id);
+    finish_job(app, &job_id);
     outcome
+}
+
+/// Registers the wait for a job's `job_result` before anything can deliver it.
+fn expect_result(app: &App, job_id: &str) -> tokio::sync::oneshot::Receiver<String> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.pending_results.lock().unwrap().insert(job_id.to_string(), tx);
+    rx
+}
+
+/// How a job on another Runner ended: its `job_result`, or skipped when the wait runs out or
+/// Stop cancels it.
+async fn wait_for_result(
+    result: tokio::sync::oneshot::Receiver<String>,
+    timeout: std::time::Duration,
+    cancel: &CancellationToken,
+) -> TurnOutcome {
+    tokio::select! {
+        result = result => result.map(|text| TurnOutcome::parse(&text)).unwrap_or(TurnOutcome::Skipped),
+        _ = tokio::time::sleep(timeout) => TurnOutcome::Skipped,
+        _ = cancel.cancelled() => TurnOutcome::Skipped,
+    }
+}
+
+/// Picks up the jobs this Device sent to other Runners before it last stopped: each counts as
+/// running again until its `job_result` arrives, the rest of its wait runs out, or Stop cancels
+/// it, so the apps show the bot at work across a restart. Called before the sync loop starts,
+/// since the first pull may carry a result that landed meanwhile. A group exchange this Device
+/// was running does not resume; only the member turn in flight shows.
+pub fn resume_sent_jobs(app: &Arc<App>) {
+    let jobs = match app.store.sent_jobs() {
+        Ok(jobs) => jobs,
+        Err(error) => {
+            tracing::error!(%error, "reading the jobs sent to other Runners");
+            return;
+        }
+    };
+    let now = now_secs();
+    for job in jobs {
+        let left = job.sent_at + REMOTE_TURN_TIMEOUT.as_secs_f64() - now;
+        if left <= 0.0 || app.chat(&job.chat_id).is_none() {
+            if let Err(error) = app.store.remove_sent_job(&job.id) {
+                tracing::error!(%error, job_id = %job.id, "dropping a job sent to another Runner");
+            }
+            continue;
+        }
+        let cancel = CancellationToken::new();
+        app.running_jobs.lock().unwrap().insert(
+            job.id.clone(),
+            RunningJob {
+                chat_id: job.chat_id.clone(),
+                bot_id: job.bot_id.clone(),
+                routine_id: job.routine_id.clone(),
+                runner_id: Some(job.runner_id.clone()),
+                cancel: cancel.clone(),
+                activity: None,
+            },
+        );
+        let result = expect_result(app, &job.id);
+        let app = app.clone();
+        tokio::spawn(async move {
+            wait_for_result(result, std::time::Duration::from_secs_f64(left), &cancel).await;
+            app.pending_results.lock().unwrap().remove(&job.id);
+            finish_job(&app, &job.id);
+        });
+    }
+    app.turns_changed();
 }
 
 /// A `job_result` from another Runner reached this Device.
 pub fn deliver_job_result(app: &Arc<App>, result: JobResult) {
     if let Some(tx) = app.pending_results.lock().unwrap().remove(&result.job_id) {
         let _ = tx.send(result.outcome);
-    }
-}
-
-/// A `job_status` from the Runner of a job this Device asked for: the app hears it as the
-/// Runner's own app does. A job that is no longer running here has nothing to show.
-pub fn deliver_job_status(app: &App, status: JobStatus) {
-    let running = app
-        .running_jobs
-        .lock()
-        .unwrap()
-        .get(&status.job_id)
-        .is_some_and(|job| job.chat_id == status.chat_id && job.bot_id == status.bot_id);
-    if running {
-        app.emit(status.activity.event(&status.chat_id, &status.bot_id));
     }
 }
 
@@ -480,7 +531,7 @@ async fn run_job_started(app: &Arc<App>, job: Job, cancel: CancellationToken) ->
         app.notice(&job.chat_id, "This Device does not run bots; assign the bot to a Runner.");
         TurnOutcome::Skipped
     };
-    finish_job(app, &job.id, &job.chat_id, &job.bot_id, job.routine_id.clone());
+    finish_job(app, &job.id);
     outcome
 }
 
@@ -495,20 +546,10 @@ fn report_outcome(app: &Arc<App>, job: &Job, outcome: TurnOutcome) {
     }
 }
 
-/// Tells the Device that asked for a job what its turn is doing, when that Device is another
-/// one: the chat log carries the turn's messages, and this carries the rest of its status line.
+/// What a turn running here is doing that no message says: it goes into this Device's machine
+/// blob, so every app shows it, and the local app hears it at once.
 pub fn report_activity(app: &App, job: &Job, activity: JobActivity) {
-    if app.this_device_id().as_deref() == Some(job.requested_by.as_str()) {
-        return;
-    }
-    let Some(requester) = app.device(&job.requested_by).filter(|d| !d.box_pubkey.is_empty()) else { return };
-    let status = JobStatus { job_id: job.id.clone(), chat_id: job.chat_id.clone(), bot_id: job.bot_id.clone(), activity };
-    match crate::crypto::seal_json(&requester.box_pubkey, &status) {
-        Ok(ciphertext) => {
-            app.push_blob("job_status", Some(requester.id.clone()), ciphertext);
-        }
-        Err(error) => tracing::warn!(%error, "sealing the job status"),
-    }
+    app.set_job_activity(&job.id, activity);
 }
 
 /// Bot names are not in the chat struct; the lookup is primed from the roster and shared by
@@ -531,6 +572,7 @@ pub fn prime_names(app: &App) {
 mod tests {
     use super::*;
     use crate::config::Config;
+    use crate::events::Event;
 
     struct ScratchApp(Arc<App>, std::path::PathBuf);
 
@@ -577,6 +619,7 @@ mod tests {
                 routine_id: None,
                 runner_id: None,
                 cancel: cancel.clone(),
+                activity: None,
             },
         );
 
@@ -617,6 +660,7 @@ mod tests {
                 routine_id: None,
                 runner_id: Some("runner".into()),
                 cancel: cancel.clone(),
+                activity: None,
             },
         );
 
@@ -632,32 +676,142 @@ mod tests {
         assert_eq!(payload.job_id, "remote-job");
     }
 
+    fn turn_on_mac(job_id: &str, chat_id: &str) -> LiveTurn {
+        LiveTurn { job_id: job_id.into(), chat_id: chat_id.into(), bot_id: "bot".into(), routine_id: None, activity: Some(JobActivity::Thinking) }
+    }
+
     #[test]
-    fn a_status_reaches_the_app_only_while_its_job_runs() {
+    fn another_devices_turns_show_while_the_relay_lists_it_online() {
         let scratch = scratch_app();
         let app = &scratch.0;
         let mut events = app.events.subscribe();
-        let thinking = || JobStatus { job_id: "remote-job".into(), chat_id: "chat".into(), bot_id: "bot".into(), activity: JobActivity::Thinking };
+        let turn = turn_on_mac("mac-job", "chat");
 
-        deliver_job_status(app, thinking());
+        // Listed while the Mac is not online: nothing shows.
+        app.set_device_turns("mac", vec![turn.clone()]);
+        assert!(app.running_turns().is_empty());
         assert!(events.try_recv().is_err());
 
-        app.running_jobs.lock().unwrap().insert(
-            "remote-job".into(),
-            RunningJob {
-                chat_id: "chat".into(),
-                bot_id: "bot".into(),
-                routine_id: None,
-                runner_id: Some("runner".into()),
-                cancel: CancellationToken::new(),
-            },
-        );
-        deliver_job_status(app, thinking());
+        app.state.lock().unwrap().turns_online.insert("mac".into());
+        app.turns_changed();
+        assert!(matches!(events.try_recv(), Ok(Event::JobStarted { job_id, chat_id, bot_id, .. }) if job_id == "mac-job" && chat_id == "chat" && bot_id == "bot"));
         assert!(matches!(events.try_recv(), Ok(Event::JobThinking { chat_id, bot_id }) if chat_id == "chat" && bot_id == "bot"));
+        assert_eq!(app.running_turns().len(), 1);
 
+        // The same list again says nothing new; another activity does.
+        app.set_device_turns("mac", vec![turn.clone()]);
+        assert!(events.try_recv().is_err());
         let retry = JobActivity::Retry { attempt: 1, max_attempts: 3, delay_ms: 2000, error: "overloaded".into() };
-        deliver_job_status(app, JobStatus { activity: retry, ..thinking() });
+        app.set_device_turns("mac", vec![LiveTurn { activity: Some(retry), ..turn.clone() }]);
         assert!(matches!(events.try_recv(), Ok(Event::JobRetry { attempt: 1, max_attempts: 3, delay_ms: 2000, .. })));
+
+        // It ends when the Mac lists it no more.
+        app.set_device_turns("mac", Vec::new());
+        assert!(matches!(events.try_recv(), Ok(Event::JobFinished { job_id, .. }) if job_id == "mac-job"));
+
+        // The list outlives a restart, and shows again once the relay says the Mac is online.
+        app.set_device_turns("mac", vec![turn.clone()]);
+        let restarted = App::load(Config { home: scratch.1.clone(), port: 0 }).unwrap();
+        assert!(restarted.running_turns().is_empty());
+        restarted.state.lock().unwrap().turns_online.insert("mac".into());
+        assert_eq!(restarted.running_turns().len(), 1);
+
+        // Offline, it ends.
+        while events.try_recv().is_ok() {}
+        app.state.lock().unwrap().turns_online.clear();
+        app.turns_changed();
+        assert!(matches!(events.try_recv(), Ok(Event::JobFinished { job_id, .. }) if job_id == "mac-job"));
+        assert!(app.running_turns().is_empty());
+    }
+
+    #[test]
+    fn a_job_sent_to_a_runner_that_lists_it_is_one_turn_until_both_let_go() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        app.state.lock().unwrap().chats.push(empty_chat("chat"));
+        let mut events = app.events.subscribe();
+        begin_job(app, "job", "chat", "bot", None, Some("mac".into()), CancellationToken::new());
+        assert!(matches!(events.try_recv(), Ok(Event::JobStarted { job_id, .. }) if job_id == "job"));
+        // A job sent elsewhere is that Runner's to list.
+        assert!(app.turns_here().is_empty());
+
+        app.state.lock().unwrap().turns_online.insert("mac".into());
+        app.set_device_turns("mac", vec![turn_on_mac("job", "chat")]);
+        assert!(matches!(events.try_recv(), Ok(Event::JobThinking { .. })));
+        assert_eq!(app.running_turns().len(), 1);
+
+        // The wait here runs out while the Runner still lists the turn: it is still working.
+        finish_job(app, "job");
+        assert!(events.try_recv().is_err());
+        assert_eq!(app.running_turns().len(), 1);
+        app.set_device_turns("mac", Vec::new());
+        assert!(matches!(events.try_recv(), Ok(Event::JobFinished { job_id, .. }) if job_id == "job"));
+        assert!(app.running_turns().is_empty());
+    }
+
+    #[test]
+    fn stop_is_sealed_to_the_device_that_lists_the_turn() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        let mac_keys = crate::keys::Machine::generate();
+        app.state.lock().unwrap().devices.push(Device {
+            id: "mac".into(),
+            name: "Mac".into(),
+            model: String::new(),
+            os: "macos".into(),
+            os_version: String::new(),
+            box_pubkey: mac_keys.box_pubkey(),
+            plugins: Vec::new(),
+            updated_at: 1,
+        });
+        app.state.lock().unwrap().turns_online.insert("mac".into());
+        app.set_device_turns("mac", vec![turn_on_mac("mac-job", "chat"), turn_on_mac("elsewhere", "other-chat")]);
+
+        cancel_chat(app, "chat");
+
+        let cancels: Vec<_> = app.store.outbox().unwrap().into_iter().filter(|item| item.kind == "job_cancel").collect();
+        let [cancel] = cancels.try_into().unwrap();
+        assert_eq!(cancel.recipient.as_deref(), Some("mac"));
+        let payload: JobCancel = crate::crypto::unseal_json(&mac_keys.box_secret, &cancel.ciphertext).unwrap();
+        assert_eq!(payload.job_id, "mac-job");
+    }
+
+    #[test]
+    fn a_machine_blob_that_only_lists_other_turns_leaves_the_roster_alone() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        crate::identity::create(app, Some("Phone".into())).unwrap();
+        let machine_file = app.machine_file().unwrap();
+        let dek = machine_file.dek().unwrap();
+        let mac = Device {
+            id: "mac".into(),
+            name: "Mac".into(),
+            model: "MacBook Air (M5)".into(),
+            os: "macos".into(),
+            os_version: "26.0".into(),
+            box_pubkey: String::new(),
+            plugins: Vec::new(),
+            updated_at: 1,
+        };
+        app.state.lock().unwrap().device_seen.insert("mac".into(), 1);
+        app.state.lock().unwrap().turns_online.insert("mac".into());
+        let blob = |seq: i64, device: Device, turns: Vec<LiveTurn>| crate::relay::BlobIn {
+            id: format!("blob-{seq}"),
+            kind: "machine".into(),
+            recipient_machine_pubkey: None,
+            seq,
+            ciphertext: crate::keys::b64(&crate::crypto::encrypt_json(&dek, "machine", &MachineBlob { device, turns }).unwrap()),
+            created_at: 0,
+        };
+        let mut events = app.events.subscribe();
+
+        crate::sync::apply_blob(app, &machine_file, &blob(1, mac.clone(), Vec::new()));
+        assert!(std::iter::from_fn(|| events.try_recv().ok()).any(|event| matches!(event, Event::RosterChanged { .. })));
+
+        crate::sync::apply_blob(app, &machine_file, &blob(2, Device { updated_at: 2, ..mac.clone() }, vec![turn_on_mac("mac-job", "chat")]));
+        let heard: Vec<Event> = std::iter::from_fn(|| events.try_recv().ok()).collect();
+        assert!(!heard.iter().any(|event| matches!(event, Event::RosterChanged { .. })));
+        assert!(heard.iter().any(|event| matches!(event, Event::JobStarted { job_id, .. } if job_id == "mac-job")));
     }
 
     #[tokio::test]
@@ -689,5 +843,52 @@ mod tests {
 
         assert_eq!(outcome, TurnOutcome::Skipped);
         assert!(app.take_steering_message("chat", "message"));
+    }
+
+    #[tokio::test]
+    async fn a_job_sent_to_another_runner_runs_again_after_a_restart() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        app.state.lock().unwrap().chats.push(empty_chat("chat"));
+        app.save_state_now();
+        begin_job(app, "remote-job", "chat", "bot", None, Some("runner".into()), CancellationToken::new());
+
+        // The process ends with the job in flight, and the next one opens the same folder.
+        let restarted = App::load(Config { home: scratch.1.clone(), port: 0 }).unwrap();
+        assert!(restarted.running_turns().is_empty());
+        resume_sent_jobs(&restarted);
+        let turns = restarted.running_turns();
+        assert_eq!(turns.len(), 1);
+        assert_eq!((turns[0]["job_id"].as_str(), turns[0]["chat_id"].as_str(), turns[0]["bot_id"].as_str()), (Some("remote-job"), Some("chat"), Some("bot")));
+
+        // The result that lands later ends it there, and nothing is left to resume.
+        let mut events = restarted.events.subscribe();
+        deliver_job_result(&restarted, JobResult { job_id: "remote-job".into(), chat_id: "chat".into(), bot_id: "bot".into(), outcome: "sent".into() });
+        let finished = tokio::time::timeout(std::time::Duration::from_secs(5), events.recv()).await.unwrap().unwrap();
+        assert!(matches!(finished, Event::JobFinished { job_id, .. } if job_id == "remote-job"));
+        assert!(restarted.running_turns().is_empty());
+        assert!(restarted.store.sent_jobs().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_sent_job_past_its_wait_or_chat_does_not_come_back() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        app.state.lock().unwrap().chats.push(empty_chat("chat"));
+        let expired = SentJob {
+            id: "expired".into(),
+            chat_id: "chat".into(),
+            bot_id: "bot".into(),
+            routine_id: None,
+            runner_id: "runner".into(),
+            sent_at: now_secs() - REMOTE_TURN_TIMEOUT.as_secs_f64() - 1.0,
+        };
+        app.store.insert_sent_job(&expired).unwrap();
+        app.store.insert_sent_job(&SentJob { id: "orphan".into(), chat_id: "deleted".into(), sent_at: now_secs(), ..expired.clone() }).unwrap();
+
+        resume_sent_jobs(app);
+
+        assert!(app.running_turns().is_empty());
+        assert!(app.store.sent_jobs().unwrap().is_empty());
     }
 }

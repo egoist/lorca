@@ -72,6 +72,12 @@ pub struct State {
     /// The machines with a sync socket open on the relay, as of the last machine list. Not
     /// kept across runs: it is only good while this Device's own socket is open.
     pub device_online: std::collections::HashSet<String>,
+    /// The same machines, kept while this Device's own socket is down: the turns they list
+    /// keep showing until the relay says otherwise, instead of ending and starting again
+    /// whenever this Device reconnects. Not kept across runs.
+    pub turns_online: std::collections::HashSet<String>,
+    /// The turns each other Device's latest machine blob lists, by machine pubkey.
+    pub device_turns: HashMap<String, Vec<LiveTurn>>,
     /// Relay blob ids this device produced or already applied, so its own echoes are no-ops.
     pub applied_blob_ids: Vec<String>,
 }
@@ -102,6 +108,33 @@ pub struct RunningJob {
     /// The other Runner executing this job, when this Device sent it there.
     pub runner_id: Option<String>,
     pub cancel: CancellationToken,
+    /// What a turn running here is doing between its messages, for every app's working row.
+    pub activity: Option<JobActivity>,
+}
+
+impl RunningJob {
+    fn turn(&self, job_id: &str) -> LiveTurn {
+        LiveTurn {
+            job_id: job_id.to_string(),
+            chat_id: self.chat_id.clone(),
+            bot_id: self.bot_id.clone(),
+            routine_id: self.routine_id.clone(),
+            activity: self.activity.clone(),
+        }
+    }
+}
+
+/// A job this Device sealed to another Runner and still waits on, as SQLite keeps it: the wait
+/// outlives the process, so a restarted CLI or phone core still shows the bot at work.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SentJob {
+    pub id: String,
+    pub chat_id: String,
+    pub bot_id: String,
+    pub routine_id: Option<String>,
+    pub runner_id: String,
+    /// When the wait began, unix seconds.
+    pub sent_at: f64,
 }
 
 pub struct App {
@@ -137,13 +170,16 @@ pub struct App {
     pub provider_auth: Mutex<CancellationToken>,
     /// By job id.
     pub running_jobs: Mutex<HashMap<String, RunningJob>>,
+    /// The turns the local app was last told about, by job id: `turns_changed` tells it what
+    /// changed since.
+    announced_turns: Mutex<std::collections::BTreeMap<String, LiveTurn>>,
     /// The direct-chat agent loop that currently owns each chat lock: `(job id, queue)`.
     #[cfg(feature = "runner")]
     pub steering_queues: Mutex<HashMap<String, (String, lorca_agent::AgentMessageQueue)>>,
     pub chat_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// The chat on screen in the local app while it is frontmost; a reply there needs no push.
     pub watched_chat: Mutex<Option<String>>,
-    /// `room_turn` jobs sent to other Runners, waiting for their `job_result`.
+    /// Jobs sent to other Runners, waiting for their `job_result`.
     pub pending_results: Mutex<HashMap<String, tokio::sync::oneshot::Sender<String>>>,
     /// Requests sent to other Runners, waiting for their `response`.
     pub pending_responses: Mutex<HashMap<String, tokio::sync::oneshot::Sender<Response>>>,
@@ -210,6 +246,7 @@ impl App {
             #[cfg(feature = "provider-auth")]
             provider_auth: Mutex::new(CancellationToken::new()),
             running_jobs: Mutex::new(HashMap::new()),
+            announced_turns: Mutex::new(std::collections::BTreeMap::new()),
             #[cfg(feature = "runner")]
             steering_queues: Mutex::new(HashMap::new()),
             chat_locks: Mutex::new(HashMap::new()),
@@ -448,6 +485,8 @@ impl App {
         if files.is_dir() {
             std::fs::remove_dir_all(&files)?;
         }
+        // The other Devices' turns went with the account.
+        self.turns_changed();
         self.emit(Event::IdentityChanged { has_identity: false });
         self.emit(Event::Snapshot(self.snapshot()));
         Ok(())
@@ -543,17 +582,20 @@ impl App {
         }
     }
 
-    /// Uploads this Device's metadata when it changed since the last upload.
+    /// Uploads this Device's metadata, with the turns in flight on it, when either changed
+    /// since the last upload.
     pub fn push_machine_blob_if_changed(&self) {
         let (Some(dek), Some(device)) = (self.dek(), self.local_device()) else { return };
+        let turns = self.turns_here();
         let fingerprint = format!(
-            "{}|{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}|{}",
             device.id,
             device.name,
             device.model,
             device.os,
             device.os_version,
-            serde_json::to_string(&device.plugins).unwrap_or_default()
+            serde_json::to_string(&device.plugins).unwrap_or_default(),
+            serde_json::to_string(&turns).unwrap_or_default()
         );
         let hash = keys::b64(&<sha2::Sha256 as sha2::Digest>::digest(fingerprint.as_bytes()));
         let changed = {
@@ -570,7 +612,7 @@ impl App {
             return;
         }
         let device_id = device.id.clone();
-        match crate::crypto::encrypt_json(&dek, "machine", &MachineBlob { device }) {
+        match crate::crypto::encrypt_json(&dek, "machine", &MachineBlob { device, turns }) {
             Ok(ciphertext) => {
                 self.push_slot_blob("machine", Slot::latest(format!("machine-{}", device_id)), None, ciphertext);
             }
@@ -620,22 +662,134 @@ impl App {
         self.chat_locks.lock().unwrap().entry(chat_id.to_string()).or_default().clone()
     }
 
-    /// Every turn in flight, for the app's working indicators: `(chat id, bot id)`; a group
+    /// Every turn in flight this Device knows of, for the apps' working indicators; a group
     /// exchange between member turns has an empty bot id.
     pub fn running_turns(&self) -> Vec<Value> {
-        self.running_jobs
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|(job_id, job)| json!({ "job_id": job_id, "chat_id": job.chat_id, "bot_id": job.bot_id, "routine_id": job.routine_id }))
+        self.known_turns()
+            .into_values()
+            .map(|turn| json!({ "job_id": turn.job_id, "chat_id": turn.chat_id, "bot_id": turn.bot_id, "routine_id": turn.routine_id }))
             .collect()
     }
 
     pub fn running_chat_ids(&self) -> Vec<String> {
-        let mut ids: Vec<String> = self.running_jobs.lock().unwrap().values().map(|job| job.chat_id.clone()).collect();
+        let mut ids: Vec<String> = self.known_turns().into_values().map(|turn| turn.chat_id).collect();
         ids.sort();
         ids.dedup();
         ids
+    }
+
+    /// The turns in flight on this Device, as its machine blob lists them: the turns it runs
+    /// and the group exchanges it holds. A job it sent to another Runner is that Runner's to
+    /// list.
+    pub fn turns_here(&self) -> Vec<LiveTurn> {
+        let mut turns: Vec<LiveTurn> =
+            self.running_jobs.lock().unwrap().iter().filter(|(_, job)| job.runner_id.is_none()).map(|(id, job)| job.turn(id)).collect();
+        turns.sort_by(|a, b| a.job_id.cmp(&b.job_id));
+        turns
+    }
+
+    /// Every turn in flight this Device knows of, by job id: what the other Devices list while
+    /// the relay last saw them online, then this Device's own jobs, including one it sent to a
+    /// Runner that has not listed it yet.
+    fn known_turns(&self) -> std::collections::BTreeMap<String, LiveTurn> {
+        let mut turns = std::collections::BTreeMap::new();
+        {
+            let state = self.state.lock().unwrap();
+            for (device_id, listed) in &state.device_turns {
+                if state.turns_online.contains(device_id) {
+                    for turn in listed {
+                        turns.insert(turn.job_id.clone(), turn.clone());
+                    }
+                }
+            }
+        }
+        for (id, job) in self.running_jobs.lock().unwrap().iter() {
+            turns.entry(id.clone()).or_insert_with(|| job.turn(id));
+        }
+        turns
+    }
+
+    /// Tells the local app which turns started and ended since it last heard, and what each is
+    /// doing. Every change to the turns this Device knows of ends here; a backlog is told once,
+    /// after its snapshot. Call it with no state or job lock held.
+    pub fn turns_changed(&self) {
+        if self.bulk_sync.load(Ordering::Relaxed) {
+            return;
+        }
+        let mut announced = self.announced_turns.lock().unwrap();
+        let known = self.known_turns();
+        for (id, turn) in announced.iter() {
+            if !known.contains_key(id) {
+                self.emit(Event::JobFinished { chat_id: turn.chat_id.clone(), bot_id: turn.bot_id.clone(), job_id: id.clone(), routine_id: turn.routine_id.clone() });
+            }
+        }
+        for (id, turn) in &known {
+            let before = announced.get(id);
+            if before.is_none() {
+                self.emit(Event::JobStarted { chat_id: turn.chat_id.clone(), bot_id: turn.bot_id.clone(), job_id: id.clone(), routine_id: turn.routine_id.clone() });
+            }
+            if let Some(activity) = &turn.activity {
+                if before.and_then(|seen| seen.activity.as_ref()) != Some(activity) {
+                    self.emit(activity.event(&turn.chat_id, &turn.bot_id));
+                }
+            }
+        }
+        *announced = known;
+    }
+
+    /// A turn here started, ended, or changed what it is doing: the other Devices hear it
+    /// through this Device's machine blob, and the local app through `turns_changed`.
+    pub fn local_turns_changed(&self) {
+        self.push_machine_blob_if_changed();
+        self.turns_changed();
+    }
+
+    /// What a turn running here is doing between its messages.
+    pub fn set_job_activity(&self, job_id: &str, activity: JobActivity) {
+        let changed = match self.running_jobs.lock().unwrap().get_mut(job_id) {
+            Some(job) if job.activity.as_ref() != Some(&activity) => {
+                job.activity = Some(activity);
+                true
+            }
+            _ => false,
+        };
+        if changed {
+            self.local_turns_changed();
+        }
+    }
+
+    /// A bot's new message says what its turn was doing, so whatever the turn reported before
+    /// it is over, as it is in the apps.
+    fn end_turn_activity(&self, chat_id: &str, bot_id: &str) {
+        let changed = self.running_jobs.lock().unwrap().values_mut().fold(false, |changed, job| {
+            let ends = job.runner_id.is_none() && job.chat_id == chat_id && job.bot_id == bot_id && job.activity.is_some();
+            if ends {
+                job.activity = None;
+            }
+            changed || ends
+        });
+        if changed {
+            self.local_turns_changed();
+        }
+    }
+
+    /// The turns another Device's latest machine blob lists.
+    pub fn set_device_turns(&self, device_id: &str, turns: Vec<LiveTurn>) {
+        {
+            let mut state = self.state.lock().unwrap();
+            if state.device_turns.get(device_id).map(Vec::as_slice).unwrap_or_default() == turns.as_slice() {
+                return;
+            }
+            if turns.is_empty() {
+                state.device_turns.remove(device_id);
+            } else {
+                state.device_turns.insert(device_id.to_string(), turns.clone());
+            }
+        }
+        if let Err(error) = self.store.set_device_turns(device_id, &turns) {
+            tracing::error!(%error, "keeping another Device's turns");
+        }
+        self.turns_changed();
     }
 
     // MARK: - Roster mutations (local + roster upload)
@@ -1078,6 +1232,9 @@ impl App {
         if upload {
             self.push_chat_op(&ChatBlob::Upsert { message: message.clone() });
         }
+        if let (true, Author::Bot { bot_id }) = (added, &message.author) {
+            self.end_turn_activity(&message.chat_id, bot_id);
+        }
         if finished && watching {
             self.push_chat_op(&ChatBlob::ClearUnread { chat_id: message.chat_id });
         }
@@ -1167,16 +1324,24 @@ impl App {
 
     // MARK: - Jobs
 
-    /// Cancels every active or waiting job in a chat and returns the jobs this Device sent to
-    /// another Runner, so the caller can forward the cancellation there too.
+    /// Cancels every active or waiting job in a chat and returns the chat's turns that another
+    /// Device runs, with that Device, so the caller can forward the cancellation there too:
+    /// jobs this Device sent to another Runner, and turns the other Devices list for the chat.
     pub fn cancel_chat(&self, chat_id: &str) -> Vec<(String, String)> {
-        let jobs = self.running_jobs.lock().unwrap();
         let mut remote = Vec::new();
-        for (id, job) in jobs.iter() {
+        for (id, job) in self.running_jobs.lock().unwrap().iter() {
             if job.chat_id == chat_id {
                 job.cancel.cancel();
                 if let Some(runner_id) = &job.runner_id {
                     remote.push((id.clone(), runner_id.clone()));
+                }
+            }
+        }
+        let state = self.state.lock().unwrap();
+        for (device_id, turns) in state.device_turns.iter().filter(|(id, _)| state.turns_online.contains(*id)) {
+            for turn in turns.iter().filter(|turn| turn.chat_id == chat_id) {
+                if !remote.iter().any(|(id, _)| id == &turn.job_id) {
+                    remote.push((turn.job_id.clone(), device_id.clone()));
                 }
             }
         }

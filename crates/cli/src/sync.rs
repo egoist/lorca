@@ -14,7 +14,7 @@ const BULK_BLOBS: usize = 20;
 
 /// What a pull takes. `file` blobs are left out: a transcript fetches them by id when it
 /// needs them, so a photo sent to one bot is not downloaded by every Device.
-pub const POLL_KINDS: &str = "roster,chat,machine,credentials,job,job_cancel,job_result,job_status,request,response";
+pub const POLL_KINDS: &str = "roster,chat,machine,credentials,job,job_cancel,job_result,request,response";
 
 pub async fn run(app: Arc<App>) {
     let mut failures: u32 = 0;
@@ -102,6 +102,9 @@ async fn session(app: &Arc<App>) -> Result<(), RelayError> {
     if !app.relay_connected.swap(true, Ordering::Relaxed) || was_refused {
         app.emit_relay_status();
     }
+    // The other Devices dropped this one's turns when the relay last showed it offline; the
+    // first round lists them again.
+    app.state.lock().unwrap().machine_blob_hash = None;
 
     let (mut pull, mut refresh) = (true, true);
     let mut credentials_due = true;
@@ -135,6 +138,8 @@ async fn session(app: &Arc<App>) -> Result<(), RelayError> {
         if app.presence_stale.swap(false, Ordering::Relaxed) {
             refresh_presence(app, &url, &token).await?;
         }
+        // After the pull, so a list saved before a restart does not show turns the pull ends.
+        app.turns_changed();
 
         (pull, refresh) = tokio::select! {
             signal = socket.next() => match signal? {
@@ -149,7 +154,7 @@ async fn session(app: &Arc<App>) -> Result<(), RelayError> {
 }
 
 /// Everything a Device polls for but the messages.
-const NOT_CHAT_KINDS: &str = "roster,machine,credentials,job,job_cancel,job_result,job_status,request,response";
+const NOT_CHAT_KINDS: &str = "roster,machine,credentials,job,job_cancel,job_result,request,response";
 /// How much of each chat a Device takes when it first syncs: what a bot's turn reads.
 const FIRST_SYNC_MESSAGES: usize = 400;
 /// Messages to a page when reading a chat backwards.
@@ -169,6 +174,7 @@ async fn first_sync(app: &Arc<App>, url: &str, token: &str, machine_file: &crate
         crate::runtime::prime_names(app);
         app.emit(Event::Snapshot(app.snapshot()));
     }
+    app.turns_changed();
     synced
 }
 
@@ -281,16 +287,28 @@ async fn pull_blobs(app: &Arc<App>, url: &str, token: &str, machine_file: &crate
         // and tell the app once, instead of one event and one state write per message.
         let bulk = blobs.len() >= BULK_BLOBS;
         app.bulk_sync.store(bulk, Ordering::Relaxed);
+        // A backlog's messages reach the app with its snapshot, and a turn's end must come
+        // after the messages it ended with, so its results wait for that snapshot.
+        let mut results = Vec::new();
         for blob in blobs {
-            apply_blob(app, machine_file, &blob);
+            let seq = blob.seq;
+            if bulk && blob.kind == "job_result" {
+                results.push(blob);
+            } else {
+                apply_blob(app, machine_file, &blob);
+            }
             let mut state = app.state.lock().unwrap();
-            state.last_seq = state.last_seq.max(blob.seq);
+            state.last_seq = state.last_seq.max(seq);
         }
         app.bulk_sync.store(false, Ordering::Relaxed);
         app.save_state_now();
         if bulk {
             crate::runtime::prime_names(app);
             app.emit(Event::Snapshot(app.snapshot()));
+            app.turns_changed();
+        }
+        for blob in results {
+            apply_blob(app, machine_file, &blob);
         }
     }
 }
@@ -434,6 +452,7 @@ async fn refresh_presence(app: &Arc<App>, url: &str, token: &str) -> Result<(), 
         if pruned {
             state.device_seen.retain(|id, _| Some(id) == this_id.as_ref() || machines.iter().any(|m| &m.machine_pubkey == id));
         }
+        state.turns_online = state.device_online.clone();
         let after: Vec<bool> = state.devices.iter().map(|d| online(&state, &d.id)).collect();
         (before != after, pruned)
     };
@@ -442,6 +461,21 @@ async fn refresh_presence(app: &Arc<App>, url: &str, token: &str) -> Result<(), 
     }
     if changed || pruned {
         app.emit(app.roster_summary());
+    }
+    // A Device that is not online lists nothing: a Runner that stopped mid-turn never shows
+    // that turn again, and one that only lost the relay lists it again when it connects.
+    let offline: Vec<String> = {
+        let mut state = app.state.lock().unwrap();
+        let offline: Vec<String> = state.device_turns.keys().filter(|id| !state.turns_online.contains(*id)).cloned().collect();
+        for id in &offline {
+            state.device_turns.remove(id);
+        }
+        offline
+    };
+    for id in offline {
+        if let Err(error) = app.store.set_device_turns(&id, &[]) {
+            tracing::error!(%error, "dropping another Device's turns");
+        }
     }
     Ok(())
 }
@@ -462,9 +496,12 @@ pub async fn unpair_device(app: &Arc<App>, id: &str) -> Result<(), String> {
         state.devices.retain(|d| d.id != id);
         state.device_seen.remove(id);
         state.device_online.remove(id);
+        state.turns_online.remove(id);
     }
     app.save_state();
     app.emit(app.roster_summary());
+    app.set_device_turns(id, Vec::new());
+    app.turns_changed();
     Ok(())
 }
 
@@ -543,10 +580,13 @@ fn apply_blob_contents(app: &Arc<App>, machine_file: &crate::keys::MachineFile, 
             Err(error) => tracing::warn!(%error, "chat blob"),
         },
         "machine" => match crate::crypto::decrypt_json::<MachineBlob>(&dek, "machine", &ciphertext) {
-            Ok(MachineBlob { device }) => {
+            Ok(MachineBlob { device, turns }) => {
                 if app.this_device_id().as_deref() == Some(device.id.as_str()) {
                     return;
                 }
+                // Shown only while the relay lists the Device online, so a key it no longer
+                // lists shows nothing.
+                app.set_device_turns(&device.id, turns);
                 let mut state = app.state.lock().unwrap();
                 // A key the last presence refresh did not list is either a Device that just
                 // paired or one unpaired since, whose old blob must not bring it back. It
@@ -556,7 +596,10 @@ fn apply_blob_contents(app: &Arc<App>, machine_file: &crate::keys::MachineFile, 
                     app.presence_stale.store(true, Ordering::Relaxed);
                     return;
                 }
-                let changed = upsert_device(&mut state.devices, device);
+                // A blob that only lists other turns is stamped anew but changes nothing the
+                // roster shows.
+                let restamped = state.devices.iter().any(|known| *known == Device { updated_at: known.updated_at, ..device.clone() });
+                let changed = !restamped && upsert_device(&mut state.devices, device);
                 drop(state);
                 if changed {
                     app.save_state();
@@ -601,18 +644,6 @@ fn apply_blob_contents(app: &Arc<App>, machine_file: &crate::keys::MachineFile, 
                     tokio::spawn(async move { delete_remote_blob(&app, &blob_id).await });
                 }
                 Err(error) => tracing::warn!(%error, "job result envelope"),
-            }
-        }
-        "job_status" => {
-            let Ok(machine) = machine_file.machine() else { return };
-            match crate::crypto::unseal_json::<JobStatus>(&machine.box_secret, &ciphertext) {
-                Ok(status) => {
-                    crate::runtime::deliver_job_status(app, status);
-                    let app = app.clone();
-                    let blob_id = blob.id.clone();
-                    tokio::spawn(async move { delete_remote_blob(&app, &blob_id).await });
-                }
-                Err(error) => tracing::warn!(%error, "job status envelope"),
             }
         }
         "request" => {

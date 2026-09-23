@@ -128,7 +128,7 @@ class Engine {
         removeChat(data.chat_id);
         break;
       case "job.started":
-        setRunning(data.job_id, { chatId: data.chat_id, botId: data.bot_id ?? "" });
+        setRunning(data.job_id, { chatId: data.chat_id, botId: data.bot_id ?? "", routineId: data.routine_id ?? undefined });
         break;
       case "job.finished":
         setRunning(data.job_id, null);
