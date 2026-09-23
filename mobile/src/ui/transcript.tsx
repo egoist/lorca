@@ -8,10 +8,11 @@ import { Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View
 import * as Clipboard from "expo-clipboard";
 import { ShimmerView } from "../../modules/lorca-core/ShimmerView";
 import { isSentMessage, recipientName, type Body, type Bot, type Chat, type Message } from "../core/model";
+import { useStore } from "../core/store";
 import { language, t } from "../i18n";
 import { AttachmentBlock } from "./attachments";
 import { BotAvatar } from "./Avatar";
-import { daySeparator, firstLine } from "./format";
+import { daySeparator, firstLine, workingActivity } from "./format";
 import { Markdown } from "./Markdown";
 import { Symbol } from "./Symbol";
 import { usePaneWidth } from "./layout";
@@ -354,16 +355,16 @@ export function StatusRow({ text }: { text: string }) {
   );
 }
 
-/// "Working…" in a DM and "Chef is working…" in a group, the words shimmering while a turn runs.
-export function WorkingRow({ bots, isGroup }: { bots: Bot[]; isGroup: boolean }) {
+/// "Working…" in a DM and "Chef is working…" in a group, or what the one bot at work is doing,
+/// the words shimmering while a turn runs.
+export function WorkingRow({ chatId, bots, isGroup }: { chatId: string; bots: Bot[]; isGroup: boolean }) {
   const p = usePalette();
+  const activity = useStore((s) => workingActivity(s, chatId));
   const names = bots.map((b) => b.name);
   const label =
-    !isGroup || names.length === 0
-      ? t("Working…")
-      : names.length === 1
-        ? t("{name} is working…", { name: names[0] })
-        : t("{names} and {last} are working…", { names: names.slice(0, -1).join(language === "zh" ? "、" : ", "), last: names[names.length - 1] });
+    names.length > 1
+      ? t("{names} and {last} are working…", { names: names.slice(0, -1).join(language === "zh" ? "、" : ", "), last: names[names.length - 1] })
+      : (activity ?? (isGroup && names.length === 1 ? t("{name} is working…", { name: names[0] }) : t("Working…")));
   return (
     <View style={[styles.messageRow, styles.messageRowBot, { paddingTop: 14, alignItems: "center" }]}>
       <View style={{ width: AVATAR + GUTTER }}>{bots[0] && <BotAvatar bot={bots[0]} size={AVATAR} />}</View>

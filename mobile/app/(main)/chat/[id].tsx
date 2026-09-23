@@ -712,12 +712,12 @@ export default function ChatScreen() {
             />
           );
         case "working":
-          return <WorkingRow bots={item.bots} isGroup={isGroup} />;
+          return <WorkingRow chatId={id} bots={item.bots} isGroup={isGroup} />;
         case "status":
           return <StatusRow text={item.text} />;
       }
     },
-    [bots, isGroup, openMarker],
+    [bots, id, isGroup, openMarker],
   );
 
   if (!chat) {

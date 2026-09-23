@@ -274,7 +274,7 @@ final class WorkingCellView: TranscriptCellView {
         case "list_teammates": return L("Checking the team")
         case "create_bot": return L("Creating a bot")
         case "edit_bot": return L("Updating a bot")
-        case "remember": return L("Taking a note")
+        case "memory_update", "memory_log": return L("Taking a note")
         case "search_plugins": return L("Searching plugins")
         case "install_plugin": return L("Installing a plugin")
         default:

@@ -15,6 +15,7 @@ import {
   applyRoster,
   botById,
   chatById,
+  endActivity,
   markFile,
   markRead,
   patchRoutine,
@@ -24,8 +25,10 @@ import {
   replaceSnapshot,
   resetStore,
   setChatUsage,
+  setRetry,
   setRunning,
   setStatus,
+  setThinking,
   upsertMessage,
   useStore,
 } from "./store";
@@ -115,7 +118,7 @@ class Engine {
       case "message.added":
       case "message.updated": {
         const message = data.message as Message;
-        upsertMessage(message);
+        upsertMessage(message, event === "message.added");
         break;
       }
       case "message.removed":
@@ -129,7 +132,14 @@ class Engine {
         break;
       case "job.finished":
         setRunning(data.job_id, null);
+        endActivity(data.chat_id, data.bot_id ?? "");
         if (!Object.values(useStore.getState().running).some((r) => r.chatId === data.chat_id)) this.noteSilence(data.chat_id);
+        break;
+      case "job.thinking":
+        setThinking(data.chat_id, data.bot_id);
+        break;
+      case "job.retry":
+        setRetry(data.chat_id, { attempt: data.attempt, max_attempts: data.max_attempts, delay_ms: data.delay_ms });
         break;
       case "chat.usage":
         setChatUsage(data.chat_id, data.usage as ChatUsage);

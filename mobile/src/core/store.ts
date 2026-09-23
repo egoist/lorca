@@ -15,6 +15,13 @@ export interface Running {
   botId: string;
 }
 
+/// A model call that failed in a way worth another try, asked again after `delay_ms`.
+export interface Retry {
+  attempt: number;
+  max_attempts: number;
+  delay_ms: number;
+}
+
 export interface StoreState {
   /// The core answered its first snapshot.
   ready: boolean;
@@ -39,6 +46,11 @@ export interface StoreState {
   providers: ProviderStatus[];
   /// Turns in flight, by job id.
   running: Record<string, Running>;
+  /// The bot whose model is thinking, by chat id, until that bot's next message or the end of
+  /// its turn.
+  thinking: Record<string, string>;
+  /// A model call waiting to be asked again, by chat id, until the chat hears more.
+  retries: Record<string, Retry>;
   /// "Chef stopped without replying", by chat id, after a turn ends with nothing said.
   statuses: Record<string, string>;
   /// The chat on screen: new replies there do not count as unread.
@@ -66,6 +78,8 @@ function empty(): Omit<StoreState, "ready" | "dictation_lang" | "appActive"> {
     auto_review: { is_enabled: true, rules: [] },
     providers: [],
     running: {},
+    thinking: {},
+    retries: {},
     statuses: {},
     openChatId: null,
     files: {},
@@ -128,6 +142,8 @@ export function replaceSnapshot(snapshot: {
 }) {
   const running: Record<string, Running> = {};
   for (const turn of snapshot.running_turns ?? []) running[turn.job_id] = { chatId: turn.chat_id, botId: turn.bot_id };
+  const busy = new Set(Object.values(running).map((r) => r.chatId));
+  const { thinking, retries } = useStore.getState();
   useStore.setState({
     ready: true,
     paired: snapshot.has_identity,
@@ -152,6 +168,9 @@ export function replaceSnapshot(snapshot: {
     auto_review: snapshot.auto_review ?? { is_enabled: true, rules: [] },
     providers: snapshot.providers ?? [],
     running,
+    // What a turn that ended unheard was doing says nothing about the next one.
+    thinking: pick(thinking, busy),
+    retries: pick(retries, busy),
   });
 }
 
@@ -187,7 +206,9 @@ export function removeRoutine(id: string) {
   useStore.setState((s) => ({ routines: s.routines.filter((r) => r.id !== id) }));
 }
 
-export function upsertMessage(message: Message): { added: boolean } {
+/// A message the core stored or changed. `isNew` is the core's `message.added`: the bot's first
+/// message after its thinking is what came of it.
+export function upsertMessage(message: Message, isNew = true): { added: boolean } {
   let added = false;
   useStore.setState((s) => {
     let chats = s.chats;
@@ -209,7 +230,10 @@ export function upsertMessage(message: Message): { added: boolean } {
     });
     // A bot that spoke is no longer "stopped without replying".
     const statuses = message.author.kind === "bot" && message.body.kind === "text" && s.statuses[message.chat_id] ? omit(s.statuses, message.chat_id) : s.statuses;
-    return { chats, statuses };
+    const retries = omit(s.retries, message.chat_id);
+    const thought = isNew && message.author.kind === "bot" && s.thinking[message.chat_id] === message.author.bot_id;
+    const thinking = thought ? omit(s.thinking, message.chat_id) : s.thinking;
+    return { chats, statuses, retries, thinking };
   });
   return { added };
 }
@@ -221,7 +245,12 @@ export function removeMessage(chatId: string, messageId: string) {
 }
 
 export function removeChat(chatId: string) {
-  useStore.setState((s) => ({ chats: s.chats.filter((c) => c.id !== chatId), statuses: omit(s.statuses, chatId) }));
+  useStore.setState((s) => ({
+    chats: s.chats.filter((c) => c.id !== chatId),
+    statuses: omit(s.statuses, chatId),
+    thinking: omit(s.thinking, chatId),
+    retries: omit(s.retries, chatId),
+  }));
 }
 
 export function setChatUsage(chatId: string, usage: ChatUsage) {
@@ -250,6 +279,25 @@ export function setRunning(jobId: string, running: Running | null) {
   });
 }
 
+/// `job.thinking`: the bot's model started thinking.
+export function setThinking(chatId: string, botId: string) {
+  useStore.setState((s) => ({ thinking: { ...s.thinking, [chatId]: botId } }));
+}
+
+/// `job.retry`: a model call failed and waits to be asked again.
+export function setRetry(chatId: string, retry: Retry) {
+  useStore.setState((s) => ({ retries: { ...s.retries, [chatId]: retry } }));
+}
+
+/// A turn ended: its retry is over, and so is its bot's thinking. An empty `botId` is a group
+/// exchange, which ends every member's.
+export function endActivity(chatId: string, botId: string) {
+  useStore.setState((s) => ({
+    retries: omit(s.retries, chatId),
+    thinking: !botId || s.thinking[chatId] === botId ? omit(s.thinking, chatId) : s.thinking,
+  }));
+}
+
 export function setStatus(chatId: string, text: string | null) {
   useStore.setState((s) => {
     const next = { ...s.statuses };
@@ -259,10 +307,15 @@ export function setStatus(chatId: string, text: string | null) {
   });
 }
 
-function omit(record: Record<string, string>, key: string): Record<string, string> {
+function omit<T>(record: Record<string, T>, key: string): Record<string, T> {
+  if (!(key in record)) return record;
   const next = { ...record };
   delete next[key];
   return next;
+}
+
+function pick<T>(record: Record<string, T>, keys: Set<string>): Record<string, T> {
+  return Object.fromEntries(Object.entries(record).filter(([key]) => keys.has(key)));
 }
 
 // MARK: - Hooks

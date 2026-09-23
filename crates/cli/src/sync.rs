@@ -14,7 +14,7 @@ const BULK_BLOBS: usize = 20;
 
 /// What a pull takes. `file` blobs are left out: a transcript fetches them by id when it
 /// needs them, so a photo sent to one bot is not downloaded by every Device.
-pub const POLL_KINDS: &str = "roster,chat,machine,credentials,job,job_cancel,job_result,request,response";
+pub const POLL_KINDS: &str = "roster,chat,machine,credentials,job,job_cancel,job_result,job_status,request,response";
 
 pub async fn run(app: Arc<App>) {
     let mut failures: u32 = 0;
@@ -149,7 +149,7 @@ async fn session(app: &Arc<App>) -> Result<(), RelayError> {
 }
 
 /// Everything a Device polls for but the messages.
-const NOT_CHAT_KINDS: &str = "roster,machine,credentials,job,job_cancel,job_result,request,response";
+const NOT_CHAT_KINDS: &str = "roster,machine,credentials,job,job_cancel,job_result,job_status,request,response";
 /// How much of each chat a Device takes when it first syncs: what a bot's turn reads.
 const FIRST_SYNC_MESSAGES: usize = 400;
 /// Messages to a page when reading a chat backwards.
@@ -594,8 +594,25 @@ fn apply_blob_contents(app: &Arc<App>, machine_file: &crate::keys::MachineFile, 
         "job_result" => {
             let Ok(machine) = machine_file.machine() else { return };
             match crate::crypto::unseal_json::<JobResult>(&machine.box_secret, &ciphertext) {
-                Ok(result) => crate::runtime::deliver_job_result(app, result),
+                Ok(result) => {
+                    crate::runtime::deliver_job_result(app, result);
+                    let app = app.clone();
+                    let blob_id = blob.id.clone();
+                    tokio::spawn(async move { delete_remote_blob(&app, &blob_id).await });
+                }
                 Err(error) => tracing::warn!(%error, "job result envelope"),
+            }
+        }
+        "job_status" => {
+            let Ok(machine) = machine_file.machine() else { return };
+            match crate::crypto::unseal_json::<JobStatus>(&machine.box_secret, &ciphertext) {
+                Ok(status) => {
+                    crate::runtime::deliver_job_status(app, status);
+                    let app = app.clone();
+                    let blob_id = blob.id.clone();
+                    tokio::spawn(async move { delete_remote_blob(&app, &blob_id).await });
+                }
+                Err(error) => tracing::warn!(%error, "job status envelope"),
             }
         }
         "request" => {

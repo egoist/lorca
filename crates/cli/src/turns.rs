@@ -25,7 +25,6 @@ use tokio_util::sync::CancellationToken;
 
 use crate::app::App;
 use crate::config::now_secs;
-use crate::events::Event;
 use crate::memory::{self, MemoryStore};
 use crate::model::*;
 use crate::providers;
@@ -172,6 +171,7 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
 
     let sink = Arc::new(TurnSink(std::sync::Mutex::new(TurnState {
         app: app.clone(),
+        job: job.clone(),
         chat_id: chat.meta.id.clone(),
         bot_id: bot.id.clone(),
         model: provider.model_id().to_string(),
@@ -717,6 +717,8 @@ fn provider_label(kind: &str) -> &str {
 /// Reduces agent events into transcript messages.
 struct TurnState {
     app: Arc<App>,
+    /// The job this turn runs, for the Device that asked for it.
+    job: Job,
     chat_id: String,
     bot_id: String,
     /// The model answering, for the usage record.
@@ -816,12 +818,12 @@ impl TurnState {
                     },
                 );
                 message.state = MessageState::Streaming;
-                self.app.upsert_message(message.clone(), false);
+                self.start_tool(message.clone());
                 self.tool_messages.push((id, message.id));
             }
             // The app reads "Thinking…" until the bot's next message or the end of its turn.
             AgentEvent::MessageUpdate { assistant_message_event: AssistantEvent::ThinkingStart { .. }, .. } => {
-                self.app.emit(Event::JobThinking { chat_id: self.chat_id.clone(), bot_id: self.bot_id.clone() });
+                self.activity(JobActivity::Thinking);
             }
             AgentEvent::MessageUpdate { assistant_message_event: AssistantEvent::ServerToolEnd { id, name, detail, summary }, .. } => {
                 let Some((_, message_id)) = self.tool_messages.iter().find(|(call, _)| *call == id).cloned() else { return };
@@ -868,7 +870,7 @@ impl TurnState {
                 self.end_assistant(&assistant);
             }
             AgentEvent::Retry { attempt, max_attempts, delay_ms, error } => {
-                self.app.emit(Event::JobRetry { chat_id: self.chat_id.clone(), bot_id: self.bot_id.clone(), attempt, max_attempts, delay_ms, error });
+                self.activity(JobActivity::Retry { attempt, max_attempts, delay_ms, error });
             }
             AgentEvent::ToolExecutionStart { tool_call_id, tool_name, args } => {
                 if !self.tools_used.contains(&tool_name) {
@@ -895,7 +897,7 @@ impl TurnState {
                     },
                 );
                 message.state = MessageState::Streaming;
-                self.app.upsert_message(message.clone(), false);
+                self.start_tool(message.clone());
                 self.tool_messages.push((tool_call_id, message.id));
             }
             AgentEvent::ToolExecutionEnd { tool_call_id, tool_name, result, is_error } => {
@@ -922,6 +924,20 @@ impl TurnState {
 
     fn new_text_message(&self) -> Message {
         Message::new(&self.chat_id, Author::Bot { bot_id: self.bot_id.clone() }, Body::text(String::new()))
+    }
+
+    /// A call's running row. Every paired Device gets the app's view of it, so a working row
+    /// anywhere reads "Running command: …" while it runs; the finished row carries the rest.
+    fn start_tool(&self, message: Message) {
+        self.app.upsert_message(message.clone(), false);
+        self.app.push_chat_op(&ChatBlob::Upsert { message: message.for_app() });
+    }
+
+    /// What the turn is doing that no message says: this Runner's app hears it, and so does
+    /// the Device that asked for the job.
+    fn activity(&self, activity: JobActivity) {
+        self.app.emit(activity.event(&self.chat_id, &self.bot_id));
+        crate::runtime::report_activity(&self.app, &self.job, activity);
     }
 
     /// A finished text part: a bubble unless it is empty or a pass.
@@ -2252,6 +2268,7 @@ fn look_for(name: &str) -> (String, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::events::Event;
     use std::time::Duration;
 
     #[test]
@@ -2468,29 +2485,9 @@ mod tests {
             state.chats.push(chat("chat", "dm", None, &["b1"]));
         }
         let mut events = app.events.subscribe();
-        let mut turn = TurnState {
-            app: app.clone(),
-            chat_id: "chat".into(),
-            bot_id: "b1".into(),
-            model: "model".into(),
-            window: 0,
-            current: None,
-            done_parts: 0,
-            tool_messages: Vec::new(),
-            sent: false,
-            failed: false,
-            last_error: None,
-            last_said: None,
-            tools_used: Vec::new(),
-            plugin_tools: crate::plugins::mcp::turn_tools(app, "chat", &chef, false).0,
-            shown_len: 0,
-            last_flush: std::time::Instant::now(),
-        };
+        let mut turn = turn_state(app, &chef, "");
 
-        turn.handle(AgentEvent::MessageUpdate {
-            message: AgentMessage::Assistant(AssistantMessage::empty("deepseek", "model")),
-            assistant_message_event: AssistantEvent::ThinkingStart { index: 0 },
-        });
+        turn.handle(thinking_starts());
         assert!(matches!(events.try_recv(), Ok(Event::JobThinking { chat_id, bot_id }) if chat_id == "chat" && bot_id == "b1"));
 
         let run = |tool: &str, args: Value| AgentEvent::ToolExecutionStart { tool_call_id: tool.into(), tool_name: tool.into(), args };
@@ -2503,6 +2500,138 @@ mod tests {
             })
             .collect();
         assert_eq!(descriptions, [Some("Install dependencies".to_string()), None]);
+    }
+
+    /// A turn of `bot` in "chat", for a job `requested_by` that Device.
+    fn turn_state(app: &Arc<App>, bot: &Bot, requested_by: &str) -> TurnState {
+        TurnState {
+            app: app.clone(),
+            job: Job {
+                id: "job-1".into(),
+                chat_id: "chat".into(),
+                bot_id: bot.id.clone(),
+                kind: "turn".into(),
+                trigger_message_id: String::new(),
+                routine_id: None,
+                requested_by: requested_by.into(),
+                from_bot_id: None,
+                hops: 0,
+                round: 0,
+                is_winding_down: false,
+                created_at: 0.0,
+            },
+            chat_id: "chat".into(),
+            bot_id: bot.id.clone(),
+            model: "model".into(),
+            window: 0,
+            current: None,
+            done_parts: 0,
+            tool_messages: Vec::new(),
+            sent: false,
+            failed: false,
+            last_error: None,
+            last_said: None,
+            tools_used: Vec::new(),
+            plugin_tools: crate::plugins::mcp::turn_tools(app, "chat", bot, false).0,
+            shown_len: 0,
+            last_flush: std::time::Instant::now(),
+        }
+    }
+
+    fn thinking_starts() -> AgentEvent {
+        AgentEvent::MessageUpdate {
+            message: AgentMessage::Assistant(AssistantMessage::empty("deepseek", "model")),
+            assistant_message_event: AssistantEvent::ThinkingStart { index: 0 },
+        }
+    }
+
+    #[test]
+    fn the_device_that_asked_hears_what_the_turn_is_doing() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        crate::identity::create(app, Some("Runner".into())).unwrap();
+        let phone_keys = crate::keys::Machine::generate();
+        let chef = bot("b1", "Chef");
+        {
+            let mut state = app.state.lock().unwrap();
+            state.bots.push(chef.clone());
+            state.chats.push(chat("chat", "dm", None, &["b1"]));
+            state.devices.push(Device {
+                id: "phone".into(),
+                name: "Phone".into(),
+                model: String::new(),
+                os: "ios".into(),
+                os_version: String::new(),
+                box_pubkey: phone_keys.box_pubkey(),
+                plugins: Vec::new(),
+                updated_at: 1,
+            });
+        }
+        let mut turn = turn_state(app, &chef, "phone");
+        let last_status = || {
+            let queued = app.store.last_outbox().unwrap().unwrap();
+            assert_eq!((queued.kind.as_str(), queued.recipient.as_deref()), ("job_status", Some("phone")));
+            crate::crypto::unseal_json::<JobStatus>(&phone_keys.box_secret, &queued.ciphertext).unwrap()
+        };
+
+        turn.handle(thinking_starts());
+        let status = last_status();
+        assert_eq!((status.job_id.as_str(), status.chat_id.as_str(), status.bot_id.as_str()), ("job-1", "chat", "b1"));
+        assert_eq!(status.activity, JobActivity::Thinking);
+
+        turn.handle(AgentEvent::Retry { attempt: 2, max_attempts: 3, delay_ms: 4000, error: "overloaded".into() });
+        assert_eq!(last_status().activity, JobActivity::Retry { attempt: 2, max_attempts: 3, delay_ms: 4000, error: "overloaded".into() });
+
+        // The running call goes up as the app sees it, and its finished row replaces it.
+        let dek = app.dek().unwrap();
+        let queued_rows = || -> Vec<(Message, bool)> {
+            app.store
+                .outbox()
+                .unwrap()
+                .into_iter()
+                .filter(|item| item.kind == "chat")
+                .map(|item| match crate::crypto::decrypt_json::<ChatBlob>(&dek, "chat", &item.ciphertext).unwrap() {
+                    ChatBlob::Upsert { message } => (message, item.slot.unwrap().keep_first),
+                    other => panic!("{other:?}"),
+                })
+                .collect()
+        };
+        let args = json!({ "command": "bun install", "description": "Install dependencies", "padding": "x".repeat(1_000) });
+        turn.handle(AgentEvent::ToolExecutionStart { tool_call_id: "call".into(), tool_name: "bash".into(), args });
+        let [(running, keep_first)] = queued_rows().try_into().unwrap();
+        let Body::Tool { is_running, arguments, detail, description, .. } = &running.body else { panic!("a tool row") };
+        assert!(*is_running && arguments.is_null() && detail.chars().count() == 400 && !keep_first);
+        assert_eq!(description.as_deref(), Some("Install dependencies"));
+        // The Runner keeps the whole call for later turns.
+        let Body::Tool { arguments, .. } = app.message("chat", &running.id).unwrap().body else { panic!("a tool row") };
+        assert_eq!(arguments["command"], "bun install");
+
+        turn.handle(AgentEvent::ToolExecutionEnd {
+            tool_call_id: "call".into(),
+            tool_name: "bash".into(),
+            result: ToolResult::text("done"),
+            is_error: false,
+        });
+        let [(finished, keep_first)] = queued_rows().try_into().unwrap();
+        let Body::Tool { is_running, arguments, .. } = &finished.body else { panic!("a tool row") };
+        assert_eq!((finished.id.as_str(), *is_running, keep_first), (running.id.as_str(), false, false));
+        assert_eq!(arguments["command"], "bun install");
+    }
+
+    #[test]
+    fn a_job_this_device_asked_for_sends_no_status() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        crate::identity::create(app, Some("Runner".into())).unwrap();
+        let chef = bot("b1", "Chef");
+        app.state.lock().unwrap().bots.push(chef.clone());
+        app.state.lock().unwrap().chats.push(chat("chat", "dm", None, &["b1"]));
+        let here = app.this_device_id().unwrap();
+        let mut turn = turn_state(app, &chef, &here);
+
+        turn.handle(thinking_starts());
+
+        assert!(app.store.outbox().unwrap().iter().all(|item| item.kind != "job_status"));
     }
 
     #[test]

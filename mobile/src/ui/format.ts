@@ -1,7 +1,9 @@
-// Stamps and previews, the rules the Mac app uses (Design/Formatters.swift, AppStore.preview).
+// Stamps, previews, and the working row's words, the rules the Mac app uses
+// (Design/Formatters.swift, AppStore.preview, ChatViewController.activity).
 
-import type { Bot, Chat, Routine } from "../core/model";
+import type { Body, Bot, Chat, Routine } from "../core/model";
 import { attachmentSummary, isSentMessage, recipientName } from "../core/model";
+import type { StoreState } from "../core/store";
 import { language, t } from "../i18n";
 
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -202,4 +204,76 @@ export function firstLine(text: string): string {
     if (line && !line.startsWith("```")) return line;
   }
   return "";
+}
+
+/// What the working row reads from the store.
+export type WorkState = Pick<StoreState, "running" | "thinking" | "retries" | "chats" | "bots" | "devices">;
+
+/// What the one bot at work in a chat is doing, in the words of the Mac's working row: a model
+/// call waiting to be asked again, its model thinking, or its latest tool, running or just
+/// finished, which the row keeps reading between calls until the bot says something.
+export function workingActivity(s: WorkState, chatId: string): string | null {
+  const retry = s.retries[chatId];
+  if (retry) {
+    const seconds = Math.max(1, Math.round(retry.delay_ms / 1000));
+    return t("Retrying ({attempt} of {max}) in {seconds} s…", { attempt: retry.attempt, max: retry.max_attempts, seconds });
+  }
+  const botIds = new Set<string>();
+  for (const r of Object.values(s.running)) if (r.chatId === chatId && r.botId) botIds.add(r.botId);
+  if (botIds.size !== 1) return null;
+  const [botId] = botIds;
+  if (s.thinking[chatId] === botId) return t("Thinking…");
+  const chat = s.chats.find((c) => c.id === chatId);
+  const last = chat?.messages[chat.messages.length - 1];
+  if (last?.author.kind !== "bot" || last.author.bot_id !== botId || last.body.kind !== "tool" || isSentMessage(last.body)) return null;
+  return toolActivity(s, botId, last.body);
+}
+
+/// What a call means while it runs, in the words of the working row.
+function toolActivity(s: WorkState, botId: string, tool: Extract<Body, { kind: "tool" }>): string {
+  switch (tool.name) {
+    case "read":
+      return t("Reading a file…");
+    case "write":
+    case "edit":
+      return t("Drafting a file…");
+    case "bash":
+      return tool.description ? t("Running command: {description}…", { description: tool.description }) : t("Running commands…");
+    case "web_search":
+      return t("Searching the web…");
+    case "web_fetch":
+      return t("Reading the web…");
+    case "grep":
+    case "find":
+    case "ls":
+      return t("Searching files…");
+    case "message_bot": {
+      const detail = tool.detail.toLowerCase();
+      const target = s.bots.find((b) => detail.includes(`"bot": "${b.name.toLowerCase()}"`));
+      return target ? t("Messaging {name}…", { name: target.name }) : t("Messaging another bot…");
+    }
+    case "list_teammates":
+      return t("Checking the team…");
+    case "create_bot":
+      return t("Creating a bot…");
+    case "edit_bot":
+      return t("Updating a bot…");
+    case "memory_update":
+    case "memory_log":
+      return t("Taking a note…");
+    case "search_plugins":
+      return t("Searching plugins…");
+    case "install_plugin":
+      return t("Installing a plugin…");
+  }
+  // A plugin's tool, `<plugin>__<tool>`: "Using GitHub", whether the call is running or just
+  // finished, so a run of quick calls never flashes back to "Working" between them.
+  const at = tool.name.indexOf("__");
+  if (at > 0) {
+    const pluginId = tool.name.slice(0, at);
+    const runnerId = s.bots.find((b) => b.id === botId)?.runner_id;
+    const plugin = s.devices.find((d) => d.id === runnerId)?.plugins?.find((p) => p.id === pluginId);
+    return t("Using {name}…", { name: plugin?.name ?? pluginId.charAt(0).toUpperCase() + pluginId.slice(1) });
+  }
+  return t("Working…");
 }

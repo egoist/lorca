@@ -98,8 +98,8 @@ impl IntoResponse for ApiError {
 pub type ApiResult<T> = Result<T, ApiError>;
 
 /// The protocol this relay speaks, in `/v1/health`. A client sends the one it speaks as
-/// `Lorca-Protocol`. 1: group paging, `DELETE /v1/identity`.
-pub const PROTOCOL: u32 = 1;
+/// `Lorca-Protocol`. 1: group paging, `DELETE /v1/identity`. 2: `job_status` envelopes.
+pub const PROTOCOL: u32 = 2;
 
 /// Turns away a client older than `--min-protocol` before anything else looks at it. The
 /// answer is the same on every route, the sync socket's upgrade included, so a client learns

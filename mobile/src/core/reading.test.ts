@@ -2,8 +2,9 @@ import { beforeEach, expect, mock, test } from "bun:test";
 import type { Notification, NotificationBehavior, NotificationResponse } from "expo-notifications";
 import type { Chat, Message } from "./model";
 
-// Exercise the real engine and store, including message/roster ordering and foreground
-// transitions. Only native bridges are replaced; no account or provider is contacted.
+// Exercise the real engine and store, including message/roster ordering, foreground
+// transitions, and the working row. Only native bridges are replaced; no account or provider is
+// contacted.
 let event: (frame: { event: string; data: unknown }) => void;
 let appState: (status: string) => void;
 const reads: string[] = [];
@@ -49,6 +50,7 @@ function snapshot(chats: Chat[]) {
 
 const { engine } = await import("./engine");
 const { resetStore, useStore } = await import("./store");
+const { workingActivity } = await import("../ui/format");
 await engine.start();
 
 beforeEach(async () => {
@@ -166,4 +168,25 @@ test("a backlog snapshot is read only while the chat is foregrounded", async () 
   appState("active");
   await flush();
   expect(reads).toEqual(["open"]);
+});
+
+test("a turn on the Runner reads as thinking, its command, and its retry", () => {
+  const row = () => workingActivity(useStore.getState(), "open");
+  const command = (is_running: boolean): Message => ({ id: "call", chat_id: "open", author: { kind: "bot", bot_id: "bot" },
+    body: { kind: "tool", name: "bash", summary: is_running ? "Running bash…" : "installed", detail: "", is_running, description: "Install dependencies" },
+    state: { kind: is_running ? "streaming" : "complete" }, created_at: 1 });
+  event({ event: "job.started", data: { job_id: "job", chat_id: "open", bot_id: "bot" } });
+  expect(row()).toBeNull();
+  event({ event: "job.thinking", data: { chat_id: "open", bot_id: "bot" } });
+  expect(row()).toBe("Thinking…");
+  // The bot's next message is what its thinking came to.
+  event({ event: "message.added", data: { chat_id: "open", message: command(true) } });
+  expect(row()).toBe("Running command: Install dependencies…");
+  event({ event: "job.thinking", data: { chat_id: "open", bot_id: "bot" } });
+  event({ event: "message.updated", data: { chat_id: "open", message: command(false) } });
+  expect(row()).toBe("Thinking…");
+  event({ event: "job.retry", data: { chat_id: "open", bot_id: "bot", attempt: 1, max_attempts: 3, delay_ms: 2000, error: "overloaded" } });
+  expect(row()).toBe("Retrying (1 of 3) in 2 s…");
+  event({ event: "job.finished", data: { job_id: "job", chat_id: "open", bot_id: "bot" } });
+  expect(useStore.getState()).toMatchObject({ running: {}, thinking: {}, retries: {} });
 });

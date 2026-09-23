@@ -17,7 +17,7 @@ import {
   type Chat,
 } from "./model";
 import { parsePairingString } from "./pairing";
-import { daySeparator, joinDictation, preview, stamp, time } from "../ui/format";
+import { daySeparator, joinDictation, preview, stamp, time, workingActivity, type WorkState } from "../ui/format";
 
 let nextId = 0;
 const uuid = () => `m-${++nextId}`;
@@ -108,6 +108,40 @@ describe("format", () => {
     expect(preview(chat("dm", [sent]), bots)).toBe("Messaged Scout: please look");
     const handoff = msg({ kind: "bot", bot_id: "b1" }, { kind: "handoff", from: "b1", to: "b2", reason: "over to you" });
     expect(preview({ ...chat("dm", [handoff]), bot_ids: ["b2"] }, bots)).toBe("Message from Chef: over to you");
+  });
+
+  test("the working row reads what the one bot at work is doing", () => {
+    const you = msg({ kind: "you" }, { kind: "text", text: "set it up" });
+    const tool = (name: string, extra: Partial<Extract<Body, { kind: "tool" }>> = {}) =>
+      msg({ kind: "bot", bot_id: "b1" }, { kind: "tool", name, summary: `Running ${name}…`, detail: "", is_running: true, ...extra });
+    const state = (messages: Chat["messages"], more: Partial<WorkState> = {}): WorkState => ({
+      running: { job: { chatId: "c", botId: "b1" } },
+      thinking: {},
+      retries: {},
+      chats: [chat("dm", messages)],
+      bots: [...bots.values()],
+      devices: [],
+      ...more,
+    });
+    const activity = (messages: Chat["messages"], more?: Partial<WorkState>) => workingActivity(state(messages, more), "c");
+
+    expect(activity([you])).toBeNull();
+    expect(activity([you, tool("bash", { description: "Install dependencies" })])).toBe("Running command: Install dependencies…");
+    // Between calls the row keeps the last one.
+    expect(activity([you, tool("bash", { is_running: false })])).toBe("Running commands…");
+    expect(activity([you, tool("memory_update")])).toBe("Taking a note…");
+    expect(activity([you, tool("message_bot", { detail: '{\n  "bot": "scout",\n  "message": "hi"\n}' })])).toBe("Messaging Scout…");
+    expect(activity([you, tool("message_bot", { summary: "Messaged Scout", is_running: false })])).toBeNull();
+    expect(activity([you, tool("github__create_issue")])).toBe("Using Github…");
+    const runner = { id: "r", name: "Mac", model: "", os: "macos", os_version: "", machine_key: "", is_this_device: false, status: "online" as const, last_seen: 0, plugins: [{ id: "github", name: "GitHub", state: "ready" as const }] };
+    expect(activity([you, tool("github__create_issue")], { devices: [runner] })).toBe("Using GitHub…");
+    expect(activity([you, tool("routines")])).toBe("Working…");
+    // What the bot said since is the news; its thinking and a retry outrank the last call.
+    expect(activity([you, tool("read"), msg({ kind: "bot", bot_id: "b1" }, { kind: "text", text: "Done" })])).toBeNull();
+    expect(activity([you, tool("read")], { thinking: { c: "b1" } })).toBe("Thinking…");
+    expect(activity([you], { thinking: { c: "b1" }, retries: { c: { attempt: 2, max_attempts: 3, delay_ms: 3600 } } })).toBe("Retrying (2 of 3) in 4 s…");
+    // Two bots at work read as their names.
+    expect(activity([you, tool("read")], { running: { a: { chatId: "c", botId: "b1" }, b: { chatId: "c", botId: "b2" } } })).toBeNull();
   });
 
   test("stamps and separators", () => {

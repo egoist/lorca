@@ -146,6 +146,8 @@ export type Body =
       arguments?: unknown;
       result?: string | null;
       is_error?: boolean;
+      /** What the call does, in the bot's words: a shell command's description. */
+      description?: string;
     }
   | { kind: "handoff"; from: string; to: string; reason: string }
   | { kind: "notice"; text: string; routine_id?: string }

@@ -488,9 +488,12 @@ pub enum ChatBlob {
 
 impl ChatBlob {
     /// Versions of a message share a slot, and so does its removal, which leaves the relay
-    /// nothing of the message but the removal. A chat's read marks share another.
+    /// nothing of the message but the removal. A chat's read marks share another. A tool row
+    /// goes up while its call runs, for the status line on other Devices, and the finished row
+    /// replaces it outright, so the relay keeps one version of each call.
     pub fn slot(&self) -> crate::app::Slot {
         match self {
+            ChatBlob::Upsert { message } if matches!(message.body, Body::Tool { .. }) => crate::app::Slot::latest(relay_name(&message.id)),
             ChatBlob::Upsert { message } => crate::app::Slot::first_and_latest(relay_name(&message.id)),
             ChatBlob::Remove { message_id, .. } => crate::app::Slot::latest(relay_name(message_id)),
             ChatBlob::ClearUnread { chat_id } => crate::app::Slot::latest(relay_name(&format!("read-{chat_id}"))),
@@ -567,6 +570,44 @@ pub struct JobResult {
     pub bot_id: String,
     /// `sent`, `pass`, or `error`.
     pub outcome: String,
+}
+
+/// `kind = job_status`, sealed to the requesting Device's box key: what the job's turn is doing
+/// that no message says, so that Device shows the bot at work the way the Runner's own app
+/// does.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct JobStatus {
+    pub job_id: String,
+    pub chat_id: String,
+    pub bot_id: String,
+    pub activity: JobActivity,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum JobActivity {
+    /// The model started thinking; the bot's next message is what came of it.
+    Thinking,
+    /// A model call failed in a way worth another try; the turn waits `delay_ms` and asks again.
+    Retry { attempt: u32, max_attempts: u32, delay_ms: u64, error: String },
+}
+
+impl JobActivity {
+    /// The event an app hears for it.
+    pub fn event(&self, chat_id: &str, bot_id: &str) -> crate::events::Event {
+        let (chat_id, bot_id) = (chat_id.to_string(), bot_id.to_string());
+        match self {
+            JobActivity::Thinking => crate::events::Event::JobThinking { chat_id, bot_id },
+            JobActivity::Retry { attempt, max_attempts, delay_ms, error } => crate::events::Event::JobRetry {
+                chat_id,
+                bot_id,
+                attempt: *attempt,
+                max_attempts: *max_attempts,
+                delay_ms: *delay_ms,
+                error: error.clone(),
+            },
+        }
+    }
 }
 
 /// `kind = job_cancel`, sealed to the Runner's box key: the hard Stop control reaches a job

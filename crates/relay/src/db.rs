@@ -24,6 +24,7 @@ pub const KINDS: &[&str] = &[
     "job",
     "job_cancel",
     "job_result",
+    "job_status",
     "request",
     "response",
     "machine",
@@ -34,7 +35,7 @@ pub const KINDS: &[&str] = &[
 
 /// Kinds sealed to one machine, which deletes what it consumed. One left behind (its Runner
 /// never came back) is dropped by `Store::sweep` once it is stale.
-pub const SEALED_KINDS: &[&str] = &["job", "job_cancel", "job_result", "request", "response"];
+pub const SEALED_KINDS: &[&str] = &["job", "job_cancel", "job_result", "job_status", "request", "response"];
 
 /// `'job', 'job_cancel', …` for an `IN (…)`.
 fn sealed_kinds_sql() -> String {

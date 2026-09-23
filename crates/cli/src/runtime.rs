@@ -337,6 +337,20 @@ pub fn deliver_job_result(app: &Arc<App>, result: JobResult) {
     }
 }
 
+/// A `job_status` from the Runner of a job this Device asked for: the app hears it as the
+/// Runner's own app does. A job that is no longer running here has nothing to show.
+pub fn deliver_job_status(app: &App, status: JobStatus) {
+    let running = app
+        .running_jobs
+        .lock()
+        .unwrap()
+        .get(&status.job_id)
+        .is_some_and(|job| job.chat_id == status.chat_id && job.bot_id == status.bot_id);
+    if running {
+        app.emit(status.activity.event(&status.chat_id, &status.bot_id));
+    }
+}
+
 // MARK: - Jobs
 
 /// Starts a turn wherever the bot runs: here in the background, or on its Runner with the
@@ -481,6 +495,22 @@ fn report_outcome(app: &Arc<App>, job: &Job, outcome: TurnOutcome) {
     }
 }
 
+/// Tells the Device that asked for a job what its turn is doing, when that Device is another
+/// one: the chat log carries the turn's messages, and this carries the rest of its status line.
+pub fn report_activity(app: &App, job: &Job, activity: JobActivity) {
+    if app.this_device_id().as_deref() == Some(job.requested_by.as_str()) {
+        return;
+    }
+    let Some(requester) = app.device(&job.requested_by).filter(|d| !d.box_pubkey.is_empty()) else { return };
+    let status = JobStatus { job_id: job.id.clone(), chat_id: job.chat_id.clone(), bot_id: job.bot_id.clone(), activity };
+    match crate::crypto::seal_json(&requester.box_pubkey, &status) {
+        Ok(ciphertext) => {
+            app.push_blob("job_status", Some(requester.id.clone()), ciphertext);
+        }
+        Err(error) => tracing::warn!(%error, "sealing the job status"),
+    }
+}
+
 /// Bot names are not in the chat struct; the lookup is primed from the roster and shared by
 /// every worker thread that builds a transcript.
 pub fn name_of(_chat: &Chat, bot_id: &str) -> String {
@@ -600,6 +630,34 @@ mod tests {
         let payload: JobCancel =
             crate::crypto::unseal_json(&runner_keys.box_secret, &ciphertext).unwrap();
         assert_eq!(payload.job_id, "remote-job");
+    }
+
+    #[test]
+    fn a_status_reaches_the_app_only_while_its_job_runs() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        let mut events = app.events.subscribe();
+        let thinking = || JobStatus { job_id: "remote-job".into(), chat_id: "chat".into(), bot_id: "bot".into(), activity: JobActivity::Thinking };
+
+        deliver_job_status(app, thinking());
+        assert!(events.try_recv().is_err());
+
+        app.running_jobs.lock().unwrap().insert(
+            "remote-job".into(),
+            RunningJob {
+                chat_id: "chat".into(),
+                bot_id: "bot".into(),
+                routine_id: None,
+                runner_id: Some("runner".into()),
+                cancel: CancellationToken::new(),
+            },
+        );
+        deliver_job_status(app, thinking());
+        assert!(matches!(events.try_recv(), Ok(Event::JobThinking { chat_id, bot_id }) if chat_id == "chat" && bot_id == "bot"));
+
+        let retry = JobActivity::Retry { attempt: 1, max_attempts: 3, delay_ms: 2000, error: "overloaded".into() };
+        deliver_job_status(app, JobStatus { activity: retry, ..thinking() });
+        assert!(matches!(events.try_recv(), Ok(Event::JobRetry { attempt: 1, max_attempts: 3, delay_ms: 2000, .. })));
     }
 
     #[tokio::test]
