@@ -328,8 +328,11 @@ final class AutoReviewRuleRow: NSView {
         addSubview(detailLabel)
         addSubview(edit)
         addSubview(delete)
+        // Past 900 points the content stops short of the row's end. Filling the row sits below the
+        // split view's holding priority, so a wide page never pulls the sidebar divider, or the
+        // window, in to keep the rows within the cap.
         let fillWidth = content.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12)
-        fillWidth.priority = .init(999)
+        fillWidth.priority = .defaultLow - 1
         NSLayoutConstraint.activate([
             content.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
             content.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -12),

@@ -539,10 +539,13 @@ final class ActionRow: NSView {
 }
 
 
-/// A key and action on the first line, with a wrapping two-line preview below them.
+/// A key and action on the first line, with a wrapping two-line preview below them. With no
+/// preview, the key and action sit alone on one line, centered like the rows around them.
 final class SummaryActionRow: NSView {
     private let value: NSTextField
     private let button = NSButton()
+    private var withPreview: [NSLayoutConstraint] = []
+    private var withoutPreview: [NSLayoutConstraint] = []
     var onAction: (() -> Void)?
 
     init(key keyText: String, value valueText: String, actionTitle: String) {
@@ -568,23 +571,34 @@ final class SummaryActionRow: NSView {
         let header = Build.stack([key, spacer, button], orientation: .horizontal, spacing: 8)
         addSubview(header)
         addSubview(value)
+        withPreview = [
+            header.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            value.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
+        ]
+        withoutPreview = [
+            heightAnchor.constraint(equalToConstant: 32),
+            header.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ]
         NSLayoutConstraint.activate([
             heightAnchor.constraint(greaterThanOrEqualToConstant: 32),
-            header.topAnchor.constraint(equalTo: topAnchor, constant: 6),
             header.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
             header.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
             value.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 2),
             value.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
             value.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-            value.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
         ])
+        setValue(valueText)
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
+    /// An empty value hides the preview line rather than leaving it blank.
     func setValue(_ text: String) {
         value.stringValue = text
+        value.isHidden = text.isEmpty
+        NSLayoutConstraint.deactivate(text.isEmpty ? withPreview : withoutPreview)
+        NSLayoutConstraint.activate(text.isEmpty ? withoutPreview : withPreview)
     }
 
     override func layout() {
