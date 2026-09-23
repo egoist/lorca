@@ -569,40 +569,118 @@ final class DayCellView: NSTableCellView {
 
 // MARK: - Permission card
 
-/// A bot asking before a plugin tool runs (or before a plugin is installed): the question,
-/// the call in one line, and Allow once / Always allow / Deny while it waits, then the answer.
+/// A bot asking before a plugin tool runs, a shell command runs, or a plugin is installed. While
+/// it waits: the question, the call (a shell command in a code block that opens the whole command
+/// on click), why Auto-review paused it, the answers, and under them the rule Always allow adds.
+/// Once answered, the answer and the call; an Always allow keeps the rule it added.
 final class PermissionCellView: NSTableCellView {
     static let identifier = NSUserInterfaceItemIdentifier("PermissionCell")
 
-    static let width: CGFloat = 420
+    static let width: CGFloat = 440
 
-    /// A decided card is one line; a long answer (a sign-in failure with advice) gets two more,
-    /// and a card showing a code to enter has a button row like a pending one. A pending card
-    /// with Auto-review's reason has a second line above the buttons.
-    static func height(pending: Bool, summary: String, hasCode: Bool = false, hasReason: Bool = false) -> CGFloat {
-        if pending && hasReason { return 106 }
-        if pending || hasCode { return 90 }
-        return summary.count > 70 ? 86 : 58
+    /// The box's height at `rowWidth`. The table's row height and the cell's own layout come
+    /// from the same `Layout`, so a card is exactly as tall as what it shows.
+    static func height(for request: PermissionRequest, rowWidth: CGFloat) -> CGFloat {
+        Layout(request: request, rowWidth: rowWidth).height
+    }
+
+    /// What a card says about its rule: the one Always allow would add, or the one it added.
+    static func ruleNote(for request: PermissionRequest) -> String? {
+        guard let rule = request.rule else { return nil }
+        if request.isPending { return L("Always allow adds the rule “%@”.", rule) }
+        return request.decision == .always ? L("Added the rule “%@” to Auto-review.", rule) : nil
+    }
+
+    /// Where each part of a card sits, relative to the box.
+    @MainActor private struct Layout {
+        static let textX: CGFloat = 38
+        static let titleFont = NSFont.systemFont(ofSize: 12.5, weight: .semibold)
+        static let commandFont = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+        static let reasonFont = NSFont.systemFont(ofSize: 11.5)
+        static let noteFont = NSFont.systemFont(ofSize: 11)
+        /// The card shows the start of a long command; a click opens all of it.
+        static let commandLines = 2
+        static let commandPadX: CGFloat = 8
+        static let commandPadY: CGFloat = 5
+
+        var width: CGFloat
+        var height: CGFloat = 0
+        var summary = NSRect.zero
+        var command: NSRect?
+        var reason: NSRect?
+        var buttonY: CGFloat?
+        var note: NSRect?
+
+        init(request: PermissionRequest, rowWidth: CGFloat) {
+            width = min(PermissionCellView.width, rowWidth - ChatMetrics.horizontalInset * 2)
+            let textWidth = width - Self.textX - 12
+            if request.decision == .allowed && request.code != nil {
+                // Signing in with a code: the step, then the code and its button on one row.
+                summary = NSRect(x: Self.textX, y: 30, width: textWidth, height: 16)
+                height = 90
+                return
+            }
+            var bottom: CGFloat
+            if request.isPending && request.isShell {
+                let lines = Self.measure(request.fullCommand, font: Self.commandFont, width: textWidth - Self.commandPadX * 2, maxLines: Self.commandLines)
+                let block = NSRect(x: Self.textX, y: 35, width: textWidth, height: lines + Self.commandPadY * 2)
+                command = block
+                bottom = block.maxY
+            } else {
+                let text = request.isPending ? request.summary : "\(request.decisionText) · \(request.summary)"
+                let lines = Self.measure(text, font: Theme.Font.caption, width: textWidth, maxLines: request.isPending ? 2 : 3)
+                summary = NSRect(x: Self.textX, y: 30, width: textWidth, height: lines)
+                bottom = summary.maxY
+            }
+            if request.isPending, let text = request.reason {
+                let lines = Self.measure(text, font: Self.reasonFont, width: textWidth)
+                let row = NSRect(x: Self.textX, y: bottom + 7, width: textWidth, height: lines)
+                reason = row
+                bottom = row.maxY
+            }
+            if request.isPending {
+                buttonY = bottom + 10
+                bottom += 10 + 22
+            }
+            if let text = PermissionCellView.ruleNote(for: request) {
+                let lines = Self.measure(text, font: Self.noteFont, width: textWidth)
+                let row = NSRect(x: Self.textX, y: bottom + (request.isPending ? 8 : 5), width: textWidth, height: lines)
+                note = row
+                bottom = row.maxY
+            }
+            height = bottom + 12
+        }
+
+        /// The height a label needs for `text` at `width`, cut to `maxLines` when set.
+        static func measure(_ text: String, font: NSFont, width: CGFloat, maxLines: Int = 0) -> CGFloat {
+            let attributes: [NSAttributedString.Key: Any] = [.font: font]
+            let full = TextMeasure.labelSize(of: NSAttributedString(string: text, attributes: attributes), width: width).height
+            guard maxLines > 0 else { return full }
+            let lines = Array(repeating: "X", count: maxLines).joined(separator: "\n")
+            return min(full, TextMeasure.labelSize(of: NSAttributedString(string: lines, attributes: attributes), width: width).height)
+        }
     }
 
     private let box = BackgroundView()
     private let icon = NSImageView()
-    private let title = Build.label("", font: .systemFont(ofSize: 12.5, weight: .semibold))
+    private let title = Build.label("", font: Layout.titleFont)
     private let summary = Build.label("", font: Theme.Font.caption, color: .secondaryLabelColor, lines: 3)
+    private let command = CommandBlockView(font: Layout.commandFont, lines: Layout.commandLines, padding: NSSize(width: Layout.commandPadX, height: Layout.commandPadY))
+    private let reason = Build.label("", font: Layout.reasonFont, color: .secondaryLabelColor, lines: 0)
+    private let note = Build.label("", font: Layout.noteFont, color: .secondaryLabelColor, lines: 0)
     private let allowButton = NSButton()
     private let alwaysButton = NSButton()
     private let denyButton = NSButton()
     private let codeLabel = Build.label("", font: .monospacedSystemFont(ofSize: 15, weight: .semibold))
     private let openButton = CopyFeedbackButton()
     private var groupStart = true
-    private var pending = true
-    private var summaryText = ""
-    private var hasCode = false
-    private var hasReason = false
+    private var request: PermissionRequest?
     private var link: String?
     private var code: String?
 
     var onDecision: ((String) -> Void)?
+    /// The command block was clicked: show the whole command.
+    var onShowCommand: (() -> Void)?
 
     init() {
         super.init(frame: .zero)
@@ -612,6 +690,7 @@ final class PermissionCellView: NSTableCellView {
         icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)
         icon.contentTintColor = .controlAccentColor
         summary.lineBreakMode = .byWordWrapping
+        command.onClick = { [weak self] in self?.onShowCommand?() }
         for (button, label, decision) in [(allowButton, L("Allow once"), "allow"), (alwaysButton, L("Always allow"), "always"), (denyButton, L("Deny"), "deny")] {
             button.title = label
             button.bezelStyle = .rounded
@@ -621,13 +700,9 @@ final class PermissionCellView: NSTableCellView {
             button.action = #selector(decide(_:))
             button.identifier = NSUserInterfaceItemIdentifier(decision)
         }
-        addSubview(box.framePositioned())
-        addSubview(icon.framePositioned())
-        addSubview(title.framePositioned())
-        addSubview(summary.framePositioned())
-        addSubview(allowButton.framePositioned())
-        addSubview(alwaysButton.framePositioned())
-        addSubview(denyButton.framePositioned())
+        for view in [box, icon, title, summary, command, reason, note, allowButton, alwaysButton, denyButton] as [NSView] {
+            addSubview(view.framePositioned())
+        }
         codeLabel.isSelectable = true
         openButton.bezelStyle = .rounded
         openButton.controlSize = .small
@@ -657,17 +732,22 @@ final class PermissionCellView: NSTableCellView {
     func configure(request: PermissionRequest, botName: String, groupStart: Bool) {
         openButton.resetCopyFeedback()
         self.groupStart = groupStart
-        pending = request.isPending
+        self.request = request
+        let hasCode = request.decision == .allowed && request.code != nil
         icon.image = NSImage(systemSymbolName: request.isConnect ? "person.crop.circle.badge.checkmark" : (request.isInstall ? "puzzlepiece.extension" : "hand.raised"), accessibilityDescription: nil)
         icon.contentTintColor = request.decision == .failed ? .systemRed : (request.decision == .connected ? .systemGreen : .controlAccentColor)
         title.stringValue = "\(botName) \(request.verbPhrase)"
-        hasCode = request.decision == .allowed && request.code != nil
+        title.toolTip = title.stringValue
         link = request.link
         code = request.code
-        hasReason = request.isPending && request.reason != nil
-        summaryText = request.isPending ? request.summary : (hasCode ? L("Enter this code at %@, then come back.", URL(string: request.link ?? "")?.host ?? L("the link")) : "\(request.decisionText) · \(request.summary)")
-        summary.stringValue = hasReason ? "\(summaryText)\n" + L("Auto-review: %@", request.reason ?? "") : summaryText
+        summary.stringValue = request.isPending
+            ? request.summary
+            : (hasCode ? L("Enter this code at %@, then come back.", URL(string: request.link ?? "")?.host ?? L("the link")) : "\(request.decisionText) · \(request.summary)")
+        summary.lineBreakMode = request.isPending ? .byTruncatingTail : .byWordWrapping
         summary.toolTip = request.summary
+        command.text = request.fullCommand
+        reason.stringValue = request.reason ?? ""
+        note.stringValue = Self.ruleNote(for: request) ?? ""
         codeLabel.stringValue = request.code ?? ""
         codeLabel.isHidden = !hasCode
         openButton.title = L("Copy code and open %@", URL(string: request.link ?? "")?.host ?? L("link"))
@@ -675,7 +755,7 @@ final class PermissionCellView: NSTableCellView {
         // The buttons follow the card's kind: Sign in / Not now, Allow / Deny, or the three.
         let buttons = [allowButton, alwaysButton, denyButton]
         for button in buttons { button.isHidden = true }
-        if pending {
+        if request.isPending {
             for (button, choice) in zip(buttons, request.choices) {
                 button.title = choice.0
                 button.identifier = NSUserInterfaceItemIdentifier(choice.1)
@@ -692,27 +772,107 @@ final class PermissionCellView: NSTableCellView {
 
     override func layout() {
         super.layout()
+        guard let request else { return }
         let top = groupStart ? ChatMetrics.groupTopPadding : ChatMetrics.tightTopPadding
-        let width = min(Self.width, bounds.width - ChatMetrics.horizontalInset * 2)
         let x = ChatMetrics.horizontalInset
-        // `height` is the box alone; the row adds `top` above it.
-        let height = Self.height(pending: pending, summary: summaryText, hasCode: hasCode, hasReason: hasReason)
-        box.frame = NSRect(x: x, y: top, width: width, height: height)
+        let layout = Layout(request: request, rowWidth: bounds.width)
+        func place(_ rect: NSRect) -> NSRect { rect.offsetBy(dx: x, dy: top) }
+
+        // `layout.height` is the box alone; the row adds `top` above it.
+        box.frame = NSRect(x: x, y: top, width: layout.width, height: layout.height)
         icon.frame = NSRect(x: x + 12, y: top + 12, width: 18, height: 18)
-        title.frame = NSRect(x: x + 38, y: top + 11, width: width - 50, height: 17)
-        summary.frame = NSRect(x: x + 38, y: top + 30, width: width - 50, height: hasReason ? 32 : (pending || hasCode ? 16 : height - 30 - 10))
-        let buttonY = top + (hasReason ? 70 : 54)
-        if hasCode {
+        title.frame = place(NSRect(x: Layout.textX, y: 11, width: layout.width - Layout.textX - 12, height: 17))
+        summary.isHidden = layout.command != nil
+        summary.frame = place(layout.summary)
+        command.isHidden = layout.command == nil
+        command.frame = layout.command.map(place) ?? .zero
+        reason.isHidden = layout.reason == nil
+        reason.frame = layout.reason.map(place) ?? .zero
+        note.isHidden = layout.note == nil
+        note.frame = layout.note.map(place) ?? .zero
+        if !codeLabel.isHidden {
             let codeSize = codeLabel.intrinsicContentSize
             codeLabel.frame = NSRect(x: x + 38, y: top + 52, width: codeSize.width + 4, height: 24)
             let openSize = openButton.intrinsicContentSize
             openButton.frame = NSRect(x: x + 38 + codeSize.width + 14, y: top + 53, width: openSize.width + 4, height: 22)
         }
-        var buttonX = x + 36
-        for button in [allowButton, alwaysButton, denyButton] where !button.isHidden {
-            let size = button.intrinsicContentSize
-            button.frame = NSRect(x: buttonX, y: buttonY, width: size.width + 4, height: 22)
-            buttonX += size.width + 12
+        if let buttonY = layout.buttonY {
+            var buttonX = x + 36
+            for button in [allowButton, alwaysButton, denyButton] where !button.isHidden {
+                let size = button.intrinsicContentSize
+                button.frame = NSRect(x: buttonX, y: top + buttonY, width: size.width + 4, height: 22)
+                buttonX += size.width + 12
+            }
         }
+    }
+}
+
+/// A shell command on a permission card: its first lines in a code block that shows the whole
+/// command on click, highlighting under the pointer like a button.
+final class CommandBlockView: NSView {
+    var onClick: (() -> Void)?
+    var text: String {
+        get { label.stringValue }
+        set { label.stringValue = newValue }
+    }
+
+    private let background = BackgroundView()
+    private let label: NSTextField
+    private let padding: NSSize
+    private var hovering = false { didSet { background.fillColor = hovering ? Theme.codeBackgroundHover : Theme.codeBackground } }
+
+    init(font: NSFont, lines: Int, padding: NSSize) {
+        self.padding = padding
+        label = Build.label("", font: font, lines: lines)
+        super.init(frame: .zero)
+        label.lineBreakMode = .byWordWrapping
+        label.cell?.truncatesLastVisibleLine = true
+        background.fillColor = Theme.codeBackground
+        background.cornerRadius = 6
+        addSubview(background.framePositioned())
+        addSubview(label.framePositioned())
+        toolTip = L("Show the full command")
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+        setAccessibilityLabel(L("Show the full command"))
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var isFlipped: Bool { true }
+
+    override func layout() {
+        super.layout()
+        background.frame = bounds
+        label.frame = bounds.insetBy(dx: padding.width, dy: padding.height)
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas { removeTrackingArea(area) }
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self))
+    }
+
+    override func mouseEntered(with event: NSEvent) { hovering = true }
+    override func mouseExited(with event: NSEvent) { hovering = false }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .pointingHand)
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        frame.contains(point) ? self : nil
+    }
+
+    override func mouseDown(with event: NSEvent) {}
+
+    override func mouseUp(with event: NSEvent) {
+        if bounds.contains(convert(event.locationInWindow, from: nil)) { onClick?() }
+    }
+
+    override func accessibilityPerformPress() -> Bool {
+        onClick?()
+        return true
     }
 }

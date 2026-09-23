@@ -42,13 +42,9 @@ enum Wire {
         var text: String
         var behavior: String
         var tool: String?
-        var runnerId: String?
-        var workdir: String?
-        var command: String?
-        var patterns: [String]?
 
         func toModel() -> Lorca.AutoReviewRule {
-            Lorca.AutoReviewRule(id: id, text: text, behavior: behavior == "ask" ? .ask : .allow, tool: tool, runnerID: runnerId, workdir: workdir, command: command, patterns: patterns ?? [])
+            Lorca.AutoReviewRule(id: id, text: text, behavior: behavior == "ask" ? .ask : .allow, tool: tool)
         }
     }
 
@@ -362,6 +358,8 @@ enum Wire {
         var decision: String?
         var link: String?
         var code: String?
+        var rule: String?
+        var command: String?
     }
 
     struct State: Decodable {
@@ -523,7 +521,8 @@ extension Wire.Message {
                 PermissionRequest(
                     pluginID: self.body.pluginId ?? "", pluginName: self.body.pluginName ?? "", tool: self.body.tool ?? "",
                     summary: self.body.summary ?? "", decision: PermissionRequest.Decision(rawValue: self.body.decision ?? "") ?? .pending,
-                    link: self.body.link, code: self.body.code, reason: self.body.reason))
+                    link: self.body.link, code: self.body.code, reason: self.body.reason, rule: self.body.rule,
+                    command: self.body.command))
         default:
             body = .text(self.body.text ?? "")
         }

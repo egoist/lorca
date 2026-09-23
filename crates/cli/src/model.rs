@@ -94,28 +94,18 @@ pub struct Bot {
 }
 
 /// One Auto-review rule: what a bot wants to do, in the user's words, and whether that runs
-/// on its own or asks first. A rule made from a card's Always allow also carries a structured
-/// tool key or reusable shell patterns, matched without another model review.
+/// on its own or asks first. Always allow on a shell command's card adds the rule Auto-review
+/// proposed in plain language; on a plugin tool's card it adds a rule for that exact tool,
+/// matched without another model review.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AutoReviewRule {
     pub id: String,
     pub text: String,
     /// `allow` (runs automatically) or `ask` (asks first; wins when rules conflict).
     pub behavior: String,
+    /// The exact plugin tool (`github/create_issue`) a card's Always allow saved this rule for.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool: Option<String>,
-    /// Scope metadata for a local shell rule. These fields keep its reusable patterns and
-    /// private-workspace cleanup tied to the Runner.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub runner_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub workdir: Option<String>,
-    /// The complete reviewed shell command that produced a local shell rule.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub command: Option<String>,
-    /// Reusable shell command prefixes such as `git status *`, scoped by Runner and workdir.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub patterns: Vec<String>,
 }
 
 /// Auto-review, after Grok Bot: with it on, a Runner checks effectful plugin actions and shell
@@ -250,6 +240,14 @@ pub enum Body {
         /// Why Auto-review paused the action, when it did.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
+        /// The plain-language rule Always allow adds, which Auto-review proposed for a shell
+        /// command. A shell card without one offers only Allow once and Deny.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rule: Option<String>,
+        /// A shell card's whole command, for the apps, which never get `arguments`: `for_app`
+        /// fills it with the first `APP_COMMAND_CHARS` characters.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        command: Option<String>,
         /// A sign-in card mid-flow: where to go and the code to enter there (device flow).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         link: Option<String>,
@@ -290,6 +288,8 @@ pub struct Message {
 
 /// How much of a tool call's detail the apps get: enough for the "Messaged ◉ X" marker.
 const APP_TOOL_DETAIL_CHARS: usize = 400;
+/// How much of a shell command a permission card carries to the apps.
+const APP_COMMAND_CHARS: usize = 8000;
 /// How many of a chat's newest messages a snapshot carries; older ones are asked for by page.
 pub const SNAPSHOT_MESSAGES: usize = 60;
 
@@ -297,7 +297,8 @@ impl Message {
     /// The message as the apps get it. A tool row keeps what they show (the name, the summary,
     /// whether it runs) and drops what only a later turn's context needs: the arguments and
     /// the result, which run to hundreds of kilobytes for a file read or a command's output.
-    /// Permission cards likewise keep their summary and decision, not their reviewed payload.
+    /// Permission cards likewise keep their summary and decision, not their reviewed payload,
+    /// except a shell command's text, which the card shows in full on request.
     pub fn for_app(&self) -> Message {
         let mut message = self.clone();
         match &mut message.body {
@@ -308,7 +309,12 @@ impl Message {
                     *detail = detail.chars().take(APP_TOOL_DETAIL_CHARS).collect();
                 }
             }
-            Body::Permission { arguments, .. } => *arguments = serde_json::Value::Null,
+            Body::Permission { plugin_id, arguments, command, .. } => {
+                if let Some(text) = arguments.get("command").and_then(serde_json::Value::as_str).filter(|_| plugin_id == "computer") {
+                    *command = Some(text.chars().take(APP_COMMAND_CHARS).collect());
+                }
+                *arguments = serde_json::Value::Null;
+            }
             _ => {}
         }
         message
@@ -714,10 +720,15 @@ mod app_view_tests {
     fn permission_cards_drop_the_reviewed_payload() {
         let permission = Message::new("c", Author::Bot { bot_id: "b".into() }, Body::Permission {
             plugin_id: "computer".into(), plugin_name: "Mac".into(), tool: "bash".into(), summary: "Run a command".into(),
-            arguments: serde_json::json!({ "command": "secret" }), decision: "pending".into(), reason: None, link: None, code: None,
+            arguments: serde_json::json!({ "command": "secret" }), decision: "pending".into(), reason: None, rule: None, command: None, link: None, code: None,
         });
-        let Body::Permission { arguments, summary, .. } = permission.for_app().body else { panic!() };
+        let app = permission.for_app();
+        let Body::Permission { arguments, summary, command, .. } = &app.body else { panic!() };
         assert!(arguments.is_null());
         assert_eq!(summary, "Run a command");
+        assert_eq!(command.as_deref(), Some("secret"));
+        // A phone stores the app view; reading it again keeps the command.
+        let Body::Permission { command, .. } = app.for_app().body else { panic!() };
+        assert_eq!(command.as_deref(), Some("secret"));
     }
 }

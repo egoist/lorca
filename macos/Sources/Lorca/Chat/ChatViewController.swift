@@ -629,6 +629,11 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
                     guard let self else { return }
                     self.store.answerPermission(chatID: chat.id, messageID: message.id, decision: decision)
                 }
+                permissionCell?.onShowCommand = { [weak self] in
+                    let botName = message.author.botID.flatMap { self?.store.bot($0) }?.name ?? L("The bot")
+                    self?.presentAsSheet(CommandSheetViewController(
+                        title: "\(botName) \(request.verbPhrase)", command: request.fullCommand))
+                }
             }
 
             _ = chat

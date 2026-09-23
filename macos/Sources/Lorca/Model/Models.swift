@@ -267,7 +267,8 @@ struct Bot: Identifiable, Hashable {
 // MARK: - Auto-review
 
 /// One Auto-review rule: what a bot wants to do, in the user's words, and whether that runs on
-/// its own or asks first. A rule from Always allow also carries a structured tool key or shell patterns.
+/// its own or asks first. Always allow on a shell command adds the rule Auto-review proposed; on
+/// a plugin tool it adds a rule for that exact tool.
 struct AutoReviewRule: Hashable, Identifiable {
     enum Behavior: String, Hashable {
         case allow
@@ -279,14 +280,8 @@ struct AutoReviewRule: Hashable, Identifiable {
     var id: String
     var text: String
     var behavior: Behavior
+    /// The exact plugin tool (`github/create_issue`) Always allow saved this rule for.
     var tool: String? = nil
-    /// Scope metadata for an exact local shell rule.
-    var runnerID: String? = nil
-    var workdir: String? = nil
-    /// The complete reviewed command for an exact local shell rule.
-    var command: String? = nil
-    /// Reusable shell command prefixes, scoped by Runner and working directory.
-    var patterns: [String] = []
 }
 
 /// The check on effectful plugin actions and shell commands, shared by every Device through
@@ -394,15 +389,28 @@ struct PermissionRequest: Hashable {
     var code: String? = nil
     /// Why Auto-review paused the action, when it did.
     var reason: String? = nil
+    /// The rule Always allow adds, which Auto-review proposed for a shell command.
+    var rule: String? = nil
+    /// A shell card's whole command, where `summary` is its first line.
+    var command: String? = nil
+
+    /// The command as the card and its sheet show it, without the summary's `$ ` prompt.
+    var fullCommand: String {
+        command ?? (summary.hasPrefix("$ ") ? String(summary.dropFirst(2)) : summary)
+    }
 
     var isPending: Bool { decision == .pending }
     var isInstall: Bool { tool == "install" }
+    /// A shell command on the bot's Runner.
+    var isShell: Bool { pluginID == "computer" }
     /// A sign-in card: Sign in starts the OAuth flow on the Runner.
     var isConnect: Bool { tool == "connect" }
 
-    /// "wants to use GitHub" / "wants to install GitHub" / "needs a sign-in to GitHub"
+    /// "wants to use GitHub" / "wants to install GitHub" / "needs a sign-in to GitHub" /
+    /// "wants to run a command on Workbench"
     var verbPhrase: String {
         if isConnect { return L("needs a sign-in to %@", pluginName) }
+        if isShell { return L("wants to run a command on %@", pluginName) }
         return isInstall ? L("wants to install %@", pluginName) : L("wants to use %@", pluginName)
     }
 
@@ -418,10 +426,12 @@ struct PermissionRequest: Hashable {
         }
     }
 
-    /// The buttons a pending card offers: (title, decision).
+    /// The buttons a pending card offers: (title, decision). A shell command offers Always
+    /// allow only with a rule to add.
     var choices: [(String, String)] {
         if isConnect { return [(L("Sign in"), "allow"), (L("Not now"), "deny")] }
         if isInstall { return [(L("Allow"), "allow"), (L("Deny"), "deny")] }
+        if isShell && rule == nil { return [(L("Allow once"), "allow"), (L("Deny"), "deny")] }
         return [(L("Allow once"), "allow"), (L("Always allow"), "always"), (L("Deny"), "deny")]
     }
 }

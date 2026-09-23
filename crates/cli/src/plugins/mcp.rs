@@ -410,6 +410,8 @@ pub fn post_sign_in_card(app: &Arc<App>, chat_id: &str, bot_id: &str, plugin_id:
             arguments: Value::Null,
             decision: "pending".into(),
             reason: None,
+            rule: None,
+            command: None,
             link: None,
             code: None,
         },
@@ -1350,7 +1352,7 @@ impl Tool for PluginTool {
                 &cancel,
             )
             .await;
-            if let super::review::Outcome::Ask { reason } = outcome {
+            if let super::review::Outcome::Ask { reason, .. } = outcome {
                 if self.unattended {
                     return Err(ToolError(format!(
                         "{tool} needs the user's permission ({}), and nobody is here to give it. Report what you would do; the user can add an Auto-review rule allowing it.",
@@ -1498,16 +1500,13 @@ pub async fn ask(app: &Arc<App>, chat_id: &str, bot_id: &str, plugin_id: &str, p
         text: format!("use {plugin_name} {tool}"),
         behavior: "allow".into(),
         tool: Some(format!("{plugin_id}/{tool}")),
-        runner_id: None,
-        workdir: None,
-        command: None,
-        patterns: Vec::new(),
     });
     ask_with_rule(app, chat_id, bot_id, plugin_id, plugin_name, tool, summary, arguments, reason, always_rule, cancel).await
 }
 
-/// A permission card whose Always allow choice saves the supplied scoped rule. Local computer
-/// actions use this with a key bound to their Runner, workspace, and exact reviewed action.
+/// A permission card whose Always allow choice saves `always_rule`. A plain-language rule (the
+/// one Auto-review proposed for a shell command) is shown on the card; without a rule, Always
+/// allow is not offered and allows once.
 #[allow(clippy::too_many_arguments)]
 pub async fn ask_with_rule(
     app: &Arc<App>,
@@ -1533,6 +1532,8 @@ pub async fn ask_with_rule(
             arguments,
             decision: "pending".into(),
             reason,
+            rule: always_rule.as_ref().filter(|rule| rule.tool.is_none()).map(|rule| rule.text.clone()),
+            command: None,
             link: None,
             code: None,
         },

@@ -53,6 +53,7 @@ const ANDROID: Record<string, string> = {
   "music.note": "music_note",
   "camera.fill": "photo_camera",
   "shield.fill": "shield",
+  "hand.raised": "pan_tool",
   "cart.fill": "shopping_cart",
   "arrow.triangle.turn.up.right.diamond.fill": "alt_route",
   "chevron.right": "chevron_right",

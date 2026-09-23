@@ -619,7 +619,6 @@ fn apply_blob_contents(app: &Arc<App>, machine_file: &crate::keys::MachineFile, 
 fn apply_roster(app: &Arc<App>, mut roster: RosterBlob) {
     let removed: Vec<String>;
     let normalized_descriptions = roster.bots.iter_mut().fold(false, |changed, bot| bot.normalize_description() || changed);
-    let normalized_auto_review = crate::app::normalize_auto_review_rules(&roster.bots, &mut roster.auto_review);
     {
         let mut state = app.state.lock().unwrap();
         let local_updated = state.chats.iter().map(|_| 0.0).fold(0.0, f64::max);
@@ -646,7 +645,7 @@ fn apply_roster(app: &Arc<App>, mut roster: RosterBlob) {
         app.emit(Event::ChatRemoved { chat_id });
     }
     crate::runtime::prime_names(app);
-    app.roster_changed(normalized_descriptions || normalized_auto_review);
+    app.roster_changed(normalized_descriptions);
 }
 
 fn apply_chat_op(app: &Arc<App>, op: ChatBlob) {

@@ -1,7 +1,7 @@
 import AppKit
 
 /// Settings → Auto-review, after Grok Bot's: the switch and the rules, shared by every Device
-/// through the roster. Add and Edit use sheets; a card's Always allow adds a structured rule here.
+/// through the roster. Add and Edit use sheets; a card's Always allow adds a rule here.
 final class AutoReviewSettingsViewController: SettingsPaneViewController {
     private let store = AppStore.shared
     private let check = SectionView(title: L("Auto-review"))
@@ -20,7 +20,7 @@ final class AutoReviewSettingsViewController: SettingsPaneViewController {
         rules.setHeaderAccessory(add)
         addSection(check)
         addSection(rules)
-        addFootnote(L("Auto-review checks effectful plugin actions and every shell command before they run. The parser identifies concrete risks; the bot's model applies your rules and latest request, so safe commands normally run automatically and risky commands ask. Off, every such action asks. Write one short, natural-language rule for each action; \"Ask first\" takes priority if rules conflict. Built-in safety checks always apply."))
+        addFootnote(L("Read-only commands and commands inside Lorca's own folders run at once. Auto-review checks effectful plugin actions and every other shell command before they run: the bot's model applies your rules and latest request, so safe work normally runs automatically and risky work asks. Off, every such action asks. Write one short, natural-language rule for each action; \"Ask first\" takes priority if rules conflict. Built-in safety checks always apply."))
         store.observe(self) { [weak self] event in
             switch event {
             case .rosterChanged, .snapshotReplaced: self?.render()
@@ -38,23 +38,9 @@ final class AutoReviewSettingsViewController: SettingsPaneViewController {
         check.setRows([switchRow, description])
 
         var ruleRows: [NSView] = review.rules.map { rule in
-            let content: NSView
-            let scope: String?
-            if rule.tool?.hasPrefix("computer/bash/") == true {
-                let runner = rule.runnerID.flatMap { store.device($0) }?.name ?? L("Runner")
-                scope = [runner, rule.workdir].compactMap { $0 }.joined(separator: " · ")
-                content = ExactShellCommandView(command: rule.command ?? rule.text)
-            } else {
-                let label = Build.label(rule.text, font: .systemFont(ofSize: 12), lines: 0)
-                label.isSelectable = true
-                content = label
-                scope = nil
-            }
-            let patternCount = rule.patterns.isEmpty
-                ? nil
-                : (rule.patterns.count == 1 ? L("1 pattern") : L("%d patterns", rule.patterns.count))
-            let detail = [scope, patternCount, rule.behavior.title].compactMap { $0 }.joined(separator: " · ")
-            let row = AutoReviewRuleRow(content: content, detail: detail)
+            let label = Build.label(rule.text, font: .systemFont(ofSize: 12), lines: 0)
+            label.isSelectable = true
+            let row = AutoReviewRuleRow(content: label, detail: rule.behavior.title)
             row.onEdit = { [weak self] in self?.showEditRule(rule) }
             row.onDelete = { [weak self] in self?.delete(rule.id) }
             return row
@@ -104,8 +90,8 @@ final class AutoReviewSettingsViewController: SettingsPaneViewController {
     }
 }
 
-/// Add and Edit share one sheet. User-written rule text is editable; an exact tool or shell
-/// identity stays fixed, while its Allow/Ask behavior can still change.
+/// Add and Edit share one sheet. Rule text is editable; a rule for an exact plugin tool keeps
+/// its tool, while its Allow/Ask behavior can still change.
 final class AutoReviewRuleEditorViewController: SheetViewController, NSTextFieldDelegate {
     private let rule: AutoReviewRule?
     private let text = NSTextField()
@@ -135,37 +121,28 @@ final class AutoReviewRuleEditorViewController: SheetViewController, NSTextField
     override func loadView() {
         super.loadView()
 
-        let value = rule?.command ?? rule?.text ?? ""
-        let ruleContent: NSView
-        if let command = rule?.command {
-            let ruleSection = SectionView(title: L("Command"))
-            ruleSection.setRows([ExactShellCommandView(command: command, maxLines: 0)])
-            ruleContent = ruleSection
-        } else {
-            text.stringValue = value
-            text.isEditable = canEditText
-            text.isSelectable = true
-            text.font = .systemFont(ofSize: 12)
-            text.textColor = .labelColor
-            text.isBezeled = true
-            text.bezelStyle = .roundedBezel
-            text.drawsBackground = true
-            text.backgroundColor = .textBackgroundColor
-            text.maximumNumberOfLines = 0
-            text.lineBreakMode = .byWordWrapping
-            text.cell?.wraps = true
-            text.cell?.usesSingleLineMode = false
-            text.cell?.isScrollable = false
-            text.delegate = self
-            text.translatesAutoresizingMaskIntoConstraints = false
-            let caption = Build.label(
-                L("Rule").uppercased(), font: .systemFont(ofSize: 10, weight: .semibold),
-                color: .tertiaryLabelColor)
-            let field = Build.stack([caption, text], spacing: 6)
-            text.widthAnchor.constraint(equalTo: field.widthAnchor).isActive = true
-            text.heightAnchor.constraint(equalToConstant: 90).isActive = true
-            ruleContent = field
-        }
+        text.stringValue = originalText
+        text.isEditable = canEditText
+        text.isSelectable = true
+        text.font = .systemFont(ofSize: 12)
+        text.textColor = .labelColor
+        text.isBezeled = true
+        text.bezelStyle = .roundedBezel
+        text.drawsBackground = true
+        text.backgroundColor = .textBackgroundColor
+        text.maximumNumberOfLines = 0
+        text.lineBreakMode = .byWordWrapping
+        text.cell?.wraps = true
+        text.cell?.usesSingleLineMode = false
+        text.cell?.isScrollable = false
+        text.delegate = self
+        text.translatesAutoresizingMaskIntoConstraints = false
+        let caption = Build.label(
+            L("Rule").uppercased(), font: .systemFont(ofSize: 10, weight: .semibold),
+            color: .tertiaryLabelColor)
+        let ruleContent = Build.stack([caption, text], spacing: 6)
+        text.widthAnchor.constraint(equalTo: ruleContent.widthAnchor).isActive = true
+        text.heightAnchor.constraint(equalToConstant: 90).isActive = true
 
         for choice in [AutoReviewRule.Behavior.allow, .ask] {
             behavior.addItem(withTitle: choice.title)
@@ -176,15 +153,8 @@ final class AutoReviewRuleEditorViewController: SheetViewController, NSTextField
         behaviorSection.setRows([AccessoryRow(key: L("Auto-review"), accessory: behavior)])
 
         contentStack.addArrangedSubview(ruleContent)
-        var fullWidth: [NSView] = [ruleContent]
-        if let patterns = rule?.patterns, !patterns.isEmpty {
-            let patternSection = SectionView(title: L("Allowed patterns"))
-            patternSection.setRows([ExactShellCommandView(command: patterns.joined(separator: "\n"), maxLines: 0)])
-            contentStack.addArrangedSubview(patternSection)
-            fullWidth.append(patternSection)
-        }
         contentStack.addArrangedSubview(behaviorSection)
-        fullWidth.append(behaviorSection)
+        let fullWidth: [NSView] = [ruleContent, behaviorSection]
         NSLayoutConstraint.activate(fullWidth.map { $0.widthAnchor.constraint(equalTo: contentStack.widthAnchor) })
         setButtons(confirm: rule == nil ? L("Add rule") : L("Save"))
     }
@@ -210,71 +180,6 @@ final class AutoReviewRuleEditorViewController: SheetViewController, NSTextField
         textView.insertNewlineIgnoringFieldEditor(nil)
         return true
     }
-}
-
-/// A complete command in a bounded wrapping code block.
-final class ExactShellCommandView: NSView {
-    private let command: NSTextField
-    private let maxLines: Int
-    private var renderedWidth: CGFloat = 0
-    private static let commandFont = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
-
-    init(command commandText: String, maxLines: Int = 2) {
-        self.maxLines = maxLines
-        command = NSTextField(wrappingLabelWithString: commandText)
-        super.init(frame: .zero)
-        translatesAutoresizingMaskIntoConstraints = false
-        command.translatesAutoresizingMaskIntoConstraints = false
-        command.font = Self.commandFont
-        command.textColor = .labelColor
-        command.maximumNumberOfLines = maxLines
-        command.lineBreakMode = maxLines == 0 ? .byCharWrapping : .byTruncatingTail
-        command.cell?.wraps = true
-        command.cell?.usesSingleLineMode = false
-        command.cell?.isScrollable = false
-        command.cell?.truncatesLastVisibleLine = maxLines != 0
-        command.isSelectable = true
-        command.toolTip = commandText
-        command.preferredMaxLayoutWidth = 640
-        command.setContentHuggingPriority(.init(1), for: .horizontal)
-        command.setContentCompressionResistancePriority(.init(1), for: .horizontal)
-        let box = BackgroundView()
-        box.fillColor = Theme.codeBackground
-        box.cornerRadius = 6
-        addSubview(box)
-        box.addSubview(command)
-        NSLayoutConstraint.activate([
-            box.topAnchor.constraint(equalTo: topAnchor),
-            box.leadingAnchor.constraint(equalTo: leadingAnchor),
-            box.trailingAnchor.constraint(equalTo: trailingAnchor),
-            box.bottomAnchor.constraint(equalTo: bottomAnchor),
-            command.topAnchor.constraint(equalTo: box.topAnchor, constant: 7),
-            command.leadingAnchor.constraint(equalTo: box.leadingAnchor, constant: 8),
-            command.trailingAnchor.constraint(equalTo: box.trailingAnchor, constant: -8),
-            command.bottomAnchor.constraint(equalTo: box.bottomAnchor, constant: -7),
-        ])
-    }
-
-    override func layout() {
-        super.layout()
-        let available = bounds.width - 16
-        if available > 0, renderedWidth != available {
-            renderedWidth = available
-            command.preferredMaxLayoutWidth = available
-            invalidateIntrinsicContentSize()
-            needsLayout = true
-        }
-    }
-
-    override var intrinsicContentSize: NSSize {
-        let lineHeight = ceil(Self.commandFont.boundingRectForFont.height)
-        return NSSize(
-            width: NSView.noIntrinsicMetric,
-            height: maxLines == 0 ? command.intrinsicContentSize.height + 14 : lineHeight * CGFloat(maxLines) + 14)
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError() }
 }
 
 /// Key on the left, any control on the right, inside a section card.

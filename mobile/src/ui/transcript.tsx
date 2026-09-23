@@ -4,7 +4,7 @@
 // centered "Message from ◉ Name" / "Messaged ◉ Name" markers. Tool calls never render.
 
 import { useEffect, useState } from "react";
-import { Linking, Pressable, StyleSheet, Text, View } from "react-native";
+import { Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withDelay, withRepeat, withSequence, withTiming } from "react-native-reanimated";
 import { isSentMessage, recipientName, type Body, type Bot, type Chat, type Message } from "../core/model";
@@ -193,20 +193,35 @@ export function NoticeRow({ row }: { row: Extract<Row, { type: "notice" }> }) {
   );
 }
 
-/// A bot asking before a plugin tool runs (or before an install): the question, the call in
-/// one line, and Allow once / Always allow / Deny while it waits, then the answer.
+/// A bot asking before a plugin tool runs, a shell command runs, or a plugin is installed. While
+/// it waits: the question, the call (a shell command in a code block that opens the whole
+/// command on tap), why Auto-review paused it, the answers, and under them the rule Always allow
+/// adds. A shell command offers Always allow only with a rule. Once answered, the answer and the
+/// call; an Always allow keeps its rule.
 export function PermissionRow({ row, onDecide }: { row: Extract<Row, { type: "permission" }>; onDecide: (decision: "allow" | "always" | "deny") => void }) {
   const p = usePalette();
   const [copied, setCopied] = useState(false);
+  const [showCommand, setShowCommand] = useState(false);
   const pending = row.body.decision === "pending";
   const connect = row.body.tool === "connect";
+  const shell = row.body.plugin_id === "computer";
   const who = row.bot?.name ?? t("The bot");
   const plugin = row.body.plugin_name;
   const title = connect
     ? t("{who} needs a sign-in to {plugin}", { who, plugin })
     : row.body.tool === "install"
       ? t("{who} wants to install {plugin}", { who, plugin })
-      : t("{who} wants to use {plugin}", { who, plugin });
+      : shell
+        ? t("{who} wants to run a command on {plugin}", { who, plugin })
+        : t("{who} wants to use {plugin}", { who, plugin });
+  const command = row.body.command ?? row.body.summary.replace(/^\$ /, "");
+  const ruleNote = !row.body.rule
+    ? undefined
+    : pending
+      ? t("Always allow adds the rule “{rule}”.", { rule: row.body.rule })
+      : row.body.decision === "always"
+        ? t("Added the rule “{rule}” to Auto-review.", { rule: row.body.rule })
+        : undefined;
   const decided: Record<string, string> = connect
     ? { allowed: t("Signing in"), denied: t("Not now"), connected: t("Signed in"), failed: t("Sign-in failed") }
     : { allowed: t("Allowed once"), always: t("Always allowed"), denied: t("Denied"), expired: t("No answer in time") };
@@ -214,7 +229,9 @@ export function PermissionRow({ row, onDecide }: { row: Extract<Row, { type: "pe
     ? [[t("Sign in"), "allow"], [t("Not now"), "deny"]]
     : row.body.tool === "install"
       ? [[t("Allow"), "allow"], [t("Deny"), "deny"]]
-      : [[t("Allow once"), "allow"], [t("Always allow"), "always"], [t("Deny"), "deny"]];
+      : shell && !row.body.rule
+        ? [[t("Allow once"), "allow"], [t("Deny"), "deny"]]
+        : [[t("Allow once"), "allow"], [t("Always allow"), "always"], [t("Deny"), "deny"]];
   useEffect(() => {
     if (!copied) return;
     const timer = setTimeout(() => setCopied(false), 1500);
@@ -229,13 +246,24 @@ export function PermissionRow({ row, onDecide }: { row: Extract<Row, { type: "pe
             {title}
           </Text>
         </View>
-        <Text style={[styles.caption, { color: p.secondaryLabel }]} numberOfLines={3}>
-          {pending ? row.body.summary : `${decided[row.body.decision] ?? row.body.decision} · ${row.body.summary}`}
-        </Text>
-        {pending && row.body.reason ? (
-          <Text style={[styles.caption, { color: p.secondaryLabel }]} numberOfLines={2}>
-            {t("Auto-review: {reason}", { reason: row.body.reason })}
+        {pending && shell ? (
+          <Pressable
+            onPress={() => setShowCommand(true)}
+            style={({ pressed }) => [styles.command, { backgroundColor: p.code, opacity: pressed ? 0.6 : 1 }]}
+            accessibilityRole="button"
+            accessibilityLabel={t("Show the full command")}
+          >
+            <Text style={[styles.commandText, { color: p.label }]} numberOfLines={2}>
+              {command}
+            </Text>
+          </Pressable>
+        ) : (
+          <Text style={[styles.caption, { color: p.secondaryLabel }]} numberOfLines={3}>
+            {pending ? row.body.summary : `${decided[row.body.decision] ?? row.body.decision} · ${row.body.summary}`}
           </Text>
+        )}
+        {pending && row.body.reason ? (
+          <Text style={[styles.reasonText, { color: p.secondaryLabel }]}>{row.body.reason}</Text>
         ) : null}
         {row.body.decision === "allowed" && row.body.code ? (
           <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginTop: 4 }}>
@@ -272,8 +300,45 @@ export function PermissionRow({ row, onDecide }: { row: Extract<Row, { type: "pe
             ))}
           </View>
         ) : null}
+        {ruleNote ? <Text style={[styles.ruleNote, { color: p.secondaryLabel }]}>{ruleNote}</Text> : null}
       </View>
+      {shell ? <CommandSheet visible={showCommand} title={title} command={command} onClose={() => setShowCommand(false)} /> : null}
     </View>
+  );
+}
+
+/// The whole command a permission card asks about, to read or copy before answering.
+function CommandSheet({ visible, title, command, onClose }: { visible: boolean; title: string; command: string; onClose: () => void }) {
+  const p = usePalette();
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(false), 1500);
+    return () => clearTimeout(timer);
+  }, [copied]);
+  return (
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+      <View style={[styles.sheet, { backgroundColor: p.groupedBackground }]}>
+        <Text style={[styles.sheetTitle, { color: p.label }]}>{title}</Text>
+        <ScrollView style={{ flex: 1 }} contentContainerStyle={[styles.sheetCommand, { backgroundColor: p.code }]}>
+          <Text selectable style={[styles.commandText, { color: p.label }]}>{command}</Text>
+        </ScrollView>
+        <View style={styles.sheetButtons}>
+          <Pressable
+            onPress={async () => {
+              await Clipboard.setStringAsync(command);
+              setCopied(true);
+            }}
+            style={({ pressed }) => [styles.permissionButton, { backgroundColor: pressed ? p.separator : p.fill }]}
+          >
+            <Text style={{ color: copied ? p.green : p.tint, fontSize: 15, fontWeight: "600" }}>{copied ? t("Copied") : t("Copy")}</Text>
+          </Pressable>
+          <Pressable onPress={onClose} style={({ pressed }) => [styles.permissionButton, { backgroundColor: pressed ? p.separator : p.fill }]}>
+            <Text style={{ color: p.tint, fontSize: 15, fontWeight: "600" }}>{t("Done")}</Text>
+          </Pressable>
+        </View>
+      </View>
+    </Modal>
   );
 }
 
@@ -352,6 +417,14 @@ const styles = StyleSheet.create({
   permission: { borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, paddingHorizontal: 12, paddingVertical: 10, gap: 6, maxWidth: 420 },
   permissionTitle: { fontSize: 14, fontWeight: "600", flexShrink: 1 },
   permissionButton: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 8 },
+  command: { borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7, marginTop: 2 },
+  commandText: { fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 12.5, lineHeight: 17 },
+  reasonText: { fontSize: 13, lineHeight: 18 },
+  ruleNote: { fontSize: 12, lineHeight: 16 },
+  sheet: { flex: 1, paddingHorizontal: 20, paddingTop: 20, gap: 14 },
+  sheetTitle: { fontSize: 17, fontWeight: "600" },
+  sheetCommand: { borderRadius: 10, padding: 12 },
+  sheetButtons: { flexDirection: "row", justifyContent: "space-between", paddingBottom: 12 },
   noticeText: { fontSize: 12.5, lineHeight: 17, flexShrink: 1 },
   dots: { flexDirection: "row", gap: 4, alignItems: "center", marginLeft: 6 },
   dot: { width: 6, height: 6, borderRadius: 3 },

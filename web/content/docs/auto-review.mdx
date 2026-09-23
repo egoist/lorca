@@ -14,12 +14,18 @@ When an action needs your say, the bot posts a card in the chat:
 
 or:
 
-> Chef wants to use Workbench · `$ cargo publish`
+> Chef wants to run a command on Workbench
+>
+> `$ cargo publish`
 
-with the reason it paused and three answers:
+with the reason it paused. Click a command to see all of it. Under the answers, a shell command's card names the rule Auto-review proposes for commands like it:
+
+> Always allow adds the rule “publish the crates in ~/dev/lorca to crates.io”.
+
+The three answers:
 
 - **Allow once** runs this action.
-- **Always allow** runs it and adds a reusable rule. Plugin rules name the exact tool. Shell rules are bound to that Runner and working directory and cover human-sized command prefixes such as `git status *` or `npm run test *`; Settings shows those patterns and keeps the original reviewed command for inspection.
+- **Always allow** runs it and adds a rule, so actions like it run on their own from then on. For a shell command that is the rule on the card, in plain language; change its words in Settings like any rule you wrote. For a plugin action the rule covers that exact tool. A shell card without a proposed rule, such as when Auto-review is off, offers Allow once and Deny.
 - **Deny** refuses it. The bot is told not to retry.
 
 You can answer from any device. The bot waits up to ten minutes.
@@ -33,7 +39,7 @@ With Auto-review **on**, each action is judged against your rules, your latest m
 
 With Auto-review **off**, every shell command and every effectful plugin action asks.
 
-Read-only plugin actions never ask. Every shell command enters Auto-review, including inspection commands such as `git status`, `rg`, and `wc`; the parser identifies concrete risks, then the bot's model applies your rules and latest request. Lorca parses all stages of a compound command before reviewing it. Plain subshell grouping, visible command substitutions, and read-only `xargs` pipelines remain inspectable instead of forcing a prompt. Destructive commands, privilege or access changes, opaque interpreters and wrappers, uploads, remote execution channels, and force pushes always ask unless you already saved that exact action.
+Read-only plugin actions never ask, and neither do read-only shell commands: Lorca parses every stage of a command, and one that only reads, such as `git status`, `ls`, or `rg TODO src | wc -l`, runs at once. A command that writes, deletes, installs, runs code, or reads keys and tokens goes to the bot's model, which applies the built-in checks, your rules, and your latest request. Lorca's own folders, `~/.lorca` and `~/.lorca-dev`, belong to the bots: a command that stays inside them runs without a review, whatever it does there. Temporary folders such as `/tmp` count as scratch space, so cleaning up there doesn't ask.
 
 ## Shell access
 
@@ -49,8 +55,8 @@ Open **Settings › Auto-review** to turn it on or off and to write rules in pla
 >
 > When a bot wants to: label issues in my own repos → **Allow automatically**
 
-When two rules disagree, Ask first wins. Rules sync to all your devices and apply to every bot.
+Always allow adds its rules here too. When two rules disagree, Ask first wins. Rules sync to all your devices and apply to every bot.
 
 ## Routines
 
-A [routine](/docs/routines) runs with nobody watching, so an action that would ask is refused instead. Commands that Auto-review or one of your scoped patterns allows still run.
+A [routine](/docs/routines) runs with nobody watching, so an action that would ask is refused instead. Actions that Auto-review allows, including those your rules cover, still run.

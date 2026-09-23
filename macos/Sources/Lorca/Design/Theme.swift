@@ -49,6 +49,12 @@ enum Theme {
         dark: { NSColor(calibratedWhite: 0, alpha: 0.24) }
     )
 
+    /// A code block that opens something on click, under the pointer.
+    static let codeBackgroundHover = dynamic(
+        light: { NSColor(calibratedWhite: 0, alpha: 0.1) },
+        dark: { NSColor(calibratedWhite: 0, alpha: 0.34) }
+    )
+
     static let chipBackground = dynamic(
         light: { NSColor(calibratedWhite: 0, alpha: 0.05) },
         dark: { NSColor(calibratedWhite: 1, alpha: 0.08) }
