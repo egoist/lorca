@@ -343,6 +343,10 @@ final class MarkdownLayoutManager: NSLayoutManager {
 /// A read-only, selectable text view on a TextKit 1 stack with the painting layout manager.
 /// Its frame is set by its parent; it never sizes itself.
 final class MarkdownTextView: NSTextView {
+    /// The run on show. Showing the same run again leaves the text, and the selection, alone.
+    private weak var shown: NSAttributedString?
+    private var linkBase: NSColor?
+
     init(textColor: NSColor) {
         let storage = NSTextStorage()
         let manager = MarkdownLayoutManager()
@@ -360,6 +364,17 @@ final class MarkdownTextView: NSTextView {
         isVerticallyResizable = false
         isHorizontallyResizable = false
         isAutomaticLinkDetectionEnabled = false
+        colorLinks(for: textColor)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    /// Links take the text's color on the accent-colored user bubble, the link color elsewhere.
+    /// A recycled cell can swap between the two.
+    func colorLinks(for textColor: NSColor) {
+        guard textColor != linkBase else { return }
+        linkBase = textColor
         linkTextAttributes = [
             .foregroundColor: Markdown.linkColor(for: textColor),
             .underlineStyle: NSUnderlineStyle.single.rawValue,
@@ -367,12 +382,12 @@ final class MarkdownTextView: NSTextView {
         ]
     }
 
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError() }
-
     func show(_ text: NSAttributedString, topInset: CGFloat, bottomInset: CGFloat) {
-        textContainerInset = NSSize(width: 0, height: 0)
-        textStorage?.setAttributedString(text)
+        if text !== shown {
+            textStorage?.setAttributedString(text)
+            setSelectedRange(NSRange(location: 0, length: 0))
+            shown = text
+        }
         insets = (topInset, bottomInset)
     }
 
@@ -416,8 +431,8 @@ struct TableLayout {
     }
 
     @MainActor
-    static func make(_ content: TableContent, maxWidth: CGFloat) -> TableLayout {
-        let natural = self.natural(content)
+    static func make(_ content: TableContent, maxWidth: CGFloat, natural known: [CGFloat]? = nil) -> TableLayout {
+        let natural = known ?? self.natural(content)
         var widths = natural
         let total = natural.reduce(0, +)
         if total > maxWidth {
@@ -594,6 +609,46 @@ enum TextMeasure {
     }
 }
 
+/// A message body laid out at one width: each segment's height and each table's grid, in order.
+/// The measurement and the views that show it use the same numbers, so the text is laid out
+/// once to measure a row rather than again for every cell that shows it.
+struct SegmentLayout {
+    var width: CGFloat = 0
+    var heights: [CGFloat] = []
+    var tables: [TableLayout] = []
+    /// The segments and the spacing between them, rounded up.
+    var height: CGFloat = 0
+
+    init() {}
+
+    /// `textSizes` are the text runs already measured at `width`, and `naturals` the tables'
+    /// natural column widths, which no width changes.
+    @MainActor
+    init(_ segments: [MessageSegment], width: CGFloat, textSizes: [NSSize]? = nil, naturals: [[CGFloat]]? = nil) {
+        self.width = width
+        guard !segments.isEmpty else { return }
+        var total: CGFloat = 0
+        var texts = 0
+        for (index, segment) in segments.enumerated() {
+            let height: CGFloat
+            switch segment {
+            case let .text(attributed, top, bottom):
+                let size = textSizes?[texts] ?? TextMeasure.textSize(of: attributed, width: width)
+                texts += 1
+                height = size.height + top + bottom
+            case let .table(content):
+                let table = TableLayout.make(content, maxWidth: width, natural: naturals?[tables.count])
+                tables.append(table)
+                height = table.height
+            }
+            heights.append(height)
+            total += height
+            if index < segments.count - 1 { total += Markdown.segmentSpacing }
+        }
+        self.height = ceil(total)
+    }
+}
+
 struct RenderedMessage {
     let segments: [MessageSegment]
 
@@ -603,35 +658,27 @@ struct RenderedMessage {
 
     var isEmpty: Bool { segments.isEmpty }
 
+    /// The body at the width it wants, from `minimum` up to `limit`: short text gets a bubble
+    /// that hugs it, long text fills the limit. Text that fills it is measured once, at the limit.
     @MainActor
-    func height(forWidth width: CGFloat) -> CGFloat {
-        guard !segments.isEmpty else { return 0 }
-        var total: CGFloat = 0
-        for (index, segment) in segments.enumerated() {
-            switch segment {
-            case let .text(attributed, top, bottom):
-                total += TextMeasure.textSize(of: attributed, width: width).height + top + bottom
-            case let .table(content):
-                total += TableLayout.make(content, maxWidth: width).height
-            }
-            if index < segments.count - 1 { total += Markdown.segmentSpacing }
-        }
-        return ceil(total)
-    }
-
-    /// Natural width so short replies get a bubble that hugs the text.
-    @MainActor
-    func preferredWidth(max limit: CGFloat) -> CGFloat {
+    func layout(fitting limit: CGFloat, minimum: CGFloat) -> SegmentLayout {
+        var sizes: [NSSize] = []
+        var naturals: [[CGFloat]] = []
         var widest: CGFloat = 0
         for segment in segments {
             switch segment {
             case let .text(attributed, _, _):
-                widest = max(widest, TextMeasure.textSize(of: attributed, width: limit).width)
+                let size = TextMeasure.textSize(of: attributed, width: limit)
+                sizes.append(size)
+                widest = max(widest, size.width)
             case let .table(content):
-                widest = max(widest, TableLayout.natural(content).reduce(0, +))
+                let natural = TableLayout.natural(content)
+                naturals.append(natural)
+                widest = max(widest, natural.reduce(0, +))
             }
         }
-        return min(widest, limit)
+        let width = max(minimum, min(widest, limit))
+        return SegmentLayout(segments, width: width, textSizes: width == limit ? sizes : nil, naturals: naturals)
     }
 
     @MainActor

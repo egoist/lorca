@@ -7,6 +7,7 @@ final class SegmentedTextView: NSView {
     private var textViews: [MarkdownTextView] = []
     private var tableViews: [MarkdownTableView] = []
     private var segments: [MessageSegment] = []
+    private var measured = SegmentLayout()
     private var textColor: NSColor = .labelColor
 
     init() {
@@ -19,55 +20,76 @@ final class SegmentedTextView: NSView {
 
     override var isFlipped: Bool { true }
 
-    func configure(_ newSegments: [MessageSegment], textColor: NSColor) {
+    /// `layout` is the body measured at the width this view gets, from the row's measurement.
+    func configure(_ newSegments: [MessageSegment], layout: SegmentLayout, textColor: NSColor) {
         segments = newSegments
+        measured = layout
         self.textColor = textColor
         syncViews()
         needsLayout = true
     }
 
-    /// Text views are rebuilt per configure: their link color follows the text color, and a
-    /// recycled cell can swap between a user and a bot bubble.
+    /// Keeps a text view per text run and a grid per table, reusing the ones this view has and
+    /// hiding the ones it has no use for, so a recycled cell shows its next message without
+    /// building text views again.
     private func syncViews() {
-        for view in textViews { view.removeFromSuperview() }
-        for view in tableViews { view.removeFromSuperview() }
-        textViews = []
-        tableViews = []
+        var texts = 0
+        var tables = 0
         for segment in segments {
             switch segment {
             case let .text(attributed, top, bottom):
-                let view = MarkdownTextView(textColor: textColor)
-                view.show(attributed, topInset: top, bottomInset: bottom)
-                addSubview(view.framePositioned())
-                textViews.append(view)
+                if texts == textViews.count {
+                    let view = MarkdownTextView(textColor: textColor)
+                    addSubview(view.framePositioned())
+                    textViews.append(view)
+                }
+                textViews[texts].isHidden = false
+                textViews[texts].colorLinks(for: textColor)
+                textViews[texts].show(attributed, topInset: top, bottomInset: bottom)
+                texts += 1
             case .table:
-                let view = MarkdownTableView()
-                addSubview(view.framePositioned())
-                tableViews.append(view)
+                if tables == tableViews.count {
+                    let view = MarkdownTableView()
+                    addSubview(view.framePositioned())
+                    tableViews.append(view)
+                }
+                tableViews[tables].isHidden = false
+                tables += 1
             }
+        }
+        for view in textViews[texts...] { view.isHidden = true }
+        for view in tableViews[tables...] { view.isHidden = true }
+        showTables()
+    }
+
+    private func showTables() {
+        for (view, table) in zip(tableViews, measured.tables) {
+            view.show(table, textColor: textColor)
         }
     }
 
     override func layout() {
         super.layout()
+        // The row measured the body at this width; only a view given another width measures.
+        if abs(measured.width - bounds.width) > 0.5 || measured.heights.count != segments.count {
+            measured = SegmentLayout(segments, width: bounds.width)
+            showTables()
+        }
         var y: CGFloat = 0
         var texts = 0
         var tables = 0
         for (index, segment) in segments.enumerated() {
+            let height = measured.heights[index]
             switch segment {
-            case let .text(attributed, top, bottom):
-                let height = TextMeasure.textSize(of: attributed, width: bounds.width).height + top + bottom
+            case .text:
                 textViews[texts].frame = NSRect(x: 0, y: y, width: bounds.width, height: height)
                 texts += 1
-                y += height
-            case let .table(content):
-                let table = TableLayout.make(content, maxWidth: bounds.width)
-                let view = tableViews[tables]
-                view.show(table, textColor: textColor)
-                view.frame = NSRect(x: 0, y: y, width: min(table.width, bounds.width), height: table.height)
+            case .table:
+                let table = measured.tables[tables]
+                tableViews[tables].frame = NSRect(x: 0, y: y, width: min(table.width, bounds.width), height: height)
                 tables += 1
-                y += table.height
             }
+            y += height
             if index < segments.count - 1 { y += Markdown.segmentSpacing }
         }
     }
@@ -111,6 +133,7 @@ final class MessageCellView: NSTableCellView {
 
     override var isFlipped: Bool { true }
 
+    /// `segments` is the parsed body, which `metrics` measured.
     func configure(
         message: Message,
         groupStart: Bool,
@@ -137,7 +160,7 @@ final class MessageCellView: NSTableCellView {
         stamp.stringValue = Preferences.showTimestamps ? Format.time(message.createdAt) : ""
         stamp.isHidden = stamp.stringValue.isEmpty
 
-        content.configure(segments, textColor: isUser ? Theme.userBubbleText : .labelColor)
+        content.configure(segments, layout: metrics.textLayout, textColor: isUser ? Theme.userBubbleText : .labelColor)
 
         if isUser {
             bubble.fillColor = Theme.userBubble

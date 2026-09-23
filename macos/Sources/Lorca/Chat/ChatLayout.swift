@@ -92,6 +92,8 @@ struct BubbleMetrics {
     var attachmentsSize: NSSize = .zero
     var attachmentFrames: [NSRect] = []
     var hasText = true
+    /// The body laid out at `textWidth`, handed to the cell so it lays out without measuring.
+    var textLayout = SegmentLayout()
 
     var timeGutter: CGFloat {
         timeWidth > 0 ? ChatMetrics.timeGap + timeWidth : 0
@@ -134,27 +136,70 @@ enum ChatRow: Equatable {
         if case let .message(id, _) = self { return id }
         return nil
     }
+
+    /// The one run of rows that differs between `old` and `new`, as its range in each; the rows
+    /// before and after it are the same in both. A reply changes the end, an older page the
+    /// start, a removed message the middle.
+    static func changedRun(from old: [ChatRow], to new: [ChatRow]) -> (removed: Range<Int>, inserted: Range<Int>) {
+        var start = 0
+        while start < old.count, start < new.count, old[start] == new[start] { start += 1 }
+        var end = 0
+        while end < old.count - start, end < new.count - start,
+            old[old.count - 1 - end] == new[new.count - 1 - end]
+        {
+            end += 1
+        }
+        return (start..<(old.count - end), start..<(new.count - end))
+    }
 }
 
-/// Renders and measures message bodies once per text revision; the table asks for
-/// heights constantly, and re-parsing Markdown on every token would show.
+/// Renders and measures each message once per version and width. The table asks for heights
+/// on every reload, insert, and resize step, and parsing Markdown or laying text out again on
+/// each ask would show. A bubble stops growing at `maxBubbleWidth`, so once a window is wide
+/// enough, resizing it measures nothing.
 @MainActor
 final class ChatLayout {
+    /// The cache keeps every message's measurement until it holds this many, then keeps only
+    /// the chat on screen.
+    static let limit = 1_500
+
     private struct Entry {
-        var text: String
-        var rendered: RenderedMessage
+        /// The version of the message the rest was made from; any change starts over.
+        var message: Message
+        var rendered: RenderedMessage?
+        /// The last two widths a bubble was measured at, newest first, so toggling the
+        /// inspector or going back to a wide window finds its measurement.
+        var bubbles: [(key: BubbleKey, metrics: BubbleMetrics)] = []
+        var notice: (width: CGFloat, metrics: NoticeMetrics)?
+        var card: (width: CGFloat, height: CGFloat)?
+    }
+
+    /// What a bubble's measurement depends on besides the message.
+    private struct BubbleKey: Equatable {
+        var maxInner: CGFloat
+        var showsName: Bool
+        var showsTime: Bool
     }
 
     private var cache: [Message.ID: Entry] = [:]
+    private var timeWidths: [String: CGFloat] = [:]
+
+    private func entry(for message: Message) -> Entry {
+        if let entry = cache[message.id], entry.message == message { return entry }
+        return Entry(message: message)
+    }
 
     func rendered(for message: Message) -> RenderedMessage {
-        let color = message.author.isYou ? Theme.userBubbleText : NSColor.labelColor
-        let text = message.text
-        if let entry = cache[message.id], entry.text == text {
-            return entry.rendered
-        }
-        let rendered = RenderedMessage(text, textColor: color)
-        cache[message.id] = Entry(text: text, rendered: rendered)
+        var entry = entry(for: message)
+        return rendered(&entry)
+    }
+
+    private func rendered(_ entry: inout Entry) -> RenderedMessage {
+        if let rendered = entry.rendered { return rendered }
+        let color = entry.message.author.isYou ? Theme.userBubbleText : NSColor.labelColor
+        let rendered = RenderedMessage(entry.message.text, textColor: color)
+        entry.rendered = rendered
+        cache[entry.message.id] = entry
         return rendered
     }
 
@@ -162,8 +207,11 @@ final class ChatLayout {
         cache.removeValue(forKey: id)
     }
 
-    func invalidateAll() {
-        cache.removeAll()
+    /// Past `limit`, drops what the chat on screen does not show.
+    func prune(keeping messages: [Message]) {
+        guard cache.count > Self.limit else { return }
+        let ids = Set(messages.map(\.id))
+        cache = cache.filter { ids.contains($0.key) }
     }
 
     func availableBubbleWidth(for message: Message, indent: CGFloat, tableWidth: CGFloat) -> CGFloat {
@@ -178,27 +226,27 @@ final class ChatLayout {
     func metrics(for message: Message, showsName: Bool, tableWidth: CGFloat) -> BubbleMetrics {
         let indent = showsName ? ChatMetrics.bubbleIndent : ChatMetrics.horizontalInset
         let maxBubble = availableBubbleWidth(for: message, indent: indent, tableWidth: tableWidth)
-        let maxInner = maxBubble - ChatMetrics.bubblePadX * 2
-        let timeWidth: CGFloat = {
-            guard Preferences.showTimestamps else { return 0 }
-            return TextMeasure.labelSize(
-                of: NSAttributedString(
-                    string: Format.time(message.createdAt),
-                    attributes: [.font: Theme.Font.caption])
-            ).width
-        }()
+        let key = BubbleKey(
+            maxInner: maxBubble - ChatMetrics.bubblePadX * 2, showsName: showsName,
+            showsTime: Preferences.showTimestamps)
+        var entry = entry(for: message)
+        if let bubble = entry.bubbles.first(where: { $0.key == key }) { return bubble.metrics }
+
+        let maxInner = key.maxInner
+        let timeWidth = key.showsTime ? timeWidth(for: message.createdAt) : 0
         let timeGutter = timeWidth > 0 ? ChatMetrics.timeGap + timeWidth : 0
         let maxText = max(24, maxInner - timeGutter)
-        let content = rendered(for: message)
+        let content = rendered(&entry)
         let hasText = !content.isEmpty
-        let textWidth = hasText ? max(24, min(content.preferredWidth(max: maxText), maxText)) : 0
+        let textLayout = hasText ? content.layout(fitting: maxText, minimum: 24) : SegmentLayout()
+        let textWidth = hasText ? textLayout.width : 0
         // With no text the stamp gets a line of its own under the attachments.
         let textHeight =
             hasText
-            ? max(ChatMetrics.timeLineHeight, content.height(forWidth: textWidth) + 1)
+            ? max(ChatMetrics.timeLineHeight, textLayout.height + 1)
             : (timeWidth > 0 ? ChatMetrics.timeLineHeight : 0)
         let attachments = AttachmentLayout.frames(for: message.attachments, maxWidth: maxInner)
-        return BubbleMetrics(
+        let metrics = BubbleMetrics(
             textWidth: textWidth,
             textHeight: textHeight,
             timeWidth: timeWidth,
@@ -206,8 +254,49 @@ final class ChatLayout {
             indent: indent,
             attachmentsSize: attachments.size,
             attachmentFrames: attachments.frames,
-            hasText: hasText
+            hasText: hasText,
+            textLayout: textLayout
         )
+        entry.bubbles = [(key, metrics)] + entry.bubbles.prefix(1)
+        cache[message.id] = entry
+        return metrics
+    }
+
+    private func timeWidth(for date: Date) -> CGFloat {
+        let time = Format.time(date)
+        if let width = timeWidths[time] { return width }
+        let width = TextMeasure.labelSize(
+            of: NSAttributedString(string: time, attributes: [.font: Theme.Font.caption])
+        ).width
+        timeWidths[time] = width
+        return width
+    }
+
+    /// A notice row's box, for a message whose body is a notice.
+    func noticeMetrics(for message: Message, tableWidth: CGFloat) -> NoticeMetrics {
+        let width = Self.noticeMaxBoxWidth(tableWidth: tableWidth)
+        var entry = entry(for: message)
+        if let notice = entry.notice, notice.width == width { return notice.metrics }
+        let metrics = noticeMetrics(for: message.text, tableWidth: tableWidth)
+        entry.notice = (width, metrics)
+        cache[message.id] = entry
+        return metrics
+    }
+
+    private static func noticeMaxBoxWidth(tableWidth: CGFloat) -> CGFloat {
+        min(ChatMetrics.noticeMaxWidth, tableWidth - ChatMetrics.horizontalInset * 2)
+    }
+
+    /// A permission card's height, for a message whose body is a permission request.
+    private func cardHeight(for message: Message, request: PermissionRequest, tableWidth: CGFloat) -> CGFloat {
+        // The card's width is all of the row it depends on.
+        let width = min(PermissionCellView.width, tableWidth - ChatMetrics.horizontalInset * 2)
+        var entry = entry(for: message)
+        if let card = entry.card, card.width == width { return card.height }
+        let height = PermissionCellView.height(for: request, rowWidth: tableWidth)
+        entry.card = (width, height)
+        cache[message.id] = entry
+        return height
     }
 
     /// Hugs the text up to `noticeMaxWidth`, with the icon centered on the first line.
@@ -216,7 +305,7 @@ final class ChatLayout {
         let textX = ChatMetrics.noticePadX + ChatMetrics.noticeIconSize + ChatMetrics.noticeIconGap
         let labelX = textX - inset
         let chromeWidth = textX - inset * 2 + ChatMetrics.noticePadX
-        let maxBoxWidth = min(ChatMetrics.noticeMaxWidth, tableWidth - ChatMetrics.horizontalInset * 2)
+        let maxBoxWidth = Self.noticeMaxBoxWidth(tableWidth: tableWidth)
         let font: [NSAttributedString.Key: Any] = [.font: Theme.Font.notice]
         let line = TextMeasure.labelSize(of: NSAttributedString(string: "X", attributes: font))
         let label = TextMeasure.labelSize(
@@ -262,11 +351,11 @@ final class ChatLayout {
             case .tool, .handoff:
                 return top + 34
 
-            case let .notice(text):
-                return top + noticeMetrics(for: text, tableWidth: tableWidth).boxSize.height
+            case .notice:
+                return top + noticeMetrics(for: message, tableWidth: tableWidth).boxSize.height
 
             case let .permission(request):
-                return top + PermissionCellView.height(for: request, rowWidth: tableWidth)
+                return top + cardHeight(for: message, request: request, tableWidth: tableWidth)
             }
         }
     }

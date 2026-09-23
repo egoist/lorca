@@ -4,7 +4,7 @@ final class ChatViewController: NSViewController {
     private let store = AppStore.shared
     private let layout = ChatLayout()
 
-    private let tableView = NSTableView()
+    private let tableView = TranscriptTableView()
     private let scrollView = NSScrollView()
     private let composer = ComposerView()
     private let emptyState = ChatEmptyStateView()
@@ -12,10 +12,14 @@ final class ChatViewController: NSViewController {
 
     private var chatID: Chat.ID?
     private var rows: [ChatRow] = []
+    /// Where each message sits in the chat's messages, so a row finds its message at once.
+    private var messageIndex: [Message.ID: Int] = [:]
     /// Shown after the last message when a turn ended without a reply; cleared by the next message.
     private var stoppedNotice: String?
     private var isPinnedToBottom = true
     private var lastWidth: CGFloat = 0
+    /// A live resize changed the width and only the rows on screen were measured again.
+    private var offscreenHeightsStale = false
 
     // MARK: - Lifecycle
 
@@ -112,6 +116,7 @@ final class ChatViewController: NSViewController {
         tableView.rowSizeStyle = .custom
         tableView.dataSource = self
         tableView.delegate = self
+        tableView.onLiveResizeEnd = { [weak self] in self?.liveResizeDidEnd() }
     }
 
     override func viewDidLoad() {
@@ -136,6 +141,8 @@ final class ChatViewController: NSViewController {
             scrollView.contentInsets.top = topInset
             if isPinnedToBottom { scrollToBottom(animated: false) }
         }
+        // In case the end of a live resize never reached the table.
+        if offscreenHeightsStale, !tableView.inLiveResize { liveResizeDidEnd() }
         let width = tableView.bounds.width
         guard abs(width - lastWidth) > 0.5 else { return }
         lastWidth = width
@@ -162,8 +169,11 @@ final class ChatViewController: NSViewController {
         chatID = newChatID
         guard let chat = store.chat(newChatID) else { return }
 
-        if !isSameChat { stoppedNotice = nil }
-        layout.invalidateAll()
+        if !isSameChat {
+            stoppedNotice = nil
+            // Measurements outlive the chat, so coming back to one measures nothing again.
+            layout.prune(keeping: chat.messages)
+        }
         rebuildRows()
         tableView.reloadData()
 
@@ -209,12 +219,14 @@ final class ChatViewController: NSViewController {
 
     private func rebuildRows() {
         rows.removeAll()
+        messageIndex.removeAll()
         guard let chatID, let chat = store.chat(chatID) else { return }
 
         var previousAuthor: Message.Author?
         var previousDate: Date?
 
-        for message in chat.messages {
+        for (index, message) in chat.messages.enumerated() {
+            messageIndex[message.id] = index
             // Tool calls are the bot's business; only a sent message leaves a marker.
             if case let .tool(tool) = message.body, !tool.isSentMessage { continue }
             let silence = previousDate.map { message.createdAt.timeIntervalSince($0) } ?? .infinity
@@ -247,6 +259,9 @@ final class ChatViewController: NSViewController {
 
     private func message(for id: Message.ID) -> Message? {
         guard let chatID, let chat = store.chat(chatID) else { return nil }
+        if let index = messageIndex[id], chat.messages.indices.contains(index), chat.messages[index].id == id {
+            return chat.messages[index]
+        }
         return chat.messages.first { $0.id == id }
     }
 
@@ -259,26 +274,19 @@ final class ChatViewController: NSViewController {
         case let .messageAdded(id, _) where id == chatID:
             let wasPinned = isPinnedToBottom
             stoppedNotice = nil
-            rebuildRows()
-            tableView.reloadData()
+            updateRows()
             emptyState.isHidden = true
             composer.isResponding = store.isResponding(in: chatID)
             if wasPinned { scrollToBottom(animated: true) }
 
         case let .messageChanged(id, messageID) where id == chatID:
-            layout.invalidate(messageID)
             updateRow(for: messageID)
-            if let index = rows.firstIndex(where: { if case .working = $0 { return true } else { return false } }),
-                let cell = tableView.view(atColumn: 0, row: index, makeIfNecessary: false)
-            {
-                configure(cell: cell, row: rows[index])
-            }
+            refreshWorkingRow()
             composer.isResponding = store.isResponding(in: chatID)
 
         case let .messageRemoved(id, messageID) where id == chatID:
             layout.invalidate(messageID)
-            rebuildRows()
-            tableView.reloadData()
+            updateRows()
             emptyState.isHidden = !(store.chat(chatID)?.messages.isEmpty ?? true)
             if isPinnedToBottom { scrollToBottom(animated: false) }
 
@@ -290,8 +298,7 @@ final class ChatViewController: NSViewController {
                 stoppedNotice = L("%@ stopped without replying", store.title(for: chat))
             }
             let wasPinned = isPinnedToBottom
-            rebuildRows()
-            tableView.reloadData()
+            updateRows()
             // Turns hand over quickly (one member finishes as the next starts), so the pin
             // is re-applied once the table has laid out the new last row.
             if wasPinned {
@@ -305,6 +312,12 @@ final class ChatViewController: NSViewController {
         case let .chatChanged(id) where id == chatID:
             guard let chat = store.chat(chatID) else { return }
             composer.configure(placeholder: placeholder(for: chat), bots: mentionable(in: chat))
+            // A member's image may have landed.
+            reconfigureVisibleRows()
+
+        case .rosterChanged:
+            // A bot's name or look may have changed.
+            reconfigureVisibleRows()
 
         case let .olderMessagesLoaded(id) where id == chatID:
             olderMessagesLoaded()
@@ -317,38 +330,112 @@ final class ChatViewController: NSViewController {
         }
     }
 
+    /// Brings the table to the rows the chat has now. Scrolled back, what the user is reading
+    /// stays in place: a long transcript's table estimates the heights of rows it has not
+    /// shown, and learning about new rows moves its estimates.
+    private func updateRows() {
+        if isPinnedToBottom {
+            applyRows()
+        } else {
+            holdingFirstVisibleMessage(by: .bottom, applyRows)
+        }
+    }
+
+    /// Replaces the one run of rows that differs. The rows around it keep their cells and
+    /// heights: the table measures only what is new, and a selection in a message on screen
+    /// survives a reply arriving.
+    private func applyRows() {
+        let old = rows
+        rebuildRows()
+        let run = ChatRow.changedRun(from: old, to: rows)
+        if !run.removed.isEmpty || !run.inserted.isEmpty {
+            tableView.beginUpdates()
+            tableView.removeRows(at: IndexSet(integersIn: run.removed), withAnimation: [])
+            tableView.insertRows(at: IndexSet(integersIn: run.inserted), withAnimation: [])
+            tableView.endUpdates()
+        }
+        refreshWorkingRow()
+    }
+
+    /// Configures the cells on screen again, for what a row shows beyond its message: a bot's
+    /// name and avatar, or a new width. Returns the rows on screen.
+    @discardableResult
+    private func reconfigureVisibleRows() -> Range<Int> {
+        let visible = tableView.rows(in: scrollView.contentView.bounds)
+        let onScreen = (visible.location..<NSMaxRange(visible)).clamped(to: rows.indices)
+        for row in onScreen {
+            guard let cell = tableView.view(atColumn: 0, row: row, makeIfNecessary: false)
+            else { continue }
+            configure(cell: cell, row: rows[row])
+        }
+        return onScreen
+    }
+
+    /// The working row reads the bot's latest step, which changes while the row stays.
+    private func refreshWorkingRow() {
+        guard let last = rows.indices.last, case .working = rows[last],
+            let cell = tableView.view(atColumn: 0, row: last, makeIfNecessary: false)
+        else { return }
+        configure(cell: cell, row: rows[last])
+    }
+
     private func updateRow(for messageID: Message.ID) {
-        guard let index = rows.firstIndex(where: { $0.messageID == messageID }) else { return }
+        // A streamed reply is at the end, so look from there.
+        guard let index = rows.lastIndex(where: { $0.messageID == messageID }) else { return }
 
         if let cell = tableView.view(atColumn: 0, row: index, makeIfNecessary: false) {
             configure(cell: cell, row: rows[index])
         }
 
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0
-            tableView.noteHeightOfRows(withIndexesChanged: IndexSet(integer: index))
+        if isPinnedToBottom {
+            noteHeights(of: IndexSet(integer: index))
+            scrollToBottom(animated: false)
+        } else {
+            // A reply growing in the message being read grows downward.
+            holdingFirstVisibleMessage(by: .top) { noteHeights(of: IndexSet(integer: index)) }
         }
-
-        if isPinnedToBottom { scrollToBottom(animated: false) }
     }
 
-    /// Bubble widths are baked in at configure time, so a resize has to re-measure
-    /// the visible cells as well as their row heights.
+    private func noteHeights(of rows: IndexSet) {
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            tableView.noteHeightOfRows(withIndexesChanged: rows)
+        }
+    }
+
+    /// Bubble widths are baked in at configure time, so a new width configures the visible
+    /// cells again and measures their rows. While the user drags the window's edge only the
+    /// rows on screen are measured; the rest are once the drag ends. Scrolled back, the top of
+    /// what the user is reading stays in place.
     private func reloadHeights() {
         guard !rows.isEmpty else { return }
 
-        let visible = tableView.rows(in: scrollView.contentView.bounds)
-        if visible.length > 0 {
-            for row in visible.lowerBound..<visible.upperBound where rows.indices.contains(row) {
-                guard let cell = tableView.view(atColumn: 0, row: row, makeIfNecessary: false)
-                else { continue }
-                configure(cell: cell, row: rows[row])
-            }
+        let onScreen = reconfigureVisibleRows()
+        if tableView.inLiveResize {
+            noteHeights(of: IndexSet(integersIn: onScreen))
+            offscreenHeightsStale = true
+            return
         }
+        offscreenHeightsStale = false
+        let all = IndexSet(integersIn: rows.indices)
+        if isPinnedToBottom {
+            noteHeights(of: all)
+        } else {
+            holdingFirstVisibleMessage(by: .top) { noteHeights(of: all) }
+        }
+    }
 
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0
-            tableView.noteHeightOfRows(withIndexesChanged: IndexSet(integersIn: 0..<rows.count))
+    /// The rows off screen take their heights at the width the resize ended on. What the user
+    /// was reading stays in place; a pinned transcript stays at its end.
+    private func liveResizeDidEnd() {
+        guard offscreenHeightsStale else { return }
+        offscreenHeightsStale = false
+        let all = IndexSet(integersIn: rows.indices)
+        if isPinnedToBottom {
+            noteHeights(of: all)
+            scrollToBottom(animated: false)
+        } else {
+            holdingFirstVisibleMessage(by: .top) { noteHeights(of: all) }
         }
     }
 
@@ -375,15 +462,34 @@ final class ChatViewController: NSViewController {
         }
     }
 
-    /// Older messages went in above the first row: keep what is on screen where it is by
-    /// holding the distance to the end of the document.
+    /// Older messages went in above the first row: keep what is on screen where it is. The
+    /// message held keeps its bottom edge, since an older neighbor can change its top padding.
     private func olderMessagesLoaded() {
+        holdingFirstVisibleMessage(by: .bottom, applyRows)
+    }
+
+    private enum Edge {
+        case top, bottom
+    }
+
+    /// Runs `change`, then scrolls so the first message starting on screen has its `edge` where
+    /// it was, whatever went in, came out, or changed height above it.
+    private func holdingFirstVisibleMessage(by edge: Edge, _ change: () -> Void) {
         let clip = scrollView.contentView
-        let fromEnd = (rows.isEmpty ? 0 : tableView.rect(ofRow: rows.count - 1).maxY) - clip.bounds.origin.y
-        rebuildRows()
-        tableView.reloadData()
-        guard !rows.isEmpty else { return }
-        let origin = NSPoint(x: clip.bounds.origin.x, y: tableView.rect(ofRow: rows.count - 1).maxY - fromEnd)
+        let visible = tableView.rows(in: clip.bounds)
+        let onScreen = (visible.location..<NSMaxRange(visible)).clamped(to: rows.indices)
+        let messages = onScreen.filter { rows[$0].messageID != nil }
+        let first = messages.first { tableView.rect(ofRow: $0).minY >= clip.bounds.minY } ?? messages.first
+        func y(of row: Int) -> CGFloat {
+            let rect = tableView.rect(ofRow: row)
+            return edge == .top ? rect.minY : rect.maxY
+        }
+        let anchor = first.flatMap { row in
+            rows[row].messageID.map { (id: $0, offset: y(of: row) - clip.bounds.minY) }
+        }
+        change()
+        guard let anchor, let row = rows.firstIndex(where: { $0.messageID == anchor.id }) else { return }
+        let origin = NSPoint(x: clip.bounds.origin.x, y: y(of: row) - anchor.offset)
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0
             clip.animator().setBoundsOrigin(origin)
@@ -463,8 +569,7 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
     }
 
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
-        let rowView = TransparentRowView()
-        return rowView
+        dequeue(TransparentRowView.identifier) { TransparentRowView() }
     }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
@@ -621,7 +726,7 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
                     text: text,
                     groupStart: groupStart,
                     metrics: layout.noticeMetrics(
-                        for: text, tableWidth: max(tableView.bounds.width, 320)))
+                        for: message, tableWidth: max(tableView.bounds.width, 320)))
 
             case let .permission(request):
                 let permissionCell = cell as? PermissionCellView
@@ -646,7 +751,20 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
 
 }
 
+/// Tells the transcript when the user stops dragging the window's edge, so the rows it left
+/// measured at an old width catch up.
+final class TranscriptTableView: NSTableView {
+    var onLiveResizeEnd: (() -> Void)?
+
+    override func viewDidEndLiveResize() {
+        super.viewDidEndLiveResize()
+        onLiveResizeEnd?()
+    }
+}
+
 final class TransparentRowView: NSTableRowView {
+    static let identifier = NSUserInterfaceItemIdentifier("TransparentRow")
+
     override func drawBackground(in dirtyRect: NSRect) {}
     override func drawSelection(in dirtyRect: NSRect) {}
     override var isEmphasized: Bool {

@@ -17,11 +17,12 @@ enum TextPopover {
         let rendered = RenderedMessage(text, textColor: .labelColor)
         guard !rendered.isEmpty else { return }
 
-        let width = min(maxWidth, max(minWidth, rendered.preferredWidth(max: maxWidth)))
-        let height = rendered.height(forWidth: width)
+        let layout = rendered.layout(fitting: maxWidth, minimum: minWidth)
+        let width = layout.width
+        let height = layout.height
 
         let content = SegmentedTextView().framePositioned()
-        content.configure(rendered.segments, textColor: .labelColor)
+        content.configure(rendered.segments, layout: layout, textColor: .labelColor)
         content.frame = NSRect(x: padding, y: padding, width: width, height: height)
 
         // A padded document view, not scroll-view insets: insets shift the scroll range, not the text.
