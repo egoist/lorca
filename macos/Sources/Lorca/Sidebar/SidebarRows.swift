@@ -42,6 +42,11 @@ final class SidebarNode: NSObject {
         }
     }
 
+    var chatID: Chat.ID? {
+        if case let .chat(id) = kind { return id }
+        return nil
+    }
+
     var isHeader: Bool {
         if case .header = kind { return true }
         return false
@@ -212,6 +217,31 @@ final class SidebarSettingCell: NSTableCellView {
 final class SidebarChatCell: NSTableCellView {
     static let identifier = NSUserInterfaceItemIdentifier("SidebarChatCell")
 
+    /// Everything a chat's row shows. The sidebar makes one for each row it holds a cell for on
+    /// every store event, and a cell that already shows it is left alone.
+    struct Content: Equatable {
+        var avatars: [AvatarView.Content]
+        var isWorking: Bool
+        var title: String
+        var preview: String
+        var stamp: String
+        var isPinned: Bool
+        var unreadCount: Int
+
+        @MainActor
+        init(chat: Chat, store: AppStore) {
+            avatars = store.bots(in: chat).prefix(4).map { AvatarView.content(for: $0, store: store) }
+            isWorking = chat.botIDs.contains { store.isWorking($0) }
+            title = store.title(for: chat)
+            preview = store.preview(for: chat)
+            stamp = Format.stamp(chat.lastActivity)
+            isPinned = chat.isPinned
+            unreadCount = chat.unreadCount
+        }
+    }
+
+    private var content: Content?
+
     private let avatars = AvatarClusterView(slot: SidebarMetric.slot)
     private let title = Build.label("", font: Theme.Font.sidebarTitle)
     private let preview = Build.label(
@@ -298,19 +328,21 @@ final class SidebarChatCell: NSTableCellView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(chat: Chat, store: AppStore) {
-        avatars.configure(with: store.bots(in: chat))
-        avatars.isWorking = chat.botIDs.contains { store.isWorking($0) }
-        title.stringValue = store.title(for: chat)
-        preview.stringValue = store.preview(for: chat)
-        stampText = Format.stamp(chat.lastActivity)
+    func configure(_ content: Content) {
+        guard content != self.content else { return }
+        self.content = content
+        avatars.configure(with: content.avatars)
+        avatars.isWorking = content.isWorking
+        title.stringValue = content.title
+        preview.stringValue = content.preview
+        stampText = content.stamp
         updateStamp()
 
-        pin.isHidden = !chat.isPinned
-        titleBeforePin.isActive = chat.isPinned
-        titleBeforeStamp.isActive = !chat.isPinned
+        pin.isHidden = !content.isPinned
+        titleBeforePin.isActive = content.isPinned
+        titleBeforeStamp.isActive = !content.isPinned
 
-        let unread = chat.unreadCount
+        let unread = content.unreadCount
         badge.isHidden = unread == 0
         count.stringValue = unread > 999 ? "999+" : String(unread)
         let unreadLabel = unread > 0 ? L("%d unread", unread) : nil

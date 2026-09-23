@@ -13,6 +13,9 @@ final class SidebarViewController: NSViewController {
     let footer = SidebarFooterView()
 
     private var nodes: [SidebarNode] = []
+    /// A chat keeps its node while it is listed, so a row that moves stays the same item to the
+    /// outline view, with its row view, cell, and selection.
+    private var chatNodes: [Chat.ID: SidebarNode] = [:]
     /// The root can restore selection before the first snapshot has created the outline rows.
     private var selection: Selection?
     private var isApplyingSelection = false
@@ -156,39 +159,86 @@ final class SidebarViewController: NSViewController {
 
     // MARK: - Data
 
+    /// Brings the rows in line with the store. Rows move, arrive, or leave only when the order
+    /// of the chats changed, and a cell is reconfigured only when what it shows changed, so an
+    /// event during a reply touches only the rows it concerns and builds no views.
     private func rebuild() {
-        let fresh = store.chats.map { SidebarNode(.chat($0.id)) }
-        if !fresh.isEmpty { installList() }
+        let ids = store.chats.map(\.id)
+        if !ids.isEmpty { installList() }
 
-        if fresh.map(\.kind) == nodes.map(\.kind) {
-            // Same rows in the same order (an unread count cleared, a pin toggled): update the
-            // cells in place. A full reload replaces the row views, and a row view built while
-            // the outline view is still handling the click that selected it draws its selection
-            // unemphasized (gray) until the next selection change.
-            refreshVisibleCells()
-        } else if isNotifyingSelection {
-            DispatchQueue.main.async { [weak self] in self?.rebuild() }
-            return
-        } else {
-            isApplyingSelection = true
-            nodes = fresh
-            outlineView.reloadData()
-            setSelection(selection)
-            isApplyingSelection = false
+        if listInstalled, ids != nodes.compactMap(\.chatID) {
+            // The outline view is still handling the click that selected a row; the rows move
+            // once it is done.
+            if isNotifyingSelection {
+                DispatchQueue.main.async { [weak self] in self?.rebuild() }
+                return
+            }
+            reorder(to: ids)
         }
+        refreshCells()
         footer.update()
     }
 
-    private func refreshVisibleCells() {
-        guard listInstalled else { return }
-        for row in 0..<outlineView.numberOfRows {
-            guard let node = outlineView.item(atRow: row) as? SidebarNode,
-                let cell = outlineView.view(atColumn: 0, row: row, makeIfNecessary: false)
-            else { continue }
-            if case let .chat(id) = node.kind, let cell = cell as? SidebarChatCell, let chat = store.chat(id) {
-                cell.configure(chat: chat, store: store)
-                cell.shortcutNumber = shortcutNumber(forRow: row)
+    /// Moves, inserts, and removes rows until they follow `ids`. Only the first rows come in
+    /// with a reload: a reload builds every row view and cell again, and a row view built while
+    /// the outline view handles the click that selected it draws its selection unemphasized
+    /// (gray) until the next selection change.
+    private func reorder(to ids: [Chat.ID]) {
+        let wasApplyingSelection = isApplyingSelection
+        isApplyingSelection = true
+        defer { isApplyingSelection = wasApplyingSelection }
+
+        guard !nodes.isEmpty else {
+            nodes = ids.map(node(for:))
+            outlineView.reloadData()
+            setSelection(selection)
+            return
+        }
+
+        let listed = Set(ids)
+        // Rows jump to their places, as a reload put them; the outline view would slide them.
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            outlineView.beginUpdates()
+            let gone = IndexSet(nodes.indices.filter { !listed.contains(nodes[$0].chatID ?? "") })
+            for index in gone.reversed() {
+                if let id = nodes[index].chatID { chatNodes[id] = nil }
+                nodes.remove(at: index)
             }
+            if !gone.isEmpty { outlineView.removeItems(at: gone, inParent: nil, withAnimation: []) }
+            // Top down, each place takes its chat: the row already there, a row moved up from
+            // further down (a chat with new activity takes one move), or a new row.
+            for (index, id) in ids.enumerated() where index == nodes.count || nodes[index].chatID != id {
+                if let from = nodes[index...].firstIndex(where: { $0.chatID == id }) {
+                    nodes.insert(nodes.remove(at: from), at: index)
+                    outlineView.moveItem(at: from, inParent: nil, to: index, inParent: nil)
+                } else {
+                    nodes.insert(node(for: id), at: index)
+                    outlineView.insertItems(at: IndexSet(integer: index), inParent: nil, withAnimation: [])
+                }
+            }
+            outlineView.endUpdates()
+        }
+        setSelection(selection)
+    }
+
+    private func node(for id: Chat.ID) -> SidebarNode {
+        if let node = chatNodes[id] { return node }
+        let node = SidebarNode(.chat(id))
+        chatNodes[id] = node
+        return node
+    }
+
+    /// Updates the rows the outline view holds cells for, on screen or kept ready beside it.
+    /// The other rows get theirs when they scroll into view.
+    private func refreshCells() {
+        guard listInstalled else { return }
+        outlineView.enumerateAvailableRowViews { rowView, row in
+            guard let cell = rowView.view(atColumn: 0) as? SidebarChatCell,
+                let id = (outlineView.item(atRow: row) as? SidebarNode)?.chatID, let chat = store.chat(id)
+            else { return }
+            cell.configure(SidebarChatCell.Content(chat: chat, store: store))
+            cell.shortcutNumber = shortcutNumber(forRow: row)
         }
     }
 
@@ -211,13 +261,10 @@ final class SidebarViewController: NSViewController {
             outlineView.deselectAll(nil)
             return
         }
-        for row in 0..<outlineView.numberOfRows {
-            guard let node = outlineView.item(atRow: row) as? SidebarNode,
-                node.selection == selection
-            else { continue }
-            outlineView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
-            return
-        }
+        guard case let .chat(id) = selection, let node = chatNodes[id] else { return }
+        let row = outlineView.row(forItem: node)
+        guard row >= 0, row != outlineView.selectedRow else { return }
+        outlineView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
     }
 
     // MARK: - Shortcuts
@@ -340,7 +387,7 @@ extension SidebarViewController: NSOutlineViewDelegate {
                     new.identifier = SidebarChatCell.identifier
                     return new
                 }()
-            cell.configure(chat: chat, store: store)
+            cell.configure(SidebarChatCell.Content(chat: chat, store: store))
             cell.shortcutNumber = nodes.firstIndex { $0 === node }.flatMap(shortcutNumber(forRow:))
             return cell
 
@@ -513,6 +560,9 @@ final class SidebarFooterView: NSView {
 
     var onSettings: (() -> Void)?
     var onDevice: (() -> Void)?
+    /// What the device button shows. The sidebar updates the footer on every store event, and
+    /// one that changes none of it leaves the button alone.
+    private var shown: (symbol: String, name: String, status: String)?
 
     init() {
         super.init(frame: .zero)
@@ -543,6 +593,8 @@ final class SidebarFooterView: NSView {
         // outline; a palette with a clear second layer leaves the outline alone. The iMac's chin
         // stays solid either way, so a desktop shows as a plain display here.
         let symbol = store.thisDevice?.symbolName ?? "laptopcomputer"
+        if let shown, shown == (symbol, name, status) { return }
+        shown = (symbol, name, status)
         device.image = NSImage(
             systemSymbolName: symbol == "desktopcomputer" ? "display" : symbol, accessibilityDescription: name)
         let tint: NSColor = connected ? .secondaryLabelColor : .systemRed

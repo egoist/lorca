@@ -232,9 +232,13 @@ final class AvatarClusterView: NSView {
     override var allowsVibrancy: Bool { false }
 
     func configure(with bots: [Bot]) {
-        let next = bots.prefix(4).map { AvatarView.content(for: $0) }
-        guard next != contents else { return }
-        contents = Array(next)
+        configure(with: bots.prefix(4).map { AvatarView.content(for: $0) })
+    }
+
+    func configure(with contents: [AvatarView.Content]) {
+        let next = Array(contents.prefix(4))
+        guard next != self.contents else { return }
+        self.contents = next
         needsDisplay = true
     }
 
