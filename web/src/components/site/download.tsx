@@ -1,3 +1,4 @@
+import { Link } from '@tanstack/react-router'
 import { createServerFn } from '@tanstack/react-start'
 import {
   Check,
@@ -147,7 +148,7 @@ export function Download({ release }: { release: MacRelease | null }) {
               <Trans
                 i18nKey="download.cli.note"
                 components={{
-                  docs: <a href={`${docsPath(i18n.language)}/cli`} className="underline underline-offset-4 hover:text-foreground" />,
+                  docs: <Link to={docsPath(i18n.language, 'cli')} className="underline underline-offset-4 hover:text-foreground" />,
                 }}
               />
             }

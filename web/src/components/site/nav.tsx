@@ -14,9 +14,10 @@ const links = [
   { id: 'faq', label: 'nav.faq' },
 ] as const
 
-/// The docs in the page's language: `/docs` and `/zh/docs`.
-export function docsPath(lng: string) {
-  return lng === 'en' ? '/docs' : `/${lng}/docs`
+/// The docs in the page's language: `/docs` and `/zh/docs`, or one of their pages: `/docs/cli`.
+export function docsPath(lng: string, page?: string) {
+  const docs = lng === 'en' ? '/docs' : `/${lng}/docs`
+  return page ? `${docs}/${page}` : docs
 }
 
 /// The download page in the page's language: `/download` and `/zh/download`. It links the Mac
@@ -25,9 +26,20 @@ export function downloadPath(lng: string) {
   return lng === 'en' ? '/download' : `/${lng}/download`
 }
 
-/// A section of the landing page, from any page: `/#faq` and `/zh#faq`.
-export function homeSection(lng: string, id: string) {
-  return `${paths[lng as Language]}#${id}`
+/// A section of the landing page, from any page: `/#faq` and `/zh#faq`. It is the current page
+/// only at its own section. Without `resetScroll`, a second click on the section already in the
+/// address bar restores the scroll position the click was made at instead of scrolling to it.
+export function SectionLink({ id, ...props }: { id: string } & Omit<React.ComponentProps<'a'>, 'href'>) {
+  const { i18n } = useTranslation()
+  return (
+    <Link
+      to={paths[i18n.language as Language]}
+      hash={id}
+      activeOptions={{ includeHash: true }}
+      resetScroll={false}
+      {...props}
+    />
+  )
 }
 
 /// A link to the same page in the other language.
@@ -48,24 +60,24 @@ export function Nav() {
   return (
     <header className="sticky top-4 z-40 mt-4 px-4">
       <div className="mx-auto flex h-14 max-w-4xl items-center justify-between rounded-full pr-4 pl-5 bg-zinc-200/50 backdrop-blur-xl dark:bg-zinc-900/80 dark:border">
-        <a href={homeSection(i18n.language, 'top')} className="flex items-center gap-2 font-semibold tracking-tight">
+        <SectionLink id="top" className="flex items-center gap-2 font-semibold tracking-tight">
           <Logo className="size-10" />
           Lorca
-        </a>
+        </SectionLink>
         <nav className="hidden items-center gap-6 text-sm text-muted-foreground md:flex">
           {links.map((link) => (
-            <a key={link.id} href={homeSection(i18n.language, link.id)} className="transition-colors hover:text-foreground">
+            <SectionLink key={link.id} id={link.id} className="transition-colors hover:text-foreground">
               {t(link.label)}
-            </a>
+            </SectionLink>
           ))}
-          <a href={docsPath(i18n.language)} className="transition-colors hover:text-foreground">
+          <Link to={docsPath(i18n.language)} className="transition-colors hover:text-foreground">
             {t('nav.docs')}
-          </a>
+          </Link>
         </nav>
         <div className="flex items-center gap-3">
           <LanguageLink className="text-sm text-muted-foreground transition-colors hover:text-foreground" />
           <Button asChild size="sm" className="rounded-full px-4">
-            <a href={downloadPath(i18n.language)}>{t('nav.download')}</a>
+            <Link to={downloadPath(i18n.language)}>{t('nav.download')}</Link>
           </Button>
         </div>
       </div>

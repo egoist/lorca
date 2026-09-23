@@ -1,3 +1,4 @@
+import { Link } from '@tanstack/react-router'
 import { Brain, FilePen, Globe, Plug } from 'lucide-react'
 import { Trans, useTranslation } from 'react-i18next'
 
@@ -10,7 +11,7 @@ import {
 import { Button } from '#/components/ui/button'
 import { RelayDiagram } from './diagram'
 import { Logo } from './logo'
-import { LanguageLink, docsPath, downloadPath, homeSection } from './nav'
+import { LanguageLink, SectionLink, docsPath, downloadPath } from './nav'
 import { Pixels } from './pixels'
 
 export function Hero() {
@@ -29,10 +30,10 @@ export function Hero() {
       </p>
       <div className="mt-9 flex flex-col justify-center gap-3 sm:flex-row">
         <Button asChild size="lg" className="h-12 rounded-full px-7 text-base">
-          <a href={downloadPath(i18n.language)}>{t('nav.download')}</a>
+          <Link to={downloadPath(i18n.language)}>{t('nav.download')}</Link>
         </Button>
         <Button asChild size="lg" variant="outline" className="h-12 rounded-full bg-transparent px-6 text-base shadow-none hover:bg-foreground/5 dark:bg-transparent dark:hover:bg-foreground/5">
-          <a href="#turns">{t('hero.how')}</a>
+          <SectionLink id="turns">{t('hero.how')}</SectionLink>
         </Button>
       </div>
       <p className="mt-4 text-sm text-muted-foreground/80">{t('hero.platforms')}</p>
@@ -208,7 +209,7 @@ export function CallToAction() {
           <h2 className="display mt-6 text-4xl text-white sm:text-6xl">{t('cta.title')}</h2>
           <p className="mx-auto mt-4 max-w-md text-white/80">{t('cta.body')}</p>
           <Button asChild size="lg" className="mt-8 h-12 rounded-full bg-white px-7 text-base text-zinc-900 hover:bg-white/90">
-            <a href={downloadPath(i18n.language)}>{t('nav.download')}</a>
+            <Link to={downloadPath(i18n.language)}>{t('nav.download')}</Link>
           </Button>
         </div>
       </div>
@@ -226,10 +227,10 @@ export function Footer() {
           <span>© {new Date().getFullYear()} Lorca</span>
         </div>
         <nav className="flex gap-6">
-          <a href={homeSection(i18n.language, 'relay')} className="hover:text-foreground">{t('footer.privacy')}</a>
-          <a href={homeSection(i18n.language, 'faq')} className="hover:text-foreground">{t('footer.faq')}</a>
-          <a href={docsPath(i18n.language)} className="hover:text-foreground">{t('nav.docs')}</a>
-          <a href={downloadPath(i18n.language)} className="hover:text-foreground">{t('footer.download')}</a>
+          <SectionLink id="relay" className="hover:text-foreground">{t('footer.privacy')}</SectionLink>
+          <SectionLink id="faq" className="hover:text-foreground">{t('footer.faq')}</SectionLink>
+          <Link to={docsPath(i18n.language)} className="hover:text-foreground">{t('nav.docs')}</Link>
+          <Link to={downloadPath(i18n.language)} className="hover:text-foreground">{t('footer.download')}</Link>
           <LanguageLink className="hover:text-foreground" />
         </nav>
       </div>
