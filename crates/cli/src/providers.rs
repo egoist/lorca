@@ -96,8 +96,7 @@ pub fn supports_vision(kind: &str, model: Option<&str>) -> bool {
     }
     let model = model.to_ascii_lowercase();
     match kind {
-        "chatgpt" | "anthropic" => true,
-        "grok" => !model.contains("build"),
+        "chatgpt" | "anthropic" | "grok" => true,
         "deepseek" => model.contains("vl") || model.contains("vision"),
         "opencode" | "opencode-go" => {
             model.contains("claude")
@@ -333,8 +332,9 @@ mod tests {
 
     #[test]
     fn defaults_are_the_first_catalog_models_and_roots_accept_v1() {
-        assert_eq!(models::for_provider("opencode")[0].id, OPENCODE_DEFAULT_MODEL);
-        assert_eq!(models::for_provider("opencode-go")[0].id, OPENCODE_GO_DEFAULT_MODEL);
+        for kind in ["deepseek", "anthropic", "chatgpt", "grok", "opencode", "opencode-go"] {
+            assert_eq!(models::for_provider(kind)[0].id, default_model(kind), "{kind}");
+        }
         assert_eq!(opencode_root("https://opencode.ai/zen/v1/"), OPENCODE_BASE_URL);
         assert_eq!(opencode_root("https://opencode.ai/zen"), OPENCODE_BASE_URL);
     }

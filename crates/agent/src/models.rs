@@ -1,6 +1,6 @@
 //! What is known about a model ahead of time: its context window and output cap, whether it
 //! reasons or sees images, how it is asked to think, and what its tokens cost. A snapshot of
-//! models.dev (fetched 2026-09-20) for the models Lorca offers. A model that is not listed
+//! models.dev (fetched 2026-09-23) for the models Lorca offers. A model that is not listed
 //! runs with no window, no levels beyond the provider's default, and zero cost.
 
 use crate::types::{Cost, ThinkingLevel, Usage};
@@ -91,14 +91,13 @@ use ThinkingLevel::{High, Low, Max, Medium, Minimal, Off, XHigh};
 
 const NO_TIERS: &[CostTier] = &[];
 const ADAPTIVE_LEVELS: &[ThinkingLevel] = &[Off, Minimal, Low, Medium, High, XHigh, Max];
-/// Fable's thinking is always on.
+/// Fable 5.1 and Opus 5.5 always think.
 const ALWAYS_ON_LEVELS: &[ThinkingLevel] = &[Minimal, Low, Medium, High, XHigh, Max];
 const BUDGET_LEVELS: &[ThinkingLevel] = &[Off, Minimal, Low, Medium, High];
 const DEEPSEEK_LEVELS: &[ThinkingLevel] = &[Off, Low, Medium, High, XHigh, Max];
-const CODEX_LEVELS: &[ThinkingLevel] = &[Low, Medium, High, XHigh];
-/// The Grok models that take `reasoning.effort`; the others reason on their own.
-const GROK_LEVELS: &[ThinkingLevel] = &[Low, Medium, High];
-const GROK_XHIGH_LEVELS: &[ThinkingLevel] = &[Low, Medium, High, XHigh];
+const CODEX_LEVELS: &[ThinkingLevel] = &[Low, Medium, High, XHigh, Max];
+/// Grok 4.6 and 4.7 take `reasoning.effort` up to `xhigh`.
+const GROK_LEVELS: &[ThinkingLevel] = &[Low, Medium, High, XHigh];
 const FULL_EFFORT_LEVELS: &[ThinkingLevel] = &[Off, Low, Medium, High, XHigh, Max];
 const ALWAYS_EFFORT_LEVELS: &[ThinkingLevel] = &[Low, Medium, High, XHigh, Max];
 const LOW_HIGH_MAX_LEVELS: &[ThinkingLevel] = &[Low, High, Max];
@@ -174,6 +173,19 @@ pub const MODELS: &[ModelInfo] = &[
         levels: ADAPTIVE_LEVELS,
     },
     ModelInfo {
+        id: "claude-opus-5-5",
+        name: "Claude Opus 5.5",
+        provider: "anthropic",
+        context_window: 1_000_000,
+        max_output: 128_000,
+        reasoning: true,
+        images: true,
+        rates: rates(4.0, 20.0, 0.2, 5.0),
+        tiers: NO_TIERS,
+        thinking: ThinkingMode::Adaptive,
+        levels: ALWAYS_ON_LEVELS,
+    },
+    ModelInfo {
         id: "claude-sonnet-5",
         name: "Claude Sonnet 5",
         provider: "anthropic",
@@ -228,15 +240,15 @@ pub const MODELS: &[ModelInfo] = &[
     // ChatGPT sign-ins: the subscription is not billed per token; these are the API rates, so
     // a turn's cost still says what the work was worth.
     ModelInfo {
-        id: "gpt-5.6-terra",
-        name: "GPT-5.6 Terra",
+        id: "gpt-6-sol",
+        name: "GPT-6 Sol",
         provider: "chatgpt",
         context_window: 1_050_000,
         max_output: 128_000,
         reasoning: true,
         images: true,
-        rates: rates(2.0, 12.0, 0.2, 2.5),
-        tiers: tier_272k!(4.0, 18.0, 0.4, 5.0),
+        rates: rates(2.0, 10.0, 0.2, 2.5),
+        tiers: tier_272k!(4.0, 15.0, 0.4, 5.0),
         thinking: ThinkingMode::Effort,
         levels: CODEX_LEVELS,
     },
@@ -254,59 +266,33 @@ pub const MODELS: &[ModelInfo] = &[
         levels: CODEX_LEVELS,
     },
     ModelInfo {
-        id: "gpt-5.6-sol",
-        name: "GPT-5.6 Sol",
+        id: "gpt-6-luna",
+        name: "GPT-6 Luna",
         provider: "chatgpt",
         context_window: 1_050_000,
         max_output: 128_000,
         reasoning: true,
         images: true,
-        rates: rates(4.0, 20.0, 0.4, 5.0),
-        tiers: tier_272k!(8.0, 30.0, 0.8, 10.0),
-        thinking: ThinkingMode::Effort,
-        levels: CODEX_LEVELS,
-    },
-    ModelInfo {
-        id: "gpt-5.6-luna",
-        name: "GPT-5.6 Luna",
-        provider: "chatgpt",
-        context_window: 1_050_000,
-        max_output: 128_000,
-        reasoning: true,
-        images: true,
-        rates: rates(0.2, 1.2, 0.02, 0.25),
-        tiers: tier_272k!(0.4, 1.8, 0.04, 0.5),
-        thinking: ThinkingMode::Effort,
-        levels: CODEX_LEVELS,
-    },
-    ModelInfo {
-        id: "gpt-5.5",
-        name: "GPT-5.5",
-        provider: "chatgpt",
-        context_window: 1_050_000,
-        max_output: 128_000,
-        reasoning: true,
-        images: true,
-        rates: rates(5.0, 30.0, 0.5, 0.0),
-        tiers: tier_272k!(10.0, 45.0, 1.0, 0.0),
-        thinking: ThinkingMode::Effort,
-        levels: CODEX_LEVELS,
-    },
-    ModelInfo {
-        id: "gpt-5.3-codex-spark",
-        name: "GPT-5.3 Codex Spark",
-        provider: "chatgpt",
-        context_window: 128_000,
-        max_output: 32_000,
-        reasoning: true,
-        images: true,
-        rates: rates(1.75, 14.0, 0.175, 0.0),
-        tiers: NO_TIERS,
+        rates: rates(0.1, 0.5, 0.01, 0.125),
+        tiers: tier_272k!(0.2, 0.75, 0.02, 0.25),
         thinking: ThinkingMode::Effort,
         levels: CODEX_LEVELS,
     },
     // Grok sign-ins: a SuperGrok or X Premium+ subscription, not billed per token; these are
     // xAI's API rates (docs.x.ai, 2026-09), so a turn's cost still says what the work was worth.
+    ModelInfo {
+        id: "grok-4.7",
+        name: "Grok 4.7",
+        provider: "grok",
+        context_window: 500_000,
+        max_output: 64_000,
+        reasoning: true,
+        images: true,
+        rates: rates(2.0, 6.0, 0.5, 0.0),
+        tiers: tier_200k!(4.0, 12.0, 1.0, 0.0),
+        thinking: ThinkingMode::Effort,
+        levels: GROK_LEVELS,
+    },
     ModelInfo {
         id: "grok-4.6",
         name: "Grok 4.6",
@@ -319,58 +305,6 @@ pub const MODELS: &[ModelInfo] = &[
         tiers: tier_200k!(4.0, 12.0, 1.0, 0.0),
         thinking: ThinkingMode::Effort,
         levels: GROK_LEVELS,
-    },
-    ModelInfo {
-        id: "grok-4.5",
-        name: "Grok 4.5",
-        provider: "grok",
-        context_window: 500_000,
-        max_output: 64_000,
-        reasoning: true,
-        images: true,
-        rates: rates(2.0, 6.0, 0.3, 0.0),
-        tiers: tier_200k!(4.0, 12.0, 0.6, 0.0),
-        thinking: ThinkingMode::Effort,
-        levels: GROK_LEVELS,
-    },
-    ModelInfo {
-        id: "grok-4.3",
-        name: "Grok 4.3",
-        provider: "grok",
-        context_window: 1_000_000,
-        max_output: 64_000,
-        reasoning: true,
-        images: true,
-        rates: rates(1.25, 2.5, 0.2, 0.0),
-        tiers: tier_200k!(2.5, 5.0, 0.4, 0.0),
-        thinking: ThinkingMode::Effort,
-        levels: GROK_LEVELS,
-    },
-    ModelInfo {
-        id: "grok-4.20-0309-reasoning",
-        name: "Grok 4.20 Reasoning",
-        provider: "grok",
-        context_window: 1_000_000,
-        max_output: 64_000,
-        reasoning: true,
-        images: true,
-        rates: rates(1.25, 2.5, 0.2, 0.0),
-        tiers: tier_200k!(2.5, 5.0, 0.4, 0.0),
-        thinking: ThinkingMode::Effort,
-        levels: NO_LEVELS,
-    },
-    ModelInfo {
-        id: "grok-build-0.1",
-        name: "Grok Build 0.1",
-        provider: "grok",
-        context_window: 256_000,
-        max_output: 64_000,
-        reasoning: true,
-        images: false,
-        rates: rates(1.0, 2.0, 0.2, 0.0),
-        tiers: tier_200k!(2.0, 4.0, 0.4, 0.0),
-        thinking: ThinkingMode::Effort,
-        levels: NO_LEVELS,
     },
     // OpenCode Zen. Its gateway routes each model to Responses, Messages, or Chat
     // Completions; the catalog still presents them as one provider.
@@ -424,7 +358,7 @@ pub const MODELS: &[ModelInfo] = &[
         rates: rates(2.0, 6.0, 0.5, 0.0),
         tiers: tier_200k!(4.0, 12.0, 1.0, 0.0),
         thinking: ThinkingMode::Effort,
-        levels: GROK_XHIGH_LEVELS,
+        levels: GROK_LEVELS,
     },
     ModelInfo {
         id: "kimi-k3",
@@ -503,7 +437,7 @@ pub const MODELS: &[ModelInfo] = &[
         rates: rates(2.0, 6.0, 0.5, 0.0),
         tiers: tier_200k!(4.0, 12.0, 1.0, 0.0),
         thinking: ThinkingMode::Effort,
-        levels: GROK_XHIGH_LEVELS,
+        levels: GROK_LEVELS,
     },
     ModelInfo {
         id: "kimi-k3",
@@ -566,16 +500,16 @@ mod tests {
 
     #[test]
     fn cost_follows_the_rates_and_the_tier() {
-        let terra = find("chatgpt", "gpt-5.6-terra").unwrap();
+        let sol = find("chatgpt", "gpt-6-sol").unwrap();
         let usage = Usage { input: 1_000_000, output: 100_000, cache_read: 0, cache_write: 0, ..Usage::default() };
-        let cost = terra.cost_of(&usage);
+        let cost = sol.cost_of(&usage);
         // Above 272k input tokens the whole request is at the long-context rate.
         assert!((cost.input - 4.0).abs() < 1e-9, "{cost:?}");
-        assert!((cost.output - 1.8).abs() < 1e-9);
-        assert!((cost.total - 5.8).abs() < 1e-9);
+        assert!((cost.output - 1.5).abs() < 1e-9);
+        assert!((cost.total - 5.5).abs() < 1e-9);
 
         let small = Usage { input: 1_000, output: 1_000, cache_read: 10_000, cache_write: 0, ..Usage::default() };
-        let cost = terra.cost_of(&small);
+        let cost = sol.cost_of(&small);
         assert!((cost.input - 0.002).abs() < 1e-9);
         assert!((cost.cache_read - 0.002).abs() < 1e-9);
     }
@@ -595,11 +529,15 @@ mod tests {
     fn levels_clamp_to_what_the_model_takes() {
         let fable = find("anthropic", "claude-fable-5-1").unwrap();
         assert_eq!(fable.clamp_level(Off), Some(Minimal));
+        let opus = find("anthropic", "claude-opus-5-5").unwrap();
+        assert_eq!(opus.clamp_level(Off), Some(Minimal));
+        assert_eq!(opus.clamp_level(Max), Some(Max));
         let haiku = find("anthropic", "claude-haiku-4-5").unwrap();
         assert_eq!(haiku.clamp_level(XHigh), Some(High));
         assert_eq!(haiku.clamp_level(Off), Some(Off));
-        let terra = find("chatgpt", "gpt-5.6-terra").unwrap();
-        assert_eq!(terra.clamp_level(Max), Some(XHigh));
-        assert_eq!(terra.clamp_level(Off), Some(Low));
+        let sol = find("chatgpt", "gpt-6-sol").unwrap();
+        assert_eq!(sol.clamp_level(Max), Some(Max));
+        assert_eq!(sol.clamp_level(Off), Some(Low));
+        assert_eq!(find("grok", "grok-4.7").unwrap().clamp_level(Max), Some(XHigh));
     }
 }

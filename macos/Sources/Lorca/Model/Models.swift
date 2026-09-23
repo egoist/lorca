@@ -97,8 +97,8 @@ struct ProviderCredential: Hashable, Identifiable {
                 case .deepseek: ["off", "low", "medium", "high", "xhigh", "max"]
                 case .anthropic: ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
                 case .opencode, .opencodeGo: ["off", "low", "medium", "high", "xhigh", "max"]
-                case .chatgpt: ["low", "medium", "high", "xhigh"]
-                case .grok: ["low", "medium", "high"]
+                case .chatgpt: ["low", "medium", "high", "xhigh", "max"]
+                case .grok: ["low", "medium", "high", "xhigh"]
                 }
             return ids.map { ($0, Self.thinkingLabel($0)) }
         }
@@ -127,6 +127,7 @@ struct ProviderCredential: Hashable, Identifiable {
             case .anthropic:
                 [
                     ("claude-opus-5", "Opus 5"),
+                    ("claude-opus-5-5", "Opus 5.5"),
                     ("claude-sonnet-5", "Sonnet 5"),
                     ("claude-fable-5-1", "Fable 5.1"),
                     ("claude-opus-4-8", "Opus 4.8"),
@@ -153,20 +154,14 @@ struct ProviderCredential: Hashable, Identifiable {
                 ]
             case .chatgpt:
                 [
-                    ("gpt-5.6-terra", "GPT-5.6 Terra"),
+                    ("gpt-6-sol", "GPT-6 Sol"),
                     ("gpt-6-astra", "GPT-6 Astra"),
-                    ("gpt-5.6-sol", "GPT-5.6 Sol"),
-                    ("gpt-5.6-luna", "GPT-5.6 Luna"),
-                    ("gpt-5.5", "GPT-5.5"),
-                    ("gpt-5.3-codex-spark", "Codex Spark (Pro)"),
+                    ("gpt-6-luna", "GPT-6 Luna"),
                 ]
             case .grok:
                 [
+                    ("grok-4.7", "Grok 4.7"),
                     ("grok-4.6", "Grok 4.6"),
-                    ("grok-4.5", "Grok 4.5"),
-                    ("grok-4.3", "Grok 4.3"),
-                    ("grok-4.20-0309-reasoning", "Grok 4.20 Reasoning"),
-                    ("grok-build-0.1", "Grok Build 0.1"),
                 ]
             }
         }

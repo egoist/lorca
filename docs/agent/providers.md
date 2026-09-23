@@ -78,12 +78,12 @@ An `error` event and HTTP errors become an error message with the server's `erro
 
 | Model | Sent |
 | --- | --- |
-| Adaptive (Opus 5, Sonnet 5, Opus 4.8, Fable 5.1, DeepSeek) | `thinking: { type: "adaptive" }` and `output_config: { effort }` (`minimal` counts as `low`); `Off` is `{ type: "disabled" }`. A model that cannot stop thinking (Fable) runs `Off` at its lowest level. |
+| Adaptive (Opus 5, Opus 5.5, Sonnet 5, Opus 4.8, Fable 5.1, DeepSeek) | `thinking: { type: "adaptive" }` and `output_config: { effort }` (`minimal` counts as `low`); `Off` is `{ type: "disabled" }`. A model that cannot stop thinking (Fable 5.1, Opus 5.5) runs `Off` at its lowest level. |
 | Budget (Haiku 4.5) | `thinking: { type: "enabled", budget_tokens }` with 1024, 2048, 8192, or 16384 tokens and an output cap that leaves 1024 for the answer; `Off` sends no thinking. |
 | OpenAI-compatible | `reasoning_effort`; `Off` sends nothing. |
 | API-key Responses | `reasoning: { effort }`; `Off` sends nothing. |
-| ChatGPT | `reasoning: { effort, summary: "auto" }` with `low`, `medium`, `high`, or `xhigh`; `Off` sends nothing. |
-| Grok | `reasoning: { effort }` with `low`, `medium`, or `high`, on the models that take it (`grok-4.3`, `grok-4.5`, `grok-4.6`, `grok-4.20-multi-agent`); the others reason on their own and get nothing. `Off` sends nothing. |
+| ChatGPT | `reasoning: { effort, summary: "auto" }` with `low`, `medium`, `high`, `xhigh`, or `max`; `Off` sends nothing. |
+| Grok | `reasoning: { effort }` with `low`, `medium`, `high`, or `xhigh`; `Off` sends nothing. |
 
 A level the model does not have becomes the nearest higher one it has. With no level set, the Anthropic adapter sends its `thinking` field as before and the others send nothing.
 
@@ -192,7 +192,7 @@ FileTokens(path.clone()).store(tokens).await?;
 
 `login` binds the callback listener, calls your `open_url` with the authorize URL, waits for the browser redirect, and exchanges the code. The pieces are public for other flows: `PkceFlow`, `wait_for_callback`, `exchange_code`, `refresh`, and `jwt_claims`.
 
-Models: the default is `gpt-5.6-terra`; `gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-luna`, and `gpt-5.5` also work with ChatGPT accounts. `*-codex` model ids are rejected for ChatGPT accounts.
+Models: the default is `gpt-6-sol`; `gpt-6-astra` and `gpt-6-luna` also work with ChatGPT accounts. `*-codex` model ids are rejected for ChatGPT accounts.
 
 Requests carry the backend's own `web_search` tool ahead of your function tools. The model searches and opens pages on the server side; each search or page read arrives as `ServerToolStart` and `ServerToolEnd` events (named `web_search` or `web_fetch`, with the query or URL as `detail` and a one-line `summary`). They show up in `message_update` and never enter the message content.
 
@@ -207,7 +207,7 @@ Tokens come from a `GrokTokenSource` you implement, the same two calls as `Token
 ```rust
 use agent::providers::{GrokProvider, GrokTokens, GrokTokenSource};
 
-let provider = GrokProvider::new(Arc::new(FileTokens(path)), None); // grok-4.6
+let provider = GrokProvider::new(Arc::new(FileTokens(path)), None); // grok-4.7
 ```
 
 `with_base_url` points it at another API root and `with_issuer` at another OAuth issuer, for a proxy or a test server.
@@ -222,7 +222,7 @@ let tokens = oauth::login(&client, &Endpoints::xai(), |url| open_browser(url), D
 
 The pieces are public for other flows: `PkceFlow`, `Callback`, `exchange_code`, `refresh`, `revoke`, and `jwt_claims`. The account id and email come from the id token, or from `/oauth2/userinfo` when it carries none.
 
-Models: the default is `grok-4.6`; `grok-4.5`, `grok-4.3`, `grok-4.20-0309-reasoning`, and `grok-build-0.1` are in the catalog. `takes_reasoning_effort` says whether a model accepts `reasoning.effort`.
+Models: the default is `grok-4.7`; `grok-4.6` is also in the catalog.
 
 Requests carry xAI's `web_search` and `x_search` tools ahead of your function tools. Each search arrives as `ServerToolStart` and `ServerToolEnd` events named `web_search` (with "Searched X for …" as the summary of an X search) or `web_fetch` for a page read.
 

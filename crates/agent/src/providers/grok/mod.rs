@@ -20,9 +20,8 @@ use crate::transform::{transform_messages, TransformOptions};
 use crate::types::ThinkingLevel;
 
 pub const GROK_BASE_URL: &str = "https://api.x.ai/v1";
-/// xAI's current reasoning model. Others a subscription runs: `grok-4.5`, `grok-4.3`,
-/// `grok-4.20-0309-reasoning`, `grok-build-0.1`.
-pub const GROK_DEFAULT_MODEL: &str = "grok-4.6";
+/// xAI's current reasoning model. The catalog also lists `grok-4.6`.
+pub const GROK_DEFAULT_MODEL: &str = "grok-4.7";
 
 /// Where the adapter reads tokens from and writes refreshed ones back to.
 #[async_trait]
@@ -38,18 +37,11 @@ pub struct GrokProvider {
     pub base_url: String,
     /// The OAuth issuer the tokens refresh against.
     pub endpoints: oauth::Endpoints,
-    /// Sent as `reasoning.effort` on the models that take it (`Off` sends nothing).
+    /// Sent as `reasoning.effort` (`Off` sends nothing).
     pub thinking_level: Option<ThinkingLevel>,
     /// The catalog entry for the model, when it has one.
     pub info: Option<&'static ModelInfo>,
     client: reqwest::Client,
-}
-
-/// Whether the model takes `reasoning.effort` at all. The others reason on their own and
-/// answer 400 to the parameter, so they are sent none.
-pub fn takes_reasoning_effort(model: &str) -> bool {
-    let model = model.trim().to_ascii_lowercase();
-    ["grok-3-mini", "grok-4.20-multi-agent", "grok-4.3", "grok-4.5", "grok-4.6"].iter().any(|prefix| model.starts_with(prefix))
 }
 
 impl GrokProvider {
@@ -136,9 +128,10 @@ impl GrokProvider {
             None | Some(ThinkingLevel::Off) => None,
             Some(ThinkingLevel::Minimal | ThinkingLevel::Low) => Some("low"),
             Some(ThinkingLevel::Medium) => Some("medium"),
-            Some(ThinkingLevel::High | ThinkingLevel::XHigh | ThinkingLevel::Max) => Some("high"),
+            Some(ThinkingLevel::High) => Some("high"),
+            Some(ThinkingLevel::XHigh | ThinkingLevel::Max) => Some("xhigh"),
         };
-        if let (Some(effort), true) = (effort, takes_reasoning_effort(&self.model)) {
+        if let Some(effort) = effort {
             body["reasoning"] = json!({ "effort": effort });
         }
         body
@@ -243,15 +236,13 @@ mod tests {
     }
 
     #[test]
-    fn effort_goes_only_to_models_that_take_it() {
-        let high = GrokProvider::new(Arc::new(StaticTokens), Some("grok-4.6")).with_thinking(Some(ThinkingLevel::Max));
-        assert_eq!(high.body(&request())["reasoning"], json!({ "effort": "high" }));
-        let low = GrokProvider::new(Arc::new(StaticTokens), Some("grok-4.3")).with_thinking(Some(ThinkingLevel::Minimal));
+    fn a_thinking_level_is_sent_as_the_effort() {
+        let xhigh = GrokProvider::new(Arc::new(StaticTokens), None).with_thinking(Some(ThinkingLevel::Max));
+        assert_eq!(xhigh.body(&request())["reasoning"], json!({ "effort": "xhigh" }));
+        let low = GrokProvider::new(Arc::new(StaticTokens), Some("grok-4.6")).with_thinking(Some(ThinkingLevel::Minimal));
         assert_eq!(low.body(&request())["reasoning"], json!({ "effort": "low" }));
-        let off = GrokProvider::new(Arc::new(StaticTokens), Some("grok-4.6")).with_thinking(Some(ThinkingLevel::Off));
+        let off = GrokProvider::new(Arc::new(StaticTokens), None).with_thinking(Some(ThinkingLevel::Off));
         assert!(off.body(&request()).get("reasoning").is_none());
-        let native = GrokProvider::new(Arc::new(StaticTokens), Some("grok-4.20-0309-reasoning")).with_thinking(Some(ThinkingLevel::High));
-        assert!(native.body(&request()).get("reasoning").is_none());
     }
 
     #[test]

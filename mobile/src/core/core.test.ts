@@ -62,7 +62,7 @@ describe("model", () => {
     expect(providerConnectMethod("grok")).toBe("providers.connect_grok");
     expect(providerDefaultBaseURL("deepseek")).toBe("https://api.deepseek.com");
     expect(providerDefaultBaseURL("chatgpt")).toBe("");
-    expect(PROVIDER_MODELS.chatgpt.at(-1)).toEqual({ id: "gpt-5.3-codex-spark", label: "Codex Spark (Pro)" });
+    expect(PROVIDER_MODELS.chatgpt.map((m) => m.id)).toEqual(["gpt-6-sol", "gpt-6-astra", "gpt-6-luna"]);
   });
 });
 

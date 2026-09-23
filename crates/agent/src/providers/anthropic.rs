@@ -730,10 +730,12 @@ mod tests {
         let off = body(AnthropicProvider::deepseek("k", None).with_thinking(Some(ThinkingLevel::Off)));
         assert_eq!(off["thinking"], json!({ "type": "disabled" }));
         assert!(off.get("output_config").is_none());
-        // Fable cannot stop thinking: Off becomes the lowest level it has.
-        let fable = body(AnthropicProvider::anthropic("k", Some("claude-fable-5-1")).with_thinking(Some(ThinkingLevel::Off)));
-        assert_eq!(fable["thinking"], json!({ "type": "adaptive" }));
-        assert_eq!(fable["output_config"], json!({ "effort": "low" }));
+        // Fable 5.1 and Opus 5.5 cannot stop thinking: Off becomes the lowest level they have.
+        for model in ["claude-fable-5-1", "claude-opus-5-5"] {
+            let always = body(AnthropicProvider::anthropic("k", Some(model)).with_thinking(Some(ThinkingLevel::Off)));
+            assert_eq!(always["thinking"], json!({ "type": "adaptive" }), "{model}");
+            assert_eq!(always["output_config"], json!({ "effort": "low" }), "{model}");
+        }
         // Haiku thinks by budget, with room left for the answer.
         let haiku = body(AnthropicProvider::anthropic("k", Some("claude-haiku-4-5")).with_thinking(Some(ThinkingLevel::Max)));
         assert_eq!(haiku["thinking"], json!({ "type": "enabled", "budget_tokens": 16384 }));

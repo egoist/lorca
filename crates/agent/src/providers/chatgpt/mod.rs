@@ -19,10 +19,10 @@ use crate::transform::{transform_messages, TransformOptions};
 use crate::types::ThinkingLevel;
 
 pub const CHATGPT_RESPONSES_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
-/// The balanced everyday model Codex offers to ChatGPT sign-ins. Others accepted with a
-/// ChatGPT account: `gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-luna`, `gpt-5.5`. The `*-codex`
-/// ids and `gpt-5.4` are rejected for ChatGPT accounts.
-pub const CHATGPT_DEFAULT_MODEL: &str = "gpt-5.6-terra";
+/// The workhorse model Codex offers to ChatGPT sign-ins for coding and everyday work. The
+/// catalog also lists `gpt-6-astra` and `gpt-6-luna`. The `*-codex` ids are rejected for
+/// ChatGPT accounts.
+pub const CHATGPT_DEFAULT_MODEL: &str = "gpt-6-sol";
 
 /// Where the adapter reads tokens from and writes refreshed ones back to.
 #[async_trait]
@@ -106,7 +106,8 @@ impl ChatGptProvider {
             Some(ThinkingLevel::Minimal | ThinkingLevel::Low) => Some("low"),
             Some(ThinkingLevel::Medium) => Some("medium"),
             Some(ThinkingLevel::High) => Some("high"),
-            Some(ThinkingLevel::XHigh | ThinkingLevel::Max) => Some("xhigh"),
+            Some(ThinkingLevel::XHigh) => Some("xhigh"),
+            Some(ThinkingLevel::Max) => Some("max"),
         };
         if let Some(effort) = effort {
             body["reasoning"] = json!({ "effort": effort, "summary": "auto" });
@@ -194,20 +195,34 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_request_carries_the_backend_web_search_before_the_functions() {
-        let provider = ChatGptProvider::new(Arc::new(StaticTokens), None);
-        let request = ModelRequest {
+    fn request() -> ModelRequest {
+        ModelRequest {
             system_prompt: "be brief".into(),
             messages: vec![LlmMessage::User(crate::types::UserMessage::text("hi"))],
             tools: vec![ToolSpec { name: "read".into(), description: "read a file".into(), parameters: json!({ "type": "object" }) }],
             max_tokens: None,
             options: Default::default(),
-        };
-        let body = provider.body(&request);
+        }
+    }
+
+    #[test]
+    fn the_request_carries_the_backend_web_search_before_the_functions() {
+        let provider = ChatGptProvider::new(Arc::new(StaticTokens), None);
+        let body = provider.body(&request());
+        assert_eq!(body["model"], CHATGPT_DEFAULT_MODEL);
         let tools = body["tools"].as_array().unwrap();
         assert_eq!(tools[0], json!({ "type": "web_search" }));
         assert_eq!(tools[1]["type"], "function");
         assert_eq!(tools[1]["name"], "read");
+    }
+
+    #[test]
+    fn a_thinking_level_is_sent_as_the_effort() {
+        let max = ChatGptProvider::new(Arc::new(StaticTokens), None).with_thinking(Some(ThinkingLevel::Max));
+        assert_eq!(max.body(&request())["reasoning"], json!({ "effort": "max", "summary": "auto" }));
+        let low = ChatGptProvider::new(Arc::new(StaticTokens), Some("gpt-6-luna")).with_thinking(Some(ThinkingLevel::Minimal));
+        assert_eq!(low.body(&request())["reasoning"]["effort"], "low");
+        let off = ChatGptProvider::new(Arc::new(StaticTokens), None).with_thinking(Some(ThinkingLevel::Off));
+        assert!(off.body(&request()).get("reasoning").is_none());
     }
 }
