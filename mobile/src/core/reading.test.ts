@@ -1,4 +1,5 @@
 import { beforeEach, expect, mock, test } from "bun:test";
+import type { Notification, NotificationBehavior, NotificationResponse } from "expo-notifications";
 import type { Chat, Message } from "./model";
 
 // Exercise the real engine and store, including message/roster ordering and foreground
@@ -7,6 +8,9 @@ let event: (frame: { event: string; data: unknown }) => void;
 let appState: (status: string) => void;
 const reads: string[] = [];
 const cleared: string[] = [];
+const opened: string[] = [];
+let handleNotification: (notification: Notification) => Promise<NotificationBehavior>;
+let openNotification: (response: NotificationResponse) => void;
 mock.module("react-native", () => ({
   Platform: { OS: "ios" },
   AppState: { currentState: "active", addEventListener: (_: string, listener: typeof appState) => { appState = listener; } },
@@ -14,8 +18,16 @@ mock.module("react-native", () => ({
 mock.module("expo-web-browser", () => ({}));
 mock.module("./host", () => ({ hostFacts: () => ({ name: "Phone", os: "ios", os_version: "", model: "" }) }));
 mock.module("./prefs", () => ({ loadPrefs: () => ({}), savePrefs: () => {}, coreHome: () => "/unused", pathOf: (p: string) => p, wipePrefs: () => {} }));
-mock.module("./push", () => ({
-  installPushHandlers: () => {}, registerForPushes: async () => {}, clearPushes: async (id: string) => { cleared.push(id); },
+mock.module("expo-application", () => ({}));
+mock.module("expo-device", () => ({ isDevice: true }));
+mock.module("expo-router", () => ({ router: { navigate: ({ params }: { params: { id: string } }) => { opened.push(params.id); } } }));
+mock.module("expo-notifications", () => ({
+  setNotificationHandler: (handler: { handleNotification: typeof handleNotification }) => { handleNotification = handler.handleNotification; },
+  addNotificationResponseReceivedListener: (listener: typeof openNotification) => { openNotification = listener; },
+  getLastNotificationResponse: () => null,
+  getPermissionsAsync: async () => ({ status: "denied" }),
+  getPresentedNotificationsAsync: async () => [notification("open", "Confirmation needed: Deploy the app"), notification("other", "Reply failed: Provider unavailable")],
+  dismissNotificationAsync: async (id: string) => { cleared.push(id); },
 }));
 mock.module("../../modules/lorca-core", () => ({
   start: () => {}, wake: () => {},
@@ -39,13 +51,15 @@ const { engine } = await import("./engine");
 const { resetStore, useStore } = await import("./store");
 await engine.start();
 
-beforeEach(() => {
+beforeEach(async () => {
   resetStore();
   appState("active");
   event({ event: "snapshot", data: snapshot([chat("open"), chat("other")]) });
   useStore.setState({ openChatId: "open" });
+  await flush();
   reads.length = 0;
   cleared.length = 0;
+  opened.length = 0;
 });
 
 async function flush() {
@@ -53,11 +67,58 @@ async function flush() {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-function reply(id: string) {
+function reply(id: string, kind: "reply" | "permission" | "failure" = "reply") {
   const message: Message = { id: "reply", chat_id: id, author: { kind: "bot", bot_id: "bot" },
     body: { kind: "text", text: "Done" }, state: { kind: "complete" }, created_at: 1 };
+  if (kind === "permission") {
+    message.body = { kind: "permission", plugin_id: "computer", plugin_name: "Mac", tool: "bash", summary: "Deploy the app", decision: "pending" };
+  } else if (kind === "failure") {
+    message.body = { kind: "text", text: "Partial response" };
+    message.state = { kind: "failed", error: "Provider unavailable" };
+  }
   event({ event: "message.updated", data: { chat_id: id, message } });
   event({ event: "roster.changed", data: { devices: [], bots: [], chats: [chat("open", id === "open" ? 1 : 0), chat("other", id === "other" ? 1 : 0)] } });
+}
+
+function notification(chatId: string, body: string): Notification {
+  return { date: 1, request: { identifier: chatId, trigger: null, content: {
+    title: "Chef", subtitle: null, body, data: { chat_id: chatId }, sound: "default",
+  } } };
+}
+
+for (const kind of ["permission", "failure"] as const) {
+  test(`a background ${kind} stays unread until the user returns`, async () => {
+    appState("background");
+    reply("open", kind);
+    await flush();
+    expect(reads).toEqual([]);
+    expect(useStore.getState().chats[0].unread_count).toBe(1);
+    appState("active");
+    await flush();
+    expect(reads).toEqual(["open"]);
+    expect(cleared).toEqual(["open"]);
+  });
+
+  test(`a visible ${kind} is read after its unread count arrives`, async () => {
+    reply("open", kind);
+    await flush();
+    expect(reads).toEqual(["open"]);
+    expect(useStore.getState().chats[0].unread_count).toBe(0);
+  });
+
+  test(`${kind} pushes show away from the chat and open it when tapped`, async () => {
+    const body = kind === "permission" ? "Confirmation needed: Deploy the app" : "Reply failed: Provider unavailable";
+    const alert = notification("open", body);
+    expect(await handleNotification(alert)).toMatchObject({ shouldShowBanner: false, shouldShowList: false, shouldPlaySound: false });
+    appState("background");
+    expect(await handleNotification(alert)).toMatchObject({ shouldShowBanner: true, shouldShowList: true, shouldPlaySound: true });
+    appState("active");
+    useStore.setState({ openChatId: "other" });
+    expect(await handleNotification(alert)).toMatchObject({ shouldShowBanner: true, shouldShowList: true, shouldPlaySound: true });
+    openNotification({ actionIdentifier: "expo.modules.notifications.actions.DEFAULT", notification: alert });
+    expect(opened).toEqual(["open"]);
+    expect(alert.request.content.body).toBe(body);
+  });
 }
 
 test("a visible reply is acknowledged after its unread count arrives", async () => {

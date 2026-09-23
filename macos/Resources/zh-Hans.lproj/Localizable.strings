@@ -1,5 +1,8 @@
 /* Simplified Chinese. The key is the English text passed to L(); `bun run l10n` checks this table. */
 
+"Confirmation needed: %@" = "需要确认：%@";
+"Reply failed: %@" = "回复失败：%@";
+
 " · @ to mention" = " · 输入 @ 可提及智能体";
 " · jobs wait on the relay" = " · 任务在中继上等待";
 ", " = "、";

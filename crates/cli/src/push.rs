@@ -1,4 +1,4 @@
-//! Pushes to the identity's phones when a bot has replied. The Runner seals a small notice
+//! Pushes to the identity's phones for replies, failures, and pending confirmations. The Runner seals a small notice
 //! (who, where, the first words) and asks the relay to push it; the relay hands APNs and FCM
 //! ciphertext under fixed words, and the phone opens it before the alert shows.
 //!
@@ -14,7 +14,7 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 
 use crate::app::App;
-use crate::model::{Bot, Chat};
+use crate::model::{Author, Body, Bot, Chat, Message};
 
 const NONCE_LEN: usize = 12;
 const AAD: &[u8] = b"push";
@@ -68,7 +68,26 @@ fn excerpt(text: &str, max: usize) -> String {
 /// phones after a grace period for read marks from any Device. Best effort: a relay without
 /// push keys answers that it queued nothing.
 pub fn reply(app: &Arc<App>, chat: &Chat, bot: &Bot, text: &str) {
-    if !should_notify(app, &chat.meta.id) {
+    send(app, chat, bot, text, None);
+}
+
+/// A terminal response error, after the turn has exhausted its retries and recovery.
+pub fn failed(app: &Arc<App>, chat: &Chat, bot: &Bot, error: &str) {
+    send(app, chat, bot, &format!("Reply failed: {error}"), None);
+}
+
+/// A new confirmation card must alert while the turn is still waiting for its answer.
+pub fn permission(app: &Arc<App>, message: &Message) {
+    let (Author::Bot { bot_id }, Body::Permission { summary, decision, .. }) = (&message.author, &message.body) else { return };
+    if decision != "pending" {
+        return;
+    }
+    let (Some(chat), Some(bot)) = (app.chat(&message.chat_id), app.bot(bot_id)) else { return };
+    send(app, &chat, &bot, &format!("Confirmation needed: {summary}"), Some(message.id.clone()));
+}
+
+fn send(app: &Arc<App>, chat: &Chat, bot: &Bot, text: &str, permission_id: Option<String>) {
+    if !should_notify(app, &chat.meta.id, permission_id.as_deref()) {
         return;
     }
     let (Some(dek), Some(url), Some(machine)) = (app.dek(), app.relay_url(), app.machine_file().and_then(|m| m.machine().ok())) else { return };
@@ -93,13 +112,13 @@ pub fn reply(app: &Arc<App>, chat: &Chat, bot: &Bot, text: &str) {
         tokio::time::sleep(READ_GRACE).await;
         // A read mark is about a reply that arrived, so a phone left open or disconnected
         // before the reply finished cannot suppress future notifications.
-        if app.dek() != Some(dek) || !should_notify(&app, &notice.chat_id) {
+        if app.dek() != Some(dek) || !should_notify(&app, &notice.chat_id, permission_id.as_deref()) {
             return;
         }
         let result = match crate::sync::token_or_register(&app, &url, &machine).await {
             Ok(token) => {
                 // Authentication may have taken longer than the read mark.
-                if app.dek() != Some(dek) || !should_notify(&app, &notice.chat_id) {
+                if app.dek() != Some(dek) || !should_notify(&app, &notice.chat_id, permission_id.as_deref()) {
                     return;
                 }
                 app.relay.push(&url, &token, &crate::keys::b64(&sealed)).await
@@ -107,14 +126,19 @@ pub fn reply(app: &Arc<App>, chat: &Chat, bot: &Bot, text: &str) {
             Err(error) => Err(error),
         };
         match result {
-            Ok(queued) => tracing::debug!(queued, "pushed a reply"),
-            Err(error) => tracing::debug!(%error, "pushing a reply"),
+            Ok(queued) => tracing::debug!(queued, "pushed a chat notification"),
+            Err(error) => tracing::debug!(%error, "pushing a chat notification"),
         }
     });
 }
 
-fn should_notify(app: &App, chat_id: &str) -> bool {
+fn should_notify(app: &App, chat_id: &str, permission_id: Option<&str>) -> bool {
     !app.is_watching(chat_id) && app.chat(chat_id).is_some_and(|chat| chat.unread_count > 0)
+        && permission_id.is_none_or(|id| {
+            app.message(chat_id, id).is_some_and(|message| {
+                matches!(message.body, Body::Permission { decision, .. } if decision == "pending")
+            })
+        })
 }
 
 #[cfg(test)]
@@ -144,7 +168,7 @@ mod tests {
 
     #[cfg(feature = "server")]
     #[tokio::test]
-    async fn replies_wait_for_reads_from_paired_devices() {
+    async fn notifications_wait_for_reads_and_permission_answers_from_paired_devices() {
         use axum::{routing::post, Json, Router};
         use crate::{config::Config, keys::MachineFile, model::*};
 
@@ -177,6 +201,7 @@ mod tests {
             accent: "indigo".into(), avatar: None, runner_id: "runner".into(), provider: "deepseek".into(),
             model: None, thinking: None, legacy_instructions: String::new(), workdir: None, created_at: 1.0,
         };
+        app.state.lock().unwrap().bots.push(bot.clone());
         for id in ["read-on-phone", "unread", "deleted", "watching"] {
             let chat = Chat {
                 meta: ChatMeta { id: id.into(), kind: "dm".into(), title: None, bot_ids: vec![bot.id.clone()],
@@ -206,6 +231,55 @@ mod tests {
         let notice = open(&dek, &crate::keys::unb64(pushed["ciphertext"].as_str().unwrap()).unwrap()).unwrap();
         assert_eq!(notice.chat_id, "read-on-phone");
         assert_eq!(notice.body, "Another reply");
+
+        // Pending confirmations and failed responses are unread even without a completed
+        // text reply. Both travel through the same encrypted push envelope.
+        let mut cards = Vec::new();
+        for id in ["pending", "answered", "expired", "read-card", "failed", "read-error", "visible"] {
+            let mut chat = chat.clone();
+            chat.meta.id = id.into();
+            chat.unread_count = 0;
+            app.state.lock().unwrap().chats.push(chat.clone());
+            if id == "visible" { app.set_watched_chat(Some(id.into())); }
+            let mut message = Message::new(id, Author::Bot { bot_id: bot.id.clone() }, Body::Permission {
+                plugin_id: "computer".into(), plugin_name: "Mac".into(), tool: "bash".into(),
+                summary: "Deploy the app".into(), arguments: serde_json::Value::Null,
+                decision: "pending".into(), reason: Some("Needs confirmation".into()), link: None, code: None,
+            });
+            if id == "failed" || id == "read-error" {
+                message.body = Body::text("Partial output");
+                message.state = MessageState::Failed { error: "Provider connection lost".into() };
+            }
+            app.upsert_message(message.clone(), false);
+            app.upsert_message(message.clone(), false);
+            assert_eq!(app.chat(id).unwrap().unread_count, u32::from(id != "visible"), "duplicate versions count once");
+            if id == "failed" || id == "read-error" {
+                failed(&app, &chat, &bot, "Provider connection lost");
+            } else {
+                permission(&app, &message);
+                cards.push(message);
+            }
+        }
+        app.mark_read("read-card", false);
+        app.mark_read("read-error", false);
+        for mut message in cards {
+            let decision = match message.chat_id.as_str() {
+                "answered" => "allowed",
+                "expired" => "expired",
+                _ => continue,
+            };
+            if let Body::Permission { decision: current, .. } = &mut message.body { *current = decision.into(); }
+            app.upsert_message(message, false);
+        }
+        let mut notices = Vec::new();
+        for _ in 0..2 {
+            let pushed = tokio::time::timeout(READ_GRACE + Duration::from_secs(2), pushes.recv()).await.unwrap().unwrap();
+            notices.push(open(&dek, &crate::keys::unb64(pushed["ciphertext"].as_str().unwrap()).unwrap()).unwrap());
+        }
+        notices.sort_by(|a, b| a.chat_id.cmp(&b.chat_id));
+        assert_eq!((notices[0].chat_id.as_str(), notices[0].body.as_str()), ("failed", "Reply failed: Provider connection lost"));
+        assert_eq!((notices[1].chat_id.as_str(), notices[1].body.as_str()), ("pending", "Confirmation needed: Deploy the app"));
+        assert!(tokio::time::timeout(Duration::from_millis(150), pushes.recv()).await.is_err());
         server.abort();
         drop(app);
         let _ = std::fs::remove_dir_all(home);

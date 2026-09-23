@@ -1,5 +1,5 @@
-// Pushes for finished replies. The phone gives the relay its APNs or FCM device token; a
-// Runner seals who replied and the first words, and the phone opens that before the alert
+// Pushes for replies, failed responses, and pending confirmations. The phone gives the relay
+// its APNs or FCM device token; a Runner seals the alert, and the phone opens it before it
 // shows (the notification service extension on iOS, PushService on Android). Here: the
 // permission, the token, what shows while the app is open, and the tap that opens the chat.
 
@@ -20,7 +20,7 @@ function chatOf(notification: Notifications.Notification): string | undefined {
 
 let installed = false;
 
-/// Once, at launch: a reply in the chat on screen makes no banner, and a tapped notification
+/// Once, at launch: an alert for the chat on screen makes no banner, and a tapped notification
 /// opens its chat (also the one that launched the app).
 export function installPushHandlers() {
   if (installed) return;

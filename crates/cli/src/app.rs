@@ -1035,8 +1035,8 @@ impl App {
 
     // MARK: - Messages
 
-    /// Insert or replace a message locally, emit, and optionally upload. A reply counts as
-    /// unread once, when it finishes, whether this Runner wrote it or the relay delivered it.
+    /// Insert or replace a message locally, emit, and optionally upload. A reply, failed
+    /// response, or pending confirmation counts as unread once, locally or from the relay.
     /// One that finishes while the user looks at its chat is read here, and so everywhere.
     /// A message the user sends, from any Device, says they have read what came before it.
     pub fn upsert_message(&self, message: Message, upload: bool) {

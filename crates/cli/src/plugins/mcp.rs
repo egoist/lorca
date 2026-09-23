@@ -415,6 +415,7 @@ pub fn post_sign_in_card(app: &Arc<App>, chat_id: &str, bot_id: &str, plugin_id:
         },
     );
     app.upsert_message(message.clone(), true);
+    crate::push::permission(app, &message);
     Ok(message)
 }
 
@@ -1539,6 +1540,7 @@ pub async fn ask_with_rule(
     let (tx, rx) = tokio::sync::oneshot::channel();
     app.pending_permissions.lock().unwrap().insert(message.id.clone(), tx);
     app.upsert_message(message.clone(), true);
+    crate::push::permission(app, &message);
     let decision = tokio::select! {
         answer = rx => answer.unwrap_or(Decision::Denied),
         _ = tokio::time::sleep(PERMISSION_TIMEOUT) => Decision::Expired,

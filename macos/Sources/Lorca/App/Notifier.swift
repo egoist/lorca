@@ -1,8 +1,8 @@
 import AppKit
 import UserNotifications
 
-/// System notifications for finished replies. A turn that ends with something said posts one,
-/// unless it has been read on a paired Device; a click brings the app forward on the chat. The
+/// System notifications for replies, failed responses, and pending confirmations,
+/// unless read on a paired Device; a click brings the app forward on the chat. The
 /// same "looking at" fact goes to the CLI (`ui.watching`), so a Runner does not push a reply
 /// the user is watching arrive to their phone.
 @MainActor
@@ -17,6 +17,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     private let store = AppStore.shared
     private var didAsk = false
     private var started = false
+    private var pendingPermissions: Set<Message.ID> = []
 
     /// `UNUserNotificationCenter` needs a bundle; a bare binary (`swift run`) has none.
     private var center: UNUserNotificationCenter? {
@@ -27,10 +28,18 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         guard !started else { return }
         started = true
         center?.delegate = self
+        rememberPermissions()
         store.observe(self) { [weak self] event in
+            guard let self else { return }
             switch event {
-            case .connectionChanged, .snapshotReplaced: self?.watchingChanged()
-            case let .turnFinished(chatID, botID, startedAt): self?.turnFinished(chatID, botID, startedAt)
+            case .connectionChanged: self.watchingChanged()
+            case .snapshotReplaced, .identityChanged:
+                self.rememberPermissions()
+                self.watchingChanged()
+            case let .messageAdded(chatID, messageID), let .messageChanged(chatID, messageID):
+                self.permissionChanged(chatID, messageID)
+            case let .messageRemoved(_, messageID): self.clearPermission(messageID)
+            case let .turnFinished(chatID, botID, startedAt): self.turnFinished(chatID, botID, startedAt)
             default: break
             }
         }
@@ -58,42 +67,69 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 
     // MARK: - Posting
 
+    private func rememberPermissions() {
+        let current = Set(store.chats.flatMap(\.messages).compactMap { message -> Message.ID? in
+            guard case let .permission(request) = message.body, request.isPending else { return nil }
+            return message.id
+        })
+        for id in pendingPermissions.subtracting(current) { clearPermission(id) }
+        pendingPermissions = current
+    }
+
+    private func clearPermission(_ messageID: Message.ID) {
+        pendingPermissions.remove(messageID)
+        center?.removeDeliveredNotifications(withIdentifiers: [messageID])
+        center?.removePendingNotificationRequests(withIdentifiers: [messageID])
+    }
+
+    private func permissionChanged(_ chatID: Chat.ID, _ messageID: Message.ID) {
+        guard let message = store.chat(chatID)?.messages.first(where: { $0.id == messageID }),
+            case let .permission(request) = message.body
+        else { return }
+        guard request.isPending else { clearPermission(messageID); return }
+        guard pendingPermissions.insert(messageID).inserted else { return }
+        let identityID = store.identityID
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            guard let self, self.store.identityID == identityID,
+                let message = self.store.chat(chatID)?.messages.first(where: { $0.id == messageID }),
+                let notification = ChatNotification(message), notification.kind == .permission
+            else { return }
+            self.post(notification, in: chatID)
+        }
+    }
+
     private func turnFinished(_ chatID: Chat.ID, _ botID: Bot.ID, _ startedAt: Date) {
         // Give the final reply and read marks from paired Devices three seconds to arrive.
         let identityID = store.identityID
         Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 3_000_000_000)
             guard let self, self.store.identityID == identityID else { return }
-            self.post(chatID, botID, startedAt)
+            guard let chat = self.store.chat(chatID),
+                let notification = ChatNotification.finishedTurn(in: chat, botID: botID, startedAt: startedAt)
+            else { return }
+            self.post(notification, in: chatID)
         }
     }
 
-    private func post(_ chatID: Chat.ID, _ botID: Bot.ID, _ startedAt: Date) {
-        guard watchedChat != chatID, let center, let chat = store.chat(chatID), chat.unreadCount > 0 else { return }
-        // What the bot said last in this turn. A pass or a failed turn said nothing.
-        let said = chat.messages.last { message in
-            guard message.author.botID == botID, message.state == .complete, message.createdAt >= startedAt.addingTimeInterval(-5),
-                case let .text(text) = message.body
-            else { return false }
-            return !text.isEmpty
-        }
-        guard let said, case let .text(text) = said.body else { return }
+    private func post(_ notification: ChatNotification, in chatID: Chat.ID) {
+        guard let center, let chat = store.chat(chatID), notification.canDeliver(in: chat, watchedChat: watchedChat) else { return }
 
         let content = UNMutableNotificationContent()
-        content.title = store.bot(botID)?.name ?? store.title(for: chat)
+        content.title = store.bot(notification.botID)?.name ?? store.title(for: chat)
         if !chat.isDM { content.subtitle = store.title(for: chat) }
-        content.body = String(text.split(whereSeparator: \.isNewline).joined(separator: " ").prefix(280))
+        content.body = String(notification.body.split(whereSeparator: \.isNewline).joined(separator: " ").prefix(280))
         content.sound = .default
         content.threadIdentifier = chatID
         content.userInfo = ["chat_id": chatID]
-        let request = UNNotificationRequest(identifier: said.id, content: content, trigger: nil)
+        let request = UNNotificationRequest(identifier: notification.messageID, content: content, trigger: nil)
 
         let identityID = store.identityID
         Task {
             guard await self.authorized(center) else { return }
-            // Permission can stay open while another Device reads the reply.
-            guard self.store.identityID == identityID, self.watchedChat != chatID,
-                let chat = self.store.chat(chatID), chat.unreadCount > 0
+            // Notification authorization can stay open while the chat is read or answered.
+            guard self.store.identityID == identityID,
+                let chat = self.store.chat(chatID), notification.canDeliver(in: chat, watchedChat: self.watchedChat)
             else { return }
             do { try await center.add(request) } catch { NSLog("Posting a notification failed: \(error.localizedDescription)") }
         }
@@ -123,9 +159,12 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 
     // MARK: - UNUserNotificationCenterDelegate
 
-    /// A reply in a chat that is not on screen shows even while the app is frontmost.
+    /// Another chat can alert while the app is frontmost; recheck in case focus just changed.
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
-        [.banner, .sound, .list]
+        let chatID = notification.request.content.userInfo["chat_id"] as? String
+        return await MainActor.run {
+            chatID != nil && self.watchedChat == chatID ? [] : [.banner, .sound, .list]
+        }
     }
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {

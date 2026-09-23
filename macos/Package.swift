@@ -32,5 +32,11 @@ let package = Package(
                 .unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])
             ]
         ),
+        .testTarget(
+            name: "LorcaTests",
+            dependencies: ["Lorca"],
+            path: "Tests/Notifications",
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
     ]
 )

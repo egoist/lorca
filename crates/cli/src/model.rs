@@ -330,10 +330,17 @@ impl Message {
         matches!(self.state, MessageState::Complete)
     }
 
-    /// A finished thing a bot said: what the unread count counts. Tool calls never show in a
-    /// transcript, so they stay out of it.
+    /// A reply, failure, or pending confirmation the user has not seen. Tool activity and
+    /// updates to an answered permission card do not add to the count.
     pub fn counts_unread(&self) -> bool {
-        matches!(self.author, Author::Bot { .. }) && matches!(self.body, Body::Text { .. }) && self.is_complete()
+        if !matches!(self.author, Author::Bot { .. }) {
+            return false;
+        }
+        match &self.body {
+            Body::Text { .. } => matches!(self.state, MessageState::Complete | MessageState::Failed { .. }),
+            Body::Permission { decision, .. } => self.is_complete() && decision == "pending",
+            _ => false,
+        }
     }
 }
 

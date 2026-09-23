@@ -273,8 +273,11 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
     } else {
         TurnOutcome::Pass
     };
-    // The user's phones hear about a reply; a pass or a failure stays quiet.
-    if let (TurnOutcome::Sent, Some(said)) = (outcome, state.last_said.as_deref()) {
+    // A terminal error takes priority over anything the bot said before it failed.
+    // Context recovery above finishes before we choose the notification.
+    if let Some(error) = state.last_error.as_deref().filter(|_| state.failed) {
+        crate::push::failed(app, &chat, &bot, error);
+    } else if let (TurnOutcome::Sent, Some(said)) = (outcome, state.last_said.as_deref()) {
         crate::push::reply(app, &chat, &bot, said);
     }
     // One line in the bot's daily log per turn that did something, written by the Runner, so
