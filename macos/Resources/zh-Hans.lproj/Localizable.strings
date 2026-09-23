@@ -450,6 +450,7 @@
 "Run Now" = "立即运行";
 "Runner" = "Runner";
 "Runner · runs bots with its own credentials" = "Runner · 用自己的凭证运行智能体";
+"Running command: %@" = "正在运行命令：%@";
 "Running commands" = "正在运行命令";
 "Running…" = "正在运行…";
 "Runs on %@ now" = "立即在 %@ 上运行";
@@ -550,6 +551,7 @@
 "The two Devices run a handshake; the relay only carries the ciphertext. This computer joins as a Runner." = "两台设备之间进行握手，中继只传递密文。这台电脑将作为 Runner 加入。";
 "theme dark mode light mode system" = "主题 深色模式 浅色模式 跟随系统 theme dark mode light mode system";
 "Thinking" = "思考";
+"Thinking|status" = "正在思考";
 "This computer" = "这台电脑";
 "This computer · CLI running" = "这台电脑 · CLI 运行中";
 "This computer is your first Device" = "这台电脑是你的第一台设备";

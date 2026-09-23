@@ -28,6 +28,9 @@ pub enum Event {
     /// A model call failed in a way worth another try; the turn waits `delay_ms` and asks again.
     #[serde(rename = "job.retry")]
     JobRetry { chat_id: String, bot_id: String, attempt: u32, max_attempts: u32, delay_ms: u64, error: String },
+    /// The bot's model started thinking; its next message in the chat is what came of it.
+    #[serde(rename = "job.thinking")]
+    JobThinking { chat_id: String, bot_id: String },
     /// A turn finished and the chat's usage moved.
     #[serde(rename = "chat.usage")]
     ChatUsageChanged { chat_id: String, usage: ChatUsage },

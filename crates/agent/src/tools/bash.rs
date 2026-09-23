@@ -71,9 +71,13 @@ impl Tool for BashTool {
             "type": "object",
             "properties": {
                 "command": { "type": "string", "description": "Shell command to execute" },
+                "description": {
+                    "type": "string",
+                    "description": "What the command does, in a few words and the language of the conversation, shown to the user while it runs: \"Install dependencies\", \"Run the tests\""
+                },
                 "timeout": { "type": "number", "description": "Timeout in seconds (optional, no default timeout)" }
             },
-            "required": ["command"]
+            "required": ["command", "description"]
         })
     }
     async fn execute(&self, _id: &str, args: Value, cancel: CancellationToken, on_update: ToolUpdateFn) -> Result<ToolResult, ToolError> {

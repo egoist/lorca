@@ -190,18 +190,21 @@ final class MessageCellView: NSTableCellView {
 
 // MARK: - Working row
 
-/// "Chef is working…" after the last message: the avatar breathes while a turn runs. A DM
-/// shows the avatar alone, since only one bot can be at work there.
+/// "Chef is working…" after the last message, its words shimmering while a turn runs. A DM,
+/// where only one bot can be at work, reads "Working…".
 final class WorkingCellView: NSTableCellView {
     static let identifier = NSUserInterfaceItemIdentifier("WorkingCell")
 
     private let avatar = AvatarView(diameter: ChatMetrics.avatarSize)
-    private let label = Build.label("", font: .systemFont(ofSize: 12.5), color: .secondaryLabelColor)
+    private let label = Build.label("", font: .systemFont(ofSize: 12.5), color: .labelColor)
+    private let shimmer = ShimmerLayer()
 
     init() {
         super.init(frame: .zero)
         addSubview(avatar.framePositioned())
         addSubview(label.framePositioned())
+        label.wantsLayer = true
+        label.layer?.mask = shimmer
     }
 
     @available(*, unavailable)
@@ -210,24 +213,23 @@ final class WorkingCellView: NSTableCellView {
     override var isFlipped: Bool { true }
 
     /// `activity` is what the one working bot is doing right now ("Running commands"); with it
-    /// the line reads the activity, without it the bot's name. A DM shows the avatar alone
-    /// unless there is an activity to name.
+    /// the line reads the activity, without it the bot's name in a group and "Working…" in a DM.
     func configure(bots: [Bot], activity: String?, showsName: Bool) {
         if let first = bots.first {
             avatar.content = AvatarView.content(for: first)
         }
         let names = bots.map(\.name)
         let text: String
-        if let activity, names.count == 1 {
+        if names.count > 1 {
+            text = L("%@ and %@ are working…", names.dropLast().joined(separator: L(", ")), names.last ?? "")
+        } else if let activity {
             text = "\(activity)…"
+        } else if showsName, let name = names.first {
+            text = L("%@ is working…", name)
         } else {
-            switch names.count {
-            case 0: text = ""
-            case 1: text = L("%@ is working…", names[0])
-            default: text = L("%@ and %@ are working…", names.dropLast().joined(separator: L(", ")), names.last ?? "")
-            }
+            text = "\(L("Working"))…"
         }
-        label.stringValue = showsName || activity != nil ? text : ""
+        label.stringValue = text
         setAccessibilityLabel(names.count == 1 ? L("%@ is working", names[0]) : text)
         needsLayout = true
     }
@@ -239,7 +241,7 @@ final class WorkingCellView: NSTableCellView {
         switch tool.name {
         case "read": return L("Reading a file")
         case "write", "edit": return L("Drafting a file")
-        case "bash": return L("Running commands")
+        case "bash": return tool.description.map { L("Running command: %@", $0) } ?? L("Running commands")
         case "web_search": return L("Searching the web")
         case "web_fetch": return L("Reading the web")
         case "grep", "find", "ls": return L("Searching files")
@@ -265,24 +267,7 @@ final class WorkingCellView: NSTableCellView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        window == nil ? stopBreathing() : startBreathing()
-    }
-
-    private func startBreathing() {
-        avatar.wantsLayer = true
-        guard let layer = avatar.layer, layer.animation(forKey: "breathe") == nil else { return }
-        let pulse = CABasicAnimation(keyPath: "opacity")
-        pulse.fromValue = 1
-        pulse.toValue = 0.35
-        pulse.duration = 0.9
-        pulse.autoreverses = true
-        pulse.repeatCount = .infinity
-        pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-        layer.add(pulse, forKey: "breathe")
-    }
-
-    private func stopBreathing() {
-        avatar.layer?.removeAnimation(forKey: "breathe")
+        window == nil ? shimmer.stop() : shimmer.start()
     }
 
     override func layout() {
@@ -290,9 +275,14 @@ final class WorkingCellView: NSTableCellView {
         let y = ChatMetrics.groupTopPadding
         avatar.frame = NSRect(
             x: ChatMetrics.horizontalInset, y: y, width: ChatMetrics.avatarSize, height: ChatMetrics.avatarSize)
+        // The label hugs its words, so the band crosses them rather than the empty row. The
+        // cell's size, not the intrinsic one, counts the text's inset; without it the last
+        // letter truncates.
+        let available = max(0, bounds.width - ChatMetrics.bubbleIndent - ChatMetrics.horizontalInset)
         label.frame = NSRect(
             x: ChatMetrics.bubbleIndent, y: y + (ChatMetrics.avatarSize - 16) / 2,
-            width: max(0, bounds.width - ChatMetrics.bubbleIndent - ChatMetrics.horizontalInset), height: 16)
+            width: min(ceil(label.cell?.cellSize.width ?? 0), available), height: 16)
+        shimmer.frame = label.bounds
     }
 }
 

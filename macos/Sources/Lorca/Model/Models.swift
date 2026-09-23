@@ -522,6 +522,8 @@ struct ToolInvocation: Hashable {
     var summary: String
     var detail: String
     var isRunning: Bool
+    /// What the call does, in the bot's words: a shell command's "Install dependencies".
+    var description: String?
 
     /// A finished message_bot call: the one tool the transcript shows, as "Messaged ◉ Name".
     /// Everything else a bot does with tools stays behind the "is working" row.

@@ -157,6 +157,7 @@ final class AppStore {
                 if self.isConnected {
                     self.isConnected = false
                     self.runningJobs.removeAll()
+                    self.thinkingBots.removeAll()
                     self.emit(.connectionChanged)
                 }
             }
@@ -311,6 +312,10 @@ final class AppStore {
                 retryNotes[payload.chatId] = nil
                 emit(.respondingChanged(payload.chatId))
             }
+            // The thinking bot's next message (a tool call, a reply) is where its thinking went.
+            if name == "message.added", let botID = payload.message.author.botId, thinkingBots[payload.chatId] == botID {
+                thinkingBots[payload.chatId] = nil
+            }
             upsert(payload.message.toModel(), in: payload.chatId)
 
         case "message.removed":
@@ -338,6 +343,9 @@ final class AppStore {
             guard let job = decode(Wire.JobEvent.self) else { return }
             runningJobs.removeAll { $0.id == job.jobId }
             retryNotes[job.chatId] = nil
+            if job.botId.isEmpty || thinkingBots[job.chatId] == job.botId {
+                thinkingBots[job.chatId] = nil
+            }
             emit(.respondingChanged(job.chatId))
             emit(.chatsChanged)
             if let startedAt = jobStarts.removeValue(forKey: job.jobId), !job.botId.isEmpty {
@@ -349,6 +357,11 @@ final class AppStore {
             let seconds = max(1, Int((Double(retry.delayMs) / 1000).rounded()))
             retryNotes[retry.chatId] = L("Retrying (%d of %d) in %d s", retry.attempt, retry.maxAttempts, seconds)
             emit(.respondingChanged(retry.chatId))
+
+        case "job.thinking":
+            guard let job = decode(Wire.JobThinking.self) else { return }
+            thinkingBots[job.chatId] = job.botId
+            emit(.respondingChanged(job.chatId))
 
         case "chat.usage":
             guard let payload = decode(Wire.ChatUsageEvent.self),
@@ -799,6 +812,13 @@ final class AppStore {
         retryNotes[chatID]
     }
 
+    /// The bot whose model is reasoning in a chat, until its next message or the end of its turn.
+    private var thinkingBots: [Chat.ID: Bot.ID] = [:]
+
+    func isThinking(_ botID: Bot.ID, in chatID: Chat.ID) -> Bool {
+        thinkingBots[chatID] == botID
+    }
+
     func deleteChat(_ id: Chat.ID) {
         guard let chat = chat(id) else { return }
 
@@ -835,6 +855,7 @@ final class AppStore {
             runningJobs.removeAll { cancelledJobIDs.contains($0.id) }
             for job in cancelledJobs { jobStarts.removeValue(forKey: job.id) }
             for chatID in removedChatIDs { retryNotes.removeValue(forKey: chatID) }
+            thinkingBots = thinkingBots.filter { $0.value != botID && !removedChatIDs.contains($0.key) }
 
             emit(.rosterChanged)
             for chatID in changedChatIDs { emit(.chatChanged(chatID)) }
@@ -849,6 +870,7 @@ final class AppStore {
         runningJobs.removeAll { $0.chatID == id }
         for job in cancelledJobs { jobStarts.removeValue(forKey: job.id) }
         retryNotes.removeValue(forKey: id)
+        thinkingBots.removeValue(forKey: id)
         emit(.chatsChanged)
         perform("chats.delete", ["chat_id": id])
     }

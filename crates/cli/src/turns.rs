@@ -802,11 +802,16 @@ impl TurnState {
                         arguments: json!({ "detail": detail }),
                         result: None,
                         is_error: false,
+                        description: None,
                     },
                 );
                 message.state = MessageState::Streaming;
                 self.app.upsert_message(message.clone(), false);
                 self.tool_messages.push((id, message.id));
+            }
+            // The app reads "Thinking…" until the bot's next message or the end of its turn.
+            AgentEvent::MessageUpdate { assistant_message_event: AssistantEvent::ThinkingStart { .. }, .. } => {
+                self.app.emit(Event::JobThinking { chat_id: self.chat_id.clone(), bot_id: self.bot_id.clone() });
             }
             AgentEvent::MessageUpdate { assistant_message_event: AssistantEvent::ServerToolEnd { id, name, detail, summary }, .. } => {
                 let Some((_, message_id)) = self.tool_messages.iter().find(|(call, _)| *call == id).cloned() else { return };
@@ -863,6 +868,7 @@ impl TurnState {
                     Some(plugin) => format!("Using {plugin}…"),
                     None => format!("Running {}…", tool_label(&tool_name)),
                 };
+                let description = if tool_name == "bash" { args["description"].as_str().and_then(|text| first_line(text, 80)) } else { None };
                 let mut message = Message::new(
                     &self.chat_id,
                     Author::Bot { bot_id: self.bot_id.clone() },
@@ -875,6 +881,7 @@ impl TurnState {
                         arguments: args,
                         result: None,
                         is_error: false,
+                        description,
                     },
                 );
                 message.state = MessageState::Streaming;
@@ -2371,6 +2378,54 @@ mod tests {
         assert!(app.message("chat", &steer.id).unwrap().promoted_at.is_some());
         assert!(app.take_steering_message("chat", &steer.id), "the admitted replacement job becomes a no-op");
         assert!(app.take_steering_message("chat", &steer.id), "the promotion survives a lost in-memory claim");
+    }
+
+    #[test]
+    fn the_app_hears_the_bot_think_and_what_its_command_does() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        let chef = bot("b1", "Chef");
+        {
+            let mut state = app.state.lock().unwrap();
+            state.bots.push(chef.clone());
+            state.chats.push(chat("chat", "dm", None, &["b1"]));
+        }
+        let mut events = app.events.subscribe();
+        let mut turn = TurnState {
+            app: app.clone(),
+            chat_id: "chat".into(),
+            bot_id: "b1".into(),
+            model: "model".into(),
+            window: 0,
+            current: None,
+            done_parts: 0,
+            tool_messages: Vec::new(),
+            sent: false,
+            failed: false,
+            last_error: None,
+            last_said: None,
+            tools_used: Vec::new(),
+            plugin_tools: crate::plugins::mcp::turn_tools(app, "chat", &chef, false).0,
+            shown_len: 0,
+            last_flush: std::time::Instant::now(),
+        };
+
+        turn.handle(AgentEvent::MessageUpdate {
+            message: AgentMessage::Assistant(AssistantMessage::empty("deepseek", "model")),
+            assistant_message_event: AssistantEvent::ThinkingStart { index: 0 },
+        });
+        assert!(matches!(events.try_recv(), Ok(Event::JobThinking { chat_id, bot_id }) if chat_id == "chat" && bot_id == "b1"));
+
+        let run = |tool: &str, args: Value| AgentEvent::ToolExecutionStart { tool_call_id: tool.into(), tool_name: tool.into(), args };
+        turn.handle(run("bash", json!({ "command": "bun install", "description": "Install dependencies\nand more" })));
+        turn.handle(run("create_bot", json!({ "name": "Scout", "description": "Finds sources" })));
+        let descriptions: Vec<Option<String>> = std::iter::from_fn(|| events.try_recv().ok())
+            .filter_map(|event| match event {
+                Event::MessageAdded { message: Message { body: Body::Tool { description, .. }, .. }, .. } => Some(description),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(descriptions, [Some("Install dependencies".to_string()), None]);
     }
 
     #[test]

@@ -318,6 +318,11 @@ enum Wire {
         var error: String
     }
 
+    struct JobThinking: Decodable {
+        var chatId: String
+        var botId: String
+    }
+
     struct ChatUsageEvent: Decodable {
         var chatId: String
         var usage: ChatUsage
@@ -349,6 +354,7 @@ enum Wire {
         var summary: String?
         var detail: String?
         var isRunning: Bool?
+        var description: String?
         var from: String?
         var to: String?
         var reason: String?
@@ -510,7 +516,8 @@ extension Wire.Message {
                     name: self.body.name ?? "tool",
                     summary: self.body.summary ?? "",
                     detail: self.body.detail ?? "",
-                    isRunning: self.body.isRunning ?? false
+                    isRunning: self.body.isRunning ?? false,
+                    description: self.body.description
                 ))
         case "handoff":
             body = .handoff(from: self.body.from ?? "", to: self.body.to ?? "", reason: self.body.reason ?? "")

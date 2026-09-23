@@ -43,7 +43,12 @@ pub async fn before_tool_call(
         "Run this shell command as the user on {runner_name}, with full filesystem, process, credential, and network access. Working directory: {}.",
         home_relative(&workdir)
     );
-    let action = Action { target_name: &runner_name, tool: "bash", description: &description, args: ctx.args, propose_rule: true };
+    // The reviewer judges the command, not the bot's own account of what it does.
+    let mut args = ctx.args.clone();
+    if let Some(fields) = args.as_object_mut() {
+        fields.remove("description");
+    }
+    let action = Action { target_name: &runner_name, tool: "bash", description: &description, args: &args, propose_rule: true };
     let Outcome::Ask { reason, rule } = review::review(app, bot, chat_id, action, ctx.cancel).await else { return None };
     if unattended {
         return Some(blocked(format!(

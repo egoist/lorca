@@ -542,9 +542,9 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
         case let .working(botIDs):
             guard let chatID, let chat = store.chat(chatID) else { return }
             // The activity is the bot's latest tool, running or just finished: between two
-            // commands the line keeps reading "Running commands…" instead of flashing back to
-            // the name every time a call ends. It reverts once the bot says something, or
-            // after a sent message, whose marker already tells the story.
+            // commands the line keeps reading the last one instead of flashing back to the
+            // name every time a call ends. It reverts once the bot says something, or after a
+            // sent message, whose marker already tells the story.
             var activity: String?
             if botIDs.count == 1, let last = chat.messages.last, last.author == .bot(botIDs[0]),
                 case let .tool(tool) = last.body, !tool.isSentMessage
@@ -552,7 +552,11 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
                 let target = store.bots.first { tool.detail.localizedCaseInsensitiveContains("\"bot\": \"\($0.name)\"") }
                 activity = WorkingCellView.activity(for: tool, targetName: target?.name, pluginName: pluginName(of: tool, bot: botIDs[0]))
             }
-            // A model call being asked again outranks the last tool: the bot is waiting, not working.
+            // A model thinking about its next step outranks the last tool.
+            if botIDs.count == 1, store.isThinking(botIDs[0], in: chatID) {
+                activity = L("Thinking", context: "status")
+            }
+            // A model call being asked again outranks both: the bot is waiting, not working.
             if let note = store.retryNote(for: chatID) {
                 activity = note
             }

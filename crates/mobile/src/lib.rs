@@ -219,6 +219,7 @@ mod tests {
                 arguments: serde_json::json!({ "command": "echo secret" }),
                 result: Some("secret output".into()),
                 is_error: false,
+                description: None,
             },
         );
         let tool_id = tool.id.clone();
