@@ -275,11 +275,32 @@ async fn serve_call(port: u16, method: &str, params: &serde_json::Value) -> anyh
 async fn watch_parent(pid: u32) {
     loop {
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        let alive = unsafe { libc::kill(pid as i32, 0) } == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM);
-        if !alive {
+        if !process_alive(pid) {
             tracing::info!(pid, "parent exited; stopping");
             std::process::exit(0);
         }
+    }
+}
+
+#[cfg(unix)]
+fn process_alive(pid: u32) -> bool {
+    let signaled = unsafe { libc::kill(pid as i32, 0) } == 0;
+    signaled || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+/// A process handle is signaled once the process has exited.
+#[cfg(windows)]
+fn process_alive(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, WAIT_TIMEOUT};
+    use windows_sys::Win32::System::Threading::{OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE};
+    unsafe {
+        let handle = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
+        if handle.is_null() {
+            return false;
+        }
+        let running = WaitForSingleObject(handle, 0) == WAIT_TIMEOUT;
+        CloseHandle(handle);
+        running
     }
 }
 

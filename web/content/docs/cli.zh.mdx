@@ -8,6 +8,26 @@ icon: Terminal
 
 在 macOS 上，应用自带的可执行文件位于 `Lorca.app/Contents/Resources/bin/lorca`。
 
+## 安装
+
+在没有桌面应用的 Apple 芯片 Mac 或 Linux 电脑上：
+
+```bash
+curl -fsSL https://lorca.app/install-cli.sh | sh
+```
+
+在 Windows 上，打开 PowerShell：
+
+```powershell
+irm https://lorca.app/install-cli.ps1 | iex
+```
+
+脚本会下载适合这台电脑的最新版本，用该版本的校验和核对下载的文件，把 `lorca` 放进 `~/.local/bin`，并把这个文件夹加入 PATH。再运行一次即可更新；正在运行的 `lorca serve` 会继续使用旧版本，直到重启。
+
+设置 `LORCA_VERSION=1.0.0` 安装指定版本，设置 `LORCA_INSTALL_DIR` 把 `lorca` 放到别的文件夹，设置 `LORCA_NO_MODIFY_PATH=1` 则不改动 PATH：`curl -fsSL https://lorca.app/install-cli.sh | LORCA_VERSION=1.0.0 sh`；在 PowerShell 里，先运行 `$env:LORCA_VERSION = '1.0.0'` 再运行 `irm`。
+
+在 Windows 上，智能体用 Git for Windows 自带的 bash 运行命令，所以也要安装 [Git for Windows](https://git-scm.com/downloads/win)。
+
 ## 命令
 
 | 命令 | 作用 |
@@ -41,6 +61,7 @@ lorca serve
 | `LORCA_HOME` | 密钥、凭据和聊天的存放位置。默认 `~/.lorca`。 |
 | `LORCA_PORT` | 应用连接的本地端口。默认 `4862`。 |
 | `LORCA_RELAY_URL` | 中继地址。 |
+| `LORCA_SHELL` | 智能体运行命令所用的 shell。默认 `/bin/bash`；在 Windows 上是 Git for Windows 的 bash。 |
 | `LORCA_DEEPSEEK_MODEL`、`LORCA_ANTHROPIC_MODEL`、`LORCA_CHATGPT_MODEL`、`LORCA_GROK_MODEL` | 没有指定模型的智能体使用的默认模型。 |
 
 ## 文件

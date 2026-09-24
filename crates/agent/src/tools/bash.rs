@@ -1,6 +1,6 @@
 //! `bash`: run a shell command in the working directory. Output is tail-truncated to 2000 lines
 //! or 50KB; the full output is saved to a temp file when truncated. Cancellation kills the
-//! whole process group.
+//! whole process group (on Windows, the process tree).
 
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -22,18 +22,42 @@ pub struct BashTool {
 
 impl BashTool {
     pub fn new(cwd: PathBuf) -> Self {
-        let shell = std::env::var("LORCA_SHELL").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| {
-            if std::path::Path::new("/bin/bash").exists() { "/bin/bash".into() } else { "/bin/sh".into() }
-        });
+        let shell = std::env::var("LORCA_SHELL").ok().filter(|s| !s.is_empty()).unwrap_or_else(default_shell);
         BashTool { cwd, shell }
     }
 }
 
+#[cfg(unix)]
+fn default_shell() -> String {
+    if std::path::Path::new("/bin/bash").exists() { "/bin/bash".into() } else { "/bin/sh".into() }
+}
+
+/// Git for Windows' bash, else the first `bash` on PATH.
+#[cfg(windows)]
+fn default_shell() -> String {
+    std::env::var_os("ProgramFiles")
+        .map(|dir| PathBuf::from(dir).join("Git").join("bin").join("bash.exe"))
+        .filter(|path| path.exists())
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "bash".into())
+}
+
+#[cfg(unix)]
 fn kill_group(pid: u32) {
     // Negative pid addresses the process group the shell started with `process_group(0)`.
     unsafe {
         libc::kill(-(pid as i32), libc::SIGKILL);
     }
+}
+
+/// Windows has no process group to signal: `taskkill /T` ends the shell and everything it started.
+#[cfg(windows)]
+fn kill_group(pid: u32) {
+    let _ = std::process::Command::new("taskkill")
+        .args(["/F", "/T", "/PID", &pid.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
 }
 
 fn describe(text: &str, truncation: &super::truncate::TruncationResult, full_output_path: Option<&std::path::Path>) -> String {

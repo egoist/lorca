@@ -1,0 +1,164 @@
+# Releases the lorca CLI for computers without the app. A tag such as v1.0.0 builds it for macOS,
+# Linux, and Windows, installs the builds with the site's install scripts on each system, and
+# publishes the archives as a release of the public repo that install-cli.sh and install-cli.ps1
+# download from. Run by hand, it builds and tests without publishing.
+# docs/releasing-cli.md has the setup.
+name: Release CLI
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # This repo is private, and the install scripts download anonymously.
+  RELEASES_REPO: egoist/lorca-releases
+  CARGO_TERM_COLOR: always
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.crate.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: crate
+        name: Check the tag against the crate version
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "lorca") | .version')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          # The tag names the release, and `lorca --version` has to say the same.
+          if [[ "$GITHUB_REF_TYPE" == tag && "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "::error::$GITHUB_REF_NAME does not match lorca $version: set version in [workspace.package] of Cargo.toml to ${GITHUB_REF_NAME#v} and tag that commit"
+            exit 1
+          fi
+
+  build:
+    name: build ${{ matrix.name }}
+    needs: version
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          # Xcode builds for the Mac; zig, through cargo-zigbuild, for the others. The Linux builds
+          # are static (musl), so one runs on any distribution, and Windows 11 on Arm runs the
+          # x86_64 build.
+          - { name: macos-aarch64, target: aarch64-apple-darwin, os: macos-latest }
+          - { name: linux-aarch64, target: aarch64-unknown-linux-musl, os: ubuntu-latest, zig: true }
+          - { name: linux-x86_64, target: x86_64-unknown-linux-musl, os: ubuntu-latest, zig: true }
+          - { name: windows-x86_64, target: x86_64-pc-windows-gnu, os: ubuntu-latest, zig: true }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - if: matrix.zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - if: matrix.zig
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild
+      - name: Build
+        run: cargo ${{ matrix.zig && 'zigbuild' || 'build' }} --release --locked -p lorca --target ${{ matrix.target }}
+      - name: Pack
+        env:
+          TARGET: ${{ matrix.target }}
+          NAME: ${{ matrix.name }}
+        run: |
+          mkdir dist
+          bin=target/$TARGET/release
+          # The binary alone at the archive's root, and its checksum beside the archive.
+          if [[ $TARGET == *windows* ]]; then
+            archive=lorca-cli-$NAME.zip
+            zip -jX "dist/$archive" "$bin/lorca.exe"
+          else
+            archive=lorca-cli-$NAME.tar.gz
+            # bsdtar on the Mac adds AppleDouble files and xattr headers, which GNU tar warns about.
+            flags=(--format ustar)
+            if [[ $RUNNER_OS == macOS ]]; then flags+=(--no-mac-metadata); fi
+            tar "${flags[@]}" -czf "dist/$archive" -C "$bin" lorca
+          fi
+          cd dist && shasum -a 256 "$archive" > "$archive.sha256"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: lorca-cli-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+
+  test:
+    name: install on ${{ matrix.os }}
+    needs: [version, build]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    env:
+      # The builds, served where a release serves them: <releases>/latest/download/<file>.
+      LORCA_DOWNLOAD_URL: http://127.0.0.1:8000
+      WANT: lorca ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          path: site/latest/download
+          merge-multiple: true
+      - name: Install with install-cli.sh, twice
+        if: runner.os != 'Windows'
+        run: |
+          python3 -m http.server --bind 127.0.0.1 --directory site 8000 &
+          for _ in $(seq 50); do curl -fs -o /dev/null "$LORCA_DOWNLOAD_URL/" && break; sleep 0.2; done
+          sh web/public/install-cli.sh
+          # The second run is an update over the first.
+          sh web/public/install-cli.sh
+          version=$(~/.local/bin/lorca --version)
+          if [[ "$version" != "$WANT" ]]; then echo "::error::lorca --version says $version"; exit 1; fi
+      - name: Install with install-cli.ps1 in Windows PowerShell, then again in PowerShell 7
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Start-Process python -ArgumentList '-m', 'http.server', '--bind', '127.0.0.1', '--directory', 'site', '8000' -WindowStyle Hidden
+          foreach ($try in 1..50) {
+            try { Invoke-WebRequest "$env:LORCA_DOWNLOAD_URL/" -UseBasicParsing | Out-Null; break } catch { Start-Sleep -Milliseconds 200 }
+          }
+          # The way people run it: the script's text through Invoke-Expression.
+          powershell -NoProfile -Command 'Get-Content -Raw web/public/install-cli.ps1 | Invoke-Expression'
+          if ($LASTEXITCODE -ne 0) { throw 'the install in Windows PowerShell failed' }
+          Get-Content -Raw web/public/install-cli.ps1 | Invoke-Expression
+          $version = lorca --version
+          if ($version -ne $env:WANT) { throw "lorca --version says $version" }
+          $userPath = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment').GetValue('Path')
+          if ($userPath -notlike "*$HOME\.local\bin*") { throw "the user PATH lacks .local\bin: $userPath" }
+
+  publish:
+    needs: [version, test]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish ${{ github.ref_name }} to ${{ env.RELEASES_REPO }}
+        env:
+          # A fine-grained token with Contents read and write on the releases repo.
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          if [[ -z "$GH_TOKEN" ]]; then
+            echo "::error::Add a RELEASES_TOKEN secret that can write to $RELEASES_REPO (docs/releasing-cli.md)"
+            exit 1
+          fi
+          cat > notes.md <<'EOF'
+          Install or update:
+
+          ```sh
+          curl -fsSL https://lorca.app/install-cli.sh | sh    # macOS and Linux
+          irm https://lorca.app/install-cli.ps1 | iex         # Windows, in PowerShell
+          ```
+          EOF
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$RELEASES_REPO" --title "Lorca CLI $VERSION" --notes-file notes.md

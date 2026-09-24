@@ -8,6 +8,26 @@ icon: Terminal
 
 On macOS, the bundled binary lives inside the app at `Lorca.app/Contents/Resources/bin/lorca`.
 
+## Install
+
+On an Apple silicon Mac or a Linux computer without the app:
+
+```bash
+curl -fsSL https://lorca.app/install-cli.sh | sh
+```
+
+On Windows, in PowerShell:
+
+```powershell
+irm https://lorca.app/install-cli.ps1 | iex
+```
+
+The script downloads the latest release for your computer, checks it against the release's checksums, puts `lorca` in `~/.local/bin`, and adds that folder to your PATH. Run it again to update; a running `lorca serve` keeps the old version until it restarts.
+
+Set `LORCA_VERSION=1.0.0` to install that release, `LORCA_INSTALL_DIR` to put `lorca` in another folder, or `LORCA_NO_MODIFY_PATH=1` to leave your PATH alone: `curl -fsSL https://lorca.app/install-cli.sh | LORCA_VERSION=1.0.0 sh`, or `$env:LORCA_VERSION = '1.0.0'` before `irm` in PowerShell.
+
+On Windows, bots run their commands in Git for Windows' bash, so install [Git for Windows](https://git-scm.com/downloads/win) too.
+
 ## Commands
 
 | Command | What it does |
@@ -41,6 +61,7 @@ The computer shows up in your Device list, and you can create bots for it from t
 | `LORCA_HOME` | Where keys, credentials, and chats live. Default `~/.lorca`. |
 | `LORCA_PORT` | The local port the app connects to. Default `4862`. |
 | `LORCA_RELAY_URL` | The relay. |
+| `LORCA_SHELL` | The shell bots run commands in. Default `/bin/bash`; on Windows, Git for Windows' bash. |
 | `LORCA_DEEPSEEK_MODEL`, `LORCA_ANTHROPIC_MODEL`, `LORCA_CHATGPT_MODEL`, `LORCA_GROK_MODEL` | The default model for bots that do not pick one. |
 
 ## Files

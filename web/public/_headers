@@ -1,0 +1,6 @@
+# The install scripts read as text in a browser, and as UTF-8 in PowerShell.
+/install-cli.sh
+  Content-Type: text/plain; charset=utf-8
+
+/install-cli.ps1
+  Content-Type: text/plain; charset=utf-8

@@ -98,11 +98,25 @@ pub fn local_time(unix: i64) -> LocalTime {
     }
 }
 
-fn local_tm(unix: i64) -> libc::tm {
+pub(crate) fn local_tm(unix: i64) -> libc::tm {
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
     let t = unix as libc::time_t;
+    #[cfg(unix)]
     unsafe { libc::localtime_r(&t, &mut tm) };
+    // Windows' `localtime_s` takes the same two arguments the other way round.
+    #[cfg(windows)]
+    unsafe { libc::localtime_s(&mut tm, &t) };
     tm
+}
+
+#[cfg(unix)]
+use libc::mktime;
+
+// The CRT's `mktime` is an inline wrapper around `_mktime64`, so libc has no binding for it.
+#[cfg(windows)]
+extern "C" {
+    #[link_name = "_mktime64"]
+    fn mktime(tm: *mut libc::tm) -> i64;
 }
 
 /// Midnight at the start of the local day `unix` falls in.
@@ -112,7 +126,7 @@ pub fn start_of_local_day(unix: i64) -> i64 {
     tm.tm_min = 0;
     tm.tm_sec = 0;
     tm.tm_isdst = -1;
-    unsafe { libc::mktime(&mut tm) as i64 }
+    unsafe { mktime(&mut tm) as i64 }
 }
 
 /// Unix seconds of a local `YYYY-MM-DD` at `HH:MM` (midnight when `clock` is `None`).
@@ -133,7 +147,7 @@ pub fn local_unix(date: &str, clock: Option<&str>) -> Option<i64> {
     tm.tm_hour = hour;
     tm.tm_min = minute;
     tm.tm_isdst = -1;
-    let t = unsafe { libc::mktime(&mut tm) };
+    let t = unsafe { mktime(&mut tm) };
     (t >= 0).then_some(t as i64)
 }
 

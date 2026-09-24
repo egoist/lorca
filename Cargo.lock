@@ -1808,6 +1808,7 @@ dependencies = [
  "usage-rs",
  "uuid",
  "webpki-roots 1.0.9",
+ "windows-sys 0.61.2",
  "x25519-dalek",
 ]
 

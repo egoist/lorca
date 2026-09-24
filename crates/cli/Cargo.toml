@@ -63,3 +63,7 @@ if-addrs = "0.15.0"
 # rmcp speaks reqwest 0.13; the rest of the crate is on the workspace's 0.12, so the MCP side has its own client.
 mcp_http = { package = "reqwest", version = "0.13", default-features = false, features = ["json", "stream", "rustls", "http2"], optional = true }
 rmcp = { version = "3.4.0", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "auth", "reqwest"], optional = true }
+
+[target.'cfg(windows)'.dependencies]
+# `serve --parent-pid` watches the parent through a process handle.
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }

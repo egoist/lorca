@@ -2,7 +2,7 @@
 //! expression (`0 9 * * 1-5`) read in the Runner's local time. `describe` says it in words the
 //! way Grok Bot's routine panel does; `next_after` finds the next firing.
 
-use crate::memory::{local_time, start_of_local_day};
+use crate::memory::{local_time, local_tm, start_of_local_day};
 
 /// The shortest gap between two runs of one routine.
 pub const MIN_INTERVAL_SECS: i64 = 5 * 60;
@@ -325,13 +325,6 @@ fn evenly_spaced(values: &[u32], cycle: u32) -> bool {
     }
     let step = cycle / values.len() as u32;
     values.iter().enumerate().all(|(i, v)| *v == i as u32 * step)
-}
-
-fn local_tm(unix: i64) -> libc::tm {
-    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-    let t = unix as libc::time_t;
-    unsafe { libc::localtime_r(&t, &mut tm) };
-    tm
 }
 
 /// `today 9:00 AM`, `tomorrow 9:00 AM`, `Mon 9:00 AM`, `2026-10-01 9:00 AM`: when a run is due.
