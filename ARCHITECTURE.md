@@ -80,7 +80,7 @@ The relay's machine list is the list of paired Devices. A Device reads it when i
 
 ### Devices and Runners
 
-Every Device writes its `os` into its machine metadata blob. Values: `macos`, `linux`, `windows`, `ios`, `ipados`, `android`. The client sets it at pairing and re-sends it with presence. `model` is the name a person knows the machine by ("MacBook Air (M5)": `system_profiler`'s machine name and chip on a Mac, where `hw.model` is an identifier such as `Mac17,3`). A CLI reads its model and OS version from the host on every run rather than from `machine.json`, and uploads its `machine` blob again when they change.
+Every Device writes its `os` into its machine metadata blob. Values: `macos`, `linux`, `windows`, `ios`, `ipados`, `android`. The client sets it at pairing and re-sends it with presence. `name` starts as the name the machine already goes by: a Mac's Computer Name; on Linux the pretty hostname in `/etc/machine-info` (GNOME's Device Name), else the host name; `COMPUTERNAME` on Windows; a phone's device name. `--name` on `lorca pair` or `lorca identity new` gives another, and `device.rename` changes it later. `model` is the name a person knows the machine by ("MacBook Air (M5)": `system_profiler`'s machine name and chip on a Mac, where `hw.model` is an identifier such as `Mac17,3`). A CLI reads its model and OS version from the host on every run rather than from `machine.json`, and uploads its `machine` blob again when they change.
 
 `os` decides the Device’s role:
 

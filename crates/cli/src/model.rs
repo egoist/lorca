@@ -734,16 +734,68 @@ fn mac_model_name() -> Option<String> {
     })
 }
 
+/// What the user calls this computer: a Mac's Computer Name, the pretty hostname a Linux
+/// desktop's Device Name setting writes, else the host name.
+fn computer_name() -> Option<String> {
+    let given = if cfg!(target_os = "macos") {
+        std::process::Command::new("scutil")
+            .args(["--get", "ComputerName"])
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    } else if cfg!(target_os = "linux") {
+        std::fs::read_to_string("/etc/machine-info").ok().and_then(|info| pretty_hostname(&info))
+    } else {
+        None
+    };
+    given.or_else(host_name)
+}
+
+/// `PRETTY_HOSTNAME` from `/etc/machine-info`: shell-style `KEY=value` lines, where systemd
+/// double-quotes a value with spaces or quotes in it and escapes with a backslash.
+fn pretty_hostname(machine_info: &str) -> Option<String> {
+    let value = machine_info.lines().find_map(|line| {
+        let (key, value) = line.split_once('=')?;
+        (key.trim() == "PRETTY_HOSTNAME").then_some(value.trim())
+    })?;
+    let name = if let Some(quoted) = value.strip_prefix('"').and_then(|v| v.strip_suffix('"')) {
+        let mut name = String::new();
+        let mut chars = quoted.chars();
+        while let Some(c) = chars.next() {
+            name.push(if c == '\\' { chars.next().unwrap_or(c) } else { c });
+        }
+        name
+    } else if let Some(quoted) = value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')) {
+        quoted.to_string()
+    } else {
+        value.to_string()
+    };
+    let name = name.trim();
+    (!name.is_empty()).then(|| name.to_string())
+}
+
+/// The kernel's host name, as `hostname` prints it. `$HOSTNAME` is a shell variable most shells
+/// never export.
+#[cfg(unix)]
+fn host_name() -> Option<String> {
+    let mut buffer = [0u8; 256];
+    if unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len()) } != 0 {
+        return None;
+    }
+    let length = buffer.iter().position(|&byte| byte == 0).unwrap_or(buffer.len());
+    let name = String::from_utf8_lossy(&buffer[..length]).trim().to_string();
+    (!name.is_empty()).then_some(name)
+}
+
+/// The computer name Windows sets in every process's environment.
+#[cfg(windows)]
+fn host_name() -> Option<String> {
+    std::env::var("COMPUTERNAME").ok().map(|name| name.trim().to_string()).filter(|name| !name.is_empty())
+}
+
 fn probe_host() -> (String, String, String, String) {
-    let name = std::process::Command::new("scutil")
-        .args(["--get", "ComputerName"])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .or_else(|| std::env::var("HOSTNAME").ok())
-        .unwrap_or_else(|| "This Computer".to_string());
     let os = if cfg!(target_os = "macos") {
         "macos"
     } else if cfg!(target_os = "linux") {
@@ -771,6 +823,8 @@ fn probe_host() -> (String, String, String, String) {
                 .filter(|s| !s.is_empty())
         })
         .unwrap_or_else(|| std::env::consts::ARCH.to_string());
+    // A computer with no name goes by its model, as a phone does.
+    let name = computer_name().unwrap_or_else(|| model.clone());
     (name, os.to_string(), os_version, model)
 }
 
@@ -820,5 +874,27 @@ mod app_view_tests {
         // A phone stores the app view; reading it again keeps the command.
         let Body::Permission { command, .. } = app.for_app().body else { panic!() };
         assert_eq!(command.as_deref(), Some("secret"));
+    }
+}
+
+#[cfg(test)]
+mod host_tests {
+    use super::*;
+
+    #[test]
+    fn a_linux_desktop_goes_by_its_pretty_hostname() {
+        assert_eq!(pretty_hostname("PRETTY_HOSTNAME=\"Kevin's ThinkPad\"\nCHASSIS=laptop\n").as_deref(), Some("Kevin's ThinkPad"));
+        assert_eq!(pretty_hostname("PRETTY_HOSTNAME=devbox").as_deref(), Some("devbox"));
+        assert_eq!(pretty_hostname(r#"PRETTY_HOSTNAME="The \"Lab\" \$box""#).as_deref(), Some(r#"The "Lab" $box"#));
+        assert_eq!(pretty_hostname("PRETTY_HOSTNAME='My Box'").as_deref(), Some("My Box"));
+        assert_eq!(pretty_hostname("#PRETTY_HOSTNAME=Old\nCHASSIS=server\n"), None);
+        assert_eq!(pretty_hostname("PRETTY_HOSTNAME=\n"), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_host_name_is_what_hostname_prints() {
+        let printed = std::process::Command::new("hostname").output().unwrap().stdout;
+        assert_eq!(host_name().as_deref(), Some(String::from_utf8_lossy(&printed).trim()));
     }
 }
