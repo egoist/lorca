@@ -41,9 +41,9 @@ jobs:
             echo "::error::$GITHUB_REF_NAME does not match lorca $version: set version in [workspace.package] of Cargo.toml to ${GITHUB_REF_NAME#cli-v} and tag that commit"
             exit 1
           fi
-          # A release takes the tag that exists, so the builds have to come from its commit.
-          tagged=$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq .sha 2>/dev/null || true)
-          if [[ -n $tagged && $tagged != "$GITHUB_SHA" ]]; then
+          # A release takes the tag that exists, so the builds have to come from its commit. For a
+          # tag that does not exist, gh fails and prints the API's error body.
+          if tagged=$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq .sha 2>/dev/null) && [[ $tagged != "$GITHUB_SHA" ]]; then
             echo "::error::$tag already tags $tagged: run this on that commit, or bump the version in Cargo.toml"
             exit 1
           fi
@@ -176,7 +176,9 @@ jobs:
           TAG: ${{ needs.version.outputs.tag }}
           VERSION: ${{ needs.version.outputs.version }}
         run: |
-          state=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq 'if .isDraft then "draft" else "published" end' 2>/dev/null || echo none)
+          if ! state=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq 'if .isDraft then "draft" else "published" end' 2>/dev/null); then
+            state=none
+          fi
           case $state in
             published)
               echo "::notice::$TAG was published while this ran, so it stays as it is"
@@ -196,5 +198,9 @@ jobs:
           ```
           EOF
               gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --draft --target "$GITHUB_SHA" --title "Lorca CLI $VERSION" --notes-file notes.md
+              ;;
+            *)
+              echo "::error::gh release view said $state for $TAG"
+              exit 1
               ;;
           esac
