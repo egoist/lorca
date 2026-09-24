@@ -16,6 +16,8 @@ icon: Wrench
 
 相对路径从智能体的[工作目录](/zh/docs/bots#工作目录)解析。
 
+命令看到的 `PATH` 和环境变量与你的终端相同。在 Mac 或 Linux 上，Lorca 启动时会从你的登录 shell（zsh、bash 或 fish）读取它们，所以即使 Lorca 是由应用启动的，`npm`、`cargo` 和 `brew` 也照样能用。插件服务器也会得到这些变量。修改 shell 配置后，请重启 Lorca。
+
 <Callout type="warn" title="智能体拥有你的权限">
   Shell 命令以你的用户身份运行，并不局限于工作目录。它可以控制文件、进程、凭据、应用和网络。在智能体的描述里写下与你对自己运行的脚本的信任程度相符的限制；把智能体分配到一台你放心让它控制的机器上。
 </Callout>

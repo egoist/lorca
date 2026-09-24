@@ -117,7 +117,7 @@ fn names_secrets(command: &str) -> bool {
     [
         ".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker", ".netrc", ".npmrc", ".pypirc", ".git-credentials", ".env", ".pem",
         ".p12", ".key", ".config/gh", "id_rsa", "id_ed25519", "id_ecdsa", "credential", "keychain", "secret", "token",
-        "password", "passwd", "shadow", "cookies", "login data",
+        "password", "passwd", "shadow", "cookies", "login data", "api_key", "apikey", "access_key",
     ]
     .iter()
     .any(|marker| lower.contains(marker))
@@ -699,6 +699,8 @@ mod tests {
             "cat ~/.ssh/id_ed25519",
             "rg -n password src",
             "cat .env",
+            "echo $OPENAI_API_KEY",
+            "printf %s \"$AWS_ACCESS_KEY_ID\"",
         ] {
             assert!(!read_only(command), "{command}");
         }

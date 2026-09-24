@@ -1,6 +1,7 @@
-//! `bash`: run a shell command in the working directory. Output is tail-truncated to 2000 lines
-//! or 50KB; the full output is saved to a temp file when truncated. Cancellation kills the
-//! whole process group (on Windows, the process tree).
+//! `bash`: run a shell command in the working directory, with the login shell's environment
+//! ([`crate::login_shell`]). Output is tail-truncated to 2000 lines or 50KB; the full output is
+//! saved to a temp file when truncated. Cancellation kills the whole process group (on Windows,
+//! the process tree).
 
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -116,7 +117,7 @@ impl Tool for BashTool {
             return Err(ToolError(format!("Working directory does not exist: {}\nCannot execute bash commands.", self.cwd.display())));
         }
 
-        let mut cmd = tokio::process::Command::new(&self.shell);
+        let mut cmd = crate::login_shell::command(&self.shell).await;
         cmd.arg("-c").arg(&command).current_dir(&self.cwd).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
         #[cfg(unix)]
         {

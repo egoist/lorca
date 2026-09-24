@@ -14,6 +14,7 @@ pub mod compaction;
 pub mod estimate;
 pub mod harness;
 pub mod json;
+pub mod login_shell;
 pub mod models;
 pub mod provider;
 pub mod providers;

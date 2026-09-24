@@ -159,7 +159,8 @@ async fn connect(app: &Arc<App>, plugin: &Installed, name: &str, spec: &ServerSp
     let mut bearer_expires_at = None;
     let service = match spec {
         ServerSpec::Stdio { command, args, env } => {
-            let mut cmd = tokio::process::Command::new(command);
+            // The login shell's environment, so `npx` or `uvx` resolve from the user's PATH.
+            let mut cmd = lorca_agent::login_shell::command(command).await;
             cmd.args(args.iter().map(|a| fill(a, values)));
             // A variable naming an optional key the user left unset is left out.
             for (key, value) in env {

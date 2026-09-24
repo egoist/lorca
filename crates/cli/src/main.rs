@@ -116,6 +116,8 @@ async fn main() -> anyhow::Result<()> {
             if let Some(pid) = parent_pid {
                 tokio::spawn(watch_parent(pid));
             }
+            // Bots' commands and plugin servers start with it; read it while the rest starts.
+            tokio::spawn(lorca_agent::login_shell::environment());
             tokio::spawn(sync::run(app.clone()));
             tokio::spawn(routines::run(app.clone()));
             ws::serve(app, ready_stdout).await

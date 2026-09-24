@@ -16,6 +16,8 @@ A bot works on its Runner with the same kind of tools a coding agent gets. It ru
 
 Relative paths resolve in the bot's [working directory](/docs/bots#working-directory).
 
+Commands see the same `PATH` and variables as your terminal. On a Mac or Linux, Lorca reads them from your login shell, whether zsh, bash, or fish, when it starts, so `npm`, `cargo`, and `brew` work even when the app started Lorca. Plugin servers get them too. Restart Lorca after you change your shell's configuration.
+
 <Callout type="warn" title="A bot has your access">
   Shell commands run as your user and are not limited to the working directory. They can control files, processes, credentials, applications, and the network. Give a bot a description with constraints that match the trust you would give a script you run yourself, and assign bots to a machine you are comfortable with them controlling.
 </Callout>
