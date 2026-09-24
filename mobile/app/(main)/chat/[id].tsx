@@ -906,14 +906,14 @@ export default function ChatScreen() {
             members={members}
             isGroup={isGroup}
             placeholder={placeholder}
-            onSend={(text, files) => {
+            onSend={(text, files, mentions) => {
               // The anchor is measured against the screen without the keyboard.
               void KeyboardController.dismiss();
               // Before the message reaches the list: FlashList notes "near the end" on a commit
               // made while its catch-up is on, and scrolls to the end on the change after it.
               setAnchored(true);
               const sent = engine
-                .sendMessage(id, text, files)
+                .sendMessage(id, text, files, mentions)
                 .then((message) => {
                   stopSettling();
                   anchorKey.current = message.id;

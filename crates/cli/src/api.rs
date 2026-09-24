@@ -252,8 +252,10 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
                 attachments.push(crate::files::store(app, file).map_err(|e| e.to_string())?);
             }
             let text = opt_string(&params, "text").unwrap_or_default();
-            let message = runtime::send_user_message(app.clone(), &string(&params, "chat_id")?, &text, opt_string(&params, "message_id"), attachments)
-                .map_err(|e| e.to_string())?;
+            let mentions: Vec<String> = serde_json::from_value(params["mentions"].clone()).unwrap_or_default();
+            let message =
+                runtime::send_user_message(app.clone(), &string(&params, "chat_id")?, &text, opt_string(&params, "message_id"), attachments, mentions)
+                    .map_err(|e| e.to_string())?;
             Ok(json!({ "message": message }))
         }
         "files.path" => {

@@ -488,7 +488,7 @@ final class AppStore {
         let body: String
         switch last.body {
         case let .text(value): body = value.isEmpty ? Attachment.summary(last.attachments) : value
-        case let .tool(tool): body = L("Messaged %@: %@", tool.recipientName, tool.detail)
+        case let .tool(tool): body = L("Messaged %@: %@", tool.targetBotID.flatMap(bot)?.name ?? L("a teammate"), tool.detail)
         case let .handoff(from, to, reason):
             body = !chat.isGroup && chat.botIDs.contains(to)
                 ? L("Message from %@: %@", bot(from)?.name ?? L("a teammate"), reason)
@@ -984,9 +984,10 @@ final class AppStore {
     }
 
     /// Sends the message and returns the chat it landed in. Mentions are references the chat's
-    /// bot acts on (it can message that bot); the message itself stays here.
+    /// bot acts on (it can message that bot); the message itself stays here. `mentions` are the
+    /// bots picked from the `@` menu, which the CLI hands the bot by id.
     @discardableResult
-    func send(_ text: String, attachments: [OutgoingAttachment] = [], in chatID: Chat.ID) -> Chat.ID {
+    func send(_ text: String, attachments: [OutgoingAttachment] = [], mentions: [Bot.ID] = [], in chatID: Chat.ID) -> Chat.ID {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || !attachments.isEmpty, let chat = chat(chatID) else { return chatID }
 
@@ -1019,7 +1020,7 @@ final class AppStore {
         perform(
             "chats.send",
             [
-                "chat_id": chatID, "text": trimmed, "message_id": message.id,
+                "chat_id": chatID, "text": trimmed, "message_id": message.id, "mentions": mentions,
                 "attachments": attachments.map { outgoing in
                     [
                         "id": outgoing.attachment.id, "path": outgoing.url.path, "name": outgoing.attachment.name,

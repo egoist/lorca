@@ -54,7 +54,7 @@ final class ChatViewController: NSViewController {
         jumpButton.isHidden = true
         jumpButton.translatesAutoresizingMaskIntoConstraints = false
 
-        composer.onSend = { [weak self] text, attachments in self?.send(text, attachments: attachments) }
+        composer.onSend = { [weak self] text, attachments, mentions in self?.send(text, attachments: attachments, mentions: mentions) }
         composer.onStop = { [weak self] in self?.stopResponding(nil) }
         // The composer floats over the transcript, as on the phone: the scroll view runs to
         // the bottom of the window and keeps an inset the height of the composer, so the last
@@ -564,10 +564,10 @@ final class ChatViewController: NSViewController {
     /// Set by the split view so a message that moves to a new group chat opens it.
     var onRedirect: ((Chat.ID) -> Void)?
 
-    private func send(_ text: String, attachments: [OutgoingAttachment]) {
+    private func send(_ text: String, attachments: [OutgoingAttachment], mentions: [Bot.ID]) {
         guard let chatID else { return }
         isPinnedToBottom = true
-        let destination = store.send(text, attachments: attachments, in: chatID)
+        let destination = store.send(text, attachments: attachments, mentions: mentions, in: chatID)
         composer.isResponding = store.isResponding(in: chatID)
         if destination != chatID { onRedirect?(destination) }
     }
@@ -685,7 +685,7 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
         if botIDs.count == 1, let last = chat.messages.last, last.author == .bot(botIDs[0]),
             case let .tool(tool) = last.body, !tool.isSentMessage
         {
-            let target = store.bots.first { tool.detail.localizedCaseInsensitiveContains("\"bot\": \"\($0.name)\"") }
+            let target = tool.targetBotID.flatMap(store.bot)
             activity = WorkingCellView.activity(for: tool, targetName: target?.name, pluginName: pluginName(of: tool, bot: botIDs[0]))
         }
         // A model thinking about its next step outranks the last tool.
@@ -704,8 +704,7 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
     private func handoff(of message: Message, in chat: Chat) -> (mode: HandoffCellView.Mode, reason: String)? {
         switch message.body {
         case let .tool(invocation):
-            let recipient = store.bots.first { $0.name.caseInsensitiveCompare(invocation.recipientName) == .orderedSame }
-            return (.outgoing(to: recipient), invocation.detail)
+            return (.outgoing(to: invocation.targetBotID.flatMap(store.bot)), invocation.detail)
         case let .handoff(from, to, reason):
             let incoming = !chat.isGroup && chat.botIDs.contains(to)
             let mode: HandoffCellView.Mode = incoming

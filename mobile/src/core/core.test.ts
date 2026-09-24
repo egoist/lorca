@@ -11,7 +11,6 @@ import {
   providerDefaultBaseURL,
   providerUsesAPIKey,
   PROVIDER_MODELS,
-  recipientName,
   type Body,
   type Bot,
   type Chat,
@@ -47,7 +46,6 @@ describe("model", () => {
     const running: Body = { ...sent, is_running: true };
     const failed: Body = { ...sent, summary: "message_bot failed" };
     expect(isSentMessage(sent)).toBe(true);
-    expect(recipientName(sent)).toBe("Scout");
     expect(isSentMessage(running)).toBe(false);
     expect(isSentMessage(failed)).toBe(false);
     expect(isSentMessage({ kind: "text", text: "Messaged Scout" })).toBe(false);
@@ -104,7 +102,7 @@ describe("format", () => {
     expect(preview(chat("group", [msg({ kind: "bot", bot_id: "b2" }, { kind: "text", text: "yes" })]), bots)).toBe("Scout: yes");
     const tool = msg({ kind: "bot", bot_id: "b1" }, { kind: "tool", name: "read", summary: "Read a file", detail: "x", is_running: false });
     expect(preview(chat("dm", [msg({ kind: "you" }, { kind: "text", text: "go" }), tool]), bots)).toBe("go");
-    const sent = msg({ kind: "bot", bot_id: "b1" }, { kind: "tool", name: "message_bot", summary: "Messaged Scout", detail: "please look", is_running: false });
+    const sent = msg({ kind: "bot", bot_id: "b1" }, { kind: "tool", name: "message_bot", summary: "Messaged Scout", detail: "please look", is_running: false, target_bot_id: "b2" });
     expect(preview(chat("dm", [sent]), bots)).toBe("Messaged Scout: please look");
     const handoff = msg({ kind: "bot", bot_id: "b1" }, { kind: "handoff", from: "b1", to: "b2", reason: "over to you" });
     expect(preview({ ...chat("dm", [handoff]), bot_ids: ["b2"] }, bots)).toBe("Message from Chef: over to you");
@@ -130,7 +128,7 @@ describe("format", () => {
     // Between calls the row keeps the last one.
     expect(activity([you, tool("bash", { is_running: false })])).toBe("Running commands…");
     expect(activity([you, tool("memory_update")])).toBe("Taking a note…");
-    expect(activity([you, tool("message_bot", { detail: '{\n  "bot": "scout",\n  "message": "hi"\n}' })])).toBe("Messaging Scout…");
+    expect(activity([you, tool("message_bot", { target_bot_id: "b2" })])).toBe("Messaging Scout…");
     expect(activity([you, tool("message_bot", { summary: "Messaged Scout", is_running: false })])).toBeNull();
     expect(activity([you, tool("github__create_issue")])).toBe("Using Github…");
     const runner = { id: "r", name: "Mac", model: "", os: "macos", os_version: "", machine_key: "", is_this_device: false, status: "online" as const, last_seen: 0, plugins: [{ id: "github", name: "GitHub", state: "ready" as const }] };

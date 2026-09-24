@@ -104,7 +104,8 @@ export function Composer({
   members: Bot[];
   isGroup: boolean;
   placeholder: string;
-  onSend: (text: string, attachments: PickedFile[]) => void;
+  /** The text, its files, and the bots its `@Name`s picked from the chips, by id. */
+  onSend: (text: string, attachments: PickedFile[], mentions: string[]) => void;
 }) {
   const p = usePalette();
   const [text, setText] = useState("");
@@ -119,6 +120,9 @@ export function Composer({
   const transcript = useRef("");
   const pendingSend = useRef(false);
   const inputRef = useRef<TextInput>(null);
+  /// The bots picked from the `@` chips since the last send, in order. Two bots can share a name;
+  /// the pick says which one the user meant.
+  const pickedMentions = useRef<Bot[]>([]);
   const dictationMenuRef = useRef<MenuComponentRef>(null);
   const { language, setting: dictationSetting } = useDictationLanguage();
   const dictationLanguages = useSupportedLanguages();
@@ -135,7 +139,16 @@ export function Composer({
   }, [text, isGroup, members]);
 
   function insertMention(bot: Bot) {
+    pickedMentions.current.push(bot);
     setText((current) => current.replace(/@(\w*)$/, `@${bot.name} `));
+  }
+
+  /// The picks whose `@Name` is still in the text, and a clean slate for the next message.
+  function takeMentions(value: string): string[] {
+    const lowered = value.toLowerCase();
+    const ids = pickedMentions.current.filter((bot) => lowered.includes(`@${bot.name.toLowerCase()}`)).map((bot) => bot.id);
+    pickedMentions.current = [];
+    return ids;
   }
 
   function send() {
@@ -147,7 +160,7 @@ export function Composer({
     }
     if (!canSend) return;
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    onSend(text, attachments);
+    onSend(text, attachments, takeMentions(text));
     setText("");
     setAttachments([]);
   }
@@ -258,7 +271,7 @@ export function Composer({
       pendingSend.current = false;
       if (next.trim() || attachments.length) {
         void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-        onSend(next, attachments);
+        onSend(next, attachments, takeMentions(next));
         setText("");
         setAttachments([]);
           }

@@ -223,6 +223,7 @@ mod tests {
                 result: Some("secret output".into()),
                 is_error: false,
                 description: None,
+                target_bot_id: None,
             },
         );
         let tool_id = tool.id.clone();

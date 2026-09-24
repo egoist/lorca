@@ -519,16 +519,13 @@ struct ToolInvocation: Hashable {
     var isRunning: Bool
     /// What the call does, in the bot's words: a shell command's "Install dependencies".
     var description: String?
+    /// The bot a message_bot call goes to.
+    var targetBotID: Bot.ID?
 
     /// A finished message_bot call: the one tool the transcript shows, as "Messaged ◉ Name".
     /// Everything else a bot does with tools stays behind the "is working" row.
     var isSentMessage: Bool {
         name == "message_bot" && !isRunning && summary.hasPrefix("Messaged ")
-    }
-
-    /// The recipient's name from a "Messaged Name" summary.
-    var recipientName: String {
-        String(summary.dropFirst("Messaged ".count))
     }
 
     var symbolName: String {

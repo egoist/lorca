@@ -199,6 +199,10 @@ pub enum Body {
         text: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         attachments: Vec<Attachment>,
+        /// The bots the user's `@Name`s address, by id, in the order the user picked them: a
+        /// bot reads "@Scout (id bot-1a2b3c4d)", and a group offers them the first turns.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        mentions: Vec<String>,
     },
     Tool {
         name: String,
@@ -217,6 +221,10 @@ pub enum Body {
         /// status line reads as "Running command: Install dependencies…".
         #[serde(default, skip_serializing_if = "Option::is_none")]
         description: Option<String>,
+        /// The bot a message_bot call goes to, by id: the apps read "Messaging Scout…" while it
+        /// runs and show the finished row as "Messaged ◉ Scout".
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_bot_id: Option<String>,
     },
     Handoff {
         from: String,
@@ -262,7 +270,7 @@ pub enum Body {
 
 impl Body {
     pub fn text(text: impl Into<String>) -> Self {
-        Body::Text { text: text.into(), attachments: Vec::new() }
+        Body::Text { text: text.into(), attachments: Vec::new(), mentions: Vec::new() }
     }
 }
 
@@ -763,7 +771,7 @@ mod app_view_tests {
     fn the_apps_get_a_tool_row_without_its_payload() {
         let tool = Message::new("c", Author::Bot { bot_id: "b".into() }, Body::Tool {
             name: "read".into(), summary: "Read a file".into(), detail: "x".repeat(5000), is_running: false,
-            call_id: "call".into(), arguments: serde_json::json!({ "path": "big" }), result: Some("y".repeat(100_000)), is_error: false, description: None,
+            call_id: "call".into(), arguments: serde_json::json!({ "path": "big" }), result: Some("y".repeat(100_000)), is_error: false, description: None, target_bot_id: None,
         });
         let Body::Tool { detail, arguments, result, summary, .. } = tool.for_app().body else { panic!() };
         assert_eq!((detail.len(), arguments.is_null(), result, summary.as_str()), (400, true, None, "Read a file"));

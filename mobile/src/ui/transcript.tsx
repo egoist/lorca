@@ -7,7 +7,7 @@ import { useEffect, useState } from "react";
 import { Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import { ShimmerView } from "../../modules/lorca-core/ShimmerView";
-import { isSentMessage, recipientName, type Body, type Bot, type Chat, type Message } from "../core/model";
+import { isSentMessage, type Body, type Bot, type Chat, type Message } from "../core/model";
 import { useStore } from "../core/store";
 import { language, t } from "../i18n";
 import { AttachmentBlock } from "./attachments";
@@ -70,7 +70,7 @@ export function buildRows(chat: Chat, bots: Map<string, Bot>, workingBotIds: str
         break;
       }
       case "tool":
-        rows.push({ key: message.id, type: "marker", text: t("Messaged"), bot: bots.get(botIdNamed(bots, recipientName(message.body))), tooltip: message.body.detail, groupStart });
+        rows.push({ key: message.id, type: "marker", text: t("Messaged"), bot: bots.get(message.body.target_bot_id ?? ""), tooltip: message.body.detail, groupStart });
         previousAuthorKey = null;
         break;
       case "handoff": {
@@ -100,11 +100,6 @@ export function buildRows(chat: Chat, bots: Map<string, Bot>, workingBotIds: str
   if (isWorking) rows.push({ key: "working", type: "working", bots: workingBotIds.map((id) => bots.get(id)).filter((b): b is Bot => !!b) });
   else if (status) rows.push({ key: "status", type: "status", text: status });
   return rows;
-}
-
-function botIdNamed(bots: Map<string, Bot>, name: string): string {
-  for (const bot of bots.values()) if (bot.name === name) return bot.id;
-  return "";
 }
 
 export function DayRow({ at }: { at: number }) {

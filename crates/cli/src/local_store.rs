@@ -985,7 +985,7 @@ fn sync_chats(tx: &Transaction<'_>, state: &State) -> anyhow::Result<()> {
 
 fn message_search_text(message: &Message) -> Option<String> {
     let text = match &message.body {
-        Body::Text { text, attachments } => {
+        Body::Text { text, attachments, .. } => {
             let names = attachments
                 .iter()
                 .map(|attachment| attachment.name.as_str())

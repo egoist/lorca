@@ -30,11 +30,19 @@ pub fn chat_source(chat: &Chat) -> String {
 ///
 /// A direct chat's bot always answers. A group runs a room exchange: every member is offered a
 /// turn in order and sends or passes, in rounds, until a round goes by with nobody speaking.
-pub fn send_user_message(app: Arc<App>, chat_id: &str, text: &str, message_id: Option<String>, attachments: Vec<Attachment>) -> anyhow::Result<Message> {
+pub fn send_user_message(
+    app: Arc<App>,
+    chat_id: &str,
+    text: &str,
+    message_id: Option<String>,
+    attachments: Vec<Attachment>,
+    mentions: Vec<String>,
+) -> anyhow::Result<Message> {
     let text = text.trim();
     if text.is_empty() && attachments.is_empty() {
         anyhow::bail!("Empty message");
     }
+    let mentions = resolve_mentions(&app, text, mentions);
     let chat = app.chat(chat_id).ok_or_else(|| anyhow::anyhow!("Unknown chat"))?;
     // The bytes go out ahead of the message that names them.
     for attachment in &attachments {
@@ -42,7 +50,7 @@ pub fn send_user_message(app: Arc<App>, chat_id: &str, text: &str, message_id: O
             tracing::warn!(%error, name = %attachment.name, "uploading an attachment");
         }
     }
-    let mut message = Message::new(chat_id, Author::You, Body::Text { text: text.to_string(), attachments });
+    let mut message = Message::new(chat_id, Author::You, Body::Text { text: text.to_string(), attachments, mentions: mentions.clone() });
     if let Some(id) = message_id.filter(|id| !id.is_empty()) {
         message.id = id;
     }
@@ -51,7 +59,7 @@ pub fn send_user_message(app: Arc<App>, chat_id: &str, text: &str, message_id: O
     crate::turns::steer_message(&app, &message);
 
     if chat.meta.is_group() {
-        let members = turn_order(&chat.meta, &app, text);
+        let members = turn_order(&chat.meta, &app, &mentions);
         start_room(app.clone(), chat_id.to_string(), message.id.clone(), members);
     } else if let Some(bot) = chat.meta.bot_ids.first().and_then(|id| app.bot(id)) {
         start_turn(&app, user_turn_job(&app, chat_id, &bot.id, &message.id));
@@ -91,13 +99,42 @@ fn user_turn_job(app: &Arc<App>, chat_id: &str, bot_id: &str, trigger_message_id
     }
 }
 
-/// Members in chat order, with the ones the message names by `@` first.
-pub fn turn_order(chat: &ChatMeta, app: &Arc<App>, text: &str) -> Vec<Bot> {
+/// Members in chat order, with the ones the message mentions first.
+pub fn turn_order(chat: &ChatMeta, app: &Arc<App>, mentions: &[String]) -> Vec<Bot> {
     let members: Vec<Bot> = chat.bot_ids.iter().filter_map(|id| app.bot(id)).collect();
-    let lowered = text.to_lowercase();
-    let (mentioned, rest): (Vec<Bot>, Vec<Bot>) =
-        members.into_iter().partition(|bot| lowered.contains(&format!("@{}", bot.name.to_lowercase())));
+    let (mentioned, rest): (Vec<Bot>, Vec<Bot>) = members.into_iter().partition(|bot| mentions.contains(&bot.id));
     mentioned.into_iter().chain(rest).collect()
+}
+
+/// The bots a message mentions, by id: the ones the user picked from the `@` menu, then each
+/// other `@Name` in the text that only one bot answers to. A name two bots share stays as typed
+/// unless the user picked which.
+fn resolve_mentions(app: &App, text: &str, picked: Vec<String>) -> Vec<String> {
+    let bots = app.state.lock().unwrap().bots.clone();
+    let mut mentions: Vec<String> = Vec::new();
+    for id in picked {
+        if bots.iter().any(|bot| bot.id == id) && !mentions.contains(&id) {
+            mentions.push(id);
+        }
+    }
+    for bot in &bots {
+        let shared = bots.iter().filter(|other| other.name.eq_ignore_ascii_case(&bot.name)).count() > 1;
+        if !shared && !mentions.contains(&bot.id) && text.match_indices('@').any(|(at, _)| mention_at(text, at, &bot.name)) {
+            mentions.push(bot.id.clone());
+        }
+    }
+    mentions
+}
+
+/// Whether `@name` starts at byte `at` of `text` as a word of its own, ignoring ASCII case: not
+/// inside an email address, and not the start of a longer name.
+pub(crate) fn mention_at(text: &str, at: usize, name: &str) -> bool {
+    let before = text[..at].chars().next_back();
+    let Some(rest) = text[at..].strip_prefix('@') else { return false };
+    !name.is_empty()
+        && !before.is_some_and(char::is_alphanumeric)
+        && rest.get(..name.len()).is_some_and(|word| word.eq_ignore_ascii_case(name))
+        && !rest[name.len()..].chars().next().is_some_and(|c| c.is_alphanumeric() || c == '_')
 }
 
 // MARK: - Rooms
@@ -605,6 +642,40 @@ mod tests {
         }
     }
 
+    fn bot(id: &str, name: &str) -> Bot {
+        Bot {
+            id: id.into(),
+            name: name.into(),
+            description: String::new(),
+            symbol_name: String::new(),
+            accent: String::new(),
+            avatar: None,
+            runner_id: "dev".into(),
+            provider: "deepseek".into(),
+            model: None,
+            thinking: None,
+            legacy_instructions: String::new(),
+            workdir: None,
+            created_at: 0.0,
+        }
+    }
+
+    #[test]
+    fn a_message_mentions_bots_by_id() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        app.state.lock().unwrap().bots = vec![bot("b1", "Chef"), bot("b2", "Chef"), bot("b3", "Scout"), bot("b4", "Sc")];
+
+        // A typed name that one bot answers to resolves; a shared one only when the user picked
+        // which. Neither an email address nor the start of a longer name is a mention.
+        assert_eq!(resolve_mentions(app, "@chef and @Scout, mail x@sc.com", Vec::new()), ["b3"]);
+        assert_eq!(resolve_mentions(app, "@Chef and @Scout", vec!["b2".into(), "gone".into(), "b2".into()]), ["b2", "b3"]);
+
+        let group = ChatMeta { kind: "group".into(), bot_ids: vec!["b1".into(), "b2".into(), "b3".into()], ..empty_chat("g").meta };
+        let order: Vec<String> = turn_order(&group, app, &["b2".into()]).into_iter().map(|bot| bot.id).collect();
+        assert_eq!(order, ["b2", "b1", "b3"]);
+    }
+
     #[test]
     fn a_new_user_message_does_not_abort_the_job_in_flight() {
         let scratch = scratch_app();
@@ -624,7 +695,7 @@ mod tests {
         );
 
         let message =
-            send_user_message(app.clone(), "chat", "change course", None, Vec::new()).unwrap();
+            send_user_message(app.clone(), "chat", "change course", None, Vec::new(), Vec::new()).unwrap();
 
         assert!(!cancel.is_cancelled());
         assert_eq!(message.author, Author::You);

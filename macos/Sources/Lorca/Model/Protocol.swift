@@ -355,6 +355,7 @@ enum Wire {
         var detail: String?
         var isRunning: Bool?
         var description: String?
+        var targetBotId: String?
         var from: String?
         var to: String?
         var reason: String?
@@ -517,7 +518,8 @@ extension Wire.Message {
                     summary: self.body.summary ?? "",
                     detail: self.body.detail ?? "",
                     isRunning: self.body.isRunning ?? false,
-                    description: self.body.description
+                    description: self.body.description,
+                    targetBotID: self.body.targetBotId
                 ))
         case "handoff":
             body = .handoff(from: self.body.from ?? "", to: self.body.to ?? "", reason: self.body.reason ?? "")

@@ -2,7 +2,7 @@
 // (Design/Formatters.swift, AppStore.preview, ChatViewController.activity).
 
 import type { Body, Bot, Chat, Routine } from "../core/model";
-import { attachmentSummary, isSentMessage, recipientName } from "../core/model";
+import { attachmentSummary, isSentMessage } from "../core/model";
 import type { StoreState } from "../core/store";
 import { language, t } from "../i18n";
 
@@ -156,7 +156,7 @@ export function preview(chat: Chat, bots: Map<string, Bot>): string {
       body = shown.body.text || attachmentSummary(shown.body.attachments ?? []);
       break;
     case "tool":
-      body = t("Messaged {name}: {detail}", { name: recipientName(shown.body), detail: shown.body.detail });
+      body = t("Messaged {name}: {detail}", { name: bots.get(shown.body.target_bot_id ?? "")?.name ?? t("a teammate"), detail: shown.body.detail });
       break;
     case "handoff":
       body =
@@ -248,8 +248,7 @@ function toolActivity(s: WorkState, botId: string, tool: Extract<Body, { kind: "
     case "ls":
       return t("Searching files…");
     case "message_bot": {
-      const detail = tool.detail.toLowerCase();
-      const target = s.bots.find((b) => detail.includes(`"bot": "${b.name.toLowerCase()}"`));
+      const target = s.bots.find((b) => b.id === tool.target_bot_id);
       return target ? t("Messaging {name}…", { name: target.name }) : t("Messaging another bot…");
     }
     case "list_teammates":

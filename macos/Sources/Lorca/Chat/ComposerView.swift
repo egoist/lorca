@@ -191,9 +191,13 @@ final class ComposerView: NSView {
     private var escapeMonitor: Any?
     private var placeholder = ""
 
-    var onSend: ((String, [OutgoingAttachment]) -> Void)?
+    /// The text, its files, and the bots its `@Name`s picked from the menu, by id.
+    var onSend: ((String, [OutgoingAttachment], [Bot.ID]) -> Void)?
     var onStop: (() -> Void)?
     var mentionableBots: [Bot] = []
+    /// The bots picked from the `@` menu since the last send, in order. Two bots can share a
+    /// name; the pick says which one the user meant.
+    private var pickedMentions: [Bot] = []
 
     var isResponding = false {
         didSet {
@@ -206,6 +210,7 @@ final class ComposerView: NSView {
         get { textView.string }
         set {
             textView.string = newValue
+            pickedMentions = []
             handleTextChange()
         }
     }
@@ -404,12 +409,15 @@ final class ComposerView: NSView {
         guard hasContent else { return }
         let value = textView.string.trimmingCharacters(in: .whitespacesAndNewlines)
         let files = attachments
+        // A pick counts while its `@Name` is still in the text.
+        let mentioned = pickedMentions.filter { value.range(of: "@\($0.name)", options: .caseInsensitive) != nil }.map(\.id)
+        pickedMentions = []
         textView.string = ""
         attachments = []
         mentions.dismiss()
         updateAttachments()
         handleTextChange()
-        onSend?(value, files)
+        onSend?(value, files, mentioned)
     }
 
     @objc private func stop() {
@@ -775,6 +783,7 @@ final class ComposerView: NSView {
     private func insertMention(_ bot: Bot) {
         guard let range = mentionRange() else { return }
         textView.insertText("@\(bot.name) ", replacementRange: range)
+        pickedMentions.append(bot)
         mentions.dismiss()
         handleTextChange()
     }

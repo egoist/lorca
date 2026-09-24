@@ -373,10 +373,11 @@ fn steering_message(
     workdir: &std::path::Path,
     pixels: bool,
 ) -> Option<AgentMessage> {
-    let (Author::You, Body::Text { text, attachments }) = (&message.author, &message.body) else { return None };
+    let (Author::You, Body::Text { text, attachments, mentions }) = (&message.author, &message.body) else { return None };
     let timestamp = (message.promoted_at.unwrap_or(message.created_at) * 1000.0) as u64;
+    let text = with_mention_ids(app, text, mentions);
     if attachments.is_empty() {
-        return Some(user(text, timestamp));
+        return Some(user(&text, timestamp));
     }
     let mut content = Vec::new();
     if !text.is_empty() {
@@ -815,6 +816,7 @@ impl TurnState {
                         result: None,
                         is_error: false,
                         description: None,
+                        target_bot_id: None,
                     },
                 );
                 message.state = MessageState::Streaming;
@@ -881,6 +883,8 @@ impl TurnState {
                     None => format!("Running {}…", tool_label(&tool_name)),
                 };
                 let description = if tool_name == "bash" { args["description"].as_str().and_then(|text| first_line(text, 80)) } else { None };
+                let target_bot_id =
+                    if tool_name == "message_bot" { args["bot_id"].as_str().map(str::trim).filter(|id| !id.is_empty()).map(str::to_string) } else { None };
                 let mut message = Message::new(
                     &self.chat_id,
                     Author::Bot { bot_id: self.bot_id.clone() },
@@ -894,6 +898,7 @@ impl TurnState {
                         result: None,
                         is_error: false,
                         description,
+                        target_bot_id,
                     },
                 );
                 message.state = MessageState::Streaming;
@@ -1083,9 +1088,10 @@ fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job, store: &Memo
 
     if let Some(from) = job.from_bot_id.as_ref().and_then(|id| app.bot(id)) {
         prompt.push_str(&format!(
-            "\nThis turn was started by a message from {} (the last \"[Message from {}]\" entry). Handle their request \
-             for the user, and use message_bot to reply to {} only when they need something back.\n",
-            from.name, from.name, from.name
+            "\nThis turn was started by a message from {name} (the last \"[Message from {name}]\" entry). Handle their request \
+             for the user, and use message_bot to reply to {name} (id {id}) only when they need something back.\n",
+            name = from.name,
+            id = from.id
         ));
     }
 
@@ -1099,11 +1105,12 @@ fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job, store: &Memo
         ));
     }
 
-    prompt.push_str(
-        "\nTeam: call list_teammates to see every bot. If the right teammate does not exist yet, propose one and create it \
-         with create_bot once the user agrees; keep every bot to one clear job. When the user wants a bot, including you, \
-         to behave differently, change its profile with edit_bot.\n",
-    );
+    prompt.push_str(&format!(
+        "\nTeam: call list_teammates to see every bot and its id. If the right teammate does not exist yet, propose one and \
+         create it with create_bot once the user agrees; keep every bot to one clear job. When the user wants a bot, \
+         including you (your id is {}), to behave differently, change its profile with edit_bot.\n",
+        bot.id
+    ));
     prompt.push_str(&routines_prompt(app, bot));
     prompt.push_str(&plugins_prompt(app, bot, plugins));
     prompt.push_str(&memory_prompt(store));
@@ -1366,12 +1373,12 @@ fn transcript_bounded(app: &App, chat: &Chat, bot: &Bot, workdir: &std::path::Pa
         }
         let timestamp = (message.promoted_at.unwrap_or(message.created_at) * 1000.0) as u64;
         match (&message.author, &message.body) {
-            (Author::You, Body::Text { text, attachments }) if attachments.is_empty() => out.push(user(text, timestamp)),
-            (Author::You, Body::Text { text, attachments }) => {
+            (Author::You, Body::Text { text, attachments, mentions }) if attachments.is_empty() => out.push(user(&with_mention_ids(app, text, mentions), timestamp)),
+            (Author::You, Body::Text { text, attachments, mentions }) => {
                 // A file is named by its path in the workspace; an image is shown as well.
                 let mut content = Vec::new();
                 if !text.is_empty() {
-                    content.push(ContentPart::text(text));
+                    content.push(ContentPart::text(with_mention_ids(app, text, mentions)));
                 }
                 for attachment in attachments {
                     content.extend(crate::files::content_parts(app, attachment, workdir, pixels));
@@ -1442,6 +1449,28 @@ fn user(text: &str, timestamp: u64) -> AgentMessage {
     AgentMessage::User(UserMessage { content: vec![ContentPart::text(text)], timestamp })
 }
 
+/// The user's words as a bot reads them: the first `@Name` of each bot the message mentions
+/// carries its id, "@Scout (id bot-1a2b3c4d)", so message_bot and edit_bot need no lookup. Two
+/// bots that share a name take their ids in the order the user picked them.
+fn with_mention_ids(app: &App, text: &str, mentions: &[String]) -> String {
+    let mut bots: Vec<Bot> = mentions.iter().filter_map(|id| app.bot(id)).collect();
+    let mut out = String::with_capacity(text.len() + bots.len() * 20);
+    let mut copied = 0;
+    for (at, _) in text.match_indices('@') {
+        if at < copied {
+            continue;
+        }
+        let Some(index) = bots.iter().position(|bot| crate::runtime::mention_at(text, at, &bot.name)) else { continue };
+        let bot = bots.remove(index);
+        let end = at + 1 + bot.name.len();
+        out.push_str(&text[copied..end]);
+        out.push_str(&format!(" (id {})", bot.id));
+        copied = end;
+    }
+    out.push_str(&text[copied..]);
+    out
+}
+
 // MARK: - Tools
 
 struct ListTeammates {
@@ -1455,7 +1484,7 @@ impl Tool for ListTeammates {
         "list_teammates"
     }
     fn description(&self) -> &str {
-        "List the other bots on this account: their name, what they are good at, which Runner they run on, and whether that Runner is online."
+        "List the other bots on this account: their id, name, what they are good at, which Runner they run on, and whether that Runner is online."
     }
     fn parameters(&self) -> Value {
         json!({ "type": "object", "properties": {}, "additionalProperties": false })
@@ -1468,6 +1497,7 @@ impl Tool for ListTeammates {
             .map(|bot| {
                 let runner = self.app.device(&bot.runner_id);
                 json!({
+                    "id": bot.id,
                     "name": bot.name,
                     "description": bot.description,
                     "runner": runner.as_ref().map(|d| d.name.clone()).unwrap_or_else(|| "unassigned".into()),
@@ -1480,6 +1510,14 @@ impl Tool for ListTeammates {
         let text = serde_json::to_string_pretty(&json!({ "teammates": rows })).unwrap_or_default();
         Ok(ToolResult::text(text).with_details(json!({ "summary": format!("Listed {} teammates", rows.len()) })))
     }
+}
+
+/// The bot with this id, for the tools that name a teammate: by id, since two bots can share a
+/// name. The error lists every bot as "Name (id)" so the model can pick again.
+fn bot_by_id(bots: &[Bot], id: &str) -> Result<Bot, ToolError> {
+    bots.iter().find(|b| b.id == id).cloned().ok_or_else(|| {
+        ToolError(format!("No bot with id {id}. Bots: {}", bots.iter().map(|b| format!("{} ({})", b.name, b.id)).collect::<Vec<_>>().join(", ")))
+    })
 }
 
 struct MessageBot {
@@ -1502,10 +1540,10 @@ impl Tool for MessageBot {
         json!({
             "type": "object",
             "properties": {
-                "bot": { "type": "string", "description": "The teammate's name" },
+                "bot_id": { "type": "string", "description": "The teammate's id, from the user's @mention or list_teammates" },
                 "message": { "type": "string", "description": "What you want them to do, with the context they need" }
             },
-            "required": ["bot", "message"],
+            "required": ["bot_id", "message"],
             "additionalProperties": false
         })
     }
@@ -1513,10 +1551,10 @@ impl Tool for MessageBot {
         Some(ToolExecutionMode::Sequential)
     }
     async fn execute(&self, _id: &str, args: Value, _cancel: CancellationToken, _on_update: ToolUpdateFn) -> Result<ToolResult, ToolError> {
-        let name = args["bot"].as_str().unwrap_or("").trim().trim_start_matches('@').to_string();
+        let bot_id = args["bot_id"].as_str().unwrap_or("").trim();
         let message = args["message"].as_str().unwrap_or("").trim().to_string();
-        if name.is_empty() || message.is_empty() {
-            return Err("bot and message are required".into());
+        if bot_id.is_empty() || message.is_empty() {
+            return Err("bot_id and message are required".into());
         }
         if self.hops >= MAX_BOT_HOPS {
             return Err(ToolError(format!(
@@ -1524,12 +1562,7 @@ impl Tool for MessageBot {
                 self.hops
             )));
         }
-        let all: Vec<Bot> = self.app.state.lock().unwrap().bots.clone();
-        let target = all
-            .iter()
-            .find(|b| b.name.eq_ignore_ascii_case(&name))
-            .cloned()
-            .ok_or_else(|| ToolError(format!("No bot named {name}. Bots: {}", all.iter().map(|b| b.name.clone()).collect::<Vec<_>>().join(", "))))?;
+        let target = bot_by_id(&self.app.state.lock().unwrap().bots, bot_id)?;
         if target.id == self.bot.id {
             return Err("You cannot message yourself".into());
         }
@@ -1844,11 +1877,11 @@ impl Tool for CreateBot {
 
         let runner = self.app.device(&created.runner_id).map(|d| d.name).unwrap_or_else(|| "this Runner".into());
         let text = if joined_here {
-            format!("Created {} on {runner}. They are in this chat now and take turns after you.", created.name)
+            format!("Created {} (id {}) on {runner}. They are in this chat now and take turns after you.", created.name, created.id)
         } else {
             format!(
-                "Created {} on {runner} with their own direct chat. To work with them together, the user can add them to a group chat.",
-                created.name
+                "Created {} (id {}) on {runner} with their own direct chat. To work with them together, the user can add them to a group chat.",
+                created.name, created.id
             )
         };
         Ok(ToolResult::text(text).with_details(json!({ "summary": format!("Created {}", created.name), "bot_id": created.id })))
@@ -1875,14 +1908,14 @@ impl Tool for EditBot {
         json!({
             "type": "object",
             "properties": {
-                "bot": { "type": "string", "description": "The teammate's current name" },
+                "bot_id": { "type": "string", "description": "The bot's id, from the user's @mention or list_teammates" },
                 "name": { "type": "string", "description": "New name, one or two words" },
                 "description": { "type": "string", "description": "New complete description of what it does and how it should work" },
                 "provider": { "type": "string", "enum": crate::credentials::PROVIDER_KINDS },
                 "thinking": { "type": "string", "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "max"], "description": "How much the model thinks" },
                 "workdir": { "type": "string", "description": "New working directory for its tools" }
             },
-            "required": ["bot"],
+            "required": ["bot_id"],
             "additionalProperties": false
         })
     }
@@ -1890,16 +1923,12 @@ impl Tool for EditBot {
         Some(ToolExecutionMode::Sequential)
     }
     async fn execute(&self, _id: &str, args: Value, _cancel: CancellationToken, _on_update: ToolUpdateFn) -> Result<ToolResult, ToolError> {
-        let name = args["bot"].as_str().unwrap_or("").trim().trim_start_matches('@').to_string();
-        if name.is_empty() {
-            return Err("bot is required".into());
+        let bot_id = args["bot_id"].as_str().unwrap_or("").trim();
+        if bot_id.is_empty() {
+            return Err("bot_id is required".into());
         }
         let all: Vec<Bot> = self.app.state.lock().unwrap().bots.clone();
-        let target = all
-            .iter()
-            .find(|b| b.name.eq_ignore_ascii_case(&name))
-            .cloned()
-            .ok_or_else(|| ToolError(format!("No bot named {name}. Bots: {}", all.iter().map(|b| b.name.clone()).collect::<Vec<_>>().join(", "))))?;
+        let target = bot_by_id(&all, bot_id)?;
 
         let field = |key: &str| args[key].as_str().map(str::trim).filter(|v| !v.is_empty()).map(str::to_string);
         let new_name = field("name").map(|n| n.trim_start_matches('@').to_string());
@@ -2632,6 +2661,68 @@ mod tests {
         let Body::Tool { is_running, arguments, .. } = &finished.body else { panic!("a tool row") };
         assert_eq!((finished.id.as_str(), *is_running, keep_first), (running.id.as_str(), false, false));
         assert_eq!(arguments["command"], "bun install");
+    }
+
+    #[tokio::test]
+    async fn team_tools_name_a_bot_by_id_when_two_share_a_name() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        let chef = bot("b1", "Chef");
+        {
+            let mut state = app.state.lock().unwrap();
+            state.bots = vec![chef.clone(), bot("b2", "Chef")];
+            state.chats.push(chat("chat", "dm", None, &["b1"]));
+        }
+        let no_updates: ToolUpdateFn = Arc::new(|_| {});
+
+        let listed = ListTeammates { app: app.clone(), chat_id: "chat".into() }
+            .execute("call", json!({}), CancellationToken::new(), no_updates.clone())
+            .await
+            .unwrap();
+        let listed: Value = serde_json::from_str(listed.content[0].as_text().unwrap()).unwrap();
+        assert_eq!(listed["teammates"].as_array().unwrap().iter().map(|t| t["id"].as_str().unwrap()).collect::<Vec<_>>(), ["b1", "b2"]);
+
+        let edit = EditBot { app: app.clone(), bot: chef.clone() };
+        edit.execute("call", json!({ "bot_id": "b2", "description": "Plans the menu" }), CancellationToken::new(), no_updates.clone()).await.unwrap();
+        let descriptions: Vec<String> = app.state.lock().unwrap().bots.iter().map(|b| b.description.clone()).collect();
+        assert_eq!(descriptions, ["", "Plans the menu"]);
+
+        let error = edit.execute("call", json!({ "bot_id": "Chef", "description": "Cooks" }), CancellationToken::new(), no_updates.clone()).await.unwrap_err();
+        assert_eq!(error.0, "No bot with id Chef. Bots: Chef (b1), Chef (b2)");
+
+        let message = MessageBot { app: app.clone(), chat_id: "chat".into(), bot: chef.clone(), hops: 0 };
+        let error = message.execute("call", json!({ "bot_id": "Chef", "message": "hi" }), CancellationToken::new(), no_updates).await.unwrap_err();
+        assert_eq!(error.0, "No bot with id Chef. Bots: Chef (b1), Chef (b2)");
+
+        // The row names the recipient by id, so the apps find the right Chef.
+        let mut turn = turn_state(app, &chef, "");
+        turn.handle(AgentEvent::ToolExecutionStart { tool_call_id: "call".into(), tool_name: "message_bot".into(), args: json!({ "bot_id": "b2", "message": "hi" }) });
+        let row = app.message("chat", &turn.tool_messages[0].1).unwrap();
+        assert!(matches!(row.body, Body::Tool { target_bot_id: Some(ref id), .. } if id == "b2"));
+    }
+
+    #[test]
+    fn a_bot_reads_the_id_of_each_bot_the_user_mentions() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        let scout = bot("b3", "Scout");
+        let dm = chat("chat", "dm", None, &["b3"]);
+        {
+            let mut state = app.state.lock().unwrap();
+            state.bots = vec![bot("b1", "Chef"), bot("b2", "Chef"), scout.clone()];
+            state.chats.push(dm.clone());
+        }
+        // Two Chefs take their ids in the order the user picked them; an unpicked name stays.
+        assert_eq!(
+            with_mention_ids(app, "@chef plans, @Chef cooks, @Scout eats", &["b2".into(), "b1".into()]),
+            "@chef (id b2) plans, @Chef (id b1) cooks, @Scout eats"
+        );
+
+        let mut message = said("chat", Author::You, "", 1.0);
+        message.body = Body::Text { text: "ask @Chef".into(), attachments: Vec::new(), mentions: vec!["b2".into()] };
+        app.upsert_message(message, false);
+        let messages = transcript_for(app, &dm, &scout, &scratch.1);
+        assert!(matches!(&messages[0], AgentMessage::User(m) if m.content.first().and_then(ContentPart::as_text) == Some("ask @Chef (id b2)")));
     }
 
     #[test]

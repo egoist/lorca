@@ -148,6 +148,8 @@ export type Body =
       is_error?: boolean;
       /** What the call does, in the bot's words: a shell command's description. */
       description?: string;
+      /** The bot a message_bot call goes to. */
+      target_bot_id?: string;
     }
   | { kind: "handoff"; from: string; to: string; reason: string }
   | { kind: "notice"; text: string; routine_id?: string }
@@ -189,10 +191,6 @@ export function isComplete(message: Message): boolean {
 /// A finished message_bot call: the one tool the transcript shows, as "Messaged ◉ Name".
 export function isSentMessage(body: Body): body is Extract<Body, { kind: "tool" }> {
   return body.kind === "tool" && body.name === "message_bot" && !body.is_running && body.summary.startsWith("Messaged ");
-}
-
-export function recipientName(body: Extract<Body, { kind: "tool" }>): string {
-  return body.summary.slice("Messaged ".length);
 }
 
 export interface ChatMeta {
