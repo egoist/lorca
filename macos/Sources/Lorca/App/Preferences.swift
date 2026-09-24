@@ -2,7 +2,7 @@ import Foundation
 
 enum Preferences {
     private enum Key {
-        static let onboarded = "lorca.onboarded"
+        static let hadIdentity = "lorca.hadIdentity"
         static let selection = "lorca.selection"
         static let showsInspector = "lorca.showsInspector"
         static let sendOnReturn = "lorca.sendOnReturn"
@@ -14,9 +14,11 @@ enum Preferences {
 
     private static let defaults = UserDefaults.standard
 
-    static var hasOnboarded: Bool {
-        get { defaults.bool(forKey: Key.onboarded) }
-        set { defaults.set(newValue, forKey: Key.onboarded) }
+    /// Whether the CLI's last answer had an identity. Launch opens the main window at once when it
+    /// did, and otherwise waits for the answer, so a fresh install goes straight to onboarding.
+    static var hadIdentity: Bool {
+        get { defaults.bool(forKey: Key.hadIdentity) }
+        set { defaults.set(newValue, forKey: Key.hadIdentity) }
     }
 
     /// Persisted so a dev-mode relaunch lands back on the same conversation.
@@ -77,7 +79,7 @@ enum Preferences {
     }
 
     static func reset() {
-        for key in [Key.onboarded, Key.selection] {
+        for key in [Key.hadIdentity, Key.selection] {
             defaults.removeObject(forKey: key)
         }
     }

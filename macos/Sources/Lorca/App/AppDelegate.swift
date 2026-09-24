@@ -1,10 +1,13 @@
 import AppKit
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var mainWindowController: MainWindowController?
     private var saidUpdateRequired = false
     private var onboardingWindowController: OnboardingWindowController?
+    /// Onboarding was opened again over an identity that still exists. Create, restore, and pair
+    /// refuse to run there, so closing it is Cancel: the main window it hid comes back as it was.
+    private var onboardingOverIdentity = false
     private var settingsWindowController: SettingsWindowController?
     private var servicesStarted = false
 
@@ -18,13 +21,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updateDockBadge()
         installSignalHandlers()
 
-        // The window opens independently of the CLI. Its loading state gives way to chats
-        // or onboarding once the CLI answers.
+        // A Mac that had an identity opens the main window at once, and its loading state gives
+        // way to chats when the CLI answers. Any other waits for the answer, so onboarding does
+        // not replace a main window that just appeared.
         store.observe(self) { [weak self] event in
             switch event {
             case .identityChanged:
                 self?.identityStateChanged()
                 self?.updateDockBadge()
+            case .connectionChanged:
+                self?.showMainWindowIfDue()
             case .snapshotReplaced, .chatsChanged:
                 self?.updateDockBadge()
             case .rosterChanged:
@@ -46,12 +52,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return id
         }
         Notifier.shared.openChat = { [weak self] id in
-            self?.showMainWindow()
-            self?.mainWindowController?.root.select(.chat(id))
+            guard let self else { return }
+            if self.onboardingOverIdentity { self.endOnboarding() }
+            if let onboarding = self.onboardingWindowController {
+                onboarding.showWindow(nil)
+                return
+            }
+            self.showMainWindow()
+            self.mainWindowController?.root.select(.chat(id))
         }
         store.start()
-        showMainWindow()
-        StartupTrace.mark("window shown")
+        if mainWindowIsDue {
+            showMainWindow()
+            StartupTrace.mark("window shown")
+        }
     }
 
     private func startServicesWhenReady() {
@@ -77,17 +91,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Onboarding closes itself through `onFinish`, so the phrase step is never yanked away by
     /// the `identity.changed` event that precedes the create response.
     private func identityStateChanged() {
-        switch store.hasIdentity {
-        case .some(true):
+        guard let hasIdentity = store.hasIdentity else { return }
+        Preferences.hadIdentity = hasIdentity
+        if hasIdentity {
             if onboardingWindowController == nil, mainWindowController == nil { showMainWindow() }
-        case .some(false):
-            guard onboardingWindowController == nil else { return }
+        } else {
+            // The account is gone: a main window hidden behind onboarding goes with it, and
+            // onboarding opened over the account becomes the real thing.
+            onboardingOverIdentity = false
             mainWindowController?.close()
             mainWindowController = nil
-            presentOnboarding()
-        case .none:
-            break
+            if onboardingWindowController == nil { presentOnboarding() }
         }
+    }
+
+    /// Whether the main window is the one to show: with an identity, and before the CLI's first
+    /// answer on a Mac that had one, or once the store stops waiting (the offline recovery controls).
+    private var mainWindowIsDue: Bool {
+        store.hasIdentity ?? (Preferences.hadIdentity || !store.isStarting)
+    }
+
+    /// A launch that waited for the CLI opens the main window when the store stops waiting.
+    private func showMainWindowIfDue() {
+        guard mainWindowController == nil, onboardingWindowController == nil, mainWindowIsDue else { return }
+        showMainWindow()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -111,8 +138,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         termSource = source
     }
 
+    /// The Dock icon brings back onboarding until it finishes, then the main window. A launch
+    /// still waiting for the CLI's answer shows its window when the answer comes.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if !flag, store.hasIdentity != false { showMainWindow() }
+        guard !flag else { return true }
+        if let onboarding = onboardingWindowController {
+            onboarding.showWindow(nil)
+        } else if mainWindowIsDue {
+            showMainWindow()
+        }
         return true
     }
 
@@ -147,19 +181,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func presentOnboarding() {
-        let controller = OnboardingWindowController { [weak self] in
-            Preferences.hasOnboarded = true
-            self?.onboardingWindowController?.close()
-            self?.onboardingWindowController = nil
-            self?.settingsWindowController?.close()
-            self?.settingsWindowController = nil
-            self?.showMainWindow()
-        }
+        let controller = OnboardingWindowController(
+            onFinish: { [weak self] in self?.endOnboarding() },
+            // The window finishes closing before onboarding ends.
+            onClose: { [weak self] in DispatchQueue.main.async { self?.onboardingWindowClosed() } })
         onboardingWindowController = controller
         controller.showWindow(nil)
         controller.window?.center()
         controller.window?.makeKeyAndOrderFront(nil)
         activate()
+    }
+
+    /// Onboarding and the small settings window close, and the main window takes over: the same
+    /// one, as it was, when onboarding hid it.
+    private func endOnboarding() {
+        guard let onboarding = onboardingWindowController else { return }
+        onboardingWindowController = nil
+        onboardingOverIdentity = false
+        onboarding.close()
+        settingsWindowController?.close()
+        settingsWindowController = nil
+        showMainWindow()
+    }
+
+    /// Closing onboarding opened again over an identity is Cancel. Any other onboarding stays the
+    /// app's window, and the Dock icon brings it back.
+    private func onboardingWindowClosed() {
+        if onboardingOverIdentity { endOnboarding() }
     }
 
     // MARK: - Actions
@@ -239,11 +287,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         store.resetMockData()
     }
 
+    /// Onboarding again, from Settings › Advanced or the Debug menu. It hides the main window
+    /// rather than closing it for good, so Cancel brings back the pane, chat, and history there.
     @objc func showOnboarding(_ sender: Any?) {
         guard onboardingWindowController == nil else { return }
-        Preferences.hasOnboarded = false
+        onboardingOverIdentity = store.hasIdentity == true
         mainWindowController?.close()
-        mainWindowController = nil
         presentOnboarding()
     }
 
@@ -288,7 +337,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if menuItem.tag == MenuTag.replayMock {
             return store.isMock
         }
-        if menuItem.action == #selector(toggleCommandPalette(_:)) {
+        // These open the main window, which stays away while onboarding is up.
+        let opensMainWindow = [
+            #selector(newBot(_:)), #selector(newGroupChat(_:)), #selector(pairDevice(_:)), #selector(find(_:)),
+            #selector(toggleCommandPalette(_:)),
+        ]
+        if let action = menuItem.action, opensMainWindow.contains(action) {
             return onboardingWindowController == nil
         }
         if menuItem.action == #selector(checkForUpdates(_:)) {

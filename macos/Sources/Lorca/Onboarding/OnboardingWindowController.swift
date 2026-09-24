@@ -1,15 +1,18 @@
 import AppKit
 
-final class OnboardingWindowController: NSWindowController {
+final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
     private let controller: OnboardingViewController
+    private let onClose: () -> Void
 
     /// True once the identity exists and the user is on the closing step, so an
     /// `identity.changed` event does not yank the window away mid-flow.
     var isOnFinalStep: Bool { controller.isOnFinalStep }
 
-    init(onFinish: @escaping () -> Void) {
+    /// `onFinish` runs when the user completes onboarding, `onClose` whenever its window closes.
+    init(onFinish: @escaping () -> Void, onClose: @escaping () -> Void) {
         let controller = OnboardingViewController(onFinish: onFinish)
         self.controller = controller
+        self.onClose = onClose
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 660, height: 560),
             styleMask: [.titled, .closable, .fullSizeContentView],
@@ -22,10 +25,15 @@ final class OnboardingWindowController: NSWindowController {
         window.contentViewController = controller
         window.backgroundColor = .windowBackgroundColor
         super.init(window: window)
+        window.delegate = self
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
+
+    func windowWillClose(_ notification: Notification) {
+        onClose()
+    }
 }
 
 final class OnboardingViewController: NSViewController {
