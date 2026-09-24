@@ -1,21 +1,23 @@
-# Releases the lorca CLI for computers without the app. A tag such as v1.0.0 builds it for macOS,
-# Linux, and Windows, installs the builds with the site's install scripts on each system, and
-# publishes the archives as a release of the public repo that install-cli.sh and install-cli.ps1
-# download from. Run by hand, it builds and tests without publishing.
-# docs/releasing-cli.md has the setup.
+# Releases the lorca CLI for computers without the app. A tag cli-vX.Y.Z, or a run by hand, builds
+# the version in Cargo.toml for macOS, Linux, and Windows, installs the builds with the site's
+# install scripts on each system, and drafts the release cli-vX.Y.Z with the archives. Once the
+# draft is published, install-cli.sh and install-cli.ps1 download from it. A release that is
+# already published is left alone. docs/releasing-cli.md has the steps.
 name: Release CLI
 
 on:
   push:
-    tags: ["v*"]
+    tags: ["cli-v*"]
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# One run at a time, so two runs never draft the same release twice.
+concurrency:
+  group: release-cli
+
 env:
-  # This repo is private, and the install scripts download anonymously.
-  RELEASES_REPO: egoist/lorca-releases
   CARGO_TERM_COLOR: always
 
 jobs:
@@ -23,22 +25,46 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.crate.outputs.version }}
+      tag: ${{ steps.crate.outputs.tag }}
+      published: ${{ steps.release.outputs.published }}
     steps:
       - uses: actions/checkout@v7
       - id: crate
-        name: Check the tag against the crate version
+        name: Name the release after the crate version
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "lorca") | .version')
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          # The tag names the release, and `lorca --version` has to say the same.
-          if [[ "$GITHUB_REF_TYPE" == tag && "$GITHUB_REF_NAME" != "v$version" ]]; then
-            echo "::error::$GITHUB_REF_NAME does not match lorca $version: set version in [workspace.package] of Cargo.toml to ${GITHUB_REF_NAME#v} and tag that commit"
+          tag=cli-v$version
+          # A pushed tag names the release, and `lorca --version` has to say the same.
+          if [[ $GITHUB_REF_TYPE == tag && $GITHUB_REF_NAME != "$tag" ]]; then
+            echo "::error::$GITHUB_REF_NAME does not match lorca $version: set version in [workspace.package] of Cargo.toml to ${GITHUB_REF_NAME#cli-v} and tag that commit"
             exit 1
+          fi
+          # A release takes the tag that exists, so the builds have to come from its commit.
+          tagged=$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq .sha 2>/dev/null || true)
+          if [[ -n $tagged && $tagged != "$GITHUB_SHA" ]]; then
+            echo "::error::$tag already tags $tagged: run this on that commit, or bump the version in Cargo.toml"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - id: release
+        name: Look for the published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.crate.outputs.tag }}
+        run: |
+          # This job's token cannot see drafts; the publish job looks for one.
+          if [[ $(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null) == false ]]; then
+            echo "::notice::$TAG is already published, so there is nothing to build"
+            echo "published=true" >> "$GITHUB_OUTPUT"
           fi
 
   build:
     name: build ${{ matrix.name }}
     needs: version
+    if: needs.version.outputs.published != 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -136,24 +162,32 @@ jobs:
 
   publish:
     needs: [version, test]
-    if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
-      - name: Publish ${{ github.ref_name }} to ${{ env.RELEASES_REPO }}
+      - name: Draft ${{ needs.version.outputs.tag }}
         env:
-          # A fine-grained token with Contents read and write on the releases repo.
-          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.version.outputs.tag }}
           VERSION: ${{ needs.version.outputs.version }}
         run: |
-          if [[ -z "$GH_TOKEN" ]]; then
-            echo "::error::Add a RELEASES_TOKEN secret that can write to $RELEASES_REPO (docs/releasing-cli.md)"
-            exit 1
-          fi
-          cat > notes.md <<'EOF'
+          state=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq 'if .isDraft then "draft" else "published" end' 2>/dev/null || echo none)
+          case $state in
+            published)
+              echo "::notice::$TAG was published while this ran, so it stays as it is"
+              ;;
+            draft)
+              # An earlier run's draft takes these builds, and keeps its title and notes.
+              gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA"
+              gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+              ;;
+            none)
+              cat > notes.md <<'EOF'
           Install or update:
 
           ```sh
@@ -161,4 +195,6 @@ jobs:
           irm https://lorca.app/install-cli.ps1 | iex         # Windows, in PowerShell
           ```
           EOF
-          gh release create "$GITHUB_REF_NAME" dist/* --repo "$RELEASES_REPO" --title "Lorca CLI $VERSION" --notes-file notes.md
+              gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --draft --target "$GITHUB_SHA" --title "Lorca CLI $VERSION" --notes-file notes.md
+              ;;
+          esac

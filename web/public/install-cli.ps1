@@ -2,10 +2,10 @@
 #
 #   irm https://lorca.app/install-cli.ps1 | iex
 #
-# It downloads the Windows build from the latest GitHub release of egoist/lorca-releases, checks
-# it against the checksum published beside it, puts lorca.exe in ~\.local\bin, and adds that
-# folder to your user PATH. Run it again to update. Settings, as environment variables set
-# before it runs:
+# It downloads the Windows build from the latest release of github.com/egoist/lorca, checks it
+# against the checksum published beside it, puts lorca.exe in ~\.local\bin, and adds that folder
+# to your user PATH. Run it again to update. Settings, as environment variables set before it
+# runs:
 #
 #   $env:LORCA_VERSION = '1.0.0'        a release to install instead of the latest
 #   $env:LORCA_INSTALL_DIR = 'C:\...'   where lorca.exe goes
@@ -20,7 +20,7 @@
     $ProgressPreference = 'SilentlyContinue'
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
-    $releases = 'https://github.com/egoist/lorca-releases/releases'
+    $releases = 'https://github.com/egoist/lorca/releases'
     if ($env:LORCA_DOWNLOAD_URL) { $releases = $env:LORCA_DOWNLOAD_URL.TrimEnd('/') }
 
     $cpu = $null
@@ -33,7 +33,7 @@
     if ($env:LORCA_VERSION) {
         $version = $env:LORCA_VERSION.Trim().TrimStart('v')
         if ($version -notmatch '^[0-9.]+$') { throw "Not a Lorca version: $env:LORCA_VERSION" }
-        $url = "$releases/download/v$version"
+        $url = "$releases/download/cli-v$version"
         $release = "release $version"
     } else {
         $url = "$releases/latest/download"

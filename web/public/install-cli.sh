@@ -3,10 +3,10 @@
 #
 #   curl -fsSL https://lorca.app/install-cli.sh | sh
 #
-# It downloads the build for this computer from the latest GitHub release of
-# egoist/lorca-releases, checks it against the checksum published beside it, puts `lorca` in
-# ~/.local/bin, and adds that folder to PATH in your shell's profile. Run it again to update.
-# Settings, as environment variables for `sh`:
+# It downloads the build for this computer from the latest release of github.com/egoist/lorca,
+# checks it against the checksum published beside it, puts `lorca` in ~/.local/bin, and adds
+# that folder to PATH in your shell's profile. Run it again to update. Settings, as environment
+# variables for `sh`:
 #
 #   LORCA_VERSION=1.0.0      a release to install instead of the latest
 #   LORCA_INSTALL_DIR=DIR    where `lorca` goes
@@ -16,7 +16,7 @@
 
 set -eu
 
-RELEASES=${LORCA_DOWNLOAD_URL:-https://github.com/egoist/lorca-releases/releases}
+RELEASES=${LORCA_DOWNLOAD_URL:-https://github.com/egoist/lorca/releases}
 
 say() {
 	printf '%s\n' "$*"
@@ -130,7 +130,7 @@ main() {
 		case $version in
 			'' | *[!0-9.]*) die "not a Lorca version: $LORCA_VERSION" ;;
 		esac
-		url=$RELEASES/download/v$version
+		url=$RELEASES/download/cli-v$version
 		release="release $version"
 	else
 		url=$RELEASES/latest/download
