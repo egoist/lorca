@@ -51,3 +51,7 @@ The landing page lives in `web/` (TanStack Start on a Cloudflare Worker, shadcn/
 bun run web          # dev server on http://localhost:3000
 bun run web:deploy   # build and wrangler deploy
 ```
+
+## License
+
+[GPL-3.0](./LICENSE)

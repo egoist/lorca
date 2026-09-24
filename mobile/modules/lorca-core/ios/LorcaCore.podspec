@@ -9,7 +9,7 @@ Pod::Spec.new do |s|
   s.version        = package['version']
   s.summary        = package['description']
   s.description    = package['description']
-  s.license        = 'MIT'
+  s.license        = 'GPL-3.0-only'
   s.author         = 'Lorca'
   s.homepage       = 'https://lorca.app'
   s.platforms      = { :ios => '16.4' }
