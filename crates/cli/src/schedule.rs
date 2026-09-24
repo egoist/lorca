@@ -309,7 +309,7 @@ fn ordinal(n: u32) -> String {
 }
 
 /// "A", "A and B", "A, B, and C".
-fn join_words(words: &[String]) -> String {
+pub(crate) fn join_words(words: &[String]) -> String {
     match words {
         [] => String::new(),
         [one] => one.clone(),

@@ -412,6 +412,7 @@ final class StatusRow: NSView {
 
     func configure(
         symbol: String,
+        image: NSImage? = nil,
         title titleText: String,
         subtitle subtitleText: String,
         state stateText: String?,
@@ -419,7 +420,7 @@ final class StatusRow: NSView {
         actionTitle: String? = nil,
         destructive: Bool = false
     ) {
-        icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+        icon.image = image ?? NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
         icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
         title.stringValue = titleText
         subtitle.stringValue = subtitleText

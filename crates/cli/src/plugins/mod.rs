@@ -1,8 +1,9 @@
-//! Plugins: MCP servers a bot can use, after Grok Bot's marketplace. A plugin is a manifest
-//! (`plugin.json`: servers, variables, skills, tool hints) that a Runner installs; the Runner
-//! keeps the package, the variables, the secrets, and the OAuth tokens, and advertises what it
-//! has in its machine blob. Every bot on the Runner may use every plugin installed there.
-//! The MCP side, with the permission gate, is `mcp` under the `runner` feature.
+//! Plugins: MCP servers a bot can use, after Grok Bot's. A plugin is a manifest (`plugin.json`:
+//! servers, variables, skills, tool hints) that a Runner installs; the Runner keeps the
+//! package, the variables, the secrets, and the OAuth tokens, and advertises what it has in
+//! its machine blob. Every bot on the Runner may use every plugin installed there. The
+//! manifests on offer are the marketplace's (`crate::marketplace`). The MCP side, with the
+//! permission gate, is `mcp` under the `runner` feature.
 
 #[cfg(feature = "runner")]
 pub mod mcp;
@@ -18,12 +19,6 @@ use serde_json::{json, Value};
 use crate::app::App;
 use crate::config::{self, now_secs};
 use crate::model::PluginStatus;
-
-/// The bundled marketplace: first-party manifests.
-const BUNDLED_INDEX: &str = include_str!("../../marketplace/index.json");
-
-/// How long a fetched marketplace index is kept before it is asked for again.
-const INDEX_TTL_SECS: f64 = 3600.0;
 
 // MARK: - Manifest
 
@@ -42,6 +37,15 @@ pub struct Manifest {
     pub icon: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub homepage: Option<String>,
+    /// Who makes the server, for the marketplace's Developer line.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub author: String,
+    /// The marketplace section it is listed under: `code`, `productivity`, `research`, ….
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub category: String,
+    /// Listed under Featured Plugins, in index order.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub featured: bool,
     /// Search words for the marketplace.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
@@ -165,7 +169,7 @@ impl Manifest {
     }
 
     pub fn check(&self) -> Result<(), String> {
-        if self.id.is_empty() || !self.id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
+        if !is_id(&self.id) {
             return Err(format!("A plugin id is lowercase letters, digits, and dashes; {:?} is not.", self.id));
         }
         if self.name.trim().is_empty() {
@@ -190,6 +194,11 @@ impl Manifest {
     }
 }
 
+/// Lowercase letters, digits, and dashes: a plugin or bot template id.
+pub fn is_id(id: &str) -> bool {
+    !id.is_empty() && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
 /// `My GitHub Server` → `my-github-server`.
 pub fn slug(name: &str) -> String {
     let mut out = String::new();
@@ -201,6 +210,22 @@ pub fn slug(name: &str) -> String {
         }
     }
     out.trim_end_matches('-').to_string()
+}
+
+/// Fills a header or an environment value, or `None` when it names a variable with no value, so
+/// an optional key left unset is not sent at all. Sent as its `${VAR}` placeholder it reads as a
+/// key: Context7 answers every tool call with "Invalid API key".
+pub fn fill_if_set(template: &str, values: &BTreeMap<String, String>) -> Option<String> {
+    let mut rest = template;
+    while let Some(start) = rest.find("${") {
+        let Some(end) = rest[start + 2..].find('}') else { break };
+        let name = &rest[start + 2..start + 2 + end];
+        if values.get(name).is_none_or(|value| value.trim().is_empty()) {
+            return None;
+        }
+        rest = &rest[start + 3 + end..];
+    }
+    Some(fill(template, values))
 }
 
 /// Fills `${VAR}` from the plugin's variables and secrets; an unknown name stays as it is.
@@ -578,11 +603,6 @@ pub fn refresh_installed(app: &Arc<App>, manifests: &[Manifest]) -> Vec<String> 
     updated
 }
 
-/// The bundled manifests alone, for startup.
-pub fn bundled() -> Vec<Manifest> {
-    parse_index(BUNDLED_INDEX).unwrap_or_default()
-}
-
 // MARK: - Where a verb runs
 
 /// Runs a plugin verb on `runner_id`: here when that is this Device, else as a request sealed
@@ -654,85 +674,9 @@ pub fn serve_request(app: &Arc<App>, verb: &str, body: &Value) -> Result<Value, 
     }
 }
 
-// MARK: - Marketplace
-
-/// The manifests on offer: the bundled index, plus the one at `marketplace_url` when set,
-/// fetched at most once an hour. A fetch that fails leaves the bundled list.
-pub async fn marketplace(app: &Arc<App>) -> Vec<Manifest> {
-    let mut plugins: Vec<Manifest> = parse_index(BUNDLED_INDEX).unwrap_or_default();
-    let url = app.settings.lock().unwrap().marketplace_url.clone().or_else(|| std::env::var("LORCA_MARKETPLACE_URL").ok()).filter(|u| !u.trim().is_empty());
-    if let Some(url) = url {
-        let cached = app.marketplace_cache.lock().unwrap().clone();
-        let extra = match cached {
-            Some((at, list)) if now_secs() - at < INDEX_TTL_SECS => list,
-            _ => match fetch_index(app, &url).await {
-                Ok(list) => {
-                    *app.marketplace_cache.lock().unwrap() = Some((now_secs(), list.clone()));
-                    list
-                }
-                Err(error) => {
-                    tracing::warn!(%error, url, "fetching the marketplace index");
-                    Vec::new()
-                }
-            },
-        };
-        for manifest in extra {
-            match plugins.iter_mut().find(|p| p.id == manifest.id) {
-                Some(existing) => *existing = manifest,
-                None => plugins.push(manifest),
-            }
-        }
-    }
-    refresh_installed(app, &plugins);
-    plugins
-}
-
-async fn fetch_index(app: &Arc<App>, url: &str) -> Result<Vec<Manifest>, String> {
-    let text = app.http.get(url).send().await.map_err(|e| e.to_string())?.error_for_status().map_err(|e| e.to_string())?.text().await.map_err(|e| e.to_string())?;
-    parse_index(&text)
-}
-
-fn parse_index(text: &str) -> Result<Vec<Manifest>, String> {
-    let value: Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
-    let entries = value.get("plugins").and_then(Value::as_array).ok_or("The index has no plugins list")?;
-    let mut plugins = Vec::new();
-    for entry in entries {
-        match Manifest::parse(entry) {
-            Ok(manifest) => plugins.push(manifest),
-            Err(error) => tracing::warn!(%error, "skipping a marketplace entry"),
-        }
-    }
-    Ok(plugins)
-}
-
-/// Marketplace entries matching `query` (every word must appear in the id, name,
-/// description, or tags), all of them for an empty query.
-pub fn search<'a>(plugins: &'a [Manifest], query: &str) -> Vec<&'a Manifest> {
-    let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
-    plugins
-        .iter()
-        .filter(|p| {
-            let haystack = format!("{} {} {} {}", p.id, p.name, p.description, p.tags.join(" ")).to_lowercase();
-            words.iter().all(|w| haystack.contains(w))
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_bundled_index_parses() {
-        let plugins = parse_index(BUNDLED_INDEX).unwrap();
-        assert!(plugins.iter().any(|p| p.id == "github"), "{:?}", plugins.iter().map(|p| &p.id).collect::<Vec<_>>());
-        for plugin in &plugins {
-            assert!(!plugin.icon.is_empty() && !plugin.description.is_empty(), "{} is incomplete", plugin.id);
-        }
-        assert_eq!(search(&plugins, "GIT hub").len(), 1);
-        assert_eq!(search(&plugins, "").len(), plugins.len());
-        assert!(search(&plugins, "nothing-like-this").is_empty());
-    }
 
     #[test]
     fn manifests_are_checked_and_templates_filled() {
@@ -744,6 +688,12 @@ mod tests {
         assert_eq!(fill("Bearer ${TOKEN}", &values), "Bearer abc");
         assert_eq!(fill("${MISSING}/x${TOKEN}", &values), "${MISSING}/xabc");
         assert_eq!(fill("no vars", &values), "no vars");
+        assert_eq!(fill_if_set("Bearer ${TOKEN}", &values).as_deref(), Some("Bearer abc"));
+        assert_eq!(fill_if_set("${MISSING}", &values), None, "an unset key is left out, not sent as its placeholder");
+        assert_eq!(fill_if_set("${TOKEN}-${MISSING}", &values), None);
+        assert_eq!(fill_if_set("static", &values).as_deref(), Some("static"));
+        values.insert("BLANK".to_string(), " ".to_string());
+        assert_eq!(fill_if_set("${BLANK}", &values), None, "a blank value is no value");
         assert_eq!(slug("  GitHub  Server! "), "github-server");
         assert!(pattern_matches("search_*", "search_issues") && !pattern_matches("search_*", "create_issue") && pattern_matches("get_me", "get_me"));
     }
@@ -800,15 +750,15 @@ mod tests {
     fn installed_marketplace_plugins_follow_the_index() {
         let scratch = scratch_app();
         let app = &scratch.0;
-        let mut old = bundled().into_iter().find(|m| m.id == "github").unwrap();
+        let mut old = crate::marketplace::bundled().plugins.into_iter().find(|m| m.id == "github").unwrap();
         // As installed before the device flow existed: a bare OAuth entry.
         old.servers.insert("github".into(), ServerSpec::Http { url: "https://api.githubcopilot.com/mcp/".into(), headers: BTreeMap::new(), auth: Some(AuthSpec::Oauth { scopes: vec![], token_variable: Some("GITHUB_TOKEN".into()), client_id_variable: None, client_secret_variable: None, client_id: None, client_secret: None, device_authorization_endpoint: None, token_endpoint: None }) });
         install(app, old, "marketplace").unwrap();
         let mut vars = BTreeMap::new();
         vars.insert("GITHUB_TOKEN".to_string(), "ghp-secret".to_string());
         set_variables(app, "github", &vars).unwrap();
-        assert_eq!(refresh_installed(app, &bundled()), vec!["github".to_string()]);
-        assert!(refresh_installed(app, &bundled()).is_empty(), "already current");
+        assert_eq!(refresh_installed(app, &crate::marketplace::bundled().plugins), vec!["github".to_string()]);
+        assert!(refresh_installed(app, &crate::marketplace::bundled().plugins).is_empty(), "already current");
         let store = app.plugins.lock().unwrap();
         let ServerSpec::Http { auth: Some(AuthSpec::Oauth { client_id, device_authorization_endpoint, .. }), .. } = store.get("github").unwrap().manifest.servers.get("github").unwrap() else { panic!("http oauth") };
         assert!(client_id.as_deref().is_some_and(|c| !c.is_empty()) && device_authorization_endpoint.is_some(), "the device flow arrived");
@@ -817,6 +767,6 @@ mod tests {
         drop(store);
         let mine = Manifest::parse(&json!({ "id": "mine", "name": "Mine", "servers": { "api": { "type": "http", "url": "https://example.com/mcp" } } })).unwrap();
         install(app, mine, "inline").unwrap();
-        assert!(refresh_installed(app, &bundled()).is_empty());
+        assert!(refresh_installed(app, &crate::marketplace::bundled().plugins).is_empty());
     }
 }

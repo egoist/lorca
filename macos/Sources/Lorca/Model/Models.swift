@@ -319,20 +319,78 @@ struct InstalledPlugin: Identifiable, Hashable {
     }
 }
 
-/// A marketplace entry, with the Runners that already have it.
+/// A marketplace plugin, with the Runners that already have it.
 struct MarketplacePlugin: Identifiable, Hashable {
+    struct Server: Hashable {
+        var name: String
+        /// The URL of a remote server, or the command a local one runs on the Runner.
+        var address: String
+        var isRemote: Bool
+        var signsIn: Bool
+    }
+
+    struct Skill: Hashable {
+        var name: String
+        var description: String
+    }
+
+    struct Variable: Hashable {
+        var name: String
+        var description: String
+        var secret: Bool
+        var required: Bool
+    }
+
     let id: String
     var name: String
     var description: String
     var icon: String
     var homepage: String?
+    /// Who makes it.
+    var author: String
+    var category: String
+    var isFeatured: Bool
     var tags: [String]
-    /// At least one server signs in with OAuth on the Runner.
-    var signsIn: Bool
-    var variableNames: [String]
+    var servers: [Server]
+    var skills: [Skill]
+    var variables: [Variable]
     var installedOn: [Device.ID]
 
     var symbolName: String { icon.isEmpty ? "puzzlepiece.extension" : icon }
+    /// At least one server signs in with OAuth on the Runner.
+    var signsIn: Bool { servers.contains { $0.signsIn } }
+}
+
+/// A bot to add from the marketplace: the profile it starts with, the plugins it works with,
+/// the routines it brings (added paused), and facts it starts out knowing.
+struct BotTemplate: Identifiable, Hashable {
+    struct Routine: Hashable {
+        var name: String
+        /// The CLI's sentence for the schedule, such as "Weekdays at 9:00 AM".
+        var scheduleText: String
+        var prompt: String
+    }
+
+    let id: String
+    var name: String
+    /// One line for the marketplace's rows.
+    var summary: String
+    /// What the bot does and how it should work: the new bot's description.
+    var description: String
+    var symbolName: String
+    var accent: Accent
+    var category: String
+    var isFeatured: Bool
+    var author: String
+    var plugins: [MarketplacePlugin.ID]
+    var routines: [Routine]
+    var memory: [String]
+}
+
+/// What the marketplace offers, in the index's order.
+struct Marketplace {
+    var plugins: [MarketplacePlugin] = []
+    var bots: [BotTemplate] = []
 }
 
 /// One installed plugin in full, as its Runner reports it: never a secret's value.

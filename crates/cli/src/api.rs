@@ -167,12 +167,19 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
         }
 
         "bots.create" => {
+            // A bot from the marketplace starts from its template's profile, with the routines
+            // and the first turn `marketplace::welcome` gives it.
+            let template = match opt_string(&params, "template_id") {
+                Some(id) => Some(crate::marketplace::template(app, &id).await?),
+                None => None,
+            };
+            let from_template = |pick: fn(&crate::marketplace::BotTemplate) -> &String| template.as_ref().map(|(t, _)| pick(t).clone());
             let bot = Bot {
                 id: opt_string(&params, "id").unwrap_or_default(),
-                name: string(&params, "name")?,
-                description: opt_string(&params, "description").unwrap_or_default(),
-                symbol_name: opt_string(&params, "symbol_name").unwrap_or_else(|| "sparkles".into()),
-                accent: opt_string(&params, "accent").unwrap_or_else(|| "indigo".into()),
+                name: opt_string(&params, "name").or_else(|| from_template(|t| &t.name)).ok_or("missing name")?,
+                description: opt_string(&params, "description").or_else(|| from_template(|t| &t.description)).unwrap_or_default(),
+                symbol_name: opt_string(&params, "symbol_name").or_else(|| from_template(|t| &t.symbol_name)).unwrap_or_else(|| "sparkles".into()),
+                accent: opt_string(&params, "accent").or_else(|| from_template(|t| &t.accent)).unwrap_or_else(|| "indigo".into()),
                 avatar: store_avatar(app, &params)?.flatten(),
                 runner_id: string(&params, "runner_id")?,
                 provider: opt_string(&params, "provider").unwrap_or_else(|| "deepseek".into()),
@@ -187,6 +194,9 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             // Every bot has one direct chat; both land in a single roster change.
             let (bot, chat) = app.create_bot_with_dm(bot, opt_string(&params, "chat_id")).map_err(|e| e.to_string())?;
             runtime::prime_names(app);
+            if let Some((template, plugins)) = template {
+                crate::marketplace::welcome(app, &bot, &chat.meta.id, &template, plugins, opt_string(&params, "greeting"));
+            }
             Ok(json!({ "bot": bot, "chat_id": chat.meta.id }))
         }
         "bots.update" => {
@@ -467,14 +477,14 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
         }
         "routines.describe" => routines::describe(&string(&params, "schedule")?),
 
-        // Plugins are installed per Runner (here, or through a sealed request to that Runner)
-        // and enabled per bot.
-        "plugins.marketplace" => {
+        // The marketplace: plugins, each with the Runners that have it, and bots to add from a
+        // template (`bots.create { template_id }`).
+        "marketplace" => {
             let query = opt_string(&params, "query").unwrap_or_default();
-            let all = crate::plugins::marketplace(app).await;
+            let index = crate::marketplace::index(app).await;
             let installed_on: Vec<(String, Vec<crate::model::PluginStatus>)> =
                 app.state.lock().unwrap().devices.iter().map(|d| (d.id.clone(), d.plugins.clone())).collect();
-            let plugins: Vec<Value> = crate::plugins::search(&all, &query)
+            let plugins: Vec<Value> = crate::marketplace::search_plugins(&index.plugins, &query)
                 .into_iter()
                 .map(|m| {
                     let mut out = serde_json::to_value(m).unwrap_or_default();
@@ -482,15 +492,28 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
                     out
                 })
                 .collect();
-            Ok(json!({ "plugins": plugins }))
+            let bots: Vec<Value> = crate::marketplace::search_bots(&index.bots, &query)
+                .into_iter()
+                .map(|t| {
+                    let mut out = serde_json::to_value(t).unwrap_or_default();
+                    // The apps word a routine's schedule from the CLI's sentence, as a bot's own.
+                    for routine in out["routines"].as_array_mut().into_iter().flatten() {
+                        let text = routine["schedule"].as_str().and_then(|s| crate::schedule::parse(s).ok()).map(|s| s.describe());
+                        routine["schedule_text"] = json!(text);
+                    }
+                    out
+                })
+                .collect();
+            Ok(json!({ "plugins": plugins, "bots": bots }))
         }
+        // Plugins are installed per Runner, here or through a sealed request to that Runner.
         "plugins.install" => {
             let runner_id = string(&params, "runner_id")?;
             let manifest = match params.get("manifest") {
                 Some(value) => crate::plugins::Manifest::parse(value)?,
                 None => {
                     let id = string(&params, "plugin_id")?;
-                    crate::plugins::marketplace(app).await.into_iter().find(|m| m.id == id).ok_or_else(|| format!("No plugin {id} in the marketplace"))?
+                    crate::marketplace::index(app).await.plugin(&id).cloned().ok_or_else(|| format!("No plugin {id} in the marketplace"))?
                 }
             };
             let source = if params.get("plugin_id").is_some() { "marketplace" } else { "inline" };

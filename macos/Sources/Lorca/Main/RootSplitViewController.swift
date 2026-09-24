@@ -188,6 +188,7 @@ final class RootSplitViewController: NSSplitViewController {
         controller.onOpenDevice = { [weak self] deviceID in
             self?.openDevice(deviceID)
         }
+        controller.onOpenMarketplace = { [weak self] in self?.presentMarketplace() }
         return controller
     }
 
@@ -200,6 +201,7 @@ final class RootSplitViewController: NSSplitViewController {
         }
         controller.onAddBot = { [weak self] in self?.addBotToChat(nil) }
         controller.onComposePrompt = { [weak self] text in self?.chatController?.prefill(text) }
+        controller.onOpenMarketplace = { [weak self] runnerID in self?.presentMarketplace(runnerID: runnerID) }
         return controller
     }
 
@@ -448,6 +450,9 @@ final class RootSplitViewController: NSSplitViewController {
         (controller as? BotsSettingsViewController)?.onOpenChat = { [weak self] chatID in
             self?.select(.chat(chatID))
         }
+        (controller as? PluginsSettingsViewController)?.onOpenMarketplace = { [weak self] runnerID in
+            self?.presentMarketplace(runnerID: runnerID)
+        }
         settingsControllers[pane] = controller
         return controller
     }
@@ -490,6 +495,19 @@ final class RootSplitViewController: NSSplitViewController {
     func open(_ chatID: Chat.ID) {
         select(.chat(chatID))
         chatController?.focusComposer()
+    }
+
+    /// The marketplace, as a sheet sized to the window: Grok Bot's is 800 by 700. From a bot's
+    /// inspector it opens on that bot's Runner, from Settings on the picked Device; a bot added
+    /// there lands in its chat.
+    func presentMarketplace(runnerID: Device.ID? = nil) {
+        guard presentedViewControllers?.contains(where: { $0 is MarketplaceViewController }) != true else { return }
+        let room = view.window?.contentLayoutRect.size ?? NSSize(width: 1000, height: 760)
+        let size = NSSize(width: min(800, max(640, room.width - 60)), height: min(700, max(460, room.height - 60)))
+        let sheet = MarketplaceViewController(runnerID: runnerID, size: size) { [weak self] chatID in
+            self?.open(chatID)
+        }
+        presentAsSheet(sheet)
     }
 
     func presentPairing() {

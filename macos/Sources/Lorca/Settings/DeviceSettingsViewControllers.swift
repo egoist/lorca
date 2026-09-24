@@ -144,6 +144,7 @@ final class ProvidersSettingsViewController: SettingsPaneViewController {
 /// What the picked Runner has installed, with each plugin's state, and the marketplace.
 final class PluginsSettingsViewController: DevicePaneViewController {
     private let section = SectionView(title: L("Plugins"))
+    var onOpenMarketplace: ((Device.ID) -> Void)?
 
     override func viewDidLoad() {
         title = L("Plugins")
@@ -163,6 +164,7 @@ final class PluginsSettingsViewController: DevicePaneViewController {
             let row = StatusRow()
             row.configure(
                 symbol: plugin.symbolName,
+                image: PluginLogo.tile(for: plugin.id, size: 18),
                 title: plugin.name,
                 subtitle: plugin.description,
                 state: plugin.detail,
@@ -176,7 +178,7 @@ final class PluginsSettingsViewController: DevicePaneViewController {
             rows.append(KeyValueRow(key: L("No plugins installed"), value: "", tint: .secondaryLabelColor))
         }
         let add = ActionRow(key: L("Marketplace"), value: "", tint: .secondaryLabelColor, actionTitle: L("Add from Plugins…"))
-        add.onAction = { [weak self] in self?.presentAsSheet(PluginsMarketplaceViewController(runner: device, bot: nil)) }
+        add.onAction = { [weak self] in self?.onOpenMarketplace?(device.id) }
         rows.append(add)
         section.setRows(rows)
     }

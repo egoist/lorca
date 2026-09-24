@@ -153,6 +153,9 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
     } else if messages.last().map(AgentMessage::is_assistant).unwrap_or(true) {
         messages.push(AgentMessage::User(UserMessage::text("Continue.")));
     }
+    if let Some(setup) = &job.setup {
+        messages.push(AgentMessage::User(UserMessage::text(setup_cue(app, setup))));
+    }
     let unattended = routine.is_some();
     let mut tools: Vec<Arc<dyn Tool>> = vec![
         Arc::new(ListTeammates { app: app.clone(), chat_id: chat.meta.id.clone() }),
@@ -674,6 +677,45 @@ fn room_turn_cue(app: &App, chat: &Chat, bot: &Bot, job: &Job) -> String {
     }
     cue.push(']');
     cue
+}
+
+/// The cue on the first turn of a bot added from a marketplace template, after Grok Bot's
+/// template setup: its facts go to memory, its paused routines wait for the user's yes, and each
+/// plugin its Runner lacks is offered on an install card.
+fn setup_cue(app: &App, setup: &TemplateSetup) -> String {
+    let mut cue = vec![format!(
+        "[You were just added from the marketplace's {} template. Set yourself up now, quietly, without narrating each step:",
+        setup.template
+    )];
+    if !setup.memory.is_empty() {
+        cue.push("- Save each of these facts with memory_update, as written:".into());
+        cue.extend(setup.memory.iter().map(|fact| format!("  - {fact}")));
+    }
+    if !setup.routines.is_empty() {
+        cue.push(format!(
+            "- Your routines were added paused: {}. Ask once whether to turn them on. Resume them with the routines tool only when \
+             the user says yes; otherwise say each can be turned on later.",
+            crate::schedule::join_words(&setup.routines)
+        ));
+    }
+    let (installed, missing): (Vec<&SetupPlugin>, Vec<&SetupPlugin>) = {
+        let store = app.plugins.lock().unwrap();
+        setup.plugins.iter().partition(|plugin| store.status(&plugin.id).is_some())
+    };
+    if !installed.is_empty() {
+        let names: Vec<String> = installed.iter().map(|plugin| plugin.name.clone()).collect();
+        cue.push(format!("- Already installed on your Runner, and yours to use: {}.", crate::schedule::join_words(&names)));
+    }
+    if !missing.is_empty() {
+        let offered: Vec<String> = missing.iter().map(|plugin| format!("{} ({})", plugin.name, plugin.description.trim_end_matches('.'))).collect();
+        cue.push(format!(
+            "- You work best with plugins your Runner does not have yet: {}. After your hello, call install_plugin for each; the \
+             user allows or denies each one on a card. A denied one is fine: say it can be added later from the marketplace.",
+            offered.join("; ")
+        ));
+    }
+    cue.push("Greet the user briefly: who you are and what you can do for them.]".into());
+    cue.join("\n")
 }
 
 /// The text blocks of a reply, in order, skipping thinking and tool calls.
@@ -1592,6 +1634,7 @@ impl Tool for MessageBot {
             hops: self.hops + 1,
             round: 0,
             is_winding_down: false,
+            setup: None,
             created_at: now_secs(),
         };
         start_turn(&self.app, job);
@@ -2124,8 +2167,8 @@ impl Tool for SearchPlugins {
     }
     async fn execute(&self, _id: &str, args: Value, _cancel: CancellationToken, _on_update: ToolUpdateFn) -> Result<ToolResult, ToolError> {
         let query = args["query"].as_str().unwrap_or("");
-        let all = crate::plugins::marketplace(&self.app).await;
-        let found = crate::plugins::search(&all, query);
+        let all = crate::marketplace::index(&self.app).await.plugins;
+        let found = crate::marketplace::search_plugins(&all, query);
         let rows: Vec<Value> = found
             .iter()
             .map(|m| {
@@ -2141,7 +2184,7 @@ impl Tool for SearchPlugins {
             })
             .collect();
         let mut text = serde_json::to_string_pretty(&json!({ "plugins": rows })).unwrap_or_default();
-        text.push_str("\n\ninstall_plugin installs one on your Runner, after the user agrees; an installed plugin is yours already. The user can also add any MCP server by hand from the inspector.");
+        text.push_str("\n\ninstall_plugin installs one on your Runner, after the user agrees; an installed plugin is yours already.");
         Ok(ToolResult::text(text).with_details(json!({ "summary": format!("Found {} plugins", rows.len()) })))
     }
 }
@@ -2187,7 +2230,7 @@ impl Tool for InstallPlugin {
         if self.app.this_device_id().as_deref() != Some(self.bot.runner_id.as_str()) {
             return Err("Plugins are installed on your Runner, which is not this Device.".into());
         }
-        let all = crate::plugins::marketplace(&self.app).await;
+        let all = crate::marketplace::index(&self.app).await.plugins;
         let manifest = all
             .iter()
             .find(|m| m.id.eq_ignore_ascii_case(&wanted) || m.name.eq_ignore_ascii_case(&wanted))
@@ -2558,6 +2601,7 @@ mod tests {
                 hops: 0,
                 round: 0,
                 is_winding_down: false,
+                setup: None,
                 created_at: 0.0,
             },
             chat_id: "chat".into(),
@@ -2833,5 +2877,30 @@ mod tests {
         assert_eq!(when_label(memory::local_unix("2026-09-17", Some("09:05")).unwrap(), now), "today 09:05");
         assert_eq!(when_label(memory::local_unix("2026-09-16", Some("18:40")).unwrap(), now), "yesterday 18:40");
         assert_eq!(when_label(memory::local_unix("2026-09-10", Some("11:00")).unwrap(), now), "2026-09-10 11:00");
+    }
+
+    #[test]
+    fn a_template_bot_sets_itself_up_on_its_first_turn() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        let github = crate::marketplace::bundled().plugins.into_iter().find(|m| m.id == "github").unwrap();
+        crate::plugins::install(app, github, "marketplace").unwrap();
+        let setup = TemplateSetup {
+            template: "Morning Briefing".into(),
+            plugins: vec![
+                SetupPlugin { id: "github".into(), name: "GitHub".into(), description: "Issues and pull requests.".into() },
+                SetupPlugin { id: "linear".into(), name: "Linear".into(), description: "Issues in Linear.".into() },
+            ],
+            routines: vec!["Morning briefing".into()],
+            memory: vec!["The user wants it short.".into()],
+        };
+        let cue = setup_cue(app, &setup);
+        assert!(cue.starts_with("[You were just added from the marketplace's Morning Briefing template."), "{cue}");
+        assert!(cue.contains("\n  - The user wants it short.\n"), "{cue}");
+        assert!(cue.contains("added paused: Morning briefing."), "{cue}");
+        assert!(cue.contains("Already installed on your Runner, and yours to use: GitHub."), "{cue}");
+        assert!(cue.contains("does not have yet: Linear (Issues in Linear). After your hello, call install_plugin"), "{cue}");
+        let bare = setup_cue(app, &TemplateSetup { template: "Prototyper".into(), ..Default::default() });
+        assert!(!bare.contains("memory_update") && !bare.contains("routines") && !bare.contains("install_plugin"), "{bare}");
     }
 }

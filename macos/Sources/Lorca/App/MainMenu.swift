@@ -82,6 +82,8 @@ enum MainMenu {
         add(menu, L("New Bot…"), #selector(AppDelegate.newBot(_:)), "n")
         add(menu, L("New Group Chat…"), #selector(AppDelegate.newGroupChat(_:)), "n", modifiers: [.command, .shift])
         menu.addItem(.separator())
+        add(menu, L("Marketplace…"), #selector(AppDelegate.showMarketplace(_:)), "m", modifiers: [.command, .shift])
+        menu.addItem(.separator())
         add(menu, L("Pair a Device…"), #selector(AppDelegate.pairDevice(_:)), "p", modifiers: [.command, .shift])
         menu.addItem(.separator())
         add(menu, L("Close Window"), #selector(NSWindow.performClose(_:)), "w")

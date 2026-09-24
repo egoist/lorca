@@ -67,6 +67,16 @@ pub fn send_user_message(
     Ok(message)
 }
 
+/// The user's first message to a bot just added from a marketplace template, and the turn that
+/// answers it: the bot sets itself up from `setup` first (`turns::setup_cue`), then says hello.
+pub fn greet_new_bot(app: &Arc<App>, chat_id: &str, bot_id: &str, text: &str, setup: TemplateSetup) {
+    let message = Message::new(chat_id, Author::You, Body::Text { text: text.trim().to_string(), attachments: Vec::new(), mentions: Vec::new() });
+    let mut job = user_turn_job(app, chat_id, bot_id, &message.id);
+    job.setup = Some(setup);
+    app.upsert_message(message, true);
+    start_turn(app, job);
+}
+
 /// Stops work in a chat on this Device and forwards job-specific cancellations to every other
 /// Runner currently doing that work. This is the hard Stop path; ordinary messages steer and
 /// do not call it.
@@ -95,6 +105,7 @@ fn user_turn_job(app: &Arc<App>, chat_id: &str, bot_id: &str, trigger_message_id
         hops: 0,
         round: 0,
         is_winding_down: false,
+        setup: None,
         created_at: now_secs(),
     }
 }
@@ -289,6 +300,7 @@ async fn run_room(
                 hops: 0,
                 round,
                 is_winding_down: round == MAX_ROOM_ROUNDS,
+                setup: None,
                 created_at: now_secs(),
             };
             let outcome = run_member_turn(&app, job, &cancel).await;
@@ -907,6 +919,7 @@ mod tests {
             hops: 0,
             round: 0,
             is_winding_down: false,
+            setup: None,
             created_at: 1.0,
         };
 

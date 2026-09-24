@@ -112,7 +112,7 @@ async fn main() -> anyhow::Result<()> {
             runtime::prime_names(&app);
             runtime::resume_sent_jobs(&app);
             // Installed marketplace plugins follow the index this build ships.
-            lorca::plugins::refresh_installed(&app, &lorca::plugins::bundled());
+            lorca::plugins::refresh_installed(&app, &lorca::marketplace::bundled().plugins);
             if let Some(pid) = parent_pid {
                 tokio::spawn(watch_parent(pid));
             }

@@ -8,7 +8,9 @@ A plugin gives bots tools for a service or an app. Under the hood a plugin is on
 
 ## The marketplace
 
-Lorca ships with plugins for **GitHub**, **Linear**, **Notion**, **Sentry**, **Context7** (library documentation), and **Browser** (a headless browser the bot drives).
+Click the marketplace icon (four circles) at the bottom right of the sidebar, or choose **File › Marketplace…** (⌘⇧M). It lists **Featured Plugins** and **Featured Bots** first, then everything by category: Code, Productivity, Research. **View all** under a featured section lists every plugin or every bot. Search finds plugins and bots together.
+
+Lorca ships with plugins for **GitHub**, **Linear**, **Notion**, **Sentry**, **Context7** (library documentation), and **Browser** (a headless browser the bot drives). The bots there are ready-made teammates; see [Bots](/docs/bots#add-a-bot-from-the-marketplace).
 
 Plugins are installed **per Runner**. Every bot on that computer can use every plugin installed there. Secrets and sign-ins stay on that Runner; your other devices only see the plugin's name and state.
 
@@ -19,7 +21,7 @@ A bot starts a turn with only a small catalog of the plugins installed on its Ru
 ## Install a plugin
 
 - **From a chat:** ask the bot. "Install the GitHub plugin." It finds the plugin and posts a card asking your permission before it installs anything.
-- **From the app:** open the bot's inspector, find **Plugins**, and choose **Add from Plugins…**. Or go to **Settings › Plugins** and pick the Runner in the toolbar.
+- **From the app:** open the marketplace and click **Add** beside a plugin. It installs on the Runner shown at the top of the marketplace; pick another one there if you have more. **Add from Plugins…** in a bot's inspector opens the marketplace on that bot's Runner, and **Settings › Plugins** on the Runner picked in the toolbar.
 
 You can install a plugin on any Runner from your phone. The request travels to that computer encrypted.
 

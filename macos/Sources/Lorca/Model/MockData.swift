@@ -74,12 +74,138 @@ enum MockData {
         ]
     }
 
-    static func marketplace() -> [MarketplacePlugin] {
+    /// The bundled index's plugins and bots, as the CLI serves them.
+    static func marketplace() -> Marketplace {
+        Marketplace(plugins: marketplacePlugins(), bots: marketplaceBots())
+    }
+
+    private static func marketplacePlugins() -> [MarketplacePlugin] {
         [
-            MarketplacePlugin(id: "github", name: "GitHub", description: "Issues, pull requests, code search, and repositories on GitHub.", icon: "chevron.left.forwardslash.chevron.right", homepage: nil, tags: ["git"], signsIn: true, variableNames: ["GITHUB_TOKEN"], installedOn: ["dev-workbench"]),
-            MarketplacePlugin(id: "linear", name: "Linear", description: "Issues, projects, and cycles in Linear.", icon: "line.3.horizontal.decrease.circle", homepage: nil, tags: [], signsIn: true, variableNames: [], installedOn: ["dev-workbench"]),
-            MarketplacePlugin(id: "notion", name: "Notion", description: "Pages and databases in a Notion workspace.", icon: "doc.richtext", homepage: nil, tags: [], signsIn: true, variableNames: [], installedOn: []),
-            MarketplacePlugin(id: "playwright", name: "Browser", description: "Opens web pages in a headless browser on the Runner.", icon: "globe", homepage: nil, tags: [], signsIn: false, variableNames: [], installedOn: []),
+            MarketplacePlugin(
+                id: "github", name: "GitHub", description: "Issues, pull requests, code search, and repositories on GitHub.",
+                icon: "chevron.left.forwardslash.chevron.right", homepage: "https://github.com/github/github-mcp-server", author: "GitHub",
+                category: "code", isFeatured: true, tags: [],
+                servers: [.init(name: "github", address: "https://api.githubcopilot.com/mcp/", isRemote: true, signsIn: true)],
+                skills: [],
+                variables: [.init(name: "GITHUB_TOKEN", description: "A personal access token (github.com/settings/tokens), the quickest way in.", secret: true, required: false), .init(name: "GITHUB_CLIENT_ID", description: "Normally not needed: the client id of your own OAuth app (github.com/settings/developers, Device Flow enabled), to sign in with it instead of Lorca's.", secret: false, required: false), .init(name: "GITHUB_CLIENT_SECRET", description: "Only for a browser sign-in with your own app: its client secret.", secret: true, required: false)],
+                installedOn: ["dev-workbench"]),
+            MarketplacePlugin(
+                id: "linear", name: "Linear", description: "Issues, projects, and cycles in Linear.",
+                icon: "line.3.horizontal.decrease.circle", homepage: "https://linear.app/docs/mcp", author: "Linear",
+                category: "productivity", isFeatured: true, tags: [],
+                servers: [.init(name: "linear", address: "https://mcp.linear.app/mcp", isRemote: true, signsIn: true)],
+                skills: [],
+                variables: [],
+                installedOn: ["dev-workbench"]),
+            MarketplacePlugin(
+                id: "notion", name: "Notion", description: "Pages and databases in a Notion workspace.",
+                icon: "doc.richtext", homepage: "https://developers.notion.com/docs/mcp", author: "Notion",
+                category: "productivity", isFeatured: true, tags: [],
+                servers: [.init(name: "notion", address: "https://mcp.notion.com/mcp", isRemote: true, signsIn: true)],
+                skills: [],
+                variables: [],
+                installedOn: []),
+            MarketplacePlugin(
+                id: "sentry", name: "Sentry", description: "Errors, issues, and releases in Sentry.",
+                icon: "exclamationmark.triangle", homepage: "https://mcp.sentry.dev", author: "Sentry",
+                category: "code", isFeatured: false, tags: [],
+                servers: [.init(name: "sentry", address: "https://mcp.sentry.dev/mcp", isRemote: true, signsIn: true)],
+                skills: [],
+                variables: [],
+                installedOn: []),
+            MarketplacePlugin(
+                id: "context7", name: "Context7", description: "Up-to-date documentation and code examples for libraries and frameworks.",
+                icon: "book.closed", homepage: "https://context7.com", author: "Upstash",
+                category: "research", isFeatured: false, tags: [],
+                servers: [.init(name: "context7", address: "https://mcp.context7.com/mcp", isRemote: true, signsIn: false)],
+                skills: [],
+                variables: [.init(name: "CONTEXT7_API_KEY", description: "Optional API key from context7.com for higher limits.", secret: true, required: false)],
+                installedOn: []),
+            MarketplacePlugin(
+                id: "playwright", name: "Browser", description: "Opens web pages in a headless browser on the Runner to read them, fill forms, and take screenshots.",
+                icon: "globe", homepage: "https://github.com/microsoft/playwright-mcp", author: "Microsoft",
+                category: "research", isFeatured: true, tags: [],
+                servers: [.init(name: "browser", address: "npx -y @playwright/mcp@latest --headless", isRemote: false, signsIn: false)],
+                skills: [.init(name: "Reading a page", description: "How to read a page without filling the context.")],
+                variables: [],
+                installedOn: []),
+        ]
+    }
+
+    private static func marketplaceBots() -> [BotTemplate] {
+        [
+            BotTemplate(
+                id: "morning-briefing", name: "Morning Briefing",
+                summary: "Preps a short morning briefing from your issues, errors, and pull requests",
+                description: "Each morning you prepare a short briefing for the user from the services they connected: new and assigned issues, pull requests waiting on them, and fresh errors. Lead with the three things that need them today, then list the rest one line each, with a link to every item. Skip what has not changed since the last briefing. When a service is not connected, say so once and work with the others.",
+                symbolName: "sun.max.fill", accent: .orange, category: "productivity",
+                isFeatured: true, author: "Lorca", plugins: ["github", "linear", "sentry"],
+                routines: [.init(name: "Morning briefing", scheduleText: "Weekdays at 8:30 AM", prompt: "Prepare today's briefing: what needs the user today first, then the rest one line each, with links.")],
+                memory: ["The user wants the briefing short: the top three items first, then everything else one line each."]),
+            BotTemplate(
+                id: "researcher", name: "Researcher",
+                summary: "Digs into any question across the web and your docs, then writes up what it found",
+                description: "You research questions for the user. Restate the question and what a good answer needs, and ask one clarifying question only when the scope is truly unclear. Search the web, read the pages that matter in the browser, and check library documentation with Context7 when the question is technical. Cite every claim with its link, say how sure you are, and keep facts apart from your reading of them. Write anything longer than a few paragraphs to a Markdown file in your working directory and give the user the short version in chat.",
+                symbolName: "binoculars.fill", accent: .teal, category: "research",
+                isFeatured: true, author: "Lorca", plugins: ["context7", "playwright"],
+                routines: [],
+                memory: []),
+            BotTemplate(
+                id: "pr-reviewer", name: "PR Reviewer",
+                summary: "Reviews new pull requests on GitHub and leaves clear, specific notes",
+                description: "You review pull requests in the user's repositories on GitHub. Read the whole change and the code around it before you comment. Look for bugs first, then risky edge cases, missing tests, and unclear names; skip nits a formatter would catch. Name the file and line for every note and suggest the concrete fix. Post nothing to GitHub unless the user asks: give them your review in chat, most important first, and say plainly when a change looks good.",
+                symbolName: "checklist", accent: .blue, category: "code",
+                isFeatured: true, author: "Lorca", plugins: ["github"],
+                routines: [.init(name: "Review new pull requests", scheduleText: "Weekdays at 9:00 AM", prompt: "Review the pull requests opened or updated since your last run in the repositories the user named.")],
+                memory: ["The user wants review notes that name the file and line and suggest a concrete change."]),
+            BotTemplate(
+                id: "lookout", name: "Lookout",
+                summary: "Watches the pages you name and tells you when they change",
+                description: "You watch web pages for the user: prices, release notes, job posts, status pages, whatever they name. Keep the list of watched pages, and what counts as a change on each, in your memory, and ask for it when it is empty. On each check, open every page in the browser, compare it with what you saw last time, and report only real changes: what changed, the old and the new value, and the link.",
+                symbolName: "eye.fill", accent: .purple, category: "research",
+                isFeatured: true, author: "Lorca", plugins: ["playwright"],
+                routines: [.init(name: "Check watched pages", scheduleText: "Every 2 hours", prompt: "Check every watched page for changes since the last check and report only what changed.")],
+                memory: []),
+            BotTemplate(
+                id: "issue-triager", name: "Issue Triager",
+                summary: "Sorts new Linear issues, fills in missing details, and flags what needs you",
+                description: "You triage new issues in Linear for the user. For each one, check it is not a duplicate, add the details you can find (steps, the affected area, links), and suggest a priority, an owner, and labels. Change nothing in Linear until the user says which changes you may make on your own, then keep to those. Report what you triaged as a short list, with anything urgent at the top.",
+                symbolName: "tray.full.fill", accent: .indigo, category: "productivity",
+                isFeatured: false, author: "Lorca", plugins: ["linear"],
+                routines: [.init(name: "Triage new issues", scheduleText: "Weekdays at 10:00 AM and 4:00 PM", prompt: "Triage the Linear issues created since your last run, anything urgent first.")],
+                memory: []),
+            BotTemplate(
+                id: "error-watch", name: "Error Watch",
+                summary: "Watches Sentry for new errors, finds the cause in the code, and drafts a fix",
+                description: "You watch Sentry for new and regressed errors in the user's projects. For each one, read the stack trace and the events, find the cause in the code, and explain it in two or three sentences with the file and line. When the cause is clear, draft a fix as a patch in your working directory and say how confident you are. Group repeats of one problem, and never resolve or ignore anything in Sentry yourself.",
+                symbolName: "exclamationmark.triangle.fill", accent: .red, category: "code",
+                isFeatured: false, author: "Lorca", plugins: ["sentry", "github"],
+                routines: [.init(name: "Check new errors", scheduleText: "Weekdays at 9:00 AM, 1:00 PM, and 5:00 PM", prompt: "Look at the errors that are new or regressed since your last run and report each one with its likely cause.")],
+                memory: []),
+            BotTemplate(
+                id: "competitor-watcher", name: "Competitor Watcher",
+                summary: "Tracks competitors' pricing and launches, and briefs you every week",
+                description: "You track the user's competitors: their pricing pages, changelogs, blogs, and launch posts. Keep the list of competitors and the pages that matter in your memory, and ask for it when it is empty. Each week, compare what you find with last week's notes and brief the user on what actually changed and why it might matter, with links. Keep a running log so later briefings can point back to earlier changes.",
+                symbolName: "chart.line.uptrend.xyaxis", accent: .green, category: "research",
+                isFeatured: false, author: "Lorca", plugins: ["playwright"],
+                routines: [.init(name: "Weekly competitor briefing", scheduleText: "Mondays at 9:00 AM", prompt: "Check each competitor's pages and brief the user on what changed since last week.")],
+                memory: []),
+            BotTemplate(
+                id: "prototyper", name: "Prototyper",
+                summary: "Turns your ideas into working prototypes on its computer",
+                description: "You build quick, working prototypes of the user's ideas on your Runner: small web apps, scripts, and tools. Ask at most one question before you start, then build the smallest version that shows the idea working, run it, and fix what breaks. Tell the user where the files are and how to run or open it, and list what you left out. Prefer plain, well-known tools that run without setup.",
+                symbolName: "hammer.fill", accent: .pink, category: "code",
+                isFeatured: false, author: "Lorca", plugins: [],
+                routines: [],
+                memory: []),
+            BotTemplate(
+                id: "docs-keeper", name: "Docs Keeper",
+                summary: "Keeps your Notion docs in step with what shipped on GitHub",
+                description: "You keep the user's documentation in Notion in step with their code. Each week, read what shipped on GitHub (merged pull requests and releases), find the Notion pages that describe those parts, and draft the updates: what to change, where, and the new wording. Edit a page only after the user approves the draft, and say which pages you could not find.",
+                symbolName: "doc.text.fill", accent: .blue, category: "productivity",
+                isFeatured: false, author: "Lorca", plugins: ["notion", "github"],
+                routines: [.init(name: "Weekly docs check", scheduleText: "Fridays at 3:00 PM", prompt: "Compare what shipped this week with the Notion docs and draft the updates for the user to approve.")],
+                memory: []),
         ]
     }
 

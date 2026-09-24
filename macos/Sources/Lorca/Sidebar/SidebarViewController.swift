@@ -31,6 +31,7 @@ final class SidebarViewController: NSViewController {
 
     var onSelect: ((Selection?) -> Void)?
     var onOpenDevice: ((Device.ID) -> Void)?
+    var onOpenMarketplace: (() -> Void)?
     var onDoubleClick: ((Selection) -> Void)?
 
     override func loadView() {
@@ -50,6 +51,7 @@ final class SidebarViewController: NSViewController {
             guard let id = self?.store.thisDevice?.id else { return }
             self?.onOpenDevice?(id)
         }
+        footer.onMarketplace = { [weak self] in self?.onOpenMarketplace?() }
 
         if SidebarChrome.floats {
             // The root hangs the search bar and the footer on the split view item, and the list
@@ -557,9 +559,13 @@ final class SidebarFooterView: NSView {
         symbol: "gearshape", tooltip: L("Settings (⌘,)"), target: self, action: #selector(openSettings))
     private lazy var device = HoverButton(
         symbol: "laptopcomputer", tooltip: "", target: self, action: #selector(openDevice))
+    /// The marketplace, at the footer's other end.
+    private lazy var marketplace = HoverButton(
+        symbol: "circle.grid.2x2", tooltip: L("Marketplace (⇧⌘M)"), target: self, action: #selector(openMarketplace))
 
     var onSettings: (() -> Void)?
     var onDevice: (() -> Void)?
+    var onMarketplace: (() -> Void)?
     /// What the device button shows. The sidebar updates the footer on every store event, and
     /// one that changes none of it leaves the button alone.
     private var shown: (symbol: String, name: String, status: String)?
@@ -570,11 +576,15 @@ final class SidebarFooterView: NSView {
 
         let buttons = Build.stack([settings, device], orientation: .horizontal, spacing: 4)
         addSubview(buttons)
+        marketplace.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(marketplace)
 
         NSLayoutConstraint.activate([
             heightAnchor.constraint(equalToConstant: 38),
             buttons.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
             buttons.centerYAnchor.constraint(equalTo: centerYAnchor),
+            marketplace.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            marketplace.centerYAnchor.constraint(equalTo: buttons.centerYAnchor),
         ])
     }
 
@@ -606,4 +616,5 @@ final class SidebarFooterView: NSView {
 
     @objc private func openSettings() { onSettings?() }
     @objc private func openDevice() { onDevice?() }
+    @objc private func openMarketplace() { onMarketplace?() }
 }

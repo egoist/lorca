@@ -19,7 +19,7 @@ use lorca_agent::{ContentPart, Tool, ToolError, ToolResult, ToolUpdateFn};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_util::sync::CancellationToken;
 
-use super::{fill, pattern_matches, AuthSpec, Installed, ServerSpec};
+use super::{fill, fill_if_set, pattern_matches, AuthSpec, Installed, ServerSpec};
 use crate::app::App;
 use crate::config::now_secs;
 use crate::model::*;
@@ -161,8 +161,11 @@ async fn connect(app: &Arc<App>, plugin: &Installed, name: &str, spec: &ServerSp
         ServerSpec::Stdio { command, args, env } => {
             let mut cmd = tokio::process::Command::new(command);
             cmd.args(args.iter().map(|a| fill(a, values)));
+            // A variable naming an optional key the user left unset is left out.
             for (key, value) in env {
-                cmd.env(key, fill(value, values));
+                if let Some(value) = fill_if_set(value, values) {
+                    cmd.env(key, value);
+                }
             }
             cmd.current_dir(app.config.plugins_dir().join(&plugin.manifest.id));
             let transport = TokioChildProcess::new(cmd).map_err(|e| format!("Cannot start {command}: {e}"))?;
@@ -171,9 +174,12 @@ async fn connect(app: &Arc<App>, plugin: &Installed, name: &str, spec: &ServerSp
         ServerSpec::Http { url, headers, auth: auth_spec } => {
             let mut config = StreamableHttpClientTransportConfig::with_uri(url.as_str());
             let mut custom = HashMap::new();
+            // A header naming an optional key the user left unset is left out: Context7 without its
+            // key works on the free limits, and with the placeholder refuses every call.
             for (key, value) in headers {
+                let Some(value) = fill_if_set(value, values) else { continue };
                 let key = mcp_http::header::HeaderName::from_bytes(key.as_bytes()).map_err(|e| format!("Bad header {key}: {e}"))?;
-                let value = mcp_http::header::HeaderValue::from_str(&fill(value, values)).map_err(|e| format!("Bad header value: {e}"))?;
+                let value = mcp_http::header::HeaderValue::from_str(&value).map_err(|e| format!("Bad header value: {e}"))?;
                 custom.insert(key, value);
             }
             config = config.custom_headers(custom);

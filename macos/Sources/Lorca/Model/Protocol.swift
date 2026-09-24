@@ -143,29 +143,87 @@ enum Wire {
         struct Server: Decodable {
             struct Auth: Decodable { var type: String }
             var type: String
+            var url: String?
+            var command: String?
+            var args: [String]?
             var auth: Auth?
         }
-        struct Variable: Decodable { var name: String }
+        struct Variable: Decodable {
+            var name: String
+            var description: String?
+            var secret: Bool?
+            var required: Bool?
+        }
+        struct Skill: Decodable {
+            var name: String
+            var description: String?
+        }
         var id: String
         var name: String
         var description: String?
         var icon: String?
         var homepage: String?
+        var author: String?
+        var category: String?
+        var featured: Bool?
         var tags: [String]?
         var servers: [String: Server]?
         var variables: [Variable]?
+        var skills: [Skill]?
         var installedOn: [String]?
 
         func toModel() -> Lorca.MarketplacePlugin {
-            Lorca.MarketplacePlugin(
-                id: id, name: name, description: description ?? "", icon: icon ?? "", homepage: homepage, tags: tags ?? [],
-                signsIn: (servers ?? [:]).values.contains { $0.auth?.type == "oauth" },
-                variableNames: (variables ?? []).map(\.name), installedOn: installedOn ?? [])
+            let servers = (servers ?? [:]).sorted { $0.key < $1.key }.map { name, server in
+                Lorca.MarketplacePlugin.Server(
+                    name: name,
+                    address: server.url ?? ([server.command ?? ""] + (server.args ?? [])).joined(separator: " "),
+                    isRemote: server.type == "http", signsIn: server.auth?.type == "oauth")
+            }
+            return Lorca.MarketplacePlugin(
+                id: id, name: name, description: description ?? "", icon: icon ?? "", homepage: homepage,
+                author: author ?? "", category: category ?? "", isFeatured: featured ?? false, tags: tags ?? [],
+                servers: servers,
+                skills: (skills ?? []).map { .init(name: $0.name, description: $0.description ?? "") },
+                variables: (variables ?? []).map {
+                    .init(name: $0.name, description: $0.description ?? "", secret: $0.secret ?? false, required: $0.required ?? false)
+                },
+                installedOn: installedOn ?? [])
+        }
+    }
+
+    struct BotTemplate: Decodable {
+        struct Routine: Decodable {
+            var name: String
+            var schedule: String
+            var scheduleText: String?
+            var prompt: String
+        }
+        var id: String
+        var name: String
+        var summary: String?
+        var description: String
+        var symbolName: String?
+        var accent: String?
+        var category: String?
+        var featured: Bool?
+        var author: String?
+        var plugins: [String]?
+        var routines: [Routine]?
+        var memory: [String]?
+
+        func toModel() -> Lorca.BotTemplate {
+            Lorca.BotTemplate(
+                id: id, name: name, summary: summary ?? "", description: description,
+                symbolName: symbolName ?? "sparkles", accent: Accent(rawValue: accent ?? "") ?? .indigo,
+                category: category ?? "", isFeatured: featured ?? false, author: author ?? "", plugins: plugins ?? [],
+                routines: (routines ?? []).map { .init(name: $0.name, scheduleText: $0.scheduleText ?? $0.schedule, prompt: $0.prompt) },
+                memory: memory ?? [])
         }
     }
 
     struct Marketplace: Decodable {
         var plugins: [MarketplacePlugin]
+        var bots: [BotTemplate]
     }
 
     struct PluginInstalled: Decodable {

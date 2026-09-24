@@ -269,26 +269,60 @@ final class HoverButton: NSButton {
         self.action = action
     }
 
+    /// A word alone, such as View all, as wide as it needs, with a symbol after it for a link that
+    /// leads somewhere ("2 installed ›").
+    init(title: String, trailingSymbol: String? = nil, target: AnyObject?, action: Selector) {
+        super.init(frame: .zero)
+        label = title
+        self.trailingSymbol = trailingSymbol.flatMap { NSImage(systemSymbolName: $0, accessibilityDescription: nil) }?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 10, weight: .semibold))
+        setAccessibilityTitle(title)
+        isBordered = false
+        contentTintColor = .secondaryLabelColor
+        self.target = target
+        self.action = action
+    }
+
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    /// The word after the symbol. The two are drawn here as one line of text, the symbol as an
-    /// attachment: the text system sets it on the capitals' center line and in the text's color,
-    /// where the button cell places and tints a symbol and a title each on its own.
-    private var label: String?
+    /// The word, after the symbol when there is one. The two are drawn here as one line of text,
+    /// the symbol as an attachment: the text system sets it on the capitals' center line and in the
+    /// text's color, where the button cell places and tints a symbol and a title each on its own.
+    var label: String? {
+        didSet {
+            guard label != oldValue else { return }
+            if let label { setAccessibilityTitle(label) }
+            invalidateIntrinsicContentSize()
+            needsDisplay = true
+        }
+    }
+    private var trailingSymbol: NSImage?
     private static let labelFont = NSFont.systemFont(ofSize: 13)
     private static let labelPadding: CGFloat = 8
     private static let symbolLift: CGFloat = 0.5
 
-    private var labelText: NSAttributedString? {
-        guard let label, let image else { return nil }
+    private func symbolText(_ symbol: NSImage) -> NSAttributedString {
         let attachment = NSTextAttachment()
-        attachment.image = image.withSymbolConfiguration(symbolConfiguration ?? .init())
+        attachment.image = symbol
         let text = NSMutableAttributedString(attachment: attachment)
         // The text system sets the symbol under the capitals' center by this much.
         text.addAttribute(.baselineOffset, value: Self.symbolLift, range: NSRange(location: 0, length: text.length))
-        text.append(NSAttributedString(string: " ", attributes: [.kern: 3]))
+        return text
+    }
+
+    private var labelText: NSAttributedString? {
+        guard let label else { return nil }
+        let text = NSMutableAttributedString()
+        if let image {
+            text.append(symbolText(image.withSymbolConfiguration(symbolConfiguration ?? .init()) ?? image))
+            text.append(NSAttributedString(string: " ", attributes: [.kern: 3]))
+        }
         text.append(NSAttributedString(string: label))
+        if let trailingSymbol {
+            text.append(NSAttributedString(string: " ", attributes: [.kern: 1]))
+            text.append(symbolText(trailingSymbol))
+        }
         text.addAttributes(
             [.font: Self.labelFont, .foregroundColor: NSColor.secondaryLabelColor],
             range: NSRange(location: 0, length: text.length))
@@ -349,8 +383,9 @@ final class HoverButton: NSButton {
         // the baseline less the ascender.
         let font = Self.labelFont
         let baseline = bounds.midY + font.capHeight / 2
-        // The lifted symbol makes the line that much taller, above the baseline.
-        let top = baseline - font.ascender - Self.symbolLift
+        // A lifted symbol makes the line that much taller, above the baseline.
+        let lift = image != nil || trailingSymbol != nil ? Self.symbolLift : 0
+        let top = baseline - font.ascender - lift
         let scale = window?.backingScaleFactor ?? 2
         labelText.draw(at: NSPoint(x: Self.labelPadding, y: (top * scale).rounded() / scale))
     }

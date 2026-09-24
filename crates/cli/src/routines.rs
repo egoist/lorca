@@ -158,6 +158,7 @@ fn job_for(app: &Arc<App>, routine: &Routine) -> Result<Job, String> {
         hops: 0,
         round: 0,
         is_winding_down: false,
+        setup: None,
         created_at: now_secs(),
     })
 }

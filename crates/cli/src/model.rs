@@ -567,7 +567,36 @@ pub struct Job {
     /// `room_turn`: the last round; the member should only add what is essential.
     #[serde(default)]
     pub is_winding_down: bool,
+    /// The first turn of a bot added from a marketplace template: what it sets up before it
+    /// answers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup: Option<TemplateSetup>,
     pub created_at: f64,
+}
+
+/// What a bot added from a marketplace template sets up on its first turn, as Grok Bot's
+/// template import asks its new bot to.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct TemplateSetup {
+    /// The template's name, such as "Researcher".
+    pub template: String,
+    /// The plugins it works with. The Runner checks which it has installed.
+    #[serde(default)]
+    pub plugins: Vec<SetupPlugin>,
+    /// Its routines, added paused, by name.
+    #[serde(default)]
+    pub routines: Vec<String>,
+    /// Facts it saves to its memory.
+    #[serde(default)]
+    pub memory: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct SetupPlugin {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
 }
 
 pub const MAX_BOT_HOPS: u32 = 8;

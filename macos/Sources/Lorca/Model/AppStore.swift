@@ -588,7 +588,9 @@ final class AppStore {
         runnerID: Device.ID,
         provider: ProviderCredential.Kind,
         model: String? = nil,
-        thinking: String? = nil
+        thinking: String? = nil,
+        templateID: BotTemplate.ID? = nil,
+        greeting: String? = nil
     ) -> Bot.ID {
         let bot = Bot(
             id: "bot-\(UUID().uuidString.lowercased().prefix(8))",
@@ -614,15 +616,34 @@ final class AppStore {
             chats.insert(chat, at: 0)
             sortChats()
             emit(.chatsChanged)
-            perform(
-                "bots.create",
-                [
-                    "id": bot.id, "name": name, "description": description, "symbol_name": symbolName,
-                    "accent": accent.rawValue, "runner_id": runnerID, "provider": provider.wireValue,
-                    "model": model ?? "", "thinking": thinking ?? "", "chat_id": chatID,
-                ])
+            var params: [String: Any] = [
+                "id": bot.id, "name": name, "description": description, "symbol_name": symbolName,
+                "accent": accent.rawValue, "runner_id": runnerID, "provider": provider.wireValue,
+                "model": model ?? "", "thinking": thinking ?? "", "chat_id": chatID,
+            ]
+            if let templateID {
+                params["template_id"] = templateID
+                params["greeting"] = greeting ?? ""
+            }
+            perform("bots.create", params)
         }
         return bot.id
+    }
+
+    /// Adds a bot from a marketplace template on `runnerID` and answers with its direct chat.
+    /// The CLI gives it the template's routines, paused, and a first turn that answers the
+    /// user's greeting: the bot sets itself up there and asks about the rest.
+    func addBot(from template: BotTemplate, runnerID: Device.ID) -> Chat.ID {
+        let botID = createBot(
+            name: template.name, description: template.description, symbolName: template.symbolName,
+            accent: template.accent, runnerID: runnerID, provider: preferredProvider, templateID: template.id,
+            greeting: L("Hi %@, introduce yourself.", template.name))
+        return dm(with: botID)
+    }
+
+    /// The provider a bot made without asking runs with: the first one the account connected.
+    var preferredProvider: ProviderCredential.Kind {
+        ProviderCredential.Kind.allCases.first { credential(for: $0)?.isConnected == true } ?? .deepseek
     }
 
     func updateBot(_ id: Bot.ID, name: String, description: String? = nil, provider: ProviderCredential.Kind? = nil) {
@@ -688,12 +709,11 @@ final class AppStore {
 
     // MARK: - Plugins
 
-    /// The marketplace with what each Runner already has, from the CLI.
-    func marketplace(query: String = "") async throws -> [MarketplacePlugin] {
-        if isMock {
-            return MockData.marketplace().filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) }
-        }
-        return try await client.request("plugins.marketplace", ["query": query], as: Wire.Marketplace.self).plugins.map { $0.toModel() }
+    /// The marketplace: its plugins, each with the Runners that have it, and its bots.
+    func marketplace() async throws -> Marketplace {
+        if isMock { return MockData.marketplace() }
+        let wire = try await client.request("marketplace", [:], as: Wire.Marketplace.self)
+        return Marketplace(plugins: wire.plugins.map { $0.toModel() }, bots: wire.bots.map { $0.toModel() })
     }
 
     /// Installs a marketplace plugin on a Runner (here, or sealed to that Runner).

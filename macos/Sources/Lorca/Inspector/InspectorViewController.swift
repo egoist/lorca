@@ -41,9 +41,8 @@ final class InspectorViewController: NSViewController {
     private lazy var marketplaceRow: ActionRow = {
         let row = ActionRow(key: L("Marketplace"), value: "", tint: .secondaryLabelColor, actionTitle: L("Add from Plugins…"))
         row.onAction = { [weak self] in
-            guard let self, let bot = self.pluginBotID.flatMap(self.store.bot), let runner = self.store.device(bot.runnerID)
-            else { return }
-            self.presentAsSheet(PluginsMarketplaceViewController(runner: runner, bot: bot))
+            guard let self, let bot = self.pluginBotID.flatMap(self.store.bot) else { return }
+            self.onOpenMarketplace?(bot.runnerID)
         }
         return row
     }()
@@ -57,6 +56,8 @@ final class InspectorViewController: NSViewController {
     var onAddBot: (() -> Void)?
     /// Puts text in the chat's composer, for "Edit in chat" on a routine.
     var onComposePrompt: ((String) -> Void)?
+    /// Opens the marketplace on a Runner, for the Plugins section's Add from Plugins.
+    var onOpenMarketplace: ((Device.ID) -> Void)?
 
     override func loadView() {
         let container = NSView()
@@ -486,6 +487,7 @@ final class InspectorViewController: NSViewController {
             }
             row.configure(
                 symbol: plugin.symbolName,
+                image: PluginLogo.tile(for: plugin.id, size: 18),
                 title: plugin.name,
                 subtitle: plugin.description,
                 state: plugin.detail,

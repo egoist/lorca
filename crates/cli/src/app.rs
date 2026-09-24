@@ -188,8 +188,8 @@ pub struct App {
     pub pending_permissions: Mutex<HashMap<String, tokio::sync::oneshot::Sender<crate::plugins::mcp::Decision>>>,
     /// What this Runner has installed, with the secrets kept apart.
     pub plugins: Mutex<crate::plugins::Store>,
-    /// A fetched marketplace index: (fetched at, manifests).
-    pub marketplace_cache: Mutex<Option<(f64, Vec<crate::plugins::Manifest>)>>,
+    /// The index fetched from `marketplace_url`: (fetched at, index).
+    pub marketplace_cache: Mutex<Option<(f64, crate::marketplace::Index)>>,
     /// Connected MCP servers.
     #[cfg(feature = "runner")]
     pub mcp: crate::plugins::mcp::Pool,
