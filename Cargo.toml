@@ -1,9 +1,16 @@
 [workspace]
 resolver = "2"
-members = ["crates/agent", "crates/provider-auth", "crates/relay", "crates/cli", "crates/mobile", "crates/markdown"]
+members = [
+  "crates/agent",
+  "crates/provider-auth",
+  "crates/relay",
+  "crates/cli",
+  "crates/mobile",
+  "crates/markdown",
+]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "GPL-3.0-only"
 
@@ -27,7 +34,12 @@ hkdf = "0.12"
 hmac = "0.12"
 open = "5"
 rand = "0.8"
-reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "gzip"] }
+reqwest = { version = "0.12", default-features = false, features = [
+  "json",
+  "stream",
+  "rustls-tls",
+  "gzip",
+] }
 rusqlite = { version = "0.37", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -40,7 +52,11 @@ webpki-roots = "1"
 tokio-postgres = "0.7"
 tokio-postgres-rustls = "0.13"
 deadpool-postgres = "0.14"
-tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
+tokio-tungstenite = { version = "0.29", default-features = false, features = [
+  "connect",
+  "handshake",
+  "rustls-tls-webpki-roots",
+] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4"] }
