@@ -8,10 +8,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         let picker = NSPopUpButton()
         picker.target = self
         picker.action = #selector(pickDevice)
-        picker.setAccessibilityLabel(L("Device"))
-        picker.toolTip = L("The Device this page shows")
         return picker
     }()
+    /// The sidebar and create buttons beside the traffic lights.
+    private var titlebarButtons: NSTitlebarAccessoryViewController?
     /// Creating bots and chats belongs to the chats; Settings hides it.
     private var createButton: HoverButton?
     private weak var navigation: NSToolbarItemGroup?
@@ -47,24 +47,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         window.toolbar = toolbar
         StartupTrace.mark("toolbar installed")
 
-        // The sidebar buttons form a leading titlebar accessory, so they keep their place beside
-        // the traffic lights when the sidebar collapses.
-        let createButton = HoverButton(
-            symbol: "plus", tooltip: L("Create"), target: nil, action: #selector(AppDelegate.newBot(_:)))
-        createButton.menu = Self.createMenu()
-        self.createButton = createButton
-        window.addTitlebarAccessoryViewController(
-            Self.leadingAccessory([
-                HoverButton(
-                    symbol: "sidebar.leading", tooltip: L("Toggle Sidebar (⌘B)"), target: root,
-                    action: #selector(NSSplitViewController.toggleSidebar(_:))),
-                createButton,
-            ]))
-
+        installTitlebarButtons()
         StartupTrace.mark("titlebar accessories installed")
 
         // Attach the split view once the saved frame and titlebar are configured, so its
         // first layout uses the final content area instead of relaying out for each change.
+        // The window takes the size of the view it is handed, so the split view comes in at
+        // the saved size.
+        if let contentView = window.contentView { root.view.frame = contentView.frame }
         window.contentViewController = root
         StartupTrace.mark("window content attached")
 
@@ -82,6 +72,43 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         updateTitle()
         updateToolbar()
         StartupTrace.mark("window configured")
+    }
+
+    /// Views take their words when they are built, so a new language makes the panes, the
+    /// titlebar buttons, and the toolbar's items again. The window stays, and with it its frame,
+    /// its Space, and whether it is zoomed, tiled, or in full screen.
+    func languageChanged() {
+        palette?.close()
+        palette = nil
+        installTitlebarButtons()
+        if let toolbar = window?.toolbar {
+            let worded: Set<NSToolbarItem.Identifier> = [.settingsNavigation, .devicePicker, .inspectorToggle]
+            for (index, item) in toolbar.items.enumerated() where worded.contains(item.itemIdentifier) {
+                toolbar.removeItem(at: index)
+                toolbar.insertItem(withItemIdentifier: item.itemIdentifier, at: index)
+            }
+        }
+        root.languageChanged()
+        updateTitle()
+        updateToolbar()
+    }
+
+    /// The sidebar buttons form a leading titlebar accessory, so they keep their place beside the
+    /// traffic lights when the sidebar collapses. A new language replaces them.
+    private func installTitlebarButtons() {
+        titlebarButtons?.removeFromParent()
+        let createButton = HoverButton(
+            symbol: "plus", tooltip: L("Create"), target: nil, action: #selector(AppDelegate.newBot(_:)))
+        createButton.menu = Self.createMenu()
+        self.createButton = createButton
+        let accessory = Self.leadingAccessory([
+            HoverButton(
+                symbol: "sidebar.leading", tooltip: L("Toggle Sidebar (⌘B)"), target: root,
+                action: #selector(NSSplitViewController.toggleSidebar(_:))),
+            createButton,
+        ])
+        window?.addTitlebarAccessoryViewController(accessory)
+        titlebarButtons = accessory
     }
 
     // MARK: - Settings toolbar
@@ -312,12 +339,15 @@ extension MainWindowController: NSToolbarDelegate {
     ) -> NSToolbarItem? {
         if identifier == .settingsNavigation {
             // Back and forward through the settings panes, ahead of the title as in System Settings.
+            // The images carry their words: the group writes a label into an image without one,
+            // and AppKit hands that same image out again, so a new language would read the old.
+            let labels = [L("Back"), L("Forward")]
             let group = NSToolbarItemGroup(
                 itemIdentifier: identifier,
-                images: ["chevron.left", "chevron.right"].map {
-                    NSImage(systemSymbolName: $0, accessibilityDescription: nil)!
+                images: zip(["chevron.left", "chevron.right"], labels).map {
+                    NSImage(systemSymbolName: $0, accessibilityDescription: $1)!
                 },
-                selectionMode: .momentary, labels: [L("Back"), L("Forward")], target: self,
+                selectionMode: .momentary, labels: labels, target: self,
                 action: #selector(navigateSettings(_:)))
             group.label = L("Back/Forward")
             group.isNavigational = true
@@ -330,6 +360,8 @@ extension MainWindowController: NSToolbarDelegate {
         if identifier == .devicePicker {
             let item = NSToolbarItem(itemIdentifier: identifier)
             item.label = L("Device")
+            devicePicker.setAccessibilityLabel(L("Device"))
+            devicePicker.toolTip = L("The Device this page shows")
             // A plain container gets no platter from the toolbar; the pop-up sits on a glass
             // capsule of its own inside it, so hiding the capsule leaves nothing behind and the
             // toolbar's layout stays as it is.

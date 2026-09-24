@@ -4,12 +4,13 @@ import { Alert, ScrollView } from "react-native";
 import { engine } from "../src/core/engine";
 import { MAX_GROUP_BOTS, providerLabel } from "../src/core/model";
 import { useStore } from "../src/core/store";
-import { t } from "../src/i18n";
+import { t, useLanguage } from "../src/i18n";
 import { BotAvatar } from "../src/ui/Avatar";
 import { CheckRow, FieldRow, Section } from "../src/ui/forms";
 import { FormToolbar } from "../src/ui/navigation";
 
 export default function NewGroupScreen() {
+  useLanguage();
   const router = useRouter();
   const bots = useStore((s) => s.bots);
   const [title, setTitle] = useState("");

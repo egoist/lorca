@@ -1,6 +1,6 @@
 import { Stack } from "expo-router";
 import { StyleSheet, Text, View } from "react-native";
-import { t } from "../../src/i18n";
+import { t, useLanguage } from "../../src/i18n";
 import { ChatsScreen } from "../../src/ui/ChatsScreen";
 import { useWide } from "../../src/ui/layout";
 import { Symbol } from "../../src/ui/Symbol";
@@ -8,6 +8,7 @@ import { usePalette } from "../../src/ui/theme";
 
 /// The chat list, or the empty pane beside the sidebar that holds the list in a wide window.
 export default function IndexScreen() {
+  useLanguage();
   const p = usePalette();
   if (!useWide()) return <ChatsScreen />;
   return (

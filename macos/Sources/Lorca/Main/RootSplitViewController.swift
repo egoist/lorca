@@ -4,7 +4,7 @@ final class RootSplitViewController: NSSplitViewController {
     private let store = AppStore.shared
 
     private let sidebarContainer = ContentContainerViewController()
-    private let sidebar = SidebarViewController()
+    private lazy var sidebar = makeSidebar()
     private var settingsSidebarStorage: SettingsSidebarViewController?
     private var settingsSidebar: SettingsSidebarViewController {
         if let controller = settingsSidebarStorage { return controller }
@@ -20,17 +20,7 @@ final class RootSplitViewController: NSSplitViewController {
     }
     private let content = ContentContainerViewController()
     private let inspectorContainer = ContentContainerViewController()
-    private lazy var inspector: InspectorViewController = {
-        let controller = InspectorViewController()
-        controller.onOpenDevice = { [weak self] id in self?.openDevice(id) }
-        controller.onRemoveBot = { [weak self] botID in
-            guard case let .chat(chatID) = self?.selection else { return }
-            self?.store.removeBot(botID, from: chatID)
-        }
-        controller.onAddBot = { [weak self] in self?.addBotToChat(nil) }
-        controller.onComposePrompt = { [weak self] text in self?.chatController?.prefill(text) }
-        return controller
-    }()
+    private lazy var inspector = makeInspector()
 
     private var sidebarItem: NSSplitViewItem!
     private var inspectorItem: NSSplitViewItem!
@@ -50,17 +40,9 @@ final class RootSplitViewController: NSSplitViewController {
     private var lastChatID: Chat.ID?
     /// What held the keyboard when Settings opened, to hand it back on the way out.
     private weak var focusBeforeSettings: NSView?
-    private lazy var offlineController: OfflineViewController = {
-        let controller = OfflineViewController()
-        controller.onRetry = { [weak self] in self?.store.reconnect() }
-        return controller
-    }()
-    private let loadingController = LoadingViewController()
-    private lazy var placeholderController: PlaceholderViewController = {
-        let controller = PlaceholderViewController()
-        controller.onNewBot = { [weak self] in self?.presentNewBot() }
-        return controller
-    }()
+    private lazy var offlineController = makeOfflineController()
+    private var loadingController = LoadingViewController()
+    private lazy var placeholderController = makePlaceholderController()
 
     var onSelectionChange: (() -> Void)?
 
@@ -109,11 +91,6 @@ final class RootSplitViewController: NSSplitViewController {
 
     // MARK: - Lifecycle
 
-    override func loadView() {
-        super.loadView()
-        view.frame = NSRect(x: 0, y: 0, width: 1180, height: 760)
-    }
-
     override func viewDidLoad() {
         super.viewDidLoad()
 
@@ -134,17 +111,6 @@ final class RootSplitViewController: NSSplitViewController {
         addSplitViewItem(sidebarItem)
         addSplitViewItem(contentItem)
         addSplitViewItem(inspectorItem)
-
-        sidebar.onSelect = { [weak self] selection in
-            self?.select(selection)
-        }
-        sidebar.onDoubleClick = { [weak self] selection in
-            guard let self, case let .chat(id) = selection, store.chat(id)?.isGroup == true else { return }
-            renameChat(nil)
-        }
-        sidebar.onOpenDevice = { [weak self] deviceID in
-            self?.openDevice(deviceID)
-        }
 
         store.observe(self) { [weak self] event in
             self?.handle(event)
@@ -188,6 +154,65 @@ final class RootSplitViewController: NSSplitViewController {
         case "settings": return SettingsPane(rawValue: parts[1]).map { .settings($0) }
         default: return nil
         }
+    }
+
+    // MARK: - Panes
+
+    /// Views take their words when they are built, so a new language builds every pane again
+    /// inside this split view. The sidebar and the inspector keep their widths and stay shown or
+    /// collapsed; the selection, the settings history, and the picked Device stay as they are.
+    func languageChanged() {
+        sidebar = makeSidebar()
+        settingsSidebarStorage = nil
+        sidebarAccessories = [:]
+        chatController = nil
+        inspector = makeInspector()
+        settingsControllers = [:]
+        offlineController = makeOfflineController()
+        loadingController = LoadingViewController()
+        placeholderController = makePlaceholderController()
+        guard isViewLoaded else { return }
+        updateContent()
+        syncSidebar()
+    }
+
+    private func makeSidebar() -> SidebarViewController {
+        let controller = SidebarViewController()
+        controller.onSelect = { [weak self] selection in
+            self?.select(selection)
+        }
+        controller.onDoubleClick = { [weak self] selection in
+            guard let self, case let .chat(id) = selection, store.chat(id)?.isGroup == true else { return }
+            renameChat(nil)
+        }
+        controller.onOpenDevice = { [weak self] deviceID in
+            self?.openDevice(deviceID)
+        }
+        return controller
+    }
+
+    private func makeInspector() -> InspectorViewController {
+        let controller = InspectorViewController()
+        controller.onOpenDevice = { [weak self] id in self?.openDevice(id) }
+        controller.onRemoveBot = { [weak self] botID in
+            guard case let .chat(chatID) = self?.selection else { return }
+            self?.store.removeBot(botID, from: chatID)
+        }
+        controller.onAddBot = { [weak self] in self?.addBotToChat(nil) }
+        controller.onComposePrompt = { [weak self] text in self?.chatController?.prefill(text) }
+        return controller
+    }
+
+    private func makeOfflineController() -> OfflineViewController {
+        let controller = OfflineViewController()
+        controller.onRetry = { [weak self] in self?.store.reconnect() }
+        return controller
+    }
+
+    private func makePlaceholderController() -> PlaceholderViewController {
+        let controller = PlaceholderViewController()
+        controller.onNewBot = { [weak self] in self?.presentNewBot() }
+        return controller
     }
 
     // MARK: - Selection

@@ -6,11 +6,12 @@ import { useState } from "react";
 import { Alert, ScrollView, StyleSheet } from "react-native";
 import { engine } from "../../../src/core/engine";
 import { useBotMap } from "../../../src/core/store";
-import { t } from "../../../src/i18n";
+import { t, useLanguage } from "../../../src/i18n";
 import { FieldRow, Section } from "../../../src/ui/forms";
 import { SaveToolbar } from "../../../src/ui/navigation";
 
 export default function BotDescriptionScreen() {
+  useLanguage();
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const bot = useBotMap().get(id);

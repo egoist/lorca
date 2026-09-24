@@ -46,7 +46,7 @@ import {
   useStore,
   useWorkingBots,
 } from "../../../src/core/store";
-import { t } from "../../../src/i18n";
+import { t, useLanguage } from "../../../src/i18n";
 import { AvatarCluster } from "../../../src/ui/Avatar";
 import { Composer, Surface } from "../../../src/ui/Composer";
 import { KeyboardFoot } from "../../../src/ui/KeyboardFoot";
@@ -79,6 +79,7 @@ const ANDROID_BAR_HEIGHT = 56;
 const ANDROID_FADE_HEIGHT = 24;
 
 export default function ChatScreen() {
+  const { language } = useLanguage();
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const p = usePalette();
@@ -653,9 +654,10 @@ export default function ChatScreen() {
     };
   }, [id]));
 
+  // The rows carry words, so a new language builds them again.
   const rows = useMemo(
     () => (chat ? buildRows(chat, bots, workingBotIds, isWorking, status) : []),
-    [chat, bots, workingBotIds, isWorking, status],
+    [chat, bots, workingBotIds, isWorking, status, language],
   );
   rowsRef.current = rows;
   const members = useMemo(

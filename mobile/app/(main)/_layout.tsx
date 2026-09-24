@@ -1,7 +1,7 @@
 import { Stack } from "expo-router";
 import { Platform, StyleSheet, useWindowDimensions, View } from "react-native";
 import { CompactWidthView } from "../../modules/lorca-core/CompactWidthView";
-import { t } from "../../src/i18n";
+import { t, useLanguage } from "../../src/i18n";
 import { PaneWidth, useSidebarWidth, useWide } from "../../src/ui/layout";
 import { useStackScreenOptions } from "../../src/ui/navigation";
 import { Sidebar } from "../../src/ui/Sidebar";
@@ -14,6 +14,7 @@ export const unstable_settings = { initialRouteName: "index" };
 /// keeps the list in a sidebar, and this stack is the pane beside it: its first screen is the
 /// empty pane and a chat takes the place of the one before it.
 export default function MainLayout() {
+  useLanguage();
   const p = usePalette();
   const wide = useWide();
   const sidebarWidth = useSidebarWidth();

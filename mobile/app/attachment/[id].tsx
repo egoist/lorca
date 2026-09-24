@@ -4,10 +4,11 @@ import { Image } from "expo-image";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { StyleSheet, View } from "react-native";
 import { useStore } from "../../src/core/store";
-import { t } from "../../src/i18n";
+import { t, useLanguage } from "../../src/i18n";
 import { IconCloseToolbar } from "../../src/ui/navigation";
 
 export default function AttachmentScreen() {
+  useLanguage();
   const { id, name } = useLocalSearchParams<{ id: string; name?: string }>();
   const router = useRouter();
   const uri = useStore((s) => s.files[id]);

@@ -8,7 +8,7 @@
 import { useRef } from "react";
 import { Pressable, StyleSheet, TextInput } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { t } from "../i18n";
+import { t, useLanguage } from "../i18n";
 import { Surface } from "./Composer";
 import { KeyboardFoot } from "./KeyboardFoot";
 import { Symbol } from "./Symbol";
@@ -28,6 +28,7 @@ export function useSidebarSearchInset(): number {
 }
 
 export function SidebarSearch({ value, placeholder, onChangeText }: { value: string; placeholder: string; onChangeText: (value: string) => void }) {
+  useLanguage();
   const p = usePalette();
   const input = useRef<TextInput>(null);
   const bottom = useFoot();

@@ -24,7 +24,7 @@ import type { PickedFile } from "../core/engine";
 import { fileSize, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS, type Bot } from "../core/model";
 import { BotAvatar } from "./Avatar";
 import { automaticLanguage, languageName, pickDictationLanguage, setDictationLanguage, useDictationLanguage, useSupportedLanguages } from "./dictation";
-import { t } from "../i18n";
+import { t, useLanguage } from "../i18n";
 import { joinDictation } from "./format";
 import { Symbol } from "./Symbol";
 import { Font, usePalette } from "./theme";
@@ -107,6 +107,7 @@ export function Composer({
   /** The text, its files, and the bots its `@Name`s picked from the chips, by id. */
   onSend: (text: string, attachments: PickedFile[], mentions: string[]) => void;
 }) {
+  useLanguage();
   const p = usePalette();
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<PickedFile[]>([]);

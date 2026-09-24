@@ -9,7 +9,7 @@ import { Pressable, StyleSheet, Text, View, type ColorValue } from "react-native
 import { engine } from "../core/engine";
 import { fileSize, isImage, type Attachment } from "../core/model";
 import { useStore } from "../core/store";
-import { t } from "../i18n";
+import { t, useLanguage } from "../i18n";
 import { Symbol } from "./Symbol";
 import { Font, usePalette } from "./theme";
 
@@ -45,6 +45,7 @@ export function AttachmentBlock({ attachments, onUserBubble, maxWidth }: { attac
 }
 
 function AttachmentTile({ attachment, onUserBubble, maxWidth }: { attachment: Attachment; onUserBubble: boolean; maxWidth: number }) {
+  useLanguage();
   const p = usePalette();
   const router = useRouter();
   const uri = useAttachmentUri(attachment);

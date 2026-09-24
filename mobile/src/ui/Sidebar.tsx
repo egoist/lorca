@@ -5,7 +5,7 @@ import { DarkTheme, DefaultTheme } from "expo-router";
 import { createNativeStackNavigator } from "expo-router/build/fork/native-stack/createNativeStackNavigator";
 import { NavigationContainer, NavigationIndependentTree, useTheme } from "expo-router/react-navigation";
 import { Platform } from "react-native";
-import { t } from "../i18n";
+import { t, useLanguage } from "../i18n";
 import { ChatsScreen } from "./ChatsScreen";
 import { useStackScreenOptions } from "./navigation";
 
@@ -16,6 +16,7 @@ function SidebarChats() {
 }
 
 export function Sidebar() {
+  useLanguage();
   const theme = useTheme();
   const screenOptions = useStackScreenOptions();
   return (

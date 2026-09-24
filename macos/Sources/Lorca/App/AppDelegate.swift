@@ -34,8 +34,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             self?.startServicesWhenReady()
         }
+        // The pop-up that picks the language sits in a pane that is built again, so the rebuild
+        // waits for its action to return.
         NotificationCenter.default.addObserver(forName: AppLanguage.didChange, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.languageChanged() }
+            DispatchQueue.main.async { self?.languageChanged() }
         }
         Notifier.shared.visibleChat = { [weak self] in
             guard let controller = self?.mainWindowController, let window = controller.window, window.isVisible, !window.isMiniaturized,
@@ -128,23 +130,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Views take their words when they are built, so a new language builds them again: the
-    /// menu bar, then the window in the same place on the same selection (Settings › General,
-    /// where the language is picked), or the small settings window while onboarding is up.
+    /// menu bar, the main window's contents in place, or the small settings window while
+    /// onboarding is up.
     private func languageChanged() {
         NSApp.mainMenu = MainMenu.build()
-        if let old = mainWindowController {
-            let selection = old.root.selection
-            let wasVisible = old.window?.isVisible == true
-            old.window?.saveFrame(usingName: "LorcaMainWindow")
-            old.close()
-            let controller = MainWindowController()
-            mainWindowController = controller
-            if wasVisible {
-                controller.showWindow(nil)
-                controller.window?.makeKeyAndOrderFront(nil)
-            }
-            controller.root.select(selection)
-        }
+        mainWindowController?.languageChanged()
         if let old = settingsWindowController {
             let frame = old.window?.frame
             old.close()

@@ -52,9 +52,11 @@ enum Format {
         return dateTimeFormatter.string(from: date)
     }
 
+    /// When an offline Device was last on the relay; an online one reads "Online". The relay
+    /// stamps `last_seen` as a socket closes, so a Device that just dropped was seen seconds ago.
     static func lastSeen(_ date: Date) -> String {
         let elapsed = Date().timeIntervalSince(date)
-        if elapsed < 90 { return L("Active now") }
+        if elapsed < 60 { return L("Last seen just now") }
         if elapsed < 3600 { return L("Last seen %dm ago", Int(elapsed / 60)) }
         if elapsed < 60 * 60 * 24 { return L("Last seen %dh ago", Int(elapsed / 3600)) }
         return L("Last seen %dd ago", Int(elapsed / 86400))

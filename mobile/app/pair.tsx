@@ -10,7 +10,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { engine } from "../src/core/engine";
 import { hostFacts } from "../src/core/host";
 import { parsePairingString } from "../src/core/pairing";
-import { t } from "../src/i18n";
+import { t, useLanguage } from "../src/i18n";
 import { Symbol } from "../src/ui/Symbol";
 import { Font, usePalette } from "../src/ui/theme";
 
@@ -18,6 +18,7 @@ type Phase = "idle" | "posting" | "waiting";
 const appIcon = Application.applicationId === "app.lorca.dev" ? require("../assets/icon-dev.png") : require("../assets/icon.png");
 
 export default function PairScreen() {
+  useLanguage();
   const p = usePalette();
   const insets = useSafeAreaInsets();
   const [code, setCode] = useState("");

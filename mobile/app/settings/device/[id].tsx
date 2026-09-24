@@ -6,7 +6,7 @@ import { Alert, ScrollView, StyleSheet, Text, View } from "react-native";
 import { engine } from "../../../src/core/engine";
 import { isRunner, providerLabel, type Device, type PluginStatus } from "../../../src/core/model";
 import { deviceIsOnline, useStore } from "../../../src/core/store";
-import { t } from "../../../src/i18n";
+import { t, useLanguage } from "../../../src/i18n";
 import { BotAvatar } from "../../../src/ui/Avatar";
 import { deviceSymbol } from "../../../src/ui/devices";
 import { Row, Section } from "../../../src/ui/forms";
@@ -32,6 +32,7 @@ function pluginState(state: PluginStatus["state"]): string {
 }
 
 export default function DeviceScreen() {
+  useLanguage();
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const p = usePalette();

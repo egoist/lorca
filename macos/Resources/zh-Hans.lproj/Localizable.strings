@@ -279,6 +279,7 @@
 "Last seen %dd ago" = "%d 天前在线";
 "Last seen %dh ago" = "%d 小时前在线";
 "Last seen %dm ago" = "%d 分钟前在线";
+"Last seen just now" = "刚刚在线";
 "Later" = "稍后";
 "Light" = "浅色";
 "link" = "链接";

@@ -236,46 +236,46 @@ export default function SettingsScreen() {
           title={t("Devices")}
           footer={t("Desktop Devices are Runners: they run bots with your account's provider credentials. Phones and tablets read and write chats.")}
         >
-          {sorted.map((device) => (
-            <Row
-              key={device.id}
-              title={
-                device.id === thisId
-                  ? t("{name} (this phone)", { name: device.name })
-                  : device.name
-              }
-              onPress={() => router.push(`/settings/device/${device.id}`)}
-              chevron
-              subtitle={[
-                device.model,
-                isRunner(device) ? t("Runner") : t("Device"),
-                device.id === thisId ? t("Online") : lastSeen(seen[device.id]),
-              ]
-                .filter(Boolean)
-                .join(" · ")}
-              leading={
-                <View style={styles.deviceIcon}>
-                  <Symbol
-                    name={deviceSymbol(device.os, device.model)}
-                    size={22}
-                    color={p.label}
-                  />
-                  <View
-                    style={[
-                      styles.deviceDot,
-                      {
-                        backgroundColor:
-                          device.id === thisId || deviceIsOnline(device.id)
-                            ? p.green
-                            : p.tertiaryLabel,
-                        borderColor: p.cell,
-                      },
-                    ]}
-                  />
-                </View>
-              }
-            />
-          ))}
+          {sorted.map((device) => {
+            const online = device.id === thisId || deviceIsOnline(device.id);
+            return (
+              <Row
+                key={device.id}
+                title={
+                  device.id === thisId
+                    ? t("{name} (this phone)", { name: device.name })
+                    : device.name
+                }
+                onPress={() => router.push(`/settings/device/${device.id}`)}
+                chevron
+                subtitle={[
+                  device.model,
+                  isRunner(device) ? t("Runner") : t("Device"),
+                  online ? t("Online") : lastSeen(seen[device.id]),
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+                leading={
+                  <View style={styles.deviceIcon}>
+                    <Symbol
+                      name={deviceSymbol(device.os, device.model)}
+                      size={22}
+                      color={p.label}
+                    />
+                    <View
+                      style={[
+                        styles.deviceDot,
+                        {
+                          backgroundColor: online ? p.green : p.tertiaryLabel,
+                          borderColor: p.cell,
+                        },
+                      ]}
+                    />
+                  </View>
+                }
+              />
+            );
+          })}
         </Section>
 
         <Section>

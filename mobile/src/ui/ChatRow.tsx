@@ -6,7 +6,7 @@ import { memo, useEffect } from "react";
 import { Pressable, StyleSheet, Text, View, type ColorValue } from "react-native";
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withRepeat, withTiming, type SharedValue } from "react-native-reanimated";
 import type { Bot, Chat } from "../core/model";
-import { t } from "../i18n";
+import { t, useLanguage } from "../i18n";
 import { AvatarCluster } from "./Avatar";
 import { lastActivity, preview, stamp } from "./format";
 import { Symbol } from "./Symbol";
@@ -16,6 +16,7 @@ import { Font, usePalette } from "./theme";
 /// `responding` is a turn in flight in this chat; `working` also lights the avatar's dot for a
 /// member at work in another chat.
 export const ChatRow = memo(function ChatRow({ chat, bots, title, working, responding, selected, onPress, onLongPress }: { chat: Chat; bots: Map<string, Bot>; title: string; working: boolean; responding: boolean; selected?: boolean; onPress: () => void; onLongPress?: () => void }) {
+  useLanguage();
   const p = usePalette();
   const members = chat.bot_ids.map((id) => bots.get(id)).filter((b): b is Bot => !!b);
   const unread = chat.unread_count;

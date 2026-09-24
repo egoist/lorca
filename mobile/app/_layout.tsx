@@ -6,7 +6,6 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { engine } from "../src/core/engine";
 import { useStore } from "../src/core/store";
-import { t, useLanguage } from "../src/i18n";
 import { useStackScreenOptions } from "../src/ui/navigation";
 import { usePalette } from "../src/ui/theme";
 
@@ -15,7 +14,6 @@ export default function RootLayout() {
   const paired = useStore((s) => s.paired);
   const p = usePalette();
   const scheme = useColorScheme();
-  const { language } = useLanguage();
   const screenOptions = useStackScreenOptions();
 
   useEffect(() => {
@@ -69,8 +67,7 @@ export default function RootLayout() {
       <KeyboardProvider>
         <StatusBar style={scheme === "dark" ? "light" : "dark"} />
         {/* The native bar takes its light/dark appearance from the navigation theme, not the OS. */}
-        {/* A new language mounts the screens again, so every title and label is said anew. */}
-        <ThemeProvider key={language} value={navigationTheme}>
+        <ThemeProvider value={navigationTheme}>
           <Stack screenOptions={screenOptions}>
             <Stack.Protected guard={paired}>
               <Stack.Screen name="(main)" options={{ headerShown: false }} />

@@ -138,6 +138,7 @@ export const zh: Record<string, string> = {
   "Last seen {count}d ago": "{count} 天前在线",
   "Last seen {count}h ago": "{count} 小时前在线",
   "Last seen {count}m ago": "{count} 分钟前在线",
+  "Last seen just now": "刚刚在线",
   "Long press to choose the language": "长按以选择语言",
   "Look": "外观",
   "Lorca checks effectful plugin actions and every shell command before they run. Safe commands normally run automatically; risky commands ask you first. Add rules to customize what bots can do automatically; \"Ask first\" wins if rules conflict.": "Lorca 会在会产生影响的插件操作和每个 shell 命令运行前进行检查。安全命令通常会自动运行；有风险的命令会先询问你。添加规则可自定义智能体能自动执行的操作；规则冲突时以“先询问”为准。",

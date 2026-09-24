@@ -4,12 +4,13 @@ import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useState } from "react";
 import { Platform, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { useChat } from "../../src/core/store";
-import { t } from "../../src/i18n";
+import { t, useLanguage } from "../../src/i18n";
 import { Markdown } from "../../src/ui/Markdown";
 import { usePalette } from "../../src/ui/theme";
 import { CloseToolbar } from "../../src/ui/navigation";
 
 export default function MessageScreen() {
+  useLanguage();
   const { id, chat: chatId, title } = useLocalSearchParams<{ id: string; chat: string; title?: string }>();
   const router = useRouter();
   const p = usePalette();

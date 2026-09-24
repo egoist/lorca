@@ -5,7 +5,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { engine } from "../src/core/engine";
 import { connectedProviders, isRunner, providerLabel, PROVIDER_MODELS, THINKING_LEVELS, thinkingLabel } from "../src/core/model";
 import { deviceIsOnline, useStore } from "../src/core/store";
-import { t } from "../src/i18n";
+import { t, useLanguage } from "../src/i18n";
 import { CheckRow, FieldRow, Section } from "../src/ui/forms";
 import { BOT_SYMBOLS, Symbol } from "../src/ui/Symbol";
 import { ACCENTS, accentColors, usePalette } from "../src/ui/theme";
@@ -13,6 +13,7 @@ import { deviceSymbol } from "../src/ui/devices";
 import { FormToolbar } from "../src/ui/navigation";
 
 export default function NewBotScreen() {
+  useLanguage();
   const router = useRouter();
   const p = usePalette();
   const devices = useStore((s) => s.devices);

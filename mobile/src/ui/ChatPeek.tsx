@@ -4,7 +4,7 @@
 import { useMemo } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import type { Bot, Chat } from "../core/model";
-import { t } from "../i18n";
+import { t, useLanguage } from "../i18n";
 import { AvatarCluster } from "./Avatar";
 import { usePalette } from "./theme";
 import { buildRows, DayRow, MarkerRow, MessageRow, NoticeRow } from "./transcript";
@@ -13,12 +13,13 @@ const PEEK_MESSAGES = 6;
 const HEADER_HEIGHT = 48;
 
 export function ChatPeek({ chat, bots, title }: { chat: Chat; bots: Map<string, Bot>; title: string }) {
+  const { language } = useLanguage();
   const p = usePalette();
   const members = chat.bot_ids.map((id) => bots.get(id)).filter((b): b is Bot => !!b);
   const rows = useMemo(() => {
     const tail: Chat = { ...chat, messages: chat.messages.slice(-PEEK_MESSAGES) };
     return buildRows(tail, bots, [], false, null);
-  }, [chat, bots]);
+  }, [chat, bots, language]);
   return (
     <View style={[styles.card, { backgroundColor: p.background }]}>
       {/* The newest rows sit at the bottom; older ones are clipped under the header. */}

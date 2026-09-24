@@ -7,7 +7,7 @@ import { ExpoSpeechRecognitionModule } from "expo-speech-recognition";
 import { ActionSheetIOS } from "react-native";
 import { mutate, useStore } from "../core/store";
 import { useEffect, useState } from "react";
-import { language as appLanguage, t } from "../i18n";
+import { language as appLanguage, t, useLanguage } from "../i18n";
 
 /// Every locale the recognizer knows; Automatic matches the phone's languages against these.
 let all: string[] | null = null;
@@ -97,8 +97,10 @@ export function languageName(tag: string): string {
   }
 }
 
-/// The recognizer's languages for a menu: empty until the first answer, then cached.
+/// The recognizer's languages for a menu: empty until the first answer, then cached. A new app
+/// language sorts them again by their new names.
 export function useSupportedLanguages(): string[] {
+  const { language } = useLanguage();
   const [languages, setLanguages] = useState<string[]>(offered);
   useEffect(() => {
     let live = true;
@@ -106,7 +108,7 @@ export function useSupportedLanguages(): string[] {
     return () => {
       live = false;
     };
-  }, []);
+  }, [language]);
   return languages;
 }
 

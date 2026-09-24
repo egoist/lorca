@@ -4,7 +4,7 @@ import { Alert, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View 
 import { chatTitle, engine } from "../../src/core/engine";
 import { providerLabel, PROVIDER_KINDS, PROVIDER_MODELS, THINKING_LEVELS, thinkingLabel, type Bot, type Routine } from "../../src/core/model";
 import { deviceIsOnline, useBotMap, useChat, useRoutines, useStore, useWorkingBotIds } from "../../src/core/store";
-import { t } from "../../src/i18n";
+import { t, useLanguage } from "../../src/i18n";
 import { AvatarCluster, BotAvatar } from "../../src/ui/Avatar";
 import { CheckRow, FieldRow, Row, Section, ToggleRow } from "../../src/ui/forms";
 import { lastRunSummary, lastSeen, routineDetail } from "../../src/ui/format";
@@ -14,6 +14,7 @@ import { deviceSymbol } from "../../src/ui/devices";
 import { CloseToolbar } from "../../src/ui/navigation";
 
 export default function ChatInfoScreen() {
+  useLanguage();
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const p = usePalette();
@@ -187,7 +188,7 @@ export default function ChatInfoScreen() {
         <Section title={t("Runs on")}>
           <Row
             title={runner.name}
-            subtitle={`${runner.model} · ${lastSeen(seen[runner.id])}`}
+            subtitle={`${runner.model} · ${deviceIsOnline(runner.id) ? t("Online") : lastSeen(seen[runner.id])}`}
             leading={
               <View style={styles.deviceIcon}>
                 <Symbol name={deviceSymbol(runner.os, runner.model)} size={22} color={p.label} />

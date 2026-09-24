@@ -8,13 +8,14 @@ import { Stack, useLocalSearchParams } from "expo-router";
 import { Alert, Pressable, ScrollView, StyleSheet, View } from "react-native";
 import { engine, type PickedFile } from "../../../src/core/engine";
 import { useBotMap } from "../../../src/core/store";
-import { t } from "../../../src/i18n";
+import { t, useLanguage } from "../../../src/i18n";
 import { AvatarDisc, useBotAvatarUri } from "../../../src/ui/Avatar";
 import { Row, Section } from "../../../src/ui/forms";
 import { BOT_SYMBOLS, Symbol } from "../../../src/ui/Symbol";
 import { ACCENTS, accentColors, usePalette } from "../../../src/ui/theme";
 
 export default function BotLookScreen() {
+  useLanguage();
   const { id } = useLocalSearchParams<{ id: string }>();
   const p = usePalette();
   const bot = useBotMap().get(id);

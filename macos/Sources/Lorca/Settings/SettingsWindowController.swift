@@ -248,8 +248,8 @@ final class GeneralSettingsViewController: SettingsPaneViewController {
         Preferences.dictationLanguage = dictationLanguage.selectedItem?.representedObject as? String
     }
 
-    /// The app says everything again in the new language: `AppDelegate` rebuilds the menu and
-    /// the window, and lands back on this pane.
+    /// The app says everything again in the new language: `AppDelegate` rebuilds the menu, and
+    /// the window builds its panes again in place, this one included.
     @objc private func changeAppLanguage() {
         AppLanguage.choose(appLanguage.selectedItem?.representedObject as? String)
     }

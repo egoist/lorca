@@ -11,11 +11,12 @@ import {
   providerUsesAPIKey,
 } from "../../../src/core/model";
 import { useStore } from "../../../src/core/store";
-import { t } from "../../../src/i18n";
+import { t, useLanguage } from "../../../src/i18n";
 import { FieldRow, Row, Section } from "../../../src/ui/forms";
 import { usePalette } from "../../../src/ui/theme";
 
 export default function ProviderSettingsScreen() {
+  useLanguage();
   const params = useLocalSearchParams<{ kind: string }>();
   const rawKind = Array.isArray(params.kind) ? params.kind[0] : params.kind;
   const router = useRouter();

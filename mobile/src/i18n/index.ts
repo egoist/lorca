@@ -1,7 +1,9 @@
 // The app's words in the user's language. The key is the English text, so a string with no
 // translation reads as written; `zh.ts` is the Chinese table. The language is the one picked
-// in Settings, else the phone's; picking one re-renders the app from the root (`useLanguage`
-// keys the navigator in `app/_layout.tsx`), so call `t()` while rendering, not at module load.
+// in Settings, else the phone's. Picking one changes the words in place: a component that says
+// words calls `useLanguage()`, which renders it again in the new language, and a memo that
+// holds words lists the language among its dependencies. The screens, the navigators, and a
+// presented sheet stay as they are. So call `t()` while rendering, not at module load.
 
 import { useSyncExternalStore } from "react";
 

@@ -9,7 +9,7 @@ import * as Clipboard from "expo-clipboard";
 import { ShimmerView } from "../../modules/lorca-core/ShimmerView";
 import { isSentMessage, type Body, type Bot, type Chat, type Message } from "../core/model";
 import { useStore } from "../core/store";
-import { language, t } from "../i18n";
+import { language, t, useLanguage } from "../i18n";
 import { AttachmentBlock } from "./attachments";
 import { BotAvatar } from "./Avatar";
 import { daySeparator, firstLine, workingActivity } from "./format";
@@ -103,6 +103,7 @@ export function buildRows(chat: Chat, bots: Map<string, Bot>, workingBotIds: str
 }
 
 export function DayRow({ at }: { at: number }) {
+  useLanguage();
   const p = usePalette();
   return (
     <View style={styles.dayRow}>
@@ -112,6 +113,7 @@ export function DayRow({ at }: { at: number }) {
 }
 
 export function MessageRow({ row, bots, isGroup }: { row: Extract<Row, { type: "message" }>; bots: Map<string, Bot>; isGroup: boolean }) {
+  useLanguage();
   const p = usePalette();
   const paneWidth = usePaneWidth();
   const { message, groupStart, groupEnd, showsName } = row;
@@ -156,6 +158,7 @@ export function MessageRow({ row, bots, isGroup }: { row: Extract<Row, { type: "
 /// "Messaged ◉ Name" with the message's first line under it; a tap opens the whole message
 /// in a sheet.
 export function MarkerRow({ row, onPress }: { row: Extract<Row, { type: "marker" }>; onPress?: (row: Extract<Row, { type: "marker" }>) => void }) {
+  useLanguage();
   const p = usePalette();
   const preview = row.tooltip ? firstLine(row.tooltip) : "";
   return (
@@ -198,6 +201,7 @@ export function NoticeRow({ row }: { row: Extract<Row, { type: "notice" }> }) {
 /// adds. A shell command offers Always allow only with a rule. Once answered, the answer and the
 /// call; an Always allow keeps its rule.
 export function PermissionRow({ row, onDecide }: { row: Extract<Row, { type: "permission" }>; onDecide: (decision: "allow" | "always" | "deny") => void }) {
+  useLanguage();
   const p = usePalette();
   const [copied, setCopied] = useState(false);
   const [showCommand, setShowCommand] = useState(false);
@@ -308,6 +312,7 @@ export function PermissionRow({ row, onDecide }: { row: Extract<Row, { type: "pe
 
 /// The whole command a permission card asks about, to read or copy before answering.
 function CommandSheet({ visible, title, command, onClose }: { visible: boolean; title: string; command: string; onClose: () => void }) {
+  useLanguage();
   const p = usePalette();
   const [copied, setCopied] = useState(false);
   useEffect(() => {
@@ -353,6 +358,7 @@ export function StatusRow({ text }: { text: string }) {
 /// "Working…" in a DM and "Chef is working…" in a group, or what the one bot at work is doing,
 /// the words shimmering while a turn runs.
 export function WorkingRow({ chatId, bots, isGroup }: { chatId: string; bots: Bot[]; isGroup: boolean }) {
+  useLanguage();
   const p = usePalette();
   const activity = useStore((s) => workingActivity(s, chatId));
   const names = bots.map((b) => b.name);

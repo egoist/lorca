@@ -4,7 +4,6 @@
 import { t } from "../i18n";
 
 export const MAX_GROUP_BOTS = 6;
-export const ONLINE_WINDOW_SECS = 150;
 
 export interface ProviderStatus {
   kind: ProviderKind | string;

@@ -7,7 +7,7 @@ import { ActivityIndicator, Alert, Platform, Pressable, StyleSheet, Text, useWin
 import { chatTitle, engine } from "../core/engine";
 import type { Bot, Chat, ChatSearchResults } from "../core/model";
 import { markRead, useBotMap, useStore, useWorkingBotIds } from "../core/store";
-import { t } from "../i18n";
+import { t, useLanguage } from "../i18n";
 import { AvatarCluster } from "./Avatar";
 import { ChatPeek } from "./ChatPeek";
 import { ChatRow } from "./ChatRow";
@@ -26,6 +26,7 @@ const KEEP_OFFSET = { disabled: true };
 /// The chat list: the first screen of a narrow window, the sidebar of a wide one. In the sidebar
 /// a chat opens in the pane beside the list, in place of the one open there, and its row stays lit.
 export function ChatsScreen({ sidebar = false }: { sidebar?: boolean }) {
+  const { language } = useLanguage();
   const p = usePalette();
   const router = useRouter();
   const openChatId = useStore((s) => s.openChatId);
@@ -81,7 +82,7 @@ export function ChatsScreen({ sidebar = false }: { sidebar?: boolean }) {
       .filter((c) => !q || chatTitle(c).toLowerCase().includes(q) || c.bot_ids.some((id) => bots.get(id)?.name.toLowerCase().includes(q)))
       .sort((a, b) => lastActivity(b) - lastActivity(a));
     return [...visible.filter((c) => c.is_pinned), ...visible.filter((c) => !c.is_pinned)];
-  }, [chats, bots, query]);
+  }, [chats, bots, query, language]);
 
   const searchRows = useMemo(() => {
     if (!query.trim()) return [];
@@ -104,7 +105,7 @@ export function ChatsScreen({ sidebar = false }: { sidebar?: boolean }) {
       rows.push({ key: `message:${hit.message_id}`, kind: "message", chat, snippet: hit.snippet, createdAt: hit.created_at });
     }
     return rows;
-  }, [chats, bots, items, matches, query]);
+  }, [chats, bots, items, matches, query, language]);
 
   const searchingText = query.trim();
   const data: (Chat | SearchRow)[] = searchingText ? searchRows : items;
@@ -300,6 +301,7 @@ function useConnecting(): boolean {
 
 /// A row whose long press opens a native menu: every row on Android, a sidebar row on iOS.
 function MenuChatRow({ chat, bots, title, working, responding, selected, width: fixedWidth, onPress, onDelete }: { chat: Chat; bots: Map<string, Bot>; title: string; working: boolean; responding: boolean; selected?: boolean; width?: number; onPress: () => void; onDelete: () => void }) {
+  useLanguage();
   const menuRef = useRef<MenuComponentRef>(null);
   const { width: windowWidth } = useWindowDimensions();
   const width = fixedWidth ?? windowWidth;
@@ -340,6 +342,7 @@ type SearchRow = {
 };
 
 function SearchResultRow({ item, bots, query, onPress }: { item: SearchRow; bots: Map<string, Bot>; query: string; onPress: () => void }) {
+  useLanguage();
   const p = usePalette();
   const members = item.chat.bot_ids.map((id) => bots.get(id)).filter((bot): bot is Bot => !!bot);
   const at = item.createdAt ?? lastActivity(item.chat);

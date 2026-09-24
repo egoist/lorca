@@ -137,10 +137,12 @@ export function lastRunSummary(routine: Routine): string {
   }
 }
 
+/// When an offline Device was last on the relay; an online one reads "Online". The relay stamps
+/// `last_seen` as a socket closes, so a Device that just dropped was seen seconds ago.
 export function lastSeen(seenUnix: number | undefined): string {
   if (!seenUnix) return t("Offline");
   const elapsed = Date.now() / 1000 - seenUnix;
-  if (elapsed < 150) return t("Active now");
+  if (elapsed < 60) return t("Last seen just now");
   if (elapsed < 3600) return t("Last seen {count}m ago", { count: Math.floor(elapsed / 60) });
   if (elapsed < 86400) return t("Last seen {count}h ago", { count: Math.floor(elapsed / 3600) });
   return t("Last seen {count}d ago", { count: Math.floor(elapsed / 86400) });
