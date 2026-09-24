@@ -1,8 +1,7 @@
 import AppKit
 
-/// The marketplace for one Runner, after Grok Bot's Plugins overlay: search, a row per plugin
-/// with Install (or its state on this Runner), and Add MCP Server for a pasted config. An
-/// install is for every bot on the Runner.
+/// The marketplace for one Runner, after Grok Bot's Plugins overlay: search and a row per plugin
+/// with Install (or its state on this Runner). An install is for every bot on the Runner.
 final class PluginsMarketplaceViewController: SheetViewController {
     private let store = AppStore.shared
     private let runner: Device
@@ -10,11 +9,6 @@ final class PluginsMarketplaceViewController: SheetViewController {
 
     private let search = NSSearchField()
     private let list = SectionView(title: L("Popular plugins"))
-    private let custom = SectionView(title: L("Add MCP Server"))
-    private let nameField = NSTextField()
-    private let jsonView = NSTextView()
-    private let addButton = NSButton()
-    private let customToggle = NSButton()
     private let status = Build.label("", font: Theme.Font.caption, color: .secondaryLabelColor, lines: 0)
 
     private var plugins: [MarketplacePlugin] = []
@@ -42,54 +36,13 @@ final class PluginsMarketplaceViewController: SheetViewController {
         search.action = #selector(searchChanged)
         search.translatesAutoresizingMaskIntoConstraints = false
 
-        nameField.placeholderString = L("Name, such as My Server")
-        nameField.controlSize = .small
-        nameField.translatesAutoresizingMaskIntoConstraints = false
-        jsonView.isRichText = false
-        jsonView.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
-        jsonView.isAutomaticQuoteSubstitutionEnabled = false
-        jsonView.isAutomaticDashSubstitutionEnabled = false
-        jsonView.isAutomaticTextReplacementEnabled = false
-        jsonView.textContainerInset = NSSize(width: 6, height: 6)
-        jsonView.isVerticallyResizable = true
-        jsonView.isHorizontallyResizable = false
-        jsonView.autoresizingMask = [.width]
-        jsonView.textContainer?.widthTracksTextView = true
-        jsonView.string = "{\n  \"mcpServers\": {\n    \"my-server\": { \"command\": \"npx\", \"args\": [\"-y\", \"@example/mcp\"] }\n  }\n}"
-        let jsonScroll = NSScrollView()
-        jsonScroll.documentView = jsonView
-        jsonScroll.hasVerticalScroller = true
-        jsonScroll.borderType = .bezelBorder
-        jsonScroll.translatesAutoresizingMaskIntoConstraints = false
-        addButton.title = L("Add to %@", runner.name)
-        addButton.bezelStyle = .rounded
-        addButton.controlSize = .small
-        addButton.target = self
-        addButton.action = #selector(addCustom)
-        let customStack = Build.stack([nameField, jsonScroll, addButton], spacing: 8)
-        custom.setRows([customStack])
-        custom.isHidden = true
-
-        customToggle.title = L("Add MCP Server…")
-        customToggle.bezelStyle = .rounded
-        customToggle.controlSize = .small
-        customToggle.target = self
-        customToggle.action = #selector(toggleCustom)
-
         contentStack.addArrangedSubview(search)
         contentStack.addArrangedSubview(list)
-        contentStack.addArrangedSubview(custom)
-        contentStack.addArrangedSubview(customToggle)
         contentStack.addArrangedSubview(status)
         NSLayoutConstraint.activate([
             search.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
             list.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
-            custom.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
             status.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
-            customStack.widthAnchor.constraint(equalTo: custom.widthAnchor, constant: -24),
-            nameField.widthAnchor.constraint(equalTo: customStack.widthAnchor),
-            jsonScroll.widthAnchor.constraint(equalTo: customStack.widthAnchor),
-            jsonScroll.heightAnchor.constraint(equalToConstant: 110),
         ])
         setButtons(confirm: L("Done"), cancel: nil)
         list.setRows([KeyValueRow(key: L("Loading the marketplace…"), value: "", tint: .secondaryLabelColor)])
@@ -157,39 +110,6 @@ final class PluginsMarketplaceViewController: SheetViewController {
                 self.status.stringValue = self.nextStep(for: status)
             } catch {
                 self.status.stringValue = L("Couldn't install %@: %@", plugin.name, error.localizedDescription)
-            }
-        }
-    }
-
-    @objc private func toggleCustom() {
-        custom.isHidden.toggle()
-        customToggle.title = custom.isHidden ? L("Add MCP Server…") : L("Hide")
-        fitSheetToContent()
-    }
-
-    @objc private func addCustom() {
-        let name = nameField.stringValue.trimmingCharacters(in: .whitespaces)
-        guard !name.isEmpty else {
-            status.stringValue = L("Give the server a name.")
-            return
-        }
-        guard let data = jsonView.string.data(using: .utf8), let json = try? JSONSerialization.jsonObject(with: data) else {
-            status.stringValue = L("That is not valid JSON.")
-            return
-        }
-        addButton.isEnabled = false
-        Task { [weak self] in
-            guard let self else { return }
-            defer { self.addButton.isEnabled = true }
-            do {
-                let installed = try await self.store.installMCPServer(named: name, json: json, on: self.runner.id)
-                self.status.stringValue = L("%@ added to %@.", installed.name, self.runner.name) + " " + self.nextStep(for: installed)
-                self.custom.isHidden = true
-                self.customToggle.title = L("Add MCP Server…")
-                self.render()
-            } catch {
-                self.status.stringValue = L("Couldn't add it: %@", error.localizedDescription)
-                self.fitSheetToContent()
             }
         }
     }

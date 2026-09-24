@@ -488,13 +488,10 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             let runner_id = string(&params, "runner_id")?;
             let manifest = match params.get("manifest") {
                 Some(value) => crate::plugins::Manifest::parse(value)?,
-                None => match params.get("mcp_json") {
-                    Some(mcp) => crate::plugins::Manifest::from_mcp_json(&string(&params, "name")?, mcp)?,
-                    None => {
-                        let id = string(&params, "plugin_id")?;
-                        crate::plugins::marketplace(app).await.into_iter().find(|m| m.id == id).ok_or_else(|| format!("No plugin {id} in the marketplace"))?
-                    }
-                },
+                None => {
+                    let id = string(&params, "plugin_id")?;
+                    crate::plugins::marketplace(app).await.into_iter().find(|m| m.id == id).ok_or_else(|| format!("No plugin {id} in the marketplace"))?
+                }
             };
             let source = if params.get("plugin_id").is_some() { "marketplace" } else { "inline" };
             let body = json!({ "manifest": manifest, "source": source });

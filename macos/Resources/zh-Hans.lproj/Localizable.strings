@@ -23,7 +23,6 @@
 "%@ · update Lorca to sync" = "%@ · 更新 Lorca 后才能同步";
 "%@ (this computer)" = "%@（这台电脑）";
 "%@ (This computer)" = "%@（这台电脑）";
-"%@ added to %@." = "%1$@ 已添加到 %2$@。";
 "%@ and %@ are working…" = "%1$@ 和 %2$@ 正在工作…";
 "%@ changed this file while you were editing" = "在你编辑期间，%@ 修改了这个文件";
 "%@ connected." = "%@ 已接入。";
@@ -75,11 +74,8 @@
 "Add a bot to %@" = "将智能体添加到“%@”";
 "Add Bot…" = "添加智能体…";
 "Add from Plugins…" = "从插件中添加…";
-"Add MCP Server" = "添加 MCP 服务器";
-"Add MCP Server…" = "添加 MCP 服务器…";
 "Add rule" = "添加规则";
 "Added the rule “%@” to Auto-review." = "已将规则“%@”添加到自动审查。";
-"Add to %@" = "添加到 %@";
 "Address one with @, or say @everyone to hear from all of them." = "用 @ 指定其中一个，或用 @everyone 让所有智能体回应。";
 "Advanced" = "高级";
 "Allow" = "允许";
@@ -163,7 +159,6 @@
 "Copy pairing string" = "拷贝配对字符串";
 "Copy Phrase" = "拷贝短语";
 "Could not start %@: %@" = "无法启动 %1$@：%2$@";
-"Couldn't add it: %@" = "无法添加：%@";
 "Couldn’t delete the account" = "无法删除账户";
 "Couldn't install %@: %@" = "无法安装 %1$@：%2$@";
 "Couldn't remove it" = "无法移除";
@@ -241,14 +236,12 @@
 "Forward" = "前进";
 "General" = "通用";
 "Give the bot a name." = "请给智能体起个名字。";
-"Give the server a name." = "请给服务器起个名称。";
 "Go to Chat %d" = "前往聊天 %d";
 "Green" = "绿色";
 "Group · %@ · %@" = "群聊 · %1$@ · %2$@";
 "Group name (optional)" = "群聊名称（可选）";
 "Handed off to %@" = "已转交给 %@";
 "Help" = "帮助";
-"Hide" = "隐藏";
 "Hide Lorca" = "隐藏 Lorca";
 "Hide Others" = "隐藏其他";
 "High" = "高";
@@ -315,7 +308,6 @@
 "Minimize" = "最小化";
 "Model" = "模型";
 "Name" = "名称";
-"Name, such as My Server" = "名称，例如 My Server";
 "needs a sign-in to %@" = "需要登录 %@";
 "Never" = "从未";
 "Never checked" = "从未检查";
@@ -526,7 +518,6 @@
 "Task" = "任务";
 "Teal" = "蓝绿色";
 "That file could not be read as an image." = "无法将该文件读取为图像。";
-"That is not valid JSON." = "这不是有效的 JSON。";
 "The app talks only to the local CLI over a localhost websocket. The CLI holds the keys, runs the agent loop, and syncs ciphertext with the relay. The relay stores public keys and opaque blobs.\n\nFull notes live in ARCHITECTURE.md." = "App 只通过本机 WebSocket 与本地 CLI 通信。CLI 保管密钥、运行智能体循环，并与中继同步密文。中继只存储公钥和不透明的数据块。\n\n完整说明见 ARCHITECTURE.md。";
 "The bot" = "智能体";
 "The bot, its routines, and this direct chat are removed from this Device and from paired Devices." = "该智能体、其例行任务和此直接聊天将从这台设备和已配对的设备上移除。";

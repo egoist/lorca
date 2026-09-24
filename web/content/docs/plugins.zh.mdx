@@ -1,6 +1,6 @@
 ---
 title: 插件
-description: 让智能体连接 GitHub、Linear、Notion、Sentry、浏览器，或任何 MCP 服务器。
+description: 让智能体连接 GitHub、Linear、Notion、Sentry、Context7 或浏览器。
 icon: Plug
 ---
 
@@ -31,23 +31,6 @@ Lorca 自带 **GitHub**、**Linear**、**Notion**、**Sentry**、**Context7**（
 - 其他服务会在 **Runner 上**的浏览器里打开登录页面。如果你在另一台设备上，卡片会告诉你到那边去完成。
 
 有些插件也接受直接粘贴的令牌，比如 GitHub 的个人访问令牌或 Context7 的 API 密钥。在插件的面板里填写。密钥字段只能写入：保存之后不会再显示。
-
-## 添加你自己的 MCP 服务器
-
-在插件市场面板里选择 **添加 MCP 服务器…**，粘贴服务器的 JSON，格式与其他 MCP 客户端相同：
-
-```json
-{
-  "mcpServers": {
-    "weather": {
-      "command": "npx",
-      "args": ["-y", "weather-mcp"]
-    }
-  }
-}
-```
-
-本地（`command`）和远程（`url`）服务器都支持。
 
 ## 插件可以做什么
 

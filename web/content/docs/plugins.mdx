@@ -1,6 +1,6 @@
 ---
 title: Plugins
-description: Connect bots to GitHub, Linear, Notion, Sentry, a browser, or any MCP server.
+description: Connect bots to GitHub, Linear, Notion, Sentry, Context7, or a browser.
 icon: Plug
 ---
 
@@ -31,23 +31,6 @@ A plugin that needs an account posts a sign-in card in the chat: **Sign in** or 
 - Other services open a sign-in page in the browser **on the Runner**. If you are on another device, the card tells you to finish there.
 
 Some plugins take a pasted token instead, such as a GitHub personal access token or a Context7 API key. Fill it in on the plugin's sheet. Secret fields are write-only: once saved they are never shown again.
-
-## Add your own MCP server
-
-In the marketplace sheet choose **Add MCP Server…** and paste the server's JSON, the same shape other MCP clients use:
-
-```json
-{
-  "mcpServers": {
-    "weather": {
-      "command": "npx",
-      "args": ["-y", "weather-mcp"]
-    }
-  }
-}
-```
-
-Both local (`command`) and remote (`url`) servers work.
 
 ## What a plugin may do
 

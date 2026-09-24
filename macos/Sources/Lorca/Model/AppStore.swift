@@ -702,12 +702,6 @@ final class AppStore {
         return try await client.request("plugins.install", ["runner_id": runnerID, "plugin_id": pluginID], as: Wire.PluginInstalled.self).status.toModel()
     }
 
-    /// Installs an MCP server the user pasted as JSON, as Grok Bot's "Add MCP Server".
-    func installMCPServer(named name: String, json: Any, on runnerID: Device.ID) async throws -> InstalledPlugin {
-        guard !isMock else { return InstalledPlugin(id: name, name: name, description: "", version: "", icon: "", state: .ready, detail: "Ready") }
-        return try await client.request("plugins.install", ["runner_id": runnerID, "name": name, "mcp_json": json], as: Wire.PluginInstalled.self).status.toModel()
-    }
-
     func uninstallPlugin(_ pluginID: String, on runnerID: Device.ID) async throws {
         guard !isMock else { return }
         _ = try await client.request("plugins.uninstall", ["runner_id": runnerID, "plugin_id": pluginID])

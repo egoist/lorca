@@ -188,61 +188,6 @@ impl Manifest {
         }
         Ok(())
     }
-
-    /// An inline MCP server the user pasted, as the app's "Add MCP Server" does: the usual
-    /// `{ "mcpServers": { "name": { "command", "args", "env" } | { "url", "headers" } } }`,
-    /// or one server object alone.
-    pub fn from_mcp_json(name: &str, json: &Value) -> Result<Manifest, String> {
-        let mut servers = BTreeMap::new();
-        let entries: Vec<(String, Value)> = match json.get("mcpServers").and_then(Value::as_object) {
-            Some(map) => map.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
-            None => vec![(slug(name), json.clone())],
-        };
-        for (server_name, entry) in entries {
-            let spec = if let Some(url) = entry.get("url").and_then(Value::as_str) {
-                let headers = entry
-                    .get("headers")
-                    .and_then(Value::as_object)
-                    .map(|h| h.iter().filter_map(|(k, v)| v.as_str().map(|v| (k.clone(), v.to_string()))).collect())
-                    .unwrap_or_default();
-                ServerSpec::Http { url: url.to_string(), headers, auth: None }
-            } else if let Some(command) = entry.get("command").and_then(Value::as_str) {
-                let args = entry
-                    .get("args")
-                    .and_then(Value::as_array)
-                    .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
-                    .unwrap_or_default();
-                let env = entry
-                    .get("env")
-                    .and_then(Value::as_object)
-                    .map(|e| e.iter().filter_map(|(k, v)| v.as_str().map(|v| (k.clone(), v.to_string()))).collect())
-                    .unwrap_or_default();
-                ServerSpec::Stdio { command: command.to_string(), args, env }
-            } else {
-                return Err(format!("Server {server_name} needs a command or a url."));
-            };
-            servers.insert(server_name, spec);
-        }
-        let name = name.trim();
-        if name.is_empty() {
-            return Err("Give the server a name.".into());
-        }
-        let manifest = Manifest {
-            id: slug(name),
-            name: name.to_string(),
-            description: "An MCP server added by hand.".into(),
-            version: String::new(),
-            icon: "server.rack".into(),
-            homepage: None,
-            tags: Vec::new(),
-            servers,
-            variables: Vec::new(),
-            skills: Vec::new(),
-            tools: ToolHints::default(),
-        };
-        manifest.check()?;
-        Ok(manifest)
-    }
 }
 
 /// `My GitHub Server` → `my-github-server`.
@@ -793,12 +738,6 @@ mod tests {
     fn manifests_are_checked_and_templates_filled() {
         assert!(Manifest::parse(&json!({ "id": "Bad Id", "name": "x", "servers": {} })).unwrap_err().contains("lowercase"));
         assert!(Manifest::parse(&json!({ "id": "x", "name": "x", "servers": {} })).unwrap_err().contains("no MCP server"));
-        let inline = Manifest::from_mcp_json("My Server", &json!({ "mcpServers": { "fs": { "command": "npx", "args": ["-y", "server"], "env": { "TOKEN": "${TOKEN}" } } } })).unwrap();
-        assert_eq!(inline.id, "my-server");
-        assert!(matches!(inline.servers.get("fs"), Some(ServerSpec::Stdio { command, .. }) if command == "npx"));
-        let one = Manifest::from_mcp_json("Remote", &json!({ "url": "https://example.com/mcp", "headers": { "X-Key": "${KEY}" } })).unwrap();
-        assert!(matches!(one.servers.get("remote"), Some(ServerSpec::Http { .. })));
-        assert!(Manifest::from_mcp_json("Nope", &json!({ "nothing": true })).is_err());
 
         let mut values = BTreeMap::new();
         values.insert("TOKEN".to_string(), "abc".to_string());
@@ -874,9 +813,9 @@ mod tests {
         let ServerSpec::Http { auth: Some(AuthSpec::Oauth { client_id, device_authorization_endpoint, .. }), .. } = store.get("github").unwrap().manifest.servers.get("github").unwrap() else { panic!("http oauth") };
         assert!(client_id.as_deref().is_some_and(|c| !c.is_empty()) && device_authorization_endpoint.is_some(), "the device flow arrived");
         assert_eq!(store.values("github").get("GITHUB_TOKEN").map(String::as_str), Some("ghp-secret"), "secrets kept");
-        // A plugin the user added by hand is left alone.
+        // A plugin installed from its own manifest is left alone.
         drop(store);
-        let mine = Manifest::from_mcp_json("Mine", &json!({ "url": "https://example.com/mcp" })).unwrap();
+        let mine = Manifest::parse(&json!({ "id": "mine", "name": "Mine", "servers": { "api": { "type": "http", "url": "https://example.com/mcp" } } })).unwrap();
         install(app, mine, "inline").unwrap();
         assert!(refresh_installed(app, &bundled()).is_empty());
     }
