@@ -102,6 +102,9 @@ final class SuggestionChip: NSView {
             label.topAnchor.constraint(equalTo: topAnchor, constant: 6),
             label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -6),
         ])
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+        setAccessibilityLabel(text)
     }
 
     @available(*, unavailable)
@@ -128,7 +131,22 @@ final class SuggestionChip: NSView {
         NSCursor.arrow.set()
     }
 
-    override func mouseUp(with event: NSEvent) { onClick?() }
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        frame.contains(point) ? self : nil
+    }
+
+    /// Claims the press. Unclaimed, AppKit hands it to the transcript table under the empty
+    /// state, whose tracking loop takes the mouse-up, so the click never lands here.
+    override func mouseDown(with event: NSEvent) {}
+
+    override func mouseUp(with event: NSEvent) {
+        if bounds.contains(convert(event.locationInWindow, from: nil)) { onClick?() }
+    }
+
+    override func accessibilityPerformPress() -> Bool {
+        onClick?()
+        return true
+    }
 
     override func draw(_ dirtyRect: NSRect) {
         let path = NSBezierPath(roundedRect: bounds, xRadius: bounds.height / 2, yRadius: bounds.height / 2)
