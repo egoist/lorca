@@ -349,13 +349,16 @@ final class BotRow: NSView {
     }
 }
 
-/// Row with a leading symbol, a title/subtitle pair and a trailing state pill.
-final class StatusRow: NSView {
+/// Row with a leading symbol, a title/subtitle pair and a trailing state pill. A state with
+/// details behind it (a plugin's "Error") shows them in a popover when clicked.
+final class StatusRow: NSView, NSGestureRecognizerDelegate {
     private let icon = NSImageView()
     private let title = Build.label("", font: .systemFont(ofSize: 12.5, weight: .medium))
     private let subtitle = Build.label(
         "", font: Theme.Font.caption, color: .secondaryLabelColor, lines: 0)
     private let state = Build.label("", font: .systemFont(ofSize: 11, weight: .medium), alignment: .right)
+    private let stateClick = NSClickGestureRecognizer()
+    private var stateDetail: String?
     private let action = NSButton()
     private var textTrailingPlain: NSLayoutConstraint!
     private var textTrailingState: NSLayoutConstraint!
@@ -368,6 +371,12 @@ final class StatusRow: NSView {
         translatesAutoresizingMaskIntoConstraints = false
         icon.translatesAutoresizingMaskIntoConstraints = false
         icon.contentTintColor = .secondaryLabelColor
+
+        stateClick.target = self
+        stateClick.action = #selector(showStateDetail)
+        stateClick.delegate = self
+        stateClick.isEnabled = false
+        state.addGestureRecognizer(stateClick)
 
         action.bezelStyle = .rounded
         action.controlSize = .small
@@ -417,6 +426,7 @@ final class StatusRow: NSView {
         subtitle subtitleText: String,
         state stateText: String?,
         stateColor: NSColor = .secondaryLabelColor,
+        stateDetail: String? = nil,
         actionTitle: String? = nil,
         destructive: Bool = false
     ) {
@@ -427,6 +437,8 @@ final class StatusRow: NSView {
         state.stringValue = stateText ?? ""
         state.textColor = stateColor
         state.isHidden = stateText == nil
+        self.stateDetail = stateDetail
+        stateClick.isEnabled = stateDetail != nil
 
         NSLayoutConstraint.deactivate([textTrailingPlain, textTrailingState, textTrailingAction])
         if let actionTitle {
@@ -445,8 +457,35 @@ final class StatusRow: NSView {
         }
     }
 
+    /// A plugin and its state. An error reads "Error"; its message is a click away, so a long
+    /// one never widens the row.
+    func configure(plugin: InstalledPlugin) {
+        let failed = plugin.state == .error
+        configure(
+            symbol: plugin.symbolName,
+            image: PluginLogo.tile(for: plugin.id, size: 18),
+            title: plugin.name,
+            subtitle: plugin.description,
+            state: failed ? L("Error") : plugin.detail,
+            stateColor: plugin.stateColor,
+            stateDetail: failed ? plugin.detail : nil
+        )
+    }
+
     @objc private func actionTapped() {
         onAction?()
+    }
+
+    @objc private func showStateDetail() {
+        guard let stateDetail else { return }
+        TextPopover.show(stateDetail, relativeTo: state.bounds, of: state)
+    }
+
+    /// A click on the state shows its details instead of doing what a click on the row does.
+    func gestureRecognizer(
+        _ gestureRecognizer: NSGestureRecognizer, shouldBeRequiredToFailBy otherGestureRecognizer: NSGestureRecognizer
+    ) -> Bool {
+        otherGestureRecognizer.view === self
     }
 }
 

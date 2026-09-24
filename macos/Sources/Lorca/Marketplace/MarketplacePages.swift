@@ -203,9 +203,7 @@ final class MarketplaceInstalledPage: MarketplacePage {
                 ? [NoteRow(text: L("Nothing installed yet. Find plugins in the marketplace."))]
                 : plugins.map { plugin in
                     let row = StatusRow()
-                    row.configure(
-                        symbol: plugin.symbolName, image: PluginLogo.tile(for: plugin.id, size: 18), title: plugin.name,
-                        subtitle: plugin.description, state: plugin.detail, stateColor: plugin.stateColor)
+                    row.configure(plugin: plugin)
                     row.identifier = NSUserInterfaceItemIdentifier(plugin.id)
                     row.toolTip = L("Open %@", plugin.name)
                     row.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(open(_:))))

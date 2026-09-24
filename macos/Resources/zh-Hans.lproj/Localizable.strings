@@ -236,6 +236,7 @@
 "enter send newline keyboard chats" = "回车 发送 换行 键盘 聊天 enter send newline keyboard chats";
 "Enter this code at %@, then come back." = "请在 %@ 输入此代码，然后回到这里。";
 "erase remove wipe relay data identity" = "抹除 移除 清除 中继 数据 身份 删除账户";
+"Error" = "错误";
 "Every bot is assigned to a Runner: a Device running macOS, Linux, or Windows. That machine's CLI runs the turn with your account's provider credentials, so a bot on an offline Runner waits until it reconnects. Phones and tablets pair as Devices but never run bots.\n\nThe app talks only to the local CLI on 127.0.0.1:%@. Start it with `lorca serve`; the CLI holds your keys and provider credentials, which reach your other Devices encrypted." = "每个智能体都分配给一个 Runner，即一台运行 macOS、Linux 或 Windows 的设备。那台机器上的 CLI 使用你账户的服务商凭证来运行每一轮，因此离线 Runner 上的智能体会等到它重新连接。手机和平板电脑可以配对为设备，但从不运行智能体。\n\nApp 只与本机 127.0.0.1:%@ 上的 CLI 通信。用 `lorca serve` 启动它；CLI 保管你的密钥和服务商凭证，这些凭证会加密后传到你的其他设备。";
 "Every bot on %@ can use it." = "%@ 上的每个智能体都能使用它。";
 "Every bot on %@ can use these. Sign-ins and keys stay on %@." = "%1$@ 上的每个智能体都能使用这些插件。登录和密钥只留在 %2$@ 上。";

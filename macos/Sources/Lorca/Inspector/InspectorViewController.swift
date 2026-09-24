@@ -485,14 +485,7 @@ final class InspectorViewController: NSViewController {
                 row.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(openPlugin(_:))))
                 return row
             }
-            row.configure(
-                symbol: plugin.symbolName,
-                image: PluginLogo.tile(for: plugin.id, size: 18),
-                title: plugin.name,
-                subtitle: plugin.description,
-                state: plugin.detail,
-                stateColor: plugin.stateColor
-            )
+            row.configure(plugin: plugin)
             row.toolTip = L("Open %@", plugin.name)
             return row
         }
