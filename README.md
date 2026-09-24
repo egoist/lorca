@@ -6,7 +6,7 @@ You create bots, talk to them 1:1, or put them in a group chat. Bots can hand wo
 
 The UI is AppKit (SPM), built to feel like a Mac app: materials, density, keyboard, and motion.
 
-Identity is a local key pair. Devices pair to each other. Traffic to the network is end-to-end encrypted; the website is a [Happy](https://happy.engineering/docs/security/)-style relay for ciphertext. Each machine or phone that pairs is a Device and records its OS (`macos`, `linux`, `windows`, `ios`, `ipados`, `android`). Desktop Devices are Runners: you can create a bot for any paired Runner, and that bot uses the account's encrypted provider credentials there. Phones and tablets are Devices, not Runners.
+Identity is a local key pair. Devices pair to each other. Traffic to the network is end-to-end encrypted. Each machine or phone that pairs is a Device and records its OS (`macos`, `linux`, `windows`, `ios`, `ipados`, `android`). Desktop Devices are Runners: you can create a bot for any paired Runner, and that bot uses the account's encrypted provider credentials there. Phones and tablets are Devices, not Runners.
 
 ## Stack
 
