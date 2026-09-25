@@ -89,6 +89,11 @@ jobs:
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-zigbuild
+      # The registry and the built dependencies, kept between runs. The cache key names the
+      # runner's OS but not the target, and three of the builds run on Linux.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
       - name: Build
         run: cargo ${{ matrix.zig && 'zigbuild' || 'build' }} --release --locked -p lorca --target ${{ matrix.target }}
       - name: Pack
