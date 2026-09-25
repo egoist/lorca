@@ -360,8 +360,7 @@ impl LocalStore {
             .transpose()
     }
 
-    /// Every message in insertion order, for assertions over the durable store.
-    #[cfg(test)]
+    /// Every message of a chat in its order.
     pub fn all(&self, chat_id: &str) -> anyhow::Result<Vec<Message>> {
         let connection = self.connection.lock().unwrap();
         let mut statement = connection
@@ -781,6 +780,13 @@ impl LocalStore {
         append_applied_blob_tx(&tx, &item.id)?;
         queue_outbox_tx(&tx, item)?;
         tx.commit()?;
+        Ok(())
+    }
+
+    /// Drops what the outbox still holds for a relay group: a chat's messages, read marks,
+    /// and attachments.
+    pub fn drop_outbox_group(&self, group: &str) -> anyhow::Result<()> {
+        self.connection.lock().unwrap().execute("DELETE FROM outbox WHERE group_name = ?1", [group])?;
         Ok(())
     }
 

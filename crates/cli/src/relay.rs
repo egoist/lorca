@@ -34,8 +34,13 @@ impl RelayError {
     pub fn is_update_required(&self) -> bool {
         self.status == Some(426)
     }
+    /// The relay refused the request, and the same request would be refused again.
     pub fn is_client_error(&self) -> bool {
-        matches!(self.status, Some(400..=499))
+        matches!(self.status, Some(400..=499)) && !self.is_rate_limited()
+    }
+    /// Over the relay's rate limit: the same request goes through after a wait.
+    pub fn is_rate_limited(&self) -> bool {
+        self.status == Some(429)
     }
 }
 

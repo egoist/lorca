@@ -18,12 +18,21 @@ pub const POLL_KINDS: &str = "roster,chat,machine,credentials,job,job_cancel,job
 
 pub async fn run(app: Arc<App>) {
     let mut failures: u32 = 0;
+    // The last try's bearer was refused and the next one went at once: a second refusal in a
+    // row waits out the backoff.
+    let mut signed_in_again = false;
     loop {
         let wakes = app.sync_wakes.load(Ordering::Relaxed);
         match session(&app, &mut failures).await {
-            Ok(()) => failures = 0,
+            Ok(()) => {
+                failures = 0;
+                signed_in_again = false;
+            }
             Err(error) => {
                 let dropped = disconnected(&app);
+                if dropped || !error.is_unauthorized() {
+                    signed_in_again = false;
+                }
                 if error.is_unauthorized() {
                     app.relay.forget_token();
                 }
@@ -49,6 +58,12 @@ pub async fn run(app: Arc<App>) {
                 if !dropped && !outdated && !error.is_unauthorized() {
                     let unknown_machine = error.is_unknown_machine() && !app.is_identity_device();
                     app.relay_failed(RelayProblem { message: error.message.clone(), unknown_machine });
+                }
+                // A relay that restarted with a new secret refuses the bearer this Device held.
+                // The next try signs in again, so it goes at once.
+                if error.is_unauthorized() && !std::mem::replace(&mut signed_in_again, true) {
+                    tracing::info!(%error, "relay; signing in again");
+                    continue;
                 }
                 // Armed before the check below, so a wake between the two still ends the wait.
                 let woken = app.outbox_notify.notified();
@@ -386,7 +401,7 @@ pub async fn ensure_registered(app: &Arc<App>, url: &str) -> Result<(), RelayErr
     }
     // A relay that knew this machine before and lost the account (a reset, or the identity
     // dropped for inactivity) gets back what a Device pairing or restoring needs: the DEK
-    // sealed to the content key, and the roster. Messages stay on the Devices that have them.
+    // sealed to the content key, the roster, and the chats' messages as this Device has them.
     if again {
         if let Some(dek) = app.dek() {
             match crate::crypto::seal(&identity.content_pubkey(), &dek) {
@@ -397,6 +412,7 @@ pub async fn ensure_registered(app: &Arc<App>, url: &str) -> Result<(), RelayErr
             }
         }
         app.push_roster();
+        app.push_history();
     }
     app.save_machine().map_err(|e| RelayError { status: None, message: e.to_string() })?;
     Ok(())
@@ -414,6 +430,12 @@ async fn drain_outbox(app: &Arc<App>, url: &str, token: &str) -> Result<(), Rela
         let (id, kind) = (item.id.clone(), item.kind.clone());
         match app.relay.put_blob(url, token, item).await {
             Ok(_) => {}
+            // Over the relay's budget for this identity, as a history uploaded again is: the
+            // same blob goes after a second.
+            Err(error) if error.is_rate_limited() => {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                continue;
+            }
             Err(error) if error.is_client_error() && !error.is_unauthorized() => {
                 tracing::warn!(%error, %kind, "relay rejected blob; dropping");
                 if kind == "credentials" {

@@ -589,6 +589,63 @@ impl App {
         }
     }
 
+    /// Queues the account's history again, for a relay that lost the log (reset, or the identity
+    /// dropped for inactivity): the bots' photos, then each chat's messages in their order, each
+    /// after the attachments it names that this Device holds, with the chat's read mark where
+    /// this Device stopped reading, so the other Devices count what this one does. What the
+    /// outbox still held for a chat goes with the rest, since a version waiting there would keep
+    /// its place ahead of older messages. A chat goes up under the message order lock, so no new
+    /// message lands between its old ones.
+    pub fn push_history(&self) {
+        let (avatars, chats): (Vec<Attachment>, Vec<(String, u32)>) = {
+            let state = self.state.lock().unwrap();
+            (
+                state.bots.iter().filter_map(|bot| bot.avatar.clone()).collect(),
+                state.chats.iter().map(|chat| (chat.meta.id.clone(), chat.unread_count)).collect(),
+            )
+        };
+        let push_file = |chat_id: Option<&str>, attachment: &Attachment| {
+            if crate::files::is_local(self, &attachment.id) {
+                if let Err(error) = crate::files::push_blob(self, chat_id, attachment) {
+                    tracing::warn!(%error, name = %attachment.name, "queueing an attachment again");
+                }
+            }
+        };
+        for avatar in &avatars {
+            push_file(None, avatar);
+        }
+        for (chat_id, unread) in chats {
+            let _order = self.message_order.lock().unwrap();
+            if let Err(error) = self.store.drop_outbox_group(&relay_name(&chat_id)) {
+                tracing::error!(%error, %chat_id, "dropping a chat's queued blobs to upload it again");
+                continue;
+            }
+            let messages = match self.store.all(&chat_id) {
+                Ok(messages) => messages,
+                Err(error) => {
+                    tracing::error!(%error, %chat_id, "reading a chat to upload it again");
+                    continue;
+                }
+            };
+            let read_mark = read_mark_at(&messages, unread);
+            let count = messages.len();
+            for (index, message) in messages.into_iter().enumerate() {
+                if index == read_mark {
+                    self.push_chat_op(&ChatBlob::ClearUnread { chat_id: chat_id.clone() });
+                }
+                if let Body::Text { attachments, .. } = &message.body {
+                    for attachment in attachments {
+                        push_file(Some(&chat_id), attachment);
+                    }
+                }
+                self.push_chat_op(&ChatBlob::Upsert { message });
+            }
+            if read_mark == count {
+                self.push_chat_op(&ChatBlob::ClearUnread { chat_id });
+            }
+        }
+    }
+
     pub fn push_chat_op(&self, op: &ChatBlob) {
         let Some(dek) = self.dek() else { return };
         match crate::crypto::encrypt_json(&dek, "chat", op) {
@@ -1511,6 +1568,24 @@ impl App {
     }
 }
 
+/// Where a chat's read mark goes among its messages: after all of them when this Device has
+/// read the chat, else before the last `unread` of those that count as unread.
+fn read_mark_at(messages: &[Message], unread: u32) -> usize {
+    if unread == 0 {
+        return messages.len();
+    }
+    let mut left = unread;
+    for (index, message) in messages.iter().enumerate().rev() {
+        if message.counts_unread() {
+            left -= 1;
+            if left == 0 {
+                return index;
+            }
+        }
+    }
+    0
+}
+
 /// Drops everything still waiting to upload for these chats and queues their relay groups for
 /// deletion. The sync cycle retries each group until the relay accepts it.
 fn queue_chat_deletes(state: &mut State, chat_ids: &[String]) {
@@ -1839,5 +1914,40 @@ mod tests {
             .collect();
         assert_eq!(stored.len(), 320);
         assert_eq!(queued, stored);
+    }
+
+    #[test]
+    fn a_history_goes_up_again_in_order_with_the_read_mark() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        crate::identity::create(app, Some("Workbench".into())).unwrap();
+        app.state.lock().unwrap().chats.push(chat("chat", "dm", &["b1"], Some("b1")));
+        let you = |text: &str| Message::new("chat", Author::You, Body::text(text));
+        let reply = |text: &str| Message::new("chat", Author::Bot { bot_id: "b1".into() }, Body::text(text));
+        let messages = [you("hi"), reply("one"), you("more"), reply("two"), reply("three")];
+        // The last two replies still wait in the outbox, as they would for a relay that went
+        // away before they went up.
+        for (index, message) in messages.iter().enumerate() {
+            app.upsert_message(message.clone(), index >= 3);
+        }
+        // This Device has not read the last two replies.
+        assert_eq!(app.state.lock().unwrap().chats.iter().find(|chat| chat.meta.id == "chat").unwrap().unread_count, 2);
+
+        app.push_history();
+
+        let queued: Vec<String> = app
+            .store
+            .outbox()
+            .unwrap()
+            .into_iter()
+            .filter(|item| item.kind == "chat" && item.group.as_deref() == Some("chat"))
+            .map(|item| item.slot.unwrap().name)
+            .collect();
+        let mut expected: Vec<String> = messages.iter().map(|message| message.id.clone()).collect();
+        expected.insert(3, "read-chat".into());
+        assert_eq!(queued, expected);
+
+        assert_eq!(read_mark_at(&messages, 0), messages.len());
+        assert_eq!(read_mark_at(&messages, 9), 0);
     }
 }
