@@ -719,6 +719,8 @@ pub fn tool_name(plugin_id: &str, tool: &str) -> String {
 pub struct PluginTool {
     app: Arc<App>,
     chat_id: String,
+    /// The message that started the turn, which the review reads as the request behind a call.
+    trigger: String,
     bot_id: String,
     /// A routine run has nobody to ask, so a tool that needs permission is refused.
     unattended: bool,
@@ -762,16 +764,18 @@ struct TurnToolsState {
 pub struct TurnTools {
     app: Arc<App>,
     chat_id: String,
+    trigger: String,
     bot_id: String,
     unattended: bool,
     state: Mutex<TurnToolsState>,
 }
 
 impl TurnTools {
-    fn new(app: Arc<App>, chat_id: &str, bot: &Bot, unattended: bool) -> Self {
+    fn new(app: Arc<App>, chat_id: &str, trigger: &str, bot: &Bot, unattended: bool) -> Self {
         TurnTools {
             app,
             chat_id: chat_id.to_string(),
+            trigger: trigger.to_string(),
             bot_id: bot.id.clone(),
             unattended,
             state: Mutex::new(TurnToolsState::default()),
@@ -868,6 +872,7 @@ impl TurnTools {
             let executable: Arc<dyn Tool> = Arc::new(PluginTool {
                 app: self.app.clone(),
                 chat_id: self.chat_id.clone(),
+                trigger: self.trigger.clone(),
                 bot_id: self.bot_id.clone(),
                 unattended: self.unattended,
                 plugin_id: plugin.manifest.id.clone(),
@@ -1046,7 +1051,7 @@ impl TurnTools {
 
 /// Creates the cheap per-turn catalog plus the prompt metadata for installed plugins. No MCP
 /// process or HTTP connection starts here.
-pub fn turn_tools(app: &Arc<App>, chat_id: &str, bot: &Bot, unattended: bool) -> (Arc<TurnTools>, Vec<PluginBrief>) {
+pub fn turn_tools(app: &Arc<App>, chat_id: &str, trigger: &str, bot: &Bot, unattended: bool) -> (Arc<TurnTools>, Vec<PluginBrief>) {
     let briefs = {
         let store = app.plugins.lock().unwrap();
         store
@@ -1079,7 +1084,7 @@ pub fn turn_tools(app: &Arc<App>, chat_id: &str, bot: &Bot, unattended: bool) ->
             })
             .collect()
     };
-    (Arc::new(TurnTools::new(app.clone(), chat_id, bot, unattended)), briefs)
+    (Arc::new(TurnTools::new(app.clone(), chat_id, trigger, bot, unattended)), briefs)
 }
 
 /// What the system prompt says about one installed plugin. Tool names, descriptions, schemas,
@@ -1357,6 +1362,7 @@ impl Tool for PluginTool {
                 &self.app,
                 &bot,
                 &self.chat_id,
+                &self.trigger,
                 &self.plugin_id,
                 &self.plugin_name,
                 &tool,
@@ -1785,7 +1791,7 @@ mod tests {
             workdir: None,
             created_at: 0.0,
         };
-        let turn = Arc::new(TurnTools::new(app.clone(), "chat", &bot, false));
+        let turn = Arc::new(TurnTools::new(app.clone(), "chat", "message", &bot, false));
         let discovery = turn.discovery_tools();
         assert_eq!(discovery.iter().map(|tool| tool.name()).collect::<Vec<_>>(), vec!["capability_search", "mcp_select_tool"]);
         assert!(discovery.iter().map(|tool| serde_json::to_vec(&tool.spec()).unwrap().len()).sum::<usize>() < 4 * 1024);
