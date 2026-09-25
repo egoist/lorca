@@ -20,6 +20,9 @@ final class PluginViewController: SheetViewController {
 
     private var detail: PluginDetail?
     private var fields: [(name: String, field: NSTextField)] = []
+    /// Only the newest load renders, so an older answer arriving late (a sealed request to
+    /// another Runner) never covers a newer one, such as the detail with a sign-in code.
+    private var loads = 0
 
     init(pluginID: String, runner: Device, bot: Bot?) {
         self.pluginID = pluginID
@@ -90,13 +93,17 @@ final class PluginViewController: SheetViewController {
     }
 
     private func load() {
+        loads += 1
+        let load = loads
         Task { [weak self] in
             guard let self else { return }
             do {
                 let detail = try await self.store.pluginDetail(self.pluginID, on: self.runner.id)
+                guard load == self.loads else { return }
                 self.detail = detail
                 self.render(detail)
             } catch {
+                guard load == self.loads else { return }
                 self.status.setRows([
                     KeyValueRow(key: L("State"), value: error.localizedDescription, tint: .systemRed)
                 ])
@@ -137,8 +144,22 @@ final class PluginViewController: SheetViewController {
         signIn.isHidden = oauthServers.isEmpty
         signIn.setRows(
             oauthServers.map { server in
+                let key = oauthServers.count > 1 ? server.name : L("Account")
+                // A device-flow sign-in waits for its code: the code, and the chat card's
+                // button, which copies it and opens the page to enter it on.
+                if let code = server.code, let link = server.link.flatMap(URL.init(string:)) {
+                    let row = ActionRow(
+                        key: key, value: code, tint: .labelColor,
+                        actionTitle: L("Copy code and open %@", link.host ?? L("link")), monospaced: true)
+                    row.onAction = { [weak row] in
+                        NSPasteboard.general.clearContents()
+                        if NSPasteboard.general.setString(code, forType: .string) { row?.showCopied() }
+                        NSWorkspace.shared.open(link)
+                    }
+                    return row
+                }
                 let row = ActionRow(
-                    key: oauthServers.count > 1 ? server.name : L("Account"),
+                    key: key,
                     value: server.signedIn ? L("Signed in") : L("Not signed in"),
                     tint: server.signedIn ? .systemGreen : .secondaryLabelColor,
                     actionTitle: server.signedIn ? L("Sign in again") : L("Sign in"))
@@ -195,11 +216,9 @@ final class PluginViewController: SheetViewController {
         Task { [weak self] in
             guard let self else { return }
             do {
-                let message = try await self.store.connectPlugin(self.pluginID, on: self.runner.id)
-                self.status.setRows([
-                    KeyValueRow(key: L("State"), value: message, tint: .controlAccentColor)
-                ])
-                self.fitSheetToContent()
+                // The Runner notes the sign-in on the plugin, so the State row reads it.
+                try await self.store.connectPlugin(self.pluginID, on: self.runner.id)
+                self.load()
             } catch {
                 self.alert(L("Couldn't start the sign-in"), error.localizedDescription)
             }

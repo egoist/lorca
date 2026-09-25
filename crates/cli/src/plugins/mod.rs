@@ -283,6 +283,18 @@ pub struct Store {
     secrets: SecretsFile,
     /// Connection state the MCP side reports: `connecting`, or an error message.
     pub notes: BTreeMap<String, (String, String)>,
+    /// The code a device-flow sign-in waits for, by plugin id, from the code's arrival until
+    /// the flow ends. The plugin's detail carries it, so the app that started the sign-in
+    /// without a card can show it.
+    pub codes: BTreeMap<String, SignInCode>,
+}
+
+/// A device-flow code waiting to be entered: which server it signs in, and where.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SignInCode {
+    pub server: String,
+    pub code: String,
+    pub link: String,
 }
 
 impl Store {
@@ -290,7 +302,7 @@ impl Store {
         let dir = config.plugins_dir();
         let installed: InstalledFile = config::read_json(&dir.join("installed.json")).unwrap_or_default();
         let secrets: SecretsFile = config::read_json(&dir.join("secrets.json")).unwrap_or_default();
-        Store { installed: installed.plugins, secrets, notes: BTreeMap::new() }
+        Store { installed: installed.plugins, secrets, notes: BTreeMap::new(), codes: BTreeMap::new() }
     }
 
     fn save(&self, config: &config::Config) -> anyhow::Result<()> {
@@ -534,14 +546,19 @@ pub fn detail(app: &Arc<App>, id: &str) -> Result<Value, String> {
         .map(|(name, spec)| {
             let (kind, auth) = match spec {
                 ServerSpec::Stdio { command, .. } => ("stdio", json!({ "command": command })),
-                ServerSpec::Http { url, auth, .. } => (
-                    "http",
-                    json!({
-                        "url": url,
-                        "oauth": matches!(auth, Some(AuthSpec::Oauth { .. })),
-                        "signed_in": matches!(auth, Some(AuthSpec::Oauth { .. })) && !store.needs_sign_in(id, name, spec, &values),
-                    }),
-                ),
+                ServerSpec::Http { url, auth, .. } => {
+                    let waiting = store.codes.get(id).filter(|code| &code.server == name);
+                    (
+                        "http",
+                        json!({
+                            "url": url,
+                            "oauth": matches!(auth, Some(AuthSpec::Oauth { .. })),
+                            "signed_in": matches!(auth, Some(AuthSpec::Oauth { .. })) && !store.needs_sign_in(id, name, spec, &values),
+                            "code": waiting.map(|code| &code.code),
+                            "link": waiting.map(|code| &code.link),
+                        }),
+                    )
+                }
             };
             json!({ "name": name, "kind": kind, "auth": auth })
         })
@@ -768,5 +785,28 @@ mod tests {
         let mine = Manifest::parse(&json!({ "id": "mine", "name": "Mine", "servers": { "api": { "type": "http", "url": "https://example.com/mcp" } } })).unwrap();
         install(app, mine, "inline").unwrap();
         assert!(refresh_installed(app, &crate::marketplace::bundled().plugins).is_empty());
+    }
+
+    #[test]
+    fn a_waiting_device_code_shows_on_its_server() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        let oauth = json!({ "type": "oauth", "client_id": "cid", "device_authorization_endpoint": "https://hub.test/device", "token_endpoint": "https://hub.test/token" });
+        let manifest = Manifest::parse(&json!({
+            "id": "hub", "name": "Hub",
+            "servers": { "api": { "type": "http", "url": "https://hub.test/mcp", "auth": oauth }, "files": { "type": "http", "url": "https://hub.test/files", "auth": oauth } }
+        }))
+        .unwrap();
+        install(app, manifest, "inline").unwrap();
+        let server = |detail: &Value, name: &str| detail["servers"].as_array().unwrap().iter().find(|s| s["name"] == name).unwrap()["auth"].clone();
+        let before = detail(app, "hub").unwrap();
+        assert_eq!((server(&before, "files")["code"].clone(), server(&before, "files")["link"].clone()), (Value::Null, Value::Null));
+        app.plugins.lock().unwrap().codes.insert("hub".into(), SignInCode { server: "files".into(), code: "WDJB-MJHT".into(), link: "https://hub.test/login/device".into() });
+        let waiting = detail(app, "hub").unwrap();
+        assert_eq!(server(&waiting, "files")["code"], json!("WDJB-MJHT"));
+        assert_eq!(server(&waiting, "files")["link"], json!("https://hub.test/login/device"));
+        assert_eq!(server(&waiting, "api")["code"], Value::Null, "only the server signing in shows it");
+        let status = serde_json::to_string(&app.plugins.lock().unwrap().statuses()).unwrap();
+        assert!(!status.contains("WDJB-MJHT"), "the machine blob's statuses never carry the code");
     }
 }

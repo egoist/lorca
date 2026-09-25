@@ -349,19 +349,23 @@ final class BotRow: NSView {
     }
 }
 
-/// Row with a leading symbol, a title/subtitle pair and a trailing state pill. A state with
-/// details behind it (a plugin's "Error") shows them in a popover when clicked.
+/// Row with a leading symbol, a title/subtitle pair and a trailing state pill, or the state as
+/// a symbol alone. A state with details behind it (what a plugin needs) shows them in a popover
+/// when clicked.
 final class StatusRow: NSView, NSGestureRecognizerDelegate {
     private let icon = NSImageView()
     private let title = Build.label("", font: .systemFont(ofSize: 12.5, weight: .medium))
     private let subtitle = Build.label(
         "", font: Theme.Font.caption, color: .secondaryLabelColor, lines: 0)
     private let state = Build.label("", font: .systemFont(ofSize: 11, weight: .medium), alignment: .right)
+    private let stateIcon = NSImageView()
     private let stateClick = NSClickGestureRecognizer()
+    private let stateIconClick = NSClickGestureRecognizer()
     private var stateDetail: String?
     private let action = NSButton()
     private var textTrailingPlain: NSLayoutConstraint!
     private var textTrailingState: NSLayoutConstraint!
+    private var textTrailingStateIcon: NSLayoutConstraint!
     private var textTrailingAction: NSLayoutConstraint!
 
     var onAction: (() -> Void)?
@@ -371,12 +375,16 @@ final class StatusRow: NSView, NSGestureRecognizerDelegate {
         translatesAutoresizingMaskIntoConstraints = false
         icon.translatesAutoresizingMaskIntoConstraints = false
         icon.contentTintColor = .secondaryLabelColor
+        stateIcon.translatesAutoresizingMaskIntoConstraints = false
+        stateIcon.isHidden = true
 
-        stateClick.target = self
-        stateClick.action = #selector(showStateDetail)
-        stateClick.delegate = self
-        stateClick.isEnabled = false
-        state.addGestureRecognizer(stateClick)
+        for (click, view) in [(stateClick, state as NSView), (stateIconClick, stateIcon)] {
+            click.target = self
+            click.action = #selector(showStateDetail(_:))
+            click.delegate = self
+            click.isEnabled = false
+            view.addGestureRecognizer(click)
+        }
 
         action.bezelStyle = .rounded
         action.controlSize = .small
@@ -388,15 +396,19 @@ final class StatusRow: NSView, NSGestureRecognizerDelegate {
         action.setContentCompressionResistancePriority(.required, for: .horizontal)
         state.setContentHuggingPriority(.required, for: .horizontal)
         state.setContentCompressionResistancePriority(.required, for: .horizontal)
+        stateIcon.setContentHuggingPriority(.required, for: .horizontal)
+        stateIcon.setContentCompressionResistancePriority(.required, for: .horizontal)
 
         let text = Build.stack([title, subtitle], spacing: 1)
         addSubview(icon)
         addSubview(text)
         addSubview(state)
+        addSubview(stateIcon)
         addSubview(action)
 
         textTrailingPlain = text.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12)
         textTrailingState = text.trailingAnchor.constraint(equalTo: state.leadingAnchor, constant: -8)
+        textTrailingStateIcon = text.trailingAnchor.constraint(equalTo: stateIcon.leadingAnchor, constant: -8)
         textTrailingAction = text.trailingAnchor.constraint(equalTo: action.leadingAnchor, constant: -8)
         textTrailingPlain.isActive = true
 
@@ -411,6 +423,8 @@ final class StatusRow: NSView, NSGestureRecognizerDelegate {
             text.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -8),
             state.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
             state.centerYAnchor.constraint(equalTo: centerYAnchor),
+            stateIcon.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            stateIcon.centerYAnchor.constraint(equalTo: centerYAnchor),
             action.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
             action.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
@@ -425,6 +439,7 @@ final class StatusRow: NSView, NSGestureRecognizerDelegate {
         title titleText: String,
         subtitle subtitleText: String,
         state stateText: String?,
+        stateSymbol: String? = nil,
         stateColor: NSColor = .secondaryLabelColor,
         stateDetail: String? = nil,
         actionTitle: String? = nil,
@@ -434,13 +449,22 @@ final class StatusRow: NSView, NSGestureRecognizerDelegate {
         icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
         title.stringValue = titleText
         subtitle.stringValue = subtitleText
+        // With a symbol, the state's words are its tooltip and what VoiceOver reads.
+        let showsSymbol = stateText != nil && stateSymbol != nil
         state.stringValue = stateText ?? ""
         state.textColor = stateColor
-        state.isHidden = stateText == nil
+        state.isHidden = stateText == nil || showsSymbol
+        stateIcon.image = stateSymbol.flatMap { NSImage(systemSymbolName: $0, accessibilityDescription: stateText) }
+        stateIcon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 12, weight: .semibold)
+        stateIcon.contentTintColor = stateColor
+        stateIcon.toolTip = stateText
+        stateIcon.setAccessibilityLabel(stateText)
+        stateIcon.isHidden = !showsSymbol
         self.stateDetail = stateDetail
         stateClick.isEnabled = stateDetail != nil
+        stateIconClick.isEnabled = stateDetail != nil
 
-        NSLayoutConstraint.deactivate([textTrailingPlain, textTrailingState, textTrailingAction])
+        NSLayoutConstraint.deactivate([textTrailingPlain, textTrailingState, textTrailingStateIcon, textTrailingAction])
         if let actionTitle {
             // The same bezel for both; a destructive action has a red title. Neither
             // `contentTintColor` nor `hasDestructiveAction` colors a rounded bezel's title, so
@@ -450,25 +474,28 @@ final class StatusRow: NSView, NSGestureRecognizerDelegate {
             action.attributedTitle = NSAttributedString(string: actionTitle, attributes: [.foregroundColor: color, .font: font])
             action.isHidden = false
             state.isHidden = true
+            stateIcon.isHidden = true
             textTrailingAction.isActive = true
         } else {
             action.isHidden = true
-            (stateText == nil ? textTrailingPlain : textTrailingState).isActive = true
+            (stateText == nil ? textTrailingPlain : showsSymbol ? textTrailingStateIcon : textTrailingState).isActive = true
         }
     }
 
-    /// A plugin and its state. An error reads "Error"; its message is a click away, so a long
-    /// one never widens the row.
+    /// A plugin and its state as a symbol: a check when it is ready, an exclamation mark when
+    /// it needs something. What the Runner says it needs (a variable, a sign-in, an error's
+    /// message) is the symbol's tooltip and a click away, so a long one never widens the row.
     func configure(plugin: InstalledPlugin) {
-        let failed = plugin.state == .error
+        let ready = plugin.state == .ready
         configure(
             symbol: plugin.symbolName,
             image: PluginLogo.tile(for: plugin.id, size: 18),
             title: plugin.name,
             subtitle: plugin.description,
-            state: failed ? L("Error") : plugin.detail,
-            stateColor: plugin.stateColor,
-            stateDetail: failed ? plugin.detail : nil
+            state: ready ? L("Ready") : plugin.detail,
+            stateSymbol: ready ? "checkmark" : "exclamationmark.circle.fill",
+            stateColor: ready ? .systemGreen : .systemOrange,
+            stateDetail: ready ? nil : plugin.detail
         )
     }
 
@@ -476,9 +503,9 @@ final class StatusRow: NSView, NSGestureRecognizerDelegate {
         onAction?()
     }
 
-    @objc private func showStateDetail() {
-        guard let stateDetail else { return }
-        TextPopover.show(stateDetail, relativeTo: state.bounds, of: state)
+    @objc private func showStateDetail(_ sender: NSClickGestureRecognizer) {
+        guard let stateDetail, let view = sender.view else { return }
+        TextPopover.show(stateDetail, relativeTo: view.bounds, of: view)
     }
 
     /// A click on the state shows its details instead of doing what a click on the row does.
@@ -538,17 +565,22 @@ final class PopUpRow: NSView {
 final class ActionRow: NSView {
     private let key: NSTextField
     private let value: NSTextField
-    private let button = NSButton()
+    private let button = CopyFeedbackButton()
     var onAction: (() -> Void)?
 
-    init(key keyText: String, value valueText: String, tint: NSColor, actionTitle: String?) {
+    /// A monospaced value is something to copy (a sign-in code), so it is also selectable.
+    init(key keyText: String, value valueText: String, tint: NSColor, actionTitle: String?, monospaced: Bool = false) {
         key = Build.label(keyText, font: .systemFont(ofSize: 12), color: .secondaryLabelColor)
-        value = Build.label(valueText, font: .systemFont(ofSize: 12), color: tint, alignment: .right)
+        value = Build.label(
+            valueText,
+            font: monospaced ? .monospacedSystemFont(ofSize: 12, weight: .semibold) : .systemFont(ofSize: 12),
+            color: tint, alignment: .right)
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
 
         key.setContentCompressionResistancePriority(.required, for: .horizontal)
         value.lineBreakMode = .byTruncatingTail
+        value.isSelectable = monospaced
 
         button.title = actionTitle ?? ""
         button.isBordered = false
@@ -581,6 +613,11 @@ final class ActionRow: NSView {
     func setValue(_ text: String) {
         guard value.stringValue != text else { return }
         value.stringValue = text
+    }
+
+    /// The action copied something: its title reads Copied for a moment.
+    func showCopied() {
+        button.showCopied()
     }
 
     @objc private func tapped() {

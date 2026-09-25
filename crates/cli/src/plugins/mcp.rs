@@ -476,11 +476,11 @@ pub fn connect_oauth_for_card(app: &Arc<App>, plugin_id: &str, server: &str, car
     let plugin_id = plugin_id.to_string();
     let server = server.to_string();
     let name = plugin.manifest.name.clone();
-    super::note(&app, &plugin_id, Some(("connecting", if device.is_some() { "Enter the code from the chat" } else { "Finish signing in in the browser" })));
+    super::note(&app, &plugin_id, Some(("connecting", if device.is_some() { "Getting a sign-in code…" } else { "Finish signing in in the browser" })));
     let message = if device.is_some() { format!("Getting a {name} sign-in code.") } else { format!("Opened the {name} sign-in page in the browser on this Runner.") };
     tokio::spawn(async move {
         let flow = match &device {
-            Some((device_endpoint, token_endpoint)) => device_sign_in(&app, device_endpoint, token_endpoint, &scopes, &name, client.id.as_deref().unwrap_or(""), card.as_ref()).await,
+            Some((device_endpoint, token_endpoint)) => device_sign_in(&app, &plugin_id, &server, device_endpoint, token_endpoint, &scopes, &name, client.id.as_deref().unwrap_or(""), card.as_ref()).await,
             None => sign_in(&app, &url, &scopes, &name, &client).await,
         };
         let outcome = match flow {
@@ -510,10 +510,11 @@ pub fn connect_oauth_for_card(app: &Arc<App>, plugin_id: &str, server: &str, car
 /// How long a device flow waits for the user to enter the code.
 const DEVICE_FLOW_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 
-/// The device flow (RFC 8628), as GitHub's own CLI signs in: ask for a code, show it on the
-/// card with the link, poll the token endpoint until the user has entered it. Answers with
-/// the tokens in the shape the browser flow saves.
-async fn device_sign_in(app: &Arc<App>, device_endpoint: &str, token_endpoint: &str, scopes: &[String], name: &str, client_id: &str, card: Option<&(String, String)>) -> Result<Value, String> {
+/// The device flow (RFC 8628), as GitHub's own CLI signs in: ask for a code, show it with the
+/// link on the card and in the plugin's detail, poll the token endpoint until the user has
+/// entered it. Answers with the tokens in the shape the browser flow saves.
+#[allow(clippy::too_many_arguments)]
+async fn device_sign_in(app: &Arc<App>, plugin_id: &str, server: &str, device_endpoint: &str, token_endpoint: &str, scopes: &[String], name: &str, client_id: &str, card: Option<&(String, String)>) -> Result<Value, String> {
     // The App's client: plain form posts, no MCP transport involved.
     let http = app.http.clone();
     let scope = scopes.join(" ");
@@ -535,7 +536,25 @@ async fn device_sign_in(app: &Arc<App>, device_endpoint: &str, token_endpoint: &
     if let Some((chat_id, message_id)) = card {
         set_card(app, chat_id, message_id, "allowed", Some(format!("Enter the code {user_code} at {shown}.")), Some(link.clone()), Some(user_code.clone()));
     }
-    let deadline = std::time::Instant::now() + DEVICE_FLOW_TIMEOUT.min(std::time::Duration::from_secs(started["expires_in"].as_u64().unwrap_or(900)));
+    // The note's new words move the machine blob, so a plugin sheet open on any Device
+    // reloads the detail that now carries the code.
+    let host = reqwest::Url::parse(&shown).ok().and_then(|url| url.host_str().map(str::to_string)).unwrap_or_else(|| shown.clone());
+    app.plugins.lock().unwrap().codes.insert(plugin_id.to_string(), super::SignInCode { server: server.to_string(), code: user_code.clone(), link: link.clone() });
+    super::note(app, plugin_id, Some(("connecting", &format!("Enter the code at {host}"))));
+    let polled = poll_device_token(app, token_endpoint, name, client_id, &device_code, interval, started["expires_in"].as_u64()).await;
+    // Spent either way; a newer flow's code stays.
+    let mut store = app.plugins.lock().unwrap();
+    if store.codes.get(plugin_id).is_some_and(|waiting| waiting.code == user_code) {
+        store.codes.remove(plugin_id);
+    }
+    polled
+}
+
+/// Polls the token endpoint until the user has entered the code, it expires, or the sign-in
+/// is refused.
+async fn poll_device_token(app: &Arc<App>, token_endpoint: &str, name: &str, client_id: &str, device_code: &str, interval: u64, expires_in: Option<u64>) -> Result<Value, String> {
+    let http = app.http.clone();
+    let deadline = std::time::Instant::now() + DEVICE_FLOW_TIMEOUT.min(std::time::Duration::from_secs(expires_in.unwrap_or(900)));
     let mut wait = interval;
     loop {
         tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
@@ -545,7 +564,7 @@ async fn device_sign_in(app: &Arc<App>, device_endpoint: &str, token_endpoint: &
         let polled: Value = http
             .post(token_endpoint)
             .header("accept", "application/json")
-            .form(&[("client_id", client_id), ("device_code", &device_code), ("grant_type", "urn:ietf:params:oauth:grant-type:device_code")])
+            .form(&[("client_id", client_id), ("device_code", device_code), ("grant_type", "urn:ietf:params:oauth:grant-type:device_code")])
             .send()
             .await
             .map_err(|e| format!("{name} did not answer: {e}"))?

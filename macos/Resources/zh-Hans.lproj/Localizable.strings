@@ -242,7 +242,6 @@
 "enter send newline keyboard chats" = "回车 发送 换行 键盘 聊天 enter send newline keyboard chats";
 "Enter this code at %@, then come back." = "请在 %@ 输入此代码，然后回到这里。";
 "erase remove wipe relay data identity" = "抹除 移除 清除 中继 数据 身份 删除账户";
-"Error" = "错误";
 "Every bot is assigned to a Runner: a Device running macOS, Linux, or Windows. That machine's CLI runs the turn with your account's provider credentials, so a bot on an offline Runner waits until it reconnects. Phones and tablets pair as Devices but never run bots.\n\nThe app talks only to the local CLI on 127.0.0.1:%@. Start it with `lorca serve`; the CLI holds your keys and provider credentials, which reach your other Devices encrypted." = "每个智能体都分配给一个 Runner，即一台运行 macOS、Linux 或 Windows 的设备。那台机器上的 CLI 使用你账户的服务商凭证来运行每一轮，因此离线 Runner 上的智能体会等到它重新连接。手机和平板电脑可以配对为设备，但从不运行智能体。\n\nApp 只与本机 127.0.0.1:%@ 上的 CLI 通信。用 `lorca serve` 启动它；CLI 保管你的密钥和服务商凭证，这些凭证会加密后传到你的其他设备。";
 "Every bot on %@ can use it." = "%@ 上的每个智能体都能使用它。";
 "Every bot on %@ can use these. Sign-ins and keys stay on %@." = "%1$@ 上的每个智能体都能使用这些插件。登录和密钥只留在 %2$@ 上。";
@@ -450,6 +449,7 @@
 "Read-only commands and commands inside Lorca's own folders run at once. Auto-review checks effectful plugin actions and every other shell command before they run: a small, fast model on the bot's provider applies your rules and latest request, so safe work normally runs automatically and risky work asks. Off, every such action asks. Write one short, natural-language rule for each action; \"Ask first\" takes priority if rules conflict. Built-in safety checks always apply." = "只读命令和在 Lorca 自己文件夹内的命令会直接运行。自动审查会在会产生影响的插件操作和其他 shell 命令运行前检查它们：智能体所用服务商的一款小型快速模型根据你的规则和最近请求作出判断，因此安全的工作通常会自动运行，有风险的会询问。关闭后，每个这样的操作都会询问。为每种操作写一条简短的自然语言规则；规则冲突时以“先询问”为准。内置安全检查始终生效。";
 "Reading a file" = "正在读取文件";
 "Reading the web" = "正在阅读网页";
+"Ready" = "就绪";
 "Red" = "红色";
 "Redo" = "重做";
 "Relay" = "中继";

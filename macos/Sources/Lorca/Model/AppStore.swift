@@ -750,9 +750,9 @@ final class AppStore {
     }
 
     /// Starts the sign-in on the Runner; the browser opens there.
-    func connectPlugin(_ pluginID: String, on runnerID: Device.ID) async throws -> String {
-        guard !isMock else { return "Opened the sign-in page." }
-        return try await client.request("plugins.connect", ["runner_id": runnerID, "plugin_id": pluginID], as: Wire.PluginConnected.self).message
+    func connectPlugin(_ pluginID: String, on runnerID: Device.ID) async throws {
+        guard !isMock else { return }
+        _ = try await client.request("plugins.connect", ["runner_id": runnerID, "plugin_id": pluginID])
     }
 
     /// Replaces Auto-review (the switch and the rules); the change shows at once and the CLI's

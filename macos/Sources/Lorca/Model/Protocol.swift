@@ -230,10 +230,6 @@ enum Wire {
         var status: PluginStatus
     }
 
-    struct PluginConnected: Decodable {
-        var message: String
-    }
-
     struct PluginDetail: Decodable {
         struct Manifest: Decodable { var homepage: String? }
         struct Variable: Decodable {
@@ -249,6 +245,8 @@ enum Wire {
                 var url: String?
                 var oauth: Bool?
                 var signedIn: Bool?
+                var code: String?
+                var link: String?
             }
             var name: String
             var kind: String
@@ -268,7 +266,7 @@ enum Wire {
             Lorca.PluginDetail(
                 status: status.toModel(), homepage: manifest.homepage,
                 variables: variables.map { .init(name: $0.name, description: $0.description ?? "", secret: $0.secret, required: $0.required, isSet: $0.isSet, value: $0.value) },
-                servers: servers.map { .init(name: $0.name, kind: $0.kind, url: $0.auth.url, oauth: $0.auth.oauth ?? false, signedIn: $0.auth.signedIn ?? false) },
+                servers: servers.map { .init(name: $0.name, kind: $0.kind, url: $0.auth.url, oauth: $0.auth.oauth ?? false, signedIn: $0.auth.signedIn ?? false, code: $0.auth.code, link: $0.auth.link) },
                 skills: skills.map { (name: $0.name, description: $0.description ?? "") })
         }
     }

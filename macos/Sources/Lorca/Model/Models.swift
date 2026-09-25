@@ -410,6 +410,9 @@ struct PluginDetail {
         var url: String?
         var oauth: Bool
         var signedIn: Bool
+        /// While a device-flow sign-in waits: the code to enter, and the page to enter it on.
+        var code: String? = nil
+        var link: String? = nil
     }
 
     var status: InstalledPlugin
