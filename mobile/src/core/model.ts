@@ -390,7 +390,6 @@ export const PROVIDER_MODELS: Record<string, { id: string; label: string }[]> = 
     { id: "minimax-m3", label: "MiniMax M3" },
   ],
   cerebras: [
-    { id: "gpt-oss-120b", label: "GPT OSS 120B" },
     { id: "qwen-3.8-27b", label: "Qwen3.8 27B" },
   ],
   chatgpt: [

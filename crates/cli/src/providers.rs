@@ -136,7 +136,7 @@ pub fn review_model(kind: &str) -> (&'static str, ThinkingLevel) {
         "chatgpt" => "gpt-6-luna",
         "grok" => "grok-4.7",
         "opencode" | "opencode-go" => "deepseek-v4.1-flash",
-        "cerebras" => "gpt-oss-120b",
+        "cerebras" => "qwen-3.8-27b",
         _ => "",
     };
     let thinking = models::find(kind, model).and_then(|info| info.levels.first().copied()).unwrap_or(ThinkingLevel::Off);
@@ -386,7 +386,7 @@ mod tests {
         assert_eq!(review_model("chatgpt"), ("gpt-6-luna", ThinkingLevel::Low));
         assert_eq!(review_model("grok"), ("grok-4.7", ThinkingLevel::Low));
         assert_eq!(review_model("opencode-go"), ("deepseek-v4.1-flash", ThinkingLevel::Low));
-        assert_eq!(review_model("cerebras"), ("gpt-oss-120b", ThinkingLevel::Low));
+        assert_eq!(review_model("cerebras"), ("qwen-3.8-27b", ThinkingLevel::Off));
     }
 
     #[tokio::test]

@@ -62,13 +62,13 @@ async fn cerebras_resolves_from_its_api_key() {
 
     app.credentials.lock().unwrap().cerebras = Some(ApiKeyCredential { api_key: "csk-test".into(), base_url: None, connected_at: 1 });
     let provider = lorca::providers::provider_for(&app, "cerebras", None, None).unwrap();
-    assert_eq!((provider.provider_id(), provider.model_id()), ("cerebras", "gpt-oss-120b"));
+    assert_eq!((provider.provider_id(), provider.model_id()), ("cerebras", "qwen-3.8-27b"));
     assert_eq!(provider.model_info().map(|m| m.context_window), Some(131_072));
-    assert!(!provider.supports_images());
+    assert!(provider.supports_images());
 
     let qwen = lorca::providers::provider_for(&app, "cerebras", Some("qwen-3.8-27b"), None).unwrap();
     assert_eq!(qwen.model_id(), "qwen-3.8-27b");
     assert!(qwen.supports_images());
     assert!(lorca::providers::supports_vision("cerebras", Some("qwen-3.8-27b")));
-    assert!(!lorca::providers::supports_vision("cerebras", None));
+    assert!(lorca::providers::supports_vision("cerebras", None));
 }

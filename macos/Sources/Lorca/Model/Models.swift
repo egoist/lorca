@@ -160,7 +160,6 @@ struct ProviderCredential: Hashable, Identifiable {
                 ]
             case .cerebras:
                 [
-                    ("gpt-oss-120b", "GPT OSS 120B"),
                     ("qwen-3.8-27b", "Qwen3.8 27B"),
                 ]
             case .chatgpt:

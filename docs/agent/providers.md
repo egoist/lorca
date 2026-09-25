@@ -111,7 +111,7 @@ let provider = OpenAiCompatProvider::new("ollama", "http://localhost:11434/v1", 
 // DeepSeek's OpenAI-compatible endpoint (deepseek-flash by default): no web search here
 let provider = OpenAiCompatProvider::deepseek(&api_key, None);
 
-// Cerebras (gpt-oss-120b by default; qwen-3.8-27b also takes images)
+// Cerebras (qwen-3.8-27b by default)
 let provider = OpenAiCompatProvider::cerebras(&api_key, None);
 ```
 

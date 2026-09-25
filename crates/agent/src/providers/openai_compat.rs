@@ -20,8 +20,7 @@ pub const DEEPSEEK_BASE_URL: &str = "https://api.deepseek.com";
 /// `deepseek-chat` / `deepseek-reasoner` names were retired in 2026.
 pub const DEEPSEEK_DEFAULT_MODEL: &str = "deepseek-flash";
 pub const CEREBRAS_BASE_URL: &str = "https://api.cerebras.ai/v1";
-/// GPT OSS 120B, Cerebras's production reasoning model.
-pub const CEREBRAS_DEFAULT_MODEL: &str = "gpt-oss-120b";
+pub const CEREBRAS_DEFAULT_MODEL: &str = "qwen-3.8-27b";
 
 const USER_AGENT: &str = concat!("lorca-agent/", env!("CARGO_PKG_VERSION"));
 
@@ -453,13 +452,11 @@ mod tests {
         let effort = |model: Option<&str>, level| OpenAiCompatProvider::cerebras("k", model).with_thinking(level).body(&request)["reasoning_effort"].clone();
         let provider = OpenAiCompatProvider::cerebras("k", None);
         assert_eq!((provider.base_url.as_str(), provider.model.as_str()), (CEREBRAS_BASE_URL, CEREBRAS_DEFAULT_MODEL));
-        assert!(!provider.supports_images);
-        assert!(OpenAiCompatProvider::cerebras("k", Some("qwen-3.8-27b")).supports_images);
-        // GPT OSS cannot stop reasoning, so Off runs at its lowest effort; Qwen turns off.
-        assert_eq!(effort(None, Some(ThinkingLevel::Off)), "low");
+        assert_eq!(CEREBRAS_DEFAULT_MODEL, "qwen-3.8-27b");
+        assert!(provider.supports_images);
+        assert_eq!(effort(None, Some(ThinkingLevel::Off)), "none");
         assert_eq!(effort(None, Some(ThinkingLevel::Max)), "high");
-        assert_eq!(effort(Some("qwen-3.8-27b"), Some(ThinkingLevel::Off)), "none");
-        assert_eq!(effort(Some("qwen-3.8-27b"), None), Value::Null);
+        assert_eq!(effort(None, None), Value::Null);
         // Servers without an off value still send nothing.
         let deepseek = OpenAiCompatProvider::deepseek("k", None).with_thinking(Some(ThinkingLevel::Off));
         assert_eq!(deepseek.body(&request)["reasoning_effort"], Value::Null);

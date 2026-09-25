@@ -99,7 +99,7 @@ describe("model", () => {
     expect(providerConnectMethod("cerebras")).toBe("providers.connect_cerebras");
     expect(providerDefaultBaseURL("cerebras")).toBe("https://api.cerebras.ai/v1");
     expect(providerLabel("cerebras")).toBe("Cerebras");
-    expect(PROVIDER_MODELS.cerebras[0].id).toBe("gpt-oss-120b");
+    expect(PROVIDER_MODELS.cerebras[0].id).toBe("qwen-3.8-27b");
     expect(providerDefaultBaseURL("deepseek")).toBe("https://api.deepseek.com");
     expect(providerDefaultBaseURL("chatgpt")).toBe("");
     expect(PROVIDER_MODELS.chatgpt.map((m) => m.id)).toEqual(["gpt-6-sol", "gpt-6-astra", "gpt-6-luna"]);
