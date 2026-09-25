@@ -172,22 +172,40 @@ pub const PROTOCOL: u32 = 1;
 const FILE_TRANSFER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 
 pub struct RelayClient {
-    http: reqwest::Client,
+    /// Replaced by `reset_connections`, and its pooled connections with it.
+    http: Mutex<reqwest::Client>,
     token: Mutex<Option<(String, i64)>>,
 }
 
 impl RelayClient {
+    pub fn new() -> anyhow::Result<Self> {
+        Ok(RelayClient { http: Mutex::new(Self::http_client()?), token: Mutex::new(None) })
+    }
+
     /// The relay's own client: what it says about this build goes to the relay and never to
     /// a provider.
-    pub fn new() -> anyhow::Result<Self> {
+    fn http_client() -> anyhow::Result<reqwest::Client> {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert("lorca-protocol", reqwest::header::HeaderValue::from(PROTOCOL));
-        let http = reqwest::Client::builder()
+        Ok(reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(60))
             .user_agent(format!("lorca/{} ({})", crate::config::VERSION, std::env::consts::OS))
             .default_headers(headers)
-            .build()?;
-        Ok(RelayClient { http, token: Mutex::new(None) })
+            .build()?)
+    }
+
+    fn http(&self) -> reqwest::Client {
+        self.http.lock().unwrap().clone()
+    }
+
+    /// Requests from here on open new connections. A phone's pooled ones may have died while
+    /// the app was suspended, some without a word (a VPN on the phone keeps its end open), and
+    /// a request sent on one of those waits out its whole timeout.
+    pub fn reset_connections(&self) {
+        match Self::http_client() {
+            Ok(http) => *self.http.lock().unwrap() = http,
+            Err(error) => tracing::warn!(%error, "building the relay client"),
+        }
     }
 
     pub fn forget_token(&self) {
@@ -209,7 +227,7 @@ impl RelayClient {
     }
 
     pub async fn health(&self, url: &str) -> RelayResult<()> {
-        Self::check(self.http.get(format!("{url}/v1/health")).send().await?).await?;
+        Self::check(self.http().get(format!("{url}/v1/health")).send().await?).await?;
         Ok(())
     }
 
@@ -223,13 +241,13 @@ impl RelayClient {
         });
         let bytes = serde_json::to_vec(&payload).unwrap();
         let body = json!({ "payload": b64(&bytes), "signature": identity.sign(&bytes) });
-        Self::check(self.http.post(format!("{url}/v1/identities")).json(&body).send().await?).await?;
+        Self::check(self.http().post(format!("{url}/v1/identities")).json(&body).send().await?).await?;
         Ok(())
     }
 
     pub async fn authenticate(&self, url: &str, machine: &Machine) -> RelayResult<String> {
         let challenge = Self::check(
-            self.http
+            self.http()
                 .post(format!("{url}/v1/auth/challenge"))
                 .json(&json!({ "machine_pubkey": machine.pubkey() }))
                 .send()
@@ -238,7 +256,7 @@ impl RelayClient {
         .await?;
         let nonce = challenge["nonce"].as_str().ok_or_else(|| RelayError { status: None, message: "no nonce".into() })?;
         let verified = Self::check(
-            self.http
+            self.http()
                 .post(format!("{url}/v1/auth/verify"))
                 .json(&json!({
                     "machine_pubkey": machine.pubkey(),
@@ -266,7 +284,7 @@ impl RelayClient {
 
     pub async fn put_blob(&self, url: &str, token: &str, item: crate::app::OutboxItem) -> RelayResult<i64> {
         if item.kind == "file" {
-            let mut request = self.http.put(format!("{url}/v1/files/{}", item.id))
+            let mut request = self.http().put(format!("{url}/v1/files/{}", item.id))
                 .bearer_auth(token)
                 .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
                 .timeout(FILE_TRANSFER_TIMEOUT);
@@ -285,7 +303,7 @@ impl RelayClient {
             body["group"] = json!(group);
         }
         let value = Self::check(
-            self.http
+            self.http()
                 .put(format!("{url}/v1/blobs"))
                 .bearer_auth(token)
                 .json(&body)
@@ -319,7 +337,7 @@ impl RelayClient {
 
     pub async fn list_blobs(&self, url: &str, token: &str, since: i64, kinds: &str) -> RelayResult<(Vec<BlobIn>, i64)> {
         let value = Self::check(
-            self.http
+            self.http()
                 .get(format!("{url}/v1/blobs"))
                 .bearer_auth(token)
                 .query(&[("since", since.to_string()), ("kinds", kinds.to_string())])
@@ -340,7 +358,7 @@ impl RelayClient {
             query.push(("before", before.to_string()));
         }
         let value = Self::check(
-            self.http.get(format!("{url}/v1/groups/{group}/blobs")).bearer_auth(token).query(&query).timeout(std::time::Duration::from_secs(60)).send().await?,
+            self.http().get(format!("{url}/v1/groups/{group}/blobs")).bearer_auth(token).query(&query).timeout(std::time::Duration::from_secs(60)).send().await?,
         )
         .await?;
         let slots = serde_json::from_value(value["slots"].clone()).map_err(|e| RelayError { status: None, message: format!("group page: {e}") })?;
@@ -349,7 +367,7 @@ impl RelayClient {
 
     /// An attachment's encrypted bytes; `None` when it is no longer stored for this identity.
     pub async fn get_file(&self, url: &str, token: &str, id: &str) -> RelayResult<Option<Vec<u8>>> {
-        let mut response = self.http.get(format!("{url}/v1/files/{id}")).bearer_auth(token).timeout(FILE_TRANSFER_TIMEOUT).send().await?;
+        let mut response = self.http().get(format!("{url}/v1/files/{id}")).bearer_auth(token).timeout(FILE_TRANSFER_TIMEOUT).send().await?;
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
         }
@@ -376,18 +394,18 @@ impl RelayClient {
     }
 
     pub async fn delete_blob(&self, url: &str, token: &str, id: &str) -> RelayResult<()> {
-        Self::check(self.http.delete(format!("{url}/v1/blobs/{id}")).bearer_auth(token).send().await?).await?;
+        Self::check(self.http().delete(format!("{url}/v1/blobs/{id}")).bearer_auth(token).send().await?).await?;
         Ok(())
     }
 
     /// Deletes every blob of a group. Good to repeat.
     pub async fn delete_group(&self, url: &str, token: &str, group: &str) -> RelayResult<()> {
-        Self::check(self.http.delete(format!("{url}/v1/groups/{group}")).bearer_auth(token).send().await?).await?;
+        Self::check(self.http().delete(format!("{url}/v1/groups/{group}")).bearer_auth(token).send().await?).await?;
         Ok(())
     }
 
     pub async fn machines(&self, url: &str, token: &str) -> RelayResult<(Vec<MachineIn>, i64)> {
-        let value = Self::check(self.http.get(format!("{url}/v1/machines")).bearer_auth(token).send().await?).await?;
+        let value = Self::check(self.http().get(format!("{url}/v1/machines")).bearer_auth(token).send().await?).await?;
         let machines: Vec<MachineIn> = serde_json::from_value(value["machines"].clone()).unwrap_or_default();
         Ok((machines, value["now"].as_i64().unwrap_or(now_unix())))
     }
@@ -397,7 +415,7 @@ impl RelayClient {
     /// Where this phone takes pushes: its APNs or FCM device token.
     pub async fn put_push_token(&self, url: &str, token: &str, platform: &str, device_token: &str, environment: Option<&str>) -> RelayResult<()> {
         Self::check(
-            self.http
+            self.http()
                 .put(format!("{url}/v1/push/token"))
                 .bearer_auth(token)
                 .json(&json!({ "platform": platform, "token": device_token, "environment": environment }))
@@ -409,13 +427,13 @@ impl RelayClient {
     }
 
     pub async fn delete_push_token(&self, url: &str, token: &str) -> RelayResult<()> {
-        Self::check(self.http.delete(format!("{url}/v1/push/token")).bearer_auth(token).send().await?).await?;
+        Self::check(self.http().delete(format!("{url}/v1/push/token")).bearer_auth(token).send().await?).await?;
         Ok(())
     }
 
     /// Asks the relay to push this ciphertext to the identity's phones; answers how many it queued.
     pub async fn push(&self, url: &str, token: &str, ciphertext_b64: &str) -> RelayResult<u64> {
-        let value = Self::check(self.http.post(format!("{url}/v1/push")).bearer_auth(token).json(&json!({ "ciphertext": ciphertext_b64 })).send().await?).await?;
+        let value = Self::check(self.http().post(format!("{url}/v1/push")).bearer_auth(token).json(&json!({ "ciphertext": ciphertext_b64 })).send().await?).await?;
         Ok(value["queued"].as_u64().unwrap_or(0))
     }
 
@@ -423,24 +441,24 @@ impl RelayClient {
 
     /// Unpairs a machine of this identity, this one included.
     pub async fn revoke_machine(&self, url: &str, token: &str, machine_pubkey: &str) -> RelayResult<()> {
-        Self::check(self.http.delete(format!("{url}/v1/machines/{machine_pubkey}")).bearer_auth(token).send().await?).await?;
+        Self::check(self.http().delete(format!("{url}/v1/machines/{machine_pubkey}")).bearer_auth(token).send().await?).await?;
         Ok(())
     }
 
     /// Deletes the identity and everything the relay holds for it; every Device gets `410`.
     pub async fn delete_identity(&self, url: &str, token: &str) -> RelayResult<()> {
-        Self::check(self.http.delete(format!("{url}/v1/identity")).bearer_auth(token).send().await?).await?;
+        Self::check(self.http().delete(format!("{url}/v1/identity")).bearer_auth(token).send().await?).await?;
         Ok(())
     }
 
     pub async fn pair_create(&self, url: &str, token: &str) -> RelayResult<String> {
-        let value = Self::check(self.http.post(format!("{url}/v1/pair")).bearer_auth(token).send().await?).await?;
+        let value = Self::check(self.http().post(format!("{url}/v1/pair")).bearer_auth(token).send().await?).await?;
         Ok(value["nonce"].as_str().unwrap_or_default().to_string())
     }
 
     pub async fn pair_post_request(&self, url: &str, nonce: &str, ciphertext: &[u8]) -> RelayResult<()> {
         Self::check(
-            self.http
+            self.http()
                 .post(format!("{url}/v1/pair/{nonce}/request"))
                 .json(&json!({ "ciphertext": b64(ciphertext) }))
                 .send()
@@ -451,13 +469,13 @@ impl RelayClient {
     }
 
     pub async fn pair_get_request(&self, url: &str, token: &str, nonce: &str) -> RelayResult<Option<Vec<u8>>> {
-        let value = Self::check(self.http.get(format!("{url}/v1/pair/{nonce}/request")).bearer_auth(token).send().await?).await?;
+        let value = Self::check(self.http().get(format!("{url}/v1/pair/{nonce}/request")).bearer_auth(token).send().await?).await?;
         decode_optional(&value)
     }
 
     pub async fn pair_post_reply(&self, url: &str, token: &str, nonce: &str, ciphertext: &[u8]) -> RelayResult<()> {
         Self::check(
-            self.http
+            self.http()
                 .post(format!("{url}/v1/pair/{nonce}/reply"))
                 .bearer_auth(token)
                 .json(&json!({ "ciphertext": b64(ciphertext) }))
@@ -470,12 +488,12 @@ impl RelayClient {
 
     /// The identity retires a pairing: the mailbox goes and a Device polling it gets a 404.
     pub async fn pair_delete(&self, url: &str, token: &str, nonce: &str) -> RelayResult<()> {
-        Self::check(self.http.delete(format!("{url}/v1/pair/{nonce}")).bearer_auth(token).send().await?).await?;
+        Self::check(self.http().delete(format!("{url}/v1/pair/{nonce}")).bearer_auth(token).send().await?).await?;
         Ok(())
     }
 
     pub async fn pair_get_reply(&self, url: &str, nonce: &str) -> RelayResult<Option<Vec<u8>>> {
-        let value = Self::check(self.http.get(format!("{url}/v1/pair/{nonce}/reply")).send().await?).await?;
+        let value = Self::check(self.http().get(format!("{url}/v1/pair/{nonce}/reply")).send().await?).await?;
         decode_optional(&value)
     }
 }

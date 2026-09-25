@@ -287,15 +287,18 @@ export function ChatsScreen({ sidebar = false }: { sidebar?: boolean }) {
   );
 }
 
-/// True once the relay has been unreachable for a moment: a launch or a quick reconnect shows nothing.
+/// True once the relay has been unreachable for a moment: a launch or a quick reconnect shows
+/// nothing, and neither does the reconnect after coming back to the foreground, which replaces
+/// the socket the suspension killed and can take a few seconds on a slow network or a VPN.
 function useConnecting(): boolean {
   const relayConnected = useStore((s) => s.relayConnected);
+  const activeSince = useStore((s) => s.activeSince);
   const [connecting, setConnecting] = useState(false);
   useEffect(() => {
     if (relayConnected) return setConnecting(false);
-    const timer = setTimeout(() => setConnecting(true), 1000);
+    const timer = setTimeout(() => setConnecting(true), Math.max(1000, activeSince + 4000 - Date.now()));
     return () => clearTimeout(timer);
-  }, [relayConnected]);
+  }, [relayConnected, activeSince]);
   return connecting;
 }
 

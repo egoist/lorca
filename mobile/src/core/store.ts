@@ -59,12 +59,14 @@ export interface StoreState {
   openChatId: string | null;
   /// Only foreground UI can acknowledge a reply as read.
   appActive: boolean;
+  /// When the app last came to the foreground, in ms.
+  activeSince: number;
   /// Attachment id → file URI, for the bytes this phone has.
   files: Record<string, string>;
   dictation_lang?: string;
 }
 
-function empty(): Omit<StoreState, "ready" | "dictation_lang" | "appActive"> {
+function empty(): Omit<StoreState, "ready" | "dictation_lang" | "appActive" | "activeSince"> {
   return {
     paired: false,
     deviceId: null,
@@ -88,7 +90,7 @@ function empty(): Omit<StoreState, "ready" | "dictation_lang" | "appActive"> {
   };
 }
 
-export const useStore = create<StoreState>()(() => ({ ...empty(), ready: false, appActive: false }));
+export const useStore = create<StoreState>()(() => ({ ...empty(), ready: false, appActive: false, activeSince: 0 }));
 
 /// Applies a change to the phone's own prefs and saves them.
 export function mutate(update: (s: StoreState) => Partial<StoreState>) {

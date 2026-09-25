@@ -66,7 +66,8 @@ class Engine {
   async start() {
     if (this.started) return;
     this.started = true;
-    useStore.setState({ dictation_lang: loadPrefs().dictation_lang, appActive: AppState.currentState === "active" });
+    const active = AppState.currentState === "active";
+    useStore.setState({ dictation_lang: loadPrefs().dictation_lang, appActive: active, activeSince: active ? Date.now() : 0 });
     core.onEvent((frame) => this.receive(frame));
     core.start(coreHome(), hostFacts());
     AppState.addEventListener("change", (status) => this.onAppState(status));
@@ -109,8 +110,8 @@ class Engine {
   }
 
   private onAppState(status: AppStateStatus) {
-    useStore.setState({ appActive: status === "active" });
-    if (status !== "active") return;
+    if (status !== "active") return useStore.setState({ appActive: false });
+    useStore.setState({ appActive: true, activeSince: Date.now() });
     // Back in the foreground: the sync socket may have died with the suspension.
     core.wake();
     // The token can change, and permission may have been given in Settings meanwhile.

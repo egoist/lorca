@@ -839,10 +839,12 @@ impl App {
     }
 
     /// Asks the relay again now: a phone came back to the foreground, or pulled to refresh.
-    /// Its socket may have died while the app was suspended, so the sync loop checks it and
-    /// opens a new one at once when it did (`sync::run`).
+    /// Its connections may have died while the app was suspended, so the next requests open
+    /// new ones, and the sync loop checks the socket and opens a new one at once when it did
+    /// (`sync::run`). The bearer lasts an hour and outlives a suspension, so none of that waits
+    /// on signing in again.
     pub fn wake_sync(&self) {
-        self.relay.forget_token();
+        self.relay.reset_connections();
         self.sync_wakes.fetch_add(1, Ordering::Relaxed);
         self.outbox_notify.notify_waiters();
     }
