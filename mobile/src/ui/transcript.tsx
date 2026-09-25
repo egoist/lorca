@@ -327,10 +327,10 @@ export function PermissionRow({ row, isGroup, onDecide }: { row: Extract<Row, { 
 
 /// A command's card, while the command needs the user (`showsCard`). While Auto-review asks to run
 /// it: who wants to, the command on one line in a code block that opens the whole command on tap,
-/// why, the answers, and the rule Always allow adds. While the command runs on after its call: Stop
-/// on the title's line, the command, and its last lines in a code block of their own that scrolls;
-/// waiting for input, Answer, which opens `AnswerSheet`. In a group the card sits in the bubbles'
-/// column, the bot's avatar beside its bottom edge.
+/// why, the answers, and the rule Always allow adds. Once the bot handed the running command over:
+/// Stop on the title's line, the command, and its last lines in a code block of their own that
+/// scrolls; at a question, Answer, which opens `AnswerSheet`. In a group the card sits in the
+/// bubbles' column, the bot's avatar beside its bottom edge.
 export function CommandRow({
   row,
   isGroup,

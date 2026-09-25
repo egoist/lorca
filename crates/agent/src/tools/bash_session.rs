@@ -289,15 +289,44 @@ impl BashSession {
         self.changed.subscribe()
     }
 
-    /// The line it asks with, when its output ends in one: "[sudo] password for ana:".
+    /// The line it asks with, when its output ends in one that nothing was typed after: "[sudo]
+    /// password for ana:". With echo off, an answered question stays the last line until the
+    /// command prints again.
     pub fn prompt(&self) -> Option<String> {
-        prompt_hint(&self.state.lock().unwrap().output.tail_text(2048))
+        let state = self.state.lock().unwrap();
+        if state.last_input > state.last_output {
+            return None;
+        }
+        prompt_hint(&state.output.tail_text(2048))
     }
 
-    /// Whether it stopped at a question: its output ends on an open line that reads like one.
+    /// Whether it stopped at a question: its output ends on an open line that reads like one,
+    /// and nothing was typed after it.
     pub fn asks(&self) -> bool {
-        let text = self.state.lock().unwrap().output.tail_text(2048);
+        let state = self.state.lock().unwrap();
+        if state.last_input > state.last_output {
+            return false;
+        }
+        let text = state.output.tail_text(2048);
         !text.ends_with('\n') && prompt_hint(&text).is_some()
+    }
+
+    /// Whether a program in it has put the terminal in raw mode, as one does to read keys one at
+    /// a time: a menu, a yes/no choice, a full-screen program. It shows even when the program
+    /// prints into a pipe: the master reads the terminal's modes on macOS and Linux alike.
+    pub fn reads_keys(&self) -> bool {
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+            let Some(fd) = self.master.lock().unwrap().clone() else { return false };
+            let mut termios = std::mem::MaybeUninit::<libc::termios>::uninit();
+            if unsafe { libc::tcgetattr(fd.get_ref().as_raw_fd(), termios.as_mut_ptr()) } != 0 {
+                return false;
+            }
+            unsafe { termios.assume_init() }.c_lflag & libc::ICANON == 0
+        }
+        #[cfg(not(unix))]
+        false
     }
 
     /// Its last `count` lines with anything on them, without escapes, each cut to a screen's
@@ -342,11 +371,15 @@ impl BashSession {
         self.changed.send_modify(|version| *version += 1);
     }
 
-    /// Types `text` into the command, as keys on its terminal.
+    /// Types `text` into the command, as keys on its terminal. The input counts from before the
+    /// first key, so whatever the command prints in reply comes after it.
     pub async fn write(&self, text: &[u8]) -> Result<(), String> {
         #[cfg(unix)]
         {
             let fd = self.master.lock().unwrap().clone().ok_or("The command has ended")?;
+            self.state.lock().unwrap().last_input = Instant::now();
+            // Whoever follows the session sees the question answered.
+            self.changed.send_modify(|version| *version += 1);
             let mut written = 0;
             let result = tokio::time::timeout(WRITE_TIMEOUT, async {
                 while written < text.len() {
@@ -370,7 +403,6 @@ impl BashSession {
                 Ok(())
             })
             .await;
-            self.state.lock().unwrap().last_input = Instant::now();
             result.map_err(|_| "The command is not taking input".to_string())?
         }
         #[cfg(not(unix))]
@@ -721,6 +753,21 @@ pub fn prompt_hint(text: &str) -> Option<String> {
     Some(if line.chars().count() > PROMPT_CHARS { format!("{}…", line.chars().take(PROMPT_CHARS).collect::<String>()) } else { line.to_string() })
 }
 
+/// A key a model spelled out as its escape, the way JSON that escaped the backslash delivers
+/// it: `\u0003` as six characters, `\x03`, or `\u001b[B` for Down. Only the whole text, and only
+/// a control character with at most a key's tail after it, so code typed into a REPL that holds
+/// an escape goes as written.
+static ESCAPED_KEY: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\\(?:u00([01][0-9a-fA-F]|7[fF])|x([01][0-9a-fA-F]|7[fF]))(\[[0-9;]*[A-Za-z~]|O[A-Za-z])?$").unwrap());
+
+/// What typing `text` sends: the text as written, or the key it spells out as an escape.
+pub fn typed_keys(text: &str) -> std::borrow::Cow<'_, str> {
+    let Some(parts) = ESCAPED_KEY.captures(text) else { return text.into() };
+    let code = parts.get(1).or_else(|| parts.get(2)).map_or("", |m| m.as_str());
+    let Ok(byte) = u8::from_str_radix(code, 16) else { return text.into() };
+    format!("{}{}", char::from(byte), parts.get(3).map_or("", |m| m.as_str())).into()
+}
+
 /// Output shown to the model: the text, and how it was cut.
 pub(crate) struct Shown {
     pub text: String,
@@ -745,15 +792,27 @@ fn footer(truncation: &TruncationResult, dropped: bool, lines_before: u64, full:
     out
 }
 
-/// The status line of a session still running when a call returns.
+/// The status line of a session still running when a call returns. Silence is not a question:
+/// a quiet command may be working, or asking where nobody sees it, since a question printed
+/// into a pipe or a file never reaches the terminal. Raw mode is the one sign of that left.
 fn running_note(session: &BashSession, stop: Stop, idle: Duration) -> String {
     let id = session.id();
     match (stop, session.prompt()) {
         (Stop::Waiting, Some(prompt)) => format!(
             "[Waiting for input: \"{prompt}\". The command is still running as session {id}: answer it with bash_input, or check on it with bash_output.]"
         ),
+        (Stop::Waiting, None) if session.reads_keys() => format!(
+            "[No output for {} seconds, and the command has put its terminal in raw mode, as a program does to read keys at a menu \
+             or a yes/no choice: it is probably waiting for one. If its question is not above, it went into a pipe or a file (`| \
+             tail`, `> log`) where nobody can see it: stop the command with bash_input \"\\u0003\" and run it again with its \
+             non-interactive options (--yes, --no-interactive) or with stdin from /dev/null. Otherwise press keys with bash_input: \
+             \"\" is Enter, and \"\\u001b[B\" and \"\\u001b[A\" with enter false move down and up. It is still running as session {id}.]",
+            idle.as_secs_f64()
+        ),
         (Stop::Waiting, None) => format!(
-            "[No output for {} seconds. The command is still running as session {id} and may be waiting for input: answer it with bash_input, or keep waiting with bash_output.]",
+            "[No output for {} seconds. The command is still running as session {id}: it may be working quietly, or waiting for \
+             input. A question it prints into a pipe or a file (`| tail`, `> log`) never shows here. Keep waiting with \
+             bash_output, answer it with bash_input, or stop it with bash_input \"\\u0003\".]",
             idle.as_secs_f64()
         ),
         _ => format!("[Still running as session {id}. Wait for more with bash_output, or answer it with bash_input.]"),
@@ -775,7 +834,7 @@ pub(crate) fn session_result(session: &Arc<BashSession>, sessions: &dyn BashSess
         let prompt = if stop == Stop::Waiting { session.prompt() } else { None };
         let body = with_status(&running_note(session, stop, idle));
         return Ok(ToolResult::text(body).with_details(json!({
-            "summary": "Waiting for input",
+            "summary": if prompt.is_some() { "Waiting for input" } else { "Running" },
             "session_id": session.id(),
             "state": "waiting",
             "prompt": prompt,
@@ -852,7 +911,7 @@ impl Tool for BashInputTool {
     }
     async fn execute(&self, _id: &str, args: Value, cancel: CancellationToken, _on_update: ToolUpdateFn) -> Result<ToolResult, ToolError> {
         let id = args["session_id"].as_str().ok_or("session_id is required")?.trim();
-        let text = args["text"].as_str().ok_or("text is required")?;
+        let text = typed_keys(args["text"].as_str().ok_or("text is required")?);
         let session = self.sessions.get(id).ok_or_else(|| unknown_session(id))?;
         let from = session.read_mark();
         if session.end().is_none() {
@@ -1074,6 +1133,20 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn an_answered_question_is_not_asked_again() {
+        let t = tools(Duration::from_secs(30));
+        let waiting = call(&t.bash, json!({"command": "read -rs -p 'Password: ' p </dev/tty; sleep 60"})).await.unwrap();
+        let session = t.host.get(&session_id(&waiting)).unwrap();
+        assert!(session.asks());
+        session.write(b"hunter2\r").await.unwrap();
+        // With echo off the line still reads "Password: ", and the command has gone quiet.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(session.last_lines(1), ["Password:"]);
+        assert!(!session.asks() && session.prompt().is_none());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn a_yes_no_question_is_answered_by_the_model() {
         let t = tools(Duration::from_secs(30));
         let waiting = call(&t.bash, json!({"command": "printf 'Continue? [y/N] '; read -r a; echo answer:$a; sleep 0.3; echo done"})).await.unwrap();
@@ -1096,6 +1169,28 @@ mod tests {
         let script = call(&t.bash, json!({"command": "sleep 60; echo after"})).await.unwrap();
         let interrupted = call(&t.input, json!({"session_id": session_id(&script), "text": "\u{3}", "enter": false})).await.unwrap();
         assert_eq!(interrupted.text_content(), "Command terminated by signal 2");
+        // Spelled out, as a model whose JSON escaped the backslash sends it.
+        let spelled = call(&t.bash, json!({"command": "sleep 60"})).await.unwrap();
+        let interrupted = call(&t.input, json!({"session_id": session_id(&spelled), "text": "\\u0003"})).await.unwrap();
+        assert_eq!(interrupted.text_content(), "Command terminated by signal 2");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn silence_is_not_taken_for_a_question() {
+        let t = tools(Duration::from_millis(400));
+        // Quiet on a normal terminal: working, or asking where nobody sees it.
+        let quiet = call(&t.bash, json!({"command": "sleep 60"})).await.unwrap();
+        assert_eq!((quiet.details["summary"].as_str(), quiet.details["prompt"].as_str()), (Some("Running"), None));
+        assert!(quiet.text_content().contains("never shows here"), "{}", quiet.text_content());
+        assert!(!t.host.get(&session_id(&quiet)).unwrap().reads_keys());
+
+        // A menu whose output goes into a pipe, as `bun create vite … | tail -5`: the terminal
+        // goes raw and stays blank.
+        let menu = call(&t.bash, json!({"command": "(stty raw; printf 'Pick a framework? '; sleep 60) | tail -5"})).await.unwrap();
+        let text = menu.text_content();
+        assert!(text.starts_with("[No output for 0.4 seconds, and the command has put its terminal in raw mode"), "{text}");
+        assert!(t.host.get(&session_id(&menu)).unwrap().reads_keys());
     }
 
     #[cfg(unix)]
@@ -1103,10 +1198,18 @@ mod tests {
     async fn stop_kills_the_whole_process_group() {
         let t = tools(Duration::from_secs(30));
         let cancel = CancellationToken::new();
-        let stopper = cancel.clone();
+        // Stop once the grandchild runs and its pid is in the output. A Stop on a clock can land
+        // before the command starts: the first command in a process waits for the login shell's
+        // environment, a few hundred milliseconds, and a group stopped then has nothing in it.
+        let (host, stopper) = (t.host.clone(), cancel.clone());
         tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(500)).await;
-            stopper.cancel();
+            loop {
+                let session = host.0.lock().unwrap().values().next().cloned();
+                if session.is_some_and(|session| session.state.lock().unwrap().output.tail.contains(&b'\n')) {
+                    return stopper.cancel();
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
         });
         let aborted = t.bash.execute("call", json!({"command": "sleep 300 & echo $!; wait"}), cancel, Arc::new(|_| {})).await.unwrap_err();
         assert!(aborted.0.ends_with("Command aborted"), "{}", aborted.0);
@@ -1191,6 +1294,18 @@ mod tests {
         drop(spill);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "1234\n[Lorca stopped saving this output at 64.0MB.]\n");
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn keys_spelled_out_as_escapes_are_typed_as_keys() {
+        assert_eq!(typed_keys("\\u0003"), "\u{3}");
+        assert_eq!(typed_keys("\\x04"), "\u{4}");
+        assert_eq!(typed_keys("\\u001B"), "\u{1b}");
+        assert_eq!(typed_keys("\\u001b[B"), "\u{1b}[B");
+        assert_eq!(typed_keys("\\u001b[3~"), "\u{1b}[3~");
+        assert_eq!(typed_keys("y"), "y");
+        assert_eq!(typed_keys("\\u0041"), "\\u0041", "only control characters");
+        assert_eq!(typed_keys("print(\"\\x1b[31m\")"), "print(\"\\x1b[31m\")", "code that holds an escape goes as written");
     }
 
     #[test]

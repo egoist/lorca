@@ -54,19 +54,21 @@ describe("model", () => {
   });
 
   test("a command shows its card only while it needs the user", () => {
-    const call = (is_running: boolean, state: CommandRun["state"]) =>
-      showsCard({ kind: "tool", name: "bash", summary: "Running", detail: "", is_running, run: { command: "sudo pacman -Syu", state } });
-    // Its question, whether or not the call still waits on it.
+    const call = (is_running: boolean, state: CommandRun["state"], handed_over = false) =>
+      showsCard({ kind: "tool", name: "bash", summary: "Running", detail: "", is_running, run: { command: "sudo pacman -Syu", state, handed_over } });
+    // Auto-review's question, whether or not the call still waits on it.
     expect(call(true, "asking")).toBe(true);
     // Inside its call: the working row says what runs.
     expect(call(true, "checking")).toBe(false);
     expect(call(true, "running")).toBe(false);
-    expect(call(true, "waiting")).toBe(false);
-    // Its call returned while it still runs: waiting for an answer, or going on by itself.
-    expect(call(false, "waiting")).toBe(true);
-    expect(call(false, "running")).toBe(true);
+    // Its call returned, and the bot is still dealing with it: it may answer the question itself.
+    expect(call(false, "waiting")).toBe(false);
+    expect(call(false, "running")).toBe(false);
+    // Handed over: waiting for the user's answer, or going on by itself after the turn.
+    expect(call(false, "waiting", true)).toBe(true);
+    expect(call(false, "running", true)).toBe(true);
     // Ended.
-    for (const state of ["exited", "failed", "stopped", "denied", "expired", "dismissed"] as const) expect(call(false, state)).toBe(false);
+    for (const state of ["exited", "failed", "stopped", "denied", "expired", "dismissed"] as const) expect(call(false, state, true)).toBe(false);
     expect(showsCard({ kind: "tool", name: "read", summary: "", detail: "", is_running: false })).toBe(false);
   });
 

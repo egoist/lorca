@@ -287,14 +287,19 @@ pub struct CommandRun {
     #[serde(default)]
     pub command: String,
     /// `checking` (Auto-review is judging it), `asking` (for the user's permission), `running`
-    /// (printing), `waiting` (at a question, or silent). Once it ended: `exited`, `failed` (a
-    /// nonzero code), `stopped`, `denied` (not allowed, so never run), `expired` (nobody
-    /// answered in time), or `dismissed` (the user sent a new message instead of answering, so
-    /// never run).
+    /// (printing, or silent), `waiting` (at a question the user can read). Once it ended:
+    /// `exited`, `failed` (a nonzero code), `stopped`, `denied` (not allowed, so never run),
+    /// `expired` (nobody answered in time), or `dismissed` (the user sent a new message instead
+    /// of answering, so never run).
     pub state: String,
-    /// The line it asks with, when its output ends in one: "[sudo] password for ana:".
+    /// The line it asks with while it waits: "[sudo] password for ana:".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
+    /// The bot left the command to the user: its turn ended with the command still running, or
+    /// it waits on the command while the command asks. The apps show a live command's card from
+    /// then until it ends; before, the bot is still dealing with it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub handed_over: bool,
     /// Its last lines, as the bottom of a terminal shows them: what it said after an answer
     /// ("Sorry, try again."). Never what was typed, which the terminal does not echo.
     #[serde(default, skip_serializing_if = "Option::is_none")]

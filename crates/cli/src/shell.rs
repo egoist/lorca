@@ -13,7 +13,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use lorca_agent::tools::bash_session::WAITING_AFTER;
+use lorca_agent::tools::bash_session::{PROMPT_QUIET, WAITING_AFTER};
 use lorca_agent::tools::{BashSession, BashSessions, SessionEnd};
 use serde_json::{json, Value};
 use tokio::time::Instant;
@@ -252,6 +252,50 @@ impl Sessions {
         });
     }
 
+    /// The bot's turn in the chat ended: every command it left running there is the user's now,
+    /// to answer or to stop, and its card shows until the command ends. Until then the bot was
+    /// the one dealing with it, and the working row said so.
+    pub fn hand_over(&self, app: &App, chat_id: &str, bot_id: &str) {
+        let live: Vec<(String, Arc<BashSession>)> = self
+            .entries
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|e| e.chat_id == chat_id && e.bot_id == bot_id)
+            .filter_map(|e| Some((e.message_id.clone()?, e.session.clone().filter(|s| s.end().is_none())?)))
+            .collect();
+        for (message_id, session) in live {
+            self.hand_over_card(app, chat_id, &message_id, &session);
+        }
+    }
+
+    /// The bot waits on session `id` (`bash_output`). A command sitting at a question is the
+    /// user's to answer now; one that runs or is merely quiet stays the bot's.
+    pub fn bot_waits(&self, app: &App, chat_id: &str, bot_id: &str, id: &str) {
+        let found = self.entries.lock().unwrap().iter().find(|e| e.chat_id == chat_id && e.bot_id == bot_id && e.session.as_ref().is_some_and(|s| s.id() == id)).and_then(|e| {
+            let message_id = e.message_id.clone()?;
+            Some((message_id, e.session.clone()?))
+        });
+        let Some((message_id, session)) = found else { return };
+        if session.end().is_none() && live_state(&session) == "waiting" {
+            self.hand_over_card(app, chat_id, &message_id, &session);
+        }
+    }
+
+    /// Hands call `message_id`'s command to the user, once: its card shows from now on, up to
+    /// date with `session` in the same write.
+    fn hand_over_card(&self, app: &App, chat_id: &str, message_id: &str, session: &BashSession) {
+        let _row = self.rows.lock().unwrap();
+        let Some(mut message) = app.message(chat_id, message_id) else { return };
+        let Body::Tool { summary, run: Some(run), .. } = &mut message.body else { return };
+        if run.handed_over {
+            return;
+        }
+        follow(run, summary, session);
+        run.handed_over = true;
+        app.upsert_message(message, true);
+    }
+
     /// Writes where session `id` stands to its card. False when no card shows it.
     fn sync_row(&self, app: &App, id: &str) -> bool {
         let found = self.entries.lock().unwrap().iter().find(|e| e.session.as_ref().is_some_and(|s| s.id() == id)).and_then(|e| {
@@ -316,14 +360,18 @@ fn follow(run: &mut CommandRun, summary: &mut String, session: &BashSession) {
     run.session_id = Some(session.id().to_string());
     run.command = session.command().chars().take(crate::model::APP_COMMAND_CHARS).collect();
     run.state = state.into();
-    run.prompt = if end.is_none() { session.prompt() } else { None };
+    run.prompt = if state == "waiting" { session.prompt() } else { None };
     run.output = (!lines.is_empty()).then(|| lines.join("\n"));
     run.outcome = end.map(|end| end.describe());
 }
 
-/// `waiting` when the command stopped at a question or has been silent a while, else `running`.
+/// `waiting` when the command sits at a question the user can read, else `running`: its output
+/// ends on an open line that reads like one and has for `PROMPT_QUIET`, or it has been silent a
+/// while after a line that asks ("Enter the code we sent:"). Silence alone is not a question: a
+/// command may be working quietly, or asking into a pipe (`| tail`), where nobody could answer.
 fn live_state(session: &BashSession) -> &'static str {
-    if session.asks() || session.last_output().elapsed() >= WAITING_AFTER {
+    let quiet = session.last_output().elapsed();
+    if (session.asks() && quiet >= PROMPT_QUIET) || (quiet >= WAITING_AFTER && session.prompt().is_some()) {
         "waiting"
     } else {
         "running"
@@ -371,9 +419,13 @@ async fn watch(app: Arc<App>, session: Arc<BashSession>) {
             }
             wake = wake.min(due);
         }
-        // A command printing now reads as waiting once it has been silent a while.
+        // A command that stopped on a question reads as waiting once it has been quiet there.
         if current.1 == "running" {
-            wake = wake.min(session.last_output() + WAITING_AFTER);
+            if session.asks() {
+                wake = wake.min(session.last_output() + PROMPT_QUIET);
+            } else if session.prompt().is_some() {
+                wake = wake.min(session.last_output() + WAITING_AFTER);
+            }
         }
         tokio::select! {
             changed = changes.changed() => {
