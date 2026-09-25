@@ -84,6 +84,9 @@ impl OpenAiResponsesProvider {
         if let Some(max_tokens) = request.max_tokens {
             body["max_output_tokens"] = Value::from(max_tokens);
         }
+        if let Some(session_id) = &request.options.session_id {
+            body["prompt_cache_key"] = Value::String(session_id.clone());
+        }
         let level = self.thinking_level.and_then(|level| match self.info {
             Some(info) => info.clamp_level(level),
             None if level == ThinkingLevel::Off => None,
@@ -188,6 +191,7 @@ mod tests {
                 description: "read a file".into(),
                 parameters: json!({ "type": "object" }),
             }],
+            cache_points: Vec::new(),
             max_tokens: Some(200),
             options: Default::default(),
         }
@@ -209,6 +213,15 @@ mod tests {
         assert_eq!(body["tools"][0]["name"], "read");
         assert_eq!(body["max_output_tokens"], 200);
         assert_eq!(body["reasoning"], json!({ "effort": "medium" }));
+        assert!(body.get("prompt_cache_key").is_none());
+    }
+
+    #[test]
+    fn the_chat_keys_the_prompt_cache() {
+        let provider = OpenAiResponsesProvider::new("opencode", "https://opencode.ai/zen/v1", "k", "gpt-5.6-terra");
+        let mut request = request();
+        request.options = crate::RequestOptions::default().with_session_id("chat-1");
+        assert_eq!(provider.body(&request)["prompt_cache_key"], "chat-1");
     }
 
     #[test]

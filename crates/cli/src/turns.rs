@@ -157,16 +157,12 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
         chat = app.chat(&job.chat_id).unwrap_or(chat);
         messages = transcript_for(app, &chat, &bot, &workdir);
     }
-    if job.kind == "room_turn" {
-        messages.push(AgentMessage::User(UserMessage::text(room_turn_cue(app, &chat, &bot, job))));
-    } else if let Some(cue) = &command_end {
-        messages.push(AgentMessage::User(UserMessage::text(cue.clone())));
-    } else if messages.last().map(AgentMessage::is_assistant).unwrap_or(true) {
-        messages.push(AgentMessage::User(UserMessage::text("Continue.")));
-    }
-    if let Some(setup) = &job.setup {
-        messages.push(AgentMessage::User(UserMessage::text(setup_cue(app, setup))));
-    }
+    let notes = TurnNotes {
+        recent_work: recent_work_brief(app, &bot, &chat.meta.id, now_secs() as i64),
+        cue: if job.kind == "room_turn" { Some(room_turn_cue(app, &chat, &bot, job)) } else { command_end.clone() },
+        setup: job.setup.as_ref().map(|setup| setup_cue(app, setup)),
+    };
+    let (mut messages, mut cache_points) = with_turn_notes(messages, &notes);
     let unattended = routine.is_some();
     let mut tools: Vec<Arc<dyn Tool>> = vec![
         Arc::new(ListTeammates { app: app.clone(), chat_id: chat.meta.id.clone() }),
@@ -240,6 +236,7 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
             system_prompt: system_prompt.clone(),
             messages: messages.clone(),
             tools: plugin_tools.tools_with_selected(&tools),
+            cache_points: cache_points.clone(),
         };
         if let Err(error) = run_agent_loop_continue(context, &config, &tx, cancel.clone()).await {
             tracing::error!(%error, "agent loop");
@@ -263,10 +260,7 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
                 Ok(Some(tokens_before)) => {
                     tracing::info!(bot = %bot.name, chat = %chat.meta.id, tokens_before, "the context overflowed; compacted and retried");
                     let latest = app.chat(&job.chat_id).unwrap_or(latest);
-                    messages = transcript_for(app, &latest, &bot, &workdir);
-                    if messages.last().map(AgentMessage::is_assistant).unwrap_or(true) {
-                        messages.push(AgentMessage::User(UserMessage::text("Continue.")));
-                    }
+                    (messages, cache_points) = with_turn_notes(transcript_for(app, &latest, &bot, &workdir), &notes);
                     let mut state = sink.0.lock().unwrap();
                     state.failed = false;
                     state.last_error = None;
@@ -526,6 +520,8 @@ impl LoopHooks for TurnHooks {
                     Ok(Some((messages, tokens_before))) => {
                         tracing::info!(bot = %self.bot.name, chat = %self.chat_id, tokens_before, "compacted mid-turn");
                         context.messages = messages;
+                        // The summary moved every message the points named.
+                        context.cache_points.clear();
                         return Some(TurnUpdate { context: Some(context), provider: None });
                     }
                     Ok(None) => {}
@@ -659,7 +655,7 @@ async fn memory_flush(
     // The turn's thinking is bound to the turn's system prompt and tools, not this run's.
     drop_bound_thinking(provider.model_id(), &mut context_messages);
     context_messages.push(AgentMessage::User(UserMessage::text(MEMORY_FLUSH_PROMPT)));
-    let context = AgentContext { system_prompt: system, messages: context_messages, tools: memory_tools(&store, chat) };
+    let context = AgentContext { system_prompt: system, messages: context_messages, tools: memory_tools(&store, chat), cache_points: Vec::new() };
     let config = AgentLoopConfig {
         provider: provider.clone(),
         hooks: Arc::new(QuietHooks),
@@ -692,6 +688,49 @@ fn memory_tools(store: &MemoryStore, chat: &Chat) -> Vec<Arc<dyn Tool>> {
         Arc::new(MemoryUpdate { store: store.clone(), source: source.clone() }),
         Arc::new(MemoryLog { store: store.clone(), source }),
     ]
+}
+
+/// What a turn tells the bot after the transcript, for this turn only. Later turns rebuild
+/// the transcript without it.
+struct TurnNotes {
+    /// What the bot said lately in its other chats.
+    recent_work: Option<String>,
+    /// What the turn is for when a message of the user's did not start it: the bot's turn in a
+    /// group, or a command it left running that has ended.
+    cue: Option<String>,
+    /// The first turn of a bot added from a marketplace template.
+    setup: Option<String>,
+}
+
+/// The rebuilt transcript followed by the turn's notes, and the transcript's cache points: its
+/// end, which later turns send again before notes of their own, and where the last turn's
+/// transcript ended, before the bot's latest replies and tool calls, which that turn's first
+/// model call left in the provider's cache.
+fn with_turn_notes(mut messages: Vec<AgentMessage>, notes: &TurnNotes) -> (Vec<AgentMessage>, Vec<usize>) {
+    let mut cache_points = vec![messages.len()];
+    cache_points.extend(last_own_run_start(&messages));
+    cache_points.retain(|point| *point > 0);
+    let ends_with_reply = messages.last().map(AgentMessage::is_assistant).unwrap_or(true);
+    if let Some(recent_work) = &notes.recent_work {
+        messages.push(AgentMessage::User(UserMessage::text(recent_work.clone())));
+    }
+    match &notes.cue {
+        Some(cue) => messages.push(AgentMessage::User(UserMessage::text(cue.clone()))),
+        None if ends_with_reply => messages.push(AgentMessage::User(UserMessage::text("Continue."))),
+        None => {}
+    }
+    if let Some(setup) = &notes.setup {
+        messages.push(AgentMessage::User(UserMessage::text(setup.clone())));
+    }
+    (messages, cache_points)
+}
+
+/// Where the bot's latest run of replies and tool calls starts in a rebuilt transcript, in
+/// which everyone else's messages are user messages.
+fn last_own_run_start(messages: &[AgentMessage]) -> Option<usize> {
+    let own = |message: &AgentMessage| matches!(message, AgentMessage::Assistant(_) | AgentMessage::ToolResult(_));
+    let last = messages.iter().rposition(own)?;
+    Some(messages[..last].iter().rposition(|message| !own(message)).map_or(0, |before| before + 1))
 }
 
 /// The ephemeral note that opens a member's turn in a group. It is not stored, so the next
@@ -1239,9 +1278,6 @@ fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job, store: &Memo
     prompt.push_str(&routines_prompt(app, bot));
     prompt.push_str(&plugins_prompt(app, bot, plugins));
     prompt.push_str(&memory_prompt(store));
-    if let Some(brief) = recent_work_brief(app, bot, &chat.meta.id, now_secs() as i64) {
-        prompt.push_str(&brief);
-    }
 
     prompt.push_str(
         "\nWrite like a teammate in a chat app: short and direct, usually one to three sentences, and one line when one \
@@ -1429,8 +1465,9 @@ const RECENT_WORK_MAX_LINES: usize = 10;
 const RECENT_WORK_MAX_CHARS: usize = 1_400;
 
 /// The newest thing the bot said in each of its other chats in the last two days, so a bot in
-/// a group knows what it did in its DM an hour ago without the transcript. `None` when there
-/// is nothing to tell.
+/// a group knows what it did in its DM an hour ago without the transcript: a note after the
+/// transcript, since in the system prompt it would change the prompt each time the bot speaks
+/// elsewhere. `None` when there is nothing to tell.
 fn recent_work_brief(app: &App, bot: &Bot, current_chat_id: &str, now: i64) -> Option<String> {
     let chats: Vec<Chat> = app.state.lock().unwrap().chats.iter().filter(|c| c.meta.id != current_chat_id && c.meta.bot_ids.contains(&bot.id)).cloned().collect();
     let mut rows: Vec<(i64, String)> = Vec::new();
@@ -1449,17 +1486,16 @@ fn recent_work_brief(app: &App, bot: &Bot, current_chat_id: &str, now: i64) -> O
         return None;
     }
     rows.sort_by(|a, b| b.0.cmp(&a.0));
-    let mut brief = String::from("\nRecently in your other chats (newest first; recall finds the detail):\n");
+    let mut lines = vec!["[Recently in your other chats (newest first; recall finds the detail):".to_string()];
     let mut used = 0;
     for (_, row) in rows.into_iter().take(RECENT_WORK_MAX_LINES) {
         if used + row.len() > RECENT_WORK_MAX_CHARS {
             break;
         }
         used += row.len();
-        brief.push_str(&row);
-        brief.push('\n');
+        lines.push(row);
     }
-    Some(brief)
+    Some(format!("{}]", lines.join("\n")))
 }
 
 /// `today 09:05`, `yesterday 18:40`, `2026-09-10 11:00`.
@@ -2469,6 +2505,39 @@ mod tests {
     }
 
     #[test]
+    fn a_turn_caches_its_transcript_and_the_last_turns_but_not_its_notes() {
+        let reply = |text: &str| {
+            let mut message = AssistantMessage::empty("", "");
+            message.content = vec![AssistantPart::Text { text: text.into() }];
+            AgentMessage::Assistant(message)
+        };
+        let said = |message: &AgentMessage| match message {
+            AgentMessage::User(UserMessage { content, .. }) => match content.as_slice() {
+                [ContentPart::Text { text }] => text.clone(),
+                _ => String::new(),
+            },
+            _ => String::new(),
+        };
+        let none = TurnNotes { recent_work: None, cue: None, setup: None };
+
+        // In a group the bot's last reply is followed by everyone else's messages.
+        let transcript = vec![AgentMessage::user("plan it?"), reply("I'll draft it."), AgentMessage::user("[Scout]: done"), AgentMessage::user("thanks")];
+        let notes = TurnNotes { recent_work: Some("[Recently in your other chats …]".into()), cue: Some("[Your turn in the group …]".into()), setup: None };
+        let (messages, points) = with_turn_notes(transcript.clone(), &notes);
+        assert_eq!(points, vec![4, 1], "the transcript's end, and the last turn's before the bot's reply");
+        assert_eq!(messages[4..].iter().map(said).collect::<Vec<_>>(), ["[Recently in your other chats …]", "[Your turn in the group …]"]);
+
+        // A turn no new message opened goes on from the bot's reply.
+        let (messages, points) = with_turn_notes(transcript[..2].to_vec(), &none);
+        assert_eq!(points, vec![2, 1]);
+        assert_eq!(said(messages.last().unwrap()), "Continue.");
+
+        // A first turn caches its transcript alone.
+        let (messages, points) = with_turn_notes(vec![AgentMessage::user("hi")], &none);
+        assert_eq!((points, messages.len()), (vec![1], 1));
+    }
+
+    #[test]
     fn a_pass_never_shows() {
         assert!(is_pass("PASS"));
         assert!(is_pass(" pass. "));
@@ -2550,6 +2619,7 @@ mod tests {
             system_prompt: "be brief".into(),
             messages: vec![AgentMessage::user("file an issue"), AgentMessage::Assistant(called.clone()), AgentMessage::ToolResult(result.clone())],
             tools: Vec::new(),
+            cache_points: Vec::new(),
         };
         let has_thinking = |messages: &[AgentMessage]| {
             messages.iter().any(|m| matches!(m, AgentMessage::Assistant(a) if a.content.iter().any(|p| matches!(p, AssistantPart::Thinking { .. }))))
@@ -2792,7 +2862,7 @@ mod tests {
     async fn review_call(app: &Arc<App>, bot: &Bot, workdir: &std::path::Path, call_id: &str, args: &Value) -> Option<lorca_agent::BeforeToolCallResult> {
         use lorca_agent::{AgentContext, BeforeToolCallContext};
         let assistant = AssistantMessage::empty("test", "test");
-        let context = AgentContext { system_prompt: String::new(), messages: Vec::new(), tools: Vec::new() };
+        let context = AgentContext { system_prompt: String::new(), messages: Vec::new(), tools: Vec::new(), cache_points: Vec::new() };
         let call = ToolCall { id: call_id.into(), name: "bash".into(), arguments: args.clone() };
         let cancel = CancellationToken::new();
         let ctx = BeforeToolCallContext { assistant_message: &assistant, tool_call: &call, args, context: &context, cancel: &cancel };
@@ -3271,7 +3341,7 @@ mod tests {
         let id = run_of(&row).unwrap().session_id.unwrap();
 
         let assistant = AssistantMessage::empty("test", "test");
-        let context = AgentContext { system_prompt: String::new(), messages: Vec::new(), tools: Vec::new() };
+        let context = AgentContext { system_prompt: String::new(), messages: Vec::new(), tools: Vec::new(), cache_points: Vec::new() };
         let cancel = CancellationToken::new();
         let review = |text: &'static str| {
             let args = json!({ "session_id": id, "text": text });
@@ -3497,11 +3567,10 @@ mod tests {
 
         let brief = recent_work_brief(app, &chef, "c4", now).unwrap();
         let lines: Vec<&str> = brief.lines().collect();
-        assert_eq!(lines[0], "");
-        assert!(lines[1].starts_with("Recently in your other chats"));
-        assert_eq!(lines[2], "- today 11:00 · group \"Standup\" · you said: \"Morning. Invoices first today.\"");
-        assert_eq!(lines[3], "- today 10:03 · your chat with the user · you said: \"Sent the three flagged invoices to finance.\"");
-        assert_eq!(lines.len(), 4, "the current chat and the stale one are left out: {brief}");
+        assert!(lines[0].starts_with("[Recently in your other chats"));
+        assert_eq!(lines[1], "- today 11:00 · group \"Standup\" · you said: \"Morning. Invoices first today.\"");
+        assert_eq!(lines[2], "- today 10:03 · your chat with the user · you said: \"Sent the three flagged invoices to finance.\"]");
+        assert_eq!(lines.len(), 3, "the current chat and the stale one are left out: {brief}");
         assert_eq!(recent_work_brief(app, &chef, "c4", now + 3 * 86_400), None);
 
         // recall over the chats: words, time, and who said it.

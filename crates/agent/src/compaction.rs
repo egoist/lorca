@@ -304,6 +304,7 @@ async fn summarize(
         system_prompt: SUMMARIZATION_SYSTEM_PROMPT.into(),
         messages: vec![LlmMessage::User(UserMessage::text(text))],
         tools: Vec::new(),
+        cache_points: Vec::new(),
         max_tokens: Some(max_tokens),
         options: options.clone(),
     };

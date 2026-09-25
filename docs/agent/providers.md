@@ -14,6 +14,9 @@ pub struct ModelRequest {
     pub system_prompt: String,
     pub messages: Vec<LlmMessage>,
     pub tools: Vec<ToolSpec>,     // name, description, parameters (JSON Schema)
+    pub cache_points: Vec<usize>, // prefix lengths of `messages` later calls send again
+    pub max_tokens: Option<u64>,
+    pub options: RequestOptions,
 }
 ```
 
@@ -43,7 +46,7 @@ let provider = AnthropicProvider::new("proxy", "https://llm.example.com", &api_k
 
 `server_tools`, `thinking`, `max_tokens`, `supports_images`, `cache`, `eager_tool_streaming`, `max_retries`, and `max_retry_delay_ms` are public fields. `anthropic()` declares `web_search_20260209` and `web_fetch_20260209` and sends `thinking: { type: "adaptive" }` (the basic `web_search_20250305` / `web_fetch_20250910` and no `thinking` for Haiku 4.5 and the 4.5 generation and earlier); `deepseek()` declares `web_search_20250305`, the tool DeepSeek's endpoint runs, and takes images only on a vision model. DeepSeek's OpenAI-compatible endpoint has no web search: it takes only `function` tools.
 
-By default every request marks the system prompt, the last function tool, and the last user block with `cache_control: ephemeral`, so the conversation so far is the cached prefix of the next turn (DeepSeek's endpoint honors it too: the second turn of a search reads its whole prefix from cache); sets `eager_input_streaming` on function tools, so arguments stream as they are generated; and is retried twice before it streams when the server answers 408, 409, 429, or 5xx or the connection fails, waiting what `retry-after` asks (a wait above `max_retry_delay_ms`, 60 s by default, fails instead) or a backoff from half a second to eight.
+By default every request carries up to four `cache_control: ephemeral` marks: on the system prompt, which covers the tools before it; on the last user block, so the next call of the run reads the conversation so far; at the end of each of the request's `cache_points`, so a later run that rebuilds its transcript without this run's notes and thinking reads what this one cached, since Anthropic looks at most 20 blocks back from a mark for an earlier entry; and on the last function tool while fewer than four are used (DeepSeek's endpoint ignores the marks and caches prefixes on its own); sets `eager_input_streaming` on function tools, so arguments stream as they are generated; and is retried twice before it streams when the server answers 408, 409, 429, or 5xx or the connection fails, waiting what `retry-after` asks (a wait above `max_retry_delay_ms`, 60 s by default, fails instead) or a backoff from half a second to eight.
 
 | Transcript | Request |
 | --- | --- |

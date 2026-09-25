@@ -9,6 +9,7 @@ pub struct AgentContext {
     pub system_prompt: String,
     pub messages: Vec<AgentMessage>,
     pub tools: Vec<Arc<dyn Tool>>,
+    pub cache_points: Vec<usize>,              // empty unless you rebuild the transcript the same way each run
 }
 
 pub struct AgentLoopConfig {
@@ -34,6 +35,8 @@ let config = AgentLoopConfig {
 
 The loop works on its own copy of the context. Your copy is untouched; add the returned messages to it yourself.
 
+`cache_points` are prefix lengths of `messages` that later model calls, those of later runs included, send again unchanged. The loop passes them on in every `ModelRequest`, counted among the messages the model gets, and an adapter that marks what the provider caches puts a mark at the end of each ([Anthropic](providers.md#anthropic-messages)). Name the end of the rebuilt transcript, before any notes that only this run carries, and where the previous run's transcript ended, so a run finds what the one before it cached even after many tool calls. `transform_context` must leave the messages before them as they are.
+
 ## Three entry points
 
 ### `agent_loop`: spawned, with a receiver
@@ -46,6 +49,7 @@ let context = AgentContext {
     system_prompt: "You are a helpful assistant.".into(),
     messages: history.clone(),
     tools,
+    cache_points: vec![history.len()],
 };
 let cancel = CancellationToken::new();
 

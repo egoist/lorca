@@ -375,6 +375,7 @@ mod tests {
             system_prompt: String::new(),
             messages: Vec::new(),
             tools: Vec::new(),
+            cache_points: Vec::new(),
             max_tokens: None,
             options: lorca_agent::RequestOptions::default().with_session_id("chat-1"),
         };
