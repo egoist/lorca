@@ -312,6 +312,7 @@ class MarketplacePage: NSViewController {
     unowned let market: MarketplaceViewController
     let content = Build.stack([], spacing: 0)
     private let scrollView = NSScrollView()
+    private weak var hoveredRow: MarketplaceRow?
 
     init(market: MarketplaceViewController) {
         self.market = market
@@ -341,7 +342,41 @@ class MarketplacePage: NSViewController {
             content.trailingAnchor.constraint(equalTo: document.trailingAnchor, constant: -32),
             content.bottomAnchor.constraint(equalTo: document.bottomAnchor, constant: -32),
         ])
+        // The page, not each row, follows the pointer and fills the one row under it. A row's
+        // own tracking area loses its exit when rows scroll or lay out under a pointer that
+        // stays put, and the row stays filled.
+        scrollView.addTrackingArea(NSTrackingArea(
+            rect: .zero, options: [.mouseEnteredAndExited, .mouseMoved, .activeInKeyWindow, .inVisibleRect], owner: self))
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(didLiveScroll), name: NSScrollView.didLiveScrollNotification, object: scrollView)
         view = scrollView
+    }
+
+    // Only a move fills a row, so a sheet or page appearing under the pointer starts with none.
+    override func mouseEntered(with event: NSEvent) {}
+
+    override func mouseMoved(with event: NSEvent) {
+        hover(at: event.locationInWindow)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        hover(at: nil)
+    }
+
+    @objc private func didLiveScroll() {
+        guard let window = scrollView.window, window.isKeyWindow else { return }
+        hover(at: window.mouseLocationOutsideOfEventStream)
+    }
+
+    /// Fills the row at `point`, in window coordinates, and clears the one filled before.
+    private func hover(at point: NSPoint?) {
+        var view = point.flatMap { point in scrollView.superview.flatMap { scrollView.hitTest($0.convert(point, from: nil)) } }
+        while let found = view, !(found is MarketplaceRow) { view = found.superview }
+        let row = view as? MarketplaceRow
+        guard row !== hoveredRow else { return }
+        hoveredRow?.isHovered = false
+        row?.isHovered = true
+        hoveredRow = row
     }
 
     /// Builds the page again from the marketplace's state.

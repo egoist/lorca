@@ -102,8 +102,9 @@ final class PluginIconView: BackgroundView {
 /// it, and what can be done with it on the Runner. A click anywhere but the button opens it.
 final class MarketplaceRow: NSView {
     private let hover = BackgroundView()
-    private var tracking: NSTrackingArea?
     private var pressed = false
+    /// Set by the page for the row under the pointer.
+    var isHovered = false { didSet { hover.fillColor = isHovered ? hoverFill : .clear } }
     var onOpen: (() -> Void)?
     /// The fill under the pointer; a row on a card's fill takes a darker one.
     var hoverFill: NSColor = Theme.botBubble
@@ -164,23 +165,6 @@ final class MarketplaceRow: NSView {
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let tracking { removeTrackingArea(tracking) }
-        let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self)
-        addTrackingArea(area)
-        tracking = area
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        hover.fillColor = hoverFill
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        hover.fillColor = .clear
-        pressed = false
-    }
 
     override func mouseDown(with event: NSEvent) {
         pressed = true
