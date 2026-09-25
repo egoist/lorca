@@ -669,6 +669,8 @@ struct CommandRun: Hashable {
     var isLive: Bool { state == .waiting || state == .running }
     /// The command runs in a session here or on its Runner: it takes answers and a Stop.
     var takesInput: Bool { isLive && sessionID != nil }
+    /// It ran and ended: by itself, with a nonzero code, or stopped.
+    var hasEnded: Bool { state == .exited || state == .failed || state == .stopped }
 
     /// The command's first line with anything on it.
     var firstLine: String {
@@ -765,6 +767,12 @@ struct Message: Identifiable, Hashable {
         self.state = state
         self.createdAt = createdAt
         self.attachments = attachments
+    }
+
+    /// A `bash` row's command.
+    var commandRun: CommandRun? {
+        if case let .tool(tool) = body { return tool.run }
+        return nil
     }
 
     var text: String {

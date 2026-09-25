@@ -11,6 +11,7 @@ import {
   providerDefaultBaseURL,
   providerUsesAPIKey,
   PROVIDER_MODELS,
+  runsInTerminal,
   showsCard,
   type Body,
   type Bot,
@@ -70,6 +71,19 @@ describe("model", () => {
     // Ended.
     for (const state of ["exited", "failed", "stopped", "denied", "expired", "dismissed"] as const) expect(call(false, state, true)).toBe(false);
     expect(showsCard({ kind: "tool", name: "read", summary: "", detail: "", is_running: false })).toBe(false);
+  });
+
+  test("a command runs in its terminal from its session's start to its end", () => {
+    const row = (state: CommandRun["state"], session_id?: string) => ({
+      id: "call", chat_id: "chat", author: { kind: "bot" as const, bot_id: "bot" }, state: { kind: "streaming" as const }, created_at: 1,
+      body: { kind: "tool" as const, name: "bash", summary: "Running", detail: "", is_running: true, run: { command: "bun install", state, session_id } },
+    });
+    // Auto-review judges it, or asks, before a terminal runs it.
+    for (const state of ["running", "checking", "asking"] as const) expect(runsInTerminal(row(state))).toBe(false);
+    expect(runsInTerminal(row("running", "bash-1"))).toBe(true);
+    expect(runsInTerminal(row("waiting", "bash-1"))).toBe(true);
+    for (const state of ["exited", "failed", "stopped"] as const) expect(runsInTerminal(row(state, "bash-1"))).toBe(false);
+    expect(runsInTerminal(undefined)).toBe(false);
   });
 
   test("describes provider credential setup", () => {

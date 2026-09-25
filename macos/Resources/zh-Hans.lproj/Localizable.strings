@@ -258,6 +258,7 @@
 "Finance" = "财务";
 "Find the prior art and cite it" = "找出已有的先例并注明出处";
 "Find…" = "查找…";
+"Finished" = "已完成";
 "Folder" = "文件夹";
 "Forward" = "前进";
 "General" = "通用";
@@ -491,8 +492,11 @@
 "Run Now" = "立即运行";
 "Runner" = "Runner";
 "Runner · runs bots with its own credentials" = "Runner · 用自己的凭证运行智能体";
+"Running" = "正在运行";
 "Running command: %@" = "正在运行命令：%@";
 "Running commands" = "正在运行命令";
+"Running tasks" = "正在运行的任务";
+"Running tasks (%d)" = "正在运行的任务（%d）";
 "Running…" = "正在运行…";
 "Runs on %@ now" = "立即在 %@ 上运行";
 "Runs on %@ with %@" = "运行于 %1$@，使用 %2$@";
@@ -566,6 +570,7 @@
 "Stop Responding" = "停止响应";
 "Stop responding (⌘.)" = "停止响应 (⌘.)";
 "Stop Speaking" = "停止朗读";
+"Stopped" = "已停止";
 "Subscription" = "订阅";
 "Support" = "支持";
 "Symbol" = "符号";
@@ -636,6 +641,7 @@
 "Version" = "版本";
 "View" = "显示";
 "View all" = "查看全部";
+"Waiting for input" = "正在等待输入";
 "Waiting for the browser…" = "正在等待浏览器…";
 "Waiting for the CLI" = "正在等待 CLI";
 "Waiting for the other Device to wrap the account key…" = "正在等待另一台设备封装账户密钥…";

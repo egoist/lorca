@@ -43,6 +43,7 @@ import {
   useBotMap,
   useChat,
   useIsWorking,
+  useRunningTasks,
   useStore,
   useWorkingBots,
 } from "../../../src/core/store";
@@ -95,6 +96,7 @@ export default function ChatScreen() {
   const bots = useBotMap();
   const workingBotIds = useWorkingBots(id);
   const isWorking = useIsWorking(id);
+  const hasTasks = useRunningTasks(id).length > 0;
   const status = useStore((s) => s.statuses[id] ?? null);
   const listRef = useRef<FlashListRef<Row>>(null);
   // The composer floats over the transcript and rides the keyboard (KeyboardFoot). The
@@ -770,6 +772,8 @@ export default function ChatScreen() {
             </Pressable>
           </Stack.Title>
           <Stack.Toolbar placement="right">
+            {/* The commands the chat's bots are running, while there are any. */}
+            <Stack.Toolbar.Button hidden={!hasTasks} icon="terminal" accessibilityLabel={t("Running tasks")} onPress={() => router.push(`/tasks/${id}`)} />
             <Stack.Toolbar.Button icon="ellipsis" accessibilityLabel={t("Chat info")} onPress={() => router.push(`/chat-info/${id}`)} />
           </Stack.Toolbar>
         </>
@@ -796,6 +800,8 @@ export default function ChatScreen() {
                 <Symbol name="arrow.left" size={26} color={p.label} />
               </Pressable>
             )}
+            {/* Room to match Running tasks on the other side, so the title stays centered. */}
+            {hasTasks ? <View style={styles.androidHeaderButton} /> : null}
             <Pressable
               onPress={() => router.push(`/chat-info/${id}`)}
               style={styles.androidHeaderTitle}
@@ -807,6 +813,11 @@ export default function ChatScreen() {
                 {title}
               </Text>
             </Pressable>
+            {hasTasks ? (
+              <Pressable onPress={() => router.push(`/tasks/${id}`)} style={styles.androidHeaderButton} accessibilityRole="button" accessibilityLabel={t("Running tasks")}>
+                <Symbol name="terminal" size={24} color={p.label} />
+              </Pressable>
+            ) : null}
             <Pressable onPress={() => router.push(`/chat-info/${id}`)} style={styles.androidHeaderButton} accessibilityRole="button" accessibilityLabel={t("Chat info")}>
               <Symbol name="ellipsis" size={24} color={p.label} />
             </Pressable>
