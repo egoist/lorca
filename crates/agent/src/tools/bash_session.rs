@@ -1198,10 +1198,18 @@ mod tests {
     async fn stop_kills_the_whole_process_group() {
         let t = tools(Duration::from_secs(30));
         let cancel = CancellationToken::new();
-        let stopper = cancel.clone();
+        // Stop once the grandchild runs and its pid is in the output. A Stop on a clock can land
+        // before the command starts: the first command in a process waits for the login shell's
+        // environment, a few hundred milliseconds, and a group stopped then has nothing in it.
+        let (host, stopper) = (t.host.clone(), cancel.clone());
         tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(500)).await;
-            stopper.cancel();
+            loop {
+                let session = host.0.lock().unwrap().values().next().cloned();
+                if session.is_some_and(|session| session.state.lock().unwrap().output.tail.contains(&b'\n')) {
+                    return stopper.cancel();
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
         });
         let aborted = t.bash.execute("call", json!({"command": "sleep 300 & echo $!; wait"}), cancel, Arc::new(|_| {})).await.unwrap_err();
         assert!(aborted.0.ends_with("Command aborted"), "{}", aborted.0);
