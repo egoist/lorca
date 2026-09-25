@@ -1,13 +1,13 @@
 import AppKit
 
-/// A shell command's card, from start to finish. While Auto-review checks it: who wants to run
-/// it and the command. While it asks: why, and Allow once, Always allow (with the rule it adds),
-/// and Deny. While the command runs: Stop at the end of the title's line, the command on one line
-/// in a code block that shows the whole command on click, and its last lines in a code block of
-/// their own that scrolls; waiting for input, a field to answer in, which hides what is typed
-/// unless the question is a yes or no, with Send. Once it ended, one line that says how. What the
-/// user types goes to the command and nowhere else: the CLI writes it to the terminal and keeps
-/// nothing.
+/// A shell command's card, while the command needs the user (`ToolInvocation.isShown`). While
+/// Auto-review asks to run it: who wants to, the command on one line in a code block that shows
+/// the whole command on click, why, and Allow once, Always allow (with the rule it adds), and
+/// Deny. While the command runs on after its call: Stop at the end of the title's line, the
+/// command, and its last lines in a code block of their own that scrolls; waiting for input, a
+/// field to answer in, which hides what is typed unless the question is a yes or no, with Send.
+/// What the user types goes to the command and nowhere else: the CLI writes it to the terminal
+/// and keeps nothing.
 final class CommandCellView: TranscriptCellView {
     static let identifier = NSUserInterfaceItemIdentifier("CommandCell")
 
@@ -19,53 +19,26 @@ final class CommandCellView: TranscriptCellView {
         Layout(run: run, rowWidth: rowWidth).height
     }
 
-    /// "Chef wants to run a command on Workbench", "Chef's command is waiting for input", or how
-    /// it ended.
+    /// "Chef wants to run a command on Workbench", "Chef's command is running", or "Chef's
+    /// command is waiting for input".
     static func title(for run: CommandRun, botName: String) -> String {
         switch run.state {
-        case .checking, .asking:
-            run.device.map { "\(botName) \(L("wants to run a command on %@", $0))" } ?? L("%@'s command", botName)
         case .waiting: L("%@'s command is waiting for input", botName)
         case .running: L("%@'s command is running", botName)
-        case .exited, .failed, .stopped, .denied, .expired, .dismissed: "\(endWord(run)) · $ \(run.firstLine)"
+        // Asking: no other state shows a card.
+        default: run.device.map { "\(botName) \(L("wants to run a command on %@", $0))" } ?? L("%@'s command", botName)
         }
     }
 
     /// For a screen reader: the title, the command, and what the card says under it.
     static func spokenText(run: CommandRun, botName: String) -> String {
-        if run.isEnded {
-            return [L("%@'s command", botName), title(for: run, botName: botName), detail(run)].compactMap { $0 }.joined(separator: ": ")
-        }
         let under = run.isLive ? outputText(run) : caption(run)
         return [title(for: run, botName: botName), "$ \(run.firstLine)", under].compactMap { $0 }.joined(separator: ": ")
     }
 
-    private static func endWord(_ run: CommandRun) -> String {
-        switch run.state {
-        case .exited: L("Finished")
-        case .failed: L("Failed")
-        case .denied: L("Denied")
-        case .expired: L("No answer in time")
-        case .dismissed: L("Dismissed")
-        default: L("Stopped")
-        }
-    }
-
-    /// Under an ended card's line: why it ended, when that says more than the word, or the rule
-    /// an Always allow added.
-    private static func detail(_ run: CommandRun) -> String? {
-        if run.state != .exited, let outcome = run.outcome, outcome != "Stopped" { return outcome }
-        if run.decision == "always", let rule = run.rule { return L("Added the rule “%@” to Auto-review.", rule) }
-        return nil
-    }
-
-    /// Under the command while Auto-review has it: that it checks, or why it asks.
+    /// Under the command while Auto-review asks: why.
     private static func caption(_ run: CommandRun) -> String? {
-        switch run.state {
-        case .checking: L("Auto-review is checking it…")
-        case .asking: run.reason
-        default: nil
-        }
+        run.state == .asking ? run.reason : nil
     }
 
     /// At the foot of the card: the rule Always allow adds, or where an answer goes.
@@ -125,24 +98,10 @@ final class CommandCellView: TranscriptCellView {
         var buttonsY: CGFloat?
         var answerY: CGFloat?
         var note: NSRect?
-        var detail: NSRect?
 
         init(run: CommandRun, rowWidth: CGFloat) {
             width = min(CommandCellView.width, rowWidth - ChatMetrics.horizontalInset * 2)
             let textWidth = width - Self.textX - 12
-            guard !run.isEnded else {
-                // Ended: the word and the command on the title's line, and why, under it.
-                let lines = Self.measure(CommandCellView.title(for: run, botName: ""), font: Theme.Font.caption, width: textWidth, maxLines: 2)
-                title = NSRect(x: Self.textX, y: 12, width: textWidth, height: lines)
-                var bottom = title.maxY
-                if let text = CommandCellView.detail(run) {
-                    let row = NSRect(x: Self.textX, y: bottom + 3, width: textWidth, height: Self.measure(text, font: Self.noteFont, width: textWidth, maxLines: 2))
-                    detail = row
-                    bottom = row.maxY
-                }
-                height = bottom + 11
-                return
-            }
             // The title's width leaves room for Stop, which `layout()` places at its end.
             title = NSRect(x: Self.textX, y: 11, width: textWidth, height: 17)
             // The command's text and the output's share a column inside their blocks.
@@ -209,7 +168,6 @@ final class CommandCellView: TranscriptCellView {
     private let stopButton = NSButton()
     /// The rule Always allow adds, where an answer goes, or why an answer did not go through.
     private let note = Build.label("", font: Layout.noteFont, color: .secondaryLabelColor, lines: 2)
-    private let detail = Build.label("", font: Layout.noteFont, color: .tertiaryLabelColor, lines: 2)
     private var groupStart = true
     private var messageID: Message.ID?
     private var run: CommandRun?
@@ -236,6 +194,7 @@ final class CommandCellView: TranscriptCellView {
         box.borderColor = Theme.botBubbleBorder
         icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)
         icon.image = NSImage(systemSymbolName: "terminal", accessibilityDescription: nil)
+        icon.contentTintColor = .controlAccentColor
         command.onClick = { [weak self] in self?.onShowCommand?() }
         caption.lineBreakMode = .byWordWrapping
         outputBox.fillColor = Theme.codeBackground
@@ -282,10 +241,9 @@ final class CommandCellView: TranscriptCellView {
             button.target = self
             button.action = action
         }
-        detail.lineBreakMode = .byWordWrapping
         let views: [NSView] = [
             box, icon, title, command, caption, outputBox, outputScroll, allowButton, alwaysButton, denyButton,
-            secretField, plainField, sendButton, stopButton, note, detail,
+            secretField, plainField, sendButton, stopButton, note,
         ]
         for view in views {
             addSubview(view.framePositioned())
@@ -322,14 +280,8 @@ final class CommandCellView: TranscriptCellView {
         self.groupStart = groupStart
         self.run = run
         title.stringValue = Self.title(for: run, botName: botName)
-        title.font = run.isEnded ? Theme.Font.caption : Layout.titleFont
-        title.textColor = run.isEnded ? .secondaryLabelColor : .labelColor
-        title.maximumNumberOfLines = run.isEnded ? 2 : 1
-        title.lineBreakMode = run.isEnded ? .byWordWrapping : .byTruncatingTail
         title.toolTip = run.command
-        icon.contentTintColor = run.isEnded ? (run.state == .failed ? .systemRed : .secondaryLabelColor) : .controlAccentColor
         caption.stringValue = Self.caption(run) ?? ""
-        detail.stringValue = Self.detail(run) ?? ""
         let asking = run.prompt ?? L("Type your answer")
         secretField.setAccessibilityLabel(asking)
         plainField.setAccessibilityLabel(asking)
@@ -456,7 +408,7 @@ final class CommandCellView: TranscriptCellView {
 
         // `layout.height` is the box alone; the row adds `top` above it.
         box.frame = NSRect(x: x, y: top, width: layout.width, height: layout.height)
-        icon.frame = NSRect(x: x + 12, y: top + (run.isEnded ? 10 : 12), width: 18, height: 18)
+        icon.frame = NSRect(x: x + 12, y: top + 12, width: 18, height: 18)
         title.frame = place(layout.title)
         if !stopButton.isHidden {
             // Stop ends the title's line, apart from Send, which answers.
@@ -499,7 +451,5 @@ final class CommandCellView: TranscriptCellView {
         }
         note.isHidden = layout.note == nil
         note.frame = layout.note.map(place) ?? .zero
-        detail.isHidden = layout.detail == nil
-        detail.frame = layout.detail.map(place) ?? .zero
     }
 }

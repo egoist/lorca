@@ -38,7 +38,7 @@ import Animated, {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { SoftScrollEdgeView } from "../../../modules/lorca-core/SoftScrollEdgeView";
 import { chatTitle, engine } from "../../../src/core/engine";
-import { isLive, type Bot, type Message } from "../../../src/core/model";
+import { isLive, type Bot } from "../../../src/core/model";
 import {
   useBotMap,
   useChat,
@@ -679,8 +679,10 @@ export default function ChatScreen() {
         ? t("Message {title} — @ to address one bot", { title })
         : t("Message {name}", { name: title });
 
-  /// The command whose answer sheet is up.
-  const [answering, setAnswering] = useState<Message | null>(null);
+  /// The command whose answer sheet is up. The sheet reads the live row, so it goes when the
+  /// command ends and its card leaves.
+  const [answeringId, setAnsweringId] = useState<string | null>(null);
+  const answering = answeringId ? chat?.messages.find((m) => m.id === answeringId) : undefined;
   const answeringRun = answering?.body.kind === "tool" ? answering.body.run : undefined;
 
   /// The whole message behind a "Messaged ◉ Name" marker, as a sheet.
@@ -724,7 +726,7 @@ export default function ChatScreen() {
             <CommandRow
               row={item}
               onDecide={(decision) => engine.answerPermission(item.message.chat_id, item.message.id, decision)}
-              onAnswer={() => setAnswering(item.message)}
+              onAnswer={() => setAnsweringId(item.message.id)}
               onStop={() => engine.stopCommand(item.message.chat_id, item.message.id)}
             />
           );
@@ -954,7 +956,7 @@ export default function ChatScreen() {
       {answering && answeringRun && isLive(answeringRun) ? (
         <AnswerSheet
           run={answeringRun}
-          onDismiss={() => setAnswering(null)}
+          onDismiss={() => setAnsweringId(null)}
           onSend={(text) => engine.answerCommand(answering.chat_id, answering.id, text)}
         />
       ) : null}

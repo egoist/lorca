@@ -19,7 +19,7 @@ use serde_json::{json, Value};
 use tokio::time::Instant;
 
 use crate::app::App;
-use crate::model::{Author, Body, CommandRun};
+use crate::model::{Author, Body, CommandRun, Message};
 
 /// A session with no output and no input for this long is stopped. Something that waited this
 /// long for an answer is not getting one, and one blocked on something outside its terminal (a
@@ -191,10 +191,12 @@ impl Sessions {
         app.upsert_message(message, true);
     }
 
-    /// Call `call_id` returned, and row `message_id` holds its result. A command still running
-    /// goes on in its session and its card follows it; one that ended says how. A call no
-    /// session ran (not allowed, or run on pipes) ends its card here, from `text`, its result.
-    pub fn call_ended(&self, app: &App, chat_id: &str, call_id: &str, message_id: &str, is_error: bool, text: &str) {
+    /// Call `call_id` returned, and `finish` writes its result into row `message_id`. The result
+    /// and where the command stands go up in one write, so no Device sees the call returned
+    /// beside a card from before. A command still running goes on in its session and its card
+    /// follows it; one that ended says how. A call no session ran (not allowed, or run on pipes)
+    /// ends its card here, from `text`, its result.
+    pub fn call_ended(&self, app: &App, chat_id: &str, call_id: &str, message_id: &str, is_error: bool, text: &str, finish: impl FnOnce(&mut Message)) {
         let session = {
             let mut entries = self.entries.lock().unwrap();
             let entry = entries.iter_mut().find(|e| e.chat_id == chat_id && e.call_id == call_id);
@@ -208,20 +210,23 @@ impl Sessions {
             }
             session
         };
-        if let Some(session) = session {
-            self.sync_row(app, session.id());
-            return;
-        }
-        self.update_card(app, chat_id, message_id, |run| {
-            if !run.is_open() {
-                return;
+        let _row = self.rows.lock().unwrap();
+        let Some(mut message) = app.message(chat_id, message_id) else { return };
+        finish(&mut message);
+        if let Body::Tool { summary, run: Some(run), .. } = &mut message.body {
+            match &session {
+                Some(session) => follow(run, summary, session),
+                None if run.is_open() => {
+                    run.state = if is_error { "failed" } else { "exited" }.into();
+                    run.prompt = None;
+                    let lines = last_lines(text, ROW_LINES);
+                    run.output = (!lines.is_empty()).then(|| lines.join("\n"));
+                    run.outcome = is_error.then(|| text.lines().next().unwrap_or("").trim().to_string()).filter(|line| !line.is_empty());
+                }
+                None => {}
             }
-            run.state = if is_error { "failed" } else { "exited" }.into();
-            run.prompt = None;
-            let lines = last_lines(text, ROW_LINES);
-            run.output = (!lines.is_empty()).then(|| lines.join("\n"));
-            run.outcome = is_error.then(|| text.lines().next().unwrap_or("").trim().to_string()).filter(|line| !line.is_empty());
-        });
+        }
+        app.upsert_message(message, true);
     }
 
     /// The turn ended before call `call_id` returned. A command already running goes on, and
@@ -247,8 +252,7 @@ impl Sessions {
         });
     }
 
-    /// Writes where session `id` stands to its card: waiting or running, with its last lines,
-    /// or how it ended. False when no card shows it.
+    /// Writes where session `id` stands to its card. False when no card shows it.
     fn sync_row(&self, app: &App, id: &str) -> bool {
         let found = self.entries.lock().unwrap().iter().find(|e| e.session.as_ref().is_some_and(|s| s.id() == id)).and_then(|e| {
             let message_id = e.message_id.clone()?;
@@ -258,21 +262,7 @@ impl Sessions {
         let _row = self.rows.lock().unwrap();
         let Some(mut message) = app.message(&chat_id, &message_id) else { return false };
         let Body::Tool { summary, run: Some(run), .. } = &mut message.body else { return false };
-        let end = session.end();
-        let state = end.as_ref().map(SessionEnd::state).unwrap_or_else(|| live_state(&session));
-        *summary = match &end {
-            None if state == "waiting" => "Waiting for input".into(),
-            None => "Running".into(),
-            Some(SessionEnd::Exited(0)) => command_summary(&session),
-            Some(end) => end.describe(),
-        };
-        let lines = session.last_lines(ROW_LINES);
-        run.session_id = Some(id.to_string());
-        run.command = session.command().chars().take(crate::model::APP_COMMAND_CHARS).collect();
-        run.state = state.into();
-        run.prompt = if end.is_none() { session.prompt() } else { None };
-        run.output = (!lines.is_empty()).then(|| lines.join("\n"));
-        run.outcome = end.map(|end| end.describe());
+        follow(run, summary, &session);
         app.upsert_message(message, true);
         true
     }
@@ -309,6 +299,26 @@ fn last_lines(text: &str, count: usize) -> Vec<String> {
     let mut lines: Vec<String> = text.lines().rev().map(str::trim_end).filter(|line| !line.trim().is_empty()).take(count).map(str::to_string).collect();
     lines.reverse();
     lines
+}
+
+/// Where `session` stands, on its card and in its row's summary: waiting or running, with its
+/// last lines, or how it ended.
+fn follow(run: &mut CommandRun, summary: &mut String, session: &BashSession) {
+    let end = session.end();
+    let state = end.as_ref().map(SessionEnd::state).unwrap_or_else(|| live_state(session));
+    *summary = match &end {
+        None if state == "waiting" => "Waiting for input".into(),
+        None => "Running".into(),
+        Some(SessionEnd::Exited(0)) => command_summary(session),
+        Some(end) => end.describe(),
+    };
+    let lines = session.last_lines(ROW_LINES);
+    run.session_id = Some(session.id().to_string());
+    run.command = session.command().chars().take(crate::model::APP_COMMAND_CHARS).collect();
+    run.state = state.into();
+    run.prompt = if end.is_none() { session.prompt() } else { None };
+    run.output = (!lines.is_empty()).then(|| lines.join("\n"));
+    run.outcome = end.map(|end| end.describe());
 }
 
 /// `waiting` when the command stopped at a question or has been silent a while, else `running`.

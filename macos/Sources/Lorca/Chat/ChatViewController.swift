@@ -237,7 +237,7 @@ final class ChatViewController: NSViewController {
         for (index, message) in chat.messages.enumerated() {
             messageIndex[message.id] = index
             // Tool calls are the bot's business; a sent message leaves a marker, and a command
-            // shows as its card, from Auto-review's question to how it ended.
+            // shows as its card while it needs the user.
             if case let .tool(tool) = message.body, !tool.isShown { continue }
             let silence = previousDate.map { message.createdAt.timeIntervalSince($0) } ?? .infinity
             if silence > ChatMetrics.separatorGap
@@ -267,6 +267,15 @@ final class ChatViewController: NSViewController {
         }
     }
 
+    /// Whether the cursor is in the row of `messageID`, such as a command card's answer field.
+    private func holdsFocus(_ messageID: Message.ID) -> Bool {
+        guard let index = rows.firstIndex(where: { $0.messageID == messageID }),
+            let cell = tableView.view(atColumn: 0, row: index, makeIfNecessary: false),
+            let responder = view.window?.firstResponder as? NSView
+        else { return false }
+        return responder.isDescendant(of: cell)
+    }
+
     private func message(for id: Message.ID) -> Message? {
         guard let chatID, let chat = store.chat(chatID) else { return nil }
         if let index = messageIndex[id], chat.messages.indices.contains(index), chat.messages[index].id == id {
@@ -290,12 +299,17 @@ final class ChatViewController: NSViewController {
             if wasPinned { scrollToBottom(animated: true) }
 
         case let .messageChanged(id, messageID) where id == chatID:
-            // A tool row shows once it has something to show: a sent message's marker.
+            // A tool row shows once it has something to show (a sent message's marker, or a
+            // command that needs the user) and goes once a command's card no longer does.
             if let message = message(for: messageID), case let .tool(tool) = message.body,
                 tool.isShown != rows.contains(where: { $0.messageID == messageID })
             {
+                // The cursor in a card's answer field goes back to the composer as the card leaves.
+                let hadFocus = holdsFocus(messageID)
                 layout.invalidate(messageID)
                 updateRows()
+                if isPinnedToBottom { scrollToBottom(animated: false) }
+                if hadFocus { composer.focus() }
             } else {
                 updateRow(for: messageID)
             }

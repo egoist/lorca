@@ -2,14 +2,14 @@
 // avatar beside the bubble's bottom edge; a DM shows neither), "Today 4:13 AM" separators after
 // fifteen minutes of silence, the "is working" row, "Chef stopped without replying", and the
 // centered "Message from ◉ Name" / "Messaged ◉ Name" markers. Tool calls never render, except a
-// command, which shows as its card from Auto-review's question to how it ended.
+// command, which shows as its card while it needs the user.
 
 import { useEffect, useRef, useState } from "react";
 import { Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import { LinearGradient } from "expo-linear-gradient";
 import { ShimmerView } from "../../modules/lorca-core/ShimmerView";
-import { isEnded, isLive, isSentMessage, type Body, type Bot, type Chat, type CommandRun, type Message } from "../core/model";
+import { isLive, isSentMessage, showsCard, type Body, type Bot, type Chat, type CommandRun, type Message } from "../core/model";
 import { useStore } from "../core/store";
 import { language, t, useLanguage } from "../i18n";
 import { AttachmentBlock } from "./attachments";
@@ -45,7 +45,7 @@ export function buildRows(chat: Chat, bots: Map<string, Bot>, workingBotIds: str
   const rows: Row[] = [];
   let previous: Message | null = null;
   let previousAuthorKey: string | null = null;
-  const shown = chat.messages.filter((m) => m.body.kind !== "tool" || !!m.body.run || isSentMessage(m.body));
+  const shown = chat.messages.filter((m) => m.body.kind !== "tool" || showsCard(m.body) || isSentMessage(m.body));
   for (let i = 0; i < shown.length; i++) {
     const message = shown[i];
     const separated = !previous || message.created_at - previous.created_at >= SEPARATOR_GAP_SECS;
@@ -318,11 +318,11 @@ export function PermissionRow({ row, onDecide }: { row: Extract<Row, { type: "pe
   );
 }
 
-/// A command's card, from start to finish. While Auto-review checks it: who wants to run it and
-/// the command, on one line in a code block that opens the whole command on tap. While it asks:
-/// why, the answers, and the rule Always allow adds. While the command runs: Stop on the title's
-/// line and its last lines in a code block of their own that scrolls; waiting for input, Answer,
-/// which opens `AnswerSheet`. Once it ended, one line that says how.
+/// A command's card, while the command needs the user (`showsCard`). While Auto-review asks to run
+/// it: who wants to, the command on one line in a code block that opens the whole command on tap,
+/// why, the answers, and the rule Always allow adds. While the command runs on after its call: Stop
+/// on the title's line, the command, and its last lines in a code block of their own that scrolls;
+/// waiting for input, Answer, which opens `AnswerSheet`.
 export function CommandRow({
   row,
   onDecide,
@@ -344,37 +344,15 @@ export function CommandRow({
   const command = firstLine(run.command);
   // A new question clears what the last answer or Stop said.
   useEffect(() => setError(null), [run.output, run.state]);
-  if (isEnded(run)) {
-    const word = { exited: t("Finished"), failed: t("Failed"), denied: t("Denied"), expired: t("No answer in time"), dismissed: t("Dismissed") }[run.state as string] ?? t("Stopped");
-    const detail =
-      run.state !== "exited" && run.outcome && run.outcome !== "Stopped"
-        ? run.outcome
-        : run.decision === "always" && run.rule
-          ? t("Added the rule “{rule}” to Auto-review.", { rule: run.rule })
-          : null;
-    return (
-      <View style={{ paddingTop: row.groupStart ? 14 : 6, paddingHorizontal: INSET }}>
-        <View style={[styles.permission, { backgroundColor: p.cell, borderColor: p.separator }]} accessible accessibilityLabel={`${t("{who}'s command", { who })}: ${word}, ${command}${detail ? `. ${detail}` : ""}`}>
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-            <Symbol name="terminal" size={15} color={run.state === "failed" ? p.red : p.secondaryLabel} />
-            <Text style={[styles.caption, { color: p.secondaryLabel, flexShrink: 1 }]} numberOfLines={2}>
-              {`${word} · $ ${command}`}
-            </Text>
-          </View>
-          {detail ? <Text style={[styles.ruleNote, { color: p.tertiaryLabel }]}>{detail}</Text> : null}
-        </View>
-      </View>
-    );
-  }
   const title =
-    run.state === "checking" || run.state === "asking"
+    run.state === "asking"
       ? run.device
         ? t("{who} wants to run a command on {plugin}", { who, plugin: run.device })
         : t("{who}'s command", { who })
       : run.state === "running"
         ? t("{who}'s command is running", { who })
         : t("{who}'s command is waiting for input", { who });
-  const caption = run.state === "checking" ? t("Auto-review is checking it…") : run.state === "asking" ? run.reason : undefined;
+  const caption = run.state === "asking" ? run.reason : undefined;
   const output = isLive(run) ? (run.output ?? "").split("\n").filter(Boolean).join("\n") : "";
   const takesInput = isLive(run) && !!run.session_id;
   const choices: [string, "allow" | "always" | "deny"][] = run.rule

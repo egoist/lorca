@@ -991,23 +991,28 @@ impl TurnState {
             }
             AgentEvent::ToolExecutionEnd { tool_call_id, tool_name, result, is_error } => {
                 let Some((_, message_id)) = self.tool_messages.iter().find(|(id, _)| *id == tool_call_id).cloned() else { return };
-                let Some(mut message) = self.app.message(&self.chat_id, &message_id) else { return };
                 let text = result.details["message"].as_str().map(str::to_string).unwrap_or_else(|| result.text_content());
                 let summary = result.details["summary"]
                     .as_str()
                     .map(str::to_string)
                     .unwrap_or_else(|| first_line(&text, 80).unwrap_or_else(|| format!("{} finished", tool_label(&tool_name))));
-                if let Body::Tool { summary: s, detail, is_running, result: r, is_error: e, .. } = &mut message.body {
-                    *s = if is_error { format!("{} failed", tool_label(&tool_name)) } else { summary };
-                    *detail = text.clone();
-                    *is_running = false;
-                    *r = Some(text.clone());
-                    *e = is_error;
-                }
-                message.state = MessageState::Complete;
-                self.app.upsert_message(message, true);
+                let summary = if is_error { format!("{} failed", tool_label(&tool_name)) } else { summary };
+                let finish = |message: &mut Message| {
+                    if let Body::Tool { summary: s, detail, is_running, result: r, is_error: e, .. } = &mut message.body {
+                        *s = summary;
+                        *detail = text.clone();
+                        *is_running = false;
+                        *r = Some(text.clone());
+                        *e = is_error;
+                    }
+                    message.state = MessageState::Complete;
+                };
                 if tool_name == "bash" {
-                    self.app.shell_sessions.call_ended(&self.app, &self.chat_id, &tool_call_id, &message_id, is_error, &text);
+                    // With the command's card, in the same write.
+                    self.app.shell_sessions.call_ended(&self.app, &self.chat_id, &tool_call_id, &message_id, is_error, &text, finish);
+                } else if let Some(mut message) = self.app.message(&self.chat_id, &message_id) {
+                    finish(&mut message);
+                    self.app.upsert_message(message, true);
                 }
             }
             _ => {}
@@ -2975,6 +2980,33 @@ mod tests {
         let (_, read) = call_tool(&mut turn, &output, "call-2", json!({ "session_id": terminal.session_id })).await;
         assert_eq!(read.unwrap().text_content(), "\nlength:7\n\n\nCommand exited with code 0");
         assert!(app.shell_sessions.find("chat", "b1", terminal.session_id.as_deref().unwrap()).is_none());
+    }
+
+    /// A call's result and its command's card go up in one write, so no Device sees the call
+    /// returned beside a card that still reads as running: the apps show a card after its call
+    /// only while the command runs on.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_returned_call_goes_up_with_its_card() {
+        use lorca_agent::tools::BashTool;
+        let (scratch, chef) = chef_in_a_dm();
+        let app = &scratch.0;
+        let mut turn = turn_state(app, &chef, "dev");
+        // On pipes, as on Windows: no session follows the command, so the call ends its card.
+        let bash = BashTool::new(scratch.1.clone());
+        let mut events = app.events.subscribe();
+        let (row, _) = call_tool(&mut turn, &bash, "call-1", json!({ "command": "echo hi", "description": "Say hi" })).await;
+        let seen: Vec<(bool, String)> = std::iter::from_fn(|| events.try_recv().ok())
+            .filter_map(|event| match event {
+                Event::MessageAdded { message, .. } | Event::MessageUpdated { message, .. } if message.id == row.id => match message.body {
+                    Body::Tool { is_running, run: Some(run), .. } => Some((is_running, run.state)),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        assert_eq!(seen.last(), Some(&(false, "exited".to_string())));
+        assert!(seen.iter().all(|(is_running, state)| *is_running || state == "exited"), "{seen:?}");
     }
 
     #[cfg(unix)]

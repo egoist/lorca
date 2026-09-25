@@ -159,10 +159,11 @@ export type Body =
   /// `command` is that command in full, where `summary` is its first line.
   | { kind: "permission"; plugin_id: string; plugin_name: string; tool: string; summary: string; decision: "pending" | "allowed" | "always" | "denied" | "expired" | "dismissed" | "connected" | "failed"; reason?: string; rule?: string; command?: string; link?: string; code?: string };
 
-/// A bash call as its card shows it: Auto-review checking it, the question it asks, the command
-/// running in its terminal, what the command asks, and how it ended. While it asks, the card takes
-/// the answer to the question (`chats.permission`); while the command runs, the user's answer to
-/// it (`bash.stdin`) and a Stop (`bash.stop`).
+/// Where a bash call's command stands: Auto-review checking it, the question it asks, the command
+/// running in its terminal, what the command asks, and that it ended. While it asks, its card takes
+/// the answer to the question (`chats.permission`); while the command runs on after its call, the
+/// user's answer to it (`bash.stdin`) and a Stop (`bash.stop`). The transcript shows the card only
+/// while the command needs the user (`showsCard`).
 export interface CommandRun {
   /** The terminal session running it, once one does; none before it starts, or on a Windows Runner, where it takes no answers. */
   session_id?: string;
@@ -178,25 +179,25 @@ export interface CommandRun {
   prompt?: string;
   /** Its last lines, as the bottom of a terminal shows them. Never what was typed. */
   output?: string;
-  /** How it ended, in the Runner's words: "Command exited with code 1". */
-  outcome?: string;
   /** The Runner it runs on, for the question: "Workbench". */
   device?: string;
   /** Why Auto-review asked. */
   reason?: string;
-  /** The rule Always allow adds, or, after an Always allow, added. */
+  /** The rule Always allow adds. */
   rule?: string;
-  /** The answer to the question. */
-  decision?: "allowed" | "always" | "denied" | "expired" | "dismissed";
 }
 
 export function isLive(run: CommandRun): boolean {
   return run.state === "waiting" || run.state === "running";
 }
 
-/// It ended: the card is one line that says how.
-export function isEnded(run: CommandRun): boolean {
-  return !isLive(run) && run.state !== "checking" && run.state !== "asking";
+/// Whether a tool row shows as a command's card: while the command needs the user. That is while
+/// Auto-review asks to run it, and once its call returned with the command still running (waiting
+/// for an answer, or going on by itself) until it ends. A command inside its call shows only as the
+/// working row's activity.
+export function showsCard(tool: Extract<Body, { kind: "tool" }>): boolean {
+  const run = tool.run;
+  return !!run && (run.state === "asking" || (isLive(run) && !tool.is_running));
 }
 
 /// One Auto-review rule: what a bot wants to do, in the user's words, and whether that runs on

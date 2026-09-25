@@ -582,8 +582,8 @@ struct ToolInvocation: Hashable {
     var description: String?
     /// The bot a message_bot call goes to.
     var targetBotID: Bot.ID?
-    /// A shell command's card, from Auto-review's question to how the command ended. Every
-    /// `bash` row has one.
+    /// A shell command's card, which the transcript shows only while the command needs the user
+    /// (`isShown`). Every `bash` row has one.
     var run: CommandRun? = nil
 
     /// A finished message_bot call: the one tool the transcript shows, as "Messaged ◉ Name".
@@ -592,8 +592,14 @@ struct ToolInvocation: Hashable {
         name == "message_bot" && !isRunning && summary.hasPrefix("Messaged ")
     }
 
-    /// Whether the transcript shows the row: a sent message's marker, or a command's card.
-    var isShown: Bool { isSentMessage || run != nil }
+    /// Whether the transcript shows the row: a sent message's marker, or a command's card while
+    /// the command needs the user. That is while Auto-review asks to run it, and once its call
+    /// returned with the command still running (waiting for an answer, or going on by itself)
+    /// until it ends. A command inside its call shows only as the working row's activity.
+    var isShown: Bool {
+        guard let run else { return isSentMessage }
+        return run.state == .asking || (run.isLive && !isRunning)
+    }
 
     var symbolName: String {
         switch name {
@@ -613,10 +619,10 @@ struct ToolInvocation: Hashable {
     }
 }
 
-/// A shell command as its card shows it: Auto-review checking it, the question it asks, the
-/// command running in its terminal, what the command asks, and how it ended. While it asks, the
-/// card takes the answer to the question (`chats.permission`); while the command runs, the
-/// user's answer to it (`bash.stdin`) and a Stop (`bash.stop`).
+/// Where a shell command stands: Auto-review checking it, the question it asks, the command
+/// running in its terminal, what the command asks, and that it ended. While it asks, its card
+/// takes the answer to the question (`chats.permission`); while the command runs on after its
+/// call, the user's answer to it (`bash.stdin`) and a Stop (`bash.stop`).
 struct CommandRun: Hashable {
     enum State: String, Hashable {
         /// Auto-review is judging it.
@@ -649,19 +655,14 @@ struct CommandRun: Hashable {
     var prompt: String?
     /// Its last lines, as the bottom of a terminal shows them. Never what was typed.
     var output: String?
-    /// How it ended, in the Runner's words: "Command exited with code 1".
-    var outcome: String?
     /// The Runner it runs on, for the question: "Workbench".
     var device: String?
     /// Why Auto-review asked.
     var reason: String?
-    /// The rule Always allow adds, or, after an Always allow, added.
+    /// The rule Always allow adds.
     var rule: String?
-    /// The answer to the question: `allowed`, `always`, `denied`, `expired`, or `dismissed`.
-    var decision: String?
 
     var isLive: Bool { state == .waiting || state == .running }
-    var isEnded: Bool { !isLive && state != .checking && state != .asking }
     /// The command runs in a session here or on its Runner: it takes answers and a Stop.
     var takesInput: Bool { isLive && sessionID != nil }
 

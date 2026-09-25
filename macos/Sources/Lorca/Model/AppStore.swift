@@ -771,9 +771,7 @@ final class AppStore {
                 message.body = .permission(request)
             case var .tool(tool):
                 guard var run = tool.run, run.state == .asking else { return }
-                run.decision = decision == "always" ? "always" : (decision == "deny" ? "denied" : "allowed")
                 run.state = decision == "deny" ? .denied : .running
-                if decision != "always" { run.rule = nil }
                 tool.run = run
                 message.body = .tool(tool)
             default:
@@ -790,27 +788,26 @@ final class AppStore {
     /// Throws why it could not, such as that Runner being offline.
     func answerCommand(chatID: Chat.ID, messageID: Message.ID, text: String) async throws {
         guard !isMock else {
-            finishMockCommand(chatID: chatID, messageID: messageID, state: .exited, outcome: "Command exited with code 0")
+            finishMockCommand(chatID: chatID, messageID: messageID, state: .exited)
             return
         }
         _ = try await client.request("bash.stdin", ["chat_id": chatID, "message_id": messageID, "text": text])
     }
 
-    /// Stops a running command; its card says so once the Runner has.
+    /// Stops a running command; its card leaves once the Runner has.
     func stopCommand(chatID: Chat.ID, messageID: Message.ID) async throws {
         guard !isMock else {
-            finishMockCommand(chatID: chatID, messageID: messageID, state: .stopped, outcome: "Stopped")
+            finishMockCommand(chatID: chatID, messageID: messageID, state: .stopped)
             return
         }
         _ = try await client.request("bash.stop", ["chat_id": chatID, "message_id": messageID])
     }
 
     /// The demo has no Runner: an answer or a Stop ends the command at once.
-    private func finishMockCommand(chatID: Chat.ID, messageID: Message.ID, state: CommandRun.State, outcome: String) {
+    private func finishMockCommand(chatID: Chat.ID, messageID: Message.ID, state: CommandRun.State) {
         update(messageID, in: chatID) { message in
             guard case var .tool(tool) = message.body, var run = tool.run else { return }
             run.state = state
-            run.outcome = outcome
             run.prompt = nil
             tool.run = run
             message.body = .tool(tool)
