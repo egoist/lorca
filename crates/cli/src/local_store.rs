@@ -554,14 +554,41 @@ impl LocalStore {
             .map_err(Into::into)
     }
 
-    pub fn last_user_text(&self, chat_id: &str) -> anyhow::Result<Option<String>> {
+    /// What the turn `message_id` started acts on: that message, or the closest one before it
+    /// that asks for work: the user's message, a teammate's handoff, or a routine's marker. A
+    /// turn that a command's end started opens on the command's card, after the request it served.
+    pub fn request_at(&self, chat_id: &str, message_id: &str) -> anyhow::Result<Option<Message>> {
+        let connection = self.connection.lock().unwrap();
+        let mut statement = connection.prepare(
+            "SELECT message_json FROM messages
+             WHERE chat_id = ?1
+               AND position <= (SELECT position FROM messages WHERE chat_id = ?1 AND id = ?2)
+               AND ((author_kind = 'you' AND body_kind = 'text')
+                    OR body_kind = 'handoff'
+                    OR (author_kind = 'system' AND body_kind = 'notice'))
+             ORDER BY position DESC",
+        )?;
+        let rows = statement.query_map(params![chat_id, message_id], |row| row.get::<_, String>(0))?;
+        for json in rows {
+            let message: Message = serde_json::from_str(&json?).context("decoding stored message")?;
+            // Other notices only say what happened.
+            if !matches!(message.body, Body::Notice { routine_id: None, .. }) {
+                return Ok(Some(message));
+            }
+        }
+        Ok(None)
+    }
+
+    /// The user's latest text in the chat, from `since` on.
+    pub fn last_user_text(&self, chat_id: &str, since: &str) -> anyhow::Result<Option<String>> {
         let connection = self.connection.lock().unwrap();
         let json: Option<String> = connection
             .query_row(
                 "SELECT message_json FROM messages
                  WHERE chat_id = ?1 AND author_kind = 'you' AND body_kind = 'text' AND text_nonempty = 1
+                   AND position >= (SELECT position FROM messages WHERE chat_id = ?1 AND id = ?2)
                  ORDER BY position DESC LIMIT 1",
-                [chat_id],
+                params![chat_id, since],
                 |row| row.get(0),
             )
             .optional()?;
@@ -1373,9 +1400,10 @@ mod tests {
         }
 
         assert_eq!(
-            scratch.0.last_user_text("chat").unwrap().as_deref(),
+            scratch.0.last_user_text("chat", "user").unwrap().as_deref(),
             Some("hello")
         );
+        assert_eq!(scratch.0.last_user_text("chat", "handoff").unwrap(), None);
         assert_eq!(
             scratch.0.last_bot_text("chat", "chef").unwrap().unwrap().id,
             "own"
@@ -1395,6 +1423,81 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["own", "other"]
         );
+    }
+
+    #[test]
+    fn a_turn_reads_the_request_that_started_it() {
+        let scratch = scratch();
+        let store = &scratch.0;
+        let add = |id: &str, author: Author, body: Body| {
+            let mut row = message(id, 0.0);
+            row.author = author;
+            row.body = body;
+            store.upsert(&row).unwrap();
+        };
+        let devops = || Author::Bot {
+            bot_id: "devops".into(),
+        };
+        add("stop", Author::You, Body::text("actually stop that"));
+        add("stopped", devops(), Body::text("Stopped."));
+        add(
+            "handoff",
+            Author::Bot {
+                bot_id: "chef".into(),
+            },
+            Body::Handoff {
+                from: "chef".into(),
+                to: "devops".into(),
+                reason: "You own Railway monitoring".into(),
+            },
+        );
+        let card = serde_json::from_value(serde_json::json!({
+            "kind": "tool", "name": "bash", "summary": "", "detail": "", "is_running": false
+        }))
+        .unwrap();
+        add("card", devops(), card);
+        add(
+            "notice",
+            Author::System,
+            Body::Notice {
+                text: "DevOps cannot run yet".into(),
+                routine_id: None,
+            },
+        );
+        add(
+            "routine",
+            Author::System,
+            Body::Notice {
+                text: "Routine · Railway memory watch".into(),
+                routine_id: Some("rt-1".into()),
+            },
+        );
+
+        let request = |id: &str| store.request_at("chat", id).unwrap().map(|message| message.id);
+        assert_eq!(request("stop").as_deref(), Some("stop"));
+        assert_eq!(request("stopped").as_deref(), Some("stop"));
+        assert_eq!(request("handoff").as_deref(), Some("handoff"));
+        // A command's end opens a turn on its card, after the request it served.
+        assert_eq!(request("card").as_deref(), Some("handoff"));
+        assert_eq!(request("notice").as_deref(), Some("handoff"));
+        assert_eq!(request("routine").as_deref(), Some("routine"));
+        assert_eq!(request("gone"), None);
+
+        // The user's stop came before the handoff, so the turn it started does not hear it.
+        assert_eq!(store.last_user_text("chat", "handoff").unwrap(), None);
+        assert_eq!(
+            store.last_user_text("chat", "stop").unwrap().as_deref(),
+            Some("actually stop that")
+        );
+        add("steer", Author::You, Body::text("leave Postgres alone"));
+        assert_eq!(
+            store.last_user_text("chat", "handoff").unwrap().as_deref(),
+            Some("leave Postgres alone")
+        );
+        // Files sent with no words still start the turn, and nothing earlier speaks for them.
+        add("files", Author::You, Body::text(""));
+        assert_eq!(request("files").as_deref(), Some("files"));
+        assert_eq!(store.last_user_text("chat", "files").unwrap(), None);
     }
 
     #[test]

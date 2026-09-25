@@ -11,25 +11,27 @@ use serde_json::Value;
 use crate::app::App;
 use crate::model::{AutoReviewRule, Bot, CommandRun};
 use crate::plugins::mcp::{self, Decision};
-use crate::plugins::review::{self, Action, Outcome};
+use crate::plugins::review::{self, Action, Outcome, Trigger};
 
 const LOCAL_TARGET_ID: &str = "computer";
 
 /// Reviews every shell call before `bash` receives it. A returned result blocks the call;
 /// `None` lets it execute unchanged with the Runner user's normal authority. With Auto-review
 /// on, a command the parser proves read-only, or one that stays in Lorca's own folders, runs at
-/// once; the review judges everything else. The call's card says so while it checks and asks
-/// the user's permission itself when the review wants it.
+/// once; the review judges everything else, against the request behind the turn that
+/// `trigger` started. The call's card says so while it checks and asks the user's permission
+/// itself when the review wants it.
 pub async fn before_tool_call(
     app: &Arc<App>,
     chat_id: &str,
+    trigger: &Trigger,
     bot: &Bot,
     workdir: &Path,
     unattended: bool,
     ctx: BeforeToolCallContext<'_>,
 ) -> Option<BeforeToolCallResult> {
     if ctx.tool_call.name == "bash_input" {
-        return review_input(app, chat_id, bot, unattended, ctx).await;
+        return review_input(app, chat_id, trigger, bot, unattended, ctx).await;
     }
     if ctx.tool_call.name != "bash" {
         return None;
@@ -64,7 +66,7 @@ pub async fn before_tool_call(
         run.device = Some(runner_name.clone());
     });
     let action = Action { target_name: &runner_name, tool: "bash", description: &description, args: &args, propose_rule: true };
-    let Outcome::Ask { reason, rule } = review::review(app, bot, chat_id, action, ctx.cancel).await else {
+    let Outcome::Ask { reason, rule } = review::review(app, bot, chat_id, trigger, action, ctx.cancel).await else {
         update(&|run| run.state = "running".into());
         return None;
     };
@@ -143,7 +145,7 @@ async fn ask_on_card(
 /// What a bot types into a command `bash` left running goes through the same review as a
 /// command. An answer to a `[Y/n]` belongs to a command the review already judged, but a shell,
 /// a REPL, or `ssh` runs whatever it is given. Ctrl-C alone only interrupts, and never asks.
-async fn review_input(app: &Arc<App>, chat_id: &str, bot: &Bot, unattended: bool, ctx: BeforeToolCallContext<'_>) -> Option<BeforeToolCallResult> {
+async fn review_input(app: &Arc<App>, chat_id: &str, trigger: &Trigger, bot: &Bot, unattended: bool, ctx: BeforeToolCallContext<'_>) -> Option<BeforeToolCallResult> {
     let text = ctx.args.get("text").and_then(Value::as_str).unwrap_or("");
     if lorca_agent::tools::bash_session::typed_keys(text) == "\u{3}" {
         return None;
@@ -159,7 +161,7 @@ async fn review_input(app: &Arc<App>, chat_id: &str, bot: &Bot, unattended: bool
     );
     let args = serde_json::json!({ "command": command, "input": text, "enter": ctx.args.get("enter").and_then(Value::as_bool).unwrap_or(true) });
     let action = Action { target_name: &runner_name, tool: "bash_input", description: &description, args: &args, propose_rule: false };
-    let Outcome::Ask { reason, .. } = review::review(app, bot, chat_id, action, ctx.cancel).await else { return None };
+    let Outcome::Ask { reason, .. } = review::review(app, bot, chat_id, trigger, action, ctx.cancel).await else { return None };
     if unattended {
         return Some(blocked(format!(
             "bash_input needs the user's permission ({}), and nobody is here to give it. Stop the command with bash_input and \
@@ -875,15 +877,15 @@ mod tests {
         let status = serde_json::json!({ "command": "git status --short && ls" });
         let status_call = ToolCall { id: "0".into(), name: "bash".into(), arguments: status.clone() };
         let ctx = BeforeToolCallContext { assistant_message: &assistant, tool_call: &status_call, args: &status, context: &context, cancel: &cancel };
-        assert!(before_tool_call(&app, "chat", &bot, &work, true, ctx).await.is_none());
+        assert!(before_tool_call(&app, "chat", &Trigger::default(), &bot, &work, true, ctx).await.is_none());
 
         // Nor does one that stays in Lorca's own folders, whatever it does there.
         let ctx = BeforeToolCallContext { assistant_message: &assistant, tool_call: &call, args: &args, context: &context, cancel: &cancel };
-        assert!(before_tool_call(&app, "chat", &bot, &own_workspace, true, ctx).await.is_none());
+        assert!(before_tool_call(&app, "chat", &Trigger::default(), &bot, &own_workspace, true, ctx).await.is_none());
 
         // With no provider connected the review cannot run, so the command asks, and nobody is there.
         let ctx = BeforeToolCallContext { assistant_message: &assistant, tool_call: &call, args: &args, context: &context, cancel: &cancel };
-        let blocked = before_tool_call(&app, "chat", &bot, &work, true, ctx).await.unwrap();
+        let blocked = before_tool_call(&app, "chat", &Trigger::default(), &bot, &work, true, ctx).await.unwrap();
         assert!(blocked.block);
         assert!(blocked.reason.as_deref().is_some_and(|reason| reason.contains("could not check")), "{:?}", blocked.reason);
 
@@ -891,7 +893,7 @@ mod tests {
         review.is_enabled = false;
         app.set_auto_review(review);
         let ctx = BeforeToolCallContext { assistant_message: &assistant, tool_call: &call, args: &args, context: &context, cancel: &cancel };
-        let blocked = before_tool_call(&app, "chat", &bot, &work, true, ctx).await.unwrap();
+        let blocked = before_tool_call(&app, "chat", &Trigger::default(), &bot, &work, true, ctx).await.unwrap();
         assert!(blocked.reason.as_deref().is_some_and(|reason| reason.contains("Auto-review is off")), "{:?}", blocked.reason);
         let _ = std::fs::remove_dir_all(scratch);
     }

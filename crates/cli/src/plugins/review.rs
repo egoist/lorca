@@ -15,7 +15,7 @@ use lorca_agent::{ModelRequest, RequestOptions};
 use tokio_util::sync::CancellationToken;
 
 use crate::app::App;
-use crate::model::Bot;
+use crate::model::{Body, Bot, Routine};
 
 /// What happens to the action: it runs, or the user is asked, with why when Auto-review
 /// itself paused it and the allow rule it proposes for Always allow.
@@ -42,6 +42,16 @@ pub struct Action<'a> {
     pub propose_rule: bool,
 }
 
+/// What started a turn, which the review reads as the request behind its actions: the message,
+/// and for a routine's run the routine as it stood when the run began. The roster's copy can be
+/// edited or deleted while the run goes on, by the bot itself too, and the run keeps the task
+/// it started with.
+#[derive(Debug, Clone, Default)]
+pub struct Trigger {
+    pub message_id: String,
+    pub routine: Option<Routine>,
+}
+
 const SYSTEM_PROMPT: &str = "You are Auto-review, the safety check that runs before a bot acts on a connected service or its Runner. \
 Decide whether this one action may run on its own or must be shown to the user first. Answer with JSON only, \
 {\"verdict\": \"allow\" | \"ask\", \"reason\": \"one short sentence\"}, nothing else.\n\n\
@@ -51,7 +61,8 @@ has access, affects many items at once, runs with elevated privileges, reads cre
 data, changes system configuration, executes downloaded or obfuscated code, writes outside the bot's working directory \
 and the temporary directories, or cannot be undone easily. Temporary directories (/tmp, /var/tmp, $TMPDIR) are scratch \
 space: cloning, building, overwriting, or deleting there is contained work, not the user's data. Allow contained, \
-reversible work in the user's own space that the user's request plainly calls for. Allow ordinary read-only inspection, including compound pipelines, loops, grouping, and visible command \
+reversible work in the user's own space that the request behind the turn plainly calls for, whether the user's message, a \
+teammate bot's message, or a routine's task. Allow ordinary read-only inspection, including compound pipelines, loops, grouping, and visible command \
 substitutions; syntax complexity alone is not a risk when every visible command is read-only. Also allow creating a \
 draft, an issue, a page, a branch, or a task; editing or closing something the bot itself just \
 made; updating a field the user asked to change; building or testing inside the named working directory. The user's rules come first: \
@@ -75,19 +86,20 @@ wiping data, or changing security settings.";
 /// Decides one effectful plugin action for `bot`. A rule Always allow saved for this exact
 /// tool decides without a review.
 #[allow(clippy::too_many_arguments)]
-pub async fn decide(app: &Arc<App>, bot: &Bot, chat_id: &str, plugin_id: &str, plugin_name: &str, tool: &str, description: &str, args: &Value, cancel: &CancellationToken) -> Outcome {
+pub async fn decide(app: &Arc<App>, bot: &Bot, chat_id: &str, trigger: &Trigger, plugin_id: &str, plugin_name: &str, tool: &str, description: &str, args: &Value, cancel: &CancellationToken) -> Outcome {
     let auto_review = app.auto_review();
     if let Some(rule) = auto_review.rule_for(plugin_id, tool).filter(|_| auto_review.is_enabled) {
         return if rule.behavior == "allow" { Outcome::Allow } else { Outcome::ask(format!("Your rule: {}", rule.text)) };
     }
     let action = Action { target_name: plugin_name, tool, description, args, propose_rule: false };
-    review(app, bot, chat_id, action, cancel).await
+    review(app, bot, chat_id, trigger, action, cancel).await
 }
 
-/// Reviews one action. With Auto-review off it asks; on, the review model of the bot's provider
+/// Reviews one action of the turn that `trigger` started. With Auto-review off it asks; on,
+/// the review model of the bot's provider
 /// ([`review_model`](crate::providers::review_model)) judges it against the user's
-/// plain-language rules, the built-in checks, and the user's latest message.
-pub async fn review(app: &Arc<App>, bot: &Bot, chat_id: &str, action: Action<'_>, cancel: &CancellationToken) -> Outcome {
+/// plain-language rules, the built-in checks, and the request behind the turn ([`request`]).
+pub async fn review(app: &Arc<App>, bot: &Bot, chat_id: &str, trigger: &Trigger, action: Action<'_>, cancel: &CancellationToken) -> Outcome {
     let auto_review = app.auto_review();
     if !auto_review.is_enabled {
         return Outcome::Ask { reason: None, rule: None };
@@ -116,9 +128,9 @@ pub async fn review(app: &Arc<App>, bot: &Bot, chat_id: &str, action: Action<'_>
         }
         text.push('\n');
     }
-    let latest = last_user_text(app, chat_id);
-    if let Some(request) = &latest {
-        text.push_str(&format!("The user's latest message to the bot:\n{request}\n\n"));
+    let request = request(app, chat_id, trigger);
+    if let Some(request) = &request {
+        text.push_str(&request.text);
     }
     let mut arguments = serde_json::to_string_pretty(action.args).unwrap_or_default();
     if arguments.len() > 4000 {
@@ -132,9 +144,9 @@ pub async fn review(app: &Arc<App>, bot: &Bot, chat_id: &str, action: Action<'_>
         action.target_name,
         if action.description.trim().is_empty() { "(no description)" } else { action.description.trim() }
     ));
-    if latest.is_some() {
+    if let Some(request) = &request {
         let answer = if action.propose_rule { "the reason and the rule" } else { "the reason" };
-        text.push_str(&format!("\n\nWrite {answer} in the language of the user's latest message."));
+        text.push_str(&format!("\n\nWrite {answer} in the language {}.", request.language));
     }
     let request = ModelRequest {
         system_prompt: if action.propose_rule { format!("{SYSTEM_PROMPT}\n\n{RULE_PROMPT}") } else { SYSTEM_PROMPT.into() },
@@ -209,10 +221,64 @@ fn rule_text(rule: &str) -> Option<String> {
     (!rule.is_empty() && rule.chars().count() <= 200).then(|| rule.to_string())
 }
 
-fn last_user_text(app: &App, chat_id: &str) -> Option<String> {
+/// The request behind a turn, as the review reads it.
+#[derive(Debug, PartialEq)]
+struct Request {
+    /// What opens the review's message: who asked for the work, in their words.
+    text: String,
+    /// The words that set the language of the answer, as they end "Write the reason in the
+    /// language …": "of the user's latest message".
+    language: String,
+}
+
+/// The request behind the turn that `trigger` started: the message that asked for the work
+/// (the user's, a teammate's handoff, or a routine's marker) and the user's latest message
+/// since. What the user wrote before it was about earlier work and is left out, so a "stop"
+/// there does not reach this turn.
+fn request(app: &App, chat_id: &str, trigger: &Trigger) -> Option<Request> {
     app.chat(chat_id)?;
-    let text = app.store.last_user_text(chat_id).ok().flatten()?;
-    Some(text.chars().take(600).collect())
+    let opening = app.store.request_at(chat_id, &trigger.message_id).ok().flatten()?;
+    let mut text = String::new();
+    let mut language = None;
+    match &opening.body {
+        Body::Handoff { from, reason, .. } => {
+            let name = app.bot(from).map(|bot| bot.name).unwrap_or_else(|| "a teammate".into());
+            text.push_str(&format!("A message from the bot's teammate {name} started this turn:\n{}\n\n", clipped(reason)));
+            language = Some(format!("of {name}'s message"));
+        }
+        Body::Notice { routine_id: Some(id), .. } => {
+            // A later turn, such as a command's end, reads the roster, as its transcript does.
+            let routine = trigger.routine.clone().filter(|routine| &routine.id == id).or_else(|| app.routine(id));
+            if let Some(routine) = routine {
+                text.push_str(&format!(
+                    "This turn is a scheduled run of the bot's routine \"{}\", with nobody watching. Its task:\n{}\n\n",
+                    routine.name,
+                    clipped(&routine.prompt)
+                ));
+                // DeepSeek writes most answers to "the language of the routine's task" in Chinese.
+                language = Some("the routine's task is written in".into());
+            }
+        }
+        // The user's own message: the latest below is that one or a later one of theirs.
+        _ => {}
+    }
+    if let Some(latest) = app.store.last_user_text(chat_id, &opening.id).ok().flatten() {
+        let since = if text.is_empty() { "" } else { ", sent since" };
+        text.push_str(&format!("The user's latest message to the bot{since}:\n{}\n\n", clipped(&latest)));
+        language = Some("of the user's latest message".into());
+    }
+    Some(Request { text, language: language? })
+}
+
+/// The most of one message the review reads.
+const REQUEST_CHARS: usize = 1500;
+
+fn clipped(text: &str) -> String {
+    let text = text.trim();
+    match text.char_indices().nth(REQUEST_CHARS) {
+        Some((end, _)) => format!("{}…", &text[..end]),
+        None => text.to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -230,5 +296,72 @@ mod tests {
         assert_eq!((bare.reason.as_str(), bare.rule), ("This action needs a look first.", None));
         assert_eq!(parse_verdict("{\"verdict\":\"maybe\"}"), None);
         assert_eq!(parse_verdict("no json here"), None);
+    }
+
+    #[test]
+    fn the_review_reads_the_request_that_started_the_turn() {
+        use crate::model::{Author, Device, Message};
+
+        let home = std::env::temp_dir().join(format!("lorca-review-request-{}", uuid::Uuid::new_v4()));
+        let app = App::load(crate::config::Config { home: home.clone(), port: 0 }).unwrap();
+        app.state.lock().unwrap().devices.push(Device {
+            id: "runner".into(), name: "MacBook Air".into(), model: String::new(), os: "macos".into(), os_version: String::new(),
+            box_pubkey: String::new(), plugins: Vec::new(), updated_at: 0,
+        });
+        let bot = |id: &str, name: &str| Bot {
+            id: id.into(), name: name.into(), description: String::new(), symbol_name: String::new(), accent: String::new(), avatar: None,
+            runner_id: "runner".into(), provider: "deepseek".into(), model: None, thinking: None, legacy_instructions: String::new(), workdir: None, created_at: 0.0,
+        };
+        let (devops, dm) = app.create_bot_with_dm(bot("bot-devops", "DevOps"), None).unwrap();
+        app.create_bot_with_dm(bot("bot-chef", "Chef"), None).unwrap();
+        let chat_id = dm.meta.id.as_str();
+        let say = |author: Author, body: Body| {
+            let message = Message::new(chat_id, author, body);
+            let id = message.id.clone();
+            app.upsert_message(message, false);
+            id
+        };
+        let at = |message_id: &str| Trigger { message_id: message_id.into(), routine: None };
+
+        let stop = say(Author::You, Body::text("actually stop that"));
+        say(Author::Bot { bot_id: devops.id.clone() }, Body::text("Stopped."));
+        let handoff = say(
+            Author::Bot { bot_id: "bot-chef".into() },
+            Body::Handoff { from: "bot-chef".into(), to: devops.id.clone(), reason: "You own Railway monitoring from now on.".into() },
+        );
+        // Hours later a teammate starts the turn: the user's stop was about earlier work.
+        let heard = request(&app, chat_id, &at(&handoff)).unwrap();
+        assert_eq!(heard.text, "A message from the bot's teammate Chef started this turn:\nYou own Railway monitoring from now on.\n\n");
+        assert_eq!(heard.language, "of Chef's message");
+        assert_eq!(request(&app, chat_id, &at(&stop)).unwrap().text, "The user's latest message to the bot:\nactually stop that\n\n");
+
+        // What the user writes while the turn runs is heard with it.
+        say(Author::You, Body::text("leave Postgres alone"));
+        let heard = request(&app, chat_id, &at(&handoff)).unwrap();
+        assert!(heard.text.ends_with("\n\nThe user's latest message to the bot, sent since:\nleave Postgres alone\n\n"), "{}", heard.text);
+        assert_eq!(heard.language, "of the user's latest message");
+
+        let routine = app
+            .insert_routine(Routine {
+                id: "rt-watch".into(), bot_id: devops.id.clone(), name: "Railway memory watch".into(), prompt: "Check Railway memory.".into(),
+                schedule: "every 2h".into(), is_enabled: true, enabled_at: 0.0, last_run_at: None, last_outcome: None, paused_reason: None, created_at: 0.0,
+            })
+            .unwrap();
+        let marker = say(Author::System, Body::Notice { text: "Routine · Railway memory watch".into(), routine_id: Some(routine.id.clone()) });
+        let run = Trigger { message_id: marker.clone(), routine: Some(routine.clone()) };
+        let task = "This turn is a scheduled run of the bot's routine \"Railway memory watch\", with nobody watching. Its task:\nCheck Railway memory.\n\n";
+        let heard = request(&app, chat_id, &run).unwrap();
+        assert_eq!(heard.text, task);
+        assert_eq!(heard.language, "the routine's task is written in");
+
+        // The run keeps the task it started with, as its own context does, while the roster's copy
+        // is edited or deleted. A later turn reads the roster, as its transcript does.
+        app.update_routine(&routine.id, |routine| routine.prompt = "Redeploy the relay service.".into()).unwrap();
+        assert_eq!(request(&app, chat_id, &run).unwrap().text, task);
+        assert!(request(&app, chat_id, &at(&marker)).unwrap().text.ends_with("Its task:\nRedeploy the relay service.\n\n"));
+        app.delete_routine(&routine.id).unwrap();
+        assert_eq!(request(&app, chat_id, &run).unwrap().text, task);
+        assert_eq!(request(&app, chat_id, &at("gone")), None);
+        let _ = std::fs::remove_dir_all(home);
     }
 }
