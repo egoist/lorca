@@ -18,10 +18,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     /// The picker's glass capsule, where the pop-up has one of its own.
     private var devicePlatter: NSView?
     private var palette: CommandPalette?
-    /// The chat's running commands, with how many: shown while it has any, or while their
-    /// popover is open.
+    /// The chat's running commands: shown while it has any, or while their popover is open, with
+    /// how many as the item's badge on the symbol's corner once there is more than one.
     private lazy var tasksButton = HoverButton(
         symbol: "terminal", tooltip: L("Running tasks"), target: self, action: #selector(toggleRunningTasks(_:)))
+    private weak var tasksItem: NSToolbarItem?
+    /// The count the item's badge shows; 0 is none.
+    private var tasksBadge = 0
     private var tasksPopover: NSPopover?
     /// When the popover last closed. A click on the button closes it before the button acts.
     private var tasksClosedAt = Date.distantPast
@@ -250,8 +253,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         let count = chatID.map { AppStore.shared.runningCommands(in: $0).count } ?? 0
         // While its popover is open the button stays, for the popover to point at.
         tasksButton.isHidden = count == 0 && tasksPopover == nil
-        let label = count > 0 ? "\(count)" : nil
-        if tasksButton.label != label { tasksButton.label = label }
+        // The toolbar's own badge, on the symbol's top-right corner, for two or more: the button
+        // alone says one runs. Before macOS 26 there is none, and the popover says how many.
+        let badge = count > 1 ? count : 0
+        if #available(macOS 26.0, *), tasksBadge != badge, let tasksItem {
+            tasksItem.badge = badge > 0 ? .count(badge) : nil
+            tasksBadge = badge
+        }
         tasksButton.setAccessibilityLabel(L("Running tasks (%d)", count))
     }
 
@@ -469,6 +477,9 @@ extension MainWindowController: NSToolbarDelegate {
             item.label = L("Running tasks")
             item.view = tasksButton
             item.isBordered = false
+            // A new item, as after a language change, takes the badge afresh.
+            tasksItem = item
+            tasksBadge = 0
             return item
         }
         guard identifier == .inspectorToggle else { return nil }

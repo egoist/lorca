@@ -96,7 +96,7 @@ export default function ChatScreen() {
   const bots = useBotMap();
   const workingBotIds = useWorkingBots(id);
   const isWorking = useIsWorking(id);
-  const tasks = useRunningTasks(id).length;
+  const hasTasks = useRunningTasks(id).length > 0;
   const status = useStore((s) => s.statuses[id] ?? null);
   const listRef = useRef<FlashListRef<Row>>(null);
   // The composer floats over the transcript and rides the keyboard (KeyboardFoot). The
@@ -773,9 +773,7 @@ export default function ChatScreen() {
           </Stack.Title>
           <Stack.Toolbar placement="right">
             {/* The commands the chat's bots are running, while there are any. */}
-            <Stack.Toolbar.Button hidden={tasks === 0} icon="terminal" accessibilityLabel={t("Running tasks")} onPress={() => router.push(`/tasks/${id}`)}>
-              <Stack.Toolbar.Badge style={{ backgroundColor: "#8E8E93", color: "#FFFFFF" }}>{String(tasks)}</Stack.Toolbar.Badge>
-            </Stack.Toolbar.Button>
+            <Stack.Toolbar.Button hidden={!hasTasks} icon="terminal" accessibilityLabel={t("Running tasks")} onPress={() => router.push(`/tasks/${id}`)} />
             <Stack.Toolbar.Button icon="ellipsis" accessibilityLabel={t("Chat info")} onPress={() => router.push(`/chat-info/${id}`)} />
           </Stack.Toolbar>
         </>
@@ -803,7 +801,7 @@ export default function ChatScreen() {
               </Pressable>
             )}
             {/* Room to match Running tasks on the other side, so the title stays centered. */}
-            {tasks > 0 ? <View style={styles.androidHeaderButton} /> : null}
+            {hasTasks ? <View style={styles.androidHeaderButton} /> : null}
             <Pressable
               onPress={() => router.push(`/chat-info/${id}`)}
               style={styles.androidHeaderTitle}
@@ -815,12 +813,9 @@ export default function ChatScreen() {
                 {title}
               </Text>
             </Pressable>
-            {tasks > 0 ? (
-              <Pressable onPress={() => router.push(`/tasks/${id}`)} style={styles.androidHeaderButton} accessibilityRole="button" accessibilityLabel={`${t("Running tasks")}, ${tasks}`}>
+            {hasTasks ? (
+              <Pressable onPress={() => router.push(`/tasks/${id}`)} style={styles.androidHeaderButton} accessibilityRole="button" accessibilityLabel={t("Running tasks")}>
                 <Symbol name="terminal" size={24} color={p.label} />
-                <View style={[styles.androidBadge, { backgroundColor: p.tint }]}>
-                  <Text style={[styles.androidBadgeText, { color: p.userBubbleText }]}>{tasks}</Text>
-                </View>
               </Pressable>
             ) : null}
             <Pressable onPress={() => router.push(`/chat-info/${id}`)} style={styles.androidHeaderButton} accessibilityRole="button" accessibilityLabel={t("Chat info")}>
@@ -989,9 +984,6 @@ const styles = StyleSheet.create({
   androidHeader: { position: "absolute", top: 0, left: 0, right: 0, zIndex: 100 },
   androidHeaderControls: { flexDirection: "row", alignItems: "center", paddingHorizontal: 12 },
   androidHeaderButton: { width: 48, height: ANDROID_BAR_HEIGHT, alignItems: "center", justifyContent: "center" },
-  // Material's small badge at the icon's top end.
-  androidBadge: { position: "absolute", top: 12, right: 6, minWidth: 16, height: 16, borderRadius: 8, paddingHorizontal: 4, alignItems: "center", justifyContent: "center" },
-  androidBadgeText: { fontSize: 11, fontWeight: "600" },
   androidHeaderTitle: { flex: 1, height: ANDROID_BAR_HEIGHT, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingHorizontal: 8 },
   composer: { position: "absolute", left: 0, right: 0, bottom: 0 },
   jump: { position: "absolute", right: 12 },
