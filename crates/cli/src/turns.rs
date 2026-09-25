@@ -27,6 +27,7 @@ use crate::app::App;
 use crate::config::now_secs;
 use crate::memory::{self, MemoryStore};
 use crate::model::*;
+use crate::plugins::review::Trigger;
 use crate::providers;
 use crate::runtime::{chat_source, name_of, prime_names, start_turn, TurnOutcome};
 
@@ -73,14 +74,14 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
     // A routine's run opens with its marker, "Routine · Name", so the chat shows what started
     // the turn (even one that cannot run) and later turns rebuild the task from it. A routine
     // deleted meanwhile does not run. Auto-review reads the request behind the turn's actions
-    // from the message that started it.
-    let mut trigger = job.trigger_message_id.clone();
+    // from the message that started it, and a run's task as it stood when the run began.
+    let mut trigger = Trigger { message_id: job.trigger_message_id.clone(), routine: None };
     let routine = match job.routine_id.as_deref() {
         Some(id) => match app.routine(id) {
             Some(routine) => {
                 crate::routines::started(app, id);
                 let marker = Message::new(&job.chat_id, Author::System, Body::Notice { text: format!("Routine · {}", routine.name), routine_id: Some(id.to_string()) });
-                trigger = marker.id.clone();
+                trigger = Trigger { message_id: marker.id.clone(), routine: Some(routine.clone()) };
                 app.upsert_message(marker, true);
                 Some(routine)
             }
@@ -360,9 +361,8 @@ fn format_tokens(tokens: u64) -> String {
 struct TurnHooks {
     app: Arc<App>,
     chat_id: String,
-    /// The message that started the turn, which Auto-review reads as the request behind its
-    /// actions.
-    trigger: String,
+    /// What started the turn, which Auto-review reads as the request behind its actions.
+    trigger: Trigger,
     bot: Bot,
     provider: Arc<dyn Provider>,
     window: u64,
@@ -2634,12 +2634,12 @@ mod tests {
         };
 
         for (model, keeps) in [("claude-opus-5-5", false), ("claude-opus-5", true)] {
-            let (plugin_tools, _) = crate::plugins::mcp::turn_tools(&scratch.0, "chat", "message", &chef, false);
+            let (plugin_tools, _) = crate::plugins::mcp::turn_tools(&scratch.0, "chat", &Trigger::default(), &chef, false);
             plugin_tools.select(lorca_agent::tools::coding_tools(scratch.1.clone()).remove(0));
             let hooks = TurnHooks {
                 app: scratch.0.clone(),
                 chat_id: "chat".into(),
-                trigger: "message".into(),
+                trigger: Trigger::default(),
                 bot: chef.clone(),
                 provider: Arc::new(Named(model)),
                 window: 0,
@@ -2810,7 +2810,7 @@ mod tests {
             last_error: None,
             last_said: None,
             tools_used: Vec::new(),
-            plugin_tools: crate::plugins::mcp::turn_tools(app, "chat", "message", bot, false).0,
+            plugin_tools: crate::plugins::mcp::turn_tools(app, "chat", &Trigger::default(), bot, false).0,
             shown_len: 0,
             last_flush: std::time::Instant::now(),
         }
@@ -2875,7 +2875,7 @@ mod tests {
         let call = ToolCall { id: call_id.into(), name: "bash".into(), arguments: args.clone() };
         let cancel = CancellationToken::new();
         let ctx = BeforeToolCallContext { assistant_message: &assistant, tool_call: &call, args, context: &context, cancel: &cancel };
-        crate::local_review::before_tool_call(app, "chat", "message", bot, workdir, false, ctx).await
+        crate::local_review::before_tool_call(app, "chat", &Trigger::default(), bot, workdir, false, ctx).await
     }
 
     /// Answers the card's question once it asks, as a tap on any Device does.
@@ -3358,7 +3358,7 @@ mod tests {
             let (assistant, context, cancel, chef, workdir) = (&assistant, &context, &cancel, &chef, &scratch.1);
             async move {
                 let ctx = BeforeToolCallContext { assistant_message: assistant, tool_call: &call, args: &args, context, cancel };
-                crate::local_review::before_tool_call(app, "chat", "message", chef, workdir, true, ctx).await
+                crate::local_review::before_tool_call(app, "chat", &Trigger::default(), chef, workdir, true, ctx).await
             }
         };
         // No provider is connected, so the review cannot clear it, and nobody is there to ask.

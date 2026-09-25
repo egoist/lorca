@@ -15,7 +15,7 @@ use lorca_agent::{ModelRequest, RequestOptions};
 use tokio_util::sync::CancellationToken;
 
 use crate::app::App;
-use crate::model::{Body, Bot};
+use crate::model::{Body, Bot, Routine};
 
 /// What happens to the action: it runs, or the user is asked, with why when Auto-review
 /// itself paused it and the allow rule it proposes for Always allow.
@@ -40,6 +40,16 @@ pub struct Action<'a> {
     pub args: &'a Value,
     /// Asks the review for the plain-language rule Always allow adds when it asks.
     pub propose_rule: bool,
+}
+
+/// What started a turn, which the review reads as the request behind its actions: the message,
+/// and for a routine's run the routine as it stood when the run began. The roster's copy can be
+/// edited or deleted while the run goes on, by the bot itself too, and the run keeps the task
+/// it started with.
+#[derive(Debug, Clone, Default)]
+pub struct Trigger {
+    pub message_id: String,
+    pub routine: Option<Routine>,
 }
 
 const SYSTEM_PROMPT: &str = "You are Auto-review, the safety check that runs before a bot acts on a connected service or its Runner. \
@@ -76,7 +86,7 @@ wiping data, or changing security settings.";
 /// Decides one effectful plugin action for `bot`. A rule Always allow saved for this exact
 /// tool decides without a review.
 #[allow(clippy::too_many_arguments)]
-pub async fn decide(app: &Arc<App>, bot: &Bot, chat_id: &str, trigger: &str, plugin_id: &str, plugin_name: &str, tool: &str, description: &str, args: &Value, cancel: &CancellationToken) -> Outcome {
+pub async fn decide(app: &Arc<App>, bot: &Bot, chat_id: &str, trigger: &Trigger, plugin_id: &str, plugin_name: &str, tool: &str, description: &str, args: &Value, cancel: &CancellationToken) -> Outcome {
     let auto_review = app.auto_review();
     if let Some(rule) = auto_review.rule_for(plugin_id, tool).filter(|_| auto_review.is_enabled) {
         return if rule.behavior == "allow" { Outcome::Allow } else { Outcome::ask(format!("Your rule: {}", rule.text)) };
@@ -85,11 +95,11 @@ pub async fn decide(app: &Arc<App>, bot: &Bot, chat_id: &str, trigger: &str, plu
     review(app, bot, chat_id, trigger, action, cancel).await
 }
 
-/// Reviews one action of the turn that the message `trigger` started. With Auto-review off it
-/// asks; on, the review model of the bot's provider
+/// Reviews one action of the turn that `trigger` started. With Auto-review off it asks; on,
+/// the review model of the bot's provider
 /// ([`review_model`](crate::providers::review_model)) judges it against the user's
 /// plain-language rules, the built-in checks, and the request behind the turn ([`request`]).
-pub async fn review(app: &Arc<App>, bot: &Bot, chat_id: &str, trigger: &str, action: Action<'_>, cancel: &CancellationToken) -> Outcome {
+pub async fn review(app: &Arc<App>, bot: &Bot, chat_id: &str, trigger: &Trigger, action: Action<'_>, cancel: &CancellationToken) -> Outcome {
     let auto_review = app.auto_review();
     if !auto_review.is_enabled {
         return Outcome::Ask { reason: None, rule: None };
@@ -221,13 +231,13 @@ struct Request {
     language: String,
 }
 
-/// The request behind the turn that the message `trigger` started: the message that asked for
-/// the work (the user's, a teammate's handoff, or a routine's marker) and the user's latest
-/// message since. What the user wrote before it was about earlier work and is left out, so a
-/// "stop" there does not reach this turn.
-fn request(app: &App, chat_id: &str, trigger: &str) -> Option<Request> {
+/// The request behind the turn that `trigger` started: the message that asked for the work
+/// (the user's, a teammate's handoff, or a routine's marker) and the user's latest message
+/// since. What the user wrote before it was about earlier work and is left out, so a "stop"
+/// there does not reach this turn.
+fn request(app: &App, chat_id: &str, trigger: &Trigger) -> Option<Request> {
     app.chat(chat_id)?;
-    let opening = app.store.request_at(chat_id, trigger).ok().flatten()?;
+    let opening = app.store.request_at(chat_id, &trigger.message_id).ok().flatten()?;
     let mut text = String::new();
     let mut language = None;
     match &opening.body {
@@ -237,7 +247,9 @@ fn request(app: &App, chat_id: &str, trigger: &str) -> Option<Request> {
             language = Some(format!("of {name}'s message"));
         }
         Body::Notice { routine_id: Some(id), .. } => {
-            if let Some(routine) = app.routine(id) {
+            // A later turn, such as a command's end, reads the roster, as its transcript does.
+            let routine = trigger.routine.clone().filter(|routine| &routine.id == id).or_else(|| app.routine(id));
+            if let Some(routine) = routine {
                 text.push_str(&format!(
                     "This turn is a scheduled run of the bot's routine \"{}\", with nobody watching. Its task:\n{}\n\n",
                     routine.name,
@@ -288,7 +300,7 @@ mod tests {
 
     #[test]
     fn the_review_reads_the_request_that_started_the_turn() {
-        use crate::model::{Author, Device, Message, Routine};
+        use crate::model::{Author, Device, Message};
 
         let home = std::env::temp_dir().join(format!("lorca-review-request-{}", uuid::Uuid::new_v4()));
         let app = App::load(crate::config::Config { home: home.clone(), port: 0 }).unwrap();
@@ -309,6 +321,7 @@ mod tests {
             app.upsert_message(message, false);
             id
         };
+        let at = |message_id: &str| Trigger { message_id: message_id.into(), routine: None };
 
         let stop = say(Author::You, Body::text("actually stop that"));
         say(Author::Bot { bot_id: devops.id.clone() }, Body::text("Stopped."));
@@ -317,14 +330,14 @@ mod tests {
             Body::Handoff { from: "bot-chef".into(), to: devops.id.clone(), reason: "You own Railway monitoring from now on.".into() },
         );
         // Hours later a teammate starts the turn: the user's stop was about earlier work.
-        let heard = request(&app, chat_id, &handoff).unwrap();
+        let heard = request(&app, chat_id, &at(&handoff)).unwrap();
         assert_eq!(heard.text, "A message from the bot's teammate Chef started this turn:\nYou own Railway monitoring from now on.\n\n");
         assert_eq!(heard.language, "of Chef's message");
-        assert_eq!(request(&app, chat_id, &stop).unwrap().text, "The user's latest message to the bot:\nactually stop that\n\n");
+        assert_eq!(request(&app, chat_id, &at(&stop)).unwrap().text, "The user's latest message to the bot:\nactually stop that\n\n");
 
         // What the user writes while the turn runs is heard with it.
         say(Author::You, Body::text("leave Postgres alone"));
-        let heard = request(&app, chat_id, &handoff).unwrap();
+        let heard = request(&app, chat_id, &at(&handoff)).unwrap();
         assert!(heard.text.ends_with("\n\nThe user's latest message to the bot, sent since:\nleave Postgres alone\n\n"), "{}", heard.text);
         assert_eq!(heard.language, "of the user's latest message");
 
@@ -334,14 +347,21 @@ mod tests {
                 schedule: "every 2h".into(), is_enabled: true, enabled_at: 0.0, last_run_at: None, last_outcome: None, paused_reason: None, created_at: 0.0,
             })
             .unwrap();
-        let marker = say(Author::System, Body::Notice { text: "Routine · Railway memory watch".into(), routine_id: Some(routine.id) });
-        let heard = request(&app, chat_id, &marker).unwrap();
-        assert_eq!(
-            heard.text,
-            "This turn is a scheduled run of the bot's routine \"Railway memory watch\", with nobody watching. Its task:\nCheck Railway memory.\n\n"
-        );
+        let marker = say(Author::System, Body::Notice { text: "Routine · Railway memory watch".into(), routine_id: Some(routine.id.clone()) });
+        let run = Trigger { message_id: marker.clone(), routine: Some(routine.clone()) };
+        let task = "This turn is a scheduled run of the bot's routine \"Railway memory watch\", with nobody watching. Its task:\nCheck Railway memory.\n\n";
+        let heard = request(&app, chat_id, &run).unwrap();
+        assert_eq!(heard.text, task);
         assert_eq!(heard.language, "the routine's task is written in");
-        assert_eq!(request(&app, chat_id, "gone"), None);
+
+        // The run keeps the task it started with, as its own context does, while the roster's copy
+        // is edited or deleted. A later turn reads the roster, as its transcript does.
+        app.update_routine(&routine.id, |routine| routine.prompt = "Redeploy the relay service.".into()).unwrap();
+        assert_eq!(request(&app, chat_id, &run).unwrap().text, task);
+        assert!(request(&app, chat_id, &at(&marker)).unwrap().text.ends_with("Its task:\nRedeploy the relay service.\n\n"));
+        app.delete_routine(&routine.id).unwrap();
+        assert_eq!(request(&app, chat_id, &run).unwrap().text, task);
+        assert_eq!(request(&app, chat_id, &at("gone")), None);
         let _ = std::fs::remove_dir_all(home);
     }
 }
