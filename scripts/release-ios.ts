@@ -11,7 +11,7 @@
 // Apple finishes processing it, usually within half an hour.
 import { $ } from "bun"
 import { existsSync } from "node:fs"
-import { mkdir, rm } from "node:fs/promises"
+import { mkdir, readdir, rename, rm } from "node:fs/promises"
 import { join } from "node:path"
 import { color, log, ROOT } from "./app.ts"
 
@@ -25,7 +25,7 @@ const local = args.includes("--local")
 const unknown = args.find((arg) => arg !== "--local")
 if (unknown) die(`unknown argument: ${unknown}`)
 
-for (const tool of ["cargo", "xcodebuild", "pod", "bunx", "plutil"]) {
+for (const tool of ["cargo", "xcodebuild", "pod", "bunx", "plutil", "rsync"]) {
   if (!Bun.which(tool)) die(`missing required tool: ${tool}`)
 }
 
@@ -34,8 +34,14 @@ const BUNDLE_ID = "app.lorca"
 const MOBILE = join(ROOT, "mobile")
 const BUILD_DIR = join(ROOT, "dist", "ios")
 // The production project is generated in a copy, so mobile/ios stays the dev loop's Lorca Dev project.
+// The copy stays between releases at the same path: Xcode's compilation cache keys hold absolute
+// paths, and the pods installed in it are used again.
 const PROJECT = join(BUILD_DIR, "mobile")
+const IOS = join(PROJECT, "ios")
+// Pods and its lockfile wait here while prebuild writes a new ios/.
+const KEPT = join(BUILD_DIR, "kept")
 const ARCHIVE = join(BUILD_DIR, "Lorca.xcarchive")
+const EXPORT = join(BUILD_DIR, "export")
 
 // App Store Connect wants every upload's build number above the last. Local time as YYYYMMDDHHmm
 // only grows, and it names when the build was made.
@@ -65,24 +71,53 @@ await $`bun run core ios`.cwd(MOBILE).env(env)
 
 // ---- 2. production project
 log(`${color.bold("prebuild")} ${color.dim(`Lorca, ${BUNDLE_ID}, build ${buildNumber}`)}`)
-await rm(BUILD_DIR, { recursive: true, force: true })
-await mkdir(BUILD_DIR, { recursive: true })
-// -c clones on APFS, so node_modules costs next to nothing to copy.
-await $`cp -cR ${MOBILE} ${PROJECT}`
-await rm(join(PROJECT, "ios"), { recursive: true, force: true })
-await rm(join(PROJECT, "android"), { recursive: true, force: true })
+// The native projects and prebuild's cache in .expo are the copy's own.
+if (existsSync(join(PROJECT, "package.json"))) {
+  // rsync copies only what changed, and leaves alone the xcframework that expo-modules-jsi's build
+  // phase makes in its package and keys to this copy's Pods path.
+  const jsi = "/node_modules/expo-modules-jsi/apple"
+  await $`rsync -a --delete --exclude /ios --exclude /android --exclude /.expo --exclude ${`${jsi}/.*`} --exclude ${`${jsi}/Products`} ${`${MOBILE}/`} ${`${PROJECT}/`}`
+} else {
+  // -c clones on APFS, so node_modules costs next to nothing to copy.
+  await rm(PROJECT, { recursive: true, force: true })
+  await mkdir(PROJECT, { recursive: true })
+  for (const name of await readdir(MOBILE)) {
+    if (!["ios", "android", ".expo"].includes(name)) await $`cp -cR ${join(MOBILE, name)} ${PROJECT}`
+  }
+}
+// A clean prebuild writes ios/ from the Expo config. The pods installed last time go back in, so
+// pod install uses them again and installs only what changed.
+const KEEP = ["Pods", "Podfile.lock"]
+await mkdir(KEPT, { recursive: true })
+for (const name of KEEP) {
+  if (!existsSync(join(IOS, name))) continue
+  await rm(join(KEPT, name), { recursive: true, force: true })
+  await rename(join(IOS, name), join(KEPT, name))
+}
+await rm(IOS, { recursive: true, force: true })
 await $`bunx expo prebuild --platform ios --no-install`.cwd(PROJECT).env(env)
-await $`pod install`.cwd(join(PROJECT, "ios")).env(env)
+for (const name of KEEP) {
+  if (existsSync(join(KEPT, name))) await rename(join(KEPT, name), join(IOS, name))
+}
+await $`pod install`.cwd(IOS).env(env)
 
-const pbxproj = await Bun.file(join(PROJECT, "ios", "Lorca.xcodeproj", "project.pbxproj")).text()
+const pbxproj = await Bun.file(join(IOS, "Lorca.xcodeproj", "project.pbxproj")).text()
 const bundleIds = new Set([...pbxproj.matchAll(/PRODUCT_BUNDLE_IDENTIFIER = "?([^";]+)"?;/g)].map((m) => m[1]))
 if (!bundleIds.has(BUNDLE_ID)) die(`the project builds ${[...bundleIds].join(", ")}, not ${BUNDLE_ID}`)
 
 // ---- 3. archive
 // CURRENT_PROJECT_VERSION carries the build number to the notify extension, whose Info.plist reads
 // it; the app's own Info.plist has it from the Expo config.
+//
+// An archive starts from an empty build database, so every compile runs again. Xcode's compilation
+// cache (DerivedData/CompilationCache.noindex) answers the C, C++, and Objective-C ones from the
+// last release: React Native's libraries drop from about seven minutes to seconds. Swift compiles
+// in full, because the cache needs explicit Swift modules and React Native's prebuilt core turns
+// them off.
 log(`${color.bold("archiving")} ${color.dim(ARCHIVE)}`)
-await $`xcodebuild -workspace ${join(PROJECT, "ios", "Lorca.xcworkspace")} -scheme Lorca -configuration Release -destination generic/platform=iOS -archivePath ${ARCHIVE} -allowProvisioningUpdates CURRENT_PROJECT_VERSION=${buildNumber} archive -quiet`.env(env)
+await rm(ARCHIVE, { recursive: true, force: true })
+await rm(EXPORT, { recursive: true, force: true })
+await $`xcodebuild -workspace ${join(IOS, "Lorca.xcworkspace")} -scheme Lorca -configuration Release -destination generic/platform=iOS -archivePath ${ARCHIVE} -allowProvisioningUpdates CURRENT_PROJECT_VERSION=${buildNumber} COMPILATION_CACHE_ENABLE_CACHING=YES archive -quiet`.env(env)
 if (!existsSync(ARCHIVE)) die("xcodebuild produced no archive")
 
 const plist = join(ARCHIVE, "Products", "Applications", "Lorca.app", "Info.plist")
@@ -115,7 +150,7 @@ await Bun.write(
 `,
 )
 log(`${color.bold("uploading")} ${color.dim("to App Store Connect")}`)
-await $`xcodebuild -exportArchive -archivePath ${ARCHIVE} -exportOptionsPlist ${exportOptions} -exportPath ${join(BUILD_DIR, "export")} -allowProvisioningUpdates`.env(env)
+await $`xcodebuild -exportArchive -archivePath ${ARCHIVE} -exportOptionsPlist ${exportOptions} -exportPath ${EXPORT} -allowProvisioningUpdates`.env(env)
 
 log(`${color.green("uploaded")} Lorca ${version} (${buildNumber})`)
 console.log("  TestFlight lists it once App Store Connect finishes processing")

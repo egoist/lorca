@@ -28,8 +28,10 @@ function ndkHome(): string {
   return join(sdk, "ndk", latest);
 }
 
-// The host dylib carries the UniFFI metadata the bindings are generated from.
-await run(["cargo", "build", "-p", "lorca-mobile"]);
+// The host dylib carries the UniFFI metadata the bindings are generated from. It takes the
+// generator's features: a cdylib's file name carries no feature hash, so builds with two feature
+// sets overwrite each other's outputs and both crates compile again on every run.
+await run(["cargo", "build", "-p", "lorca-mobile", "--features", "bindgen"]);
 const bindgen = ["cargo", "run", "-q", "-p", "lorca-mobile", "--features", "bindgen", "--bin", "uniffi-bindgen", "--", "generate", "--library", join(TARGET, "debug/liblorca_mobile.dylib")];
 
 if (wantIos) {
