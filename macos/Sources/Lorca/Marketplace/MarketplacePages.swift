@@ -82,23 +82,33 @@ final class MarketplaceHomePage: MarketplacePage {
 
     /// Featured Plugins, Featured Bots, then a section per category, plugins before bots. A
     /// featured section's View all lists every plugin or every bot, the featured ones first.
+    /// A category leads with what the featured sections do not already show, and one with both
+    /// kinds keeps half its rows for bots, so its plugins never hide them.
     private func homeSections(_ catalog: Marketplace) -> [NSView] {
         var sections: [NSView] = []
-        let featuredPlugins = catalog.plugins.filter(\.isFeatured).map(MarketplaceItem.plugin)
+        let featuredPlugins = catalog.plugins.filter(\.isFeatured)
         if !featuredPlugins.isEmpty {
-            sections.append(section(L("Featured Plugins"), featuredPlugins, listTitle: L("Plugins")) { catalog in
+            sections.append(section(L("Featured Plugins"), featuredPlugins.map(MarketplaceItem.plugin), listTitle: L("Plugins")) { catalog in
                 (catalog.plugins.filter(\.isFeatured) + catalog.plugins.filter { !$0.isFeatured }).map(MarketplaceItem.plugin)
             })
         }
-        let featuredBots = catalog.bots.filter(\.isFeatured).map(MarketplaceItem.bot)
+        let featuredBots = catalog.bots.filter(\.isFeatured)
         if !featuredBots.isEmpty {
-            sections.append(section(L("Featured Bots"), featuredBots, listTitle: L("Bots")) { catalog in
+            sections.append(section(L("Featured Bots"), featuredBots.map(MarketplaceItem.bot), listTitle: L("Bots")) { catalog in
                 (catalog.bots.filter(\.isFeatured) + catalog.bots.filter { !$0.isFeatured }).map(MarketplaceItem.bot)
             })
         }
+        let shownPlugins = Set(featuredPlugins.prefix(previewCount).map(\.id))
+        let shownBots = Set(featuredBots.prefix(previewCount).map(\.id))
         for key in MarketplaceCategory.keys(in: catalog.items) {
-            let items = catalog.items.filter { $0.category == key }
-            sections.append(section(MarketplaceCategory.title(key), items) { $0.items.filter { $0.category == key } })
+            let plugins = catalog.plugins.filter { $0.category == key }
+            let bots = catalog.bots.filter { $0.category == key }
+            let freshPlugins = plugins.filter { !shownPlugins.contains($0.id) } + plugins.filter { shownPlugins.contains($0.id) }
+            let freshBots = bots.filter { !shownBots.contains($0.id) } + bots.filter { shownBots.contains($0.id) }
+            let botRows = min(bots.count, max(previewCount - plugins.count, previewCount / 2))
+            let preview =
+                freshPlugins.prefix(previewCount - botRows).map(MarketplaceItem.plugin) + freshBots.prefix(botRows).map(MarketplaceItem.bot)
+            sections.append(section(MarketplaceCategory.title(key), preview) { $0.items.filter { $0.category == key } })
         }
         return sections.isEmpty ? [statusLine(L("Nothing in the marketplace yet."))] : sections
     }

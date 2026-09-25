@@ -250,8 +250,16 @@ mod tests {
         let text: Value = serde_json::from_str(BUNDLED_INDEX).unwrap();
         assert_eq!(index.plugins.len(), text["plugins"].as_array().unwrap().len(), "every bundled plugin reads");
         assert_eq!(index.bots.len(), text["bots"].as_array().unwrap().len(), "every bundled bot reads");
+        let mut ids = std::collections::HashSet::new();
         for plugin in &index.plugins {
+            assert!(ids.insert(plugin.id.as_str()), "{} is listed twice", plugin.id);
             assert!(!plugin.icon.is_empty() && !plugin.description.is_empty() && !plugin.category.is_empty(), "{} is incomplete", plugin.id);
+            assert!(!plugin.author.is_empty() && plugin.homepage.as_deref().is_some_and(|h| h.starts_with("https://")), "{} needs its maker and website", plugin.id);
+            for (name, server) in &plugin.servers {
+                if let crate::plugins::ServerSpec::Http { url, .. } = server {
+                    assert!(url.starts_with("https://"), "{}'s server {name} is not HTTPS", plugin.id);
+                }
+            }
         }
         for bot in &index.bots {
             assert!(!bot.summary.is_empty() && !bot.category.is_empty(), "{} is incomplete", bot.id);
@@ -260,7 +268,7 @@ mod tests {
             }
         }
         assert!(index.plugins.iter().any(|p| p.featured) && index.bots.iter().any(|b| b.featured));
-        assert_eq!(search_plugins(&index.plugins, "GIT hub").len(), 1);
+        assert_eq!(search_plugins(&index.plugins, "PULL requests").iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), ["github"]);
         assert_eq!(search_plugins(&index.plugins, "").len(), index.plugins.len());
         assert!(search_plugins(&index.plugins, "nothing-like-this").is_empty());
         assert!(search_bots(&index.bots, "pull requests").iter().any(|b| b.id == "pr-reviewer"));

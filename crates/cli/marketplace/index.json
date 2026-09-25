@@ -121,6 +121,497 @@
           "content": "# Reading a page\n\nNavigate with browser_navigate, then read browser_snapshot once. Prefer the snapshot over screenshots: it is text. Close tabs you opened when done."
         }
       ]
+    },
+    {
+      "id": "atlassian",
+      "name": "Atlassian",
+      "description": "Issues and projects in Jira, and pages in Confluence.",
+      "category": "productivity",
+      "featured": true,
+      "author": "Atlassian",
+      "version": "1",
+      "icon": "ticket",
+      "homepage": "https://support.atlassian.com/atlassian-ai-gateway/docs/get-started-with-the-atlassian-remote-mcp-server/",
+      "tags": ["jira", "confluence", "issues", "tickets", "wiki", "docs", "projects", "loom"],
+      "servers": {
+        "atlassian": { "type": "http", "url": "https://mcp.atlassian.com/v2/mcp", "auth": { "type": "oauth" } }
+      },
+      "tools": { "readonly": ["atlassianUserInfo", "getAccessibleAtlassianResources", "discover", "executeRead", "getJiraIssue", "searchJiraIssuesUsingJql", "getConfluenceContent", "searchConfluence", "getTeamworkGraphObject", "getLoomVideo"] }
+    },
+    {
+      "id": "zapier",
+      "name": "Zapier",
+      "description": "Actions in thousands of apps, such as Gmail, Google Calendar, and Slack, through Zapier.",
+      "category": "productivity",
+      "featured": true,
+      "author": "Zapier",
+      "version": "1",
+      "icon": "bolt.horizontal",
+      "homepage": "https://docs.zapier.com/mcp/home",
+      "tags": ["automation", "gmail", "google calendar", "google sheets", "slack", "workflows", "integrations"],
+      "servers": {
+        "zapier": { "type": "http", "url": "https://mcp.zapier.com/api/v1/connect", "auth": { "type": "oauth", "token_variable": "ZAPIER_TOKEN" } }
+      },
+      "variables": [
+        { "name": "ZAPIER_TOKEN", "description": "A connection token instead of signing in: at mcp.zapier.com, add a server for another client and generate a token on its Connect tab.", "secret": true, "required": false }
+      ],
+      "tools": { "readonly": ["inspect_zapier_actions", "discover_zapier_actions", "execute_zapier_read_action", "list_zapier_connections", "get_configuration_url", "list_zapier_skills", "get_zapier_skill"] }
+    },
+    {
+      "id": "todoist",
+      "name": "Todoist",
+      "description": "Tasks, projects, and due dates in Todoist.",
+      "category": "productivity",
+      "author": "Doist",
+      "version": "1",
+      "icon": "checkmark.circle",
+      "homepage": "https://www.todoist.com/help/todoist/todoist-and-ai/connect-todoist-to-an-ai-assistant-xMSzFfHng",
+      "tags": ["tasks", "to-do", "todo", "projects", "reminders"],
+      "servers": {
+        "todoist": { "type": "http", "url": "https://ai.todoist.net/mcp", "auth": { "type": "oauth" } }
+      }
+    },
+    {
+      "id": "clickup",
+      "name": "ClickUp",
+      "description": "Tasks, lists, docs, and time tracking in ClickUp.",
+      "category": "productivity",
+      "author": "ClickUp",
+      "version": "1",
+      "icon": "checklist",
+      "homepage": "https://developer.clickup.com/docs/connect-an-ai-assistant-to-clickups-mcp-server",
+      "tags": ["tasks", "projects", "docs", "time tracking", "chat"],
+      "servers": {
+        "clickup": { "type": "http", "url": "https://mcp.clickup.com/mcp", "auth": { "type": "oauth" } }
+      },
+      "tools": { "readonly": ["clickup_get_*", "clickup_filter_tasks", "clickup_search*", "clickup_resolve_assignees"] }
+    },
+    {
+      "id": "airtable",
+      "name": "Airtable",
+      "description": "Bases, tables, and records in Airtable.",
+      "category": "productivity",
+      "author": "Airtable",
+      "version": "1",
+      "icon": "tablecells",
+      "homepage": "https://airtable.com/developers/agents/mcp/getting-started",
+      "tags": ["database", "spreadsheet", "tables", "records", "bases", "interfaces"],
+      "servers": {
+        "airtable": { "type": "http", "url": "https://mcp.airtable.com/mcp", "auth": { "type": "oauth", "token_variable": "AIRTABLE_TOKEN" } }
+      },
+      "variables": [
+        { "name": "AIRTABLE_TOKEN", "description": "A personal access token (airtable.com/create/tokens) instead of signing in, for a Runner without a browser.", "secret": true, "required": false }
+      ],
+      "tools": { "readonly": ["list_*", "get_*", "search_*", "describe_*"] }
+    },
+    {
+      "id": "granola",
+      "name": "Granola",
+      "description": "Meeting notes and transcripts from Granola.",
+      "category": "communication",
+      "author": "Granola",
+      "version": "1",
+      "icon": "note.text",
+      "homepage": "https://docs.granola.ai/help-center/sharing/integrations/mcp",
+      "tags": ["meetings", "notes", "transcripts", "calls"],
+      "servers": {
+        "granola": { "type": "http", "url": "https://mcp.granola.ai/mcp", "auth": { "type": "oauth" } }
+      },
+      "tools": { "readonly": ["query_granola_meetings", "list_*", "get_*"] }
+    },
+    {
+      "id": "fireflies",
+      "name": "Fireflies",
+      "description": "Meeting transcripts, summaries, and action items from Fireflies.",
+      "category": "communication",
+      "author": "Fireflies.ai",
+      "version": "1",
+      "icon": "waveform",
+      "homepage": "https://docs.fireflies.ai/getting-started/mcp-configuration",
+      "tags": ["meetings", "transcripts", "recordings", "calls", "notes"],
+      "servers": {
+        "fireflies": { "type": "http", "url": "https://api.fireflies.ai/mcp", "auth": { "type": "oauth", "token_variable": "FIREFLIES_API_KEY" } }
+      },
+      "variables": [
+        { "name": "FIREFLIES_API_KEY", "description": "Your API key (Fireflies › Integrations › Fireflies API) instead of signing in, for a Runner without a browser.", "secret": true, "required": false }
+      ],
+      "tools": { "readonly": ["fireflies_search", "fireflies_fetch", "fireflies_get_*", "fireflies_list_*"] }
+    },
+    {
+      "id": "resend",
+      "name": "Resend",
+      "description": "Email sent from your own domain, received mail, and contacts in Resend.",
+      "category": "communication",
+      "author": "Resend",
+      "version": "1",
+      "icon": "envelope",
+      "homepage": "https://resend.com/docs/mcp-server",
+      "tags": ["email", "send email", "inbound", "contacts", "broadcasts"],
+      "servers": {
+        "resend": { "type": "http", "url": "https://mcp.resend.com/mcp", "auth": { "type": "oauth", "token_variable": "RESEND_API_KEY" } }
+      },
+      "variables": [
+        { "name": "RESEND_API_KEY", "description": "An API key (resend.com/api-keys) instead of signing in, for a Runner without a browser.", "secret": true, "required": false }
+      ]
+    },
+    {
+      "id": "canva",
+      "name": "Canva",
+      "description": "Designs, presentations, and brand assets in Canva.",
+      "category": "design",
+      "author": "Canva",
+      "version": "1",
+      "icon": "paintpalette",
+      "homepage": "https://www.canva.dev/docs/apps/mcp/",
+      "tags": ["design", "graphics", "presentations", "social media", "images"],
+      "servers": {
+        "canva": { "type": "http", "url": "https://mcp.canva.com/mcp", "auth": { "type": "oauth" } }
+      }
+    },
+    {
+      "id": "miro",
+      "name": "Miro",
+      "description": "Boards, diagrams, and sticky notes in Miro.",
+      "category": "design",
+      "author": "Miro",
+      "version": "1",
+      "icon": "square.on.square.dashed",
+      "homepage": "https://developers.miro.com/docs/miro-mcp",
+      "tags": ["whiteboard", "diagrams", "boards", "brainstorming", "prototypes"],
+      "servers": {
+        "miro": { "type": "http", "url": "https://mcp.miro.com/", "auth": { "type": "oauth" } }
+      },
+      "tools": { "readonly": ["board_search_boards", "canvas_read_as_svg", "canvas_search", "canvas_get_canvas_composer_skill", "canvas_load_format_skill", "comment_list_comments", "image_get_data", "image_get_url", "prototype_read", "table_list_rows"] }
+    },
+    {
+      "id": "webflow",
+      "name": "Webflow",
+      "description": "Sites, pages, and CMS collections in Webflow.",
+      "category": "design",
+      "author": "Webflow",
+      "version": "1",
+      "icon": "macwindow",
+      "homepage": "https://developers.webflow.com/mcp/reference/overview",
+      "tags": ["website", "cms", "pages", "no-code", "publishing"],
+      "servers": {
+        "webflow": { "type": "http", "url": "https://mcp.webflow.com/mcp", "auth": { "type": "oauth" } }
+      },
+      "tools": { "readonly": ["ask_webflow_ai", "webflow_guide_tool", "get_asset_preview"] }
+    },
+    {
+      "id": "cloudflare",
+      "name": "Cloudflare",
+      "description": "The whole Cloudflare API: DNS, Workers, R2, and the rest of your account.",
+      "category": "code",
+      "author": "Cloudflare",
+      "version": "1",
+      "icon": "cloud",
+      "homepage": "https://developers.cloudflare.com/agents/model-context-protocol/cloudflare/servers-for-cloudflare/",
+      "tags": ["dns", "workers", "r2", "d1", "cdn", "hosting", "zero trust"],
+      "servers": {
+        "cloudflare": { "type": "http", "url": "https://mcp.cloudflare.com/mcp", "auth": { "type": "oauth", "token_variable": "CLOUDFLARE_API_TOKEN" } }
+      },
+      "variables": [
+        { "name": "CLOUDFLARE_API_TOKEN", "description": "An API token (dash.cloudflare.com/profile/api-tokens) instead of signing in, for a Runner without a browser.", "secret": true, "required": false }
+      ],
+      "tools": { "readonly": ["search", "docs"] }
+    },
+    {
+      "id": "gitlab",
+      "name": "GitLab",
+      "description": "Issues, merge requests, and pipelines on GitLab.com, once a group Owner allows MCP access.",
+      "category": "code",
+      "author": "GitLab",
+      "version": "1",
+      "icon": "arrow.triangle.branch",
+      "homepage": "https://docs.gitlab.com/user/model_context_protocol/mcp_server/",
+      "tags": ["git", "code", "merge requests", "issues", "ci", "pipelines", "repositories"],
+      "servers": {
+        "gitlab": { "type": "http", "url": "https://gitlab.com/api/v4/mcp", "auth": { "type": "oauth" } }
+      }
+    },
+    {
+      "id": "netlify",
+      "name": "Netlify",
+      "description": "Sites, deploys, and environment variables on Netlify.",
+      "category": "code",
+      "author": "Netlify",
+      "version": "1",
+      "icon": "server.rack",
+      "homepage": "https://docs.netlify.com/build/build-with-ai/agent-setup-guides/agent-setup-overview/",
+      "tags": ["hosting", "deploy", "websites", "functions"],
+      "servers": {
+        "netlify": { "type": "http", "url": "https://netlify-mcp.netlify.app/mcp", "auth": { "type": "oauth" } }
+      }
+    },
+    {
+      "id": "railway",
+      "name": "Railway",
+      "description": "Projects, services, and deploys on Railway, with Railway's own agent for the rest.",
+      "category": "code",
+      "author": "Railway",
+      "version": "1",
+      "icon": "train.side.front.car",
+      "homepage": "https://docs.railway.com/ai/mcp-server",
+      "tags": ["hosting", "deploy", "servers", "databases", "logs", "feature flags"],
+      "servers": {
+        "railway": { "type": "http", "url": "https://mcp.railway.com", "auth": { "type": "oauth" } }
+      },
+      "tools": { "readonly": ["whoami", "list-*", "get-*"] }
+    },
+    {
+      "id": "expo",
+      "name": "Expo",
+      "description": "EAS builds, workflows, and store submissions, and the crashes and reviews of your Expo apps.",
+      "category": "code",
+      "author": "Expo",
+      "version": "1",
+      "icon": "iphone",
+      "homepage": "https://docs.expo.dev/mcp/",
+      "tags": ["react native", "mobile", "ios", "android", "eas", "builds", "testflight", "app store", "google play"],
+      "servers": {
+        "expo": { "type": "http", "url": "https://mcp.expo.dev/mcp", "auth": { "type": "oauth" } }
+      },
+      "tools": { "readonly": ["read_documentation", "search_documentation", "workflow_info", "workflow_list", "workflow_logs", "workflow_validate", "build_list", "build_info", "build_logs", "testflight_crashes", "testflight_feedback", "appstore_reviews", "playstore_crashes", "playstore_reviews"] }
+    },
+    {
+      "id": "supabase",
+      "name": "Supabase",
+      "description": "Projects, Postgres databases, and edge functions in Supabase.",
+      "category": "data",
+      "author": "Supabase",
+      "version": "1",
+      "icon": "cylinder.split.1x2",
+      "homepage": "https://supabase.com/docs/guides/ai-tools/mcp",
+      "tags": ["postgres", "database", "sql", "auth", "storage", "edge functions"],
+      "servers": {
+        "supabase": { "type": "http", "url": "https://mcp.supabase.com/mcp", "auth": { "type": "oauth", "token_variable": "SUPABASE_ACCESS_TOKEN" } }
+      },
+      "variables": [
+        { "name": "SUPABASE_ACCESS_TOKEN", "description": "A personal access token (supabase.com/dashboard/account/tokens) instead of signing in, for a Runner without a browser.", "secret": true, "required": false }
+      ]
+    },
+    {
+      "id": "neon",
+      "name": "Neon",
+      "description": "Serverless Postgres projects, branches, and queries on Neon.",
+      "category": "data",
+      "author": "Neon",
+      "version": "1",
+      "icon": "cylinder",
+      "homepage": "https://neon.com/docs/ai/neon-mcp-server",
+      "tags": ["postgres", "database", "sql", "branches"],
+      "servers": {
+        "neon": { "type": "http", "url": "https://mcp.neon.tech/mcp", "auth": { "type": "oauth", "token_variable": "NEON_API_KEY" } }
+      },
+      "variables": [
+        { "name": "NEON_API_KEY", "description": "An API key (Neon Console › Account settings › API keys) instead of signing in, for a Runner without a browser.", "secret": true, "required": false }
+      ]
+    },
+    {
+      "id": "posthog",
+      "name": "PostHog",
+      "description": "Product analytics, feature flags, and errors in PostHog.",
+      "category": "data",
+      "author": "PostHog",
+      "version": "1",
+      "icon": "chart.bar.xaxis",
+      "homepage": "https://posthog.com/docs/model-context-protocol",
+      "tags": ["analytics", "events", "feature flags", "experiments", "insights", "session replay"],
+      "servers": {
+        "posthog": { "type": "http", "url": "https://mcp.posthog.com/mcp", "auth": { "type": "oauth", "token_variable": "POSTHOG_API_KEY" } }
+      },
+      "variables": [
+        { "name": "POSTHOG_API_KEY", "description": "A personal API key with the MCP Server preset (PostHog › Settings › Personal API keys) instead of signing in, for a Runner without a browser.", "secret": true, "required": false }
+      ]
+    },
+    {
+      "id": "mixpanel",
+      "name": "Mixpanel",
+      "description": "Reports, events, and dashboards in Mixpanel.",
+      "category": "data",
+      "author": "Mixpanel",
+      "version": "1",
+      "icon": "chart.xyaxis.line",
+      "homepage": "https://docs.mixpanel.com/docs/mcp",
+      "tags": ["analytics", "events", "funnels", "retention", "reports", "dashboards"],
+      "servers": {
+        "mixpanel": { "type": "http", "url": "https://mcp.mixpanel.com/mcp", "auth": { "type": "oauth" } }
+      },
+      "tools": { "readonly": ["Get-*", "List-*", "Search-*", "Run-Query", "Display-Query", "Describe-Cohort-Schema"] }
+    },
+    {
+      "id": "amplitude",
+      "name": "Amplitude",
+      "description": "Charts, dashboards, and experiments in Amplitude.",
+      "category": "data",
+      "author": "Amplitude",
+      "version": "1",
+      "icon": "chart.line.uptrend.xyaxis",
+      "homepage": "https://amplitude.com/docs/amplitude-ai/amplitude-mcp",
+      "tags": ["analytics", "events", "dashboards", "experiments", "cohorts", "session replay"],
+      "servers": {
+        "amplitude": { "type": "http", "url": "https://mcp.amplitude.com/mcp", "auth": { "type": "oauth" } }
+      },
+      "tools": { "readonly": ["search", "get_*", "query_*", "list_*", "describe_tool"] }
+    },
+    {
+      "id": "attio",
+      "name": "Attio",
+      "description": "Companies, people, deals, and notes in Attio.",
+      "category": "sales",
+      "author": "Attio",
+      "version": "1",
+      "icon": "person.2",
+      "homepage": "https://docs.attio.com/mcp/overview",
+      "tags": ["crm", "deals", "contacts", "pipeline", "companies", "meetings"],
+      "servers": {
+        "attio": { "type": "http", "url": "https://mcp.attio.com/mcp", "auth": { "type": "oauth" } }
+      },
+      "tools": { "readonly": ["list-*", "search-*", "semantic-search-*", "get-*", "whoami"] }
+    },
+    {
+      "id": "close",
+      "name": "Close",
+      "description": "Leads, opportunities, and activities in Close.",
+      "category": "sales",
+      "author": "Close",
+      "version": "1",
+      "icon": "phone.arrow.up.right",
+      "homepage": "https://developer.close.com/mcp",
+      "tags": ["crm", "leads", "sales", "pipeline", "calls", "email"],
+      "servers": {
+        "close": { "type": "http", "url": "https://mcp.close.com/mcp", "auth": { "type": "oauth" } }
+      },
+      "tools": { "readonly": ["fetch*", "find_*", "get_*", "list_*", "search", "lead_search", "activity_search", "paginate_search", "aggregation", "org_info", "org_users"] }
+    },
+    {
+      "id": "apollo",
+      "name": "Apollo.io",
+      "description": "Prospects, companies, and sequences in Apollo.io.",
+      "category": "sales",
+      "author": "Apollo.io",
+      "version": "1",
+      "icon": "person.crop.rectangle.stack",
+      "homepage": "https://docs.apollo.io/docs/apollo-mcp",
+      "tags": ["prospecting", "leads", "contacts", "enrichment", "outreach"],
+      "servers": {
+        "apollo": { "type": "http", "url": "https://mcp.apollo.io/mcp", "auth": { "type": "oauth" } }
+      }
+    },
+    {
+      "id": "stripe",
+      "name": "Stripe",
+      "description": "Customers, payments, subscriptions, and invoices in Stripe.",
+      "category": "finance",
+      "featured": true,
+      "author": "Stripe",
+      "version": "1",
+      "icon": "creditcard",
+      "homepage": "https://docs.stripe.com/mcp",
+      "tags": ["payments", "billing", "invoices", "subscriptions", "revenue"],
+      "servers": {
+        "stripe": { "type": "http", "url": "https://mcp.stripe.com", "auth": { "type": "oauth", "token_variable": "STRIPE_API_KEY" } }
+      },
+      "variables": [
+        { "name": "STRIPE_API_KEY", "description": "An agent API key (a restricted key made for agent access at dashboard.stripe.com/apikeys) instead of signing in, for a Runner without a browser.", "secret": true, "required": false }
+      ],
+      "tools": { "readonly": ["stripe_api_search", "stripe_api_details", "stripe_api_read", "get_stripe_account_info", "get_balance_summary", "stripe_analytics", "search_stripe_documentation", "stripe_implementation_planner"] }
+    },
+    {
+      "id": "paypal",
+      "name": "PayPal",
+      "description": "Invoices, orders, payments, and disputes in PayPal.",
+      "category": "finance",
+      "author": "PayPal",
+      "version": "1",
+      "icon": "dollarsign.circle",
+      "homepage": "https://developer.paypal.com/ai-tools/mcp-server",
+      "tags": ["payments", "invoices", "orders", "disputes", "subscriptions"],
+      "servers": {
+        "paypal": { "type": "http", "url": "https://mcp.paypal.com/mcp", "auth": { "type": "oauth" } }
+      },
+      "tools": { "readonly": ["list_*", "get_*", "show_*", "search_product"] }
+    },
+    {
+      "id": "mercury",
+      "name": "Mercury",
+      "description": "Accounts, balances, and transactions in Mercury, read only.",
+      "category": "finance",
+      "author": "Mercury",
+      "version": "1",
+      "icon": "building.columns",
+      "homepage": "https://docs.mercury.com/docs/what-is-mercury-mcp",
+      "tags": ["banking", "bank", "transactions", "balances", "accounts", "statements"],
+      "servers": {
+        "mercury": { "type": "http", "url": "https://mcp.mercury.com/mcp", "auth": { "type": "oauth" } }
+      },
+      "tools": { "readonly": ["get*", "list*"] }
+    },
+    {
+      "id": "exa",
+      "name": "Exa",
+      "description": "Web search, and web pages read as clean text.",
+      "category": "research",
+      "featured": true,
+      "author": "Exa",
+      "version": "1",
+      "icon": "magnifyingglass",
+      "homepage": "https://exa.ai/docs/get-started/exa-mcp",
+      "tags": ["search", "web", "news", "crawl", "research"],
+      "servers": {
+        "exa": { "type": "http", "url": "https://mcp.exa.ai/mcp", "headers": { "x-api-key": "${EXA_API_KEY}" } }
+      },
+      "variables": [
+        { "name": "EXA_API_KEY", "description": "Optional API key from dashboard.exa.ai for higher limits.", "secret": true, "required": false }
+      ]
+    },
+    {
+      "id": "deepwiki",
+      "name": "DeepWiki",
+      "description": "Answers and docs for any public GitHub repository.",
+      "category": "research",
+      "author": "Cognition",
+      "version": "1",
+      "icon": "book.pages",
+      "homepage": "https://docs.devin.ai/work-with-devin/deepwiki-mcp",
+      "tags": ["github", "repositories", "code", "docs", "wiki"],
+      "servers": {
+        "deepwiki": { "type": "http", "url": "https://mcp.deepwiki.com/mcp" }
+      },
+      "tools": { "readonly": ["*"] }
+    },
+    {
+      "id": "huggingface",
+      "name": "Hugging Face",
+      "description": "Models, datasets, Spaces, and papers on the Hugging Face Hub.",
+      "category": "research",
+      "author": "Hugging Face",
+      "version": "1",
+      "icon": "face.smiling",
+      "homepage": "https://huggingface.co/docs/hub/agents-mcp",
+      "tags": ["ai", "models", "datasets", "spaces", "papers", "machine learning"],
+      "servers": {
+        "huggingface": { "type": "http", "url": "https://huggingface.co/mcp", "headers": { "Authorization": "Bearer ${HF_TOKEN}" } }
+      },
+      "variables": [
+        { "name": "HF_TOKEN", "description": "Optional access token (huggingface.co/settings/tokens), so the server works as your account with the tools picked at huggingface.co/settings/mcp.", "secret": true, "required": false }
+      ]
+    },
+    {
+      "id": "intercom",
+      "name": "Intercom",
+      "description": "Conversations, contacts, and help articles in Intercom.",
+      "category": "support",
+      "author": "Intercom",
+      "version": "1",
+      "icon": "bubble.left.and.bubble.right",
+      "homepage": "https://developers.intercom.com/docs/guides/mcp",
+      "tags": ["support", "customers", "conversations", "tickets", "help center"],
+      "servers": {
+        "intercom": { "type": "http", "url": "https://mcp.intercom.com/mcp", "auth": { "type": "oauth" } }
+      },
+      "tools": { "readonly": ["search", "fetch", "search_*", "get_*", "list_*"] }
     }
   ],
   "bots": [
