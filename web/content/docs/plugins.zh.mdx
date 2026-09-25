@@ -1,6 +1,6 @@
 ---
 title: 插件
-description: 让智能体连接 GitHub、Linear、Notion、Sentry、Context7 或浏览器。
+description: 让智能体连接 GitHub、Jira、Notion、Stripe、浏览器等几十种服务。
 icon: Plug
 ---
 
@@ -8,9 +8,23 @@ icon: Plug
 
 ## 市场
 
-点按侧边栏右下角的市场图标（四个圆点），或选择 **文件 › 市场…**（⌘⇧M）。最前面是 **精选插件** 和 **精选智能体**，然后按类别列出其余内容：代码、效率、研究。精选分组下的 **查看全部** 会列出所有插件或所有智能体。搜索会同时查找插件和智能体。
+点按侧边栏右下角的市场图标（四个圆点），或选择 **文件 › 市场…**（⌘⇧M）。最前面是 **精选插件** 和 **精选智能体**，然后按类别列出其余内容。精选分组下的 **查看全部** 会列出所有插件或所有智能体。搜索会同时查找插件和智能体。
 
-Lorca 自带 **GitHub**、**Linear**、**Notion**、**Sentry**、**Context7**（库文档）和 **Browser**（由智能体操作的无头浏览器）插件。市场里的智能体是现成的队友，参见[智能体](/zh/docs/bots)。
+Lorca 自带这些插件：
+
+| 类别 | 插件 |
+| --- | --- |
+| 效率 | Linear、Notion、Atlassian（Jira 和 Confluence）、Zapier、Todoist、ClickUp、Airtable |
+| 通信 | Granola、Fireflies、Resend |
+| 设计 | Canva、Miro、Webflow |
+| 代码 | GitHub、Sentry、Cloudflare、GitLab、Netlify、Railway、Expo |
+| 数据 | Supabase、Neon、PostHog、Mixpanel、Amplitude |
+| 销售 | Attio、Close、Apollo.io |
+| 财务 | Stripe、PayPal、Mercury |
+| 研究 | Context7（库文档）、Browser（由智能体操作的无头浏览器）、Exa（网页搜索）、DeepWiki、Hugging Face |
+| 支持 | Intercom |
+
+Browser、Context7、DeepWiki、Exa 和 Hugging Face 不需要账号。这里没有插件的应用，比如 Gmail、Google 日历和 Slack，可以通过 Zapier 使用。市场里的智能体是现成的队友，参见[智能体](/zh/docs/bots)。
 
 插件**按 Runner 安装**。那台电脑上的每个智能体都能使用那里安装的每个插件。密钥和登录状态留在那个 Runner 上；你的其他设备只看得到插件的名字和状态。
 
@@ -32,7 +46,7 @@ Lorca 自带 **GitHub**、**Linear**、**Notion**、**Sentry**、**Context7**（
 - GitHub 会显示一个短代码和一个链接。在任何设备上到 github.com 输入代码即可。
 - 其他服务会在 **Runner 上**的浏览器里打开登录页面。如果你在另一台设备上，卡片会告诉你到那边去完成。
 
-有些插件也接受直接粘贴的令牌，比如 GitHub 的个人访问令牌或 Context7 的 API 密钥。在插件的面板里填写。密钥字段只能写入：保存之后不会再显示。
+有些插件也接受直接粘贴的令牌，没有浏览器的 Runner 也能用：GitHub 的个人访问令牌，或者 Airtable、Cloudflare、Fireflies、Neon、PostHog、Resend、Stripe、Supabase、Zapier 的 API 密钥或令牌。Context7 和 Exa 可以填一个 API 密钥来提高免费额度，Hugging Face 的令牌则让插件用你自己的账号。在插件的面板里填写。密钥字段只能写入：保存之后不会再显示。
 
 ## 插件可以做什么
 
