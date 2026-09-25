@@ -16,7 +16,7 @@ export const zh: Messages = {
   },
   hero: {
     badge: 'Mac 版现已推出',
-    title: 'AI 队友，<br/>和你一起干<accent>实事</accent>。',
+    title: '拉个群，<br/>让 AI 队友<accent>分工</accent>。',
     body: '和一个队友单聊，或者把几个拉进一个群聊。它们可以读写你的文件、运行命令，并记住你说过的话。交给它们一件事，它们会自己分工协作。',
     how: '看看它怎么运作',
     platforms: 'Linux 和 Windows 可通过命令行使用。',
