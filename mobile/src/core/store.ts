@@ -5,7 +5,7 @@
 import { useMemo } from "react";
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
-import { runsInTerminal, type AutoReview, type Bot, type Chat, type ChatMeta, type ChatUsage, type Device, type Message, type ProviderStatus, type Routine } from "./model";
+import { runsInTerminal, type AutoReview, type Bot, type Chat, type ChatMeta, type ChatUsage, type Device, type Message, type ProviderStatus, type RelayProblem, type Routine } from "./model";
 import { t } from "../i18n";
 import { savePrefs } from "./prefs";
 
@@ -35,6 +35,8 @@ export interface StoreState {
   relayConnected: boolean;
   /** The relay refused this build's protocol: it syncs again once the app is updated. */
   relayUpdateRequired: boolean;
+  /** Why the last try to connect to the relay failed, until one goes through. */
+  relayError: RelayProblem | null;
   devices: Device[];
   /// Device id → last seen (unix seconds), from the devices list.
   device_seen: Record<string, number>;
@@ -77,6 +79,7 @@ function empty(): Omit<StoreState, "ready" | "dictation_lang" | "appActive" | "a
     relayUrl: null,
     relayConnected: false,
     relayUpdateRequired: false,
+    relayError: null,
     devices: [],
     device_seen: {},
     bots: [],
@@ -140,6 +143,7 @@ export function replaceSnapshot(snapshot: {
   relay_url: string | null;
   relay_connected: boolean;
   relay_update_required?: boolean;
+  relay_error?: RelayProblem | null;
   devices: Device[];
   bots: Bot[];
   chats: Chat[];
@@ -160,6 +164,7 @@ export function replaceSnapshot(snapshot: {
     relayUrl: snapshot.relay_url,
     relayConnected: snapshot.relay_connected,
     relayUpdateRequired: !!snapshot.relay_update_required,
+    relayError: snapshot.relay_error ?? null,
     devices: snapshot.devices,
     device_seen: seenOf(snapshot.devices),
     bots: snapshot.bots,

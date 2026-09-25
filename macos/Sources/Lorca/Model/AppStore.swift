@@ -84,6 +84,9 @@ final class AppStore {
     private(set) var relayConnected = false
     /// The relay refused this build's protocol: it syncs again once Lorca is updated.
     private(set) var relayUpdateRequired = false
+    /// Why the last try to connect to the relay failed, as the CLI words it, until one goes
+    /// through.
+    private(set) var relayError: String?
     private(set) var relayURL: String?
 
     /// Turns in flight, by job id: the chat and the bot (empty while a group exchange is between
@@ -251,6 +254,7 @@ final class AppStore {
         relayURL = snapshot.relayUrl
         relayConnected = snapshot.relayConnected
         relayUpdateRequired = snapshot.relayUpdateRequired ?? false
+        relayError = snapshot.relayError?.message
         devices = snapshot.devices.map { $0.toModel() }
         bots = snapshot.bots.map { $0.toModel() }
         // A snapshot carries each chat's newest messages. Older pages this app already loaded
@@ -382,6 +386,7 @@ final class AppStore {
             guard let status = decode(Wire.RelayStatus.self) else { return }
             relayConnected = status.connected
             relayUpdateRequired = status.updateRequired ?? false
+            relayError = status.error?.message
             relayURL = status.url ?? relayURL
             emit(.rosterChanged)
 

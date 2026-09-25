@@ -13,7 +13,7 @@
     "release-ios": "bun run scripts/release-ios.ts",
     "cli": "cargo run -q -p lorca -- serve",
     "reset": "bun run scripts/reset.ts",
-    "relay": "cargo run -q -p lorca-relay -- --bind 0.0.0.0:8787 --db target/lorca-relay.db --apns-topic app.lorca.dev",
+    "relay": "mkdir -p temp && cargo run -q -p lorca-relay -- --bind 0.0.0.0:8787 --db temp/lorca-relay.db --apns-topic app.lorca.dev",
     "l10n": "bun run scripts/l10n.ts",
     "web": "bun run --cwd web dev",
     "web:build": "bun run --cwd web build",

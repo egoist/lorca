@@ -10,7 +10,7 @@ use tokio::sync::{broadcast, Notify};
 use tokio_util::sync::CancellationToken;
 
 use crate::config::{self, Config, Settings};
-use crate::events::{ChatSummary, Event};
+use crate::events::{ChatSummary, Event, RelayProblem};
 use crate::keys::{self, IdentityFile, MachineFile};
 use crate::model::*;
 use crate::local_store::LocalStore;
@@ -156,6 +156,10 @@ pub struct App {
     pub relay_connected: AtomicBool,
     /// The relay answered `426`: it no longer serves the protocol this build speaks.
     pub relay_update_required: AtomicBool,
+    /// Why the last try to connect to the relay failed, kept until a try goes through, the
+    /// relay URL changes, or the identity goes. A socket that worked and then ended leaves it
+    /// unset: the next try usually connects.
+    pub relay_problem: Mutex<Option<RelayProblem>>,
     /// A `machine` blob named a key the last presence refresh did not list: a Device that
     /// just paired, or one unpaired since. The cycle refreshes presence again to tell.
     pub presence_stale: AtomicBool,
@@ -246,6 +250,7 @@ impl App {
             message_order: Mutex::new(()),
             relay_connected: AtomicBool::new(false),
             relay_update_required: AtomicBool::new(false),
+            relay_problem: Mutex::new(None),
             presence_stale: AtomicBool::new(false),
             bulk_sync: AtomicBool::new(false),
             pairings: Mutex::new(HashMap::new()),
@@ -437,8 +442,10 @@ impl App {
         settings.save(&self.config)?;
         drop(settings);
         self.relay.forget_token();
-        // Another relay may serve this build; the sync loop wakes and finds out.
-        if self.relay_update_required.swap(false, Ordering::Relaxed) {
+        // Another relay may serve this build and know this Device; the sync loop wakes and
+        // finds out.
+        let had_problem = self.relay_problem.lock().unwrap().take().is_some();
+        if self.relay_update_required.swap(false, Ordering::Relaxed) || had_problem {
             self.emit_relay_status();
         }
         self.outbox_notify.notify_waiters();
@@ -483,6 +490,7 @@ impl App {
         self.store.clear()?;
         self.settings.lock().unwrap().relay_url = None;
         self.relay.forget_token();
+        *self.relay_problem.lock().unwrap() = None;
         // The sync session ends on this instead of waiting for its socket to say something.
         self.outbox_notify.notify_waiters();
         for path in [self.config.identity_path(), self.config.machine_path(), self.config.credentials_path(), self.config.settings_path()] {
@@ -855,7 +863,16 @@ impl App {
             connected: self.relay_connected.load(Ordering::Relaxed),
             url: self.relay_url(),
             update_required: self.relay_update_required.load(Ordering::Relaxed),
+            error: self.relay_problem.lock().unwrap().clone(),
         });
+    }
+
+    /// A try to connect to the relay failed: the app hears why when the reason changed.
+    pub fn relay_failed(&self, problem: RelayProblem) {
+        let changed = self.relay_problem.lock().unwrap().replace(problem.clone()) != Some(problem);
+        if changed {
+            self.emit_relay_status();
+        }
     }
 
     pub fn roster_changed(&self, upload: bool) {
@@ -1481,6 +1498,7 @@ impl App {
             "relay_url": self.relay_url(),
             "relay_connected": self.relay_connected.load(Ordering::Relaxed),
             "relay_update_required": self.relay_update_required.load(Ordering::Relaxed),
+            "relay_error": self.relay_problem.lock().unwrap().clone(),
             "devices": self.devices_out(&state),
             "bots": state.bots,
             "chats": state.chats.iter().map(|chat| self.chat_for_app(chat)).collect::<Vec<_>>(),

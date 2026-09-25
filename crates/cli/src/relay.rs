@@ -41,7 +41,13 @@ impl RelayError {
 
 impl From<reqwest::Error> for RelayError {
     fn from(error: reqwest::Error) -> Self {
-        RelayError { status: error.status().map(|s| s.as_u16()), message: format!("relay unreachable: {error}") }
+        // reqwest's own words name the request ("error sending request for url (…)"); what went
+        // wrong with it is the last cause in the chain ("Connection refused (os error 61)").
+        let mut cause: &dyn std::error::Error = &error;
+        while let Some(source) = cause.source() {
+            cause = source;
+        }
+        RelayError { status: error.status().map(|s| s.as_u16()), message: format!("relay unreachable: {cause}") }
     }
 }
 

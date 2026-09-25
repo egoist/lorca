@@ -4,7 +4,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use crate::app::{remember_applied, upsert_device, App};
-use crate::events::Event;
+use crate::events::{Event, RelayProblem};
 use crate::keys::unb64;
 use crate::model::*;
 use crate::relay::{BlobIn, RelayError, Signal};
@@ -23,7 +23,7 @@ pub async fn run(app: Arc<App>) {
         match session(&app, &mut failures).await {
             Ok(()) => failures = 0,
             Err(error) => {
-                disconnected(&app);
+                let dropped = disconnected(&app);
                 if error.is_unauthorized() {
                     app.relay.forget_token();
                 }
@@ -42,6 +42,13 @@ pub async fn run(app: Arc<App>) {
                 let outdated = error.is_update_required();
                 if outdated && !app.relay_update_required.swap(true, Ordering::Relaxed) {
                     app.emit_relay_status();
+                }
+                // A try that never connected says why, until one does. A socket that worked and
+                // then ended says nothing, since the next try usually connects, and neither does
+                // a stale bearer, which the next try replaces.
+                if !dropped && !outdated && !error.is_unauthorized() {
+                    let unknown_machine = error.is_unknown_machine() && !app.is_identity_device();
+                    app.relay_failed(RelayProblem { message: error.message.clone(), unknown_machine });
                 }
                 // Armed before the check below, so a wake between the two still ends the wait.
                 let woken = app.outbox_notify.notified();
@@ -69,9 +76,11 @@ pub async fn run(app: Arc<App>) {
     }
 }
 
-/// Without its own socket this Device knows nothing of the others' presence.
-fn disconnected(app: &Arc<App>) {
-    if app.relay_connected.swap(false, Ordering::Relaxed) {
+/// Without its own socket this Device knows nothing of the others' presence. True when a
+/// socket was open.
+fn disconnected(app: &Arc<App>) -> bool {
+    let was_connected = app.relay_connected.swap(false, Ordering::Relaxed);
+    if was_connected {
         app.emit_relay_status();
     }
     let had_online = {
@@ -83,6 +92,7 @@ fn disconnected(app: &Arc<App>) {
     if had_online {
         app.emit(app.roster_summary());
     }
+    was_connected
 }
 
 /// One sync socket, from connect to its end. The relay signals over it and carries no data:
@@ -113,7 +123,8 @@ async fn session(app: &Arc<App>, failures: &mut u32) -> Result<(), RelayError> {
     let token = token_or_register(app, &url, &machine).await?;
     let mut socket = app.relay.sync_socket(&url, &token).await?;
     let was_refused = app.relay_update_required.swap(false, Ordering::Relaxed);
-    if !app.relay_connected.swap(true, Ordering::Relaxed) || was_refused {
+    let had_problem = app.relay_problem.lock().unwrap().take().is_some();
+    if !app.relay_connected.swap(true, Ordering::Relaxed) || was_refused || had_problem {
         app.emit_relay_status();
     }
     // The other Devices dropped this one's turns when the relay last showed it offline; the

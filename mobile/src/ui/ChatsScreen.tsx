@@ -12,6 +12,7 @@ import { AvatarCluster } from "./Avatar";
 import { ChatPeek } from "./ChatPeek";
 import { ChatRow } from "./ChatRow";
 import { PaneWidth, useSidebarWidth } from "./layout";
+import { problemTitle, showRelayProblem } from "./relay";
 import { lastActivity, preview, stamp } from "./format";
 import { SidebarSearch, useSidebarSearchInset } from "./SidebarSearch";
 import { Symbol } from "./Symbol";
@@ -39,6 +40,8 @@ export function ChatsScreen({ sidebar = false }: { sidebar?: boolean }) {
   const running = useStore((s) => s.running);
   const connecting = useConnecting();
   const updateRequired = useStore((s) => s.relayUpdateRequired);
+  const relayError = useStore((s) => s.relayError);
+  const relayUrl = useStore((s) => s.relayUrl);
   const bots = useBotMap();
   const workingBots = useWorkingBotIds();
   const [query, setQuery] = useState("");
@@ -183,7 +186,8 @@ export function ChatsScreen({ sidebar = false }: { sidebar?: boolean }) {
           </Stack.Toolbar>
         </>
       )}
-      {/* The relay status sits in the bar's title slot, so the list never moves. */}
+      {/* The relay status sits in the bar's title slot, so the list never moves. Once a try to
+          connect has failed it says so, and a tap shows the error. */}
       {updateRequired ? (
         <Stack.Title asChild>
           <View style={styles.status} accessibilityRole="header" accessibilityLabel={t("Update Lorca to sync")}>
@@ -191,6 +195,20 @@ export function ChatsScreen({ sidebar = false }: { sidebar?: boolean }) {
               {t("Update Lorca to sync")}
             </Text>
           </View>
+        </Stack.Title>
+      ) : connecting && relayError ? (
+        <Stack.Title asChild>
+          <Pressable
+            style={({ pressed }) => [styles.status, pressed && styles.statusPressed]}
+            accessibilityRole="button"
+            accessibilityLabel={problemTitle(relayError)}
+            onPress={() => showRelayProblem(relayError, relayUrl)}
+          >
+            <Symbol name="exclamationmark.triangle.fill" size={13} color={p.red} />
+            <Text style={[styles.statusText, { color: p.secondaryLabel }]} numberOfLines={1}>
+              {problemTitle(relayError)}
+            </Text>
+          </Pressable>
         </Stack.Title>
       ) : connecting ? (
         <Stack.Title asChild>
@@ -391,6 +409,7 @@ const styles = StyleSheet.create({
   list: { flex: 1 },
   separator: { height: StyleSheet.hairlineWidth, marginLeft: 78 },
   status: { flexDirection: "row", alignItems: "center", gap: 8 },
+  statusPressed: { opacity: 0.4 },
   statusText: { fontSize: Font.small, fontWeight: "500" },
   empty: { alignItems: "center", paddingTop: 120, paddingHorizontal: 40, gap: 8 },
   emptyTitle: { fontSize: 20, fontWeight: "600", marginTop: 8 },

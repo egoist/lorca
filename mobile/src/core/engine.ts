@@ -179,7 +179,7 @@ class Engine {
         setChatUsage(data.chat_id, data.usage as ChatUsage);
         break;
       case "relay.status":
-        useStore.setState((s) => ({ relayConnected: !!data.connected, relayUpdateRequired: !!data.update_required, relayUrl: data.url ?? s.relayUrl }));
+        useStore.setState((s) => ({ relayConnected: !!data.connected, relayUpdateRequired: !!data.update_required, relayError: data.error ?? null, relayUrl: data.url ?? s.relayUrl }));
         break;
       case "provider.auth":
         this.openProviderAuth(data.url);

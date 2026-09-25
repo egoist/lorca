@@ -12,6 +12,15 @@ export interface ProviderStatus {
   base_url?: string;
 }
 
+/// Why this phone's last try to connect to the relay failed.
+export interface RelayProblem {
+  /// The error as it came: the relay's answer, or why none came.
+  message: string;
+  /// The relay has no record of this phone: it was reset, or it is not the relay that paired
+  /// it. Only pairing again brings the phone back.
+  unknown_machine: boolean;
+}
+
 /// A Device as the core's snapshot describes it: presence already resolved.
 export interface Device {
   /// The machine signing public key, base64url.

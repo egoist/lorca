@@ -16,6 +16,7 @@ enum Wire {
         var relayUrl: String?
         var relayConnected: Bool
         var relayUpdateRequired: Bool?
+        var relayError: RelayProblem?
     }
 
     struct Snapshot: Decodable {
@@ -27,6 +28,7 @@ enum Wire {
         var relayUrl: String?
         var relayConnected: Bool
         var relayUpdateRequired: Bool?
+        var relayError: RelayProblem?
         var devices: [Device]
         var bots: [Bot]
         var chats: [Chat]
@@ -486,6 +488,13 @@ enum Wire {
         var connected: Bool
         var url: String?
         var updateRequired: Bool?
+        var error: RelayProblem?
+    }
+
+    /// Why the last try to connect to the relay failed.
+    struct RelayProblem: Decodable {
+        /// The error as it came: the relay's answer, or why none came.
+        var message: String
     }
 
     struct IdentityChanged: Decodable {

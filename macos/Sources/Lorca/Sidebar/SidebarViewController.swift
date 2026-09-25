@@ -146,7 +146,7 @@ final class SidebarViewController: NSViewController {
             switch event {
             case .chatsChanged, .snapshotReplaced, .chatChanged:
                 self?.rebuild()
-            case .connectionChanged:
+            case .connectionChanged, .rosterChanged:
                 self?.footer.update()
             default:
                 break
@@ -553,7 +553,8 @@ private final class ActivatingSearchField: NSSearchField {
 // MARK: - Footer
 
 /// Two buttons at the foot of the sidebar: Settings, and this computer, whose icon turns red while
-/// the CLI is not answering.
+/// the CLI is not answering and orange while the CLI cannot connect to the relay, with the error
+/// in its tooltip.
 final class SidebarFooterView: NSView {
     private lazy var settings = HoverButton(
         symbol: "gearshape", tooltip: L("Settings (⌘,)"), target: self, action: #selector(openSettings))
@@ -595,10 +596,16 @@ final class SidebarFooterView: NSView {
         let store = AppStore.shared
         let connected = store.isConnected
         let name = store.thisDevice?.name ?? L("This computer")
-        let status = connected
-            ? L("CLI on 127.0.0.1:%@", String(Preferences.cliPort))
-            : L("CLI not running · start it with: lorca serve")
-                .replacingOccurrences(of: "lorca serve", with: AppInfo.cliCommand)
+        let relayError = connected ? store.relayError : nil
+        let status =
+            if !connected {
+                L("CLI not running · start it with: lorca serve")
+                    .replacingOccurrences(of: "lorca serve", with: AppInfo.cliCommand)
+            } else if let relayError {
+                L("Can’t connect to the relay: %@", relayError)
+            } else {
+                L("CLI on 127.0.0.1:%@", String(Preferences.cliPort))
+            }
         // Device symbols fill their screen in monochrome, which sits heavier than the gear's
         // outline; a palette with a clear second layer leaves the outline alone. The iMac's chin
         // stays solid either way, so a desktop shows as a plain display here.
@@ -607,7 +614,7 @@ final class SidebarFooterView: NSView {
         shown = (symbol, name, status)
         device.image = NSImage(
             systemSymbolName: symbol == "desktopcomputer" ? "display" : symbol, accessibilityDescription: name)
-        let tint: NSColor = connected ? .secondaryLabelColor : .systemRed
+        let tint: NSColor = !connected ? .systemRed : relayError != nil ? .systemOrange : .secondaryLabelColor
         device.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
             .applying(.init(paletteColors: [tint, .clear]))
         device.toolTip = "\(name) · \(status)"

@@ -1,4 +1,4 @@
-import { watch } from "node:fs"
+import { mkdirSync, watch } from "node:fs"
 import { join, relative } from "node:path"
 import {
   APP_NAME,
@@ -111,7 +111,9 @@ async function strayRelayPid(): Promise<number | null> {
  * app (LORCA_DEV=1) defaults its relay URL to this Mac's LAN IP on this port, and the phone
  * that pairs is the development build, so APNs pushes go to `app.lorca.dev`. A relay left
  * over from an earlier loop is replaced: it may predate the blob kinds the CLI now syncs, and
- * the CLI fails every cycle against one that rejects them. */
+ * the CLI fails every cycle against one that rejects them. Its database lives in `temp/`, out
+ * of the build output that mbx prunes on its own: a relay that loses it forgets every paired
+ * phone, which then has to pair again. */
 async function startRelay() {
   if (relay) return
   if (await relayAnswers()) {
@@ -131,8 +133,9 @@ async function startRelay() {
     log(color.red("relay build failed — not started"))
     return
   }
+  mkdirSync(join(ROOT, "temp"), { recursive: true })
   relay = Bun.spawn(
-    [join(ROOT, "target", "debug", "lorca-relay"), "--bind", `0.0.0.0:${RELAY_PORT}`, "--db", join(ROOT, "target", "lorca-relay.db"), "--apns-topic", "app.lorca.dev"],
+    [join(ROOT, "target", "debug", "lorca-relay"), "--bind", `0.0.0.0:${RELAY_PORT}`, "--db", join(ROOT, "temp", "lorca-relay.db"), "--apns-topic", "app.lorca.dev"],
     {
       cwd: ROOT,
       stdin: "ignore",

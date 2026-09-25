@@ -29,6 +29,7 @@ export default function SettingsScreen() {
   const seen = useStore((s) => s.device_seen);
   const relayConnected = useStore((s) => s.relayConnected);
   const relayUpdateRequired = useStore((s) => s.relayUpdateRequired);
+  const relayError = useStore((s) => s.relayError);
   const relayUrl = useStore((s) => s.relayUrl);
   const identity = useStore((s) => s.identityId);
   const autoReview = useStore((s) => s.auto_review);
@@ -182,7 +183,9 @@ export default function SettingsScreen() {
           <Row
             title={t("Relay")}
             detail={relayUrl?.replace(/^https?:\/\//, "") ?? "—"}
-            subtitle={relayUpdateRequired ? t("Update Lorca to sync") : relayConnected ? t("Connected") : t("Connecting…")}
+            // Why the last try to connect failed, as the core has it, until one goes through.
+            subtitle={relayUpdateRequired ? t("Update Lorca to sync") : relayConnected ? t("Connected") : relayError ? relayError.message : t("Connecting…")}
+            subtitleLines={3}
           />
         </Section>
 

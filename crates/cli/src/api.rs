@@ -67,6 +67,7 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             "relay_url": app.relay_url(),
             "relay_connected": app.relay_connected.load(std::sync::atomic::Ordering::Relaxed),
             "relay_update_required": app.relay_update_required.load(std::sync::atomic::Ordering::Relaxed),
+            "relay_error": app.relay_problem.lock().unwrap().clone(),
         })),
         "bootstrap" => {
             runtime::prime_names(app);

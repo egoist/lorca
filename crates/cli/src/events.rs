@@ -36,8 +36,8 @@ pub enum Event {
     ChatUsageChanged { chat_id: String, usage: ChatUsage },
     #[serde(rename = "relay.status")]
     /// `update_required`: the relay refused this build's protocol, and only a newer Lorca
-    /// connects again.
-    RelayStatus { connected: bool, url: Option<String>, update_required: bool },
+    /// connects again. `error`: why the last try to connect failed, until one goes through.
+    RelayStatus { connected: bool, url: Option<String>, update_required: bool, error: Option<RelayProblem> },
     /// A Device opens this provider authorization URL while the core waits on its loopback
     /// callback. Runners open the same URL themselves.
     #[serde(rename = "provider.auth")]
@@ -49,6 +49,16 @@ pub enum Event {
     PairCompleted { nonce: String, device: Value },
     #[serde(rename = "identity.changed")]
     IdentityChanged { has_identity: bool },
+}
+
+/// Why this Device's last try to connect to the relay failed.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RelayProblem {
+    /// The error as it came: the relay's answer, or why none came.
+    pub message: String,
+    /// The relay has no record of this Device: it was reset, or it is not the relay that
+    /// attested this Device. Only the identity device attests one, so this Device pairs again.
+    pub unknown_machine: bool,
 }
 
 /// Chat metadata plus per-device state, without messages.
