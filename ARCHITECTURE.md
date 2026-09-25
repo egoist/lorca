@@ -338,7 +338,7 @@ Shell review lives at the loop's `before_tool_call` boundary (`crates/cli/src/lo
 
 ### The lead bot
 
-A new identity starts with one bot, **Chef**, a chief of staff on the first Runner: an ordinary bot whose description says to learn the user’s work, propose a small team of one-job bots, create them with `create_bot`, and route work with `message_bot`. Nothing about it is privileged; rename or delete it like any bot.
+A new identity starts with one bot, **Chef**, a chief of staff on the first Runner: an ordinary bot whose description has it plan the work, delegate each task to the right teammate with `message_bot`, propose a new one for `create_bot` when none fits, and do hands-on work when necessary. Nothing about it is privileged; rename or delete it like any bot.
 
 A chat has a `kind`. A DM is one bot and never gains or loses members; there is one DM per bot. A group holds one to six bots, can add or remove them after creation, and has an `owner_bot_id` (the bot holding the work; defaults to the first member, `chats.set_owner` changes it).
 

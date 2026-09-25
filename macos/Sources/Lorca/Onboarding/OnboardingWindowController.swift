@@ -292,11 +292,11 @@ final class OnboardingViewController: NSViewController {
         nameField.identifier = NSUserInterfaceItemIdentifier("botName")
         let descriptionField = WrappingTextField()
         if let description = firstBot?.description,
-            description != "A general-purpose chief of staff for planning work and getting things done."
+            description != "Chief of staff. Plans the work and delegates each task to the right teammate, proposing a new one when none fits. Does hands-on work when necessary."
         {
             descriptionField.stringValue = description
         } else {
-            descriptionField.stringValue = L("A general-purpose chief of staff for planning work and getting things done.")
+            descriptionField.stringValue = L("Chief of staff. Plans the work and delegates each task to the right teammate, proposing a new one when none fits. Does hands-on work when necessary.")
         }
         descriptionField.placeholderString = L("What it does and how it should work")
         descriptionField.usesSingleLineMode = false
