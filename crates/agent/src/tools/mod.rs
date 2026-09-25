@@ -1,12 +1,15 @@
 //! The built-in tools of pi's coding agent, ported: `read`, `write`, `edit`, `bash`, `grep`,
-//! `find`, `ls`. Every tool resolves relative paths against one working directory.
+//! `find`, `ls`. Every tool resolves relative paths against one working directory. A host that
+//! keeps terminal sessions also gets `bash_input` and `bash_output` ([`bash_session`]).
 
 pub mod bash;
+pub mod bash_session;
 pub mod edit;
 pub mod find;
 pub mod grep;
 pub mod ls;
 pub mod read;
+pub mod sanitize;
 pub mod truncate;
 pub mod write;
 
@@ -16,6 +19,7 @@ use std::sync::Arc;
 use crate::tool::Tool;
 
 pub use bash::BashTool;
+pub use bash_session::{BashInputTool, BashOutputTool, BashSession, BashSessions, SessionEnd};
 pub use edit::EditTool;
 pub use find::FindTool;
 pub use grep::GrepTool;
@@ -42,11 +46,28 @@ pub fn resolve_to_cwd(path: &str, cwd: &Path) -> PathBuf {
 /// All seven tools bound to one working directory.
 pub fn coding_tools(cwd: impl Into<PathBuf>) -> Vec<Arc<dyn Tool>> {
     let cwd: PathBuf = cwd.into();
+    with_bash(BashTool::new(cwd.clone()), cwd)
+}
+
+/// The seven tools, with `bash` running each command in a terminal session `sessions` keeps,
+/// plus `bash_input` and `bash_output` to reach a command that is still running. On Windows
+/// `bash` runs on pipes and the two are left out.
+pub fn coding_tools_with_sessions(cwd: impl Into<PathBuf>, sessions: Arc<dyn BashSessions>) -> Vec<Arc<dyn Tool>> {
+    let cwd: PathBuf = cwd.into();
+    let mut tools = with_bash(BashTool::with_sessions(cwd.clone(), sessions.clone()), cwd);
+    if cfg!(unix) {
+        tools.push(Arc::new(BashInputTool::new(sessions.clone())));
+        tools.push(Arc::new(BashOutputTool::new(sessions)));
+    }
+    tools
+}
+
+fn with_bash(bash: BashTool, cwd: PathBuf) -> Vec<Arc<dyn Tool>> {
     vec![
         Arc::new(ReadTool::new(cwd.clone())),
         Arc::new(WriteTool::new(cwd.clone())),
         Arc::new(EditTool::new(cwd.clone())),
-        Arc::new(BashTool::new(cwd.clone())),
+        Arc::new(bash),
         Arc::new(GrepTool::new(cwd.clone())),
         Arc::new(FindTool::new(cwd.clone())),
         Arc::new(LsTool::new(cwd)),
@@ -59,6 +80,12 @@ pub fn coding_tools_snippet() -> &'static str {
      replacement, including multiple disjoint edits in one call. bash: Execute bash commands (ls, grep, find, etc.). \
      grep: Search file contents for patterns (respects .gitignore). find: Find files by glob pattern (respects \
      .gitignore). ls: List directory contents."
+}
+
+/// The one-line summaries of `bash_input` and `bash_output`, beside [`coding_tools_snippet`].
+pub fn session_tools_snippet() -> &'static str {
+    "bash_input: Type into a command bash left running (a password prompt, a [Y/n]). bash_output: Read more from a command \
+     bash left running."
 }
 
 pub fn coding_tools_guidelines() -> &'static [&'static str] {

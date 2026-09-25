@@ -1493,7 +1493,7 @@ impl Decision {
             _ => None,
         }
     }
-    fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Decision::Allowed => "allowed",
             Decision::Always => "always",
@@ -1551,26 +1551,38 @@ pub async fn ask_with_rule(
             code: None,
         },
     );
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    app.pending_permissions.lock().unwrap().insert(message.id.clone(), tx);
-    app.upsert_message(message.clone(), true);
-    crate::push::permission(app, &message);
-    let decision = tokio::select! {
-        answer = rx => answer.unwrap_or(Decision::Denied),
-        _ = tokio::time::sleep(PERMISSION_TIMEOUT) => Decision::Expired,
-        _ = cancel.cancelled() => Decision::Denied,
-    };
-    app.pending_permissions.lock().unwrap().remove(&message.id);
-    if decision == Decision::Always {
-        if let Some(rule) = always_rule {
-            app.add_auto_review_rule(rule);
-        }
-    }
+    let decision = await_answer(app, &message.id, always_rule, cancel, || {
+        app.upsert_message(message.clone(), true);
+        crate::push::permission(app, &message);
+    })
+    .await;
     if let Some(mut message) = app.message(chat_id, &message.id) {
         if let Body::Permission { decision: d, .. } = &mut message.body {
             *d = decision.as_str().into();
         }
         app.upsert_message(message, true);
+    }
+    decision
+}
+
+/// Waits for the answer to the question row `message_id` asks, from this Device or any paired
+/// one (`chats.permission` names the row), for `PERMISSION_TIMEOUT` at most. `ask` puts the
+/// question up once an answer can arrive; Stop answers Denied. An Always allow adds
+/// `always_rule` before this returns.
+pub async fn await_answer(app: &Arc<App>, message_id: &str, always_rule: Option<AutoReviewRule>, cancel: &CancellationToken, ask: impl FnOnce()) -> Decision {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.pending_permissions.lock().unwrap().insert(message_id.to_string(), tx);
+    ask();
+    let decision = tokio::select! {
+        answer = rx => answer.unwrap_or(Decision::Denied),
+        _ = tokio::time::sleep(PERMISSION_TIMEOUT) => Decision::Expired,
+        _ = cancel.cancelled() => Decision::Denied,
+    };
+    app.pending_permissions.lock().unwrap().remove(message_id);
+    if decision == Decision::Always {
+        if let Some(rule) = always_rule {
+            app.add_auto_review_rule(rule);
+        }
     }
     decision
 }

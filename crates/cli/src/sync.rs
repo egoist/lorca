@@ -716,6 +716,8 @@ fn apply_roster(app: &Arc<App>, mut roster: RosterBlob) {
         app.cancel_chat(&chat_id);
         app.emit(Event::ChatRemoved { chat_id });
     }
+    #[cfg(feature = "runner")]
+    app.shell_sessions.close_orphans(app);
     crate::runtime::prime_names(app);
     app.roster_changed(normalized_descriptions);
 }

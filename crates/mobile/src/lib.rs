@@ -223,6 +223,7 @@ mod tests {
                 is_error: false,
                 description: None,
                 target_bot_id: None,
+                run: None,
             },
         );
         let tool_id = tool.id.clone();

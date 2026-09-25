@@ -2,29 +2,70 @@
 //! ([`crate::login_shell`]). Output is tail-truncated to 2000 lines or 50KB; the full output is
 //! saved to a temp file when truncated. Cancellation kills the whole process group (on Windows,
 //! the process tree).
+//!
+//! Built with [`BashTool::new`], it is pi's bash: pipes, nothing on stdin, and the call lasts
+//! as long as the command. Built with [`BashTool::with_sessions`], a command runs in a terminal
+//! of its own that can outlive the call and take input ([`super::bash_session`]).
 
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use tokio::io::AsyncReadExt;
 use tokio_util::sync::CancellationToken;
 
+use super::bash_session::{BashSessions, WAITING_AFTER};
 use super::truncate::{format_size, truncate_tail, TruncatedBy, TruncationOptions, DEFAULT_MAX_BYTES};
 use crate::tool::{Tool, ToolError, ToolResult, ToolUpdateFn};
 
-const UPDATE_THROTTLE_MS: u64 = 250;
+pub(crate) const UPDATE_THROTTLE_MS: u64 = 250;
+
+const DESCRIPTION: &str = "Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last 2000 lines \
+     or 50KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.";
+
+const TERMINAL_DESCRIPTION: &str = "Execute a bash command in the current working directory, in a terminal of its own. Returns its output, stdout and \
+     stderr together, with colors and other terminal codes removed. Output is truncated to last 2000 lines or 50KB (whichever is hit \
+     first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds. A command that stops at \
+     what looks like a prompt, or prints nothing for 20 seconds, returns while it still runs, with a session id: it may be waiting \
+     for input, such as a password, a yes/no answer, or a key. Answer it with bash_input, or wait for more with bash_output.";
+
+const NO_INPUT_DESCRIPTION: &str = "Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last 2000 \
+     lines or 50KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in \
+     seconds. Commands get no input: stdin is closed, and interactive input is not available on Windows, so pass answers as flags \
+     (--yes, -y) or through files.";
 
 pub struct BashTool {
     cwd: PathBuf,
     shell: String,
+    sessions: Option<Arc<dyn BashSessions>>,
+    waiting_after: Duration,
 }
 
 impl BashTool {
     pub fn new(cwd: PathBuf) -> Self {
         let shell = std::env::var("LORCA_SHELL").ok().filter(|s| !s.is_empty()).unwrap_or_else(default_shell);
-        BashTool { cwd, shell }
+        BashTool { cwd, shell, sessions: None, waiting_after: WAITING_AFTER }
+    }
+
+    /// Runs each command in a terminal session `sessions` keeps, so a command waiting for input
+    /// returns with its session id and can be answered. On Windows commands still run on pipes,
+    /// with no input.
+    pub fn with_sessions(cwd: PathBuf, sessions: Arc<dyn BashSessions>) -> Self {
+        BashTool { sessions: Some(sessions), ..BashTool::new(cwd) }
+    }
+
+    /// How long a command may print nothing before its call returns with the session id.
+    pub fn waiting_after(mut self, after: Duration) -> Self {
+        self.waiting_after = after;
+        self
+    }
+
+    /// Where commands run in terminals: a host that keeps sessions, on Unix.
+    fn terminal(&self) -> Option<&Arc<dyn BashSessions>> {
+        self.sessions.as_ref().filter(|_| cfg!(unix))
     }
 }
 
@@ -43,9 +84,14 @@ fn default_shell() -> String {
         .unwrap_or_else(|| "bash".into())
 }
 
+/// Kills the process group the shell leads: `process_group(0)` on pipes, `setsid` in a terminal,
+/// both make its pid the group's id.
 #[cfg(unix)]
-fn kill_group(pid: u32) {
-    // Negative pid addresses the process group the shell started with `process_group(0)`.
+pub(crate) fn kill_group(pid: u32) {
+    // Negative pid addresses the process group; -0 would be this process's own.
+    if pid == 0 {
+        return;
+    }
     unsafe {
         libc::kill(-(pid as i32), libc::SIGKILL);
     }
@@ -53,7 +99,10 @@ fn kill_group(pid: u32) {
 
 /// Windows has no process group to signal: `taskkill /T` ends the shell and everything it started.
 #[cfg(windows)]
-fn kill_group(pid: u32) {
+pub(crate) fn kill_group(pid: u32) {
+    if pid == 0 {
+        return;
+    }
     let _ = std::process::Command::new("taskkill")
         .args(["/F", "/T", "/PID", &pid.to_string()])
         .stdout(Stdio::null())
@@ -88,8 +137,11 @@ impl Tool for BashTool {
         "bash"
     }
     fn description(&self) -> &str {
-        "Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last 2000 lines \
-         or 50KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds."
+        match (&self.sessions, self.terminal()) {
+            (_, Some(_)) => TERMINAL_DESCRIPTION,
+            (Some(_), None) => NO_INPUT_DESCRIPTION,
+            (None, None) => DESCRIPTION,
+        }
     }
     fn parameters(&self) -> Value {
         json!({
@@ -105,7 +157,7 @@ impl Tool for BashTool {
             "required": ["command", "description"]
         })
     }
-    async fn execute(&self, _id: &str, args: Value, cancel: CancellationToken, on_update: ToolUpdateFn) -> Result<ToolResult, ToolError> {
+    async fn execute(&self, id: &str, args: Value, cancel: CancellationToken, on_update: ToolUpdateFn) -> Result<ToolResult, ToolError> {
         let command = args["command"].as_str().ok_or("command is required")?.to_string();
         let timeout = args["timeout"].as_f64();
         if let Some(t) = timeout {
@@ -115,6 +167,9 @@ impl Tool for BashTool {
         }
         if !self.cwd.exists() {
             return Err(ToolError(format!("Working directory does not exist: {}\nCannot execute bash commands.", self.cwd.display())));
+        }
+        if let Some(sessions) = self.terminal() {
+            return super::bash_session::run(&self.shell, &command, &self.cwd, timeout, sessions, id, self.waiting_after, cancel, on_update).await;
         }
 
         let mut cmd = crate::login_shell::command(&self.shell).await;

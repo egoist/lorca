@@ -236,8 +236,9 @@ final class ChatViewController: NSViewController {
 
         for (index, message) in chat.messages.enumerated() {
             messageIndex[message.id] = index
-            // Tool calls are the bot's business; only a sent message leaves a marker.
-            if case let .tool(tool) = message.body, !tool.isSentMessage { continue }
+            // Tool calls are the bot's business; a sent message leaves a marker, and a command
+            // shows as its card, from Auto-review's question to how it ended.
+            if case let .tool(tool) = message.body, !tool.isShown { continue }
             let silence = previousDate.map { message.createdAt.timeIntervalSince($0) } ?? .infinity
             if silence > ChatMetrics.separatorGap
                 || previousDate.map({ !Format.isSameDay($0, message.createdAt) }) ?? true
@@ -289,7 +290,15 @@ final class ChatViewController: NSViewController {
             if wasPinned { scrollToBottom(animated: true) }
 
         case let .messageChanged(id, messageID) where id == chatID:
-            updateRow(for: messageID)
+            // A tool row shows once it has something to show: a sent message's marker.
+            if let message = message(for: messageID), case let .tool(tool) = message.body,
+                tool.isShown != rows.contains(where: { $0.messageID == messageID })
+            {
+                layout.invalidate(messageID)
+                updateRows()
+            } else {
+                updateRow(for: messageID)
+            }
             refreshWorkingRow()
             composer.isResponding = store.isResponding(in: chatID)
 
@@ -637,6 +646,9 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
             case .text:
                 identifier = MessageCellView.identifier
                 cell = dequeue(identifier) { MessageCellView() }
+            case let .tool(tool) where tool.run != nil:
+                identifier = CommandCellView.identifier
+                cell = dequeue(identifier) { CommandCellView() }
             case .tool, .handoff:
                 identifier = HandoffCellView.identifier
                 cell = dequeue(identifier) { HandoffCellView() }
@@ -748,6 +760,8 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
                 }
                 let words = layout.rendered(for: message).plainText
                 return "\(author): \(words.isEmpty ? Attachment.summary(message.attachments) : words)"
+            case let .tool(tool) where tool.run != nil:
+                return CommandCellView.spokenText(run: tool.run!, botName: botName(of: message))
             case .tool, .handoff:
                 guard let marker = handoff(of: message, in: chat) else { return "" }
                 return HandoffCellView.spokenText(mode: marker.mode, reason: marker.reason)
@@ -810,6 +824,24 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
                     attachments: items,
                     metrics: metrics
                 )
+
+            case let .tool(tool) where tool.run != nil:
+                guard let commandCell = cell as? CommandCellView, let run = tool.run else { return }
+                commandCell.configure(run: run, messageID: message.id, botName: botName(of: message), groupStart: groupStart)
+                commandCell.onDecision = { [weak self] decision in
+                    self?.store.answerPermission(chatID: chat.id, messageID: message.id, decision: decision)
+                }
+                commandCell.onSend = { [weak self] text in
+                    try await self?.store.answerCommand(chatID: chat.id, messageID: message.id, text: text)
+                }
+                commandCell.onStop = { [weak self] in
+                    try await self?.store.stopCommand(chatID: chat.id, messageID: message.id)
+                }
+                commandCell.onShowCommand = { [weak self] in
+                    guard let self else { return }
+                    presentAsSheet(CommandSheetViewController(
+                        title: L("%@'s command", botName(of: message)), command: run.command))
+                }
 
             case .tool, .handoff:
                 guard let marker = handoff(of: message, in: chat) else { return }

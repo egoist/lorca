@@ -111,10 +111,17 @@ async fn main() -> anyhow::Result<()> {
         Command::Serve { parent_pid, ready_stdout } => {
             runtime::prime_names(&app);
             runtime::resume_sent_jobs(&app);
+            // A command a Lorca that quit left waiting went with it; its row says so now.
+            {
+                let app = app.clone();
+                tokio::task::spawn_blocking(move || lorca::shell::close_stale_rows(&app));
+            }
+            #[cfg(unix)]
+            tokio::spawn(stop_on_signal(app.clone()));
             // Installed marketplace plugins follow the index this build ships.
             lorca::plugins::refresh_installed(&app, &lorca::marketplace::bundled().plugins);
             if let Some(pid) = parent_pid {
-                tokio::spawn(watch_parent(pid));
+                tokio::spawn(watch_parent(app.clone(), pid));
             }
             // Bots' commands and plugin servers start with it; read it while the rest starts.
             tokio::spawn(lorca_agent::login_shell::environment());
@@ -274,13 +281,35 @@ async fn serve_call(port: u16, method: &str, params: &serde_json::Value) -> anyh
 }
 
 /// Exits once the parent process is gone.
-async fn watch_parent(pid: u32) {
+async fn watch_parent(app: std::sync::Arc<App>, pid: u32) {
     loop {
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         if !process_alive(pid) {
             tracing::info!(pid, "parent exited; stopping");
+            app.shell_sessions.shutdown(&app);
             std::process::exit(0);
         }
+    }
+}
+
+/// Quitting (the app stopping its CLI, Ctrl-C, a closed terminal) first stops the commands bots
+/// left running in their terminals, so none outlives Lorca and their rows say so; then the
+/// signal ends the process as it would have.
+#[cfg(unix)]
+async fn stop_on_signal(app: std::sync::Arc<App>) {
+    use tokio::signal::unix::{signal, SignalKind};
+    let (Ok(mut terminate), Ok(mut interrupt), Ok(mut hangup)) = (signal(SignalKind::terminate()), signal(SignalKind::interrupt()), signal(SignalKind::hangup())) else {
+        return;
+    };
+    let number = tokio::select! {
+        _ = terminate.recv() => libc::SIGTERM,
+        _ = interrupt.recv() => libc::SIGINT,
+        _ = hangup.recv() => libc::SIGHUP,
+    };
+    app.shell_sessions.shutdown(&app);
+    unsafe {
+        libc::signal(number, libc::SIG_DFL);
+        libc::raise(number);
     }
 }
 

@@ -425,6 +425,20 @@ enum Wire {
         var code: String?
         var rule: String?
         var command: String?
+        var run: Run?
+    }
+
+    struct Run: Decodable {
+        var sessionId: String?
+        var command: String?
+        var state: String
+        var prompt: String?
+        var output: String?
+        var outcome: String?
+        var device: String?
+        var reason: String?
+        var rule: String?
+        var decision: String?
     }
 
     struct State: Decodable {
@@ -577,7 +591,14 @@ extension Wire.Message {
                     detail: self.body.detail ?? "",
                     isRunning: self.body.isRunning ?? false,
                     description: self.body.description,
-                    targetBotID: self.body.targetBotId
+                    targetBotID: self.body.targetBotId,
+                    run: self.body.run.map {
+                        CommandRun(
+                            sessionID: $0.sessionId, command: $0.command ?? "",
+                            state: CommandRun.State(rawValue: $0.state) ?? .stopped,
+                            prompt: $0.prompt, output: $0.output, outcome: $0.outcome,
+                            device: $0.device, reason: $0.reason, rule: $0.rule, decision: $0.decision)
+                    }
                 ))
         case "handoff":
             body = .handoff(from: self.body.from ?? "", to: self.body.to ?? "", reason: self.body.reason ?? "")

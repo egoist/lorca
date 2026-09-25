@@ -580,6 +580,22 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             crate::plugins::on_runner(app, &bot.runner_id, "permission.answer", body).await
         }
 
+        // A command running in its terminal: the user's answer goes to it from its card, or it
+        // stops. Here when the bot runs here, else sealed to its Runner. The text is never kept.
+        "bash.stdin" | "bash.stop" => {
+            let chat_id = string(&params, "chat_id")?;
+            let message_id = string(&params, "message_id")?;
+            let message = app.message(&chat_id, &message_id).ok_or("Unknown message")?;
+            let Author::Bot { bot_id } = &message.author else { return Err("That row has no command waiting".into()) };
+            let bot = app.bot(bot_id).ok_or("Unknown bot")?;
+            let body = json!({ "chat_id": chat_id, "message_id": message_id, "text": params["text"], "enter": params["enter"] });
+            if app.this_device_id().as_deref() == Some(bot.runner_id.as_str()) {
+                #[cfg(feature = "runner")]
+                return crate::shell::serve(app, method, &body).await;
+            }
+            requests::ask(app, &bot.runner_id, method, body).await
+        }
+
         // Read one API key on demand for the local settings editor. Snapshots and events
         // continue to carry masked provider statuses.
         "providers.api_key" => {

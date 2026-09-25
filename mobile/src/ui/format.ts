@@ -266,6 +266,10 @@ function toolActivity(s: WorkState, botId: string, tool: Extract<Body, { kind: "
       return t("Searching plugins…");
     case "install_plugin":
       return t("Installing a plugin…");
+    case "bash_input":
+      return t("Answering a command…");
+    case "bash_output":
+      return t("Waiting on a command…");
   }
   // A plugin's tool, `<plugin>__<tool>`: "Using GitHub", whether the call is running or just
   // finished, so a run of quick calls never flashes back to "Working" between them.

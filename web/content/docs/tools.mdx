@@ -22,7 +22,20 @@ Commands see the same `PATH` and variables as your terminal. On a Mac or Linux, 
   Shell commands run as your user and are not limited to the working directory. They can control files, processes, credentials, applications, and the network. Give a bot a description with constraints that match the trust you would give a script you run yourself, and assign bots to a machine you are comfortable with them controlling.
 </Callout>
 
-Before a shell command starts, Lorca parses all of its stages and sends the complete command through [Auto-review](/docs/auto-review). Safe work runs automatically; risky work posts a permission card. An allowed command retains your user's full access.
+Before a shell command starts, Lorca parses all of its stages and sends the complete command through [Auto-review](/docs/auto-review). Safe work runs automatically; for risky work, the command's card asks you first. An allowed command retains your user's full access.
+
+## The command's card
+
+Every command a bot runs shows in the chat as one card, from start to finish: while Auto-review checks it, while it asks for your permission (**Allow once**, **Always allow**, or **Deny**), while it runs, with its latest output, and once it ends, as one line that says how. Click or tap the command to see all of it.
+
+## When a command asks for input
+
+Each command runs in a terminal of its own, so `sudo`, `ssh`, a key's passphrase, or a `[Y/n]` can ask for an answer. A command that stops at a question, or prints nothing for 20 seconds, doesn't hold up the bot: its turn goes on, and the bot answers what it knows. The rest is yours, on the command's card.
+
+- **Answer** from the card, on any of your Devices. What you type goes straight to the command. It is never saved in the chat, and the terminal doesn't echo it, so the bot doesn't read it back. Bots are told to leave passwords and one-time codes to you. When the command finishes, the bot hears how it went and carries on.
+- **Stop** from the card, or with **Stop** in the chat.
+
+Anything a bot types into a command goes through [Auto-review](/docs/auto-review) first, like a new command. A command still waiting stops by itself after 30 minutes without output, when Lorca quits, and when its chat is deleted. On Windows, commands get no input.
 
 ## On the web
 

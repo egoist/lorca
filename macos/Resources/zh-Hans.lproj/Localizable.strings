@@ -36,6 +36,9 @@
 "%@ of %@ · %d%%" = "%1$@ / %2$@ · %3$d%%";
 "%@ on %@" = "%1$@ · %2$@";
 "%@ stopped without replying" = "%@ 未回复就停止了";
+"%@'s command" = "%@ 的命令";
+"%@'s command is running" = "%@ 的命令正在运行";
+"%@'s command is waiting for input" = "%@ 的命令正在等待输入";
 "%@'s memory" = "%@ 的记忆";
 "%d bots" = "%d 个智能体";
 "%d day of logs" = "%d 天的日志";
@@ -92,6 +95,7 @@
 "Always allowed" = "已始终允许";
 "Always allowed|plugin tools" = "始终允许的操作";
 "an unassigned Runner" = "未分配的 Runner";
+"Answering a command" = "正在回答命令";
 "API base URL" = "API 基础 URL";
 "API key" = "API 密钥";
 "API key from opencode.ai/auth" = "来自 opencode.ai/auth 的 API 密钥";
@@ -107,6 +111,7 @@
 "Auto-review" = "自动审查";
 "auto-review approve approval permission plugin ask" = "自动审查 批准 许可 权限 插件 询问 auto-review approve approval permission plugin ask";
 "Auto-review Rules" = "自动审查规则";
+"Auto-review is checking it…" = "自动审查正在检查…";
 "Automatic (%@)" = "自动（%@）";
 "Available" = "可添加";
 "Back" = "返回";
@@ -170,6 +175,7 @@
 "Copy pairing string" = "拷贝配对字符串";
 "Copy Phrase" = "拷贝短语";
 "Could not start %@: %@" = "无法启动 %1$@：%2$@";
+"Could not stop the command" = "无法停止命令";
 "Couldn’t delete the account" = "无法删除账户";
 "Couldn't install %@: %@" = "无法安装 %1$@：%2$@";
 "Couldn't remove it" = "无法移除";
@@ -252,6 +258,7 @@
 "Finance" = "财务";
 "Find the prior art and cite it" = "找出已有的先例并注明出处";
 "Find…" = "查找…";
+"Finished" = "已完成";
 "Folder" = "文件夹";
 "Forward" = "前进";
 "General" = "通用";
@@ -555,10 +562,12 @@
 "State" = "状态";
 "Status" = "状态";
 "Status on the last deploy" = "上次部署的状态如何";
+"Stop" = "停止";
 "Stop recording" = "停止录音";
 "Stop Responding" = "停止响应";
 "Stop responding (⌘.)" = "停止响应 (⌘.)";
 "Stop Speaking" = "停止朗读";
+"Stopped" = "已停止";
 "Subscription" = "订阅";
 "Support" = "支持";
 "Symbol" = "符号";
@@ -611,6 +620,7 @@
 "Tokens from the sign-in are shared with your paired Devices, encrypted." = "登录获得的令牌会加密共享给你已配对的设备。";
 "tomorrow %@" = "明天 %@";
 "Try Again" = "重试";
+"Type your answer" = "输入你的回答";
 "unassigned" = "未分配";
 "Undo" = "撤销";
 "Unpair" = "取消配对";
@@ -633,6 +643,7 @@
 "Waiting for the other Device to wrap the account key…" = "正在等待另一台设备封装账户密钥…";
 "Waiting for the other Device… Done keeps this code good for ten minutes; Cancel retires it." = "正在等待另一台设备…点“完成”后此配对码在十分钟内仍然有效；点“取消”则将其作废。";
 "Waiting for you" = "等待你的决定";
+"Waiting on a command" = "正在等待命令";
 "Waiting to start the CLI" = "等待启动 CLI";
 "wants to install %@" = "想要安装 %@";
 "wants to run a command on %@" = "想要在 %@ 上运行命令";
@@ -644,6 +655,7 @@
 "What it works with" = "它配合使用的插件";
 "What should I work on next?" = "我接下来该做什么？";
 "What would you delete first?" = "你会先删掉什么？";
+"What you type goes straight to the command, not into the chat." = "你输入的内容直接发送给命令，不会进入聊天。";
 "Where turns run" = "运行位置";
 "Window" = "窗口";
 "Working" = "正在工作";

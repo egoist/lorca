@@ -69,8 +69,11 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 
     private func rememberPermissions() {
         let current = Set(store.chats.flatMap(\.messages).compactMap { message -> Message.ID? in
-            guard case let .permission(request) = message.body, request.isPending else { return nil }
-            return message.id
+            switch message.body {
+            case let .permission(request) where request.isPending: message.id
+            case let .tool(tool) where tool.run?.state == .asking: message.id
+            default: nil
+            }
         })
         for id in pendingPermissions.subtracting(current) { clearPermission(id) }
         pendingPermissions = current
@@ -83,10 +86,15 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     }
 
     private func permissionChanged(_ chatID: Chat.ID, _ messageID: Message.ID) {
-        guard let message = store.chat(chatID)?.messages.first(where: { $0.id == messageID }),
-            case let .permission(request) = message.body
-        else { return }
-        guard request.isPending else { clearPermission(messageID); return }
+        guard let message = store.chat(chatID)?.messages.first(where: { $0.id == messageID }) else { return }
+        // A permission card, or a command's card, asks.
+        let asks: Bool
+        switch message.body {
+        case let .permission(request): asks = request.isPending
+        case let .tool(tool) where tool.run != nil: asks = tool.run?.state == .asking
+        default: return
+        }
+        guard asks else { clearPermission(messageID); return }
         guard pendingPermissions.insert(messageID).inserted else { return }
         let identityID = store.identityID
         Task { @MainActor [weak self] in

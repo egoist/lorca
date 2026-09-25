@@ -173,3 +173,46 @@ Output limits are applied so a single call cannot flood the context: 2,000 lines
 `write`, `edit`, `bash`, `grep`, `find`, and `ls` put a one-line `summary` in `details` (for example `Edited src/main.rs` or `12 matches for TODO`) for display next to the call.
 
 The truncation helpers are public in `agent::tools::truncate` (`truncate_head`, `truncate_tail`, `truncate_line`, `format_size`) for tools of your own with the same limits.
+
+### Commands in a terminal
+
+`coding_tools` runs `bash` as pi does: pipes, nothing on stdin, and a call that lasts as long as the command. That suits a person at a terminal, who answers a prompt there. A host whose commands run where nobody watches builds the tools with a store for terminal sessions instead, and gets two more tools:
+
+```rust
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use agent::tools::{coding_tools_with_sessions, session_tools_snippet, BashSession, BashSessions};
+
+#[derive(Default)]
+struct Sessions(Mutex<HashMap<String, Arc<BashSession>>>);
+
+impl BashSessions for Sessions {
+    fn insert(&self, _call_id: &str, session: Arc<BashSession>) {
+        self.0.lock().unwrap().insert(session.id().to_string(), session);
+    }
+    fn get(&self, id: &str) -> Option<Arc<BashSession>> {
+        self.0.lock().unwrap().get(id).cloned()
+    }
+    fn remove(&self, id: &str) {
+        self.0.lock().unwrap().remove(id);
+    }
+}
+
+// read, write, edit, bash, grep, find, ls, bash_input, bash_output
+let tools = coding_tools_with_sessions("/path/to/project", Arc::new(Sessions::default()));
+```
+
+On macOS and Linux, `bash` then starts each command on a pseudo-terminal of its own, as its controlling terminal (`setsid`, `TIOCSCTTY`), so programs that ask on `/dev/tty` (`sudo`, `ssh`, `getpass`) ask there. The terminal is 80×24 with `TERM=xterm-256color`, `PAGER=cat`, and `GIT_PAGER=cat`, and echo is off, so typed input never comes back as output. The child ignores SIGHUP, so a background job outlives the shell as under `nohup`. Output is drained into the session whether or not a call is reading, and results carry text: `agent::tools::sanitize::terminal_text` drops escape sequences and control characters and applies carriage returns and backspaces. The temp file with the full output keeps the raw bytes.
+
+A call returns when the command exits, with the same result as on pipes, or while it still runs: 2 s after it stops on an open line that reads like a question (`BashSession::prompt` has the heuristic), or after 20 s with no output (`bash_session::WAITING_AFTER`; `BashTool::waiting_after` changes it). That result is the output so far, a note that the command waits, and its session id, which `details["session_id"]` also carries. `timeout` still kills the command when it runs that long; cancellation kills its process group.
+
+| Tool | Arguments | Behavior |
+| --- | --- | --- |
+| `bash_input` | `session_id`, `text`, `enter?` (default `true`) | Types the text into the session's terminal, then Return unless `enter` is false. Control characters are keys: `\u0003` is Ctrl-C, `\u0004` Ctrl-D. Returns what the command printed since the model last read it, once it ends, asks again, or goes quiet. |
+| `bash_output` | `session_id`, `wait_seconds?` (default 0, at most 300) | Returns what the command printed since the model last read it, waiting up to `wait_seconds` for it to end or ask. |
+
+A result on a command that ended reads the same as `bash`'s: output, then `Command exited with code N` (an error), `Command terminated by signal N`, or why it was stopped. The tool that reads an end calls `remove`.
+
+The host decides how long a session lives, and must end it: `BashSession::stop(reason)` kills the command's process group, closes its terminal, and gives the next call that reason. Stop it when the user stops the run, after a while without output, and when the process exits. Dropping the last handle to a session kills whatever still runs. Beyond the tools, a session offers what a host's own UI needs: `write` to type into it, `prompt` and `last_lines` for what it shows, `end` and `ended` for how it ended, and `changes` to follow it.
+
+On Windows `bash` keeps pipes even with a store, its description says input is not available, and `coding_tools_with_sessions` leaves out the two tools. `session_tools_snippet()` is their one-line summary for a system prompt.

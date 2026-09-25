@@ -188,6 +188,9 @@ pub struct App {
     /// Permission cards waiting for the user's answer, by message id.
     #[cfg(feature = "runner")]
     pub pending_permissions: Mutex<HashMap<String, tokio::sync::oneshot::Sender<crate::plugins::mcp::Decision>>>,
+    /// Commands `bash` left running in their terminals, waiting for input.
+    #[cfg(feature = "runner")]
+    pub shell_sessions: crate::shell::Sessions,
     /// What this Runner has installed, with the secrets kept apart.
     pub plugins: Mutex<crate::plugins::Store>,
     /// The index fetched from `marketplace_url`: (fetched at, index).
@@ -258,6 +261,8 @@ impl App {
             pending_responses: Mutex::new(HashMap::new()),
             #[cfg(feature = "runner")]
             pending_permissions: Mutex::new(HashMap::new()),
+            #[cfg(feature = "runner")]
+            shell_sessions: crate::shell::Sessions::default(),
             plugins: Mutex::new(plugins),
             marketplace_cache: Mutex::new(None),
             #[cfg(feature = "runner")]
@@ -938,6 +943,8 @@ impl App {
         for chat_id in &removed_chat_ids {
             self.emit(Event::ChatRemoved { chat_id: chat_id.clone() });
         }
+        #[cfg(feature = "runner")]
+        self.shell_sessions.close_orphans(self);
         self.roster_changed(true);
         crate::runtime::prime_names(self);
         Ok(())
@@ -1054,6 +1061,8 @@ impl App {
             tracing::error!(%error, %chat_id, "deleting chat state");
         }
         self.emit(Event::ChatRemoved { chat_id: chat_id.to_string() });
+        #[cfg(feature = "runner")]
+        self.shell_sessions.close_orphans(self);
         self.roster_changed(true);
     }
 

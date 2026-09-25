@@ -81,6 +81,9 @@ pub fn greet_new_bot(app: &Arc<App>, chat_id: &str, bot_id: &str, text: &str, se
 /// Runner currently doing that work. This is the hard Stop path; ordinary messages steer and
 /// do not call it.
 pub fn cancel_chat(app: &Arc<App>, chat_id: &str) {
+    // A command left waiting for input in this chat stops too, turn or no turn.
+    #[cfg(feature = "runner")]
+    app.shell_sessions.stop_chat(chat_id);
     for (job_id, runner_id) in app.cancel_chat(chat_id) {
         let Some(runner) = app.device(&runner_id).filter(|runner| !runner.box_pubkey.is_empty()) else { continue };
         match crate::crypto::seal_json(&runner.box_pubkey, &JobCancel { job_id: job_id.clone() }) {
@@ -99,6 +102,26 @@ fn user_turn_job(app: &Arc<App>, chat_id: &str, bot_id: &str, trigger_message_id
         bot_id: bot_id.to_string(),
         kind: "turn".into(),
         trigger_message_id: trigger_message_id.to_string(),
+        requested_by: app.this_device_id().unwrap_or_default(),
+        routine_id: None,
+        from_bot_id: None,
+        hops: 0,
+        round: 0,
+        is_winding_down: false,
+        setup: None,
+        created_at: now_secs(),
+    }
+}
+
+/// The turn in which a bot hears that a command it left running ended (`shell::wake_job`):
+/// `trigger_message_id` is the command's card.
+pub fn command_job(app: &App, chat_id: &str, bot_id: &str, card_id: &str) -> Job {
+    Job {
+        id: format!("job-{}", uuid::Uuid::new_v4()),
+        chat_id: chat_id.to_string(),
+        bot_id: bot_id.to_string(),
+        kind: "command".into(),
+        trigger_message_id: card_id.to_string(),
         requested_by: app.this_device_id().unwrap_or_default(),
         routine_id: None,
         from_bot_id: None,

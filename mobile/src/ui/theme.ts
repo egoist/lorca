@@ -21,6 +21,9 @@ export interface Palette {
   botBubble: ColorValue;
   botBubbleText: ColorValue;
   code: ColorValue;
+  /// `code` over `cell` as one solid color, then that color clear: the ends of the fade at a
+  /// scrolling code block's edge. iOS only; Android fades a scroll view's edges itself.
+  codeFade?: readonly [string, string];
   green: ColorValue;
   red: ColorValue;
   link: ColorValue;
@@ -49,6 +52,8 @@ export function usePalette(): Palette {
       botBubble: dark ? "rgba(255,255,255,0.10)" : "#E9E9EB",
       botBubbleText: ios("label")!,
       code: dark ? "rgba(0,0,0,0.28)" : "rgba(0,0,0,0.06)",
+      // secondarySystemGroupedBackground (#1C1C1E, #FFFFFF) under `code`.
+      codeFade: dark ? ["rgb(20,20,22)", "rgba(20,20,22,0)"] : ["rgb(240,240,240)", "rgba(240,240,240,0)"],
       green: ios("systemGreen")!,
       red: ios("systemRed")!,
       link: ios("link")!,

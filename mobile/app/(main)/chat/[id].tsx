@@ -38,7 +38,7 @@ import Animated, {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { SoftScrollEdgeView } from "../../../modules/lorca-core/SoftScrollEdgeView";
 import { chatTitle, engine } from "../../../src/core/engine";
-import type { Bot } from "../../../src/core/model";
+import { isLive, type Bot, type Message } from "../../../src/core/model";
 import {
   useBotMap,
   useChat,
@@ -53,6 +53,7 @@ import { KeyboardFoot } from "../../../src/ui/KeyboardFoot";
 import { useWide } from "../../../src/ui/layout";
 import { Symbol } from "../../../src/ui/Symbol";
 import { usePalette } from "../../../src/ui/theme";
+import { AnswerSheet } from "../../../src/ui/AnswerSheet";
 import {
   buildRows,
   DayRow,
@@ -60,6 +61,7 @@ import {
   MessageRow,
   NoticeRow,
   PermissionRow,
+  CommandRow,
   StatusRow,
   WorkingRow,
   type Row,
@@ -677,6 +679,10 @@ export default function ChatScreen() {
         ? t("Message {title} — @ to address one bot", { title })
         : t("Message {name}", { name: title });
 
+  /// The command whose answer sheet is up.
+  const [answering, setAnswering] = useState<Message | null>(null);
+  const answeringRun = answering?.body.kind === "tool" ? answering.body.run : undefined;
+
   /// The whole message behind a "Messaged ◉ Name" marker, as a sheet.
   const openMarker = useCallback(
     (row: Extract<Row, { type: "marker" }>) => {
@@ -711,6 +717,15 @@ export default function ChatScreen() {
                   decision,
                 )
               }
+            />
+          );
+        case "command":
+          return (
+            <CommandRow
+              row={item}
+              onDecide={(decision) => engine.answerPermission(item.message.chat_id, item.message.id, decision)}
+              onAnswer={() => setAnswering(item.message)}
+              onStop={() => engine.stopCommand(item.message.chat_id, item.message.id)}
             />
           );
         case "working":
@@ -936,6 +951,13 @@ export default function ChatScreen() {
           />
         </KeyboardFoot>
       </View>
+      {answering && answeringRun && isLive(answeringRun) ? (
+        <AnswerSheet
+          run={answeringRun}
+          onDismiss={() => setAnswering(null)}
+          onSend={(text) => engine.answerCommand(answering.chat_id, answering.id, text)}
+        />
+      ) : null}
     </View>
   );
 }

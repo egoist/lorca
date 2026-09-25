@@ -14,7 +14,7 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 
 use crate::app::App;
-use crate::model::{Author, Body, Bot, Chat, Message};
+use crate::model::{Author, Bot, Chat, Message};
 
 const NONCE_LEN: usize = 12;
 const AAD: &[u8] = b"push";
@@ -76,12 +76,11 @@ pub fn failed(app: &Arc<App>, chat: &Chat, bot: &Bot, error: &str) {
     send(app, chat, bot, &format!("Reply failed: {error}"), None);
 }
 
-/// A new confirmation card must alert while the turn is still waiting for its answer.
+/// A new question (a permission card, or a command's card that asks) must alert while the turn
+/// is still waiting for its answer.
 pub fn permission(app: &Arc<App>, message: &Message) {
-    let (Author::Bot { bot_id }, Body::Permission { summary, decision, .. }) = (&message.author, &message.body) else { return };
-    if decision != "pending" {
-        return;
-    }
+    let Author::Bot { bot_id } = &message.author else { return };
+    let Some(summary) = message.confirmation() else { return };
     let (Some(chat), Some(bot)) = (app.chat(&message.chat_id), app.bot(bot_id)) else { return };
     send(app, &chat, &bot, &format!("Confirmation needed: {summary}"), Some(message.id.clone()));
 }
@@ -135,9 +134,7 @@ fn send(app: &Arc<App>, chat: &Chat, bot: &Bot, text: &str, permission_id: Optio
 fn should_notify(app: &App, chat_id: &str, permission_id: Option<&str>) -> bool {
     !app.is_watching(chat_id) && app.chat(chat_id).is_some_and(|chat| chat.unread_count > 0)
         && permission_id.is_none_or(|id| {
-            app.message(chat_id, id).is_some_and(|message| {
-                matches!(message.body, Body::Permission { decision, .. } if decision == "pending")
-            })
+            app.message(chat_id, id).is_some_and(|message| message.confirmation().is_some())
         })
 }
 

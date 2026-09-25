@@ -401,13 +401,35 @@ class Engine {
 
   /// Answers a permission card; the core's message event confirms the decision.
   answerPermission(chatId: string, messageId: string, decision: "allow" | "always" | "deny") {
-    const decided = decision === "always" ? "always" : decision === "deny" ? "denied" : "allowed";
+    const decided: "always" | "denied" | "allowed" = decision === "always" ? "always" : decision === "deny" ? "denied" : "allowed";
+    // A permission card shows the answer; a command's card moves on to running, or ends.
+    const answered = (m: Message): Message => {
+      if (m.id !== messageId) return m;
+      if (m.body.kind === "permission") return { ...m, body: { ...m.body, decision: decided } };
+      if (m.body.kind === "tool" && m.body.run?.state === "asking") {
+        const run = { ...m.body.run, decision: decided, state: decided === "denied" ? ("denied" as const) : ("running" as const), rule: decided === "always" ? m.body.run.rule : undefined };
+        return { ...m, body: { ...m.body, run } };
+      }
+      return m;
+    };
     useStore.setState((s) => ({
-      chats: s.chats.map((c) =>
-        c.id === chatId ? { ...c, messages: c.messages.map((m) => (m.id === messageId && m.body.kind === "permission" ? { ...m, body: { ...m.body, decision: decided } } : m)) } : c,
-      ),
+      chats: s.chats.map((c) => (c.id === chatId ? { ...c, messages: c.messages.map(answered) } : c)),
     }));
     void core.request("chats.permission", { chat_id: chatId, message_id: messageId, decision });
+  }
+
+  // MARK: - Commands
+
+  /// Types the user's answer into a command running in its terminal, then Return. It goes
+  /// through the core, sealed to the bot's Runner, and nothing keeps it. Rejects with why it
+  /// could not, such as the Runner being offline.
+  async answerCommand(chatId: string, messageId: string, text: string) {
+    await core.request("bash.stdin", { chat_id: chatId, message_id: messageId, text });
+  }
+
+  /// Stops a running command; its card says so once the Runner has.
+  async stopCommand(chatId: string, messageId: string) {
+    await core.request("bash.stop", { chat_id: chatId, message_id: messageId });
   }
 
   // MARK: - Routines

@@ -1,13 +1,15 @@
 // Transcript rows, after the Mac app: bubbles (a group shows the bot's name above and its
 // avatar beside the bubble's bottom edge; a DM shows neither), "Today 4:13 AM" separators after
 // fifteen minutes of silence, the "is working" row, "Chef stopped without replying", and the
-// centered "Message from ◉ Name" / "Messaged ◉ Name" markers. Tool calls never render.
+// centered "Message from ◉ Name" / "Messaged ◉ Name" markers. Tool calls never render, except a
+// command, which shows as its card from Auto-review's question to how it ended.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import * as Clipboard from "expo-clipboard";
+import { LinearGradient } from "expo-linear-gradient";
 import { ShimmerView } from "../../modules/lorca-core/ShimmerView";
-import { isSentMessage, type Body, type Bot, type Chat, type Message } from "../core/model";
+import { isEnded, isLive, isSentMessage, type Body, type Bot, type Chat, type CommandRun, type Message } from "../core/model";
 import { useStore } from "../core/store";
 import { language, t, useLanguage } from "../i18n";
 import { AttachmentBlock } from "./attachments";
@@ -34,6 +36,7 @@ export type Row =
   | { key: string; type: "marker"; text: string; bot: Bot | undefined; tooltip?: string; groupStart: boolean }
   | { key: string; type: "notice"; text: string; groupStart: boolean }
   | { key: string; type: "permission"; message: Message; body: Extract<Body, { kind: "permission" }>; bot: Bot | undefined; groupStart: boolean }
+  | { key: string; type: "command"; message: Message; run: CommandRun; bot: Bot | undefined; groupStart: boolean }
   | { key: string; type: "working"; bots: Bot[] }
   | { key: string; type: "status"; text: string };
 
@@ -42,7 +45,7 @@ export function buildRows(chat: Chat, bots: Map<string, Bot>, workingBotIds: str
   const rows: Row[] = [];
   let previous: Message | null = null;
   let previousAuthorKey: string | null = null;
-  const shown = chat.messages.filter((m) => m.body.kind !== "tool" || isSentMessage(m.body));
+  const shown = chat.messages.filter((m) => m.body.kind !== "tool" || !!m.body.run || isSentMessage(m.body));
   for (let i = 0; i < shown.length; i++) {
     const message = shown[i];
     const separated = !previous || message.created_at - previous.created_at >= SEPARATOR_GAP_SECS;
@@ -70,7 +73,12 @@ export function buildRows(chat: Chat, bots: Map<string, Bot>, workingBotIds: str
         break;
       }
       case "tool":
-        rows.push({ key: message.id, type: "marker", text: t("Messaged"), bot: bots.get(message.body.target_bot_id ?? ""), tooltip: message.body.detail, groupStart });
+        if (message.body.run) {
+          const bot = message.author.kind === "bot" ? bots.get(message.author.bot_id) : undefined;
+          rows.push({ key: message.id, type: "command", message, run: message.body.run, bot, groupStart });
+        } else {
+          rows.push({ key: message.id, type: "marker", text: t("Messaged"), bot: bots.get(message.body.target_bot_id ?? ""), tooltip: message.body.detail, groupStart });
+        }
         previousAuthorKey = null;
         break;
       case "handoff": {
@@ -310,7 +318,182 @@ export function PermissionRow({ row, onDecide }: { row: Extract<Row, { type: "pe
   );
 }
 
-/// The whole command a permission card asks about, to read or copy before answering.
+/// A command's card, from start to finish. While Auto-review checks it: who wants to run it and
+/// the command, on one line in a code block that opens the whole command on tap. While it asks:
+/// why, the answers, and the rule Always allow adds. While the command runs: Stop on the title's
+/// line and its last lines in a code block of their own that scrolls; waiting for input, Answer,
+/// which opens `AnswerSheet`. Once it ended, one line that says how.
+export function CommandRow({
+  row,
+  onDecide,
+  onAnswer,
+  onStop,
+}: {
+  row: Extract<Row, { type: "command" }>;
+  onDecide: (decision: "allow" | "always" | "deny") => void;
+  onAnswer: () => void;
+  onStop: () => Promise<void>;
+}) {
+  useLanguage();
+  const p = usePalette();
+  const [stopping, setStopping] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [showCommand, setShowCommand] = useState(false);
+  const { run } = row;
+  const who = row.bot?.name ?? t("The bot");
+  const command = firstLine(run.command);
+  // A new question clears what the last answer or Stop said.
+  useEffect(() => setError(null), [run.output, run.state]);
+  if (isEnded(run)) {
+    const word = { exited: t("Finished"), failed: t("Failed"), denied: t("Denied"), expired: t("No answer in time") }[run.state as string] ?? t("Stopped");
+    const detail =
+      run.state !== "exited" && run.outcome && run.outcome !== "Stopped"
+        ? run.outcome
+        : run.decision === "always" && run.rule
+          ? t("Added the rule “{rule}” to Auto-review.", { rule: run.rule })
+          : null;
+    return (
+      <View style={{ paddingTop: row.groupStart ? 14 : 6, paddingHorizontal: INSET }}>
+        <View style={[styles.permission, { backgroundColor: p.cell, borderColor: p.separator }]} accessible accessibilityLabel={`${t("{who}'s command", { who })}: ${word}, ${command}${detail ? `. ${detail}` : ""}`}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+            <Symbol name="terminal" size={15} color={run.state === "failed" ? p.red : p.secondaryLabel} />
+            <Text style={[styles.caption, { color: p.secondaryLabel, flexShrink: 1 }]} numberOfLines={2}>
+              {`${word} · $ ${command}`}
+            </Text>
+          </View>
+          {detail ? <Text style={[styles.ruleNote, { color: p.tertiaryLabel }]}>{detail}</Text> : null}
+        </View>
+      </View>
+    );
+  }
+  const title =
+    run.state === "checking" || run.state === "asking"
+      ? run.device
+        ? t("{who} wants to run a command on {plugin}", { who, plugin: run.device })
+        : t("{who}'s command", { who })
+      : run.state === "running"
+        ? t("{who}'s command is running", { who })
+        : t("{who}'s command is waiting for input", { who });
+  const caption = run.state === "checking" ? t("Auto-review is checking it…") : run.state === "asking" ? run.reason : undefined;
+  const output = isLive(run) ? (run.output ?? "").split("\n").filter(Boolean).join("\n") : "";
+  const takesInput = isLive(run) && !!run.session_id;
+  const choices: [string, "allow" | "always" | "deny"][] = run.rule
+    ? [[t("Allow once"), "allow"], [t("Always allow"), "always"], [t("Deny"), "deny"]]
+    : [[t("Allow once"), "allow"], [t("Deny"), "deny"]];
+  const stop = async () => {
+    setStopping(true);
+    setError(null);
+    try {
+      await onStop();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setStopping(false);
+    }
+  };
+  return (
+    <View style={{ paddingTop: row.groupStart ? 14 : 6, paddingHorizontal: INSET }}>
+      <View style={[styles.permission, { backgroundColor: p.cell, borderColor: p.separator }]}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <Symbol name="terminal" size={16} color={p.tint} />
+          <Text style={[styles.permissionTitle, { color: p.label, flex: 1 }]} numberOfLines={2}>
+            {title}
+          </Text>
+          {takesInput ? (
+            <Pressable
+              disabled={stopping}
+              onPress={() => void stop()}
+              hitSlop={6}
+              style={({ pressed }) => [styles.headerButton, { backgroundColor: pressed ? p.separator : p.fill, opacity: stopping ? 0.5 : 1 }]}
+              accessibilityRole="button"
+            >
+              <Text style={{ color: p.label, fontSize: 13, fontWeight: "600" }}>{t("Stop")}</Text>
+            </Pressable>
+          ) : null}
+        </View>
+        <Pressable
+          onPress={() => setShowCommand(true)}
+          style={({ pressed }) => [styles.command, { backgroundColor: p.code, opacity: pressed ? 0.6 : 1 }]}
+          accessibilityRole="button"
+          accessibilityLabel={t("Show the full command")}
+        >
+          <Text style={[styles.commandText, { color: p.label }]} numberOfLines={1}>
+            {`$ ${command}`}
+          </Text>
+        </Pressable>
+        {caption ? <Text style={[styles.reasonText, { color: p.secondaryLabel }]}>{caption}</Text> : null}
+        {output ? <OutputBlock text={output} /> : null}
+        {error ? <Text style={[styles.reasonText, { color: p.red }]}>{error}</Text> : null}
+        {run.state === "asking" ? (
+          <View style={{ flexDirection: "row", gap: 8, marginTop: 4 }}>
+            {choices.map(([label, decision]) => (
+              <Pressable key={decision} onPress={() => onDecide(decision)} style={({ pressed }) => [styles.permissionButton, { backgroundColor: pressed ? p.separator : p.fill }]}>
+                <Text style={{ color: decision === "deny" ? p.label : p.tint, fontSize: 13, fontWeight: "600" }}>{label}</Text>
+              </Pressable>
+            ))}
+          </View>
+        ) : null}
+        {run.state === "asking" && run.rule ? <Text style={[styles.ruleNote, { color: p.secondaryLabel }]}>{t("Always allow adds the rule “{rule}”.", { rule: run.rule })}</Text> : null}
+        {run.state === "waiting" && takesInput ? (
+          <View style={{ flexDirection: "row", marginTop: 4 }}>
+            <Pressable onPress={onAnswer} style={({ pressed }) => [styles.permissionButton, { backgroundColor: pressed ? p.separator : p.fill }]} accessibilityRole="button">
+              <Text style={{ color: p.tint, fontSize: 13, fontWeight: "600" }}>{t("Answer")}</Text>
+            </Pressable>
+          </View>
+        ) : null}
+      </View>
+      <CommandSheet visible={showCommand} title={t("{who}'s command", { who })} command={run.command} onClose={() => setShowCommand(false)} />
+    </View>
+  );
+}
+
+/// A running command's last lines: a code block like the command's that grows to six lines and
+/// then scrolls, the newest line in view. An edge with more lines past it fades out: Android
+/// draws that itself, iOS gets a gradient in the block's color.
+function OutputBlock({ text }: { text: string }) {
+  const p = usePalette();
+  const scroll = useRef<ScrollView>(null);
+  const extent = useRef({ content: 0, frame: 0, offset: 0 });
+  const [edges, setEdges] = useState({ above: false, below: false });
+  const measured = () => {
+    const { content, frame, offset } = extent.current;
+    const above = offset > 1;
+    const below = offset + frame < content - 1;
+    setEdges((shown) => (shown.above === above && shown.below === below ? shown : { above, below }));
+  };
+  const fade = p.codeFade;
+  return (
+    <View style={[styles.output, { backgroundColor: p.code }]}>
+      <ScrollView
+        ref={scroll}
+        nestedScrollEnabled
+        fadingEdgeLength={16}
+        style={styles.outputScroll}
+        contentContainerStyle={styles.outputContent}
+        scrollEventThrottle={32}
+        onLayout={(e) => {
+          extent.current.frame = e.nativeEvent.layout.height;
+          measured();
+        }}
+        onContentSizeChange={(_, height) => {
+          extent.current.content = height;
+          scroll.current?.scrollToEnd({ animated: false });
+          measured();
+        }}
+        onScroll={(e) => {
+          extent.current.offset = e.nativeEvent.contentOffset.y;
+          measured();
+        }}
+      >
+        <Text style={[styles.commandText, { color: p.label }]}>{text}</Text>
+      </ScrollView>
+      {fade && edges.above ? <LinearGradient pointerEvents="none" colors={[fade[0], fade[1]]} style={[styles.outputFade, { top: 0 }]} /> : null}
+      {fade && edges.below ? <LinearGradient pointerEvents="none" colors={[fade[1], fade[0]]} style={[styles.outputFade, { bottom: 0 }]} /> : null}
+    </View>
+  );
+}
+
+/// The whole command a permission card asks about or a command's card runs, to read or copy.
 function CommandSheet({ visible, title, command, onClose }: { visible: boolean; title: string; command: string; onClose: () => void }) {
   useLanguage();
   const p = usePalette();
@@ -395,8 +578,14 @@ const styles = StyleSheet.create({
   permission: { borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, paddingHorizontal: 12, paddingVertical: 10, gap: 6, maxWidth: 420 },
   permissionTitle: { fontSize: 14, fontWeight: "600", flexShrink: 1 },
   permissionButton: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 8 },
+  headerButton: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 7 },
   command: { borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7, marginTop: 2 },
   commandText: { fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 12.5, lineHeight: 17 },
+  output: { borderRadius: 8, marginTop: 2, overflow: "hidden" },
+  // Six lines of `commandText`, then the block scrolls.
+  outputScroll: { maxHeight: 6 * 17 + 14 },
+  outputContent: { paddingHorizontal: 10, paddingVertical: 7 },
+  outputFade: { position: "absolute", left: 0, right: 0, height: 16 },
   reasonText: { fontSize: 13, lineHeight: 18 },
   ruleNote: { fontSize: 12, lineHeight: 16 },
   sheet: { flex: 1, paddingHorizontal: 20, paddingTop: 20, gap: 14 },

@@ -29,6 +29,8 @@ pub mod requests;
 pub mod routines;
 pub mod runtime;
 pub mod schedule;
+#[cfg(feature = "runner")]
+pub mod shell;
 pub mod sync;
 pub mod local_store;
 #[cfg(feature = "runner")]

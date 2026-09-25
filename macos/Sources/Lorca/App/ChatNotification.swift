@@ -17,6 +17,9 @@ struct ChatNotification: Equatable {
         case let .permission(request) where request.isPending:
             kind = .permission
             body = L("Confirmation needed: %@", request.summary)
+        case let .tool(tool) where tool.run?.state == .asking:
+            kind = .permission
+            body = L("Confirmation needed: %@", "$ \(tool.run?.firstLine ?? "")")
         case let .text(text):
             switch message.state {
             case let .failed(error):

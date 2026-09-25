@@ -760,16 +760,61 @@ final class AppStore {
         perform("auto_review.set", ["is_enabled": value.isEnabled, "rules": rules])
     }
 
-    /// Answers a permission card: `allow`, `always`, or `deny`. The CLI confirms with the
-    /// message's new decision.
+    /// Answers a question: a permission card's, or a command card's. `allow`, `always`, or
+    /// `deny`. The CLI confirms with the card's new state.
     func answerPermission(chatID: Chat.ID, messageID: Message.ID, decision: String) {
         update(messageID, in: chatID) { message in
-            guard case var .permission(request) = message.body else { return }
-            request.decision = decision == "always" ? .always : (decision == "deny" ? .denied : .allowed)
-            if request.isConnect, request.decision == .allowed { request.summary = L("Starting the sign-in…") }
-            message.body = .permission(request)
+            switch message.body {
+            case var .permission(request):
+                request.decision = decision == "always" ? .always : (decision == "deny" ? .denied : .allowed)
+                if request.isConnect, request.decision == .allowed { request.summary = L("Starting the sign-in…") }
+                message.body = .permission(request)
+            case var .tool(tool):
+                guard var run = tool.run, run.state == .asking else { return }
+                run.decision = decision == "always" ? "always" : (decision == "deny" ? "denied" : "allowed")
+                run.state = decision == "deny" ? .denied : .running
+                if decision != "always" { run.rule = nil }
+                tool.run = run
+                message.body = .tool(tool)
+            default:
+                return
+            }
         }
         perform("chats.permission", ["chat_id": chatID, "message_id": messageID, "decision": decision])
+    }
+
+    // MARK: - Commands
+
+    /// Types the user's answer into a command running in its terminal, then Return.
+    /// The CLI writes it to the terminal, or seals it to the bot's Runner, and keeps nothing.
+    /// Throws why it could not, such as that Runner being offline.
+    func answerCommand(chatID: Chat.ID, messageID: Message.ID, text: String) async throws {
+        guard !isMock else {
+            finishMockCommand(chatID: chatID, messageID: messageID, state: .exited, outcome: "Command exited with code 0")
+            return
+        }
+        _ = try await client.request("bash.stdin", ["chat_id": chatID, "message_id": messageID, "text": text])
+    }
+
+    /// Stops a running command; its card says so once the Runner has.
+    func stopCommand(chatID: Chat.ID, messageID: Message.ID) async throws {
+        guard !isMock else {
+            finishMockCommand(chatID: chatID, messageID: messageID, state: .stopped, outcome: "Stopped")
+            return
+        }
+        _ = try await client.request("bash.stop", ["chat_id": chatID, "message_id": messageID])
+    }
+
+    /// The demo has no Runner: an answer or a Stop ends the command at once.
+    private func finishMockCommand(chatID: Chat.ID, messageID: Message.ID, state: CommandRun.State, outcome: String) {
+        update(messageID, in: chatID) { message in
+            guard case var .tool(tool) = message.body, var run = tool.run else { return }
+            run.state = state
+            run.outcome = outcome
+            run.prompt = nil
+            tool.run = run
+            message.body = .tool(tool)
+        }
     }
 
     // MARK: - Routines

@@ -42,6 +42,7 @@ const ANDROID: Record<string, string> = {
   "paintbrush.fill": "brush",
   "chart.bar.fill": "bar_chart",
   "terminal.fill": "terminal",
+  terminal: "terminal",
   "globe": "public",
   "brain.head.profile": "psychology",
   "magnifyingglass": "search",

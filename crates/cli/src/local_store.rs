@@ -483,6 +483,15 @@ impl LocalStore {
         collect_messages(rows)
     }
 
+    /// Every `bash` card (`Body::Tool.run`), in any chat: for the ones a Lorca that quit left
+    /// open.
+    pub fn command_rows(&self) -> anyhow::Result<Vec<Message>> {
+        let connection = self.connection.lock().unwrap();
+        let mut statement = connection.prepare("SELECT message_json FROM messages WHERE body_kind = 'tool' AND message_json LIKE '%\"run\":{%'")?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+        collect_messages(rows)
+    }
+
     pub fn count_after(&self, chat_id: &str, message_id: Option<&str>) -> anyhow::Result<usize> {
         let connection = self.connection.lock().unwrap();
         let count = match message_id {

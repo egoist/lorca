@@ -225,6 +225,10 @@ pub enum Body {
         /// runs and show the finished row as "Messaged ◉ Scout".
         #[serde(default, skip_serializing_if = "Option::is_none")]
         target_bot_id: Option<String>,
+        /// A `bash` call's card, from Auto-review's question to how the command ended. Every
+        /// `bash` row has one; the apps show it in place of the row.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        run: Option<CommandRun>,
     },
     Handoff {
         from: String,
@@ -268,6 +272,62 @@ pub enum Body {
     },
 }
 
+/// A `bash` call as its card shows it: Auto-review checking it, the question it asks, the
+/// command running in its terminal (`lorca_agent::tools::BashSession`), what the command asks,
+/// and how it ended.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct CommandRun {
+    /// The terminal session running it, once one does: what `bash_input`, `bash_output`,
+    /// `bash.stdin`, and `bash.stop` name it by (`bash-3f9a2c`). None before it starts, and on
+    /// Windows, where a command runs on pipes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// The command, for the card, which the apps get without the call's arguments: its first
+    /// `APP_COMMAND_CHARS` characters.
+    #[serde(default)]
+    pub command: String,
+    /// `checking` (Auto-review is judging it), `asking` (for the user's permission), `running`
+    /// (printing), `waiting` (at a question, or silent). Once it ended: `exited`, `failed` (a
+    /// nonzero code), `stopped`, `denied` (not allowed, so never run), or `expired` (nobody
+    /// answered in time).
+    pub state: String,
+    /// The line it asks with, when its output ends in one: "[sudo] password for ana:".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    /// Its last lines, as the bottom of a terminal shows them: what it said after an answer
+    /// ("Sorry, try again."). Never what was typed, which the terminal does not echo.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<String>,
+    /// How it ended, in words: "Command exited with code 0", "Stopped".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<String>,
+    /// The Runner it runs on, by name, for Auto-review's question: "Workbench".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+    /// Why Auto-review asked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// The plain-language rule Always allow adds, which Auto-review proposed. Without one the
+    /// question offers only Allow once and Deny.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule: Option<String>,
+    /// The answer to Auto-review's question: `allowed` (once), `always`, `denied`, or `expired`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<String>,
+}
+
+impl CommandRun {
+    /// The command still runs: the card takes answers and a Stop when a session runs it.
+    pub fn is_live(&self) -> bool {
+        matches!(self.state.as_str(), "waiting" | "running")
+    }
+
+    /// It has not ended: Auto-review checks it, it asks, or the command runs.
+    pub fn is_open(&self) -> bool {
+        self.is_live() || matches!(self.state.as_str(), "checking" | "asking")
+    }
+}
+
 impl Body {
     pub fn text(text: impl Into<String>) -> Self {
         Body::Text { text: text.into(), attachments: Vec::new(), mentions: Vec::new() }
@@ -300,8 +360,8 @@ pub struct Message {
 
 /// How much of a tool call's detail the apps get: enough for the "Messaged ◉ X" marker.
 const APP_TOOL_DETAIL_CHARS: usize = 400;
-/// How much of a shell command a permission card carries to the apps.
-const APP_COMMAND_CHARS: usize = 8000;
+/// How much of a shell command a permission card or a command's card carries to the apps.
+pub const APP_COMMAND_CHARS: usize = 8000;
 /// How many of a chat's newest messages a snapshot carries; older ones are asked for by page.
 pub const SNAPSHOT_MESSAGES: usize = 60;
 
@@ -348,16 +408,31 @@ impl Message {
         matches!(self.state, MessageState::Complete)
     }
 
+
     /// A reply, failure, or pending confirmation the user has not seen. Tool activity and
-    /// updates to an answered permission card do not add to the count.
+    /// updates to an answered question do not add to the count.
     pub fn counts_unread(&self) -> bool {
         if !matches!(self.author, Author::Bot { .. }) {
             return false;
         }
         match &self.body {
             Body::Text { .. } => matches!(self.state, MessageState::Complete | MessageState::Failed { .. }),
-            Body::Permission { decision, .. } => self.is_complete() && decision == "pending",
+            Body::Permission { .. } => self.is_complete() && self.confirmation().is_some(),
+            Body::Tool { .. } => self.confirmation().is_some(),
             _ => false,
+        }
+    }
+
+    /// What a question waiting for the user's answer asks about: a pending permission card's
+    /// summary, or the command of a `bash` card that asks.
+    pub fn confirmation(&self) -> Option<String> {
+        match &self.body {
+            Body::Permission { summary, decision, .. } if decision == "pending" => Some(summary.clone()),
+            Body::Tool { run: Some(run), .. } if run.state == "asking" => {
+                let line = run.command.lines().next().unwrap_or("").trim();
+                Some(format!("$ {}", line.chars().take(180).collect::<String>()))
+            }
+            _ => None,
         }
     }
 }
@@ -501,7 +576,9 @@ impl ChatBlob {
     /// replaces it outright, so the relay keeps one version of each call.
     pub fn slot(&self) -> crate::app::Slot {
         match self {
-            ChatBlob::Upsert { message } if matches!(message.body, Body::Tool { .. }) => crate::app::Slot::latest(relay_name(&message.id)),
+            // A command's card shows in the transcript, so like a message it keeps the place it
+            // first took in the log however often it changes.
+            ChatBlob::Upsert { message } if matches!(message.body, Body::Tool { run: None, .. }) => crate::app::Slot::latest(relay_name(&message.id)),
             ChatBlob::Upsert { message } => crate::app::Slot::first_and_latest(relay_name(&message.id)),
             ChatBlob::Remove { message_id, .. } => crate::app::Slot::latest(relay_name(message_id)),
             ChatBlob::ClearUnread { chat_id } => crate::app::Slot::latest(relay_name(&format!("read-{chat_id}"))),
@@ -547,7 +624,8 @@ pub struct Job {
     pub chat_id: String,
     pub bot_id: String,
     /// `turn` for a user message in a DM, `room_turn` for one member's turn in a group,
-    /// `message` for a teammate's message_bot, `routine` for a run of a routine.
+    /// `message` for a teammate's message_bot, `routine` for a run of a routine, `command` for
+    /// a command the bot left running that ended.
     pub kind: String,
     pub trigger_message_id: String,
     /// `routine`: which routine is running.
@@ -855,6 +933,7 @@ mod app_view_tests {
         let tool = Message::new("c", Author::Bot { bot_id: "b".into() }, Body::Tool {
             name: "read".into(), summary: "Read a file".into(), detail: "x".repeat(5000), is_running: false,
             call_id: "call".into(), arguments: serde_json::json!({ "path": "big" }), result: Some("y".repeat(100_000)), is_error: false, description: None, target_bot_id: None,
+            run: None,
         });
         let Body::Tool { detail, arguments, result, summary, .. } = tool.for_app().body else { panic!() };
         assert_eq!((detail.len(), arguments.is_null(), result, summary.as_str()), (400, true, None, "Read a file"));

@@ -9,7 +9,7 @@ use regex::Regex;
 use serde_json::Value;
 
 use crate::app::App;
-use crate::model::{AutoReviewRule, Bot};
+use crate::model::{AutoReviewRule, Bot, CommandRun};
 use crate::plugins::mcp::{self, Decision};
 use crate::plugins::review::{self, Action, Outcome};
 
@@ -18,7 +18,8 @@ const LOCAL_TARGET_ID: &str = "computer";
 /// Reviews every shell call before `bash` receives it. A returned result blocks the call;
 /// `None` lets it execute unchanged with the Runner user's normal authority. With Auto-review
 /// on, a command the parser proves read-only, or one that stays in Lorca's own folders, runs at
-/// once; the review judges everything else.
+/// once; the review judges everything else. The call's card says so while it checks and asks
+/// the user's permission itself when the review wants it.
 pub async fn before_tool_call(
     app: &Arc<App>,
     chat_id: &str,
@@ -27,6 +28,9 @@ pub async fn before_tool_call(
     unattended: bool,
     ctx: BeforeToolCallContext<'_>,
 ) -> Option<BeforeToolCallResult> {
+    if ctx.tool_call.name == "bash_input" {
+        return review_input(app, chat_id, bot, unattended, ctx).await;
+    }
     if ctx.tool_call.name != "bash" {
         return None;
     }
@@ -48,9 +52,28 @@ pub async fn before_tool_call(
     if let Some(fields) = args.as_object_mut() {
         fields.remove("description");
     }
+    // The call's card, when a turn shows one: Auto-review's question goes on it.
+    let card = app.shell_sessions.card(chat_id, &ctx.tool_call.id);
+    let update = |change: &dyn Fn(&mut CommandRun)| {
+        if let Some(message_id) = &card {
+            app.shell_sessions.update_card(app, chat_id, message_id, change);
+        }
+    };
+    update(&|run| {
+        run.state = "checking".into();
+        run.device = Some(runner_name.clone());
+    });
     let action = Action { target_name: &runner_name, tool: "bash", description: &description, args: &args, propose_rule: true };
-    let Outcome::Ask { reason, rule } = review::review(app, bot, chat_id, action, ctx.cancel).await else { return None };
+    let Outcome::Ask { reason, rule } = review::review(app, bot, chat_id, action, ctx.cancel).await else {
+        update(&|run| run.state = "running".into());
+        return None;
+    };
     if unattended {
+        update(&|run| {
+            run.state = "denied".into();
+            run.reason = reason.clone();
+            run.outcome = Some("Needs your permission, and nobody was here to give it".into());
+        });
         return Some(blocked(format!(
             "bash needs the user's permission ({}), and nobody is here to give it. Report what you would do; the user can add an Auto-review rule allowing it{}.",
             reason.as_deref().unwrap_or("Auto-review is off, so every command asks"),
@@ -59,24 +82,93 @@ pub async fn before_tool_call(
     }
 
     let always_rule = rule.map(|text| AutoReviewRule { id: uuid::Uuid::new_v4().to_string(), text, behavior: "allow".into(), tool: None });
-    match mcp::ask_with_rule(
-        app,
-        chat_id,
-        &bot.id,
-        LOCAL_TARGET_ID,
-        &runner_name,
-        "bash",
-        &command_summary(command),
-        ctx.args.clone(),
-        reason,
-        always_rule,
-        ctx.cancel,
-    )
-    .await
-    {
+    let decision = match &card {
+        Some(message_id) => ask_on_card(app, chat_id, message_id, reason, always_rule, ctx.cancel).await,
+        None => {
+            mcp::ask_with_rule(app, chat_id, &bot.id, LOCAL_TARGET_ID, &runner_name, "bash", &command_summary(command), ctx.args.clone(), reason, always_rule, ctx.cancel)
+                .await
+        }
+    };
+    match decision {
         Decision::Allowed | Decision::Always => None,
         Decision::Denied => Some(blocked("The user did not allow bash. Do not retry it; ask what they want instead.".into())),
         Decision::Expired => Some(blocked("Nobody answered the permission request for bash in time. Say what you needed and stop.".into())),
+    }
+}
+
+/// Auto-review's question on a command's own card: the card asks, the call waits for the
+/// answer from any Device, and the card shows it. An allowed command runs on the same card; a
+/// Stop while it asks stops the card.
+async fn ask_on_card(
+    app: &Arc<App>,
+    chat_id: &str,
+    message_id: &str,
+    reason: Option<String>,
+    always_rule: Option<AutoReviewRule>,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> Decision {
+    let rule = always_rule.as_ref().map(|rule| rule.text.clone());
+    let decision = mcp::await_answer(app, message_id, always_rule, cancel, || {
+        app.shell_sessions.update_card(app, chat_id, message_id, |run| {
+            run.state = "asking".into();
+            run.reason = reason;
+            run.rule = rule;
+        });
+        if let Some(message) = app.message(chat_id, message_id) {
+            crate::push::permission(app, &message);
+        }
+    })
+    .await;
+    app.shell_sessions.update_card(app, chat_id, message_id, |run| {
+        run.decision = Some(decision.as_str().into());
+        // The rule stays to say an Always allow added it.
+        if decision != Decision::Always {
+            run.rule = None;
+        }
+        run.state = match decision {
+            Decision::Allowed | Decision::Always => "running",
+            Decision::Denied if cancel.is_cancelled() => "stopped",
+            Decision::Denied => "denied",
+            Decision::Expired => "expired",
+        }
+        .into();
+    });
+    decision
+}
+
+/// What a bot types into a command `bash` left running goes through the same review as a
+/// command. An answer to a `[Y/n]` belongs to a command the review already judged, but a shell,
+/// a REPL, or `ssh` runs whatever it is given. Ctrl-C alone only interrupts, and never asks.
+async fn review_input(app: &Arc<App>, chat_id: &str, bot: &Bot, unattended: bool, ctx: BeforeToolCallContext<'_>) -> Option<BeforeToolCallResult> {
+    let text = ctx.args.get("text").and_then(Value::as_str).unwrap_or("");
+    if text == "\u{3}" {
+        return None;
+    }
+    // A session that is not there is the tool's to report.
+    let session_id = ctx.args.get("session_id").and_then(Value::as_str).unwrap_or("").trim();
+    let command = app.shell_sessions.command(chat_id, &bot.id, session_id)?;
+    let runner_id = app.this_device_id().unwrap_or_else(|| bot.runner_id.clone());
+    let runner_name = app.device(&runner_id).map(|device| device.name).unwrap_or_else(|| "this Runner".into());
+    let description = format!(
+        "Type input into a command already running as the user on {runner_name}, with full filesystem, process, credential, and \
+         network access. The command reads the input exactly as typed, followed by Enter unless enter is false."
+    );
+    let args = serde_json::json!({ "command": command, "input": text, "enter": ctx.args.get("enter").and_then(Value::as_bool).unwrap_or(true) });
+    let action = Action { target_name: &runner_name, tool: "bash_input", description: &description, args: &args, propose_rule: false };
+    let Outcome::Ask { reason, .. } = review::review(app, bot, chat_id, action, ctx.cancel).await else { return None };
+    if unattended {
+        return Some(blocked(format!(
+            "bash_input needs the user's permission ({}), and nobody is here to give it. Stop the command with bash_input and \
+             \"\\u0003\", and report what it asked.",
+            reason.as_deref().unwrap_or("Auto-review is off, so every command asks")
+        )));
+    }
+    let shown: String = text.chars().take(80).collect();
+    let summary = format!("Type “{shown}” into {}", command_summary(&command));
+    match mcp::ask_with_rule(app, chat_id, &bot.id, LOCAL_TARGET_ID, &runner_name, "bash_input", &summary, args, reason, None, ctx.cancel).await {
+        Decision::Allowed | Decision::Always => None,
+        Decision::Denied => Some(blocked("The user did not allow that input. Do not retry it; ask what they want instead.".into())),
+        Decision::Expired => Some(blocked("Nobody answered the permission request for bash_input in time. Say what you needed and stop.".into())),
     }
 }
 

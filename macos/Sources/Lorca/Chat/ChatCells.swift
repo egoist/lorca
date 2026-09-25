@@ -277,6 +277,8 @@ final class WorkingCellView: TranscriptCellView {
         case "memory_update", "memory_log": return L("Taking a note")
         case "search_plugins": return L("Searching plugins")
         case "install_plugin": return L("Installing a plugin")
+        case "bash_input": return L("Answering a command")
+        case "bash_output": return L("Waiting on a command")
         default:
             // A plugin tool: "Using GitHub", whether the call is running or just finished, so
             // a run of quick calls never flashes back to "Working" between them.

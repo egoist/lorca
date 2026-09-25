@@ -60,6 +60,15 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
     if app.chat(&job.chat_id).is_none() {
         return TurnOutcome::Skipped;
     }
+    // A command's end that the bot has read already, in a turn that ran meanwhile, needs no
+    // turn of its own.
+    let command_end = match job.kind.as_str() {
+        "command" => match command_cue(app, job) {
+            Some(cue) => Some(cue),
+            None => return TurnOutcome::Skipped,
+        },
+        _ => None,
+    };
 
     // A routine's run opens with its marker, "Routine · Name", so the chat shows what started
     // the turn (even one that cannot run) and later turns rebuild the task from it. A routine
@@ -150,6 +159,8 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
     }
     if job.kind == "room_turn" {
         messages.push(AgentMessage::User(UserMessage::text(room_turn_cue(app, &chat, &bot, job))));
+    } else if let Some(cue) = &command_end {
+        messages.push(AgentMessage::User(UserMessage::text(cue.clone())));
     } else if messages.last().map(AgentMessage::is_assistant).unwrap_or(true) {
         messages.push(AgentMessage::User(UserMessage::text("Continue.")));
     }
@@ -170,7 +181,10 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
     tools.extend(plugin_tools.discovery_tools());
     tools.extend(memory_tools(&store, &chat));
     tools.push(Arc::new(Recall { app: app.clone(), store: store.clone(), bot: bot.clone() }));
-    tools.extend(lorca_agent::tools::coding_tools(workdir.clone()));
+    // Commands run in terminals of their own, kept on this Runner past the turn when they
+    // wait for input.
+    let sessions = Arc::new(crate::shell::TurnSessions::new(app, &chat.meta.id, &bot.id));
+    tools.extend(lorca_agent::tools::coding_tools_with_sessions(workdir.clone(), sessions));
 
     let sink = Arc::new(TurnSink(std::sync::Mutex::new(TurnState {
         app: app.clone(),
@@ -267,6 +281,10 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
     }
     if steering.is_some() {
         app.unregister_steering_queue(&chat.meta.id, &job.id);
+    }
+    // Stop ends what the bot left running in the chat too; a turn that ends on its own does not.
+    if cancel.is_cancelled() {
+        app.shell_sessions.stop_chat(&chat.meta.id);
     }
     let mut state = sink.0.lock().unwrap();
     state.finish();
@@ -859,6 +877,7 @@ impl TurnState {
                         is_error: false,
                         description: None,
                         target_bot_id: None,
+                        run: None,
                     },
                 );
                 message.state = MessageState::Streaming;
@@ -925,6 +944,13 @@ impl TurnState {
                     None => format!("Running {}…", tool_label(&tool_name)),
                 };
                 let description = if tool_name == "bash" { args["description"].as_str().and_then(|text| first_line(text, 80)) } else { None };
+                // A command's card shows from the start: Auto-review's question, the command
+                // running, what it asks, how it ended.
+                let run = (tool_name == "bash").then(|| CommandRun {
+                    command: args["command"].as_str().unwrap_or("").chars().take(crate::model::APP_COMMAND_CHARS).collect(),
+                    state: "running".into(),
+                    ..CommandRun::default()
+                });
                 let target_bot_id =
                     if tool_name == "message_bot" { args["bot_id"].as_str().map(str::trim).filter(|id| !id.is_empty()).map(str::to_string) } else { None };
                 let mut message = Message::new(
@@ -941,9 +967,13 @@ impl TurnState {
                         is_error: false,
                         description,
                         target_bot_id,
+                        run,
                     },
                 );
                 message.state = MessageState::Streaming;
+                if tool_name == "bash" {
+                    self.app.shell_sessions.begin(&self.chat_id, &self.bot_id, &tool_call_id, &message.id);
+                }
                 self.start_tool(message.clone());
                 self.tool_messages.push((tool_call_id, message.id));
             }
@@ -959,11 +989,14 @@ impl TurnState {
                     *s = if is_error { format!("{} failed", tool_label(&tool_name)) } else { summary };
                     *detail = text.clone();
                     *is_running = false;
-                    *r = Some(text);
+                    *r = Some(text.clone());
                     *e = is_error;
                 }
                 message.state = MessageState::Complete;
                 self.app.upsert_message(message, true);
+                if tool_name == "bash" {
+                    self.app.shell_sessions.call_ended(&self.app, &self.chat_id, &tool_call_id, &message_id, is_error, &text);
+                }
             }
             _ => {}
         }
@@ -1040,19 +1073,43 @@ impl TurnState {
     fn finish(&mut self) {
         self.current = None;
         // A tool that never reported back (cancelled) should not stay spinning.
-        for (_, message_id) in self.tool_messages.drain(..) {
+        for (call_id, message_id) in self.tool_messages.drain(..) {
             if let Some(mut message) = self.app.message(&self.chat_id, &message_id) {
-                if let Body::Tool { is_running, summary, .. } = &mut message.body {
+                if let Body::Tool { is_running, summary, name, .. } = &mut message.body {
                     if *is_running {
+                        let bash = name == "bash";
                         *is_running = false;
                         *summary = "Stopped".into();
                         message.state = MessageState::Complete;
                         self.app.upsert_message(message, true);
+                        if bash {
+                            self.app.shell_sessions.abandon_call(&self.app, &self.chat_id, &call_id, &message_id);
+                        }
                     }
                 }
             }
         }
     }
+}
+
+/// What a `command` turn opens with: how the command the bot left running ended, and its last
+/// lines, which never hold what the user typed. None when there is nothing left to hear: the
+/// command still runs, or the bot read how it ended.
+fn command_cue(app: &App, job: &Job) -> Option<String> {
+    let message = app.message(&job.chat_id, &job.trigger_message_id)?;
+    let Body::Tool { run: Some(run), .. } = &message.body else { return None };
+    let session_id = run.session_id.as_deref()?;
+    if run.is_open() || !app.shell_sessions.contains(session_id) {
+        return None;
+    }
+    let command = run.command.lines().next().unwrap_or("").trim();
+    let outcome = run.outcome.as_deref().unwrap_or("It ended");
+    let mut cue = format!("[The command you left running in session {session_id} (`{command}`) has ended: {outcome}.");
+    if let Some(output) = run.output.as_deref().filter(|output| !output.trim().is_empty()) {
+        cue.push_str(&format!(" Its last lines:\n{output}\n"));
+    }
+    cue.push_str(" The user may have answered it from its card. Tell them how it went, or go on with what you were doing.]");
+    Some(cue)
 }
 
 /// The status line for a server-side tool while it runs, in Grok Bot's words.
@@ -1166,7 +1223,11 @@ fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job, store: &Memo
          the answer; headings are for long reports the user asked for. Ask one question when something is unclear. \
          Markdown renders. Do not invent APIs, files, or results.\n",
     );
-    prompt.push_str(&format!("\nTools on your Runner: {}\n", lorca_agent::tools::coding_tools_snippet()));
+    prompt.push_str(&format!("\nTools on your Runner: {}", lorca_agent::tools::coding_tools_snippet()));
+    if cfg!(unix) {
+        prompt.push_str(&format!(" {}", lorca_agent::tools::session_tools_snippet()));
+    }
+    prompt.push('\n');
     for guideline in lorca_agent::tools::coding_tools_guidelines() {
         prompt.push_str(&format!("- {guideline}\n"));
     }
@@ -1174,10 +1235,22 @@ fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job, store: &Memo
         "Relative paths resolve against your working directory {}. Work there unless the user names another path. \
          Commands run as the user on that machine with its full filesystem, process, and network access. Never scan the \
          user's home directory recursively, because it may trigger macOS TCC permission dialogs. Every bash call \
-         goes through Auto-review first and may pause on a permission card. Treat destructive commands with care and say \
-         what you ran.\n",
+         goes through Auto-review first and may pause for the user's permission on the command's card. Treat destructive \
+         commands with care and say what you ran.\n",
         workdir.display()
     ));
+    if cfg!(unix) {
+        prompt.push_str(
+            "Each command runs in a terminal of its own, and /dev/tty is that terminal: sudo, ssh, and `read </dev/tty` \
+             ask there, and what the user types into the command's card reaches them. A command that stops for input \
+             returns while it still runs, with a session id; answer what you know with bash_input. When it asks for \
+             something only the user should type, such as a password, a passphrase, or a one-time code, tell them it is \
+             waiting and that they can type it into the command's card in this chat, then end your turn. Never ask for it in \
+             a message: what they type in the card goes straight to the command and never reaches you or the chat. When a \
+             command you left running ends by itself, you get a turn to hear how it went and carry on; bash_output shows \
+             more of what it printed.\n",
+        );
+    }
     if let Some(runner) = runner {
         prompt.push_str(&format!("\nYou run on the Runner \"{}\" ({}).", runner.name, runner.os_version));
     }
@@ -1438,7 +1511,7 @@ fn transcript_bounded(app: &App, chat: &Chat, bot: &Bot, workdir: &std::path::Pa
             }
             // Server-side tool rows are a record of activity, not calls to replay.
             (Author::Bot { .. }, Body::Tool { name, .. }) if is_server_tool(name) => {}
-            (Author::Bot { bot_id }, Body::Tool { name, call_id, arguments, result, is_error, .. }) if bot_id == &bot.id => {
+            (Author::Bot { bot_id }, Body::Tool { name, call_id, arguments, result, is_error, run, .. }) if bot_id == &bot.id => {
                 let call_id = if call_id.is_empty() { message.id.clone() } else { call_id.clone() };
                 // A `remember` row from before memory_update replays as the call it would be now.
                 let (name, arguments) = if name == "remember" {
@@ -1451,10 +1524,18 @@ fn transcript_bounded(app: &App, chat: &Chat, bot: &Bot, workdir: &std::path::Pa
                 assistant.stop_reason = StopReason::ToolUse;
                 assistant.timestamp = timestamp;
                 out.push(AgentMessage::Assistant(assistant));
+                // A command the call left running (its result names the session) that has ended
+                // since, maybe on the user's answer.
+                let mut result = result.clone().unwrap_or_default();
+                if let Some(CommandRun { session_id: Some(session_id), outcome: Some(outcome), .. }) = run.as_ref().filter(|r| !r.is_live()) {
+                    if result.contains(session_id.as_str()) {
+                        result.push_str(&format!("\n\n[Session {session_id} has since ended: {outcome}.]"));
+                    }
+                }
                 out.push(AgentMessage::ToolResult(ToolResultMessage {
                     tool_call_id: call_id,
                     tool_name: name.clone(),
-                    content: vec![ContentPart::text(result.clone().unwrap_or_default())],
+                    content: vec![ContentPart::text(result)],
                     details: Value::Null,
                     is_error: *is_error,
                     timestamp,
@@ -2622,6 +2703,408 @@ mod tests {
         }
     }
 
+    /// One call as `run_job` makes it: the row goes up as the call starts, and the result lands
+    /// in it when the call returns. Returns the row as it is then.
+    async fn call_tool(turn: &mut TurnState, tool: &dyn Tool, call_id: &str, args: Value) -> (Message, Result<ToolResult, ToolError>) {
+        turn.handle(AgentEvent::ToolExecutionStart { tool_call_id: call_id.into(), tool_name: tool.name().into(), args: args.clone() });
+        let result = tool.execute(call_id, args, CancellationToken::new(), Arc::new(|_| {})).await;
+        // The loop hands an error on as text, without details.
+        let (shown, is_error) = match &result {
+            Ok(result) => (result.clone(), false),
+            Err(error) => (ToolResult::text(error.0.clone()), true),
+        };
+        turn.handle(AgentEvent::ToolExecutionEnd { tool_call_id: call_id.into(), tool_name: tool.name().into(), result: shown, is_error });
+        let message_id = turn.tool_messages.iter().find(|(id, _)| id == call_id).map(|(_, message)| message.clone()).unwrap();
+        (turn.app.message("chat", &message_id).unwrap(), result)
+    }
+
+    fn run_of(message: &Message) -> Option<CommandRun> {
+        match &message.body {
+            Body::Tool { run, .. } => run.clone(),
+            _ => None,
+        }
+    }
+
+    /// The row once its session's state reached it: the watcher writes it when the command ends.
+    async fn row_when(app: &Arc<App>, message_id: &str, done: impl Fn(&CommandRun) -> bool) -> Message {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let row = app.message("chat", message_id).unwrap();
+                if run_of(&row).is_some_and(|t| done(&t)) {
+                    return row;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("the row caught up with its session")
+    }
+
+    /// Chef in a DM, running on this Device.
+    fn chef_in_a_dm() -> (ScratchApp, Bot) {
+        let scratch = scratch_app();
+        crate::identity::create(&scratch.0, Some("Runner".into())).unwrap();
+        let mut chef = bot("b1", "Chef");
+        chef.runner_id = scratch.0.this_device_id().unwrap();
+        {
+            let mut state = scratch.0.state.lock().unwrap();
+            state.bots = vec![chef.clone(), bot("b2", "Scout")];
+            state.chats.push(chat("chat", "dm", None, &["b1"]));
+        }
+        (scratch, chef)
+    }
+
+    /// Auto-review of call `call_id`, as the loop runs it before `bash` gets the call.
+    async fn review_call(app: &Arc<App>, bot: &Bot, workdir: &std::path::Path, call_id: &str, args: &Value) -> Option<lorca_agent::BeforeToolCallResult> {
+        use lorca_agent::{AgentContext, BeforeToolCallContext};
+        let assistant = AssistantMessage::empty("test", "test");
+        let context = AgentContext { system_prompt: String::new(), messages: Vec::new(), tools: Vec::new() };
+        let call = ToolCall { id: call_id.into(), name: "bash".into(), arguments: args.clone() };
+        let cancel = CancellationToken::new();
+        let ctx = BeforeToolCallContext { assistant_message: &assistant, tool_call: &call, args, context: &context, cancel: &cancel };
+        crate::local_review::before_tool_call(app, "chat", bot, workdir, false, ctx).await
+    }
+
+    /// Answers the card's question once it asks, as a tap on any Device does.
+    fn answer_when_asked(app: &Arc<App>, message_id: &str, decision: crate::plugins::mcp::Decision) -> tokio::task::JoinHandle<()> {
+        let (app, message_id) = (app.clone(), message_id.to_string());
+        tokio::spawn(async move {
+            loop {
+                if app.message("chat", &message_id).as_ref().and_then(run_of).is_some_and(|run| run.state == "asking") {
+                    assert!(crate::plugins::mcp::answer(&app, &message_id, decision));
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+    }
+
+    /// With Auto-review off, every command asks.
+    fn every_command_asks(app: &App) {
+        let mut review = app.auto_review();
+        review.is_enabled = false;
+        app.set_auto_review(review);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_command_asks_on_its_own_card_and_runs_there() {
+        use lorca_agent::tools::{BashSessions, BashTool};
+        let (scratch, chef) = chef_in_a_dm();
+        let app = &scratch.0;
+        every_command_asks(app);
+        let mut turn = turn_state(app, &chef, "dev");
+        let sessions: Arc<dyn BashSessions> = Arc::new(crate::shell::TurnSessions::new(app, "chat", "b1"));
+        let bash = BashTool::with_sessions(scratch.1.clone(), sessions);
+        let args = json!({ "command": "echo hello", "description": "Greet" });
+        turn.handle(AgentEvent::ToolExecutionStart { tool_call_id: "call-1".into(), tool_name: "bash".into(), args: args.clone() });
+        let row = turn.tool_messages[0].1.clone();
+        let card = run_of(&app.message("chat", &row).unwrap()).unwrap();
+        assert_eq!((card.state.as_str(), card.command.as_str()), ("running", "echo hello"));
+
+        let answered = answer_when_asked(app, &row, crate::plugins::mcp::Decision::Allowed);
+        assert!(review_call(app, &chef, &scratch.1, "call-1", &args).await.is_none(), "allowed");
+        answered.await.unwrap();
+        let card = run_of(&app.message("chat", &row).unwrap()).unwrap();
+        assert_eq!((card.state.as_str(), card.decision.as_deref()), ("running", Some("allowed")));
+        assert!(card.device.is_some());
+
+        let result = bash.execute("call-1", args, CancellationToken::new(), Arc::new(|_| {})).await.unwrap();
+        turn.handle(AgentEvent::ToolExecutionEnd { tool_call_id: "call-1".into(), tool_name: "bash".into(), result, is_error: false });
+        let done = row_when(app, &row, |run| run.state == "exited").await;
+        let card = run_of(&done).unwrap();
+        assert_eq!((card.output.as_deref(), card.decision.as_deref()), (Some("hello"), Some("allowed")));
+        // One row from the question to the end: nothing else asked.
+        assert_eq!(app.messages("chat").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_denied_command_ends_its_card_without_running() {
+        let (scratch, chef) = chef_in_a_dm();
+        let app = &scratch.0;
+        every_command_asks(app);
+        let mut turn = turn_state(app, &chef, "dev");
+        let args = json!({ "command": "rm -rf build", "description": "Clean" });
+        turn.handle(AgentEvent::ToolExecutionStart { tool_call_id: "call-1".into(), tool_name: "bash".into(), args: args.clone() });
+        let row = turn.tool_messages[0].1.clone();
+
+        let answered = answer_when_asked(app, &row, crate::plugins::mcp::Decision::Denied);
+        let blocked = review_call(app, &chef, &scratch.1, "call-1", &args).await.unwrap();
+        answered.await.unwrap();
+        assert!(blocked.block);
+        // The loop hands the block on as the call's error.
+        turn.handle(AgentEvent::ToolExecutionEnd { tool_call_id: "call-1".into(), tool_name: "bash".into(), result: ToolResult::text(blocked.reason.unwrap()), is_error: true });
+        let card = run_of(&app.message("chat", &row).unwrap()).unwrap();
+        assert_eq!((card.state.as_str(), card.decision.as_deref(), card.session_id), ("denied", Some("denied"), None));
+        assert_eq!(app.messages("chat").len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_command_waiting_for_input_keeps_its_row_and_the_answer_stays_out_of_the_chat() {
+        use lorca_agent::tools::{BashOutputTool, BashSessions, BashTool};
+        let (scratch, chef) = chef_in_a_dm();
+        let app = &scratch.0;
+        let mut turn = turn_state(app, &chef, "dev");
+        let sessions: Arc<dyn BashSessions> = Arc::new(crate::shell::TurnSessions::new(app, "chat", "b1"));
+        let bash = BashTool::with_sessions(scratch.1.clone(), sessions.clone());
+        let command = "read -rs -p '[sudo] password for ana: ' p </dev/tty; echo; echo length:${#p}";
+        let (row, result) = call_tool(&mut turn, &bash, "call-1", json!({ "command": command, "description": "Check the password" })).await;
+
+        let result = result.unwrap();
+        assert!(result.text_content().contains("Waiting for input: \"[sudo] password for ana:\""), "{}", result.text_content());
+        let Body::Tool { summary, is_running, .. } = &row.body else { panic!("a tool row") };
+        assert_eq!((summary.as_str(), *is_running), ("Waiting for input", false));
+        let terminal = run_of(&row).unwrap();
+        assert_eq!((terminal.state.as_str(), terminal.prompt.as_deref(), terminal.command.as_str()), ("waiting", Some("[sudo] password for ana:"), command));
+        // What the apps get carries it too, so every Device shows the question.
+        assert_eq!(run_of(&row.for_app()), Some(terminal.clone()));
+
+        // The turn is over; the user answers from the row.
+        let typed = crate::api::dispatch(app, "bash.stdin", json!({ "chat_id": "chat", "message_id": row.id, "text": "hunter2" })).await.unwrap();
+        assert_eq!(typed, json!({ "sent": true }));
+        let row = row_when(app, &row.id, |t| !t.is_live()).await;
+        let terminal = run_of(&row).unwrap();
+        assert_eq!((terminal.state.as_str(), terminal.outcome.as_deref(), terminal.prompt), ("exited", Some("Command exited with code 0"), None));
+        let Body::Tool { summary, .. } = &row.body else { panic!("a tool row") };
+        assert!(summary.starts_with("$ read -rs"), "{summary}");
+
+        // The answer is nowhere: not in the rows, not in the database, not in what goes to the relay.
+        assert!(!serde_json::to_string(&app.messages("chat")).unwrap().contains("hunter2"));
+        for file in ["lorca.sqlite3", "lorca.sqlite3-wal"] {
+            let bytes = std::fs::read(scratch.1.join(file)).unwrap_or_default();
+            assert!(!bytes.windows(7).any(|w| w == b"hunter2"), "{file}");
+        }
+        let dek = app.dek().unwrap();
+        for item in app.store.outbox().unwrap().into_iter().filter(|item| item.kind == "chat") {
+            let blob: ChatBlob = crate::crypto::decrypt_json(&dek, "chat", &item.ciphertext).unwrap();
+            assert!(!serde_json::to_string(&blob).unwrap().contains("hunter2"));
+        }
+
+        // A later turn learns how it ended from the rebuilt call.
+        let transcript = transcript_for(app, &app.chat("chat").unwrap(), &chef, &scratch.1);
+        let rebuilt = transcript.iter().find_map(|m| match m { AgentMessage::ToolResult(r) if r.tool_call_id == "call-1" => Some(r.content[0].as_text().unwrap().to_string()), _ => None }).unwrap();
+        assert!(rebuilt.ends_with(&format!("[Session {} has since ended: Command exited with code 0.]", terminal.session_id.as_deref().unwrap())), "{rebuilt}");
+        assert!(!rebuilt.contains("hunter2"));
+
+        // And reads what the command said to the answer, after which the session goes.
+        let output = BashOutputTool::new(sessions);
+        let (_, read) = call_tool(&mut turn, &output, "call-2", json!({ "session_id": terminal.session_id })).await;
+        assert_eq!(read.unwrap().text_content(), "\nlength:7\n\n\nCommand exited with code 0");
+        assert!(app.shell_sessions.find("chat", "b1", terminal.session_id.as_deref().unwrap()).is_none());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_command_left_running_wakes_its_bot_when_it_ends() {
+        use lorca_agent::tools::{BashOutputTool, BashSessions, BashTool};
+        let (scratch, chef) = chef_in_a_dm();
+        let app = &scratch.0;
+        let mut turn = turn_state(app, &chef, "dev");
+        let sessions: Arc<dyn BashSessions> = Arc::new(crate::shell::TurnSessions::new(app, "chat", "b1"));
+        let bash = BashTool::with_sessions(scratch.1.clone(), sessions.clone());
+        let mut events = app.events.subscribe();
+        let command = "read -rs -p 'Password: ' p </dev/tty; echo; echo length:${#p}";
+        let (row, _) = call_tool(&mut turn, &bash, "call-1", json!({ "command": command, "description": "Log in" })).await;
+        let id = run_of(&row).unwrap().session_id.unwrap();
+
+        // The turn is over; the user answers from the card, and the command exits.
+        crate::api::dispatch(app, "bash.stdin", json!({ "chat_id": "chat", "message_id": row.id, "text": "hunter2" })).await.unwrap();
+        row_when(app, &row.id, |run| run.state == "exited").await;
+        let woke = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Ok(Event::JobStarted { chat_id, bot_id, .. }) = events.recv().await {
+                    if chat_id == "chat" && bot_id == "b1" {
+                        return;
+                    }
+                }
+            }
+        })
+        .await;
+        assert!(woke.is_ok(), "the bot gets a turn when the command it left ends");
+        // That turn opens with how it ended and what it said, never with what was typed.
+        let job = crate::shell::wake_job(app, &app.shell_sessions, &id).expect("a command turn");
+        assert_eq!((job.kind.as_str(), job.trigger_message_id.as_str()), ("command", row.id.as_str()));
+        let cue = command_cue(app, &job).unwrap();
+        assert!(cue.contains("has ended: Command exited with code 0.") && cue.contains("length:7"), "{cue}");
+        assert!(!cue.contains("hunter2"));
+        // Once the bot read the end itself, there is nothing left to hear.
+        let output = BashOutputTool::new(sessions);
+        call_tool(&mut turn, &output, "call-2", json!({ "session_id": id })).await.1.unwrap();
+        assert_eq!(command_cue(app, &job), None);
+
+        // A command the user stopped wakes nobody.
+        let (row, _) = call_tool(&mut turn, &bash, "call-3", json!({ "command": command, "description": "Log in" })).await;
+        let id = run_of(&row).unwrap().session_id.unwrap();
+        crate::api::dispatch(app, "bash.stop", json!({ "chat_id": "chat", "message_id": row.id })).await.unwrap();
+        row_when(app, &row.id, |run| run.state == "stopped").await;
+        assert!(crate::shell::wake_job(app, &app.shell_sessions, &id).is_none());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_row_shows_what_the_command_says_after_an_answer() {
+        use lorca_agent::tools::{BashSessions, BashTool};
+        let (scratch, chef) = chef_in_a_dm();
+        let app = &scratch.0;
+        let mut turn = turn_state(app, &chef, "dev");
+        let sessions: Arc<dyn BashSessions> = Arc::new(crate::shell::TurnSessions::new(app, "chat", "b1"));
+        let bash = BashTool::with_sessions(scratch.1.clone(), sessions);
+        let command = "for i in 1 2 3; do read -rs -p 'Password: ' p </dev/tty; echo; [ \"$p\" = right ] && exit 0; echo 'Sorry, try again.'; done; exit 1";
+        let (row, _) = call_tool(&mut turn, &bash, "call-1", json!({ "command": command, "description": "Log in" })).await;
+        assert_eq!(run_of(&row).unwrap().output.as_deref(), Some("Password:"));
+
+        let answer = |text: &'static str| crate::api::dispatch(app, "bash.stdin", json!({ "chat_id": "chat", "message_id": row.id, "text": text }));
+        answer("wrong").await.unwrap();
+        let retry = row_when(app, &row.id, |t| t.output.as_deref() == Some("Password:\nSorry, try again.\nPassword:")).await;
+        let terminal = run_of(&retry).unwrap();
+        assert_eq!((terminal.state.as_str(), terminal.prompt.as_deref()), ("waiting", Some("Password:")));
+
+        answer("right").await.unwrap();
+        let done = row_when(app, &row.id, |t| !t.is_live()).await;
+        assert_eq!(run_of(&done).unwrap().outcome.as_deref(), Some("Command exited with code 0"));
+        // Too late: it ended.
+        let late = answer("again").await.unwrap_err();
+        assert_eq!(late, "The command has already ended");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_limits_stop_a_silent_command_and_the_oldest_of_too_many() {
+        use lorca_agent::tools::{BashSessions, BashTool, SessionEnd};
+        let (scratch, chef) = chef_in_a_dm();
+        let app = &scratch.0;
+        let mut turn = turn_state(app, &chef, "dev");
+        let sessions: Arc<dyn BashSessions> = Arc::new(crate::shell::TurnSessions::new(app, "chat", "b1"));
+        let bash = BashTool::with_sessions(scratch.1.clone(), sessions).waiting_after(Duration::from_millis(300));
+
+        // Blocked on something outside its terminal, as `ls` on a permission dialog: the call
+        // returns, and the idle limit ends it.
+        app.shell_sessions.set_limits(crate::shell::Limits { idle: Duration::from_millis(900), max: 8 });
+        let (row, _) = call_tool(&mut turn, &bash, "call-1", json!({ "command": "sleep 60", "description": "Wait" })).await;
+        let stopped = row_when(app, &row.id, |t| !t.is_live()).await;
+        let terminal = run_of(&stopped).unwrap();
+        assert_eq!((terminal.state.as_str(), terminal.outcome.as_deref()), ("stopped", Some("Stopped after 0.9 seconds without output")));
+        let Body::Tool { summary, .. } = &stopped.body else { panic!("a tool row") };
+        assert_eq!(summary, "Stopped after 0.9 seconds without output");
+
+        app.shell_sessions.set_limits(crate::shell::Limits { idle: crate::shell::IDLE_LIMIT, max: 2 });
+        for call in ["call-2", "call-3", "call-4"] {
+            call_tool(&mut turn, &bash, call, json!({ "command": "sleep 60", "description": "Wait" })).await.1.unwrap();
+        }
+        let ends: Vec<Option<SessionEnd>> = app.shell_sessions.entries_for_test().iter().rev().take(3).map(|s| s.end()).collect();
+        assert_eq!(ends, [None, None, Some(SessionEnd::Stopped("Stopped to make room for a newer command (2 at most)".into()))]);
+
+        // Quitting stops the rest, and their rows say so.
+        app.shell_sessions.shutdown(app);
+        let rows: Vec<Message> = app.messages("chat").into_iter().filter(|m| run_of(m).is_some()).collect();
+        assert_eq!(rows.len(), 4);
+        assert!(rows.iter().all(|m| !run_of(m).unwrap().is_live()), "{rows:?}");
+        let quit = rows.iter().filter(|m| run_of(m).unwrap().outcome.as_deref() == Some("Stopped when Lorca quit")).count();
+        assert_eq!(quit, 2);
+    }
+
+    #[test]
+    fn rows_left_waiting_by_a_lorca_that_quit_say_it_stopped() {
+        let (scratch, chef) = chef_in_a_dm();
+        let app = &scratch.0;
+        let mut elsewhere = bot("b3", "Atlas");
+        elsewhere.runner_id = "another-mac".into();
+        {
+            let mut state = app.state.lock().unwrap();
+            state.bots.push(elsewhere.clone());
+            state.chats[1].meta.bot_ids.push("b3".into());
+        }
+        let waiting = |bot: &Bot, state: &str| {
+            let mut message = Message::new("chat", Author::Bot { bot_id: bot.id.clone() }, Body::Tool {
+                name: "bash".into(), summary: "Waiting for input".into(), detail: String::new(), is_running: false, call_id: format!("call-{}", bot.id),
+                arguments: json!({}), result: Some("…".into()), is_error: false, description: None, target_bot_id: None,
+                run: Some(CommandRun { session_id: Some(format!("bash-{}", bot.id)), command: "sudo -v".into(), state: state.into(), prompt: Some("Password:".into()), ..CommandRun::default() }),
+            });
+            message.state = MessageState::Complete;
+            app.upsert_message(message.clone(), false);
+            message.id
+        };
+        let here = waiting(&chef, "waiting");
+        let running = waiting(&bot("b2", "Scout"), "running");
+        let there = waiting(&elsewhere, "waiting");
+        app.state.lock().unwrap().bots.iter_mut().find(|b| b.id == "b2").unwrap().runner_id = chef.runner_id.clone();
+
+        crate::shell::close_stale_rows(app);
+        let terminal = |id: &str| run_of(&app.message("chat", id).unwrap()).unwrap();
+        assert_eq!((terminal(&here).state, terminal(&here).outcome), ("stopped".to_string(), Some("Stopped when Lorca quit".to_string())));
+        assert_eq!(terminal(&running).state, "stopped");
+        assert_eq!(terminal(&there).state, "waiting", "another Runner's command is its own");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stop_and_deleting_the_chat_end_what_waits_there() {
+        use lorca_agent::tools::{BashSessions, BashTool, SessionEnd};
+        let (scratch, chef) = chef_in_a_dm();
+        let app = &scratch.0;
+        let mut turn = turn_state(app, &chef, "dev");
+        let sessions: Arc<dyn BashSessions> = Arc::new(crate::shell::TurnSessions::new(app, "chat", "b1"));
+        let bash = BashTool::with_sessions(scratch.1.clone(), sessions).waiting_after(Duration::from_millis(300));
+
+        let (row, _) = call_tool(&mut turn, &bash, "call-1", json!({ "command": "sleep 60", "description": "Wait" })).await;
+        let id = run_of(&row).unwrap().session_id.unwrap();
+        // Only the bot that started it, in its chat, reaches it.
+        assert!(crate::shell::TurnSessions::new(app, "chat", "b2").get(&id).is_none());
+        assert!(crate::shell::TurnSessions::new(app, "other", "b1").get(&id).is_none());
+
+        let session = app.shell_sessions.find("chat", "b1", &id).unwrap();
+        crate::runtime::cancel_chat(app, "chat");
+        assert_eq!(session.end(), Some(SessionEnd::Stopped("Stopped".into())));
+        let row = row_when(app, &row.id, |t| t.state == "stopped").await;
+        let Body::Tool { summary, .. } = &row.body else { panic!("a tool row") };
+        assert_eq!(summary, "Stopped");
+
+        // The row's own Stop.
+        let (row, _) = call_tool(&mut turn, &bash, "call-3", json!({ "command": "sleep 60", "description": "Wait" })).await;
+        crate::api::dispatch(app, "bash.stop", json!({ "chat_id": "chat", "message_id": row.id })).await.unwrap();
+        row_when(app, &row.id, |t| t.outcome.as_deref() == Some("Stopped")).await;
+
+        let (_, _) = call_tool(&mut turn, &bash, "call-2", json!({ "command": "sleep 60", "description": "Wait" })).await;
+        let session = app.shell_sessions.entries_for_test().pop().unwrap();
+        assert!(session.end().is_none());
+        app.delete_chat("chat");
+        assert_eq!(session.end(), Some(SessionEnd::Stopped("Stopped: its chat or bot was deleted".into())));
+        assert!(app.shell_sessions.find("chat", "b1", session.id()).is_none());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn input_the_bot_types_goes_through_auto_review() {
+        use lorca_agent::tools::{BashSessions, BashTool};
+        let (scratch, chef) = chef_in_a_dm();
+        let app = &scratch.0;
+        let mut turn = turn_state(app, &chef, "dev");
+        let sessions: Arc<dyn BashSessions> = Arc::new(crate::shell::TurnSessions::new(app, "chat", "b1"));
+        let bash = BashTool::with_sessions(scratch.1.clone(), sessions).waiting_after(Duration::from_millis(300));
+        let (row, _) = call_tool(&mut turn, &bash, "call-1", json!({ "command": "bash", "description": "A shell" })).await;
+        let id = run_of(&row).unwrap().session_id.unwrap();
+
+        let assistant = AssistantMessage::empty("test", "test");
+        let context = AgentContext { system_prompt: String::new(), messages: Vec::new(), tools: Vec::new() };
+        let cancel = CancellationToken::new();
+        let review = |text: &'static str| {
+            let args = json!({ "session_id": id, "text": text });
+            let call = ToolCall { id: "2".into(), name: "bash_input".into(), arguments: args.clone() };
+            let (assistant, context, cancel, chef, workdir) = (&assistant, &context, &cancel, &chef, &scratch.1);
+            async move {
+                let ctx = BeforeToolCallContext { assistant_message: assistant, tool_call: &call, args: &args, context, cancel };
+                crate::local_review::before_tool_call(app, "chat", chef, workdir, true, ctx).await
+            }
+        };
+        // No provider is connected, so the review cannot clear it, and nobody is there to ask.
+        let blocked = review("rm -rf ~/Documents").await.expect("reviewed");
+        assert!(blocked.block && blocked.reason.as_deref().is_some_and(|r| r.starts_with("bash_input needs the user's permission")), "{:?}", blocked.reason);
+        // Interrupting is always fine.
+        assert!(review("\u{3}").await.is_none());
+        app.shell_sessions.stop_chat("chat");
+    }
+
     fn thinking_starts() -> AgentEvent {
         AgentEvent::MessageUpdate {
             message: AgentMessage::Assistant(AssistantMessage::empty("deepseek", "model")),
@@ -2670,7 +3153,8 @@ mod tests {
         let retry = JobActivity::Retry { attempt: 2, max_attempts: 3, delay_ms: 4000, error: "overloaded".into() };
         assert_eq!(listed(), turn_doing(Some(retry)));
 
-        // The running call goes up as the app sees it, and its finished row replaces it.
+        // The running call goes up as the app sees it, and its finished row replaces it. A
+        // command's card keeps the place it took first in the log, as a message does.
         let queued_rows = || -> Vec<(Message, bool)> {
             app.store
                 .outbox()
@@ -2687,7 +3171,7 @@ mod tests {
         turn.handle(AgentEvent::ToolExecutionStart { tool_call_id: "call".into(), tool_name: "bash".into(), args });
         let [(running, keep_first)] = queued_rows().try_into().unwrap();
         let Body::Tool { is_running, arguments, detail, description, .. } = &running.body else { panic!("a tool row") };
-        assert!(*is_running && arguments.is_null() && detail.chars().count() == 400 && !keep_first);
+        assert!(*is_running && arguments.is_null() && detail.chars().count() == 400 && keep_first);
         assert_eq!(description.as_deref(), Some("Install dependencies"));
         // The bot's new message says what it is doing now.
         assert_eq!(listed(), turn_doing(None));
@@ -2703,7 +3187,9 @@ mod tests {
         });
         let [(finished, keep_first)] = queued_rows().try_into().unwrap();
         let Body::Tool { is_running, arguments, .. } = &finished.body else { panic!("a tool row") };
-        assert_eq!((finished.id.as_str(), *is_running, keep_first), (running.id.as_str(), false, false));
+        assert_eq!((finished.id.as_str(), *is_running, keep_first), (running.id.as_str(), false, true));
+        let Body::Tool { run: Some(run), .. } = &finished.body else { panic!("a command's card") };
+        assert_eq!((run.state.as_str(), run.output.as_deref()), ("exited", Some("done")));
         assert_eq!(arguments["command"], "bun install");
     }
 

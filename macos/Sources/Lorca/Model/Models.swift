@@ -579,12 +579,18 @@ struct ToolInvocation: Hashable {
     var description: String?
     /// The bot a message_bot call goes to.
     var targetBotID: Bot.ID?
+    /// A shell command's card, from Auto-review's question to how the command ended. Every
+    /// `bash` row has one.
+    var run: CommandRun? = nil
 
     /// A finished message_bot call: the one tool the transcript shows, as "Messaged ◉ Name".
     /// Everything else a bot does with tools stays behind the "is working" row.
     var isSentMessage: Bool {
         name == "message_bot" && !isRunning && summary.hasPrefix("Messaged ")
     }
+
+    /// Whether the transcript shows the row: a sent message's marker, or a command's card.
+    var isShown: Bool { isSentMessage || run != nil }
 
     var symbolName: String {
         switch name {
@@ -601,6 +607,74 @@ struct ToolInvocation: Hashable {
         case "ls": "folder"
         default: "wrench.and.screwdriver.fill"
         }
+    }
+}
+
+/// A shell command as its card shows it: Auto-review checking it, the question it asks, the
+/// command running in its terminal, what the command asks, and how it ended. While it asks, the
+/// card takes the answer to the question (`chats.permission`); while the command runs, the
+/// user's answer to it (`bash.stdin`) and a Stop (`bash.stop`).
+struct CommandRun: Hashable {
+    enum State: String, Hashable {
+        /// Auto-review is judging it.
+        case checking
+        /// For the user's permission.
+        case asking
+        /// Running and printing.
+        case running
+        /// Running, at a question or silent.
+        case waiting
+        case exited
+        /// Exited with a nonzero code.
+        case failed
+        case stopped
+        /// Not allowed, so it never ran.
+        case denied
+        /// Nobody answered the question in time.
+        case expired
+    }
+
+    /// The terminal session running it, once one does. Nil before it starts, and on a Windows
+    /// Runner, where a command runs on pipes and takes no answers.
+    var sessionID: String?
+    /// The command, its first 8,000 characters.
+    var command: String
+    var state: State
+    /// The line it asks with: "[sudo] password for ana:".
+    var prompt: String?
+    /// Its last lines, as the bottom of a terminal shows them. Never what was typed.
+    var output: String?
+    /// How it ended, in the Runner's words: "Command exited with code 1".
+    var outcome: String?
+    /// The Runner it runs on, for the question: "Workbench".
+    var device: String?
+    /// Why Auto-review asked.
+    var reason: String?
+    /// The rule Always allow adds, or, after an Always allow, added.
+    var rule: String?
+    /// The answer to the question: `allowed`, `always`, `denied`, or `expired`.
+    var decision: String?
+
+    var isLive: Bool { state == .waiting || state == .running }
+    var isEnded: Bool { !isLive && state != .checking && state != .asking }
+    /// The command runs in a session here or on its Runner: it takes answers and a Stop.
+    var takesInput: Bool { isLive && sessionID != nil }
+
+    /// The command's first line with anything on it.
+    var firstLine: String {
+        command.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.first { !$0.isEmpty } ?? command
+    }
+
+    /// Whether what the user types should show as they type it: a yes-or-no question. Anything
+    /// else may be a secret.
+    var asksYesOrNo: Bool {
+        guard let prompt = prompt?.lowercased() else { return false }
+        return prompt.contains("[y/n]") || prompt.contains("(y/n)") || prompt.contains("(yes/no")
+    }
+
+    /// The buttons the question offers: (title, decision). Always allow only with a rule to add.
+    var choices: [(String, String)] {
+        rule == nil ? [(L("Allow once"), "allow"), (L("Deny"), "deny")] : [(L("Allow once"), "allow"), (L("Always allow"), "always"), (L("Deny"), "deny")]
     }
 }
 

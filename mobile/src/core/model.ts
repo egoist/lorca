@@ -149,6 +149,8 @@ export type Body =
       description?: string;
       /** The bot a message_bot call goes to. */
       target_bot_id?: string;
+      /** A bash call's card, from Auto-review's question to how the command ended. */
+      run?: CommandRun;
     }
   | { kind: "handoff"; from: string; to: string; reason: string }
   | { kind: "notice"; text: string; routine_id?: string }
@@ -156,6 +158,45 @@ export type Body =
   /// `rule` is the rule Always allow adds, which Auto-review proposed for a shell command (`plugin_id` is `computer`);
   /// `command` is that command in full, where `summary` is its first line.
   | { kind: "permission"; plugin_id: string; plugin_name: string; tool: string; summary: string; decision: "pending" | "allowed" | "always" | "denied" | "expired" | "connected" | "failed"; reason?: string; rule?: string; command?: string; link?: string; code?: string };
+
+/// A bash call as its card shows it: Auto-review checking it, the question it asks, the command
+/// running in its terminal, what the command asks, and how it ended. While it asks, the card takes
+/// the answer to the question (`chats.permission`); while the command runs, the user's answer to
+/// it (`bash.stdin`) and a Stop (`bash.stop`).
+export interface CommandRun {
+  /** The terminal session running it, once one does; none before it starts, or on a Windows Runner, where it takes no answers. */
+  session_id?: string;
+  /** The command, its first 8,000 characters. */
+  command: string;
+  /**
+   * `checking` (Auto-review is judging it), `asking` (for the user's permission), `running`, or `waiting` (at a question,
+   * or silent); once it ended, `exited`, `failed`, `stopped`, `denied` (never run), or `expired` (nobody answered in time).
+   */
+  state: "checking" | "asking" | "running" | "waiting" | "exited" | "failed" | "stopped" | "denied" | "expired";
+  /** The line it asks with: "[sudo] password for ana:". */
+  prompt?: string;
+  /** Its last lines, as the bottom of a terminal shows them. Never what was typed. */
+  output?: string;
+  /** How it ended, in the Runner's words: "Command exited with code 1". */
+  outcome?: string;
+  /** The Runner it runs on, for the question: "Workbench". */
+  device?: string;
+  /** Why Auto-review asked. */
+  reason?: string;
+  /** The rule Always allow adds, or, after an Always allow, added. */
+  rule?: string;
+  /** The answer to the question. */
+  decision?: "allowed" | "always" | "denied" | "expired";
+}
+
+export function isLive(run: CommandRun): boolean {
+  return run.state === "waiting" || run.state === "running";
+}
+
+/// It ended: the card is one line that says how.
+export function isEnded(run: CommandRun): boolean {
+  return !isLive(run) && run.state !== "checking" && run.state !== "asking";
+}
 
 /// One Auto-review rule: what a bot wants to do, in the user's words, and whether that runs on
 /// its own or asks first. Always allow on a shell command adds the rule Auto-review proposed; on

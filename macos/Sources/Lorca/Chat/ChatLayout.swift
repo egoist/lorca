@@ -305,6 +305,17 @@ final class ChatLayout {
         return height
     }
 
+    /// A command's card, for a `bash` row.
+    private func commandHeight(for message: Message, run: CommandRun, tableWidth: CGFloat) -> CGFloat {
+        let width = min(CommandCellView.width, tableWidth - ChatMetrics.horizontalInset * 2)
+        var entry = entry(for: message)
+        if let card = entry.card, card.width == width { return card.height }
+        let height = CommandCellView.height(for: run, rowWidth: tableWidth)
+        entry.card = (width, height)
+        cache[message.id] = entry
+        return height
+    }
+
     /// Hugs the text up to `noticeMaxWidth`, with the icon centered on the first line.
     func noticeMetrics(for text: String, tableWidth: CGFloat) -> NoticeMetrics {
         let inset = TextMeasure.labelInset
@@ -353,8 +364,14 @@ final class ChatLayout {
                 let metrics = metrics(for: message, showsName: showsName, tableWidth: tableWidth)
                 return top + metrics.rowHeight
 
-            // Tool calls never show; only a message_bot row reaches here, as a marker.
-            case .tool, .handoff:
+            // Tool calls never show but as a message_bot marker or a command's card.
+            case let .tool(tool):
+                if let run = tool.run {
+                    return top + commandHeight(for: message, run: run, tableWidth: tableWidth)
+                }
+                return top + 34
+
+            case .handoff:
                 return top + 34
 
             case .notice:

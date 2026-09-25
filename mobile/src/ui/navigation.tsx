@@ -16,6 +16,7 @@ export const AndroidIcons = {
   photos: require("../../assets/material/photo_library.xml") as ImageSourcePropType,
   camera: require("../../assets/material/camera.xml") as ImageSourcePropType,
   folder: require("../../assets/material/folder.xml") as ImageSourcePropType,
+  send: require("../../assets/material/send.xml") as ImageSourcePropType,
 } as const;
 
 /** The bar every stack shares: tinted on iOS, Material's plain label color on Android. */
