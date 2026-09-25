@@ -152,6 +152,7 @@ if (notes) await Bun.write(join(UPDATES_DIR, `${APP_NAME}-${version}.md`), `${no
 else log(color.yellow(`CHANGELOG.md has no "${version}" section: releasing without notes`))
 
 // ---- 6. appcast
+log("generating appcast.xml")
 if (!(await generateAppcast(UPDATES_DIR, RELEASES_URL))) die("generate_appcast failed")
 
 // ---- 7. upload
