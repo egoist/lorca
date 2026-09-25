@@ -18,7 +18,7 @@ pub type ChatGptTokens = serde_json::Value;
 #[cfg(not(feature = "provider-auth"))]
 pub type GrokTokens = serde_json::Value;
 
-pub const PROVIDER_KINDS: [&str; 6] = ["deepseek", "anthropic", "opencode", "opencode-go", "chatgpt", "grok"];
+pub const PROVIDER_KINDS: [&str; 7] = ["deepseek", "anthropic", "opencode", "opencode-go", "cerebras", "chatgpt", "grok"];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiKeyCredential {
@@ -39,6 +39,8 @@ pub struct Credentials {
     pub opencode: Option<ApiKeyCredential>,
     #[serde(default)]
     pub opencode_go: Option<ApiKeyCredential>,
+    #[serde(default)]
+    pub cerebras: Option<ApiKeyCredential>,
     #[serde(default)]
     pub chatgpt: Option<ChatGptTokens>,
     #[serde(default)]
@@ -96,6 +98,7 @@ impl Credentials {
                         "anthropic" => self.anthropic = other.anthropic.clone(),
                         "opencode" => self.opencode = other.opencode.clone(),
                         "opencode-go" => self.opencode_go = other.opencode_go.clone(),
+                        "cerebras" => self.cerebras = other.cerebras.clone(),
                         "chatgpt" => self.chatgpt = other.chatgpt.clone(),
                         "grok" => self.grok = other.grok.clone(),
                         _ => unreachable!(),
@@ -120,6 +123,7 @@ impl Credentials {
             "anthropic" => self.anthropic.as_ref(),
             "opencode" => self.opencode.as_ref(),
             "opencode-go" => self.opencode_go.as_ref(),
+            "cerebras" => self.cerebras.as_ref(),
             _ => None,
         }
     }
@@ -232,5 +236,25 @@ mod tests {
         assert_eq!(ours.opencode.as_ref().unwrap().api_key, "zen-new");
         assert_eq!(ours.opencode_go.as_ref().unwrap().api_key, "go-key");
         assert_eq!(ours.statuses().into_iter().map(|status| status.kind).collect::<Vec<_>>(), PROVIDER_KINDS);
+    }
+
+    #[test]
+    fn cerebras_key_round_trips_and_merges() {
+        let mut ours = Credentials {
+            cerebras: Some(ApiKeyCredential { api_key: "csk-test-cerebras-key".into(), base_url: Some("https://proxy.test/v1".into()), connected_at: 7 }),
+            ..Default::default()
+        };
+        ours.changed_at.insert("cerebras".into(), 3.0);
+
+        let stored: Credentials = serde_json::from_str(&serde_json::to_string(&ours).unwrap()).unwrap();
+        let key = stored.api_key("cerebras").unwrap();
+        assert_eq!((key.api_key.as_str(), key.base_url.as_deref(), key.connected_at), ("csk-test-cerebras-key", Some("https://proxy.test/v1"), 7));
+        assert_eq!(stored.connected_kinds(), vec!["cerebras".to_string()]);
+        let status = stored.statuses().into_iter().find(|s| s.kind == "cerebras").unwrap();
+        assert_eq!(status.detail, "csk…-key · https://proxy.test/v1");
+
+        let mut other = Credentials::default();
+        assert_eq!(other.merge(&stored).taken, vec!["cerebras".to_string()]);
+        assert_eq!(other.cerebras.as_ref().unwrap().api_key, "csk-test-cerebras-key");
     }
 }

@@ -9,19 +9,20 @@ struct ProviderCredential: Hashable, Identifiable {
         case anthropic = "Anthropic"
         case opencode = "OpenCode Zen"
         case opencodeGo = "OpenCode Go"
+        case cerebras = "Cerebras"
         case chatgpt = "ChatGPT"
         case grok = "Grok"
 
         var symbolName: String {
             switch self {
-            case .deepseek, .anthropic, .opencode, .opencodeGo: "key.fill"
+            case .deepseek, .anthropic, .opencode, .opencodeGo, .cerebras: "key.fill"
             case .chatgpt, .grok: "person.badge.key.fill"
             }
         }
 
         var subtitle: String {
             switch self {
-            case .deepseek, .anthropic, .opencode, .opencodeGo: L("API key")
+            case .deepseek, .anthropic, .opencode, .opencodeGo, .cerebras: L("API key")
             case .chatgpt, .grok: L("Subscription")
             }
         }
@@ -34,7 +35,7 @@ struct ProviderCredential: Hashable, Identifiable {
             switch self {
             case .chatgpt: L("It needs a ChatGPT subscription.")
             case .grok: L("It needs a SuperGrok or X Premium+ subscription.")
-            case .deepseek, .anthropic, .opencode, .opencodeGo: ""
+            case .deepseek, .anthropic, .opencode, .opencodeGo, .cerebras: ""
             }
         }
 
@@ -45,6 +46,7 @@ struct ProviderCredential: Hashable, Identifiable {
             case .anthropic: "https://api.anthropic.com"
             case .opencode: "https://opencode.ai/zen"
             case .opencodeGo: "https://opencode.ai/zen/go"
+            case .cerebras: "https://api.cerebras.ai/v1"
             case .chatgpt, .grok: ""
             }
         }
@@ -55,6 +57,7 @@ struct ProviderCredential: Hashable, Identifiable {
             case .deepseek: L("sk-… from platform.deepseek.com")
             case .anthropic: L("sk-ant-… from console.anthropic.com")
             case .opencode, .opencodeGo: L("API key from opencode.ai/auth")
+            case .cerebras: L("csk-… from cloud.cerebras.ai")
             case .chatgpt, .grok: ""
             }
         }
@@ -66,6 +69,7 @@ struct ProviderCredential: Hashable, Identifiable {
             case .anthropic: "anthropic"
             case .opencode: "opencode"
             case .opencodeGo: "opencode-go"
+            case .cerebras: "cerebras"
             case .chatgpt: "chatgpt"
             case .grok: "grok"
             }
@@ -77,6 +81,7 @@ struct ProviderCredential: Hashable, Identifiable {
             case "anthropic": self = .anthropic
             case "opencode": self = .opencode
             case "opencode-go": self = .opencodeGo
+            case "cerebras": self = .cerebras
             case "chatgpt": self = .chatgpt
             case "grok": self = .grok
             default: return nil
@@ -97,6 +102,7 @@ struct ProviderCredential: Hashable, Identifiable {
                 case .deepseek: ["off", "low", "medium", "high", "xhigh", "max"]
                 case .anthropic: ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
                 case .opencode, .opencodeGo: ["off", "low", "medium", "high", "xhigh", "max"]
+                case .cerebras: ["off", "low", "medium", "high"]
                 case .chatgpt: ["low", "medium", "high", "xhigh", "max"]
                 case .grok: ["low", "medium", "high", "xhigh"]
                 }
@@ -151,6 +157,11 @@ struct ProviderCredential: Hashable, Identifiable {
                     ("kimi-k3", "Kimi K3"),
                     ("qwen3.8-flash", "Qwen3.8 Flash"),
                     ("minimax-m3", "MiniMax M3"),
+                ]
+            case .cerebras:
+                [
+                    ("gpt-oss-120b", "GPT OSS 120B"),
+                    ("qwen-3.8-27b", "Qwen3.8 27B"),
                 ]
             case .chatgpt:
                 [

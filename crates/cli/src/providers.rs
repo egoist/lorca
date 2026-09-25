@@ -121,6 +121,7 @@ pub fn default_model(kind: &str) -> &'static str {
         "grok" => lorca_agent::providers::grok::GROK_DEFAULT_MODEL,
         "opencode" => OPENCODE_DEFAULT_MODEL,
         "opencode-go" => OPENCODE_GO_DEFAULT_MODEL,
+        "cerebras" => lorca_agent::providers::openai_compat::CEREBRAS_DEFAULT_MODEL,
         _ => "",
     }
 }
@@ -135,6 +136,7 @@ pub fn review_model(kind: &str) -> (&'static str, ThinkingLevel) {
         "chatgpt" => "gpt-6-luna",
         "grok" => "grok-4.7",
         "opencode" | "opencode-go" => "deepseek-v4.1-flash",
+        "cerebras" => "gpt-oss-120b",
         _ => "",
     };
     let thinking = models::find(kind, model).and_then(|info| info.levels.first().copied()).unwrap_or(ThinkingLevel::Off);
@@ -201,6 +203,19 @@ pub fn provider_for(app: &Arc<App>, kind: &str, model: Option<&str>, thinking: O
                 .or_else(|| env_url("LORCA_OPENCODE_GO_BASE_URL"))
                 .unwrap_or_else(|| OPENCODE_GO_BASE_URL.into());
             opencode_provider("opencode-go", &root, &key.api_key, &model, thinking)
+        }
+        "cerebras" => {
+            let key = app
+                .credentials
+                .lock()
+                .unwrap()
+                .cerebras
+                .clone()
+                .ok_or_else(|| "Cerebras is not connected".to_string())?;
+            let model = model.or_else(|| std::env::var("LORCA_CEREBRAS_MODEL").ok());
+            let mut provider = OpenAiCompatProvider::cerebras(&key.api_key, model.as_deref()).with_thinking(thinking);
+            provider.base_url = key.base_url.clone().unwrap_or_else(cerebras_base_url);
+            Ok(Arc::new(provider))
         }
         "chatgpt" => {
             if app.credentials.lock().unwrap().chatgpt.is_none() {
@@ -303,6 +318,12 @@ fn deepseek_anthropic_url(root: &str) -> String {
     }
 }
 
+/// Cerebras's API root when the credential has none: `LORCA_CEREBRAS_BASE_URL` or Cerebras
+/// itself.
+fn cerebras_base_url() -> String {
+    env_url("LORCA_CEREBRAS_BASE_URL").unwrap_or_else(|| lorca_agent::providers::openai_compat::CEREBRAS_BASE_URL.to_string())
+}
+
 /// Anthropic's API root when the credential has none: `LORCA_ANTHROPIC_BASE_URL` or
 /// Anthropic itself.
 fn anthropic_base_url() -> String {
@@ -348,7 +369,7 @@ mod tests {
 
     #[test]
     fn defaults_are_the_first_catalog_models_and_roots_accept_v1() {
-        for kind in ["deepseek", "anthropic", "chatgpt", "grok", "opencode", "opencode-go"] {
+        for kind in ["deepseek", "anthropic", "chatgpt", "grok", "opencode", "opencode-go", "cerebras"] {
             assert_eq!(models::for_provider(kind)[0].id, default_model(kind), "{kind}");
         }
         assert_eq!(opencode_root("https://opencode.ai/zen/v1/"), OPENCODE_BASE_URL);
@@ -357,7 +378,7 @@ mod tests {
 
     #[test]
     fn auto_review_runs_a_small_model_that_thinks_least() {
-        for kind in ["deepseek", "anthropic", "chatgpt", "grok", "opencode", "opencode-go"] {
+        for kind in ["deepseek", "anthropic", "chatgpt", "grok", "opencode", "opencode-go", "cerebras"] {
             assert!(models::find(kind, review_model(kind).0).is_some(), "{kind}");
         }
         assert_eq!(review_model("deepseek"), ("deepseek-flash", ThinkingLevel::Off));
@@ -365,6 +386,7 @@ mod tests {
         assert_eq!(review_model("chatgpt"), ("gpt-6-luna", ThinkingLevel::Low));
         assert_eq!(review_model("grok"), ("grok-4.7", ThinkingLevel::Low));
         assert_eq!(review_model("opencode-go"), ("deepseek-v4.1-flash", ThinkingLevel::Low));
+        assert_eq!(review_model("cerebras"), ("gpt-oss-120b", ThinkingLevel::Low));
     }
 
     #[tokio::test]

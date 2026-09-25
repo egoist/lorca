@@ -25,7 +25,7 @@ export default function NewBotScreen() {
   const [runnerId, setRunnerId] = useState<string>(() => runners.find((r) => deviceIsOnline(r.id))?.id ?? runners[0]?.id ?? "");
   const runner = runners.find((r) => r.id === runnerId);
   const connected = connectedProviders(useStore((s) => s.providers));
-  const providers = connected.length ? connected : ["deepseek", "anthropic", "opencode", "opencode-go", "chatgpt", "grok"];
+  const providers = connected.length ? connected : ["deepseek", "anthropic", "opencode", "opencode-go", "cerebras", "chatgpt", "grok"];
   const [provider, setProvider] = useState<string>(providers[0]);
   const [model, setModel] = useState<string | undefined>(undefined);
   const [thinking, setThinking] = useState<string | undefined>(undefined);

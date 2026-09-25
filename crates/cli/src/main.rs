@@ -78,10 +78,10 @@ enum IdentityCommand {
 
 #[derive(Subcommands, Debug)]
 enum ProviderCommand {
-    /// Connect a provider: an API key for deepseek, anthropic, opencode, and opencode-go;
-    /// a browser sign-in for chatgpt and grok.
+    /// Connect a provider: an API key for deepseek, anthropic, opencode, opencode-go, and
+    /// cerebras; a browser sign-in for chatgpt and grok.
     Set {
-        /// deepseek, anthropic, opencode, opencode-go, chatgpt, or grok.
+        /// deepseek, anthropic, opencode, opencode-go, cerebras, chatgpt, or grok.
         kind: String,
         /// The API key. Omit to read it from stdin, which keeps it out of the shell history.
         api_key: Option<String>,

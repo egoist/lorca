@@ -51,6 +51,7 @@ type Builder = Arc<dyn Fn(&str, Option<ThinkingLevel>) -> Result<Arc<dyn Provide
 /// | --- | --- | --- |
 /// | `deepseek` | `DEEPSEEK_API_KEY` | `DEEPSEEK_BASE_URL` (the API root; its `/anthropic` is used) |
 /// | `anthropic` | `ANTHROPIC_API_KEY` | `ANTHROPIC_BASE_URL` |
+/// | `cerebras` | `CEREBRAS_API_KEY` | `CEREBRAS_BASE_URL` (default `https://api.cerebras.ai/v1`) |
 /// | `openai` | `OPENAI_API_KEY` | `OPENAI_BASE_URL` (default `https://api.openai.com/v1`) |
 /// | `chatgpt` | the [`TokenSource`] given to `with_chatgpt` | |
 /// | `grok` | the [`GrokTokenSource`] given to `with_grok` | `GROK_BASE_URL` |
@@ -109,6 +110,14 @@ impl ProviderFactory for EnvProviderFactory {
                 let mut provider = AnthropicProvider::anthropic(&key, model_id);
                 if let Some(base) = Self::env("ANTHROPIC_BASE_URL") {
                     provider = provider.with_base_url(&base);
+                }
+                Ok(Arc::new(provider.with_thinking(thinking)))
+            }
+            "cerebras" => {
+                let key = Self::env("CEREBRAS_API_KEY").ok_or("CEREBRAS_API_KEY is not set")?;
+                let mut provider = OpenAiCompatProvider::cerebras(&key, model_id);
+                if let Some(base) = Self::env("CEREBRAS_BASE_URL") {
+                    provider.base_url = base.trim_end_matches('/').to_string();
                 }
                 Ok(Arc::new(provider.with_thinking(thinking)))
             }

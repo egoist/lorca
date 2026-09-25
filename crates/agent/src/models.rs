@@ -103,6 +103,10 @@ const ALWAYS_EFFORT_LEVELS: &[ThinkingLevel] = &[Low, Medium, High, XHigh, Max];
 const LOW_HIGH_MAX_LEVELS: &[ThinkingLevel] = &[Low, High, Max];
 const MAX_ONLY_LEVELS: &[ThinkingLevel] = &[Max];
 const QWEN_LEVELS: &[ThinkingLevel] = &[Off, Low, Medium, XHigh];
+/// Cerebras takes `reasoning_effort` `low` to `high`; GPT OSS always reasons, Qwen turns off
+/// with `none`.
+const GPT_OSS_LEVELS: &[ThinkingLevel] = &[Low, Medium, High];
+const CEREBRAS_QWEN_LEVELS: &[ThinkingLevel] = &[Off, Low, Medium, High];
 const NO_LEVELS: &[ThinkingLevel] = &[];
 
 const fn rates(input: f64, output: f64, cache_read: f64, cache_write: f64) -> Rates {
@@ -478,6 +482,33 @@ pub const MODELS: &[ModelInfo] = &[
         thinking: ThinkingMode::Effort,
         levels: NO_LEVELS,
     },
+    // Cerebras. The first entry is Lorca's default.
+    ModelInfo {
+        id: "gpt-oss-120b",
+        name: "GPT OSS 120B",
+        provider: "cerebras",
+        context_window: 131_072,
+        max_output: 40_960,
+        reasoning: true,
+        images: false,
+        rates: rates(0.35, 0.75, 0.35, 0.0),
+        tiers: NO_TIERS,
+        thinking: ThinkingMode::Effort,
+        levels: GPT_OSS_LEVELS,
+    },
+    ModelInfo {
+        id: "qwen-3.8-27b",
+        name: "Qwen3.8 27B",
+        provider: "cerebras",
+        context_window: 131_072,
+        max_output: 40_960,
+        reasoning: true,
+        images: true,
+        rates: rates(0.99, 1.49, 0.99, 0.0),
+        tiers: NO_TIERS,
+        thinking: ThinkingMode::Effort,
+        levels: CEREBRAS_QWEN_LEVELS,
+    },
 ];
 
 /// The catalog entry for a model of a provider: an exact id, or a dated variant of one
@@ -523,6 +554,10 @@ mod tests {
         assert_eq!(for_provider("opencode").first().map(|m| m.id), Some("deepseek-v4.1-flash"));
         assert_eq!(for_provider("opencode-go").first().map(|m| m.id), Some("glm-5.3-flash"));
         assert_eq!(find("opencode-go", "qwen3.8-flash").map(|m| m.images), Some(true));
+        assert_eq!(for_provider("cerebras").first().map(|m| m.id), Some("gpt-oss-120b"));
+        assert_eq!(find("cerebras", "gpt-oss-120b").map(|m| (m.reasoning, m.images)), Some((true, false)));
+        assert_eq!(find("cerebras", "qwen-3.8-27b").map(|m| m.images), Some(true));
+        assert!(find("cerebras", "llama3.1-8b").is_none());
     }
 
     #[test]

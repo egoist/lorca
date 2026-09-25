@@ -1,4 +1,4 @@
-//! OpenAI-compatible `/chat/completions` streaming. DeepSeek uses this as is.
+//! OpenAI-compatible `/chat/completions` streaming. DeepSeek and Cerebras use this as is.
 
 use std::collections::HashMap;
 
@@ -19,6 +19,9 @@ pub const DEEPSEEK_BASE_URL: &str = "https://api.deepseek.com";
 /// DeepSeek V4.1 Flash. `deepseek-v4-pro` is the reasoning-heavy option; the legacy
 /// `deepseek-chat` / `deepseek-reasoner` names were retired in 2026.
 pub const DEEPSEEK_DEFAULT_MODEL: &str = "deepseek-flash";
+pub const CEREBRAS_BASE_URL: &str = "https://api.cerebras.ai/v1";
+/// GPT OSS 120B, Cerebras's production reasoning model.
+pub const CEREBRAS_DEFAULT_MODEL: &str = "gpt-oss-120b";
 
 const USER_AGENT: &str = concat!("lorca-agent/", env!("CARGO_PKG_VERSION"));
 
@@ -32,8 +35,11 @@ pub struct OpenAiCompatProvider {
     /// Retries of a request that fails before it streams (408, 409, 429, 5xx, transport).
     pub max_retries: u32,
     pub max_retry_delay_ms: u64,
-    /// Sent as `reasoning_effort` (`Off` sends nothing).
+    /// Sent as `reasoning_effort` (`Off` sends nothing unless `reasoning_off` names a value).
     pub thinking_level: Option<ThinkingLevel>,
+    /// The `reasoning_effort` that turns thinking off on a server that takes one (Cerebras:
+    /// `none`), sent when the model can turn it off.
+    pub reasoning_off: Option<&'static str>,
     /// The catalog entry for the model, when it has one.
     pub info: Option<&'static ModelInfo>,
     client: reqwest::Client,
@@ -50,6 +56,7 @@ impl OpenAiCompatProvider {
             max_retries: 2,
             max_retry_delay_ms: DEFAULT_MAX_RETRY_DELAY_MS,
             thinking_level: None,
+            reasoning_off: None,
             info: models::find(provider_id, model),
             client: reqwest::Client::new(),
         }
@@ -62,6 +69,14 @@ impl OpenAiCompatProvider {
 
     pub fn deepseek(api_key: &str, model: Option<&str>) -> Self {
         Self::new("deepseek", DEEPSEEK_BASE_URL, api_key, model.unwrap_or(DEEPSEEK_DEFAULT_MODEL))
+    }
+
+    /// Cerebras, whose models take `reasoning_effort` and stream thinking as `reasoning`.
+    pub fn cerebras(api_key: &str, model: Option<&str>) -> Self {
+        let mut provider = Self::new("cerebras", CEREBRAS_BASE_URL, api_key, model.unwrap_or(CEREBRAS_DEFAULT_MODEL));
+        provider.supports_images = provider.info.is_some_and(|info| info.images);
+        provider.reasoning_off = Some("none");
+        provider
     }
 
     fn body(&self, request: &ModelRequest) -> Value {
@@ -95,7 +110,8 @@ impl OpenAiCompatProvider {
             None => Some(level),
         });
         let effort = match level {
-            None | Some(ThinkingLevel::Off) => None,
+            None => None,
+            Some(ThinkingLevel::Off) => self.reasoning_off,
             Some(ThinkingLevel::Minimal) => Some("minimal"),
             Some(ThinkingLevel::Low) => Some("low"),
             Some(ThinkingLevel::Medium) => Some("medium"),
@@ -423,6 +439,31 @@ impl Provider for OpenAiCompatProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cerebras_effort_follows_the_models_levels() {
+        let request = ModelRequest {
+            system_prompt: String::new(),
+            messages: Vec::new(),
+            tools: Vec::new(),
+            cache_points: Vec::new(),
+            max_tokens: None,
+            options: Default::default(),
+        };
+        let effort = |model: Option<&str>, level| OpenAiCompatProvider::cerebras("k", model).with_thinking(level).body(&request)["reasoning_effort"].clone();
+        let provider = OpenAiCompatProvider::cerebras("k", None);
+        assert_eq!((provider.base_url.as_str(), provider.model.as_str()), (CEREBRAS_BASE_URL, CEREBRAS_DEFAULT_MODEL));
+        assert!(!provider.supports_images);
+        assert!(OpenAiCompatProvider::cerebras("k", Some("qwen-3.8-27b")).supports_images);
+        // GPT OSS cannot stop reasoning, so Off runs at its lowest effort; Qwen turns off.
+        assert_eq!(effort(None, Some(ThinkingLevel::Off)), "low");
+        assert_eq!(effort(None, Some(ThinkingLevel::Max)), "high");
+        assert_eq!(effort(Some("qwen-3.8-27b"), Some(ThinkingLevel::Off)), "none");
+        assert_eq!(effort(Some("qwen-3.8-27b"), None), Value::Null);
+        // Servers without an off value still send nothing.
+        let deepseek = OpenAiCompatProvider::deepseek("k", None).with_thinking(Some(ThinkingLevel::Off));
+        assert_eq!(deepseek.body(&request)["reasoning_effort"], Value::Null);
+    }
 
     #[tokio::test]
     async fn gateway_reasoning_field_streams_as_thinking() {

@@ -47,7 +47,7 @@ let mut harness = AgentHarness::new(options);
 | `tool_execution` | `Parallel` |
 | `messages` | empty |
 
-`EnvProviderFactory` builds the built-in adapters from `DEEPSEEK_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` (with `*_BASE_URL` overrides) a `TokenSource` for ChatGPT, and a `GrokTokenSource` for Grok (`GROK_BASE_URL` overrides its API root), and takes `register(provider, builder)` for anything else. Implement `ProviderFactory` yourself when keys live elsewhere.
+`EnvProviderFactory` builds the built-in adapters from `DEEPSEEK_API_KEY`, `ANTHROPIC_API_KEY`, `CEREBRAS_API_KEY`, `OPENAI_API_KEY` (with `*_BASE_URL` overrides) a `TokenSource` for ChatGPT, and a `GrokTokenSource` for Grok (`GROK_BASE_URL` overrides its API root), and takes `register(provider, builder)` for anything else. Implement `ProviderFactory` yourself when keys live elsewhere.
 
 ## Running
 

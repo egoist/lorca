@@ -12,6 +12,7 @@ Bots think with your own AI accounts. Connect a provider once, on any paired dev
 | **Anthropic** | API key | `claude-opus-5` |
 | **OpenCode Zen** | API key, pay as you go | `deepseek-v4.1-flash` |
 | **OpenCode Go** | API key and Go subscription | `glm-5.3-flash` |
+| **Cerebras** | API key | `gpt-oss-120b` |
 | **ChatGPT** | Sign in with your ChatGPT subscription | `gpt-6-sol` |
 | **Grok** | Sign in with SuperGrok or X Premium+ | `grok-4.7` |
 
@@ -31,6 +32,7 @@ lorca provider set deepseek
 lorca provider set anthropic
 lorca provider set opencode
 lorca provider set opencode-go
+lorca provider set cerebras
 lorca provider set chatgpt
 lorca provider list
 ```
@@ -51,4 +53,4 @@ If a bot's provider is not connected, its turn ends with a note that says to con
 
 ## Cost
 
-DeepSeek, Anthropic, and OpenCode Zen bill by usage; OpenCode Go applies usage to its subscription limits. The inspector shows what each chat has spent. ChatGPT and Grok sign-ins use your subscription, and the figure shown is what the work would cost at API rates.
+DeepSeek, Anthropic, OpenCode Zen, and Cerebras bill by usage; OpenCode Go applies usage to its subscription limits. The inspector shows what each chat has spent. ChatGPT and Grok sign-ins use your subscription, and the figure shown is what the work would cost at API rates.

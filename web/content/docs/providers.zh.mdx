@@ -12,6 +12,7 @@ icon: Sparkles
 | **Anthropic** | API 密钥 | `claude-opus-5` |
 | **OpenCode Zen** | API 密钥，按量付费 | `deepseek-v4.1-flash` |
 | **OpenCode Go** | API 密钥和 Go 订阅 | `glm-5.3-flash` |
+| **Cerebras** | API 密钥 | `gpt-oss-120b` |
 | **ChatGPT** | 用你的 ChatGPT 订阅登录 | `gpt-6-sol` |
 | **Grok** | 用 SuperGrok 或 X Premium+ 登录 | `grok-4.7` |
 
@@ -31,6 +32,7 @@ lorca provider set deepseek
 lorca provider set anthropic
 lorca provider set opencode
 lorca provider set opencode-go
+lorca provider set cerebras
 lorca provider set chatgpt
 lorca provider list
 ```
@@ -51,4 +53,4 @@ lorca provider list
 
 ## 花费
 
-DeepSeek、Anthropic 和 OpenCode Zen 按用量计费；OpenCode Go 的用量计入订阅限额。检查器会显示每个聊天花了多少。ChatGPT 和 Grok 登录用的是你的订阅，显示的数字是按 API 价格折算的花费。
+DeepSeek、Anthropic、OpenCode Zen 和 Cerebras 按用量计费；OpenCode Go 的用量计入订阅限额。检查器会显示每个聊天花了多少。ChatGPT 和 Grok 登录用的是你的订阅，显示的数字是按 API 价格折算的花费。

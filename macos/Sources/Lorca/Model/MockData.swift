@@ -62,6 +62,7 @@ enum MockData {
             ProviderCredential(kind: .anthropic, isConnected: true, detail: "sk-ant…8d1a"),
             ProviderCredential(kind: .opencode, isConnected: false, detail: "Not connected"),
             ProviderCredential(kind: .opencodeGo, isConnected: false, detail: "Not connected"),
+            ProviderCredential(kind: .cerebras, isConnected: false, detail: "Not connected"),
             ProviderCredential(kind: .chatgpt, isConnected: true, detail: "you@lorca.app"),
             ProviderCredential(kind: .grok, isConnected: false, detail: "Not connected"),
         ]

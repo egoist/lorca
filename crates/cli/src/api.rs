@@ -601,7 +601,7 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
         // continue to carry masked provider statuses.
         "providers.api_key" => {
             let kind = string(&params, "kind")?;
-            if !matches!(kind.as_str(), "deepseek" | "anthropic" | "opencode" | "opencode-go") {
+            if !matches!(kind.as_str(), "deepseek" | "anthropic" | "opencode" | "opencode-go" | "cerebras") {
                 return Err("Not an API-key provider".into());
             }
             let credentials = app.credentials.lock().unwrap();
@@ -629,6 +629,11 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
         #[cfg(feature = "provider-auth")]
         "providers.connect_opencode_go" => {
             provider_auth::connect_opencode_go(app, &string(&params, "api_key")?, opt_string(&params, "base_url").as_deref()).await?;
+            Ok(json!({ "providers": app.credentials.lock().unwrap().statuses() }))
+        }
+        #[cfg(feature = "provider-auth")]
+        "providers.connect_cerebras" => {
+            provider_auth::connect_cerebras(app, &string(&params, "api_key")?, opt_string(&params, "base_url").as_deref()).await?;
             Ok(json!({ "providers": app.credentials.lock().unwrap().statuses() }))
         }
         #[cfg(feature = "provider-auth")]

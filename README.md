@@ -29,7 +29,7 @@ bun run reset        # stop everything and wipe identity, credentials, chats, pr
 
 ## AI services
 
-- API key: DeepSeek, Anthropic, OpenCode Zen, OpenCode Go (with its Go subscription)
+- API key: DeepSeek, Anthropic, OpenCode Zen, OpenCode Go (with its Go subscription), Cerebras
 - Subscription: ChatGPT, Grok (SuperGrok or X Premium+)
 
 Architecture: [ARCHITECTURE.md](./ARCHITECTURE.md). Read it before implementing.

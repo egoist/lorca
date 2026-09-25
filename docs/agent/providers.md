@@ -85,7 +85,7 @@ An `error` event and HTTP errors become an error message with the server's `erro
 | --- | --- |
 | Adaptive (Opus 5, Opus 5.5, Sonnet 5, Opus 4.8, Fable 5.1, DeepSeek) | `thinking: { type: "adaptive" }` and `output_config: { effort }` (`minimal` counts as `low`); `Off` is `{ type: "disabled" }`. A model that cannot stop thinking (Fable 5.1, Opus 5.5) runs `Off` at its lowest level. |
 | Budget (Haiku 4.5) | `thinking: { type: "enabled", budget_tokens }` with 1024, 2048, 8192, or 16384 tokens and an output cap that leaves 1024 for the answer; `Off` sends no thinking. |
-| OpenAI-compatible | `reasoning_effort`; `Off` sends nothing. |
+| OpenAI-compatible | `reasoning_effort`; `Off` sends nothing, or the provider's `reasoning_off` value (`none` for Cerebras) when the model can stop thinking. |
 | API-key Responses | `reasoning: { effort }`; `Off` sends nothing. |
 | ChatGPT | `reasoning: { effort, summary: "auto" }` with `low`, `medium`, `high`, `xhigh`, or `max`; `Off` sends nothing. |
 | Grok | `reasoning: { effort }` with `low`, `medium`, `high`, or `xhigh`; `Off` sends nothing. |
@@ -110,6 +110,9 @@ let provider = OpenAiCompatProvider::new("ollama", "http://localhost:11434/v1", 
 
 // DeepSeek's OpenAI-compatible endpoint (deepseek-flash by default): no web search here
 let provider = OpenAiCompatProvider::deepseek(&api_key, None);
+
+// Cerebras (gpt-oss-120b by default; qwen-3.8-27b also takes images)
+let provider = OpenAiCompatProvider::cerebras(&api_key, None);
 ```
 
 It posts to `{base_url}/chat/completions` with bearer auth, `stream: true`, and usage reporting on.

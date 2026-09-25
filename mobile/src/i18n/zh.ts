@@ -45,6 +45,7 @@ export const zh: Record<string, string> = {
   "Answering a command…": "正在回答命令…",
   "API Key": "API 密钥",
   "API key from opencode.ai/auth": "来自 opencode.ai/auth 的 API 密钥",
+  "csk-… from cloud.cerebras.ai": "来自 cloud.cerebras.ai 的 csk-…",
   "App Language": "应用语言",
   "Ask first": "先询问",
   "At most {count} files per message.": "每条消息最多 {count} 个文件。",

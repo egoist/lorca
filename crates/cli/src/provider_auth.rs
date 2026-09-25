@@ -16,6 +16,7 @@ const ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 const OPENCODE_BASE_URL: &str = "https://opencode.ai/zen";
 const OPENCODE_GO_BASE_URL: &str = "https://opencode.ai/zen/go";
+const CEREBRAS_BASE_URL: &str = "https://api.cerebras.ai/v1";
 
 fn env_url(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|s| !s.trim().is_empty()).map(|s| s.trim_end_matches('/').to_string())
@@ -23,6 +24,10 @@ fn env_url(name: &str) -> Option<String> {
 
 fn deepseek_base_url() -> String {
     env_url("LORCA_DEEPSEEK_BASE_URL").unwrap_or_else(|| "https://api.deepseek.com".into())
+}
+
+fn cerebras_base_url() -> String {
+    env_url("LORCA_CEREBRAS_BASE_URL").unwrap_or_else(|| CEREBRAS_BASE_URL.into())
 }
 
 fn anthropic_base_url() -> String {
@@ -111,6 +116,18 @@ pub async fn connect_opencode_go(app: &Arc<App>, api_key: &str, base_url: Option
     save_api_key(app, "opencode-go", key, base_url)
 }
 
+/// Checks a Cerebras key against the API (the given root, or Cerebras's) before saving both.
+pub async fn connect_cerebras(app: &Arc<App>, api_key: &str, base_url: Option<&str>) -> Result<(), String> {
+    let key = api_key.trim();
+    if key.is_empty() {
+        return Err("Paste a Cerebras API key".into());
+    }
+    let base_url = custom_base_url(base_url)?;
+    let root = base_url.clone().unwrap_or_else(cerebras_base_url);
+    check_key("Cerebras", app.http.get(format!("{root}/models")).bearer_auth(key)).await?;
+    save_api_key(app, "cerebras", key, base_url)
+}
+
 async fn check_key(name: &str, request: reqwest::RequestBuilder) -> Result<(), String> {
     let response = request.send().await.map_err(|e| format!("{name} unreachable: {e}"))?;
     match response.status() {
@@ -138,6 +155,7 @@ fn save_api_key(app: &Arc<App>, kind: &str, key: &str, base_url: Option<String>)
         "anthropic" => credentials.anthropic = credential,
         "opencode" => credentials.opencode = credential,
         "opencode-go" => credentials.opencode_go = credential,
+        "cerebras" => credentials.cerebras = credential,
         _ => unreachable!(),
     };
     app.update_credentials(kind, update).map_err(|e| e.to_string())
@@ -174,6 +192,7 @@ pub fn disconnect(app: &Arc<App>, kind: &str) -> Result<(), String> {
         "anthropic" => credentials.anthropic = None,
         "opencode" => credentials.opencode = None,
         "opencode-go" => credentials.opencode_go = None,
+        "cerebras" => credentials.cerebras = None,
         "chatgpt" => credentials.chatgpt = None,
         "grok" => {
             // Tell xAI the sign-in is over; the account-wide removal stands either way.

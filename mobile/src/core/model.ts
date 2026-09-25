@@ -295,11 +295,12 @@ export const PROVIDER_LABELS: Record<string, string> = {
   anthropic: "Anthropic",
   opencode: "OpenCode Zen",
   "opencode-go": "OpenCode Go",
+  cerebras: "Cerebras",
   chatgpt: "ChatGPT",
   grok: "Grok",
 };
 
-export const PROVIDER_KINDS = ["deepseek", "anthropic", "opencode", "opencode-go", "chatgpt", "grok"] as const;
+export const PROVIDER_KINDS = ["deepseek", "anthropic", "opencode", "opencode-go", "cerebras", "chatgpt", "grok"] as const;
 export type ProviderKind = (typeof PROVIDER_KINDS)[number];
 
 export function isProviderKind(kind: string): kind is ProviderKind {
@@ -324,6 +325,8 @@ export function providerDefaultBaseURL(kind: ProviderKind): string {
       return "https://opencode.ai/zen";
     case "opencode-go":
       return "https://opencode.ai/zen/go";
+    case "cerebras":
+      return "https://api.cerebras.ai/v1";
     default:
       return "";
   }
@@ -338,6 +341,8 @@ export function providerKeyPlaceholder(kind: ProviderKind): string {
     case "opencode":
     case "opencode-go":
       return t("API key from opencode.ai/auth");
+    case "cerebras":
+      return t("csk-… from cloud.cerebras.ai");
     default:
       return "";
   }
@@ -384,6 +389,10 @@ export const PROVIDER_MODELS: Record<string, { id: string; label: string }[]> = 
     { id: "qwen3.8-flash", label: "Qwen3.8 Flash" },
     { id: "minimax-m3", label: "MiniMax M3" },
   ],
+  cerebras: [
+    { id: "gpt-oss-120b", label: "GPT OSS 120B" },
+    { id: "qwen-3.8-27b", label: "Qwen3.8 27B" },
+  ],
   chatgpt: [
     { id: "gpt-6-sol", label: "GPT-6 Sol" },
     { id: "gpt-6-astra", label: "GPT-6 Astra" },
@@ -401,6 +410,7 @@ export const THINKING_LEVELS: Record<string, string[]> = {
   anthropic: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
   opencode: ["off", "low", "medium", "high", "xhigh", "max"],
   "opencode-go": ["off", "low", "medium", "high", "xhigh", "max"],
+  cerebras: ["off", "low", "medium", "high"],
   chatgpt: ["low", "medium", "high", "xhigh", "max"],
   grok: ["low", "medium", "high", "xhigh"],
 };

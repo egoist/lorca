@@ -828,6 +828,7 @@ fn provider_label(kind: &str) -> &str {
         "anthropic" => "Anthropic",
         "opencode" => "OpenCode Zen",
         "opencode-go" => "OpenCode Go",
+        "cerebras" => "Cerebras",
         "chatgpt" => "ChatGPT",
         "grok" => "Grok",
         other => other,

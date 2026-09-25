@@ -98,6 +98,7 @@
 "API base URL" = "API 基础 URL";
 "API key" = "API 密钥";
 "API key from opencode.ai/auth" = "来自 opencode.ai/auth 的 API 密钥";
+"csk-… from cloud.cerebras.ai" = "csk-…，来自 cloud.cerebras.ai";
 "App Language" = "应用语言";
 "Appearance" = "外观";
 "Architecture Notes" = "架构说明";
