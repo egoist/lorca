@@ -1771,7 +1771,7 @@ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
 name = "lorca"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1814,7 +1814,7 @@ dependencies = [
 
 [[package]]
 name = "lorca-agent"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -1839,7 +1839,7 @@ dependencies = [
 
 [[package]]
 name = "lorca-markdown"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "pulldown-cmark",
  "serde",
@@ -1848,7 +1848,7 @@ dependencies = [
 
 [[package]]
 name = "lorca-mobile"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "lorca",
  "lorca-markdown",
@@ -1862,7 +1862,7 @@ dependencies = [
 
 [[package]]
 name = "lorca-provider-auth"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "base64 0.22.1",
  "rand 0.8.8",
@@ -1875,7 +1875,7 @@ dependencies = [
 
 [[package]]
 name = "lorca-relay"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "async-trait",
