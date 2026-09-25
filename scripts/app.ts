@@ -133,9 +133,31 @@ async function run(cmd: string[], opts: { cwd?: string; capture?: boolean } = {}
     stdout: opts.capture ? "pipe" : "inherit",
     stderr: opts.capture ? "pipe" : "inherit",
   })
-  const stdout = opts.capture ? await new Response(proc.stdout).text() : ""
+  // Both pipes drain together: a process blocked on a full stderr pipe never exits.
+  const [stdout, stderr] = opts.capture
+    ? await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()])
+    : ["", ""]
   const exitCode = await proc.exited
-  return { exitCode, stdout }
+  return { exitCode, stdout, stderr }
+}
+
+/** Run codesign, printing its error when it fails. A secure timestamp (`--timestamp`) is a request
+ * to Apple's timestamp server, and one that stalls on the network fails the signature, so a
+ * timestamp error gets two more tries. */
+export async function codesign(args: string[]): Promise<boolean> {
+  for (let attempt = 1; ; attempt++) {
+    const result = await run(["codesign", ...args], { capture: true })
+    if (result.exitCode === 0) return true
+    // --force notes each signature it replaces; the other lines are the error.
+    const error =
+      result.stderr
+        .split("\n")
+        .filter((line) => line.trim() && !line.endsWith(": replacing existing signature"))
+        .join("\n") || `codesign exited with code ${result.exitCode}`
+    const retry = attempt < 3 && /timestamp/i.test(error)
+    log(retry ? color.yellow(`${error} (retrying)`) : color.red(error))
+    if (!retry) return false
+  }
 }
 
 /** Compile the Rust CLI the app bundles and launches. */
@@ -255,8 +277,7 @@ async function signBundle(bundle: string, sparkle: string, identity: string, con
   const hardened = identity !== "-"
   const identifier = bundleId(config)
   const flags = hardened ? ["--options", "runtime", "--timestamp"] : []
-  const sign = async (path: string, extra: string[] = []) =>
-    (await run(["codesign", "--force", ...flags, ...extra, "--sign", identity, path], { capture: true })).exitCode === 0
+  const sign = (path: string, extra: string[] = []) => codesign(["--force", ...flags, ...extra, "--sign", identity, path])
 
   const version = join(sparkle, "Versions", "B")
   const xpcServices = (await readdir(join(version, "XPCServices")).catch(() => []))

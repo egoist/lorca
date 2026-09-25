@@ -16,6 +16,7 @@ import {
   APP_NAME,
   buildApp,
   bundlePath,
+  codesign,
   color,
   FEED_URL,
   log,
@@ -107,7 +108,7 @@ await $`create-dmg --volname ${`${APP_NAME} ${version}`} --window-size 540 380 -
   .nothrow()
   .quiet()
 if (!existsSync(dmgPath)) die("create-dmg produced no disk image")
-await $`codesign --force --timestamp --sign ${SIGN_IDENTITY} ${dmgPath}`
+if (!(await codesign(["--force", "--timestamp", "--sign", SIGN_IDENTITY, dmgPath]))) die("signing the disk image failed")
 
 // ---- 4. notarize and staple
 // Notarizing the disk image notarizes the code inside it, so one submission staples both.
