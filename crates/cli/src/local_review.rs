@@ -145,7 +145,7 @@ async fn ask_on_card(
 /// a REPL, or `ssh` runs whatever it is given. Ctrl-C alone only interrupts, and never asks.
 async fn review_input(app: &Arc<App>, chat_id: &str, bot: &Bot, unattended: bool, ctx: BeforeToolCallContext<'_>) -> Option<BeforeToolCallResult> {
     let text = ctx.args.get("text").and_then(Value::as_str).unwrap_or("");
-    if text == "\u{3}" {
+    if lorca_agent::tools::bash_session::typed_keys(text) == "\u{3}" {
         return None;
     }
     // A session that is not there is the tool's to report.

@@ -437,6 +437,7 @@ enum Wire {
         var device: String?
         var reason: String?
         var rule: String?
+        var handedOver: Bool?
     }
 
     struct State: Decodable {
@@ -595,7 +596,8 @@ extension Wire.Message {
                             sessionID: $0.sessionId, command: $0.command ?? "",
                             state: CommandRun.State(rawValue: $0.state) ?? .stopped,
                             prompt: $0.prompt, output: $0.output,
-                            device: $0.device, reason: $0.reason, rule: $0.rule)
+                            device: $0.device, reason: $0.reason, rule: $0.rule,
+                            handedOver: $0.handedOver ?? false)
                     }
                 ))
         case "handoff":

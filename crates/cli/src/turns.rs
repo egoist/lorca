@@ -965,6 +965,10 @@ impl TurnState {
                 });
                 let target_bot_id =
                     if tool_name == "message_bot" { args["bot_id"].as_str().map(str::trim).filter(|id| !id.is_empty()).map(str::to_string) } else { None };
+                // Waiting on a command that asks leaves the question to the user.
+                let waits_on = (tool_name == "bash_output" && args["wait_seconds"].as_f64().is_some_and(|wait| wait > 0.0))
+                    .then(|| args["session_id"].as_str().map(|id| id.trim().to_string()))
+                    .flatten();
                 let mut message = Message::new(
                     &self.chat_id,
                     Author::Bot { bot_id: self.bot_id.clone() },
@@ -985,6 +989,9 @@ impl TurnState {
                 message.state = MessageState::Streaming;
                 if tool_name == "bash" {
                     self.app.shell_sessions.begin(&self.chat_id, &self.bot_id, &tool_call_id, &message.id);
+                }
+                if let Some(id) = waits_on {
+                    self.app.shell_sessions.bot_waits(&self.app, &self.chat_id, &self.bot_id, &id);
                 }
                 self.start_tool(message.clone());
                 self.tool_messages.push((tool_call_id, message.id));
@@ -1106,6 +1113,8 @@ impl TurnState {
                 }
             }
         }
+        // What the turn left running is the user's now: its card shows.
+        self.app.shell_sessions.hand_over(&self.app, &self.chat_id, &self.bot_id);
     }
 }
 
@@ -1259,7 +1268,9 @@ fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job, store: &Memo
     if cfg!(unix) {
         prompt.push_str(
             "Each command runs in a terminal of its own, and /dev/tty is that terminal: sudo, ssh, and `read </dev/tty` \
-             ask there, and what the user types into the command's card reaches them. A command that stops for input \
+             ask there, and what the user types into the command's card reaches them. A question a command prints into a \
+             pipe or a file (`| tail`, `> log`) never shows, so run scaffolders and installers with their non-interactive \
+             options (--yes, --no-interactive). A command that stops for input \
              returns while it still runs, with a session id; answer what you know with bash_input. When it asks for \
              something only the user should type, such as a password, a passphrase, or a one-time code, tell them it is \
              waiting and that they can type it into the command's card in this chat, then end your turn. Never ask for it in \
@@ -3009,6 +3020,64 @@ mod tests {
         assert!(seen.iter().all(|(is_running, state)| *is_running || state == "exited"), "{seen:?}");
     }
 
+    /// A command that goes quiet is not asking anything the user could answer: a menu printed
+    /// into `| tail` never reaches the terminal. Its card reads as running, and shows only once
+    /// the turn that left it running is over.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_quiet_command_is_not_a_question_and_its_card_waits_for_the_turn() {
+        use lorca_agent::tools::{BashSessions, BashTool};
+        let (scratch, chef) = chef_in_a_dm();
+        let app = &scratch.0;
+        let mut turn = turn_state(app, &chef, "dev");
+        let sessions: Arc<dyn BashSessions> = Arc::new(crate::shell::TurnSessions::new(app, "chat", "b1"));
+        let bash = BashTool::with_sessions(scratch.1.clone(), sessions).waiting_after(Duration::from_millis(300));
+        let command = "(printf 'Pick a framework? '; sleep 60) | tail -1";
+        let (row, _) = call_tool(&mut turn, &bash, "call-1", json!({ "command": command, "description": "Scaffold" })).await;
+        let card = run_of(&row).unwrap();
+        assert_eq!((card.state.as_str(), card.prompt.as_deref(), card.handed_over), ("running", None, false));
+        let Body::Tool { summary, .. } = &row.body else { panic!("a tool row") };
+        assert_eq!(summary, "Running");
+
+        turn.finish();
+        let card = run_of(&app.message("chat", &row.id).unwrap()).unwrap();
+        assert_eq!((card.state.as_str(), card.handed_over), ("running", true), "the command is the user's now");
+        app.shell_sessions.stop_chat("chat");
+    }
+
+    /// Waiting on a command that asks hands its question to the user. A look at it, or a wait on
+    /// one that is only quiet, leaves it with the bot.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn waiting_on_a_question_hands_it_to_the_user() {
+        use lorca_agent::tools::{BashSessions, BashTool};
+        let (scratch, chef) = chef_in_a_dm();
+        let app = &scratch.0;
+        let mut turn = turn_state(app, &chef, "dev");
+        let sessions: Arc<dyn BashSessions> = Arc::new(crate::shell::TurnSessions::new(app, "chat", "b1"));
+        // A question returns its call once it held still; silence, after a while.
+        let bash = BashTool::with_sessions(scratch.1.clone(), sessions.clone());
+        let quick = BashTool::with_sessions(scratch.1.clone(), sessions).waiting_after(Duration::from_millis(300));
+        let handed_over = |row: &Message| run_of(&app.message("chat", &row.id).unwrap()).unwrap().handed_over;
+        let wait_on = |turn: &mut TurnState, call_id: &str, row: &Message, wait: f64| {
+            let id = run_of(row).unwrap().session_id.unwrap();
+            turn.handle(AgentEvent::ToolExecutionStart { tool_call_id: call_id.into(), tool_name: "bash_output".into(), args: json!({ "session_id": id, "wait_seconds": wait }) });
+        };
+
+        let (quiet, _) = call_tool(&mut turn, &quick, "call-1", json!({ "command": "sleep 60", "description": "Wait" })).await;
+        wait_on(&mut turn, "call-2", &quiet, 30.0);
+        assert!(!handed_over(&quiet), "a quiet command stays the bot's");
+
+        let (asks, _) = call_tool(&mut turn, &bash, "call-3", json!({ "command": "read -rs -p 'Password: ' p </dev/tty", "description": "Log in" })).await;
+        assert!(!handed_over(&asks), "the bot reads the question first, and may answer it");
+        wait_on(&mut turn, "call-4", &asks, 0.0);
+        assert!(!handed_over(&asks), "a look is not a wait");
+        wait_on(&mut turn, "call-5", &asks, 30.0);
+        let card = run_of(&app.message("chat", &asks.id).unwrap()).unwrap();
+        assert_eq!((card.state.as_str(), card.prompt.as_deref(), card.handed_over), ("waiting", Some("Password:"), true));
+        app.shell_sessions.stop_chat("chat");
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn a_command_left_running_wakes_its_bot_when_it_ends() {
@@ -3071,7 +3140,8 @@ mod tests {
 
         let answer = |text: &'static str| crate::api::dispatch(app, "bash.stdin", json!({ "chat_id": "chat", "message_id": row.id, "text": text }));
         answer("wrong").await.unwrap();
-        let retry = row_when(app, &row.id, |t| t.output.as_deref() == Some("Password:\nSorry, try again.\nPassword:")).await;
+        // It reads as asking again once the new question has held still.
+        let retry = row_when(app, &row.id, |t| t.output.as_deref() == Some("Password:\nSorry, try again.\nPassword:") && t.state == "waiting").await;
         let terminal = run_of(&retry).unwrap();
         assert_eq!((terminal.state.as_str(), terminal.prompt.as_deref()), ("waiting", Some("Password:")));
 
@@ -3215,8 +3285,9 @@ mod tests {
         // No provider is connected, so the review cannot clear it, and nobody is there to ask.
         let blocked = review("rm -rf ~/Documents").await.expect("reviewed");
         assert!(blocked.block && blocked.reason.as_deref().is_some_and(|r| r.starts_with("bash_input needs the user's permission")), "{:?}", blocked.reason);
-        // Interrupting is always fine.
+        // Interrupting is always fine, spelled out as an escape too.
         assert!(review("\u{3}").await.is_none());
+        assert!(review("\\u0003").await.is_none());
         app.shell_sessions.stop_chat("chat");
     }
 

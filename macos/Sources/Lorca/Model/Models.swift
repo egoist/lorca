@@ -593,12 +593,13 @@ struct ToolInvocation: Hashable {
     }
 
     /// Whether the transcript shows the row: a sent message's marker, or a command's card while
-    /// the command needs the user. That is while Auto-review asks to run it, and once its call
-    /// returned with the command still running (waiting for an answer, or going on by itself)
-    /// until it ends. A command inside its call shows only as the working row's activity.
+    /// the command needs the user. That is while Auto-review asks to run it, and once the bot
+    /// handed the running command over (its turn ended, or it waits on the command at a
+    /// question) until it ends. Before that the bot deals with it, and the command shows only
+    /// as the working row's activity.
     var isShown: Bool {
         guard let run else { return isSentMessage }
-        return run.state == .asking || (run.isLive && !isRunning)
+        return run.state == .asking || (run.isLive && run.handedOver)
     }
 
     var symbolName: String {
@@ -621,17 +622,17 @@ struct ToolInvocation: Hashable {
 
 /// Where a shell command stands: Auto-review checking it, the question it asks, the command
 /// running in its terminal, what the command asks, and that it ended. While it asks, its card
-/// takes the answer to the question (`chats.permission`); while the command runs on after its
-/// call, the user's answer to it (`bash.stdin`) and a Stop (`bash.stop`).
+/// takes the answer to the question (`chats.permission`); once the bot handed the running
+/// command over, the user's answer to it (`bash.stdin`) and a Stop (`bash.stop`).
 struct CommandRun: Hashable {
     enum State: String, Hashable {
         /// Auto-review is judging it.
         case checking
         /// For the user's permission.
         case asking
-        /// Running and printing.
+        /// Running: printing, or quiet.
         case running
-        /// Running, at a question or silent.
+        /// Running, at a question the user can read.
         case waiting
         case exited
         /// Exited with a nonzero code.
@@ -661,6 +662,9 @@ struct CommandRun: Hashable {
     var reason: String?
     /// The rule Always allow adds.
     var rule: String?
+    /// The bot left the command to the user: its turn ended with the command still running, or
+    /// it waits on the command at a question.
+    var handedOver = false
 
     var isLive: Bool { state == .waiting || state == .running }
     /// The command runs in a session here or on its Runner: it takes answers and a Stop.

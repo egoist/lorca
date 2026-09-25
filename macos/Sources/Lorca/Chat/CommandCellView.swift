@@ -3,8 +3,8 @@ import AppKit
 /// A shell command's card, while the command needs the user (`ToolInvocation.isShown`). While
 /// Auto-review asks to run it: who wants to, the command on one line in a code block that shows
 /// the whole command on click, why, and Allow once, Always allow (with the rule it adds), and
-/// Deny. While the command runs on after its call: Stop at the end of the title's line, the
-/// command, and its last lines in a code block of their own that scrolls; waiting for input, a
+/// Deny. Once the bot handed the running command over: Stop at the end of the title's line, the
+/// command, and its last lines in a code block of their own that scrolls; at a question, a
 /// field to answer in, which hides what is typed unless the question is a yes or no, with Send.
 /// What the user types goes to the command and nowhere else: the CLI writes it to the terminal
 /// and keeps nothing. In a group the card sits in the bubbles' column, the bot's avatar beside

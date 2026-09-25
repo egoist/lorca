@@ -161,22 +161,24 @@ export type Body =
 
 /// Where a bash call's command stands: Auto-review checking it, the question it asks, the command
 /// running in its terminal, what the command asks, and that it ended. While it asks, its card takes
-/// the answer to the question (`chats.permission`); while the command runs on after its call, the
-/// user's answer to it (`bash.stdin`) and a Stop (`bash.stop`). The transcript shows the card only
-/// while the command needs the user (`showsCard`).
+/// the answer to the question (`chats.permission`); once the bot handed the running command over,
+/// the user's answer to it (`bash.stdin`) and a Stop (`bash.stop`). The transcript shows the card
+/// only while the command needs the user (`showsCard`).
 export interface CommandRun {
   /** The terminal session running it, once one does; none before it starts, or on a Windows Runner, where it takes no answers. */
   session_id?: string;
   /** The command, its first 8,000 characters. */
   command: string;
   /**
-   * `checking` (Auto-review is judging it), `asking` (for the user's permission), `running`, or `waiting` (at a question,
-   * or silent); once it ended, `exited`, `failed`, `stopped`, `denied` (never run), `expired` (nobody answered in time), or
-   * `dismissed` (the user sent a new message instead of answering, so it never ran).
+   * `checking` (Auto-review is judging it), `asking` (for the user's permission), `running` (printing, or quiet), or
+   * `waiting` (at a question the user can read); once it ended, `exited`, `failed`, `stopped`, `denied` (never run),
+   * `expired` (nobody answered in time), or `dismissed` (the user sent a new message instead of answering, so it never ran).
    */
   state: "checking" | "asking" | "running" | "waiting" | "exited" | "failed" | "stopped" | "denied" | "expired" | "dismissed";
-  /** The line it asks with: "[sudo] password for ana:". */
+  /** The line it asks with while it waits: "[sudo] password for ana:". */
   prompt?: string;
+  /** The bot left the command to the user: its turn ended with the command still running, or it waits on the command at a question. */
+  handed_over?: boolean;
   /** Its last lines, as the bottom of a terminal shows them. Never what was typed. */
   output?: string;
   /** The Runner it runs on, for the question: "Workbench". */
@@ -192,12 +194,12 @@ export function isLive(run: CommandRun): boolean {
 }
 
 /// Whether a tool row shows as a command's card: while the command needs the user. That is while
-/// Auto-review asks to run it, and once its call returned with the command still running (waiting
-/// for an answer, or going on by itself) until it ends. A command inside its call shows only as the
-/// working row's activity.
+/// Auto-review asks to run it, and once the bot handed the running command over (its turn ended, or
+/// it waits on the command at a question) until it ends. Before that the bot deals with it, and the
+/// command shows only as the working row's activity.
 export function showsCard(tool: Extract<Body, { kind: "tool" }>): boolean {
   const run = tool.run;
-  return !!run && (run.state === "asking" || (isLive(run) && !tool.is_running));
+  return !!run && (run.state === "asking" || (isLive(run) && !!run.handed_over));
 }
 
 /// One Auto-review rule: what a bot wants to do, in the user's words, and whether that runs on
