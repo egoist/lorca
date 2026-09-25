@@ -27,6 +27,8 @@ enum ChatMetrics {
 
     static var bubbleIndent: CGFloat { horizontalInset + avatarSize + avatarGutter }
 
+    /// Where a bot's bubble or card starts: after the avatar column in a group, at the inset in a DM.
+    static func indent(showsAvatar: Bool) -> CGFloat { showsAvatar ? bubbleIndent : horizontalInset }
 }
 
 /// Thumbnails and file cards inside a bubble, above the text. Images flow in rows, sized
@@ -230,7 +232,7 @@ final class ChatLayout {
 
     /// `showsName` is a group chat's bot message: name above, avatar beside the bubble.
     func metrics(for message: Message, showsName: Bool, tableWidth: CGFloat) -> BubbleMetrics {
-        let indent = showsName ? ChatMetrics.bubbleIndent : ChatMetrics.horizontalInset
+        let indent = ChatMetrics.indent(showsAvatar: showsName)
         let maxBubble = availableBubbleWidth(for: message, indent: indent, tableWidth: tableWidth)
         let key = BubbleKey(
             maxInner: maxBubble - ChatMetrics.bubblePadX * 2, showsName: showsName,
@@ -294,23 +296,23 @@ final class ChatLayout {
     }
 
     /// A permission card's height, for a message whose body is a permission request.
-    private func cardHeight(for message: Message, request: PermissionRequest, tableWidth: CGFloat) -> CGFloat {
+    private func cardHeight(for message: Message, request: PermissionRequest, tableWidth: CGFloat, indent: CGFloat) -> CGFloat {
         // The card's width is all of the row it depends on.
-        let width = min(PermissionCellView.width, tableWidth - ChatMetrics.horizontalInset * 2)
+        let width = min(PermissionCellView.width, tableWidth - indent - ChatMetrics.horizontalInset)
         var entry = entry(for: message)
         if let card = entry.card, card.width == width { return card.height }
-        let height = PermissionCellView.height(for: request, rowWidth: tableWidth)
+        let height = PermissionCellView.height(for: request, rowWidth: tableWidth, indent: indent)
         entry.card = (width, height)
         cache[message.id] = entry
         return height
     }
 
     /// A command's card, for a `bash` row.
-    private func commandHeight(for message: Message, run: CommandRun, tableWidth: CGFloat) -> CGFloat {
-        let width = min(CommandCellView.width, tableWidth - ChatMetrics.horizontalInset * 2)
+    private func commandHeight(for message: Message, run: CommandRun, tableWidth: CGFloat, indent: CGFloat) -> CGFloat {
+        let width = min(CommandCellView.width, tableWidth - indent - ChatMetrics.horizontalInset)
         var entry = entry(for: message)
         if let card = entry.card, card.width == width { return card.height }
-        let height = CommandCellView.height(for: run, rowWidth: tableWidth)
+        let height = CommandCellView.height(for: run, rowWidth: tableWidth, indent: indent)
         entry.card = (width, height)
         cache[message.id] = entry
         return height
@@ -342,8 +344,10 @@ final class ChatLayout {
         )
     }
 
+    /// `showsAvatar` is a bot's row in a group: its avatar beside the bubble or card, and a
+    /// bubble's name above it.
     func height(
-        for row: ChatRow, message: Message?, tableWidth: CGFloat, showsName: Bool
+        for row: ChatRow, message: Message?, tableWidth: CGFloat, showsAvatar: Bool
     ) -> CGFloat {
         switch row {
         case .day:
@@ -358,16 +362,17 @@ final class ChatLayout {
         case let .message(_, groupStart):
             guard let message else { return 0 }
             let top = groupStart ? ChatMetrics.groupTopPadding : ChatMetrics.tightTopPadding
+            let indent = ChatMetrics.indent(showsAvatar: showsAvatar)
 
             switch message.body {
             case .text:
-                let metrics = metrics(for: message, showsName: showsName, tableWidth: tableWidth)
+                let metrics = metrics(for: message, showsName: showsAvatar, tableWidth: tableWidth)
                 return top + metrics.rowHeight
 
             // Tool calls never show but as a message_bot marker or a command's card.
             case let .tool(tool):
                 if let run = tool.run {
-                    return top + commandHeight(for: message, run: run, tableWidth: tableWidth)
+                    return top + commandHeight(for: message, run: run, tableWidth: tableWidth, indent: indent)
                 }
                 return top + 34
 
@@ -378,7 +383,7 @@ final class ChatLayout {
                 return top + noticeMetrics(for: message, tableWidth: tableWidth).boxSize.height
 
             case let .permission(request):
-                return top + cardHeight(for: message, request: request, tableWidth: tableWidth)
+                return top + cardHeight(for: message, request: request, tableWidth: tableWidth, indent: indent)
             }
         }
     }

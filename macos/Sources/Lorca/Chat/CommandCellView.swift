@@ -7,16 +7,17 @@ import AppKit
 /// command, and its last lines in a code block of their own that scrolls; waiting for input, a
 /// field to answer in, which hides what is typed unless the question is a yes or no, with Send.
 /// What the user types goes to the command and nowhere else: the CLI writes it to the terminal
-/// and keeps nothing.
+/// and keeps nothing. In a group the card sits in the bubbles' column, the bot's avatar beside
+/// its bottom edge.
 final class CommandCellView: TranscriptCellView {
     static let identifier = NSUserInterfaceItemIdentifier("CommandCell")
 
     static let width: CGFloat = 440
 
-    /// The box's height at `rowWidth`. The table's row height and the cell's own layout come
-    /// from the same `Layout`, so a card is exactly as tall as what it shows.
-    static func height(for run: CommandRun, rowWidth: CGFloat) -> CGFloat {
-        Layout(run: run, rowWidth: rowWidth).height
+    /// The box's height at `rowWidth`, starting at `indent`. The table's row height and the
+    /// cell's own layout come from the same `Layout`, so a card is exactly as tall as what it shows.
+    static func height(for run: CommandRun, rowWidth: CGFloat, indent: CGFloat) -> CGFloat {
+        Layout(run: run, rowWidth: rowWidth, indent: indent).height
     }
 
     /// "Chef wants to run a command on Workbench", "Chef's command is running", or "Chef's
@@ -99,8 +100,8 @@ final class CommandCellView: TranscriptCellView {
         var answerY: CGFloat?
         var note: NSRect?
 
-        init(run: CommandRun, rowWidth: CGFloat) {
-            width = min(CommandCellView.width, rowWidth - ChatMetrics.horizontalInset * 2)
+        init(run: CommandRun, rowWidth: CGFloat, indent: CGFloat) {
+            width = min(CommandCellView.width, rowWidth - indent - ChatMetrics.horizontalInset)
             let textWidth = width - Self.textX - 12
             // The title's width leaves room for Stop, which `layout()` places at its end.
             title = NSRect(x: Self.textX, y: 11, width: textWidth, height: 17)
@@ -147,6 +148,7 @@ final class CommandCellView: TranscriptCellView {
         }
     }
 
+    private let avatar = AvatarView(diameter: ChatMetrics.avatarSize)
     private let box = BackgroundView()
     private let icon = NSImageView()
     private let title = Build.label("", font: Layout.titleFont)
@@ -242,7 +244,7 @@ final class CommandCellView: TranscriptCellView {
             button.action = action
         }
         let views: [NSView] = [
-            box, icon, title, command, caption, outputBox, outputScroll, allowButton, alwaysButton, denyButton,
+            avatar, box, icon, title, command, caption, outputBox, outputScroll, allowButton, alwaysButton, denyButton,
             secretField, plainField, sendButton, stopButton, note,
         ]
         for view in views {
@@ -255,7 +257,8 @@ final class CommandCellView: TranscriptCellView {
 
     override var isFlipped: Bool { true }
 
-    func configure(run: CommandRun, messageID: Message.ID, botName: String, groupStart: Bool) {
+    /// `avatar` is the bot's in a group, nil in a DM.
+    func configure(run: CommandRun, messageID: Message.ID, botName: String, avatar avatarContent: AvatarView.Content?, groupStart: Bool) {
         let previous = self.messageID == messageID ? self.run : nil
         // Another command, in a reused cell, starts empty; the same one keeps what the user is
         // typing while its output changes.
@@ -279,6 +282,8 @@ final class CommandCellView: TranscriptCellView {
         self.messageID = messageID
         self.groupStart = groupStart
         self.run = run
+        avatar.isHidden = avatarContent == nil
+        if let avatarContent { avatar.content = avatarContent }
         title.stringValue = Self.title(for: run, botName: botName)
         title.toolTip = run.command
         caption.stringValue = Self.caption(run) ?? ""
@@ -401,13 +406,16 @@ final class CommandCellView: TranscriptCellView {
         super.layout()
         guard let run else { return }
         let top = groupStart ? ChatMetrics.groupTopPadding : ChatMetrics.tightTopPadding
-        let x = ChatMetrics.horizontalInset
-        let layout = Layout(run: run, rowWidth: bounds.width)
+        let x = ChatMetrics.indent(showsAvatar: !avatar.isHidden)
+        let layout = Layout(run: run, rowWidth: bounds.width, indent: x)
         func place(_ rect: NSRect) -> NSRect { rect.offsetBy(dx: x, dy: top) }
         let right = x + layout.width - 12
 
         // `layout.height` is the box alone; the row adds `top` above it.
         box.frame = NSRect(x: x, y: top, width: layout.width, height: layout.height)
+        avatar.frame = NSRect(
+            x: ChatMetrics.horizontalInset, y: top + layout.height - ChatMetrics.avatarSize,
+            width: ChatMetrics.avatarSize, height: ChatMetrics.avatarSize)
         icon.frame = NSRect(x: x + 12, y: top + 12, width: 18, height: 18)
         title.frame = place(layout.title)
         if !stopButton.isHidden {

@@ -207,12 +207,14 @@ export function NoticeRow({ row }: { row: Extract<Row, { type: "notice" }> }) {
 /// it waits: the question, the call (a shell command in a code block that opens the whole
 /// command on tap), why Auto-review paused it, the answers, and under them the rule Always allow
 /// adds. A shell command offers Always allow only with a rule. Once answered, the answer and the
-/// call; an Always allow keeps its rule.
-export function PermissionRow({ row, onDecide }: { row: Extract<Row, { type: "permission" }>; onDecide: (decision: "allow" | "always" | "deny") => void }) {
+/// call; an Always allow keeps its rule. In a group the card sits in the bubbles' column, the bot's
+/// avatar beside its bottom edge.
+export function PermissionRow({ row, isGroup, onDecide }: { row: Extract<Row, { type: "permission" }>; isGroup: boolean; onDecide: (decision: "allow" | "always" | "deny") => void }) {
   useLanguage();
   const p = usePalette();
   const [copied, setCopied] = useState(false);
   const [showCommand, setShowCommand] = useState(false);
+  const showsAvatar = isGroup && row.message.author.kind === "bot";
   const pending = row.body.decision === "pending";
   const connect = row.body.tool === "connect";
   const shell = row.body.plugin_id === "computer";
@@ -249,7 +251,12 @@ export function PermissionRow({ row, onDecide }: { row: Extract<Row, { type: "pe
     return () => clearTimeout(timer);
   }, [copied]);
   return (
-    <View style={{ paddingTop: row.groupStart ? 14 : 6, paddingHorizontal: INSET }}>
+    <View style={[styles.messageRow, { paddingTop: row.groupStart ? 14 : 6 }]}>
+      {showsAvatar && (
+        <View style={{ width: AVATAR + GUTTER, alignSelf: "flex-end" }}>
+          <BotAvatar bot={row.bot} size={AVATAR} />
+        </View>
+      )}
       <View style={[styles.permission, { backgroundColor: p.cell, borderColor: p.separator }]}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
           <Symbol name={connect ? "person.crop.circle.badge.checkmark" : row.body.tool === "install" ? "puzzlepiece.extension" : "hand.raised"} size={16} color={row.body.decision === "failed" ? p.red : row.body.decision === "connected" ? p.green : p.tint} />
@@ -322,14 +329,17 @@ export function PermissionRow({ row, onDecide }: { row: Extract<Row, { type: "pe
 /// it: who wants to, the command on one line in a code block that opens the whole command on tap,
 /// why, the answers, and the rule Always allow adds. While the command runs on after its call: Stop
 /// on the title's line, the command, and its last lines in a code block of their own that scrolls;
-/// waiting for input, Answer, which opens `AnswerSheet`.
+/// waiting for input, Answer, which opens `AnswerSheet`. In a group the card sits in the bubbles'
+/// column, the bot's avatar beside its bottom edge.
 export function CommandRow({
   row,
+  isGroup,
   onDecide,
   onAnswer,
   onStop,
 }: {
   row: Extract<Row, { type: "command" }>;
+  isGroup: boolean;
   onDecide: (decision: "allow" | "always" | "deny") => void;
   onAnswer: () => void;
   onStop: () => Promise<void>;
@@ -340,6 +350,7 @@ export function CommandRow({
   const [error, setError] = useState<string | null>(null);
   const [showCommand, setShowCommand] = useState(false);
   const { run } = row;
+  const showsAvatar = isGroup && row.message.author.kind === "bot";
   const who = row.bot?.name ?? t("The bot");
   const command = firstLine(run.command);
   // A new question clears what the last answer or Stop said.
@@ -370,7 +381,12 @@ export function CommandRow({
     }
   };
   return (
-    <View style={{ paddingTop: row.groupStart ? 14 : 6, paddingHorizontal: INSET }}>
+    <View style={[styles.messageRow, { paddingTop: row.groupStart ? 14 : 6 }]}>
+      {showsAvatar && (
+        <View style={{ width: AVATAR + GUTTER, alignSelf: "flex-end" }}>
+          <BotAvatar bot={row.bot} size={AVATAR} />
+        </View>
+      )}
       <View style={[styles.permission, { backgroundColor: p.cell, borderColor: p.separator }]}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
           <Symbol name="terminal" size={16} color={p.tint} />
@@ -553,7 +569,8 @@ const styles = StyleSheet.create({
   centered: { alignItems: "center", paddingHorizontal: INSET },
   markerLine: { flexDirection: "row", alignItems: "center" },
   notice: { flexDirection: "row", alignItems: "flex-start", gap: 8, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8, maxWidth: 360 },
-  permission: { borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, paddingHorizontal: 12, paddingVertical: 10, gap: 6, maxWidth: 420 },
+  // The card takes what the row leaves beside the avatar column, up to `maxWidth`.
+  permission: { flex: 1, borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, paddingHorizontal: 12, paddingVertical: 10, gap: 6, maxWidth: 420 },
   permissionTitle: { fontSize: 14, fontWeight: "600", flexShrink: 1 },
   permissionButton: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 8 },
   headerButton: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 7 },

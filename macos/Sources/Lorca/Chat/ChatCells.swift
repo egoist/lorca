@@ -596,16 +596,17 @@ final class DayCellView: TranscriptCellView {
 /// A bot asking before a plugin tool runs, a shell command runs, or a plugin is installed. While
 /// it waits: the question, the call (a shell command in a code block that opens the whole command
 /// on click), why Auto-review paused it, the answers, and under them the rule Always allow adds.
-/// Once answered, the answer and the call; an Always allow keeps the rule it added.
+/// Once answered, the answer and the call; an Always allow keeps the rule it added. In a group
+/// the card sits in the bubbles' column, the bot's avatar beside its bottom edge.
 final class PermissionCellView: TranscriptCellView {
     static let identifier = NSUserInterfaceItemIdentifier("PermissionCell")
 
     static let width: CGFloat = 440
 
-    /// The box's height at `rowWidth`. The table's row height and the cell's own layout come
-    /// from the same `Layout`, so a card is exactly as tall as what it shows.
-    static func height(for request: PermissionRequest, rowWidth: CGFloat) -> CGFloat {
-        Layout(request: request, rowWidth: rowWidth).height
+    /// The box's height at `rowWidth`, starting at `indent`. The table's row height and the
+    /// cell's own layout come from the same `Layout`, so a card is exactly as tall as what it shows.
+    static func height(for request: PermissionRequest, rowWidth: CGFloat, indent: CGFloat) -> CGFloat {
+        Layout(request: request, rowWidth: rowWidth, indent: indent).height
     }
 
     /// The line under the title: the call while it waits, the answer and the call once
@@ -650,8 +651,8 @@ final class PermissionCellView: TranscriptCellView {
         var buttonY: CGFloat?
         var note: NSRect?
 
-        init(request: PermissionRequest, rowWidth: CGFloat) {
-            width = min(PermissionCellView.width, rowWidth - ChatMetrics.horizontalInset * 2)
+        init(request: PermissionRequest, rowWidth: CGFloat, indent: CGFloat) {
+            width = min(PermissionCellView.width, rowWidth - indent - ChatMetrics.horizontalInset)
             let textWidth = width - Self.textX - 12
             if request.decision == .allowed && request.code != nil {
                 // Signing in with a code: the step, then the code and its button on one row.
@@ -700,6 +701,7 @@ final class PermissionCellView: TranscriptCellView {
         }
     }
 
+    private let avatar = AvatarView(diameter: ChatMetrics.avatarSize)
     private let box = BackgroundView()
     private let icon = NSImageView()
     private let title = Build.label("", font: Layout.titleFont)
@@ -739,7 +741,7 @@ final class PermissionCellView: TranscriptCellView {
             button.action = #selector(decide(_:))
             button.identifier = NSUserInterfaceItemIdentifier(decision)
         }
-        for view in [box, icon, title, summary, command, reason, note, allowButton, alwaysButton, denyButton] as [NSView] {
+        for view in [avatar, box, icon, title, summary, command, reason, note, allowButton, alwaysButton, denyButton] as [NSView] {
             addSubview(view.framePositioned())
         }
         codeLabel.isSelectable = true
@@ -768,10 +770,13 @@ final class PermissionCellView: TranscriptCellView {
 
     override var isFlipped: Bool { true }
 
-    func configure(request: PermissionRequest, botName: String, groupStart: Bool) {
+    /// `avatar` is the bot's in a group, nil in a DM.
+    func configure(request: PermissionRequest, botName: String, avatar avatarContent: AvatarView.Content?, groupStart: Bool) {
         openButton.resetCopyFeedback()
         self.groupStart = groupStart
         self.request = request
+        avatar.isHidden = avatarContent == nil
+        if let avatarContent { avatar.content = avatarContent }
         let hasCode = request.decision == .allowed && request.code != nil
         icon.image = NSImage(systemSymbolName: request.isConnect ? "person.crop.circle.badge.checkmark" : (request.isInstall ? "puzzlepiece.extension" : "hand.raised"), accessibilityDescription: nil)
         icon.contentTintColor = request.decision == .failed ? .systemRed : (request.decision == .connected ? .systemGreen : .controlAccentColor)
@@ -811,12 +816,15 @@ final class PermissionCellView: TranscriptCellView {
         super.layout()
         guard let request else { return }
         let top = groupStart ? ChatMetrics.groupTopPadding : ChatMetrics.tightTopPadding
-        let x = ChatMetrics.horizontalInset
-        let layout = Layout(request: request, rowWidth: bounds.width)
+        let x = ChatMetrics.indent(showsAvatar: !avatar.isHidden)
+        let layout = Layout(request: request, rowWidth: bounds.width, indent: x)
         func place(_ rect: NSRect) -> NSRect { rect.offsetBy(dx: x, dy: top) }
 
         // `layout.height` is the box alone; the row adds `top` above it.
         box.frame = NSRect(x: x, y: top, width: layout.width, height: layout.height)
+        avatar.frame = NSRect(
+            x: ChatMetrics.horizontalInset, y: top + layout.height - ChatMetrics.avatarSize,
+            width: ChatMetrics.avatarSize, height: ChatMetrics.avatarSize)
         icon.frame = NSRect(x: x + 12, y: top + 12, width: 18, height: 18)
         title.frame = place(NSRect(x: Layout.textX, y: 11, width: layout.width - Layout.textX - 12, height: 17))
         summary.isHidden = layout.command != nil
