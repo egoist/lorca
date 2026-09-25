@@ -5,7 +5,8 @@ Sparkle shows it in the update window.
 
 ## [Unreleased]
 
-- Every command a bot runs shows in the chat as one card, from start to finish: Auto-review's question, if it asks, with Allow once, Always allow, and Deny; the command's latest output while it runs, in a block that scrolls; and one line when it ends.
+- A bot's command shows in the chat as a card only while it needs you: Auto-review's question, with Allow once, Always allow, and Deny, or a command the bot left running for you, with its latest output in a block that scrolls.
+- Running tasks: while a chat's bots run commands, a terminal button with their number sits in the chat's toolbar. It lists each command with what it does, who runs it and for how long, its latest output, and Stop, which ends that command alone while the bot carries on.
 - A bot's command that asks for input (a `sudo` password, an `ssh` passphrase, a `[Y/n]`) no longer hangs its turn. You answer or stop it from its card on any of your Devices. What you type goes straight to the command and is never saved in the chat, and once the command finishes, the bot hears how it went and carries on. A command that prints nothing for 20 seconds waits the same way, and one still waiting stops after 30 minutes without output, when Lorca quits, or when its chat is deleted.
 - Command output reaches the bot without colors and other terminal codes, which stay in the full-output file.
 - Chats with ChatGPT, Grok, and OpenCode's GPT and Grok models keep reaching the provider server that holds their prompt cache, so long chats answer sooner and cost less.

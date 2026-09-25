@@ -14,6 +14,8 @@ enum StoreEvent {
     case olderMessagesLoaded(Chat.ID)
     /// A bot's turn ended; the date is when this app saw it start.
     case turnFinished(Chat.ID, Bot.ID, Date)
+    /// A command in the chat has run long enough to count as a running task.
+    case runningTasksChanged(Chat.ID)
     case selectionChanged
     case connectionChanged
     case identityChanged
@@ -91,6 +93,10 @@ final class AppStore {
     /// When each turn in flight was first seen, so a finished turn's reply can be told from
     /// what the bot said before it.
     private var jobStarts: [String: Date] = [:]
+    /// When this app saw each command start running in its terminal, by row.
+    private var commandStarts: [Message.ID: Date] = [:]
+    /// How long a command runs before it counts as a running task.
+    static let taskDelay: TimeInterval = 2
     /// The chat last reported to the CLI as on screen; `.some(nil)` is "none".
     private var reportedWatchedChat: Chat.ID??
     private var loadingOlder: Set<Chat.ID> = []
@@ -323,6 +329,7 @@ final class AppStore {
                 let index = chats.firstIndex(where: { $0.id == payload.chatId })
             else { return }
             chats[index].messages.removeAll { $0.id == payload.messageId }
+            commandStarts[payload.messageId] = nil
             emit(.messageRemoved(payload.chatId, payload.messageId))
 
         case "chat.removed":
@@ -390,6 +397,7 @@ final class AppStore {
 
     private func upsert(_ message: Message, in chatID: Chat.ID) {
         guard let chatIndex = chats.firstIndex(where: { $0.id == chatID }) else { return }
+        noteCommand(message, in: chatID)
         if let messageIndex = chats[chatIndex].index(of: message.id) {
             chats[chatIndex].messages[messageIndex] = message
             emit(.messageChanged(chatID, message.id))
@@ -1019,6 +1027,7 @@ final class AppStore {
     func append(_ message: Message, to chatID: Chat.ID) -> Message.ID? {
         guard let index = chats.firstIndex(where: { $0.id == chatID }) else { return nil }
         chats[index].messages.append(message)
+        noteCommand(message, in: chatID)
         emit(.messageAdded(chatID, message.id))
         sortChats()
         emit(.chatsChanged)
@@ -1032,6 +1041,7 @@ final class AppStore {
             let messageIndex = chats[chatIndex].index(of: messageID)
         else { return }
         transform(&chats[chatIndex].messages[messageIndex])
+        noteCommand(chats[chatIndex].messages[messageIndex], in: chatID)
         emit(.messageChanged(chatID, messageID))
     }
 
@@ -1154,6 +1164,33 @@ final class AppStore {
 
     func isResponding(in chatID: Chat.ID) -> Bool {
         runningJobs.contains { $0.chatID == chatID }
+    }
+
+    /// The chat's running tasks: its commands running in their terminals, here or on their
+    /// Runners, in the order they started, once each has run for `taskDelay`. A command
+    /// Auto-review is still judging has no terminal yet, and a quick one ends before it would
+    /// show, so the Running tasks button does not flash for every `ls`.
+    func runningCommands(in chatID: Chat.ID) -> [Message] {
+        let now = Date()
+        return chat(chatID)?.messages.filter { message in
+            guard message.commandRun?.takesInput == true else { return false }
+            // One that was running before this app heard of it has run long enough.
+            return now.timeIntervalSince(commandStarts[message.id] ?? .distantPast) >= Self.taskDelay
+        } ?? []
+    }
+
+    /// Notes when a command starts running in its terminal, and tells the observers once it has
+    /// run for `taskDelay`.
+    private func noteCommand(_ message: Message, in chatID: Chat.ID) {
+        guard message.commandRun?.takesInput == true else {
+            commandStarts[message.id] = nil
+            return
+        }
+        guard commandStarts[message.id] == nil else { return }
+        commandStarts[message.id] = Date()
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.taskDelay) { [weak self] in
+            self?.emit(.runningTasksChanged(chatID))
+        }
     }
 
     /// Bots with a turn running in this chat, in the order they started.

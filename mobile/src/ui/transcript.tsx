@@ -29,6 +29,8 @@ const INSET = 12;
 /// A notice's line, and its icon, which centers on the first line as on the Mac.
 const NOTICE_LINE = 17;
 const NOTICE_ICON = 14;
+/// A line of `commandText`, which an output block's height counts in.
+const CODE_LINE = 17;
 
 export type Row =
   | { key: string; type: "day"; at: number }
@@ -441,10 +443,10 @@ export function CommandRow({
   );
 }
 
-/// A running command's last lines: a code block like the command's that grows to six lines and
-/// then scrolls, the newest line in view. An edge with more lines past it fades out: Android
-/// draws that itself, iOS gets a gradient in the block's color.
-function OutputBlock({ text }: { text: string }) {
+/// A running command's last lines: a code block like the command's that grows to `lines` lines
+/// (six on a card) and then scrolls, the newest line in view. An edge with more lines past it
+/// fades out: Android draws that itself, iOS gets a gradient in the block's color.
+export function OutputBlock({ text, lines = 6 }: { text: string; lines?: number }) {
   const p = usePalette();
   const scroll = useRef<ScrollView>(null);
   const extent = useRef({ content: 0, frame: 0, offset: 0 });
@@ -462,7 +464,7 @@ function OutputBlock({ text }: { text: string }) {
         ref={scroll}
         nestedScrollEnabled
         fadingEdgeLength={16}
-        style={styles.outputScroll}
+        style={{ maxHeight: lines * CODE_LINE + 14 }}
         contentContainerStyle={styles.outputContent}
         scrollEventThrottle={32}
         onLayout={(e) => {
@@ -488,7 +490,7 @@ function OutputBlock({ text }: { text: string }) {
 }
 
 /// The whole command a permission card asks about or a command's card runs, to read or copy.
-function CommandSheet({ visible, title, command, onClose }: { visible: boolean; title: string; command: string; onClose: () => void }) {
+export function CommandSheet({ visible, title, command, onClose }: { visible: boolean; title: string; command: string; onClose: () => void }) {
   useLanguage();
   const p = usePalette();
   const [copied, setCopied] = useState(false);
@@ -575,10 +577,8 @@ const styles = StyleSheet.create({
   permissionButton: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 8 },
   headerButton: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 7 },
   command: { borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7, marginTop: 2 },
-  commandText: { fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 12.5, lineHeight: 17 },
+  commandText: { fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 12.5, lineHeight: CODE_LINE },
   output: { borderRadius: 8, marginTop: 2, overflow: "hidden" },
-  // Six lines of `commandText`, then the block scrolls.
-  outputScroll: { maxHeight: 6 * 17 + 14 },
   outputContent: { paddingHorizontal: 10, paddingVertical: 7 },
   outputFade: { position: "absolute", left: 0, right: 0, height: 16 },
   reasonText: { fontSize: 13, lineHeight: 18 },

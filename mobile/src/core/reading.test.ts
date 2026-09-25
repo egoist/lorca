@@ -1,6 +1,6 @@
 import { beforeEach, expect, mock, test } from "bun:test";
 import type { Notification, NotificationBehavior, NotificationResponse } from "expo-notifications";
-import type { Chat, Message } from "./model";
+import type { Chat, CommandRun, Message } from "./model";
 
 // Exercise the real engine and store, including message/roster ordering, foreground
 // transitions, and the working row. Only native bridges are replaced; no account or provider is
@@ -53,7 +53,7 @@ function snapshot(chats: Chat[]) {
 }
 
 const { engine } = await import("./engine");
-const { resetStore, useStore } = await import("./store");
+const { resetStore, runningTasks, TASK_DELAY_MS, useStore } = await import("./store");
 const { workingActivity } = await import("../ui/format");
 await engine.start();
 
@@ -209,4 +209,36 @@ test("events that arrive while a snapshot is on its way are applied after it", a
   await paired;
   expect(useStore.getState().relayConnected).toBe(true);
   expect(useStore.getState().chats[0].messages.map((m) => m.id)).toEqual(["reply"]);
+});
+
+function command(state: CommandRun["state"], session_id?: string, id = "call"): Message {
+  return { id, chat_id: "open", author: { kind: "bot", bot_id: "bot" }, state: { kind: "streaming" }, created_at: 1,
+    body: { kind: "tool", name: "bash", summary: "Running", detail: "", is_running: true, description: "Install dependencies", run: { command: "bun install", state, session_id } } };
+}
+
+const tasks = () => runningTasks(useStore.getState(), "open").map((m) => m.id);
+
+test("a command becomes a running task once it has run in its terminal for a moment", async () => {
+  // The call starts, and Auto-review judges the command before a terminal runs it.
+  event({ event: "message.added", data: { chat_id: "open", message: command("running") } });
+  event({ event: "message.updated", data: { chat_id: "open", message: command("checking") } });
+  event({ event: "message.updated", data: { chat_id: "open", message: command("running", "bash-1") } });
+  expect(tasks()).toEqual([]);
+  await new Promise((resolve) => setTimeout(resolve, TASK_DELAY_MS + 50));
+  expect(tasks()).toEqual(["call"]);
+  // Waiting at a question is still running.
+  event({ event: "message.updated", data: { chat_id: "open", message: command("waiting", "bash-1") } });
+  expect(tasks()).toEqual(["call"]);
+  event({ event: "message.updated", data: { chat_id: "open", message: command("exited", "bash-1") } });
+  expect(tasks()).toEqual([]);
+});
+
+test("a quick command never counts, and one running before the phone heard of it counts at once", () => {
+  event({ event: "message.added", data: { chat_id: "open", message: command("running") } });
+  event({ event: "message.updated", data: { chat_id: "open", message: command("running", "bash-1") } });
+  event({ event: "message.updated", data: { chat_id: "open", message: command("exited", "bash-1") } });
+  expect(tasks()).toEqual([]);
+  expect(useStore.getState().pendingTasks).toEqual({});
+  event({ event: "snapshot", data: snapshot([{ ...chat("open"), messages: [command("running", "bash-2", "server")] }, chat("other")]) });
+  expect(tasks()).toEqual(["server"]);
 });

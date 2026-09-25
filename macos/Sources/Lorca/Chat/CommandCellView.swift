@@ -63,10 +63,10 @@ final class CommandCellView: TranscriptCellView {
         max(8, Int((width - 8) / ("M" as NSString).size(withAttributes: [.font: font]).width))
     }
 
-    /// "$ " and the command's first line, cut to one line of `width`.
-    private static func commandLine(_ run: CommandRun, fitting width: CGFloat, font: NSFont) -> String {
+    /// "$ " and a command's first line, cut to one line of `width`.
+    static func commandLine(_ firstLine: String, fitting width: CGFloat, font: NSFont) -> String {
         let fits = perLine(width: width, font: font)
-        let command = "$ \(run.firstLine)"
+        let command = "$ \(firstLine)"
         guard command.count > fits else { return command }
         return String(command.prefix(fits - 1)).trimmingCharacters(in: .whitespaces) + "…"
     }
@@ -83,11 +83,6 @@ final class CommandCellView: TranscriptCellView {
         static let screenPadX: CGFloat = 8
         static let screenPadY: CGFloat = 5
         static let controlHeight: CGFloat = 22
-        /// `outputLines` lines as the output's text view lays them out.
-        static let outputMaxHeight = TextMeasure.textSize(
-            of: NSAttributedString(string: Array(repeating: "X", count: outputLines).joined(separator: "\n"), attributes: [.font: screenFont]),
-            width: 1000
-        ).height
 
         var width: CGFloat
         var height: CGFloat = 0
@@ -107,7 +102,7 @@ final class CommandCellView: TranscriptCellView {
             title = NSRect(x: Self.textX, y: 11, width: textWidth, height: 17)
             // The command's text and the output's share a column inside their blocks.
             let columnWidth = textWidth - Self.screenPadX * 2
-            commandText = CommandCellView.commandLine(run, fitting: columnWidth, font: Self.screenFont)
+            commandText = CommandCellView.commandLine(run.firstLine, fitting: columnWidth, font: Self.screenFont)
             let block = NSRect(x: Self.textX, y: 36, width: textWidth, height: Self.measure("X", font: Self.screenFont, width: columnWidth) + Self.screenPadY * 2)
             command = block
             var bottom = block.maxY
@@ -117,8 +112,7 @@ final class CommandCellView: TranscriptCellView {
                 bottom = row.maxY
             }
             if run.isLive, let text = CommandCellView.outputText(run) {
-                let full = TextMeasure.textSize(of: NSAttributedString(string: text, attributes: [.font: Self.screenFont]), width: columnWidth).height
-                let lines = NSRect(x: Self.textX, y: bottom + 6, width: textWidth, height: min(full, Self.outputMaxHeight) + Self.screenPadY * 2)
+                let lines = NSRect(x: Self.textX, y: bottom + 6, width: textWidth, height: CommandOutputView.height(of: text, width: textWidth, lines: Self.outputLines))
                 output = lines
                 bottom = lines.maxY
             }
@@ -154,13 +148,8 @@ final class CommandCellView: TranscriptCellView {
     private let title = Build.label("", font: Layout.titleFont)
     private let command = CommandBlockView(font: Layout.screenFont, lines: 1, padding: NSSize(width: Layout.screenPadX, height: Layout.screenPadY))
     private let caption = Build.label("", font: Layout.captionFont, color: .secondaryLabelColor, lines: 4)
-    /// The output: a code block like the command's that grows to `Layout.outputLines` lines and
-    /// then scrolls, the newest line in view. An edge with more lines past it fades out.
-    private let outputBox = BackgroundView()
-    private let outputScroll: NSScrollView
-    private let outputText: NSTextView
-    private let outputFade = CAGradientLayer()
-    private var scrollOutputToEnd = false
+    /// The output, which grows to `Layout.outputLines` lines and then scrolls.
+    private let output = CommandOutputView()
     private let allowButton = NSButton()
     private let alwaysButton = NSButton()
     private let denyButton = NSButton()
@@ -187,9 +176,6 @@ final class CommandCellView: TranscriptCellView {
     private var field: NSTextField { run?.asksYesOrNo == true ? plainField : secretField }
 
     init() {
-        let scroll = NSTextView.scrollableTextView()
-        outputScroll = scroll
-        outputText = scroll.documentView as? NSTextView ?? NSTextView()
         super.init(frame: .zero)
         box.cornerRadius = 12
         box.fillColor = Theme.botBubble
@@ -199,22 +185,6 @@ final class CommandCellView: TranscriptCellView {
         icon.contentTintColor = .controlAccentColor
         command.onClick = { [weak self] in self?.onShowCommand?() }
         caption.lineBreakMode = .byWordWrapping
-        outputBox.fillColor = Theme.codeBackground
-        outputBox.cornerRadius = 6
-        outputScroll.drawsBackground = false
-        outputScroll.borderType = .noBorder
-        outputScroll.hasVerticalScroller = true
-        outputScroll.autohidesScrollers = true
-        outputText.isEditable = false
-        outputText.isSelectable = true
-        outputText.drawsBackground = false
-        outputText.textContainer?.lineFragmentPadding = 0
-        outputText.textContainerInset = NSSize(width: Layout.screenPadX, height: Layout.screenPadY)
-        // The block's background is see-through, so the fade is a mask on the text, not a
-        // color painted over it.
-        outputScroll.wantsLayer = true
-        outputScroll.contentView.postsBoundsChangedNotifications = true
-        NotificationCenter.default.addObserver(self, selector: #selector(outputScrolled(_:)), name: NSView.boundsDidChangeNotification, object: outputScroll.contentView)
         for (button, label, decision) in [(allowButton, L("Allow once"), "allow"), (alwaysButton, L("Always allow"), "always"), (denyButton, L("Deny"), "deny")] {
             button.title = label
             button.bezelStyle = .rounded
@@ -244,7 +214,7 @@ final class CommandCellView: TranscriptCellView {
             button.action = action
         }
         let views: [NSView] = [
-            avatar, box, icon, title, command, caption, outputBox, outputScroll, allowButton, alwaysButton, denyButton,
+            avatar, box, icon, title, command, caption, output, allowButton, alwaysButton, denyButton,
             secretField, plainField, sendButton, stopButton, note,
         ]
         for view in views {
@@ -275,9 +245,7 @@ final class CommandCellView: TranscriptCellView {
             plainField.stringValue = ""
         }
         if previous?.output != run.output || previous == nil {
-            let text = Self.outputText(run) ?? ""
-            outputText.textStorage?.setAttributedString(NSAttributedString(string: text, attributes: [.font: Layout.screenFont, .foregroundColor: NSColor.labelColor]))
-            scrollOutputToEnd = true
+            output.text = Self.outputText(run) ?? ""
         }
         self.messageID = messageID
         self.groupStart = groupStart
@@ -336,34 +304,6 @@ final class CommandCellView: TranscriptCellView {
             alert.informativeText = error
             alert.beginSheetModal(for: window)
         }
-    }
-
-    @objc private func outputScrolled(_ notification: Notification) {
-        updateOutputFade()
-    }
-
-    /// Fades the output at each edge with more lines past it: the cue that the block scrolls,
-    /// and which way.
-    private func updateOutputFade() {
-        guard let layer = outputScroll.layer, let document = outputScroll.documentView, layer.bounds.height > 0 else { return }
-        if layer.mask !== outputFade { layer.mask = outputFade }
-        // The text view is flipped, so its clip view's origin is how far down it has scrolled.
-        let visible = outputScroll.contentView.bounds
-        let above = visible.minY > 1
-        let below = visible.maxY < document.frame.height - 1
-        let edge = min(16 / layer.bounds.height, 0.5)
-        // The gradient's unit space starts at the top in a flipped layer, at the bottom in another.
-        let flipped = layer.contentsAreFlipped()
-        let shown = NSColor.black.cgColor
-        let faded = NSColor.clear.cgColor
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        outputFade.frame = layer.bounds
-        outputFade.startPoint = CGPoint(x: 0.5, y: flipped ? 0 : 1)
-        outputFade.endPoint = CGPoint(x: 0.5, y: flipped ? 1 : 0)
-        outputFade.colors = [above ? faded : shown, shown, shown, below ? faded : shown]
-        outputFade.locations = [0, NSNumber(value: Double(edge)), NSNumber(value: Double(1 - edge)), 1]
-        CATransaction.commit()
     }
 
     @objc private func decide(_ sender: NSButton) {
@@ -429,17 +369,8 @@ final class CommandCellView: TranscriptCellView {
         command.text = layout.commandText
         caption.isHidden = layout.caption == nil
         caption.frame = layout.caption.map(place) ?? .zero
-        outputBox.isHidden = layout.output == nil
-        outputScroll.isHidden = layout.output == nil
-        outputBox.frame = layout.output.map(place) ?? .zero
-        outputScroll.frame = outputBox.frame
-        if scrollOutputToEnd, layout.output != nil {
-            scrollOutputToEnd = false
-            outputText.scrollToEndOfDocument(nil)
-        }
-        if layout.output != nil {
-            updateOutputFade()
-        }
+        output.isHidden = layout.output == nil
+        output.frame = layout.output.map(place) ?? .zero
         if let buttonsY = layout.buttonsY {
             var buttonX = x + Layout.textX - 2
             for button in [allowButton, alwaysButton, denyButton] where !button.isHidden {
@@ -459,5 +390,119 @@ final class CommandCellView: TranscriptCellView {
         }
         note.isHidden = layout.note == nil
         note.frame = layout.note.map(place) ?? .zero
+    }
+}
+
+/// A command's last lines: a code block like the command's that grows to a number of lines and
+/// then scrolls, the newest line in view. An edge with more lines past it fades out: the cue
+/// that the block scrolls, and which way. The command's card and Running tasks show it.
+final class CommandOutputView: NSView {
+    static let font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+    static let padding = NSSize(width: 8, height: 5)
+
+    /// The block's height for `text` at `width`: the text's own, up to `lines` lines, and the
+    /// padding.
+    static func height(of text: String, width: CGFloat, lines: Int) -> CGFloat {
+        let full = TextMeasure.textSize(of: NSAttributedString(string: text, attributes: [.font: font]), width: width - padding.width * 2).height
+        return min(full, textHeight(lines: lines)) + padding.height * 2
+    }
+
+    /// `lines` lines as the text view lays them out.
+    private static func textHeight(lines: Int) -> CGFloat {
+        if let height = textHeights[lines] { return height }
+        let sample = NSAttributedString(string: Array(repeating: "X", count: lines).joined(separator: "\n"), attributes: [.font: font])
+        let height = TextMeasure.textSize(of: sample, width: 1000).height
+        textHeights[lines] = height
+        return height
+    }
+
+    private static var textHeights: [Int: CGFloat] = [:]
+
+    private let box = BackgroundView()
+    private let scroll: NSScrollView
+    private let textView: NSTextView
+    private let fade = CAGradientLayer()
+    private var scrollsToEnd = false
+
+    /// The lines, newest last. New text scrolls to its end.
+    var text = "" {
+        didSet {
+            textView.textStorage?.setAttributedString(NSAttributedString(string: text, attributes: [.font: Self.font, .foregroundColor: NSColor.labelColor]))
+            scrollsToEnd = true
+            needsLayout = true
+        }
+    }
+
+    init() {
+        scroll = NSTextView.scrollableTextView()
+        textView = scroll.documentView as? NSTextView ?? NSTextView()
+        super.init(frame: .zero)
+        box.fillColor = Theme.codeBackground
+        box.cornerRadius = 6
+        scroll.drawsBackground = false
+        scroll.borderType = .noBorder
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.drawsBackground = false
+        textView.textContainer?.lineFragmentPadding = 0
+        textView.textContainerInset = Self.padding
+        // The block's background is see-through, so the fade is a mask on the text, not a color
+        // painted over it.
+        scroll.wantsLayer = true
+        scroll.contentView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(self, selector: #selector(scrolled(_:)), name: NSView.boundsDidChangeNotification, object: scroll.contentView)
+        addSubview(box.framePositioned())
+        addSubview(scroll)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var isFlipped: Bool { true }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        needsLayout = true
+    }
+
+    override func layout() {
+        super.layout()
+        box.frame = bounds
+        scroll.frame = bounds
+        // Once the block has a size to scroll in: a hidden one keeps the end for when it shows.
+        if scrollsToEnd, !isHidden, bounds.height > 0 {
+            scrollsToEnd = false
+            textView.scrollToEndOfDocument(nil)
+        }
+        updateFade()
+    }
+
+    @objc private func scrolled(_ notification: Notification) {
+        updateFade()
+    }
+
+    /// Fades the text at each edge with more lines past it.
+    private func updateFade() {
+        guard let layer = scroll.layer, let document = scroll.documentView, layer.bounds.height > 0 else { return }
+        if layer.mask !== fade { layer.mask = fade }
+        // The text view is flipped, so its clip view's origin is how far down it has scrolled.
+        let visible = scroll.contentView.bounds
+        let above = visible.minY > 1
+        let below = visible.maxY < document.frame.height - 1
+        let edge = min(16 / layer.bounds.height, 0.5)
+        // The gradient's unit space starts at the top in a flipped layer, at the bottom in another.
+        let flipped = layer.contentsAreFlipped()
+        let shown = NSColor.black.cgColor
+        let faded = NSColor.clear.cgColor
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        fade.frame = layer.bounds
+        fade.startPoint = CGPoint(x: 0.5, y: flipped ? 0 : 1)
+        fade.endPoint = CGPoint(x: 0.5, y: flipped ? 1 : 0)
+        fade.colors = [above ? faded : shown, shown, shown, below ? faded : shown]
+        fade.locations = [0, NSNumber(value: Double(edge)), NSNumber(value: Double(1 - edge)), 1]
+        CATransaction.commit()
     }
 }

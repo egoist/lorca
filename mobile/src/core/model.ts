@@ -193,6 +193,18 @@ export function isLive(run: CommandRun): boolean {
   return run.state === "waiting" || run.state === "running";
 }
 
+/// It ran and ended: by itself, with a nonzero code, or stopped.
+export function hasEnded(run: CommandRun): boolean {
+  return run.state === "exited" || run.state === "failed" || run.state === "stopped";
+}
+
+/// A `bash` row whose command runs in its terminal, here or on its Runner: it takes answers and a
+/// Stop. A command Auto-review is still judging has no terminal yet.
+export function runsInTerminal(message: Message | undefined): boolean {
+  const run = message?.body.kind === "tool" ? message.body.run : undefined;
+  return !!run && isLive(run) && !!run.session_id;
+}
+
 /// Whether a tool row shows as a command's card: while the command needs the user. That is while
 /// Auto-review asks to run it, and once the bot handed the running command over (its turn ended, or
 /// it waits on the command at a question) until it ends. Before that the bot deals with it, and the

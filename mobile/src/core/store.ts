@@ -5,7 +5,7 @@
 import { useMemo } from "react";
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
-import type { AutoReview, Bot, Chat, ChatMeta, ChatUsage, Device, Message, ProviderStatus, Routine } from "./model";
+import { runsInTerminal, type AutoReview, type Bot, type Chat, type ChatMeta, type ChatUsage, type Device, type Message, type ProviderStatus, type Routine } from "./model";
 import { t } from "../i18n";
 import { savePrefs } from "./prefs";
 
@@ -55,6 +55,9 @@ export interface StoreState {
   retries: Record<string, Retry>;
   /// "Chef stopped without replying", by chat id, after a turn ends with nothing said.
   statuses: Record<string, string>;
+  /// Commands that started running while the phone watched, by row id, until they have run for
+  /// `TASK_DELAY_MS`: not running tasks yet, so a quick command never shows as one.
+  pendingTasks: Record<string, true>;
   /// The chat on screen: new replies there do not count as unread.
   openChatId: string | null;
   /// Only foreground UI can acknowledge a reply as read.
@@ -85,6 +88,7 @@ function empty(): Omit<StoreState, "ready" | "dictation_lang" | "appActive" | "a
     thinking: {},
     retries: {},
     statuses: {},
+    pendingTasks: {},
     openChatId: null,
     files: {},
   };
@@ -210,10 +214,15 @@ export function removeRoutine(id: string) {
   useStore.setState((s) => ({ routines: s.routines.filter((r) => r.id !== id) }));
 }
 
+/// How long a command runs before it counts as a running task.
+export const TASK_DELAY_MS = 2000;
+
 /// A message the core stored or changed. `isNew` is the core's `message.added`: the bot's first
 /// message after its thinking is what came of it.
 export function upsertMessage(message: Message, isNew = true): { added: boolean } {
   let added = false;
+  let previous: Message | undefined;
+  let started = false;
   useStore.setState((s) => {
     let chats = s.chats;
     if (!chats.some((c) => c.id === message.chat_id)) {
@@ -223,6 +232,7 @@ export function upsertMessage(message: Message, isNew = true): { added: boolean 
     chats = chats.map((chat) => {
       if (chat.id !== message.chat_id) return chat;
       const index = chat.messages.findIndex((m) => m.id === message.id);
+      previous = chat.messages[index];
       if (index < 0) {
         added = true;
         return { ...chat, messages: [...chat.messages, message] };
@@ -237,14 +247,19 @@ export function upsertMessage(message: Message, isNew = true): { added: boolean 
     const retries = omit(s.retries, message.chat_id);
     const thought = isNew && message.author.kind === "bot" && s.thinking[message.chat_id] === message.author.bot_id;
     const thinking = thought ? omit(s.thinking, message.chat_id) : s.thinking;
-    return { chats, statuses, retries, thinking };
+    // A command that starts running here waits to count as a running task.
+    started = runsInTerminal(message) && !runsInTerminal(previous);
+    const pendingTasks = started ? { ...s.pendingTasks, [message.id]: true as const } : runsInTerminal(message) ? s.pendingTasks : omit(s.pendingTasks, message.id);
+    return { chats, statuses, retries, thinking, pendingTasks };
   });
+  if (started) setTimeout(() => useStore.setState((s) => ({ pendingTasks: omit(s.pendingTasks, message.id) })), TASK_DELAY_MS);
   return { added };
 }
 
 export function removeMessage(chatId: string, messageId: string) {
   useStore.setState((s) => ({
     chats: s.chats.map((chat) => (chat.id === chatId ? { ...chat, messages: chat.messages.filter((m) => m.id !== messageId) } : chat)),
+    pendingTasks: omit(s.pendingTasks, messageId),
   }));
 }
 
@@ -348,6 +363,18 @@ export function useWorkingBots(chatId: string): string[] {
       return s.bots.filter((b) => ids.has(b.id)).map((b) => b.id);
     }),
   );
+}
+
+/// The chat's running tasks: its commands running in their terminals, here or on their Runners,
+/// in the order they started. One that starts while the phone watches counts once it has run for
+/// `TASK_DELAY_MS`; one that was running before counts at once.
+export function runningTasks(s: StoreState, chatId: string): Message[] {
+  return s.chats.find((c) => c.id === chatId)?.messages.filter((m) => runsInTerminal(m) && !s.pendingTasks[m.id]) ?? [];
+}
+
+/// What the Running tasks button counts and its sheet lists.
+export function useRunningTasks(chatId: string): Message[] {
+  return useStore(useShallow((s) => runningTasks(s, chatId)));
 }
 
 export function useIsWorking(chatId: string): boolean {

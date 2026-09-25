@@ -26,14 +26,18 @@ Before a shell command starts, Lorca parses all of its stages and sends the comp
 
 ## The command's card
 
-Every command a bot runs shows in the chat as one card, from start to finish: while Auto-review checks it, while it asks for your permission (**Allow once**, **Always allow**, or **Deny**), while it runs, with its latest output, and once it ends, as one line that says how. Click or tap the command to see all of it.
+A command shows in the chat as a card only while it needs you: while Auto-review asks for your permission (**Allow once**, **Always allow**, or **Deny**), and once the bot leaves a running command to you, because its turn ended with the command still running or it waits on a question the command asks. That card shows the latest output and **Stop**. Until then, the shimmering line says what the bot is running. Click or tap the command to see all of it.
+
+## Running tasks
+
+Every command the chat's bots have running shows under **Running tasks**, including the ones a bot is still dealing with. While a chat has one, a terminal button with their number sits in the chat's toolbar, beside **⋯** on a phone. It opens the list: what each command does, who runs it and for how long, the command, its latest output, and **Stop**. **Stop** ends that command alone; the bot hears that it stopped and carries on. A command shows there once it has run for two seconds, so quick ones never do.
 
 ## When a command asks for input
 
 Each command runs in a terminal of its own, so `sudo`, `ssh`, a key's passphrase, or a `[Y/n]` can ask for an answer. A command that stops at a question, or prints nothing for 20 seconds, doesn't hold up the bot: its turn goes on, and the bot answers what it knows. The rest is yours, on the command's card.
 
 - **Answer** from the card, on any of your Devices. What you type goes straight to the command. It is never saved in the chat, and the terminal doesn't echo it, so the bot doesn't read it back. Bots are told to leave passwords and one-time codes to you. When the command finishes, the bot hears how it went and carries on.
-- **Stop** from the card, or with **Stop** in the chat.
+- **Stop** from the card or from Running tasks. **Stop** in the desktop app's composer ends the whole turn, its commands included.
 
 Anything a bot types into a command goes through [Auto-review](/docs/auto-review) first, like a new command. A command still waiting stops by itself after 30 minutes without output, when Lorca quits, and when its chat is deleted. On Windows, commands get no input.
 

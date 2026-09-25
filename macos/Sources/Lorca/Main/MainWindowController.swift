@@ -18,6 +18,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     /// The picker's glass capsule, where the pop-up has one of its own.
     private var devicePlatter: NSView?
     private var palette: CommandPalette?
+    /// The chat's running commands, with how many: shown while it has any, or while their
+    /// popover is open.
+    private lazy var tasksButton = HoverButton(
+        symbol: "terminal", tooltip: L("Running tasks"), target: self, action: #selector(toggleRunningTasks(_:)))
+    private var tasksPopover: NSPopover?
+    /// When the popover last closed. A click on the button closes it before the button acts.
+    private var tasksClosedAt = Date.distantPast
 
     init() {
         StartupTrace.mark("window objects initialized")
@@ -66,6 +73,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         AppStore.shared.observe(self) { [weak self] event in
             switch event {
             case .rosterChanged, .snapshotReplaced: self?.updateToolbar()
+            case .messageAdded, .messageChanged, .messageRemoved, .chatsChanged, .runningTasksChanged: self?.updateRunningTasks()
             default: break
             }
         }
@@ -81,8 +89,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         palette?.close()
         palette = nil
         installTitlebarButtons()
+        tasksPopover?.close()
+        tasksButton.toolTip = L("Running tasks")
         if let toolbar = window?.toolbar {
-            let worded: Set<NSToolbarItem.Identifier> = [.settingsNavigation, .devicePicker, .inspectorToggle]
+            let worded: Set<NSToolbarItem.Identifier> = [.settingsNavigation, .devicePicker, .inspectorToggle, .runningTasks]
             for (index, item) in toolbar.items.enumerated() where worded.contains(item.itemIdentifier) {
                 toolbar.removeItem(at: index)
                 toolbar.insertItem(withItemIdentifier: item.itemIdentifier, at: index)
@@ -135,6 +145,16 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         } else if !isSettings, toggle == nil {
             toolbar.insertItem(withItemIdentifier: .inspectorToggle, at: toolbar.items.count)
         }
+        // Running tasks belong to the chats, at the content area's trailing edge. The item stays
+        // while chats show and only its button hides, so the toolbar keeps its layout.
+        let tasks = toolbar.items.firstIndex { $0.itemIdentifier == .runningTasks }
+        if isSettings, let tasks {
+            toolbar.removeItem(at: tasks)
+        } else if !isSettings, tasks == nil {
+            let at = toolbar.items.firstIndex { $0.itemIdentifier == .inspectorTrackingSeparator } ?? toolbar.items.count
+            toolbar.insertItem(withItemIdentifier: .runningTasks, at: at)
+        }
+        updateRunningTasks()
 
         // The picker joins the toolbar with Settings. An item entering, leaving, or hiding makes
         // the toolbar lay its glass out again, which blinks the back and forward buttons.
@@ -210,6 +230,53 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     @objc private func pairDevice() {
         selectPickedDevice()
         NSApp.sendAction(#selector(AppDelegate.pairDevice(_:)), to: nil, from: nil)
+    }
+
+    // MARK: - Running tasks
+
+    /// The chat on screen, when a chat is.
+    private var selectedChatID: Chat.ID? {
+        if case let .chat(id) = root.selection { return id }
+        return nil
+    }
+
+    /// Shows the Running tasks button with how many commands the chat on screen has running,
+    /// and closes the popover when it belongs to a chat no longer on screen.
+    private func updateRunningTasks() {
+        let chatID = selectedChatID
+        if let popover = tasksPopover, (popover.contentViewController as? RunningTasksViewController)?.chatID != chatID {
+            popover.close()
+        }
+        let count = chatID.map { AppStore.shared.runningCommands(in: $0).count } ?? 0
+        // While its popover is open the button stays, for the popover to point at.
+        tasksButton.isHidden = count == 0 && tasksPopover == nil
+        let label = count > 0 ? "\(count)" : nil
+        if tasksButton.label != label { tasksButton.label = label }
+        tasksButton.setAccessibilityLabel(L("Running tasks (%d)", count))
+    }
+
+    @objc private func toggleRunningTasks(_ sender: Any?) {
+        if let popover = tasksPopover {
+            popover.close()
+            return
+        }
+        // The click that closed the popover.
+        guard Date().timeIntervalSince(tasksClosedAt) > 0.3, let chatID = selectedChatID else { return }
+        let content = RunningTasksViewController(chatID: chatID)
+        _ = content.view
+        guard !content.tasks.isEmpty else { return }
+        content.onShowCommand = { [weak self] title, command in
+            guard let self else { return }
+            tasksPopover?.close()
+            root.presentAsSheet(CommandSheetViewController(title: title, command: command))
+        }
+        content.onEmpty = { [weak self] in self?.tasksPopover?.close() }
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.contentViewController = content
+        popover.delegate = self
+        tasksPopover = popover
+        popover.show(relativeTo: tasksButton.bounds, of: tasksButton, preferredEdge: .maxY)
     }
 
     /// Lays square plain buttons out as a leading titlebar accessory, just past the traffic lights.
@@ -312,6 +379,7 @@ extension NSToolbarItem.Identifier {
     static let inspectorToggle = NSToolbarItem.Identifier("lorca.inspectorToggle")
     static let devicePicker = NSToolbarItem.Identifier("lorca.devicePicker")
     static let settingsNavigation = NSToolbarItem.Identifier("lorca.settingsNavigation")
+    static let runningTasks = NSToolbarItem.Identifier("lorca.runningTasks")
 }
 
 // Standard toolbar items sit on glass platters; a borderless custom-view item doesn't. AppKit moves
@@ -329,7 +397,7 @@ extension MainWindowController: NSToolbarDelegate {
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        toolbarDefaultItemIdentifiers(toolbar) + [.devicePicker, .settingsNavigation]
+        toolbarDefaultItemIdentifiers(toolbar) + [.devicePicker, .settingsNavigation, .runningTasks]
     }
 
     func toolbar(
@@ -396,6 +464,13 @@ extension MainWindowController: NSToolbarDelegate {
             }
             return item
         }
+        if identifier == .runningTasks {
+            let item = NSToolbarItem(itemIdentifier: identifier)
+            item.label = L("Running tasks")
+            item.view = tasksButton
+            item.isBordered = false
+            return item
+        }
         guard identifier == .inspectorToggle else { return nil }
         let item = NSToolbarItem(itemIdentifier: identifier)
         item.label = L("Inspector")
@@ -404,5 +479,14 @@ extension MainWindowController: NSToolbarDelegate {
             action: #selector(RootSplitViewController.toggleInspector(_:)))
         item.isBordered = false
         return item
+    }
+}
+
+extension MainWindowController: NSPopoverDelegate {
+    func popoverDidClose(_ notification: Notification) {
+        guard (notification.object as? NSPopover) === tasksPopover else { return }
+        tasksPopover = nil
+        tasksClosedAt = Date()
+        updateRunningTasks()
     }
 }
