@@ -589,7 +589,7 @@ pub fn answer_sign_in(app: &Arc<App>, chat_id: &str, message_id: &str, decision:
             let summary = if started.starts_with("Getting a") { "Getting a code…".to_string() } else { format!("Finish signing in in the browser on {runner}.") };
             set_card(app, chat_id, message_id, "allowed", Some(summary), None, None);
         }
-        Decision::Denied | Decision::Expired => set_card(app, chat_id, message_id, "denied", None, None, None),
+        Decision::Denied | Decision::Expired | Decision::Dismissed => set_card(app, chat_id, message_id, "denied", None, None, None),
     }
     Ok(true)
 }
@@ -1377,6 +1377,7 @@ impl Tool for PluginTool {
                     Decision::Allowed | Decision::Always => {}
                     Decision::Denied => return Err(ToolError(format!("The user did not allow {tool}. Do not retry it; ask what they want instead."))),
                     Decision::Expired => return Err(ToolError(format!("Nobody answered the permission request for {tool} in time. Say what you needed and stop."))),
+                    Decision::Dismissed => return Ok(dismissed_call(format!("The user sent a new message instead of answering, so {tool} did not run. Follow that message."))),
                 }
             }
         }
@@ -1482,6 +1483,8 @@ pub enum Decision {
     Always,
     Denied,
     Expired,
+    /// The user wrote in the chat instead of answering (`dismiss_questions`).
+    Dismissed,
 }
 
 impl Decision {
@@ -1499,6 +1502,7 @@ impl Decision {
             Decision::Always => "always",
             Decision::Denied => "denied",
             Decision::Expired => "expired",
+            Decision::Dismissed => "dismissed",
         }
     }
 }
@@ -1551,7 +1555,7 @@ pub async fn ask_with_rule(
             code: None,
         },
     );
-    let decision = await_answer(app, &message.id, always_rule, cancel, || {
+    let decision = await_answer(app, chat_id, &message.id, always_rule, cancel, || {
         app.upsert_message(message.clone(), true);
         crate::push::permission(app, &message);
     })
@@ -1565,13 +1569,20 @@ pub async fn ask_with_rule(
     decision
 }
 
-/// Waits for the answer to the question row `message_id` asks, from this Device or any paired
-/// one (`chats.permission` names the row), for `PERMISSION_TIMEOUT` at most. `ask` puts the
-/// question up once an answer can arrive; Stop answers Denied. An Always allow adds
-/// `always_rule` before this returns.
-pub async fn await_answer(app: &Arc<App>, message_id: &str, always_rule: Option<AutoReviewRule>, cancel: &CancellationToken, ask: impl FnOnce()) -> Decision {
+/// Waits for the answer to the question row `message_id` asks in `chat_id`, from this Device
+/// or any paired one (`chats.permission` names the row), for `PERMISSION_TIMEOUT` at most.
+/// `ask` puts the question up once an answer can arrive; Stop answers Denied. A question never
+/// holds back what the user wrote: one that would go up while a direct turn has a message of
+/// theirs still to read is dismissed without asking, and a message that arrives while it waits
+/// dismisses it (`dismiss_questions`). An Always allow adds `always_rule` before this returns.
+pub async fn await_answer(app: &Arc<App>, chat_id: &str, message_id: &str, always_rule: Option<AutoReviewRule>, cancel: &CancellationToken, ask: impl FnOnce()) -> Decision {
     let (tx, rx) = tokio::sync::oneshot::channel();
-    app.pending_permissions.lock().unwrap().insert(message_id.to_string(), tx);
+    app.pending_permissions.lock().unwrap().insert(message_id.to_string(), (chat_id.to_string(), tx));
+    // Checked once the question is registered, so a message landing in between still reaches it.
+    if app.steering_queue(chat_id).is_some_and(|queue| !queue.is_empty()) {
+        app.pending_permissions.lock().unwrap().remove(message_id);
+        return Decision::Dismissed;
+    }
     ask();
     let decision = tokio::select! {
         answer = rx => answer.unwrap_or(Decision::Denied),
@@ -1591,9 +1602,26 @@ pub async fn await_answer(app: &Arc<App>, message_id: &str, always_rule: Option<
 /// nothing waits on that message (answered already, or expired).
 pub fn answer(app: &Arc<App>, message_id: &str, decision: Decision) -> bool {
     match app.pending_permissions.lock().unwrap().remove(message_id) {
-        Some(tx) => tx.send(decision).is_ok(),
+        Some((_, tx)) => tx.send(decision).is_ok(),
         None => false,
     }
+}
+
+/// The user wrote in `chat_id` while questions there waited for their answer: each is
+/// dismissed, so its action does not run and the turn goes on to read what they wrote.
+pub fn dismiss_questions(app: &App, chat_id: &str) {
+    let dismissed: Vec<_> = app.pending_permissions.lock().unwrap().extract_if(|_, (chat, _)| chat == chat_id).collect();
+    for (_, (_, tx)) in dismissed {
+        let _ = tx.send(Decision::Dismissed);
+    }
+}
+
+/// What a call returns when the user left its question for a new message: the action did not
+/// happen, and the turn stops after this batch unless that message is there to read next, as a
+/// direct chat's steering puts it. A group member's turn ends, and the room that message started
+/// answers it.
+pub fn dismissed_call(reason: String) -> ToolResult {
+    ToolResult { terminate: true, ..ToolResult::text(reason) }
 }
 
 #[cfg(test)]

@@ -157,7 +157,7 @@ export type Body =
   /// The bot asks before a plugin or shell action, or before installing a plugin (`tool` is `install`).
   /// `rule` is the rule Always allow adds, which Auto-review proposed for a shell command (`plugin_id` is `computer`);
   /// `command` is that command in full, where `summary` is its first line.
-  | { kind: "permission"; plugin_id: string; plugin_name: string; tool: string; summary: string; decision: "pending" | "allowed" | "always" | "denied" | "expired" | "connected" | "failed"; reason?: string; rule?: string; command?: string; link?: string; code?: string };
+  | { kind: "permission"; plugin_id: string; plugin_name: string; tool: string; summary: string; decision: "pending" | "allowed" | "always" | "denied" | "expired" | "dismissed" | "connected" | "failed"; reason?: string; rule?: string; command?: string; link?: string; code?: string };
 
 /// A bash call as its card shows it: Auto-review checking it, the question it asks, the command
 /// running in its terminal, what the command asks, and how it ended. While it asks, the card takes
@@ -170,9 +170,10 @@ export interface CommandRun {
   command: string;
   /**
    * `checking` (Auto-review is judging it), `asking` (for the user's permission), `running`, or `waiting` (at a question,
-   * or silent); once it ended, `exited`, `failed`, `stopped`, `denied` (never run), or `expired` (nobody answered in time).
+   * or silent); once it ended, `exited`, `failed`, `stopped`, `denied` (never run), `expired` (nobody answered in time), or
+   * `dismissed` (the user sent a new message instead of answering, so it never ran).
    */
-  state: "checking" | "asking" | "running" | "waiting" | "exited" | "failed" | "stopped" | "denied" | "expired";
+  state: "checking" | "asking" | "running" | "waiting" | "exited" | "failed" | "stopped" | "denied" | "expired" | "dismissed";
   /** The line it asks with: "[sudo] password for ana:". */
   prompt?: string;
   /** Its last lines, as the bottom of a terminal shows them. Never what was typed. */
@@ -186,7 +187,7 @@ export interface CommandRun {
   /** The rule Always allow adds, or, after an Always allow, added. */
   rule?: string;
   /** The answer to the question. */
-  decision?: "allowed" | "always" | "denied" | "expired";
+  decision?: "allowed" | "always" | "denied" | "expired" | "dismissed";
 }
 
 export function isLive(run: CommandRun): boolean {

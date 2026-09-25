@@ -1032,6 +1032,37 @@ mod tests {
         assert_eq!(provider.requests.lock().unwrap().len(), 1, "the batch terminated the run");
     }
 
+    /// Blocks every call and asks to end the run, with a user message queued while the call
+    /// waited: a question the user answered by writing something else.
+    struct BlockForSteering(crate::AgentMessageQueue);
+
+    #[async_trait]
+    impl LoopHooks for BlockForSteering {
+        async fn before_tool_call(&self, _ctx: BeforeToolCallContext<'_>) -> Option<BeforeToolCallResult> {
+            self.0.push(AgentMessage::user("use yay instead"));
+            Some(BeforeToolCallResult { block: true, reason: Some("dismissed".into()), args: None, terminate: true })
+        }
+
+        async fn steering_messages(&self) -> Vec<AgentMessage> {
+            self.0.drain()
+        }
+    }
+
+    #[tokio::test]
+    async fn a_run_a_blocked_call_ends_goes_on_for_a_queued_message() {
+        let provider = Scripted::new("p", vec![Turn::Call { name: "count", args: r#"{"limit": 1}"#, stop: StopReason::ToolUse }, Turn::Text("on it")]);
+        let tool = Arc::new(Counter { runs: Mutex::new(vec![]), cancel_on_run: None });
+        let queue = crate::AgentMessageQueue::new(crate::QueueMode::All);
+        let (messages, _) = run(provider.clone(), vec![tool.clone()], Arc::new(BlockForSteering(queue)), CancellationToken::new()).await;
+        assert!(tool.runs.lock().unwrap().is_empty());
+        assert_eq!(provider.requests.lock().unwrap().len(), 2, "the queued message outlasts the terminate hint");
+        // The prompt, the call, its block, the queued message, and the answer to it.
+        assert!(matches!(&messages[2], AgentMessage::ToolResult(result) if result.text() == "dismissed"));
+        assert!(matches!(&messages[3], AgentMessage::User(user) if user.content[0].as_text() == Some("use yay instead")));
+        let AgentMessage::Assistant(last) = messages.last().unwrap() else { panic!() };
+        assert_eq!((messages.len(), last.text().as_str()), (5, "on it"));
+    }
+
     #[tokio::test]
     async fn a_transient_failure_is_retried_and_leaves_no_message() {
         let provider = Scripted::new("p", vec![Turn::Fail("529: Overloaded"), Turn::Text("finally")]);

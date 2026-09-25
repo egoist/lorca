@@ -27,7 +27,7 @@ final class CommandCellView: TranscriptCellView {
             run.device.map { "\(botName) \(L("wants to run a command on %@", $0))" } ?? L("%@'s command", botName)
         case .waiting: L("%@'s command is waiting for input", botName)
         case .running: L("%@'s command is running", botName)
-        case .exited, .failed, .stopped, .denied, .expired: "\(endWord(run)) · $ \(run.firstLine)"
+        case .exited, .failed, .stopped, .denied, .expired, .dismissed: "\(endWord(run)) · $ \(run.firstLine)"
         }
     }
 
@@ -46,6 +46,7 @@ final class CommandCellView: TranscriptCellView {
         case .failed: L("Failed")
         case .denied: L("Denied")
         case .expired: L("No answer in time")
+        case .dismissed: L("Dismissed")
         default: L("Stopped")
         }
     }

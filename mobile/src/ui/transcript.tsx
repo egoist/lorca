@@ -235,7 +235,7 @@ export function PermissionRow({ row, onDecide }: { row: Extract<Row, { type: "pe
         : undefined;
   const decided: Record<string, string> = connect
     ? { allowed: t("Signing in"), denied: t("Not now"), connected: t("Signed in"), failed: t("Sign-in failed") }
-    : { allowed: t("Allowed once"), always: t("Always allowed"), denied: t("Denied"), expired: t("No answer in time") };
+    : { allowed: t("Allowed once"), always: t("Always allowed"), denied: t("Denied"), expired: t("No answer in time"), dismissed: t("Dismissed") };
   const choices: [string, "allow" | "always" | "deny"][] = connect
     ? [[t("Sign in"), "allow"], [t("Not now"), "deny"]]
     : row.body.tool === "install"
@@ -345,7 +345,7 @@ export function CommandRow({
   // A new question clears what the last answer or Stop said.
   useEffect(() => setError(null), [run.output, run.state]);
   if (isEnded(run)) {
-    const word = { exited: t("Finished"), failed: t("Failed"), denied: t("Denied"), expired: t("No answer in time") }[run.state as string] ?? t("Stopped");
+    const word = { exited: t("Finished"), failed: t("Failed"), denied: t("Denied"), expired: t("No answer in time"), dismissed: t("Dismissed") }[run.state as string] ?? t("Stopped");
     const detail =
       run.state !== "exited" && run.outcome && run.outcome !== "Stopped"
         ? run.outcome

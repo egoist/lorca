@@ -412,6 +412,18 @@ fn steering_message(
 
 const STEERING_MESSAGE_KIND: &str = "lorca_steering";
 
+/// A new message from the user reached this Runner. The direct-chat loop that owns the chat
+/// takes it as steering, and the questions the chat's turn waits on are dismissed: the user
+/// wrote instead of answering, and the turn could not read what they wrote until its question
+/// let go. Steering comes first, so the loop finds the message when the dismissed call returns.
+pub(crate) fn hear_user_message(app: &App, message: &Message) {
+    if message.author != Author::You || !message.is_complete() {
+        return;
+    }
+    steer_message(app, message);
+    crate::plugins::mcp::dismiss_questions(app, &message.chat_id);
+}
+
 /// Offers a durable Lorca user message to the direct-chat loop that currently owns the lock.
 /// The separately admitted Job remains the fallback when there is no active queue or this
 /// message arrives after the loop's final steering poll.
@@ -2333,6 +2345,12 @@ impl Tool for InstallPlugin {
             crate::plugins::mcp::Decision::Allowed | crate::plugins::mcp::Decision::Always => {}
             crate::plugins::mcp::Decision::Denied => return Err(ToolError(format!("The user did not want {} installed. Do not ask again this turn.", manifest.name))),
             crate::plugins::mcp::Decision::Expired => return Err("Nobody answered in time. Say what you needed and stop.".into()),
+            crate::plugins::mcp::Decision::Dismissed => {
+                return Ok(crate::plugins::mcp::dismissed_call(format!(
+                    "The user sent a new message instead of answering, so {} was not installed. Follow that message.",
+                    manifest.name
+                )))
+            }
         }
         let status = crate::plugins::install(&self.app, manifest.clone(), "marketplace").map_err(ToolError)?;
         let next = match status.state.as_str() {
@@ -2837,6 +2855,71 @@ mod tests {
         let card = run_of(&app.message("chat", &row).unwrap()).unwrap();
         assert_eq!((card.state.as_str(), card.decision.as_deref(), card.session_id), ("denied", Some("denied"), None));
         assert_eq!(app.messages("chat").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_message_sent_instead_of_an_answer_dismisses_the_question() {
+        let (scratch, chef) = chef_in_a_dm();
+        let app = &scratch.0;
+        every_command_asks(app);
+        let queue = AgentMessageQueue::new(QueueMode::All);
+        app.register_steering_queue("chat", "job-1", queue.clone());
+        let mut turn = turn_state(app, &chef, "dev");
+        let args = json!({ "command": "sudo pacman -Rns geekbench", "description": "Remove Geekbench" });
+        turn.handle(AgentEvent::ToolExecutionStart { tool_call_id: "call-1".into(), tool_name: "bash".into(), args: args.clone() });
+        let row = turn.tool_messages[0].1.clone();
+
+        // The user writes while the card asks: in another chat first, which leaves it asking.
+        let (writer, row_id) = (app.clone(), row.clone());
+        let wrote = tokio::spawn(async move {
+            while !writer.message("chat", &row_id).as_ref().and_then(run_of).is_some_and(|run| run.state == "asking") {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            hear_user_message(&writer, &said("elsewhere", Author::You, "hi", 2.0));
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            assert_eq!(run_of(&writer.message("chat", &row_id).unwrap()).unwrap().state, "asking");
+            let message = said("chat", Author::You, "I meant yay", 3.0);
+            writer.upsert_message(message.clone(), false);
+            hear_user_message(&writer, &message);
+        });
+        let blocked = review_call(app, &chef, &scratch.1, "call-1", &args).await.unwrap();
+        wrote.await.unwrap();
+        assert!(blocked.block && blocked.terminate);
+        assert!(blocked.reason.as_deref().unwrap().starts_with("The user sent a new message instead of answering"));
+        turn.handle(AgentEvent::ToolExecutionEnd { tool_call_id: "call-1".into(), tool_name: "bash".into(), result: ToolResult::text(blocked.reason.unwrap()), is_error: true });
+        let card = run_of(&app.message("chat", &row).unwrap()).unwrap();
+        assert_eq!((card.state.as_str(), card.decision.as_deref(), card.session_id), ("dismissed", Some("dismissed"), None));
+        assert!(app.message("chat", &row).unwrap().confirmation().is_none(), "nothing waits for an answer");
+        // The loop reads the message right after the call it dismissed.
+        let steered = materialize_steering_messages(app, &chef, &scratch.1, queue.drain()).await;
+        assert!(matches!(&steered[..], [AgentMessage::User(user)] if user.content[0].as_text() == Some("I meant yay")));
+        assert!(app.pending_permissions.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_question_is_not_asked_over_a_message_the_turn_has_not_read() {
+        let (scratch, chef) = chef_in_a_dm();
+        let app = &scratch.0;
+        every_command_asks(app);
+        let queue = AgentMessageQueue::new(QueueMode::All);
+        app.register_steering_queue("chat", "job-1", queue.clone());
+        let mut turn = turn_state(app, &chef, "dev");
+        let args = json!({ "command": "sudo pacman -Rns geekbench", "description": "Remove Geekbench" });
+        turn.handle(AgentEvent::ToolExecutionStart { tool_call_id: "call-1".into(), tool_name: "bash".into(), args: args.clone() });
+        let row = turn.tool_messages[0].1.clone();
+        // The user wrote while the model was still choosing the command.
+        let message = said("chat", Author::You, "I meant yay", 3.0);
+        app.upsert_message(message.clone(), false);
+        hear_user_message(app, &message);
+
+        let blocked = review_call(app, &chef, &scratch.1, "call-1", &args).await.unwrap();
+        assert!(blocked.block && blocked.terminate);
+        let card = run_of(&app.message("chat", &row).unwrap()).unwrap();
+        assert_eq!((card.state.as_str(), card.decision.as_deref()), ("dismissed", Some("dismissed")));
+        // It never asked: no question counted unread, and the message still waits for the loop.
+        assert_eq!(app.chat("chat").unwrap().unread_count, 0);
+        assert!(!queue.is_empty());
+        assert!(app.pending_permissions.lock().unwrap().is_empty());
     }
 
     #[cfg(unix)]

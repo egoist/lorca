@@ -93,12 +93,15 @@ pub async fn before_tool_call(
         Decision::Allowed | Decision::Always => None,
         Decision::Denied => Some(blocked("The user did not allow bash. Do not retry it; ask what they want instead.".into())),
         Decision::Expired => Some(blocked("Nobody answered the permission request for bash in time. Say what you needed and stop.".into())),
+        Decision::Dismissed => Some(dismissed(
+            "The user sent a new message instead of answering, so bash did not run. Follow that message; run the command again only if it still fits.",
+        )),
     }
 }
 
 /// Auto-review's question on a command's own card: the card asks, the call waits for the
 /// answer from any Device, and the card shows it. An allowed command runs on the same card; a
-/// Stop while it asks stops the card.
+/// Stop while it asks stops the card, and a new message from the user dismisses it.
 async fn ask_on_card(
     app: &Arc<App>,
     chat_id: &str,
@@ -108,7 +111,7 @@ async fn ask_on_card(
     cancel: &tokio_util::sync::CancellationToken,
 ) -> Decision {
     let rule = always_rule.as_ref().map(|rule| rule.text.clone());
-    let decision = mcp::await_answer(app, message_id, always_rule, cancel, || {
+    let decision = mcp::await_answer(app, chat_id, message_id, always_rule, cancel, || {
         app.shell_sessions.update_card(app, chat_id, message_id, |run| {
             run.state = "asking".into();
             run.reason = reason;
@@ -130,6 +133,7 @@ async fn ask_on_card(
             Decision::Denied if cancel.is_cancelled() => "stopped",
             Decision::Denied => "denied",
             Decision::Expired => "expired",
+            Decision::Dismissed => "dismissed",
         }
         .into();
     });
@@ -169,11 +173,19 @@ async fn review_input(app: &Arc<App>, chat_id: &str, bot: &Bot, unattended: bool
         Decision::Allowed | Decision::Always => None,
         Decision::Denied => Some(blocked("The user did not allow that input. Do not retry it; ask what they want instead.".into())),
         Decision::Expired => Some(blocked("Nobody answered the permission request for bash_input in time. Say what you needed and stop.".into())),
+        Decision::Dismissed => Some(dismissed("The user sent a new message instead of answering, so that input was not typed. Follow that message.")),
     }
 }
 
 fn blocked(reason: String) -> BeforeToolCallResult {
     BeforeToolCallResult { block: true, reason: Some(reason), args: None, terminate: false }
+}
+
+/// A call whose question the user left for a new message, as `mcp::dismissed_call` ends a
+/// plugin's: it does not run, and the turn stops after this batch unless that message is there
+/// to read next.
+fn dismissed(reason: &str) -> BeforeToolCallResult {
+    BeforeToolCallResult { block: true, reason: Some(reason.into()), args: None, terminate: true }
 }
 
 /// `~/dev/lorca` for a folder in the home folder, so a proposed rule names it the way people do.

@@ -114,6 +114,7 @@ export const zh: Record<string, string> = {
   "Dictation stopped": "听写已停止",
   "Disconnect": "断开",
   "Disconnect {name}?": "断开 {name}？",
+  "Dismissed": "已忽略",
   "Done": "完成",
   "Drafting a file…": "正在撰写文件…",
   "Each code pairs one Device. Get a fresh code from Lorca on the other computer.": "每个配对码只能配对一台设备。请从另一台电脑上的 Lorca 获取新配对码。",

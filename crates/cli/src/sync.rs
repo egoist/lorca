@@ -726,7 +726,7 @@ fn apply_chat_op(app: &Arc<App>, op: ChatBlob) {
     match op {
         ChatBlob::Upsert { message } => {
             #[cfg(feature = "runner")]
-            let steering = (message.author == Author::You && app.message(&message.chat_id, &message.id).is_none())
+            let heard = (message.author == Author::You && app.message(&message.chat_id, &message.id).is_none())
                 .then(|| message.clone());
             {
                 let mut state = app.state.lock().unwrap();
@@ -743,8 +743,8 @@ fn apply_chat_op(app: &Arc<App>, op: ChatBlob) {
             // The cycle saves state once after the page.
             app.upsert_message(message, false);
             #[cfg(feature = "runner")]
-            if let Some(message) = steering {
-                crate::turns::steer_message(app, &message);
+            if let Some(message) = heard {
+                crate::turns::hear_user_message(app, &message);
             }
         }
         ChatBlob::Remove { chat_id, message_id } => app.remove_message(&chat_id, &message_id, false),

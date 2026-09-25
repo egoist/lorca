@@ -25,8 +25,9 @@ pub fn chat_source(chat: &Chat) -> String {
 // MARK: - Sending
 
 /// Appends the user's message and admits the turn it calls for. If another turn owns the chat
-/// lock, that turn can consume the message as steering at its next safe model boundary; the
-/// admitted replacement job then exits when it reaches the lock.
+/// lock, that turn can consume the message as steering at its next safe model boundary, and a
+/// question it waits on is dismissed; the admitted replacement job then exits when it reaches
+/// the lock.
 ///
 /// A direct chat's bot always answers. A group runs a room exchange: every member is offered a
 /// turn in order and sends or passes, in rounds, until a round goes by with nobody speaking.
@@ -56,7 +57,7 @@ pub fn send_user_message(
     }
     app.upsert_message(message.clone(), true);
     #[cfg(feature = "runner")]
-    crate::turns::steer_message(&app, &message);
+    crate::turns::hear_user_message(&app, &message);
 
     if chat.meta.is_group() {
         let members = turn_order(&chat.meta, &app, &mentions);

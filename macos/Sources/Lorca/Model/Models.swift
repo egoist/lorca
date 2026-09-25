@@ -427,6 +427,8 @@ struct PermissionRequest: Hashable {
         case always
         case denied
         case expired
+        /// The user sent a new message instead of answering.
+        case dismissed
         /// A sign-in card: the flow finished.
         case connected
         case failed
@@ -474,6 +476,7 @@ struct PermissionRequest: Hashable {
         case .always: L("Always allowed")
         case .denied: isConnect ? L("Not now") : L("Denied")
         case .expired: L("No answer in time")
+        case .dismissed: L("Dismissed")
         case .connected: L("Signed in")
         case .failed: L("Sign-in failed")
         }
@@ -632,6 +635,8 @@ struct CommandRun: Hashable {
         case denied
         /// Nobody answered the question in time.
         case expired
+        /// The user sent a new message instead of answering, so it never ran.
+        case dismissed
     }
 
     /// The terminal session running it, once one does. Nil before it starts, and on a Windows
@@ -652,7 +657,7 @@ struct CommandRun: Hashable {
     var reason: String?
     /// The rule Always allow adds, or, after an Always allow, added.
     var rule: String?
-    /// The answer to the question: `allowed`, `always`, `denied`, or `expired`.
+    /// The answer to the question: `allowed`, `always`, `denied`, `expired`, or `dismissed`.
     var decision: String?
 
     var isLive: Bool { state == .waiting || state == .running }

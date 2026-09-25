@@ -185,9 +185,10 @@ pub struct App {
     pub pending_results: Mutex<HashMap<String, tokio::sync::oneshot::Sender<String>>>,
     /// Requests sent to other Runners, waiting for their `response`.
     pub pending_responses: Mutex<HashMap<String, tokio::sync::oneshot::Sender<Response>>>,
-    /// Permission cards waiting for the user's answer, by message id.
+    /// Questions waiting for the user's answer, by the id of the row that asks: its chat, and
+    /// where the answer goes.
     #[cfg(feature = "runner")]
-    pub pending_permissions: Mutex<HashMap<String, tokio::sync::oneshot::Sender<crate::plugins::mcp::Decision>>>,
+    pub pending_permissions: Mutex<HashMap<String, (String, tokio::sync::oneshot::Sender<crate::plugins::mcp::Decision>)>>,
     /// Commands `bash` left running in their terminals, waiting for input.
     #[cfg(feature = "runner")]
     pub shell_sessions: crate::shell::Sessions,
