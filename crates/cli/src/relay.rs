@@ -90,11 +90,15 @@ pub enum Signal {
 /// This machine's sync socket. It is online on the relay while this is open.
 pub struct SyncSocket {
     stream: tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+    /// When the relay has to have said something, a ping of its own or the answer to a probe.
+    due: tokio::time::Instant,
 }
 
 /// The relay pings every 25 s. A socket silent for this long is dead: the computer slept, the
 /// phone changed networks.
 const SOCKET_SILENCE: std::time::Duration = std::time::Duration::from_secs(70);
+/// How long the relay has to answer a probe.
+const PROBE_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 
 impl SyncSocket {
     /// The next signal. An error means the socket is gone and the caller connects again.
@@ -102,11 +106,12 @@ impl SyncSocket {
         use futures::{SinkExt, StreamExt};
         use tokio_tungstenite::tungstenite::Message;
         loop {
-            let message = tokio::time::timeout(SOCKET_SILENCE, self.stream.next())
+            let message = tokio::time::timeout_at(self.due, self.stream.next())
                 .await
                 .map_err(|_| RelayError { status: None, message: "the sync socket went silent".into() })?
                 .ok_or_else(|| RelayError { status: None, message: "the relay closed the sync socket".into() })?
                 .map_err(socket_error)?;
+            self.due = tokio::time::Instant::now() + SOCKET_SILENCE;
             match message {
                 Message::Text(text) => match serde_json::from_str::<Value>(&text).ok().as_ref().and_then(|v| v["type"].as_str()) {
                     Some("blobs") => return Ok(Signal::Blobs),
@@ -119,6 +124,18 @@ impl SyncSocket {
                 _ => {}
             }
         }
+    }
+
+    /// Pings the relay, which has `PROBE_WAIT` to answer before `next` gives the socket up: a
+    /// phone's may have died while the app was suspended, with nothing said on it since.
+    pub async fn probe(&mut self) -> RelayResult<()> {
+        use futures::SinkExt;
+        use tokio_tungstenite::tungstenite::Message;
+        self.due = self.due.min(tokio::time::Instant::now() + PROBE_WAIT);
+        tokio::time::timeout_at(self.due, self.stream.send(Message::Ping(Default::default())))
+            .await
+            .map_err(|_| RelayError { status: None, message: "the sync socket took no ping".into() })?
+            .map_err(socket_error)
     }
 }
 
@@ -297,7 +314,7 @@ impl RelayClient {
             .await
             .map_err(|_| RelayError { status: None, message: "the sync socket timed out connecting".into() })?
             .map_err(socket_error)?;
-        Ok(SyncSocket { stream })
+        Ok(SyncSocket { stream, due: tokio::time::Instant::now() + SOCKET_SILENCE })
     }
 
     pub async fn list_blobs(&self, url: &str, token: &str, since: i64, kinds: &str) -> RelayResult<(Vec<BlobIn>, i64)> {

@@ -1,7 +1,7 @@
 //! Process-wide state: keys, the in-memory view of the local SQLite store, and the event bus.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
@@ -148,6 +148,8 @@ pub struct App {
     pub events: broadcast::Sender<Event>,
     pub relay: RelayClient,
     pub outbox_notify: Notify,
+    /// Counts `wake_sync` calls, so the sync loop can tell that one came while it was busy.
+    pub sync_wakes: AtomicU64,
     /// Held from a message's local write to its outbox enqueue, so a chat's `position` order
     /// and the order its messages reach the relay log are the same on every Device.
     message_order: Mutex<()>,
@@ -236,6 +238,7 @@ impl App {
             events,
             relay: RelayClient::new()?,
             outbox_notify: Notify::new(),
+            sync_wakes: AtomicU64::new(0),
             message_order: Mutex::new(()),
             relay_connected: AtomicBool::new(false),
             relay_update_required: AtomicBool::new(false),
@@ -827,6 +830,15 @@ impl App {
             state.auto_review.rules.push(rule);
         }
         self.roster_changed(true);
+    }
+
+    /// Asks the relay again now: a phone came back to the foreground, or pulled to refresh.
+    /// Its socket may have died while the app was suspended, so the sync loop checks it and
+    /// opens a new one at once when it did (`sync::run`).
+    pub fn wake_sync(&self) {
+        self.relay.forget_token();
+        self.sync_wakes.fetch_add(1, Ordering::Relaxed);
+        self.outbox_notify.notify_waiters();
     }
 
     /// Tells the app where the relay connection stands.

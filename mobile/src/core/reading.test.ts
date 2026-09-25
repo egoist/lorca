@@ -5,7 +5,11 @@ import type { Chat, Message } from "./model";
 // Exercise the real engine and store, including message/roster ordering, foreground
 // transitions, and the working row. Only native bridges are replaced; no account or provider is
 // contacted.
-let event: (frame: { event: string; data: unknown }) => void;
+type Listener = (frame: { event: string; data: unknown }) => void;
+const listeners = new Set<Listener>();
+const event: Listener = (frame) => listeners.forEach((listener) => listener(frame));
+/// Set to keep the next `bootstrap` answer until the test gives it.
+let heldSnapshot: Promise<unknown> | null = null;
 let appState: (status: string) => void;
 const reads: string[] = [];
 const cleared: string[] = [];
@@ -32,10 +36,10 @@ mock.module("expo-notifications", () => ({
 }));
 mock.module("../../modules/lorca-core", () => ({
   start: () => {}, wake: () => {},
-  onEvent: (listener: typeof event) => { event = listener; return () => {}; },
+  onEvent: (listener: Listener) => { listeners.add(listener); return () => listeners.delete(listener); },
   request: async (method: string, params: { chat_id?: string } = {}) => {
     if (method === "chats.mark_read") reads.push(params.chat_id!);
-    return method === "bootstrap" ? snapshot([]) : null;
+    return method === "bootstrap" ? (heldSnapshot ?? snapshot([])) : null;
   },
 }));
 
@@ -189,4 +193,20 @@ test("a turn on the Runner reads as thinking, its command, and its retry", () =>
   expect(row()).toBe("Retrying (1 of 3) in 2 s…");
   event({ event: "job.finished", data: { job_id: "job", chat_id: "open", bot_id: "bot" } });
   expect(useStore.getState()).toMatchObject({ running: {}, thinking: {}, retries: {} });
+});
+
+test("events that arrive while a snapshot is on its way are applied after it", async () => {
+  // The relay connects and a reply lands while the core is still building the snapshot the app
+  // asked for, so the snapshot is older than both.
+  let answer!: (snapshot: unknown) => void;
+  heldSnapshot = new Promise((resolve) => { answer = resolve; });
+  const paired = engine.pair("lorca://pair");
+  await flush();
+  event({ event: "relay.status", data: { connected: true, update_required: false, url: "https://relay.example" } });
+  reply("open");
+  answer({ ...snapshot([chat("open"), chat("other")]), relay_connected: false });
+  heldSnapshot = null;
+  await paired;
+  expect(useStore.getState().relayConnected).toBe(true);
+  expect(useStore.getState().chats[0].messages.map((m) => m.id)).toEqual(["reply"]);
 });

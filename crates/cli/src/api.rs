@@ -130,8 +130,7 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
         }
         // The app came back to the foreground: ask the relay again now, not after the backoff.
         "sync.wake" => {
-            app.relay.forget_token();
-            app.outbox_notify.notify_waiters();
+            app.wake_sync();
             Ok(Value::Null)
         }
 

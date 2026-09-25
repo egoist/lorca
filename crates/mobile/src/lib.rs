@@ -108,8 +108,7 @@ impl Core {
 
     /// The app came to the foreground: sync now rather than after the backoff.
     pub fn wake(&self) {
-        self.app.relay.forget_token();
-        self.app.outbox_notify.notify_waiters();
+        self.app.wake_sync();
     }
 }
 

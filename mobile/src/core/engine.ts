@@ -56,6 +56,9 @@ class Engine {
   private providerBrowserOpen = false;
   private dismissingProviderAuth = false;
   private readChatId: string | null = null;
+  /// Snapshots on their way, and the events that arrived meanwhile (see `bootstrap`).
+  private bootstraps = 0;
+  private held: core.Frame[] = [];
 
   // MARK: - Lifecycle
 
@@ -64,21 +67,51 @@ class Engine {
     if (this.started) return;
     this.started = true;
     useStore.setState({ dictation_lang: loadPrefs().dictation_lang, appActive: AppState.currentState === "active" });
-    core.onEvent((frame) => this.apply(frame.event, frame.data));
+    core.onEvent((frame) => this.receive(frame));
     core.start(coreHome(), hostFacts());
     AppState.addEventListener("change", (status) => this.onAppState(status));
     // Read after every store update, including the roster's unread count that follows a
     // message event, a backlog snapshot, and returning to a chat already mounted on screen.
     useStore.subscribe(() => this.readVisibleChat());
-    replaceSnapshot(await core.request<Snapshot>("bootstrap"));
+    await this.bootstrap();
     installPushHandlers();
     if (useStore.getState().paired) void registerForPushes();
+  }
+
+  /// Takes the core's snapshot of the account. The core keeps emitting while it builds one, so
+  /// an event can arrive ahead of a snapshot older than it: the relay connecting during launch,
+  /// a reply. Those events wait and are applied after the snapshot, as the macOS app does; each
+  /// says where a thing stands, so one the snapshot already has changes nothing.
+  private async bootstrap() {
+    this.bootstraps += 1;
+    try {
+      replaceSnapshot(await core.request<Snapshot>("bootstrap"));
+    } finally {
+      this.bootstraps -= 1;
+      if (!this.bootstraps) this.applyHeld();
+    }
+  }
+
+  private receive(frame: core.Frame) {
+    if (this.bootstraps) this.held.push(frame);
+    else this.apply(frame.event, frame.data);
+  }
+
+  /// Each held event on its own, as on arrival: one that fails keeps back none of the rest.
+  private applyHeld() {
+    for (const frame of this.held.splice(0)) {
+      try {
+        this.apply(frame.event, frame.data);
+      } catch (error) {
+        console.warn(`applying ${frame.event}`, error instanceof Error ? error.message : error);
+      }
+    }
   }
 
   private onAppState(status: AppStateStatus) {
     useStore.setState({ appActive: status === "active" });
     if (status !== "active") return;
-    // Back in the foreground: the poll that was in flight died with the suspension.
+    // Back in the foreground: the sync socket may have died with the suspension.
     core.wake();
     // The token can change, and permission may have been given in Settings meanwhile.
     if (useStore.getState().paired) void registerForPushes();
@@ -423,7 +456,7 @@ class Engine {
       stop();
       signal?.removeEventListener("abort", abort);
     }
-    replaceSnapshot(await core.request<Snapshot>("bootstrap"));
+    await this.bootstrap();
     onProgress?.({ phase: "done" });
     core.wake();
     void registerForPushes();

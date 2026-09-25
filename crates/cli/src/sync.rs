@@ -19,7 +19,8 @@ pub const POLL_KINDS: &str = "roster,chat,machine,credentials,job,job_cancel,job
 pub async fn run(app: Arc<App>) {
     let mut failures: u32 = 0;
     loop {
-        match session(&app).await {
+        let wakes = app.sync_wakes.load(Ordering::Relaxed);
+        match session(&app, &mut failures).await {
             Ok(()) => failures = 0,
             Err(error) => {
                 disconnected(&app);
@@ -42,6 +43,17 @@ pub async fn run(app: Arc<App>) {
                 if outdated && !app.relay_update_required.swap(true, Ordering::Relaxed) {
                     app.emit_relay_status();
                 }
+                // Armed before the check below, so a wake between the two still ends the wait.
+                let woken = app.outbox_notify.notified();
+                tokio::pin!(woken);
+                woken.as_mut().enable();
+                // A wake came during this session: the phone is back in the foreground, where a
+                // socket that died while the app was suspended is expected. The next one opens
+                // now, and the backoff is left for failures after that.
+                if app.sync_wakes.load(Ordering::Relaxed) != wakes {
+                    tracing::info!(%error, "relay; connecting again after a wake");
+                    continue;
+                }
                 failures = failures.saturating_add(1);
                 let delay = if outdated { 900 } else { (2u64.pow(failures.min(5))).min(60) };
                 tracing::warn!(%error, retry_in = delay, "relay");
@@ -50,7 +62,7 @@ pub async fn run(app: Arc<App>) {
                 let jitter = std::time::Duration::from_millis(rand::Rng::gen_range(&mut rand::thread_rng(), 0..1000));
                 tokio::select! {
                     _ = tokio::time::sleep(std::time::Duration::from_secs(delay) + jitter) => {}
-                    _ = app.outbox_notify.notified() => {}
+                    _ = woken => {}
                 }
             }
         }
@@ -76,8 +88,10 @@ fn disconnected(app: &Arc<App>) {
 /// One sync socket, from connect to its end. The relay signals over it and carries no data:
 /// `blobs` is answered with a pull, `machines` with a fresh machine list. The outbox wakes
 /// the session too. `Ok` means the identity or the relay URL changed and the next session
-/// starts from there; an error is the socket or a request failing.
-async fn session(app: &Arc<App>) -> Result<(), RelayError> {
+/// starts from there; an error is the socket or a request failing. Each round that goes
+/// through sets `failures` back to zero, so a socket that worked for hours before it dropped
+/// is followed by the shortest backoff.
+async fn session(app: &Arc<App>, failures: &mut u32) -> Result<(), RelayError> {
     let Some(machine_file) = app.machine_file() else {
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         return Ok(());
@@ -108,6 +122,7 @@ async fn session(app: &Arc<App>) -> Result<(), RelayError> {
 
     let (mut pull, mut refresh) = (true, true);
     let mut credentials_due = true;
+    let mut wakes = app.sync_wakes.load(Ordering::Relaxed);
     loop {
         let same_machine = app.machine_file().is_some_and(|file| file.machine().is_ok_and(|m| m.pubkey() == machine.pubkey()));
         if !same_machine || app.relay_url().as_deref() != Some(url.as_str()) {
@@ -140,15 +155,24 @@ async fn session(app: &Arc<App>) -> Result<(), RelayError> {
         }
         // After the pull, so a list saved before a restart does not show turns the pull ends.
         app.turns_changed();
+        *failures = 0;
 
         (pull, refresh) = tokio::select! {
             signal = socket.next() => match signal? {
                 Signal::Blobs => (true, false),
                 Signal::Machines => (false, true),
             },
-            // The outbox, or `sync.wake` from a phone that came back to the foreground: its
-            // socket may have died unnoticed, and a pull costs one request.
-            _ = &mut queued => (true, false),
+            // The outbox, or a wake from a phone that came back to the foreground: its socket
+            // may have died unnoticed while the app was suspended, so the relay is asked to
+            // answer on it, and a pull costs one request.
+            _ = &mut queued => {
+                let woken = app.sync_wakes.load(Ordering::Relaxed);
+                if woken != wakes {
+                    wakes = woken;
+                    socket.probe().await?;
+                }
+                (true, false)
+            }
         };
     }
 }
