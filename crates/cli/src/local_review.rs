@@ -866,7 +866,7 @@ mod tests {
             runner_id: "runner".into(), provider: "deepseek".into(), model: None, thinking: None, legacy_instructions: String::new(), workdir: Some(work.display().to_string()), created_at: 0.0,
         };
         let assistant = AssistantMessage::empty("test", "test");
-        let context = AgentContext { system_prompt: String::new(), messages: Vec::new(), tools: Vec::new() };
+        let context = AgentContext { system_prompt: String::new(), messages: Vec::new(), tools: Vec::new(), cache_points: Vec::new() };
         let cancel = CancellationToken::new();
         let args = serde_json::json!({ "command": "cargo test" });
         let call = ToolCall { id: "1".into(), name: "bash".into(), arguments: args.clone() };

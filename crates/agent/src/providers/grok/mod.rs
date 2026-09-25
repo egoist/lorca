@@ -124,6 +124,10 @@ impl GrokProvider {
         if let Some(max_tokens) = request.max_tokens {
             body["max_output_tokens"] = Value::from(max_tokens);
         }
+        // xAI keeps a prompt cache per server and routes requests with the same key to one.
+        if let Some(session_id) = &request.options.session_id {
+            body["prompt_cache_key"] = Value::String(session_id.clone());
+        }
         let effort = match self.thinking_level {
             None | Some(ThinkingLevel::Off) => None,
             Some(ThinkingLevel::Minimal | ThinkingLevel::Low) => Some("low"),
@@ -217,6 +221,7 @@ mod tests {
             system_prompt: "be brief".into(),
             messages: vec![LlmMessage::User(crate::types::UserMessage::text("hi"))],
             tools: vec![ToolSpec { name: "read".into(), description: "read a file".into(), parameters: json!({ "type": "object" }) }],
+            cache_points: Vec::new(),
             max_tokens: None,
             options: Default::default(),
         }
@@ -233,6 +238,15 @@ mod tests {
         assert_eq!(tools[2]["type"], "function");
         assert_eq!(tools[2]["name"], "read");
         assert!(body.get("reasoning").is_none());
+        assert!(body.get("prompt_cache_key").is_none());
+    }
+
+    #[test]
+    fn the_chat_keys_the_prompt_cache() {
+        let provider = GrokProvider::new(Arc::new(StaticTokens), None);
+        let mut request = request();
+        request.options = crate::RequestOptions::default().with_session_id("chat-1");
+        assert_eq!(provider.body(&request)["prompt_cache_key"], "chat-1");
     }
 
     #[test]

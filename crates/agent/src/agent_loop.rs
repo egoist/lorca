@@ -35,6 +35,10 @@ pub struct AgentContext {
     pub system_prompt: String,
     pub messages: Vec<AgentMessage>,
     pub tools: Vec<Arc<dyn Tool>>,
+    /// Prefix lengths of `messages` that later model calls, those of later runs included, send
+    /// again unchanged: where a provider's cache should keep an entry. `transform_context`
+    /// must leave the messages before them as they are.
+    pub cache_points: Vec<usize>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -400,10 +404,18 @@ async fn stream_assistant_response(
     loop {
         let transformed = hooks.transform_context(context.messages.clone(), cancel).await;
         let llm_messages = hooks.convert_to_llm(&transformed);
+        // The same points among the messages the model gets.
+        let cache_points = context
+            .cache_points
+            .iter()
+            .filter(|point| **point <= transformed.len())
+            .map(|point| hooks.convert_to_llm(&transformed[..*point]).len())
+            .collect();
         let request = ModelRequest {
             system_prompt: context.system_prompt.clone(),
             messages: llm_messages,
             tools: context.tools.iter().map(|tool| tool.spec()).collect(),
+            cache_points,
             max_tokens: None,
             options: config.request.clone(),
         };
@@ -938,7 +950,7 @@ mod tests {
     }
 
     async fn run_with(config: AgentLoopConfig, tools: Vec<Arc<dyn Tool>>, cancel: CancellationToken) -> (Vec<AgentMessage>, Vec<AgentEvent>) {
-        let context = AgentContext { system_prompt: String::new(), messages: vec![], tools };
+        let context = AgentContext { system_prompt: String::new(), messages: vec![], tools, cache_points: Vec::new() };
         let (tx, mut rx) = mpsc::channel(256);
         let messages = tokio::spawn(async move { run_agent_loop(vec![AgentMessage::user("go")], context, &config, &tx, cancel).await });
         let mut events = Vec::new();
@@ -950,6 +962,25 @@ mod tests {
 
     fn tool_results(messages: &[AgentMessage]) -> Vec<&ToolResultMessage> {
         messages.iter().filter_map(|m| match m { AgentMessage::ToolResult(r) => Some(r), _ => None }).collect()
+    }
+
+    #[tokio::test]
+    async fn cache_points_count_the_messages_the_model_gets() {
+        let provider = Scripted::new("p", vec![Turn::Text("ok")]);
+        let context = AgentContext {
+            system_prompt: String::new(),
+            messages: vec![
+                AgentMessage::Custom { kind: "marker".into(), data: Value::Null, timestamp: 0 },
+                AgentMessage::user("first"),
+                AgentMessage::user("note"),
+            ],
+            tools: Vec::new(),
+            // After "first", and past the end.
+            cache_points: vec![2, 9],
+        };
+        let (tx, _rx) = mpsc::channel(256);
+        run_agent_loop_continue(context, &AgentLoopConfig::new(provider.clone()), &tx, CancellationToken::new()).await.unwrap();
+        assert_eq!(provider.requests.lock().unwrap()[0].cache_points, vec![1]);
     }
 
     #[tokio::test]

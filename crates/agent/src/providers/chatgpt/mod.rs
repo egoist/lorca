@@ -14,6 +14,7 @@ use tokio_util::sync::CancellationToken;
 use super::responses;
 use crate::models::{self, ModelInfo};
 use crate::provider::{channel_stream, AssistantEvent, AssistantEventStream, ModelRequest, Provider};
+use crate::request::RequestOptions;
 use crate::retry::{send_with_retry, RequestFailure, DEFAULT_MAX_RETRY_DELAY_MS};
 use crate::transform::{transform_messages, TransformOptions};
 use crate::types::ThinkingLevel;
@@ -101,6 +102,9 @@ impl ChatGptProvider {
         if let Some(max_tokens) = request.max_tokens {
             body["max_output_tokens"] = Value::from(max_tokens);
         }
+        if let Some(session_id) = &request.options.session_id {
+            body["prompt_cache_key"] = Value::String(session_id.clone());
+        }
         let effort = match self.thinking_level {
             None | Some(ThinkingLevel::Off) => None,
             Some(ThinkingLevel::Minimal | ThinkingLevel::Low) => Some("low"),
@@ -114,6 +118,22 @@ impl ChatGptProvider {
         }
         body
     }
+}
+
+/// One call to the backend with the sign-in's headers. The backend keeps a conversation on the
+/// server that holds its prompt cache by the `session-id` header, as the Codex CLI sends it.
+fn build_request(client: &reqwest::Client, tokens: &ChatGptTokens, options: &RequestOptions, body: &Value) -> reqwest::RequestBuilder {
+    let mut request = client
+        .post(CHATGPT_RESPONSES_URL)
+        .bearer_auth(&tokens.access_token)
+        .header("chatgpt-account-id", &tokens.account_id)
+        .header("OpenAI-Beta", "responses=experimental")
+        .header("originator", "codex_cli_rs")
+        .header("Accept", "text/event-stream");
+    if let Some(session_id) = &options.session_id {
+        request = request.header("session-id", session_id);
+    }
+    options.apply_to(request).json(body)
 }
 
 #[async_trait]
@@ -148,16 +168,7 @@ impl Provider for ChatGptProvider {
         };
 
         tokio::spawn(async move {
-            let build = || {
-                let request = client
-                    .post(CHATGPT_RESPONSES_URL)
-                    .bearer_auth(&tokens.access_token)
-                    .header("chatgpt-account-id", &tokens.account_id)
-                    .header("OpenAI-Beta", "responses=experimental")
-                    .header("originator", "codex_cli_rs")
-                    .header("Accept", "text/event-stream");
-                options.apply_to(request).json(&body)
-            };
+            let build = || build_request(&client, &tokens, &options, &body);
             let response = match send_with_retry(build, 2, DEFAULT_MAX_RETRY_DELAY_MS, &cancel).await {
                 Ok(response) => {
                     options.report(&response);
@@ -200,6 +211,7 @@ mod tests {
             system_prompt: "be brief".into(),
             messages: vec![LlmMessage::User(crate::types::UserMessage::text("hi"))],
             tools: vec![ToolSpec { name: "read".into(), description: "read a file".into(), parameters: json!({ "type": "object" }) }],
+            cache_points: Vec::new(),
             max_tokens: None,
             options: Default::default(),
         }
@@ -224,5 +236,27 @@ mod tests {
         assert_eq!(low.body(&request())["reasoning"]["effort"], "low");
         let off = ChatGptProvider::new(Arc::new(StaticTokens), None).with_thinking(Some(ThinkingLevel::Off));
         assert!(off.body(&request()).get("reasoning").is_none());
+    }
+
+    #[test]
+    fn the_chat_keys_the_prompt_cache() {
+        let provider = ChatGptProvider::new(Arc::new(StaticTokens), None);
+        assert!(provider.body(&request()).get("prompt_cache_key").is_none());
+        let mut request = request();
+        request.options = RequestOptions::default().with_session_id("chat-1");
+        let body = provider.body(&request);
+        assert_eq!(body["prompt_cache_key"], "chat-1");
+
+        let tokens = ChatGptTokens {
+            access_token: "a".into(),
+            refresh_token: "r".into(),
+            id_token: None,
+            account_id: "acct".into(),
+            email: None,
+            expires_at: 0,
+        };
+        let built = build_request(&reqwest::Client::new(), &tokens, &request.options, &body).build().unwrap();
+        assert_eq!(built.headers().get("session-id").unwrap(), "chat-1");
+        assert_eq!(built.headers().get("chatgpt-account-id").unwrap(), "acct");
     }
 }

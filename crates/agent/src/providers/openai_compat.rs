@@ -236,13 +236,15 @@ impl StreamState {
 
     async fn apply_chunk(&mut self, chunk: &Value, tx: &mpsc::Sender<AssistantEvent>) {
         if let Some(usage) = chunk.get("usage").filter(|u| !u.is_null()) {
+            // `prompt_tokens` counts the cached tokens too; `input` is the part read fresh.
+            let cache_read = usage["prompt_cache_hit_tokens"]
+                .as_u64()
+                .or_else(|| usage["prompt_tokens_details"]["cached_tokens"].as_u64())
+                .unwrap_or(0);
             self.usage = Usage {
-                input: usage["prompt_tokens"].as_u64().unwrap_or(0),
+                input: usage["prompt_tokens"].as_u64().unwrap_or(0).saturating_sub(cache_read),
                 output: usage["completion_tokens"].as_u64().unwrap_or(0),
-                cache_read: usage["prompt_cache_hit_tokens"]
-                    .as_u64()
-                    .or_else(|| usage["prompt_tokens_details"]["cached_tokens"].as_u64())
-                    .unwrap_or(0),
+                cache_read,
                 cache_write: 0,
                 reasoning: usage["completion_tokens_details"]["reasoning_tokens"].as_u64(),
                 total_tokens: usage["total_tokens"].as_u64().unwrap_or(0),
@@ -432,5 +434,20 @@ mod tests {
         drop(tx);
         assert!(matches!(rx.recv().await, Some(AssistantEvent::ThinkingStart { index: 0 })));
         assert!(matches!(rx.recv().await, Some(AssistantEvent::ThinkingDelta { index: 0, delta }) if delta == "considering"));
+    }
+
+    #[tokio::test]
+    async fn cached_prompt_tokens_count_once() {
+        let (tx, _rx) = mpsc::channel(8);
+        let mut deepseek = StreamState::default();
+        let usage = json!({ "usage": { "prompt_tokens": 100, "completion_tokens": 7, "total_tokens": 107, "prompt_cache_hit_tokens": 80, "prompt_cache_miss_tokens": 20 } });
+        deepseek.apply_chunk(&usage, &tx).await;
+        assert_eq!((deepseek.usage.input, deepseek.usage.cache_read, deepseek.usage.output), (20, 80, 7));
+
+        let mut openai = StreamState::default();
+        let usage = json!({ "usage": { "prompt_tokens": 100, "completion_tokens": 7, "total_tokens": 107, "prompt_tokens_details": { "cached_tokens": 64 } } });
+        openai.apply_chunk(&usage, &tx).await;
+        assert_eq!((openai.usage.input, openai.usage.cache_read), (36, 64));
+        assert_eq!(crate::estimate::context_tokens(&openai.usage), 107);
     }
 }

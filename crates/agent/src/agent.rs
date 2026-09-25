@@ -343,6 +343,7 @@ impl Agent {
             system_prompt: self.system_prompt.clone(),
             messages: self.messages.clone(),
             tools: self.tools.clone(),
+            cache_points: Vec::new(),
         };
         let config = AgentLoopConfig {
             provider: self.provider.clone(),

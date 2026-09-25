@@ -780,7 +780,7 @@ impl AgentHarness {
         let mut recovered = false;
 
         loop {
-            let context = AgentContext { system_prompt: system_prompt.clone(), messages: self.messages.clone(), tools: tools.clone() };
+            let context = AgentContext { system_prompt: system_prompt.clone(), messages: self.messages.clone(), tools: tools.clone(), cache_points: Vec::new() };
             let config = AgentLoopConfig {
                 provider: self.provider.clone(),
                 hooks: hooks.clone(),

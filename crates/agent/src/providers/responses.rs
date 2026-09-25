@@ -186,12 +186,14 @@ impl ResponsesState {
             }
             "response.completed" | "response.done" => {
                 let usage = &value["response"]["usage"];
+                // `input_tokens` counts the cached tokens too; `input` is the part read fresh.
+                let cache_read = usage["input_tokens_details"]["cached_tokens"].as_u64().unwrap_or(0);
                 self.usage = Usage {
                     reasoning: usage["output_tokens_details"]["reasoning_tokens"].as_u64(),
                     cost: Default::default(),
-                    input: usage["input_tokens"].as_u64().unwrap_or(0),
+                    input: usage["input_tokens"].as_u64().unwrap_or(0).saturating_sub(cache_read),
                     output: usage["output_tokens"].as_u64().unwrap_or(0),
-                    cache_read: usage["input_tokens_details"]["cached_tokens"].as_u64().unwrap_or(0),
+                    cache_read,
                     cache_write: 0,
                     total_tokens: usage["total_tokens"].as_u64().unwrap_or(0),
                 };
@@ -363,7 +365,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reasoning_tokens_land_in_usage() {
+    async fn usage_counts_cached_input_once_and_keeps_reasoning_tokens() {
         let (tx, _rx) = mpsc::channel(16);
         let mut state = ResponsesState::new();
         let completed = json!({ "response": { "status": "completed", "usage": {
@@ -371,6 +373,7 @@ mod tests {
             "input_tokens_details": { "cached_tokens": 4 }, "output_tokens_details": { "reasoning_tokens": 12 },
         } } });
         assert_eq!(state.apply("response.completed", &completed, &tx).await, Ok(true));
-        assert_eq!((state.usage.input, state.usage.output, state.usage.cache_read, state.usage.reasoning), (10, 30, 4, Some(12)));
+        assert_eq!((state.usage.input, state.usage.output, state.usage.cache_read, state.usage.reasoning), (6, 30, 4, Some(12)));
+        assert_eq!(crate::estimate::context_tokens(&state.usage), 40);
     }
 }

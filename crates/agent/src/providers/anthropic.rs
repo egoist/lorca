@@ -16,7 +16,7 @@ use crate::provider::{
 };
 use crate::retry::{send_with_retry, RequestFailure, DEFAULT_MAX_RETRY_DELAY_MS};
 use crate::sse::SseParser;
-use crate::transform::{transform_messages, TransformOptions};
+use crate::transform::{transform_messages_with_origins, TransformOptions};
 use crate::types::{AgentMessage, AssistantPart, ContentPart, LlmMessage, StopReason, ThinkingLevel, Usage};
 
 pub const ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com";
@@ -27,6 +27,8 @@ pub const DEEPSEEK_ANTHROPIC_BASE_URL: &str = "https://api.deepseek.com/anthropi
 pub const DEEPSEEK_DEFAULT_MODEL: &str = super::openai_compat::DEEPSEEK_DEFAULT_MODEL;
 
 const USER_AGENT: &str = concat!("lorca-agent/", env!("CARGO_PKG_VERSION"));
+/// The most `cache_control` marks a request may carry.
+const MAX_CACHE_MARKS: usize = 4;
 
 pub struct AnthropicProvider {
     pub provider_id: String,
@@ -147,7 +149,7 @@ impl AnthropicProvider {
     }
 
     fn body(&self, request: &ModelRequest) -> Value {
-        let transformed = transform_messages(
+        let transformed = transform_messages_with_origins(
             &request.messages,
             &TransformOptions {
                 provider: &self.provider_id,
@@ -159,7 +161,9 @@ impl AnthropicProvider {
         let cache_control = self.cache_control();
 
         let mut messages: Vec<Value> = Vec::new();
-        for message in &transformed {
+        // Where each request message's last block landed: (message, block) in `messages`.
+        let mut ends: Vec<Option<(usize, usize)>> = vec![None; request.messages.len()];
+        for (origin, message) in &transformed {
             let Some((role, blocks)) = convert_message(message) else { continue };
             // The API reads consecutive same-role messages as one turn; merged here so a tool
             // result always sits in the message right after its call.
@@ -171,18 +175,38 @@ impl AnthropicProvider {
                 }
                 _ => messages.push(json!({ "role": role, "content": blocks })),
             }
+            let at = messages.len() - 1;
+            let block = messages[at]["content"].as_array().map_or(0, Vec::len).saturating_sub(1);
+            if let Some(end) = ends.get_mut(*origin) {
+                *end = Some((at, block));
+            }
         }
-        // The last user block carries the cache marker, so the whole conversation so far is
-        // the cached prefix of the next turn.
-        if let (Some(cache_control), Some(last)) = (&cache_control, messages.last_mut()) {
-            if last["role"] == "user" {
-                if let Some(block) = last["content"].as_array_mut().and_then(|blocks| blocks.last_mut()) {
-                    if matches!(block["type"].as_str(), Some("text" | "image" | "tool_result")) {
-                        block["cache_control"] = cache_control.clone();
+        // Cache marks, four at most. The system prompt's covers the tools before it. The last
+        // user block's lets the next call of this turn read everything so far; a cache point's
+        // is what later turns find again, since they rebuild the transcript without this turn's
+        // notes and thinking. The last tool gets one while any are left.
+        let has_system = !request.system_prompt.trim().is_empty();
+        let mut marks: Vec<(usize, usize)> = Vec::new();
+        if let Some(cache_control) = &cache_control {
+            if let Some(last) = messages.len().checked_sub(1).filter(|last| messages[*last]["role"] == "user") {
+                marks.push((last, messages[last]["content"].as_array().map_or(0, Vec::len).saturating_sub(1)));
+            }
+            let mut points = request.cache_points.clone();
+            points.sort_unstable_by(|a, b| b.cmp(a));
+            for point in points {
+                if let Some(end) = ends[..point.min(ends.len())].iter().rev().find_map(|end| *end) {
+                    if !marks.contains(&end) {
+                        marks.push(end);
                     }
                 }
             }
+            marks.retain(|(message, block)| takes_cache_mark(&messages[*message]["content"][*block]));
+            marks.truncate(MAX_CACHE_MARKS - usize::from(has_system));
+            for (message, block) in &marks {
+                messages[*message]["content"][*block]["cache_control"] = cache_control.clone();
+            }
         }
+        let mark_last_tool = usize::from(has_system) + marks.len() < MAX_CACHE_MARKS;
 
         let requested = request.max_tokens.unwrap_or(self.max_tokens);
         let (thinking, output_config, max_tokens) = self.thinking_fields(requested);
@@ -199,7 +223,7 @@ impl AnthropicProvider {
         if let Some(output_config) = output_config {
             body["output_config"] = output_config;
         }
-        if !request.system_prompt.trim().is_empty() {
+        if has_system {
             body["system"] = match &cache_control {
                 Some(cache_control) => json!([{ "type": "text", "text": request.system_prompt, "cache_control": cache_control }]),
                 None => Value::String(request.system_prompt.clone()),
@@ -212,7 +236,7 @@ impl AnthropicProvider {
             if self.eager_tool_streaming {
                 spec["eager_input_streaming"] = Value::Bool(true);
             }
-            if let (Some(cache_control), true) = (&cache_control, index + 1 == function_count) {
+            if let (Some(cache_control), true) = (&cache_control, mark_last_tool && index + 1 == function_count) {
                 spec["cache_control"] = cache_control.clone();
             }
             spec
@@ -253,7 +277,8 @@ fn thinking_budget(level: ThinkingLevel) -> u64 {
 
 /// One transcript message as a role and its content blocks; `None` when nothing is left to
 /// send (the API rejects empty content). The transcript has already been through
-/// [`transform_messages`], so seals and server blocks here are this provider's own.
+/// [`crate::transform::transform_messages`], so seals and server blocks here are this
+/// provider's own.
 fn convert_message(message: &LlmMessage) -> Option<(&'static str, Vec<Value>)> {
     match message {
         LlmMessage::User(user) => {
@@ -317,6 +342,12 @@ fn convert_message(message: &LlmMessage) -> Option<(&'static str, Vec<Value>)> {
 
 fn image_block(data: &str, mime_type: &str) -> Value {
     json!({ "type": "image", "source": { "type": "base64", "media_type": mime_type, "data": data } })
+}
+
+/// Whether a content block may carry `cache_control`. Thinking cannot; server tool blocks are
+/// left unmarked.
+fn takes_cache_mark(block: &Value) -> bool {
+    matches!(block["type"].as_str(), Some("text" | "image" | "document" | "tool_use" | "tool_result"))
 }
 
 /// Tool call ids must match `^[a-zA-Z0-9_-]+$` and be at most 64 characters.
@@ -714,6 +745,7 @@ mod tests {
             system_prompt: "be brief".into(),
             messages,
             tools: vec![ToolSpec { name: "read".into(), description: "read a file".into(), parameters: json!({ "type": "object" }) }],
+            cache_points: Vec::new(),
             max_tokens: None,
             options: Default::default(),
         }
@@ -739,6 +771,62 @@ mod tests {
         assert!(provider.supports_images(), "the catalog says Flash takes images");
         assert!(!AnthropicProvider::deepseek("k", Some("deepseek-v4-pro")).supports_images());
         assert_eq!(provider.model_info().map(|i| i.context_window), Some(1_000_000));
+    }
+
+    #[test]
+    fn cache_points_mark_what_later_turns_send_again_and_not_the_turns_notes() {
+        // The last turn read a file and answered. The user asked again, and this turn's note
+        // follows the transcript.
+        let mut call = AssistantMessage::empty("deepseek", DEEPSEEK_DEFAULT_MODEL);
+        call.content = vec![AssistantPart::ToolCall(ToolCall { id: "call_1".into(), name: "read".into(), arguments: json!({ "path": "a" }) })];
+        call.stop_reason = StopReason::ToolUse;
+        let mut answer = AssistantMessage::empty("deepseek", DEEPSEEK_DEFAULT_MODEL);
+        answer.content = vec![AssistantPart::Text { text: "It says hi.".into() }];
+        let result = ToolResultMessage { tool_call_id: "call_1".into(), tool_name: "read".into(), content: vec![ContentPart::text("hi")], details: Value::Null, is_error: false, timestamp: 0 };
+        let mut request = request(vec![
+            LlmMessage::User(UserMessage::text("what is in a?")),
+            LlmMessage::Assistant(call),
+            LlmMessage::ToolResult(result),
+            LlmMessage::Assistant(answer),
+            LlmMessage::User(UserMessage::text("and b?")),
+            LlmMessage::User(UserMessage::text("[Recently in your other chats …]")),
+        ]);
+        request.cache_points = vec![1, 5];
+        let body = AnthropicProvider::deepseek("k", None).body(&request);
+        let mark = json!({ "type": "ephemeral" });
+        let messages = body["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 5);
+        // Where the last turn's transcript ended, where this one's ends, and the note.
+        assert_eq!(messages[0]["content"][0]["cache_control"], mark);
+        assert!(messages[2]["content"][0].get("cache_control").is_none());
+        assert_eq!(messages[4]["content"][0]["cache_control"], mark);
+        assert_eq!(messages[4]["content"][1]["cache_control"], mark);
+        // The system prompt's makes four, so the last tool goes without.
+        assert_eq!(body["system"][0]["cache_control"], mark);
+        assert!(body["tools"][1].get("cache_control").is_none());
+        assert_eq!(body.to_string().matches("cache_control").count(), 4);
+    }
+
+    #[test]
+    fn a_cache_point_lands_on_its_own_last_block_when_messages_merge_or_drop() {
+        let mut failed = AssistantMessage::empty("deepseek", DEEPSEEK_DEFAULT_MODEL);
+        failed.stop_reason = StopReason::Error;
+        let mut request = request(vec![
+            LlmMessage::User(UserMessage::text("one")),
+            LlmMessage::Assistant(failed),
+            LlmMessage::User(UserMessage::text("two")),
+            LlmMessage::User(UserMessage::text("note")),
+        ]);
+        request.cache_points = vec![3];
+        let body = AnthropicProvider::deepseek("k", None).body(&request);
+        // The failed turn is left out, so the three are one user message.
+        let content = body["messages"][0]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 3);
+        assert!(content[0].get("cache_control").is_none());
+        assert_eq!((content[1]["text"].as_str(), &content[1]["cache_control"]), (Some("two"), &json!({ "type": "ephemeral" })));
+        assert_eq!(content[2]["cache_control"], json!({ "type": "ephemeral" }));
+        // Three marks leave room for the last tool's.
+        assert_eq!(body["tools"][1]["cache_control"], json!({ "type": "ephemeral" }));
     }
 
     #[test]
@@ -1050,6 +1138,36 @@ mod tests {
     /// Runs against DeepSeek's endpoint: `DEEPSEEK_API_KEY=… cargo test -p lorca-agent
     /// live_deepseek -- --ignored --nocapture`. A search, then a function call the turn
     /// continues from with the seals and server blocks replayed.
+    /// `DEEPSEEK_API_KEY=… cargo test -p lorca-agent live_deepseek_takes -- --ignored
+    /// --nocapture`. A turn with its cache points and a note after them carries four marks.
+    #[tokio::test]
+    #[ignore]
+    async fn live_deepseek_takes_a_turns_four_cache_marks() {
+        let Ok(key) = std::env::var("DEEPSEEK_API_KEY") else { return };
+        let provider = AnthropicProvider::deepseek(&key, None);
+        let mut noted = AssistantMessage::empty("deepseek", DEEPSEEK_DEFAULT_MODEL);
+        noted.content = vec![AssistantPart::Text { text: "Noted.".into() }];
+        let mut request = request(vec![
+            LlmMessage::User(UserMessage::text("Remember the word teal.")),
+            LlmMessage::Assistant(noted),
+            LlmMessage::User(UserMessage::text("Which word did I ask you to remember? Answer with the word alone.")),
+            LlmMessage::User(UserMessage::text("[A note for this turn only: answer in lowercase.]")),
+        ]);
+        request.cache_points = vec![3, 1];
+        assert_eq!(provider.body(&request).to_string().matches("cache_control").count(), 4);
+        for call in ["first", "second"] {
+            let mut stream = provider.stream(request.clone(), CancellationToken::new()).await;
+            let mut acc = AssistantAccumulator::new("deepseek", DEEPSEEK_DEFAULT_MODEL);
+            while let Some(event) = stream.next().await {
+                acc.apply(&event);
+            }
+            let message = acc.finish(false);
+            eprintln!("{call} call: {:?} {:?} {:?} usage {:?}", message.stop_reason, message.error_message, message.content, message.usage);
+            assert_eq!(message.stop_reason, StopReason::Stop, "{:?}", message.error_message);
+            assert!(message.content.iter().any(|p| matches!(p, AssistantPart::Text { text } if text.to_lowercase().contains("teal"))));
+        }
+    }
+
     #[tokio::test]
     #[ignore]
     async fn live_deepseek_search_then_tool_call_replays() {
@@ -1064,6 +1182,7 @@ mod tests {
             system_prompt: "Search the web before answering questions about current software versions. When you know the answer, call save_note with one line, then say done.".into(),
             messages: vec![LlmMessage::User(UserMessage::text("What is the latest stable Rust release? Save the version as a note."))],
             tools: tools.clone(),
+            cache_points: Vec::new(),
             max_tokens: None,
             options: Default::default(),
         };
@@ -1100,6 +1219,7 @@ mod tests {
                 LlmMessage::ToolResult(result),
             ],
             tools,
+            cache_points: Vec::new(),
             max_tokens: None,
             options: Default::default(),
         };

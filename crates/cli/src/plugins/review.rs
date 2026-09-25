@@ -140,6 +140,7 @@ pub async fn review(app: &Arc<App>, bot: &Bot, chat_id: &str, action: Action<'_>
         system_prompt: if action.propose_rule { format!("{SYSTEM_PROMPT}\n\n{RULE_PROMPT}") } else { SYSTEM_PROMPT.into() },
         messages: vec![LlmMessage::User(UserMessage::text(text))],
         tools: Vec::new(),
+        cache_points: Vec::new(),
         // The verdict is short; the rest is room for a model that reasons at its lowest effort.
         max_tokens: Some(4096),
         options: RequestOptions::default().with_session_id(chat_id),

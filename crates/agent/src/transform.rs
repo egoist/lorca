@@ -20,6 +20,12 @@ pub struct TransformOptions<'a> {
 }
 
 pub fn transform_messages(messages: &[LlmMessage], options: &TransformOptions<'_>) -> Vec<LlmMessage> {
+    transform_messages_with_origins(messages, options).into_iter().map(|(_, message)| message).collect()
+}
+
+/// [`transform_messages`], each message paired with the index in `messages` it comes from. A
+/// result made up for a call that never got one belongs to the message it follows.
+pub fn transform_messages_with_origins(messages: &[LlmMessage], options: &TransformOptions<'_>) -> Vec<(usize, LlmMessage)> {
     let mut id_map: Vec<(String, String)> = Vec::new();
     let mut transformed: Vec<LlmMessage> = Vec::with_capacity(messages.len());
 
@@ -87,25 +93,29 @@ pub fn transform_messages(messages: &[LlmMessage], options: &TransformOptions<'_
 
     // Second pass: a failed or aborted turn is not replayed, and every tool call gets a
     // result before the next assistant turn, the next user message, or the end.
-    let mut result: Vec<LlmMessage> = Vec::with_capacity(transformed.len());
+    let mut result: Vec<(usize, LlmMessage)> = Vec::with_capacity(transformed.len());
     let mut pending: Vec<(String, String)> = Vec::new();
     let mut answered: Vec<String> = Vec::new();
-    fn settle(result: &mut Vec<LlmMessage>, pending: &mut Vec<(String, String)>, answered: &mut Vec<String>) {
+    fn settle(result: &mut Vec<(usize, LlmMessage)>, pending: &mut Vec<(String, String)>, answered: &mut Vec<String>) {
+        let origin = result.last().map_or(0, |(origin, _)| *origin);
         for (id, name) in pending.drain(..) {
             if !answered.contains(&id) {
-                result.push(LlmMessage::ToolResult(ToolResultMessage {
-                    tool_call_id: id,
-                    tool_name: name,
-                    content: vec![ContentPart::text(NO_RESULT_PROVIDED)],
-                    details: serde_json::Value::Null,
-                    is_error: true,
-                    timestamp: crate::now_ms(),
-                }));
+                result.push((
+                    origin,
+                    LlmMessage::ToolResult(ToolResultMessage {
+                        tool_call_id: id,
+                        tool_name: name,
+                        content: vec![ContentPart::text(NO_RESULT_PROVIDED)],
+                        details: serde_json::Value::Null,
+                        is_error: true,
+                        timestamp: crate::now_ms(),
+                    }),
+                ));
             }
         }
         answered.clear();
     }
-    for message in transformed {
+    for (origin, message) in transformed.into_iter().enumerate() {
         match message {
             LlmMessage::Assistant(assistant) => {
                 settle(&mut result, &mut pending, &mut answered);
@@ -116,15 +126,15 @@ pub fn transform_messages(messages: &[LlmMessage], options: &TransformOptions<'_
                 if !calls.is_empty() {
                     pending = calls;
                 }
-                result.push(LlmMessage::Assistant(assistant));
+                result.push((origin, LlmMessage::Assistant(assistant)));
             }
             LlmMessage::ToolResult(tool_result) => {
                 answered.push(tool_result.tool_call_id.clone());
-                result.push(LlmMessage::ToolResult(tool_result));
+                result.push((origin, LlmMessage::ToolResult(tool_result)));
             }
             LlmMessage::User(user) => {
                 settle(&mut result, &mut pending, &mut answered);
-                result.push(LlmMessage::User(user));
+                result.push((origin, LlmMessage::User(user)));
             }
         }
     }

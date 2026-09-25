@@ -23,6 +23,9 @@ pub struct ModelRequest {
     pub system_prompt: String,
     pub messages: Vec<LlmMessage>,
     pub tools: Vec<ToolSpec>,
+    /// Prefix lengths of `messages` that later calls send again unchanged. An adapter that
+    /// marks what the provider caches puts a mark at the end of each.
+    pub cache_points: Vec<usize>,
     /// A cap on the reply for this call, instead of the provider's own.
     pub max_tokens: Option<u64>,
     /// Headers, timeout, session affinity, metadata, and hooks for this call.
