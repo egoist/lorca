@@ -1,17 +1,18 @@
-// A chat's running tasks, as a sheet from its Running tasks button: the commands its bots have
-// running in their terminals (`useRunningTasks`), each with Stop. The working row only says what
-// a bot is doing, and a command's card shows only once the bot hands the command over; here every
-// one shows. One that ends while the sheet is open stays, saying how it ended.
+// A chat's running tasks, as rows in the sheet its Running tasks button opens: the commands its
+// bots have running in their terminals (`useRunningTasks`), each with what it does, who runs it
+// in a group, and where it stands. A row slides the command's details in. One that ends while the
+// sheet is open stays, saying how it ended.
 
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useRef } from "react";
-import { Platform, ScrollView, StyleSheet, Text, View } from "react-native";
-import { engine } from "../../src/core/engine";
+import { Platform, ScrollView, StyleSheet, Text } from "react-native";
 import { hasEnded } from "../../src/core/model";
 import { useBotMap, useChat, useRunningTasks } from "../../src/core/store";
 import { t, useLanguage } from "../../src/i18n";
+import { firstLine } from "../../src/ui/format";
+import { Row, Section } from "../../src/ui/forms";
 import { CloseToolbar } from "../../src/ui/navigation";
-import { TaskCard, useNow } from "../../src/ui/RunningTasks";
+import { taskState, useNow } from "../../src/ui/tasks";
 import { usePalette } from "../../src/ui/theme";
 
 export default function TasksScreen() {
@@ -31,31 +32,38 @@ export default function TasksScreen() {
     return running.includes(m) || (!!run && listed.current.has(m.id) && hasEnded(run));
   });
   return (
-    <View style={styles.screen}>
+    <>
       <Stack.Screen options={{ title: t("Running tasks") }} />
       <CloseToolbar label={Platform.OS === "android" ? t("Close") : t("Done")} onClose={() => router.dismiss()} />
-      <ScrollView contentContainerStyle={styles.content} contentInsetAdjustmentBehavior="automatic">
+      <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.content}>
         {tasks.length > 0 ? (
-          tasks.map((message) => (
-            <TaskCard
-              key={message.id}
-              message={message}
-              bot={message.author.kind === "bot" ? bots.get(message.author.bot_id) : undefined}
-              isGroup={chat?.kind === "group"}
-              now={now}
-              onStop={() => engine.stopCommand(message.chat_id, message.id)}
-            />
-          ))
+          <Section>
+            {tasks.map((message) => {
+              const body = message.body.kind === "tool" ? message.body : undefined;
+              if (!body?.run) return null;
+              const bot = message.author.kind === "bot" ? bots.get(message.author.bot_id) : undefined;
+              const state = taskState(body.run, message.created_at, now);
+              return (
+                <Row
+                  key={message.id}
+                  icon="terminal"
+                  title={body.description ?? firstLine(body.run.command)}
+                  subtitle={chat?.kind === "group" ? `${bot?.name ?? t("The bot")} · ${state}` : state}
+                  chevron
+                  onPress={() => router.push({ pathname: "/tasks/command/[id]", params: { id: message.id, chat: id } })}
+                />
+              );
+            })}
+          </Section>
         ) : (
           <Text style={[styles.empty, { color: p.secondaryLabel }]}>{t("No commands are running.")}</Text>
         )}
       </ScrollView>
-    </View>
+    </>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1 },
-  content: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 40, gap: 12 },
-  empty: { textAlign: "center", marginTop: 24, fontSize: 15 },
+  content: { paddingBottom: 40 },
+  empty: { textAlign: "center", marginTop: 32, fontSize: 15 },
 });
