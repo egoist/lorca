@@ -617,14 +617,13 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
         guard rows.indices.contains(row) else { return 1 }
         let chatRow = rows[row]
         let message = chatRow.messageID.flatMap(message(for:))
-        let showsName = showsName(for: message)
         return max(
             1,
             layout.height(
                 for: chatRow,
                 message: message,
                 tableWidth: max(tableView.bounds.width, 320),
-                showsName: showsName
+                showsAvatar: showsAvatar(for: message)
             ))
     }
 
@@ -687,12 +686,16 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
         return view
     }
 
-    /// A bot's text in a group carries its name and avatar; a DM's bot needs neither.
-    private func showsName(for message: Message?) -> Bool {
-        guard let chatID, store.chat(chatID)?.isGroup == true, let message,
-            case .bot = message.author, case .text = message.body
-        else { return false }
+    /// A bot's row in a group carries its avatar, beside a bubble or a card, and a bubble its
+    /// name as well; a DM's bot needs neither.
+    private func showsAvatar(for message: Message?) -> Bool {
+        guard let chatID, store.chat(chatID)?.isGroup == true, message?.author.botID != nil else { return false }
         return true
+    }
+
+    /// The bot's avatar for a card in a group; nil in a DM.
+    private func cardAvatar(for message: Message) -> AvatarView.Content? {
+        showsAvatar(for: message) ? AvatarView.content(for: message.author, store: store) : nil
     }
 
     /// The plugin behind a `<plugin>__<tool>` row, by name, from the bot's Runner.
@@ -808,7 +811,7 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
             switch message.body {
             case .text:
                 guard let messageCell = cell as? MessageCellView else { return }
-                let showsName = showsName(for: message)
+                let showsName = showsAvatar(for: message)
                 let name: String
                 let nameColor: NSColor
                 if showsName, case let .bot(botID) = message.author {
@@ -841,7 +844,9 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
 
             case let .tool(tool) where tool.run != nil:
                 guard let commandCell = cell as? CommandCellView, let run = tool.run else { return }
-                commandCell.configure(run: run, messageID: message.id, botName: botName(of: message), groupStart: groupStart)
+                commandCell.configure(
+                    run: run, messageID: message.id, botName: botName(of: message), avatar: cardAvatar(for: message),
+                    groupStart: groupStart)
                 commandCell.onDecision = { [weak self] decision in
                     self?.store.answerPermission(chatID: chat.id, messageID: message.id, decision: decision)
                 }
@@ -870,7 +875,9 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
 
             case let .permission(request):
                 let permissionCell = cell as? PermissionCellView
-                permissionCell?.configure(request: request, botName: botName(of: message), groupStart: groupStart)
+                permissionCell?.configure(
+                    request: request, botName: botName(of: message), avatar: cardAvatar(for: message),
+                    groupStart: groupStart)
                 permissionCell?.onDecision = { [weak self] decision in
                     guard let self else { return }
                     self.store.answerPermission(chatID: chat.id, messageID: message.id, decision: decision)

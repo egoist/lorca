@@ -712,6 +712,7 @@ export default function ChatScreen() {
           return (
             <PermissionRow
               row={item}
+              isGroup={isGroup}
               onDecide={(decision) =>
                 engine.answerPermission(
                   item.message.chat_id,
@@ -725,6 +726,7 @@ export default function ChatScreen() {
           return (
             <CommandRow
               row={item}
+              isGroup={isGroup}
               onDecide={(decision) => engine.answerPermission(item.message.chat_id, item.message.id, decision)}
               onAnswer={() => setAnsweringId(item.message.id)}
               onStop={() => engine.stopCommand(item.message.chat_id, item.message.id)}
