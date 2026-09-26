@@ -6,6 +6,7 @@
 import * as WebBrowser from "expo-web-browser";
 import { AppState, Platform, type AppStateStatus } from "react-native";
 import * as core from "../../modules/lorca-core";
+import type { CodexCatalog, CodexOptions, CodexSelection } from "./model";
 import { t } from "../i18n";
 import { hostFacts } from "./host";
 import { providerConnectMethod, type Attachment, type AutoReview, type Bot, type Chat, type ChatMeta, type ChatSearchResults, type ChatUsage, type Message, type ProviderKind, type ProviderStatus } from "./model";
@@ -259,7 +260,7 @@ class Engine {
     }
   }
 
-  async createBot(input: { name: string; description: string; symbol_name: string; accent: string; runner_id: string; provider: string; model?: string; thinking?: string }): Promise<{ bot: Bot; chatId: string }> {
+  async createBot(input: { name: string; description: string; symbol_name: string; accent: string; runner_id: string; provider: string; harness?: "lorca" | "codex"; codex_options?: CodexOptions; model?: string; thinking?: string }): Promise<{ bot: Bot; chatId: string }> {
     const { bot, chat_id } = await core.request<{ bot: Bot; chat_id: string }>("bots.create", input);
     return { bot, chatId: chat_id };
   }
@@ -281,6 +282,22 @@ class Engine {
     void core.request("bots.update", { id, provider, model: model ?? "", thinking: thinking ?? "" }).catch((error) => {
       console.warn("updating bot runtime", error instanceof Error ? error.message : error);
     });
+  }
+
+  async setBotHarness(id: string, harness: "lorca" | "codex"): Promise<void> {
+    const { bot } = await core.request<{ bot: Bot }>("bots.update", { id, harness, model: "", thinking: "" });
+    useStore.setState((s) => ({ bots: s.bots.map((current) => current.id === id ? bot : current) }));
+  }
+
+  async codexModels(runnerId: string, botId?: string): Promise<CodexCatalog> {
+    return core.request<CodexCatalog>("codex.models", { runner_id: runnerId, bot_id: botId });
+  }
+
+  async setCodexOptions(id: string, selection: CodexSelection): Promise<void> {
+    const { bot } = await core.request<{ bot: Bot }>("bots.update", {
+      id, model: selection.model ?? "", thinking: selection.thinking ?? "", codex_options: selection.options,
+    });
+    useStore.setState((s) => ({ bots: s.bots.map((current) => current.id === id ? bot : current) }));
   }
 
   /// The bot's symbol and accent, the look under and behind its image.

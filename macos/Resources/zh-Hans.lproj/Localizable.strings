@@ -290,7 +290,7 @@
 "It loses its keys and synced chats the next time it connects. You can pair it again any time." = "它下次连接时会失去密钥和已同步的聊天。你可以随时重新配对。";
 "It needs a ChatGPT subscription." = "需要 ChatGPT 订阅。";
 "It needs a SuperGrok or X Premium+ subscription." = "需要 SuperGrok 或 X Premium+ 订阅。";
-"It runs on this computer, plans your work, and builds the rest of the team when you ask. Give it a name and the credentials it runs with." = "它运行在这台电脑上，为你规划工作，并在你需要时组建团队的其他成员。给它起个名字，并提供它运行所用的凭证。";
+"It runs on this computer, plans your work, and builds the rest of the team when you ask. Give it a name and choose how it runs." = "它运行在这台电脑上，为你规划工作，并在你需要时组建团队的其他成员。给它起个名字，并选择运行环境。";
 "its Runner" = "它的 Runner";
 "Jobs that run on their own" = "自动运行的任务";
 "Keys and sign-ins are sent sealed to %@ and stay there. A sign-in opens the browser on %@." = "密钥和登录信息会密封发送到 %1$@ 并保留在那里。登录时会在 %2$@ 上打开浏览器。";
@@ -674,3 +674,27 @@
 "Your browser opens a %@ sign-in. The tokens are shared with your paired Devices, encrypted with your account key; the relay cannot read them." = "浏览器会打开 %@ 的登录页面。令牌会用你的账户密钥加密，共享给你已配对的设备；中继无法读取它们。";
 "Your first bot" = "你的第一个智能体";
 "Zoom" = "缩放";
+
+"Runtime" = "运行环境";
+
+"Uses Codex's login, model, tools, and permissions on this Runner. Install Codex and run codex login there first." = "使用此 Runner 上 Codex 的登录、模型、工具与权限设置。请先在该 Runner 安装 Codex 并运行 codex login。";
+
+"Standard" = "标准";
+
+"Fast" = "快速";
+
+"Speed" = "速度";
+
+"Approvals" = "审批";
+
+"Approve for me" = "替我审批";
+
+"Ask me" = "询问我";
+
+"Fast uses more quota. Approve for me lets Codex review native approval requests. Changes apply to the next turn." = "快速模式会消耗更多额度。“替我审批”由 Codex 审查原生权限请求。设置从下一轮开始生效。";
+
+"Codex" = "Codex";
+
+"Loading models…" = "正在加载模型…";
+
+"Reload models" = "刷新模型";

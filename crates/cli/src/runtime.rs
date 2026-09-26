@@ -687,6 +687,7 @@ mod tests {
             accent: String::new(),
             avatar: None,
             runner_id: "dev".into(),
+            harness: crate::model::Harness::default(), codex_options: crate::model::CodexOptions::default(),
             provider: "deepseek".into(),
             model: None,
             thinking: None,

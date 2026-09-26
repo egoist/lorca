@@ -1803,6 +1803,7 @@ mod tests {
             accent: String::new(),
             avatar: None,
             runner_id: "runner".into(),
+            harness: crate::model::Harness::default(), codex_options: crate::model::CodexOptions::default(),
             provider: "deepseek".into(),
             model: None,
             thinking: None,

@@ -77,6 +77,7 @@ fn create_lead_bot(app: &Arc<App>) {
         accent: "indigo".into(),
         avatar: None,
         runner_id,
+        harness: crate::model::Harness::default(), codex_options: crate::model::CodexOptions::default(),
         provider: "deepseek".into(),
         model: None,
         thinking: None,

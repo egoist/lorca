@@ -6,6 +6,8 @@ You create bots, talk to them 1:1, or put them in a group chat. Bots can hand wo
 
 The UI is AppKit (SPM), built to feel like a Mac app: materials, density, keyboard, and motion.
 
+Each bot selects a runtime: **Lorca** runs the built-in Rust agent loop with account provider credentials; **Codex** runs the Runner's native Codex harness through App Server, using its Codex login, configuration, and tools. Choose Runtime in New Bot or Details. [Set up a Codex bot](./docs/codex.md).
+
 Identity is a local key pair. Devices pair to each other. Traffic to the network is end-to-end encrypted. Each machine or phone that pairs is a Device and records its OS (`macos`, `linux`, `windows`, `ios`, `ipados`, `android`). Desktop Devices are Runners: you can create a bot for any paired Runner, and that bot uses the account's encrypted provider credentials there. Phones and tablets are Devices, not Runners.
 
 ## Stack

@@ -73,6 +73,8 @@ export interface Bot {
   avatar?: Attachment;
   runner_id: string;
   provider: string;
+  harness?: "lorca" | "codex";
+  codex_options?: CodexOptions;
   model?: string;
   /** How much the model thinks: off, minimal, low, medium, high, xhigh, max. */
   thinking?: string;
@@ -126,6 +128,22 @@ export function isImage(attachment: Attachment): boolean {
 }
 
 /// "Photo", "3 photos", "report.pdf", "2 files": the preview of a message with no text.
+export interface CodexOptions {
+  speed: "default" | "standard" | "fast";
+  approvals: "auto_review" | "user";
+}
+export interface CodexSelection {
+  model?: string;
+  thinking?: string;
+  options: CodexOptions;
+}
+export interface CodexCatalog {
+  models: { id: string; label: string; levels: string[]; default_thinking?: string | null; fast_tier?: string | null; fast_description?: string | null }[];
+  default_model?: string | null;
+  default_thinking?: string | null;
+  default_service_tier?: string | null;
+}
+
 export function attachmentSummary(attachments: Attachment[]): string {
   const first = attachments[0];
   if (!first) return "";

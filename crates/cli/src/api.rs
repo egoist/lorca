@@ -20,6 +20,16 @@ fn opt_string(params: &Value, key: &str) -> Option<String> {
     params[key].as_str().map(str::to_string).filter(|s| !s.is_empty())
 }
 
+fn harness(params: &Value) -> Result<Option<Harness>, String> {
+    params.get("harness").map(|value| serde_json::from_value(value.clone())
+        .map_err(|_| "harness must be lorca or codex".to_string())).transpose()
+}
+
+fn codex_options(params: &Value) -> Result<Option<CodexOptions>, String> {
+    params.get("codex_options").map(|value| serde_json::from_value(value.clone())
+        .map_err(|_| "codex_options needs speed (default, standard, fast) and approvals (auto_review, user)".to_string())).transpose()
+}
+
 /// A Runner opens provider OAuth in its browser. A phone emits the URL to the Expo app,
 /// whose in-app browser keeps the core alive for the localhost callback.
 #[cfg(feature = "provider-auth")]
@@ -167,6 +177,8 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
         }
 
         "bots.create" => {
+            let harness = harness(&params)?.unwrap_or_default();
+            let codex_options = codex_options(&params)?.unwrap_or_default();
             // A bot from the marketplace starts from its template's profile, with the routines
             // and the first turn `marketplace::welcome` gives it.
             let template = match opt_string(&params, "template_id") {
@@ -182,6 +194,8 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
                 accent: opt_string(&params, "accent").or_else(|| from_template(|t| &t.accent)).unwrap_or_else(|| "indigo".into()),
                 avatar: store_avatar(app, &params)?.flatten(),
                 runner_id: string(&params, "runner_id")?,
+                harness,
+                codex_options,
                 provider: opt_string(&params, "provider").unwrap_or_else(|| "deepseek".into()),
                 model: opt_string(&params, "model"),
                 thinking: opt_string(&params, "thinking"),
@@ -201,6 +215,8 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
         }
         "bots.update" => {
             let id = string(&params, "id")?;
+            let harness = harness(&params)?;
+            let codex_options = codex_options(&params)?;
             // The image is copied and queued before the roster names it, so every Device can
             // fetch the blob by the time it reads the profile.
             let avatar = store_avatar(app, &params)?;
@@ -216,6 +232,8 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
                     bot.description = v.trim().to_string();
                 }
                 bot.legacy_instructions.clear();
+                if let Some(v) = harness { bot.harness = v; }
+                if let Some(v) = codex_options { bot.codex_options = v; }
                 if let Some(v) = opt_string(&params, "provider") { bot.provider = v; }
                 if let Some(v) = params["model"].as_str() { bot.model = Some(v.trim().to_string()).filter(|m| !m.is_empty()); }
                 if let Some(v) = params["thinking"].as_str() { bot.thinking = Some(v.trim().to_string()).filter(|t| !t.is_empty()); }
@@ -228,6 +246,17 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
         "bots.delete" => {
             app.delete_bot(&string(&params, "id")?).map_err(|e| e.to_string())?;
             Ok(Value::Null)
+        }
+
+        "codex.models" => {
+            let runner_id = string(&params, "runner_id")?;
+            if app.this_device_id().as_deref() == Some(runner_id.as_str()) {
+                #[cfg(feature = "runner")]
+                return crate::turns::codex::models(app, &params).await;
+                #[cfg(not(feature = "runner"))]
+                return Err("Codex runs on a desktop Runner".into());
+            }
+            requests::ask(app, &runner_id, "codex.models", params).await
         }
 
         "chats.create" => {

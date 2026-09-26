@@ -59,6 +59,40 @@ impl Device {
     }
 }
 
+/// The execution engine on a bot's Runner. Provider credentials are used by Lorca;
+/// Codex owns its own login, model calls, tools, and persisted threads.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Harness {
+    #[default]
+    Lorca,
+    Codex,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CodexSpeed {
+    #[default]
+    Default,
+    Standard,
+    Fast,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CodexApprovals {
+    #[default]
+    AutoReview,
+    User,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct CodexOptions {
+    pub speed: CodexSpeed,
+    pub approvals: CodexApprovals,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Bot {
     pub id: String,
@@ -73,6 +107,10 @@ pub struct Bot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub avatar: Option<Attachment>,
     pub runner_id: String,
+    #[serde(default)]
+    pub harness: Harness,
+    #[serde(default)]
+    pub codex_options: CodexOptions,
     pub provider: String,
     /// Model id for the provider. `None` means the provider's default.
     #[serde(default, skip_serializing_if = "Option::is_none")]

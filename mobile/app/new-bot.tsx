@@ -3,6 +3,8 @@ import { useMemo, useState } from "react";
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { engine } from "../src/core/engine";
+import type { CodexSelection } from "../src/core/model";
+import { CodexSettings } from "../src/ui/CodexSettings";
 import { connectedProviders, isRunner, providerLabel, PROVIDER_MODELS, THINKING_LEVELS, thinkingLabel } from "../src/core/model";
 import { deviceIsOnline, useStore } from "../src/core/store";
 import { t, useLanguage } from "../src/i18n";
@@ -20,6 +22,8 @@ export default function NewBotScreen() {
   const runners = useMemo(() => devices.filter(isRunner), [devices]);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [harness, setHarness] = useState<"lorca" | "codex">("lorca");
+  const [codex, setCodex] = useState<CodexSelection>({ options: { speed: "default", approvals: "auto_review" } });
   const [symbol, setSymbol] = useState("sparkles");
   const [accent, setAccent] = useState("indigo");
   const [runnerId, setRunnerId] = useState<string>(() => runners.find((r) => deviceIsOnline(r.id))?.id ?? runners[0]?.id ?? "");
@@ -34,7 +38,8 @@ export default function NewBotScreen() {
 
   async function save() {
     try {
-      const { chatId } = await engine.createBot({ name, description, symbol_name: symbol, accent, runner_id: runnerId, provider: effectiveProvider, model, thinking });
+      const { chatId } = await engine.createBot({ name, description, symbol_name: symbol, accent, runner_id: runnerId, provider: effectiveProvider, harness,
+        codex_options: codex.options, model: harness === "codex" ? codex.model : model, thinking: harness === "codex" ? codex.thinking : thinking });
       router.dismiss();
       router.push(`/chat/${chatId}`);
     } catch (error) {
@@ -86,14 +91,19 @@ export default function NewBotScreen() {
             />
           ))}
         </Section>
-        {runner && (
+        <Section title={t("Runtime")} footer={harness === "codex" ? t("Uses Codex's login, model, tools, and permissions on this Runner. Install Codex and run codex login there first.") : undefined}>
+          <CheckRow title="Lorca" checked={harness === "lorca"} onPress={() => setHarness("lorca")} />
+          <CheckRow title="Codex" checked={harness === "codex"} onPress={() => setHarness("codex")} />
+        </Section>
+        {runner && harness === "codex" && <Section title="Codex"><CodexSettings runnerId={runner.id} selection={codex} onChange={setCodex} /></Section>}
+        {runner && harness === "lorca" && (
           <Section title={t("Provider")} footer={connected.length ? undefined : t("No provider is connected yet; connect one in Settings before this bot answers.")}>
             {providers.map((kind) => (
               <CheckRow key={kind} title={providerLabel(kind)} checked={kind === effectiveProvider} onPress={() => { setProvider(kind); setModel(undefined); setThinking(undefined); }} />
             ))}
           </Section>
         )}
-        {runner && PROVIDER_MODELS[effectiveProvider] && (
+        {runner && harness === "lorca" && PROVIDER_MODELS[effectiveProvider] && (
           <Section title={t("Model")}>
             <CheckRow title={t("Default")} subtitle={PROVIDER_MODELS[effectiveProvider][0].label} checked={!model} onPress={() => setModel(undefined)} />
             {PROVIDER_MODELS[effectiveProvider].map((m) => (
@@ -101,7 +111,7 @@ export default function NewBotScreen() {
             ))}
           </Section>
         )}
-        {runner && THINKING_LEVELS[effectiveProvider] && (
+        {runner && harness === "lorca" && THINKING_LEVELS[effectiveProvider] && (
           <Section title={t("Thinking")} footer={t("How much the model reasons before it answers. Higher levels are slower and cost more.")}>
             <CheckRow title={t("Default")} checked={!thinking} onPress={() => setThinking(undefined)} />
             {THINKING_LEVELS[effectiveProvider].map((level) => (

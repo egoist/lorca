@@ -14,7 +14,7 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
         self.controller = controller
         self.onClose = onClose
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 660, height: 560),
+            contentRect: NSRect(x: 0, y: 0, width: 660, height: 720),
             styleMask: [.titled, .closable, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -58,6 +58,8 @@ final class OnboardingViewController: NSViewController {
 
     var isOnFinalStep: Bool { step == .done || step == .create || step == .bot || step == .provider }
     private var providerKind: ProviderCredential.Kind = .deepseek
+    private var harnessKind: Bot.Harness = .lorca
+    private var codexSelection = CodexSelection()
 
     init(onFinish: @escaping () -> Void) {
         self.onFinish = onFinish
@@ -78,7 +80,7 @@ final class OnboardingViewController: NSViewController {
         root.addSubview(container)
         NSLayoutConstraint.activate([
             root.widthAnchor.constraint(equalToConstant: 660),
-            root.heightAnchor.constraint(equalToConstant: 560),
+            root.heightAnchor.constraint(equalToConstant: 720),
             container.topAnchor.constraint(equalTo: root.topAnchor, constant: 28),
             container.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 44),
             container.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -44),
@@ -274,7 +276,7 @@ final class OnboardingViewController: NSViewController {
     private func botView() -> NSView {
         let title = Build.label(L("Your first bot"), font: .systemFont(ofSize: 22, weight: .semibold))
         let subtitle = Build.label(
-            L("It runs on this computer, plans your work, and builds the rest of the team when you ask. Give it a name and the credentials it runs with."),
+            L("It runs on this computer, plans your work, and builds the rest of the team when you ask. Give it a name and choose how it runs."),
             font: .systemFont(ofSize: 12.5), color: .secondaryLabelColor, lines: 0
         )
 
@@ -307,10 +309,18 @@ final class OnboardingViewController: NSViewController {
         descriptionField.heightAnchor.constraint(greaterThanOrEqualToConstant: 54).isActive = true
         descriptionField.identifier = NSUserInterfaceItemIdentifier("botDescription")
 
+        let harnessPicker = NSPopUpButton()
+        harnessPicker.addItems(withTitles: Bot.Harness.allCases.map(\.title))
+        harnessPicker.selectItem(at: Bot.Harness.allCases.firstIndex(of: harnessKind) ?? 0)
+        harnessPicker.target = self
+        harnessPicker.action = #selector(harnessPicked(_:))
+        harnessPicker.identifier = NSUserInterfaceItemIdentifier("harness")
+
         let grid = formGrid([
             ("", avatar),
             (L("Name"), nameField),
             (L("Description"), descriptionField),
+            (L("Runtime"), harnessPicker),
         ] + providerRows())
 
         let back = secondaryButton(L("Back"), action: #selector(goWelcome))
@@ -344,6 +354,7 @@ final class OnboardingViewController: NSViewController {
         picker.selectItem(at: ProviderCredential.Kind.allCases.firstIndex(of: providerKind) ?? 0)
         picker.target = self
         picker.action = #selector(providerPicked(_:))
+        providerPicker = picker
 
         let host = NSView()
         host.translatesAutoresizingMaskIntoConstraints = false
@@ -357,11 +368,29 @@ final class OnboardingViewController: NSViewController {
 
     private weak var credentialHost: NSView?
     private weak var credentialLabel: NSTextField?
+    private weak var providerPicker: NSPopUpButton?
+    private weak var providerRow: NSGridRow?
 
     /// Fills the credential row for the current provider and sets the button to match.
     private func renderCredential() {
         guard let host = credentialHost else { return }
         for subview in host.subviews { subview.removeFromSuperview() }
+        let usesCodex = step == .bot && harnessKind == .codex
+        providerRow?.isHidden = usesCodex
+
+        if usesCodex {
+            if let bot = firstBot {
+                let settings = CodexSettingsView(runnerID: bot.runnerID, botID: bot.id, selection: codexSelection)
+                settings.onChange = { [weak self] in self?.codexSelection = $0 }
+                host.addSubview(settings)
+                settings.pin(to: host)
+            }
+            credentialLabel?.stringValue = ""
+            setStatus("", color: .tertiaryLabelColor)
+            findContinueButton()?.title = L("Continue")
+            findContinueButton()?.isEnabled = true
+            return
+        }
 
         let control: NSView
         if providerKind.usesAPIKey {
@@ -405,6 +434,7 @@ final class OnboardingViewController: NSViewController {
             if control === credentialHost { credentialLabel = label }
             grid.addRow(with: [label, control])
             let row = grid.row(at: grid.numberOfRows - 1)
+            if control === providerPicker { providerRow = row }
             row.yPlacement = control is WrappingTextField || (control is NSTextField && !(control as! NSTextField).isEditable) ? .top : .center
             if control is NSTextField || control is NSPopUpButton || control === credentialHost {
                 control.widthAnchor.constraint(equalToConstant: 400).isActive = true
@@ -580,7 +610,19 @@ final class OnboardingViewController: NSViewController {
     @objc private func goRestore() { transition(to: .restore) }
     @objc private func goPair() { transition(to: .pair) }
     @objc private func goDone() { transition(to: .done) }
-    @objc private func goBot() { transition(to: firstBot == nil ? .provider : .bot) }
+    @objc private func goBot() {
+        harnessKind = firstBot?.harness ?? .lorca
+        providerKind = firstBot?.provider ?? .deepseek
+        codexSelection = .init(model: harnessKind == .codex ? firstBot?.model : nil,
+                               thinking: harnessKind == .codex ? firstBot?.thinking : nil,
+                               options: firstBot?.codexOptions ?? .init())
+        transition(to: firstBot == nil ? .provider : .bot)
+    }
+
+    @objc private func harnessPicked(_ sender: NSPopUpButton) {
+        harnessKind = Bot.Harness.allCases[max(0, sender.indexOfSelectedItem)]
+        renderCredential()
+    }
 
     @objc private func providerPicked(_ sender: NSPopUpButton) {
         providerKind = ProviderCredential.Kind.allCases[max(0, sender.indexOfSelectedItem)]
@@ -601,6 +643,12 @@ final class OnboardingViewController: NSViewController {
         // The bot runs with the provider chosen here, not the CLI's default.
         if name != bot.name || description != bot.description || providerKind != bot.provider {
             store.updateBot(bot.id, name: name, description: description, provider: providerKind)
+        }
+        store.setBotHarness(bot.id, harness: harnessKind)
+        if harnessKind == .codex {
+            store.setCodexOptions(bot.id, selection: codexSelection)
+            transition(to: .done)
+            return
         }
         connectProvider()
     }

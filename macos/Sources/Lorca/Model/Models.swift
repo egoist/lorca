@@ -241,6 +241,10 @@ struct Device: Identifiable, Hashable {
 // MARK: - Bot
 
 struct Bot: Identifiable, Hashable {
+    enum Harness: String, CaseIterable {
+        case lorca, codex
+        var title: String { self == .codex ? "Codex" : "Lorca" }
+    }
     let id: String
     var name: String
     /// What the bot does and how it should work.
@@ -249,6 +253,9 @@ struct Bot: Identifiable, Hashable {
     var accent: Accent
     var runnerID: Device.ID
     var provider: ProviderCredential.Kind
+    var harness: Harness = .lorca
+    var codexOptions: CodexOptions = .init()
+    var runtimeLabel: String { harness == .codex ? "Codex" : provider.rawValue }
     /// nil means the provider's default model.
     var model: String? = nil
     /// How much the model thinks; nil means the provider's default.
@@ -257,6 +264,44 @@ struct Bot: Identifiable, Hashable {
     /// of the symbol and accent once this computer has the bytes.
     var avatar: Attachment? = nil
     var createdAt: Date
+}
+
+struct CodexOptions: Codable, Hashable {
+    enum Speed: String, Codable, CaseIterable { case `default`, standard, fast }
+    enum Approvals: String, Codable, CaseIterable { case autoReview = "auto_review", user }
+    var speed: Speed = .default
+    var approvals: Approvals = .autoReview
+    var params: [String: Any] { ["speed": speed.rawValue, "approvals": approvals.rawValue] }
+}
+
+struct CodexCatalog: Decodable {
+    struct Model: Decodable {
+        var id: String
+        var label: String
+        var levels: [String]
+        var defaultThinking: String?
+        var fastTier: String?
+        var fastDescription: String?
+    }
+    var models: [Model]
+    var defaultModel: String?
+    var defaultThinking: String?
+    var defaultServiceTier: String?
+
+    func model(_ id: String?) -> Model? { models.first { $0.id == (id ?? defaultModel) } }
+    func thinking(_ id: String?) -> String? {
+        guard let model = model(id) else { return defaultThinking }
+        return defaultThinking.flatMap { model.levels.contains($0) ? $0 : nil } ?? model.defaultThinking
+    }
+    func usesFastByDefault(_ id: String?) -> Bool {
+        defaultServiceTier == "priority" && (model(id) == nil || model(id)?.fastTier != nil)
+    }
+}
+
+struct CodexSelection {
+    var model: String?
+    var thinking: String?
+    var options: CodexOptions = .init()
 }
 
 // MARK: - Auto-review

@@ -104,6 +104,9 @@ pub async fn review(app: &Arc<App>, bot: &Bot, chat_id: &str, trigger: &Trigger,
     if !auto_review.is_enabled {
         return Outcome::Ask { reason: None, rule: None };
     }
+    if bot.harness == crate::model::Harness::Codex {
+        return Outcome::ask("Approve this Lorca plugin action. Codex runs this bot; provider-based Auto-review is unavailable.");
+    }
     let (model, thinking) = crate::providers::review_model(&bot.provider);
     let provider = match crate::providers::provider_for(app, &bot.provider, Some(model), Some(thinking)) {
         Ok(provider) => provider,
@@ -310,7 +313,7 @@ mod tests {
         });
         let bot = |id: &str, name: &str| Bot {
             id: id.into(), name: name.into(), description: String::new(), symbol_name: String::new(), accent: String::new(), avatar: None,
-            runner_id: "runner".into(), provider: "deepseek".into(), model: None, thinking: None, legacy_instructions: String::new(), workdir: None, created_at: 0.0,
+            runner_id: "runner".into(), harness: crate::model::Harness::default(), codex_options: crate::model::CodexOptions::default(), provider: "deepseek".into(), model: None, thinking: None, legacy_instructions: String::new(), workdir: None, created_at: 0.0,
         };
         let (devops, dm) = app.create_bot_with_dm(bot("bot-devops", "DevOps"), None).unwrap();
         app.create_bot_with_dm(bot("bot-chef", "Chef"), None).unwrap();

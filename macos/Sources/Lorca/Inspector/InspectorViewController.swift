@@ -254,7 +254,7 @@ final class InspectorViewController: NSViewController {
                 let row = keptRow("bot:\(bot.id)") { BotRow() }
                 row.configure(
                     bot: bot,
-                    detailText: "\(bot.provider.rawValue) · \(host)",
+                    detailText: "\(bot.runtimeLabel) · \(host)",
                     accessorySymbol: chat.canRemoveBot ? "minus.circle" : nil,
                     tooltip: L("Remove from chat")
                 )
@@ -275,7 +275,7 @@ final class InspectorViewController: NSViewController {
 
     private func showRuntime(of bot: Bot, in chat: Chat) {
         let credential = store.credential(for: bot.provider)
-        if changed(runtime, to: [chat.id, bot.id, bot.provider, bot.model, bot.thinking, credential, chat.usage == nil]) {
+        if changed(runtime, to: [chat.id, bot.id, bot.harness, bot.codexOptions, bot.runnerID, bot.provider, bot.model, bot.thinking, credential, chat.usage == nil]) {
             runtime.setRows(runtimeRows(for: bot, in: chat))
         }
         // What the turns used changes after every turn; the rows take the new values in place.
@@ -343,6 +343,20 @@ final class InspectorViewController: NSViewController {
     }
 
     private func runtimeRows(for bot: Bot, in chat: Chat) -> [NSView] {
+        let harnesses = Bot.Harness.allCases
+        let harnessRow = PopUpRow(key: L("Runtime"), items: harnesses.map(\.title), selected: harnesses.firstIndex(of: bot.harness) ?? 0)
+        harnessRow.onChange = { [weak self] index in
+            guard harnesses.indices.contains(index) else { return }
+            self?.store.setBotHarness(bot.id, harness: harnesses[index])
+        }
+        if bot.harness == .codex {
+            contextRow = nil
+            spentRow = nil
+            let settings = CodexSettingsView(runnerID: bot.runnerID, botID: bot.id,
+                selection: .init(model: bot.model, thinking: bot.thinking, options: bot.codexOptions))
+            settings.onChange = { [weak self] selection in self?.store.setCodexOptions(bot.id, selection: selection) }
+            return [harnessRow, settings]
+        }
         let kinds = ProviderCredential.Kind.allCases
         let providerRow = PopUpRow(
             key: L("Provider"),
@@ -403,7 +417,7 @@ final class InspectorViewController: NSViewController {
             ConnectProviderViewController.present(kind: bot.provider, from: self)
         }
 
-        return [providerRow, modelRow, thinkingRow, status] + usageRows
+        return [harnessRow, providerRow, modelRow, thinkingRow, status] + usageRows
     }
 
     /// What the bot remembers, as its Runner reports it: the index against its load budget with

@@ -281,6 +281,8 @@ enum Wire {
         var accent: String
         var runnerId: String
         var provider: String
+        var harness: String?
+        var codexOptions: CodexOptions?
         var model: String?
         var thinking: String?
         var avatar: Attachment?
@@ -570,6 +572,8 @@ extension Wire.Bot {
             accent: Accent(rawValue: accent) ?? .indigo,
             runnerID: runnerId,
             provider: ProviderCredential.Kind(wireValue: provider) ?? .deepseek,
+            harness: Bot.Harness(rawValue: harness ?? "lorca") ?? .lorca,
+            codexOptions: codexOptions ?? .init(),
             model: model,
             thinking: thinking,
             avatar: avatar.map { Attachment(id: $0.id, name: $0.name, mime: $0.mime, size: $0.size, width: $0.width, height: $0.height) },

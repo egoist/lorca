@@ -22,6 +22,10 @@ final class NewBotViewController: SheetViewController {
     private let descriptionField = WrappingTextField()
     private let runnerPopup = NSPopUpButton()
     private let providerPopup = NSPopUpButton()
+    private let harnessPopup = NSPopUpButton()
+    private let codexHost = Build.stack([], spacing: 0)
+    private var codexRunnerID: Device.ID?
+    private var codexSelection = CodexSelection()
     private let modelPopup = NSPopUpButton()
     private let thinkingPopup = NSPopUpButton()
     private let lookRow = Build.stack([], orientation: .horizontal, spacing: 8)
@@ -74,6 +78,10 @@ final class NewBotViewController: SheetViewController {
         }
         providerPopup.target = self
         providerPopup.action = #selector(providerChanged)
+        harnessPopup.translatesAutoresizingMaskIntoConstraints = false
+        harnessPopup.addItems(withTitles: Bot.Harness.allCases.map(\.title))
+        harnessPopup.target = self
+        harnessPopup.action = #selector(harnessChanged)
         modelPopup.translatesAutoresizingMaskIntoConstraints = false
         thinkingPopup.translatesAutoresizingMaskIntoConstraints = false
         reloadModels()
@@ -85,9 +93,11 @@ final class NewBotViewController: SheetViewController {
             labeled(L("Description"), descriptionField, topAligned: true),
             labeled(L("Look"), lookRow),
             labeled(L("Runner"), runnerPopup),
+            labeled(L("Runtime"), harnessPopup),
             labeled(L("Provider"), providerPopup),
             labeled(L("Model"), modelPopup),
             labeled(L("Thinking"), thinkingPopup),
+            codexHost,
             note,
         ]
         // Width constraints need a common ancestor, so they go on after each row joins the stack.
@@ -98,6 +108,7 @@ final class NewBotViewController: SheetViewController {
 
         setButtons(confirm: L("Create Bot"))
         confirmButton.isEnabled = false
+        codexHost.isHidden = true
         runnerChanged()
     }
 
@@ -209,6 +220,19 @@ final class NewBotViewController: SheetViewController {
             return
         }
         let runner = runners[runnerPopup.indexOfSelectedItem]
+        if selectedHarness == .codex {
+            if codexRunnerID != runner.id {
+                codexRunnerID = runner.id
+                for view in codexHost.arrangedSubviews { codexHost.removeArrangedSubview(view); view.removeFromSuperview() }
+                let settings = CodexSettingsView(runnerID: runner.id, selection: codexSelection)
+                settings.onChange = { [weak self] in self?.codexSelection = $0 }
+                codexHost.addArrangedSubview(settings)
+                settings.widthAnchor.constraint(equalTo: codexHost.widthAnchor).isActive = true
+            }
+            note.stringValue = L("Uses Codex's login, model, tools, and permissions on this Runner. Install Codex and run codex login there first.")
+            note.textColor = .tertiaryLabelColor
+            return
+        }
         let provider = selectedProvider
         if store.credential(for: provider)?.isConnected == true {
             note.stringValue = L("%@ is connected. Turns run on %@.", provider.rawValue, runner.name)
@@ -233,11 +257,21 @@ final class NewBotViewController: SheetViewController {
             accent: look.accent,
             runnerID: store.runners[runnerPopup.indexOfSelectedItem].id,
             provider: selectedProvider,
-            model: selectedModel,
-            thinking: selectedThinking
+            harness: selectedHarness,
+            codexOptions: codexSelection.options,
+            model: selectedHarness == .codex ? codexSelection.model : selectedModel,
+            thinking: selectedHarness == .codex ? codexSelection.thinking : selectedThinking
         )
         dismiss(nil)
         onCreate(botID)
+    }
+
+    private var selectedHarness: Bot.Harness { harnessPopup.indexOfSelectedItem == 1 ? .codex : .lorca }
+
+    @objc private func harnessChanged() {
+        for control in [providerPopup, modelPopup, thinkingPopup] { control.superview?.isHidden = selectedHarness == .codex }
+        codexHost.isHidden = selectedHarness != .codex
+        runnerChanged()
     }
 }
 

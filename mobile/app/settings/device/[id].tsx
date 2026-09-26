@@ -95,7 +95,7 @@ export default function DeviceScreen() {
 
         {runner && (
           <Section title={t("Bots assigned here")}>
-            {bots.length === 0 ? <Row title={t("No bots assigned")} /> : bots.map((bot) => <Row key={bot.id} title={bot.name} subtitle={providerLabel(bot.provider)} leading={<BotAvatar bot={bot} size={32} />} chevron onPress={() => openChat(bot.id)} />)}
+            {bots.length === 0 ? <Row title={t("No bots assigned")} /> : bots.map((bot) => <Row key={bot.id} title={bot.name} subtitle={bot.harness === "codex" ? "Codex" : providerLabel(bot.provider)} leading={<BotAvatar bot={bot} size={32} />} chevron onPress={() => openChat(bot.id)} />)}
           </Section>
         )}
 

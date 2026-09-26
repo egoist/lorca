@@ -193,7 +193,7 @@ final class ReplyEngine {
     private func teammateDetail(_ members: [Bot]) -> String {
         let rows = members.map { bot -> String in
             let host = store.device(bot.runnerID)
-            let status = host?.status == .offline ? "offline" : bot.provider.rawValue
+            let status = host?.status == .offline ? "offline" : bot.runtimeLabel
             return
                 "  { \"name\": \"\(bot.name)\", \"runner\": \"\(host?.name ?? "?")\", \"provider\": \"\(status)\" }"
         }

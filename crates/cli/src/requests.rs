@@ -89,6 +89,8 @@ pub fn serve(app: Arc<App>, request: Request, blob_id: String) {
 async fn answer(app: &Arc<App>, request: &Request) -> Result<Value, String> {
     let body = &request.body;
     match request.verb.as_str() {
+        #[cfg(feature = "runner")]
+        "codex.models" => crate::turns::codex::models(app, body).await,
         "memory.read" => memory_read(app, body["bot_id"].as_str().ok_or("missing bot_id")?),
         "memory.write" => {
             let text = body["text"].as_str().ok_or("missing text")?;

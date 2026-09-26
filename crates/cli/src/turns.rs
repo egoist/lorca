@@ -31,6 +31,8 @@ use crate::plugins::review::Trigger;
 use crate::providers;
 use crate::runtime::{chat_source, name_of, prime_names, start_turn, TurnOutcome};
 
+pub(crate) mod codex;
+
 /// The most chat messages a turn rebuilds as they are. Past this a chat is compacted by count,
 /// so nothing is dropped without a summary; with compaction off, older rows are left out.
 const MAX_CONTEXT_MESSAGES: usize = 400;
@@ -90,6 +92,13 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
         None => None,
     };
 
+    if bot.harness == Harness::Codex {
+        return codex::run(app, job, &bot, routine.as_ref(), &trigger, cancel).await;
+    }
+    // A later switch back to Codex seeds a new thread with the work done by Lorca too.
+    if let Err(error) = app.store.clear_codex_sessions(&job.chat_id, &bot.id) {
+        tracing::warn!(%error, "clearing the previous Codex thread association");
+    }
     let provider = match providers::provider_for(app, &bot.provider, bot.model.as_deref(), providers::thinking_level(&bot)) {
         Ok(provider) => provider,
         Err(reason) => {
@@ -605,6 +614,9 @@ pub async fn compact_now(app: &Arc<App>, chat_id: &str, bot_id: Option<&str>) ->
         .or_else(|| chat.meta.bot_ids.first().cloned())
         .ok_or("The chat has no bot")?;
     let bot = app.bot(&bot_id).ok_or("Unknown bot")?;
+    if bot.harness == Harness::Codex {
+        return Err("Codex manages this bot's context automatically".into());
+    }
     if app.this_device_id().as_deref() != Some(bot.runner_id.as_str()) {
         return Err(format!("{} runs on another Runner; compact it there", bot.name));
     }
@@ -1293,6 +1305,10 @@ fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job, store: &Memo
          the answer; headings are for long reports the user asked for. Ask one question when something is unclear. \
          Markdown renders. Do not invent APIs, files, or results.\n",
     );
+    if bot.harness == Harness::Codex {
+        prompt.push_str("\nCodex provides your coding tools, sandbox, skills, and MCP connections. Use lorca_call for Lorca team, memory, routine, and plugin tools. Its catalog names their arguments. After capability_search, pass a selected plugin tool's name and arguments to lorca_call. Follow Codex's tool and approval instructions.\n");
+        return prompt;
+    }
     prompt.push_str(&format!("\nTools on your Runner: {}", lorca_agent::tools::coding_tools_snippet()));
     if cfg!(unix) {
         prompt.push_str(&format!(" {}", lorca_agent::tools::session_tools_snippet()));
@@ -1582,7 +1598,7 @@ fn transcript_bounded(app: &App, chat: &Chat, bot: &Bot, workdir: &std::path::Pa
                 out.push(user(&format!("[{}]: {text}", name_of(chat, bot_id)), timestamp));
             }
             // Server-side tool rows are a record of activity, not calls to replay.
-            (Author::Bot { .. }, Body::Tool { name, .. }) if is_server_tool(name) => {}
+            (Author::Bot { .. }, Body::Tool { name, .. }) if is_server_tool(name) || name.starts_with("codex_") => {}
             (Author::Bot { bot_id }, Body::Tool { name, call_id, arguments, result, is_error, run, .. }) if bot_id == &bot.id => {
                 let call_id = if call_id.is_empty() { message.id.clone() } else { call_id.clone() };
                 // A `remember` row from before memory_update replays as the call it would be now.
@@ -2045,6 +2061,8 @@ impl Tool for CreateBot {
             accent,
             avatar: None,
             runner_id: self.bot.runner_id.clone(),
+            harness: self.bot.harness,
+            codex_options: self.bot.codex_options,
             provider,
             model: None,
             thinking: args["thinking"].as_str().map(|t| t.trim().to_string()).filter(|t| !t.is_empty()),
@@ -2680,6 +2698,7 @@ mod tests {
             accent: String::new(),
             avatar: None,
             runner_id: "dev".into(),
+            harness: crate::model::Harness::default(), codex_options: crate::model::CodexOptions::default(),
             provider: "deepseek".into(),
             model: None,
             thinking: None,

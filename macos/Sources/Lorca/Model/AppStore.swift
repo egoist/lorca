@@ -483,7 +483,7 @@ final class AppStore {
         let members = bots(in: chat)
         if chat.isDM, let only = members.first {
             let host = device(only.runnerID)?.name ?? L("unassigned")
-            return L("%@ on %@", only.provider.rawValue, host)
+            return L("%@ on %@", only.runtimeLabel, host)
         }
         let hosts = Set(members.compactMap { device($0.runnerID)?.name })
         let runnerLabel = hosts.count == 1 ? (hosts.first ?? "") : L("%d Runners", hosts.count)
@@ -600,6 +600,8 @@ final class AppStore {
         accent: Accent,
         runnerID: Device.ID,
         provider: ProviderCredential.Kind,
+        harness: Bot.Harness = .lorca,
+        codexOptions: CodexOptions = .init(),
         model: String? = nil,
         thinking: String? = nil,
         templateID: BotTemplate.ID? = nil,
@@ -613,7 +615,10 @@ final class AppStore {
             accent: accent,
             runnerID: runnerID,
             provider: provider,
+            harness: harness,
+            codexOptions: codexOptions,
             model: model,
+            thinking: thinking,
             createdAt: Date()
         )
         bots.append(bot)
@@ -632,6 +637,8 @@ final class AppStore {
             var params: [String: Any] = [
                 "id": bot.id, "name": name, "description": description, "symbol_name": symbolName,
                 "accent": accent.rawValue, "runner_id": runnerID, "provider": provider.wireValue,
+                "harness": harness.rawValue,
+                "codex_options": codexOptions.params,
                 "model": model ?? "", "thinking": thinking ?? "", "chat_id": chatID,
             ]
             if let templateID {
@@ -701,6 +708,34 @@ final class AppStore {
             emit(.chatsChanged)
             perform("bots.update", ["id": id, "avatar": NSNull()])
         }
+    }
+
+    /// Switching execution engines clears model overrides so the selected runtime chooses its default.
+    func setBotHarness(_ id: Bot.ID, harness: Bot.Harness) {
+        guard let index = bots.firstIndex(where: { $0.id == id }), bots[index].harness != harness else { return }
+        bots[index].harness = harness
+        bots[index].model = nil
+        bots[index].thinking = nil
+        emit(.rosterChanged)
+        for chat in chats where chat.botIDs.contains(id) { emit(.chatChanged(chat.id)) }
+        perform("bots.update", ["id": id, "harness": harness.rawValue, "model": "", "thinking": ""])
+    }
+
+    func codexModels(runnerID: Device.ID, botID: Bot.ID? = nil) async throws -> CodexCatalog {
+        var params: [String: Any] = ["runner_id": runnerID]
+        if let botID { params["bot_id"] = botID }
+        return try await client.request("codex.models", params, as: CodexCatalog.self)
+    }
+
+    func setCodexOptions(_ id: Bot.ID, selection: CodexSelection) {
+        guard let index = bots.firstIndex(where: { $0.id == id }) else { return }
+        bots[index].model = selection.model
+        bots[index].thinking = selection.thinking
+        bots[index].codexOptions = selection.options
+        emit(.rosterChanged)
+        for chat in chats where chat.botIDs.contains(id) { emit(.chatChanged(chat.id)) }
+        perform("bots.update", ["id": id, "model": selection.model ?? "", "thinking": selection.thinking ?? "",
+                               "codex_options": selection.options.params])
     }
 
     /// Provider, model, and thinking level a bot runs with. nil means the provider's default.
