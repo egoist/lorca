@@ -166,7 +166,6 @@ pub async fn review(app: &Arc<App>, bot: &Bot, chat_id: &str, trigger: &Trigger,
         let answer = if action.propose_rule { "the reason and the rule" } else { "the reason" };
         text.push_str(&format!("\n\nWrite {answer} in the language {language}."));
     }
-    tracing::trace!(%text, "auto-review request");
     let request = ModelRequest {
         system_prompt: if action.propose_rule { format!("{SYSTEM_PROMPT}\n\n{RULE_PROMPT}") } else { SYSTEM_PROMPT.into() },
         messages: vec![LlmMessage::User(UserMessage::text(text))],
