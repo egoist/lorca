@@ -14,6 +14,7 @@ Sparkle shows it in the update window.
 - A chat's Spent figure no longer counts cached input twice on ChatGPT, Grok, and most OpenCode models.
 - Claude chats reuse their prompt cache from one turn to the next in groups and after turns with many tool calls.
 - A bot speaking in one of its chats no longer costs its other chats their prompt cache.
+- Auto-review weighs what a bot's action could break against what you asked for, reading the chat around your request. A step your request calls for runs without asking, destructive ones included: deleting build output, stopping a process the bot started, pushing the branch when you asked for a PR, or posting a comment after you answered "yes" to the bot's question. It still asks before harm you did not ask for, such as deleting your files, discarding uncommitted work, or deploying. The rule Always allow adds names the kind of work ("deploy Railway services to production") rather than one folder or file, so it covers the next time too.
 
 ## [0.1.0]
 

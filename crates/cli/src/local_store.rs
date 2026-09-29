@@ -462,6 +462,26 @@ impl LocalStore {
         Ok((messages, has_more))
     }
 
+    /// The newest `limit` messages after `message_id`, oldest first, and how many of the ones
+    /// between it and them were left out.
+    pub fn newest_after(&self, chat_id: &str, message_id: &str, limit: usize) -> anyhow::Result<(Vec<Message>, usize)> {
+        let connection = self.connection.lock().unwrap();
+        let Some(position) = connection
+            .query_row("SELECT position FROM messages WHERE chat_id = ?1 AND id = ?2", params![chat_id, message_id], |row| row.get::<_, i64>(0))
+            .optional()?
+        else {
+            return Ok((Vec::new(), 0));
+        };
+        let total: i64 =
+            connection.query_row("SELECT COUNT(*) FROM messages WHERE chat_id = ?1 AND position > ?2", params![chat_id, position], |row| row.get(0))?;
+        let mut statement =
+            connection.prepare("SELECT message_json FROM messages WHERE chat_id = ?1 AND position > ?2 ORDER BY position DESC LIMIT ?3")?;
+        let mut messages = collect_messages(statement.query_map(params![chat_id, position, limit as i64], |row| row.get::<_, String>(0))?)?;
+        messages.reverse();
+        let left_out = (total as usize).saturating_sub(messages.len());
+        Ok((messages, left_out))
+    }
+
     pub fn messages_after(&self, chat_id: &str, message_id: &str) -> anyhow::Result<Vec<Message>> {
         let connection = self.connection.lock().unwrap();
         let Some(position) = connection
@@ -1488,6 +1508,15 @@ mod tests {
         assert_eq!(request("notice").as_deref(), Some("handoff"));
         assert_eq!(request("routine").as_deref(), Some("routine"));
         assert_eq!(request("gone"), None);
+
+        // What a turn did since its request, newest last, and how much a limit left out.
+        let after = |id: &str, limit: usize| {
+            let (messages, left_out) = store.newest_after("chat", id, limit).unwrap();
+            (messages.into_iter().map(|message| message.id).collect::<Vec<_>>(), left_out)
+        };
+        assert_eq!(after("handoff", 10), (vec!["card".to_string(), "notice".into(), "routine".into()], 0));
+        assert_eq!(after("handoff", 2), (vec!["notice".to_string(), "routine".into()], 1));
+        assert_eq!(after("gone", 2), (Vec::new(), 0));
 
         // The user's stop came before the handoff, so the turn it started does not hear it.
         assert_eq!(store.last_user_text("chat", "handoff").unwrap(), None);
