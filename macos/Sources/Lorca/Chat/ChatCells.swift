@@ -279,6 +279,8 @@ final class WorkingCellView: TranscriptCellView {
         case "install_plugin": return L("Installing a plugin")
         case "bash_input": return L("Answering a command")
         case "bash_output": return L("Waiting on a command")
+        // A codemode script: the plugin of its latest plugin call, which the CLI names.
+        case "codemode": return tool.description.map { L("Using %@", $0) } ?? L("Working")
         default:
             // A plugin tool: "Using GitHub", whether the call is running or just finished, so
             // a run of quick calls never flashes back to "Working" between them.

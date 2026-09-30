@@ -5,11 +5,15 @@
 //! - [`Agent`]: a stateful wrapper that owns the transcript and the queues.
 //! - [`Provider`]: a model adapter that turns a request into a stream of [`AssistantEvent`]s.
 //! - [`Tool`]: something the model can call.
+//! - `codemode`: a tool that runs model-written JavaScript calling other tools, so their results
+//!   stay out of the model's context.
 //! - `providers`: Anthropic Messages (Anthropic and DeepSeek, with server-side web search),
 //!   OpenAI-compatible Chat Completions and Responses, and ChatGPT and Grok (subscription OAuth).
 
 pub mod agent;
 pub mod agent_loop;
+#[cfg(feature = "codemode")]
+pub mod codemode;
 pub mod compaction;
 pub mod estimate;
 pub mod harness;
@@ -37,7 +41,7 @@ pub use models::ModelInfo;
 pub use retry::{is_context_overflow, is_retryable_error, RetryPolicy};
 pub use provider::{AssistantEvent, AssistantEventStream, ModelRequest, Provider, ToolSpec};
 pub use request::{RequestHooks, RequestOptions, RequestOptionsPatch, ResponseInfo};
-pub use tool::{Tool, ToolError, ToolResult, ToolUpdateFn};
+pub use tool::{DirectRunner, Tool, ToolError, ToolOutcome, ToolResult, ToolRunner, ToolUpdateFn};
 pub use types::{
     AgentEvent, AgentMessage, AssistantMessage, AssistantPart, ContentPart, Cost, LlmMessage, StopReason,
     ThinkingLevel, ToolCall, ToolResultMessage, Usage, UserMessage,

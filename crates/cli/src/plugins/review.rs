@@ -41,6 +41,8 @@ pub struct Action<'a> {
     pub tool: &'a str,
     pub description: &'a str,
     pub args: &'a Value,
+    /// The codemode script the call comes from, which says what the whole batch is for.
+    pub script: Option<&'a str>,
     /// Asks the review for the plain-language rule Always allow adds when it asks.
     pub propose_rule: bool,
 }
@@ -100,15 +102,27 @@ must not cover force pushes, and a rule for deleting build output must not cover
 the user's rules. Leave out secrets and tokens. Answer \"rule\": \"\" when no rule should let this run unattended, such as \
 deleting the user's documents, reading private keys, wiping data, or changing security settings.";
 
-/// Decides one effectful plugin action for `bot`. A rule Always allow saved for this exact
-/// tool decides without a review.
+/// Decides one effectful plugin action for `bot`, which `script` makes. A rule Always allow
+/// saved for this exact tool decides without a review.
 #[allow(clippy::too_many_arguments)]
-pub async fn decide(app: &Arc<App>, bot: &Bot, chat_id: &str, trigger: &Trigger, plugin_id: &str, plugin_name: &str, tool: &str, description: &str, args: &Value, cancel: &CancellationToken) -> Outcome {
+pub async fn decide(
+    app: &Arc<App>,
+    bot: &Bot,
+    chat_id: &str,
+    trigger: &Trigger,
+    plugin_id: &str,
+    plugin_name: &str,
+    tool: &str,
+    description: &str,
+    args: &Value,
+    script: Option<&str>,
+    cancel: &CancellationToken,
+) -> Outcome {
     let auto_review = app.auto_review();
     if let Some(rule) = auto_review.rule_for(plugin_id, tool).filter(|_| auto_review.is_enabled) {
         return if rule.behavior == "allow" { Outcome::Allow } else { Outcome::ask(format!("Your rule: {}", rule.text)) };
     }
-    let action = Action { target_name: plugin_name, tool, description, args, propose_rule: false };
+    let action = Action { target_name: plugin_name, tool, description, args, script, propose_rule: false };
     review(app, bot, chat_id, trigger, action, cancel).await
 }
 
@@ -154,6 +168,9 @@ pub async fn review(app: &Arc<App>, bot: &Bot, chat_id: &str, trigger: &Trigger,
     if arguments.len() > 4000 {
         arguments.truncate(arguments.floor_char_boundary(4000));
         arguments.push_str("\n…");
+    }
+    if let Some(script) = action.script {
+        text.push_str(&format!("The bot is running this script, which makes the call below:\n```js\n{}\n```\n\n", clipped(script, SCRIPT_CHARS)));
     }
     text.push_str(&format!(
         "The action: bot {} wants to call {} on {}.\nWhat the tool does: {}\nArguments:\n{arguments}",
@@ -328,8 +345,10 @@ fn request(app: &App, chat_id: &str, trigger: &Trigger) -> Option<Request> {
     Some(Request { text, language })
 }
 
-/// The most of one message the review reads, of a bot's message, and of a step.
+/// The most of one message the review reads, of a bot's message, of a step, and of the script a
+/// call comes from.
 const REQUEST_CHARS: usize = 1500;
+const SCRIPT_CHARS: usize = 4000;
 const BOT_CHARS: usize = 800;
 const STEP_CHARS: usize = 300;
 
@@ -368,6 +387,7 @@ fn chat_lines(app: &App, message: &Message) -> Vec<String> {
                 };
                 (format!("{} {verb}: {}", name(bot_id), one_line(command)), answer(run.decision.as_deref()))
             }
+            None if tool == lorca_agent::codemode::CODEMODE_TOOL_NAME => (format!("{} ran a script: {}", name(bot_id), one_line(summary)), None),
             None => (format!("{} used {tool}: {}", name(bot_id), one_line(summary)), None),
         },
         (Author::Bot { bot_id }, Body::Permission { plugin_name, tool, summary, decision, .. }) => {

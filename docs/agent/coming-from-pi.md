@@ -46,6 +46,13 @@ The runtime follows `pi-agent-core`'s design: the same message model, the same e
 | `Models` + `getApiKey` | `ProviderFactory` (`EnvProviderFactory` reads the environment) and `RequestHooks::api_key` per call |
 | `onPayload`, `onResponse`, `sessionId`, `headers`, `timeoutMs` | `RequestOptions` and `RequestHooks` on every model call |
 | `execute(toolCallId, params, signal, onUpdate)` | `execute(tool_call_id, args, cancel, on_update)` |
+| `outputSchema`, `structuredContent`, `isError` in a tool result | `Tool::output_schema`, `ToolResult::structured`, `ToolResult::is_error` |
+| `ctx.executeTool()` / `runToolCall()` for nested calls, `parentToolCallId` | `Tool::execute_with` and its `ToolRunner`, `BeforeToolCallContext::parent` |
+| `@earendil-works/pi-codemode` (`CodemodeSandbox`, `renderDeclarations`, `parseCodemodeSource`) and the `codemode` tool | `agent::codemode` (`CodemodeTool`, `schema_to_type`, `tool_signature`, `parse_source`) |
+| Tool exposure `direct` / `codemode` / `deferred` for codemode | `codemode::Exposure::{Direct, Listed, Deferred}` on a catalog `Entry` |
+| Codemode `globals` (such as `models.classify`) | `codemode::HostFunction` |
+| `store()` writes as session custom entries | `codemode::CodemodeStore`, kept by the host |
+| QuickJS compiled to WebAssembly in a worker thread | QuickJS through `rquickjs` on a thread of its own |
 | Throwing from `execute` | Returning `Err(ToolError)` |
 | `terminate: true` in a tool result | `ToolResult::terminating()` |
 | `AbortSignal` | `CancellationToken` |

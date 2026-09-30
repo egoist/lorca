@@ -77,9 +77,11 @@ options.tools = vec![Arc::new(Weather)];
 | `label()` | A human-readable name for UIs. Defaults to `name()`. |
 | `description()` | What the model reads to decide when to call the tool. |
 | `parameters()` | JSON Schema for the arguments object. |
+| `output_schema()` | JSON Schema of the `structured` output every result carries, for a tool that has one. A codemode script receives that output instead of the text. Defaults to `None`. |
 | `execution_mode()` | `Some(ToolExecutionMode::Sequential)` makes any batch containing this tool run one call at a time. Defaults to `None`. |
 | `prepare_arguments(args)` | A shim over the raw arguments before the schema check, for a tool that accepts an older or looser shape. Defaults to returning them as they are. |
 | `execute(tool_call_id, args, cancel, on_update)` | Runs the call. |
+| `execute_with(tool_call_id, args, cancel, on_update, tools)` | What the loop calls: `execute`, plus a `ToolRunner` for calling other tools (below). Defaults to `execute`. |
 | `spec()` | The `ToolSpec` sent to the provider. Built from the methods above. |
 
 ### Arguments
@@ -108,10 +110,12 @@ A message the model's output limit cut off (`stop_reason` `Length`) never runs i
 
 ### Results
 
-`ToolResult` has three fields:
+`ToolResult` has these fields:
 
 - `content: Vec<ContentPart>`: what the model sees. Text parts reach every provider. Image parts reach the Anthropic Messages adapter as image blocks of the tool result, and the OpenAI-compatible adapter as a user message right after the tool message; a model that does not take images gets a note in their place.
 - `details: Value`: structured data for your logs or UI. The model never sees it; it travels on `tool_execution_end` and in the `ToolResultMessage`.
+- `structured: Option<Value>`: machine-readable output matching `output_schema()`. The model never sees it; a codemode script gets it instead of the text.
+- `is_error: bool`: the call failed, and this result says how (below).
 - `terminate: bool`: a hint that the run should stop after this batch (see below).
 
 Builders: `ToolResult::text(s)`, `.with_details(value)`, `.terminating()`. `result.text_content()` joins the text parts.
@@ -119,6 +123,12 @@ Builders: `ToolResult::text(s)`, `.with_details(value)`, `.terminating()`. `resu
 ### Errors
 
 Return `Err(ToolError)` on failure. Do not encode failures as successful content. The error text becomes the tool result's content with `is_error: true`, and the model sees it on its next turn. `ToolError` converts from `String`, `&str`, and `serde_json::Error`.
+
+A failure with more to say than a message, such as an MCP result with `isError` and structured output, returns `Ok(ToolResult { is_error: true, .. })`: the loop treats it as an error result, with its content and structured output kept.
+
+### Calling other tools
+
+A tool that calls other tools while it runs, as [codemode](codemode.md) does, overrides `execute_with`. The loop passes a `ToolRunner`, and `tools.run(tool, id, args, cancel)` puts each call through the same pipeline as the model's own: the tool's argument shim, coercion and the schema check, `before_tool_call`, and `after_tool_call`, with the calling call as the hooks' `parent`. It returns a `ToolOutcome { result, is_error, blocked }`; `blocked` means a `before_tool_call` hook refused the call and it never ran. Such calls send no events; report them through your own updates. Called outside the loop, `execute` gets a `DirectRunner`, which checks arguments and runs no hooks.
 
 ### Progress
 

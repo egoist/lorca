@@ -1,18 +1,22 @@
 //! The MCP side of plugins on this Runner: a pool of connected servers (`rmcp`, stdio or
-//! streamable HTTP), on-demand tool discovery for a turn, the OAuth sign-in for a remote
-//! server, and Auto-review (`review.rs`) at the execution boundary. A read-only tool runs;
-//! anything else asks the user in the chat first, after Grok Bot.
+//! streamable HTTP), the catalog a turn's codemode scripts call plugin tools from, the OAuth
+//! sign-in for a remote server, and Auto-review (`review.rs`) at the loop's
+//! `before_tool_call` boundary. A read-only tool runs; anything else may ask the user in the
+//! chat first, after Grok Bot.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use lorca_agent::codemode::{self, Entry, Exposure, Namespace};
+use lorca_agent::{BeforeToolCallContext, BeforeToolCallResult};
 use rmcp::model::{CallToolRequestParams, ClientConfig, ContentBlock, Implementation};
 use rmcp::service::RunningService;
 use rmcp::transport::auth::{AuthClient, AuthorizationManager, AuthorizationRequest, OAuthState};
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use rmcp::transport::{StreamableHttpClientTransport, TokioChildProcess};
 use rmcp::{RoleClient, ServiceExt};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use lorca_agent::agent_loop::ToolExecutionMode;
 use lorca_agent::{ContentPart, Tool, ToolError, ToolResult, ToolUpdateFn};
@@ -35,17 +39,12 @@ const SIGN_IN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5 * 
 const DEVICE_TOKEN_REFRESH_BUFFER_SECS: f64 = 5.0 * 60.0;
 /// The most text a tool result carries to the model.
 const MAX_RESULT_CHARS: usize = 50_000;
-/// fx-style discovery bounds: metadata stays small, while matching executable schemas are
-/// admitted only for the next model step.
-const MAX_CAPABILITY_QUERY_BYTES: usize = 4 * 1024;
-const CAPABILITY_RESULT_LIMIT: usize = 5;
-const MAX_SEARCH_IDENTITY_BYTES: usize = 256;
-const MAX_SEARCH_DESCRIPTION_BYTES: usize = 1024;
+/// How much of a tool's description, schema, and server instructions `searchTools()` ranks by.
 const MAX_SEARCH_INDEX_DESCRIPTION_BYTES: usize = 2 * 1024;
 const MAX_SEARCH_SCHEMA_BYTES: usize = 4 * 1024;
 const MAX_SERVER_INSTRUCTIONS_BYTES: usize = 2 * 1024;
-const MAX_SEARCH_RESULT_BYTES: usize = 16 * 1024;
-const MCP_SCHEMA_LOAD_BUDGET_BYTES: usize = 64 * 1024;
+/// How much of a plugin's server instructions the codemode description carries.
+const MAX_NAMESPACE_INSTRUCTIONS_BYTES: usize = 1024;
 
 // MARK: - Pool
 
@@ -123,6 +122,7 @@ impl Pool {
         super::note(app, plugin_id, Some(("connecting", "Connecting…")));
         match connect(app, &plugin, name, &spec, &values).await {
             Ok(server) => {
+                save_catalog(app, &server);
                 let server = Arc::new(server);
                 self.servers.lock().unwrap().insert(key, server.clone());
                 super::note(app, plugin_id, None);
@@ -488,6 +488,7 @@ pub fn connect_oauth_for_card(app: &Arc<App>, plugin_id: &str, server: &str, car
                 Ok(()) => {
                     app.mcp.forget(&plugin_id);
                     super::note(&app, &plugin_id, None);
+                    prefetch_tools(&app, &plugin_id);
                     Ok(())
                 }
                 Err(error) => Err(error),
@@ -727,36 +728,90 @@ async fn wait_for_callback(listener: tokio::net::TcpListener, port: u16, name: &
 
 // MARK: - Tools for a turn
 
-/// The tool name the model sees: `github__create_issue`, within the providers' limits.
+/// The name a script calls a plugin tool by: `github__create_issue`, within the providers' limits.
 pub fn tool_name(plugin_id: &str, tool: &str) -> String {
     let raw = format!("{plugin_id}__{tool}");
     let cleaned: String = raw.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' }).collect();
     cleaned.chars().take(64).collect()
 }
 
-/// A tool of a plugin server, bound to the turn's chat and bot.
+/// What a plugin's servers offered the last time each connected, in `catalog.json` in the
+/// plugin's folder: a turn lists the tools from it without starting a server.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct SavedCatalog {
+    #[serde(default)]
+    servers: BTreeMap<String, SavedServer>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct SavedServer {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    instructions: Option<String>,
+    #[serde(default)]
+    tools: Vec<rmcp::model::Tool>,
+}
+
+fn catalog_path(app: &App, plugin_id: &str) -> std::path::PathBuf {
+    app.config.plugins_dir().join(plugin_id).join("catalog.json")
+}
+
+/// Keeps what a server just offered, for the next turns' listings.
+fn save_catalog(app: &App, server: &Server) {
+    let path = catalog_path(app, &server.plugin_id);
+    let mut saved: SavedCatalog = crate::config::read_json(&path).unwrap_or_default();
+    let fresh = SavedServer { instructions: server.instructions.clone(), tools: server.tools.clone() };
+    let changed = saved.servers.get(&server.name).is_none_or(|old| old.instructions != fresh.instructions || old.tools != fresh.tools);
+    if changed {
+        saved.servers.insert(server.name.clone(), fresh);
+        if let Err(error) = crate::config::write_json_private(&path, &saved) {
+            tracing::warn!(%error, plugin = %server.plugin_id, "saving a plugin's tool list");
+        }
+    }
+}
+
+/// Connects a plugin that is ready and has no saved tool list, once, in the background, so the
+/// next turn lists its tools: after an install, a setup, or a sign-in.
+pub fn prefetch_tools(app: &Arc<App>, plugin_id: &str) {
+    let Ok(runtime) = tokio::runtime::Handle::try_current() else { return };
+    let ready = app.plugins.lock().unwrap().status(plugin_id).is_some_and(|status| status.state == "ready");
+    if !ready || catalog_path(app, plugin_id).exists() {
+        return;
+    }
+    let (app, plugin_id) = (app.clone(), plugin_id.to_string());
+    runtime.spawn(async move {
+        app.mcp.servers_of(&app, &plugin_id).await;
+    });
+}
+
+/// The saved tool lists of a plugin's current servers, without the tools its manifest hides.
+fn saved_servers(app: &App, plugin: &Installed) -> Vec<(String, Option<String>, Vec<rmcp::model::Tool>)> {
+    let saved: SavedCatalog = crate::config::read_json(&catalog_path(app, &plugin.manifest.id)).unwrap_or_default();
+    saved
+        .servers
+        .into_iter()
+        .filter(|(name, _)| plugin.manifest.servers.contains_key(name))
+        .map(|(name, server)| {
+            let tools = server.tools.into_iter().filter(|tool| !plugin.manifest.tools.hide.iter().any(|pattern| pattern_matches(pattern, &tool.name))).collect();
+            (name, server.instructions, tools)
+        })
+        .collect()
+}
+
+/// A tool of a plugin server, which scripts call as `tools.github__create_issue(args)`. The
+/// server connects on the first call. Permission is asked before the call, at the loop's
+/// `before_tool_call` boundary ([`review_call`]).
 pub struct PluginTool {
     app: Arc<App>,
-    chat_id: String,
-    /// What started the turn, which the review reads as the request behind a call.
-    trigger: super::review::Trigger,
-    bot_id: String,
-    /// A routine run has nobody to ask, so a tool that needs permission is refused.
-    unattended: bool,
     plugin_id: String,
     plugin_name: String,
-    server: Arc<Server>,
+    server_name: String,
     tool: rmcp::model::Tool,
     name: String,
-    /// The model also sees bounded server instructions in `description`; permission review
-    /// keeps using the server's own tool description as before.
-    review_description: String,
     description: String,
     read_only: bool,
 }
 
-/// One connected MCP tool in this turn's searchable catalog. Its executable schema stays out
-/// of model context until discovery selects it.
+/// One plugin tool in the turn's catalog, with the bounded text search ranks it by.
 struct CatalogTool {
     name: String,
     original_name: String,
@@ -766,348 +821,261 @@ struct CatalogTool {
     description: String,
     search_schema: String,
     server_instructions: String,
-    read_only: bool,
-    schema_bytes: usize,
-    executable: Arc<dyn Tool>,
+    tool: Arc<PluginTool>,
+}
+
+/// A plugin as the codemode description names it.
+struct PluginGroup {
+    id: String,
+    description: String,
 }
 
 #[derive(Default)]
-struct TurnToolsState {
-    catalog: HashMap<String, Arc<CatalogTool>>,
-    selected: BTreeMap<String, Arc<dyn Tool>>,
+struct CatalogState {
+    tools: BTreeMap<String, Arc<CatalogTool>>,
+    /// Plugins whose servers connected during this turn, so their live tool lists are in.
+    connected: std::collections::HashSet<String>,
 }
 
-/// MCP discovery state for one agent turn. Installed plugin names are cheap prompt metadata;
-/// servers connect only when `capability_search` or `mcp_select_tool` needs them, and selected
-/// schemas join the agent loop on its next model step.
-pub struct TurnTools {
+/// What a turn's codemode scripts can call: the bot's own read and write tools, and every tool
+/// of the plugins installed on this Runner. A plugin's tools come from what its servers offered
+/// last time, so listing them starts nothing; a plugin never connected yet is named, and a
+/// search or a call by name connects it.
+pub struct PluginCatalog {
     app: Arc<App>,
-    chat_id: String,
-    trigger: super::review::Trigger,
-    bot_id: String,
-    unattended: bool,
-    state: Mutex<TurnToolsState>,
+    local: Vec<Arc<dyn Tool>>,
+    groups: Vec<PluginGroup>,
+    state: Mutex<CatalogState>,
 }
 
-impl TurnTools {
-    fn new(app: Arc<App>, chat_id: &str, trigger: &super::review::Trigger, bot: &Bot, unattended: bool) -> Self {
-        TurnTools {
-            app,
-            chat_id: chat_id.to_string(),
-            trigger: trigger.clone(),
-            bot_id: bot.id.clone(),
-            unattended,
-            state: Mutex::new(TurnToolsState::default()),
-        }
-    }
-
-    /// The two fixed, small schemas a model sees before it asks for any MCP capability.
-    pub fn discovery_tools(self: &Arc<Self>) -> Vec<Arc<dyn Tool>> {
-        vec![
-            Arc::new(CapabilitySearch { turn: self.clone() }),
-            Arc::new(McpSelectTool { turn: self.clone() }),
-        ]
-    }
-
-    /// Adds every schema selected so far, preserving the fixed tool order and avoiding a
-    /// duplicate when this is called on a context already updated by the loop hook.
-    pub fn tools_with_selected(&self, base: &[Arc<dyn Tool>]) -> Vec<Arc<dyn Tool>> {
-        let selected: Vec<Arc<dyn Tool>> = self.state.lock().unwrap().selected.values().cloned().collect();
-        let mut tools = base.to_vec();
-        for tool in selected {
-            if !tools.iter().any(|candidate| candidate.name() == tool.name()) {
-                tools.push(tool);
+impl PluginCatalog {
+    fn new(app: Arc<App>, local: Vec<Arc<dyn Tool>>) -> Self {
+        let installed = app.plugins.lock().unwrap().installed().to_vec();
+        let mut catalog = PluginCatalog { app, local, groups: Vec::new(), state: Mutex::new(CatalogState::default()) };
+        for plugin in &installed {
+            let saved = saved_servers(&catalog.app, plugin);
+            catalog.groups.push(plugin_group(&catalog.app, plugin, &saved));
+            for (server, instructions, tools) in &saved {
+                catalog.add_tools(plugin, server, instructions.as_deref(), tools);
             }
         }
-        tools
+        catalog
     }
 
-    /// Selects a tool as `mcp_select_tool` does, for tests elsewhere in the crate.
-    #[cfg(test)]
-    pub(crate) fn select(&self, tool: Arc<dyn Tool>) {
-        self.state.lock().unwrap().selected.insert(tool.name().to_string(), tool);
-    }
-
-    /// The label for a dynamic tool's working row.
-    pub fn plugin_name(&self, tool_name: &str) -> Option<String> {
-        self.state.lock().unwrap().catalog.get(tool_name).map(|tool| tool.plugin_name.clone())
-    }
-
-    async fn load_plugin(&self, plugin: &Installed, cancel: &CancellationToken) -> Result<Vec<String>, ToolError> {
-        let status = self.app.plugins.lock().unwrap().status(&plugin.manifest.id);
-        if let Some(status) = status.filter(|status| status.state == "needs_setup" || status.state == "needs_auth") {
-            return Ok(vec![status.detail]);
-        }
-
-        let mut problems = Vec::new();
-        for server_name in plugin.manifest.servers.keys() {
-            let connection = self.app.mcp.server(&self.app, &plugin.manifest.id, server_name);
-            let server = tokio::select! {
-                result = connection => match result {
-                    Ok(server) => server,
-                    Err(error) => {
-                        tracing::warn!(%error, plugin = %plugin.manifest.id, server = %server_name, "connecting a plugin server for capability discovery");
-                        problems.push(error);
-                        continue;
-                    }
-                },
-                _ = cancel.cancelled() => return Err(ToolError("Stopped".into())),
-            };
-            self.catalog_server(plugin, server);
-        }
-        Ok(problems)
-    }
-
-    fn catalog_server(&self, plugin: &Installed, server: Arc<Server>) {
+    fn add_tools(&self, plugin: &Installed, server_name: &str, instructions: Option<&str>, tools: &[rmcp::model::Tool]) {
         let mut state = self.state.lock().unwrap();
-        for tool in &server.tools {
+        let server_instructions = instructions.map(|text| utf8_prefix(text, MAX_SERVER_INSTRUCTIONS_BYTES).to_string()).unwrap_or_default();
+        for tool in tools {
             if plugin.manifest.tools.hide.iter().any(|pattern| pattern_matches(pattern, &tool.name)) {
                 continue;
             }
             let original_name = tool.name.to_string();
-            if state.catalog.values().any(|known| {
-                known.plugin_id == plugin.manifest.id && known.server_name == server.name && known.original_name == original_name
-            }) {
-                continue;
-            }
-
-            let base_name = tool_name(&plugin.manifest.id, &original_name);
-            let name = unique_tool_name(&base_name, &state.catalog);
-            let server_instructions = server
-                .instructions
+            let existing = state.tools.values().find(|known| known.plugin_id == plugin.manifest.id && known.server_name == server_name && known.original_name == original_name).map(|known| known.name.clone());
+            let name = existing.unwrap_or_else(|| unique_tool_name(&tool_name(&plugin.manifest.id, &original_name), &state.tools));
+            let description = tool
+                .description
                 .as_deref()
-                .map(|text| utf8_prefix(text, MAX_SERVER_INSTRUCTIONS_BYTES).to_string())
-                .unwrap_or_default();
-            let plain_description = tool.description.as_deref().unwrap_or("").to_string();
-            let description = if server_instructions.is_empty() {
-                plain_description.clone()
-            } else if plain_description.is_empty() {
-                format!("Server instructions: {server_instructions}")
-            } else {
-                format!("{plain_description}\n\nServer instructions: {server_instructions}")
-            };
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .map(str::to_string)
+                .or_else(|| tool.title.clone())
+                .unwrap_or_else(|| format!("{} tool {original_name}", plugin.manifest.name));
             let read_only = tool.annotations.as_ref().and_then(|annotations| annotations.read_only_hint).unwrap_or(false)
                 || plugin.manifest.tools.readonly.iter().any(|pattern| pattern_matches(pattern, &original_name));
-            let executable: Arc<dyn Tool> = Arc::new(PluginTool {
+            let executable = Arc::new(PluginTool {
                 app: self.app.clone(),
-                chat_id: self.chat_id.clone(),
-                trigger: self.trigger.clone(),
-                bot_id: self.bot_id.clone(),
-                unattended: self.unattended,
                 plugin_id: plugin.manifest.id.clone(),
                 plugin_name: plugin.manifest.name.clone(),
-                server: server.clone(),
+                server_name: server_name.to_string(),
                 tool: tool.clone(),
                 name: name.clone(),
-                review_description: plain_description.clone(),
-                description,
+                description: description.clone(),
                 read_only,
             });
-            let schema_bytes = serde_json::to_vec(&executable.spec()).map(|json| json.len()).unwrap_or(usize::MAX);
             let raw_search_schema = serde_json::to_string(&Value::Object((*tool.input_schema).clone())).unwrap_or_default();
-            let search_schema = utf8_prefix(&raw_search_schema, MAX_SEARCH_SCHEMA_BYTES).to_string();
-            let search_description = utf8_prefix(&plain_description, MAX_SEARCH_INDEX_DESCRIPTION_BYTES).to_string();
-            state.catalog.insert(
+            state.tools.insert(
                 name.clone(),
                 Arc::new(CatalogTool {
                     name,
                     original_name,
                     plugin_id: plugin.manifest.id.clone(),
                     plugin_name: plugin.manifest.name.clone(),
-                    server_name: server.name.clone(),
-                    description: search_description,
-                    search_schema,
-                    server_instructions,
-                    read_only,
-                    schema_bytes,
-                    executable,
+                    server_name: server_name.to_string(),
+                    description: utf8_prefix(&description, MAX_SEARCH_INDEX_DESCRIPTION_BYTES).to_string(),
+                    search_schema: utf8_prefix(&raw_search_schema, MAX_SEARCH_SCHEMA_BYTES).to_string(),
+                    server_instructions: server_instructions.clone(),
+                    tool: executable,
                 }),
             );
         }
     }
 
-    async fn search(&self, query: &str, plugin_id: Option<&str>, cancel: &CancellationToken) -> Result<Value, ToolError> {
-        if query.is_empty() {
-            return Err(ToolError("capability_search requires a non-empty query".into()));
+    /// Connects a plugin's servers and takes their live tool lists. The problems are why a
+    /// server could not connect.
+    async fn connect_plugin(&self, plugin: &Installed, cancel: &CancellationToken) -> Vec<String> {
+        if self.state.lock().unwrap().connected.contains(&plugin.manifest.id) {
+            return Vec::new();
         }
-        if query.len() > MAX_CAPABILITY_QUERY_BYTES {
-            return Err(ToolError(format!("capability_search query exceeds {MAX_CAPABILITY_QUERY_BYTES} bytes")));
+        let status = self.app.plugins.lock().unwrap().status(&plugin.manifest.id);
+        if let Some(status) = status.filter(|status| status.state == "needs_setup" || status.state == "needs_auth") {
+            return vec![status.detail];
         }
+        let mut problems = Vec::new();
+        for server_name in plugin.manifest.servers.keys() {
+            let server = tokio::select! {
+                result = self.app.mcp.server(&self.app, &plugin.manifest.id, server_name) => result,
+                _ = cancel.cancelled() => return problems,
+            };
+            match server {
+                Ok(server) => self.add_tools(plugin, &server.name, server.instructions.as_deref(), &server.tools),
+                Err(error) => {
+                    tracing::warn!(%error, plugin = %plugin.manifest.id, server = %server_name, "connecting a plugin server for a script");
+                    problems.push(error);
+                }
+            }
+        }
+        if problems.is_empty() {
+            self.state.lock().unwrap().connected.insert(plugin.manifest.id.clone());
+        }
+        problems
+    }
 
+    fn plugin_tool(&self, name: &str) -> Option<Arc<PluginTool>> {
+        self.state.lock().unwrap().tools.get(name).map(|tool| tool.tool.clone())
+    }
+
+    /// The plugin a tool belongs to, by name, for the working row's "Using GitHub…".
+    pub fn plugin_name(&self, tool_name: &str) -> Option<String> {
+        self.state.lock().unwrap().tools.get(tool_name).map(|tool| tool.plugin_name.clone())
+    }
+
+    fn entry(tool: &CatalogTool) -> Entry {
+        Entry::new(tool.tool.clone(), Exposure::Listed).in_namespace(tool.plugin_id.clone())
+    }
+
+    /// A catalog tool by its name or its identifier.
+    fn lookup(&self, name: &str) -> Option<Arc<CatalogTool>> {
+        let state = self.state.lock().unwrap();
+        state.tools.get(name).cloned().or_else(|| state.tools.values().find(|tool| codemode::to_identifier(&tool.name) == name).cloned())
+    }
+}
+
+/// How the codemode description names a plugin: its id, its name and what it does, what it
+/// still needs, and the start of its servers' own instructions. Only the needs that last are
+/// named, so the description stays the same from turn to turn.
+fn plugin_group(app: &App, plugin: &Installed, saved: &[(String, Option<String>, Vec<rmcp::model::Tool>)]) -> PluginGroup {
+    let manifest = &plugin.manifest;
+    let mut description = manifest.name.clone();
+    if let Some(about) = manifest.description.lines().map(str::trim).find(|line| !line.is_empty()) {
+        description.push_str(&format!(": {about}"));
+    }
+    let status = app.plugins.lock().unwrap().status(&manifest.id);
+    match status.as_ref().map(|status| status.state.as_str()) {
+        Some("needs_auth") => description.push_str("\nNeeds a sign-in before its tools work: call connect_plugin."),
+        Some("needs_setup") => description.push_str(&format!("\nNot set up yet ({}): the user sets it up in the plugin's settings.", status.map(|status| status.detail).unwrap_or_default())),
+        _ => {}
+    }
+    for (_, instructions, _) in saved {
+        if let Some(instructions) = instructions.as_deref().map(str::trim).filter(|text| !text.is_empty()) {
+            let shown = utf8_prefix(instructions, MAX_NAMESPACE_INSTRUCTIONS_BYTES);
+            description.push_str(&format!("\nServer instructions: {shown}{}", if shown.len() < instructions.len() { "…" } else { "" }));
+        }
+    }
+    PluginGroup { id: manifest.id.clone(), description }
+}
+
+#[async_trait]
+impl codemode::Catalog for PluginCatalog {
+    fn entries(&self) -> Vec<Entry> {
+        let mut entries: Vec<Entry> = self.local.iter().map(|tool| Entry::new(tool.clone(), Exposure::Direct)).collect();
+        entries.extend(self.state.lock().unwrap().tools.values().map(|tool| PluginCatalog::entry(tool)));
+        entries
+    }
+
+    fn namespaces(&self) -> Vec<Namespace> {
+        self.groups.iter().map(|group| Namespace { name: group.id.clone(), description: group.description.clone() }).collect()
+    }
+
+    async fn find(&self, name: &str, cancel: &CancellationToken) -> Option<Entry> {
+        if let Some(tool) = self.local.iter().find(|tool| tool.name() == name) {
+            return Some(Entry::new(tool.clone(), Exposure::Direct));
+        }
+        if let Some(tool) = self.lookup(name) {
+            return Some(PluginCatalog::entry(&tool));
+        }
+        // A tool of a plugin that has not connected yet: connect it and look again.
+        let (prefix, _) = name.split_once("__")?;
+        let plugin = self.app.plugins.lock().unwrap().installed().iter().find(|plugin| plugin.manifest.id == prefix || codemode::to_identifier(&plugin.manifest.id) == prefix).cloned()?;
+        self.connect_plugin(&plugin, cancel).await;
+        self.lookup(name).map(|tool| PluginCatalog::entry(&tool))
+    }
+
+    async fn search(&self, query: &str, namespace: Option<&str>, limit: usize, cancel: &CancellationToken) -> Result<Vec<Entry>, String> {
+        if query.trim().is_empty() {
+            return Err("searchTools() needs a non-empty query".into());
+        }
         let installed = self.app.plugins.lock().unwrap().installed().to_vec();
-        let plugins: Vec<Installed> = match plugin_id {
-            Some(id) => installed.into_iter().filter(|plugin| plugin.manifest.id == id).collect(),
+        let plugins: Vec<Installed> = match namespace {
+            Some(namespace) => {
+                let plugins: Vec<Installed> = installed.into_iter().filter(|plugin| plugin.manifest.id == namespace || codemode::to_identifier(&plugin.manifest.id) == namespace).collect();
+                if plugins.is_empty() {
+                    return Err(format!("No plugin \"{namespace}\" is installed on this Runner"));
+                }
+                plugins
+            }
             None => installed,
         };
-        if plugin_id.is_some() && plugins.is_empty() {
-            return Ok(json!({
-                "tools": [],
-                "count": 0,
-                "total_matches": 0,
-                "state": "plugin_not_found"
-            }));
-        }
-
-        let mut problems = Vec::new();
+        // A plugin with no saved tool list connects now, so its tools can match.
         for plugin in &plugins {
-            for problem in self.load_plugin(plugin, cancel).await? {
-                if problems.len() < CAPABILITY_RESULT_LIMIT {
-                    problems.push(json!({
-                        "plugin": bounded_json_text(&plugin.manifest.id, MAX_SEARCH_IDENTITY_BYTES),
-                        "message": bounded_json_text(&problem, 512)
-                    }));
-                }
+            let known = self.state.lock().unwrap().tools.values().any(|tool| tool.plugin_id == plugin.manifest.id);
+            if !known {
+                self.connect_plugin(plugin, cancel).await;
             }
         }
-
-        let candidates: Vec<Arc<CatalogTool>> = self
-            .state
-            .lock()
-            .unwrap()
-            .catalog
-            .values()
-            .filter(|tool| plugin_id.is_none_or(|id| tool.plugin_id == id))
-            .cloned()
-            .collect();
-        let ranked = rank_tools(query, &candidates, plugin_id.is_some());
-        let total_matches = ranked.len();
-        let matches: Vec<Arc<CatalogTool>> = ranked.into_iter().take(CAPABILITY_RESULT_LIMIT).collect();
-        let (loaded, rejected, schema_budget_exhausted) = self.select_search_matches(&matches);
-        let rows: Vec<Value> = matches
-            .iter()
-            .map(|tool| {
-                json!({
-                    "name": tool.name,
-                    "plugin": bounded_json_text(&tool.plugin_id, MAX_SEARCH_IDENTITY_BYTES),
-                    "server": bounded_json_text(&tool.server_name, MAX_SEARCH_IDENTITY_BYTES),
-                    "description": bounded_json_text(&tool.description, MAX_SEARCH_DESCRIPTION_BYTES),
-                    "read_only": tool.read_only,
-                })
-            })
-            .collect();
-        let state = if total_matches == 0 {
-            if candidates.is_empty() && !problems.is_empty() { "unavailable" } else { "no_match" }
-        } else {
-            "ready"
-        };
-        let value = json!({
-            "tools": rows,
-            "count": matches.len(),
-            "total_matches": total_matches,
-            "more_available": total_matches > matches.len(),
-            "schemas_loaded": loaded,
-            "schemas_rejected": rejected,
-            "schema_budget_exhausted": schema_budget_exhausted,
-            "problems": problems,
-            "state": state,
-        });
-        let encoded = serde_json::to_vec(&value).unwrap_or_default();
-        if encoded.len() > MAX_SEARCH_RESULT_BYTES {
-            return Err(ToolError("capability_search result exceeded its context budget; use a narrower query or plugin".into()));
-        }
-        Ok(value)
+        let candidates: Vec<Arc<CatalogTool>> =
+            self.state.lock().unwrap().tools.values().filter(|tool| plugins.iter().any(|plugin| plugin.manifest.id == tool.plugin_id)).cloned().collect();
+        Ok(rank_tools(query, &candidates, namespace.is_some()).into_iter().take(limit).map(|tool| PluginCatalog::entry(&tool)).collect())
     }
+}
 
-    fn select_search_matches(&self, matches: &[Arc<CatalogTool>]) -> (Vec<String>, Vec<String>, bool) {
-        let mut state = self.state.lock().unwrap();
-        let mut remaining = MCP_SCHEMA_LOAD_BUDGET_BYTES;
-        let mut loaded = Vec::new();
-        let mut rejected = Vec::new();
-        let mut exhausted = false;
-        for tool in matches {
-            if state.selected.contains_key(&tool.name) {
-                loaded.push(tool.name.clone());
-                continue;
-            }
-            if tool.schema_bytes > MCP_SCHEMA_LOAD_BUDGET_BYTES {
-                rejected.push(tool.name.clone());
-                continue;
-            }
-            if tool.schema_bytes > remaining {
-                exhausted = true;
-                break;
-            }
-            remaining -= tool.schema_bytes;
-            state.selected.insert(tool.name.clone(), tool.executable.clone());
-            loaded.push(tool.name.clone());
-        }
-        (loaded, rejected, exhausted)
-    }
+/// The catalog behind a turn's `codemode` tool, with `local` (the bot's own read and write
+/// tools) callable from scripts too. No MCP process or HTTP connection starts here.
+pub fn turn_catalog(app: &Arc<App>, local: Vec<Arc<dyn Tool>>) -> Arc<PluginCatalog> {
+    Arc::new(PluginCatalog::new(app.clone(), local))
+}
 
-    async fn select_exact(&self, name: &str, cancel: &CancellationToken) -> Result<String, ToolError> {
-        if !self.state.lock().unwrap().catalog.contains_key(name) {
-            if let Some((plugin_id, _)) = name.split_once("__") {
-                let plugin = self
-                    .app
-                    .plugins
-                    .lock()
-                    .unwrap()
-                    .installed()
+/// The installed plugins as the system prompt names them.
+pub fn plugin_briefs(app: &App) -> Vec<PluginBrief> {
+    let store = app.plugins.lock().unwrap();
+    store
+        .installed()
+        .iter()
+        .map(|plugin| {
+            let status = store.status(&plugin.manifest.id);
+            PluginBrief {
+                id: plugin.manifest.id.clone(),
+                name: plugin.manifest.name.clone(),
+                state: status.as_ref().map(|status| status.state.clone()).unwrap_or_else(|| "ready".into()),
+                detail: status.map(|status| status.detail).unwrap_or_default(),
+                skills: plugin
+                    .manifest
+                    .skills
                     .iter()
-                    .find(|plugin| plugin.manifest.id == plugin_id)
-                    .cloned();
-                if let Some(plugin) = plugin {
-                    let _ = self.load_plugin(&plugin, cancel).await?;
-                }
+                    .map(|skill| {
+                        (
+                            skill.name.clone(),
+                            skill.description.clone(),
+                            app.config.plugins_dir().join(&plugin.manifest.id).join("skills").join(format!("{}.md", super::slug(&skill.name))),
+                        )
+                    })
+                    .collect(),
             }
-        }
-        let mut state = self.state.lock().unwrap();
-        let tool = state
-            .catalog
-            .get(name)
-            .cloned()
-            .ok_or_else(|| ToolError(format!("Dynamic MCP tool not found: {name}. Use capability_search and copy an exact returned name.")))?;
-        if tool.schema_bytes > MCP_SCHEMA_LOAD_BUDGET_BYTES {
-            return Err(ToolError(format!(
-                "The schema for {name} is {} bytes, over the {}-byte MCP schema limit.",
-                tool.schema_bytes, MCP_SCHEMA_LOAD_BUDGET_BYTES
-            )));
-        }
-        state.selected.insert(tool.name.clone(), tool.executable.clone());
-        Ok(tool.plugin_name.clone())
-    }
+        })
+        .collect()
 }
 
-/// Creates the cheap per-turn catalog plus the prompt metadata for installed plugins. No MCP
-/// process or HTTP connection starts here.
-pub fn turn_tools(app: &Arc<App>, chat_id: &str, trigger: &super::review::Trigger, bot: &Bot, unattended: bool) -> (Arc<TurnTools>, Vec<PluginBrief>) {
-    let briefs = {
-        let store = app.plugins.lock().unwrap();
-        store
-            .installed()
-            .iter()
-            .map(|plugin| {
-                let status = store.status(&plugin.manifest.id);
-                PluginBrief {
-                    id: plugin.manifest.id.clone(),
-                    name: plugin.manifest.name.clone(),
-                    state: status.as_ref().map(|status| status.state.clone()).unwrap_or_else(|| "ready".into()),
-                    detail: status.map(|status| status.detail).unwrap_or_default(),
-                    skills: plugin
-                        .manifest
-                        .skills
-                        .iter()
-                        .map(|skill| {
-                            (
-                                skill.name.clone(),
-                                skill.description.clone(),
-                                app.config
-                                    .plugins_dir()
-                                    .join(&plugin.manifest.id)
-                                    .join("skills")
-                                    .join(format!("{}.md", super::slug(&skill.name))),
-                            )
-                        })
-                        .collect(),
-                }
-            })
-            .collect()
-    };
-    (Arc::new(TurnTools::new(app.clone(), chat_id, trigger, bot, unattended)), briefs)
-}
-
-/// What the system prompt says about one installed plugin. Tool names, descriptions, schemas,
-/// and server instructions arrive only through capability discovery.
+/// What the system prompt says about one installed plugin. Its tools are in the codemode
+/// tool's description.
 pub struct PluginBrief {
     pub id: String,
     pub name: String,
@@ -1117,79 +1085,45 @@ pub struct PluginBrief {
     pub skills: Vec<(String, String, std::path::PathBuf)>,
 }
 
-struct CapabilitySearch {
-    turn: Arc<TurnTools>,
-}
-
-#[async_trait]
-impl Tool for CapabilitySearch {
-    fn name(&self) -> &str {
-        "capability_search"
+/// Auto-review, and the user's answer on a card when it asks, for a plugin call a script makes:
+/// at the loop's `before_tool_call` boundary, so a call that is not allowed never reaches the
+/// server and ends the script. A read-only tool runs at once. `None` lets the call run.
+#[allow(clippy::too_many_arguments)]
+pub async fn review_call(
+    app: &Arc<App>,
+    catalog: &PluginCatalog,
+    chat_id: &str,
+    trigger: &super::review::Trigger,
+    bot: &Bot,
+    unattended: bool,
+    ctx: &BeforeToolCallContext<'_>,
+) -> Option<BeforeToolCallResult> {
+    let tool = catalog.plugin_tool(&ctx.tool_call.name)?;
+    if tool.read_only {
+        return None;
     }
-    fn description(&self) -> &str {
-        "Find tools in installed plugins for a capability needed by the current task. Optionally restrict the search to one exact plugin id. Matching MCP schemas load automatically within a bounded budget and become callable on the next model step. Results describe only this query; no_match does not rule out a better query. Use exact returned names and never guess them."
+    let name = tool.tool.name.to_string();
+    // The script the call comes from says what the whole batch is for.
+    let script = ctx.parent.filter(|parent| parent.name == codemode::CODEMODE_TOOL_NAME).and_then(|parent| parent.arguments["code"].as_str());
+    let review_description = tool.tool.description.as_deref().unwrap_or("").to_string();
+    let outcome = super::review::decide(app, bot, chat_id, trigger, &tool.plugin_id, &tool.plugin_name, &name, &review_description, ctx.args, script, ctx.cancel).await;
+    let super::review::Outcome::Ask { reason, .. } = outcome else { return None };
+    if unattended {
+        return Some(crate::local_review::blocked(format!(
+            "{name} needs the user's permission ({}), and nobody is here to give it. Report what you would do; the user can add an Auto-review rule allowing it.",
+            reason.as_deref().unwrap_or("Auto-review is off, so every change asks")
+        )));
     }
-    fn parameters(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "query": { "type": "string", "description": "Natural-language capability needed for the current task", "minLength": 1, "maxLength": MAX_CAPABILITY_QUERY_BYTES },
-                "plugin": { "type": "string", "description": "Optional exact installed plugin id from the prompt catalog", "minLength": 1 }
-            },
-            "required": ["query"],
-            "additionalProperties": false
-        })
-    }
-    fn execution_mode(&self) -> Option<ToolExecutionMode> {
-        Some(ToolExecutionMode::Sequential)
-    }
-    async fn execute(&self, _id: &str, args: Value, cancel: CancellationToken, _on_update: ToolUpdateFn) -> Result<ToolResult, ToolError> {
-        let query = args["query"].as_str().unwrap_or("").trim();
-        let plugin = args["plugin"].as_str().map(str::trim).filter(|value| !value.is_empty());
-        let result = self.turn.search(query, plugin, &cancel).await?;
-        let count = result["count"].as_u64().unwrap_or(0);
-        let text = serde_json::to_string(&result).unwrap_or_default();
-        Ok(ToolResult::text(text).with_details(json!({ "summary": format!("Found {count} plugin tools") })))
-    }
-}
-
-struct McpSelectTool {
-    turn: Arc<TurnTools>,
-}
-
-#[async_trait]
-impl Tool for McpSelectTool {
-    fn name(&self) -> &str {
-        "mcp_select_tool"
-    }
-    fn description(&self) -> &str {
-        "Select one exact dynamic MCP tool name returned by capability_search so its executable schema is advertised on the next model step. Do not use partial names, guess a name, select built-in tools, or treat this as executing the selected tool."
-    }
-    fn parameters(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": { "name": { "type": "string", "description": "Exact dynamic MCP tool name returned by capability_search", "minLength": 1 } },
-            "required": ["name"],
-            "additionalProperties": false
-        })
-    }
-    fn execution_mode(&self) -> Option<ToolExecutionMode> {
-        Some(ToolExecutionMode::Sequential)
-    }
-    async fn execute(&self, _id: &str, args: Value, cancel: CancellationToken, _on_update: ToolUpdateFn) -> Result<ToolResult, ToolError> {
-        let name = args["name"].as_str().unwrap_or("").trim();
-        if name.is_empty() {
-            return Err(ToolError("mcp_select_tool requires an exact dynamic tool name".into()));
-        }
-        let plugin = self.turn.select_exact(name, &cancel).await?;
-        Ok(ToolResult::text(format!(
-            "Selected dynamic MCP tool `{name}` from {plugin}. Its schema is available on the next model step; call `{name}` then with arguments matching that schema."
-        ))
-        .with_details(json!({ "summary": format!("Selected {name}") })))
+    let summary = call_summary(&name, ctx.args);
+    match ask(app, chat_id, &bot.id, &tool.plugin_id, &tool.plugin_name, &name, &summary, ctx.args.clone(), reason, ctx.cancel).await {
+        Decision::Allowed | Decision::Always => None,
+        Decision::Denied => Some(crate::local_review::blocked(format!("The user did not allow {name}. Do not retry it; ask what they want instead."))),
+        Decision::Expired => Some(crate::local_review::blocked(format!("Nobody answered the permission request for {name} in time. Say what you needed and stop."))),
+        Decision::Dismissed => Some(crate::local_review::dismissed(&format!("The user sent a new message instead of answering, so {name} did not run. Follow that message."))),
     }
 }
 
-fn unique_tool_name(base: &str, catalog: &HashMap<String, Arc<CatalogTool>>) -> String {
+fn unique_tool_name(base: &str, catalog: &BTreeMap<String, Arc<CatalogTool>>) -> String {
     if !catalog.contains_key(base) {
         return base.to_string();
     }
@@ -1213,26 +1147,6 @@ fn utf8_prefix(text: &str, max_bytes: usize) -> &str {
         end -= 1;
     }
     &text[..end]
-}
-
-/// A JSON string scalar whose encoded representation fits the model-output budget. Control
-/// characters expand when escaped, so a raw byte prefix alone is not enough.
-fn bounded_json_text(text: &str, max_bytes: usize) -> String {
-    if serde_json::to_string(text).map(|encoded| encoded.len()).unwrap_or(usize::MAX) <= max_bytes {
-        return text.to_string();
-    }
-    let mut end = utf8_prefix(text, max_bytes).len();
-    while end > 0 {
-        let candidate = &text[..end];
-        if serde_json::to_string(candidate).map(|encoded| encoded.len()).unwrap_or(usize::MAX) <= max_bytes {
-            return candidate.to_string();
-        }
-        end -= 1;
-        while end > 0 && !text.is_char_boundary(end) {
-            end -= 1;
-        }
-    }
-    String::new()
 }
 
 fn query_tokens(query: &str) -> Vec<String> {
@@ -1367,102 +1281,104 @@ impl Tool for PluginTool {
     fn description(&self) -> &str {
         &self.description
     }
+    /// The server's input schema, as an object schema with properties, which providers and the
+    /// schema check both need.
     fn parameters(&self) -> Value {
-        Value::Object((*self.tool.input_schema).clone())
+        let mut schema = Value::Object((*self.tool.input_schema).clone());
+        if schema.get("type").is_none() {
+            schema["type"] = json!("object");
+        }
+        if schema.get("properties").is_none() {
+            schema["properties"] = json!({});
+        }
+        schema
     }
+    /// A script gets the whole `CallToolResult`, with the tool's own output schema as its
+    /// `structuredContent`.
+    fn output_schema(&self) -> Option<Value> {
+        let mut properties = json!({ "content": { "type": "array", "items": { "type": "object" } }, "isError": { "type": "boolean" } });
+        if let Some(schema) = &self.tool.output_schema {
+            properties["structuredContent"] = Value::Object((**schema).clone());
+        }
+        Some(json!({ "type": "object", "properties": properties, "required": ["content"] }))
+    }
+    /// A call that may ask the user runs alone, so two of a script's cards never ask at once.
     fn execution_mode(&self) -> Option<ToolExecutionMode> {
-        Some(ToolExecutionMode::Sequential)
+        (!self.read_only).then_some(ToolExecutionMode::Sequential)
     }
     async fn execute(&self, _id: &str, args: Value, cancel: CancellationToken, _on_update: ToolUpdateFn) -> Result<ToolResult, ToolError> {
         let tool = self.tool.name.to_string();
-        if !self.read_only {
-            let bot = self.app.bot(&self.bot_id).ok_or_else(|| ToolError("The bot is gone".into()))?;
-            let outcome = super::review::decide(
-                &self.app,
-                &bot,
-                &self.chat_id,
-                &self.trigger,
-                &self.plugin_id,
-                &self.plugin_name,
-                &tool,
-                &self.review_description,
-                &args,
-                &cancel,
-            )
-            .await;
-            if let super::review::Outcome::Ask { reason, .. } = outcome {
-                if self.unattended {
-                    return Err(ToolError(format!(
-                        "{tool} needs the user's permission ({}), and nobody is here to give it. Report what you would do; the user can add an Auto-review rule allowing it.",
-                        reason.as_deref().unwrap_or("Auto-review is off, so every change asks")
-                    )));
-                }
-                let summary = call_summary(&tool, &args);
-                match ask(&self.app, &self.chat_id, &self.bot_id, &self.plugin_id, &self.plugin_name, &tool, &summary, args.clone(), reason, &cancel).await {
-                    Decision::Allowed | Decision::Always => {}
-                    Decision::Denied => return Err(ToolError(format!("The user did not allow {tool}. Do not retry it; ask what they want instead."))),
-                    Decision::Expired => return Err(ToolError(format!("Nobody answered the permission request for {tool} in time. Say what you needed and stop."))),
-                    Decision::Dismissed => return Ok(dismissed_call(format!("The user sent a new message instead of answering, so {tool} did not run. Follow that message."))),
-                }
-            }
-        }
+        let server = tokio::select! {
+            server = self.app.mcp.server(&self.app, &self.plugin_id, &self.server_name) => server.map_err(ToolError)?,
+            _ = cancel.cancelled() => return Err(ToolError("Stopped".into())),
+        };
         let mut params = CallToolRequestParams::default();
         params.name = tool.clone().into();
         params.arguments = args.as_object().cloned();
-        let call = self.server.service.call_tool(params);
+        let call = server.service.call_tool(params);
         let result = tokio::select! {
             result = tokio::time::timeout(CALL_TIMEOUT, call) => result.map_err(|_| ToolError(format!("{tool} took too long")))?,
             _ = cancel.cancelled() => return Err(ToolError("Stopped".into())),
         };
-        if let Some(auth) = &self.server.auth {
-            persist_refreshed(&self.app, &self.plugin_id, &self.server.name, auth).await;
+        if let Some(auth) = &server.auth {
+            persist_refreshed(&self.app, &self.plugin_id, &server.name, auth).await;
         }
         let result = result.map_err(|e| ToolError(format!("{tool} failed: {e}")))?;
-        let mut content: Vec<ContentPart> = Vec::new();
-        let mut text_len = 0;
-        for block in result.content {
-            match block {
-                ContentBlock::Text(text) => {
-                    let mut text = text.text;
-                    if text_len + text.len() > MAX_RESULT_CHARS {
-                        let room = MAX_RESULT_CHARS.saturating_sub(text_len);
-                        let mut cut = room;
-                        while cut > 0 && !text.is_char_boundary(cut) {
-                            cut -= 1;
-                        }
-                        text.truncate(cut);
-                        text.push_str("\n[truncated]");
+        let is_error = result.is_error.unwrap_or(false);
+        let mut content = model_content(&result);
+        if is_error && content.iter().all(|part| part.as_text().is_none_or(|text| text.trim().is_empty())) {
+            content = vec![ContentPart::text(format!("{} {tool} reported an error", self.plugin_name))];
+        }
+        let mut structured = serde_json::to_value(&result).unwrap_or_else(|_| json!({ "content": [] }));
+        if let Some(fields) = structured.as_object_mut() {
+            fields.remove("_meta");
+            fields.remove("resultType");
+        }
+        Ok(ToolResult { content, details: json!({ "plugin_id": self.plugin_id, "tool": tool }), structured: Some(structured), is_error, terminate: false })
+    }
+}
+
+/// A plugin result as text and images: text blocks cut at `MAX_RESULT_CHARS` in all, other
+/// blocks as JSON, and the structured result when there are no blocks. What an error says, and
+/// what hooks read.
+fn model_content(result: &rmcp::model::CallToolResult) -> Vec<ContentPart> {
+    let mut content: Vec<ContentPart> = Vec::new();
+    let mut text_len = 0;
+    for block in &result.content {
+        match block {
+            ContentBlock::Text(text) => {
+                let mut text = text.text.clone();
+                if text_len + text.len() > MAX_RESULT_CHARS {
+                    let mut cut = MAX_RESULT_CHARS.saturating_sub(text_len);
+                    while cut > 0 && !text.is_char_boundary(cut) {
+                        cut -= 1;
                     }
-                    text_len += text.len();
+                    text.truncate(cut);
+                    text.push_str("\n[truncated]");
+                }
+                text_len += text.len();
+                content.push(ContentPart::text(text));
+            }
+            ContentBlock::Image(image) => content.push(ContentPart::Image { data: image.data.clone(), mime_type: image.mime_type.clone() }),
+            ContentBlock::Resource(resource) => {
+                if let Ok(text) = serde_json::to_string(&resource.resource) {
                     content.push(ContentPart::text(text));
                 }
-                ContentBlock::Image(image) => content.push(ContentPart::Image { data: image.data, mime_type: image.mime_type }),
-                ContentBlock::Resource(resource) => {
-                    if let Ok(text) = serde_json::to_string(&resource.resource) {
-                        content.push(ContentPart::text(text));
-                    }
-                }
-                other => {
-                    if let Ok(text) = serde_json::to_string(&other) {
-                        content.push(ContentPart::text(text));
-                    }
+            }
+            other => {
+                if let Ok(text) = serde_json::to_string(other) {
+                    content.push(ContentPart::text(text));
                 }
             }
         }
-        if content.is_empty() {
-            if let Some(structured) = &result.structured_content {
-                content.push(ContentPart::text(serde_json::to_string_pretty(structured).unwrap_or_default()));
-            } else {
-                content.push(ContentPart::text("(no output)"));
-            }
-        }
-        let summary = format!("Used {}", self.plugin_name);
-        if result.is_error.unwrap_or(false) {
-            let text = content.iter().filter_map(ContentPart::as_text).collect::<Vec<_>>().join("\n");
-            return Err(ToolError(format!("{tool} reported an error: {text}")));
-        }
-        Ok(ToolResult { content, details: json!({ "summary": summary, "plugin_id": self.plugin_id, "tool": tool }), terminate: false })
     }
+    if content.is_empty() {
+        match &result.structured_content {
+            Some(structured) => content.push(ContentPart::text(serde_json::to_string_pretty(structured).unwrap_or_default())),
+            None => content.push(ContentPart::text("(no output)")),
+        }
+    }
+    content
 }
 
 /// Saves tokens the transport refreshed, so the next connection does not start from a stale
@@ -1653,37 +1569,29 @@ pub fn dismissed_call(reason: String) -> ToolResult {
 mod tests {
     use super::*;
 
-    struct StubTool {
-        name: String,
-        description: String,
-        parameters: Value,
-    }
-
-    #[async_trait::async_trait]
-    impl Tool for StubTool {
-        fn name(&self) -> &str {
-            &self.name
-        }
-        fn description(&self) -> &str {
-            &self.description
-        }
-        fn parameters(&self) -> Value {
-            self.parameters.clone()
-        }
-        async fn execute(&self, _id: &str, _args: Value, _cancel: CancellationToken, _on_update: ToolUpdateFn) -> Result<ToolResult, ToolError> {
-            Ok(ToolResult::text("ok"))
+    /// An App over a scratch home, removed when the test ends.
+    struct ScratchApp(Arc<App>, std::path::PathBuf);
+    impl Drop for ScratchApp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.1);
         }
     }
 
-    fn catalog_tool(plugin_id: &str, plugin_name: &str, original_name: &str, description: &str, schema: &str) -> Arc<CatalogTool> {
+    fn scratch_app() -> ScratchApp {
+        let home = std::env::temp_dir().join(format!("lorca-mcp-{}", uuid::Uuid::new_v4()));
+        let app = App::load(crate::config::Config { home: home.clone(), port: 0 }).unwrap();
+        ScratchApp(app, home)
+    }
+
+    fn mcp_tool(name: &str, description: &str, schema: &str) -> rmcp::model::Tool {
+        serde_json::from_value(json!({ "name": name, "description": description, "inputSchema": serde_json::from_str::<Value>(schema).unwrap() })).unwrap()
+    }
+
+    fn catalog_tool(app: &Arc<App>, plugin_id: &str, plugin_name: &str, original_name: &str, description: &str, schema: &str) -> Arc<CatalogTool> {
         let name = tool_name(plugin_id, original_name);
-        let executable: Arc<dyn Tool> = Arc::new(StubTool {
-            name: name.clone(),
-            description: description.into(),
-            parameters: serde_json::from_str(schema).unwrap(),
-        });
+        let tool = mcp_tool(original_name, description, schema);
         Arc::new(CatalogTool {
-            name,
+            name: name.clone(),
             original_name: original_name.into(),
             plugin_id: plugin_id.into(),
             plugin_name: plugin_name.into(),
@@ -1691,9 +1599,16 @@ mod tests {
             description: description.into(),
             search_schema: schema.into(),
             server_instructions: String::new(),
-            read_only: true,
-            schema_bytes: serde_json::to_vec(&executable.spec()).unwrap().len(),
-            executable,
+            tool: Arc::new(PluginTool {
+                app: app.clone(),
+                plugin_id: plugin_id.into(),
+                plugin_name: plugin_name.into(),
+                server_name: "test".into(),
+                tool,
+                name,
+                description: description.into(),
+                read_only: true,
+            }),
         })
     }
 
@@ -1745,9 +1660,12 @@ mod tests {
     }
 
     #[test]
-    fn capability_search_ranks_intent_and_exact_identity() {
+    fn plugin_search_ranks_intent_and_exact_identity() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
         let tools = vec![
             catalog_tool(
+                app,
                 "github",
                 "GitHub",
                 "create_issue",
@@ -1755,6 +1673,7 @@ mod tests {
                 r#"{"type":"object","properties":{"repo":{"type":"string"},"title":{"type":"string"}}}"#,
             ),
             catalog_tool(
+                app,
                 "github",
                 "GitHub",
                 "list_pull_requests",
@@ -1762,6 +1681,7 @@ mod tests {
                 r#"{"type":"object","properties":{"repo":{"type":"string"}}}"#,
             ),
             catalog_tool(
+                app,
                 "linear",
                 "Linear",
                 "create_issue",
@@ -1779,61 +1699,62 @@ mod tests {
     }
 
     #[test]
-    fn discovery_bounds_utf8_and_names_without_retargeting() {
+    fn search_text_bounds_utf8_and_names_without_retargeting() {
+        let scratch = scratch_app();
         assert_eq!(utf8_prefix("aéz", 2), "a");
-        let bounded = bounded_json_text(&"\n".repeat(1_000), 128);
-        assert!(serde_json::to_string(&bounded).unwrap().len() <= 128);
         assert_eq!(query_tokens("GitHub github issue"), vec!["github", "issue"]);
 
-        let first = catalog_tool("github", "GitHub", "create.issue", "Create", r#"{"type":"object"}"#);
-        let mut catalog = HashMap::new();
+        let first = catalog_tool(&scratch.0, "github", "GitHub", "create.issue", "Create", r#"{"type":"object"}"#);
+        let mut catalog = BTreeMap::new();
         catalog.insert(first.name.clone(), first.clone());
         assert_eq!(unique_tool_name(&first.name, &catalog), "github__create_issue_2");
     }
 
+    /// A turn lists a plugin's tools from what its server offered last time, without starting
+    /// it, and names a plugin that never connected.
     #[test]
-    fn selected_schemas_join_the_next_context_once() {
-        let home = std::env::temp_dir().join(format!("lorca-mcp-turn-{}", uuid::Uuid::new_v4()));
-        let app = App::load(crate::config::Config { home: home.clone(), port: 0 }).unwrap();
-        let bot = Bot {
-            id: "bot".into(),
-            name: "Chef".into(),
-            description: String::new(),
-            symbol_name: String::new(),
-            accent: String::new(),
-            avatar: None,
-            runner_id: "runner".into(),
-            provider: "deepseek".into(),
-            model: None,
-            thinking: None,
-            legacy_instructions: String::new(),
-            workdir: None,
-            created_at: 0.0,
+    fn a_turns_catalog_lists_saved_tools_without_connecting() {
+        use lorca_agent::codemode::{Catalog, CodemodeOptions, CodemodeTool};
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        for (id, name) in [("linear", "Linear"), ("notion", "Notion")] {
+            let manifest = super::super::Manifest::parse(&json!({
+                "id": id, "name": name, "description": format!("{name} for the team.\nMore."),
+                "servers": { "api": { "type": "stdio", "command": "false" } },
+                "tools": { "readonly": ["list_*"], "hide": ["secret_*"] }
+            }))
+            .unwrap();
+            super::super::install(app, manifest, "inline").unwrap();
+        }
+        let issues = mcp_tool("list_issues", "List issues in a team", r#"{"type":"object","properties":{"team":{"type":"string","description":"Team key"}},"required":["team"]}"#);
+        let comment = mcp_tool("create_comment", "Comment on an issue", r#"{"type":"object","properties":{"issue":{"type":"string"},"body":{"type":"string"}}}"#);
+        let hidden = mcp_tool("secret_admin", "Never offered", r#"{"type":"object"}"#);
+        let saved = SavedCatalog {
+            servers: BTreeMap::from([
+                ("api".to_string(), SavedServer { instructions: Some("Use team keys like ENG.".into()), tools: vec![issues, comment, hidden] }),
+                ("gone".to_string(), SavedServer { instructions: None, tools: vec![mcp_tool("old", "A server the manifest no longer has", r#"{}"#)] }),
+            ]),
         };
-        let turn = Arc::new(TurnTools::new(app.clone(), "chat", &Default::default(), &bot, false));
-        let discovery = turn.discovery_tools();
-        assert_eq!(discovery.iter().map(|tool| tool.name()).collect::<Vec<_>>(), vec!["capability_search", "mcp_select_tool"]);
-        assert!(discovery.iter().map(|tool| serde_json::to_vec(&tool.spec()).unwrap().len()).sum::<usize>() < 4 * 1024);
-        let base: Arc<dyn Tool> = Arc::new(StubTool {
-            name: "base".into(),
-            description: "base".into(),
-            parameters: json!({ "type": "object" }),
-        });
-        let dynamic = catalog_tool("github", "GitHub", "create_issue", "Create an issue", r#"{"type":"object"}"#);
-        turn.state.lock().unwrap().catalog.insert(dynamic.name.clone(), dynamic.clone());
+        crate::config::write_json_private(&catalog_path(app, "linear"), &saved).unwrap();
 
-        assert_eq!(turn.tools_with_selected(std::slice::from_ref(&base)).len(), 1);
-        let (loaded, rejected, exhausted) = turn.select_search_matches(std::slice::from_ref(&dynamic));
-        assert_eq!(loaded, vec!["github__create_issue"]);
-        assert!(rejected.is_empty());
-        assert!(!exhausted);
-        let tools = turn.tools_with_selected(std::slice::from_ref(&base));
-        assert_eq!(tools.iter().map(|tool| tool.name()).collect::<Vec<_>>(), vec!["base", "github__create_issue"]);
-        assert_eq!(turn.tools_with_selected(&tools).len(), 2);
+        let local: Vec<Arc<dyn Tool>> = lorca_agent::tools::coding_tools(scratch.1.clone()).into_iter().filter(|tool| tool.name() == "read").collect();
+        let catalog = turn_catalog(app, local);
+        assert_eq!(plugin_briefs(app).len(), 2);
+        let names: Vec<String> = catalog.entries().iter().map(|entry| entry.tool.name().to_string()).collect();
+        assert_eq!(names, vec!["read", "linear__create_comment", "linear__list_issues"]);
+        assert_eq!(catalog.plugin_name("linear__list_issues").as_deref(), Some("Linear"));
+        assert!(catalog.plugin_tool("linear__list_issues").unwrap().read_only, "the manifest's readonly pattern applies");
+        assert!(!catalog.plugin_tool("linear__create_comment").unwrap().read_only);
+        assert_eq!(catalog.lookup("linear__list_issues").map(|tool| tool.original_name.clone()).as_deref(), Some("list_issues"));
 
-        drop(turn);
-        drop(app);
-        let _ = std::fs::remove_dir_all(home);
+        let codemode = CodemodeTool::new(catalog.clone(), CodemodeOptions::default());
+        let description = codemode.description().to_string();
+        assert!(description.contains("## linear (2 tools)\nLinear: Linear for the team.\nServer instructions: Use team keys like ENG."), "{description}");
+        assert!(description.contains("linear__list_issues(args: {\n  // Team key\n  team: string;\n}): Promise<CallToolResult>;"), "{description}");
+        assert!(description.contains("## notion (tools not known yet; searchTools() finds them)\nNotion: Notion for the team."), "{description}");
+        assert!(description.contains("Your own tools `read` are callable here too"), "{description}");
+        assert!(!description.contains("secret_admin") && !description.contains("linear__old"), "{description}");
+        assert_eq!(CodemodeTool::new(catalog, CodemodeOptions::default()).description(), description, "the same listing every time");
     }
 
     #[tokio::test]

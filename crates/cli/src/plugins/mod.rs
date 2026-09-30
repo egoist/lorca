@@ -432,7 +432,10 @@ pub fn install(app: &Arc<App>, manifest: Manifest, source: &str) -> Result<Plugi
         store.status(&manifest.id).ok_or("installed but missing")?
     };
     #[cfg(feature = "runner")]
-    app.mcp.forget(&manifest.id);
+    {
+        app.mcp.forget(&manifest.id);
+        mcp::prefetch_tools(app, &manifest.id);
+    }
     announce(app);
     Ok(status)
 }
@@ -493,7 +496,10 @@ pub fn set_variables(app: &Arc<App>, id: &str, variables: &BTreeMap<String, Stri
         store.status(id).ok_or("Unknown plugin")?
     };
     #[cfg(feature = "runner")]
-    app.mcp.forget(id);
+    {
+        app.mcp.forget(id);
+        mcp::prefetch_tools(app, id);
+    }
     announce(app);
     Ok(status)
 }

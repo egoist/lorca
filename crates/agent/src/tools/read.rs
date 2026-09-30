@@ -75,7 +75,7 @@ impl Tool for ReadTool {
             return Ok(ToolResult {
                 content: vec![ContentPart::text(format!("Read image file [{mime}]")), ContentPart::Image { data, mime_type: mime.to_string() }],
                 details: Value::Null,
-                terminate: false,
+                ..ToolResult::default()
             });
         }
 

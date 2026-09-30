@@ -65,7 +65,7 @@ pub async fn before_tool_call(
         run.state = "checking".into();
         run.device = Some(runner_name.clone());
     });
-    let action = Action { target_name: &runner_name, tool: "bash", description: &description, args: &args, propose_rule: true };
+    let action = Action { target_name: &runner_name, tool: "bash", description: &description, args: &args, script: None, propose_rule: true };
     let Outcome::Ask { reason, rule } = review::review(app, bot, chat_id, trigger, action, ctx.cancel).await else {
         update(&|run| run.state = "running".into());
         return None;
@@ -160,7 +160,7 @@ async fn review_input(app: &Arc<App>, chat_id: &str, trigger: &Trigger, bot: &Bo
          network access. The command reads the input exactly as typed, followed by Enter unless enter is false."
     );
     let args = serde_json::json!({ "command": command, "input": text, "enter": ctx.args.get("enter").and_then(Value::as_bool).unwrap_or(true) });
-    let action = Action { target_name: &runner_name, tool: "bash_input", description: &description, args: &args, propose_rule: false };
+    let action = Action { target_name: &runner_name, tool: "bash_input", description: &description, args: &args, script: None, propose_rule: false };
     let Outcome::Ask { reason, .. } = review::review(app, bot, chat_id, trigger, action, ctx.cancel).await else { return None };
     if unattended {
         return Some(blocked(format!(
@@ -179,14 +179,15 @@ async fn review_input(app: &Arc<App>, chat_id: &str, trigger: &Trigger, bot: &Bo
     }
 }
 
-fn blocked(reason: String) -> BeforeToolCallResult {
+/// A call that does not run, with why: the model reads it, and a script it came from ends.
+pub(crate) fn blocked(reason: String) -> BeforeToolCallResult {
     BeforeToolCallResult { block: true, reason: Some(reason), args: None, terminate: false }
 }
 
-/// A call whose question the user left for a new message, as `mcp::dismissed_call` ends a
-/// plugin's: it does not run, and the turn stops after this batch unless that message is there
+/// A call whose question the user left for a new message, as `mcp::dismissed_call` ends an
+/// install: it does not run, and the turn stops after this batch unless that message is there
 /// to read next.
-fn dismissed(reason: &str) -> BeforeToolCallResult {
+pub(crate) fn dismissed(reason: &str) -> BeforeToolCallResult {
     BeforeToolCallResult { block: true, reason: Some(reason.into()), args: None, terminate: true }
 }
 
@@ -903,15 +904,15 @@ mod tests {
         // A read-only command needs no review, so it runs even with no provider to ask.
         let status = serde_json::json!({ "command": "git status --short && ls" });
         let status_call = ToolCall { id: "0".into(), name: "bash".into(), arguments: status.clone() };
-        let ctx = BeforeToolCallContext { assistant_message: &assistant, tool_call: &status_call, args: &status, context: &context, cancel: &cancel };
+        let ctx = BeforeToolCallContext { assistant_message: &assistant, tool_call: &status_call, args: &status, context: &context, cancel: &cancel, parent: None };
         assert!(before_tool_call(&app, "chat", &Trigger::default(), &bot, &work, true, ctx).await.is_none());
 
         // Nor does one that stays in Lorca's own folders, whatever it does there.
-        let ctx = BeforeToolCallContext { assistant_message: &assistant, tool_call: &call, args: &args, context: &context, cancel: &cancel };
+        let ctx = BeforeToolCallContext { assistant_message: &assistant, tool_call: &call, args: &args, context: &context, cancel: &cancel, parent: None };
         assert!(before_tool_call(&app, "chat", &Trigger::default(), &bot, &own_workspace, true, ctx).await.is_none());
 
         // With no provider connected the review cannot run, so the command asks, and nobody is there.
-        let ctx = BeforeToolCallContext { assistant_message: &assistant, tool_call: &call, args: &args, context: &context, cancel: &cancel };
+        let ctx = BeforeToolCallContext { assistant_message: &assistant, tool_call: &call, args: &args, context: &context, cancel: &cancel, parent: None };
         let blocked = before_tool_call(&app, "chat", &Trigger::default(), &bot, &work, true, ctx).await.unwrap();
         assert!(blocked.block);
         assert!(blocked.reason.as_deref().is_some_and(|reason| reason.contains("could not check")), "{:?}", blocked.reason);
@@ -919,7 +920,7 @@ mod tests {
         let mut review = app.auto_review();
         review.is_enabled = false;
         app.set_auto_review(review);
-        let ctx = BeforeToolCallContext { assistant_message: &assistant, tool_call: &call, args: &args, context: &context, cancel: &cancel };
+        let ctx = BeforeToolCallContext { assistant_message: &assistant, tool_call: &call, args: &args, context: &context, cancel: &cancel, parent: None };
         let blocked = before_tool_call(&app, "chat", &Trigger::default(), &bot, &work, true, ctx).await.unwrap();
         assert!(blocked.reason.as_deref().is_some_and(|reason| reason.contains("Auto-review is off")), "{:?}", blocked.reason);
         let _ = std::fs::remove_dir_all(scratch);

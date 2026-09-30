@@ -30,6 +30,8 @@ pub mod routines;
 pub mod runtime;
 pub mod schedule;
 #[cfg(feature = "runner")]
+pub mod scripts;
+#[cfg(feature = "runner")]
 pub mod shell;
 pub mod sync;
 pub mod local_store;

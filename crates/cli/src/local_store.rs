@@ -120,6 +120,13 @@ impl LocalStore {
              );
              CREATE UNIQUE INDEX IF NOT EXISTS outbox_slot
                  ON outbox(slot_name) WHERE slot_name IS NOT NULL;
+             CREATE TABLE IF NOT EXISTS codemode_store (
+                 chat_id TEXT NOT NULL,
+                 bot_id  TEXT NOT NULL,
+                 key     TEXT NOT NULL,
+                 json    TEXT NOT NULL,
+                 PRIMARY KEY (chat_id, bot_id, key)
+             );
              CREATE TABLE IF NOT EXISTS device_turns (
                  id   TEXT PRIMARY KEY NOT NULL,
                  json TEXT NOT NULL
@@ -197,6 +204,7 @@ impl LocalStore {
         for chat_id in chat_ids {
             tx.execute("DELETE FROM messages WHERE chat_id = ?1", [chat_id])?;
             tx.execute("DELETE FROM chat_history WHERE chat_id = ?1", [chat_id])?;
+            tx.execute("DELETE FROM codemode_store WHERE chat_id = ?1", [chat_id])?;
             tx.execute(
                 "DELETE FROM outbox WHERE group_name = ?1",
                 [crate::model::relay_name(chat_id)],
@@ -728,6 +736,45 @@ impl LocalStore {
         Ok(count as usize)
     }
 
+    /// The values a bot's codemode scripts stored in a chat with `store()`.
+    pub fn codemode_values(&self, chat_id: &str, bot_id: &str) -> anyhow::Result<std::collections::BTreeMap<String, serde_json::Value>> {
+        let connection = self.connection.lock().unwrap();
+        let mut statement = connection.prepare("SELECT key, json FROM codemode_store WHERE chat_id = ?1 AND bot_id = ?2")?;
+        let rows = statement.query_map(params![chat_id, bot_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?;
+        let mut values = std::collections::BTreeMap::new();
+        for row in rows {
+            let (key, json) = row?;
+            if let Ok(value) = serde_json::from_str(&json) {
+                values.insert(key, value);
+            }
+        }
+        Ok(values)
+    }
+
+    /// What one successful script stored and deleted.
+    pub fn save_codemode_writes(&self, chat_id: &str, bot_id: &str, set: &std::collections::BTreeMap<String, serde_json::Value>, delete: &[String]) -> anyhow::Result<()> {
+        let mut connection = self.connection.lock().unwrap();
+        let tx = connection.transaction()?;
+        for key in delete {
+            tx.execute("DELETE FROM codemode_store WHERE chat_id = ?1 AND bot_id = ?2 AND key = ?3", params![chat_id, bot_id, key])?;
+        }
+        for (key, value) in set {
+            tx.execute(
+                "INSERT INTO codemode_store (chat_id, bot_id, key, json) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(chat_id, bot_id, key) DO UPDATE SET json = excluded.json",
+                params![chat_id, bot_id, key, serde_json::to_string(value)?],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// A deleted bot's stored script values, in the chats that outlive it.
+    pub fn forget_codemode_values_of(&self, bot_id: &str) -> anyhow::Result<()> {
+        self.connection.lock().unwrap().execute("DELETE FROM codemode_store WHERE bot_id = ?1", [bot_id])?;
+        Ok(())
+    }
+
     pub fn remove(&self, chat_id: &str, message_id: &str) -> anyhow::Result<bool> {
         let connection = self.connection.lock().unwrap();
         let removed = connection.execute(
@@ -755,6 +802,16 @@ impl LocalStore {
         for chat_id in stored_chats {
             if !valid.contains(chat_id.as_str()) {
                 tx.execute("DELETE FROM messages WHERE chat_id = ?1", [&chat_id])?;
+            }
+        }
+        let scripted_chats: Vec<String> = {
+            let mut statement = tx.prepare("SELECT DISTINCT chat_id FROM codemode_store")?;
+            let rows = statement.query_map([], |row| row.get(0))?;
+            rows.collect::<rusqlite::Result<_>>()?
+        };
+        for chat_id in scripted_chats {
+            if !valid.contains(chat_id.as_str()) {
+                tx.execute("DELETE FROM codemode_store WHERE chat_id = ?1", [&chat_id])?;
             }
         }
         let queued_groups: Vec<String> = {

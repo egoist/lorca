@@ -169,6 +169,9 @@ describe("format", () => {
     const runner = { id: "r", name: "Mac", model: "", os: "macos", os_version: "", machine_key: "", is_this_device: false, status: "online" as const, last_seen: 0, plugins: [{ id: "github", name: "GitHub", state: "ready" as const }] };
     expect(activity([you, tool("github__create_issue")], { devices: [runner] })).toBe("Using GitHub…");
     expect(activity([you, tool("routines")])).toBe("Working…");
+    // A script reads as the plugin its latest call used, which the CLI puts in its description.
+    expect(activity([you, tool("codemode")])).toBe("Working…");
+    expect(activity([you, tool("codemode", { description: "Linear", is_running: false })])).toBe("Using Linear…");
     // What the bot said since is the news; its thinking and a retry outrank the last call.
     expect(activity([you, tool("read"), msg({ kind: "bot", bot_id: "b1" }, { kind: "text", text: "Done" })])).toBeNull();
     expect(activity([you, tool("read")], { thinking: { c: "b1" } })).toBe("Thinking…");

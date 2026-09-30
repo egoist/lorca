@@ -1008,6 +1008,7 @@ impl App {
         };
         let snapshot = self.state.lock().unwrap().clone();
         self.store.save_state_deleting_chats(&snapshot, &removed_chat_ids)?;
+        self.store.forget_codemode_values_of(id)?;
 
         // Stop this bot after the roster mutation is committed. A room job has no bot id and
         // keeps going when its group survives; it reads the changed membership before offering
@@ -1400,6 +1401,26 @@ impl App {
             entry.cost_usd += usage.cost.total;
             entry.turns += 1;
             entry.model = model.to_string();
+            entry.updated_at = crate::config::now_secs();
+            entry.clone()
+        };
+        self.save_state();
+        self.emit(Event::ChatUsageChanged { chat_id: chat_id.to_string(), usage: updated });
+    }
+
+    /// Adds a side call's tokens and cost to the chat's, such as a script's `models.ask()`: they
+    /// count in what the chat spent, while its context size, turns, and model stay the last
+    /// turn's.
+    #[cfg(feature = "runner")]
+    pub fn add_side_usage(&self, chat_id: &str, usage: &lorca_agent::Usage) {
+        let updated = {
+            let mut state = self.state.lock().unwrap();
+            let Some(chat) = state.chats.iter_mut().find(|c| c.meta.id == chat_id) else { return };
+            let entry = chat.usage.get_or_insert_with(ChatUsage::default);
+            entry.input_tokens += usage.input + usage.cache_read + usage.cache_write;
+            entry.output_tokens += usage.output;
+            entry.cache_read_tokens += usage.cache_read;
+            entry.cost_usd += usage.cost.total;
             entry.updated_at = crate::config::now_secs();
             entry.clone()
         };

@@ -8,6 +8,7 @@ It has five parts:
 - **`Agent`**: a stateful wrapper that owns the transcript between runs and exposes steering, follow-ups, and abort through a cloneable `AgentHandle`.
 - **`Provider`**: a model adapter that turns a request into a stream of `AssistantEvent`s. The crate ships Anthropic's Messages API (Anthropic, and DeepSeek through its Anthropic-compatible endpoint, both with server-side web search), OpenAI-compatible Chat Completions and Responses, and the ChatGPT and Grok subscription adapters.
 - **`Tool`**: something the model can call. Seven coding tools ship with the crate: `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`.
+- **Codemode** (`codemode`): a tool that runs model-written JavaScript which calls other tools, so their results stay out of the model's context.
 - **`AgentHarness`**: a general agent over all of it, after pi's coding-agent harness: a switchable model, skills and prompt templates, compaction, retry, queues, hooks, and events, with the transcript left to the host to keep.
 
 ## Install
@@ -76,7 +77,8 @@ Read events on a separate task, as above. The run waits for the channel to accep
 
 - [How it works](how-it-works.md): messages, the turn loop, event order, errors, cancellation
 - [The `Agent`](agent.md): prompting, continuing, steering, follow-ups, abort, persistence
-- [Tools](tools.md): writing a tool, streaming updates, terminating a run, the built-in coding tools
+- [Tools](tools.md): writing a tool, structured output, calling other tools, streaming updates, terminating a run, the built-in coding tools
+- [Codemode](codemode.md): scripts that call tools, catalogs, host functions, the QuickJS sandbox
 - [Providers](providers.md): the provider contract, the Anthropic Messages, OpenAI-compatible, ChatGPT, and Grok adapters, writing your own
 - [Hooks](hooks.md): context transforms, custom messages, tool-call gates, stopping early, preparing the next turn
 - [Compaction](compaction.md): keeping a long conversation inside the window, estimating context size

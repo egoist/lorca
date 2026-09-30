@@ -5,6 +5,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = ["codemode"]
+# The codemode tool: model-written JavaScript in a QuickJS VM that calls other tools.
+codemode = ["dep:rquickjs"]
+
 [dependencies]
 lorca-provider-auth = { path = "../provider-auth" }
 async-trait.workspace = true
@@ -25,3 +30,4 @@ tokio-util.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 jsonschema = { version = "0.56", default-features = false }
+rquickjs = { version = "0.14", optional = true }

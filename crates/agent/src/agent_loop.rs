@@ -13,7 +13,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::provider::{AssistantAccumulator, AssistantEvent, ModelRequest, Provider};
 use crate::schema::validate_tool_arguments;
-use crate::tool::{Tool, ToolResult};
+use crate::tool::{Tool, ToolOutcome, ToolResult, ToolRunner};
 use crate::types::{
     AgentEvent, AgentMessage, AssistantMessage, ContentPart, LlmMessage, StopReason, ToolCall,
     ToolResultMessage,
@@ -68,6 +68,9 @@ pub struct BeforeToolCallContext<'a> {
     /// Cancels while a policy hook is waiting for a person or another reviewer. Hooks should
     /// stop promptly when it fires; the loop checks it again before any tool executes.
     pub cancel: &'a CancellationToken,
+    /// For a call another tool made while it ran (a codemode script's), the call that made it.
+    /// `None` for the model's own calls.
+    pub parent: Option<&'a ToolCall>,
 }
 
 pub struct AfterToolCallContext<'a> {
@@ -77,6 +80,8 @@ pub struct AfterToolCallContext<'a> {
     pub result: &'a ToolResult,
     pub is_error: bool,
     pub context: &'a AgentContext,
+    /// The call that made this one, as in [`BeforeToolCallContext::parent`].
+    pub parent: Option<&'a ToolCall>,
 }
 
 pub struct ShouldStopAfterTurnContext<'a> {
@@ -504,7 +509,9 @@ struct FinalizedCall {
 }
 
 enum Preparation {
-    Immediate { result: ToolResult, is_error: bool },
+    /// The call ends without running: no such tool, arguments that fail their check, a hook's
+    /// block (`blocked`), or a stop.
+    Immediate { result: ToolResult, is_error: bool, blocked: bool },
     Prepared { tool: Arc<dyn Tool>, args: Value },
 }
 
@@ -575,10 +582,11 @@ async fn execute_sequential(
         .await;
 
         let finalized = match prepare_tool_call(context, assistant, &tool_call, config, cancel).await {
-            Preparation::Immediate { result, is_error } => FinalizedCall { tool_call, result, is_error },
+            Preparation::Immediate { result, is_error, .. } => FinalizedCall { tool_call, result, is_error },
             Preparation::Prepared { tool, args } => {
-                let (result, is_error) = execute_prepared(&tool, &tool_call, &args, emit, cancel).await;
-                finalize_executed(context, assistant, tool_call, args, result, is_error, config).await
+                let runner = LoopRunner { context, assistant, config, parent: &tool_call };
+                let (result, is_error) = execute_prepared(&tool, &tool_call, &args, emit, cancel, &runner).await;
+                finalize_executed(context, assistant, tool_call, args, result, is_error, config, None).await
             }
         };
 
@@ -619,7 +627,7 @@ async fn execute_parallel(
         )
         .await;
         match prepare_tool_call(context, assistant, &tool_call, config, cancel).await {
-            Preparation::Immediate { result, is_error } => {
+            Preparation::Immediate { result, is_error, .. } => {
                 let finalized = FinalizedCall { tool_call, result, is_error };
                 emit_tool_execution_end(&finalized, emit).await;
                 slots.push(Slot::Done(finalized));
@@ -641,9 +649,10 @@ async fn execute_parallel(
                 finalized
             }
             Slot::Pending { tool, tool_call, args } => {
-                let (result, is_error) = execute_prepared(&tool, &tool_call, &args, emit, cancel).await;
+                let runner = LoopRunner { context, assistant, config, parent: &tool_call };
+                let (result, is_error) = execute_prepared(&tool, &tool_call, &args, emit, cancel, &runner).await;
                 let finalized =
-                    finalize_executed(context, assistant, tool_call, args, result, is_error, config).await;
+                    finalize_executed(context, assistant, tool_call, args, result, is_error, config, None).await;
                 emit_tool_execution_end(&finalized, emit).await;
                 finalized
             }
@@ -676,41 +685,92 @@ async fn prepare_tool_call(
         return Preparation::Immediate {
             result: error_result(format!("Tool {} not found", tool_call.name)),
             is_error: true,
+            blocked: false,
         };
     };
+    prepare_call(tool, context, assistant, tool_call, config, cancel, None).await
+}
 
-    // An object, through the tool's own shim, coerced and checked against its schema.
-    let args = match validate_arguments(&tool_call.arguments)
-        .map(|args| tool.prepare_arguments(args))
-        .and_then(|args| validate_tool_arguments(tool.name(), &tool.parameters(), &args))
-    {
+/// Checks a call's arguments and asks `before_tool_call` about it: the model's own calls, and
+/// those a tool makes through the loop's runner (`parent` set).
+async fn prepare_call(
+    tool: Arc<dyn Tool>,
+    context: &AgentContext,
+    assistant: &AssistantMessage,
+    tool_call: &ToolCall,
+    config: &AgentLoopConfig,
+    cancel: &CancellationToken,
+    parent: Option<&ToolCall>,
+) -> Preparation {
+    let mut args = match checked_arguments(tool.as_ref(), &tool_call.arguments) {
         Ok(args) => args,
-        Err(message) => return Preparation::Immediate { result: error_result(message), is_error: true },
+        Err(message) => return Preparation::Immediate { result: error_result(message), is_error: true, blocked: false },
     };
 
-    let mut args = args;
     if let Some(before) = config
         .hooks
-        .before_tool_call(BeforeToolCallContext { assistant_message: assistant, tool_call, args: &args, context, cancel })
+        .before_tool_call(BeforeToolCallContext { assistant_message: assistant, tool_call, args: &args, context, cancel, parent })
         .await
     {
         if cancel.is_cancelled() {
-            return Preparation::Immediate { result: error_result("Operation aborted".into()), is_error: true };
+            return Preparation::Immediate { result: error_result("Operation aborted".into()), is_error: true, blocked: false };
         }
         if before.block {
             let mut result = error_result(before.reason.unwrap_or_else(|| "Tool execution was blocked".into()));
             result.terminate = before.terminate;
-            return Preparation::Immediate { result, is_error: true };
+            return Preparation::Immediate { result, is_error: true, blocked: true };
         }
         if let Some(replacement) = before.args {
             args = replacement;
         }
     }
     if cancel.is_cancelled() {
-        return Preparation::Immediate { result: error_result("Operation aborted".into()), is_error: true };
+        return Preparation::Immediate { result: error_result("Operation aborted".into()), is_error: true, blocked: false };
     }
 
     Preparation::Prepared { tool, args }
+}
+
+/// A call's arguments as the tool runs them: an object, through the tool's own shim, coerced
+/// and checked against its schema. The error is what the model or script reads.
+pub(crate) fn checked_arguments(tool: &dyn Tool, arguments: &Value) -> Result<Value, String> {
+    validate_arguments(arguments)
+        .map(|args| tool.prepare_arguments(args))
+        .and_then(|args| validate_tool_arguments(tool.name(), &tool.parameters(), &args))
+}
+
+/// The runner a tool gets for the calls it makes while it runs (`Tool::execute_with`), such as
+/// a codemode script's: each goes through the checks and hooks the model's own calls do, with
+/// the calling call as `parent`. Such calls send no events of their own; the calling tool
+/// reports them in its updates and result.
+struct LoopRunner<'a> {
+    context: &'a AgentContext,
+    assistant: &'a AssistantMessage,
+    config: &'a AgentLoopConfig,
+    parent: &'a ToolCall,
+}
+
+#[async_trait]
+impl ToolRunner for LoopRunner<'_> {
+    async fn run(&self, tool: Arc<dyn Tool>, tool_call_id: String, args: Value, cancel: CancellationToken) -> ToolOutcome {
+        let tool_call = ToolCall { id: tool_call_id, name: tool.name().to_string(), arguments: args };
+        match prepare_call(tool, self.context, self.assistant, &tool_call, self.config, &cancel, Some(self.parent)).await {
+            Preparation::Immediate { result, is_error, blocked } => ToolOutcome { result, is_error, blocked },
+            Preparation::Prepared { tool, args } => {
+                let nested = LoopRunner { parent: &tool_call, ..*self };
+                let (result, is_error) = match tool.execute_with(&tool_call.id, args.clone(), cancel.clone(), Arc::new(|_| {}), &nested).await {
+                    Ok(result) => {
+                        let is_error = result.is_error;
+                        (result, is_error)
+                    }
+                    Err(error) => (error_result(error.0), true),
+                };
+                let finalized =
+                    finalize_executed(self.context, self.assistant, tool_call, args, result, is_error, self.config, Some(self.parent)).await;
+                ToolOutcome { result: finalized.result, is_error: finalized.is_error, blocked: false }
+            }
+        }
+    }
 }
 
 /// Arguments must be a JSON object before the schema check.
@@ -732,6 +792,7 @@ async fn execute_prepared(
     args: &Value,
     emit: &Emitter<'_>,
     cancel: &CancellationToken,
+    tools: &dyn ToolRunner,
 ) -> (ToolResult, bool) {
     let (update_tx, mut update_rx) = mpsc::unbounded_channel::<ToolResult>();
     let on_update: crate::tool::ToolUpdateFn = Arc::new(move |partial| {
@@ -742,7 +803,7 @@ async fn execute_prepared(
     let name = tool_call.name.clone();
     let call_args = tool_call.arguments.clone();
 
-    let execution = tool.execute(&call_id, args.clone(), cancel.clone(), on_update);
+    let execution = tool.execute_with(&call_id, args.clone(), cancel.clone(), on_update, tools);
     tokio::pin!(execution);
 
     let outcome = loop {
@@ -772,7 +833,10 @@ async fn execute_prepared(
     }
 
     match outcome {
-        Ok(result) => (result, false),
+        Ok(result) => {
+            let is_error = result.is_error;
+            (result, is_error)
+        }
         Err(error) => (error_result(error.0), true),
     }
 }
@@ -786,6 +850,7 @@ async fn finalize_executed(
     mut result: ToolResult,
     mut is_error: bool,
     config: &AgentLoopConfig,
+    parent: Option<&ToolCall>,
 ) -> FinalizedCall {
     if let Some(after) = config
         .hooks
@@ -796,6 +861,7 @@ async fn finalize_executed(
             result: &result,
             is_error,
             context,
+            parent,
         })
         .await
     {
@@ -816,7 +882,7 @@ async fn finalize_executed(
 }
 
 fn error_result(message: String) -> ToolResult {
-    ToolResult { content: vec![ContentPart::text(message)], details: Value::Object(Default::default()), terminate: false }
+    ToolResult { content: vec![ContentPart::text(message)], details: Value::Object(Default::default()), is_error: true, ..ToolResult::default() }
 }
 
 async fn emit_tool_execution_end(finalized: &FinalizedCall, emit: &Emitter<'_>) {
@@ -1061,6 +1127,38 @@ mod tests {
         let (messages, _) = run(provider.clone(), vec![tool], Arc::new(BlockAndStop), CancellationToken::new()).await;
         assert_eq!(tool_results(&messages)[0].text(), "not allowed");
         assert_eq!(provider.requests.lock().unwrap().len(), 1, "the batch terminated the run");
+    }
+
+    /// Records every call it sees with the call that made it, and blocks a script's call to
+    /// count to 2.
+    struct GuardNested(Mutex<Vec<(String, Option<String>)>>);
+
+    #[async_trait]
+    impl LoopHooks for GuardNested {
+        async fn before_tool_call(&self, ctx: BeforeToolCallContext<'_>) -> Option<BeforeToolCallResult> {
+            self.0.lock().unwrap().push((ctx.tool_call.id.clone(), ctx.parent.map(|parent| parent.id.clone())));
+            (ctx.parent.is_some() && ctx.args["limit"] == 2).then(|| BeforeToolCallResult { block: true, reason: Some("not allowed".into()), args: None, terminate: false })
+        }
+    }
+
+    #[cfg(feature = "codemode")]
+    #[tokio::test]
+    async fn a_scripts_calls_go_through_the_hooks_and_a_block_ends_the_script() {
+        let code = r#"{"code": "await tools.count({ limit: '1' });\nawait tools.count({ limit: 2 });\nreturn 'unreachable';"}"#;
+        let provider = Scripted::new("p", vec![Turn::Call { name: "codemode", args: code, stop: StopReason::ToolUse }]);
+        let counter = Arc::new(Counter { runs: Mutex::new(vec![]), cancel_on_run: None });
+        let catalog = crate::codemode::StaticCatalog::new(vec![counter.clone()]);
+        let codemode = Arc::new(crate::codemode::CodemodeTool::new(Arc::new(catalog), Default::default()));
+        let hooks = Arc::new(GuardNested(Mutex::new(vec![])));
+        let (messages, _) = run(provider, vec![codemode], hooks.clone(), CancellationToken::new()).await;
+        // The script's first call had its argument coerced to the schema; the second never ran.
+        assert_eq!(counter.runs.lock().unwrap().as_slice(), &[json!({ "limit": 1 })]);
+        let result = tool_results(&messages)[0];
+        assert!(result.is_error);
+        assert!(result.text().contains("Script stopped: not allowed"), "{}", result.text());
+        assert!(!result.text().contains("unreachable"));
+        let seen = hooks.0.lock().unwrap().clone();
+        assert_eq!(seen, vec![("c1".to_string(), None), ("c1/1".to_string(), Some("c1".to_string())), ("c1/2".to_string(), Some("c1".to_string()))]);
     }
 
     /// Blocks every call and asks to end the run, with a user message queued while the call

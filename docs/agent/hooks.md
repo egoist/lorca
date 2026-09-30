@@ -128,7 +128,9 @@ impl LoopHooks for Guard {
 
 The hook is async, so it can wait for a person to approve the call.
 
-`BeforeToolCallContext` has `assistant_message`, `tool_call`, `args` (the arguments after coercion and validation, which is what the tool will run with), `context` (the loop's `AgentContext`), and the run's `cancel` token. A hook waiting for a person should select on that token; the loop also checks it again before execution and turns cancellation into an `Operation aborted` result.
+`BeforeToolCallContext` has `assistant_message`, `tool_call`, `args` (the arguments after coercion and validation, which is what the tool will run with), `context` (the loop's `AgentContext`), the run's `cancel` token, and `parent`. A hook waiting for a person should select on that token; the loop also checks it again before execution and turns cancellation into an `Operation aborted` result.
+
+`parent` is the call that made this one, for a call another tool made through the loop's runner, such as a codemode script's; it is `None` for the model's own calls. The script is in `parent.arguments["code"]`, which a reviewer can read as what the whole batch is for. A block ends the script, not only the call.
 
 ### `after_tool_call`
 
