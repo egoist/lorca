@@ -1008,7 +1008,6 @@ impl App {
         };
         let snapshot = self.state.lock().unwrap().clone();
         self.store.save_state_deleting_chats(&snapshot, &removed_chat_ids)?;
-        self.store.forget_codemode_values_of(id)?;
 
         // Stop this bot after the roster mutation is committed. A room job has no bot id and
         // keeps going when its group survives; it reads the changed membership before offering
@@ -1020,6 +1019,10 @@ impl App {
         }
         for chat_id in &removed_chat_ids {
             self.emit(Event::ChatRemoved { chat_id: chat_id.clone() });
+        }
+        // After its jobs stop, so a script ending now finds the bot gone and writes nothing.
+        if let Err(error) = self.store.forget_codemode_values_of(id) {
+            tracing::warn!(%error, "forgetting a deleted bot's script values");
         }
         #[cfg(feature = "runner")]
         self.shell_sessions.close_orphans(self);

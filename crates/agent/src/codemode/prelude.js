@@ -3,7 +3,10 @@
 // The VM is a runtime of its own with no I/O, so nothing here guards a realm boundary. The
 // prelude keeps the host bridge in a closure the script cannot reach, and builds `tools`,
 // `ALL_TOOLS`, the output helpers (`text`, `image`, `exit`, `console`), `store`/`load`, and
-// the host globals on top of it. Arguments and results cross as JSON text.
+// the host globals on top of it. Arguments and results cross as JSON text. The built-ins it
+// relies on are captured before the script runs, and its own state lives in objects with no
+// prototype, so a script that patches `Map.prototype` or `Promise` cannot hide a pending call.
+// The host checks what crosses the bridge again; nothing here is its only guard.
 //
 // `bridge(kind, id, text, extra)` takes primitives only:
 // - ("call", id, name, argsJson?) and ("global", id, name, argsJson?) ask the host to run a tool
@@ -19,21 +22,46 @@
 	"use strict";
 	const stringify = JSON.stringify;
 	const parse = JSON.parse;
+	const PromiseCtor = Promise;
 	const promiseThen = Promise.prototype.then;
+	const apply = Reflect.apply;
+	const objectCreate = Object.create;
+	const objectKeys = Object.keys;
+	const defineProperty = Object.defineProperty;
+	const freeze = Object.freeze;
+	const toWellFormed = String.prototype.toWellFormed;
+	const replaceString = String.prototype.replace;
+	const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
 	const ErrorCtor = Error;
 	const TypeErrorCtor = TypeError;
 	const RangeErrorCtor = RangeError;
 	const limits = parse(limitsJson);
-	const pending = new Map();
+	// Call id -> { resolve, reject }, and how many there are.
+	const pending = objectCreate(null);
+	let pendingCount = 0;
 	let nextId = 1;
 	let finished = false;
 	// Thrown by exit() to unwind the script after it already reported success.
-	const EXIT = Object.freeze({});
+	const EXIT = freeze({});
+
+	// A string with every lone surrogate replaced, which is what can cross to the host.
+	function wellFormed(text) {
+		if (typeof toWellFormed === "function") return apply(toWellFormed, text, []);
+		return apply(replaceString, text, [LONE_SURROGATE, "�"]);
+	}
+
+	function jsonReplacer(_key, value) {
+		return typeof value === "string" ? wellFormed(value) : value;
+	}
+
+	function toJson(value) {
+		return stringify(value, jsonReplacer);
+	}
 
 	// The bridge takes no explicit `undefined`: an absent value is a missing argument.
 	function send(kind, id, text, extra) {
-		if (extra === undefined) bridge(kind, id, text);
-		else bridge(kind, id, text, extra);
+		if (extra === undefined) bridge(kind, id, wellFormed(text));
+		else bridge(kind, id, wellFormed(text), wellFormed(extra));
 	}
 
 	function done(ok, payload, writes) {
@@ -44,7 +72,7 @@
 	}
 
 	function serialize(value) {
-		return value === undefined ? undefined : stringify(value);
+		return value === undefined ? undefined : toJson(value);
 	}
 
 	// QuickJS stacks list frames only. Prefix "Name: message" like V8 so the text reads the
@@ -62,7 +90,7 @@
 		if (typeof value === "string") return value;
 		if (value instanceof ErrorCtor) return errorText(value);
 		try {
-			const json = stringify(value);
+			const json = toJson(value);
 			return json === undefined ? String(value) : json;
 		} catch {
 			return String(value);
@@ -75,15 +103,19 @@
 		if (error === null) {
 			return stringify({ name: "InternalError", message: "out of memory (or the script threw null)" });
 		}
-		if (error instanceof ErrorCtor) {
-			return stringify({ name: error.name, message: error.message, stack: errorText(error) });
+		try {
+			if (error instanceof ErrorCtor) {
+				return toJson({ name: String(error.name), message: String(error.message), stack: errorText(error) });
+			}
+			return toJson({ message: format(error) });
+		} catch {
+			return stringify({ message: "The script threw something that cannot be shown" });
 		}
-		return stringify({ message: format(error) });
 	}
 
 	function caller(kind, name, spread) {
 		return (...args) =>
-			new Promise((resolve, reject) => {
+			new PromiseCtor((resolve, reject) => {
 				if (finished) {
 					reject(new ErrorCtor("The script has already finished"));
 					return;
@@ -96,26 +128,29 @@
 					return;
 				}
 				const id = nextId++;
-				pending.set(id, { resolve, reject });
+				pending[id] = { resolve, reject };
+				pendingCount++;
 				send(kind, id, name, json);
 			});
 	}
 
 	// Tools known when the script starts, by identifier and by name. A name the script finds
 	// later (a searchTools() match) is still callable: the proxy asks the host for it.
-	const known = Object.create(null);
+	const known = objectCreate(null);
 	const allTools = [];
-	for (const { name, jsName, description } of parse(toolsJson)) {
+	const toolList = parse(toolsJson);
+	for (let i = 0; i < toolList.length; i++) {
+		const { name, jsName, description } = toolList[i];
 		const fn = caller("call", name);
 		// The first tool wins when two names normalize to the same identifier.
 		if (!(jsName in known)) {
 			known[jsName] = fn;
-			allTools.push(Object.freeze({ name: jsName, description }));
+			allTools[allTools.length] = freeze({ name: jsName, description });
 		}
 		if (!(name in known)) known[name] = fn;
 	}
-	Object.freeze(known);
-	Object.freeze(allTools);
+	freeze(known);
+	freeze(allTools);
 	const tools = new Proxy(known, {
 		get(target, property) {
 			if (typeof property !== "string") return undefined;
@@ -126,27 +161,37 @@
 		},
 	});
 
-	const namespaces = new Map();
-	for (const { name, spread } of parse(globalsJson)) {
+	const namespaces = objectCreate(null);
+	const globalList = parse(globalsJson);
+	for (let i = 0; i < globalList.length; i++) {
+		const { name, spread } = globalList[i];
 		const fn = caller("global", name, spread);
 		const dot = name.indexOf(".");
 		if (dot === -1) {
-			Object.defineProperty(globalThis, name, { value: fn, enumerable: true });
+			defineProperty(globalThis, name, { value: fn, enumerable: true });
 			continue;
 		}
 		const namespace = name.slice(0, dot);
-		if (!namespaces.has(namespace)) namespaces.set(namespace, Object.create(null));
-		namespaces.get(namespace)[name.slice(dot + 1)] = fn;
+		if (!(namespace in namespaces)) namespaces[namespace] = objectCreate(null);
+		namespaces[namespace][name.slice(dot + 1)] = fn;
 	}
-	for (const [namespace, members] of namespaces) {
-		Object.defineProperty(globalThis, namespace, { value: Object.freeze(members), enumerable: true });
+	const namespaceNames = objectKeys(namespaces);
+	for (let i = 0; i < namespaceNames.length; i++) {
+		defineProperty(globalThis, namespaceNames[i], { value: freeze(namespaces[namespaceNames[i]]), enumerable: true });
 	}
 
-	// key -> JSON text. Sizes count key and JSON characters.
-	const stored = new Map(Object.entries(parse(storeJson)));
-	const writes = new Map();
+	// key -> JSON text. Sizes count key and JSON characters; the host checks them again.
+	const stored = objectCreate(null);
+	const initial = parse(storeJson);
+	const initialKeys = objectKeys(initial);
 	let storedChars = 0;
-	for (const [key, json] of stored) storedChars += key.length + json.length;
+	for (let i = 0; i < initialKeys.length; i++) {
+		const key = initialKeys[i];
+		stored[key] = initial[key];
+		storedChars += key.length + initial[key].length;
+	}
+	// key -> JSON text, or null for a deletion.
+	const writes = objectCreate(null);
 
 	function checkKey(name, key) {
 		if (typeof key !== "string") throw new TypeErrorCtor(name + "() key must be a string");
@@ -154,16 +199,17 @@
 
 	function store(key, value) {
 		checkKey("store", key);
-		const previous = stored.has(key) ? key.length + stored.get(key).length : 0;
+		key = wellFormed(key);
+		const previous = key in stored ? key.length + stored[key].length : 0;
 		if (value === undefined) {
-			stored.delete(key);
+			delete stored[key];
 			storedChars -= previous;
-			writes.set(key, undefined);
+			writes[key] = null;
 			return;
 		}
 		let json;
 		try {
-			json = stringify(value);
+			json = toJson(value);
 		} catch (error) {
 			throw new TypeErrorCtor("store(" + stringify(key) + ") value is not JSON-serializable: " + format(error));
 		}
@@ -177,21 +223,27 @@
 		if (next > limits.storeTotalChars) {
 			throw new RangeErrorCtor("store is full: stored values would exceed " + limits.storeTotalChars + " characters of JSON");
 		}
-		stored.set(key, json);
+		stored[key] = json;
 		storedChars = next;
-		writes.set(key, json);
+		writes[key] = json;
 	}
 
 	function load(key) {
 		checkKey("load", key);
-		const json = stored.get(key);
-		return json === undefined ? undefined : parse(json);
+		key = wellFormed(key);
+		return key in stored ? parse(stored[key]) : undefined;
 	}
 
+	// `[[key, json], [key], …]` for the host, built from strings so nothing the script patched
+	// takes part.
 	function serializeWrites() {
-		const entries = [];
-		for (const [key, json] of writes) entries.push(json === undefined ? [key] : [key, json]);
-		return stringify(entries);
+		const keys = objectKeys(writes);
+		let out = "[";
+		for (let i = 0; i < keys.length; i++) {
+			const json = writes[keys[i]];
+			out += (i === 0 ? "" : ",") + "[" + stringify(keys[i]) + (json === null ? "" : "," + stringify(json)) + "]";
+		}
+		return out + "]";
 	}
 
 	// Primitives become their string form, everything else JSON.
@@ -199,7 +251,7 @@
 		if (value === undefined || value === null || (typeof value !== "object" && typeof value !== "function")) {
 			return String(value);
 		}
-		const json = stringify(value);
+		const json = toJson(value);
 		return json === undefined ? String(value) : json;
 	}
 
@@ -210,7 +262,7 @@
 		} catch (error) {
 			throw new TypeErrorCtor(error instanceof ErrorCtor ? error.message : String(error));
 		}
-		if (!finished) bridge("text", 0, rendered);
+		if (!finished) send("text", 0, rendered);
 	}
 
 	const IMAGE_EXPECTS = "image expects a non-empty image URL string, an object with image_url, or an MCP image block";
@@ -231,7 +283,7 @@
 	}
 
 	function image(value) {
-		const url = imageUrl(value);
+		const url = String(imageUrl(value));
 		if (url === "") throw new TypeErrorCtor(IMAGE_EXPECTS);
 		const colon = url.indexOf(":");
 		const scheme = colon === -1 ? "" : url.slice(0, colon).toLowerCase();
@@ -243,7 +295,7 @@
 		if (scheme !== "data" || comma === -1 || header.slice(1).every((part) => part.toLowerCase() !== "base64")) {
 			throw new TypeErrorCtor("invalid image output. Pass a base64 data URI instead");
 		}
-		if (!finished) bridge("image", 0, url.slice(comma + 1), header[0] || "application/octet-stream");
+		if (!finished) send("image", 0, url.slice(comma + 1), header[0] || "application/octet-stream");
 	}
 
 	function exit() {
@@ -258,28 +310,33 @@
 		throw EXIT;
 	}
 
-	const console = {};
-	for (const level of ["log", "info", "warn", "error", "debug"]) {
-		console[level] = (...args) => {
-			if (!finished) bridge("text", 0, args.map(format).join(" "));
+	const console = objectCreate(null);
+	const levels = ["log", "info", "warn", "error", "debug"];
+	for (let i = 0; i < levels.length; i++) {
+		console[levels[i]] = (...args) => {
+			if (finished) return;
+			let line = "";
+			for (let j = 0; j < args.length; j++) line += (j === 0 ? "" : " ") + format(args[j]);
+			send("text", 0, line);
 		};
 	}
-	Object.freeze(console);
+	freeze(console);
 
-	Object.defineProperty(globalThis, "tools", { value: tools, enumerable: true });
-	Object.defineProperty(globalThis, "ALL_TOOLS", { value: allTools, enumerable: true });
-	Object.defineProperty(globalThis, "console", { value: console, enumerable: true });
-	Object.defineProperty(globalThis, "text", { value: text, enumerable: true });
-	Object.defineProperty(globalThis, "image", { value: image, enumerable: true });
-	Object.defineProperty(globalThis, "exit", { value: exit, enumerable: true });
-	Object.defineProperty(globalThis, "store", { value: store, enumerable: true });
-	Object.defineProperty(globalThis, "load", { value: load, enumerable: true });
+	defineProperty(globalThis, "tools", { value: tools, enumerable: true });
+	defineProperty(globalThis, "ALL_TOOLS", { value: allTools, enumerable: true });
+	defineProperty(globalThis, "console", { value: console, enumerable: true });
+	defineProperty(globalThis, "text", { value: text, enumerable: true });
+	defineProperty(globalThis, "image", { value: image, enumerable: true });
+	defineProperty(globalThis, "exit", { value: exit, enumerable: true });
+	defineProperty(globalThis, "store", { value: store, enumerable: true });
+	defineProperty(globalThis, "load", { value: load, enumerable: true });
 
 	return {
 		settle(id, ok, hasPayload, payload) {
-			const entry = pending.get(id);
-			if (!entry) return;
-			pending.delete(id);
+			const entry = pending[id];
+			if (entry === undefined) return;
+			delete pending[id];
+			pendingCount--;
 			if (!ok) {
 				entry.reject(new ErrorCtor(payload));
 				return;
@@ -301,8 +358,7 @@
 				if (error !== EXIT) done(false, describeError(error));
 				return;
 			}
-			promiseThen.call(
-				promise,
+			apply(promiseThen, promise, [
 				(value) => {
 					let json;
 					let writesJson;
@@ -318,11 +374,11 @@
 				(error) => {
 					if (error !== EXIT) done(false, describeError(error));
 				},
-			);
+			]);
 		},
 		stalled() {
 			if (finished) return "finished";
-			if (pending.size > 0) return "waiting";
+			if (pendingCount > 0) return "waiting";
 			done(
 				false,
 				stringify({

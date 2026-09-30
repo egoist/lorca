@@ -745,6 +745,11 @@ fn apply_roster(app: &Arc<App>, mut roster: RosterBlob) {
     if let Err(error) = app.store.save_state_deleting_chats(&snapshot, &removed) {
         tracing::error!(%error, "saving synced roster");
     }
+    // Bots deleted on another Device take their scripts' values along here too.
+    let bot_ids: Vec<String> = snapshot.bots.iter().map(|bot| bot.id.clone()).collect();
+    if let Err(error) = app.store.retain_codemode_bots(&bot_ids) {
+        tracing::warn!(%error, "forgetting deleted bots' script values");
+    }
     for chat_id in removed {
         app.cancel_chat(&chat_id);
         app.emit(Event::ChatRemoved { chat_id });

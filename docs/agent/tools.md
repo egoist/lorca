@@ -128,7 +128,7 @@ A failure with more to say than a message, such as an MCP result with `isError` 
 
 ### Calling other tools
 
-A tool that calls other tools while it runs, as [codemode](codemode.md) does, overrides `execute_with`. The loop passes a `ToolRunner`, and `tools.run(tool, id, args, cancel)` puts each call through the same pipeline as the model's own: the tool's argument shim, coercion and the schema check, `before_tool_call`, and `after_tool_call`, with the calling call as the hooks' `parent`. It returns a `ToolOutcome { result, is_error, blocked }`; `blocked` means a `before_tool_call` hook refused the call and it never ran. Such calls send no events; report them through your own updates. Called outside the loop, `execute` gets a `DirectRunner`, which checks arguments and runs no hooks.
+A tool that calls other tools while it runs, as [codemode](codemode.md) does, overrides `execute_with`. The loop passes a `ToolRunner`, and `tools.run(tool, id, args, cancel)` puts each call through the same pipeline as the model's own: the tool's argument shim, coercion and the schema check, `before_tool_call`, and `after_tool_call`, with the calling call as the hooks' `parent`. It returns a `ToolOutcome { result, is_error, blocked }`; `blocked` means a `before_tool_call` hook refused the call and it never ran. A call whose cancel token has fired runs no hook and ends as `Operation aborted`. Such calls send no events; report them through your own updates. Called outside the loop, `execute` gets a `DirectRunner`, which checks arguments and runs no hooks.
 
 ### Progress
 

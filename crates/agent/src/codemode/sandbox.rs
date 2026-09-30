@@ -23,6 +23,9 @@ const MAX_STACK_BYTES: usize = 8 * 1024 * 1024;
 /// The most one `store()` value and all values together may take, in characters of JSON.
 pub const MAX_STORE_VALUE_CHARS: usize = 256 * 1024;
 pub const MAX_STORE_TOTAL_CHARS: usize = 1024 * 1024;
+/// Events the script may have sent that the host has not taken yet: past this, the script's
+/// thread waits, so a script that writes faster than the host reads never grows the host.
+const EVENT_BUFFER: usize = 64;
 
 /// A tool as the script sees it: `tools[js_name]` and `tools[name]`, listed in `ALL_TOOLS`.
 pub(crate) struct ScriptTool {
@@ -71,14 +74,14 @@ struct Reply {
 
 /// A running script. Dropping it stops the script.
 pub(crate) struct Worker {
-    events: mpsc::UnboundedReceiver<Event>,
+    events: mpsc::Receiver<Event>,
     replies: Option<std_mpsc::Sender<Reply>>,
     interrupt: Arc<AtomicBool>,
 }
 
 impl Worker {
     pub fn start(script: Script) -> Result<Worker, String> {
-        let (event_tx, events) = mpsc::unbounded_channel();
+        let (event_tx, events) = mpsc::channel(EVENT_BUFFER);
         let (replies, reply_rx) = std_mpsc::channel();
         let interrupt = Arc::new(AtomicBool::new(false));
         let flag = interrupt.clone();
@@ -91,10 +94,10 @@ impl Worker {
                 match outcome {
                     Ok(Ok(())) => {}
                     Ok(Err(message)) => {
-                        let _ = crashed.send(Event::Crash(message));
+                        let _ = crashed.blocking_send(Event::Crash(message));
                     }
                     Err(_) => {
-                        let _ = crashed.send(Event::Crash("the script's VM panicked".into()));
+                        let _ = crashed.blocking_send(Event::Crash("the script's VM panicked".into()));
                     }
                 }
             })
@@ -114,11 +117,13 @@ impl Worker {
         }
     }
 
-    /// Ends the script where it stands: a spinning VM throws at its next interrupt check, and
-    /// one waiting on a call wakes to a closed channel.
+    /// Ends the script where it stands: a spinning VM throws at its next interrupt check, one
+    /// waiting on a call wakes to a closed channel, and one waiting to send wakes when the
+    /// events close.
     pub fn stop(&mut self) {
         self.interrupt.store(true, Ordering::Relaxed);
         self.replies = None;
+        self.events.close();
     }
 }
 
@@ -137,7 +142,7 @@ fn eval_options(filename: &str) -> EvalOptions {
 
 /// The thread's work: sets up the VM, starts the script, then runs its jobs and delivers the
 /// host's answers until it settles or the host stops it.
-fn drive(script: Script, events: mpsc::UnboundedSender<Event>, replies: std_mpsc::Receiver<Reply>, interrupt: &Arc<AtomicBool>) -> Result<(), String> {
+fn drive(script: Script, events: mpsc::Sender<Event>, replies: std_mpsc::Receiver<Reply>, interrupt: &Arc<AtomicBool>) -> Result<(), String> {
     let runtime = Runtime::new().map_err(|error| format!("Cannot start QuickJS: {error}"))?;
     runtime.set_memory_limit(script.memory_limit);
     runtime.set_max_stack_size(MAX_STACK_BYTES);
@@ -205,7 +210,7 @@ fn drive(script: Script, events: mpsc::UnboundedSender<Event>, replies: std_mpsc
 
 /// Evaluates the prelude with the bridge and starts the script. `None` when the script did not
 /// compile, which it reports itself.
-fn setup(ctx: &Ctx<'_>, script: &Script, events: mpsc::UnboundedSender<Event>, finished: Arc<AtomicBool>) -> Result<Option<Persistent<Object<'static>>>, String> {
+fn setup(ctx: &Ctx<'_>, script: &Script, events: mpsc::Sender<Event>, finished: Arc<AtomicBool>) -> Result<Option<Persistent<Object<'static>>>, String> {
     let failures = events.clone();
     let failed = finished.clone();
     let bridge = Function::new(ctx.clone(), move |kind: String, id: f64, text: String, extra: Opt<String>| {
@@ -223,7 +228,8 @@ fn setup(ctx: &Ctx<'_>, script: &Script, events: mpsc::UnboundedSender<Event>, f
             }
             _ => return,
         };
-        let _ = events.send(event);
+        // The script's own thread: waiting here is what keeps a flood of output bounded.
+        let _ = events.blocking_send(event);
     })
     .map_err(|error| error.to_string())?;
 
@@ -253,7 +259,7 @@ fn setup(ctx: &Ctx<'_>, script: &Script, events: mpsc::UnboundedSender<Event>, f
             };
             let error = json!({ "name": name, "message": message, "stack": stack.unwrap_or_else(|| format!("{name}: {message}")) });
             failed.store(true, Ordering::Relaxed);
-            let _ = failures.send(Event::Failed { error: error.to_string() });
+            let _ = failures.blocking_send(Event::Failed { error: error.to_string() });
             return Ok(None);
         }
     };

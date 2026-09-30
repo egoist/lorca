@@ -134,7 +134,7 @@ The hook is async, so it can wait for a person to approve the call.
 
 ### `after_tool_call`
 
-Called after `execute` returns, before `tool_execution_end`. Return an `AfterToolCallResult` to override any part of the result; fields left `None` keep their value.
+Called after `execute` returns, before `tool_execution_end`. Return an `AfterToolCallResult` to override any part of the result; fields left `None` keep their value. `structured` replaces the structured output, which is what a codemode script receives from a tool that declares an output schema.
 
 | Field | Overrides |
 | --- | --- |

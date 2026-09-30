@@ -56,6 +56,9 @@ pub struct BeforeToolCallResult {
 pub struct AfterToolCallResult {
     pub content: Option<Vec<ContentPart>>,
     pub details: Option<Value>,
+    /// Replaces the structured output, which is what a codemode script receives from a tool
+    /// that declares an output schema.
+    pub structured: Option<Value>,
     pub is_error: Option<bool>,
     pub terminate: Option<bool>,
 }
@@ -702,6 +705,11 @@ async fn prepare_call(
     cancel: &CancellationToken,
     parent: Option<&ToolCall>,
 ) -> Preparation {
+    // A call that was stopped before it started asks nothing of the hooks, which may put a
+    // question to a person.
+    if cancel.is_cancelled() {
+        return Preparation::Immediate { result: error_result("Operation aborted".into()), is_error: true, blocked: false };
+    }
     let mut args = match checked_arguments(tool.as_ref(), &tool_call.arguments) {
         Ok(args) => args,
         Err(message) => return Preparation::Immediate { result: error_result(message), is_error: true, blocked: false },
@@ -870,6 +878,9 @@ async fn finalize_executed(
         }
         if let Some(details) = after.details {
             result.details = details;
+        }
+        if let Some(structured) = after.structured {
+            result.structured = Some(structured);
         }
         if let Some(terminate) = after.terminate {
             result.terminate = terminate;

@@ -775,6 +775,22 @@ impl LocalStore {
         Ok(())
     }
 
+    /// Keeps the stored script values of these bots only: the roster's, once a synced roster
+    /// arrives.
+    pub fn retain_codemode_bots(&self, bot_ids: &[String]) -> anyhow::Result<()> {
+        let valid: std::collections::HashSet<&str> = bot_ids.iter().map(String::as_str).collect();
+        let connection = self.connection.lock().unwrap();
+        let stored: Vec<String> = {
+            let mut statement = connection.prepare("SELECT DISTINCT bot_id FROM codemode_store")?;
+            let rows = statement.query_map([], |row| row.get(0))?;
+            rows.collect::<rusqlite::Result<_>>()?
+        };
+        for bot_id in stored.iter().filter(|bot_id| !valid.contains(bot_id.as_str())) {
+            connection.execute("DELETE FROM codemode_store WHERE bot_id = ?1", [bot_id])?;
+        }
+        Ok(())
+    }
+
     pub fn remove(&self, chat_id: &str, message_id: &str) -> anyhow::Result<bool> {
         let connection = self.connection.lock().unwrap();
         let removed = connection.execute(

@@ -33,6 +33,10 @@ impl CodemodeStore for ScriptStore {
     }
 
     fn save(&self, writes: &StoreWrites) {
+        // A bot deleted while its script ran leaves nothing behind.
+        if self.app.bot(&self.bot_id).is_none() {
+            return;
+        }
         if let Err(error) = self.app.store.save_codemode_writes(&self.chat_id, &self.bot_id, &writes.set, &writes.delete) {
             tracing::warn!(%error, "saving a script's stored values");
         }
@@ -83,15 +87,15 @@ impl HostFunction for ModelsAsk {
 
     async fn call(&self, args: Vec<Value>, cancel: &CancellationToken) -> Result<Value, String> {
         let prompt = args.first().and_then(Value::as_str).filter(|prompt| !prompt.trim().is_empty()).ok_or("models.ask() expects a prompt string")?;
-        if prompt.chars().count() > MAX_PROMPT_CHARS {
-            return Err(format!("models.ask() takes a prompt of at most {MAX_PROMPT_CHARS} characters"));
-        }
         let options = args.get(1).cloned().unwrap_or(Value::Null);
         let system = match options.get("system") {
             None | Some(Value::Null) => String::new(),
             Some(Value::String(system)) => system.clone(),
             Some(_) => return Err("models.ask() system must be a string".into()),
         };
+        if prompt.chars().count() + system.chars().count() > MAX_PROMPT_CHARS {
+            return Err(format!("models.ask() takes a prompt and system of at most {MAX_PROMPT_CHARS} characters together"));
+        }
         let max_tokens = match options.get("maxTokens") {
             None | Some(Value::Null) => DEFAULT_MAX_TOKENS,
             Some(value) => value.as_u64().filter(|tokens| (1..=MAX_TOKENS).contains(tokens)).ok_or(format!("models.ask() maxTokens must be between 1 and {MAX_TOKENS}"))?,
@@ -144,6 +148,7 @@ mod tests {
         assert!(ask.call(vec![json!("x".repeat(MAX_PROMPT_CHARS + 1))], &cancel).await.unwrap_err().contains("at most"));
         assert!(ask.call(vec![json!("hi"), json!({ "maxTokens": 0 })], &cancel).await.unwrap_err().contains("maxTokens"));
         assert!(ask.call(vec![json!("hi"), json!({ "system": 1 })], &cancel).await.unwrap_err().contains("system"));
+        assert!(ask.call(vec![json!("hi"), json!({ "system": "x".repeat(MAX_PROMPT_CHARS) })], &cancel).await.unwrap_err().contains("together"));
         assert_eq!(ask.call(vec![json!("hi")], &cancel).await.unwrap_err(), "DeepSeek is not connected");
         ask.calls.store(MAX_CALLS_PER_TURN, Ordering::Relaxed);
         assert!(ask.call(vec![json!("hi")], &cancel).await.unwrap_err().contains("200 times"));

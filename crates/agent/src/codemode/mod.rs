@@ -213,6 +213,9 @@ pub struct CodemodeOptions {
     /// How many of a script's calls may run at once; the rest wait their turn. A tool whose
     /// execution mode is sequential runs alone either way.
     pub max_concurrent_calls: usize,
+    /// The longest a script may run, its calls and any question they put to a person included.
+    /// Its options line may ask for less.
+    pub timeout: Duration,
     /// Declare the shared MCP result types even before any MCP tool is known, for a host whose
     /// scripts reach MCP servers that connect on first use.
     pub mcp_types: bool,
@@ -222,7 +225,15 @@ pub struct CodemodeOptions {
 
 impl Default for CodemodeOptions {
     fn default() -> Self {
-        CodemodeOptions { inline_budget: 3000, max_output_tokens: 10_000, memory_limit: 256 * 1024 * 1024, max_concurrent_calls: 8, mcp_types: false, guidance: None }
+        CodemodeOptions {
+            inline_budget: 3000,
+            max_output_tokens: 10_000,
+            memory_limit: 256 * 1024 * 1024,
+            max_concurrent_calls: 8,
+            timeout: Duration::from_secs(30 * 60),
+            mcp_types: false,
+            guidance: None,
+        }
     }
 }
 
@@ -261,6 +272,20 @@ const ERROR_PREVIEW_CHARS: usize = 500;
 const CHARS_PER_TOKEN: usize = 4;
 /// How long calls still running when a script ends get to wind down after their cancel.
 const WIND_DOWN: Duration = Duration::from_secs(10);
+/// What one script may send the host, whatever its memory limit: the text it outputs, its
+/// images and their size, the calls it has started and not seen finish, and one call's
+/// arguments. Past the first or the third, the script stops.
+const MAX_OUTPUT_CHARS: usize = 16 * 1024 * 1024;
+const MAX_IMAGES: usize = 10;
+const MAX_IMAGE_BYTES: usize = 5 * 1024 * 1024;
+const IMAGE_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+const MAX_PENDING_CALLS: usize = 1000;
+const MAX_ARGUMENT_CHARS: usize = 8 * 1024 * 1024;
+/// The largest output budget an options line may ask for: the result is a chat row, which must
+/// stay small enough to sync.
+const MAX_OUTPUT_TOKENS: usize = 50_000;
+/// The most of a script's error the result carries.
+const MAX_ERROR_CHARS: usize = 20_000;
 
 /// The `codemode` tool.
 pub struct CodemodeTool {
@@ -354,6 +379,8 @@ enum End {
     Stopped { reason: String, terminate: bool },
     Timeout(u64),
     Aborted,
+    /// It went past what a script may send the host.
+    Limit(String),
     Crash(String),
 }
 
@@ -437,40 +464,37 @@ impl<'a> Run<'a> {
                 .chain(self.tool.functions.iter().map(|function| function.name().to_string()))
                 .map(|name| ScriptGlobal { name, spread: true })
                 .collect(),
-            store,
+            store: store.clone(),
             memory_limit: self.tool.options.memory_limit,
         };
+        let timeout = parsed.options.timeout_ms.map(Duration::from_millis).map_or(self.tool.options.timeout, |asked| asked.min(self.tool.options.timeout));
 
         let mut output: Vec<ContentPart> = Vec::new();
         let end = match Worker::start(script) {
-            Ok(worker) => self.drive(worker, parsed.options.timeout_ms, &mut output).await,
+            Ok(worker) => self.drive(worker, timeout, &mut output).await,
             Err(error) => End::Crash(error),
         };
         for call in self.calls.lock().unwrap().iter_mut().filter(|call| call.status == CallStatus::Running) {
             call.status = CallStatus::Cancelled;
         }
-        self.finish(end, output, parsed.options.max_output_tokens, started).await
+        self.finish(end, output, parsed.options.max_output_tokens, &store, started).await
     }
 
     /// Runs the script to its end: its calls, its output, and the host's deadline and stop.
-    async fn drive(&self, mut worker: Worker, timeout_ms: Option<u64>, output: &mut Vec<ContentPart>) -> End {
+    async fn drive(&self, mut worker: Worker, timeout: Duration, output: &mut Vec<ContentPart>) -> End {
         type Pending<'f> = std::pin::Pin<Box<dyn std::future::Future<Output = (u64, Option<usize>, Reply)> + Send + 'f>>;
         let mut in_flight: FuturesUnordered<Pending<'_>> = FuturesUnordered::new();
-        let deadline = timeout_ms.map(|ms| tokio::time::Instant::now() + Duration::from_millis(ms));
-        let sleep = async {
-            match deadline {
-                Some(deadline) => tokio::time::sleep_until(deadline).await,
-                None => std::future::pending().await,
-            }
-        };
+        let sleep = tokio::time::sleep(timeout);
         tokio::pin!(sleep);
         let mut next_call = 0u64;
+        let mut output_chars = 0usize;
+        let mut images = 0usize;
 
         let end = loop {
             tokio::select! {
                 biased;
                 _ = self.cancel.cancelled() => break End::Aborted,
-                _ = &mut sleep => break End::Timeout(timeout_ms.unwrap_or_default()),
+                _ = &mut sleep => break End::Timeout(timeout.as_millis() as u64),
                 Some((id, record, reply)) = in_flight.next(), if !in_flight.is_empty() => {
                     match reply {
                         Reply::Value(json) => worker.reply(id, true, json),
@@ -482,21 +506,49 @@ impl<'a> Run<'a> {
                     }
                 }
                 event = worker.next() => match event {
-                    Some(Event::Call { id, global: true, name, args }) => in_flight.push(Box::pin(async move { (id, None, self.global(&name, args.as_deref()).await) })),
+                    Some(Event::Call { .. }) if in_flight.len() >= MAX_PENDING_CALLS => {
+                        break End::Limit(format!("It started more than {MAX_PENDING_CALLS} calls without waiting for them, so it was stopped."));
+                    }
+                    Some(Event::Call { id, global: true, name, args }) => {
+                        let args = read_arguments(&name, args.as_deref(), json!([]));
+                        in_flight.push(Box::pin(async move { (id, None, self.global(&name, args).await) }));
+                    }
                     Some(Event::Call { id, global: false, name, args }) => {
                         next_call += 1;
                         let call_id = format!("{}/{next_call}", self.call_id);
-                        let args: Value = args.as_deref().and_then(|json| serde_json::from_str(json).ok()).unwrap_or_else(|| json!({}));
-                        let record = self.record(&call_id, &name, &args);
-                        self.publish();
-                        in_flight.push(Box::pin(async move {
-                            let reply = self.call(&name, call_id, args, record).await;
-                            (id, record, reply)
-                        }));
+                        match read_arguments(&name, args.as_deref(), json!({})) {
+                            // A call whose arguments the host cannot read never runs with other ones.
+                            Err(message) => worker.reply(id, false, Some(message)),
+                            Ok(args) => {
+                                let record = self.record(&call_id, &name, &args);
+                                self.publish();
+                                in_flight.push(Box::pin(async move {
+                                    let reply = self.call(&name, call_id, args, record).await;
+                                    (id, record, reply)
+                                }));
+                            }
+                        }
                     }
-                    Some(Event::Text(text)) => output.push(ContentPart::text(text)),
-                    Some(Event::Image { data, mime_type }) => output.push(ContentPart::Image { data, mime_type }),
-                    Some(Event::Done { value, writes }) => break End::Done { value, writes },
+                    Some(Event::Text(text)) => {
+                        output_chars += text.len();
+                        if output_chars > MAX_OUTPUT_CHARS {
+                            break End::Limit(format!("Its output passed {} MB, so it was stopped.", MAX_OUTPUT_CHARS / (1024 * 1024)));
+                        }
+                        output.push(ContentPart::text(text));
+                    }
+                    Some(Event::Image { data, mime_type }) => match check_image(&data, &mime_type, images) {
+                        Ok(()) => {
+                            images += 1;
+                            output.push(ContentPart::Image { data, mime_type });
+                        }
+                        Err(why) => output.push(ContentPart::text(format!("[An image was left out: {why}]"))),
+                    },
+                    Some(Event::Done { value, writes }) => {
+                        if output_chars + value.as_ref().map_or(0, String::len) > MAX_OUTPUT_CHARS {
+                            break End::Limit(format!("Its output passed {} MB, so it was stopped.", MAX_OUTPUT_CHARS / (1024 * 1024)));
+                        }
+                        break End::Done { value, writes };
+                    }
                     Some(Event::Failed { error }) => break End::Failed(error),
                     Some(Event::Crash(message)) => break End::Crash(message),
                     None => break End::Crash("the script's thread ended without a result".into()),
@@ -570,19 +622,26 @@ impl<'a> Run<'a> {
             }
         }
         let permit = tokio::select! {
-            permit = self.limiter.acquire() => permit.ok(),
+            biased;
             _ = self.calls_cancel.cancelled() => None,
+            permit = self.limiter.acquire() => permit.ok(),
         };
-        let Some(_permit) = permit else { return Reply::Throw("The script ended".into()) };
+        let Some(_permit) = permit else { return self.never_ran(record) };
         let sequential = entry.tool.execution_mode() == Some(crate::agent_loop::ToolExecutionMode::Sequential);
         let _alone = if sequential {
             tokio::select! {
+                biased;
+                _ = self.calls_cancel.cancelled() => return self.never_ran(record),
                 guard = self.exclusive.lock() => Some(guard),
-                _ = self.calls_cancel.cancelled() => return Reply::Throw("The script ended".into()),
             }
         } else {
             None
         };
+        // A call still waiting when the script ended never starts: no hook sees it, and no card
+        // asks about it.
+        if self.calls_cancel.is_cancelled() {
+            return self.never_ran(record);
+        }
         let outcome = self.tools.run(entry.tool.clone(), call_id, args, self.calls_cancel.child_token()).await;
         let cancelled = self.calls_cancel.is_cancelled();
         self.update(record, |call| {
@@ -600,9 +659,19 @@ impl<'a> Run<'a> {
         script_reply(entry.tool.as_ref(), &outcome)
     }
 
-    /// `searchTools()` and `describeTool()`.
-    async fn global(&self, name: &str, args: Option<&str>) -> Reply {
-        let args: Vec<Value> = args.and_then(|json| serde_json::from_str(json).ok()).unwrap_or_default();
+    /// A call that was waiting to start when the script ended.
+    fn never_ran(&self, record: Option<usize>) -> Reply {
+        self.update(record, |call| call.status = CallStatus::Cancelled);
+        Reply::Throw("The script ended before this call started".into())
+    }
+
+    /// `searchTools()`, `describeTool()`, and the host's functions.
+    async fn global(&self, name: &str, args: Result<Value, String>) -> Reply {
+        let args: Vec<Value> = match args {
+            Ok(Value::Array(args)) => args,
+            Ok(_) => Vec::new(),
+            Err(message) => return Reply::Throw(message),
+        };
         match name {
             "searchTools" => {
                 let Some(query) = args.first().and_then(Value::as_str) else { return Reply::Throw("searchTools() expects a query string".into()) };
@@ -669,21 +738,28 @@ impl<'a> Run<'a> {
         }
     }
 
-    async fn finish(&self, end: End, mut items: Vec<ContentPart>, max_output_tokens: Option<u64>, started: Instant) -> ToolResult {
+    async fn finish(&self, end: End, mut items: Vec<ContentPart>, max_output_tokens: Option<u64>, stored: &BTreeMap<String, String>, started: Instant) -> ToolResult {
         let calls = self.calls.lock().unwrap().clone();
-        let (ok, terminate) = match &end {
-            End::Done { value, writes } => {
-                let writes = parse_writes(writes);
-                if !writes.is_empty() {
-                    if let Some(store) = &self.tool.store {
-                        store.save(&writes);
+        // The store's limits hold here too, whatever the script did to its own copy of them.
+        let end = match end {
+            End::Done { value, writes } => match parse_writes(&writes).and_then(|writes| check_writes(stored, writes)) {
+                Ok(writes) => {
+                    if !writes.is_empty() {
+                        if let Some(store) = &self.tool.store {
+                            store.save(&writes);
+                        }
                     }
+                    if let Some(value) = &value {
+                        items.push(ContentPart::text(value_text(value)));
+                    }
+                    End::Done { value, writes: String::new() }
                 }
-                if let Some(value) = value {
-                    items.push(ContentPart::text(value_text(value)));
-                }
-                (true, false)
-            }
+                Err(why) => End::Limit(format!("Its store() writes were not saved: {why}")),
+            },
+            other => other,
+        };
+        let (ok, terminate) = match &end {
+            End::Done { .. } => (true, false),
             End::Stopped { reason, terminate } => {
                 items.push(ContentPart::text(format!("Script stopped: {reason}\n\n{}", call_summary(&calls))));
                 (false, *terminate)
@@ -692,12 +768,14 @@ impl<'a> Run<'a> {
                 let head = match other {
                     End::Failed(error) => {
                         let error: Value = serde_json::from_str(error).unwrap_or_else(|_| json!({ "message": error }));
-                        error["stack"].as_str().map(str::to_string).unwrap_or_else(|| {
+                        let text = error["stack"].as_str().map(str::to_string).unwrap_or_else(|| {
                             format!("{}: {}", error["name"].as_str().unwrap_or("Error"), error["message"].as_str().unwrap_or(""))
-                        })
+                        });
+                        clipped(&text, MAX_ERROR_CHARS)
                     }
                     End::Timeout(ms) => format!("Script timed out: Execution timed out after {ms} ms"),
                     End::Aborted => "Script aborted: the run was stopped".into(),
+                    End::Limit(message) => message.clone(),
                     End::Crash(message) => format!("Script sandbox failed: {message}"),
                     End::Done { .. } | End::Stopped { .. } => unreachable!(),
                 };
@@ -706,7 +784,7 @@ impl<'a> Run<'a> {
             }
         };
 
-        let budget = max_output_tokens.map(|tokens| tokens as usize).unwrap_or(self.tool.options.max_output_tokens);
+        let budget = max_output_tokens.map_or(self.tool.options.max_output_tokens, |tokens| (tokens as usize).min(MAX_OUTPUT_TOKENS));
         let (items, full_output_path) = truncate_output(items, budget).await;
         let header = format!(
             "{}\nWall time {:.1} seconds\nOutput:\n",
@@ -747,9 +825,40 @@ fn script_reply(tool: &dyn Tool, outcome: &ToolOutcome) -> Reply {
     Reply::Value(Some(Value::String(text).to_string()))
 }
 
-fn parse_writes(writes: &str) -> StoreWrites {
+/// A call's arguments as the host reads them: `absent` when the script passed none, and an
+/// error the call rejects with when they are too large or are not JSON the host can read.
+fn read_arguments(name: &str, json: Option<&str>, absent: Value) -> Result<Value, String> {
+    match json {
+        None => Ok(absent),
+        Some(json) if json.len() > MAX_ARGUMENT_CHARS => Err(format!("The arguments of {name} are over {} MB", MAX_ARGUMENT_CHARS / (1024 * 1024))),
+        Some(json) => serde_json::from_str(json).map_err(|error| format!("The arguments of {name} could not be read: {error}")),
+    }
+}
+
+/// An image the result can carry: a type every provider takes, valid base64, and not too many or
+/// too large. The error says why it was left out.
+fn check_image(data: &str, mime_type: &str, images: usize) -> Result<(), String> {
+    if images >= MAX_IMAGES {
+        return Err(format!("a script's output holds at most {MAX_IMAGES} images"));
+    }
+    if !IMAGE_TYPES.contains(&mime_type) {
+        return Err(format!("{mime_type} is not an image type the model takes (PNG, JPEG, GIF, or WebP)"));
+    }
+    let valid = data.len().is_multiple_of(4) && data.bytes().enumerate().all(|(index, byte)| byte.is_ascii_alphanumeric() || byte == b'+' || byte == b'/' || (byte == b'=' && index + 2 >= data.len()));
+    if !valid || data.is_empty() {
+        return Err("its data is not base64".into());
+    }
+    if data.len() / 4 * 3 > MAX_IMAGE_BYTES {
+        return Err(format!("it is over {} MB", MAX_IMAGE_BYTES / (1024 * 1024)));
+    }
+    Ok(())
+}
+
+/// A successful script's `store()` writes, from `[[key, json], [key], …]`. Anything else is an
+/// error, never a silent loss.
+fn parse_writes(writes: &str) -> Result<StoreWrites, String> {
     let mut result = StoreWrites::default();
-    let entries: Vec<Vec<String>> = serde_json::from_str(writes).unwrap_or_default();
+    let entries: Vec<Vec<String>> = serde_json::from_str(writes).map_err(|error| format!("they could not be read ({error})"))?;
     for entry in entries {
         match entry.as_slice() {
             [key] => {
@@ -758,14 +867,32 @@ fn parse_writes(writes: &str) -> StoreWrites {
             }
             [key, json] => {
                 result.delete.retain(|deleted| deleted != key);
-                if let Ok(value) = serde_json::from_str(json) {
-                    result.set.insert(key.clone(), value);
-                }
+                let value = serde_json::from_str(json).map_err(|error| format!("the value of {key:?} could not be read ({error})"))?;
+                result.set.insert(key.clone(), value);
             }
-            _ => {}
+            _ => return Err("they could not be read".into()),
         }
     }
-    result
+    Ok(result)
+}
+
+/// The writes, when the store stays within its limits after them.
+fn check_writes(stored: &BTreeMap<String, String>, writes: StoreWrites) -> Result<StoreWrites, String> {
+    let mut sizes: BTreeMap<&str, usize> = stored.iter().map(|(key, json)| (key.as_str(), key.len() + json.len())).collect();
+    for key in &writes.delete {
+        sizes.remove(key.as_str());
+    }
+    for (key, value) in &writes.set {
+        let json = serde_json::to_string(value).unwrap_or_default().len();
+        if json > MAX_STORE_VALUE_CHARS {
+            return Err(format!("the value of {key:?} is over {MAX_STORE_VALUE_CHARS} characters of JSON"));
+        }
+        sizes.insert(key.as_str(), key.len() + json);
+    }
+    if sizes.values().sum::<usize>() > MAX_STORE_TOTAL_CHARS {
+        return Err(format!("the stored values would pass {MAX_STORE_TOTAL_CHARS} characters of JSON"));
+    }
+    Ok(writes)
 }
 
 /// A returned value as `text()` would write it: a string as it is, anything else as JSON.
@@ -824,7 +951,7 @@ async fn truncate_output(items: Vec<ContentPart>, max_tokens: usize) -> (Vec<Con
         combined.lines().count(),
         removed.div_ceil(CHARS_PER_TOKEN)
     );
-    let path = std::env::temp_dir().join(format!("lorca-codemode-{}-{}.txt", std::process::id(), crate::now_ms()));
+    let path = std::env::temp_dir().join(format!("lorca-codemode-{}.txt", uuid::Uuid::new_v4()));
     let saved = write_private(&path, combined.as_bytes()).await;
     let full_output_path = match saved {
         Ok(()) => {
@@ -844,11 +971,13 @@ async fn truncate_output(items: Vec<ContentPart>, max_tokens: usize) -> (Vec<Con
 /// Script output can hold private data, so only the user may read the file.
 async fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     let mut options = tokio::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    options.write(true).create_new(true);
     #[cfg(unix)]
     options.mode(0o600);
     let mut file = options.open(path).await?;
-    tokio::io::AsyncWriteExt::write_all(&mut file, bytes).await
+    tokio::io::AsyncWriteExt::write_all(&mut file, bytes).await?;
+    // Tokio finishes a write in the background; the result names the file as soon as it returns.
+    tokio::io::AsyncWriteExt::flush(&mut file).await
 }
 
 // MARK: - Description
@@ -861,7 +990,7 @@ results down to what you need. Only what the script outputs or returns reaches y
 - A call a permission check refuses ends the whole script: the calls after it do not run.
 - Plain JavaScript only: no Node, file system, network, timers, or modules.
 - The input is raw JavaScript source, not JSON, a quoted string, or a markdown code fence.
-- It may start with a line like `// @options: {\"max_output_tokens\": 1000, \"timeout_ms\": 60000}`: `max_output_tokens` is the token budget for the output (default {max_output_tokens}), `timeout_ms` a hard deadline for the whole script (none by default).
+- It may start with a line like `// @options: {\"max_output_tokens\": 1000, \"timeout_ms\": 60000}`: `max_output_tokens` is the token budget for the output (default {max_output_tokens}, at most 50000), `timeout_ms` a hard deadline for the whole script, at most and by default {timeout} minutes.
 - Calls still running when the script ends are cancelled. Tool calls are real and have side effects: a script that fails partway does not undo the calls it already made.
 - Scripts have a {memory} MB memory limit. Filter or aggregate large data instead of accumulating it.
 
@@ -895,7 +1024,8 @@ struct CatalogEntry {
 fn describe(entries: &[Entry], namespaces: &[Namespace], functions: &[Arc<dyn HostFunction>], options: &CodemodeOptions) -> String {
     let intro = DESCRIPTION_INTRO
         .replace("{max_output_tokens}", &options.max_output_tokens.to_string())
-        .replace("{memory}", &(options.memory_limit / (1024 * 1024)).to_string());
+        .replace("{memory}", &(options.memory_limit / (1024 * 1024)).to_string())
+        .replace("{timeout}", &options.timeout.as_secs().div_ceil(60).to_string());
     let mut sections = vec![intro];
 
     let callable: Vec<&Entry> = entries.iter().filter(|entry| entry.tool.name() != CODEMODE_TOOL_NAME).collect();

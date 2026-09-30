@@ -192,7 +192,9 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
     let script_store = Arc::new(crate::scripts::ScriptStore { app: app.clone(), chat_id: chat.meta.id.clone(), bot_id: bot.id.clone() });
     let functions: Vec<Arc<dyn HostFunction>> =
         crate::scripts::ModelsAsk::new(app, &chat.meta.id, &bot.provider).map(|ask| Arc::new(ask) as Arc<dyn HostFunction>).into_iter().collect();
-    let options = CodemodeOptions { mcp_types: !plugin_briefs.is_empty(), ..CodemodeOptions::default() };
+    // A routine's script has nobody to press Stop, so it gets less time.
+    let timeout = std::time::Duration::from_secs(if unattended { 10 * 60 } else { 30 * 60 });
+    let options = CodemodeOptions { mcp_types: !plugin_briefs.is_empty(), timeout, ..CodemodeOptions::default() };
     tools.push(Arc::new(CodemodeTool::new(plugin_tools.clone(), options).with_store(script_store).with_functions(functions)));
 
     let sink = Arc::new(TurnSink(std::sync::Mutex::new(TurnState {
@@ -1112,15 +1114,20 @@ impl TurnState {
         Message::new(&self.chat_id, Author::Bot { bot_id: self.bot_id.clone() }, Body::text(String::new()))
     }
 
-    /// The plugin of a script's latest plugin call, by name.
+    /// The plugin of a script's latest plugin call that ran or runs, by name.
     fn latest_plugin(&self, details: &Value) -> Option<String> {
-        script_calls(details).into_iter().rev().find_map(|(name, _)| self.plugin_tools.plugin_name(&name))
+        script_calls(details)
+            .into_iter()
+            .rev()
+            .filter(|(_, status)| matches!(status.as_str(), "running" | "ok" | "error"))
+            .find_map(|(name, _)| self.plugin_tools.plugin_name(&name))
     }
 
-    /// The plugins a script's calls used, by name, in the order it first used each.
+    /// The plugins a script's calls used, by name, in the order it first used each. A call that
+    /// was refused or never started did not use its plugin.
     fn script_plugins(&self, details: &Value) -> Vec<String> {
         let mut plugins: Vec<String> = Vec::new();
-        for (name, _) in script_calls(details) {
+        for (name, _) in script_calls(details).into_iter().filter(|(_, status)| matches!(status.as_str(), "ok" | "error")) {
             if let Some(plugin) = self.plugin_tools.plugin_name(&name) {
                 if !plugins.contains(&plugin) {
                     plugins.push(plugin);
@@ -2854,6 +2861,35 @@ mod tests {
         // A routine has nobody to ask.
         let unattended = review("linear__create_comment", "c1/5", true).await.expect("refused");
         assert!(unattended.reason.as_deref().is_some_and(|reason| reason.starts_with("create_comment needs the user's permission")), "{:?}", unattended.reason);
+
+        // A call stopped before its question goes up puts no card in the chat.
+        let cards = || app.messages("chat").into_iter().filter(|message| matches!(message.body, Body::Permission { .. })).count();
+        let before = cards();
+        let stopped = CancellationToken::new();
+        stopped.cancel();
+        let call = ToolCall { id: "c1/6".into(), name: "linear__create_comment".into(), arguments: json!({ "body": "hi" }) };
+        let ctx = BeforeToolCallContext { assistant_message: &assistant, tool_call: &call, args: &call.arguments, context: &context, cancel: &stopped, parent: Some(&script) };
+        assert!(review_call(app, &catalog, "chat", &Trigger::default(), &chef, false, &ctx).await.is_some_and(|result| result.block));
+        assert_eq!(cards(), before);
+
+        // One stopped while it asks reads as dismissed, not as the user's no.
+        let waiting = CancellationToken::new();
+        let stop = waiting.clone();
+        let app_for_stop = app.clone();
+        tokio::spawn(async move {
+            loop {
+                if app_for_stop.messages("chat").iter().any(|message| matches!(&message.body, Body::Permission { decision, .. } if decision == "pending")) {
+                    stop.cancel();
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        });
+        let call = ToolCall { id: "c1/7".into(), name: "linear__create_comment".into(), arguments: json!({ "body": "hi" }) };
+        let ctx = BeforeToolCallContext { assistant_message: &assistant, tool_call: &call, args: &call.arguments, context: &context, cancel: &waiting, parent: Some(&script) };
+        assert!(review_call(app, &catalog, "chat", &Trigger::default(), &chef, false, &ctx).await.is_some());
+        let last = app.messages("chat").into_iter().rev().find(|message| matches!(message.body, Body::Permission { .. })).unwrap();
+        assert!(matches!(&last.body, Body::Permission { decision, .. } if decision == "dismissed"), "{:?}", last.body);
     }
 
     #[test]
@@ -2894,6 +2930,7 @@ mod tests {
     fn script_values_stay_with_their_chat_and_bot() {
         let scratch = scratch_app();
         let app = &scratch.0;
+        app.state.lock().unwrap().bots.extend([bot("b1", "Chef"), bot("b2", "Scout")]);
         use lorca_agent::codemode::{CodemodeStore, StoreWrites};
         let store = |chat_id: &str, bot_id: &str| crate::scripts::ScriptStore { app: app.clone(), chat_id: chat_id.into(), bot_id: bot_id.into() };
         let set = |pairs: &[(&str, Value)]| StoreWrites { set: pairs.iter().map(|(key, value)| (key.to_string(), value.clone())).collect(), delete: Vec::new() };
@@ -2909,6 +2946,11 @@ mod tests {
         app.store.forget_codemode_values_of("b1").unwrap();
         assert!(store("chat", "b1").load().is_empty(), "so does a deleted bot");
         assert_eq!(store("chat", "b2").load().len(), 1);
+        app.store.retain_codemode_bots(&[]).unwrap();
+        assert!(store("chat", "b2").load().is_empty(), "and one a synced roster no longer has");
+        app.state.lock().unwrap().bots.clear();
+        store("chat", "b1").save(&set(&[("late", json!(1))]));
+        assert!(store("chat", "b1").load().is_empty(), "a script ending after its bot was deleted keeps nothing");
     }
 
     /// A turn of `bot` in "chat", for a job `requested_by` that Device, running here.

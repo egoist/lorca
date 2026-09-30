@@ -296,7 +296,7 @@ impl LoopHooks for RunHooks {
             return None;
         }
         let decision = self.registry.after_tool(ctx.tool_call, ctx.args, ctx.result, ctx.is_error).await?;
-        Some(AfterToolCallResult { content: decision.content, details: decision.details, is_error: decision.is_error, terminate: decision.terminate })
+        Some(AfterToolCallResult { content: decision.content, details: decision.details, structured: None, is_error: decision.is_error, terminate: decision.terminate })
     }
 
     async fn prepare_next_turn(&self, ctx: PrepareNextTurnContext<'_>) -> Option<TurnUpdate> {

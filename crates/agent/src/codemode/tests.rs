@@ -366,3 +366,103 @@ async fn host_functions_are_declared_called_and_recorded() {
     assert_eq!(result.details["calls"][0]["status"], "ok");
     assert_eq!(result.details["calls"][1]["status"], "error");
 }
+
+#[tokio::test]
+async fn scripts_have_no_way_out_but_their_tools() {
+    let codemode = tool(vec![]);
+    let names = ["setTimeout", "setInterval", "fetch", "require", "process", "std", "os", "WebAssembly", "XMLHttpRequest", "Deno", "Bun"];
+    let code = format!("return {:?}.filter((name) => typeof globalThis[name] !== \"undefined\");", names);
+    let result = run(&codemode, &code).await;
+    assert!(text_of(&result).ends_with("\n[]"), "{}", text_of(&result));
+    let tools_object = run(&codemode, "return [typeof tools.then, Object.keys(tools).length, Object.isFrozen(ALL_TOOLS)];").await;
+    assert!(text_of(&tools_object).ends_with("[\"undefined\",0,true]"), "{}", text_of(&tools_object));
+}
+
+/// Counts the calls that reached it, and refuses the one named `refused`.
+struct Counting {
+    refused: &'static str,
+    runs: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait]
+impl ToolRunner for Counting {
+    async fn run(&self, tool: Arc<dyn Tool>, tool_call_id: String, args: Value, cancel: CancellationToken) -> ToolOutcome {
+        self.runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if tool.name() == self.refused {
+            return ToolOutcome { result: ToolResult::text("not allowed"), is_error: true, blocked: true };
+        }
+        DirectRunner.run(tool, tool_call_id, args, cancel).await
+    }
+}
+
+#[tokio::test]
+async fn calls_still_waiting_when_a_refusal_ends_the_script_never_start() {
+    let options = CodemodeOptions { max_concurrent_calls: 1, ..CodemodeOptions::default() };
+    let codemode = CodemodeTool::new(Arc::new(StaticCatalog::new(vec![Probe::tool("danger", Mode::Echo), Probe::tool("echo", Mode::Echo)])), options);
+    let runner = Counting { refused: "danger", runs: Default::default() };
+    let result = run_with(&codemode, "await Promise.all([tools.danger({}), ...Array.from({ length: 20 }, () => tools.echo({}))]);", &runner).await;
+    assert!(text_of(&result).contains("Script stopped: not allowed"), "{}", text_of(&result));
+    assert_eq!(runner.runs.load(std::sync::atomic::Ordering::SeqCst), 1, "only the refused call reached the pipeline");
+    let calls = result.details["calls"].as_array().unwrap();
+    assert!(calls[1..].iter().all(|call| call["status"] == "cancelled"), "{calls:?}");
+}
+
+#[tokio::test]
+async fn a_script_cannot_flood_the_host() {
+    let codemode = tool(vec![Probe::tool("hang", Mode::Hang)]);
+    let flood = run(&codemode, "for (let i = 0; i < 40; i++) text('x'.repeat(1000000));").await;
+    assert!(flood.is_error && text_of(&flood).contains("Its output passed 16 MB"), "{}", &text_of(&flood)[..200.min(text_of(&flood).len())]);
+    let pending = run(&codemode, "for (let i = 0; i < 2000; i++) tools.hang({});\nawait tools.hang({});").await;
+    assert!(text_of(&pending).contains("more than 1000 calls without waiting"), "{}", text_of(&pending));
+    let returned = run(&codemode, "return 'x'.repeat(17 * 1024 * 1024);").await;
+    assert!(returned.is_error && text_of(&returned).contains("Its output passed 16 MB"));
+}
+
+#[tokio::test]
+async fn images_the_model_cannot_take_are_left_out() {
+    let codemode = tool(vec![]);
+    let code = "image('data:image/svg+xml;base64,PHN2Zz4=');\nimage('data:image/png;base64,not base64!');\nimage({ type: 'image', data: 'AAAA' });\n\
+                for (let i = 0; i < 11; i++) image('data:image/png;base64,AAAA');";
+    let result = run(&codemode, code).await;
+    let images = result.content.iter().filter(|part| matches!(part, ContentPart::Image { .. })).count();
+    let text = text_of(&result);
+    assert_eq!(images, 10, "{text}");
+    assert!(text.contains("image/svg+xml is not an image type the model takes"), "{text}");
+    assert!(text.contains("its data is not base64"), "{text}");
+    assert!(text.contains("application/octet-stream is not an image type"), "{text}");
+    assert!(text.contains("at most 10 images"), "{text}");
+}
+
+#[tokio::test]
+async fn broken_strings_are_mended_and_unreadable_arguments_refused() {
+    let codemode = tool(vec![Probe::tool("echo", Mode::Echo)]);
+    let mended = run(&codemode, "text('a' + '\\u{1F600}'.slice(0, 1));\nreturn await tools.echo({ query: '\\u{1F600}'.slice(0, 1) });").await;
+    let text = text_of(&mended);
+    assert!(!mended.is_error, "{text}");
+    assert!(text.contains("a\u{FFFD}") && text.contains("{\"query\":\"\u{FFFD}\"}"), "{text}");
+    let refused = run(&codemode, "try { await tools.echo({ ['\\u{1F600}'.slice(0, 1)]: 1 }); } catch (error) { return error.message; }").await;
+    assert!(text_of(&refused).contains("The arguments of echo could not be read"), "{}", text_of(&refused));
+}
+
+#[tokio::test]
+async fn every_script_has_a_deadline() {
+    let options = CodemodeOptions { timeout: Duration::from_millis(200), ..CodemodeOptions::default() };
+    let codemode = CodemodeTool::new(Arc::new(StaticCatalog::new(vec![])), options);
+    let spinning = run(&codemode, "while (true) {}").await;
+    assert!(text_of(&spinning).contains("timed out after 200 ms"), "{}", text_of(&spinning));
+    let longer = run(&codemode, "// @options: {\"timeout_ms\": 60000}\nwhile (true) {}").await;
+    assert!(text_of(&longer).contains("timed out after 200 ms"), "an options line cannot ask for more: {}", text_of(&longer));
+    assert!(tool(vec![]).description().contains("at most and by default 30 minutes"));
+}
+
+#[test]
+fn the_host_holds_the_store_to_its_limits() {
+    let stored = BTreeMap::from([("old".to_string(), "\"x\"".to_string())]);
+    let writes = |pairs: Vec<(&str, Value)>| StoreWrites { set: pairs.into_iter().map(|(key, value)| (key.to_string(), value)).collect(), delete: Vec::new() };
+    assert!(check_writes(&stored, writes(vec![("a", json!(1))])).is_ok());
+    assert!(check_writes(&stored, writes(vec![("big", json!("y".repeat(MAX_STORE_VALUE_CHARS)))])).unwrap_err().contains("\"big\""));
+    let many: Vec<(&str, Value)> = ["a", "b", "c", "d", "e"].into_iter().map(|key| (key, json!("z".repeat(MAX_STORE_VALUE_CHARS - 10)))).collect();
+    assert!(check_writes(&stored, writes(many)).unwrap_err().contains("would pass"));
+    assert!(parse_writes("[[\"k\", \"{bad\"]]").unwrap_err().contains("\"k\""));
+    assert_eq!(parse_writes("[[\"k\", \"1\"], [\"gone\"]]").unwrap(), StoreWrites { set: BTreeMap::from([("k".to_string(), json!(1))]), delete: vec!["gone".into()] });
+}

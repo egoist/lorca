@@ -33,7 +33,7 @@ The tool takes one argument, `code`, the body of an async function: top-level `a
 // @options: {"max_output_tokens": 2000, "timeout_ms": 60000}
 ```
 
-`max_output_tokens` is the budget for the script's output (default `CodemodeOptions::max_output_tokens`, 10,000). Longer output keeps its start and end, and the whole text goes to a temp file the result names. `timeout_ms` is a hard deadline for the whole script, tool calls included; there is none by default, and the run's cancel token stops a script at any time.
+`max_output_tokens` is the budget for the script's output (default `CodemodeOptions::max_output_tokens`, 10,000, and at most 50,000). Longer output keeps its start and end, and the whole text goes to a temp file the result names. `timeout_ms` shortens the deadline for the whole script, tool calls included, which is `CodemodeOptions::timeout` (30 minutes) at most; the run's cancel token stops a script at any time.
 
 The result starts with `Script completed`, `Script failed`, or `Script stopped`, the wall time, and then the output in the order the script produced it. A failure appends the error with its stack (`codemode.js:<line>`, which matches the script as written) and the calls made before it, which are not undone. A failed script is an error result (`ToolResult::is_error`) that keeps its partial output. `details.calls` lists the script's calls (name, arguments cut for display, status, duration, error), the first 256 of them.
 
@@ -49,11 +49,15 @@ The result starts with `Script completed`, `Script failed`, or `Script stopped`,
 
 A script that waits on a promise nothing can settle fails at once instead of hanging.
 
+The host holds a script to limits its VM's memory cap does not cover. Past 16 MB of output, or with more than 1,000 calls it started and has not seen finish, the script stops. An image must be PNG, JPEG, GIF, or WebP, in valid base64, of at most 5 MB, and ten at most; any other is left out with a note in the output. A call whose arguments are over 8 MB, or are not JSON the host can read, rejects without running. Strings are made well-formed before they cross, so a lone surrogate becomes U+FFFD. `store()` writes over their limits fail the script, whatever the script did to the prelude's own checks.
+
 ## Calls go through the loop
 
 The loop calls `Tool::execute_with`, which hands the tool a `ToolRunner`. Codemode runs every call through it, so a script's call gets the same treatment as a call the model makes: the tool's argument shim, coercion and the schema check, `before_tool_call`, and `after_tool_call`. The hooks see the script's own call as `ctx.parent`, and each nested call has the id `<codemode call id>/<n>`. Nested calls send no events of their own; the codemode tool reports them in its updates (`details.calls`) and its result.
 
-A call that `before_tool_call` blocks ends the script. The calls after it never start, calls still running are cancelled, and the result says `Script stopped:` with the hook's reason, carrying the block's `terminate` hint. A refusal is final: the script cannot catch it and go on with the rest of a batch.
+A call that `before_tool_call` blocks ends the script. Calls still waiting for their turn never start and reach no hook, calls still running are cancelled, and the result says `Script stopped:` with the hook's reason, carrying the block's `terminate` hint. A refusal is final: the script cannot catch it and go on with the rest of a batch. The loop runs no hook for a call that was cancelled before it started.
+
+A tool that declares an output schema hands the script its `structured` output, so an `after_tool_call` hook that changes what a script sees sets `AfterToolCallResult::structured`, not only the content.
 
 Calls run in parallel, up to `max_concurrent_calls` (8) at once. A tool whose `execution_mode()` is `Sequential` runs alone, so two calls that may ask a person never wait at the same time.
 

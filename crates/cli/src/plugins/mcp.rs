@@ -34,6 +34,9 @@ pub const PERMISSION_TIMEOUT: std::time::Duration = std::time::Duration::from_se
 const CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 /// How long the sign-in page may take.
 const SIGN_IN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+/// How long a server may take to start and answer the MCP handshake. A package runner such as
+/// `npx` may download the server first.
+const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2 * 60);
 /// Reconnect a device-flow server before its bearer expires. A turn that starts inside this
 /// window gets a fresh token, so the static bearer cannot expire midway through ordinary work.
 const DEVICE_TOKEN_REFRESH_BUFFER_SECS: f64 = 5.0 * 60.0;
@@ -66,6 +69,9 @@ pub struct Server {
 /// changes. Held by the App.
 pub struct Pool {
     servers: Mutex<HashMap<String, Arc<Server>>>,
+    /// Bumped by `forget`, per plugin: a connection that started before a change of the
+    /// plugin's settings is used for nothing once it answers.
+    generations: Mutex<HashMap<String, u64>>,
     connecting: tokio::sync::Mutex<()>,
     /// The HTTP client the MCP transports and the OAuth flow use (rmcp's reqwest, not the
     /// App's).
@@ -81,12 +87,17 @@ impl Default for Pool {
 impl Pool {
     pub fn new() -> Self {
         let http = mcp_http::Client::builder().timeout(std::time::Duration::from_secs(600)).build().unwrap_or_default();
-        Pool { servers: Mutex::new(HashMap::new()), connecting: tokio::sync::Mutex::new(()), http }
+        Pool { servers: Mutex::new(HashMap::new()), generations: Mutex::new(HashMap::new()), connecting: tokio::sync::Mutex::new(()), http }
     }
 
     /// Drops every connection of a plugin, so the next use reconnects with fresh settings.
     pub fn forget(&self, plugin_id: &str) {
+        *self.generations.lock().unwrap().entry(plugin_id.to_string()).or_default() += 1;
         self.servers.lock().unwrap().retain(|key, _| !key.starts_with(&format!("{plugin_id}/")));
+    }
+
+    fn generation(&self, plugin_id: &str) -> u64 {
+        self.generations.lock().unwrap().get(plugin_id).copied().unwrap_or_default()
     }
 
     fn cached_server(&self, key: &str) -> Option<Arc<Server>> {
@@ -119,8 +130,17 @@ impl Pool {
             (plugin, store.values(plugin_id))
         };
         let spec = plugin.manifest.servers.get(name).cloned().ok_or_else(|| format!("{} has no server {name}", plugin.manifest.name))?;
+        let generation = self.generation(plugin_id);
         super::note(app, plugin_id, Some(("connecting", "Connecting…")));
-        match connect(app, &plugin, name, &spec, &values).await {
+        let connected = tokio::time::timeout(CONNECT_TIMEOUT, connect(app, &plugin, name, &spec, &values))
+            .await
+            .unwrap_or_else(|_| Err(format!("{} did not start within {} minutes", plugin.manifest.name, CONNECT_TIMEOUT.as_secs() / 60)));
+        match connected {
+            // The plugin changed (new settings, a sign-in, an uninstall) while it connected.
+            Ok(_) if self.generation(plugin_id) != generation => {
+                super::note(app, plugin_id, None);
+                Err(format!("{}'s settings changed while it connected. Try again.", plugin.manifest.name))
+            }
             Ok(server) => {
                 save_catalog(app, &server);
                 let server = Arc::new(server);
@@ -728,10 +748,11 @@ async fn wait_for_callback(listener: tokio::net::TcpListener, port: u16, name: &
 
 // MARK: - Tools for a turn
 
-/// The name a script calls a plugin tool by: `github__create_issue`, within the providers' limits.
+/// The name a script calls a plugin tool by, a JavaScript identifier: `github__create_issue`,
+/// `google_drive__search` for the `google-drive` plugin.
 pub fn tool_name(plugin_id: &str, tool: &str) -> String {
     let raw = format!("{plugin_id}__{tool}");
-    let cleaned: String = raw.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' }).collect();
+    let cleaned: String = raw.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' }).collect();
     cleaned.chars().take(64).collect()
 }
 
@@ -1099,13 +1120,26 @@ pub async fn review_call(
     ctx: &BeforeToolCallContext<'_>,
 ) -> Option<BeforeToolCallResult> {
     let tool = catalog.plugin_tool(&ctx.tool_call.name)?;
-    if tool.read_only {
+    let name = tool.tool.name.to_string();
+    let manifest_read_only =
+        app.plugins.lock().unwrap().get(&tool.plugin_id).is_some_and(|plugin| plugin.manifest.tools.readonly.iter().any(|pattern| pattern_matches(pattern, &name)));
+    if manifest_read_only {
         return None;
     }
-    let name = tool.tool.name.to_string();
+    // What the server says about the tool now, never what the saved list says: the bot can
+    // write that file. A server that cannot be reached says nothing, and the call is reviewed.
+    let live = tokio::select! {
+        biased;
+        _ = ctx.cancel.cancelled() => return Some(crate::local_review::blocked("Stopped".into())),
+        server = app.mcp.server(app, &tool.plugin_id, &tool.server_name) => server.ok(),
+    };
+    let live_tool = live.as_ref().and_then(|server| server.tools.iter().find(|candidate| candidate.name == tool.tool.name).cloned());
+    if live_tool.as_ref().and_then(|live| live.annotations.as_ref()).and_then(|annotations| annotations.read_only_hint) == Some(true) {
+        return None;
+    }
     // The script the call comes from says what the whole batch is for.
     let script = ctx.parent.filter(|parent| parent.name == codemode::CODEMODE_TOOL_NAME).and_then(|parent| parent.arguments["code"].as_str());
-    let review_description = tool.tool.description.as_deref().unwrap_or("").to_string();
+    let review_description = live_tool.and_then(|live| live.description.map(|description| description.to_string())).unwrap_or_default();
     let outcome = super::review::decide(app, bot, chat_id, trigger, &tool.plugin_id, &tool.plugin_name, &name, &review_description, ctx.args, script, ctx.cancel).await;
     let super::review::Outcome::Ask { reason, .. } = outcome else { return None };
     if unattended {
@@ -1503,7 +1537,9 @@ pub async fn ask_with_rule(
     .await;
     if let Some(mut message) = app.message(chat_id, &message.id) {
         if let Body::Permission { decision: d, .. } = &mut message.body {
-            *d = decision.as_str().into();
+            // A question the turn or script stopped waiting on was never answered: it reads as
+            // dismissed, not as the user's no, which Auto-review would learn from.
+            *d = if cancel.is_cancelled() && decision == Decision::Denied { Decision::Dismissed } else { decision }.as_str().into();
         }
         app.upsert_message(message, true);
     }
@@ -1517,6 +1553,10 @@ pub async fn ask_with_rule(
 /// theirs still to read is dismissed without asking, and a message that arrives while it waits
 /// dismisses it (`dismiss_questions`). An Always allow adds `always_rule` before this returns.
 pub async fn await_answer(app: &Arc<App>, chat_id: &str, message_id: &str, always_rule: Option<AutoReviewRule>, cancel: &CancellationToken, ask: impl FnOnce()) -> Decision {
+    // A call stopped before its question went up puts nothing in the chat.
+    if cancel.is_cancelled() {
+        return Decision::Denied;
+    }
     let (tx, rx) = tokio::sync::oneshot::channel();
     app.pending_permissions.lock().unwrap().insert(message_id.to_string(), (chat_id.to_string(), tx));
     // Checked once the question is registered, so a message landing in between still reaches it.
@@ -1650,7 +1690,8 @@ mod tests {
     #[test]
     fn tool_names_fit_the_providers() {
         assert_eq!(tool_name("github", "create_issue"), "github__create_issue");
-        assert_eq!(tool_name("my-server", "weird.name/x"), "my-server__weird_name_x");
+        assert_eq!(tool_name("my-server", "weird.name/x"), "my_server__weird_name_x");
+        assert_eq!(tool_name("p", "a-b"), tool_name("p", "a_b"), "names are identifiers, so a collision gets a suffix in the catalog");
         assert_eq!(tool_name("p", &"x".repeat(100)).len(), 64);
         // serde_json keeps object keys sorted, so the summary lists them alphabetically.
         assert_eq!(call_summary("create_issue", &json!({ "repo": "lorca", "title": "Fix   the relay", "body": "x".repeat(80) })), format!("create_issue · body: {}…, repo: lorca, title: Fix the relay", "x".repeat(60)));
