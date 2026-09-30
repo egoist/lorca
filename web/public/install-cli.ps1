@@ -26,8 +26,7 @@
     $cpu = $null
     try { $cpu = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString() } catch {}
     if (-not $cpu) { $cpu = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE } }
-    if ($cpu -notmatch '^(x64|amd64|arm64)$') { throw "There is no Lorca CLI for Windows on $cpu yet." }
-    # One build for both: Windows 11 on Arm runs x64 programs.
+    if ($cpu -notmatch '^(x64|amd64)$') { throw "There is no Lorca CLI for Windows on $cpu." }
     $target = 'windows-x86_64'
 
     if ($env:LORCA_VERSION) {

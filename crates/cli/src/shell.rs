@@ -358,6 +358,7 @@ fn follow(run: &mut CommandRun, summary: &mut String, session: &BashSession) {
     };
     let lines = session.last_lines(ROW_LINES);
     run.session_id = Some(session.id().to_string());
+    run.started_at = session.started_at().duration_since(std::time::UNIX_EPOCH).ok().map(|since| since.as_secs_f64());
     run.command = session.command().chars().take(crate::model::APP_COMMAND_CHARS).collect();
     run.state = state.into();
     run.prompt = if state == "waiting" { session.prompt() } else { None };

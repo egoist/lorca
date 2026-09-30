@@ -3107,12 +3107,18 @@ mod tests {
         let card = run_of(&app.message("chat", &row).unwrap()).unwrap();
         assert_eq!((card.state.as_str(), card.decision.as_deref()), ("running", Some("allowed")));
         assert!(card.device.is_some());
+        assert_eq!(card.started_at, None, "no terminal runs it yet");
+        let allowed_at = crate::config::now_secs();
 
         let result = bash.execute("call-1", args, CancellationToken::new(), Arc::new(|_| {})).await.unwrap();
         turn.handle(AgentEvent::ToolExecutionEnd { tool_call_id: "call-1".into(), tool_name: "bash".into(), result, is_error: false });
         let done = row_when(app, &row, |run| run.state == "exited").await;
         let card = run_of(&done).unwrap();
         assert_eq!((card.output.as_deref(), card.decision.as_deref()), (Some("hello"), Some("allowed")));
+        // How long it ran counts from its terminal's start, after the answer, not from the row,
+        // which went up before the question.
+        assert!(done.created_at < allowed_at);
+        assert!(card.started_at.is_some_and(|started| started >= allowed_at), "{:?}", card.started_at);
         // One row from the question to the end: nothing else asked.
         assert_eq!(app.messages("chat").len(), 1);
     }

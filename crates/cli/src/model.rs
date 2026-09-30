@@ -282,6 +282,11 @@ pub struct CommandRun {
     /// Windows, where a command runs on pipes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    /// When the session started it, in Unix seconds on the Runner's clock: after Auto-review and
+    /// the user's answer, which the row's `created_at` comes before. The apps count how long it
+    /// has run from here. None until a session runs it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<f64>,
     /// The command, for the card, which the apps get without the call's arguments: its first
     /// `APP_COMMAND_CHARS` characters.
     #[serde(default)]

@@ -20,6 +20,7 @@ import {
 } from "./model";
 import { parsePairingString } from "./pairing";
 import { daySeparator, joinDictation, preview, stamp, time, workingActivity, type WorkState } from "../ui/format";
+import { taskState } from "../ui/tasks";
 
 let nextId = 0;
 const uuid = () => `m-${++nextId}`;
@@ -192,5 +193,15 @@ describe("format", () => {
     const lastYear = new Date(now.getFullYear() - 1, 8, 2, 9, 0);
     expect(stamp(lastYear)).toBe(`9/2/${String(now.getFullYear() - 1).slice(-2)}`);
     expect(daySeparator(lastYear)).toMatch(/^\w{3}, Sep 2 9:00 AM$/);
+  });
+
+  test("a running task counts from when its terminal started it", () => {
+    // The row went up at 820, before Auto-review asked; its terminal started it after the answer.
+    const run: CommandRun = { session_id: "bash-1", started_at: 1000, command: "bun install", state: "running" };
+    expect(taskState(run, 820, 1_065_000)).toBe("Running · 1:05");
+    expect(taskState({ ...run, state: "waiting" }, 820, 1_065_000)).toBe("Waiting for input · 1:05");
+    // A run with no start counts from its row.
+    expect(taskState({ ...run, started_at: undefined }, 1000, 1_065_000)).toBe("Running · 1:05");
+    expect(taskState({ ...run, state: "exited" }, 820, 1_065_000)).toBe("Finished");
   });
 });

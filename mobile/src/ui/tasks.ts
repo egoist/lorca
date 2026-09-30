@@ -23,10 +23,11 @@ export function elapsed(seconds: number): string {
   return hours > 0 ? `${hours}:${pad(minutes)}:${pad(rest)}` : `${minutes}:${pad(rest)}`;
 }
 
-/// "Running · 1:05" and "Waiting for input · 1:05" while it runs, counted from its row's start
-/// (unix seconds); how it ended once it has.
-export function taskState(run: CommandRun, startedAt: number, now: number): string {
-  const running = elapsed(now / 1000 - startedAt);
+/// "Running · 1:05" and "Waiting for input · 1:05" while it runs, counted from when its terminal
+/// started it, or from its row's `created_at` (unix seconds) when the run has no start; how it
+/// ended once it has.
+export function taskState(run: CommandRun, createdAt: number, now: number): string {
+  const running = elapsed(now / 1000 - (run.started_at ?? createdAt));
   switch (run.state) {
     case "running":
       return `${t("Running")} · ${running}`;

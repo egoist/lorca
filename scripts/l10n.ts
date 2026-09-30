@@ -1,6 +1,6 @@
-// Checks the apps' string tables against the sources: every `L("…")` in the Mac app and every
-// `t("…")` in the phone app should have a Chinese entry, and a format key and its translation
-// should take the same values. `bun run l10n` lists what is missing, unused, or mismatched;
+// Checks the apps' string tables against the sources: every `L("…")` in the Mac app, every
+// `t("…")` in the phone app, and every `L("…")` and `Lc("…", "…")` in the desktop app should have a
+// Chinese entry, and a format key and its translation should take the same values. `bun run l10n` lists what is missing, unused, or mismatched;
 // `--merge <fragment.json>…` adds `{ "English": "中文" }` files to the tables first.
 
 import { Glob } from "bun"
@@ -9,6 +9,7 @@ import { join } from "node:path"
 const ROOT = join(import.meta.dir, "..")
 const MAC_TABLE = join(ROOT, "macos/Resources/zh-Hans.lproj/Localizable.strings")
 const PHONE_TABLE = join(ROOT, "mobile/src/i18n/zh.ts")
+const DESKTOP_TABLE = join(ROOT, "desktop/src/l10n/zh.ts")
 
 type Table = Map<string, string>
 
@@ -48,9 +49,25 @@ async function readMacTable(): Promise<Table> {
   return table
 }
 
-async function readPhoneTable(): Promise<Table> {
+/// The desktop app's keys: `L("…")` or `L('…')`, and `Lc("…", "…")` as the key `…|…`.
+async function desktopKeysIn(dir: string) {
+  const keys = new Map<string, string>()
+  for await (const path of new Glob("src/**/*.{ts,tsx}").scan({ cwd: dir })) {
+    if (path.includes("l10n/") || path.endsWith("mygo.ts") || path.endsWith(".test.ts")) continue
+    const source = await Bun.file(join(dir, path)).text()
+    for (const match of source.matchAll(/\bL\(\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)')/g)) {
+      keys.set(unescape(match[1] ?? match[2]), path)
+    }
+    for (const match of source.matchAll(/\bLc\(\s*"((?:[^"\\]|\\.)*)",\s*"((?:[^"\\]|\\.)*)"/g)) {
+      keys.set(`${unescape(match[1])}|${unescape(match[2])}`, path)
+    }
+  }
+  return keys
+}
+
+async function readPhoneTable(path = PHONE_TABLE): Promise<Table> {
   const table: Table = new Map()
-  const file = Bun.file(PHONE_TABLE)
+  const file = Bun.file(path)
   if (!(await file.exists())) return table
   for (const match of (await file.text()).matchAll(/^\s*"((?:[^"\\]|\\.)*)":\s*"((?:[^"\\]|\\.)*)",?$/gm)) {
     table.set(unescape(match[1]), unescape(match[2]))
@@ -70,6 +87,11 @@ async function writeMacTable(table: Table) {
 async function writePhoneTable(table: Table) {
   const lines = sorted(table).map(([key, value]) => `  "${escapeFor(key)}": "${escapeFor(value)}",`)
   await Bun.write(PHONE_TABLE, `// Simplified Chinese. The key is the English text passed to t(); \`bun run l10n\` checks this table.\n\nexport const zh: Record<string, string> = {\n${lines.join("\n")}\n};\n`)
+}
+
+async function writeDesktopTable(table: Table) {
+  const lines = sorted(table).map(([key, value]) => `  "${escapeFor(key)}": "${escapeFor(value)}",`)
+  await Bun.write(DESKTOP_TABLE, `// Simplified Chinese. The key is the English text passed to L(); \`bun run l10n\` checks this table.\n\nexport const zh: Record<string, string> = {\n${lines.join("\n")}\n};\n`)
 }
 
 /// The values a sentence takes: `%@`/`%d` (positions ignored) or `{name}`.
@@ -103,16 +125,18 @@ function report(name: string, used: Map<string, string>, table: Table) {
 
 const macKeys = await keysIn(join(ROOT, "macos/Sources/Lorca"), "**/*.swift", /\bL\(\s*"((?:[^"\\]|\\.)*)"(?:,\s*context:\s*"((?:[^"\\]|\\.)*)")?/g, () => false)
 const phoneKeys = await keysIn(join(ROOT, "mobile"), "{app,src}/**/*.{ts,tsx}", /\bt\(\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)')/g, (path) => path.includes("i18n/") || path.endsWith(".test.ts"))
+const desktopKeys = await desktopKeysIn(join(ROOT, "desktop"))
 
 const mac = await readMacTable()
 const phone = await readPhoneTable()
+const desktop = await readPhoneTable(DESKTOP_TABLE)
 
 const mergeAt = process.argv.indexOf("--merge")
 if (mergeAt !== -1) {
   for (const path of process.argv.slice(mergeAt + 1)) {
     const fragment = (await Bun.file(path).json()) as Record<string, string>
     for (const [key, value] of Object.entries(fragment)) {
-      for (const [used, table, name] of [[macKeys, mac, "mac"], [phoneKeys, phone, "phone"]] as const) {
+      for (const [used, table, name] of [[macKeys, mac, "mac"], [phoneKeys, phone, "phone"], [desktopKeys, desktop, "desktop"]] as const) {
         if (!used.has(key)) continue
         const existing = table.get(key)
         if (existing !== undefined && existing !== value) console.log(`${name}: kept ${JSON.stringify(existing)} over ${JSON.stringify(value)} for ${JSON.stringify(key)}`)
@@ -122,7 +146,8 @@ if (mergeAt !== -1) {
   }
   await writeMacTable(mac)
   await writePhoneTable(phone)
+  await writeDesktopTable(desktop)
 }
 
-const problems = report("mac", macKeys, mac) + report("phone", phoneKeys, phone)
+const problems = report("mac", macKeys, mac) + report("phone", phoneKeys, phone) + report("desktop", desktopKeys, desktop)
 process.exit(problems === 0 ? 0 : 1)

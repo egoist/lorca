@@ -3,7 +3,8 @@
   "private": true,
   "version": "1.0.7",
   "workspaces": [
-    "web"
+    "web",
+    "desktop"
   ],
   "scripts": {
     "dev": "bun run scripts/dev.ts",
@@ -11,6 +12,8 @@
     "build": "bun run scripts/build.ts",
     "release-mac": "bun run scripts/release-mac.ts",
     "release-ios": "bun run scripts/release-ios.ts",
+    "desktop": "bun run scripts/desktop.ts",
+    "desktop:build": "bun run scripts/desktop.ts build",
     "cli": "cargo run -q -p lorca -- serve",
     "reset": "bun run scripts/reset.ts",
     "relay": "mkdir -p temp && cargo run -q -p lorca-relay -- --bind 0.0.0.0:8787 --db temp/lorca-relay.db --apns-topic app.lorca.dev",

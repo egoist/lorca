@@ -1,0 +1,228 @@
+/* The app's colors and type, after the macOS app's Theme: semantic label and fill colors, the
+   system accent colors bots take, and the bubble, code, chip, and composer fills. Windows and Linux
+   bring their own fonts through system-ui. */
+
+:root {
+  color-scheme: light dark;
+  --font: system-ui, "Segoe UI Variable Text", "Segoe UI", Cantarell, Ubuntu, "Noto Sans", "Microsoft YaHei UI", "Noto Sans CJK SC", sans-serif;
+  --mono: ui-monospace, "Cascadia Mono", "Cascadia Code", Consolas, "DejaVu Sans Mono", "Liberation Mono", "Noto Sans Mono", monospace;
+
+  --label: rgba(0, 0, 0, 0.86);
+  --label-2: rgba(0, 0, 0, 0.52);
+  --label-3: rgba(0, 0, 0, 0.3);
+  --label-4: rgba(0, 0, 0, 0.12);
+  --separator: rgba(0, 0, 0, 0.1);
+  --placeholder: rgba(0, 0, 0, 0.3);
+  --link: #0068da;
+
+  --accent: #007aff;
+  --accent-text: #ffffff;
+  --accent-soft: rgba(0, 122, 255, 0.12);
+
+  --indigo: #5856d6;
+  --blue: #007aff;
+  --teal: #30b0c7;
+  --green: #34c759;
+  --orange: #ff9500;
+  --pink: #ff2d55;
+  --purple: #af52de;
+  --red: #ff3b30;
+
+  --window: #ececed;
+  --sidebar: #f3f3f4;
+  --inspector: #f6f6f7;
+  --content: #ffffff;
+  --toolbar-line: rgba(0, 0, 0, 0.09);
+
+  --bot-bubble: #f1f1f1;
+  --bot-bubble-border: rgba(0, 0, 0, 0.04);
+  --code: rgba(0, 0, 0, 0.06);
+  --code-hover: rgba(0, 0, 0, 0.1);
+  --chip: rgba(0, 0, 0, 0.05);
+  --card: #f1f1f2;
+  --card-border: rgba(0, 0, 0, 0.05);
+  --composer-field: rgba(255, 255, 255, 0.86);
+  --composer-border: rgba(0, 0, 0, 0.12);
+  --composer-control: rgba(0, 0, 0, 0.07);
+  --composer-primary: #000000;
+  --composer-primary-content: #ffffff;
+  --hover: rgba(0, 0, 0, 0.06);
+  --pressed: rgba(0, 0, 0, 0.12);
+  --selection: #0064e1;
+  --selection-text: #ffffff;
+  --selection-inactive: rgba(0, 0, 0, 0.1);
+  --field: #ffffff;
+  --field-border: rgba(0, 0, 0, 0.15);
+  --popover: #ffffff;
+  --shadow: 0 10px 40px rgba(0, 0, 0, 0.18), 0 0 0 0.5px rgba(0, 0, 0, 0.12);
+  --scrim: rgba(0, 0, 0, 0.22);
+
+  --text-message: 13.5px;
+  --text-body: 13px;
+  --text-small: 12px;
+  --text-caption: 10.5px;
+  --text-notice: 11.5px;
+}
+
+:root[data-dark] {
+  --label: rgba(255, 255, 255, 0.87);
+  --label-2: rgba(255, 255, 255, 0.55);
+  --label-3: rgba(255, 255, 255, 0.28);
+  --label-4: rgba(255, 255, 255, 0.12);
+  --separator: rgba(255, 255, 255, 0.1);
+  --placeholder: rgba(255, 255, 255, 0.3);
+  --link: #4ea1ff;
+
+  --accent: #0a84ff;
+  --accent-soft: rgba(10, 132, 255, 0.18);
+
+  --indigo: #5e5ce6;
+  --blue: #0a84ff;
+  --teal: #40cbe0;
+  --green: #30d158;
+  --orange: #ff9f0a;
+  --pink: #ff375f;
+  --purple: #bf5af2;
+  --red: #ff453a;
+
+  --window: #262628;
+  --sidebar: #232325;
+  --inspector: #222224;
+  --content: #1c1c1c;
+  --toolbar-line: rgba(255, 255, 255, 0.08);
+
+  --bot-bubble: rgba(255, 255, 255, 0.1);
+  --bot-bubble-border: rgba(255, 255, 255, 0.06);
+  --code: rgba(0, 0, 0, 0.24);
+  --code-hover: rgba(0, 0, 0, 0.34);
+  --chip: rgba(255, 255, 255, 0.08);
+  --card: rgba(255, 255, 255, 0.06);
+  --card-border: rgba(255, 255, 255, 0.06);
+  --composer-field: rgba(46, 46, 48, 0.86);
+  --composer-border: rgba(255, 255, 255, 0.14);
+  --composer-control: rgba(255, 255, 255, 0.12);
+  --composer-primary: #ffffff;
+  --composer-primary-content: #000000;
+  --hover: rgba(255, 255, 255, 0.07);
+  --pressed: rgba(255, 255, 255, 0.14);
+  --selection: #0a64d8;
+  --selection-inactive: rgba(255, 255, 255, 0.1);
+  --field: rgba(255, 255, 255, 0.06);
+  --field-border: rgba(255, 255, 255, 0.14);
+  --popover: #2c2c2e;
+  --shadow: 0 10px 40px rgba(0, 0, 0, 0.5), 0 0 0 0.5px rgba(255, 255, 255, 0.14);
+  --scrim: rgba(0, 0, 0, 0.4);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--font);
+  font-size: var(--text-body);
+  color: var(--label);
+  background: var(--window);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  user-select: none;
+  cursor: default;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: default;
+}
+
+input,
+textarea,
+[contenteditable="true"] {
+  user-select: text;
+}
+
+.selectable {
+  user-select: text;
+  cursor: auto;
+}
+
+.icon {
+  flex: none;
+  display: block;
+}
+
+:focus {
+  outline: none;
+}
+
+:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
+  outline-offset: 1px;
+}
+
+/* Fields show focus in their own way: a tinted border, or none in the composer and the palette. */
+input:focus-visible,
+textarea:focus-visible {
+  outline: none;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--accent) 32%, transparent);
+}
+
+::-webkit-scrollbar {
+  width: 11px;
+  height: 11px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: transparent;
+  border: 3px solid transparent;
+  border-radius: 8px;
+  background-clip: padding-box;
+}
+
+:hover::-webkit-scrollbar-thumb {
+  background-color: var(--label-4);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--label-3);
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.truncate {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.secondary {
+  color: var(--label-2);
+}
+
+.tertiary {
+  color: var(--label-3);
+}
+
+.caption {
+  font-size: var(--text-caption);
+}

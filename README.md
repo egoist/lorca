@@ -11,6 +11,7 @@ Identity is a local key pair. Devices pair to each other. Traffic to the network
 ## Stack
 
 - macOS app: AppKit, SPM (`macos/`)
+- Windows and Linux app: MyGo (Go and the system webview) with a Solid page (`desktop/`), after the macOS app
 - CLI: Rust websocket service (`crates/cli`)
   - agent loop after pi-agent-core (`crates/agent`), with Grok-style bot orchestration
   - identity, pairing, E2E (X25519/Ed25519 key pairs + XChaCha20-Poly1305 DEK); signed requests and opaque blobs to the relay
@@ -21,6 +22,7 @@ Identity is a local key pair. Devices pair to each other. Traffic to the network
 
 ```bash
 bun run dev          # builds the CLI and the app, launches the app, rebuilds on change; runs a relay on 0.0.0.0:8787
+bun run desktop      # the Windows and Linux app in development (mygo dev); bun run desktop:build builds its releases
 bun run mobile       # Expo dev server for the phone app (bun run mobile:ios builds the dev client)
 bun run relay        # a local relay on 0.0.0.0:8787 (set LORCA_RELAY_URL to use it)
 cargo test           # agent loop, crypto, and SSE tests

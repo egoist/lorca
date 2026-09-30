@@ -16,7 +16,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
 use regex::Regex;
@@ -120,6 +120,8 @@ pub struct BashSession {
     command: String,
     pid: u32,
     started: Instant,
+    /// `started` on the wall clock.
+    started_at: SystemTime,
     state: Mutex<SessionState>,
     changed: watch::Sender<u64>,
     #[cfg(unix)]
@@ -261,6 +263,12 @@ impl BashSession {
 
     pub fn pid(&self) -> u32 {
         self.pid
+    }
+
+    /// When it started, on the wall clock: after whatever held its call first (a review, the
+    /// user's answer), for a host that shows how long it has run.
+    pub fn started_at(&self) -> SystemTime {
+        self.started_at
     }
 
     /// How it ended, or `None` while it runs.
@@ -618,6 +626,7 @@ impl BashSession {
             command: command.to_string(),
             pid,
             started: now,
+            started_at: SystemTime::now(),
             state: Mutex::new(SessionState { output: Output::new(), last_output: now, last_input: now, end: None, read: 0, drained: false }),
             changed: watch::channel(0).0,
             master: Mutex::new(Some(fd.clone())),

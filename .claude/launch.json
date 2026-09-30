@@ -25,6 +25,18 @@
         "4173"
       ],
       "port": 4173
+    },
+    {
+      "name": "desktop-web",
+      "runtimeExecutable": "bun",
+      "runtimeArgs": [
+        "run",
+        "--cwd",
+        "desktop",
+        "dev:web"
+      ],
+      "port": 5178,
+      "url": "http://localhost:5178"
     }
   ]
 }

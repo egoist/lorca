@@ -93,7 +93,7 @@ final class RunningTasksViewController: NSViewController {
                     firstLine: run.firstLine,
                     output: run.output ?? "",
                     state: run.state,
-                    startedAt: message.createdAt))
+                    startedAt: run.startedAt ?? message.createdAt))
             }
         }
         // What went wrong with a Stop matters while the command runs.

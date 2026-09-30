@@ -18,6 +18,20 @@ final class RunningTaskTests: XCTestCase {
         XCTAssertEqual(RunningTask.elapsed(since: start, now: start.addingTimeInterval(-4)), "0:00")
     }
 
+    func testTheRunningTimeCountsFromWhenItsTerminalStartedIt() throws {
+        // The row goes up before Auto-review asks; its terminal starts it after the answer.
+        let row = { (run: String) in
+            #"{"id": "call", "chat_id": "chat", "author": {"kind": "bot", "bot_id": "scout"}, "created_at": 820, "state": {"kind": "complete"}, "body": {"kind": "tool", "name": "bash", "summary": "Running", "detail": "", "is_running": true, "run": \#(run)}}"#
+        }
+        let started = try Wire.decoder.decode(
+            Wire.Message.self,
+            from: Data(row(#"{"session_id": "bash-1", "started_at": 1000.5, "command": "bun install", "state": "running"}"#).utf8)
+        ).toModel()
+        XCTAssertEqual(started.commandRun?.startedAt, Date(timeIntervalSince1970: 1000.5))
+        let asking = try Wire.decoder.decode(Wire.Message.self, from: Data(row(#"{"command": "bun install", "state": "asking"}"#).utf8)).toModel()
+        XCTAssertNil(asking.commandRun?.startedAt)
+    }
+
     func testTheStatusSaysWhoRunsItAndHowItStands() {
         let now = start.addingTimeInterval(65)
         XCTAssertEqual(task(.running).status(at: now), "Running · 1:05")

@@ -430,6 +430,7 @@ enum Wire {
 
     struct Run: Decodable {
         var sessionId: String?
+        var startedAt: Double?
         var command: String?
         var state: String
         var prompt: String?
@@ -600,7 +601,8 @@ extension Wire.Message {
                     targetBotID: self.body.targetBotId,
                     run: self.body.run.map {
                         CommandRun(
-                            sessionID: $0.sessionId, command: $0.command ?? "",
+                            sessionID: $0.sessionId, startedAt: $0.startedAt.map(Date.init(timeIntervalSince1970:)),
+                            command: $0.command ?? "",
                             state: CommandRun.State(rawValue: $0.state) ?? .stopped,
                             prompt: $0.prompt, output: $0.output,
                             device: $0.device, reason: $0.reason, rule: $0.rule,

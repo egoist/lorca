@@ -70,8 +70,7 @@ jobs:
       matrix:
         include:
           # Xcode builds for the Mac; zig, through cargo-zigbuild, for the others. The Linux builds
-          # are static (musl), so one runs on any distribution, and Windows 11 on Arm runs the
-          # x86_64 build.
+          # are static (musl), so one runs on any distribution.
           - { name: macos-aarch64, target: aarch64-apple-darwin, os: macos-latest }
           - { name: linux-aarch64, target: aarch64-unknown-linux-musl, os: ubuntu-latest, zig: true }
           - { name: linux-x86_64, target: x86_64-unknown-linux-musl, os: ubuntu-latest, zig: true }

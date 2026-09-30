@@ -176,6 +176,8 @@ export type Body =
 export interface CommandRun {
   /** The terminal session running it, once one does; none before it starts, or on a Windows Runner, where it takes no answers. */
   session_id?: string;
+  /** When its terminal started it, in unix seconds on the Runner's clock: after Auto-review and the user's answer, which the row's `created_at` comes before. None until a terminal runs it. */
+  started_at?: number;
   /** The command, its first 8,000 characters. */
   command: string;
   /**

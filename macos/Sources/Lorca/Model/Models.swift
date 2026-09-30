@@ -652,6 +652,9 @@ struct CommandRun: Hashable {
     /// The terminal session running it, once one does. Nil before it starts, and on a Windows
     /// Runner, where a command runs on pipes and takes no answers.
     var sessionID: String?
+    /// When its terminal started it, on the Runner's clock: after Auto-review and the user's
+    /// answer, which the row's time comes before. Nil until a terminal runs it.
+    var startedAt: Date?
     /// The command, its first 8,000 characters.
     var command: String
     var state: State

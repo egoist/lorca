@@ -16,7 +16,7 @@ each with its SHA-256 beside it:
 lorca-cli-macos-aarch64.tar.gz    Apple silicon
 lorca-cli-linux-aarch64.tar.gz    static (musl), for any distribution
 lorca-cli-linux-x86_64.tar.gz
-lorca-cli-windows-x86_64.zip      Windows 11 on Arm runs it too
+lorca-cli-windows-x86_64.zip
 <archive>.sha256
 ```
 
@@ -69,8 +69,8 @@ A release needs no deploy of the site. A change to the scripts ships with `bun r
   `LORCA_DOWNLOAD_URL` (the releases URL, `https://github.com/egoist/lorca/releases` by default;
   the workflow points it at its local server).
 - They pick the archive for the OS and CPU, the arm64 build in a shell under Rosetta, and refuse
-  an Intel Mac. They check the archive against its `.sha256` and move `lorca` into place by
-  rename, so a running `lorca serve` keeps the file it started from.
+  an Intel Mac and Windows on Arm. They check the archive against its `.sha256` and move `lorca`
+  into place by rename, so a running `lorca serve` keeps the file it started from.
 - The shell script adds the folder to PATH in the profile of the user's shell (`.zshrc`,
   `.bashrc`, fish's `conf.d`, else `.profile`); the PowerShell one adds it to the user `Path` in
   the registry.
