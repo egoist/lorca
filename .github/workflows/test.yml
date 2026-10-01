@@ -60,10 +60,10 @@ jobs:
 
   rust-windows:
     name: Rust (Windows)
-    # The crates a Windows Runner runs: the CLI, the agent, and provider sign-in. There paths have
-    # drive letters, PATH splits on `;`, and commands run on pipes in Git for Windows' bash, which
-    # the runner has; tests of Unix-only behavior (terminal sessions, the login shell's
-    # environment) are #[cfg(unix)]. The release builds x86_64-pc-windows-gnu with zig, and the
+    # The crates a Windows Runner runs: the CLI, the agent, the model catalog, and provider
+    # sign-in. There paths have drive letters, PATH splits on `;`, and commands run on pipes in
+    # Git for Windows' bash, which the runner has; tests of Unix-only behavior (terminal sessions,
+    # the login shell's environment) are #[cfg(unix)]. The release builds x86_64-pc-windows-gnu with zig, and the
     # tests build with the runner's MSVC toolchain.
     runs-on: windows-latest
     steps:
@@ -71,7 +71,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # Every suite runs, so one failing on Windows does not hide the others.
-      - run: cargo test --locked --no-fail-fast -p lorca -p lorca-agent -p lorca-provider-auth
+      - run: cargo test --locked --no-fail-fast -p lorca -p lorca-agent -p lorca-models -p lorca-provider-auth
 
   macos-app:
     name: macOS app

@@ -19,6 +19,7 @@ import {
   routineDetail,
   spendSummary,
   thinkingLevels,
+  withCustomModels,
   type Bot,
   type BotMemory,
   type Chat,
@@ -205,8 +206,13 @@ function Runtime(props: { bot: Bot; chat: Chat }) {
     const kinds = store.providerKinds;
     return kinds.includes(bot().provider) ? kinds : [...kinds, bot().provider];
   };
-  const models = () => providerModels(bot().provider, providers());
-  const levels = () => thinkingLevels(bot().provider);
+  // The CLI's catalog, which comes with each snapshot, and the custom providers' saved models.
+  const catalog = () => {
+    track.roster();
+    return withCustomModels(store.models, store.providers);
+  };
+  const models = () => providerModels(catalog(), bot().provider);
+  const levels = () => thinkingLevels(catalog(), bot().provider, bot().model);
   const credential = () => {
     track.roster();
     return store.credential(bot().provider);
@@ -227,18 +233,24 @@ function Runtime(props: { bot: Bot; chat: Chat }) {
         value={models().some((model) => model.id === bot().model) ? bot().model! : ""}
         onChange={(id) => {
           const model = id === "" ? undefined : id;
-          if (model !== bot().model) store.setBotRuntime(bot().id, bot().provider, model, bot().thinking);
+          if (model === bot().model) return;
+          // A level the new model does not take goes back to the default.
+          const kept = thinkingLevels(catalog(), bot().provider, model).some((level) => level.id === bot().thinking);
+          store.setBotRuntime(bot().id, bot().provider, model, kept ? bot().thinking : undefined);
         }}
       />
-      <PopUpRow
-        label={L("Thinking")}
-        options={[{ value: "", label: L("Default") }, ...levels().map((level) => ({ value: level.id, label: level.label }))]}
-        value={levels().some((level) => level.id === bot().thinking) ? bot().thinking! : ""}
-        onChange={(id) => {
-          const thinking = id === "" ? undefined : id;
-          if (thinking !== bot().thinking) store.setBotRuntime(bot().id, bot().provider, bot().model, thinking);
-        }}
-      />
+      {/* Only the levels this model takes; a model without any has no choice to make. */}
+      <Show when={levels().length > 0}>
+        <PopUpRow
+          label={L("Thinking")}
+          options={[{ value: "", label: L("Default") }, ...levels().map((level) => ({ value: level.id, label: level.label }))]}
+          value={levels().some((level) => level.id === bot().thinking) ? bot().thinking! : ""}
+          onChange={(id) => {
+            const thinking = id === "" ? undefined : id;
+            if (thinking !== bot().thinking) store.setBotRuntime(bot().id, bot().provider, bot().model, thinking);
+          }}
+        />
+      </Show>
       {/* Connected: the masked key and a Change link. Not connected: just the Connect link. A custom
           provider's link opens its own sheet: to edit it, or to add it again once it is deleted. */}
       <ActionRow

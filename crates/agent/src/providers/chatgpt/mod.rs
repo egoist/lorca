@@ -21,9 +21,9 @@ use crate::types::ThinkingLevel;
 
 pub const CHATGPT_RESPONSES_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
 /// The workhorse model Codex offers to ChatGPT sign-ins for coding and everyday work. The
-/// catalog also lists `gpt-6-astra` and `gpt-6-luna`. The `*-codex` ids are rejected for
-/// ChatGPT accounts.
-pub const CHATGPT_DEFAULT_MODEL: &str = "gpt-6-sol";
+/// catalog also lists `gpt-6-astra`, `gpt-6-sol`, and `gpt-6-luna`. The `*-codex` ids are
+/// rejected for ChatGPT accounts.
+pub const CHATGPT_DEFAULT_MODEL: &str = "gpt-6.1-sol";
 
 /// Where the adapter reads tokens from and writes refreshed ones back to.
 #[async_trait]

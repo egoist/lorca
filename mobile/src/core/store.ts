@@ -5,7 +5,7 @@
 import { useMemo } from "react";
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
-import { runsInTerminal, type AutoReview, type Bot, type Chat, type ChatMeta, type ChatUsage, type Device, type Message, type ProviderStatus, type RelayProblem, type Routine } from "./model";
+import { runsInTerminal, type AutoReview, type Bot, type Chat, type ChatMeta, type ChatUsage, type Device, type Message, type ProviderModel, type ProviderStatus, type RelayProblem, type Routine } from "./model";
 import { t } from "../i18n";
 import { savePrefs } from "./prefs";
 
@@ -48,6 +48,8 @@ export interface StoreState {
   auto_review: AutoReview;
   /// The account's provider credentials, the same on every Device.
   providers: ProviderStatus[];
+  /// The models the core's catalog offers, for the Model and Thinking pickers.
+  models: ProviderModel[];
   /// Turns in flight, by job id.
   running: Record<string, Running>;
   /// The bot whose model is thinking, by chat id, until that bot's next message or the end of
@@ -87,6 +89,7 @@ function empty(): Omit<StoreState, "ready" | "dictation_lang" | "appActive" | "a
     routines: [],
     auto_review: { is_enabled: true, rules: [] },
     providers: [],
+    models: [],
     running: {},
     thinking: {},
     retries: {},
@@ -150,6 +153,7 @@ export function replaceSnapshot(snapshot: {
   routines?: Routine[];
   auto_review?: AutoReview;
   providers?: ProviderStatus[];
+  models?: ProviderModel[];
   running_turns: { job_id: string; chat_id: string; bot_id: string; routine_id?: string | null }[];
 }) {
   const running: Record<string, Running> = {};
@@ -180,6 +184,7 @@ export function replaceSnapshot(snapshot: {
     routines: snapshot.routines ?? [],
     auto_review: snapshot.auto_review ?? { is_enabled: true, rules: [] },
     providers: snapshot.providers ?? [],
+    models: snapshot.models ?? [],
     running,
     // What a turn that ended unheard was doing says nothing about the next one.
     thinking: pick(thinking, busy),

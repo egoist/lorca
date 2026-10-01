@@ -72,6 +72,8 @@ final class AppStore {
     private(set) var autoReview = AutoReview()
     /// The account's provider credentials, the same on every Device.
     private(set) var providers: [ProviderCredential] = []
+    /// The models the CLI's catalog offers, for the Model and Thinking pickers.
+    private(set) var catalog: [ProviderModel] = []
 
     /// True when the CLI answers on localhost (mock: toggled from the Debug menu).
     private(set) var isConnected = false
@@ -273,6 +275,7 @@ final class AppStore {
         routines = (snapshot.routines ?? []).map { $0.toModel() }
         autoReview = snapshot.autoReview?.toModel() ?? AutoReview()
         providers = (snapshot.providers ?? []).compactMap { $0.toModel() }
+        catalog = (snapshot.models ?? []).compactMap { $0.toModel() }
         runningJobs = (snapshot.runningTurns ?? []).map { ($0.jobId, $0.chatId, $0.botId, $0.routineId) }
         for id in snapshot.runningChatIds where !runningJobs.contains(where: { $0.chatID == id }) {
             runningJobs.append(("chat:\(id)", id, "", nil))
@@ -1340,6 +1343,21 @@ final class AppStore {
         providers.first { $0.kind == kind }
     }
 
+    /// The models `kind` offers, in the catalog's order; the first is the default the CLI uses.
+    /// A custom provider's are the ones saved with it, with the levels the CLI says they take.
+    func models(for kind: ProviderCredential.Kind) -> [ProviderModel] {
+        guard kind.isCustom else { return catalog.filter { $0.provider == kind } }
+        return (credential(for: kind)?.models ?? []).map {
+            ProviderModel(provider: kind, id: $0.id, label: $0.displayName, levels: $0.levels)
+        }
+    }
+
+    /// The thinking levels `model` of `kind` takes, lowest first; see
+    /// `ProviderModel.thinkingLevels(for:among:)`.
+    func thinkingLevels(for kind: ProviderCredential.Kind, model: String?) -> [(id: String, label: String)] {
+        ProviderModel.thinkingLevels(for: model, among: models(for: kind))
+    }
+
     /// Disconnects a provider for the whole account, or deletes a custom one.
     func disconnectProvider(_ kind: ProviderCredential.Kind) async throws {
         if isMock, kind.isCustom {
@@ -1372,7 +1390,7 @@ final class AppStore {
             let kind = kind ?? .custom(ProviderCredential.Kind.customPrefix + name.lowercased().replacingOccurrences(of: " ", with: "-"))
             let saved = ProviderCredential(
                 kind: kind, isConnected: true, detail: baseURL, baseURL: baseURL, name: name, api: api,
-                models: models.map { CustomModel(id: $0) })
+                models: models.map { CustomModel(id: $0, levels: ["low", "medium", "high"]) })
             if let index = providers.firstIndex(where: { $0.kind == kind }) { providers[index] = saved } else { providers.append(saved) }
             emit(.rosterChanged)
             return kind
@@ -1398,6 +1416,7 @@ final class AppStore {
         routines = MockData.routines()
         autoReview = MockData.autoReview()
         providers = MockData.providers()
+        catalog = MockData.models()
         sortChats()
         emit(.snapshotReplaced)
     }

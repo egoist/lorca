@@ -27,6 +27,7 @@ import {
   type PluginDetail,
   type PluginState,
   type ProviderCredential,
+  type ProviderModel,
   type Routine,
 } from "./models";
 
@@ -240,8 +241,18 @@ export interface WireSnapshot {
   routines?: WireRoutine[] | null;
   auto_review?: WireAutoReview | null;
   providers?: WireProvider[] | null;
+  models?: WireModel[] | null;
   running_chat_ids: string[];
   running_turns?: WireRunningTurn[] | null;
+}
+
+/** A model the CLI's catalog offers, in the catalog's order: each provider's first is its default. */
+export interface WireModel {
+  provider: string;
+  id: string;
+  name: string;
+  /** The thinking levels it takes, lowest first. */
+  levels: string[];
 }
 
 export interface WireRosterChanged {
@@ -585,6 +596,10 @@ export function toCustomModel(wire: WireCustomModel): CustomModel {
     maxOutput: optional(wire.max_output),
     images: optional(wire.images),
   };
+}
+
+export function toModels(wire: WireModel[] | null | undefined): ProviderModel[] {
+  return (wire ?? []).map((model) => ({ provider: model.provider, id: model.id, label: model.name, levels: model.levels }));
 }
 
 export function toMarketplacePlugin(wire: WireMarketplacePlugin): MarketplacePlugin {

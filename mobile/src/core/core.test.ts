@@ -31,16 +31,17 @@ import {
   providerKinds,
   providerLabel,
   providerModels,
-  providerThinkingLevels,
   providerUsesAPIKey,
   PROVIDER_KINDS,
-  PROVIDER_MODELS,
   runsInTerminal,
   savedModelRows,
   selectedModelIds,
   showsCard,
   toggleModelRow,
   urlHost,
+  thinkingLevels,
+  withCustomModels,
+  type ProviderModel,
   type Body,
   type Bot,
   type Chat,
@@ -124,7 +125,26 @@ describe("model", () => {
     expect(providerConnectMethod("grok")).toBe("providers.connect_grok");
     expect(providerDefaultBaseURL("deepseek")).toBe("https://api.deepseek.com");
     expect(providerDefaultBaseURL("chatgpt")).toBe("");
-    expect(PROVIDER_MODELS.chatgpt.map((m) => m.id)).toEqual(["gpt-6-sol", "gpt-6-astra", "gpt-6-luna"]);
+  });
+
+  test("offers the models and thinking levels the catalog lists", () => {
+    // As the core's snapshot carries them, in the catalog's order.
+    const catalog: ProviderModel[] = [
+      { provider: "anthropic", id: "claude-opus-5", name: "Claude Opus 5", levels: ["off", "low", "medium", "high", "xhigh", "max"] },
+      { provider: "anthropic", id: "claude-opus-5-5", name: "Claude Opus 5.5", levels: ["low", "medium", "high", "xhigh", "max"] },
+      { provider: "anthropic", id: "claude-haiku-4-5", name: "Claude Haiku 4.5", levels: ["off", "minimal", "low", "medium", "high"] },
+      { provider: "opencode", id: "kimi-k3", name: "Kimi K3", levels: ["max"] },
+      { provider: "opencode", id: "big-pickle", name: "Big Pickle", levels: [] },
+    ];
+    expect(providerModels(catalog, "anthropic").map((m) => m.id)).toEqual(["claude-opus-5", "claude-opus-5-5", "claude-haiku-4-5"]);
+    expect(providerModels(catalog, "grok")).toEqual([]);
+    // The default model's levels, until the bot picks one.
+    expect(thinkingLevels(catalog, "anthropic", undefined)).toEqual(["off", "low", "medium", "high", "xhigh", "max"]);
+    expect(thinkingLevels(catalog, "anthropic", "claude-opus-5-5")).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(thinkingLevels(catalog, "opencode", "kimi-k3")).toEqual(["max"]);
+    expect(thinkingLevels(catalog, "opencode", "big-pickle")).toEqual([]);
+    // A model the catalog does not have gets every level the provider's models take.
+    expect(thinkingLevels(catalog, "anthropic", "claude-custom")).toEqual(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
   });
 });
 
@@ -138,9 +158,12 @@ describe("custom providers", () => {
     base_url: "https://openrouter.ai/api/v1",
     name: "OpenRouter",
     api: "chat-completions",
-    models: [{ id: "anthropic/claude-sonnet-5", name: "Anthropic: Claude Sonnet 5", context_window: 1_000_000, max_output: 128_000, images: true }, { id: "qwen3:8b" }],
+    models: [
+      { id: "anthropic/claude-sonnet-5", name: "Anthropic: Claude Sonnet 5", context_window: 1_000_000, max_output: 128_000, images: true, levels: ["off", "low", "medium", "high", "xhigh", "max"] },
+      { id: "qwen3:8b", levels: ["low", "medium", "high"] },
+    ],
   };
-  const lab: ProviderStatus = { kind: "custom:lab", is_connected: true, detail: "http://192.168.1.20:11434/v1", base_url: "http://192.168.1.20:11434/v1", name: "Lab", api: "responses", models: [{ id: "llama4", name: "" }] };
+  const lab: ProviderStatus = { kind: "custom:lab", is_connected: true, detail: "http://192.168.1.20:11434/v1", base_url: "http://192.168.1.20:11434/v1", name: "Lab", api: "responses", models: [{ id: "llama4", name: "", levels: ["low", "medium", "high"] }] };
   const statuses = [...builtIn, openrouter, lab];
 
   test("kinds start with custom:", () => {
@@ -158,22 +181,23 @@ describe("custom providers", () => {
     expect(providerLabel("anthropic", [])).toBe("Anthropic");
   });
 
-  test("its models are the ones saved with it, named as its server lists them, the first the default", () => {
-    expect(providerModels("custom:openrouter", statuses)).toEqual([
-      { id: "anthropic/claude-sonnet-5", label: "Anthropic: Claude Sonnet 5" },
-      { id: "qwen3:8b", label: "qwen3:8b" },
+  // The core's catalog, as the snapshot carries it, with the custom providers' models after it.
+  const catalog = withCustomModels([{ provider: "chatgpt", id: "gpt-6.1-sol", name: "GPT-6.1 Sol", levels: ["low", "medium", "high", "xhigh", "max"] }], statuses);
+
+  test("its models join the catalog, named as its server lists them, the first the default", () => {
+    expect(providerModels(catalog, "custom:openrouter").map((model) => [model.id, model.name])).toEqual([
+      ["anthropic/claude-sonnet-5", "Anthropic: Claude Sonnet 5"],
+      ["qwen3:8b", "qwen3:8b"],
     ]);
-    expect(providerModels("custom:lab", statuses)).toEqual([{ id: "llama4", label: "llama4" }]);
-    expect(providerModels("custom:gone", statuses)).toEqual([]);
-    expect(providerModels("chatgpt", statuses)).toEqual(PROVIDER_MODELS.chatgpt);
-    expect(providerModels("unknown", statuses)).toEqual([]);
+    expect(providerModels(catalog, "custom:lab").map((model) => model.name)).toEqual(["llama4"]);
+    expect(providerModels(catalog, "custom:gone")).toEqual([]);
+    expect(providerModels(catalog, "chatgpt").map((model) => model.id)).toEqual(["gpt-6.1-sol"]);
   });
 
-  test("its thinking levels are off to high; built-ins keep their own", () => {
-    expect(providerThinkingLevels("custom:openrouter")).toEqual(["off", "low", "medium", "high"]);
-    expect(providerThinkingLevels("anthropic")).toEqual(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
-    expect(providerThinkingLevels("grok")).toEqual(["low", "medium", "high", "xhigh"]);
-    expect(providerThinkingLevels("unknown")).toEqual([]);
+  test("each of its models takes the thinking levels the core gives it", () => {
+    expect(thinkingLevels(catalog, "custom:openrouter", undefined)).toEqual(["off", "low", "medium", "high", "xhigh", "max"]);
+    expect(thinkingLevels(catalog, "custom:openrouter", "qwen3:8b")).toEqual(["low", "medium", "high"]);
+    expect(thinkingLevels(catalog, "custom:lab", "llama4")).toEqual(["low", "medium", "high"]);
   });
 
   test("custom providers come after the built-ins, in the order added", () => {

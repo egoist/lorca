@@ -161,6 +161,11 @@ mod tests {
         let device = &snapshot["result"]["devices"][0];
         assert_eq!(device["os"], "ios");
         assert_eq!(device["name"], "Phone");
+        // The pickers' models come from the catalog, which the phone has without the agent.
+        let models = snapshot["result"]["models"].as_array().unwrap();
+        let sol = models.iter().find(|model| model["provider"] == "chatgpt").unwrap();
+        assert_eq!((&sol["id"], &sol["name"]), (&serde_json::json!("gpt-6.1-sol"), &serde_json::json!("GPT-6.1 Sol")));
+        assert_eq!(sol["levels"], serde_json::json!(["low", "medium", "high", "xhigh", "max"]));
 
         // Provider credentials can be configured on a Device build. The phone checks the key,
         // stores it locally, and returns the account-wide status without gaining Runner code.

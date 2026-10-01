@@ -1617,10 +1617,20 @@ impl App {
             "routines": self.routines_out(&state),
             "auto_review": state.auto_review,
             "providers": self.credentials.lock().unwrap().statuses(),
+            "models": models_out(),
             "running_chat_ids": self.running_chat_ids(),
             "running_turns": self.running_turns(),
         })
     }
+}
+
+/// The models the apps offer in their pickers, in the catalog's order, so each provider's first
+/// is its default: the provider, id, and name, and the thinking levels each one takes.
+fn models_out() -> Vec<Value> {
+    lorca_models::MODELS
+        .iter()
+        .map(|model| json!({ "provider": model.provider, "id": model.id, "name": model.name, "levels": model.levels }))
+        .collect()
 }
 
 /// Where a chat's read mark goes among its messages: after all of them when this Device has

@@ -35,8 +35,22 @@ enum Wire {
         var routines: [Routine]?
         var autoReview: AutoReview?
         var providers: [Provider]?
+        var models: [Model]?
         var runningChatIds: [String]
         var runningTurns: [RunningTurn]?
+    }
+
+    /// A model the CLI's catalog offers, in the catalog's order.
+    struct Model: Decodable {
+        var provider: String
+        var id: String
+        var name: String
+        var levels: [String]
+
+        func toModel() -> ProviderModel? {
+            guard let kind = ProviderCredential.Kind(wireValue: provider) else { return nil }
+            return ProviderModel(provider: kind, id: id, label: name, levels: levels)
+        }
     }
 
     struct AutoReviewRule: Decodable {
