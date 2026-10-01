@@ -545,9 +545,9 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             }
             crate::plugins::on_runner(app, &runner_id, "plugins.connect", body).await
         }
-        // The phone's sign-in page closed before the browser came back.
+        // The phone's page for sign-in `sign_in` closed before the browser came back.
         "plugins.auth.cancel" => {
-            app.cancel_plugin_sign_in();
+            app.cancel_plugin_sign_in(opt_string(&params, "sign_in").as_deref());
             Ok(Value::Null)
         }
         "plugins.detail" => {

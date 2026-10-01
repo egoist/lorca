@@ -53,8 +53,9 @@ class Engine {
   private started = false;
   private fetchingFiles = new Set<string>();
   private loadingOlder = new Set<string>();
-  private authBrowserOpen = false;
-  private dismissingAuthBrowser = false;
+  /// The sign-in page up in the in-app browser: whose it is (a plugin sign-in's id, or
+  /// "provider"), and whether this side is closing it.
+  private authPage: { attempt: string; closing: boolean } | null = null;
   private readChatId: string | null = null;
   /// Snapshots on their way, and the events that arrived meanwhile (see `bootstrap`).
   private bootstraps = 0;
@@ -182,13 +183,13 @@ class Engine {
         useStore.setState((s) => ({ relayConnected: !!data.connected, relayUpdateRequired: !!data.update_required, relayError: data.error ?? null, relayUrl: data.url ?? s.relayUrl }));
         break;
       case "provider.auth":
-        this.openAuthBrowser(data.url, "providers.auth.cancel");
+        void this.openAuthPage(data.url, "provider", () => core.request("providers.auth.cancel"));
         break;
       case "plugin.auth":
-        this.openAuthBrowser(data.url, "plugins.auth.cancel");
+        void this.openAuthPage(data.url, data.sign_in, () => core.request("plugins.auth.cancel", { sign_in: data.sign_in }));
         break;
       case "plugin.auth.done":
-        this.dismissAuthBrowser();
+        void this.closeAuthPage(data.sign_in);
         break;
       case "identity.changed":
         if (!data.has_identity) resetStore();
@@ -356,7 +357,7 @@ class Engine {
       const { providers } = await core.request<{ providers: ProviderStatus[] }>(providerConnectMethod(kind), params);
       useStore.setState({ providers });
     } finally {
-      if (kind === "chatgpt" || kind === "grok") this.dismissAuthBrowser();
+      if (kind === "chatgpt" || kind === "grok") void this.closeAuthPage("provider");
     }
   }
 
@@ -366,43 +367,38 @@ class Engine {
   }
 
   /// Opens a sign-in page, a provider's or a plugin's for its Runner, in the in-app browser
-  /// while the core waits on its loopback callback. Closing the page first cancels the wait
-  /// with `cancel`.
-  private openAuthBrowser(url: string, cancel: "providers.auth.cancel" | "plugins.auth.cancel") {
+  /// while the core waits on its loopback callback; a page up for another sign-in closes first.
+  /// Closing the page before the sign-in came back calls `cancel`.
+  private async openAuthPage(url: string, attempt: string, cancel: () => Promise<unknown>) {
+    if (this.authPage) await this.closeAuthPage(this.authPage.attempt);
     // iOS keeps the core alive behind SFSafariViewController. Android's auth-session
     // polyfill also watches AppState, so closing the custom tab can cancel the Rust wait.
-    this.authBrowserOpen = true;
-    const browser = Platform.OS === "android" ? WebBrowser.openAuthSessionAsync(url) : WebBrowser.openBrowserAsync(url);
-    void browser
-      .then((result) => {
-        if (!this.dismissingAuthBrowser && (result.type === "cancel" || result.type === "dismiss")) void core.request(cancel).catch(() => {});
-      })
-      .catch((error) => {
-        console.warn("opening a sign-in page", error instanceof Error ? error.message : error);
-        void core.request(cancel).catch(() => {});
-      })
-      .finally(() => {
-        this.authBrowserOpen = false;
-        this.dismissingAuthBrowser = false;
-      });
+    const page = { attempt, closing: false };
+    this.authPage = page;
+    try {
+      const result = await (Platform.OS === "android" ? WebBrowser.openAuthSessionAsync(url) : WebBrowser.openBrowserAsync(url));
+      if (!page.closing && (result.type === "cancel" || result.type === "dismiss")) void cancel().catch(() => {});
+    } catch (error) {
+      console.warn("opening a sign-in page", error instanceof Error ? error.message : error);
+      void cancel().catch(() => {});
+    } finally {
+      if (this.authPage === page) this.authPage = null;
+    }
   }
 
-  private dismissAuthBrowser() {
-    if (!this.authBrowserOpen) {
-      this.dismissingAuthBrowser = false;
-      return;
-    }
-    this.dismissingAuthBrowser = true;
+  /// Closes the page of sign-in `attempt` when it is the one up: the sign-in came back, or ended.
+  private async closeAuthPage(attempt: string) {
+    const page = this.authPage;
+    if (!page || page.attempt !== attempt) return;
+    page.closing = true;
     // Chrome Custom Tabs have no programmatic dismiss. Its success page stays up until the
-    // user closes it; the promise above then clears this flag without cancelling the login.
+    // user closes it; the page's promise then ends without cancelling the sign-in.
     if (Platform.OS === "android") return;
     try {
-      void WebBrowser.dismissBrowser().catch(() => {
-        this.dismissingAuthBrowser = false;
-      });
+      await WebBrowser.dismissBrowser();
     } catch {
       // The browser may already be gone on this platform.
-      this.dismissingAuthBrowser = false;
+      page.closing = false;
     }
   }
 

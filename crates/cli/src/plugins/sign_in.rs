@@ -16,6 +16,10 @@ use crate::events::Event;
 
 /// How long the sign-in page may take, here and on the Runner.
 pub const TIMEOUT: Duration = Duration::from_secs(5 * 60);
+/// How long the Runner gives a server's discovery and client registration.
+pub const SETUP_TIMEOUT: Duration = Duration::from_secs(45);
+/// How long a Device waits for the Runner to start a sign-in: the setup and the relay both ways.
+pub const START_TIMEOUT: Duration = Duration::from_secs(75);
 
 /// A loopback listener for the browser's redirect, bound before the page opens so the redirect
 /// never races it. The port is whatever was free; the client is registered with it.
@@ -60,6 +64,20 @@ impl Callback {
             Err(_) => Err("Timed out waiting for the browser".into()),
         }
     }
+}
+
+/// True for the redirect a Device's `Callback` listens on: plain http to 127.0.0.1 on a port of
+/// its own, at `/callback`, with no user, query, or fragment, so the code goes nowhere else.
+pub fn is_loopback_redirect(uri: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(uri) else { return false };
+    url.scheme() == "http"
+        && url.host_str() == Some("127.0.0.1")
+        && url.port().is_some()
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.path() == "/callback"
+        && url.query().is_none()
+        && url.fragment().is_none()
 }
 
 /// True when the browser came back with an error instead of a code: the user said no.
@@ -109,11 +127,11 @@ fn escape(text: &str) -> String {
 pub async fn from_here(app: &Arc<App>, runner_id: &str, verb: &str, mut body: Value, plugin_id: &str, name: &str) -> Result<Value, String> {
     let callback = Callback::bind().await?;
     body["redirect_uri"] = json!(callback.redirect_uri());
-    let answer = crate::requests::ask(app, runner_id, verb, body).await?;
+    let answer = crate::requests::ask_within(app, runner_id, verb, body, START_TIMEOUT).await?;
     let (Some(page), Some(id)) = (answer["url"].as_str().map(str::to_string), answer["sign_in"].as_str().map(str::to_string)) else { return Ok(answer) };
-    let cancel = app.begin_plugin_sign_in();
+    let cancel = app.begin_plugin_sign_in(&id);
     let (app, runner_id, plugin_id, name) = (app.clone(), runner_id.to_string(), plugin_id.to_string(), name.to_string());
-    let opened = open_page(&app, &plugin_id, &page);
+    let opened = open_page(&app, &plugin_id, &id, &page);
     let open = opened.is_ok();
     tokio::spawn(async move {
         let landed = if open {
@@ -124,7 +142,7 @@ pub async fn from_here(app: &Arc<App>, runner_id: &str, verb: &str, mut body: Va
         } else {
             None
         };
-        app.emit(Event::PluginAuthDone { plugin_id: plugin_id.clone() });
+        app.emit(Event::PluginAuthDone { plugin_id: plugin_id.clone(), sign_in: id.clone() });
         let (verb, body) = match landed {
             Some(Ok(url)) => ("plugins.sign_in.finish", json!({ "plugin_id": plugin_id, "sign_in": id, "url": url })),
             // The Runner stops waiting at the same time.
@@ -139,17 +157,17 @@ pub async fn from_here(app: &Arc<App>, runner_id: &str, verb: &str, mut body: Va
     Ok(answer)
 }
 
-/// Opens a sign-in page on this Device: a computer's browser, or a phone's in-app browser
+/// Opens sign-in `id`'s page on this Device: a computer's browser, or a phone's in-app browser
 /// through its app.
-fn open_page(app: &Arc<App>, plugin_id: &str, url: &str) -> Result<(), String> {
+fn open_page(app: &Arc<App>, plugin_id: &str, id: &str, url: &str) -> Result<(), String> {
     #[cfg(feature = "runner")]
     {
-        let _ = plugin_id;
+        let _ = (plugin_id, id);
         crate::plugins::mcp::open_browser(app, url)
     }
     #[cfg(not(feature = "runner"))]
     {
-        app.emit(Event::PluginAuth { plugin_id: plugin_id.to_string(), url: url.to_string() });
+        app.emit(Event::PluginAuth { plugin_id: plugin_id.to_string(), sign_in: id.to_string(), url: url.to_string() });
         Ok(())
     }
 }
@@ -170,6 +188,20 @@ mod tests {
         assert!(page.text().await.unwrap().contains("Signed in to Docs &lt;Team&gt;"));
         assert_eq!(waiting.await.unwrap().unwrap(), format!("{redirect}?code=abc&state=xyz"));
         drop(idle);
+
+        assert!(is_loopback_redirect(&redirect));
+        for elsewhere in [
+            "http://127.0.0.1:80@evil.example/callback",
+            "http://user@127.0.0.1:5555/callback",
+            "http://127.0.0.1.evil.example:5555/callback",
+            "https://127.0.0.1:5555/callback",
+            "http://localhost:5555/callback",
+            "http://127.0.0.1/callback",
+            "http://127.0.0.1:5555/elsewhere",
+            "http://127.0.0.1:5555/callback?next=https://evil.example",
+        ] {
+            assert!(!is_loopback_redirect(elsewhere), "{elsewhere}");
+        }
 
         assert!(denied("http://127.0.0.1:1/callback?error=access_denied&state=xyz"));
         assert!(!denied("http://127.0.0.1:1/callback?code=abc&state=error"));

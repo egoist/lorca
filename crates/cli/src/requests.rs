@@ -21,6 +21,11 @@ pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 /// Asks `runner_id` to run `verb` and waits for the answer. Refuses up front when the Runner is
 /// unknown, unreachable, or offline, so an editor never spins on a machine that is asleep.
 pub async fn ask(app: &Arc<App>, runner_id: &str, verb: &str, body: Value) -> Result<Value, String> {
+    ask_within(app, runner_id, verb, body, REQUEST_TIMEOUT).await
+}
+
+/// `ask` for a verb the Runner takes longer to answer, waiting up to `timeout`.
+pub async fn ask_within(app: &Arc<App>, runner_id: &str, verb: &str, body: Value, timeout: Duration) -> Result<Value, String> {
     let runner = app.device(runner_id).ok_or("That bot is assigned to a Runner this Device does not know yet.")?;
     if runner.box_pubkey.is_empty() {
         return Err(format!("{} has not shared its key yet.", runner.name));
@@ -42,7 +47,7 @@ pub async fn ask(app: &Arc<App>, runner_id: &str, verb: &str, body: Value) -> Re
     let (tx, rx) = tokio::sync::oneshot::channel();
     app.pending_responses.lock().unwrap().insert(request.id.clone(), tx);
     app.push_blob("request", Some(runner.id.clone()), ciphertext);
-    let answer = tokio::time::timeout(REQUEST_TIMEOUT, rx).await;
+    let answer = tokio::time::timeout(timeout, rx).await;
     app.pending_responses.lock().unwrap().remove(&request.id);
     match answer {
         Ok(Ok(Response { error: Some(error), .. })) => Err(error),

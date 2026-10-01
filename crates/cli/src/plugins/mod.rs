@@ -655,7 +655,7 @@ pub async fn serve_request(app: &Arc<App>, verb: &str, body: &Value, requested_b
     // A Device that listens on its own loopback for the browser's redirect opens the sign-in
     // page itself (`sign_in::from_here`).
     let elsewhere = || {
-        let redirect_uri = body["redirect_uri"].as_str().filter(|uri| uri.starts_with("http://127.0.0.1:"))?.to_string();
+        let redirect_uri = body["redirect_uri"].as_str().filter(|uri| sign_in::is_loopback_redirect(uri))?.to_string();
         let device = requested_by.and_then(|id| app.device(id)).map(|d| d.name).unwrap_or_else(|| "the Device that asked".into());
         Some(mcp::Elsewhere { device, redirect_uri })
     };

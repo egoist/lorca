@@ -843,25 +843,29 @@ async fn challenge_of(app: &Arc<App>, url: &str) -> Option<String> {
 
 /// Starts the authorization against a server: discovery from its own challenge, the client
 /// (registered on the fly as a native app, or the preregistered one), PKCE. Answers with what
-/// finishes it and the page to open, for the browser to come back to `redirect`.
+/// finishes it and the page to open, for the browser to come back to `redirect`. The server
+/// has `sign_in::SETUP_TIMEOUT` for all of it, so a Device waiting on the start hears how it went.
 async fn begin_sign_in(app: &Arc<App>, url: &str, scopes: &[String], name: &str, client: &ClientHint, redirect: String) -> Result<(OAuthState, String), String> {
-    let mut state = OAuthState::new(url, Some(app.mcp.http.clone())).await.map_err(|e| format!("{name}: {e}"))?;
-    let mut request = AuthorizationRequest::new(redirect).with_scopes(scopes.iter().cloned()).with_client_name("Lorca").with_application_type("native");
-    if let Some(challenge) = challenge_of(app, url).await {
-        request = request.with_challenge(challenge);
-    }
-    if let Some(id) = &client.id {
-        request = request.with_preregistered_client(id.clone());
-        if let Some(secret) = &client.secret {
-            request = request.with_client_secret(secret.clone());
+    let setup = async {
+        let mut state = OAuthState::new(url, Some(app.mcp.http.clone())).await.map_err(|e| format!("{name}: {e}"))?;
+        let mut request = AuthorizationRequest::new(redirect).with_scopes(scopes.iter().cloned()).with_client_name("Lorca").with_application_type("native");
+        if let Some(challenge) = challenge_of(app, url).await {
+            request = request.with_challenge(challenge);
         }
-    }
-    state.start_authorization(request).await.map_err(|e| match e {
-        rmcp::transport::auth::AuthError::RegistrationFailed(_) => client.no_registration_advice(name),
-        other => format!("{name} does not offer a sign-in: {other}"),
-    })?;
-    let page = state.get_authorization_url().await.map_err(|e| e.to_string())?;
-    Ok((state, page))
+        if let Some(id) = &client.id {
+            request = request.with_preregistered_client(id.clone());
+            if let Some(secret) = &client.secret {
+                request = request.with_client_secret(secret.clone());
+            }
+        }
+        state.start_authorization(request).await.map_err(|e| match e {
+            rmcp::transport::auth::AuthError::RegistrationFailed(_) => client.no_registration_advice(name),
+            other => format!("{name} does not offer a sign-in: {other}"),
+        })?;
+        let page = state.get_authorization_url().await.map_err(|e| e.to_string())?;
+        Ok((state, page))
+    };
+    tokio::time::timeout(super::sign_in::SETUP_TIMEOUT, setup).await.map_err(|_| format!("{name} did not answer the sign-in in time."))?
 }
 
 /// Finishes an authorization with where the browser landed: its code for the tokens.
