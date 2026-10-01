@@ -13,11 +13,11 @@ export const en = {
     download: 'Download',
   },
   hero: {
-    badge: 'Now available for Mac',
+    badge: 'Now on Windows and Linux',
     title: 'AI teammates<br/>for <accent>real</accent> work.',
     body: 'Chat with one teammate, or put several in a group chat. They can read and edit your files, run commands, and remember what you tell them. Give them a job and they coordinate the work among themselves.',
     how: 'See how it works',
-    platforms: 'Also on Linux and Windows, from the command line.',
+    platforms: 'For Mac, Windows, and Linux. iPhone and iPad in beta.',
   },
   turns: {
     eyebrow: 'Group chats',
@@ -62,7 +62,7 @@ export const en = {
     title: 'Questions',
     items: [
       { q: 'Do I need an account or a server?', a: 'No. Lorca runs on your own computer, with no sign-up and nothing to host. Your backup phrase is your account.' },
-      { q: 'What does it run on?', a: 'Mac, with the app. Linux and Windows from the command line. A bot on any of them can join the same group chats.' },
+      { q: 'What does it run on?', a: 'Mac, Windows, and Linux, with the app or only the command line. iPhone and iPad are in beta, for chatting with your bots. A bot on any of your computers can join the same group chats.' },
       { q: 'Which AI does it use?', a: 'Your own account or API key. Sign in with ChatGPT or Grok, or add a DeepSeek API key. Each bot can use a different provider, and you can change it any time.' },
       { q: 'What can a bot do on my computer?', a: 'Read, edit, and create files and run commands in the folder you give it. It runs with your user permissions on that computer and shows you what it ran.' },
       { q: 'Can anyone read my chats?', a: 'No. Chats are encrypted on your computer before they sync. The relay stores only encrypted data and has no key, so it cannot read bot names, chat titles, or messages.' },
@@ -70,32 +70,40 @@ export const en = {
   },
   cta: {
     title: 'Get started.',
-    body: 'Download for Mac, or use the command line on Linux and Windows.',
+    body: 'Download for Mac, Windows, or Linux.',
   },
   docs: {
     title: 'Lorca Docs',
   },
   download: {
     title: 'Download Lorca',
-    description: 'Download Lorca for Mac, join the iPhone and iPad beta on TestFlight, or install the Lorca CLI on any computer.',
+    description: 'Download Lorca for Mac, Windows, and Linux, join the iPhone and iPad beta on TestFlight, or install the Lorca CLI on any computer.',
+    version: 'Version {{version}}',
+    unavailable: "Couldn't load the latest version. Reload the page to try again.",
     mac: {
       title: 'Mac',
       body: 'Chat with your bots and run them on your Mac.',
       action: 'Download for Mac',
-      version: 'Version {{version}}',
       system: 'macOS {{version}} or later',
       appleSilicon: 'Apple silicon',
-      unavailable: "Couldn't load the latest version. Reload the page to try again.",
+    },
+    windows: {
+      title: 'Windows',
+      body: 'Chat with your bots and run them on your Windows PC. Bots run their commands in the bash that comes with <git>Git for Windows</git>, so install it too.',
+      action: 'Download for Windows',
+      system: 'x64',
+    },
+    linux: {
+      title: 'Linux',
+      body: 'Chat with your bots and run them on your Linux computer. The command installs Lorca in your home folder, without root, and Lorca keeps itself up to date.',
+      deb: 'Or install the Debian package for <amd64>x64</amd64> or <arm64>Arm64</arm64>. It updates when you install the next one.',
+      system: 'x64 and Arm64',
     },
     ios: {
       title: 'iPhone and iPad',
       body: 'Chat with your bots while they keep running on your computer. Scan the QR code in the desktop app to pair.',
       action: 'Join the TestFlight beta',
       note: 'Install TestFlight from the App Store first.',
-    },
-    windowsLinux: {
-      title: 'Windows and Linux',
-      body: 'Chat with your bots and run them on your Windows or Linux computer.',
     },
     android: {
       title: 'Android',

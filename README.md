@@ -1,6 +1,6 @@
 # Lorca
 
-Lorca is a Grok bot alternative: a Rust CLI for macOS, Linux, and Windows, a native macOS AppKit client, and phone apps. The CLI is a localhost websocket service and the agent loop; the AppKit client is a UI for that CLI and launches the bundled binary.
+Lorca is a Grok bot alternative: a Rust CLI for macOS, Linux, and Windows, a native macOS AppKit client, a Windows and Linux app, and phone apps. The CLI is a localhost websocket service and the agent loop; the AppKit client is a UI for that CLI and launches the bundled binary.
 
 You create bots, talk to them 1:1, or put them in a group chat. Bots can hand work to each other and orchestrate, in the same spirit as Grok Bot.
 

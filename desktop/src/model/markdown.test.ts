@@ -59,6 +59,25 @@ test("tables", () => {
   expect(table.rows[0]![1]![0]!.bold).toBe(true);
 });
 
+test("bare links become links outside code and links", () => {
+  const doc = parseMarkdown("See https://x.y/a, **www.b.org** or me@c.io.\n\n`https://code.y` [named](https://n.y) <https://auto.y>\n\n```\nhttps://block.y\n```\n\n| www.cell.org |\n|---|\n");
+  const first = doc[0] as Extract<Block, { type: "paragraph" }>;
+  expect(text(first.spans)).toBe("See https://x.y/a, www.b.org or me@c.io.");
+  const links = first.spans.filter((span) => span.link !== null).map((span) => [span.text, span.link, span.bold]);
+  expect(links).toEqual([
+    ["https://x.y/a", "https://x.y/a", false],
+    ["www.b.org", "http://www.b.org", true],
+    ["me@c.io", "mailto:me@c.io", false],
+  ]);
+  const second = doc[1] as Extract<Block, { type: "paragraph" }>;
+  expect(second.spans.some((span) => span.code && span.text === "https://code.y" && span.link === null)).toBe(true);
+  expect(second.spans.some((span) => span.text === "named" && span.link === "https://n.y")).toBe(true);
+  expect(second.spans.some((span) => span.text === "https://auto.y" && span.link === "https://auto.y")).toBe(true);
+  expect(doc[2]).toEqual({ type: "code", language: null, text: "https://block.y" });
+  const table = doc[3] as Extract<Block, { type: "table" }>;
+  expect(table.header[0]![0]!.link).toBe("http://www.cell.org");
+});
+
 test("plain text and empty input survive", () => {
   expect(parseMarkdown("")).toEqual([]);
   const doc = parseMarkdown("just words");

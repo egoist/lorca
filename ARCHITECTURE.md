@@ -106,13 +106,14 @@ lorca/
   crates/provider-auth/ # OAuth token types and PKCE flows shared by every Device
   crates/cli/          # lorca: the Device core as a library (keys, relay sync, jobs, the JSON API) + runner and server features + the binary
   crates/mobile/       # lorca-mobile: the core for the phone over UniFFI
+  crates/markdown/     # lorca-markdown: message Markdown as the blocks and spans every app renders (pulldown-cmark, and GitHub's autolinks for bare URLs and addresses), for the Mac and phone over UniFFI
   crates/relay/        # lorca-relay: axum + SQLite or Postgres, and its Dockerfile
   macos/               # AppKit SPM app; the build bundles the CLI
   desktop/             # the Windows and Linux app: MyGo (Go + system webview) with a Solid page; the build bundles the CLI
   mobile/              # Expo app for iOS and Android: a paired Device over the core (modules/lorca-core)
   web/                 # the site
   scripts/             # bun scripts: dev loop, bundle build, macOS release, the desktop app's dev loop and builds, string and doc checks
-  .github/workflows/   # release-cli.yml and release-desktop.yml: release builds; docs.yml: the doc check; windows.yml: the unit tests on Windows
+  .github/workflows/   # release-cli.yml and release-desktop.yml: release builds; test.yml: every app's and crate's tests on each pull request; docs.yml: the doc check
 ```
 
 `bun run android` rebuilds the Rust core for Android, then builds and runs the Expo dev client on the Android emulator. `cd mobile && bun run core` rebuilds the Rust core for both phone platforms; `bun run mobile:dev` is the iOS development loop described below.

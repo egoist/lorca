@@ -1,9 +1,11 @@
 // Markdown for message bodies, folded into the block structure every Lorca app renders: the same
 // Block and Span shapes as `crates/markdown` (pulldown-cmark), which the macOS and phone apps
 // link. Here markdown-it reads the text (CommonMark, with tables and strikethrough; task list
-// markers are read as pulldown-cmark reads them), and the fold follows the crate's.
+// markers are read as pulldown-cmark reads them), and the fold follows the crate's, bare links
+// included.
 
 import MarkdownIt, { type Token } from "markdown-it";
+import { findAutolinks } from "./autolink";
 
 /** A run of text with one style. */
 export interface Span {
@@ -246,15 +248,36 @@ class Builder {
     else this.spans.push(span);
   }
 
-  /** The leaf's spans, trimmed at both ends so a stray line break never opens or closes a block. */
+  /** The leaf's spans, trimmed at both ends so a stray line break never opens or closes a block,
+   * with their bare links made links. */
   private takeSpans(): Span[] {
     const spans = this.spans;
     this.spans = [];
     if (spans[0]) spans[0].text = spans[0].text.trimStart();
     const last = spans[spans.length - 1];
     if (last) last.text = last.text.trimEnd();
-    return spans.filter((span) => span.text !== "");
+    return linkify(spans.filter((span) => span.text !== ""));
   }
+}
+
+/** Splits each span of words that is not code or a link already around the bare links in it. */
+function linkify(spans: Span[]): Span[] {
+  const out: Span[] = [];
+  for (const span of spans) {
+    const links = span.code || span.link !== null ? [] : findAutolinks(span.text);
+    if (links.length === 0) {
+      out.push(span);
+      continue;
+    }
+    let at = 0;
+    for (const link of links) {
+      if (link.start > at) out.push({ ...span, text: span.text.slice(at, link.start) });
+      out.push({ ...span, text: span.text.slice(link.start, link.end), link: link.href });
+      at = link.end;
+    }
+    if (at < span.text.length) out.push({ ...span, text: span.text.slice(at) });
+  }
+  return out;
 }
 
 function sameStyle(a: Span, b: Span): boolean {
@@ -265,8 +288,8 @@ export function plain(text: string): Span {
   return { text, bold: false, italic: false, code: false, strike: false, link: null };
 }
 
-/** Parses a message body. Tables, strikethrough, and task lists are on; everything else is
- * CommonMark. */
+/** Parses a message body. Tables, strikethrough, task lists, and bare links (GitHub's autolinks)
+ * are on; everything else is CommonMark. */
 export function parseMarkdown(text: string): Block[] {
   const builder = new Builder();
   builder.run(parser.parse(text, {}));

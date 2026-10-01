@@ -205,6 +205,69 @@
       "tools": { "readonly": ["list_*", "get_*", "search_*", "describe_*"] }
     },
     {
+      "id": "feishu",
+      "name": "飞书",
+      "description": "Docs, comments, and chat messages in Feishu.",
+      "category": "productivity",
+      "author": "飞书",
+      "version": "1",
+      "icon": "doc.text",
+      "homepage": "https://open.feishu.cn/document/mcp_open_tools/supported-tools",
+      "tags": ["feishu", "docs", "documents", "comments", "chat", "messages", "groups", "文档", "消息", "群聊"],
+      "servers": {
+        "feishu": { "type": "http", "url": "https://mcp.feishu.cn/mcp", "auth": { "type": "oauth" } }
+      },
+      "tools": { "readonly": ["search-*", "get-*", "fetch-*", "list-*"] }
+    },
+    {
+      "id": "feishu-project",
+      "name": "飞书项目",
+      "description": "Work items, workflows, and schedules in Feishu Project.",
+      "category": "productivity",
+      "author": "飞书",
+      "version": "1",
+      "icon": "checklist",
+      "homepage": "https://project.feishu.cn/b/helpcenter/1p8d7djs/jdmql9oj",
+      "tags": ["feishu project", "meego", "issues", "tasks", "projects", "planning", "工作项", "需求", "缺陷", "排期"],
+      "servers": {
+        "feishu-project": { "type": "http", "url": "https://project.feishu.cn/mcp_server/v1", "auth": { "type": "oauth" } }
+      },
+      "tools": { "readonly": ["list_*", "get_*", "search_user_info", "search_project_info", "search_view_by_title"] }
+    },
+    {
+      "id": "dida365",
+      "name": "滴答清单",
+      "description": "Tasks, lists, habits, and focus sessions in Dida365.",
+      "category": "productivity",
+      "author": "滴答清单",
+      "version": "1",
+      "icon": "checkmark.circle",
+      "homepage": "https://help.dida365.com/articles/7438132116019216384",
+      "tags": ["dida365", "ticktick", "tasks", "todo", "lists", "habits", "focus", "任务", "待办", "习惯"],
+      "servers": {
+        "dida365": { "type": "http", "url": "https://mcp.dida365.com", "auth": { "type": "oauth", "token_variable": "DIDA365_TOKEN" } }
+      },
+      "variables": [
+        { "name": "DIDA365_TOKEN", "description": "An API token (Settings › Account and Security › API Token on dida365.com) instead of signing in, for a Runner without a browser.", "secret": true, "required": false }
+      ],
+      "tools": { "readonly": ["search_task", "get_*", "list_*", "filter_tasks", "project_member"] }
+    },
+    {
+      "id": "tencent-docs",
+      "name": "腾讯文档",
+      "description": "Docs, sheets, slides, and mind maps in Tencent Docs.",
+      "category": "productivity",
+      "author": "腾讯",
+      "version": "1",
+      "icon": "doc.richtext",
+      "homepage": "https://docs.qq.com/open/document/mcp/",
+      "tags": ["tencent docs", "docs", "documents", "sheets", "spreadsheet", "slides", "mind map", "文档", "表格", "幻灯片", "思维导图"],
+      "servers": {
+        "tencent-docs": { "type": "http", "url": "https://docs.qq.com/openapi/mcp", "auth": { "type": "oauth" } }
+      },
+      "tools": { "readonly": ["query_space_node", "search_space_file", "get_content", "smartcanvas.get_*", "smartsheet.list_*"] }
+    },
+    {
       "id": "granola",
       "name": "Granola",
       "description": "Meeting notes and transcripts from Granola.",
@@ -297,6 +360,21 @@
         "webflow": { "type": "http", "url": "https://mcp.webflow.com/mcp", "auth": { "type": "oauth" } }
       },
       "tools": { "readonly": ["ask_webflow_ai", "webflow_guide_tool", "get_asset_preview"] }
+    },
+    {
+      "id": "kling",
+      "name": "可灵",
+      "description": "Videos from text and images, lip sync, and virtual try-on with Kling AI, paid with your credits.",
+      "category": "design",
+      "author": "快手",
+      "version": "1",
+      "icon": "film",
+      "homepage": "https://klingai.com/app/mcp/guide",
+      "tags": ["kling", "video", "generation", "image to video", "lip sync", "try-on", "视频", "生成", "对口型"],
+      "servers": {
+        "kling": { "type": "http", "url": "https://klingai.com/mcp", "auth": { "type": "oauth" } }
+      },
+      "tools": { "readonly": ["who_am_i", "motion_library_list", "element_list", "element_get", "query_tasks", "query_membership_and_credits"] }
     },
     {
       "id": "cloudflare",
@@ -597,6 +675,60 @@
       "variables": [
         { "name": "HF_TOKEN", "description": "Optional access token (huggingface.co/settings/tokens), so the server works as your account with the tools picked at huggingface.co/settings/mcp.", "secret": true, "required": false }
       ]
+    },
+    {
+      "id": "metaso",
+      "name": "秘塔 AI 搜索",
+      "description": "Web search, answers with sources, and web pages read as text, from Metaso.",
+      "category": "research",
+      "author": "秘塔科技",
+      "version": "1",
+      "icon": "magnifyingglass",
+      "homepage": "https://www.modelscope.cn/mcp/servers/metasota/metaso-search",
+      "tags": ["metaso", "search", "web", "answers", "reader", "research", "搜索", "秘塔"],
+      "servers": {
+        "metaso": { "type": "http", "url": "https://metaso.cn/api/mcp", "headers": { "Authorization": "Bearer ${METASO_API_KEY}" } }
+      },
+      "variables": [
+        { "name": "METASO_API_KEY", "description": "An API key from metaso.cn/search-api/api-keys. Searches and page reads spend its points.", "secret": true, "required": true }
+      ],
+      "tools": { "readonly": ["*"] }
+    },
+    {
+      "id": "zhihu",
+      "name": "知乎",
+      "description": "Zhihu and web search, Zhihu's hot list, and answers from Zhida.",
+      "category": "research",
+      "author": "知乎",
+      "version": "1",
+      "icon": "questionmark.bubble",
+      "homepage": "https://developer.zhihu.com",
+      "tags": ["zhihu", "search", "questions", "answers", "hot list", "trending", "搜索", "热榜", "问答", "直答"],
+      "servers": {
+        "zhihu": { "type": "http", "url": "https://developer.zhihu.com/api/mcp/v1", "headers": { "Authorization": "Bearer ${ZHIHU_ACCESS_SECRET}" } }
+      },
+      "variables": [
+        { "name": "ZHIHU_ACCESS_SECRET", "description": "The Access Secret from your personal center at developer.zhihu.com, with 1,000 free calls a day.", "secret": true, "required": true }
+      ],
+      "tools": { "readonly": ["*"] }
+    },
+    {
+      "id": "amap",
+      "name": "高德地图",
+      "description": "Places, addresses, routes, distances, and weather in China, from Amap.",
+      "category": "research",
+      "author": "高德",
+      "version": "1",
+      "icon": "map",
+      "homepage": "https://lbs.amap.com/api/mcp-server/gettingstarted",
+      "tags": ["amap", "gaode", "maps", "places", "routes", "directions", "geocoding", "weather", "地图", "导航", "路线", "天气"],
+      "servers": {
+        "amap": { "type": "stdio", "command": "npx", "args": ["-y", "@amap/amap-maps-mcp-server"], "env": { "AMAP_MAPS_API_KEY": "${AMAP_MAPS_API_KEY}" } }
+      },
+      "variables": [
+        { "name": "AMAP_MAPS_API_KEY", "description": "A Web Service (Web服务) key from console.amap.com, made under 应用管理 › 我的应用.", "secret": true, "required": true }
+      ],
+      "tools": { "readonly": ["*"] }
     },
     {
       "id": "intercom",

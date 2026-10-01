@@ -6,6 +6,10 @@ and the update window shows it.
 
 ## [Unreleased]
 
+- The marketplace adds plugins for 飞书, 飞书项目, 滴答清单, 腾讯文档, 秘塔 AI 搜索, 知乎, 高德地图, and
+  可灵. 飞书, 飞书项目, 滴答清单, 腾讯文档, and 可灵 sign in with your account in the browser; 秘塔 AI
+  搜索 and 知乎 take an API key from their sites, and 高德地图 a Web Service key from the Amap console.
+
 ## [0.1.1]
 
 - A routine can watch for something without spending a turn each time: the bot gives it a check, a

@@ -3,6 +3,8 @@
 //! shape for the Mac). The views only style what they are handed, so every screen reads a
 //! message the same way.
 
+mod autolink;
+
 use pulldown_cmark::{Alignment, CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use serde::{Deserialize, Serialize};
 
@@ -64,8 +66,8 @@ pub struct Document {
     pub blocks: Vec<Block>,
 }
 
-/// Parses a message body. Tables, strikethrough, and task lists are on; everything else is
-/// CommonMark.
+/// Parses a message body. Tables, strikethrough, task lists, and bare links (GitHub's autolinks)
+/// are on; everything else is CommonMark.
 pub fn parse(text: &str) -> Document {
     parse_markdown(text.to_owned())
 }
@@ -328,7 +330,8 @@ impl Builder {
         self.push(block);
     }
 
-    /// The leaf's spans, trimmed at both ends so a stray line break never opens or closes a block.
+    /// The leaf's spans, trimmed at both ends so a stray line break never opens or closes a block,
+    /// with their bare links made links.
     fn take_spans(&mut self) -> Vec<Span> {
         let mut spans = std::mem::take(&mut self.spans);
         if let Some(first) = spans.first_mut() {
@@ -338,8 +341,32 @@ impl Builder {
             last.text = last.text.trim_end().to_owned();
         }
         spans.retain(|span| !span.text.is_empty());
-        spans
+        linkify(spans)
     }
+}
+
+/// Splits each span of words that is not code or a link already around the bare links in it.
+fn linkify(spans: Vec<Span>) -> Vec<Span> {
+    let mut out = Vec::with_capacity(spans.len());
+    for span in spans {
+        let links = if span.code || span.link.is_some() { Vec::new() } else { autolink::find(&span.text) };
+        if links.is_empty() {
+            out.push(span);
+            continue;
+        }
+        let mut at = 0;
+        for link in links {
+            if link.start > at {
+                out.push(Span { text: span.text[at..link.start].to_owned(), ..span.clone() });
+            }
+            out.push(Span { text: span.text[link.start..link.end].to_owned(), link: Some(link.href), ..span.clone() });
+            at = link.end;
+        }
+        if at < span.text.len() {
+            out.push(Span { text: span.text[at..].to_owned(), ..span });
+        }
+    }
+    out
 }
 
 fn same_style(a: &Span, b: &Span) -> bool {
@@ -407,6 +434,22 @@ mod tests {
         assert_eq!(text(&header[1].spans), "b");
         assert_eq!(rows.len(), 1);
         assert!(rows[0].cells[1].spans[0].bold);
+    }
+
+    #[test]
+    fn bare_links_become_links_outside_code_and_links() {
+        let doc = parse("See https://x.y/a, **www.b.org** or me@c.io.\n\n`https://code.y` [named](https://n.y) <https://auto.y>\n\n```\nhttps://block.y\n```\n\n| www.cell.org |\n|---|\n");
+        let Block::Paragraph { spans } = &doc.blocks[0] else { panic!("{:?}", doc.blocks[0]) };
+        assert_eq!(text(spans), "See https://x.y/a, www.b.org or me@c.io.");
+        let links: Vec<_> = spans.iter().filter_map(|s| Some((s.text.as_str(), s.link.as_deref()?, s.bold))).collect();
+        assert_eq!(links, vec![("https://x.y/a", "https://x.y/a", false), ("www.b.org", "http://www.b.org", true), ("me@c.io", "mailto:me@c.io", false)]);
+        let Block::Paragraph { spans } = &doc.blocks[1] else { panic!("{:?}", doc.blocks[1]) };
+        assert!(spans.iter().any(|s| s.code && s.text == "https://code.y" && s.link.is_none()));
+        assert!(spans.iter().any(|s| s.text == "named" && s.link.as_deref() == Some("https://n.y")));
+        assert!(spans.iter().any(|s| s.text == "https://auto.y" && s.link.as_deref() == Some("https://auto.y")));
+        assert!(matches!(&doc.blocks[2], Block::Code { text, .. } if text == "https://block.y"));
+        let Block::Table { header, .. } = &doc.blocks[3] else { panic!("{:?}", doc.blocks[3]) };
+        assert_eq!(header[0].spans[0].link.as_deref(), Some("http://www.cell.org"));
     }
 
     #[test]

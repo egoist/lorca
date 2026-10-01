@@ -15,11 +15,11 @@ export const zh: Messages = {
     download: '下载',
   },
   hero: {
-    badge: 'Mac 版现已推出',
+    badge: 'Windows 和 Linux 版现已推出',
     title: '拉个群，<br/>让 AI 队友<accent>分工</accent>。',
     body: '和一个队友单聊，或者把几个拉进一个群聊。它们可以读写你的文件、运行命令，并记住你说过的话。交给它们一件事，它们会自己分工协作。',
     how: '看看它怎么运作',
-    platforms: 'Linux 和 Windows 可通过命令行使用。',
+    platforms: '支持 Mac、Windows 和 Linux，iPhone 和 iPad 版正在公测。',
   },
   turns: {
     eyebrow: '群聊',
@@ -64,7 +64,7 @@ export const zh: Messages = {
     title: '常见问题',
     items: [
       { q: '需要注册账号或者服务器吗？', a: '不需要。Lorca 在你自己的电脑上运行，不用注册，也不用架服务器。你的备份短语就是你的账户。' },
-      { q: '支持哪些平台？', a: 'Mac 用应用，Linux 和 Windows 用命令行。这些平台上的智能体都能加入同一个群聊。' },
+      { q: '支持哪些平台？', a: 'Mac、Windows 和 Linux，用应用或只用命令行都可以。iPhone 和 iPad 版正在公测，用来和智能体聊天。你任何一台电脑上的智能体都能加入同一个群聊。' },
       { q: '它用的是哪家 AI？', a: '你自己的账号或 API 密钥。登录 ChatGPT 或 Grok，或者添加一个 DeepSeek API 密钥。每个智能体可以用不同的服务商，随时可以换。' },
       { q: '智能体能在我的电脑上做什么？', a: '在你给它的文件夹里读取、修改、新建文件和运行命令。它以你的用户权限在那台电脑上运行，并告诉你它运行了什么。' },
       { q: '有人能看到我的聊天记录吗？', a: '不能。聊天记录在同步之前就已在你的电脑上加密。中继只保存加密数据，没有密钥，所以看不到智能体名字、聊天标题和消息内容。' },
@@ -72,32 +72,40 @@ export const zh: Messages = {
   },
   cta: {
     title: '开始使用 Lorca。',
-    body: '下载 Mac 版，或在 Linux 和 Windows 上使用命令行。',
+    body: '下载 Mac、Windows 或 Linux 版。',
   },
   docs: {
     title: 'Lorca 文档',
   },
   download: {
     title: '下载 Lorca',
-    description: '下载 Lorca Mac 版，通过 TestFlight 加入 iPhone 和 iPad 版测试，或在任意电脑上安装 Lorca CLI。',
+    description: '下载 Lorca 的 Mac、Windows 和 Linux 版，通过 TestFlight 加入 iPhone 和 iPad 版测试，或在任意电脑上安装 Lorca CLI。',
+    version: '版本 {{version}}',
+    unavailable: '暂时无法获取最新版本，请刷新页面重试。',
     mac: {
       title: 'Mac',
       body: '和智能体聊天，并在你的 Mac 上运行它们。',
       action: '下载 Mac 版',
-      version: '版本 {{version}}',
       system: 'macOS {{version}} 或更高版本',
       appleSilicon: 'Apple 芯片',
-      unavailable: '暂时无法获取最新版本，请刷新页面重试。',
+    },
+    windows: {
+      title: 'Windows',
+      body: '和智能体聊天，并在你的 Windows 电脑上运行它们。智能体用 <git>Git for Windows</git> 自带的 bash 运行命令，请一并安装。',
+      action: '下载 Windows 版',
+      system: 'x64',
+    },
+    linux: {
+      title: 'Linux',
+      body: '和智能体聊天，并在你的 Linux 电脑上运行它们。这条命令把 Lorca 安装到你的主目录，不需要 root，之后 Lorca 会自动更新。',
+      deb: '也可以安装 <amd64>x64</amd64> 或 <arm64>Arm64</arm64> 的 Debian 软件包，它在你安装下一个软件包时更新。',
+      system: 'x64 和 Arm64',
     },
     ios: {
       title: 'iPhone 和 iPad',
       body: '和智能体聊天，它们继续在你的电脑上运行。扫描桌面应用里的二维码即可配对。',
       action: '加入 TestFlight 测试',
       note: '需要先从 App Store 安装 TestFlight。',
-    },
-    windowsLinux: {
-      title: 'Windows 和 Linux',
-      body: '和智能体聊天，并在你的 Windows 或 Linux 电脑上运行它们。',
     },
     android: {
       title: 'Android',

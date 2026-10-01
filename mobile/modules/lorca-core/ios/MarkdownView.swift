@@ -497,7 +497,6 @@ final class SelectableTextView: UITextView {
     isScrollEnabled = false
     backgroundColor = .clear
     textContainerInset = .zero
-    dataDetectorTypes = [.link]
     adjustsFontForContentSizeCategory = false
     tintColor = style.tint
     linkTextAttributes = [.foregroundColor: style.linkColor, .underlineStyle: NSUnderlineStyle.single.rawValue]

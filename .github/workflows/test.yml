@@ -1,0 +1,123 @@
+# Runs the test suites on every pull request and every push to main: the Rust workspace on Linux,
+# where the relay's store suite runs on SQLite and on a Postgres service, and on macOS; the crates
+# a Windows Runner runs, on Windows; the macOS app's XCTest suite over the markdown crate it links;
+# the Windows and Linux app's page and Go side; and the phone app's TypeScript. The end-to-end
+# scripts, which need a live relay, a model, or a simulator, run locally.
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# A newer push to a pull request replaces the run still going for it.
+concurrency:
+  group: tests-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust-linux:
+    name: Rust (Linux)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: lorca
+          POSTGRES_DB: lorca
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      LORCA_RELAY_TEST_POSTGRES: postgres://postgres:lorca@127.0.0.1:5432/lorca?sslmode=disable
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Cargo unifies features across the packages of one run, and the phone core takes lorca
+      # without the runner, so it is tested on its own.
+      - run: cargo test --locked --workspace --exclude lorca-mobile
+      - run: cargo test --locked -p lorca-mobile
+
+  rust-macos:
+    name: Rust (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked --workspace --exclude lorca-mobile
+      - run: cargo test --locked -p lorca-mobile
+
+  rust-windows:
+    name: Rust (Windows)
+    # The crates a Windows Runner runs: the CLI, the agent, and provider sign-in. There paths have
+    # drive letters, PATH splits on `;`, and commands run on pipes in Git for Windows' bash, which
+    # the runner has; tests of Unix-only behavior (terminal sessions, the login shell's
+    # environment) are #[cfg(unix)]. The release builds x86_64-pc-windows-gnu with zig, and the
+    # tests build with the runner's MSVC toolchain.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked -p lorca -p lorca-agent -p lorca-provider-auth
+
+  macos-app:
+    name: macOS app
+    # The app builds against the macOS 26 SDK.
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: oven-sh/setup-bun@v2
+      # The markdown crate's static library, xcframework, and Swift bindings, as `bun run dev`
+      # builds them into macos/Libraries and macos/Sources/LorcaMarkdown.
+      - name: Build the markdown crate for Swift
+        run: bun -e 'import { buildMarkdown } from "./scripts/app.ts"; if (!(await buildMarkdown("debug")).ok) process.exit(1)'
+      - run: swift test
+        working-directory: macos
+      - run: bun run test:mac-startup
+
+  desktop:
+    name: Windows and Linux app
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: desktop/go.mod
+          cache-dependency-path: desktop/go.sum
+      - run: bun install --frozen-lockfile
+      # src/mygo.ts, the page's bindings to the Go side, is generated and never committed.
+      - run: bun run generate
+      - run: bun run typecheck
+      - run: bun run test
+      - run: go test ./...
+
+  mobile:
+    name: Phone app
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run test

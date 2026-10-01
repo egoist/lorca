@@ -30,12 +30,19 @@ export const Route = createRootRoute({
   shellComponent: RootDocument,
 })
 
+/// Keeps `.dark` on <html> with the system's appearance, from the first paint, for the docs'
+/// styles (Fumadocs keys code colors off the class; the site's own use the media query). It lives
+/// in the shell, which is rendered on the server and hydrated, never created on the client, where
+/// React warns about script tags.
+const followAppearance = `{const m=matchMedia('(prefers-color-scheme: dark)'),a=()=>document.documentElement.classList.toggle('dark',m.matches);a();m.addEventListener('change',a)}`
+
 function RootDocument({ children }: { children: React.ReactNode }) {
   const lng = languageOf(useLocation({ select: (location) => location.pathname }))
   return (
-    // The docs' theme provider keeps a class on <html> in step with the system's appearance.
+    // The script below adds a class to <html> before React hydrates it.
     <html lang={htmlLang[lng]} suppressHydrationWarning>
       <head>
+        <script dangerouslySetInnerHTML={{ __html: followAppearance }} />
         <HeadContent />
         {/* Analytics for production builds. The shell keeps this tag mounted, so it runs once per
             page load; a head() script is put back after a client-side navigation and runs again. */}

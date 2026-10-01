@@ -21,7 +21,8 @@ export function docsPath(lng: string, page?: string) {
 }
 
 /// The download page in the page's language: `/download` and `/zh/download`. It links the Mac
-/// app's disk image, the iPhone beta, and the CLI installer.
+/// app's disk image, the Windows installer, the Linux install script and Debian packages, the
+/// iPhone beta, and the CLI installer.
 export function downloadPath(lng: string) {
   return lng === 'en' ? '/download' : `/${lng}/download`
 }

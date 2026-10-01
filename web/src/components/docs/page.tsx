@@ -101,11 +101,12 @@ export function DocsPage({ lang, data }: { lang: Language; data: DocsData }) {
   const t = i18nFor(lang).t
   const navigate = useNavigate()
 
-  /// The site's colors follow the system, so the docs do too: the provider keeps `.dark` on
-  /// <html> in step with it and the layout offers no switch.
+  /// The site's colors follow the system, so the docs do too: the root shell keeps `.dark` on
+  /// <html> in step with it, and the layout offers no switch. The provider's own theme (next-themes)
+  /// would render a script tag each time a client-side navigation mounts the docs.
   return (
     <RootProvider
-      theme={{ defaultTheme: 'system', enableSystem: true, forcedTheme: 'system' }}
+      theme={{ enabled: false }}
       i18n={{
         ...i18nProvider(translations, lang),
         locales,
