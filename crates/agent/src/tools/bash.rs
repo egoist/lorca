@@ -38,18 +38,20 @@ const NO_INPUT_DESCRIPTION: &str = "Execute a bash command in the current workin
      (--yes, -y) or through files.";
 
 const NO_SHELL: &str = "Commands run in Git for Windows' bash, and none was found: no bash.exe in Program Files, Program Files (x86), \
-     %LOCALAPPDATA%\\Programs\\Git, or beside a git.exe on PATH. Install Git for Windows from https://git-scm.com/downloads/win and \
-     run the command again, or set LORCA_SHELL to the full path of a bash.exe and restart Lorca.";
+     %LOCALAPPDATA%\\Programs\\Git, or beside a git.exe on PATH. Install Git for Windows from https://git-scm.com/downloads/win, \
+     and commands run from the next message on; or set LORCA_SHELL to the full path of a bash.exe and restart Lorca.";
 
 pub struct BashTool {
     cwd: PathBuf,
+    /// None on a Windows computer without Git for Windows' bash: every call then fails saying so.
+    shell: Option<String>,
     sessions: Option<Arc<dyn BashSessions>>,
     waiting_after: Duration,
 }
 
 impl BashTool {
     pub fn new(cwd: PathBuf) -> Self {
-        BashTool { cwd, sessions: None, waiting_after: WAITING_AFTER }
+        BashTool { cwd, shell: shell(), sessions: None, waiting_after: WAITING_AFTER }
     }
 
     /// Runs each command in a terminal session `sessions` keeps, so a command waiting for input
@@ -71,17 +73,13 @@ impl BashTool {
     }
 }
 
-/// The shell a command runs in: `LORCA_SHELL` when set, else this platform's. Looked up on every
-/// call, so a Git for Windows installed while Lorca runs is used from the next command on.
-fn shell() -> Result<String, ToolError> {
-    if let Some(shell) = std::env::var("LORCA_SHELL").ok().filter(|s| !s.is_empty()) {
-        return Ok(shell);
-    }
+/// The shell commands run in: `LORCA_SHELL` when set, else this platform's.
+fn shell() -> Option<String> {
     #[cfg(unix)]
-    let shell = Some(default_shell());
+    let default = || Some(default_shell());
     #[cfg(windows)]
-    let shell = default_shell();
-    shell.ok_or_else(|| ToolError(NO_SHELL.into()))
+    let default = default_shell;
+    std::env::var("LORCA_SHELL").ok().filter(|s| !s.is_empty()).or_else(default)
 }
 
 #[cfg(unix)]
@@ -211,12 +209,12 @@ impl Tool for BashTool {
         if !self.cwd.exists() {
             return Err(ToolError(format!("Working directory does not exist: {}\nCannot execute bash commands.", self.cwd.display())));
         }
-        let shell = shell()?;
+        let shell = self.shell.as_deref().ok_or_else(|| ToolError(NO_SHELL.into()))?;
         if let Some(sessions) = self.terminal() {
-            return super::bash_session::run(&shell, &command, &self.cwd, timeout, sessions, id, self.waiting_after, cancel, on_update).await;
+            return super::bash_session::run(shell, &command, &self.cwd, timeout, sessions, id, self.waiting_after, cancel, on_update).await;
         }
 
-        let mut cmd = crate::login_shell::command(&shell).await;
+        let mut cmd = crate::login_shell::command(shell).await;
         cmd.arg("-c").arg(&command).current_dir(&self.cwd).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
         #[cfg(unix)]
         {
@@ -413,8 +411,8 @@ mod tests {
         let vars = [("SystemRoot", c.join("Windows"))];
         // WSL's launcher, and a git.exe whose `..\..\bin\bash.exe` would be C:\WINDOWS\bin\bash.exe.
         let files = vec![system32.join("bash.exe"), system32.join("git.exe"), bash_in(&c.join("WINDOWS"))];
-        assert_eq!(find(&vars, &[system32.clone()], &files), None);
-        assert_eq!(find(&[("windir", c.join("Windows"))], &[system32.clone()], &files), None);
+        assert_eq!(find(&vars, std::slice::from_ref(&system32), &files), None);
+        assert_eq!(find(&[("windir", c.join("Windows"))], std::slice::from_ref(&system32), &files), None);
 
         let mut files = files;
         files.extend([join(&git, &["cmd", "git.exe"]), bash_in(&git)]);
