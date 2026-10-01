@@ -1387,6 +1387,12 @@ export class AppStore {
     this.emit({ kind: "rosterChanged" });
   }
 
+  /** Unpairs this Device. The CLI asks the relay to drop its key, best effort, then forgets the
+   * identity here; the `identity.changed` it sends brings back onboarding. */
+  async forgetIdentity(): Promise<void> {
+    await this.request("identity.forget");
+  }
+
   /** Deletes the account on the relay and on this Device; the other Devices forget it as the relay
    * drops them. Throws when the relay could not be told, and nothing is deleted then. */
   async deleteAccount(): Promise<void> {

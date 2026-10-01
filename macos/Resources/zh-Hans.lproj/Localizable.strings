@@ -612,6 +612,8 @@
 "This bot is no longer in the marketplace." = "这个智能体已不在市场中。";
 "This computer" = "这台电脑";
 "This computer · CLI running" = "这台电脑 · CLI 运行中";
+"This computer forgets its keys, credentials, and synced chats, and bots assigned to it stop running until you assign them to another Runner. Your other paired Devices keep everything, and you can pair again any time." = "这台电脑会清除密钥、凭证和已同步的聊天；分配给它的智能体也会停止运行，直到你把它们分配给其他 Runner。其他已配对设备会保留全部内容，你可以随时重新配对。";
+"This computer forgets its keys, credentials, and synced chats, and bots assigned to it stop running until you assign them to another Runner. Your other paired Devices keep everything. Because this computer holds your identity, you need your backup phrase to use this account here again or to pair a new Device." = "这台电脑会清除密钥、凭证和已同步的聊天；分配给它的智能体也会停止运行，直到你把它们分配给其他 Runner。其他已配对设备会保留全部内容。由于你的身份保存在这台电脑上，之后要在这里重新使用此账户或配对新设备，都需要你的备份短语。";
 "This computer is your first Device" = "这台电脑是你的第一台设备";
 "This deletes the routine and stops its future runs. This can't be undone." = "这会删除该例行任务并停止它今后的运行。此操作无法撤销。";
 "This phrase is your master secret. It re-derives every key and unwraps everything on the relay. Write it down — nobody can reset it for you." = "这组短语是你的主密钥。它能重新派生所有密钥，并解开中继上的全部内容。请把它抄写下来——没有人能替你重置。";
@@ -633,6 +635,7 @@
 "Unpair" = "取消配对";
 "Unpair \"%@\"?" = "要取消配对“%@”吗？";
 "unpair remove device paired" = "取消配对 移除设备 已配对 unpair remove device paired";
+"Unpair this computer?" = "要取消配对这台电脑吗？";
 "Unpair…" = "取消配对…";
 "Unpin" = "取消置顶";
 "Update Lorca to keep syncing" = "更新 Lorca 以继续同步";

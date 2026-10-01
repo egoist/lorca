@@ -11,6 +11,9 @@ and the update window shows it.
   搜索 and 知乎 take an API key from their sites, and 高德地图 a Web Service key from the Amap console.
 - On Windows 10 the main window and onboarding no longer show Windows' own title bar, with a second
   set of window buttons, above the app's.
+- Settings › Devices can unpair this computer too: Lorca forgets the account's keys, credentials,
+  and chats here and goes back to onboarding. When this computer holds your identity, the
+  confirmation says that coming back, or pairing a new Device, takes your backup phrase.
 
 ## [0.1.1]
 

@@ -93,7 +93,7 @@ enum SettingsSearch {
         case .bots: (device.map { store.bots(on: $0.id) } ?? []).map { .bot($0) }
         case .providers: store.providers.map { .provider($0.kind) }
         case .plugins: (device?.plugins ?? []).map { .plugin($0) }
-        case .device: device?.isThisDevice == false ? [.machineKey, .pairing] : [.machineKey]
+        case .device: device == nil ? [.machineKey] : [.machineKey, .pairing]
         }
     }
 

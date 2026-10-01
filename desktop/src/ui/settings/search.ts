@@ -72,7 +72,7 @@ export function entriesIn(pane: SettingsPane, device: Device | undefined, store:
     case "plugins":
       return (device?.plugins ?? []).map(Entries.plugin);
     case "device":
-      return device && !device.isThisDevice ? [Entries.machineKey(), Entries.pairing()] : [Entries.machineKey()];
+      return device ? [Entries.machineKey(), Entries.pairing()] : [Entries.machineKey()];
   }
 }
 
