@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use futures::{SinkExt, StreamExt};
 use serde_json::{json, Value};
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::process::Command;
 use tokio::time::timeout;
 
@@ -18,8 +18,13 @@ impl Home {
 
     fn serve(&self, port: u16) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_lorca"));
+        command.env_clear();
+        // Windows loads its network stack from under %SystemRoot%: without the variable, binding a
+        // socket fails with WSAEPROVIDERFAILEDINIT.
+        if let Some(root) = std::env::var_os("SystemRoot") {
+            command.env("SystemRoot", root);
+        }
         command
-            .env_clear()
             .env("RUST_LOG", "off")
             .args([
                 "serve",
@@ -31,7 +36,7 @@ impl Home {
             .arg(&self.0)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .kill_on_drop(true);
         command
     }
@@ -53,6 +58,11 @@ async fn readiness_is_flushed_with_logs_disabled_and_the_websocket_is_ready() {
         .await
         .unwrap()
         .unwrap();
+    if line.is_empty() {
+        let mut stderr = String::new();
+        let _ = timeout(Duration::from_secs(5), child.stderr.take().unwrap().read_to_string(&mut stderr)).await;
+        panic!("lorca serve exited before it was ready ({:?}): {stderr}", child.wait().await);
+    }
     let ready: Value = serde_json::from_str(&line).unwrap();
     assert_eq!(ready["event"], "ready");
     let port = ready["port"].as_u64().unwrap();
