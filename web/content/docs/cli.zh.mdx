@@ -26,7 +26,7 @@ irm https://lorca.app/install-cli.ps1 | iex
 
 设置 `LORCA_VERSION=1.0.0` 安装指定版本，设置 `LORCA_INSTALL_DIR` 把 `lorca` 放到别的文件夹，设置 `LORCA_NO_MODIFY_PATH=1` 则不改动 PATH：`curl -fsSL https://lorca.app/install-cli.sh | LORCA_VERSION=1.0.0 sh`；在 PowerShell 里，先运行 `$env:LORCA_VERSION = '1.0.0'` 再运行 `irm`。
 
-在 Windows 上，智能体用 Git for Windows 自带的 bash 运行命令，所以也要安装 [Git for Windows](https://git-scm.com/downloads/win)。
+在 Windows 上，智能体用 Git for Windows 自带的 bash 运行命令，不用 WSL 的 bash，所以也要安装 [Git for Windows](https://git-scm.com/downloads/win)。Lorca 会在 Program Files、只为当前用户安装的位置，或 PATH 上的 `git` 旁边找到它；安装之前，智能体的命令会失败，并提示需要安装。
 
 ## 命令
 

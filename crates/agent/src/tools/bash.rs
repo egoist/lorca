@@ -7,7 +7,7 @@
 //! as long as the command. Built with [`BashTool::with_sessions`], a command runs in a terminal
 //! of its own that can outlive the call and take input ([`super::bash_session`]).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -37,17 +37,19 @@ const NO_INPUT_DESCRIPTION: &str = "Execute a bash command in the current workin
      seconds. Commands get no input: stdin is closed, and interactive input is not available on Windows, so pass answers as flags \
      (--yes, -y) or through files.";
 
+const NO_SHELL: &str = "Commands run in Git for Windows' bash, and none was found: no bash.exe in Program Files, Program Files (x86), \
+     %LOCALAPPDATA%\\Programs\\Git, or beside a git.exe on PATH. Install Git for Windows from https://git-scm.com/downloads/win and \
+     run the command again, or set LORCA_SHELL to the full path of a bash.exe and restart Lorca.";
+
 pub struct BashTool {
     cwd: PathBuf,
-    shell: String,
     sessions: Option<Arc<dyn BashSessions>>,
     waiting_after: Duration,
 }
 
 impl BashTool {
     pub fn new(cwd: PathBuf) -> Self {
-        let shell = std::env::var("LORCA_SHELL").ok().filter(|s| !s.is_empty()).unwrap_or_else(default_shell);
-        BashTool { cwd, shell, sessions: None, waiting_after: WAITING_AFTER }
+        BashTool { cwd, sessions: None, waiting_after: WAITING_AFTER }
     }
 
     /// Runs each command in a terminal session `sessions` keeps, so a command waiting for input
@@ -69,19 +71,60 @@ impl BashTool {
     }
 }
 
+/// The shell a command runs in: `LORCA_SHELL` when set, else this platform's. Looked up on every
+/// call, so a Git for Windows installed while Lorca runs is used from the next command on.
+fn shell() -> Result<String, ToolError> {
+    if let Some(shell) = std::env::var("LORCA_SHELL").ok().filter(|s| !s.is_empty()) {
+        return Ok(shell);
+    }
+    #[cfg(unix)]
+    let shell = Some(default_shell());
+    #[cfg(windows)]
+    let shell = default_shell();
+    shell.ok_or_else(|| ToolError(NO_SHELL.into()))
+}
+
 #[cfg(unix)]
 fn default_shell() -> String {
     if std::path::Path::new("/bin/bash").exists() { "/bin/bash".into() } else { "/bin/sh".into() }
 }
 
-/// Git for Windows' bash, else the first `bash` on PATH.
+/// Git for Windows' bash ([`git_bash`]), or none when this computer has no Git.
 #[cfg(windows)]
-fn default_shell() -> String {
-    std::env::var_os("ProgramFiles")
-        .map(|dir| PathBuf::from(dir).join("Git").join("bin").join("bash.exe"))
-        .filter(|path| path.exists())
-        .map(|path| path.display().to_string())
-        .unwrap_or_else(|| "bash".into())
+fn default_shell() -> Option<String> {
+    git_bash(|name| std::env::var_os(name), Path::is_file).map(|path| path.display().to_string())
+}
+
+/// Git for Windows' bash: in `%ProgramFiles%`, `%ProgramFiles(x86)%`, or `%LOCALAPPDATA%\Programs`
+/// (a per-user install), else at `..\..\bin\bash.exe` from a `git.exe` on PATH
+/// (`…\Git\cmd\git.exe` → `…\Git\bin\bash.exe`), the first PATH entry whose Git has one. Never a
+/// bare `bash`: `Command` looks in the system directories before PATH, and System32's `bash.exe`
+/// is WSL's, which would run the command in Linux. So PATH is walked here, past the Windows
+/// directory (`%SystemRoot%`, System32 included) and relative entries. `var` reads an environment
+/// variable and `exists` says whether a file is there, so tests run the search on any platform.
+#[cfg(any(windows, test))]
+fn git_bash(var: impl Fn(&str) -> Option<std::ffi::OsString>, exists: impl Fn(&Path) -> bool) -> Option<PathBuf> {
+    let dir = |name: &str| var(name).filter(|value| !value.is_empty()).map(PathBuf::from);
+    let installs = [
+        dir("ProgramFiles").map(|dir| dir.join("Git")),
+        dir("ProgramFiles(x86)").map(|dir| dir.join("Git")),
+        dir("LOCALAPPDATA").map(|dir| dir.join("Programs").join("Git")),
+    ];
+    let windows = dir("SystemRoot").or_else(|| dir("windir"));
+    let path = var("PATH").unwrap_or_default();
+    let on_path = std::env::split_paths(&path)
+        .filter(|entry| entry.is_absolute() && !windows.as_deref().is_some_and(|windows| within(entry, windows)))
+        .filter(|entry| exists(&entry.join("git.exe")))
+        .filter_map(|entry| entry.parent().map(Path::to_path_buf));
+    installs.into_iter().flatten().chain(on_path).map(|git| git.join("bin").join("bash.exe")).find(|bash| exists(bash))
+}
+
+/// Whether `path` lies in `dir`, ignoring case as Windows does (`C:\WINDOWS\system32` is in
+/// `C:\Windows`).
+#[cfg(any(windows, test))]
+fn within(path: &Path, dir: &Path) -> bool {
+    let lower = |path: &Path| PathBuf::from(path.to_string_lossy().to_lowercase());
+    lower(path).starts_with(lower(dir))
 }
 
 /// Kills the process group the shell leads: `process_group(0)` on pipes, `setsid` in a terminal,
@@ -110,7 +153,7 @@ pub(crate) fn kill_group(pid: u32) {
         .status();
 }
 
-fn describe(text: &str, truncation: &super::truncate::TruncationResult, full_output_path: Option<&std::path::Path>) -> String {
+fn describe(text: &str, truncation: &super::truncate::TruncationResult, full_output_path: Option<&Path>) -> String {
     let mut out = text.to_string();
     if truncation.truncated {
         let start = truncation.total_lines - truncation.output_lines + 1;
@@ -168,17 +211,18 @@ impl Tool for BashTool {
         if !self.cwd.exists() {
             return Err(ToolError(format!("Working directory does not exist: {}\nCannot execute bash commands.", self.cwd.display())));
         }
+        let shell = shell()?;
         if let Some(sessions) = self.terminal() {
-            return super::bash_session::run(&self.shell, &command, &self.cwd, timeout, sessions, id, self.waiting_after, cancel, on_update).await;
+            return super::bash_session::run(&shell, &command, &self.cwd, timeout, sessions, id, self.waiting_after, cancel, on_update).await;
         }
 
-        let mut cmd = crate::login_shell::command(&self.shell).await;
+        let mut cmd = crate::login_shell::command(&shell).await;
         cmd.arg("-c").arg(&command).current_dir(&self.cwd).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
         #[cfg(unix)]
         {
             cmd.process_group(0);
         }
-        let mut child = cmd.spawn().map_err(|e| ToolError(format!("Failed to start {}: {e}", self.shell)))?;
+        let mut child = cmd.spawn().map_err(|e| ToolError(format!("Failed to start {shell}: {e}")))?;
         let pid = child.id().unwrap_or(0);
 
         let mut stdout = child.stdout.take();
@@ -285,5 +329,95 @@ mod tests {
         assert!(err.0.contains("boom") && err.0.contains("exited with code 3"), "{}", err.0);
         let timeout = tool.execute("3", json!({"command": "sleep 5", "timeout": 0.2}), CancellationToken::new(), Arc::new(|_| {})).await.unwrap_err();
         assert!(timeout.0.contains("timed out"));
+    }
+
+    /// A drive root on Windows, `/` elsewhere, so the fixture paths are absolute where the test runs.
+    fn drive() -> PathBuf {
+        PathBuf::from(if cfg!(windows) { "C:\\" } else { "/" })
+    }
+
+    fn join(base: &Path, parts: &[&str]) -> PathBuf {
+        parts.iter().fold(base.to_path_buf(), |path, part| path.join(part))
+    }
+
+    fn bash_in(git: &Path) -> PathBuf {
+        join(git, &["bin", "bash.exe"])
+    }
+
+    /// Runs [`git_bash`] on a computer with these variables, these PATH entries, and only these files.
+    fn find(vars: &[(&str, PathBuf)], path: &[PathBuf], files: &[PathBuf]) -> Option<PathBuf> {
+        let path = std::env::join_paths(path).unwrap();
+        git_bash(
+            |name| match name {
+                "PATH" => Some(path.clone()),
+                _ => vars.iter().find(|(var, _)| *var == name).map(|(_, value)| value.clone().into_os_string()),
+            },
+            |file| files.iter().any(|f| f == file),
+        )
+    }
+
+    #[test]
+    fn git_bash_looks_in_install_folders_then_path() {
+        let c = drive();
+        let local = join(&c, &["Users", "me", "AppData", "Local"]);
+        let custom = join(&c, &["Tools", "Git"]);
+        let vars = [
+            ("ProgramFiles", c.join("Program Files")),
+            ("ProgramFiles(x86)", c.join("Program Files (x86)")),
+            ("LOCALAPPDATA", local.clone()),
+            ("SystemRoot", c.join("Windows")),
+        ];
+        let path = [join(&custom, &["cmd"])];
+        let git = join(&custom, &["cmd", "git.exe"]);
+        let in_order = [
+            bash_in(&join(&c, &["Program Files", "Git"])),
+            bash_in(&join(&c, &["Program Files (x86)", "Git"])),
+            bash_in(&join(&local, &["Programs", "Git"])),
+            bash_in(&custom),
+        ];
+        for (i, expected) in in_order.iter().enumerate() {
+            let mut files = in_order[i..].to_vec();
+            files.push(git.clone());
+            assert_eq!(find(&vars, &path, &files).as_ref(), Some(expected));
+        }
+        assert_eq!(find(&vars, &path, &[git]), None);
+        assert_eq!(find(&[], &[], &[]), None);
+    }
+
+    #[test]
+    fn git_bash_derives_bash_from_git_on_path() {
+        let c = drive();
+        let shims = join(&c, &["Users", "me", "scoop", "shims"]);
+        let portable = join(&c, &["Users", "me", "PortableGit"]);
+        let bare = join(&c, &["msys64", "usr"]);
+        let path = [shims.clone(), bare.clone(), join(&portable, &["cmd"])];
+        let files = [
+            // A shim's `..\bin\bash.exe` is not there, so the next Git on PATH is used.
+            shims.join("git.exe"),
+            // A bash with no git.exe beside it is not Git for Windows'.
+            bash_in(&bare),
+            join(&portable, &["cmd", "git.exe"]),
+            bash_in(&portable),
+        ];
+        assert_eq!(find(&[], &path, &files), Some(bash_in(&portable)));
+        // Git's own `bin` on PATH also leads to `bin\bash.exe`.
+        assert_eq!(find(&[], &[portable.join("bin")], &[join(&portable, &["bin", "git.exe"]), bash_in(&portable)]), Some(bash_in(&portable)));
+        assert_eq!(find(&[], &[PathBuf::from("relative").join("cmd")], &[join(Path::new("relative"), &["cmd", "git.exe"]), bash_in(Path::new("relative"))]), None);
+    }
+
+    #[test]
+    fn git_bash_skips_the_windows_directory_on_path() {
+        let c = drive();
+        let system32 = join(&c, &["WINDOWS", "system32"]);
+        let git = join(&c, &["Program Files", "Git"]);
+        let vars = [("SystemRoot", c.join("Windows"))];
+        // WSL's launcher, and a git.exe whose `..\..\bin\bash.exe` would be C:\WINDOWS\bin\bash.exe.
+        let files = vec![system32.join("bash.exe"), system32.join("git.exe"), bash_in(&c.join("WINDOWS"))];
+        assert_eq!(find(&vars, &[system32.clone()], &files), None);
+        assert_eq!(find(&[("windir", c.join("Windows"))], &[system32.clone()], &files), None);
+
+        let mut files = files;
+        files.extend([join(&git, &["cmd", "git.exe"]), bash_in(&git)]);
+        assert_eq!(find(&vars, &[system32, join(&git, &["cmd"])], &files), Some(bash_in(&git)));
     }
 }

@@ -26,7 +26,7 @@ The script downloads the latest release for your computer, checks it against the
 
 Set `LORCA_VERSION=1.0.0` to install that release, `LORCA_INSTALL_DIR` to put `lorca` in another folder, or `LORCA_NO_MODIFY_PATH=1` to leave your PATH alone: `curl -fsSL https://lorca.app/install-cli.sh | LORCA_VERSION=1.0.0 sh`, or `$env:LORCA_VERSION = '1.0.0'` before `irm` in PowerShell.
 
-On Windows, bots run their commands in Git for Windows' bash, so install [Git for Windows](https://git-scm.com/downloads/win) too.
+On Windows, bots run their commands in Git for Windows' bash, not WSL's, so install [Git for Windows](https://git-scm.com/downloads/win) too. Lorca finds it in Program Files, in an install for your user only, or through `git` on your PATH; until it is installed, a bot's commands fail with a note that says so.
 
 ## Commands
 
