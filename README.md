@@ -34,7 +34,7 @@ bun run reset        # stop everything and wipe identity, credentials, chats, pr
 - API key: DeepSeek, Anthropic, OpenCode Zen, OpenCode Go (with its Go subscription)
 - Subscription: ChatGPT, Grok (SuperGrok or X Premium+)
 
-Architecture: [ARCHITECTURE.md](./ARCHITECTURE.md). Read it before implementing.
+Architecture: [ARCHITECTURE.md](./ARCHITECTURE.md), the overview, and one doc per subject in [docs/architecture](./docs/architecture). Read the overview and the subjects you touch before implementing.
 
 ## Phone app
 

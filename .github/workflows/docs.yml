@@ -1,0 +1,22 @@
+# Checks the docs on every change to them: ARCHITECTURE.md and each subject doc within its budget,
+# every subject listed in ARCHITECTURE.md, and every relative link and #heading resolving.
+# scripts/check-docs.ts is the check; `bun run check:docs` runs it locally.
+name: Docs
+
+on:
+  push:
+    branches: [main]
+    paths: ["**.md", "scripts/check-docs.ts", ".github/workflows/docs.yml"]
+  pull_request:
+    paths: ["**.md", "scripts/check-docs.ts", ".github/workflows/docs.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+      - run: bun run check:docs

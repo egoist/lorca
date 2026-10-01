@@ -1,6 +1,6 @@
 # lorca-relay
 
-The relay stores public keys and ciphertext and forwards blobs between an identity's Devices. The [Relay doc](../../web/content/docs/relay.mdx) covers running it and [ARCHITECTURE.md](../../ARCHITECTURE.md#relay) the protocol and storage.
+The relay stores public keys and ciphertext and forwards blobs between an identity's Devices. The [Relay doc](../../web/content/docs/relay.mdx) covers running it and [docs/architecture/relay.md](../../docs/architecture/relay.md) the protocol and storage.
 
 Every flag has an environment variable, listed by `lorca-relay --help`.
 
