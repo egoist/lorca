@@ -13,6 +13,7 @@ use crate::models::{self, ModelInfo};
 use crate::provider::{
     channel_stream, AssistantEvent, AssistantEventStream, ModelRequest, Provider,
 };
+use crate::request::bearer_auth;
 use crate::retry::{send_with_retry, RequestFailure, DEFAULT_MAX_RETRY_DELAY_MS};
 use crate::transform::{transform_messages, TransformOptions};
 use crate::types::ThinkingLevel;
@@ -144,9 +145,7 @@ impl Provider for OpenAiResponsesProvider {
 
         tokio::spawn(async move {
             let build = || {
-                let request = client
-                    .post(&url)
-                    .bearer_auth(&api_key)
+                let request = bearer_auth(client.post(&url), &api_key)
                     .header("Accept", "text/event-stream")
                     .header("User-Agent", USER_AGENT);
                 options.apply_to(request).json(&body)

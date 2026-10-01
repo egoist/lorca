@@ -379,9 +379,8 @@ export function savedChecklist(models: readonly CustomModel[] = []): ModelCheckl
 /** Takes a new listing: the models to keep (picked or added by hand) stay where they are with the
  * listing's facts, the rest of the old listing goes, and the new one follows. With nothing picked
  * yet, a list of eight models or fewer, as a model server on the user's network has, starts picked,
- * its first the default. An empty listing changes nothing. */
+ * its first the default. An empty listing, a server with none, keeps only the models to keep. */
 export function takeListing(checklist: ModelChecklist, listed: readonly CustomModel[]): ModelChecklist {
-  if (listed.length === 0) return checklist;
   const facts = new Map<string, CustomModel>();
   for (const model of listed) if (!facts.has(model.id)) facts.set(model.id, model);
   const keep = (id: string) => checklist.selected.has(id) || checklist.added.has(id);
@@ -392,7 +391,7 @@ export function takeListing(checklist: ModelChecklist, listed: readonly CustomMo
     seen.add(model.id);
     models.push(model);
   }
-  if (checklist.selected.size > 0 || listed.length > 8) return { ...checklist, models };
+  if (checklist.selected.size > 0 || listed.length === 0 || listed.length > 8) return { ...checklist, models };
   return { ...checklist, models, selected: new Set(listed.map((model) => model.id)), defaultID: listed[0]?.id };
 }
 

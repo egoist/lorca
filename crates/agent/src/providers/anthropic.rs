@@ -638,9 +638,12 @@ impl Provider for AnthropicProvider {
 
         tokio::spawn(async move {
             let build = || {
-                let request = client
-                    .post(&url)
-                    .header("x-api-key", &api_key)
+                // A server that takes no key gets no `x-api-key`, as it may refuse an empty one.
+                let request = match api_key.as_str() {
+                    "" => client.post(&url),
+                    key => client.post(&url).header("x-api-key", key),
+                };
+                let request = request
                     .header("anthropic-version", ANTHROPIC_VERSION)
                     .header("Accept", "text/event-stream")
                     .header("User-Agent", USER_AGENT);

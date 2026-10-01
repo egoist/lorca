@@ -28,6 +28,8 @@ final class CustomProviderTests: XCTestCase {
         let merged = ModelChecklist.merge(old, keeping: { ["typed", "picked"].contains($0) }, with: listed)
         XCTAssertEqual(merged.map(\.id), ["typed", "picked", "fresh"])
         XCTAssertEqual(merged[1].contextWindow, 128_000, "the listing's facts replace the kept row's")
+        // A server with no list keeps only what was picked or typed, none of the last server's.
+        XCTAssertEqual(ModelChecklist.merge(merged, keeping: { $0 == "typed" }, with: []).map(\.id), ["typed"])
     }
 
     func testTheSearchFieldFiltersOrOffersToAdd() {

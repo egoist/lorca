@@ -173,8 +173,9 @@ test("a listing keeps the picked and typed models where they are, and the rest o
   expect(next.models[0]).toEqual({ id: "mine", images: true });
   expect(next.models[1]).toEqual({ id: "m4", name: "Model Four", contextWindow: 128_000 });
   expect([picked(next), next.defaultID]).toEqual([["m4", "mine"], "m4"]);
-  // A server that lists nothing changes nothing.
-  expect(takeListing(next, [])).toBe(next);
+  // A server that lists nothing keeps the picked and typed models, none of the last server's.
+  const unlisted = takeListing(toggleModel(next, "m4"), []);
+  expect([ids(unlisted), picked(unlisted), unlisted.defaultID]).toEqual([["mine"], ["mine"], "mine"]);
 });
 
 test("a short listing starts picked when nothing is, and a saved pick keeps the rest unpicked", () => {

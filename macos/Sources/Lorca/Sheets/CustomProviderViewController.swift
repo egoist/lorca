@@ -298,15 +298,17 @@ final class CustomProviderViewController: SheetViewController {
         }
     }
 
-    /// A listing replaces the last one; picked and typed models stay. A short list, as a model
-    /// server on the user's network has, starts picked.
+    /// A listing replaces the last one, and a server with none leaves no other server's models
+    /// behind; picked and typed models stay. A short list, as a model server on the user's
+    /// network has, starts picked.
     private func take(_ listed: [CustomModel]?) {
+        let (picked, typed) = (selected, added)
+        models = ModelChecklist.merge(models, keeping: { picked.contains($0) || typed.contains($0) }, with: listed ?? [])
         guard let listed, !listed.isEmpty else {
             show(.unlisted)
+            reloadEntries()
             return
         }
-        let (picked, typed) = (selected, added)
-        models = ModelChecklist.merge(models, keeping: { picked.contains($0) || typed.contains($0) }, with: listed)
         if selected.isEmpty && listed.count <= 8 {
             selected = Set(listed.map(\.id))
             defaultID = listed.first?.id

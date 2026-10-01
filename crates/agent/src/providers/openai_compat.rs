@@ -10,6 +10,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::models::{self, ModelInfo};
 use crate::provider::{channel_stream, AssistantEvent, AssistantEventStream, ModelRequest, Provider};
+use crate::request::bearer_auth;
 use crate::retry::{send_with_retry, RequestFailure, DEFAULT_MAX_RETRY_DELAY_MS};
 use crate::sse::SseParser;
 use crate::transform::{transform_messages, TransformOptions};
@@ -357,7 +358,7 @@ impl Provider for OpenAiCompatProvider {
         let info = self.info;
 
         tokio::spawn(async move {
-            let build = || options.apply_to(client.post(&url).bearer_auth(&api_key).header("User-Agent", USER_AGENT)).json(&body);
+            let build = || options.apply_to(bearer_auth(client.post(&url), &api_key).header("User-Agent", USER_AGENT)).json(&body);
             let response = match send_with_retry(build, max_retries, max_retry_delay_ms, &cancel).await {
                 Ok(response) => {
                     options.report(&response);

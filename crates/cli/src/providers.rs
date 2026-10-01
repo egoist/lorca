@@ -537,6 +537,53 @@ mod tests {
         assert_eq!(provider_for(app, "custom:vision-lab", None, None).err().unwrap(), "vision-lab is not connected");
     }
 
+    /// Answers one model call with `body` as a stream and hands back the request it got.
+    fn answer_once(body: &'static str) -> (String, std::thread::JoinHandle<String>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let root = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut request = [0u8; 8192];
+            let read = socket.read(&mut request).unwrap();
+            let reply = format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+            socket.write_all(reply.as_bytes()).unwrap();
+            String::from_utf8_lossy(&request[..read]).to_ascii_lowercase()
+        });
+        (root, server)
+    }
+
+    #[tokio::test]
+    async fn a_server_that_takes_no_key_gets_no_auth_header() {
+        use futures::StreamExt;
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        let request = || ModelRequest {
+            system_prompt: String::new(),
+            messages: vec![lorca_agent::LlmMessage::User(lorca_agent::UserMessage::text("hi"))],
+            tools: Vec::new(),
+            cache_points: Vec::new(),
+            max_tokens: None,
+            options: lorca_agent::RequestOptions::default().with_session_id("chat-1"),
+        };
+        let cases = [
+            (CustomApi::ChatCompletions, "/v1", "data: [DONE]\n\n", "post /v1/chat/completions "),
+            (CustomApi::Messages, "", "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n", "post /v1/messages "),
+        ];
+        for (api, path, body, line) in cases {
+            let (root, server) = answer_once(body);
+            let kind = format!("custom:keyless-{}", path.len());
+            let provider = CustomProvider { name: "Keyless".into(), api, base_url: format!("{root}{path}"), api_key: String::new(), models: vec![model("m")], created_at: 1 };
+            app.credentials.lock().unwrap().custom.insert(kind.clone(), provider);
+            let mut stream = provider_for(app, &kind, None, None).unwrap().stream(request(), CancellationToken::new()).await;
+            while stream.next().await.is_some() {}
+            let seen = server.join().unwrap();
+            assert!(seen.starts_with(line), "{seen}");
+            assert!(!seen.contains("\r\nauthorization:") && !seen.contains("\r\nx-api-key:"), "{seen}");
+            assert!(!seen.contains("prompt_cache_key"), "{seen}");
+        }
+    }
+
     #[test]
     fn a_custom_messages_server_thinks_by_budget() {
         let scratch = scratch_app();

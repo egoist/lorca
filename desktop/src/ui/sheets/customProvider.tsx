@@ -143,12 +143,13 @@ function CustomProviderSheet(props: {
       try {
         const listed = await store.listCustomModels(request);
         if (closed || current !== generation) return;
-        // A listing replaces the last one; picked and typed models stay.
+        // A listing replaces the last one, and a server with none leaves no other server's models
+        // behind; picked and typed models stay.
+        setChecklist(takeListing(checklist(), listed ?? []));
         if (listed === null || listed.length === 0) {
           setListing({ kind: "unlisted" });
           return;
         }
-        setChecklist(takeListing(checklist(), listed));
         setListing({ kind: "listed" });
       } catch (error) {
         if (closed || current !== generation) return;
