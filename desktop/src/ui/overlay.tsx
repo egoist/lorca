@@ -238,7 +238,7 @@ export function alert(options: AlertOptions): Promise<number> {
           }}
         >
           <span class="alert-icon" aria-hidden="true">
-            <img src={hostInfo().isDevelopment ? devIconURL : iconURL} width={48} height={48} alt="" draggable={false} />
+            <img src={hostInfo().isDevelopment ? devIconURL : iconURL} width={48} height={48} alt="" draggable="false" />
             <Show when={options.style === "critical"}>
               <span class="alert-caution">
                 <Icon name="exclamationmark.triangle.fill" size={20} strokeWidth={2.2} />

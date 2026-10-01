@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tokio::sync::{broadcast, Notify};
+use tokio::sync::{broadcast, watch, Notify};
 use tokio_util::sync::CancellationToken;
 
 use crate::config::{self, Config, Settings};
@@ -167,6 +167,9 @@ pub struct App {
     /// history). Message and roster events are held back and state is not written per
     /// message; the cycle saves once and emits one snapshot when the page is applied.
     pub bulk_sync: AtomicBool,
+    /// The machine key of the account the sync loop has pulled from the relay since this
+    /// process started: its roster, Devices, and credentials. `sync.account` waits on it.
+    pub account_pulled: watch::Sender<Option<String>>,
     pub pairings: Mutex<HashMap<String, PendingPairing>>,
     /// The pairing this Device is joining, while `pair.accept` waits for the reply.
     pub accepting: Mutex<Option<CancellationToken>>,
@@ -174,6 +177,9 @@ pub struct App {
     /// closing on a phone, cancels the old wait.
     #[cfg(feature = "provider-auth")]
     pub provider_auth: Mutex<CancellationToken>,
+    /// The plugin sign-in this Device waits on for another Runner, by the Runner's id for it. A
+    /// newer one, or its page closing on a phone, cancels the wait.
+    pub plugin_sign_in: Mutex<Option<(String, CancellationToken)>>,
     /// By job id.
     pub running_jobs: Mutex<HashMap<String, RunningJob>>,
     /// The turns the local app was last told about, by job id: `turns_changed` tells it what
@@ -256,10 +262,12 @@ impl App {
             relay_problem: Mutex::new(None),
             presence_stale: AtomicBool::new(false),
             bulk_sync: AtomicBool::new(false),
+            account_pulled: watch::Sender::new(None),
             pairings: Mutex::new(HashMap::new()),
             accepting: Mutex::new(None),
             #[cfg(feature = "provider-auth")]
             provider_auth: Mutex::new(CancellationToken::new()),
+            plugin_sign_in: Mutex::new(None),
             running_jobs: Mutex::new(HashMap::new()),
             announced_turns: Mutex::new(std::collections::BTreeMap::new()),
             #[cfg(feature = "runner")]
@@ -335,6 +343,24 @@ impl App {
     #[cfg(feature = "provider-auth")]
     pub fn cancel_provider_auth(&self) {
         self.provider_auth.lock().unwrap().cancel();
+    }
+
+    /// Starts waiting on plugin sign-in `id` for another Runner, cancelling a previous wait.
+    pub fn begin_plugin_sign_in(&self, id: &str) -> CancellationToken {
+        let next = CancellationToken::new();
+        if let Some((_, previous)) = self.plugin_sign_in.lock().unwrap().replace((id.to_string(), next.clone())) {
+            previous.cancel();
+        }
+        next
+    }
+
+    /// Stops waiting on plugin sign-in `id`, or on whichever one this Device waits on.
+    pub fn cancel_plugin_sign_in(&self, id: Option<&str>) {
+        if let Some((waiting, token)) = self.plugin_sign_in.lock().unwrap().as_ref() {
+            if id.is_none_or(|id| id == waiting) {
+                token.cancel();
+            }
+        }
     }
 
     /// Changes the account's credential of `kind`: saved here, sent to the other Devices, and
@@ -486,6 +512,7 @@ impl App {
         }
         #[cfg(feature = "provider-auth")]
         self.cancel_provider_auth();
+        self.cancel_plugin_sign_in(None);
         #[cfg(feature = "runner")]
         self.steering_queues.lock().unwrap().clear();
         *self.identity.lock().unwrap() = None;
@@ -969,7 +996,6 @@ impl App {
             bot
         };
         self.roster_changed(true);
-        crate::runtime::prime_names(self);
         Ok(bot)
     }
 
@@ -1032,7 +1058,6 @@ impl App {
         #[cfg(feature = "runner")]
         self.shell_sessions.close_orphans(self);
         self.roster_changed(true);
-        crate::runtime::prime_names(self);
         Ok(())
     }
 
@@ -1750,6 +1775,22 @@ mod tests {
             slot: None,
             group: Some(crate::model::relay_name(chat_id)),
         }
+    }
+
+    #[test]
+    fn closing_a_sign_in_page_stops_only_its_own_wait() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        let first = app.begin_plugin_sign_in("first");
+        let second = app.begin_plugin_sign_in("second");
+        assert!(first.is_cancelled(), "a newer sign-in replaces the wait");
+        app.cancel_plugin_sign_in(Some("first"));
+        assert!(!second.is_cancelled(), "a late close of the first page leaves the second alone");
+        app.cancel_plugin_sign_in(Some("second"));
+        assert!(second.is_cancelled());
+        let third = app.begin_plugin_sign_in("third");
+        app.cancel_plugin_sign_in(None);
+        assert!(third.is_cancelled());
     }
 
     #[test]

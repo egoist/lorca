@@ -69,6 +69,7 @@ import {
   type WireRosterChanged,
   type WireSearchResults,
   type WireSnapshot,
+  type WireSyncAccount,
 } from "./wire";
 
 export type StoreEvent =
@@ -905,7 +906,7 @@ export class AppStore {
     return toPlugin(reply.status);
   }
 
-  /** Starts the sign-in on the Runner; the browser opens there. */
+  /** Starts a plugin's sign-in for the Runner; the browser opens on this computer. */
   async connectPlugin(pluginID: string, runnerID: string): Promise<void> {
     if (this.isMock) return;
     await this.request("plugins.connect", { runner_id: runnerID, plugin_id: pluginID });
@@ -1392,6 +1393,13 @@ export class AppStore {
     this.emit({ kind: "rosterChanged" });
   }
 
+  /** Unpairs this Device. The CLI asks the relay to drop its key, best effort, then forgets the
+   * identity here; the `identity.changed` it sends brings back onboarding. The demo has no CLI, so
+   * its Unpair opens onboarding instead (`confirmUnpair`). */
+  async forgetIdentity(): Promise<void> {
+    await this.request("identity.forget");
+  }
+
   /** Deletes the account on the relay and on this Device; the other Devices forget it as the relay
    * drops them. Throws when the relay could not be told, and nothing is deleted then. */
   async deleteAccount(): Promise<void> {
@@ -1425,6 +1433,24 @@ export class AppStore {
     await this.request("pair.accept", { pairing_string: pairingString });
     this.hasIdentity = true;
     this.emit({ kind: "identityChanged" });
+  }
+
+  /** Stops waiting on the other Device: `acceptPairing` fails with "Pairing cancelled". */
+  abortPairing(): void {
+    this.perform("pair.abort");
+  }
+
+  /** Whether the account this computer just joined has a provider connected. The CLI answers
+   * once its first pull from the relay has brought the account's credentials, or after half a
+   * minute (`sync.account`). */
+  async accountHasProvider(): Promise<boolean> {
+    try {
+      const synced = await this.request<WireSyncAccount>("sync.account");
+      return toProviders(synced.providers).some((provider) => provider.isConnected);
+    } catch {
+      // A CLI that cannot answer (an older one, or one that restarted) leaves what the store has.
+      return this.providers.some((provider) => provider.isConnected);
+    }
   }
 
   providerAPIKey(kind: ProviderKind): Promise<{ api_key?: string | null; base_url?: string | null }> {

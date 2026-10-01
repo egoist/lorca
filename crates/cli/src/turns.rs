@@ -30,7 +30,7 @@ use crate::memory::{self, MemoryStore};
 use crate::model::*;
 use crate::plugins::review::Trigger;
 use crate::providers;
-use crate::runtime::{chat_source, name_of, prime_names, start_turn, TurnOutcome};
+use crate::runtime::{chat_source, name_of, start_turn, TurnOutcome};
 
 /// The most chat messages a turn rebuilds as they are. Past this a chat is compacted by count,
 /// so nothing is dropped without a summary; with compaction off, older rows are left out.
@@ -136,7 +136,7 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
         Arc::new(InstallPlugin { app: app.clone(), chat_id: chat.meta.id.clone(), bot: bot.clone(), unattended }),
         Arc::new(ConnectPlugin { app: app.clone(), chat_id: chat.meta.id.clone(), bot: bot.clone() }),
     ];
-    tools.extend(memory_tools(&store, &chat));
+    tools.extend(memory_tools(app, &store, &chat));
     tools.push(Arc::new(Recall { app: app.clone(), store: store.clone(), bot: bot.clone() }));
     // Commands run in terminals of their own, kept on this Runner past the turn when they
     // wait for input.
@@ -336,7 +336,7 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
         drop(state);
         let source = match &routine {
             Some(routine) => format!("routine \"{}\"", routine.name),
-            None => format!("in {}", chat_source(&chat)),
+            None => format!("in {}", chat_source(app, &chat)),
         };
         if let Err(error) = store.append_log(&line, Some(&source), now_secs() as i64) {
             tracing::warn!(%error, "writing the turn to the daily log");
@@ -748,7 +748,7 @@ async fn memory_flush(
             // The turn's thinking is bound to the turn's system prompt and tools, not this run's.
             drop_bound_thinking(provider.model_id(), &mut context_messages);
             context_messages.push(AgentMessage::User(UserMessage::text(memory_flush_prompt(None))));
-            AgentContext { system_prompt: system, messages: context_messages, tools: memory_tools(&store, chat), cache_points: Vec::new() }
+            AgentContext { system_prompt: system, messages: context_messages, tools: memory_tools(app, &store, chat), cache_points: Vec::new() }
         }
     };
     let config = AgentLoopConfig {
@@ -777,8 +777,8 @@ async fn memory_flush(
 }
 
 /// The two memory writing tools, bound to one bot and the chat the writes come from.
-fn memory_tools(store: &MemoryStore, chat: &Chat) -> Vec<Arc<dyn Tool>> {
-    let source = chat_source(chat);
+fn memory_tools(app: &App, store: &MemoryStore, chat: &Chat) -> Vec<Arc<dyn Tool>> {
+    let source = chat_source(app, chat);
     vec![
         Arc::new(MemoryUpdate { store: store.clone(), source: source.clone() }),
         Arc::new(MemoryLog { store: store.clone(), source }),
@@ -1671,7 +1671,7 @@ fn recent_work_brief(app: &App, bot: &Bot, current_chat_id: &str, now: i64) -> O
             continue;
         }
         let Body::Text { text, .. } = &message.body else { continue };
-        rows.push((at, format!("- {} · {} · you said: \"{}\"", when_label(at, now), chat_source(chat), excerpt(text, 160))));
+        rows.push((at, format!("- {} · {} · you said: \"{}\"", when_label(at, now), chat_source(app, chat), excerpt(text, 160))));
     }
     if rows.is_empty() {
         return None;
@@ -1762,7 +1762,7 @@ fn transcript_bounded(app: &App, chat: &Chat, bot: &Bot, workdir: &std::path::Pa
                 out.push(AgentMessage::Assistant(assistant));
             }
             (Author::Bot { bot_id }, Body::Text { text, .. }) => {
-                out.push(user(&format!("[{}]: {text}", name_of(chat, bot_id)), timestamp));
+                out.push(user(&format!("[{}]: {text}", name_of(app, bot_id)), timestamp));
             }
             // Server-side tool rows are a record of activity, not calls to replay.
             (Author::Bot { .. }, Body::Tool { name, .. }) if is_server_tool(name) => {}
@@ -1805,11 +1805,11 @@ fn transcript_bounded(app: &App, chat: &Chat, bot: &Bot, workdir: &std::path::Pa
                 out.push(user(&task, timestamp));
             }
             (Author::Bot { bot_id }, Body::Handoff { to, reason, .. }) if bot_id != &bot.id => {
-                let from = name_of(chat, bot_id);
+                let from = name_of(app, bot_id);
                 if to == &bot.id {
                     out.push(user(&format!("[Message from {from}]: {reason}"), timestamp));
                 } else {
-                    out.push(user(&format!("[{from} → {}]: {reason}", name_of(chat, to)), timestamp));
+                    out.push(user(&format!("[{from} → {}]: {reason}", name_of(app, to)), timestamp));
                 }
             }
             _ => {}
@@ -2155,7 +2155,7 @@ fn chat_hits(app: &App, bot: &Bot, regex: Option<&regex::Regex>, since: Option<i
     let chats: Vec<Chat> = app.state.lock().unwrap().chats.iter().filter(|c| c.meta.bot_ids.contains(&bot.id)).cloned().collect();
     let mut hits = Vec::new();
     for chat in &chats {
-        let source = chat_source(chat);
+        let source = chat_source(app, chat);
         for message in app.store.text_messages(&chat.meta.id, since, until).unwrap_or_default() {
             let Body::Text { text, .. } = &message.body else { continue };
             let at = message.created_at as i64;
@@ -2165,7 +2165,7 @@ fn chat_hits(app: &App, bot: &Bot, regex: Option<&regex::Regex>, since: Option<i
             let who = match &message.author {
                 Author::You => "the user".to_string(),
                 Author::Bot { bot_id } if bot_id == &bot.id => "you".to_string(),
-                Author::Bot { bot_id } => name_of(chat, bot_id),
+                Author::Bot { bot_id } => name_of(app, bot_id),
                 Author::System => continue,
             };
             hits.push(memory::Hit { at: Some(at), source: format!("{source} · {who}"), text: excerpt(text, 240) });
@@ -2237,7 +2237,6 @@ impl Tool for CreateBot {
             created_at: 0.0,
         };
         let (created, _dm) = self.app.create_bot_with_dm(bot, None).map_err(|e| ToolError(e.to_string()))?;
-        prime_names(&self.app);
 
         let mut joined_here = false;
         if let Some(chat) = self.app.chat(&self.chat_id) {
@@ -2817,7 +2816,7 @@ mod tests {
         let dm = chat("chat", "dm", None, &["b1"]);
         app.state.lock().unwrap().chats.push(dm.clone());
         let store = MemoryStore::for_bot(&app.config.home, &chef);
-        let mut tools = memory_tools(&store, &dm);
+        let mut tools = memory_tools(app, &store, &dm);
         tools.extend(lorca_agent::tools::coding_tools(scratch.1.join("work")));
         let turn = TurnRequest { system_prompt: "You are Chef, a bot in Lorca.".into(), tools, cache_points: vec![2] };
         let reply = |text: &str| {
@@ -3989,7 +3988,6 @@ mod tests {
         ] {
             app.upsert_message(message, false);
         }
-        prime_names(app);
 
         let brief = recent_work_brief(app, &chef, "c4", now).unwrap();
         let lines: Vec<&str> = brief.lines().collect();

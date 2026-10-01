@@ -153,7 +153,7 @@ function ConnectProviderSheet(props: {
               placeholder={keyPlaceholder(kind)}
               aria-label={L("API key")}
               disabled={busy()}
-              spellcheck={false}
+              spellcheck="false"
               autocomplete="off"
               onInput={(event) => setKey(event.currentTarget.value)}
             />
@@ -176,7 +176,7 @@ function ConnectProviderSheet(props: {
               value={baseURL()}
               placeholder={defaultBaseURL(kind)}
               disabled={busy()}
-              spellcheck={false}
+              spellcheck="false"
               autocomplete="off"
               onInput={(event) => setBaseURL(event.currentTarget.value)}
             />

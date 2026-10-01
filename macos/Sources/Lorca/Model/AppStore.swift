@@ -757,7 +757,7 @@ final class AppStore {
         return try await client.request("plugins.set_variables", ["runner_id": runnerID, "plugin_id": pluginID, "variables": variables], as: Wire.PluginInstalled.self).status.toModel()
     }
 
-    /// Starts the sign-in on the Runner; the browser opens there.
+    /// Starts a plugin's sign-in for the Runner; the browser opens on this Mac.
     func connectPlugin(_ pluginID: String, on runnerID: Device.ID) async throws {
         guard !isMock else { return }
         _ = try await client.request("plugins.connect", ["runner_id": runnerID, "plugin_id": pluginID])
@@ -1253,6 +1253,13 @@ final class AppStore {
         emit(.rosterChanged)
     }
 
+    /// Unpairs this Device. The CLI asks the relay to drop its key, best effort, then forgets the
+    /// identity here; the `identity.changed` it sends brings back onboarding. The demo has no CLI,
+    /// so its Unpair opens onboarding instead (`UnpairDevice`).
+    func forgetIdentity() async throws {
+        _ = try await client.request("identity.forget")
+    }
+
     /// Deletes the account on the relay and on this Device; the other Devices forget it as the
     /// relay drops them. Throws when the relay could not be told, and nothing is deleted then.
     func deleteAccount() async throws {
@@ -1283,6 +1290,22 @@ final class AppStore {
             "pair.accept", ["pairing_string": pairingString, "device_name": Host.current().localizedName ?? ""])
         hasIdentity = true
         emit(.identityChanged)
+    }
+
+    /// Stops waiting on the other Device: `acceptPairing` throws "Pairing cancelled".
+    func abortPairing() {
+        perform("pair.abort")
+    }
+
+    /// Whether the account this Mac just joined has a provider connected. The CLI answers once
+    /// its first pull from the relay has brought the account's credentials, or after half a
+    /// minute (`sync.account`).
+    func accountHasProvider() async -> Bool {
+        guard let synced = try? await client.request("sync.account", as: Wire.SyncAccount.self) else {
+            // A CLI that cannot answer (an older one, or one that restarted) leaves what the store has.
+            return providers.contains(where: \.isConnected)
+        }
+        return (synced.providers ?? []).compactMap { $0.toModel() }.contains(where: \.isConnected)
     }
 
     func providerAPIKey(_ kind: ProviderCredential.Kind) async throws -> Wire.ProviderAPIKey {

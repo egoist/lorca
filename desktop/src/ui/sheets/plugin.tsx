@@ -224,7 +224,7 @@ function PluginSheet(props: { pluginID: string; runner: Device; dismiss: () => v
                   value={variable().secret ? "" : (variable().value ?? "")}
                   placeholder={variable().secret ? (variable().isSet ? L("Set · type to replace") : L("Not set")) : variable().isSet ? "" : L("Not set")}
                   title={variable().description}
-                  spellcheck={false}
+                  spellcheck="false"
                   autocomplete="off"
                 />
               </div>
@@ -240,7 +240,7 @@ function PluginSheet(props: { pluginID: string; runner: Device; dismiss: () => v
       <div class="sheet-note secondary">
         {props.runner.isThisDevice
           ? L("Keys and sign-ins stay on this device.")
-          : L("Keys and sign-ins are sent sealed to %@ and stay there. A sign-in opens the browser on %@.", props.runner.name, props.runner.name)}
+          : L("Keys and sign-ins are sent sealed to %@ and stay there.", props.runner.name)}
       </div>
       <div class="sheet-actions">
         <Show when={(detail()?.variables.length ?? 0) > 0}>

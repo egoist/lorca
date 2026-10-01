@@ -2657,6 +2657,11 @@ body.resizing * {
   margin-top: 20px;
 }
 
+.onboarding-buttons .spinner {
+  align-self: center;
+  margin-right: 2px;
+}
+
 .onboarding-next {
   min-width: 120px;
 }

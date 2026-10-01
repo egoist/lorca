@@ -219,13 +219,11 @@ final class AboutDeviceSettingsViewController: DevicePaneViewController {
                 } ?? L("Not configured"),
                 monospaced: true),
         ]
-        if !device.isThisDevice {
-            let unpair = ActionRow(
-                key: SettingsEntry.pairing.row, value: L("Paired to this account"), tint: .secondaryLabelColor,
-                actionTitle: L("Unpair…"))
-            unpair.onAction = { [weak self] in UnpairDevice.confirm(device, in: self?.view.window) }
-            rows.append(unpair)
-        }
+        let unpair = ActionRow(
+            key: SettingsEntry.pairing.row, value: L("Paired to this account"), tint: .secondaryLabelColor,
+            actionTitle: L("Unpair…"))
+        unpair.onAction = { [weak self] in UnpairDevice.confirm(device, in: self?.view.window) }
+        rows.append(unpair)
         machineSection.setRows(rows)
     }
 }

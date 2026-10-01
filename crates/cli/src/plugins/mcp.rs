@@ -20,7 +20,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use lorca_agent::agent_loop::ToolExecutionMode;
 use lorca_agent::{ContentPart, Tool, ToolError, ToolResult, ToolUpdateFn};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_util::sync::CancellationToken;
 
 use super::{fill, fill_if_set, pattern_matches, AuthSpec, Installed, ServerSpec};
@@ -32,8 +31,6 @@ use crate::model::*;
 pub const PERMISSION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 /// How long a tool call may run.
 const CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10 * 60);
-/// How long the sign-in page may take.
-const SIGN_IN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5 * 60);
 /// How long a server may take to start and answer the MCP handshake. A package runner such as
 /// `npx` may download the server first.
 const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2 * 60);
@@ -76,6 +73,8 @@ pub struct Pool {
     /// The HTTP client the MCP transports and the OAuth flow use (rmcp's reqwest, not the
     /// App's).
     http: mcp_http::Client,
+    /// Browser sign-ins another Device finishes, by plugin, each with an id of its own.
+    sign_ins: Mutex<HashMap<String, (String, Pending)>>,
 }
 
 impl Default for Pool {
@@ -87,7 +86,7 @@ impl Default for Pool {
 impl Pool {
     pub fn new() -> Self {
         let http = mcp_http::Client::builder().timeout(std::time::Duration::from_secs(600)).build().unwrap_or_default();
-        Pool { servers: Mutex::new(HashMap::new()), generations: Mutex::new(HashMap::new()), connecting: tokio::sync::Mutex::new(()), http }
+        Pool { servers: Mutex::new(HashMap::new()), generations: Mutex::new(HashMap::new()), connecting: tokio::sync::Mutex::new(()), http, sign_ins: Mutex::new(HashMap::new()) }
     }
 
     /// Drops every connection of a plugin, so the next use reconnects with fresh settings.
@@ -394,11 +393,36 @@ async fn device_bearer(app: &Arc<App>, plugin_id: &str, server: &str, name: &str
 
 // MARK: - Sign-in
 
-/// Signs in to an OAuth server on this Runner: the MCP authorization flow with a loopback
-/// callback, the browser opened here. Runs in the background; the plugin's state says how it
-/// goes and the tokens land in the secrets file.
-pub fn connect_oauth(app: &Arc<App>, plugin_id: &str, server: &str) -> Result<String, String> {
-    connect_oauth_for_card(app, plugin_id, server, None)
+/// Signs in to an OAuth server of a plugin on this Runner: the MCP authorization flow with a
+/// loopback callback. The browser opens here, or on the Device that asked from `elsewhere`,
+/// which sends back where it landed (`finish_sign_in`). Runs in the background; the plugin's
+/// state says how it goes and the tokens land in the secrets file.
+pub async fn connect_oauth(app: &Arc<App>, plugin_id: &str, server: &str, elsewhere: Option<Elsewhere>) -> Result<SignInStart, String> {
+    connect_oauth_for_card(app, plugin_id, server, None, elsewhere).await
+}
+
+/// The Device that asked for a sign-in from elsewhere: its name, and the loopback redirect it
+/// listens on.
+pub struct Elsewhere {
+    pub device: String,
+    pub redirect_uri: String,
+}
+
+/// How a sign-in started: what to tell the user, and for the Device that asked, the page it
+/// opens and the id it finishes the sign-in with.
+pub struct SignInStart {
+    pub message: String,
+    pub url: Option<String>,
+    pub id: Option<String>,
+}
+
+/// A browser sign-in another Device finishes: the authorization this Runner holds until that
+/// Device sends back where the browser landed, and what to update when it ends.
+struct Pending {
+    state: OAuthState,
+    server: String,
+    name: String,
+    card: Option<(String, String)>,
 }
 
 /// The OAuth server of a plugin, when it has one.
@@ -414,7 +438,9 @@ pub fn oauth_server(app: &App, plugin_id: &str) -> Option<String> {
 }
 
 /// Posts a sign-in card in the chat, as Grok Bot does: "Sign in" on it starts the OAuth flow
-/// on the Runner and the card says how it went. Nothing waits on it.
+/// on the Runner and the card says how it went. Nothing waits on it. A chat holds one waiting
+/// card per plugin and Runner: asked again before the user writes, this answers with the card
+/// already up; asked after, the new card replaces the old one, which reads dismissed.
 pub fn post_sign_in_card(app: &Arc<App>, chat_id: &str, bot_id: &str, plugin_id: &str) -> Result<Message, String> {
     let (name, state) = {
         let store = app.plugins.lock().unwrap();
@@ -425,6 +451,29 @@ pub fn post_sign_in_card(app: &Arc<App>, chat_id: &str, bot_id: &str, plugin_id:
     if state == "ready" {
         return Err(format!("{name} is already signed in."));
     }
+    let runner_of = |bot_id: &str| app.bot(bot_id).map(|bot| bot.runner_id);
+    let here = runner_of(bot_id);
+    let mut waiting: Vec<(Message, bool)> = app
+        .store
+        .sign_in_cards(Some(chat_id), plugin_id)
+        .unwrap_or_else(|error| {
+            tracing::error!(%error, %chat_id, "reading sign-in cards");
+            Vec::new()
+        })
+        .into_iter()
+        .filter(|(card, _)| matches!(&card.body, Body::Permission { decision, .. } if decision == "pending"))
+        .filter(|(card, _)| matches!(&card.author, Author::Bot { bot_id } if runner_of(bot_id) == here))
+        .collect();
+    let current = match waiting.last() {
+        Some((_, true)) => waiting.pop().map(|(card, _)| card),
+        _ => None,
+    };
+    for (card, _) in &waiting {
+        set_card(app, chat_id, &card.id, "dismissed", None, None, None);
+    }
+    if let Some(card) = current {
+        return Ok(card);
+    }
     let runner = app.this_device_id().and_then(|id| app.device(&id)).map(|d| d.name).unwrap_or_else(|| "its Runner".into());
     let message = Message::new(
         chat_id,
@@ -433,7 +482,7 @@ pub fn post_sign_in_card(app: &Arc<App>, chat_id: &str, bot_id: &str, plugin_id:
             plugin_id: plugin_id.to_string(),
             plugin_name: name.clone(),
             tool: "connect".into(),
-            summary: format!("Sign in to {name}; the browser opens on {runner}."),
+            summary: format!("Sign in to {name} on {runner}."),
             arguments: Value::Null,
             decision: "pending".into(),
             reason: None,
@@ -464,7 +513,7 @@ fn set_card(app: &Arc<App>, chat_id: &str, message_id: &str, decision: &str, sum
 }
 
 /// `connect_oauth` with a chat card (chat id, message id) to update as the sign-in goes.
-pub fn connect_oauth_for_card(app: &Arc<App>, plugin_id: &str, server: &str, card: Option<(String, String)>) -> Result<String, String> {
+pub async fn connect_oauth_for_card(app: &Arc<App>, plugin_id: &str, server: &str, card: Option<(String, String)>, elsewhere: Option<Elsewhere>) -> Result<SignInStart, String> {
     let (plugin, spec) = {
         let store = app.plugins.lock().unwrap();
         let plugin = store.get(plugin_id).cloned().ok_or("Unknown plugin")?;
@@ -492,40 +541,151 @@ pub fn connect_oauth_for_card(app: &Arc<App>, plugin_id: &str, server: &str, car
         }
         _ => return Err(format!("{server} does not sign in with OAuth.")),
     };
-    let app = app.clone();
-    let plugin_id = plugin_id.to_string();
-    let server = server.to_string();
     let name = plugin.manifest.name.clone();
-    super::note(&app, &plugin_id, Some(("connecting", if device.is_some() { "Getting a sign-in code…" } else { "Finish signing in in the browser" })));
+    // A device code works on any Device, so it is the sign-in wherever the user asked.
+    let opens_on = match (&device, &elsewhere) {
+        (Some(_), _) => None,
+        (None, Some(elsewhere)) => Some(elsewhere.device.clone()),
+        (None, None) => Some(this_runner(app)),
+    };
+    match &opens_on {
+        Some(device) => super::note(app, plugin_id, Some(("connecting", &format!("Finish signing in in the browser on {device}")))),
+        None => super::note(app, plugin_id, Some(("connecting", "Getting a sign-in code…"))),
+    }
+    if let Some((chat_id, message_id)) = &card {
+        let summary = opens_on.as_ref().map(|device| format!("Finish signing in in the browser on {device}.")).unwrap_or_else(|| "Getting a code…".into());
+        set_card(app, chat_id, message_id, "allowed", Some(summary), None, None);
+    }
+    if let (Some(elsewhere), None) = (elsewhere, &device) {
+        return match begin_sign_in(app, &url, &scopes, &name, &client, elsewhere.redirect_uri).await {
+            Ok((state, page)) => {
+                let id = hold_sign_in(app, plugin_id, Pending { state, server: server.to_string(), name: name.clone(), card });
+                Ok(SignInStart { message: format!("Open the {name} sign-in page on {}.", elsewhere.device), url: Some(page), id: Some(id) })
+            }
+            Err(error) => {
+                end_sign_in(app, plugin_id, server, &name, card, Err(error.clone()));
+                Err(error)
+            }
+        };
+    }
     let message = if device.is_some() { format!("Getting a {name} sign-in code.") } else { format!("Opened the {name} sign-in page in the browser on this Runner.") };
+    let (app, plugin_id, server) = (app.clone(), plugin_id.to_string(), server.to_string());
     tokio::spawn(async move {
         let flow = match &device {
             Some((device_endpoint, token_endpoint)) => device_sign_in(&app, &plugin_id, &server, device_endpoint, token_endpoint, &scopes, &name, client.id.as_deref().unwrap_or(""), card.as_ref()).await,
             None => sign_in(&app, &url, &scopes, &name, &client).await,
         };
-        let outcome = match flow {
-            Ok(saved) => match super::set_oauth(&app, &plugin_id, &server, Some(saved)) {
-                Ok(()) => {
-                    app.mcp.forget(&plugin_id);
-                    super::note(&app, &plugin_id, None);
-                    prefetch_tools(&app, &plugin_id);
-                    Ok(())
-                }
-                Err(error) => Err(error),
-            },
-            Err(error) => Err(error),
-        };
-        if let Err(error) = &outcome {
-            super::note(&app, &plugin_id, Some(("error", error)));
-        }
-        if let Some((chat_id, message_id)) = card {
-            match outcome {
-                Ok(()) => set_card(&app, &chat_id, &message_id, "connected", Some(format!("Signed in to {name}.")), None, None),
-                Err(error) => set_card(&app, &chat_id, &message_id, "failed", Some(format!("Sign-in failed: {error}")), None, None),
-            }
+        end_sign_in(&app, &plugin_id, &server, &name, card, flow);
+    });
+    Ok(SignInStart { message, url: None, id: None })
+}
+
+fn this_runner(app: &App) -> String {
+    app.this_device_id().and_then(|id| app.device(&id)).map(|d| d.name).unwrap_or_else(|| "this Runner".into())
+}
+
+/// Keeps a sign-in for the Device that opened its page, in place of an older one of the
+/// plugin, whose card asks again, and ends it as timed out if that Device never comes back.
+/// Answers with its id.
+fn hold_sign_in(app: &Arc<App>, plugin_id: &str, pending: Pending) -> String {
+    let id = uuid::Uuid::new_v4().to_string();
+    let replaced = app.mcp.sign_ins.lock().unwrap().insert(plugin_id.to_string(), (id.clone(), pending));
+    if let Some((_, Pending { name, card: Some((chat_id, message_id)), .. })) = replaced {
+        set_card_while(app, &chat_id, &message_id, "allowed", "pending", format!("Sign in to {name} on {}.", this_runner(app)));
+    }
+    let (app, plugin_id, held) = (app.clone(), plugin_id.to_string(), id.clone());
+    tokio::spawn(async move {
+        tokio::time::sleep(super::sign_in::TIMEOUT).await;
+        if let Some(pending) = take_sign_in(&app, &plugin_id, &held) {
+            end_sign_in(&app, &plugin_id, &pending.server, &pending.name, pending.card, Err("Timed out waiting for the browser".into()));
         }
     });
-    Ok(message)
+    id
+}
+
+/// The held sign-in `id` of a plugin, unless it ended or a newer one replaced it.
+fn take_sign_in(app: &App, plugin_id: &str, id: &str) -> Option<Pending> {
+    let mut held = app.mcp.sign_ins.lock().unwrap();
+    if held.get(plugin_id).is_some_and(|(held_id, _)| held_id == id) { held.remove(plugin_id).map(|(_, pending)| pending) } else { None }
+}
+
+/// The Device that opened the page sent back where the browser landed: its code becomes the
+/// tokens here.
+pub async fn finish_sign_in(app: &Arc<App>, plugin_id: &str, id: &str, callback: &str) -> Result<Value, String> {
+    let pending = take_sign_in(app, plugin_id, id).ok_or("That sign-in is over. Start it again.")?;
+    let flow = complete_sign_in(pending.state, callback, &pending.name).await;
+    let finished = flow.as_ref().map(|_| ()).map_err(String::clone);
+    end_sign_in(app, plugin_id, &pending.server, &pending.name, pending.card, flow);
+    finished.map(|()| json!({ "signed_in": true }))
+}
+
+/// The page closed before the sign-in finished: the plugin waits for a sign-in again, and its
+/// card offers Sign in again.
+pub fn cancel_sign_in(app: &Arc<App>, plugin_id: &str, id: &str) -> Result<Value, String> {
+    let Some(pending) = take_sign_in(app, plugin_id, id) else { return Ok(Value::Null) };
+    super::note(app, plugin_id, None);
+    if let Some((chat_id, message_id)) = pending.card {
+        let summary = format!("Sign in to {} on {}.", pending.name, this_runner(app));
+        set_card_while(app, &chat_id, &message_id, "allowed", "pending", summary);
+    }
+    Ok(Value::Null)
+}
+
+/// Ends a sign-in: the tokens saved and every card that asks for the plugin's sign-in reads
+/// Signed in, or the plugin and the card say why it failed. A failure leaves alone a plugin
+/// another sign-in got ready, and a card that already says how it went.
+fn end_sign_in(app: &Arc<App>, plugin_id: &str, server: &str, name: &str, card: Option<(String, String)>, flow: Result<Value, String>) {
+    match flow.and_then(|saved| super::set_oauth(app, plugin_id, server, Some(saved))) {
+        Ok(()) => {
+            app.mcp.forget(plugin_id);
+            super::note(app, plugin_id, None);
+            prefetch_tools(app, plugin_id);
+            if let Some((chat_id, message_id)) = card {
+                set_card(app, &chat_id, &message_id, "connected", Some(format!("Signed in to {name}.")), None, None);
+            }
+            settle_sign_in_cards(app, plugin_id, name);
+        }
+        Err(error) => {
+            if !is_ready(app, plugin_id) {
+                super::note(app, plugin_id, Some(("error", &error)));
+            }
+            if let Some((chat_id, message_id)) = card {
+                set_card_while(app, &chat_id, &message_id, "allowed", "failed", format!("Sign-in failed: {error}"));
+            }
+        }
+    }
+}
+
+fn is_ready(app: &App, plugin_id: &str) -> bool {
+    app.plugins.lock().unwrap().status(plugin_id).is_some_and(|status| status.state == "ready")
+}
+
+/// The plugin is signed in, whichever card or sheet did it: every card of a bot here that asks
+/// for its sign-in, or follows one, reads Signed in.
+pub fn settle_sign_in_cards(app: &Arc<App>, plugin_id: &str, name: &str) {
+    let here = app.this_device_id();
+    let cards = app.store.sign_in_cards(None, plugin_id).unwrap_or_else(|error| {
+        tracing::error!(%error, plugin = %plugin_id, "reading sign-in cards");
+        Vec::new()
+    });
+    for (card, _) in cards {
+        let Body::Permission { decision, .. } = &card.body else { continue };
+        let ours = matches!(&card.author, Author::Bot { bot_id } if app.bot(bot_id).map(|bot| bot.runner_id) == here);
+        if ours && (decision == "pending" || decision == "allowed") {
+            set_card(app, &card.chat_id, &card.id, "connected", Some(format!("Signed in to {name}.")), None, None);
+        }
+    }
+}
+
+/// `set_card` for a card that still reads `expected`, with no link or code.
+fn set_card_while(app: &Arc<App>, chat_id: &str, message_id: &str, expected: &str, decision: &str, summary: String) {
+    let current = app.message(chat_id, message_id).and_then(|message| match message.body {
+        Body::Permission { decision, .. } => Some(decision),
+        _ => None,
+    });
+    if current.as_deref() == Some(expected) {
+        set_card(app, chat_id, message_id, decision, Some(summary), None, None);
+    }
 }
 
 /// How long a device flow waits for the user to enter the code.
@@ -613,25 +773,33 @@ async fn poll_device_token(app: &Arc<App>, token_endpoint: &str, name: &str, cli
     }
 }
 
-/// An answer to a sign-in card: Sign in starts the flow on this Runner and the card follows
-/// it; Not now closes the card. True when the card was pending.
-pub fn answer_sign_in(app: &Arc<App>, chat_id: &str, message_id: &str, decision: Decision) -> Result<bool, String> {
-    let Some(message) = app.message(chat_id, message_id) else { return Ok(false) };
-    let Body::Permission { plugin_id, tool, decision: current, .. } = &message.body else { return Ok(false) };
+/// An answer to a sign-in card: Sign in starts the flow and the card follows it, in this
+/// Runner's browser or on the Device that asked from `elsewhere`; Not now closes the card. A
+/// plugin signed in meanwhile, from another card or its sheet, reads Signed in at once.
+/// `answered` is false when the card was not waiting; `url` is the page the Device that asked
+/// opens, and `sign_in` the id it finishes the sign-in with.
+pub async fn answer_sign_in(app: &Arc<App>, chat_id: &str, message_id: &str, decision: Decision, elsewhere: Option<Elsewhere>) -> Result<Value, String> {
+    let Some(message) = app.message(chat_id, message_id) else { return Ok(json!({ "answered": false })) };
+    let Body::Permission { plugin_id, plugin_name, tool, decision: current, .. } = &message.body else { return Ok(json!({ "answered": false })) };
     if tool != "connect" || current != "pending" {
-        return Ok(false);
+        return Ok(json!({ "answered": false }));
     }
     match decision {
+        Decision::Allowed | Decision::Always if is_ready(app, plugin_id) => {
+            set_card(app, chat_id, message_id, "connected", Some(format!("Signed in to {plugin_name}.")), None, None);
+            Ok(json!({ "answered": true }))
+        }
         Decision::Allowed | Decision::Always => {
             let server = oauth_server(app, plugin_id).ok_or("Nothing to sign in to")?;
-            let runner = app.this_device_id().and_then(|id| app.device(&id)).map(|d| d.name).unwrap_or_else(|| "the Runner".into());
-            let started = connect_oauth_for_card(app, plugin_id, &server, Some((chat_id.to_string(), message_id.to_string())))?;
-            let summary = if started.starts_with("Getting a") { "Getting a code…".to_string() } else { format!("Finish signing in in the browser on {runner}.") };
-            set_card(app, chat_id, message_id, "allowed", Some(summary), None, None);
+            let card = Some((chat_id.to_string(), message_id.to_string()));
+            let started = connect_oauth_for_card(app, plugin_id, &server, card, elsewhere).await?;
+            Ok(json!({ "answered": true, "url": started.url, "sign_in": started.id }))
         }
-        Decision::Denied | Decision::Expired | Decision::Dismissed => set_card(app, chat_id, message_id, "denied", None, None, None),
+        Decision::Denied | Decision::Expired | Decision::Dismissed => {
+            set_card(app, chat_id, message_id, "denied", None, None, None);
+            Ok(json!({ "answered": true }))
+        }
     }
-    Ok(true)
 }
 
 /// What the manifest and the user supplied for a server that needs a preregistered client.
@@ -673,77 +841,66 @@ async fn challenge_of(app: &Arc<App>, url: &str) -> Option<String> {
     response.headers().get("www-authenticate").and_then(|v| v.to_str().ok()).map(str::to_string)
 }
 
-async fn sign_in(app: &Arc<App>, url: &str, scopes: &[String], name: &str, client: &ClientHint) -> Result<Value, String> {
-    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.map_err(|e| format!("Cannot listen for the callback: {e}"))?;
-    let port = listener.local_addr().map_err(|e| e.to_string())?.port();
-    let redirect = format!("http://127.0.0.1:{port}/callback");
-    let mut state = OAuthState::new(url, Some(app.mcp.http.clone())).await.map_err(|e| format!("{name}: {e}"))?;
-    let mut request = AuthorizationRequest::new(redirect).with_scopes(scopes.iter().cloned()).with_client_name("Lorca").with_application_type("native");
-    if let Some(challenge) = challenge_of(app, url).await {
-        request = request.with_challenge(challenge);
-    }
-    if let Some(id) = &client.id {
-        request = request.with_preregistered_client(id.clone());
-        if let Some(secret) = &client.secret {
-            request = request.with_client_secret(secret.clone());
+/// Starts the authorization against a server: discovery from its own challenge, the client
+/// (registered on the fly as a native app, or the preregistered one), PKCE. Answers with what
+/// finishes it and the page to open, for the browser to come back to `redirect`. The server
+/// has `sign_in::SETUP_TIMEOUT` for all of it, so a Device waiting on the start hears how it went.
+async fn begin_sign_in(app: &Arc<App>, url: &str, scopes: &[String], name: &str, client: &ClientHint, redirect: String) -> Result<(OAuthState, String), String> {
+    let setup = async {
+        let mut state = OAuthState::new(url, Some(app.mcp.http.clone())).await.map_err(|e| format!("{name}: {e}"))?;
+        let mut request = AuthorizationRequest::new(redirect).with_scopes(scopes.iter().cloned()).with_client_name("Lorca").with_application_type("native");
+        if let Some(challenge) = challenge_of(app, url).await {
+            request = request.with_challenge(challenge);
         }
-    }
-    state.start_authorization(request).await.map_err(|e| match e {
-        rmcp::transport::auth::AuthError::RegistrationFailed(_) => client.no_registration_advice(name),
-        other => format!("{name} does not offer a sign-in: {other}"),
-    })?;
-    let authorize_url = state.get_authorization_url().await.map_err(|e| e.to_string())?;
-    if std::env::var("LORCA_OAUTH_NO_BROWSER").ok().as_deref() == Some("1") {
-        // Tests: fetch the page ourselves; a fake server redirects straight to the callback.
-        let http = app.mcp.http.clone();
-        let url = authorize_url.clone();
-        tokio::spawn(async move {
-            if let Err(error) = http.get(&url).send().await {
-                tracing::warn!(%error, "fetching the sign-in page");
+        if let Some(id) = &client.id {
+            request = request.with_preregistered_client(id.clone());
+            if let Some(secret) = &client.secret {
+                request = request.with_client_secret(secret.clone());
             }
-        });
-    } else {
-        open::that(&authorize_url).map_err(|e| format!("Cannot open the browser: {e}"))?;
+        }
+        state.start_authorization(request).await.map_err(|e| match e {
+            rmcp::transport::auth::AuthError::RegistrationFailed(_) => client.no_registration_advice(name),
+            other => format!("{name} does not offer a sign-in: {other}"),
+        })?;
+        let page = state.get_authorization_url().await.map_err(|e| e.to_string())?;
+        Ok((state, page))
+    };
+    tokio::time::timeout(super::sign_in::SETUP_TIMEOUT, setup).await.map_err(|_| format!("{name} did not answer the sign-in in time."))?
+}
+
+/// Finishes an authorization with where the browser landed: its code for the tokens.
+async fn complete_sign_in(mut state: OAuthState, callback: &str, name: &str) -> Result<Value, String> {
+    if super::sign_in::denied(callback) {
+        return Err("The sign-in was denied.".into());
     }
-    let callback = tokio::time::timeout(SIGN_IN_TIMEOUT, wait_for_callback(listener, port, name))
-        .await
-        .map_err(|_| "Timed out waiting for the browser".to_string())??;
-    state.handle_callback_url(&callback).await.map_err(|e| format!("{name} rejected the sign-in: {e}"))?;
+    state.handle_callback_url(callback).await.map_err(|e| format!("{name} rejected the sign-in: {e}"))?;
     let (client_id, tokens) = state.get_credentials().await.map_err(|e| e.to_string())?;
     let tokens = tokens.ok_or("The sign-in produced no tokens")?;
     Ok(json!({ "client_id": client_id, "tokens": tokens, "signed_in_at": now_secs() }))
 }
 
-/// Answers the browser's redirect and returns the full callback URL.
-async fn wait_for_callback(listener: tokio::net::TcpListener, port: u16, name: &str) -> Result<String, String> {
-    loop {
-        let (mut socket, _) = listener.accept().await.map_err(|e| e.to_string())?;
-        let mut buffer = vec![0u8; 16384];
-        let read = socket.read(&mut buffer).await.map_err(|e| e.to_string())?;
-        let request = String::from_utf8_lossy(&buffer[..read]).into_owned();
-        let path = request.lines().next().and_then(|line| line.split_whitespace().nth(1)).unwrap_or("/").to_string();
-        if !path.starts_with("/callback") {
-            let _ = socket.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n").await;
-            continue;
-        }
-        let failed = path.contains("error=");
-        let body = if failed {
-            "<html><body style=\"font-family:-apple-system\"><h2>Sign-in failed</h2><p>Go back to Lorca and try again.</p></body></html>".to_string()
-        } else {
-            format!("<html><body style=\"font-family:-apple-system\"><h2>Signed in to {name}</h2><p>You can close this window and return to Lorca.</p></body></html>")
-        };
-        let response = format!(
-            "HTTP/1.1 {}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            if failed { "400 Bad Request" } else { "200 OK" },
-            body.len()
-        );
-        let _ = socket.write_all(response.as_bytes()).await;
-        let _ = socket.shutdown().await;
-        if failed {
-            return Err("The sign-in was denied.".into());
-        }
-        return Ok(format!("http://127.0.0.1:{port}{path}"));
+/// A sign-in in this Runner's own browser, back to its own loopback.
+async fn sign_in(app: &Arc<App>, url: &str, scopes: &[String], name: &str, client: &ClientHint) -> Result<Value, String> {
+    let callback = super::sign_in::Callback::bind().await?;
+    let (state, page) = begin_sign_in(app, url, scopes, name, client, callback.redirect_uri()).await?;
+    open_browser(app, &page)?;
+    let landed = callback.wait(name, super::sign_in::TIMEOUT).await?;
+    complete_sign_in(state, &landed, name).await
+}
+
+/// Opens a sign-in page in this computer's browser. `LORCA_OAUTH_NO_BROWSER=1` fetches it
+/// instead, for tests against a fake server that redirects straight to the callback.
+pub fn open_browser(app: &Arc<App>, url: &str) -> Result<(), String> {
+    if std::env::var("LORCA_OAUTH_NO_BROWSER").ok().as_deref() == Some("1") {
+        let (http, url) = (app.mcp.http.clone(), url.to_string());
+        tokio::spawn(async move {
+            if let Err(error) = http.get(&url).send().await {
+                tracing::warn!(%error, "fetching the sign-in page");
+            }
+        });
+        return Ok(());
     }
+    open::that(url).map_err(|e| format!("Cannot open the browser: {e}"))
 }
 
 // MARK: - Tools for a turn
@@ -1635,6 +1792,7 @@ pub fn dismissed_call(reason: String) -> ToolResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     /// An App over a scratch home, removed when the test ends.
     struct ScratchApp(Arc<App>, std::path::PathBuf);
@@ -1886,5 +2044,91 @@ mod tests {
         });
         let error = refresh_device_bearer(&reqwest::Client::new(), &endpoint, "GitHub", &stored).await.unwrap_err();
         assert_eq!(error, "The GitHub sign-in expired. Sign in again.");
+    }
+
+    #[tokio::test]
+    async fn a_chat_holds_one_waiting_sign_in_card_per_plugin_and_runner() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        let bot = |id: &str, runner_id: &str| -> Bot {
+            serde_json::from_value(json!({ "id": id, "name": id, "description": "", "symbol_name": "", "accent": "", "runner_id": runner_id, "provider": "deepseek", "created_at": 0.0 })).unwrap()
+        };
+        {
+            let mut state = app.state.lock().unwrap();
+            state.bots.extend([bot("maid", "here"), bot("cook", "here"), bot("scout", "elsewhere")]);
+            state.chats.push(serde_json::from_value(json!({ "id": "chat", "kind": "group", "bot_ids": ["maid", "cook", "scout"], "created_at": 0.0 })).unwrap());
+        }
+        let manifest = crate::plugins::Manifest::parse(&json!({ "id": "docs", "name": "Docs", "servers": { "api": { "type": "http", "url": "https://docs.test/mcp", "auth": { "type": "oauth" } } } })).unwrap();
+        assert_eq!(crate::plugins::install(app, manifest, "marketplace").unwrap().state, "needs_auth");
+        let waiting = || {
+            let cards = app.store.sign_in_cards(Some("chat"), "docs").unwrap().into_iter();
+            cards.filter(|(card, _)| matches!(&card.body, Body::Permission { decision, .. } if decision == "pending")).map(|(card, _)| card.id).collect::<Vec<_>>()
+        };
+        let decision = |id: &str| match app.message("chat", id).unwrap().body {
+            Body::Permission { decision, .. } => decision,
+            _ => unreachable!(),
+        };
+
+        app.upsert_message(Message::new("chat", Author::You, Body::text("add Docs")), false);
+        // The install puts the card up, then the bot asks for it again in the same turn.
+        let first = post_sign_in_card(app, "chat", "maid", "docs").unwrap();
+        assert_eq!(post_sign_in_card(app, "chat", "maid", "docs").unwrap().id, first.id);
+        assert_eq!(post_sign_in_card(app, "chat", "cook", "docs").unwrap().id, first.id, "a bot on the same Runner");
+        let elsewhere = post_sign_in_card(app, "chat", "scout", "docs").unwrap();
+        assert_ne!(elsewhere.id, first.id, "another Runner signs in on its own");
+        assert_eq!(waiting(), [first.id.clone(), elsewhere.id.clone()]);
+
+        // The user wrote without signing in: asked again, the card goes up after their message.
+        app.upsert_message(Message::new("chat", Author::You, Body::text("not yet")), false);
+        let again = post_sign_in_card(app, "chat", "maid", "docs").unwrap();
+        assert_ne!(again.id, first.id);
+        assert_eq!(decision(&first.id), "dismissed");
+        assert_eq!(waiting(), [elsewhere.id, again.id]);
+    }
+
+    #[tokio::test]
+    async fn signed_in_once_every_card_here_says_so() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        crate::identity::create(app, Some("Workbench".into())).unwrap();
+        let here = app.this_device_id().unwrap();
+        let bot = |id: &str, runner_id: &str| -> Bot {
+            serde_json::from_value(json!({ "id": id, "name": id, "description": "", "symbol_name": "", "accent": "", "runner_id": runner_id, "provider": "deepseek", "created_at": 0.0 })).unwrap()
+        };
+        {
+            let mut state = app.state.lock().unwrap();
+            state.bots.extend([bot("maid", &here), bot("scout", "elsewhere")]);
+            for (chat, bots) in [("one", json!(["maid"])), ("two", json!(["maid", "scout"]))] {
+                state.chats.push(serde_json::from_value(json!({ "id": chat, "kind": "group", "bot_ids": bots, "created_at": 0.0 })).unwrap());
+            }
+        }
+        let manifest = crate::plugins::Manifest::parse(&json!({ "id": "docs", "name": "Docs", "servers": { "api": { "type": "http", "url": "https://docs.test/mcp", "auth": { "type": "oauth", "token_variable": "DOCS_TOKEN" } } }, "variables": [{ "name": "DOCS_TOKEN", "secret": true }] })).unwrap();
+        crate::plugins::install(app, manifest, "marketplace").unwrap();
+        let decision = |chat: &str, id: &str| match app.message(chat, id).unwrap().body {
+            Body::Permission { decision, .. } => decision,
+            _ => unreachable!(),
+        };
+        let first = post_sign_in_card(app, "one", "maid", "docs").unwrap();
+        let second = post_sign_in_card(app, "two", "maid", "docs").unwrap();
+        set_card(app, "two", &second.id, "allowed", Some("Finish signing in in the browser on Phone.".into()), None, None);
+        let theirs = post_sign_in_card(app, "two", "scout", "docs").unwrap();
+
+        // A pasted token stands in for the sign-in.
+        let token = BTreeMap::from([("DOCS_TOKEN".to_string(), "secret".to_string())]);
+        assert_eq!(crate::plugins::set_variables(app, "docs", &token).unwrap().state, "ready");
+        settle_sign_in_cards(app, "docs", "Docs");
+        assert_eq!((decision("one", &first.id), decision("two", &second.id)), ("connected".into(), "connected".into()));
+        assert_eq!(decision("two", &theirs.id), "pending", "another Runner signs in on its own");
+
+        // A card that waited through it reads Signed in when tapped, and starts nothing.
+        let mut late = first.clone();
+        late.id = "late".into();
+        late.body = theirs.body.clone();
+        late.author = Author::Bot { bot_id: "maid".into() };
+        app.upsert_message(late, false);
+        let answered = answer_sign_in(app, "one", "late", Decision::Allowed, None).await.unwrap();
+        assert_eq!(answered, json!({ "answered": true }));
+        assert_eq!(decision("one", "late"), "connected");
+        assert!(app.mcp.sign_ins.lock().unwrap().is_empty());
     }
 }

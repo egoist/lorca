@@ -523,23 +523,33 @@ function BotsPane() {
   );
 }
 
-/** The one confirmation every device list shares. */
+/** The confirmation behind Unpair in the Devices pane. Another Device is unpaired by id; this one
+ * forgets the identity, and the app goes back to onboarding. */
 export async function confirmUnpair(device: Device): Promise<void> {
-  if (device.isThisDevice) {
-    void host.beep();
-    return;
-  }
-  const answer = await alert({
-    message: L('Unpair "%@"?', device.name),
-    informative: isRunner(device)
+  // Only a Device that holds the identity pairs others, and only the backup phrase brings the
+  // identity back once this one forgets it.
+  const holdsIdentity = device.isThisDevice && store.isIdentityDevice;
+  const informative = device.isThisDevice
+    ? holdsIdentity
+      ? L("This computer forgets its keys, credentials, and synced chats, and bots assigned to it stop running until you assign them to another Runner. Your other paired Devices keep everything. Because this computer holds your identity, you need your backup phrase to use this account here again or to pair a new Device.")
+      : L("This computer forgets its keys, credentials, and synced chats, and bots assigned to it stop running until you assign them to another Runner. Your other paired Devices keep everything, and you can pair again any time.")
+    : isRunner(device)
       ? L("It loses its keys and synced chats the next time it connects, and bots assigned to it stop running until you assign them to another Runner. You can pair it again any time.")
-      : L("It loses its keys and synced chats the next time it connects. You can pair it again any time."),
-    style: "warning",
+      : L("It loses its keys and synced chats the next time it connects. You can pair it again any time.");
+  const answer = await alert({
+    message: device.isThisDevice ? L("Unpair this computer?") : L('Unpair "%@"?', device.name),
+    informative,
+    style: holdsIdentity ? "critical" : "warning",
     buttons: [{ title: L("Unpair"), destructive: true }, { title: L("Cancel") }],
   });
   if (answer !== 0) return;
   try {
-    await store.unpairDevice(device.id);
+    if (!device.isThisDevice) await store.unpairDevice(device.id);
+    // The demo has no CLI to forget the identity: onboarding opens over the demo account, as Show
+    // Onboarding Again opens it, and closing it brings the demo back. It hides this window, so the
+    // click returns first.
+    else if (store.isMock) setTimeout(() => void host.showOnboarding());
+    else await store.forgetIdentity();
   } catch (error) {
     void alert({ message: L("Couldn’t unpair %@", device.name), informative: errorText(error) });
   }
@@ -600,15 +610,13 @@ function DevicePane() {
               <KeyValueRow label={L("Role")} value={isRunner(current()) ? L("Runner · runs bots with its own credentials") : L("Device · never runs bots")} />
               <KeyValueRow label={L("Last seen")} value={current().status === "online" ? L("Active now") : Format.lastSeen(current().lastSeen)} />
               <KeyValueRow label={L("Relay")} value={relay()} monospaced />
-              <Show when={!current().isThisDevice}>
-                <ActionRow
-                  label={Entries.pairing().row}
-                  value={L("Paired to this account")}
-                  tint="var(--label-2)"
-                  actionTitle={L("Unpair…")}
-                  onAction={() => void confirmUnpair(current())}
-                />
-              </Show>
+              <ActionRow
+                label={Entries.pairing().row}
+                value={L("Paired to this account")}
+                tint="var(--label-2)"
+                actionTitle={L("Unpair…")}
+                onAction={() => void confirmUnpair(current())}
+              />
             </Section>
           </>
         )}

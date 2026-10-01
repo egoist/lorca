@@ -519,6 +519,30 @@ impl LocalStore {
         collect_messages(rows)
     }
 
+    /// A plugin's sign-in cards (`Body::Permission` with `tool` `connect`) in one chat, or in
+    /// every chat, in order, each with whether it came after the user last wrote in its chat.
+    pub fn sign_in_cards(&self, chat_id: Option<&str>, plugin_id: &str) -> anyhow::Result<Vec<(Message, bool)>> {
+        let connection = self.connection.lock().unwrap();
+        let mut statement = connection.prepare(
+            "SELECT m.message_json, m.position > COALESCE(
+                 (SELECT u.position FROM messages u WHERE u.chat_id = m.chat_id AND u.author_kind = 'you' ORDER BY u.position DESC LIMIT 1),
+                 m.position - 1)
+             FROM messages m
+             WHERE (?1 IS NULL OR m.chat_id = ?1) AND m.body_kind = 'permission' AND m.message_json LIKE '%\"tool\":\"connect\"%'
+             ORDER BY m.chat_id, m.position",
+        )?;
+        let rows = statement.query_map([chat_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, bool>(1)?)))?;
+        let mut cards = Vec::new();
+        for row in rows {
+            let (json, after_user) = row?;
+            let message: Message = serde_json::from_str(&json).context("decoding stored message")?;
+            if matches!(&message.body, Body::Permission { plugin_id: p, tool, .. } if p == plugin_id && tool == "connect") {
+                cards.push((message, after_user));
+            }
+        }
+        Ok(cards)
+    }
+
     pub fn count_after(&self, chat_id: &str, message_id: Option<&str>) -> anyhow::Result<usize> {
         let connection = self.connection.lock().unwrap();
         let count = match message_id {

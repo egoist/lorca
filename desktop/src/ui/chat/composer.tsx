@@ -399,7 +399,7 @@ export function Composer(props: {
                       </div>
                     }
                   >
-                    <img src={item.url} alt="" draggable={false} />
+                    <img src={item.url} alt="" draggable="false" />
                   </Show>
                   <button
                     class="composer-chip-remove"

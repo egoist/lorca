@@ -54,7 +54,7 @@
     "ios": "expo run:ios",
     "android": "expo run:android",
     "typecheck": "tsc --noEmit",
-    "test": "bun test src",
+    "test": "bun test --isolate src",
     "core": "bun run modules/lorca-core/build.ts"
   },
   "private": true

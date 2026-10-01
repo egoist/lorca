@@ -12,11 +12,16 @@ import { keyPlaceholder, providerKinds, providerName, signInRequirement, usesAPI
 import { onStoreEvent, track } from "../model/reactive";
 import { errorText, store } from "../model/store";
 import { Avatar, botAvatar } from "./avatar";
-import { Button, CopyButton, PopUpButton } from "./controls";
+import { Button, CopyButton, PopUpButton, Spinner } from "./controls";
 import { Icon } from "./icons";
 import { alert, hasSheet } from "./overlay";
 
 type Step = "welcome" | "create" | "restore" | "pair" | "bot" | "provider" | "done";
+/** How this computer came by its identity, which the last step words. */
+type Origin = "created" | "restored" | "paired";
+/** A restore or a pairing in flight. Back cancels `pairing`, which waits on the other Device; a
+ * restore, and the sync after either, end on their own. */
+type Joining = "restoring" | "pairing" | "syncing";
 
 /** The first bot's description as the CLI writes it, which the page shows in the app's language. */
 const defaultDescription = "Chief of staff. Plans the work and delegates each task to the right teammate, proposing a new one when none fits. Does hands-on work when necessary.";
@@ -29,6 +34,9 @@ const [savedPhrase, setSavedPhrase] = createSignal(false);
 const [status, setStatus] = createSignal<{ text: string; color: string } | null>(null);
 const [providerKind, setProviderKind] = createSignal<ProviderKind>("deepseek");
 const [apiKey, setAPIKey] = createSignal("");
+/** `null` when the identity arrived from elsewhere while the page waited. */
+const [origin, setOrigin] = createSignal<Origin | null>(null);
+const [joining, setJoining] = createSignal<Joining | null>(null);
 let busy = false;
 /** A subscription sign-in is waiting on the browser. */
 let signingIn = false;
@@ -41,6 +49,12 @@ export function Onboarding() {
     return store.bots.find((bot) => bot.name === "Chef") ?? store.bots[0];
   });
 
+  /** One that arrived from elsewhere was paired, unless this computer holds the identity. */
+  const doneOrigin = createMemo((): Origin => {
+    track.connection();
+    return origin() ?? (store.isIdentityDevice ? "created" : "paired");
+  });
+
   const go = (next: Step) => {
     setStatus(null);
     setAPIKey("");
@@ -51,7 +65,9 @@ export function Onboarding() {
     onStoreEvent((event) => {
       // Identity arrived from elsewhere (the CLI, or a paired Device) while the page waited.
       if (event.kind !== "identityChanged" || store.hasIdentity !== true || busy) return;
-      if (step() === "welcome" || step() === "restore" || step() === "pair") go("done");
+      if (step() !== "welcome" && step() !== "restore" && step() !== "pair") return;
+      setOrigin(null);
+      go("done");
     }),
   );
   // Return presses the page's default button while nothing on it has the keyboard, as a window's
@@ -75,6 +91,7 @@ export function Onboarding() {
     if (store.isMock) {
       const { backupPhrase } = await import("../model/mock");
       setPhrase(backupPhrase);
+      setOrigin("created");
       go("create");
       return;
     }
@@ -85,6 +102,7 @@ export function Onboarding() {
     busy = true;
     try {
       setPhrase(await store.createIdentity());
+      setOrigin("created");
       go("create");
     } catch (error) {
       presentError(errorText(error));
@@ -93,31 +111,42 @@ export function Onboarding() {
     }
   };
 
-  /** A computer that joined an account gets its credentials with the first sync, so the provider
-   * step shows only when none arrive. */
+  /** A computer that joined an account gets its credentials with its first pull from the relay,
+   * so the provider step shows only when the account has none. */
   const continueAfterJoining = async () => {
-    const connected = () => store.providers.some((credential) => credential.isConnected);
-    for (let attempt = 0; attempt < 15 && !connected(); attempt++) await new Promise((resolve) => setTimeout(resolve, 200));
-    go(connected() ? "done" : "provider");
+    setJoining("syncing");
+    setStatus({ text: L("Syncing the account from the relay…"), color: "var(--label-2)" });
+    go((await store.accountHasProvider()) ? "done" : "provider");
   };
 
-  const join = async (text: string, waiting: string, run: (text: string) => Promise<void>) => {
+  const join = async (text: string, joined: Origin, waiting: string, run: (text: string) => Promise<void>) => {
     const trimmed = text.trim();
     if (busy || trimmed === "") return;
     if (store.isMock) {
+      setOrigin(joined);
       go("provider");
       return;
     }
     busy = true;
+    setJoining(joined === "paired" ? "pairing" : "restoring");
     setStatus({ text: waiting, color: "var(--label-2)" });
     try {
       await run(trimmed);
+      setOrigin(joined);
       await continueAfterJoining();
     } catch (error) {
-      setStatus({ text: errorText(error), color: "var(--red)" });
+      // Back cancelled the pairing and left the step.
+      if (step() === "restore" || step() === "pair") setStatus({ text: errorText(error), color: "var(--red)" });
     } finally {
       busy = false;
+      setJoining(null);
     }
+  };
+
+  /** Back from a pairing that waits on the other Device stops the wait in the CLI too. */
+  const leaveJoin = () => {
+    if (joining() === "pairing") store.abortPairing();
+    go("welcome");
   };
 
   const connectProvider = async () => {
@@ -241,8 +270,10 @@ export function Onboarding() {
                   }
                   status={status()}
                   action={L("Restore")}
-                  onBack={() => go("welcome")}
-                  onSubmit={(text) => void join(text, L("Re-deriving keys and unwrapping the account key…"), (phraseText) => store.restoreIdentity(phraseText))}
+                  busy={joining() !== null}
+                  canGoBack={joining() === null}
+                  onBack={leaveJoin}
+                  onSubmit={(text) => void join(text, "restored", L("Re-deriving keys and unwrapping the account key…"), (phraseText) => store.restoreIdentity(phraseText))}
                 />
               );
             case "pair":
@@ -256,8 +287,10 @@ export function Onboarding() {
                   note={L("The two Devices run a handshake; the relay only carries the ciphertext. This computer joins as a Runner.")}
                   status={status()}
                   action={L("Pair")}
-                  onBack={() => go("welcome")}
-                  onSubmit={(text) => void join(text, L("Waiting for the other Device to wrap the account key…"), (code) => store.acceptPairing(code))}
+                  busy={joining() !== null}
+                  canGoBack={joining() === null || joining() === "pairing"}
+                  onBack={leaveJoin}
+                  onSubmit={(text) => void join(text, "paired", L("Waiting for the other Device to wrap the account key…"), (code) => store.acceptPairing(code))}
                 />
               );
             case "bot":
@@ -278,7 +311,7 @@ export function Onboarding() {
                 </StepLayout>
               );
             case "done":
-              return <Done botName={firstBot()?.name} />;
+              return <Done origin={doneOrigin()} botName={firstBot()?.name} />;
           }
         }}
       </Show>
@@ -290,7 +323,7 @@ function Welcome(props: { onCreate: () => void; onRestore: () => void; onPair: (
   return (
     <div class="onboarding-center">
       <div class="onboarding-column">
-        <img class="onboarding-icon" src={hostInfo().isDevelopment ? devIconURL : iconURL} width={96} height={96} alt="" draggable={false} />
+        <img class="onboarding-icon" src={hostInfo().isDevelopment ? devIconURL : iconURL} width={96} height={96} alt="" draggable="false" />
         <div class="onboarding-app-name">{hostInfo().name}</div>
         <div class="onboarding-lede">
           {L("Bots that run on computers you own. Your identity is a key pair on this computer — no account, no server that can read your chats.")}
@@ -318,8 +351,9 @@ interface StepButton {
 }
 
 /** A step: its title and what it is for at the top, its body, and Back and Continue at the bottom.
- * Return presses Continue, as a default button does. */
-function StepLayout(props: { title: string; subtitle: string; back?: StepButton; next: StepButton; children: JSX.Element }) {
+ * Return presses Continue, as a default button does. While the step is `busy`, a spinner turns
+ * beside the buttons. */
+function StepLayout(props: { title: string; subtitle: string; back?: StepButton; next: StepButton; busy?: boolean; children: JSX.Element }) {
   return (
     <div
       class="onboarding-step"
@@ -337,9 +371,12 @@ function StepLayout(props: { title: string; subtitle: string; back?: StepButton;
       </div>
       <div class="onboarding-body">{props.children}</div>
       <div class="onboarding-buttons">
+        <Show when={props.busy}>
+          <Spinner size={16} />
+        </Show>
         <Show when={props.back}>
           {(back) => (
-            <Button large onClick={() => back().run()}>
+            <Button large disabled={back().enabled === false} onClick={() => back().run()}>
               {back().title}
             </Button>
           )}
@@ -359,6 +396,9 @@ function JoinStep(props: {
   note: string;
   status: { text: string; color: string } | null;
   action: string;
+  /** The restore or the pairing is under way: the field and the action wait. */
+  busy: boolean;
+  canGoBack: boolean;
   onBack: () => void;
   onSubmit: (text: string) => void;
 }) {
@@ -366,14 +406,21 @@ function JoinStep(props: {
   let field: HTMLInputElement | undefined;
   onSettled(() => field?.focus());
   return (
-    <StepLayout title={props.title} subtitle={props.subtitle} back={{ title: L("Back"), run: props.onBack }} next={{ title: props.action, run: () => props.onSubmit(text()) }}>
+    <StepLayout
+      title={props.title}
+      subtitle={props.subtitle}
+      back={{ title: L("Back"), enabled: props.canGoBack, run: props.onBack }}
+      next={{ title: props.action, enabled: !props.busy, run: () => props.onSubmit(text()) }}
+      busy={props.busy}
+    >
       <div class="onboarding-join">
         <input
           ref={(element) => (field = element)}
           class="text-field mono onboarding-wide"
           placeholder={props.placeholder}
-          spellcheck={false}
+          spellcheck="false"
           autocomplete="off"
+          disabled={props.busy}
           value={text()}
           onInput={(event) => setText(event.currentTarget.value)}
         />
@@ -435,7 +482,7 @@ function ProviderRows(props: {
             type="password"
             placeholder={keyPlaceholder(kind())}
             aria-label={L("API key")}
-            spellcheck={false}
+            spellcheck="false"
             autocomplete="off"
             value={props.apiKey()}
             onInput={(event) => props.setAPIKey(event.currentTarget.value)}
@@ -477,7 +524,7 @@ function FirstBot(props: {
             <Avatar content={props.bot ? botAvatar(props.bot) : { kind: "bot", symbolName: "sparkles", accent: "indigo" }} size={40} />
           </FormRow>
           <FormRow label={L("Name")}>
-            <input class="text-field" placeholder={L("Name")} value={name()} spellcheck={false} onInput={(event) => setName(event.currentTarget.value)} />
+            <input class="text-field" placeholder={L("Name")} value={name()} spellcheck="false" onInput={(event) => setName(event.currentTarget.value)} />
           </FormRow>
           <FormRow label={L("Description")} top>
             <textarea
@@ -503,21 +550,40 @@ function FirstBot(props: {
   );
 }
 
-function Done(props: { botName: string | undefined }) {
+function Done(props: { origin: Origin; botName: string | undefined }) {
   let button: HTMLButtonElement | undefined;
   onSettled(() => button?.focus());
+  const title = () => {
+    switch (props.origin) {
+      case "created":
+        return L("This computer is your first Device");
+      case "restored":
+        return L("Your identity is restored");
+      case "paired":
+        return L("This computer is paired");
+    }
+  };
+  const lede = () => {
+    switch (props.origin) {
+      case "created":
+        return props.botName
+          ? L("%@ is ready to talk to. Pair another Device any time from the File menu.", props.botName)
+          : L("Bots you create here run on this computer with your account's provider credentials. Pair another Device any time from the File menu.");
+      case "restored":
+        return L("Your bots and chats sync to this computer, and it can run bots too. Pair another Device any time from the File menu.");
+      // Only the computer that holds the identity pairs others.
+      case "paired":
+        return L("Your bots and chats sync to this computer, and it can run bots too.");
+    }
+  };
   return (
     <div class="onboarding-center">
       <div class="onboarding-column">
         <span class="onboarding-done-icon">
           <Icon name="checkmark.circle.fill" size={56} strokeWidth={1.6} />
         </span>
-        <div class="onboarding-title center">{L("This computer is your first Device")}</div>
-        <div class="onboarding-lede">
-          {props.botName
-            ? L("%@ is ready to talk to. Pair another Device any time from the File menu.", props.botName)
-            : L("Bots you create here run on this computer with your account's provider credentials. Pair another Device any time from the File menu.")}
-        </div>
+        <div class="onboarding-title center">{title()}</div>
+        <div class="onboarding-lede">{lede()}</div>
         <Button kind="primary" large class="onboarding-open" ref={(element) => (button = element)} onClick={() => void host.finishOnboarding()}>
           {L("Open Lorca")}
         </Button>

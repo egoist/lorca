@@ -109,7 +109,6 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.command.unwrap_or(Command::Serve { parent_pid: None, ready_stdout: false }) {
         Command::Serve { parent_pid, ready_stdout } => {
-            runtime::prime_names(&app);
             runtime::resume_sent_jobs(&app);
             // A command a Lorca that quit left waiting went with it; its row says so now.
             {

@@ -9,6 +9,7 @@
 pub mod mcp;
 #[cfg(feature = "runner")]
 pub mod review;
+pub mod sign_in;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -635,7 +636,7 @@ pub async fn on_runner(app: &Arc<App>, runner_id: &str, verb: &str, body: Value)
     if app.this_device_id().as_deref() == Some(runner_id) {
         #[cfg(feature = "runner")]
         {
-            return serve_request(app, verb, &body);
+            return serve_request(app, verb, &body, None).await;
         }
         #[cfg(not(feature = "runner"))]
         {
@@ -646,10 +647,18 @@ pub async fn on_runner(app: &Arc<App>, runner_id: &str, verb: &str, body: Value)
     crate::requests::ask(app, runner_id, verb, body).await
 }
 
-/// The plugin verbs this Runner answers, from the local app or a sealed request.
+/// The plugin verbs this Runner answers, from the local app or a sealed request from the
+/// Device `requested_by`.
 #[cfg(feature = "runner")]
-pub fn serve_request(app: &Arc<App>, verb: &str, body: &Value) -> Result<Value, String> {
+pub async fn serve_request(app: &Arc<App>, verb: &str, body: &Value, requested_by: Option<&str>) -> Result<Value, String> {
     let plugin_id = || body["plugin_id"].as_str().map(str::to_string).ok_or_else(|| "missing plugin_id".to_string());
+    // A Device that listens on its own loopback for the browser's redirect opens the sign-in
+    // page itself (`sign_in::from_here`).
+    let elsewhere = || {
+        let redirect_uri = body["redirect_uri"].as_str().filter(|uri| sign_in::is_loopback_redirect(uri))?.to_string();
+        let device = requested_by.and_then(|id| app.device(id)).map(|d| d.name).unwrap_or_else(|| "the Device that asked".into());
+        Some(mcp::Elsewhere { device, redirect_uri })
+    };
     match verb {
         "plugins.install" => {
             let manifest = Manifest::parse(&body["manifest"])?;
@@ -662,7 +671,12 @@ pub fn serve_request(app: &Arc<App>, verb: &str, body: &Value) -> Result<Value, 
         }
         "plugins.variables" => {
             let variables: BTreeMap<String, String> = serde_json::from_value(body["variables"].clone()).map_err(|e| format!("variables: {e}"))?;
-            Ok(json!(set_variables(app, &plugin_id()?, &variables)?))
+            let status = set_variables(app, &plugin_id()?, &variables)?;
+            // A pasted token stands in for the sign-in the cards ask for.
+            if status.state == "ready" {
+                mcp::settle_sign_in_cards(app, &status.id, &status.name);
+            }
+            Ok(json!(status))
         }
         "plugins.connect" => {
             let id = plugin_id()?;
@@ -680,8 +694,14 @@ pub fn serve_request(app: &Arc<App>, verb: &str, body: &Value) -> Result<Value, 
                         .ok_or_else(|| format!("{} has nothing to sign in to.", plugin.manifest.name))?
                 }
             };
-            Ok(json!({ "message": mcp::connect_oauth(app, &id, &server)? }))
+            let started = mcp::connect_oauth(app, &id, &server, elsewhere()).await?;
+            Ok(json!({ "message": started.message, "url": started.url, "sign_in": started.id }))
         }
+        "plugins.sign_in.finish" => {
+            let id = body["sign_in"].as_str().ok_or("missing sign_in")?;
+            mcp::finish_sign_in(app, &plugin_id()?, id, body["url"].as_str().ok_or("missing url")?).await
+        }
+        "plugins.sign_in.cancel" => mcp::cancel_sign_in(app, &plugin_id()?, body["sign_in"].as_str().ok_or("missing sign_in")?),
         "plugins.detail" => detail(app, &plugin_id()?),
         "permission.answer" => {
             let message_id = body["message_id"].as_str().ok_or("missing message_id")?;
@@ -689,9 +709,9 @@ pub fn serve_request(app: &Arc<App>, verb: &str, body: &Value) -> Result<Value, 
             if mcp::answer(app, message_id, decision) {
                 return Ok(json!({ "answered": true }));
             }
-            // Not a waiting tool: a sign-in card, answered by starting the flow here.
+            // Not a waiting tool: a sign-in card, answered by starting the flow.
             let chat_id = body["chat_id"].as_str().ok_or("missing chat_id")?;
-            Ok(json!({ "answered": mcp::answer_sign_in(app, chat_id, message_id, decision)? }))
+            mcp::answer_sign_in(app, chat_id, message_id, decision, elsewhere()).await
         }
         other => Err(format!("Unknown request {other}")),
     }

@@ -4,22 +4,25 @@
 import { Button as MenuButton, Divider, HStack, Host, Image as MenuImage, Menu, Text as MenuText } from "@expo/ui/swift-ui";
 import { foregroundStyle, frame, lineLimit, tint, truncationMode } from "@expo/ui/swift-ui/modifiers";
 import { MenuView, type MenuAction } from "@expo/ui/community/menu";
-import { type ReactNode } from "react";
+import { Children, isValidElement, type ReactNode } from "react";
 import { Platform, Pressable, StyleSheet, Switch, Text, TextInput, useWindowDimensions, View, type StyleProp, type TextInputProps, type ViewStyle } from "react-native";
 import { Symbol } from "./Symbol";
 import { Font, usePalette } from "./theme";
 
 export function Section({ title, footer, children, style }: { title?: string; footer?: string; children: ReactNode; style?: StyleProp<ViewStyle> }) {
   const p = usePalette();
-  const items = Array.isArray(children) ? children.filter(Boolean) : [children];
+  // Rows from a `{list.map(…)}` beside other rows arrive as one nested array; flattened, each
+  // row gets its own separator. `toArray` drops empty children and keys every row by its place
+  // and its own key, so a row keeps its cell when the rows around it come and go.
+  const rows = Children.toArray(children).filter(isValidElement);
   return (
     <View style={[styles.section, style]}>
       {title ? <Text style={[styles.sectionTitle, { color: p.secondaryLabel }]}>{Platform.OS === "ios" ? title.toUpperCase() : title}</Text> : null}
       <View style={[styles.group, { backgroundColor: p.cell }]}>
-        {items.map((child, index) => (
-          <View key={index}>
+        {rows.map((row, index) => (
+          <View key={row.key}>
             {index > 0 && <View style={[styles.separator, { backgroundColor: p.separator }]} />}
-            {child}
+            {row}
           </View>
         ))}
       </View>

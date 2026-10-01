@@ -301,7 +301,7 @@ export function EditableRow(props: {
         class={["row-field", { mono: !!props.monospaced, right: !!props.alignRight }]}
         value={editing() ? draft() : props.value}
         placeholder={props.placeholder}
-        spellcheck={false}
+        spellcheck="false"
         onFocus={(event) => {
           committed = false;
           setDraft(event.currentTarget.value);

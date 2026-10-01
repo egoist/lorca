@@ -236,7 +236,7 @@ export function PermissionRow({ row, isGroup, onDecide }: { row: Extract<Row, { 
         ? t("Added the rule “{rule}” to Auto-review.", { rule: row.body.rule })
         : undefined;
   const decided: Record<string, string> = connect
-    ? { allowed: t("Signing in"), denied: t("Not now"), connected: t("Signed in"), failed: t("Sign-in failed") }
+    ? { allowed: t("Signing in"), denied: t("Not now"), dismissed: t("Dismissed"), connected: t("Signed in"), failed: t("Sign-in failed") }
     : { allowed: t("Allowed once"), always: t("Always allowed"), denied: t("Denied"), expired: t("No answer in time"), dismissed: t("Dismissed") };
   const choices: [string, "allow" | "always" | "deny"][] = connect
     ? [[t("Sign in"), "allow"], [t("Not now"), "deny"]]

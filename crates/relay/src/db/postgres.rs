@@ -24,6 +24,8 @@ const CHANNEL: &str = "lorca_relay";
 const INSTANCE_TTL: i64 = 150;
 /// Held while the schema is made, so two processes starting together do not collide.
 const SCHEMA_LOCK: i64 = 0x10ca_5c4e;
+/// How long opening waits for the event listener's `LISTEN` before it goes on without it.
+const LISTEN_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 
 const SCHEMA: &str = "
     CREATE TABLE IF NOT EXISTS identities (
@@ -202,7 +204,14 @@ impl Postgres {
         let store = Postgres { pool, instance: uuid::Uuid::new_v4().to_string(), host };
         store.beat(&client).await?;
         drop(client);
-        tokio::spawn(listen(config, local, store.pool.clone()));
+        // A `NOTIFY` reaches only the sessions listening when it is sent, so the store opens once
+        // its listener is: an event published at once, or a key revoked before the revoked keys
+        // are read, would go unheard otherwise.
+        let (listening, listened) = tokio::sync::oneshot::channel();
+        tokio::spawn(listen(config, local, store.pool.clone(), listening));
+        if !matches!(tokio::time::timeout(LISTEN_WAIT, listened).await, Ok(Ok(()))) {
+            tracing::warn!("event listener is not listening yet; once it is, every socket looks again");
+        }
         Ok(store)
     }
 
@@ -235,10 +244,11 @@ impl Postgres {
 }
 
 /// Hears every process's events, this one's among them, and hands them to the local sockets.
-/// A listener that lost its connection may have missed some, so after it is back every local
-/// socket is told to look again and the revoked keys are read afresh.
-async fn listen(config: tokio_postgres::Config, local: Arc<Local>, pool: Pool) {
-    let mut first = true;
+/// `listening` hears when the first `LISTEN` is in place, which `open` waits for. A listener
+/// that lost its connection, or that `open` stopped waiting for, may have missed some, so once
+/// it listens every local socket is told to look again and the revoked keys are read afresh.
+async fn listen(config: tokio_postgres::Config, local: Arc<Local>, pool: Pool, listening: tokio::sync::oneshot::Sender<()>) {
+    let mut listening = Some(listening);
     loop {
         match config.connect(tls()).await {
             Ok((client, mut connection)) => {
@@ -261,7 +271,10 @@ async fn listen(config: tokio_postgres::Config, local: Arc<Local>, pool: Pool) {
                 if let Err(error) = client.batch_execute(&format!("LISTEN {CHANNEL}")).await {
                     tracing::warn!(%error, "LISTEN");
                 } else {
-                    if !first {
+                    // Only the first `LISTEN`, with `open` still waiting, missed nothing: no socket
+                    // was here yet, and the revoked keys are read after it.
+                    let missed = listening.take().is_none_or(|listening| listening.send(()).is_err());
+                    if missed {
                         if let Ok(client) = pool.get().await {
                             if let Ok(rows) = client.query("SELECT machine_pubkey FROM revoked_machines", &[]).await {
                                 rows.iter().for_each(|row| local.revoked.insert(row.get(0)));
@@ -269,7 +282,6 @@ async fn listen(config: tokio_postgres::Config, local: Arc<Local>, pool: Pool) {
                         }
                         local.hub.everyone();
                     }
-                    first = false;
                     while let Some(payload) = notifications.recv().await {
                         match serde_json::from_str::<Event>(&payload) {
                             Ok(event) => local.deliver(&event),

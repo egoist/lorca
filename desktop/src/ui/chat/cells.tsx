@@ -88,7 +88,7 @@ function AttachmentTile(props: { attachment: Attachment; chatID: string; message
       aria-label={attachment.name}
       onClick={open}
     >
-      <Show when={file()?.url}>{(url) => <img src={url()} alt="" draggable={false} />}</Show>
+      <Show when={file()?.url}>{(url) => <img src={url()} alt="" draggable="false" />}</Show>
     </button>
   ) : (
     <button class={["attachment-file", { "on-user": props.onUserBubble }]} title={file() ? attachment.name : L("%@ · fetching…", attachment.name)} onClick={open}>

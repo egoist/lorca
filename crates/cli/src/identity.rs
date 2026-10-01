@@ -87,7 +87,6 @@ fn create_lead_bot(app: &Arc<App>) {
     match app.create_bot_with_dm(bot, None) {
         Ok((_, chat)) => {
             let _ = app.update_chat_meta(&chat.meta.id, |meta| meta.is_pinned = true);
-            crate::runtime::prime_names(app);
         }
         Err(error) => tracing::warn!(%error, "creating the lead bot"),
     }

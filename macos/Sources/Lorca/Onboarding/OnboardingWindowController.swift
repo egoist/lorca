@@ -47,6 +47,21 @@ final class OnboardingViewController: NSViewController {
         case done
     }
 
+    /// How this computer came by its identity, which the last step words.
+    private enum Origin {
+        case created
+        case restored
+        case paired
+    }
+
+    /// A restore or a pairing in flight. Back cancels `pairing`, which waits on the other Device;
+    /// a restore, and the sync after either, end on their own.
+    private enum Joining {
+        case restoring
+        case pairing
+        case syncing
+    }
+
     private let store = AppStore.shared
     private let onFinish: () -> Void
     private let container = NSView()
@@ -57,6 +72,11 @@ final class OnboardingViewController: NSViewController {
     private var busy = false
     /// A subscription sign-in is waiting on the browser.
     private var isSigningIn = false
+    /// `nil` when the identity arrived from elsewhere while onboarding waited.
+    private var origin: Origin?
+    private var joining: Joining? {
+        didSet { updateJoinControls() }
+    }
 
     var isOnFinalStep: Bool { step == .done || step == .create || step == .bot || step == .provider }
     private var providerKind: ProviderCredential.Kind = .deepseek
@@ -93,10 +113,22 @@ final class OnboardingViewController: NSViewController {
         super.viewDidLoad()
         transition(to: .welcome)
         store.observe(self) { [weak self] event in
-            guard let self, case .identityChanged = event, self.store.hasIdentity == true, !self.busy else { return }
-            // Identity arrived from elsewhere (the CLI, or a paired Device) while we waited here.
-            if self.step == .welcome || self.step == .restore || self.step == .pair {
-                self.transition(to: .done)
+            guard let self else { return }
+            switch event {
+            case .identityChanged:
+                guard self.store.hasIdentity == true, !self.busy else { return }
+                // Identity arrived from elsewhere (the CLI, or a paired Device) while we waited here.
+                if self.step == .welcome || self.step == .restore || self.step == .pair {
+                    self.origin = nil
+                    self.transition(to: .done)
+                }
+            case .snapshotReplaced where self.step == .done && self.origin == nil:
+                // The snapshot after an identity from elsewhere says whether this computer holds it.
+                let words = self.doneWords
+                self.find(NSTextField.self, "doneTitle")?.stringValue = words.title
+                self.find(NSTextField.self, "doneSubtitle")?.stringValue = words.subtitle
+            default:
+                break
             }
         }
     }
@@ -227,15 +259,18 @@ final class OnboardingViewController: NSViewController {
         hint.widthAnchor.constraint(equalToConstant: 560).isActive = true
         hint.identifier = NSUserInterfaceItemIdentifier("status")
 
-        let back = secondaryButton(L("Back"), action: #selector(goWelcome))
+        let back = secondaryButton(L("Back"), action: #selector(leaveJoin))
+        back.identifier = NSUserInterfaceItemIdentifier("back")
         let next = primaryButton(L("Restore"), action: #selector(restoreIdentity))
+        next.identifier = NSUserInterfaceItemIdentifier("join")
 
         return stepLayout(
             title: title,
             subtitle: subtitle,
             body: Build.stack([field, hint], spacing: 10),
             back: back,
-            next: next
+            next: next,
+            spinner: joinSpinner()
         )
     }
 
@@ -260,12 +295,14 @@ final class OnboardingViewController: NSViewController {
         status.widthAnchor.constraint(equalToConstant: 560).isActive = true
         status.identifier = NSUserInterfaceItemIdentifier("status")
 
-        let back = secondaryButton(L("Back"), action: #selector(goWelcome))
+        let back = secondaryButton(L("Back"), action: #selector(leaveJoin))
+        back.identifier = NSUserInterfaceItemIdentifier("back")
         let next = primaryButton(L("Pair"), action: #selector(acceptPairing))
+        next.identifier = NSUserInterfaceItemIdentifier("join")
 
         return stepLayout(
             title: title, subtitle: subtitle, body: Build.stack([field, status], spacing: 10), back: back,
-            next: next)
+            next: next, spinner: joinSpinner())
     }
 
     /// The bot the CLI created with the identity, or the first bot in the roster.
@@ -435,6 +472,30 @@ final class OnboardingViewController: NSViewController {
         return box
     }
 
+    /// The last step's words. An identity that arrived from elsewhere was paired, unless this
+    /// computer holds it.
+    private var doneWords: (title: String, subtitle: String) {
+        switch origin ?? (store.isIdentityDevice ? .created : .paired) {
+        case .created:
+            return (
+                L("This computer is your first Device"),
+                firstBot.map { L("%@ is ready to talk to. Pair another Device any time from the File menu.", $0.name) }
+                    ?? L("Bots you create here run on this computer with your account's provider credentials. Pair another Device any time from the File menu.")
+            )
+        case .restored:
+            return (
+                L("Your identity is restored"),
+                L("Your bots and chats sync to this computer, and it can run bots too. Pair another Device any time from the File menu.")
+            )
+        case .paired:
+            // Only the computer that holds the identity pairs others.
+            return (
+                L("This computer is paired"),
+                L("Your bots and chats sync to this computer, and it can run bots too.")
+            )
+        }
+    }
+
     private func doneView() -> NSView {
         let icon = NSImageView()
         icon.image = NSImage(systemSymbolName: "checkmark.circle.fill", accessibilityDescription: nil)
@@ -442,14 +503,13 @@ final class OnboardingViewController: NSViewController {
         icon.contentTintColor = .systemGreen
         icon.translatesAutoresizingMaskIntoConstraints = false
 
-        let title = Build.label(
-            L("This computer is your first Device"), font: .systemFont(ofSize: 22, weight: .semibold),
-            alignment: .center)
+        let words = doneWords
+        let title = Build.label(words.title, font: .systemFont(ofSize: 22, weight: .semibold), alignment: .center)
+        title.identifier = NSUserInterfaceItemIdentifier("doneTitle")
         let subtitle = Build.label(
-            firstBot.map { L("%@ is ready to talk to. Pair another Device any time from the File menu.", $0.name) }
-                ?? L("Bots you create here run on this computer with your account's provider credentials. Pair another Device any time from the File menu."),
-            font: .systemFont(ofSize: 12.5), color: .secondaryLabelColor, lines: 0, alignment: .center
+            words.subtitle, font: .systemFont(ofSize: 12.5), color: .secondaryLabelColor, lines: 0, alignment: .center
         )
+        subtitle.identifier = NSUserInterfaceItemIdentifier("doneSubtitle")
 
         let open = primaryButton(L("Open Lorca"), action: #selector(finish))
 
@@ -525,13 +585,14 @@ final class OnboardingViewController: NSViewController {
     }
 
     private func stepLayout(
-        title: NSView, subtitle: NSView, body: NSView, back: NSButton, next: NSButton
+        title: NSView, subtitle: NSView, body: NSView, back: NSButton, next: NSButton, spinner: NSView? = nil
     ) -> NSView {
         let host = NSView()
         host.translatesAutoresizingMaskIntoConstraints = false
 
         let header = Build.stack([title, subtitle], spacing: 6)
-        let buttons = Build.stack([back, next], orientation: .horizontal, spacing: 10)
+        let row: [NSView?] = [spinner, back, next]
+        let buttons = Build.stack(row.compactMap { $0 }, orientation: .horizontal, spacing: 10)
 
         host.addSubview(header)
         host.addSubview(body)
@@ -576,9 +637,26 @@ final class OnboardingViewController: NSViewController {
         return button
     }
 
+    /// Turns beside a restore's or a pairing's buttons while it runs.
+    private func joinSpinner() -> NSProgressIndicator {
+        let spinner = NSProgressIndicator()
+        spinner.style = .spinning
+        spinner.controlSize = .small
+        spinner.isHidden = true
+        spinner.identifier = NSUserInterfaceItemIdentifier("joinSpinner")
+        spinner.translatesAutoresizingMaskIntoConstraints = false
+        return spinner
+    }
+
     // MARK: - Actions
 
     @objc private func goWelcome() { transition(to: .welcome) }
+
+    /// Back from a pairing that waits on the other Device stops the wait in the CLI too.
+    @objc private func leaveJoin() {
+        if joining == .pairing { store.abortPairing() }
+        transition(to: .welcome)
+    }
     @objc private func goRestore() { transition(to: .restore) }
     @objc private func goPair() { transition(to: .pair) }
     @objc private func goBot() { transition(to: firstBot == nil ? .provider : .bot) }
@@ -655,6 +733,7 @@ final class OnboardingViewController: NSViewController {
         guard !busy else { return }
         if store.isMock {
             phrase = MockData.backupPhrase
+            origin = .created
             transition(to: .create)
             return
         }
@@ -670,6 +749,7 @@ final class OnboardingViewController: NSViewController {
             defer { self.busy = false }
             do {
                 self.phrase = try await self.store.createIdentity()
+                self.origin = .created
                 self.transition(to: .create)
             } catch {
                 self.presentError(error.localizedDescription)
@@ -682,16 +762,22 @@ final class OnboardingViewController: NSViewController {
         let text = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         if store.isMock {
+            origin = .restored
             transition(to: .provider)
             return
         }
         busy = true
+        joining = .restoring
         setStatus(L("Re-deriving keys and unwrapping the account key…"), color: .secondaryLabelColor)
         Task { [weak self] in
             guard let self else { return }
-            defer { self.busy = false }
+            defer {
+                self.busy = false
+                self.joining = nil
+            }
             do {
                 try await self.store.restoreIdentity(phrase: text)
+                self.origin = .restored
                 await self.continueAfterJoining()
             } catch {
                 self.setStatus(error.localizedDescription, color: .systemRed)
@@ -699,13 +785,13 @@ final class OnboardingViewController: NSViewController {
         }
     }
 
-    /// A computer that joined an account gets its credentials with the first sync, so the provider
-    /// step shows only when none arrive.
+    /// A computer that joined an account gets its credentials with its first pull from the relay,
+    /// so the provider step shows only when the account has none.
     private func continueAfterJoining() async {
-        for _ in 0..<15 where !store.providers.contains(where: \.isConnected) {
-            try? await Task.sleep(for: .milliseconds(200))
-        }
-        transition(to: store.providers.contains(where: \.isConnected) ? .done : .provider)
+        joining = .syncing
+        setStatus(L("Syncing the account from the relay…"), color: .secondaryLabelColor)
+        let hasProvider = await store.accountHasProvider()
+        transition(to: hasProvider ? .done : .provider)
     }
 
     @objc private func acceptPairing() {
@@ -713,16 +799,22 @@ final class OnboardingViewController: NSViewController {
         let text = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         if store.isMock {
+            origin = .paired
             transition(to: .provider)
             return
         }
         busy = true
+        joining = .pairing
         setStatus(L("Waiting for the other Device to wrap the account key…"), color: .secondaryLabelColor)
         Task { [weak self] in
             guard let self else { return }
-            defer { self.busy = false }
+            defer {
+                self.busy = false
+                self.joining = nil
+            }
             do {
                 try await self.store.acceptPairing(text)
+                self.origin = .paired
                 await self.continueAfterJoining()
             } catch {
                 self.setStatus(error.localizedDescription, color: .systemRed)
@@ -746,6 +838,19 @@ final class OnboardingViewController: NSViewController {
         guard let label = find(NSTextField.self, "status") else { return }
         label.stringValue = text
         label.textColor = color
+    }
+
+    /// While a restore or a pairing runs, its field and button wait beside the spinner, and Back
+    /// stays only to cancel a pairing.
+    private func updateJoinControls() {
+        let busy = joining != nil
+        find(NSTextField.self, "phrase")?.isEnabled = !busy
+        find(NSTextField.self, "pairing")?.isEnabled = !busy
+        find(NSButton.self, "join")?.isEnabled = !busy
+        find(NSButton.self, "back")?.isEnabled = joining == nil || joining == .pairing
+        guard let spinner = find(NSProgressIndicator.self, "joinSpinner") else { return }
+        spinner.isHidden = !busy
+        if busy { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
     }
 
     private func presentError(_ message: String) {

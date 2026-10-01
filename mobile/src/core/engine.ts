@@ -53,8 +53,9 @@ class Engine {
   private started = false;
   private fetchingFiles = new Set<string>();
   private loadingOlder = new Set<string>();
-  private providerBrowserOpen = false;
-  private dismissingProviderAuth = false;
+  /// The sign-in page up in the in-app browser: whose it is (a plugin sign-in's id, or
+  /// "provider"), and whether this side is closing it.
+  private authPage: { attempt: string; closing: boolean } | null = null;
   private readChatId: string | null = null;
   /// Snapshots on their way, and the events that arrived meanwhile (see `bootstrap`).
   private bootstraps = 0;
@@ -182,7 +183,13 @@ class Engine {
         useStore.setState((s) => ({ relayConnected: !!data.connected, relayUpdateRequired: !!data.update_required, relayError: data.error ?? null, relayUrl: data.url ?? s.relayUrl }));
         break;
       case "provider.auth":
-        this.openProviderAuth(data.url);
+        void this.openAuthPage(data.url, "provider", () => core.request("providers.auth.cancel"));
+        break;
+      case "plugin.auth":
+        void this.openAuthPage(data.url, data.sign_in, () => core.request("plugins.auth.cancel", { sign_in: data.sign_in }));
+        break;
+      case "plugin.auth.done":
+        void this.closeAuthPage(data.sign_in);
         break;
       case "identity.changed":
         if (!data.has_identity) resetStore();
@@ -350,7 +357,7 @@ class Engine {
       const { providers } = await core.request<{ providers: ProviderStatus[] }>(providerConnectMethod(kind), params);
       useStore.setState({ providers });
     } finally {
-      if (kind === "chatgpt" || kind === "grok") this.dismissProviderAuth();
+      if (kind === "chatgpt" || kind === "grok") void this.closeAuthPage("provider");
     }
   }
 
@@ -359,53 +366,51 @@ class Engine {
     useStore.setState({ providers });
   }
 
-  private openProviderAuth(url: string) {
+  /// Opens a sign-in page, a provider's or a plugin's for its Runner, in the in-app browser
+  /// while the core waits on its loopback callback; a page up for another sign-in closes first.
+  /// Closing the page before the sign-in came back calls `cancel`.
+  private async openAuthPage(url: string, attempt: string, cancel: () => Promise<unknown>) {
+    if (this.authPage) await this.closeAuthPage(this.authPage.attempt);
     // iOS keeps the core alive behind SFSafariViewController. Android's auth-session
     // polyfill also watches AppState, so closing the custom tab can cancel the Rust wait.
-    this.providerBrowserOpen = true;
-    const browser = Platform.OS === "android" ? WebBrowser.openAuthSessionAsync(url) : WebBrowser.openBrowserAsync(url);
-    void browser
-      .then((result) => {
-        if (!this.dismissingProviderAuth && (result.type === "cancel" || result.type === "dismiss"))
-          void core.request("providers.auth.cancel").catch(() => {});
-      })
-      .catch((error) => {
-        console.warn("opening provider sign-in", error instanceof Error ? error.message : error);
-        void core.request("providers.auth.cancel").catch(() => {});
-      })
-      .finally(() => {
-        this.providerBrowserOpen = false;
-        this.dismissingProviderAuth = false;
-      });
+    const page = { attempt, closing: false };
+    this.authPage = page;
+    try {
+      const result = await (Platform.OS === "android" ? WebBrowser.openAuthSessionAsync(url) : WebBrowser.openBrowserAsync(url));
+      if (!page.closing && (result.type === "cancel" || result.type === "dismiss")) void cancel().catch(() => {});
+    } catch (error) {
+      console.warn("opening a sign-in page", error instanceof Error ? error.message : error);
+      void cancel().catch(() => {});
+    } finally {
+      if (this.authPage === page) this.authPage = null;
+    }
   }
 
-  private dismissProviderAuth() {
-    if (!this.providerBrowserOpen) {
-      this.dismissingProviderAuth = false;
-      return;
-    }
-    this.dismissingProviderAuth = true;
+  /// Closes the page of sign-in `attempt` when it is the one up: the sign-in came back, or ended.
+  private async closeAuthPage(attempt: string) {
+    const page = this.authPage;
+    if (!page || page.attempt !== attempt) return;
+    page.closing = true;
     // Chrome Custom Tabs have no programmatic dismiss. Its success page stays up until the
-    // user closes it; the promise above then clears this flag without cancelling the login.
+    // user closes it; the page's promise then ends without cancelling the sign-in.
     if (Platform.OS === "android") return;
     try {
-      void WebBrowser.dismissBrowser().catch(() => {
-        this.dismissingProviderAuth = false;
-      });
+      await WebBrowser.dismissBrowser();
     } catch {
       // The browser may already be gone on this platform.
-      this.dismissingProviderAuth = false;
+      page.closing = false;
     }
   }
 
   // MARK: - Plugins
 
-  /// Answers a permission card; the core's message event confirms the decision.
-  answerPermission(chatId: string, messageId: string, decision: "allow" | "always" | "deny") {
+  /// Answers a permission card; the core's message event confirms the decision. Sign in on a
+  /// sign-in card for a bot on another Runner opens the sign-in page here. Rejects with why the
+  /// answer did not reach the Runner, such as it being offline, and the card asks again.
+  async answerPermission(chatId: string, messageId: string, decision: "allow" | "always" | "deny") {
     const decided: "always" | "denied" | "allowed" = decision === "always" ? "always" : decision === "deny" ? "denied" : "allowed";
     // A permission card shows the answer; a command's card moves on to running, or ends.
     const answered = (m: Message): Message => {
-      if (m.id !== messageId) return m;
       if (m.body.kind === "permission") return { ...m, body: { ...m.body, decision: decided } };
       if (m.body.kind === "tool" && m.body.run?.state === "asking") {
         const run = { ...m.body.run, decision: decided, state: decided === "denied" ? ("denied" as const) : ("running" as const), rule: decided === "always" ? m.body.run.rule : undefined };
@@ -413,10 +418,22 @@ class Engine {
       }
       return m;
     };
-    useStore.setState((s) => ({
-      chats: s.chats.map((c) => (c.id === chatId ? { ...c, messages: c.messages.map(answered) } : c)),
-    }));
-    void core.request("chats.permission", { chat_id: chatId, message_id: messageId, decision });
+    const asked = chatById(chatId)?.messages.find((m) => m.id === messageId);
+    const shown = asked && answered(asked);
+    // Puts back what the card showed, unless the core changed it meanwhile.
+    const replace = (from: Message | undefined, to: Message | undefined) => {
+      if (!from || !to) return;
+      useStore.setState((s) => ({
+        chats: s.chats.map((c) => (c.id === chatId ? { ...c, messages: c.messages.map((m) => (m === from ? to : m)) } : c)),
+      }));
+    };
+    replace(asked, shown);
+    try {
+      await core.request("chats.permission", { chat_id: chatId, message_id: messageId, decision });
+    } catch (error) {
+      replace(shown, asked);
+      throw error;
+    }
   }
 
   // MARK: - Commands
