@@ -420,4 +420,43 @@ mod tests {
         files.extend([join(&git, &["cmd", "git.exe"]), bash_in(&git)]);
         assert_eq!(find(&vars, &[system32, join(&git, &["cmd"])], &files), Some(bash_in(&git)));
     }
+
+    /// The search on an environment as Windows writes it: drive letters, a PATH split on `;` with
+    /// an empty, a relative, and a quoted entry, and System32 in another case than `%SystemRoot%`.
+    #[cfg(windows)]
+    #[test]
+    fn git_bash_reads_a_windows_environment() {
+        let path = r#"C:\WINDOWS\system32;C:\WINDOWS;;relative\cmd;"D:\Tools\Git\cmd";C:\Users\me\scoop\shims"#;
+        let vars = [
+            ("ProgramFiles", r"C:\Program Files"),
+            ("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+            ("LOCALAPPDATA", r"C:\Users\me\AppData\Local"),
+            ("SystemRoot", r"C:\Windows"),
+            ("PATH", path),
+        ];
+        let search = |files: &[&str]| {
+            git_bash(
+                |name| vars.iter().find(|(var, _)| *var == name).map(|(_, value)| std::ffi::OsString::from(value)),
+                |file| files.iter().any(|f| Path::new(f) == file),
+            )
+        };
+        let on_path = [
+            r"C:\WINDOWS\system32\bash.exe",
+            r"C:\WINDOWS\system32\git.exe",
+            r"C:\WINDOWS\bin\bash.exe",
+            r"relative\cmd\git.exe",
+            r"relative\bin\bash.exe",
+            r"D:\Tools\Git\cmd\git.exe",
+            r"D:\Tools\Git\bin\bash.exe",
+            r"C:\Users\me\scoop\shims\git.exe",
+        ];
+        assert_eq!(search(&on_path), Some(PathBuf::from(r"D:\Tools\Git\bin\bash.exe")));
+
+        let mut with_user_install = on_path.to_vec();
+        with_user_install.push(r"C:\Users\me\AppData\Local\Programs\Git\bin\bash.exe");
+        assert_eq!(search(&with_user_install), Some(PathBuf::from(r"C:\Users\me\AppData\Local\Programs\Git\bin\bash.exe")));
+
+        with_user_install.push(r"C:\Program Files\Git\bin\bash.exe");
+        assert_eq!(search(&with_user_install), Some(PathBuf::from(r"C:\Program Files\Git\bin\bash.exe")));
+    }
 }

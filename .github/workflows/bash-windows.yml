@@ -1,0 +1,24 @@
+# Runs the bash tool's tests on Windows, where its shell lookup (Git for Windows' bash, never
+# WSL's) depends on Windows paths: drive letters, a PATH split on `;`, System32. The runner has
+# Git for Windows, so the end-to-end test also runs its commands in the bash the lookup finds.
+# Codemode (QuickJS) is left out of the build; the bash tool does not use it.
+name: Bash tool on Windows
+
+on:
+  push:
+    branches: [main]
+    paths: ["crates/agent/src/tools/bash.rs", ".github/workflows/bash-windows.yml"]
+  pull_request:
+    paths: ["crates/agent/src/tools/bash.rs", ".github/workflows/bash-windows.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p lorca-agent --lib --no-default-features tools::bash::
