@@ -533,10 +533,22 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             let status = crate::plugins::on_runner(app, &runner_id, "plugins.variables", body).await?;
             Ok(json!({ "status": status }))
         }
+        // On another Runner, the sign-in page opens here (`plugins::sign_in`).
         "plugins.connect" => {
             let runner_id = string(&params, "runner_id")?;
-            let body = json!({ "plugin_id": string(&params, "plugin_id")?, "server": opt_string(&params, "server") });
+            let plugin_id = string(&params, "plugin_id")?;
+            let body = json!({ "plugin_id": plugin_id, "server": opt_string(&params, "server") });
+            if app.this_device_id().as_deref() != Some(runner_id.as_str()) {
+                let plugin = app.device(&runner_id).and_then(|device| device.plugins.into_iter().find(|p| p.id == plugin_id));
+                let name = plugin.map(|p| p.name).unwrap_or_else(|| plugin_id.clone());
+                return crate::plugins::sign_in::from_here(app, &runner_id, "plugins.connect", body, &plugin_id, &name).await;
+            }
             crate::plugins::on_runner(app, &runner_id, "plugins.connect", body).await
+        }
+        // The phone's page for sign-in `sign_in` closed before the browser came back.
+        "plugins.auth.cancel" => {
+            app.cancel_plugin_sign_in(opt_string(&params, "sign_in").as_deref());
+            Ok(Value::Null)
         }
         "plugins.detail" => {
             let runner_id = string(&params, "runner_id")?;
@@ -580,6 +592,13 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             let Author::Bot { bot_id } = &message.author else { return Err("Not a permission request".into()) };
             let bot = app.bot(bot_id).ok_or("Unknown bot")?;
             let body = json!({ "chat_id": chat_id, "message_id": message_id, "decision": decision });
+            // Sign in on a card for a bot on another Runner: the sign-in page opens here.
+            if let Body::Permission { tool, plugin_id, plugin_name, decision: current, .. } = &message.body {
+                let signs_in = tool == "connect" && current == "pending" && decision != "deny";
+                if signs_in && app.this_device_id().as_deref() != Some(bot.runner_id.as_str()) {
+                    return crate::plugins::sign_in::from_here(app, &bot.runner_id, "permission.answer", body, plugin_id, plugin_name).await;
+                }
+            }
             crate::plugins::on_runner(app, &bot.runner_id, "permission.answer", body).await
         }
 

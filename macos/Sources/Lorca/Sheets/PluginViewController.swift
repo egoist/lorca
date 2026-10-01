@@ -75,7 +75,7 @@ final class PluginViewController: SheetViewController {
         note.stringValue =
             runner.isThisDevice
             ? L("Keys and sign-ins stay on this device.")
-            : L("Keys and sign-ins are sent sealed to %@ and stay there. A sign-in opens the browser on %@.", runner.name, runner.name)
+            : L("Keys and sign-ins are sent sealed to %@ and stay there.", runner.name)
         load()
     }
 

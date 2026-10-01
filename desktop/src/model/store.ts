@@ -912,7 +912,7 @@ export class AppStore {
     return toPlugin(reply.status);
   }
 
-  /** Starts the sign-in on the Runner; the browser opens there. */
+  /** Starts a plugin's sign-in for the Runner; the browser opens on this computer. */
   async connectPlugin(pluginID: string, runnerID: string): Promise<void> {
     if (this.isMock) return;
     await this.request("plugins.connect", { runner_id: runnerID, plugin_id: pluginID });
@@ -1397,6 +1397,13 @@ export class AppStore {
     if (!this.isMock) await this.request("device.unpair", { id });
     this.devices = this.devices.filter((device) => device.id !== id);
     this.emit({ kind: "rosterChanged" });
+  }
+
+  /** Unpairs this Device. The CLI asks the relay to drop its key, best effort, then forgets the
+   * identity here; the `identity.changed` it sends brings back onboarding. The demo has no CLI, so
+   * its Unpair opens onboarding instead (`confirmUnpair`). */
+  async forgetIdentity(): Promise<void> {
+    await this.request("identity.forget");
   }
 
   /** Deletes the account on the relay and on this Device; the other Devices forget it as the relay

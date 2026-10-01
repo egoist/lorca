@@ -759,7 +759,7 @@ final class AppStore {
         return try await client.request("plugins.set_variables", ["runner_id": runnerID, "plugin_id": pluginID, "variables": variables], as: Wire.PluginInstalled.self).status.toModel()
     }
 
-    /// Starts the sign-in on the Runner; the browser opens there.
+    /// Starts a plugin's sign-in for the Runner; the browser opens on this Mac.
     func connectPlugin(_ pluginID: String, on runnerID: Device.ID) async throws {
         guard !isMock else { return }
         _ = try await client.request("plugins.connect", ["runner_id": runnerID, "plugin_id": pluginID])
@@ -1253,6 +1253,13 @@ final class AppStore {
         }
         devices.removeAll { $0.id == id }
         emit(.rosterChanged)
+    }
+
+    /// Unpairs this Device. The CLI asks the relay to drop its key, best effort, then forgets the
+    /// identity here; the `identity.changed` it sends brings back onboarding. The demo has no CLI,
+    /// so its Unpair opens onboarding instead (`UnpairDevice`).
+    func forgetIdentity() async throws {
+        _ = try await client.request("identity.forget")
     }
 
     /// Deletes the account on the relay and on this Device; the other Devices forget it as the
