@@ -992,7 +992,6 @@ impl App {
             bot
         };
         self.roster_changed(true);
-        crate::runtime::prime_names(self);
         Ok(bot)
     }
 
@@ -1055,7 +1054,6 @@ impl App {
         #[cfg(feature = "runner")]
         self.shell_sessions.close_orphans(self);
         self.roster_changed(true);
-        crate::runtime::prime_names(self);
         Ok(())
     }
 
