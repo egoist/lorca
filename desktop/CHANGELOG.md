@@ -26,6 +26,9 @@ and the update window shows it.
   searches as you type them, or in the description, rule, and memory sheets. The composer still
   checks spelling.
 - Bot avatars, image attachments, and the app icon can no longer be dragged out of the window.
+- On Windows, plugins that start with `npx`, such as Browser and 高德地图, no longer fail with
+  "Cannot start npx: program not found". Lorca finds a plugin's program as a terminal does, so it
+  finds the `npx.cmd` that Node.js installs.
 
 ## [0.1.1]
 

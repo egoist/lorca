@@ -178,7 +178,8 @@ async fn connect(app: &Arc<App>, plugin: &Installed, name: &str, spec: &ServerSp
     let mut bearer_expires_at = None;
     let service = match spec {
         ServerSpec::Stdio { command, args, env } => {
-            // The login shell's environment, so `npx` or `uvx` resolve from the user's PATH.
+            // The login shell's environment, so `npx` or `uvx` resolve from the user's PATH, on
+            // Windows as files the way a terminal finds them (`npx` is npm's `npx.cmd`).
             let mut cmd = lorca_agent::login_shell::command(command).await;
             cmd.args(args.iter().map(|a| fill(a, values)));
             // A variable naming an optional key the user left unset is left out.
@@ -188,7 +189,11 @@ async fn connect(app: &Arc<App>, plugin: &Installed, name: &str, spec: &ServerSp
                 }
             }
             cmd.current_dir(app.config.plugins_dir().join(&plugin.manifest.id));
-            let transport = TokioChildProcess::new(cmd).map_err(|e| format!("Cannot start {command}: {e}"))?;
+            // On Windows a bare name starts a file found on PATH (npx.cmd), which the error names:
+            // a batch file refuses an argument with a line break.
+            let program = std::path::Path::new(cmd.as_std().get_program()).display().to_string();
+            let starting = if program == *command { program } else { format!("{command} ({program})") };
+            let transport = TokioChildProcess::new(cmd).map_err(|e| format!("Cannot start {starting}: {e}"))?;
             info.serve(transport).await.map_err(|e| format!("{command} did not answer the MCP handshake: {e}"))?
         }
         ServerSpec::Http { url, headers, auth: auth_spec } => {
