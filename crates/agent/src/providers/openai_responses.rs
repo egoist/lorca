@@ -30,7 +30,9 @@ pub struct OpenAiResponsesProvider {
     /// Retries of a request that fails before it streams (408, 409, 429, 5xx, transport).
     pub max_retries: u32,
     pub max_retry_delay_ms: u64,
-    /// Sent as `reasoning.effort` when the catalog says the model takes an effort.
+    /// Sent as `reasoning.effort` when the catalog says the model takes an effort. `Off` is the
+    /// effort `none` on a model the catalog says can stop thinking, and sends nothing on any
+    /// other.
     pub thinking_level: Option<ThinkingLevel>,
     /// The catalog entry for the model, when it has one.
     pub info: Option<&'static ModelInfo>,
@@ -93,7 +95,9 @@ impl OpenAiResponsesProvider {
             None => Some(level),
         });
         let effort = match level {
-            None | Some(ThinkingLevel::Off) => None,
+            None => None,
+            // Only a model the catalog says can stop thinking keeps `Off` through the clamp.
+            Some(ThinkingLevel::Off) => Some("none"),
             Some(ThinkingLevel::Minimal) => Some("minimal"),
             Some(ThinkingLevel::Low) => Some("low"),
             Some(ThinkingLevel::Medium) => Some("medium"),
@@ -203,11 +207,11 @@ mod tests {
             "opencode",
             "https://opencode.ai/zen/v1",
             "k",
-            "gpt-5.6-terra",
+            "gpt-6.1-sol",
         )
         .with_thinking(Some(ThinkingLevel::Medium));
         let body = provider.body(&request());
-        assert_eq!(body["model"], "gpt-5.6-terra");
+        assert_eq!(body["model"], "gpt-6.1-sol");
         assert_eq!(body["instructions"], "be brief");
         assert_eq!(body["input"][0]["type"], "message");
         assert_eq!(body["tools"][0]["name"], "read");
@@ -218,7 +222,7 @@ mod tests {
 
     #[test]
     fn the_chat_keys_the_prompt_cache() {
-        let provider = OpenAiResponsesProvider::new("opencode", "https://opencode.ai/zen/v1", "k", "gpt-5.6-terra");
+        let provider = OpenAiResponsesProvider::new("opencode", "https://opencode.ai/zen/v1", "k", "gpt-6.1-sol");
         let mut request = request();
         request.options = crate::RequestOptions::default().with_session_id("chat-1");
         assert_eq!(provider.body(&request)["prompt_cache_key"], "chat-1");
@@ -234,5 +238,16 @@ mod tests {
         )
         .with_thinking(Some(ThinkingLevel::High));
         assert!(provider.body(&request()).get("reasoning").is_none());
+    }
+
+    #[test]
+    fn off_is_the_effort_none_where_the_model_can_stop_thinking() {
+        let body = |kind: &str, model: &str| {
+            OpenAiResponsesProvider::new(kind, "https://opencode.ai/zen/go/v1", "k", model).with_thinking(Some(ThinkingLevel::Off)).body(&request())
+        };
+        assert_eq!(body("opencode-go", "gpt-6-luna")["reasoning"], json!({ "effort": "none" }));
+        // GPT-6.1 Sol always reasons, so Off runs at its lowest effort.
+        assert_eq!(body("opencode", "gpt-6.1-sol")["reasoning"], json!({ "effort": "low" }));
+        assert!(body("opencode", "unknown-model").get("reasoning").is_none());
     }
 }

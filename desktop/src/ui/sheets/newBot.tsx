@@ -2,7 +2,7 @@
 // it runs on, and the provider, model, and thinking level. Every bot gets a direct chat, which opens
 // when it is made.
 
-import { createMemo, createSignal, For } from "solid-js";
+import { createMemo, createSignal, For, Show } from "solid-js";
 import type { JSX } from "@solidjs/web";
 import { L } from "../../l10n";
 import {
@@ -90,8 +90,13 @@ function NewBotSheet(props: { onCreate: (botID: string) => void; dismiss: () => 
     props.onCreate(botID);
   };
 
-  const models = () => providerModels(provider());
-  const levels = () => thinkingLevels(provider());
+  // The CLI's catalog, which comes with each snapshot.
+  const catalog = () => {
+    track.roster();
+    return store.models;
+  };
+  const models = () => providerModels(catalog(), provider());
+  const levels = () => thinkingLevels(catalog(), provider(), model() || undefined);
   return (
     <Sheet
       title={L("New Bot")}
@@ -158,18 +163,25 @@ function NewBotSheet(props: { onCreate: (botID: string) => void; dismiss: () => 
         <PopUpButton
           options={[{ value: "", label: L("Default (%@)", models()[0]?.label ?? "") }, ...models().map((each) => ({ value: each.id, label: each.label }))]}
           value={model()}
-          onChange={setModel}
+          onChange={(id) => {
+            setModel(id);
+            // A level the new model does not take goes back to the default.
+            if (!levels().some((level) => level.id === thinking())) setThinking("");
+          }}
           class="fill"
         />
       </LabeledRow>
-      <LabeledRow label={L("Thinking")}>
-        <PopUpButton
-          options={[{ value: "", label: L("Default") }, ...levels().map((level) => ({ value: level.id, label: level.label }))]}
-          value={thinking()}
-          onChange={setThinking}
-          class="fill"
-        />
-      </LabeledRow>
+      {/* Only the levels this model takes; a model without any has no choice to make. */}
+      <Show when={levels().length > 0}>
+        <LabeledRow label={L("Thinking")}>
+          <PopUpButton
+            options={[{ value: "", label: L("Default") }, ...levels().map((level) => ({ value: level.id, label: level.label }))]}
+            value={thinking()}
+            onChange={setThinking}
+            class="fill"
+          />
+        </LabeledRow>
+      </Show>
       <div class={["sheet-note", { warning: note().warning }]}>{note().text}</div>
     </Sheet>
   );

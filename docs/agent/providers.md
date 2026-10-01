@@ -60,7 +60,7 @@ By default every request carries up to four `cache_control: ephemeral` marks: on
 
 The transcript goes through the [shared transform](#before-conversion) first, so seals and server blocks here are this provider's own and tool call ids from another model have the `^[a-zA-Z0-9_-]{1,64}$` shape this API wants. Consecutive same-role messages are merged into one, so a tool result always follows its call in the next message. Assistant messages that end up empty are left out.
 
-Opus 5.5 and Fable 5.1 bind each thinking block to the system prompt, the tools, and the messages before it, and refuse one replayed after any of them changed. `anthropic::drop_bound_thinking(model, &mut messages)` removes the thinking from a transcript for those models and leaves other models' alone: call it when a run's tools change, when a compaction keeps recent messages after its summary, and before messages go into a request with another system prompt or other tools. The harness does it for its compactions.
+Opus 5.5, Fable 5.1, and Sonnet 5.5 bind each thinking block to the system prompt, the tools, and the messages before it, and refuse one replayed after any of them changed. `anthropic::drop_bound_thinking(model, &mut messages)` removes the thinking from a transcript for those models and leaves other models' alone: call it when a run's tools change, when a compaction keeps recent messages after its summary, and before messages go into a request with another system prompt or other tools. The harness does it for its compactions.
 
 From the stream it reads `text_delta`, `thinking_delta`, `signature_delta` (as `ThinkingSignature`), and `input_json_delta` for `tool_use` blocks. A `server_tool_use` block becomes a `ServerToolStart` once its input is complete (`web_search` with the query, `web_fetch` with the URL) and a `ServerBlock`; its `*_tool_result` block becomes the matching `ServerToolEnd` (a result whose content is an error object, or a list holding one, names the error code in the summary) and another `ServerBlock`. Any other block type is kept as a `ServerBlock` too, except a `fallback` block, which is fine before any output and an error after some. `message_delta` gives the stop reason and usage (`cache_read_input_tokens` as `cache_read`, `cache_creation_input_tokens` as `cache_write`, `output_tokens_details.thinking_tokens` as `reasoning`).
 
@@ -83,10 +83,10 @@ An `error` event and HTTP errors become an error message with the server's `erro
 
 | Model | Sent |
 | --- | --- |
-| Adaptive (Opus 5, Opus 5.5, Sonnet 5, Opus 4.8, Fable 5.1, DeepSeek) | `thinking: { type: "adaptive" }` and `output_config: { effort }` (`minimal` counts as `low`); `Off` is `{ type: "disabled" }`. A model that cannot stop thinking (Fable 5.1, Opus 5.5) runs `Off` at its lowest level. |
+| Adaptive (Opus 5, Opus 5.5, Sonnet 5, Sonnet 5.5, Opus 4.8, Fable 5.1, DeepSeek) | `thinking: { type: "adaptive" }` and `output_config: { effort }` (`minimal` counts as `low`); `Off` is `{ type: "disabled" }`, except on Sonnet 5.5, which refuses it: there `Off` is `{ type: "between_tools" }` with no effort. A model that cannot stop thinking (Fable 5.1, Opus 5.5) runs `Off` at its lowest level. |
 | Budget (Haiku 4.5) | `thinking: { type: "enabled", budget_tokens }` with 1024, 2048, 8192, or 16384 tokens and an output cap that leaves 1024 for the answer; `Off` sends no thinking. |
-| OpenAI-compatible | `reasoning_effort`; `Off` sends nothing. |
-| API-key Responses | `reasoning: { effort }`; `Off` sends nothing. |
+| OpenAI-compatible | `reasoning_effort`: the level's own word for a catalogued model, at most `high` for any other. `Off` is `thinking: { type: "disabled" }` on a model the catalog says can stop thinking (DeepSeek V4 Pro on Zen), and sends nothing on any other. |
+| API-key Responses | `reasoning: { effort }`; `Off` is the effort `none` on a model the catalog says can stop thinking (GPT-6 Luna), and sends nothing on any other. |
 | ChatGPT | `reasoning: { effort, summary: "auto" }` with `low`, `medium`, `high`, `xhigh`, or `max`; `Off` sends nothing. |
 | Grok | `reasoning: { effort }` with `low`, `medium`, `high`, or `xhigh`; `Off` sends nothing. |
 
@@ -94,7 +94,7 @@ A level the model does not have becomes the nearest higher one it has. With no l
 
 ### The model catalog and cost
 
-`agent::models` is a snapshot of [models.dev](https://models.dev) for the models the adapters offer: `ModelInfo { id, name, provider, context_window, max_output, reasoning, images, rates, tiers, thinking, levels }`. `models::find(provider, id)` looks one up (dated Anthropic ids match their base entry); `models::for_provider(provider)` lists a provider's, default first. Every built-in adapter resolves its entry at construction and reports it through `Provider::model_info`, so a harness can read the window and the levels; an unlisted model runs with none.
+`agent::models` re-exports the `lorca-models` crate, a snapshot of [models.dev](https://models.dev) for the models the adapters offer, which a Device without the agent can use alone (`ThinkingLevel`, `Usage`, and `Cost` live there too and are re-exported from `agent::types`): `ModelInfo { id, name, provider, context_window, max_output, reasoning, images, rates, tiers, thinking, levels }`. `models::find(provider, id)` looks one up (dated Anthropic ids match their base entry); `models::for_provider(provider)` lists a provider's, default first. Every built-in adapter resolves its entry at construction and reports it through `Provider::model_info`, so a harness can read the window and the levels; an unlisted model runs with none.
 
 When the entry is known, the `Usage` of every message carries `cost` in dollars: input, output, cache reads, and cache writes at the model's rates, at the long-context tier when the request's input is above it. `Usage::add` sums usages and costs. ChatGPT and Grok sign-ins are not billed per token; their cost is what the work would cost at API rates.
 
@@ -127,7 +127,7 @@ The transcript goes through the [shared transform](#before-conversion) first. `s
 
 ### OpenAI-compatible Responses
 
-`OpenAiResponsesProvider` speaks an API-key Responses endpoint. Gateways such as OpenCode use it for GPT and Grok model families while ChatGPT and Grok subscription tokens stay in their isolated adapters.
+`OpenAiResponsesProvider` speaks an API-key Responses endpoint. Gateways such as OpenCode use it for the GPT, Grok, and Muse model families while ChatGPT and Grok subscription tokens stay in their isolated adapters.
 
 ```rust
 use agent::providers::OpenAiResponsesProvider;
@@ -136,7 +136,7 @@ let provider = OpenAiResponsesProvider::new(
     "opencode",
     "https://opencode.ai/zen/v1",
     &api_key,
-    "gpt-5.6-terra",
+    "gpt-6.1-sol",
 );
 ```
 
@@ -197,7 +197,7 @@ FileTokens(path.clone()).store(tokens).await?;
 
 `login` binds the callback listener, calls your `open_url` with the authorize URL, waits for the browser redirect, and exchanges the code. The pieces are public for other flows: `PkceFlow`, `wait_for_callback`, `exchange_code`, `refresh`, and `jwt_claims`.
 
-Models: the default is `gpt-6-sol`; `gpt-6-astra` and `gpt-6-luna` also work with ChatGPT accounts. `*-codex` model ids are rejected for ChatGPT accounts.
+Models: the default is `gpt-6.1-sol`; `gpt-6-astra`, `gpt-6-sol`, and `gpt-6-luna` also work with ChatGPT accounts. `*-codex` model ids are rejected for ChatGPT accounts.
 
 Requests carry the backend's own `web_search` tool ahead of your function tools. The model searches and opens pages on the server side; each search or page read arrives as `ServerToolStart` and `ServerToolEnd` events (named `web_search` or `web_fetch`, with the query or URL as `detail` and a one-line `summary`). They show up in `message_update` and never enter the message content.
 

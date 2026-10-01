@@ -72,6 +72,8 @@ final class AppStore {
     private(set) var autoReview = AutoReview()
     /// The account's provider credentials, the same on every Device.
     private(set) var providers: [ProviderCredential] = []
+    /// The models the CLI's catalog offers, for the Model and Thinking pickers.
+    private(set) var catalog: [ProviderModel] = []
 
     /// True when the CLI answers on localhost (mock: toggled from the Debug menu).
     private(set) var isConnected = false
@@ -273,6 +275,7 @@ final class AppStore {
         routines = (snapshot.routines ?? []).map { $0.toModel() }
         autoReview = snapshot.autoReview?.toModel() ?? AutoReview()
         providers = (snapshot.providers ?? []).compactMap { $0.toModel() }
+        catalog = (snapshot.models ?? []).compactMap { $0.toModel() }
         runningJobs = (snapshot.runningTurns ?? []).map { ($0.jobId, $0.chatId, $0.botId, $0.routineId) }
         for id in snapshot.runningChatIds where !runningJobs.contains(where: { $0.chatID == id }) {
             runningJobs.append(("chat:\(id)", id, "", nil))
@@ -1312,6 +1315,17 @@ final class AppStore {
         providers.first { $0.kind == kind }
     }
 
+    /// The models `kind` offers, in the catalog's order; the first is the default the CLI uses.
+    func models(for kind: ProviderCredential.Kind) -> [ProviderModel] {
+        catalog.filter { $0.provider == kind }
+    }
+
+    /// The thinking levels `model` of `kind` takes, lowest first; see
+    /// `ProviderModel.thinkingLevels(for:among:)`.
+    func thinkingLevels(for kind: ProviderCredential.Kind, model: String?) -> [(id: String, label: String)] {
+        ProviderModel.thinkingLevels(for: model, among: models(for: kind))
+    }
+
     func disconnectProvider(_ kind: ProviderCredential.Kind) async throws {
         _ = try await client.request("providers.disconnect", ["kind": kind.wireValue])
     }
@@ -1331,6 +1345,7 @@ final class AppStore {
         routines = MockData.routines()
         autoReview = MockData.autoReview()
         providers = MockData.providers()
+        catalog = MockData.models()
         sortChats()
         emit(.snapshotReplaced)
     }

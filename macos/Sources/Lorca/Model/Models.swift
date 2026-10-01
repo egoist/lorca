@@ -89,20 +89,6 @@ struct ProviderCredential: Hashable, Identifiable {
             self == .opencodeGo ? "opencode_go" : wireValue
         }
 
-        /// The thinking levels this provider's models take, lowest first. nil on a bot means
-        /// the provider's default.
-        var thinkingLevels: [(id: String, label: String)] {
-            let ids: [String] =
-                switch self {
-                case .deepseek: ["off", "low", "medium", "high", "xhigh", "max"]
-                case .anthropic: ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
-                case .opencode, .opencodeGo: ["off", "low", "medium", "high", "xhigh", "max"]
-                case .chatgpt: ["low", "medium", "high", "xhigh", "max"]
-                case .grok: ["low", "medium", "high", "xhigh"]
-                }
-            return ids.map { ($0, Self.thinkingLabel($0)) }
-        }
-
         static func thinkingLabel(_ level: String) -> String {
             switch level {
             case "off": L("Off")
@@ -115,56 +101,6 @@ struct ProviderCredential: Hashable, Identifiable {
             default: level.prefix(1).uppercased() + level.dropFirst()
             }
         }
-
-        /// Model ids this provider accepts, first is the default the CLI uses.
-        var models: [(id: String, label: String)] {
-            switch self {
-            case .deepseek:
-                [
-                    ("deepseek-flash", "V4.1 Flash"),
-                    ("deepseek-v4-pro", "V4 Pro (reasoning)"),
-                ]
-            case .anthropic:
-                [
-                    ("claude-opus-5", "Opus 5"),
-                    ("claude-opus-5-5", "Opus 5.5"),
-                    ("claude-sonnet-5", "Sonnet 5"),
-                    ("claude-fable-5-1", "Fable 5.1"),
-                    ("claude-opus-4-8", "Opus 4.8"),
-                    ("claude-haiku-4-5", "Haiku 4.5"),
-                ]
-            case .opencode:
-                [
-                    ("deepseek-v4.1-flash", "DeepSeek V4.1 Flash"),
-                    ("claude-sonnet-5", "Claude Sonnet 5"),
-                    ("gpt-5.6-terra", "GPT-5.6 Terra"),
-                    ("grok-4.6", "Grok 4.6"),
-                    ("kimi-k3", "Kimi K3"),
-                    ("big-pickle", "Big Pickle (free)"),
-                ]
-            case .opencodeGo:
-                [
-                    ("glm-5.3-flash", "GLM-5.3 Flash"),
-                    ("deepseek-v4.1-flash", "DeepSeek V4.1 Flash"),
-                    ("gpt-5.6-luna", "GPT-5.6 Luna"),
-                    ("grok-4.6", "Grok 4.6"),
-                    ("kimi-k3", "Kimi K3"),
-                    ("qwen3.8-flash", "Qwen3.8 Flash"),
-                    ("minimax-m3", "MiniMax M3"),
-                ]
-            case .chatgpt:
-                [
-                    ("gpt-6-sol", "GPT-6 Sol"),
-                    ("gpt-6-astra", "GPT-6 Astra"),
-                    ("gpt-6-luna", "GPT-6 Luna"),
-                ]
-            case .grok:
-                [
-                    ("grok-4.7", "Grok 4.7"),
-                    ("grok-4.6", "Grok 4.6"),
-                ]
-            }
-        }
     }
 
     var id: Kind { kind }
@@ -173,6 +109,27 @@ struct ProviderCredential: Hashable, Identifiable {
     var detail: String
     /// A custom API root, when the account credential has one.
     var baseURL: String? = nil
+}
+
+/// A model the CLI's catalog offers, as the snapshot names it, and the thinking levels it
+/// takes, lowest first.
+struct ProviderModel: Hashable {
+    var provider: ProviderCredential.Kind
+    var id: String
+    var label: String
+    var levels: [String]
+
+    /// Every thinking level, lowest first.
+    private static let allThinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
+
+    /// The thinking levels `model` takes among `models`, one provider's in the catalog's order:
+    /// the default model's when it is nil, and every level they take for a model the catalog
+    /// does not have. nil on a bot means the model's default.
+    static func thinkingLevels(for model: String?, among models: [ProviderModel]) -> [(id: String, label: String)] {
+        let known = models.first { $0.id == (model ?? models.first?.id) }
+        let ids = known?.levels ?? allThinkingLevels.filter { level in models.contains { $0.levels.contains(level) } }
+        return ids.map { ($0, ProviderCredential.Kind.thinkingLabel($0)) }
+    }
 }
 
 /// A paired machine or phone. Its `os` decides whether it is a Runner: only desktop

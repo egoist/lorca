@@ -67,6 +67,25 @@ enum MockData {
         ]
     }
 
+    /// A few of the catalog's models for each provider, with their thinking levels.
+    static func models() -> [ProviderModel] {
+        let all = ["off", "low", "medium", "high", "xhigh", "max"]
+        let on = ["low", "medium", "high", "xhigh", "max"]
+        return [
+            ProviderModel(provider: .deepseek, id: "deepseek-flash", label: "DeepSeek V4.1 Flash", levels: all),
+            ProviderModel(provider: .anthropic, id: "claude-opus-5", label: "Claude Opus 5", levels: all),
+            ProviderModel(provider: .anthropic, id: "claude-fable-5-1", label: "Claude Fable 5.1", levels: on),
+            ProviderModel(provider: .anthropic, id: "claude-haiku-4-5", label: "Claude Haiku 4.5", levels: ["off", "minimal", "low", "medium", "high"]),
+            ProviderModel(provider: .opencode, id: "deepseek-v4.1-flash", label: "DeepSeek V4.1 Flash", levels: ["low", "high", "max"]),
+            ProviderModel(provider: .opencode, id: "kimi-k3", label: "Kimi K3", levels: ["max"]),
+            ProviderModel(provider: .opencode, id: "big-pickle", label: "Big Pickle", levels: []),
+            ProviderModel(provider: .opencodeGo, id: "glm-5.3-flash", label: "GLM-5.3 Flash", levels: ["low", "high", "max"]),
+            ProviderModel(provider: .chatgpt, id: "gpt-6.1-sol", label: "GPT-6.1 Sol", levels: on),
+            ProviderModel(provider: .chatgpt, id: "gpt-6-luna", label: "GPT-6 Luna", levels: on),
+            ProviderModel(provider: .grok, id: "grok-4.7", label: "Grok 4.7", levels: ["low", "medium", "high", "xhigh"]),
+        ]
+    }
+
     static func plugins() -> [InstalledPlugin] {
         [
             InstalledPlugin(id: "github", name: "GitHub", description: "Issues, pull requests, code search, and repositories on GitHub.", version: "1", icon: "chevron.left.forwardslash.chevron.right", state: .ready, detail: "Ready"),

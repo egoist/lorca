@@ -139,6 +139,8 @@ impl AnthropicProvider {
                 let budget = thinking_budget(level);
                 (Some(json!({ "type": "enabled", "budget_tokens": budget })), None, max_tokens.max(budget + 1024))
             }
+            // No effort, so the default `high`, the most `between_tools` takes.
+            (ThinkingMode::AdaptiveBetweenTools, ThinkingLevel::Off) => (Some(json!({ "type": "between_tools" })), None, max_tokens),
             (_, ThinkingLevel::Off) => (Some(json!({ "type": "disabled" })), None, max_tokens),
             (_, level) => (Some(json!({ "type": "adaptive" })), Some(json!({ "effort": effort_word(level) })), max_tokens),
         }
@@ -356,12 +358,12 @@ fn normalize_tool_call_id(id: &str) -> String {
 }
 
 /// For a model that binds each thinking block to the conversation that produced it (Opus 5.5,
-/// Fable 5.1), drops the thinking from every assistant message in `messages`. Anthropic refuses
-/// a block replayed after the system prompt, the tools, or an earlier message changed, and
-/// always takes a history without thinking. Other models keep theirs.
+/// Fable 5.1, Sonnet 5.5), drops the thinking from every assistant message in `messages`.
+/// Anthropic refuses a block replayed after the system prompt, the tools, or an earlier message
+/// changed, and always takes a history without thinking. Other models keep theirs.
 pub fn drop_bound_thinking(model: &str, messages: &mut [AgentMessage]) {
     let model = model.to_ascii_lowercase();
-    if !["claude-opus-5-5", "claude-fable-5-1"].iter().any(|id| model.starts_with(id)) {
+    if !["claude-opus-5-5", "claude-fable-5-1", "claude-sonnet-5-5"].iter().any(|id| model.starts_with(id)) {
         return;
     }
     for message in messages {
@@ -844,6 +846,13 @@ mod tests {
             assert_eq!(always["thinking"], json!({ "type": "adaptive" }), "{model}");
             assert_eq!(always["output_config"], json!({ "effort": "low" }), "{model}");
         }
+        // Sonnet 5.5 refuses `disabled`; its lowest setting goes alone, at the default effort.
+        let sonnet = body(AnthropicProvider::anthropic("k", Some("claude-sonnet-5-5")).with_thinking(Some(ThinkingLevel::Off)));
+        assert_eq!(sonnet["thinking"], json!({ "type": "between_tools" }));
+        assert!(sonnet.get("output_config").is_none());
+        let sonnet = body(AnthropicProvider::anthropic("k", Some("claude-sonnet-5-5")).with_thinking(Some(ThinkingLevel::XHigh)));
+        assert_eq!(sonnet["thinking"], json!({ "type": "adaptive" }));
+        assert_eq!(sonnet["output_config"], json!({ "effort": "xhigh" }));
         // Haiku thinks by budget, with room left for the answer.
         let haiku = body(AnthropicProvider::anthropic("k", Some("claude-haiku-4-5")).with_thinking(Some(ThinkingLevel::Max)));
         assert_eq!(haiku["thinking"], json!({ "type": "enabled", "budget_tokens": 16384 }));
@@ -945,7 +954,7 @@ mod tests {
         drop_bound_thinking("claude-opus-5", &mut kept);
         assert_eq!(kept, history);
 
-        for model in ["claude-opus-5-5", "claude-fable-5-1"] {
+        for model in ["claude-opus-5-5", "claude-fable-5-1", "claude-sonnet-5-5"] {
             let mut dropped = history.clone();
             drop_bound_thinking(model, &mut dropped);
             let AgentMessage::Assistant(assistant) = &dropped[1] else { panic!("{model}") };

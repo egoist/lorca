@@ -235,8 +235,9 @@ enum OpenCodeWire {
     Unsupported,
 }
 
-/// OpenCode publishes the wire protocol beside every model. Zen and Go differ for MiniMax,
-/// while their GPT, Grok, and Muse families use Responses and their Qwen family uses Messages.
+/// OpenCode publishes the wire protocol beside every model. Zen and Go differ for MiniMax and
+/// for Qwen3.8 Max, which Zen serves on Chat Completions, while their GPT, Grok, and Muse
+/// families use Responses and the rest of their Qwen family uses Messages.
 fn opencode_wire(kind: &str, model: &str) -> OpenCodeWire {
     let model = model.to_ascii_lowercase();
     if (kind == "opencode" && model.starts_with("gemini-")) || model.starts_with("jev-") {
@@ -245,7 +246,8 @@ fn opencode_wire(kind: &str, model: &str) -> OpenCodeWire {
     if model.starts_with("gpt-") || model.starts_with("grok-") || model.starts_with("muse-spark-") {
         return OpenCodeWire::Responses;
     }
-    if model.starts_with("qwen") || (kind == "opencode-go" && model.starts_with("minimax-")) || model.starts_with("claude-") {
+    let qwen = model.starts_with("qwen") && !(kind == "opencode" && model == "qwen3.8-max");
+    if qwen || (kind == "opencode-go" && model.starts_with("minimax-")) || model.starts_with("claude-") {
         return OpenCodeWire::Messages;
     }
     OpenCodeWire::ChatCompletions
@@ -338,12 +340,22 @@ mod tests {
 
     #[test]
     fn opencode_models_use_their_published_wire_protocols() {
-        assert_eq!(opencode_wire("opencode", "gpt-5.6-terra"), OpenCodeWire::Responses);
-        assert_eq!(opencode_wire("opencode", "claude-sonnet-5"), OpenCodeWire::Messages);
+        assert_eq!(opencode_wire("opencode", "gpt-6.1-sol"), OpenCodeWire::Responses);
+        assert_eq!(opencode_wire("opencode", "muse-spark-1.3"), OpenCodeWire::Responses);
+        assert_eq!(opencode_wire("opencode", "claude-sonnet-5-5"), OpenCodeWire::Messages);
         assert_eq!(opencode_wire("opencode", "deepseek-v4.1-flash"), OpenCodeWire::ChatCompletions);
+        assert_eq!(opencode_wire("opencode", "minimax-m3"), OpenCodeWire::ChatCompletions);
+        assert_eq!(opencode_wire("opencode", "qwen3.8-max"), OpenCodeWire::ChatCompletions);
         assert_eq!(opencode_wire("opencode", "gemini-3.8-flash"), OpenCodeWire::Unsupported);
         assert_eq!(opencode_wire("opencode-go", "minimax-m3"), OpenCodeWire::Messages);
-        assert_eq!(opencode_wire("opencode-go", "grok-4.6"), OpenCodeWire::Responses);
+        assert_eq!(opencode_wire("opencode-go", "qwen3.8-max"), OpenCodeWire::Messages);
+        assert_eq!(opencode_wire("opencode-go", "grok-4.7"), OpenCodeWire::Responses);
+        // Every model the catalog offers on OpenCode has a wire Lorca speaks.
+        for kind in ["opencode", "opencode-go"] {
+            for model in models::for_provider(kind) {
+                assert_ne!(opencode_wire(kind, model.id), OpenCodeWire::Unsupported, "{kind}/{}", model.id);
+            }
+        }
     }
 
     #[test]

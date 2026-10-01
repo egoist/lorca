@@ -2,7 +2,7 @@ import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import { Alert, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 import { chatTitle, engine } from "../../src/core/engine";
-import { providerLabel, PROVIDER_KINDS, PROVIDER_MODELS, THINKING_LEVELS, thinkingLabel, type Bot, type Routine } from "../../src/core/model";
+import { providerLabel, PROVIDER_KINDS, providerModels, thinkingLabel, thinkingLevels, type Bot, type Routine } from "../../src/core/model";
 import { deviceIsOnline, useBotMap, useChat, useRoutines, useStore, useWorkingBotIds } from "../../src/core/store";
 import { t, useLanguage } from "../../src/i18n";
 import { AvatarCluster, BotAvatar } from "../../src/ui/Avatar";
@@ -23,6 +23,7 @@ export default function ChatInfoScreen() {
   const allBots = useStore((s) => s.bots);
   const devices = useStore((s) => s.devices);
   const seen = useStore((s) => s.device_seen);
+  const catalog = useStore((s) => s.models);
   const working = useWorkingBotIds();
   const members = chat?.bot_ids.map((botID) => bots.get(botID)).filter((bot): bot is Bot => !!bot) ?? [];
   const isGroup = chat?.kind === "group";
@@ -53,11 +54,14 @@ export default function ChatInfoScreen() {
     ]);
   }
   const runner = bot ? devices.find((d) => d.id === bot.runner_id) : undefined;
-  const providerModels = bot ? (PROVIDER_MODELS[bot.provider] ?? []) : [];
-  const thinkingLevels = bot ? (THINKING_LEVELS[bot.provider] ?? []) : [];
-  const defaultModel = providerModels[0]?.label;
+  const offered = bot ? providerModels(catalog, bot.provider) : [];
+  const levels = bot ? thinkingLevels(catalog, bot.provider, bot.model) : [];
+  // Switching models keeps the thinking level only where the new model takes it.
+  const pickModel = (bot: Bot, model: string | undefined) =>
+    engine.setBotRuntime(bot.id, bot.provider, model, bot.thinking && thinkingLevels(catalog, bot.provider, model).includes(bot.thinking) ? bot.thinking : undefined);
+  const defaultModel = offered[0]?.name;
   const modelValue = bot?.model
-    ? providerModels.find((model) => model.id === bot.model)?.label ?? bot.model
+    ? offered.find((model) => model.id === bot.model)?.name ?? bot.model
     : defaultModel
       ? t("Default ({model})", { model: defaultModel })
       : t("Default");
@@ -150,37 +154,40 @@ export default function ChatInfoScreen() {
                 {
                   title: defaultModel ? t("Default ({model})", { model: defaultModel }) : t("Default"),
                   selected: !bot.model,
-                  onPress: () => engine.setBotRuntime(bot.id, bot.provider, undefined, bot.thinking),
+                  onPress: () => pickModel(bot, undefined),
                   dividerAfter: true,
                 },
-                ...providerModels.map((model) => ({
-                  title: model.label,
+                ...offered.map((model) => ({
+                  title: model.name,
                   selected: bot.model === model.id,
-                  onPress: () => engine.setBotRuntime(bot.id, bot.provider, model.id, bot.thinking),
+                  onPress: () => pickModel(bot, model.id),
                 })),
               ],
             }}
           />
-          <Row
-            title={t("Thinking")}
-            menu={{
-              title: t("Thinking"),
-              value: bot.thinking ? thinkingLabel(bot.thinking) : t("Default"),
-              choices: [
-                {
-                  title: t("Default"),
-                  selected: !bot.thinking,
-                  onPress: () => engine.setBotRuntime(bot.id, bot.provider, bot.model, undefined),
-                  dividerAfter: true,
-                },
-                ...thinkingLevels.map((level) => ({
-                  title: thinkingLabel(level),
-                  selected: bot.thinking === level,
-                  onPress: () => engine.setBotRuntime(bot.id, bot.provider, bot.model, level),
-                })),
-              ],
-            }}
-          />
+          {/* Only the levels this model takes; a model without any has no choice to make. */}
+          {levels.length > 0 && (
+            <Row
+              title={t("Thinking")}
+              menu={{
+                title: t("Thinking"),
+                value: bot.thinking ? thinkingLabel(bot.thinking) : t("Default"),
+                choices: [
+                  {
+                    title: t("Default"),
+                    selected: !bot.thinking,
+                    onPress: () => engine.setBotRuntime(bot.id, bot.provider, bot.model, undefined),
+                    dividerAfter: true,
+                  },
+                  ...levels.map((level) => ({
+                    title: thinkingLabel(level),
+                    selected: bot.thinking === level,
+                    onPress: () => engine.setBotRuntime(bot.id, bot.provider, bot.model, level),
+                  })),
+                ],
+              }}
+            />
+          )}
         </Section>
       )}
 

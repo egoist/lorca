@@ -10,9 +10,11 @@ import {
   providerConnectMethod,
   providerDefaultBaseURL,
   providerUsesAPIKey,
-  PROVIDER_MODELS,
+  providerModels,
   runsInTerminal,
   showsCard,
+  thinkingLevels,
+  type ProviderModel,
   type Body,
   type Bot,
   type Chat,
@@ -95,7 +97,26 @@ describe("model", () => {
     expect(providerConnectMethod("grok")).toBe("providers.connect_grok");
     expect(providerDefaultBaseURL("deepseek")).toBe("https://api.deepseek.com");
     expect(providerDefaultBaseURL("chatgpt")).toBe("");
-    expect(PROVIDER_MODELS.chatgpt.map((m) => m.id)).toEqual(["gpt-6-sol", "gpt-6-astra", "gpt-6-luna"]);
+  });
+
+  test("offers the models and thinking levels the catalog lists", () => {
+    // As the core's snapshot carries them, in the catalog's order.
+    const catalog: ProviderModel[] = [
+      { provider: "anthropic", id: "claude-opus-5", name: "Claude Opus 5", levels: ["off", "low", "medium", "high", "xhigh", "max"] },
+      { provider: "anthropic", id: "claude-opus-5-5", name: "Claude Opus 5.5", levels: ["low", "medium", "high", "xhigh", "max"] },
+      { provider: "anthropic", id: "claude-haiku-4-5", name: "Claude Haiku 4.5", levels: ["off", "minimal", "low", "medium", "high"] },
+      { provider: "opencode", id: "kimi-k3", name: "Kimi K3", levels: ["max"] },
+      { provider: "opencode", id: "big-pickle", name: "Big Pickle", levels: [] },
+    ];
+    expect(providerModels(catalog, "anthropic").map((m) => m.id)).toEqual(["claude-opus-5", "claude-opus-5-5", "claude-haiku-4-5"]);
+    expect(providerModels(catalog, "grok")).toEqual([]);
+    // The default model's levels, until the bot picks one.
+    expect(thinkingLevels(catalog, "anthropic", undefined)).toEqual(["off", "low", "medium", "high", "xhigh", "max"]);
+    expect(thinkingLevels(catalog, "anthropic", "claude-opus-5-5")).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(thinkingLevels(catalog, "opencode", "kimi-k3")).toEqual(["max"]);
+    expect(thinkingLevels(catalog, "opencode", "big-pickle")).toEqual([]);
+    // A model the catalog does not have gets every level the provider's models take.
+    expect(thinkingLevels(catalog, "anthropic", "claude-custom")).toEqual(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
   });
 });
 

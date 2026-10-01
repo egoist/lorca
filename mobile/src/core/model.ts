@@ -355,57 +355,30 @@ export function providerLabel(kind: string): string {
   return PROVIDER_LABELS[kind] ?? kind;
 }
 
-/** Models offered for each provider, in the same order as the desktop app. */
-export const PROVIDER_MODELS: Record<string, { id: string; label: string }[]> = {
-  deepseek: [
-    { id: "deepseek-flash", label: "V4.1 Flash" },
-    { id: "deepseek-v4-pro", label: "V4 Pro (reasoning)" },
-  ],
-  anthropic: [
-    { id: "claude-opus-5", label: "Opus 5" },
-    { id: "claude-opus-5-5", label: "Opus 5.5" },
-    { id: "claude-sonnet-5", label: "Sonnet 5" },
-    { id: "claude-fable-5-1", label: "Fable 5.1" },
-    { id: "claude-opus-4-8", label: "Opus 4.8" },
-    { id: "claude-haiku-4-5", label: "Haiku 4.5" },
-  ],
-  opencode: [
-    { id: "deepseek-v4.1-flash", label: "DeepSeek V4.1 Flash" },
-    { id: "claude-sonnet-5", label: "Claude Sonnet 5" },
-    { id: "gpt-5.6-terra", label: "GPT-5.6 Terra" },
-    { id: "grok-4.6", label: "Grok 4.6" },
-    { id: "kimi-k3", label: "Kimi K3" },
-    { id: "big-pickle", label: "Big Pickle (free)" },
-  ],
-  "opencode-go": [
-    { id: "glm-5.3-flash", label: "GLM-5.3 Flash" },
-    { id: "deepseek-v4.1-flash", label: "DeepSeek V4.1 Flash" },
-    { id: "gpt-5.6-luna", label: "GPT-5.6 Luna" },
-    { id: "grok-4.6", label: "Grok 4.6" },
-    { id: "kimi-k3", label: "Kimi K3" },
-    { id: "qwen3.8-flash", label: "Qwen3.8 Flash" },
-    { id: "minimax-m3", label: "MiniMax M3" },
-  ],
-  chatgpt: [
-    { id: "gpt-6-sol", label: "GPT-6 Sol" },
-    { id: "gpt-6-astra", label: "GPT-6 Astra" },
-    { id: "gpt-6-luna", label: "GPT-6 Luna" },
-  ],
-  grok: [
-    { id: "grok-4.7", label: "Grok 4.7" },
-    { id: "grok-4.6", label: "Grok 4.6" },
-  ],
-};
+/** A model the core's catalog offers, as the snapshot carries it: its provider, id, and name,
+ * and the thinking levels it takes, lowest first. */
+export interface ProviderModel {
+  provider: string;
+  id: string;
+  name: string;
+  levels: string[];
+}
 
-/** The thinking levels a provider's models take, lowest first. */
-export const THINKING_LEVELS: Record<string, string[]> = {
-  deepseek: ["off", "low", "medium", "high", "xhigh", "max"],
-  anthropic: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
-  opencode: ["off", "low", "medium", "high", "xhigh", "max"],
-  "opencode-go": ["off", "low", "medium", "high", "xhigh", "max"],
-  chatgpt: ["low", "medium", "high", "xhigh", "max"],
-  grok: ["low", "medium", "high", "xhigh"],
-};
+/** The models a provider offers, in the catalog's order; the first is the default the CLI uses. */
+export function providerModels(models: ProviderModel[], provider: string): ProviderModel[] {
+  return models.filter((model) => model.provider === provider);
+}
+
+/** Every thinking level, lowest first. */
+const ALL_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+/** The thinking levels `model` takes, lowest first: the provider's default model's when it is
+ * undefined, and every level the provider's models take for a model the catalog does not have. */
+export function thinkingLevels(models: ProviderModel[], provider: string, model: string | undefined): string[] {
+  const offered = providerModels(models, provider);
+  const known = offered.find((each) => each.id === (model ?? offered[0]?.id));
+  return known?.levels ?? ALL_THINKING_LEVELS.filter((level) => offered.some((each) => each.levels.includes(level)));
+}
 
 export function thinkingLabel(level: string): string {
   const labels: Record<string, string> = {

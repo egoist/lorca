@@ -11,6 +11,7 @@ default = ["codemode"]
 codemode = ["dep:rquickjs"]
 
 [dependencies]
+lorca-models = { path = "../models" }
 lorca-provider-auth = { path = "../provider-auth" }
 async-trait.workspace = true
 base64.workspace = true

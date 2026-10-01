@@ -24,6 +24,10 @@ final class NewBotViewController: SheetViewController {
     private let providerPopup = NSPopUpButton()
     private let modelPopup = NSPopUpButton()
     private let thinkingPopup = NSPopUpButton()
+    /// The Thinking row, hidden for a model without levels.
+    private var thinkingRow: NSView?
+    /// The levels in the thinking pop-up after its Default item.
+    private var shownLevels: [(id: String, label: String)] = []
     private let lookRow = Build.stack([], orientation: .horizontal, spacing: 8)
     private let note = Build.label("", font: Theme.Font.caption, color: .tertiaryLabelColor, lines: 0)
 
@@ -75,11 +79,14 @@ final class NewBotViewController: SheetViewController {
         providerPopup.target = self
         providerPopup.action = #selector(providerChanged)
         modelPopup.translatesAutoresizingMaskIntoConstraints = false
+        modelPopup.target = self
+        modelPopup.action = #selector(modelChanged)
         thinkingPopup.translatesAutoresizingMaskIntoConstraints = false
-        reloadModels()
 
         buildLookRow()
 
+        let thinkingRow = labeled(L("Thinking"), thinkingPopup)
+        self.thinkingRow = thinkingRow
         let rows = [
             labeled(L("Name"), nameField),
             labeled(L("Description"), descriptionField, topAligned: true),
@@ -87,7 +94,7 @@ final class NewBotViewController: SheetViewController {
             labeled(L("Runner"), runnerPopup),
             labeled(L("Provider"), providerPopup),
             labeled(L("Model"), modelPopup),
-            labeled(L("Thinking"), thinkingPopup),
+            thinkingRow,
             note,
         ]
         // Width constraints need a common ancestor, so they go on after each row joins the stack.
@@ -95,6 +102,7 @@ final class NewBotViewController: SheetViewController {
             contentStack.addArrangedSubview(row)
             row.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
         }
+        reloadModels()
 
         setButtons(confirm: L("Create Bot"))
         runnerChanged()
@@ -170,16 +178,15 @@ final class NewBotViewController: SheetViewController {
 
     /// nil means the provider's default model.
     private var selectedModel: String? {
-        let models = selectedProvider.models
+        let models = store.models(for: selectedProvider)
         let index = modelPopup.indexOfSelectedItem
         return index <= 0 || index > models.count ? nil : models[index - 1].id
     }
 
-    /// nil means the provider's default thinking level.
+    /// nil means the model's default thinking level.
     private var selectedThinking: String? {
-        let levels = selectedProvider.thinkingLevels
         let index = thinkingPopup.indexOfSelectedItem
-        return index <= 0 || index > levels.count ? nil : levels[index - 1].id
+        return index <= 0 || index > shownLevels.count ? nil : shownLevels[index - 1].id
     }
 
     @objc private func providerChanged() {
@@ -187,16 +194,30 @@ final class NewBotViewController: SheetViewController {
         runnerChanged()
     }
 
+    /// A new model keeps the thinking level only if it takes it too.
+    @objc private func modelChanged() {
+        reloadThinking(keeping: selectedThinking)
+    }
+
     private func reloadModels() {
-        let models = selectedProvider.models
+        let models = store.models(for: selectedProvider)
         modelPopup.removeAllItems()
         modelPopup.addItem(withTitle: L("Default (%@)", models.first?.label ?? ""))
         for model in models { modelPopup.addItem(withTitle: model.label) }
         modelPopup.selectItem(at: 0)
+        reloadThinking(keeping: nil)
+    }
+
+    /// Fills the thinking pop-up with the levels the selected model takes, selecting `level`
+    /// when it is one of them and Default otherwise.
+    private func reloadThinking(keeping level: String?) {
+        shownLevels = store.thinkingLevels(for: selectedProvider, model: selectedModel)
         thinkingPopup.removeAllItems()
         thinkingPopup.addItem(withTitle: L("Default"))
-        for level in selectedProvider.thinkingLevels { thinkingPopup.addItem(withTitle: level.label) }
-        thinkingPopup.selectItem(at: 0)
+        for level in shownLevels { thinkingPopup.addItem(withTitle: level.label) }
+        thinkingPopup.selectItem(at: level.flatMap { id in shownLevels.firstIndex { $0.id == id } }.map { $0 + 1 } ?? 0)
+        // A model without levels has no choice to make.
+        thinkingRow?.isHidden = shownLevels.isEmpty
     }
 
     /// The Runner picked in the pop-up; nil while none is paired.

@@ -39,6 +39,7 @@ import {
   type PluginDetail,
   type ProviderCredential,
   type ProviderKind,
+  type ProviderModel,
   type Routine,
   commandRunOf,
 } from "./models";
@@ -53,6 +54,7 @@ import {
   toMessage,
   toPlugin,
   toPluginDetail,
+  toModels,
   toProviders,
   toRoutine,
   toUsage,
@@ -136,6 +138,8 @@ export class AppStore {
   autoReview: AutoReview = { isEnabled: true, rules: [] };
   /** The account's provider credentials, the same on every Device. */
   providers: ProviderCredential[] = [];
+  /** The models the CLI's catalog offers, for the Model and Thinking pickers. */
+  models: ProviderModel[] = [];
 
   /** True when the CLI answers on localhost (mock: toggled from the Debug menu). */
   isConnected = false;
@@ -318,6 +322,7 @@ export class AppStore {
     this.routines = (snapshot.routines ?? []).map(toRoutine);
     this.autoReview = toAutoReview(snapshot.auto_review);
     this.providers = toProviders(snapshot.providers);
+    this.models = toModels(snapshot.models);
     this.runningJobs = (snapshot.running_turns ?? []).map((turn) => ({
       id: turn.job_id,
       chatID: turn.chat_id,
@@ -1470,6 +1475,7 @@ export class AppStore {
       this.routines = mock.routines();
       this.autoReview = mock.autoReview();
       this.providers = mock.providers();
+      this.models = mock.models();
       this.sortChats();
       this.emit({ kind: "snapshotReplaced" });
     });

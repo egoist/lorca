@@ -354,7 +354,7 @@ final class InspectorViewController: NSViewController {
             self.store.setBotRuntime(bot.id, provider: kinds[index], model: nil, thinking: nil)
         }
 
-        let models = bot.provider.models
+        let models = store.models(for: bot.provider)
         let modelItems = [L("Default (%@)", models.first?.label ?? "")] + models.map(\.label)
         let selectedModel = bot.model.flatMap { id in models.firstIndex { $0.id == id } }.map { $0 + 1 } ?? 0
         let modelRow = PopUpRow(key: L("Model"), items: modelItems, selected: selectedModel)
@@ -362,10 +362,12 @@ final class InspectorViewController: NSViewController {
             guard let self else { return }
             let model: String? = index == 0 ? nil : models[index - 1].id
             guard model != bot.model else { return }
-            self.store.setBotRuntime(bot.id, provider: bot.provider, model: model, thinking: bot.thinking)
+            // A level the new model does not take goes back to the default.
+            let kept = self.store.thinkingLevels(for: bot.provider, model: model).contains { $0.id == bot.thinking }
+            self.store.setBotRuntime(bot.id, provider: bot.provider, model: model, thinking: kept ? bot.thinking : nil)
         }
 
-        let levels = bot.provider.thinkingLevels
+        let levels = store.thinkingLevels(for: bot.provider, model: bot.model)
         let thinkingItems = [L("Default")] + levels.map(\.label)
         let selectedThinking = bot.thinking.flatMap { id in levels.firstIndex { $0.id == id } }.map { $0 + 1 } ?? 0
         let thinkingRow = PopUpRow(key: L("Thinking"), items: thinkingItems, selected: selectedThinking)
@@ -403,7 +405,8 @@ final class InspectorViewController: NSViewController {
             ConnectProviderViewController.present(kind: bot.provider, from: self)
         }
 
-        return [providerRow, modelRow, thinkingRow, status] + usageRows
+        // Only the levels this model takes; a model without any has no choice to make.
+        return [providerRow, modelRow] + (levels.isEmpty ? [] : [thinkingRow]) + [status] + usageRows
     }
 
     /// What the bot remembers, as its Runner reports it: the index against its load budget with
