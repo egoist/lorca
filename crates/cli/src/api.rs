@@ -69,10 +69,7 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             "relay_update_required": app.relay_update_required.load(std::sync::atomic::Ordering::Relaxed),
             "relay_error": app.relay_problem.lock().unwrap().clone(),
         })),
-        "bootstrap" => {
-            runtime::prime_names(app);
-            Ok(app.snapshot())
-        }
+        "bootstrap" => Ok(app.snapshot()),
 
         "identity.create" => {
             let phrase = identity::create(app, opt_string(&params, "device_name")).map_err(|e| e.to_string())?;
@@ -193,7 +190,6 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             };
             // Every bot has one direct chat; both land in a single roster change.
             let (bot, chat) = app.create_bot_with_dm(bot, opt_string(&params, "chat_id")).map_err(|e| e.to_string())?;
-            runtime::prime_names(app);
             if let Some((template, plugins)) = template {
                 crate::marketplace::welcome(app, &bot, &chat.meta.id, &template, plugins, opt_string(&params, "greeting"));
             }
@@ -255,7 +251,6 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             Ok(json!({ "chat": chat }))
         }
         "chats.send" => {
-            runtime::prime_names(app);
             let files: Vec<crate::files::OutgoingFile> = serde_json::from_value(params["attachments"].clone()).unwrap_or_default();
             let mut attachments = Vec::new();
             for file in &files {

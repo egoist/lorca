@@ -224,7 +224,7 @@ function PluginSheet(props: { pluginID: string; runner: Device; dismiss: () => v
                   value={variable().secret ? "" : (variable().value ?? "")}
                   placeholder={variable().secret ? (variable().isSet ? L("Set · type to replace") : L("Not set")) : variable().isSet ? "" : L("Not set")}
                   title={variable().description}
-                  spellcheck={false}
+                  spellcheck="false"
                   autocomplete="off"
                 />
               </div>

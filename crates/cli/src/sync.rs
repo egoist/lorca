@@ -221,7 +221,6 @@ async fn first_sync(app: &Arc<App>, url: &str, token: &str, machine_file: &crate
     app.bulk_sync.store(false, Ordering::Relaxed);
     if matches!(synced, Ok(FirstSync::Done)) {
         app.save_state_now();
-        crate::runtime::prime_names(app);
         app.emit(Event::Snapshot(app.snapshot()));
     }
     app.turns_changed();
@@ -353,7 +352,6 @@ async fn pull_blobs(app: &Arc<App>, url: &str, token: &str, machine_file: &crate
         app.bulk_sync.store(false, Ordering::Relaxed);
         app.save_state_now();
         if bulk {
-            crate::runtime::prime_names(app);
             app.emit(Event::Snapshot(app.snapshot()));
             app.turns_changed();
         }
@@ -673,7 +671,6 @@ fn apply_blob_contents(app: &Arc<App>, machine_file: &crate::keys::MachineFile, 
             let Ok(machine) = machine_file.machine() else { return };
             match crate::crypto::unseal_json::<Job>(&machine.box_secret, &ciphertext) {
                 Ok(job) => {
-                    crate::runtime::prime_names(app);
                     crate::runtime::spawn_local_job(app.clone(), job, Some(blob.id.clone()));
                 }
                 Err(error) => tracing::warn!(%error, "job envelope"),
@@ -759,7 +756,6 @@ fn apply_roster(app: &Arc<App>, mut roster: RosterBlob) {
     }
     #[cfg(feature = "runner")]
     app.shell_sessions.close_orphans(app);
-    crate::runtime::prime_names(app);
     app.roster_changed(normalized_descriptions || kept_checks);
 }
 

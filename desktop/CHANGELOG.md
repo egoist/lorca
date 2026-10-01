@@ -20,6 +20,9 @@ and the update window shows it.
 - Settings › Devices can unpair this computer too: Lorca forgets the account's keys, credentials,
   and chats here and goes back to onboarding. When this computer holds your identity, the
   confirmation says that coming back, or pairing a new Device, takes your backup phrase.
+- Red spelling underlines no longer appear under API keys, URLs, plugin variables, names, and
+  searches as you type them, or in the description, rule, and memory sheets. The composer still
+  checks spelling.
 
 ## [0.1.1]
 

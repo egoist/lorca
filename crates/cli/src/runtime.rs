@@ -11,10 +11,10 @@ use crate::config::now_secs;
 use crate::model::*;
 
 /// How a chat is named in a bot's memory: `your chat with the user`, `group "Standup"`.
-pub fn chat_source(chat: &Chat) -> String {
+pub fn chat_source(app: &App, chat: &Chat) -> String {
     if chat.meta.is_group() {
         let title = chat.meta.title.clone().filter(|t| !t.trim().is_empty()).unwrap_or_else(|| {
-            chat.meta.bot_ids.iter().map(|id| name_of(chat, id)).collect::<Vec<_>>().join(", ")
+            chat.meta.bot_ids.iter().map(|id| name_of(app, id)).collect::<Vec<_>>().join(", ")
         });
         format!("group \"{title}\"")
     } else {
@@ -628,20 +628,10 @@ pub fn report_activity(app: &App, job: &Job, activity: JobActivity) {
     app.set_job_activity(&job.id, activity);
 }
 
-/// Bot names are not in the chat struct; the lookup is primed from the roster and shared by
-/// every worker thread that builds a transcript.
-pub fn name_of(_chat: &Chat, bot_id: &str) -> String {
-    NAME_CACHE.read().unwrap().get(bot_id).cloned().unwrap_or_else(|| bot_id.to_string())
-}
-
-static NAME_CACHE: std::sync::LazyLock<std::sync::RwLock<std::collections::HashMap<String, String>>> =
-    std::sync::LazyLock::new(|| std::sync::RwLock::new(std::collections::HashMap::new()));
-
-/// Refreshes the bot-name lookup used while building transcripts.
-pub fn prime_names(app: &App) {
-    let names: std::collections::HashMap<String, String> =
-        app.state.lock().unwrap().bots.iter().map(|b| (b.id.clone(), b.name.clone())).collect();
-    *NAME_CACHE.write().unwrap() = names;
+/// Bot names are not in the chat struct; they come from this App's roster as it is now, and a
+/// bot no longer on it is named by its id.
+pub fn name_of(app: &App, bot_id: &str) -> String {
+    app.state.lock().unwrap().bots.iter().find(|b| b.id == bot_id).map(|b| b.name.clone()).unwrap_or_else(|| bot_id.to_string())
 }
 
 #[cfg(test)]
@@ -713,6 +703,16 @@ mod tests {
         let group = ChatMeta { kind: "group".into(), bot_ids: vec!["b1".into(), "b2".into(), "b3".into()], ..empty_chat("g").meta };
         let order: Vec<String> = turn_order(&group, app, &["b2".into()]).into_iter().map(|bot| bot.id).collect();
         assert_eq!(order, ["b2", "b1", "b3"]);
+    }
+
+    #[test]
+    fn each_app_names_bots_from_its_own_roster() {
+        let (one, two) = (scratch_app(), scratch_app());
+        one.0.state.lock().unwrap().bots.push(bot("b2", "Scout"));
+        two.0.state.lock().unwrap().bots.push(bot("b2", "Critic"));
+        let group = Chat { meta: ChatMeta { kind: "group".into(), bot_ids: vec!["b2".into(), "gone".into()], ..empty_chat("g").meta }, ..empty_chat("g") };
+        assert_eq!(chat_source(&one.0, &group), "group \"Scout, gone\"", "a bot off the roster is named by its id");
+        assert_eq!(chat_source(&two.0, &group), "group \"Critic, gone\"");
     }
 
     #[test]

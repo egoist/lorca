@@ -77,7 +77,6 @@ impl Core {
             .map_err(|e| CoreError::Failed(e.to_string()))?;
         let app = App::load(Config { home: PathBuf::from(home), port: 0 }).map_err(|e| CoreError::Failed(e.to_string()))?;
         let _guard = runtime.enter();
-        lorca::runtime::prime_names(&app);
         // Before the first snapshot and the first pull: a turn sent before the app was closed
         // still shows, and a result that landed meanwhile ends it.
         lorca::runtime::resume_sent_jobs(&app);

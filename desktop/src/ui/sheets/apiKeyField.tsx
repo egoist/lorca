@@ -35,7 +35,7 @@ export function APIKeyField(props: { value: string; placeholder: string; disable
         placeholder={props.placeholder}
         aria-label={L("API key")}
         disabled={props.disabled}
-        spellcheck={false}
+        spellcheck="false"
         autocomplete="off"
         onInput={(event) => props.onInput(event.currentTarget.value)}
       />

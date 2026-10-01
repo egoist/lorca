@@ -387,7 +387,7 @@ function Palette() {
             ref={(element) => (field = element)}
             value={query()}
             placeholder={L("Search actions, chats, messages, and settings")}
-            spellcheck={false}
+            spellcheck="false"
             autocomplete="off"
             onInput={(event) => {
               const text = event.currentTarget.value;

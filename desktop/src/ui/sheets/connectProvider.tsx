@@ -143,7 +143,7 @@ function ConnectProviderSheet(props: {
               value={baseURL()}
               placeholder={defaultBaseURL(kind)}
               disabled={busy()}
-              spellcheck={false}
+              spellcheck="false"
               autocomplete="off"
               onInput={(event) => setBaseURL(event.currentTarget.value)}
             />

@@ -95,7 +95,7 @@ fn send(app: &Arc<App>, chat: &Chat, bot: &Bot, text: &str, permission_id: Optio
     }
     let (Some(dek), Some(url), Some(machine)) = (app.dek(), app.relay_url(), app.machine_file().and_then(|m| m.machine().ok())) else { return };
     let subtitle = chat.meta.is_group().then(|| {
-        chat.meta.title.clone().filter(|t| !t.trim().is_empty()).unwrap_or_else(|| chat.meta.bot_ids.iter().map(|id| crate::runtime::name_of(chat, id)).collect::<Vec<_>>().join(", "))
+        chat.meta.title.clone().filter(|t| !t.trim().is_empty()).unwrap_or_else(|| chat.meta.bot_ids.iter().map(|id| crate::runtime::name_of(app, id)).collect::<Vec<_>>().join(", "))
     });
     let mut notice = Notice { title: bot.name.clone(), subtitle, body: excerpt(text, BODY_CHARS), chat_id: chat.meta.id.clone() };
     let mut sealed = match seal(&dek, &notice) {

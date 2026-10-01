@@ -218,7 +218,7 @@ export function TextField(props: {
       disabled={props.disabled}
       readonly={props.readOnly}
       aria-label={props.label}
-      spellcheck={props.spellcheck ?? false}
+      spellcheck={props.spellcheck ? "true" : "false"}
       autocomplete="off"
       autocapitalize="off"
       onInput={(event) => props.onInput?.(event.currentTarget.value)}
@@ -274,7 +274,7 @@ export function TextArea(props: {
       disabled={props.disabled}
       readonly={props.readOnly}
       aria-label={props.label}
-      spellcheck={false}
+      spellcheck="false"
       onInput={(event) => {
         props.onInput?.(event.currentTarget.value);
         fit();
@@ -310,7 +310,7 @@ export function SearchField(props: {
         type="text"
         value={props.value ?? ""}
         placeholder={props.placeholder ?? L("Search")}
-        spellcheck={false}
+        spellcheck="false"
         autocomplete="off"
         readonly={!!props.onActivate}
         tabindex={props.onActivate ? -1 : 0}
