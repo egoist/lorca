@@ -609,6 +609,7 @@
 "Subscription" = "订阅";
 "Support" = "支持";
 "Symbol" = "符号";
+"Syncing the account from the relay…" = "正在从中继同步账户…";
 "System" = "跟随系统";
 "Taking a note" = "正在记笔记";
 "Task" = "任务";
@@ -645,6 +646,7 @@
 "This computer · CLI running" = "这台电脑 · CLI 运行中";
 "This computer forgets its keys, credentials, and synced chats, and bots assigned to it stop running until you assign them to another Runner. Your other paired Devices keep everything, and you can pair again any time." = "这台电脑会清除密钥、凭证和已同步的聊天；分配给它的智能体也会停止运行，直到你把它们分配给其他 Runner。其他已配对设备会保留全部内容，你可以随时重新配对。";
 "This computer forgets its keys, credentials, and synced chats, and bots assigned to it stop running until you assign them to another Runner. Your other paired Devices keep everything. Because this computer holds your identity, you need your backup phrase to use this account here again or to pair a new Device." = "这台电脑会清除密钥、凭证和已同步的聊天；分配给它的智能体也会停止运行，直到你把它们分配给其他 Runner。其他已配对设备会保留全部内容。由于你的身份保存在这台电脑上，之后要在这里重新使用此账户或配对新设备，都需要你的备份短语。";
+"This computer is paired" = "这台电脑已配对";
 "This computer is your first Device" = "这台电脑是你的第一台设备";
 "This deletes the routine and stops its future runs. This can't be undone." = "这会删除该例行任务并停止它今后的运行。此操作无法撤销。";
 "This phrase is your master secret. It re-derives every key and unwraps everything on the relay. Write it down — nobody can reset it for you." = "这组短语是你的主密钥。它能重新派生所有密钥，并解开中继上的全部内容。请把它抄写下来——没有人能替你重置。";
@@ -708,8 +710,11 @@
 "You" = "你";
 "You can still add model IDs above." = "你仍可在上方添加模型 ID。";
 "Your backup phrase" = "你的备份短语";
+"Your bots and chats sync to this computer, and it can run bots too." = "你的智能体和聊天会同步到这台电脑，它也能运行智能体。";
+"Your bots and chats sync to this computer, and it can run bots too. Pair another Device any time from the File menu." = "你的智能体和聊天会同步到这台电脑，它也能运行智能体。你可以随时从“文件”菜单配对另一台设备。";
 "Your bots, keys and transcripts live in the CLI on this computer. The app starts it on its own; you can also run it from a terminal, and this window reconnects either way." = "你的智能体、密钥和聊天记录都保存在这台电脑的 CLI 中。App 会自行启动它；你也可以在终端中运行，无论哪种方式，此窗口都会重新连接。";
 "Your browser opens a %@ sign-in when you continue. %@" = "继续后，浏览器会打开 %1$@ 登录页面。%2$@";
 "Your browser opens a %@ sign-in. The tokens are shared with your paired Devices, encrypted with your account key; the relay cannot read them." = "浏览器会打开 %@ 的登录页面。令牌会用你的账户密钥加密，共享给你已配对的设备；中继无法读取它们。";
 "Your first bot" = "你的第一个智能体";
+"Your identity is restored" = "你的身份已恢复";
 "Zoom" = "缩放";

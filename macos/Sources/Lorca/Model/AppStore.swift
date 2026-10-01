@@ -1294,6 +1294,22 @@ final class AppStore {
         emit(.identityChanged)
     }
 
+    /// Stops waiting on the other Device: `acceptPairing` throws "Pairing cancelled".
+    func abortPairing() {
+        perform("pair.abort")
+    }
+
+    /// Whether the account this Mac just joined has a provider connected. The CLI answers once
+    /// its first pull from the relay has brought the account's credentials, or after half a
+    /// minute (`sync.account`).
+    func accountHasProvider() async -> Bool {
+        guard let synced = try? await client.request("sync.account", as: Wire.SyncAccount.self) else {
+            // A CLI that cannot answer (an older one, or one that restarted) leaves what the store has.
+            return providers.contains(where: \.isConnected)
+        }
+        return (synced.providers ?? []).compactMap { $0.toModel() }.contains(where: \.isConnected)
+    }
+
     func providerAPIKey(_ kind: ProviderCredential.Kind) async throws -> Wire.ProviderAPIKey {
         try await client.request("providers.api_key", ["kind": kind.wireValue], as: Wire.ProviderAPIKey.self)
     }

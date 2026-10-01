@@ -63,7 +63,7 @@ function AvatarDisc(props: { content: AvatarContent; size: number; working?: boo
       }}
     >
       <Show when={props.content.kind === "image" && (props.content as { url: string }).url}>
-        {(url) => <img src={url()} alt="" draggable={false} />}
+        {(url) => <img src={url()} alt="" draggable="false" />}
       </Show>
       <Show when={props.content.kind !== "image"}>
         <Icon

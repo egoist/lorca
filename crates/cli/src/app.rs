@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tokio::sync::{broadcast, Notify};
+use tokio::sync::{broadcast, watch, Notify};
 use tokio_util::sync::CancellationToken;
 
 use crate::config::{self, Config, Settings};
@@ -167,6 +167,9 @@ pub struct App {
     /// history). Message and roster events are held back and state is not written per
     /// message; the cycle saves once and emits one snapshot when the page is applied.
     pub bulk_sync: AtomicBool,
+    /// The machine key of the account the sync loop has pulled from the relay since this
+    /// process started: its roster, Devices, and credentials. `sync.account` waits on it.
+    pub account_pulled: watch::Sender<Option<String>>,
     pub pairings: Mutex<HashMap<String, PendingPairing>>,
     /// The pairing this Device is joining, while `pair.accept` waits for the reply.
     pub accepting: Mutex<Option<CancellationToken>>,
@@ -259,6 +262,7 @@ impl App {
             relay_problem: Mutex::new(None),
             presence_stale: AtomicBool::new(false),
             bulk_sync: AtomicBool::new(false),
+            account_pulled: watch::Sender::new(None),
             pairings: Mutex::new(HashMap::new()),
             accepting: Mutex::new(None),
             #[cfg(feature = "provider-auth")]

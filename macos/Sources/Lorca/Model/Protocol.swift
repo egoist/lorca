@@ -545,6 +545,11 @@ enum Wire {
         var name: String
     }
 
+    /// `sync.account`: the account's providers once this Device's first pull has its credentials.
+    struct SyncAccount: Decodable {
+        var providers: [Provider]?
+    }
+
     struct IdentityCreated: Decodable {
         var phrase: [String]
     }

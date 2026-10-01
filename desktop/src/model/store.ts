@@ -74,6 +74,7 @@ import {
   type WireRosterChanged,
   type WireSearchResults,
   type WireSnapshot,
+  type WireSyncAccount,
 } from "./wire";
 
 export type StoreEvent =
@@ -1439,6 +1440,24 @@ export class AppStore {
     await this.request("pair.accept", { pairing_string: pairingString });
     this.hasIdentity = true;
     this.emit({ kind: "identityChanged" });
+  }
+
+  /** Stops waiting on the other Device: `acceptPairing` fails with "Pairing cancelled". */
+  abortPairing(): void {
+    this.perform("pair.abort");
+  }
+
+  /** Whether the account this computer just joined has a provider connected. The CLI answers
+   * once its first pull from the relay has brought the account's credentials, or after half a
+   * minute (`sync.account`). */
+  async accountHasProvider(): Promise<boolean> {
+    try {
+      const synced = await this.request<WireSyncAccount>("sync.account");
+      return toProviders(synced.providers).some((provider) => provider.isConnected);
+    } catch {
+      // A CLI that cannot answer (an older one, or one that restarted) leaves what the store has.
+      return this.providers.some((provider) => provider.isConnected);
+    }
   }
 
   /** The saved key of an API-key provider or a custom one, for its sheet. */

@@ -117,9 +117,20 @@ fn disconnected(app: &Arc<App>) -> bool {
 /// through sets `failures` back to zero, so a socket that worked for hours before it dropped
 /// is followed by the shortest backoff.
 async fn session(app: &Arc<App>, failures: &mut u32) -> Result<(), RelayError> {
-    let Some(machine_file) = app.machine_file() else {
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-        return Ok(());
+    let machine_file = {
+        // Armed before the check: creating, restoring, or pairing an identity queues a blob, so
+        // the first session starts as soon as there is one.
+        let joined = app.outbox_notify.notified();
+        tokio::pin!(joined);
+        joined.as_mut().enable();
+        let Some(machine_file) = app.machine_file() else {
+            tokio::select! {
+                _ = tokio::time::sleep(std::time::Duration::from_secs(2)) => {}
+                _ = joined => {}
+            }
+            return Ok(());
+        };
+        machine_file
     };
     let Some(url) = app.relay_url() else {
         tokio::select! {
@@ -254,6 +265,9 @@ async fn first_sync_quietly(app: &Arc<App>, url: &str, token: &str, machine_file
         }
         since = last;
     }
+    // The credentials are here, so onboarding can tell whether the account has a provider
+    // without waiting for every chat.
+    mark_account_pulled(app, machine_file);
     let chats: Vec<String> = app.state.lock().unwrap().chats.iter().map(|chat| chat.meta.id.clone()).collect();
     for chat_id in chats {
         let page = app.relay.group_page(url, token, &crate::model::relay_name(&chat_id), None, FIRST_SYNC_MESSAGES).await;
@@ -330,6 +344,8 @@ async fn pull_blobs(app: &Arc<App>, url: &str, token: &str, machine_file: &crate
         let since = app.state.lock().unwrap().last_seq;
         let (blobs, _head) = app.relay.list_blobs(url, token, since, POLL_KINDS).await?;
         if blobs.is_empty() {
+            // Caught up, the replay of a relay that cannot page a chat included.
+            mark_account_pulled(app, machine_file);
             return Ok(());
         }
         // A page this long is a backlog (a fresh pair replays the history): apply it quietly
@@ -359,6 +375,33 @@ async fn pull_blobs(app: &Arc<App>, url: &str, token: &str, machine_file: &crate
             apply_blob(app, machine_file, &blob);
         }
     }
+}
+
+/// How long `sync.account` waits for the first pull of an account this Device just joined.
+pub const ACCOUNT_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// The roster, Devices, and credentials of the account `machine_file` belongs to are here.
+fn mark_account_pulled(app: &App, machine_file: &crate::keys::MachineFile) {
+    let Ok(machine) = machine_file.machine() else { return };
+    let id = machine.pubkey();
+    app.account_pulled.send_if_modified(|pulled| {
+        let changed = pulled.as_deref() != Some(id.as_str());
+        if changed {
+            *pulled = Some(id);
+        }
+        changed
+    });
+}
+
+/// Waits, for at most `limit`, until the sync loop has pulled the account this Device holds:
+/// a Device that pairs or restores gets the account's credentials that way, so onboarding asks
+/// before it offers to connect a provider. False when the limit passed first, or this Device
+/// holds no account.
+pub async fn wait_for_account(app: &App, limit: std::time::Duration) -> bool {
+    let Some(this) = app.this_device_id() else { return false };
+    let mut pulled = app.account_pulled.subscribe();
+    let landed = tokio::time::timeout(limit, pulled.wait_for(|machine| machine.as_deref() == Some(this.as_str()))).await;
+    landed.is_ok_and(|landed| landed.is_ok())
 }
 
 /// A bearer for this machine. When the relay does not know the machine (a relay other than
@@ -802,4 +845,56 @@ pub async fn fetch_dek(app: &Arc<App>, url: &str, identity: &crate::keys::Identi
         }
     }
     Err("The relay has no account key for this identity. Create the identity on a Device that is online first.".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+    use crate::config::Config;
+
+    struct ScratchApp(Arc<App>, std::path::PathBuf);
+
+    impl Drop for ScratchApp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.1);
+        }
+    }
+
+    fn scratch_app() -> ScratchApp {
+        let home = std::env::temp_dir().join(format!("lorca-sync-{}", uuid::Uuid::new_v4()));
+        let app = App::load(Config { home: home.clone(), port: 0 }).unwrap();
+        ScratchApp(app, home)
+    }
+
+    #[tokio::test]
+    async fn a_device_without_an_account_does_not_wait() {
+        let scratch = scratch_app();
+        let waited = tokio::time::timeout(Duration::from_secs(5), wait_for_account(&scratch.0, ACCOUNT_WAIT)).await;
+        assert_eq!(waited, Ok(false));
+    }
+
+    #[tokio::test]
+    async fn the_wait_ends_when_the_account_this_device_holds_is_pulled() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        crate::identity::create(app, Some("Runner".into())).unwrap();
+        let machine_file = app.machine_file().unwrap();
+
+        // The pull of an account this Device held before does not count.
+        app.account_pulled.send_replace(Some(crate::keys::Machine::generate().pubkey()));
+        assert!(!wait_for_account(app, Duration::from_millis(50)).await);
+
+        let waiting = tokio::spawn({
+            let app = app.clone();
+            async move { wait_for_account(&app, ACCOUNT_WAIT).await }
+        });
+        tokio::task::yield_now().await;
+        mark_account_pulled(app, &machine_file);
+        assert!(tokio::time::timeout(Duration::from_secs(5), waiting).await.unwrap().unwrap());
+
+        // Pulled once, it answers at once.
+        assert!(wait_for_account(app, Duration::from_millis(1)).await);
+    }
 }

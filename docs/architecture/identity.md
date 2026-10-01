@@ -21,11 +21,11 @@ Recovery: restore the master secret from the backup phrase → re-derive content
 
 ## Pairing a Device
 
-1. Device A (has the identity) asks the relay for a pairing nonce and shows a pairing string: `lorca://pair?relay=…&id=<identity pubkey>&ek=<ephemeral pubkey>&n=<nonce>`. The CLI waits on it for ten minutes whether or not the sheet stays open (Done keeps the code good). Cancel retires it: `pair.cancel` drops the waiter and deletes the mailbox (`DELETE /v1/pair/{nonce}`), so a Device that pastes the code afterwards is told at once instead of polling out the TTL.
+1. Device A, an identity device (attesting B in step 3 takes the identity signing key), asks the relay for a pairing nonce and shows a pairing string: `lorca://pair?relay=…&id=<identity pubkey>&ek=<ephemeral pubkey>&n=<nonce>`. The CLI waits on it for ten minutes whether or not the sheet stays open (Done keeps the code good). Cancel retires it: `pair.cancel` drops the waiter and deletes the mailbox (`DELETE /v1/pair/{nonce}`), so a Device that pastes the code afterwards is told at once instead of polling out the TTL.
 2. Device B pastes it (onboarding, or `lorca pair <string>`). B generates its machine keys and posts a request sealed to `ek` into the relay’s pairing mailbox (`POST /v1/pair/{nonce}/request`, no auth): its machine public key, box public key, `name`, `os`. `pair.accept` emits `pair.posted` once the request is up and then polls for the reply; `pair.abort` ends that wait, a newer `pair.accept` replaces it, and a mailbox that is gone (cancelled or expired) fails the wait with a message that says to get a fresh code.
 3. A polls the mailbox, unseals the request, attests B on the relay with an identity-signed `POST /v1/identities`, and posts a reply sealed to B’s box key: identity public key, content public key, the **account DEK**, and the relay URL.
 4. B unseals the reply, saves `machine.json`, authenticates with the challenge, and uploads its `machine` blob (`name`, `os`, installed plugins and their state).
-5. B syncs the roster, the account’s credentials, and the chats, and shows up in the Device list. A Runner is ready for bots as soon as the `credentials` blob lands.
+5. B syncs the roster, the account’s credentials, and the chats, and shows up in the Device list. Its sync loop starts as soon as the keys are saved, and its first pull takes everything but the messages before the chats' newest messages; `sync.account` answers once that part has landed, so onboarding learns whether the account has a provider without waiting for the chats. A Runner is ready for bots as soon as the `credentials` blob lands.
 
 App ↔ CLI on one machine uses `127.0.0.1`; those keys are already local.
 
@@ -44,7 +44,7 @@ Every Device writes its `os` into its machine metadata blob. Values: `macos`, `l
 | `os`                        | Role       | Can                                                                                      |
 | --------------------------- | ---------- | ---------------------------------------------------------------------------------------- |
 | `macos`, `linux`, `windows` | **Runner** | Everything a Device can, plus be assigned bots and run Jobs with the account’s credentials. |
-| `ios`, `ipados`, `android`  | Device     | Hold keys, configure account providers, read and write chats, create bots for Runners, pair other Devices. |
+| `ios`, `ipados`, `android`  | Device     | Hold keys, configure account providers, read and write chats, create bots for Runners. |
 
 Runner status is derived from `os` alone. There is no flag to opt a phone in or a desktop out. Peers read `os` from the decrypted metadata blob, so the relay never learns which Devices are Runners.
 

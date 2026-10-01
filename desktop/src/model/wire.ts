@@ -324,6 +324,11 @@ export interface WirePairStatus {
   device?: { id: string; name: string } | null;
 }
 
+/** `sync.account`: the account's providers once this Device's first pull has its credentials. */
+export interface WireSyncAccount {
+  providers?: WireProvider[] | null;
+}
+
 export interface WireJobEvent {
   chat_id: string;
   bot_id: string;
