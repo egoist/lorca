@@ -84,6 +84,7 @@ export const zh: Record<string, string> = {
   "Copy": "复制",
   "Copy a pairing code from Lorca on another computer first.": "请先从另一台电脑上的 Lorca 复制配对码。",
   "Copy code and open": "复制验证码并打开",
+  "Could not answer": "无法回应",
   "Could not create the bot": "无法创建智能体",
   "Could not create the group": "无法创建群聊",
   "Could not remove the photo": "无法移除照片",

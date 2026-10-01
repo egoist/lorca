@@ -42,6 +42,13 @@ pub enum Event {
     /// callback. Runners open the same URL themselves.
     #[serde(rename = "provider.auth")]
     ProviderAuth { kind: String, url: String },
+    /// A phone opens this plugin sign-in page for a Runner while the core waits on its loopback
+    /// callback. A computer opens its browser itself.
+    #[serde(rename = "plugin.auth")]
+    PluginAuth { plugin_id: String, url: String },
+    /// The browser landed on the callback, or the wait ended: the sign-in page can close.
+    #[serde(rename = "plugin.auth.done")]
+    PluginAuthDone { plugin_id: String },
     /// This Device's pairing request reached the relay; the other Device has yet to accept.
     #[serde(rename = "pair.posted")]
     PairPosted { nonce: String },

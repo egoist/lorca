@@ -900,7 +900,7 @@ export class AppStore {
     return toPlugin(reply.status);
   }
 
-  /** Starts the sign-in on the Runner; the browser opens there. */
+  /** Starts a plugin's sign-in for the Runner; the browser opens on this computer. */
   async connectPlugin(pluginID: string, runnerID: string): Promise<void> {
     if (this.isMock) return;
     await this.request("plugins.connect", { runner_id: runnerID, plugin_id: pluginID });

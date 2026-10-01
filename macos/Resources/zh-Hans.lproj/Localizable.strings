@@ -295,7 +295,7 @@
 "It runs on this computer, plans your work, and builds the rest of the team when you ask. Give it a name and the credentials it runs with." = "它运行在这台电脑上，为你规划工作，并在你需要时组建团队的其他成员。给它起个名字，并提供它运行所用的凭证。";
 "its Runner" = "它的 Runner";
 "Jobs that run on their own" = "自动运行的任务";
-"Keys and sign-ins are sent sealed to %@ and stay there. A sign-in opens the browser on %@." = "密钥和登录信息会密封发送到 %1$@ 并保留在那里。登录时会在 %2$@ 上打开浏览器。";
+"Keys and sign-ins are sent sealed to %@ and stay there." = "密钥和登录信息会密封发送到 %@ 并保留在那里。";
 "Keys and sign-ins stay on this device." = "密钥和登录信息只保留在这台设备上。";
 "Language" = "语言";
 "language locale english chinese translation" = "语言 中文 英文 翻译 界面 language locale english chinese translation";

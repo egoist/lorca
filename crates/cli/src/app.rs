@@ -174,6 +174,9 @@ pub struct App {
     /// closing on a phone, cancels the old wait.
     #[cfg(feature = "provider-auth")]
     pub provider_auth: Mutex<CancellationToken>,
+    /// The plugin sign-in this Device waits on for another Runner. A newer one, or the page
+    /// closing on a phone, cancels the old wait.
+    pub plugin_sign_in: Mutex<CancellationToken>,
     /// By job id.
     pub running_jobs: Mutex<HashMap<String, RunningJob>>,
     /// The turns the local app was last told about, by job id: `turns_changed` tells it what
@@ -260,6 +263,7 @@ impl App {
             accepting: Mutex::new(None),
             #[cfg(feature = "provider-auth")]
             provider_auth: Mutex::new(CancellationToken::new()),
+            plugin_sign_in: Mutex::new(CancellationToken::new()),
             running_jobs: Mutex::new(HashMap::new()),
             announced_turns: Mutex::new(std::collections::BTreeMap::new()),
             #[cfg(feature = "runner")]
@@ -335,6 +339,17 @@ impl App {
     #[cfg(feature = "provider-auth")]
     pub fn cancel_provider_auth(&self) {
         self.provider_auth.lock().unwrap().cancel();
+    }
+
+    /// Starts waiting on one plugin sign-in for another Runner, cancelling a previous wait.
+    pub fn begin_plugin_sign_in(&self) -> CancellationToken {
+        let next = CancellationToken::new();
+        std::mem::replace(&mut *self.plugin_sign_in.lock().unwrap(), next.clone()).cancel();
+        next
+    }
+
+    pub fn cancel_plugin_sign_in(&self) {
+        self.plugin_sign_in.lock().unwrap().cancel();
     }
 
     /// Changes the account's credential of `kind`: saved here, sent to the other Devices, and
@@ -486,6 +501,7 @@ impl App {
         }
         #[cfg(feature = "provider-auth")]
         self.cancel_provider_auth();
+        self.cancel_plugin_sign_in();
         #[cfg(feature = "runner")]
         self.steering_queues.lock().unwrap().clear();
         *self.identity.lock().unwrap() = None;

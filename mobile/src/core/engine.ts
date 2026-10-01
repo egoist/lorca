@@ -53,8 +53,8 @@ class Engine {
   private started = false;
   private fetchingFiles = new Set<string>();
   private loadingOlder = new Set<string>();
-  private providerBrowserOpen = false;
-  private dismissingProviderAuth = false;
+  private authBrowserOpen = false;
+  private dismissingAuthBrowser = false;
   private readChatId: string | null = null;
   /// Snapshots on their way, and the events that arrived meanwhile (see `bootstrap`).
   private bootstraps = 0;
@@ -182,7 +182,13 @@ class Engine {
         useStore.setState((s) => ({ relayConnected: !!data.connected, relayUpdateRequired: !!data.update_required, relayError: data.error ?? null, relayUrl: data.url ?? s.relayUrl }));
         break;
       case "provider.auth":
-        this.openProviderAuth(data.url);
+        this.openAuthBrowser(data.url, "providers.auth.cancel");
+        break;
+      case "plugin.auth":
+        this.openAuthBrowser(data.url, "plugins.auth.cancel");
+        break;
+      case "plugin.auth.done":
+        this.dismissAuthBrowser();
         break;
       case "identity.changed":
         if (!data.has_identity) resetStore();
@@ -350,7 +356,7 @@ class Engine {
       const { providers } = await core.request<{ providers: ProviderStatus[] }>(providerConnectMethod(kind), params);
       useStore.setState({ providers });
     } finally {
-      if (kind === "chatgpt" || kind === "grok") this.dismissProviderAuth();
+      if (kind === "chatgpt" || kind === "grok") this.dismissAuthBrowser();
     }
   }
 
@@ -359,53 +365,56 @@ class Engine {
     useStore.setState({ providers });
   }
 
-  private openProviderAuth(url: string) {
+  /// Opens a sign-in page, a provider's or a plugin's for its Runner, in the in-app browser
+  /// while the core waits on its loopback callback. Closing the page first cancels the wait
+  /// with `cancel`.
+  private openAuthBrowser(url: string, cancel: "providers.auth.cancel" | "plugins.auth.cancel") {
     // iOS keeps the core alive behind SFSafariViewController. Android's auth-session
     // polyfill also watches AppState, so closing the custom tab can cancel the Rust wait.
-    this.providerBrowserOpen = true;
+    this.authBrowserOpen = true;
     const browser = Platform.OS === "android" ? WebBrowser.openAuthSessionAsync(url) : WebBrowser.openBrowserAsync(url);
     void browser
       .then((result) => {
-        if (!this.dismissingProviderAuth && (result.type === "cancel" || result.type === "dismiss"))
-          void core.request("providers.auth.cancel").catch(() => {});
+        if (!this.dismissingAuthBrowser && (result.type === "cancel" || result.type === "dismiss")) void core.request(cancel).catch(() => {});
       })
       .catch((error) => {
-        console.warn("opening provider sign-in", error instanceof Error ? error.message : error);
-        void core.request("providers.auth.cancel").catch(() => {});
+        console.warn("opening a sign-in page", error instanceof Error ? error.message : error);
+        void core.request(cancel).catch(() => {});
       })
       .finally(() => {
-        this.providerBrowserOpen = false;
-        this.dismissingProviderAuth = false;
+        this.authBrowserOpen = false;
+        this.dismissingAuthBrowser = false;
       });
   }
 
-  private dismissProviderAuth() {
-    if (!this.providerBrowserOpen) {
-      this.dismissingProviderAuth = false;
+  private dismissAuthBrowser() {
+    if (!this.authBrowserOpen) {
+      this.dismissingAuthBrowser = false;
       return;
     }
-    this.dismissingProviderAuth = true;
+    this.dismissingAuthBrowser = true;
     // Chrome Custom Tabs have no programmatic dismiss. Its success page stays up until the
     // user closes it; the promise above then clears this flag without cancelling the login.
     if (Platform.OS === "android") return;
     try {
       void WebBrowser.dismissBrowser().catch(() => {
-        this.dismissingProviderAuth = false;
+        this.dismissingAuthBrowser = false;
       });
     } catch {
       // The browser may already be gone on this platform.
-      this.dismissingProviderAuth = false;
+      this.dismissingAuthBrowser = false;
     }
   }
 
   // MARK: - Plugins
 
-  /// Answers a permission card; the core's message event confirms the decision.
-  answerPermission(chatId: string, messageId: string, decision: "allow" | "always" | "deny") {
+  /// Answers a permission card; the core's message event confirms the decision. Sign in on a
+  /// sign-in card for a bot on another Runner opens the sign-in page here. Rejects with why the
+  /// answer did not reach the Runner, such as it being offline, and the card asks again.
+  async answerPermission(chatId: string, messageId: string, decision: "allow" | "always" | "deny") {
     const decided: "always" | "denied" | "allowed" = decision === "always" ? "always" : decision === "deny" ? "denied" : "allowed";
     // A permission card shows the answer; a command's card moves on to running, or ends.
     const answered = (m: Message): Message => {
-      if (m.id !== messageId) return m;
       if (m.body.kind === "permission") return { ...m, body: { ...m.body, decision: decided } };
       if (m.body.kind === "tool" && m.body.run?.state === "asking") {
         const run = { ...m.body.run, decision: decided, state: decided === "denied" ? ("denied" as const) : ("running" as const), rule: decided === "always" ? m.body.run.rule : undefined };
@@ -413,10 +422,22 @@ class Engine {
       }
       return m;
     };
-    useStore.setState((s) => ({
-      chats: s.chats.map((c) => (c.id === chatId ? { ...c, messages: c.messages.map(answered) } : c)),
-    }));
-    void core.request("chats.permission", { chat_id: chatId, message_id: messageId, decision });
+    const asked = chatById(chatId)?.messages.find((m) => m.id === messageId);
+    const shown = asked && answered(asked);
+    // Puts back what the card showed, unless the core changed it meanwhile.
+    const replace = (from: Message | undefined, to: Message | undefined) => {
+      if (!from || !to) return;
+      useStore.setState((s) => ({
+        chats: s.chats.map((c) => (c.id === chatId ? { ...c, messages: c.messages.map((m) => (m === from ? to : m)) } : c)),
+      }));
+    };
+    replace(asked, shown);
+    try {
+      await core.request("chats.permission", { chat_id: chatId, message_id: messageId, decision });
+    } catch (error) {
+      replace(shown, asked);
+      throw error;
+    }
   }
 
   // MARK: - Commands

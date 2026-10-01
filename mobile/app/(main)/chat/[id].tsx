@@ -38,7 +38,7 @@ import Animated, {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { SoftScrollEdgeView } from "../../../modules/lorca-core/SoftScrollEdgeView";
 import { chatTitle, engine } from "../../../src/core/engine";
-import { isLive, type Bot } from "../../../src/core/model";
+import { isLive, type Bot, type Message } from "../../../src/core/model";
 import {
   useBotMap,
   useChat,
@@ -699,6 +699,13 @@ export default function ChatScreen() {
     [router, id],
   );
 
+  /// Answers a card. One whose answer cannot reach the bot's Runner asks again, and says why.
+  const answerCard = useCallback((message: Message, decision: "allow" | "always" | "deny") => {
+    engine.answerPermission(message.chat_id, message.id, decision).catch((error) => {
+      Alert.alert(t("Could not answer"), error instanceof Error ? error.message : String(error));
+    });
+  }, []);
+
   const renderItem = useCallback(
     ({ item }: { item: Row }) => {
       switch (item.type) {
@@ -715,13 +722,7 @@ export default function ChatScreen() {
             <PermissionRow
               row={item}
               isGroup={isGroup}
-              onDecide={(decision) =>
-                engine.answerPermission(
-                  item.message.chat_id,
-                  item.message.id,
-                  decision,
-                )
-              }
+              onDecide={(decision) => answerCard(item.message, decision)}
             />
           );
         case "command":
@@ -729,7 +730,7 @@ export default function ChatScreen() {
             <CommandRow
               row={item}
               isGroup={isGroup}
-              onDecide={(decision) => engine.answerPermission(item.message.chat_id, item.message.id, decision)}
+              onDecide={(decision) => answerCard(item.message, decision)}
               onAnswer={() => setAnsweringId(item.message.id)}
               onStop={() => engine.stopCommand(item.message.chat_id, item.message.id)}
             />
@@ -740,7 +741,7 @@ export default function ChatScreen() {
           return <StatusRow text={item.text} />;
       }
     },
-    [bots, id, isGroup, openMarker],
+    [answerCard, bots, id, isGroup, openMarker],
   );
 
   if (!chat) {

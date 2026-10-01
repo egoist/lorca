@@ -754,7 +754,7 @@ final class AppStore {
         return try await client.request("plugins.set_variables", ["runner_id": runnerID, "plugin_id": pluginID, "variables": variables], as: Wire.PluginInstalled.self).status.toModel()
     }
 
-    /// Starts the sign-in on the Runner; the browser opens there.
+    /// Starts a plugin's sign-in for the Runner; the browser opens on this Mac.
     func connectPlugin(_ pluginID: String, on runnerID: Device.ID) async throws {
         guard !isMock else { return }
         _ = try await client.request("plugins.connect", ["runner_id": runnerID, "plugin_id": pluginID])
