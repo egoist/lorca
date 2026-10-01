@@ -6,6 +6,7 @@ Sparkle shows it in the update window. The Windows and Linux app's are in
 
 ## [Unreleased]
 
+- Bots on ChatGPT, Grok, and OpenCode's GPT, Grok, and Muse Spark models see the images their tools return, such as a browser plugin's screenshot or an image file they read. They used to get only the text beside the image.
 - Pairing a Mac or restoring your identity no longer asks you to connect a provider your account already has. Onboarding waits until the account's providers arrive from the relay, which a slow connection or a long list of chats used to outlast.
 - Onboarding's last step says the Mac is paired, or that your identity is restored, instead of calling it your first Device. A paired Mac is no longer pointed to Pair a Device, which only the Mac that created or restored your identity can do.
 - While onboarding pairs or restores, the Pair or Restore button and the field are disabled beside a spinner, and Back stops a pairing that is still waiting on the other computer.

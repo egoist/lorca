@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use super::responses;
+use super::responses::{self, ToolImages};
 use crate::models::{self, ModelInfo};
 use crate::provider::{
     channel_stream, AssistantEvent, AssistantEventStream, ModelRequest, Provider,
@@ -28,6 +28,9 @@ pub struct OpenAiResponsesProvider {
     pub model: String,
     /// Whether the model takes images; a text-only model gets a note in their place.
     pub supports_images: bool,
+    /// Where tool results' images go: a user message after the outputs by default, since a
+    /// gateway may take only a string `output`; `InOutput` for OpenAI's own API.
+    pub tool_images: ToolImages,
     /// Retries of a request that fails before it streams (408, 409, 429, 5xx, transport).
     pub max_retries: u32,
     pub max_retry_delay_ms: u64,
@@ -49,6 +52,7 @@ impl OpenAiResponsesProvider {
             api_key: api_key.to_string(),
             model: model.to_string(),
             supports_images: info.map(|model| model.images).unwrap_or(true),
+            tool_images: ToolImages::UserMessage,
             max_retries: 2,
             max_retry_delay_ms: DEFAULT_MAX_RETRY_DELAY_MS,
             thinking_level: None,
@@ -75,7 +79,7 @@ impl OpenAiResponsesProvider {
         let mut body = json!({
             "model": self.model,
             "instructions": request.system_prompt,
-            "input": responses::input_items(&transformed),
+            "input": responses::input_items(&transformed, self.tool_images),
             "store": false,
             "stream": true,
         });
@@ -183,6 +187,8 @@ impl Provider for OpenAiResponsesProvider {
 mod tests {
     use super::*;
     use crate::provider::ToolSpec;
+    use crate::providers::responses::testing;
+    use crate::transform::NON_VISION_TOOL_IMAGE_PLACEHOLDER;
     use crate::types::{LlmMessage, UserMessage};
 
     fn request() -> ModelRequest {
@@ -248,5 +254,71 @@ mod tests {
         // GPT-6.1 Sol always reasons, so Off runs at its lowest effort.
         assert_eq!(body("opencode", "gpt-6.1-sol")["reasoning"], json!({ "effort": "low" }));
         assert!(body("opencode", "unknown-model").get("reasoning").is_none());
+    }
+
+    #[test]
+    fn a_tool_image_follows_the_outputs_and_a_text_only_model_gets_a_note() {
+        let mut request = request();
+        request.messages.extend(testing::screenshot_turn("opencode", "gpt-6.1-sol", "AAAA"));
+        let provider = OpenAiResponsesProvider::new("opencode", "https://opencode.ai/zen/v1", "k", "gpt-6.1-sol");
+        let input = provider.body(&request)["input"].clone();
+        assert_eq!(input[2]["output"], "Took a screenshot of the page.");
+        assert_eq!(input[3]["role"], "user");
+        assert_eq!(input[3]["content"][1]["image_url"], "data:image/png;base64,AAAA");
+
+        let mut text_only = OpenAiResponsesProvider::new("opencode", "https://opencode.ai/zen/v1", "k", "gpt-6.1-sol");
+        text_only.supports_images = false;
+        let input = text_only.body(&request)["input"].clone();
+        assert_eq!(input[2]["output"], format!("Took a screenshot of the page.\n{NON_VISION_TOOL_IMAGE_PLACEHOLDER}"));
+        assert_eq!(input.as_array().unwrap().len(), 3);
+
+        // OpenAI's own Responses API takes the image inside the output.
+        let mut openai = OpenAiResponsesProvider::new("openai", "https://api.openai.com/v1", "k", "gpt-6.1-sol");
+        openai.tool_images = ToolImages::InOutput;
+        assert_eq!(openai.body(&request)["input"][2]["output"][1]["type"], "input_image");
+    }
+
+    /// `LORCA_CREDENTIALS=~/.lorca/credentials.json cargo test -p lorca-agent live_opencode_zen --
+    /// --ignored --nocapture`: Zen's GPT, Grok, and Muse Spark routes read a random code off a
+    /// tool's screenshot sent in a user message, and the probe reports whether each also reads
+    /// one inside the output. `live_opencode_go` does the same on Go's GPT and Grok.
+    #[tokio::test]
+    #[ignore]
+    async fn live_opencode_zen_reads_a_tool_screenshot() {
+        opencode_reads_a_tool_screenshot("opencode", "opencode", "https://opencode.ai/zen", &["gpt-6.1-sol", "grok-4.7", "muse-spark-1.3"]).await;
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_opencode_go_reads_a_tool_screenshot() {
+        opencode_reads_a_tool_screenshot("opencode-go", "opencode_go", "https://opencode.ai/zen/go", &["gpt-6-luna", "grok-4.7"]).await;
+    }
+
+    /// The probe on each of `models`, with the API key under `key` in the credentials and the
+    /// root it names, else `root`.
+    async fn opencode_reads_a_tool_screenshot(kind: &str, key: &str, root: &str, models: &[&str]) {
+        let Some(credential) = testing::credential::<Value>(key) else { return };
+        let root = credential["base_url"].as_str().map(|url| url.trim_end_matches('/').trim_end_matches("/v1")).unwrap_or(root);
+        let api_key = credential["api_key"].as_str().expect("an API key");
+        // Go routes a request by its session header, which the Runner sends.
+        let options = || {
+            let session = uuid::Uuid::new_v4().to_string();
+            let mut options = crate::RequestOptions::default().with_session_id(&session);
+            options.headers.insert("x-opencode-session".into(), session);
+            options
+        };
+        let mut failures = Vec::new();
+        for model in models {
+            let mut provider = OpenAiResponsesProvider::new(kind, &format!("{root}/v1"), api_key, model);
+            if let Err(problem) = testing::reads_a_screenshot(&provider, options()).await {
+                failures.push(format!("{kind} {model}: {problem}"));
+            }
+            provider.tool_images = ToolImages::InOutput;
+            match testing::reads_a_screenshot(&provider, options()).await {
+                Ok(_) => eprintln!("{kind} {model} read the image inside the function call output too"),
+                Err(problem) => eprintln!("{kind} {model} did not read the image inside the function call output: {problem}"),
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 }

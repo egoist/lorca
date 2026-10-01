@@ -311,7 +311,11 @@ fn opencode_provider(
             provider.max_tokens = 32_000;
             Arc::new(provider)
         }
-        OpenCodeWire::Responses => Arc::new(OpenAiResponsesProvider::new(kind, &format!("{root}/v1"), api_key, model).with_thinking(thinking)),
+        OpenCodeWire::Responses => {
+            let mut provider = OpenAiResponsesProvider::new(kind, &format!("{root}/v1"), api_key, model).with_thinking(thinking);
+            provider.supports_images = built_in_vision(kind, Some(model));
+            Arc::new(provider)
+        }
         OpenCodeWire::Unsupported => {
             return Err(format!("{model} uses an OpenCode endpoint Lorca does not support"));
         }
@@ -462,6 +466,17 @@ mod tests {
                 assert_ne!(opencode_wire(kind, model.id), OpenCodeWire::Unsupported, "{kind}/{}", model.id);
             }
         }
+    }
+
+    #[test]
+    fn every_opencode_route_takes_images_when_the_runner_sends_pixels() {
+        for model in ["gpt-6.1-sol", "grok-4.7", "muse-spark-1.3", "claude-sonnet-5-5", "kimi-k3"] {
+            assert!(opencode_provider("opencode", OPENCODE_BASE_URL, "k", model, None).unwrap().supports_images(), "{model}");
+        }
+        // A Responses model the catalog lacks, which the Runner sends no pixels, gets notes for
+        // its tools' images too.
+        assert!(!built_in_vision("opencode", Some("muse-spark-2")));
+        assert!(!opencode_provider("opencode", OPENCODE_BASE_URL, "k", "muse-spark-2", None).unwrap().supports_images());
     }
 
     #[test]

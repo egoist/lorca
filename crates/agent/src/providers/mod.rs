@@ -15,3 +15,4 @@ pub use chatgpt::{ChatGptProvider, ChatGptTokens, TokenSource};
 pub use grok::{GrokProvider, GrokTokenSource, GrokTokens};
 pub use openai_compat::OpenAiCompatProvider;
 pub use openai_responses::OpenAiResponsesProvider;
+pub use responses::ToolImages;

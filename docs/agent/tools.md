@@ -112,7 +112,7 @@ A message the model's output limit cut off (`stop_reason` `Length`) never runs i
 
 `ToolResult` has these fields:
 
-- `content: Vec<ContentPart>`: what the model sees. Text parts reach every provider. Image parts reach the Anthropic Messages adapter as image blocks of the tool result, and the OpenAI-compatible adapter as a user message right after the tool message; a model that does not take images gets a note in their place.
+- `content: Vec<ContentPart>`: what the model sees. Text parts reach every provider. Image parts reach the Anthropic Messages adapter as image blocks of the tool result, the ChatGPT adapter as `input_image` parts of the function call output, the OpenAI-compatible chat completions adapter as a user message right after the tool message, and the Grok and API-key Responses adapters as a user message after the function call outputs (see [Providers](providers.md#openai-compatible-responses)); a model that does not take images gets a note in their place.
 - `details: Value`: structured data for your logs or UI. The model never sees it; it travels on `tool_execution_end` and in the `ToolResultMessage`.
 - `structured: Option<Value>`: machine-readable output matching `output_schema()`. The model never sees it; a codemode script gets it instead of the text.
 - `is_error: bool`: the call failed, and this result says how (below).

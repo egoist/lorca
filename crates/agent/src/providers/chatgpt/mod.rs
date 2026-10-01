@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use super::responses;
+use super::responses::{self, ToolImages};
 use crate::models::{self, ModelInfo};
 use crate::provider::{channel_stream, AssistantEvent, AssistantEventStream, ModelRequest, Provider};
 use crate::request::RequestOptions;
@@ -39,6 +39,9 @@ pub struct ChatGptProvider {
     pub thinking_level: Option<ThinkingLevel>,
     /// The catalog entry for the model, when it has one.
     pub info: Option<&'static ModelInfo>,
+    /// Where tool results' images go: inside the function call output, as the Codex CLI
+    /// sends them.
+    pub tool_images: ToolImages,
     client: reqwest::Client,
 }
 
@@ -50,6 +53,7 @@ impl ChatGptProvider {
             model: model.to_string(),
             thinking_level: None,
             info: models::find("chatgpt", model),
+            tool_images: ToolImages::InOutput,
             client: reqwest::Client::new(),
         }
     }
@@ -82,7 +86,7 @@ impl ChatGptProvider {
             &request.messages,
             &TransformOptions { provider: "chatgpt", model: &self.model, supports_images: true, normalize_tool_call_id: None },
         );
-        let input = responses::input_items(&transformed);
+        let input = responses::input_items(&transformed, self.tool_images);
 
         // The backend's own web search: it searches and reads pages server-side and streams
         // `web_search_call` items, which become server-tool events here.
@@ -192,6 +196,7 @@ impl Provider for ChatGptProvider {
 mod tests {
     use super::*;
     use crate::provider::ToolSpec;
+    use crate::providers::responses::testing;
     use crate::types::LlmMessage;
 
     struct StaticTokens;
@@ -258,5 +263,52 @@ mod tests {
         let built = build_request(&reqwest::Client::new(), &tokens, &request.options, &body).build().unwrap();
         assert_eq!(built.headers().get("session-id").unwrap(), "chat-1");
         assert_eq!(built.headers().get("chatgpt-account-id").unwrap(), "acct");
+    }
+
+    #[test]
+    fn a_tool_image_goes_inside_the_function_call_output() {
+        let provider = ChatGptProvider::new(Arc::new(StaticTokens), None);
+        let mut request = request();
+        request.messages.extend(testing::screenshot_turn("chatgpt", CHATGPT_DEFAULT_MODEL, "AAAA"));
+        let input = provider.body(&request)["input"].clone();
+        assert_eq!(input[1]["type"], "function_call");
+        assert_eq!(
+            input[2],
+            json!({ "type": "function_call_output", "call_id": "call_1", "output": [
+                { "type": "input_text", "text": "Took a screenshot of the page." },
+                { "type": "input_image", "image_url": "data:image/png;base64,AAAA" },
+            ] })
+        );
+        assert_eq!(input.as_array().unwrap().len(), 3);
+    }
+
+    /// The tokens of a Lorca data directory, used as they are: refreshing them here would spend
+    /// the refresh token the account holds.
+    struct LiveTokens(ChatGptTokens);
+
+    #[async_trait]
+    impl TokenSource for LiveTokens {
+        async fn tokens(&self) -> Result<ChatGptTokens, String> {
+            if self.0.is_expired() {
+                return Err("the access token has expired; let Lorca refresh it, then run the probe again".into());
+            }
+            Ok(self.0.clone())
+        }
+        async fn store(&self, _tokens: ChatGptTokens) -> Result<(), String> {
+            Err("the probe stores no tokens".into())
+        }
+    }
+
+    /// `LORCA_CREDENTIALS=~/.lorca/credentials.json cargo test -p lorca-agent live_chatgpt --
+    /// --ignored --nocapture`: the model reads a random code off a tool's screenshot.
+    #[tokio::test]
+    #[ignore]
+    async fn live_chatgpt_reads_a_tool_screenshot() {
+        let Some(tokens) = testing::credential::<ChatGptTokens>("chatgpt") else { return };
+        let provider = ChatGptProvider::new(Arc::new(LiveTokens(tokens)), None);
+        let options = RequestOptions::default().with_session_id(&uuid::Uuid::new_v4().to_string());
+        if let Err(problem) = testing::reads_a_screenshot(&provider, options).await {
+            panic!("{problem}");
+        }
     }
 }

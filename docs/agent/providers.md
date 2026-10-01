@@ -140,7 +140,19 @@ let provider = OpenAiResponsesProvider::new(
 );
 ```
 
-It posts the shared Responses input and function-tool shapes to `{base_url}/responses` with bearer auth, streams text, reasoning, tool calls, and usage through the same parser as the subscription adapters, and maps a selected thinking level to `reasoning.effort` when the model catalog declares effort levels.
+It posts the shared Responses input and function-tool shapes to `{base_url}/responses` with bearer auth, streams text, reasoning, tool calls, and usage through the same parser as the subscription adapters, and maps a selected thinking level to `reasoning.effort` when the model catalog declares effort levels. The three Responses adapters convert the transcript the same way:
+
+| Transcript | Request |
+| --- | --- |
+| System prompt | `instructions`. |
+| User text and images | A `user` message of `input_text` and `input_image` parts; images as `data:` URLs. |
+| Assistant text and tool calls | An `assistant` message of `output_text`, then a `function_call` item per call. Thinking and server blocks are not sent back. |
+| Tool result | A `function_call_output` item whose `output` is the result's text. A result's images go where the adapter's `tool_images` says. With `ToolImages::InOutput`, `output` becomes `input_text` and `input_image` parts in the result's order, each run of text joined as `text()` joins it. With `ToolImages::UserMessage`, `output` stays the text (`(see attached image)` when there is none), and one `user` message after the run of outputs carries each result's images under `Images from the <tool> tool result:`. |
+| Tools | `function` tools, after ChatGPT's and Grok's own search tools. |
+
+The transcript goes through the [shared transform](#before-conversion) first. `supports_images` (the catalog's, or true for a model it does not list), `tool_images` (`UserMessage`, since a gateway may take only a string `output`; OpenAI's own API takes `InOutput`), `max_retries` (2), and `max_retry_delay_ms` are public fields.
+
+`LORCA_CREDENTIALS=~/.lorca/credentials.json cargo test -p lorca-agent reads_a_tool_screenshot -- --ignored --nocapture` has each Responses adapter connected in that data directory read a random code off a tool's screenshot, and reports whether Grok and OpenCode's Responses routes read it inside the output too. It uses the access tokens as they are and never refreshes them, which would spend the refresh token the account holds.
 
 ### ChatGPT subscription
 
@@ -201,7 +213,7 @@ Models: the default is `gpt-6.1-sol`; `gpt-6-astra`, `gpt-6-sol`, and `gpt-6-lun
 
 Requests carry the backend's own `web_search` tool ahead of your function tools. The model searches and opens pages on the server side; each search or page read arrives as `ServerToolStart` and `ServerToolEnd` events (named `web_search` or `web_fetch`, with the query or URL as `detail` and a one-line `summary`). They show up in `message_update` and never enter the message content.
 
-Reasoning summaries stream as thinking. User images are sent as `input_image`; tool results are sent as text. An incomplete response ends with `stop_reason` `Length`. The transcript goes through the [shared transform](#before-conversion) first, and a request that fails before it streams is retried like the others.
+Reasoning summaries stream as thinking. The input is the [Responses shape](#openai-compatible-responses), with a tool result's images inside its `function_call_output` (`tool_images` is `ToolImages::InOutput`), as the Codex CLI sends them to the backend. An incomplete response ends with `stop_reason` `Length`. The transcript goes through the [shared transform](#before-conversion) first, and a request that fails before it streams is retried like the others.
 
 ### Grok subscription
 
@@ -231,6 +243,8 @@ Models: the default is `grok-4.7`; `grok-4.6` is also in the catalog.
 
 Requests carry xAI's `web_search` and `x_search` tools ahead of your function tools. Each search arrives as `ServerToolStart` and `ServerToolEnd` events named `web_search` (with "Searched X for …" as the summary of an X search) or `web_fetch` for a page read.
 
+A tool result's images follow the function call outputs in a user message (`tool_images` is `ToolImages::UserMessage`), since xAI documents only a string `output`.
+
 ## Before conversion
 
 `agent::transform::transform_messages` is what every built-in adapter does to the transcript before converting it, after pi's `transformMessages`. Use it in your own:
@@ -246,7 +260,7 @@ let messages = transform_messages(&request.messages, &TransformOptions {
 });
 ```
 
-- **Images** in user messages and tool results become one `(image omitted: model does not support images)` note when `supports_images` is false.
+- **Images** in user messages and tool results become one `(image omitted: model does not support images)` note (`(tool image omitted: model does not support images)` in a tool result) when `supports_images` is false.
 - **Another model's thinking** becomes plain text; its seals and server blocks are dropped. A message is the adapter's own when its `provider` and `model` match. Own thinking keeps its signature; empty thinking without one goes.
 - **Tool call ids** from another model pass through `normalize_tool_call_id`, and their results are renamed to match.
 - **Failed and aborted turns** (`stop_reason` `Error` or `Aborted`) are left out: they are incomplete, and replaying them is what makes APIs reject a request.

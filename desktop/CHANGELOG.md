@@ -12,6 +12,9 @@ and the update window shows it.
   network. The sheet loads the models the server lists to pick from, and takes any it does not
   list. Bots pick the provider, its models, and a thinking level as they do a built-in one, and it
   reaches your paired Devices encrypted with the account key.
+- Bots on ChatGPT, Grok, and OpenCode's GPT, Grok, and Muse Spark models see the images their
+  tools return, such as a browser plugin's screenshot or an image file they read. They used to get
+  only the text beside the image.
 - Pairing a computer or restoring your identity no longer asks you to connect a provider your
   account already has. Onboarding waits until the account's providers arrive from the relay, which a
   slow connection or a long list of chats used to outlast.

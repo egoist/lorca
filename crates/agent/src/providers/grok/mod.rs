@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use super::responses;
+use super::responses::{self, ToolImages};
 use crate::models::{self, ModelInfo};
 use crate::provider::{channel_stream, AssistantEvent, AssistantEventStream, ModelRequest, Provider};
 use crate::retry::{send_with_retry, RequestFailure, DEFAULT_MAX_RETRY_DELAY_MS};
@@ -41,6 +41,9 @@ pub struct GrokProvider {
     pub thinking_level: Option<ThinkingLevel>,
     /// The catalog entry for the model, when it has one.
     pub info: Option<&'static ModelInfo>,
+    /// Where tool results' images go: a user message after the outputs, since xAI documents
+    /// only a string `output`.
+    pub tool_images: ToolImages,
     client: reqwest::Client,
 }
 
@@ -54,6 +57,7 @@ impl GrokProvider {
             endpoints: oauth::Endpoints::xai(),
             thinking_level: None,
             info: models::find("grok", model),
+            tool_images: ToolImages::UserMessage,
             client: reqwest::Client::new(),
         }
     }
@@ -104,7 +108,7 @@ impl GrokProvider {
             &request.messages,
             &TransformOptions { provider: "grok", model: &self.model, supports_images: true, normalize_tool_call_id: None },
         );
-        let input = responses::input_items(&transformed);
+        let input = responses::input_items(&transformed, self.tool_images);
 
         // xAI's own search tools: the model searches the web and X on the server and streams
         // `web_search_call` and `x_search_call` items, which become server-tool events here.
@@ -202,6 +206,7 @@ impl Provider for GrokProvider {
 mod tests {
     use super::*;
     use crate::provider::ToolSpec;
+    use crate::providers::responses::testing;
     use crate::types::LlmMessage;
 
     struct StaticTokens;
@@ -260,11 +265,63 @@ mod tests {
     }
 
     #[test]
+    fn a_tool_image_follows_the_outputs_in_a_user_message() {
+        let provider = GrokProvider::new(Arc::new(StaticTokens), None);
+        let mut request = request();
+        request.messages.extend(testing::screenshot_turn("grok", GROK_DEFAULT_MODEL, "AAAA"));
+        let input = provider.body(&request)["input"].clone();
+        assert_eq!(input[2], json!({ "type": "function_call_output", "call_id": "call_1", "output": "Took a screenshot of the page." }));
+        assert_eq!(
+            input[3],
+            json!({ "type": "message", "role": "user", "content": [
+                { "type": "input_text", "text": "Images from the take_screenshot tool result:" },
+                { "type": "input_image", "image_url": "data:image/png;base64,AAAA" },
+            ] })
+        );
+    }
+
+    #[test]
     fn a_token_near_its_end_counts_as_expired() {
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
         let soon = GrokTokens { access_token: "a".into(), refresh_token: "r".into(), id_token: None, account_id: None, email: None, expires_at: now + 60 };
         assert!(soon.is_expired());
         let later = GrokTokens { expires_at: now + 3600, ..soon };
         assert!(!later.is_expired());
+    }
+
+    /// The tokens of a Lorca data directory, used as they are: xAI rotates the refresh token,
+    /// so refreshing here would spend the one the account holds.
+    struct LiveTokens(GrokTokens);
+
+    #[async_trait]
+    impl GrokTokenSource for LiveTokens {
+        async fn tokens(&self) -> Result<GrokTokens, String> {
+            if self.0.is_expired() {
+                return Err("the access token has expired; let Lorca refresh it, then run the probe again".into());
+            }
+            Ok(self.0.clone())
+        }
+        async fn store(&self, _tokens: GrokTokens) -> Result<(), String> {
+            Err("the probe stores no tokens".into())
+        }
+    }
+
+    /// `LORCA_CREDENTIALS=~/.lorca/credentials.json cargo test -p lorca-agent live_grok --
+    /// --ignored --nocapture`: the model reads a random code off a tool's screenshot sent in a
+    /// user message, and the probe reports whether it also reads one inside the output.
+    #[tokio::test]
+    #[ignore]
+    async fn live_grok_reads_a_tool_screenshot() {
+        let Some(tokens) = testing::credential::<GrokTokens>("grok") else { return };
+        let mut provider = GrokProvider::new(Arc::new(LiveTokens(tokens)), None);
+        let options = || crate::RequestOptions::default().with_session_id(&uuid::Uuid::new_v4().to_string());
+        if let Err(problem) = testing::reads_a_screenshot(&provider, options()).await {
+            panic!("{problem}");
+        }
+        provider.tool_images = ToolImages::InOutput;
+        match testing::reads_a_screenshot(&provider, options()).await {
+            Ok(_) => eprintln!("grok read the image inside the function call output too"),
+            Err(problem) => eprintln!("grok did not read the image inside the function call output: {problem}"),
+        }
     }
 }

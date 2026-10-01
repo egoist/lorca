@@ -1,5 +1,6 @@
-//! The Responses API wire shape shared by the subscription adapters: ChatGPT's Codex backend
-//! and xAI's `/v1/responses` both take the same `input` items and stream the same events.
+//! The Responses API wire shape shared by the subscription adapters and the API-key one:
+//! ChatGPT's Codex backend, xAI's `/v1/responses`, and gateways take the same `input` items,
+//! apart from where a tool result's images go ([`ToolImages`]), and stream the same events.
 
 use std::collections::{HashMap, HashSet};
 
@@ -13,23 +14,33 @@ use crate::provider::{AssistantEvent, ToolSpec, WEB_FETCH_TOOL, WEB_SEARCH_TOOL}
 use crate::sse::SseParser;
 use crate::types::{AssistantPart, ContentPart, LlmMessage, StopReason, Usage};
 
-/// The `input` items for a transformed transcript.
-pub(crate) fn input_items(messages: &[LlmMessage]) -> Vec<Value> {
+/// Where the images of a tool result go in the `input`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolImages {
+    /// Inside the `function_call_output`: its `output` becomes `input_text` and `input_image`
+    /// parts, in the result's order. OpenAI's Responses API takes this encoding, and the Codex
+    /// CLI sends its own tool images to the ChatGPT backend this way.
+    InOutput,
+    /// The `output` is the result's text, and one user message after the run of outputs
+    /// carries their images, for a server that documents only a string `output` (xAI) and
+    /// gateways that drop the parts.
+    UserMessage,
+}
+
+/// The `input` items for a transformed transcript, with tool images placed as `tool_images`
+/// says.
+pub(crate) fn input_items(messages: &[LlmMessage], tool_images: ToolImages) -> Vec<Value> {
     let mut input = Vec::new();
+    // The images of the tool results since the last other message, each result's after a line
+    // naming its tool, for `ToolImages::UserMessage`.
+    let mut images = Vec::new();
     for message in messages {
+        if !matches!(message, LlmMessage::ToolResult(_)) {
+            push_images(&mut input, &mut images);
+        }
         match message {
             LlmMessage::User(user) => {
-                let content: Vec<Value> = user
-                    .content
-                    .iter()
-                    .map(|part| match part {
-                        ContentPart::Text { text } => json!({ "type": "input_text", "text": text }),
-                        ContentPart::Image { data, mime_type } => json!({
-                            "type": "input_image",
-                            "image_url": format!("data:{mime_type};base64,{data}"),
-                        }),
-                    })
-                    .collect();
+                let content: Vec<Value> = user.content.iter().map(input_part).collect();
                 input.push(json!({ "type": "message", "role": "user", "content": content }));
             }
             LlmMessage::Assistant(assistant) => {
@@ -53,15 +64,61 @@ pub(crate) fn input_items(messages: &[LlmMessage]) -> Vec<Value> {
                 }
             }
             LlmMessage::ToolResult(result) => {
+                let has_images = result.content.iter().any(|part| matches!(part, ContentPart::Image { .. }));
+                let output = match tool_images {
+                    _ if !has_images => Value::String(result.text()),
+                    ToolImages::InOutput => Value::Array(output_parts(&result.content)),
+                    ToolImages::UserMessage => {
+                        images.push(json!({ "type": "input_text", "text": format!("Images from the {} tool result:", result.tool_name) }));
+                        images.extend(result.content.iter().filter(|part| matches!(part, ContentPart::Image { .. })).map(input_part));
+                        let text = result.text();
+                        Value::String(if text.is_empty() { "(see attached image)".into() } else { text })
+                    }
+                };
                 input.push(json!({
                     "type": "function_call_output",
                     "call_id": result.tool_call_id,
-                    "output": result.text(),
+                    "output": output,
                 }));
             }
         }
     }
+    push_images(&mut input, &mut images);
     input
+}
+
+/// A content part as a Responses input part; an image as a `data:` URL.
+fn input_part(part: &ContentPart) -> Value {
+    match part {
+        ContentPart::Text { text } => json!({ "type": "input_text", "text": text }),
+        ContentPart::Image { data, mime_type } => json!({
+            "type": "input_image",
+            "image_url": format!("data:{mime_type};base64,{data}"),
+        }),
+    }
+}
+
+/// A tool result's content as `function_call_output` parts: each run of text one `input_text`,
+/// joined as [`crate::types::ToolResultMessage::text`] joins it, and each image where it was.
+/// A blank run is left out.
+fn output_parts(content: &[ContentPart]) -> Vec<Value> {
+    content
+        .chunk_by(|a, b| matches!((a, b), (ContentPart::Text { .. }, ContentPart::Text { .. })))
+        .filter_map(|run| match run {
+            [image @ ContentPart::Image { .. }] => Some(input_part(image)),
+            _ => {
+                let text = run.iter().filter_map(ContentPart::as_text).collect::<Vec<_>>().join("\n");
+                (!text.trim().is_empty()).then(|| json!({ "type": "input_text", "text": text }))
+            }
+        })
+        .collect()
+}
+
+/// Sends the tool images gathered for [`ToolImages::UserMessage`] as one user message.
+fn push_images(input: &mut Vec<Value>, images: &mut Vec<Value>) {
+    if !images.is_empty() {
+        input.push(json!({ "type": "message", "role": "user", "content": std::mem::take(images) }));
+    }
 }
 
 /// Function tools in the Responses shape.
@@ -304,9 +361,239 @@ pub(crate) async fn pump(
     let _ = tx.send(AssistantEvent::Done { stop_reason: state.stop_reason, usage }).await;
 }
 
+/// What the Responses adapters' tests share: a turn whose tool returned a screenshot, and a
+/// live probe that asks a model to read one.
+#[cfg(test)]
+pub(crate) mod testing {
+    use base64::Engine;
+    use futures::StreamExt;
+    use serde_json::{json, Value};
+    use tokio_util::sync::CancellationToken;
+
+    use crate::provider::{AssistantAccumulator, ModelRequest, Provider, ToolSpec};
+    use crate::request::RequestOptions;
+    use crate::types::{AssistantMessage, AssistantPart, ContentPart, LlmMessage, StopReason, ToolCall, ToolResultMessage, UserMessage};
+
+    /// The model's `take_screenshot` call and its result: a line of text, then the image.
+    pub(crate) fn screenshot_turn(provider: &str, model: &str, png: &str) -> Vec<LlmMessage> {
+        let mut call = AssistantMessage::empty(provider, model);
+        call.content = vec![AssistantPart::ToolCall(ToolCall { id: "call_1".into(), name: "take_screenshot".into(), arguments: json!({}) })];
+        call.stop_reason = StopReason::ToolUse;
+        vec![LlmMessage::Assistant(call), screenshot("call_1", png)]
+    }
+
+    fn screenshot(call_id: &str, png: &str) -> LlmMessage {
+        LlmMessage::ToolResult(ToolResultMessage {
+            tool_call_id: call_id.into(),
+            tool_name: "take_screenshot".into(),
+            content: vec![ContentPart::text("Took a screenshot of the page."), ContentPart::Image { data: png.into(), mime_type: "image/png".into() }],
+            details: Value::Null,
+            is_error: false,
+            timestamp: 0,
+        })
+    }
+
+    /// One provider's entry in the `credentials.json` that `LORCA_CREDENTIALS` names (a Lorca
+    /// data directory's), or `None` to skip the probe.
+    pub(crate) fn credential<T: serde::de::DeserializeOwned>(key: &str) -> Option<T> {
+        let path = std::env::var("LORCA_CREDENTIALS").ok()?;
+        let text = std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("reading {path}: {error}"));
+        let credentials: Value = serde_json::from_str(&text).expect("credentials.json is JSON");
+        match credentials.get(key).filter(|entry| !entry.is_null()) {
+            Some(entry) => Some(serde_json::from_value(entry.clone()).unwrap_or_else(|error| panic!("{key} in {path}: {error}"))),
+            None => {
+                eprintln!("{key} is not connected in {path}; skipped");
+                None
+            }
+        }
+    }
+
+    /// Asks the model to call `take_screenshot`, returns a screenshot of a random six-digit
+    /// code, and answers the reply when it names the code. The code is only in the pixels.
+    pub(crate) async fn reads_a_screenshot(provider: &dyn Provider, options: RequestOptions) -> Result<String, String> {
+        let code = format!("{:06}", rand::random::<u32>() % 1_000_000);
+        let mut request = ModelRequest {
+            system_prompt: "You are under test. Do what the user asks, with no other tool.".into(),
+            messages: vec![LlmMessage::User(UserMessage::text("Call take_screenshot. The screenshot shows a six-digit code: reply with the code alone."))],
+            tools: vec![ToolSpec {
+                name: "take_screenshot".into(),
+                description: "Takes a screenshot of the test page.".into(),
+                parameters: json!({ "type": "object", "properties": {} }),
+            }],
+            cache_points: Vec::new(),
+            max_tokens: None,
+            options,
+        };
+        let first = complete(provider, &request).await;
+        let calls = first.tool_calls();
+        let [call] = calls.as_slice() else {
+            return Err(format!("expected one take_screenshot call: {:?} {:?}", first.content, first.error_message));
+        };
+        let png = base64::engine::general_purpose::STANDARD.encode(digits_png(&code));
+        let result = screenshot(&call.id, &png);
+        request.messages.extend([LlmMessage::Assistant(first), result]);
+        let reply = complete(provider, &request).await;
+        eprintln!("{} {}: {:?} {:?} usage {:?}", provider.provider_id(), provider.model_id(), reply.stop_reason, reply.text(), reply.usage);
+        match reply.text() {
+            text if text.contains(&code) => Ok(text),
+            text => Err(format!("the reply does not name {code}: {text:?} {:?}", reply.error_message)),
+        }
+    }
+
+    async fn complete(provider: &dyn Provider, request: &ModelRequest) -> AssistantMessage {
+        let mut stream = provider.stream(request.clone(), CancellationToken::new()).await;
+        let mut message = AssistantAccumulator::new(provider.provider_id(), provider.model_id());
+        while let Some(event) = stream.next().await {
+            message.apply(&event);
+        }
+        message.finish(false)
+    }
+
+    /// A PNG of `digits` in a 5×7 dot font, eight pixels a dot, black on white.
+    fn digits_png(digits: &str) -> Vec<u8> {
+        // Each row's five dots, the leftmost in bit 4.
+        const GLYPHS: [[u8; 7]; 10] = [
+            [0x0E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E],
+            [0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E],
+            [0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F],
+            [0x0E, 0x11, 0x01, 0x06, 0x01, 0x11, 0x0E],
+            [0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02],
+            [0x1F, 0x10, 0x1E, 0x01, 0x01, 0x11, 0x0E],
+            [0x06, 0x08, 0x10, 0x1E, 0x11, 0x11, 0x0E],
+            [0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08],
+            [0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E],
+            [0x0E, 0x11, 0x11, 0x0F, 0x01, 0x02, 0x0C],
+        ];
+        const DOT: usize = 8;
+        const MARGIN: usize = 3;
+        let glyphs: Vec<&[u8; 7]> = digits.bytes().map(|digit| &GLYPHS[usize::from(digit - b'0')]).collect();
+        let (width, height) = ((glyphs.len() * 6 - 1 + 2 * MARGIN) * DOT, (7 + 2 * MARGIN) * DOT);
+        // Rows of 8-bit gray, each after the byte that says it is not filtered.
+        let mut pixels = Vec::with_capacity((width + 1) * height);
+        for y in 0..height {
+            pixels.push(0);
+            let row = (y / DOT).wrapping_sub(MARGIN);
+            for x in 0..width {
+                let column = (x / DOT).wrapping_sub(MARGIN);
+                let ink = row < 7 && column % 6 < 5 && glyphs.get(column / 6).is_some_and(|glyph| glyph[row] & (0x10 >> (column % 6)) != 0);
+                pixels.push(if ink { 0 } else { 255 });
+            }
+        }
+        // A zlib stream of stored deflate blocks.
+        let mut zlib = vec![0x78, 0x01];
+        let blocks: Vec<&[u8]> = pixels.chunks(usize::from(u16::MAX)).collect();
+        for (index, block) in blocks.iter().enumerate() {
+            let length = block.len() as u16;
+            zlib.push(u8::from(index + 1 == blocks.len()));
+            zlib.extend(length.to_le_bytes());
+            zlib.extend((!length).to_le_bytes());
+            zlib.extend_from_slice(block);
+        }
+        let (mut a, mut b) = (1u32, 0u32);
+        for &byte in &pixels {
+            a = (a + u32::from(byte)) % 65_521;
+            b = (b + a) % 65_521;
+        }
+        zlib.extend(((b << 16) | a).to_be_bytes());
+
+        let mut header = Vec::new();
+        header.extend((width as u32).to_be_bytes());
+        header.extend((height as u32).to_be_bytes());
+        header.extend([8, 0, 0, 0, 0]);
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        for (kind, data) in [(b"IHDR", header.as_slice()), (b"IDAT", zlib.as_slice()), (b"IEND", &[])] {
+            png.extend((data.len() as u32).to_be_bytes());
+            let start = png.len();
+            png.extend(kind);
+            png.extend_from_slice(data);
+            let mut crc = !0u32;
+            for &byte in &png[start..] {
+                crc ^= u32::from(byte);
+                for _ in 0..8 {
+                    crc = if crc & 1 == 1 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+                }
+            }
+            png.extend((!crc).to_be_bytes());
+        }
+        png
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::{AssistantMessage, ToolCall, ToolResultMessage, UserMessage};
+
+    fn result(id: &str, tool: &str, content: Vec<ContentPart>) -> LlmMessage {
+        LlmMessage::ToolResult(ToolResultMessage { tool_call_id: id.into(), tool_name: tool.into(), content, details: Value::Null, is_error: false, timestamp: 0 })
+    }
+
+    fn png(data: &str) -> ContentPart {
+        ContentPart::Image { data: data.into(), mime_type: "image/png".into() }
+    }
+
+    /// Three tools run at once, two of them returning images, then the user's next message.
+    fn parallel_turn() -> Vec<LlmMessage> {
+        let mut calls = AssistantMessage::empty("p", "m");
+        calls.content = ["browser", "bash", "read"]
+            .iter()
+            .enumerate()
+            .map(|(index, tool)| AssistantPart::ToolCall(ToolCall { id: format!("call_{index}"), name: tool.to_string(), arguments: json!({}) }))
+            .collect();
+        vec![
+            LlmMessage::Assistant(calls),
+            result("call_0", "browser", vec![ContentPart::text("Took a screenshot"), png("AAAA")]),
+            result("call_1", "bash", vec![ContentPart::text("ok")]),
+            result("call_2", "read", vec![png("BBBB")]),
+            LlmMessage::User(UserMessage::text("next")),
+        ]
+    }
+
+    #[test]
+    fn tool_images_go_inside_the_output_in_order() {
+        let mixed = result("call_0", "codemode", vec![ContentPart::text("a"), ContentPart::text("b"), png("AAAA"), ContentPart::text(" "), png("BBBB"), ContentPart::text("c")]);
+        let input = input_items(&[mixed, result("call_1", "bash", vec![ContentPart::text("ok")])], ToolImages::InOutput);
+        // Text runs join as a text-only result's do; a blank run is left out.
+        assert_eq!(
+            input[0]["output"],
+            json!([
+                { "type": "input_text", "text": "a\nb" },
+                { "type": "input_image", "image_url": "data:image/png;base64,AAAA" },
+                { "type": "input_image", "image_url": "data:image/png;base64,BBBB" },
+                { "type": "input_text", "text": "c" },
+            ])
+        );
+        assert_eq!(input[1]["output"], "ok");
+
+        let input = input_items(&parallel_turn(), ToolImages::InOutput);
+        assert_eq!(input[5]["output"], json!([{ "type": "input_image", "image_url": "data:image/png;base64,BBBB" }]));
+        assert_eq!(input.len(), 7, "no message for the images: {input:?}");
+    }
+
+    #[test]
+    fn tool_images_follow_the_run_of_outputs_in_one_user_message() {
+        let turn = parallel_turn();
+        let input = input_items(&turn, ToolImages::UserMessage);
+        let kinds: Vec<&str> = input.iter().map(|item| item["type"].as_str().unwrap()).collect();
+        assert_eq!(kinds, ["function_call", "function_call", "function_call", "function_call_output", "function_call_output", "function_call_output", "message", "message"]);
+        assert_eq!(input[3]["output"], "Took a screenshot");
+        assert_eq!(input[4]["output"], "ok");
+        assert_eq!(input[5]["output"], "(see attached image)");
+        assert_eq!(
+            input[6],
+            json!({ "type": "message", "role": "user", "content": [
+                { "type": "input_text", "text": "Images from the browser tool result:" },
+                { "type": "input_image", "image_url": "data:image/png;base64,AAAA" },
+                { "type": "input_text", "text": "Images from the read tool result:" },
+                { "type": "input_image", "image_url": "data:image/png;base64,BBBB" },
+            ] })
+        );
+        assert_eq!(input[7]["content"], json!([{ "type": "input_text", "text": "next" }]));
+
+        // A turn that ends on its results still sends their images.
+        let ending = input_items(&turn[..4], ToolImages::UserMessage);
+        assert_eq!(ending.last().unwrap()["content"][1]["image_url"], "data:image/png;base64,AAAA");
+    }
 
     #[tokio::test]
     async fn web_search_calls_stream_as_server_tools_and_never_as_blocks() {
