@@ -17,6 +17,7 @@ and the update window shows it.
 - Red spelling underlines no longer appear under API keys, URLs, plugin variables, names, and
   searches as you type them, or in the description, rule, and memory sheets. The composer still
   checks spelling.
+- Bot avatars, image attachments, and the app icon can no longer be dragged out of the window.
 
 ## [0.1.1]
 

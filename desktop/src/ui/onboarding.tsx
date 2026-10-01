@@ -290,7 +290,7 @@ function Welcome(props: { onCreate: () => void; onRestore: () => void; onPair: (
   return (
     <div class="onboarding-center">
       <div class="onboarding-column">
-        <img class="onboarding-icon" src={hostInfo().isDevelopment ? devIconURL : iconURL} width={96} height={96} alt="" draggable={false} />
+        <img class="onboarding-icon" src={hostInfo().isDevelopment ? devIconURL : iconURL} width={96} height={96} alt="" draggable="false" />
         <div class="onboarding-app-name">{hostInfo().name}</div>
         <div class="onboarding-lede">
           {L("Bots that run on computers you own. Your identity is a key pair on this computer — no account, no server that can read your chats.")}
