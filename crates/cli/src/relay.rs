@@ -178,7 +178,8 @@ fn tls() -> Arc<rustls::ClientConfig> {
 
 /// The relay protocol this client speaks, sent as `Lorca-Protocol` with every request. A
 /// relay may refuse one it no longer serves with `426`. 1: group paging, `DELETE /v1/identity`.
-pub const PROTOCOL: u32 = 1;
+/// 2: `POST /v1/machines`.
+pub const PROTOCOL: u32 = 2;
 
 const FILE_TRANSFER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 
@@ -237,9 +238,10 @@ impl RelayClient {
         Ok(value)
     }
 
-    pub async fn health(&self, url: &str) -> RelayResult<()> {
-        Self::check(self.http().get(format!("{url}/v1/health")).send().await?).await?;
-        Ok(())
+    /// Answers the protocol the relay speaks; 0 from one that does not say.
+    pub async fn health(&self, url: &str) -> RelayResult<u32> {
+        let value = Self::check(self.http().get(format!("{url}/v1/health")).send().await?).await?;
+        Ok(value["protocol"].as_u64().unwrap_or(0) as u32)
     }
 
     /// Signed by the identity: registers the identity (idempotent) and attests one machine.
@@ -253,6 +255,14 @@ impl RelayClient {
         let bytes = serde_json::to_vec(&payload).unwrap();
         let body = json!({ "payload": b64(&bytes), "signature": identity.sign(&bytes) });
         Self::check(self.http().post(format!("{url}/v1/identities")).json(&body).send().await?).await?;
+        Ok(())
+    }
+
+    /// The machine behind the bearer attests another for its identity: how a Device without
+    /// the identity key pairs one. Protocol 2.
+    pub async fn attest(&self, url: &str, token: &str, machine_pubkey: &str, box_pubkey: &str) -> RelayResult<()> {
+        let body = json!({ "machine_pubkey": machine_pubkey, "box_pubkey": box_pubkey });
+        Self::check(self.http().post(format!("{url}/v1/machines")).bearer_auth(token).json(&body).send().await?).await?;
         Ok(())
     }
 

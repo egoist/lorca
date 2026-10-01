@@ -17,6 +17,7 @@ import {
   providerName,
   providerSubtitle,
   providerSymbol,
+  unknownDeviceNote,
   usesAPIKey,
   type AutoReviewRule,
   type Device,
@@ -451,7 +452,15 @@ function Placeholder(props: { device: Device | undefined; children: JSX.Element 
       {(device) => (
         <Show
           when={isRunner(device())}
-          fallback={<NoteRow text={L("%@ Devices hold your keys and chats but never run a bot. Pick a Runner: a Device running macOS, Linux, or Windows.", osDisplayName(device().os))} />}
+          fallback={
+            <NoteRow
+              text={
+                device().os === "unknown"
+                  ? unknownDeviceNote()
+                  : L("%@ Devices hold your keys and chats but never run a bot. Pick a Runner: a Device running macOS, Linux, or Windows.", osDisplayName(device().os))
+              }
+            />
+          }
         >
           {props.children}
         </Show>
@@ -526,12 +535,11 @@ function BotsPane() {
 /** The confirmation behind Unpair in the Devices pane. Another Device is unpaired by id; this one
  * forgets the identity, and the app goes back to onboarding. */
 export async function confirmUnpair(device: Device): Promise<void> {
-  // Only a Device that holds the identity pairs others, and only the backup phrase brings the
-  // identity back once this one forgets it.
+  // Only the backup phrase brings the identity back once the Device that holds it forgets it.
   const holdsIdentity = device.isThisDevice && store.isIdentityDevice;
   const informative = device.isThisDevice
     ? holdsIdentity
-      ? L("This computer forgets its keys, credentials, and synced chats, and bots assigned to it stop running until you assign them to another Runner. Your other paired Devices keep everything. Because this computer holds your identity, you need your backup phrase to use this account here again or to pair a new Device.")
+      ? L("This computer forgets its keys, credentials, and synced chats, and bots assigned to it stop running until you assign them to another Runner. Your other paired Devices keep everything, and you can pair again any time. Because this computer holds your identity, your backup phrase becomes the only way to restore it.")
       : L("This computer forgets its keys, credentials, and synced chats, and bots assigned to it stop running until you assign them to another Runner. Your other paired Devices keep everything, and you can pair again any time.")
     : isRunner(device)
       ? L("It loses its keys and synced chats the next time it connects, and bots assigned to it stop running until you assign them to another Runner. You can pair it again any time.")
@@ -597,7 +605,9 @@ function DevicePane() {
               </span>
               <div class="device-header-text">
                 <span class="device-header-name">{current().name}</span>
-                <span class="device-header-model">{`${current().model} · ${current().osVersion}`}</span>
+                <Show when={current().os !== "unknown"}>
+                  <span class="device-header-model">{`${current().model} · ${current().osVersion}`}</span>
+                </Show>
                 <span class="device-header-status" style={{ color: status(current()).color }}>
                   <StatusDot status={current().status} />
                   {status(current()).text}
@@ -605,8 +615,13 @@ function DevicePane() {
               </div>
             </div>
             <Section title={L("Machine")} style="heading">
+              <Show when={current().os === "unknown"}>
+                <NoteRow text={unknownDeviceNote()} />
+              </Show>
               <KeyValueRow label={Entries.machineKey().row} value={current().machineKey} monospaced />
-              <KeyValueRow label={L("OS")} value={`${osDisplayName(current().os)} · ${current().osVersion}`} />
+              <Show when={current().os !== "unknown"}>
+                <KeyValueRow label={L("OS")} value={`${osDisplayName(current().os)} · ${current().osVersion}`} />
+              </Show>
               <KeyValueRow label={L("Role")} value={isRunner(current()) ? L("Runner · runs bots with its own credentials") : L("Device · never runs bots")} />
               <KeyValueRow label={L("Last seen")} value={current().status === "online" ? L("Active now") : Format.lastSeen(current().lastSeen)} />
               <KeyValueRow label={L("Relay")} value={relay()} monospaced />

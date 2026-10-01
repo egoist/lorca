@@ -1,6 +1,7 @@
-//! Pairing. The identity device (A) publishes a pairing string; the joining Device (B) posts a
+//! Pairing. A paired Device (A) publishes a pairing string; the joining Device (B) posts a
 //! sealed request to the relay's pairing mailbox; A attests B's machine and seals the account
-//! key back to it.
+//! key back to it. A attests with the identity key when it holds it, and with its own machine
+//! key otherwise.
 
 use std::sync::Arc;
 
@@ -15,6 +16,8 @@ use crate::model::{host_facts, Device, PairReply, PairRequest};
 
 const PAIR_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 const POLL: std::time::Duration = std::time::Duration::from_millis(1500);
+/// The relay protocol that lets a machine attest another (`POST /v1/machines`).
+const MACHINE_ATTEST_PROTOCOL: u32 = 2;
 
 pub fn parse_pairing_string(text: &str) -> anyhow::Result<(String, String, String, String)> {
     let text = text.trim();
@@ -72,15 +75,18 @@ fn percent_decode(value: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// A: create the mailbox and start waiting. Returns the nonce and the pairing string.
+/// A: create the mailbox and start waiting. Returns the nonce and the pairing string. Any
+/// paired Device can; one without the identity key needs a relay that takes its attestation.
 pub async fn start(app: Arc<App>) -> anyhow::Result<(String, String)> {
-    let identity_file = app.identity.lock().unwrap().clone().ok_or_else(|| anyhow::anyhow!("Only the Device that holds the identity can pair others."))?;
-    let identity = identity_file.identity()?;
     let url = app.relay_url().ok_or_else(|| anyhow::anyhow!("Set a relay URL first. Pairing runs through the relay."))?;
-    let machine_file = app.machine_file().ok_or_else(|| anyhow::anyhow!("No machine"))?;
+    let machine_file = app.machine_file().ok_or_else(|| anyhow::anyhow!("No identity on this Device"))?;
     let machine = machine_file.machine()?;
     if !machine_file.registered {
         crate::sync::ensure_registered(&app, &url).await.map_err(|e| anyhow::anyhow!("{e}"))?;
+    }
+    // Said now, before the other Device posts its request into a pairing that cannot finish.
+    if !app.is_identity_device() && app.relay.health(&url).await.map_err(|e| anyhow::anyhow!("{e}"))? < MACHINE_ATTEST_PROTOCOL {
+        anyhow::bail!("Pairing from this Device needs a newer relay. Update the relay, or pair from the computer that created or restored the identity.");
     }
     let token = crate::sync::token_or_register(&app, &url, &machine).await.map_err(|e| anyhow::anyhow!("{e}"))?;
     let nonce = app.relay.pair_create(&url, &token).await.map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -90,7 +96,7 @@ pub async fn start(app: Arc<App>) -> anyhow::Result<(String, String)> {
     let pairing_string = format!(
         "lorca://pair?relay={}&id={}&ek={}&n={}",
         percent_encode(&url),
-        percent_encode(&identity.pubkey()),
+        percent_encode(&machine_file.identity_pubkey),
         percent_encode(&ek),
         percent_encode(&nonce)
     );
@@ -121,7 +127,7 @@ pub async fn start(app: Arc<App>) -> anyhow::Result<(String, String)> {
 }
 
 async fn wait_for_request(app: &Arc<App>, url: &str, nonce: &str) -> Result<Value, String> {
-    let identity = app.identity.lock().unwrap().clone().and_then(|f| f.identity().ok()).ok_or("no identity")?;
+    let identity = app.identity.lock().unwrap().clone().map(|file| file.identity()).transpose().map_err(|e| e.to_string())?;
     let machine_file = app.machine_file().ok_or("no machine")?;
     let machine = machine_file.machine().map_err(|e| e.to_string())?;
     loop {
@@ -150,10 +156,14 @@ async fn wait_for_request(app: &Arc<App>, url: &str, nonce: &str) -> Result<Valu
         }
 
         // Attest B, then hand it the account key.
-        app.relay.register(url, &identity, &request.machine_pubkey, &request.box_pubkey).await.map_err(|e| e.to_string())?;
+        match &identity {
+            Some(identity) => app.relay.register(url, identity, &request.machine_pubkey, &request.box_pubkey).await,
+            None => app.relay.attest(url, &token, &request.machine_pubkey, &request.box_pubkey).await,
+        }
+        .map_err(|e| e.to_string())?;
         let reply = PairReply {
-            identity_pubkey: identity.pubkey(),
-            content_pubkey: identity.content_pubkey(),
+            identity_pubkey: machine_file.identity_pubkey.clone(),
+            content_pubkey: machine_file.content_pubkey.clone(),
             account_dek: machine_file.account_dek.clone(),
             relay_url: url.to_string(),
         };

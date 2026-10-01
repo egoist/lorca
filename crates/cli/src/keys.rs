@@ -171,7 +171,8 @@ pub struct MachineFile {
     pub os: String,
     pub os_version: String,
     pub model: String,
-    /// Whether the relay has this machine attested by the identity.
+    /// Whether the relay has this machine attested: by the identity, or by the Device that
+    /// paired it.
     #[serde(default)]
     pub registered: bool,
     /// The identity's relay URL at pairing time. `LORCA_RELAY_URL` still overrides.

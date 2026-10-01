@@ -34,6 +34,7 @@ class DevicePaneViewController: SettingsPaneViewController {
     func placeholderRows(for device: Device?) -> [NSView]? {
         guard let device else { return [KeyValueRow(key: L("Waiting for the CLI"), value: "")] }
         guard !device.isRunner else { return nil }
+        if device.os == .unknown { return [NoteRow(text: Device.unknownNote)] }
         return [
             NoteRow(
                 text: L("%@ Devices hold your keys and chats but never run a bot. Pick a Runner: a Device running macOS, Linux, or Windows.", device.os.displayName))
@@ -200,15 +201,25 @@ final class AboutDeviceSettingsViewController: DevicePaneViewController {
         guard let device else { return }
         header.configure(device: device)
 
-        var rows: [NSView] = [
-            KeyValueRow(key: SettingsEntry.machineKey.row, value: device.machineKey, monospaced: true),
-            KeyValueRow(key: L("OS"), value: "\(device.os.displayName) · \(device.osVersion)"),
+        // A machine that never said what it is has no system to show, only why it is listed.
+        let unknown = device.os == .unknown
+        var rows: [NSView] = []
+        if unknown {
+            rows.append(NoteRow(text: Device.unknownNote))
+        }
+        rows.append(KeyValueRow(key: SettingsEntry.machineKey.row, value: device.machineKey, monospaced: true))
+        if !unknown {
+            rows.append(KeyValueRow(key: L("OS"), value: "\(device.os.displayName) · \(device.osVersion)"))
+        }
+        rows.append(
             KeyValueRow(
                 key: L("Role"),
-                value: device.isRunner ? L("Runner · runs bots with its own credentials") : L("Device · never runs bots")),
+                value: device.isRunner ? L("Runner · runs bots with its own credentials") : L("Device · never runs bots")))
+        rows.append(
             KeyValueRow(
                 key: L("Last seen"),
-                value: device.status == .online ? L("Active now") : Format.lastSeen(device.lastSeen)),
+                value: device.status == .online ? L("Active now") : Format.lastSeen(device.lastSeen)))
+        rows.append(
             KeyValueRow(
                 key: L("Relay"),
                 value: store.relayURL.map { url in
@@ -217,8 +228,7 @@ final class AboutDeviceSettingsViewController: DevicePaneViewController {
                     // Why the last try to connect failed, in the CLI's words.
                     return store.relayError.map { "\(url) · \($0)" } ?? L("%@ · offline", url)
                 } ?? L("Not configured"),
-                monospaced: true),
-        ]
+                monospaced: true))
         let unpair = ActionRow(
             key: SettingsEntry.pairing.row, value: L("Paired to this account"), tint: .secondaryLabelColor,
             actionTitle: L("Unpair…"))
@@ -268,6 +278,7 @@ final class DeviceHeaderView: NSView {
         icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 34, weight: .regular)
         name.stringValue = device.name
         model.stringValue = "\(device.model) · \(device.osVersion)"
+        model.isHidden = device.os == .unknown
         dot.status = device.status
 
         switch device.status {

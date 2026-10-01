@@ -182,6 +182,9 @@ impl LocalStore {
             turns_online: Default::default(),
             device_turns: load_device_turns(&connection)?,
             applied_blob_ids: load_ordered_ids(&connection, "applied_blobs")?,
+            listed_machines: Default::default(),
+            unknown_machines: Default::default(),
+            caught_up: false,
         })
     }
 

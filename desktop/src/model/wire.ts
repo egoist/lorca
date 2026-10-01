@@ -66,6 +66,8 @@ export interface WireDevice {
   status: string;
   last_seen: number;
   plugins?: WirePluginStatus[];
+  /** The relay lists the machine, but it never sent its `machine` blob: no name, no `os`. */
+  unknown?: boolean;
 }
 
 export interface WireAttachment {
@@ -351,9 +353,9 @@ export function toDevice(wire: WireDevice): Device {
   const oses: DeviceOS[] = ["macos", "linux", "windows", "ios", "ipados", "android"];
   return {
     id: wire.id,
-    name: wire.name,
+    name: wire.unknown ? L("Unknown Device") : wire.name,
     model: wire.model,
-    os: (oses as string[]).includes(wire.os) ? (wire.os as DeviceOS) : "linux",
+    os: wire.unknown ? "unknown" : (oses as string[]).includes(wire.os) ? (wire.os as DeviceOS) : "linux",
     osVersion: wire.os_version,
     isThisDevice: wire.is_this_device,
     status: wire.status === "online" ? "online" : wire.status === "pairing" ? "pairing" : "offline",

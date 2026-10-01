@@ -271,3 +271,61 @@ async fn a_stopping_relay_delivers_the_pushes_it_took() {
     assert_eq!(delivered.load(Ordering::Relaxed), 1);
     apns.abort();
 }
+
+/// A computer that joined by pairing pairs the next one: the identity device attests the first
+/// with the identity key, that one attests the next with its machine key, and the newest gets
+/// the account. Once unpaired, a computer pairs nobody.
+#[tokio::test]
+async fn a_paired_computer_pairs_another() {
+    let relay = Relay::start(0).await;
+    let app = |name: &str| lorca::app::App::load(lorca::config::Config { home: relay.home.join(name), port: 0 }).unwrap();
+    let (first, second, third) = (app("first"), app("second"), app("third"));
+    lorca::identity::create(&first, Some("First".into())).unwrap();
+    first.set_relay_url(Some(relay.url.clone())).unwrap();
+
+    let (_, code) = lorca::pairing::start(first.clone()).await.unwrap();
+    lorca::pairing::accept(second.clone(), &code, Some("Second".into())).await.unwrap();
+    assert!(!second.is_identity_device());
+
+    let (nonce, code) = lorca::pairing::start(second.clone()).await.unwrap();
+    lorca::pairing::accept(third.clone(), &code, Some("Third".into())).await.unwrap();
+    let (account, joined) = (first.machine_file().unwrap(), third.machine_file().unwrap());
+    assert_eq!(joined.identity_pubkey, account.identity_pubkey);
+    assert_eq!(joined.account_dek, account.account_dek);
+    assert_eq!(relay.state.db.machines_for(&account.identity_pubkey).await.unwrap().len(), 3);
+    third.relay.token(&relay.url, &joined.machine().unwrap()).await.unwrap();
+    for _ in 0..50 {
+        if lorca::pairing::status(&second, &nonce)["state"] == "completed" {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert_eq!(lorca::pairing::status(&second, &nonce)["device"]["name"], "Third");
+
+    lorca::sync::unpair_device(&first, &second.this_device_id().unwrap()).await.unwrap();
+    let error = lorca::pairing::start(second.clone()).await.unwrap_err();
+    assert!(error.to_string().contains("unpaired"), "{error}");
+}
+
+/// `POST /v1/machines` takes a paired machine's bearer and new keys, refuses a key paired with
+/// other keys, and answers `410` for a revoked one.
+#[tokio::test]
+async fn attesting_a_machine_takes_a_bearer_and_keeps_keys_apart() {
+    let relay = Relay::start(0).await;
+    let key = |seed: u8| b64url_encode(ed25519_dalek::SigningKey::from_bytes(&[seed; 32]).verifying_key().as_bytes());
+    let (laptop, box_key) = (key(1), b64url_encode(&[2; 32]));
+    relay.client.attest(&relay.url, &relay.token, &laptop, &box_key).await.unwrap();
+    relay.client.attest(&relay.url, &relay.token, &laptop, &box_key).await.unwrap();
+    assert_eq!(relay.state.db.machines_for("identity").await.unwrap().len(), 2);
+
+    let refused = relay.client.attest(&relay.url, &relay.token, &laptop, &b64url_encode(&[3; 32])).await.unwrap_err();
+    assert_eq!(refused.status, Some(409));
+    let refused = relay.client.attest(&relay.url, "not-a-token", &key(4), &box_key).await.unwrap_err();
+    assert_eq!(refused.status, Some(401));
+    let refused = relay.client.attest(&relay.url, &relay.token, "not-a-key", &box_key).await.unwrap_err();
+    assert_eq!(refused.status, Some(400));
+
+    assert!(relay.state.db.revoke_machine("identity", &laptop).await.unwrap());
+    let refused = relay.client.attest(&relay.url, &relay.token, &laptop, &box_key).await.unwrap_err();
+    assert_eq!(refused.status, Some(410));
+}

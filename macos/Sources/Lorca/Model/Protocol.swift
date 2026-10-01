@@ -124,6 +124,8 @@ enum Wire {
         var status: String
         var lastSeen: Double
         var plugins: [PluginStatus]?
+        /// The relay lists the machine, but it never sent its `machine` blob: no name, no `os`.
+        var unknown: Bool?
     }
 
     struct PluginStatus: Decodable {
@@ -553,9 +555,9 @@ extension Wire.Device {
     func toModel() -> Device {
         Device(
             id: id,
-            name: name,
+            name: unknown == true ? L("Unknown Device") : name,
             model: model,
-            os: Device.OS(rawValue: os) ?? .linux,
+            os: unknown == true ? Device.OS.unknown : Device.OS(rawValue: os) ?? .linux,
             osVersion: osVersion,
             isThisDevice: isThisDevice,
             status: status == "online" ? .online : (status == "pairing" ? .pairing : .offline),

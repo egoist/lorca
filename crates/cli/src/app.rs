@@ -78,11 +78,19 @@ pub struct State {
     pub turns_online: std::collections::HashSet<String>,
     /// The turns each other Device's latest machine blob lists, by machine pubkey.
     pub device_turns: HashMap<String, Vec<LiveTurn>>,
+    /// The relay's machine list as last read: machine pubkey → when the relay attested it, on
+    /// this Device's clock. Not kept across runs.
+    pub listed_machines: HashMap<String, i64>,
+    /// Listed machines that never sent a `machine` blob, which the Device list shows as unknown
+    /// (`sync::settle_unknown_machines`). Not kept across runs.
+    pub unknown_machines: std::collections::BTreeSet<String>,
+    /// This Device's pull reached the relay's head since its sync socket last opened.
+    pub caught_up: bool,
     /// Relay blob ids this device produced or already applied, so its own echoes are no-ops.
     pub applied_blob_ids: Vec<String>,
 }
 
-/// A pairing this identity device is waiting on.
+/// A pairing this Device is waiting on.
 pub struct PendingPairing {
     pub ephemeral: crypto_box::SecretKey,
     pub status: PairingStatus,
@@ -1559,7 +1567,7 @@ impl App {
         let this_id = self.this_device_id();
         let mut devices: Vec<&Device> = state.devices.iter().collect();
         devices.sort_by_key(|d| (Some(d.id.clone()) != this_id, d.name.to_lowercase()));
-        devices
+        let mut out: Vec<Value> = devices
             .into_iter()
             .map(|device| {
                 let is_this = Some(device.id.clone()) == this_id;
@@ -1578,7 +1586,26 @@ impl App {
                     "plugins": device.plugins,
                 })
             })
-            .collect()
+            .collect();
+        // Machines the relay lists that never said what they are come last: a key, presence,
+        // and Unpair, with no name or `os`. One whose `machine` blob landed since is above.
+        let unknown = state.unknown_machines.iter().filter(|id| state.listed_machines.contains_key(*id) && !state.devices.iter().any(|d| &d.id == *id));
+        out.extend(unknown.map(|id| {
+            json!({
+                "id": id,
+                "name": "",
+                "model": "",
+                "os": "",
+                "os_version": "",
+                "machine_key": short_key(id),
+                "is_this_device": false,
+                "status": if state.device_online.contains(id) { "online" } else { "offline" },
+                "last_seen": state.device_seen.get(id).copied().unwrap_or(0) as f64,
+                "plugins": [],
+                "unknown": true,
+            })
+        }));
+        out
     }
 
     /// A chat as a snapshot carries it: its newest messages in the apps' form, and `has_more`

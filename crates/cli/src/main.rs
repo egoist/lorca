@@ -42,7 +42,7 @@ enum Command {
     },
     /// Pair another Device.
     Pair {
-        /// A pairing string from the Device that holds the identity. Omit to create one here.
+        /// A pairing string from a paired Device. Omit to create one here.
         pairing_string: Option<String>,
         /// Name for this Device when joining.
         #[usage(long)]
@@ -165,6 +165,8 @@ async fn main() -> anyhow::Result<()> {
             Some(text) => {
                 let device = pairing::accept(app.clone(), &text, name).await?;
                 println!("Paired as {}. Run `lorca serve` to sync.", device["name"].as_str().unwrap_or("this Device"));
+                // The machine blob goes up now, so the other Devices learn what joined.
+                flush_outbox_once(&app).await;
                 Ok(())
             }
             None => {

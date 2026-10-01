@@ -153,9 +153,14 @@ async fn session(app: &Arc<App>, failures: &mut u32) -> Result<(), RelayError> {
     if !app.relay_connected.swap(true, Ordering::Relaxed) || was_refused || had_problem {
         app.emit_relay_status();
     }
-    // The other Devices dropped this one's turns when the relay last showed it offline; the
-    // first round lists them again.
-    app.state.lock().unwrap().machine_blob_hash = None;
+    {
+        let mut state = app.state.lock().unwrap();
+        // The other Devices dropped this one's turns when the relay last showed it offline;
+        // the first round lists them again.
+        state.machine_blob_hash = None;
+        // What landed while this Device was away is unread until the first pull ends.
+        state.caught_up = false;
+    }
 
     let (mut pull, mut refresh) = (true, true);
     let mut credentials_due = true;
@@ -346,6 +351,10 @@ async fn pull_blobs(app: &Arc<App>, url: &str, token: &str, machine_file: &crate
         if blobs.is_empty() {
             // Caught up, the replay of a relay that cannot page a chat included.
             mark_account_pulled(app, machine_file);
+            app.state.lock().unwrap().caught_up = true;
+            if settle_unknown_machines(app) {
+                app.emit(app.roster_summary());
+            }
             return Ok(());
         }
         // A page this long is a backlog (a fresh pair replays the history): apply it quietly
@@ -530,11 +539,14 @@ async fn drain_blob_deletes(app: &Arc<App>, url: &str, token: &str) -> Result<()
 /// The relay's machine list is the list of paired Devices: presence comes from it, and a
 /// Device it no longer lists was unpaired, so it leaves the roster here too.
 async fn refresh_presence(app: &Arc<App>, url: &str, token: &str) -> Result<(), RelayError> {
-    let (machines, _now) = app.relay.machines(url, token).await?;
+    let (machines, relay_now) = app.relay.machines(url, token).await?;
+    // When the relay attested each machine, on this Device's clock.
+    let skew = crate::config::now_unix() - relay_now;
     let this_id = app.this_device_id();
     let (changed, pruned) = {
         let mut state = app.state.lock().unwrap();
         let before: Vec<bool> = state.devices.iter().map(|d| online(&state, &d.id)).collect();
+        state.listed_machines = machines.iter().map(|m| (m.machine_pubkey.clone(), m.created_at + skew)).collect();
         state.device_online = machines.iter().filter(|m| m.online).map(|m| m.machine_pubkey.clone()).collect();
         for machine in &machines {
             state.device_seen.insert(machine.machine_pubkey.clone(), machine.last_seen);
@@ -557,7 +569,8 @@ async fn refresh_presence(app: &Arc<App>, url: &str, token: &str) -> Result<(), 
     if pruned {
         app.save_state();
     }
-    if changed || pruned {
+    let unknown = settle_unknown_machines(app);
+    if changed || pruned || unknown {
         app.emit(app.roster_summary());
     }
     // A Device that is not online lists nothing: a Runner that stopped mid-turn never shows
@@ -578,6 +591,54 @@ async fn refresh_presence(app: &Arc<App>, url: &str, token: &str) -> Result<(), 
     Ok(())
 }
 
+/// How long the relay may list a machine before the Device list shows it as unknown when no
+/// `machine` blob came from it: a Device that pairs sends its blob within seconds.
+const UNKNOWN_AFTER: i64 = 10 * 60;
+
+/// Works out which machines the relay lists that never said what they are: no `machine` blob
+/// in what this Device pulled, ten minutes after the relay attested them. The Device list shows
+/// those as unknown, so a machine nobody recognizes can be unpaired. Only once this session's
+/// pull has caught up, so a Device still reading the log does not take the Devices whose blobs
+/// it has yet to read for unknown ones; until then the last answer stands. A machine still
+/// inside its ten minutes is looked at again when they end. Returns whether the set changed,
+/// for the caller to tell the app.
+fn settle_unknown_machines(app: &Arc<App>) -> bool {
+    let this_id = app.this_device_id();
+    let now = crate::config::now_unix();
+    let (changed, next) = {
+        let mut state = app.state.lock().unwrap();
+        if !state.caught_up {
+            return false;
+        }
+        let mut next: Option<i64> = None;
+        let mut unknown = std::collections::BTreeSet::new();
+        for (id, attested) in &state.listed_machines {
+            if Some(id) == this_id.as_ref() || state.devices.iter().any(|d| &d.id == id) {
+                continue;
+            }
+            let due = attested + UNKNOWN_AFTER;
+            if due <= now {
+                unknown.insert(id.clone());
+            } else {
+                next = Some(next.map_or(due, |next: i64| next.min(due)));
+            }
+        }
+        let changed = state.unknown_machines != unknown;
+        state.unknown_machines = unknown;
+        (changed, next)
+    };
+    if let Some(due) = next {
+        let app = app.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs((due - now).max(1) as u64)).await;
+            if settle_unknown_machines(&app) {
+                app.emit(app.roster_summary());
+            }
+        });
+    }
+    changed
+}
+
 /// Unpairs another Device: the relay drops its key, and it leaves this roster now rather
 /// than on the next presence refresh. A machine the relay already forgot still leaves.
 pub async fn unpair_device(app: &Arc<App>, id: &str) -> Result<(), String> {
@@ -595,6 +656,8 @@ pub async fn unpair_device(app: &Arc<App>, id: &str) -> Result<(), String> {
         state.device_seen.remove(id);
         state.device_online.remove(id);
         state.turns_online.remove(id);
+        state.listed_machines.remove(id);
+        state.unknown_machines.remove(id);
     }
     app.save_state();
     app.emit(app.roster_summary());
@@ -896,5 +959,47 @@ mod tests {
 
         // Pulled once, it answers at once.
         assert!(wait_for_account(app, Duration::from_millis(1)).await);
+    }
+
+    /// A machine the relay lists that never sent its `machine` blob shows as unknown once the
+    /// pull has caught up and ten minutes have passed since the relay attested it. Its blob
+    /// makes it a Device like any other, and a key the relay stops listing leaves at once.
+    #[tokio::test]
+    async fn a_listed_machine_that_never_said_what_it_is_shows_as_unknown() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        crate::identity::create(app, Some("Runner".into())).unwrap();
+        let unknown = || -> Vec<String> {
+            let snapshot = app.snapshot();
+            snapshot["devices"].as_array().unwrap().iter().filter(|d| d["unknown"] == true).map(|d| d["id"].as_str().unwrap().to_string()).collect()
+        };
+        let (silent, fresh) = (crate::keys::Machine::generate().pubkey(), crate::keys::Machine::generate().pubkey());
+        let now = crate::config::now_unix();
+        {
+            let mut state = app.state.lock().unwrap();
+            state.listed_machines.insert(silent.clone(), now - UNKNOWN_AFTER - 5);
+            state.listed_machines.insert(fresh.clone(), now - 5);
+            state.listed_machines.insert(app.this_device_id().unwrap(), now - UNKNOWN_AFTER - 5);
+        }
+        assert!(!settle_unknown_machines(app), "a Device still reading the log takes nobody for unknown");
+        assert!(unknown().is_empty());
+
+        app.state.lock().unwrap().caught_up = true;
+        assert!(settle_unknown_machines(app));
+        assert_eq!(unknown(), [silent.clone()]);
+        let snapshot = app.snapshot();
+        let entry = snapshot["devices"].as_array().unwrap().iter().find(|d| d["id"] == silent.as_str()).unwrap();
+        assert_eq!((entry["name"].as_str(), entry["os"].as_str(), entry["is_this_device"].as_bool()), (Some(""), Some(""), Some(false)));
+
+        let device = Device { id: silent.clone(), name: "Laptop".into(), model: String::new(), os: "windows".into(), os_version: String::new(), box_pubkey: String::new(), plugins: Vec::new(), updated_at: now };
+        upsert_device(&mut app.state.lock().unwrap().devices, device);
+        assert!(unknown().is_empty(), "its blob landed");
+        assert!(settle_unknown_machines(app));
+
+        app.state.lock().unwrap().listed_machines.insert(fresh.clone(), now - UNKNOWN_AFTER - 1);
+        assert!(settle_unknown_machines(app));
+        assert_eq!(unknown(), [fresh.clone()]);
+        app.state.lock().unwrap().listed_machines.remove(&fresh);
+        assert!(unknown().is_empty(), "unpaired from another Device");
     }
 }

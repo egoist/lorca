@@ -65,7 +65,8 @@ pub struct RelayProblem {
     /// The error as it came: the relay's answer, or why none came.
     pub message: String,
     /// The relay has no record of this Device: it was reset, or it is not the relay that
-    /// attested this Device. Only the identity device attests one, so this Device pairs again.
+    /// attested this Device. Only an identity device attests itself again, so this Device
+    /// pairs again.
     pub unknown_machine: bool,
 }
 

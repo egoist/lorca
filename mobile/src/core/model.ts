@@ -36,6 +36,8 @@ export interface Device {
   last_seen: number;
   /// Plugins installed on that Runner, with their setup state.
   plugins?: PluginStatus[];
+  /// The relay lists the machine, but it never sent its `machine` blob: no name, no `os`.
+  unknown?: boolean;
 }
 
 /// A plugin as its Runner advertises it: installed, and in what state.
@@ -57,6 +59,11 @@ export function connectedProviders(providers: ProviderStatus[]): string[] {
 
 export function isRunner(device: Device): boolean {
   return device.os === "macos" || device.os === "linux" || device.os === "windows";
+}
+
+/// What a Device goes by: a machine that never said what it is has no name of its own.
+export function deviceName(device: Device): string {
+  return device.unknown ? t("Unknown Device") : device.name;
 }
 
 export type Accent = "indigo" | "blue" | "teal" | "green" | "orange" | "pink" | "purple" | "red";

@@ -36,6 +36,7 @@ const ANDROID: Record<string, string> = {
   iphone: "smartphone",
   ipad: "tablet",
   smartphone: "smartphone",
+  "questionmark.circle": "help",
   "wand.and.stars": "auto_fix_high",
   "hammer.fill": "handyman",
   "book.fill": "menu_book",

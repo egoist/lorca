@@ -570,10 +570,8 @@ function Done(props: { origin: Origin; botName: string | undefined }) {
           ? L("%@ is ready to talk to. Pair another Device any time from the File menu.", props.botName)
           : L("Bots you create here run on this computer with your account's provider credentials. Pair another Device any time from the File menu.");
       case "restored":
-        return L("Your bots and chats sync to this computer, and it can run bots too. Pair another Device any time from the File menu.");
-      // Only the computer that holds the identity pairs others.
       case "paired":
-        return L("Your bots and chats sync to this computer, and it can run bots too.");
+        return L("Your bots and chats sync to this computer, and it can run bots too. Pair another Device any time from the File menu.");
     }
   };
   return (

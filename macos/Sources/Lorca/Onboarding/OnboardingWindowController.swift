@@ -488,10 +488,9 @@ final class OnboardingViewController: NSViewController {
                 L("Your bots and chats sync to this computer, and it can run bots too. Pair another Device any time from the File menu.")
             )
         case .paired:
-            // Only the computer that holds the identity pairs others.
             return (
                 L("This computer is paired"),
-                L("Your bots and chats sync to this computer, and it can run bots too.")
+                L("Your bots and chats sync to this computer, and it can run bots too. Pair another Device any time from the File menu.")
             )
         }
     }

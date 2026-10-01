@@ -98,8 +98,8 @@ impl IntoResponse for ApiError {
 pub type ApiResult<T> = Result<T, ApiError>;
 
 /// The protocol this relay speaks, in `/v1/health`. A client sends the one it speaks as
-/// `Lorca-Protocol`. 1: group paging, `DELETE /v1/identity`.
-pub const PROTOCOL: u32 = 1;
+/// `Lorca-Protocol`. 1: group paging, `DELETE /v1/identity`. 2: `POST /v1/machines`.
+pub const PROTOCOL: u32 = 2;
 
 /// Turns away a client older than `--min-protocol` before anything else looks at it. The
 /// answer is the same on every route, the sync socket's upgrade included, so a client learns
@@ -129,7 +129,7 @@ pub fn router(state: AppState) -> Router {
         .route("/metrics", get(crate::metrics::serve))
         .route("/v1/sync", get(sync_socket))
         .route("/v1/identity", axum::routing::delete(delete_identity))
-        .route("/v1/machines", get(list_machines))
+        .route("/v1/machines", get(list_machines).post(attest_machine))
         .route("/v1/machines/{machine_pubkey}", axum::routing::delete(revoke_machine))
         .route("/v1/blobs", get(list_blobs).put(put_blob.layer(axum::middleware::from_fn_with_state(state.clone(), crate::limit::large_uploads))))
         .route("/v1/blobs/{id}", get(get_blob).delete(delete_blob))
@@ -185,17 +185,32 @@ struct RegisterIdentity {
 }
 
 /// Registers an identity (idempotent) and attests one machine for it. Signed by the identity
-/// key. Used at identity creation, restore, and for each Device the identity pairs.
+/// key. Used at identity creation, restore, and for each Device an identity device pairs.
 async fn register_identity(State(state): State<AppState>, Json(signed): Json<SignedRequest>) -> ApiResult<Json<Value>> {
     let (body, identity_pubkey): (RegisterIdentity, String) = signed.verify()?;
-    crate::auth::verifying_key(&body.machine.machine_pubkey)?;
-    if b64url_decode(&body.machine.box_pubkey)?.len() != 32 {
-        return Err(ApiError::bad_request("box_pubkey must be 32 bytes"));
-    }
+    check_machine_keys(&body.machine)?;
     let attestation = serde_json::to_string(&json!({ "payload": signed.payload, "signature": signed.signature })).unwrap();
     let machine_pubkey = body.machine.machine_pubkey.clone();
     state.db.register_identity(&identity_pubkey, &body.content_pubkey, &body.machine.machine_pubkey, &body.machine.box_pubkey, &attestation).await?;
     Ok(Json(json!({ "identity_pubkey": identity_pubkey, "machine_pubkey": machine_pubkey })))
+}
+
+fn check_machine_keys(machine: &MachineKeys) -> ApiResult<()> {
+    crate::auth::verifying_key(&machine.machine_pubkey)?;
+    if b64url_decode(&machine.box_pubkey)?.len() != 32 {
+        return Err(ApiError::bad_request("box_pubkey must be 32 bytes"));
+    }
+    Ok(())
+}
+
+/// A paired machine attests another for its identity: how a Device without the identity key
+/// pairs one. The attestation the relay keeps names the machine that vouched. An unpaired
+/// machine has no bearer, so it attests nothing.
+async fn attest_machine(State(state): State<AppState>, auth: Auth, Json(body): Json<MachineKeys>) -> ApiResult<Json<Value>> {
+    check_machine_keys(&body)?;
+    let attestation = serde_json::to_string(&json!({ "by": auth.machine_pubkey, "at": now() })).unwrap();
+    state.db.attest_machine(&auth.identity_pubkey, &auth.machine_pubkey, &body.machine_pubkey, &body.box_pubkey, &attestation).await?;
+    Ok(Json(json!({ "identity_pubkey": auth.identity_pubkey, "machine_pubkey": body.machine_pubkey })))
 }
 
 #[derive(Debug, Deserialize)]

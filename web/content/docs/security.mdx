@@ -33,6 +33,8 @@ Devices prove who they are by signing a challenge with their key. There is nothi
 
 A pairing code carries a one-time public key. The new device sends its keys sealed to that one-time key; the existing device answers with the account key sealed to the new device. The relay passes both messages without being able to open either. A code expires after ten minutes or when you cancel it.
 
+Any paired computer can pair a new device. Every paired device shows in your device list, one that never says what it is as **Unknown Device**, so you can unpair a device you don't recognize.
+
 ## Unpairing
 
 Unpairing a device makes the relay refuse its key for good. The device deletes its keys, credentials, and chats the next time it connects.

@@ -258,6 +258,11 @@ pub trait Store: Send + Sync {
     /// Registers the identity (idempotent) and attests one machine. `410` for a revoked key,
     /// `409` for an identity known under another content key.
     async fn register_identity(&self, identity_pubkey: &str, content_pubkey: &str, machine_pubkey: &str, box_pubkey: &str, attestation: &str) -> ApiResult<()>;
+    /// A paired machine (`by`) attests another for its identity. `404` when `by` is not one of
+    /// the identity's machines (`410` when it was unpaired), `410` for a revoked key, `409` for
+    /// a key already paired with other keys or to another identity. The same keys again change
+    /// nothing.
+    async fn attest_machine(&self, identity_pubkey: &str, by: &str, machine_pubkey: &str, box_pubkey: &str, attestation: &str) -> ApiResult<()>;
     /// `404` for an unknown machine, `410` for a revoked one.
     async fn create_challenge(&self, nonce: &str, machine_pubkey: &str, expires_at: i64) -> ApiResult<()>;
     /// Spends the challenge (a nonce is good once), checks it was this machine's and is still

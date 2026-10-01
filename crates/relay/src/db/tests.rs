@@ -169,6 +169,34 @@ async fn machines_challenges_envelopes_and_revocation() {
 }
 
 #[tokio::test]
+async fn a_paired_machine_attests_another() {
+    for (store, _) in backends().await {
+        let (who, mac, laptop, phone) = (name("identity"), name("mac"), name("laptop"), name("phone"));
+        ok!(store.register_identity(&who, "content", &mac, "box", "attestation"));
+        ok!(store.attest_machine(&who, &mac, &laptop, "laptop-box", "by mac"));
+        // A machine paired this way pairs the next one, and signs in like any other.
+        ok!(store.attest_machine(&who, &laptop, &phone, "phone-box", "by laptop"));
+        assert_eq!(ok!(store.machines_for(&who)).len(), 3, "{}", store.describe());
+        let nonce = name("nonce");
+        ok!(store.create_challenge(&nonce, &phone, now() + 60));
+        assert_eq!(ok!(store.redeem_challenge(&nonce, &phone)).identity_pubkey, who);
+
+        ok!(store.attest_machine(&who, &mac, &laptop, "laptop-box", "the same keys again"));
+        assert!(store.attest_machine(&who, &mac, &laptop, "another-box", "attestation").await.is_err(), "a paired machine keeps its box key");
+        let (other, theirs) = (name("identity"), name("theirs"));
+        ok!(store.register_identity(&other, "content", &theirs, "box", "attestation"));
+        assert!(store.attest_machine(&other, &theirs, &laptop, "laptop-box", "attestation").await.is_err(), "a key stays with its identity");
+        assert!(store.attest_machine(&who, &theirs, &name("new"), "box", "attestation").await.is_err(), "only the identity's own machines attest");
+
+        // An unpaired machine attests nothing, and nothing attests its key again.
+        assert!(ok!(store.revoke_machine(&who, &laptop)));
+        assert!(store.attest_machine(&who, &laptop, &name("new"), "box", "attestation").await.is_err());
+        assert!(store.attest_machine(&who, &mac, &laptop, "laptop-box", "attestation").await.is_err());
+        assert_eq!(ok!(store.machines_for(&who)).len(), 2);
+    }
+}
+
+#[tokio::test]
 async fn the_pairing_mailbox() {
     for (store, _) in backends().await {
         let (who, nonce) = (name("identity"), name("nonce"));

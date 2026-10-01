@@ -186,7 +186,8 @@ export interface ProviderCredential {
 
 // MARK: - Device
 
-export type DeviceOS = "macos" | "linux" | "windows" | "ios" | "ipados" | "android";
+/** `unknown` is a machine the relay lists that never said what it is: never a Runner. */
+export type DeviceOS = "macos" | "linux" | "windows" | "ios" | "ipados" | "android" | "unknown";
 
 export function osDisplayName(os: DeviceOS): string {
   switch (os) {
@@ -202,6 +203,8 @@ export function osDisplayName(os: DeviceOS): string {
       return "iPadOS";
     case "android":
       return "Android";
+    case "unknown":
+      return "";
   }
 }
 
@@ -249,6 +252,11 @@ export function roleLabel(device: Device): string {
   return isRunner(device) ? L("Runner") : L("Device");
 }
 
+/** What the Device panes say about a machine that never said what it is. */
+export function unknownDeviceNote(): string {
+  return L("This machine is paired to your account but has not sent its name or system. If you don't recognize it, unpair it.");
+}
+
 /** The symbol for a Device: its kind of machine. */
 export function deviceSymbol(device: Device): string {
   switch (device.os) {
@@ -267,6 +275,8 @@ export function deviceSymbol(device: Device): string {
       return "ipad";
     case "android":
       return "smartphone";
+    case "unknown":
+      return "questionmark.circle";
   }
 }
 

@@ -385,6 +385,31 @@ pub fn register_identity(
     Ok(())
 }
 
+/// A paired machine attests another for its identity.
+pub fn attest_machine(connection: &Connection, identity_pubkey: &str, by: &str, machine_pubkey: &str, box_pubkey: &str, attestation: &str) -> ApiResult<()> {
+    if !machine(connection, by)?.is_some_and(|attester| attester.identity_pubkey == identity_pubkey) {
+        if is_revoked(connection, by)? {
+            return Err(ApiError::gone("Machine was unpaired"));
+        }
+        return Err(ApiError::not_found("Unknown machine"));
+    }
+    if is_revoked(connection, machine_pubkey)? {
+        return Err(ApiError::gone("Machine was unpaired"));
+    }
+    if let Some(existing) = machine(connection, machine_pubkey)? {
+        if existing.identity_pubkey == identity_pubkey && existing.box_pubkey == box_pubkey {
+            return Ok(());
+        }
+        return Err(ApiError::conflict("Machine is already paired"));
+    }
+    connection.execute(
+        "INSERT INTO machines (machine_pubkey, identity_pubkey, box_pubkey, attestation, last_seen, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+        params![machine_pubkey, identity_pubkey, box_pubkey, attestation, now()],
+    )?;
+    Ok(())
+}
+
 // MARK: - Auth challenges
 
 pub fn create_challenge(connection: &Connection, nonce: &str, machine_pubkey: &str, expires_at: i64) -> ApiResult<()> {
@@ -781,6 +806,11 @@ impl Store for Sqlite {
     async fn register_identity(&self, identity_pubkey: &str, content_pubkey: &str, machine_pubkey: &str, box_pubkey: &str, attestation: &str) -> ApiResult<()> {
         let args = [identity_pubkey, content_pubkey, machine_pubkey, box_pubkey, attestation].map(str::to_string);
         self.write(move |db| register_identity(db, &args[0], &args[1], &args[2], &args[3], &args[4])).await
+    }
+
+    async fn attest_machine(&self, identity_pubkey: &str, by: &str, machine_pubkey: &str, box_pubkey: &str, attestation: &str) -> ApiResult<()> {
+        let args = [identity_pubkey, by, machine_pubkey, box_pubkey, attestation].map(str::to_string);
+        self.write(move |db| attest_machine(db, &args[0], &args[1], &args[2], &args[3], &args[4])).await
     }
 
     async fn create_challenge(&self, nonce: &str, machine_pubkey: &str, expires_at: i64) -> ApiResult<()> {

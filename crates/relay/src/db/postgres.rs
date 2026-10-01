@@ -367,6 +367,36 @@ impl Store for Postgres {
         Ok(())
     }
 
+    async fn attest_machine(&self, identity_pubkey: &str, by: &str, machine_pubkey: &str, box_pubkey: &str, attestation: &str) -> ApiResult<()> {
+        let mut client = self.client().await?;
+        let tx = client.transaction().await?;
+        // Under the identity's lock, so `by` cannot be unpaired between the check and the insert.
+        lock_identity(&tx, identity_pubkey).await?;
+        if tx.query_opt("SELECT 1 FROM machines WHERE machine_pubkey = $1 AND identity_pubkey = $2", &[&by, &identity_pubkey]).await?.is_none() {
+            if tx.query_opt("SELECT 1 FROM revoked_machines WHERE machine_pubkey = $1", &[&by]).await?.is_some() {
+                return Err(ApiError::gone("Machine was unpaired"));
+            }
+            return Err(ApiError::not_found("Unknown machine"));
+        }
+        if tx.query_opt("SELECT 1 FROM revoked_machines WHERE machine_pubkey = $1", &[&machine_pubkey]).await?.is_some() {
+            return Err(ApiError::gone("Machine was unpaired"));
+        }
+        if let Some(row) = tx.query_opt("SELECT identity_pubkey, box_pubkey FROM machines WHERE machine_pubkey = $1", &[&machine_pubkey]).await? {
+            if row.get::<_, String>(0) == identity_pubkey && row.get::<_, String>(1) == box_pubkey {
+                return Ok(());
+            }
+            return Err(ApiError::conflict("Machine is already paired"));
+        }
+        tx.execute(
+            "INSERT INTO machines (machine_pubkey, identity_pubkey, box_pubkey, attestation, last_seen, created_at)
+             VALUES ($1, $2, $3, $4, $5, $5)",
+            &[&machine_pubkey, &identity_pubkey, &box_pubkey, &attestation, &now()],
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     async fn create_challenge(&self, nonce: &str, machine_pubkey: &str, expires_at: i64) -> ApiResult<()> {
         let client = self.client().await?;
         if client.query_opt("SELECT 1 FROM machines WHERE machine_pubkey = $1", &[&machine_pubkey]).await?.is_none() {

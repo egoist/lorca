@@ -14,6 +14,9 @@ export function deviceSymbol(os: string, model: string): string {
       return "iphone";
     case "ipados":
       return "ipad";
+    // A machine the relay lists that never said what it is.
+    case "":
+      return "questionmark.circle";
     default:
       return "smartphone";
   }

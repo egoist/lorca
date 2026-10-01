@@ -13,6 +13,7 @@ extension Device {
         case .ios: return "iphone"
         case .ipados: return "ipad"
         case .android: return "smartphone"
+        case .unknown: return "questionmark.circle"
         }
     }
 }

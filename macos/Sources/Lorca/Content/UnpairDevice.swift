@@ -6,15 +6,14 @@ import AppKit
 enum UnpairDevice {
     static func confirm(_ device: Device, in window: NSWindow?) {
         let store = AppStore.shared
-        // Only a Device that holds the identity pairs others, and only the backup phrase brings
-        // the identity back once this one forgets it.
+        // Only the backup phrase brings the identity back once the Device that holds it forgets it.
         let holdsIdentity = device.isThisDevice && store.isIdentityDevice
         let alert = NSAlert()
         if device.isThisDevice {
             alert.messageText = L("Unpair this computer?")
             alert.informativeText =
                 holdsIdentity
-                ? L("This computer forgets its keys, credentials, and synced chats, and bots assigned to it stop running until you assign them to another Runner. Your other paired Devices keep everything. Because this computer holds your identity, you need your backup phrase to use this account here again or to pair a new Device.")
+                ? L("This computer forgets its keys, credentials, and synced chats, and bots assigned to it stop running until you assign them to another Runner. Your other paired Devices keep everything, and you can pair again any time. Because this computer holds your identity, your backup phrase becomes the only way to restore it.")
                 : L("This computer forgets its keys, credentials, and synced chats, and bots assigned to it stop running until you assign them to another Runner. Your other paired Devices keep everything, and you can pair again any time.")
         } else {
             alert.messageText = L("Unpair \"%@\"?", device.name)

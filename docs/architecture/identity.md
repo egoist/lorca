@@ -2,7 +2,7 @@
 
 An identity is keys you hold.
 
-After Happy’s layering, the Device that creates or restores the identity is the identity device.
+After Happy’s layering, the Device that creates or restores the identity is the identity device. It alone holds the master secret, so it alone registers the identity on a relay, again when a relay forgot the account. Every paired Device holds the account DEK, and any paired computer pairs others.
 
 | Layer                    | What                                                                                | Where                                                                                                |
 | ------------------------ | ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
@@ -10,7 +10,7 @@ After Happy’s layering, the Device that creates or restores the identity is th
 | Content keypair          | X25519, HKDF from master. Secret unseals the DEK. Public key seals it.              | Secret on Devices that have the master. Public key on the relay.                                     |
 | Identity signing key     | Ed25519, HKDF from master.                                                          | Private local. Public key on the relay; the identity id is `hash(pubkey)`.                           |
 | Account DEK              | Random XChaCha20-Poly1305 key. Encrypts roster, chats, messages, machine metadata, provider credentials. | Made locally. On the relay as a `key` blob **sealed** to the content public key; handed to each paired machine inside the sealed pairing reply. |
-| Machine keypair          | One 32-byte secret per Device → HKDF → Ed25519 signing key + X25519 box key.        | `~/.lorca/machine.json`. Public keys on the relay, attested by the identity.                       |
+| Machine keypair          | One 32-byte secret per Device → HKDF → Ed25519 signing key + X25519 box key.        | `~/.lorca/machine.json`. Public keys on the relay, attested by the identity or by the Device that paired it. |
 | Chat/job envelopes       | Account DEK for roster/chat/machine/credentials blobs; sealed box to the Runner’s box key for jobs. | Relay stores ciphertext.                                                                          |
 | Push key                 | HKDF from the account DEK. Seals what a push says.                                  | Every Device derives it. An iPhone keeps a copy in its app group's keychain for the notification extension. |
 | Ephemeral pairing key    | X25519, one handshake.                                                              | Devices; discarded after pairing.                                                                    |
@@ -21,9 +21,9 @@ Recovery: restore the master secret from the backup phrase → re-derive content
 
 ## Pairing a Device
 
-1. Device A, an identity device (attesting B in step 3 takes the identity signing key), asks the relay for a pairing nonce and shows a pairing string: `lorca://pair?relay=…&id=<identity pubkey>&ek=<ephemeral pubkey>&n=<nonce>`. The CLI waits on it for ten minutes whether or not the sheet stays open (Done keeps the code good). Cancel retires it: `pair.cancel` drops the waiter and deletes the mailbox (`DELETE /v1/pair/{nonce}`), so a Device that pastes the code afterwards is told at once instead of polling out the TTL.
+1. Device A, any paired computer (the Mac and desktop apps offer Pair a Device on every one; a phone only joins), asks the relay for a pairing nonce and shows a pairing string: `lorca://pair?relay=…&id=<identity pubkey>&ek=<ephemeral pubkey>&n=<nonce>`. The CLI waits on it for ten minutes whether or not the sheet stays open (Done keeps the code good). Cancel retires it: `pair.cancel` drops the waiter and deletes the mailbox (`DELETE /v1/pair/{nonce}`), so a Device that pastes the code afterwards is told at once instead of polling out the TTL.
 2. Device B pastes it (onboarding, or `lorca pair <string>`). B generates its machine keys and posts a request sealed to `ek` into the relay’s pairing mailbox (`POST /v1/pair/{nonce}/request`, no auth): its machine public key, box public key, `name`, `os`. `pair.accept` emits `pair.posted` once the request is up and then polls for the reply; `pair.abort` ends that wait, a newer `pair.accept` replaces it, and a mailbox that is gone (cancelled or expired) fails the wait with a message that says to get a fresh code.
-3. A polls the mailbox, unseals the request, attests B on the relay with an identity-signed `POST /v1/identities`, and posts a reply sealed to B’s box key: identity public key, content public key, the **account DEK**, and the relay URL.
+3. A polls the mailbox, unseals the request, attests B on the relay, and posts a reply sealed to B’s box key: identity public key, content public key, the **account DEK**, and the relay URL. An identity device attests B with an identity-signed `POST /v1/identities`; any other Device sends `POST /v1/machines` with its own bearer, and the relay records that machine as B’s attester. That takes relay protocol 2, so `pair.start` on a Device without the identity key reads the relay's `/v1/health` first and fails at once on an older relay, before it shows a code.
 4. B unseals the reply, saves `machine.json`, authenticates with the challenge, and uploads its `machine` blob (`name`, `os`, installed plugins and their state).
 5. B syncs the roster, the account’s credentials, and the chats, and shows up in the Device list. Its sync loop starts as soon as the keys are saved, and its first pull takes everything but the messages before the chats' newest messages; `sync.account` answers once that part has landed, so onboarding learns whether the account has a provider without waiting for the chats. A Runner is ready for bots as soon as the `credentials` blob lands.
 
@@ -31,9 +31,11 @@ App ↔ CLI on one machine uses `127.0.0.1`; those keys are already local.
 
 ## Unpairing a Device
 
-Any paired Device can unpair any other from its Device list (`device.unpair`), and a Device unpairs itself with `identity.forget`: Unpair on this computer's Devices pane in the Mac and desktop apps, Unpair This Phone on a phone. Either way the CLI calls `DELETE /v1/machines/{machine_pubkey}` with its bearer token: the relay drops the machine row, remembers the key in `revoked_machines`, deletes the envelopes sealed to it, closes its sync socket, and signals `machines` to the identity's other sockets. A revoked key never authenticates again: its bearer tokens are refused, its challenge answers `410 Gone`, and the identity cannot re-attest it. A Device that pairs again generates a new machine key. A Device unpairing itself gives the relay five seconds and forgets the identity either way; one the relay did not hear from stays in the other Devices' lists, offline, until one of them unpairs it.
+Any paired Device can unpair any other from its Device list (`device.unpair`), and a Device unpairs itself with `identity.forget`: Unpair on this computer's Devices pane in the Mac and desktop apps, Unpair This Phone on a phone. Either way the CLI calls `DELETE /v1/machines/{machine_pubkey}` with its bearer token: the relay drops the machine row, remembers the key in `revoked_machines`, deletes the envelopes sealed to it, closes its sync socket, and signals `machines` to the identity's other sockets. A revoked key never authenticates again: its bearer tokens are refused, its challenge answers `410 Gone`, and neither the identity nor a paired machine can attest it again. Without a bearer it attests no other machine either, so an unpaired computer pairs nobody. A Device that pairs again generates a new machine key. A Device unpairing itself gives the relay five seconds and forgets the identity either way; one the relay did not hear from stays in the other Devices' lists, offline, until one of them unpairs it.
 
 The relay's machine list is the list of paired Devices. A Device reads it when its sync socket opens and whenever the relay signals `machines`, and drops a Device it no longer lists, so the other Devices see an unpaired one leave at once; a stale `machine` blob for a key the relay does not list is ignored. The unpaired Device learns when its socket closes and the relay refuses the next one: a `410` from the relay makes its CLI forget the identity (keys, credentials, chats), and the app shows onboarding. That holds for the identity device too: a phone can unpair a lost computer, and the backup phrase restores the identity on a new machine key.
+
+A machine the relay lists that never sent a `machine` blob is an unknown Device (`sync::settle_unknown_machines`): the snapshot and `roster.changed` list it after the others with `unknown: true` and no name or `os`, and the apps show Unknown Device with a note to unpair a machine nobody recognizes. Any paired Device can attest one, so none stays hidden from the Device list. A Device takes a machine for unknown only once its pull has caught up since its socket opened, so one still reading the log does not mistake the Devices whose blobs it has yet to read, and only ten minutes after the relay attested it, which is time enough for a Device that pairs to send its blob (`lorca pair <string>` sends it before it exits). A blob that arrives later makes it a Device like any other.
 
 ## Devices and Runners
 
@@ -52,7 +54,7 @@ Runner status is derived from `os` alone. There is no flag to opt a phone in or 
 
 The relay stores:
 
-- Identity public key and content public key; machine signing and box public keys with the identity’s attestation
+- Identity public key and content public key; machine signing and box public keys with their attestation: the identity’s signature, or the paired machine that attested them
 - Blob ids, kinds, sequence numbers, timestamps, size
 - A blob's slot: the random id of the message it is a version of, `roster`, `credentials`, `machine-<machine public key>`, or `read-<chat id>`
 - A blob's group: the random id of the chat a message, read mark, or attachment belongs to, and the ids of deleted chats
