@@ -13,7 +13,7 @@ use crate::agent_loop::{
     run_agent_loop, run_agent_loop_continue, AfterToolCallContext, AfterToolCallResult, AgentContext, AgentLoopConfig,
     BeforeToolCallContext, BeforeToolCallResult, LoopError, LoopHooks, PrepareNextTurnContext, ToolExecutionMode, TurnUpdate,
 };
-use crate::compaction::{self, CompactResult, CompactionSettings};
+use crate::compaction::{self, CompactResult, CompactionSettings, RequestShape};
 use crate::estimate::{context_tokens, estimate_context_tokens, estimate_text_tokens};
 use crate::request::RequestOptions;
 use crate::retry::{is_context_overflow, RetryPolicy};
@@ -310,7 +310,15 @@ impl LoopHooks for RunHooks {
         }
         self.events.emit(HarnessEvent::CompactionStart { run_id: self.run_id.clone(), reason: CompactionReason::Threshold }).await;
         let cancel = CancellationToken::new();
-        let result = compact_transcript(&self.registry, self.provider.as_ref(), &ctx.context.messages, &self.compaction, CompactionReason::Threshold, None, &self.request, &cancel).await;
+        // Between the run's own model calls the summary is the run's next request, so the
+        // provider's prompt cache serves the transcript.
+        let shape = RequestShape {
+            system_prompt: ctx.context.system_prompt.clone(),
+            tools: ctx.context.tools.iter().map(|tool| tool.spec()).collect(),
+            cache_points: ctx.context.cache_points.clone(),
+        };
+        let result =
+            compact_transcript(&self.registry, self.provider.as_ref(), &ctx.context.messages, Some(&shape), &self.compaction, CompactionReason::Threshold, None, &self.request, &cancel).await;
         match result {
             Ok(Some((messages, tokens_before))) => {
                 *self.replacement.lock().unwrap() = Some((messages.clone(), tokens_before));
@@ -347,29 +355,33 @@ pub fn convert_with_summaries(messages: &[AgentMessage]) -> Vec<LlmMessage> {
 }
 
 /// Summarizes the older part of `messages` (which may start with an earlier summary), asking
-/// the hooks first. `Ok(Some((messages, tokens_before)))` is the transcript to go on with.
+/// the hooks first. Given the `shape` of the run whose context `messages` is, the summary is
+/// asked inside that run (`compaction::compact_in_place`). `Ok(Some((messages, tokens_before)))`
+/// is the transcript to go on with.
 #[allow(clippy::too_many_arguments)]
 async fn compact_transcript(
     registry: &HookRegistry,
     provider: &dyn Provider,
     messages: &[AgentMessage],
+    shape: Option<&RequestShape>,
     settings: &CompactionSettings,
     reason: CompactionReason,
     custom_instructions: Option<&str>,
     request: &RequestOptions,
     cancel: &CancellationToken,
 ) -> Result<Option<(Vec<AgentMessage>, u64)>, String> {
-    let (previous, skip) = match messages.first() {
-        Some(AgentMessage::Custom { kind, data, .. }) if kind == "compaction" => (data["summary"].as_str().map(str::to_string), 1),
-        _ => (None, 0),
-    };
+    let (previous, skip) = compaction::earlier_summary(messages);
     let body = &messages[skip..];
     let result: CompactResult = match registry.before_compaction(reason, body, custom_instructions).await {
         Some(CompactionDecision::Decline) => return Ok(None),
         Some(CompactionDecision::Replace(result)) => result,
         None => {
             let options = registry.before_request(RequestStep::Compaction, 1, request).await;
-            match compaction::compact(provider, body, previous.as_deref(), settings, custom_instructions, &options, cancel).await? {
+            let result = match shape {
+                Some(shape) => compaction::compact_in_place(provider, shape, convert_with_summaries, messages, settings, custom_instructions, &options, cancel).await?,
+                None => compaction::compact(provider, body, previous.as_deref(), settings, custom_instructions, &options, cancel).await?,
+            };
+            match result {
                 Some(result) => result,
                 None => return Ok(None),
             }
@@ -681,7 +693,7 @@ impl AgentHarness {
     async fn compact_now(&mut self, reason: CompactionReason, custom_instructions: Option<&str>, cancel: &CancellationToken) -> Result<CompactionOutcome, HarnessError> {
         let run_id = format!("compaction-{}", self.runs + 1);
         self.events.emit(HarnessEvent::CompactionStart { run_id: run_id.clone(), reason }).await;
-        let result = compact_transcript(&self.hooks, self.provider.as_ref(), &self.messages, &self.compaction, reason, custom_instructions, &self.request, cancel).await;
+        let result = compact_transcript(&self.hooks, self.provider.as_ref(), &self.messages, None, &self.compaction, reason, custom_instructions, &self.request, cancel).await;
         let outcome = match result {
             Ok(Some((messages, tokens_before))) => {
                 self.messages = messages;

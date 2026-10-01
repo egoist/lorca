@@ -466,3 +466,18 @@ fn the_host_holds_the_store_to_its_limits() {
     assert!(parse_writes("[[\"k\", \"{bad\"]]").unwrap_err().contains("\"k\""));
     assert_eq!(parse_writes("[[\"k\", \"1\"], [\"gone\"]]").unwrap(), StoreWrites { set: BTreeMap::from([("k".to_string(), json!(1))]), delete: vec!["gone".into()] });
 }
+
+#[tokio::test]
+async fn a_host_running_a_script_gets_what_it_returned_apart_from_what_it_printed() {
+    let codemode = tool(vec![Probe::tool("echo", Mode::Echo)]);
+    let found = codemode.run_script("check", "console.log('looked'); const seen = await tools.echo({ id: 7 }); return { new: [seen] };", CancellationToken::new(), &DirectRunner).await.unwrap();
+    assert!(!found.result.is_error);
+    assert_eq!(found.returned, Some(json!({ "new": ["{\"id\":7}"] })));
+    assert!(text_of(&found.result).contains("looked"), "the printed output stays in the result: {}", text_of(&found.result));
+
+    let quiet = codemode.run_script("check", "console.log('nothing new');", CancellationToken::new(), &DirectRunner).await.unwrap();
+    assert_eq!(quiet.returned, None);
+    let failed = codemode.run_script("check", "throw new Error('feed is down');", CancellationToken::new(), &DirectRunner).await.unwrap();
+    assert!(failed.result.is_error && failed.returned.is_none());
+    assert!(text_of(&failed.result).contains("feed is down"));
+}

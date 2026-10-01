@@ -444,7 +444,8 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             Ok(Value::Null)
         }
 
-        // Routines live in the roster; any Device edits them, the bot's Runner runs them.
+        // Routines live in the roster; any Device edits them, the bot's Runner runs them. A
+        // routine's check is the bot's to write, on its Runner, with the routines tool.
         "routines.create" => {
             let routine = routines::create(
                 app,
@@ -452,6 +453,7 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
                 &string(&params, "name")?,
                 &string(&params, "schedule")?,
                 params["prompt"].as_str().unwrap_or(""),
+                None,
                 params["enabled"].as_bool().unwrap_or(true),
             )?;
             Ok(json!({ "routine": app.routine_out(&routine) }))
@@ -460,7 +462,7 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             let id = string(&params, "id")?;
             let mut routine = app.routine(&id).ok_or("Unknown routine")?;
             if params.get("name").is_some() || params.get("schedule").is_some() || params.get("prompt").is_some() {
-                routine = routines::edit(app, &id, opt_string(&params, "name").as_deref(), opt_string(&params, "schedule").as_deref(), params["prompt"].as_str())?;
+                routine = routines::edit(app, &id, opt_string(&params, "name").as_deref(), opt_string(&params, "schedule").as_deref(), params["prompt"].as_str(), None)?;
             }
             if let Some(enabled) = params["enabled"].as_bool() {
                 routine = routines::set_enabled(app, &id, enabled)?;

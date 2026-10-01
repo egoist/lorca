@@ -1,7 +1,7 @@
 // One routine's details, after the macOS app's RoutineViewController: the schedule and its next and
-// last runs, the task, and the actions on it. Run Now starts it on the bot's Runner; Pause and Resume
-// flip the switch the inspector shows; Edit in Chat hands the bot the change to make, since the bot
-// owns its routines; Delete asks first.
+// last runs, the task, the check when it has one, and the actions on it. Run Now starts it on the
+// bot's Runner; Pause and Resume flip the switch the inspector shows; Edit in Chat hands the bot the
+// change to make, since the bot owns its routines; Delete asks first.
 
 import { createEffect, createMemo, Show } from "solid-js";
 import { L } from "../../l10n";
@@ -76,12 +76,22 @@ function RoutineSheet(props: { routineID: string; bot: Bot; onEditInChat: (text:
             <Section title={L("Schedule")}>
               <KeyValueRow label={L("State")} value={state()[0]} tint={state()[1]} />
               <KeyValueRow label={L("Schedule")} value={current().scheduleText} tooltip={current().schedule} />
-              <KeyValueRow label={L("Next run")} value={current().nextRunAt !== undefined ? Format.upcoming(current().nextRunAt!) : "—"} />
+              <KeyValueRow
+                label={current().check === undefined ? L("Next run") : L("Next check")}
+                value={current().nextRunAt !== undefined ? Format.upcoming(current().nextRunAt!) : "—"}
+              />
               <KeyValueRow label={L("Last run")} value={lastRunSummary(current())} />
             </Section>
             <Section title={L("Task")}>
               <div class="routine-prompt selectable">{current().prompt}</div>
             </Section>
+            <Show when={current().check}>
+              {(check) => (
+                <Section title={L("Check")}>
+                  <div class="routine-check selectable">{check()}</div>
+                </Section>
+              )}
+            </Show>
             <div class="sheet-actions">
               <Button disabled={current().isRunning} tooltip={runTooltip()} onClick={() => store.runRoutine(props.routineID)}>
                 {L("Run Now")}

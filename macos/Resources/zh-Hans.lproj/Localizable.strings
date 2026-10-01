@@ -10,6 +10,7 @@
 "%@ · failed" = "%@ · 失败";
 "%@ · fetching…" = "%@ · 正在获取…";
 "%@ · Next %@" = "%1$@ · 下次 %2$@";
+"%@ · Next check %@" = "%1$@ · 下次检查 %2$@";
 "%@ · nothing to report" = "%@ · 无需汇报";
 "%@ · offline" = "%@ · 离线";
 "%@ · on %@" = "%1$@ · 位于 %2$@";
@@ -137,6 +138,7 @@
 "Chat name" = "聊天名称";
 "Chat names live inside the encrypted roster blob, never on the relay." = "聊天名称保存在加密的名册数据中，不会以明文出现在中继上。";
 "Chats" = "聊天";
+"Check" = "检查";
 "Check actions before they run" = "操作执行前先检查";
 "Check for Updates" = "检查更新";
 "Check for updates automatically" = "自动检查更新";
@@ -355,6 +357,7 @@
 "New Chat" = "新聊天";
 "New Group Chat" = "新建群聊";
 "New Group Chat…" = "新建群聊…";
+"Next check" = "下次检查";
 "Next run" = "下次运行";
 "No answer in time" = "未及时答复";
 "No bots assigned" = "未分配智能体";

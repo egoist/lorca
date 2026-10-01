@@ -564,6 +564,9 @@ export interface Routine {
   lastOutcome?: string;
   nextRunAt?: number;
   isRunning: boolean;
+  /** The script the Runner runs at each due time before the bot does; the bot runs only when it
+   * finds something. `nextRunAt` is then the next check. */
+  check?: string;
   createdAt: number;
 }
 
@@ -573,7 +576,10 @@ export function routineDetail(routine: Routine): string {
   if (!routine.isEnabled) {
     return routine.pausedReason === "away" ? L("%@ · Paused while you were away", routine.scheduleText) : L("%@ · Paused", routine.scheduleText);
   }
-  if (routine.nextRunAt !== undefined) return L("%@ · Next %@", routine.scheduleText, Format.upcoming(routine.nextRunAt));
+  if (routine.nextRunAt !== undefined) {
+    const next = Format.upcoming(routine.nextRunAt);
+    return routine.check === undefined ? L("%@ · Next %@", routine.scheduleText, next) : L("%@ · Next check %@", routine.scheduleText, next);
+  }
   return routine.scheduleText;
 }
 

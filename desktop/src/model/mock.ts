@@ -114,6 +114,27 @@ export function routines(): Routine[] {
       isRunning: false,
       createdAt: minutesAgo(60 * 24 * 3),
     },
+    {
+      id: "rt-reviews",
+      botID: "bot-nova",
+      name: "Review requests",
+      prompt: "Read the pull requests your check found and tell me which need my review first, with one line on each.",
+      schedule: "every 10m",
+      scheduleText: "Every 10 minutes",
+      isEnabled: true,
+      lastRunAt: minutesAgo(60 * 5),
+      lastOutcome: "sent",
+      nextRunAt: Date.now() + 4 * 60_000,
+      isRunning: false,
+      check: [
+        "const seen = load('seen') ?? [];",
+        "const result = await tools.github__search_pull_requests({ query: 'is:open review-requested:@me' });",
+        "const fresh = result.structuredContent.items.filter((pr) => !seen.includes(pr.number));",
+        "store('seen', [...seen, ...fresh.map((pr) => pr.number)]);",
+        "return fresh.map((pr) => `#${pr.number} ${pr.title}`).join('\\n');",
+      ].join("\n"),
+      createdAt: minutesAgo(60 * 24 * 2),
+    },
   ];
 }
 

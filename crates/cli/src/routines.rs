@@ -1,6 +1,8 @@
 //! Routines: recurring tasks a bot runs on a schedule in its direct chat, after Grok Bot. The
 //! roster carries them, so every Device lists them and can pause one; the bot's Runner runs
-//! them, looking for due ones every half minute, and any Device can ask for a run now.
+//! them, looking for due ones every half minute, and any Device can ask for a run now. A
+//! routine with a check runs the check first, a script and no model, and the bot runs only on
+//! what it found.
 
 use std::sync::Arc;
 
@@ -12,6 +14,13 @@ use crate::model::*;
 use crate::runtime::{self, TurnOutcome};
 use crate::schedule;
 
+#[cfg(feature = "runner")]
+use lorca_agent::codemode::{CodemodeOptions, CodemodeTool, HostFunction};
+#[cfg(feature = "runner")]
+use lorca_agent::{DirectRunner, Tool, ToolOutcome, ToolResult, ToolRunner};
+#[cfg(feature = "runner")]
+use tokio_util::sync::CancellationToken;
+
 /// How often the Runner looks for due routines.
 #[cfg(feature = "runner")]
 const TICK: std::time::Duration = std::time::Duration::from_secs(30);
@@ -22,16 +31,19 @@ pub const AWAY_AFTER_SECS: i64 = 7 * 86_400;
 
 pub const MAX_NAME_CHARS: usize = 60;
 pub const MAX_PER_BOT: usize = 20;
+/// The longest check a routine keeps: a check looks, and the run does the work.
+pub const MAX_CHECK_CHARS: usize = 8_000;
 
 // MARK: - Editing
 
-/// Adds a routine for `bot_id`, checking the schedule and the name first.
-pub fn create(app: &Arc<App>, bot_id: &str, name: &str, schedule_text: &str, prompt: &str, enabled: bool) -> Result<Routine, String> {
+/// Adds a routine for `bot_id`, checking the schedule, the name, and the check first.
+pub fn create(app: &Arc<App>, bot_id: &str, name: &str, schedule_text: &str, prompt: &str, check: Option<&str>, enabled: bool) -> Result<Routine, String> {
     let name = clean_name(name)?;
     let prompt = prompt.trim();
     if prompt.is_empty() {
         return Err("Say what the routine should do on each run.".into());
     }
+    let check = check.map(clean_check).transpose()?.flatten();
     let schedule = schedule::parse(schedule_text)?;
     if app.bot(bot_id).is_none() {
         return Err("Unknown bot".into());
@@ -55,14 +67,15 @@ pub fn create(app: &Arc<App>, bot_id: &str, name: &str, schedule_text: &str, pro
         last_run_at: None,
         last_outcome: None,
         paused_reason: None,
+        check,
         created_at: now,
     };
     app.insert_routine(routine).map_err(|e| e.to_string())
 }
 
-/// Changes a routine's name, schedule, or prompt. Only the fields given change; a new schedule
-/// counts from now.
-pub fn edit(app: &Arc<App>, id: &str, name: Option<&str>, schedule_text: Option<&str>, prompt: Option<&str>) -> Result<Routine, String> {
+/// Changes a routine's name, schedule, prompt, or check. Only the fields given change; an empty
+/// check removes it, and a new schedule counts from now.
+pub fn edit(app: &Arc<App>, id: &str, name: Option<&str>, schedule_text: Option<&str>, prompt: Option<&str>, check: Option<&str>) -> Result<Routine, String> {
     let current = app.routine(id).ok_or("Unknown routine")?;
     let name = name.map(clean_name).transpose()?;
     if let Some(name) = &name {
@@ -72,8 +85,9 @@ pub fn edit(app: &Arc<App>, id: &str, name: Option<&str>, schedule_text: Option<
     }
     let schedule = schedule_text.map(schedule::parse).transpose()?;
     let prompt = prompt.map(str::trim).filter(|p| !p.is_empty()).map(str::to_string);
-    if name.is_none() && schedule.is_none() && prompt.is_none() {
-        return Err("Pass a new name, schedule, or prompt.".into());
+    let check = check.map(clean_check).transpose()?;
+    if name.is_none() && schedule.is_none() && prompt.is_none() && check.is_none() {
+        return Err("Pass a new name, schedule, prompt, or check.".into());
     }
     app.update_routine(id, |routine| {
         if let Some(name) = name {
@@ -86,8 +100,44 @@ pub fn edit(app: &Arc<App>, id: &str, name: Option<&str>, schedule_text: Option<
         if let Some(prompt) = prompt {
             routine.prompt = prompt;
         }
+        if let Some(check) = check {
+            routine.check = check;
+        }
     })
     .map_err(|e| e.to_string())
+}
+
+/// A check as a routine keeps it, or `None` for an empty one, which removes it. A Runner reads
+/// its options line now, so a bad one is refused before it is saved.
+fn clean_check(code: &str) -> Result<Option<String>, String> {
+    let code = code.trim();
+    if code.is_empty() {
+        return Ok(None);
+    }
+    if code.chars().count() > MAX_CHECK_CHARS {
+        return Err(format!("Keep the check under {MAX_CHECK_CHARS} characters: it only looks, and the run does the work."));
+    }
+    #[cfg(feature = "runner")]
+    lorca_agent::codemode::parse_source(code)?;
+    Ok(Some(code.to_string()))
+}
+
+/// A routine's check is its Runner's to change, and a build that does not know checks writes
+/// the roster without them. When `incoming` leaves out the check that a routine of a bot on
+/// `this_device` has in `current`, the check stays. True when one did, so the roster goes up
+/// again with it.
+pub fn keep_checks(current: &[Routine], incoming: &mut [Routine], bots: &[Bot], this_device: &str) -> bool {
+    let mut kept = false;
+    for routine in incoming.iter_mut().filter(|routine| routine.check.is_none()) {
+        if !bots.iter().any(|bot| bot.id == routine.bot_id && bot.runner_id == this_device) {
+            continue;
+        }
+        if let Some(check) = current.iter().find(|held| held.id == routine.id).and_then(|held| held.check.clone()) {
+            routine.check = Some(check);
+            kept = true;
+        }
+    }
+    kept
 }
 
 /// Pauses or resumes a routine. A resumed schedule counts from now.
@@ -153,6 +203,7 @@ fn job_for(app: &Arc<App>, routine: &Routine) -> Result<Job, String> {
         kind: "routine".into(),
         trigger_message_id: String::new(),
         routine_id: Some(routine.id.clone()),
+        check: None,
         requested_by: app.this_device_id().unwrap_or_default(),
         from_bot_id: None,
         hops: 0,
@@ -188,24 +239,17 @@ pub async fn run(app: Arc<App>) {
     }
 }
 
-/// Starts every due routine of a bot on this Runner, unless the user has been away, in which
-/// case the due ones are paused with a notice instead.
+/// Starts every due routine of a bot on this Runner, or its check, unless the user has been
+/// away, in which case the due ones are paused with a notice instead.
 #[cfg(feature = "runner")]
 pub fn tick(app: &Arc<App>) {
     let Some(this) = app.this_device_id() else { return };
     let now = now_unix();
-    let due: Vec<Routine> = app
-        .state
-        .lock()
-        .unwrap()
-        .routines
-        .iter()
-        .filter(|r| r.is_enabled && r.next_run_at().is_some_and(|t| t <= now))
-        .cloned()
-        .collect();
-    let due: Vec<Routine> = due
+    let enabled: Vec<Routine> = app.state.lock().unwrap().routines.iter().filter(|r| r.is_enabled).cloned().collect();
+    let due: Vec<Routine> = enabled
         .into_iter()
-        .filter(|r| app.bot(&r.bot_id).is_some_and(|b| b.runner_id == this) && !app.is_routine_running(&r.id))
+        .filter(|r| due_at(app, r).is_some_and(|t| t <= now))
+        .filter(|r| app.bot(&r.bot_id).is_some_and(|b| b.runner_id == this) && !app.is_routine_running(&r.id) && !app.routine_checks.is_running(&r.id))
         .collect();
     if due.is_empty() {
         return;
@@ -215,11 +259,216 @@ pub fn tick(app: &Arc<App>) {
         return;
     }
     for routine in due {
+        if routine.check.is_some() {
+            check_then_run(app, routine);
+            continue;
+        }
         started(app, &routine.id);
         match job_for(app, &routine) {
             Ok(job) => runtime::spawn_local_job(app.clone(), job, None),
             Err(error) => tracing::warn!(%error, routine = %routine.name, "starting a routine"),
         }
+    }
+}
+
+// MARK: - Checks
+
+/// How long a check may take, plugin servers starting included.
+#[cfg(feature = "runner")]
+const CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+/// The most of what a check found that its run reads.
+#[cfg(feature = "runner")]
+const MAX_FOUND_CHARS: usize = 4_000;
+/// The bot's file tools a check may call: the ones that only read.
+#[cfg(feature = "runner")]
+const CHECK_FILE_TOOLS: [&str; 4] = ["read", "grep", "find", "ls"];
+
+/// The checks of this Runner's routines: when each last ran here, and which run now. Kept in
+/// memory: a check that found nothing changes nothing else, and after a restart a due check
+/// runs once more.
+#[cfg(feature = "runner")]
+#[derive(Default)]
+pub struct Checks(std::sync::Mutex<std::collections::HashMap<String, CheckState>>);
+
+#[cfg(feature = "runner")]
+#[derive(Default, Clone, Copy)]
+struct CheckState {
+    last_at: Option<i64>,
+    running: bool,
+}
+
+#[cfg(feature = "runner")]
+impl Checks {
+    /// When the routine's check last ran here.
+    pub fn last_at(&self, id: &str) -> Option<i64> {
+        self.0.lock().unwrap().get(id).and_then(|state| state.last_at)
+    }
+
+    pub fn is_running(&self, id: &str) -> bool {
+        self.0.lock().unwrap().get(id).is_some_and(|state| state.running)
+    }
+
+    /// Marks the routine's check running; false when it already is.
+    fn start(&self, id: &str) -> bool {
+        let mut checks = self.0.lock().unwrap();
+        let state = checks.entry(id.to_string()).or_default();
+        !std::mem::replace(&mut state.running, true)
+    }
+
+    fn finish(&self, id: &str, at: i64) {
+        self.0.lock().unwrap().insert(id.to_string(), CheckState { last_at: Some(at), running: false });
+    }
+}
+
+/// When this Runner runs the routine next: its schedule from the last run, or from the last
+/// check here, which counts as a run whether or not it started one.
+#[cfg(feature = "runner")]
+fn due_at(app: &App, routine: &Routine) -> Option<i64> {
+    match app.routine_checks.last_at(&routine.id) {
+        Some(at) => routine.next_run_after(at),
+        None => routine.next_run_at(),
+    }
+}
+
+/// When the routine runs next, as the apps and the bot say it. Only the Runner knows when a
+/// routine's check last ran; elsewhere a routine with a check that is past due is due at its
+/// next schedule time, since its Runner has been checking in between.
+pub fn next_run_shown(app: &App, routine: &Routine) -> Option<i64> {
+    #[cfg(feature = "runner")]
+    if let Some(at) = app.routine_checks.last_at(&routine.id) {
+        return routine.next_run_after(at);
+    }
+    #[cfg(not(feature = "runner"))]
+    let _ = app;
+    let next = routine.next_run_at()?;
+    let now = now_unix();
+    if routine.check.is_some() && next <= now {
+        return schedule::parse(&routine.schedule).ok().and_then(|schedule| schedule.next_after(now)).or(Some(next));
+    }
+    Some(next)
+}
+
+/// Runs a due routine's check, then the routine when the check found something or failed. A
+/// check that found nothing leaves no trace but the time it ran, which the schedule counts
+/// from: no marker, no turn, and no roster change.
+#[cfg(feature = "runner")]
+fn check_then_run(app: &Arc<App>, routine: Routine) {
+    if !app.routine_checks.start(&routine.id) {
+        return;
+    }
+    let app = app.clone();
+    tokio::spawn(async move {
+        let checked = run_check(&app, &routine, &CancellationToken::new()).await;
+        app.routine_checks.finish(&routine.id, now_unix());
+        // A routine paused, deleted, or given another check meanwhile does not run on this one.
+        let Some(current) = app.routine(&routine.id).filter(|current| current.is_enabled && current.check == routine.check) else { return };
+        let Some(report) = checked.report() else { return };
+        started(&app, &current.id);
+        match job_for(&app, &current) {
+            Ok(mut job) => {
+                job.check = Some(report);
+                runtime::spawn_local_job(app.clone(), job, None);
+            }
+            Err(error) => tracing::warn!(%error, routine = %current.name, "starting a routine its check called for"),
+        }
+    });
+}
+
+/// How a check went.
+#[cfg(feature = "runner")]
+#[derive(Debug, Clone, PartialEq)]
+pub struct CheckRun {
+    /// What it returned, as its run reads it; `None` when it returned nothing to report.
+    pub found: Option<String>,
+    /// How it failed, when it did.
+    pub error: Option<String>,
+    /// Its whole result, what it printed and its calls included, for the bot that wrote it.
+    pub result: String,
+}
+
+#[cfg(feature = "runner")]
+impl CheckRun {
+    /// What the run reads about the check, when the check calls for a run.
+    pub fn report(&self) -> Option<CheckReport> {
+        (self.found.is_some() || self.error.is_some()).then(|| CheckReport { found: self.found.clone().unwrap_or_default(), error: self.error.clone() })
+    }
+}
+
+/// Runs a routine's check: its script in a codemode sandbox of its own, with the bot's file
+/// tools that only read, the read-only tools of this Runner's plugins, the values the bot's
+/// scripts keep in its direct chat, and `models.ask`. No model of the bot's runs and nobody is
+/// asked anything: a call that could change something ends the check.
+#[cfg(feature = "runner")]
+pub async fn run_check(app: &Arc<App>, routine: &Routine, cancel: &CancellationToken) -> CheckRun {
+    let failed = |error: String| CheckRun { found: None, error: Some(error.clone()), result: error };
+    let Some(code) = routine.check.as_deref() else { return CheckRun { found: None, error: None, result: String::new() } };
+    let Some(bot) = app.bot(&routine.bot_id) else { return failed("The routine's bot is gone.".into()) };
+    let dm = match app.dm_with(&bot.id, None) {
+        Ok(dm) => dm,
+        Err(error) => return failed(error.to_string()),
+    };
+    let files: Vec<Arc<dyn Tool>> =
+        lorca_agent::tools::coding_tools(bot.working_directory(&app.config.home)).into_iter().filter(|tool| CHECK_FILE_TOOLS.contains(&tool.name())).collect();
+    let catalog = crate::plugins::mcp::turn_catalog(app, files);
+    let store = Arc::new(crate::scripts::ScriptStore { app: app.clone(), chat_id: dm.meta.id.clone(), bot_id: bot.id.clone() });
+    let functions: Vec<Arc<dyn HostFunction>> =
+        crate::scripts::ModelsAsk::new(app, &dm.meta.id, &bot.provider).map(|ask| Arc::new(ask) as Arc<dyn HostFunction>).into_iter().collect();
+    let options = CodemodeOptions { mcp_types: !crate::plugins::mcp::plugin_briefs(app).is_empty(), timeout: CHECK_TIMEOUT, ..CodemodeOptions::default() };
+    let codemode = CodemodeTool::new(catalog.clone(), options).with_store(store).with_functions(functions);
+    let runner = CheckRunner { app: app.clone(), catalog };
+    match codemode.run_script(&format!("check-{}", routine.id), code, cancel.clone(), &runner).await {
+        Err(error) => failed(error.0),
+        Ok(run) => {
+            let result = run.result.text_content();
+            if run.result.is_error {
+                CheckRun { found: None, error: Some(clipped(&result, MAX_FOUND_CHARS)), result }
+            } else {
+                CheckRun { found: run.returned.as_ref().and_then(found_text), error: None, result }
+            }
+        }
+    }
+}
+
+/// What a check returned, as its run reads it: a string as it is, anything else as JSON.
+/// Nothing, `null`, `false`, and an empty string, list, or object have nothing to report.
+#[cfg(feature = "runner")]
+fn found_text(value: &Value) -> Option<String> {
+    let text = match value {
+        Value::Null | Value::Bool(false) => return None,
+        Value::Array(items) if items.is_empty() => return None,
+        Value::Object(fields) if fields.is_empty() => return None,
+        Value::String(text) => text.trim().to_string(),
+        other => serde_json::to_string_pretty(other).unwrap_or_default(),
+    };
+    (!text.is_empty()).then(|| clipped(&text, MAX_FOUND_CHARS))
+}
+
+#[cfg(feature = "runner")]
+fn clipped(text: &str, max: usize) -> String {
+    if text.chars().count() > max {
+        format!("{}…", text.chars().take(max).collect::<String>())
+    } else {
+        text.to_string()
+    }
+}
+
+/// Runs a check's calls: the read-only ones, and no other. A refused call ends the check.
+#[cfg(feature = "runner")]
+struct CheckRunner {
+    app: Arc<App>,
+    catalog: Arc<crate::plugins::mcp::PluginCatalog>,
+}
+
+#[cfg(feature = "runner")]
+#[async_trait::async_trait]
+impl ToolRunner for CheckRunner {
+    async fn run(&self, tool: Arc<dyn Tool>, tool_call_id: String, args: Value, cancel: CancellationToken) -> ToolOutcome {
+        let reads = CHECK_FILE_TOOLS.contains(&tool.name()) || crate::plugins::mcp::is_read_only(&self.app, &self.catalog, tool.name(), &cancel).await;
+        if !reads {
+            let refusal = format!("{} can change things, and a check only looks: leave it to the run the check starts.", tool.name());
+            return ToolOutcome { result: ToolResult { is_error: true, ..ToolResult::text(refusal) }, is_error: true, blocked: true };
+        }
+        DirectRunner.run(tool, tool_call_id, args, cancel).await
     }
 }
 
@@ -302,20 +551,20 @@ mod tests {
     fn routines_are_checked_and_named_once() {
         let scratch = scratch_app();
         let app = &scratch.0;
-        assert!(create(app, "b1", "Brief", "every 2m", "x", true).unwrap_err().contains("too often"));
-        assert!(create(app, "b1", "", "every 1h", "x", true).unwrap_err().contains("name"));
-        assert!(create(app, "b1", "Brief", "every 1h", "  ", true).unwrap_err().contains("should do"));
-        let brief = create(app, "b1", "  Morning   brief ", "0 9 * * 1-5", "Summarize the inbox.", true).unwrap();
+        assert!(create(app, "b1", "Brief", "every 2m", "x", None, true).unwrap_err().contains("too often"));
+        assert!(create(app, "b1", "", "every 1h", "x", None, true).unwrap_err().contains("name"));
+        assert!(create(app, "b1", "Brief", "every 1h", "  ", None, true).unwrap_err().contains("should do"));
+        let brief = create(app, "b1", "  Morning   brief ", "0 9 * * 1-5", "Summarize the inbox.", None, true).unwrap();
         assert_eq!(brief.name, "Morning brief");
         assert_eq!(brief.schedule, "0 9 * * 1-5");
         assert!(brief.is_enabled && brief.next_run_at().is_some());
-        assert!(create(app, "b1", "morning BRIEF", "every 1h", "x", true).unwrap_err().contains("already exists"));
-        assert!(create(app, "b2", "Other", "every 1h", "x", true).unwrap_err().contains("Unknown bot"));
+        assert!(create(app, "b1", "morning BRIEF", "every 1h", "x", None, true).unwrap_err().contains("already exists"));
+        assert!(create(app, "b2", "Other", "every 1h", "x", None, true).unwrap_err().contains("Unknown bot"));
 
-        let edited = edit(app, &brief.id, None, Some("every 2h"), None).unwrap();
+        let edited = edit(app, &brief.id, None, Some("every 2h"), None, None).unwrap();
         assert_eq!(edited.schedule, "every 2h");
         assert!(edited.enabled_at >= brief.enabled_at);
-        assert!(edit(app, &brief.id, None, None, None).unwrap_err().contains("Pass a new"));
+        assert!(edit(app, &brief.id, None, None, None, None).unwrap_err().contains("Pass a new"));
 
         let paused = set_enabled(app, &brief.id, false).unwrap();
         assert!(!paused.is_enabled && paused.next_run_at().is_none());
@@ -331,7 +580,7 @@ mod tests {
     fn the_next_run_counts_from_the_last_one() {
         let scratch = scratch_app();
         let app = &scratch.0;
-        let hourly = create(app, "b1", "Hourly", "every 1h", "x", true).unwrap();
+        let hourly = create(app, "b1", "Hourly", "every 1h", "x", None, true).unwrap();
         assert_eq!(hourly.next_run_at(), Some(hourly.enabled_at as i64 + 3600));
         let ran = app.update_routine(&hourly.id, |r| r.last_run_at = Some(hourly.enabled_at + 7200.0)).unwrap();
         assert_eq!(ran.next_run_at(), Some(hourly.enabled_at as i64 + 10_800));
@@ -350,7 +599,7 @@ mod tests {
     async fn the_tick_runs_a_due_routine_once() {
         let scratch = scratch_app();
         let app = &scratch.0;
-        let hourly = create(app, "b1", "Hourly", "every 1h", "x", true).unwrap();
+        let hourly = create(app, "b1", "Hourly", "every 1h", "x", None, true).unwrap();
         tick(app);
         assert_eq!(app.routine(&hourly.id).unwrap().last_run_at, None, "not due yet");
         // Armed an hour and a bit ago: due now.
@@ -385,7 +634,7 @@ mod tests {
     async fn away_pauses_due_routines_with_a_notice() {
         let scratch = scratch_app();
         let app = &scratch.0;
-        let brief = create(app, "b1", "Brief", "every 1h", "x", true).unwrap();
+        let brief = create(app, "b1", "Brief", "every 1h", "x", None, true).unwrap();
         let long_ago = now_secs() - (AWAY_AFTER_SECS as f64) - 7200.0;
         app.update_routine(&brief.id, |r| {
             r.created_at = long_ago;
@@ -413,7 +662,7 @@ mod tests {
         let app = &scratch.0;
         let now = now_unix();
         assert!(!user_away(app, now), "a fresh account is not away");
-        create(app, "b1", "Hourly", "every 1h", "x", true).unwrap();
+        create(app, "b1", "Hourly", "every 1h", "x", None, true).unwrap();
         assert!(!user_away(app, now));
         assert!(user_away(app, now + AWAY_AFTER_SECS + 60));
         let dm = app.dm_with("b1", None).unwrap();
@@ -421,5 +670,161 @@ mod tests {
         message.created_at = (now + AWAY_AFTER_SECS) as f64;
         app.upsert_message(message, false);
         assert!(!user_away(app, now + AWAY_AFTER_SECS + 60));
+    }
+
+    fn plain(id: &str, bot_id: &str, check: Option<&str>) -> Routine {
+        Routine {
+            id: id.into(),
+            bot_id: bot_id.into(),
+            name: id.into(),
+            prompt: "x".into(),
+            schedule: "every 1h".into(),
+            is_enabled: true,
+            enabled_at: 0.0,
+            last_run_at: None,
+            last_outcome: None,
+            paused_reason: None,
+            check: check.map(str::to_string),
+            created_at: 0.0,
+        }
+    }
+
+    #[test]
+    fn a_check_is_kept_as_written_and_removed_when_empty() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        let watch = create(app, "b1", "Watch", "every 10m", "Tell me what is new.", Some("  return load('seen');  "), true).unwrap();
+        assert_eq!(watch.check.as_deref(), Some("return load('seen');"));
+        assert!(create(app, "b1", "Long", "every 1h", "x", Some(&"x".repeat(MAX_CHECK_CHARS + 1)), true).unwrap_err().contains("under"));
+        #[cfg(feature = "runner")]
+        assert!(create(app, "b1", "Bad", "every 1h", "x", Some("// @options: {\"retries\": 3}\nreturn 1"), true).unwrap_err().contains("@options"));
+        assert_eq!(create(app, "b1", "Plain", "every 1h", "x", Some("   "), true).unwrap().check, None);
+        assert_eq!(edit(app, &watch.id, None, None, None, Some("")).unwrap().check, None, "an empty check removes it");
+    }
+
+    /// Only a Runner writes its routines' checks, so one an incoming roster leaves out was
+    /// dropped by a build that does not know them.
+    #[test]
+    fn a_roster_without_checks_keeps_this_runners_checks() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        let mut bots = app.state.lock().unwrap().bots.clone();
+        let here = bots[0].runner_id.clone();
+        let mut away = bots[0].clone();
+        away.id = "b2".into();
+        away.runner_id = "another-runner".into();
+        bots.push(away);
+        let current = vec![plain("r1", "b1", Some("return 1")), plain("r2", "b2", Some("return 2"))];
+        let mut incoming = vec![plain("r1", "b1", None), plain("r2", "b2", None), plain("r3", "b1", None)];
+        assert!(keep_checks(&current, &mut incoming, &bots, &here));
+        assert_eq!(incoming[0].check.as_deref(), Some("return 1"));
+        assert_eq!(incoming[1].check, None, "another Runner keeps its own");
+        assert_eq!(incoming[2].check, None);
+        // A check that arrives stands.
+        let mut incoming = vec![plain("r1", "b1", Some("return 9"))];
+        assert!(!keep_checks(&current, &mut incoming, &bots, &here));
+        assert_eq!(incoming[0].check.as_deref(), Some("return 9"));
+    }
+
+    /// A Device other than the Runner never hears of the checks that found nothing, so a
+    /// routine with a check that is past due is shown due at its next schedule time.
+    #[test]
+    fn a_routine_with_a_check_is_shown_due_from_now() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        let mut routine = plain("r1", "b1", Some("return null"));
+        routine.enabled_at = now_secs() - 7200.0;
+        assert!(next_run_shown(app, &routine).unwrap() > now_unix());
+        routine.check = None;
+        assert!(next_run_shown(app, &routine).unwrap() <= now_unix(), "a routine without one shows when it was due");
+    }
+
+    #[cfg(feature = "runner")]
+    #[test]
+    fn nothing_returned_is_nothing_found() {
+        use serde_json::json;
+        for quiet in [json!(null), json!(false), json!(""), json!("  "), json!([]), json!({})] {
+            assert_eq!(found_text(&quiet), None, "{quiet}");
+        }
+        assert_eq!(found_text(&json!(" two new ")).as_deref(), Some("two new"));
+        assert_eq!(found_text(&json!({ "new": [1] })).as_deref(), Some("{\n  \"new\": [\n    1\n  ]\n}"));
+        assert!(found_text(&json!("y".repeat(MAX_FOUND_CHARS + 10))).unwrap().ends_with('…'));
+    }
+
+    /// A check reads with the bot's file tools, keeps values with store(), and returns what it
+    /// found; a tool that writes is not there to call, and its failure is what the run reads.
+    #[cfg(feature = "runner")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_check_looks_and_says_what_it_found() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        let bot = app.bot("b1").unwrap();
+        let workdir = bot.working_directory(&app.config.home);
+        std::fs::create_dir_all(&workdir).unwrap();
+        std::fs::write(workdir.join("notes.txt"), "hello").unwrap();
+        let looks = "const seen = load('runs') ?? 0;\nstore('runs', seen + 1);\nconst files = await tools.ls({});\nreturn files.includes('notes.txt') ? 'notes.txt is here' : null;";
+        let watch = create(app, "b1", "Watch", "every 10m", "Tell me what is new.", Some(looks), true).unwrap();
+        let checked = run_check(app, &watch, &CancellationToken::new()).await;
+        assert_eq!((checked.found.as_deref(), checked.error.as_deref()), (Some("notes.txt is here"), None), "{}", checked.result);
+        assert_eq!(checked.report(), Some(CheckReport { found: "notes.txt is here".into(), error: None }));
+        let dm = app.dm_with("b1", None).unwrap();
+        assert_eq!(app.store.codemode_values(&dm.meta.id, "b1").unwrap()["runs"], serde_json::json!(1));
+
+        let writes = edit(app, &watch.id, None, None, None, Some("await tools.write({ path: 'x.txt', content: 'y' });")).unwrap();
+        let checked = run_check(app, &writes, &CancellationToken::new()).await;
+        assert!(checked.error.as_deref().is_some_and(|error| error.contains("Unknown tool")), "{checked:?}");
+        assert!(checked.report().unwrap().error.is_some());
+        assert!(!workdir.join("x.txt").exists());
+    }
+
+    /// A due check that finds nothing runs no turn: no marker, no run counted, no roster
+    /// change, and the next check counts from this one. One that finds something starts the run.
+    #[cfg(feature = "runner")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_due_check_starts_the_run_only_when_it_finds_something() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        let quiet = create(app, "b1", "Quiet", "every 10m", "Tell me what is new.", Some("return null;"), true).unwrap();
+        let now = now_secs();
+        app.update_routine(&quiet.id, |r| r.enabled_at = now - 700.0).unwrap();
+        tick(app);
+        for _ in 0..200 {
+            if app.routine_checks.last_at(&quiet.id).is_some() && !app.routine_checks.is_running(&quiet.id) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+        let checked_at = app.routine_checks.last_at(&quiet.id).expect("the check ran");
+        let after = app.routine(&quiet.id).unwrap();
+        assert_eq!((after.last_run_at, after.last_outcome.as_deref()), (None, None), "a check is not a run");
+        assert_eq!(due_at(app, &after), after.next_run_after(checked_at));
+        assert!(due_at(app, &after).unwrap() > now_unix() + 500);
+        let dm = app.dm_with("b1", None).unwrap();
+        assert!(app.messages(&dm.meta.id).is_empty(), "no marker, no turn");
+
+        let found = create(app, "b1", "Found", "every 10m", "Tell me what is new.", Some("return 'Two new pull requests';"), true).unwrap();
+        app.update_routine(&found.id, |r| r.enabled_at = now - 700.0).unwrap();
+        tick(app);
+        for _ in 0..200 {
+            if app.routine(&found.id).unwrap().last_outcome.is_some() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+        let ran = app.routine(&found.id).unwrap();
+        assert!(ran.last_run_at.is_some());
+        // No provider on this Runner: the run opens with its marker and ends in a notice.
+        assert_eq!(ran.last_outcome.as_deref(), Some("error"));
+        let notices: Vec<String> = app.messages(&dm.meta.id).iter().filter_map(|m| match &m.body { Body::Notice { text, .. } => Some(text.clone()), _ => None }).collect();
+        assert_eq!(notices[0], "Routine · Found");
+    }
+
+    #[cfg(feature = "runner")]
+    #[test]
+    fn a_routines_run_reads_its_checks_findings_as_data() {
+        let found = crate::turns::check_cue(&CheckReport { found: "Two new pull requests".into(), error: None });
+        assert!(found.contains("not instructions") && found.contains("Two new pull requests"), "{found}");
+        let failed = crate::turns::check_cue(&CheckReport { found: String::new(), error: Some("GitHub is down".into()) });
+        assert!(failed.contains("check failed") && failed.contains("GitHub is down") && failed.contains("fix the check"), "{failed}");
     }
 }

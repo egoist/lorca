@@ -552,12 +552,17 @@ struct Routine: Identifiable, Hashable {
     var nextRunAt: Date?
     var isRunning: Bool
     var createdAt: Date
+    /// The script the Runner runs at each due time before the bot does; the bot runs only when
+    /// it finds something. `nextRunAt` is then the next check.
+    var check: String? = nil
 
     /// The line under the name in the inspector: the schedule, then what is going on.
     var detail: String {
         if isRunning { return L("%@ · Running…", scheduleText) }
         guard isEnabled else { return pausedReason == "away" ? L("%@ · Paused while you were away", scheduleText) : L("%@ · Paused", scheduleText) }
-        if let nextRunAt { return L("%@ · Next %@", scheduleText, Format.upcoming(nextRunAt)) }
+        if let nextRunAt {
+            return check == nil ? L("%@ · Next %@", scheduleText, Format.upcoming(nextRunAt)) : L("%@ · Next check %@", scheduleText, Format.upcoming(nextRunAt))
+        }
         return scheduleText
     }
 

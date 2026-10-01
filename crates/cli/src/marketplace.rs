@@ -230,7 +230,7 @@ pub async fn template(app: &Arc<App>, id: &str) -> Result<(BotTemplate, Vec<Setu
 pub fn welcome(app: &Arc<App>, bot: &Bot, chat_id: &str, template: &BotTemplate, plugins: Vec<SetupPlugin>, greeting: Option<String>) {
     let mut routines = Vec::new();
     for routine in &template.routines {
-        match crate::routines::create(app, &bot.id, &routine.name, &routine.schedule, &routine.prompt, false) {
+        match crate::routines::create(app, &bot.id, &routine.name, &routine.schedule, &routine.prompt, None, false) {
             Ok(created) => routines.push(created.name),
             Err(error) => tracing::warn!(%error, routine = %routine.name, "adding a template's routine"),
         }

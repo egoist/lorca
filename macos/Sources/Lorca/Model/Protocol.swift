@@ -79,6 +79,7 @@ enum Wire {
         var lastOutcome: String?
         var nextRunAt: Double?
         var isRunning: Bool?
+        var check: String?
         var createdAt: Double
 
         func toModel() -> Lorca.Routine {
@@ -86,7 +87,7 @@ enum Wire {
                 id: id, botID: botId, name: name, prompt: prompt, schedule: schedule, scheduleText: Format.schedule(scheduleText ?? schedule),
                 isEnabled: isEnabled, pausedReason: pausedReason, lastRunAt: lastRunAt.map { Date(timeIntervalSince1970: $0) },
                 lastOutcome: lastOutcome, nextRunAt: nextRunAt.map { Date(timeIntervalSince1970: $0) }, isRunning: isRunning ?? false,
-                createdAt: Date(timeIntervalSince1970: createdAt))
+                createdAt: Date(timeIntervalSince1970: createdAt), check: check)
         }
     }
 

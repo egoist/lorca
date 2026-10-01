@@ -37,6 +37,8 @@ The tool takes one argument, `code`, the body of an async function: top-level `a
 
 The result starts with `Script completed`, `Script failed`, or `Script stopped`, the wall time, and then the output in the order the script produced it. A failure appends the error with its stack (`codemode.js:<line>`, which matches the script as written) and the calls made before it, which are not undone. A failed script is an error result (`ToolResult::is_error`) that keeps its partial output. `details.calls` lists the script's calls (name, arguments cut for display, status, duration, error), the first 256 of them.
 
+A host can run a script itself, outside a model's turn: `codemode.run_script(call_id, code, cancel, &runner)` runs it as a call of the tool would, with `runner` (a `ToolRunner`) running its calls, and answers with a `ScriptRun`: the `result` a model would have read, and `returned`, the JSON the script returned when it finished and returned anything but `undefined`. A runner that answers a call with `blocked` ends the script, as a refusing hook does.
+
 ## What a script has
 
 - `tools.<name>(args)`: a promise per tool. A name becomes a JavaScript identifier, with characters that are not valid in one turned into `_`; `tools["my-tool"]` works too, and so does a name the script found with a search after it started.

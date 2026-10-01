@@ -1106,6 +1106,45 @@ pub struct PluginBrief {
     pub skills: Vec<(String, String, std::path::PathBuf)>,
 }
 
+/// What a plugin tool may do.
+enum Access {
+    ReadOnly,
+    /// It may change things. `description` is its live server's, for the review.
+    Changes { description: String },
+    Stopped,
+}
+
+/// Whether a plugin tool only reads: its manifest lists it so, or its server marks it
+/// `readOnlyHint` now. What the server says now counts, never what the saved list says, since
+/// the bot can write that file; a server that cannot be reached says nothing, and the tool may
+/// change things.
+async fn access(app: &Arc<App>, tool: &PluginTool, cancel: &CancellationToken) -> Access {
+    let name = tool.tool.name.to_string();
+    let manifest_read_only =
+        app.plugins.lock().unwrap().get(&tool.plugin_id).is_some_and(|plugin| plugin.manifest.tools.readonly.iter().any(|pattern| pattern_matches(pattern, &name)));
+    if manifest_read_only {
+        return Access::ReadOnly;
+    }
+    let live = tokio::select! {
+        biased;
+        _ = cancel.cancelled() => return Access::Stopped,
+        server = app.mcp.server(app, &tool.plugin_id, &tool.server_name) => server.ok(),
+    };
+    let live_tool = live.as_ref().and_then(|server| server.tools.iter().find(|candidate| candidate.name == tool.tool.name).cloned());
+    if live_tool.as_ref().and_then(|live| live.annotations.as_ref()).and_then(|annotations| annotations.read_only_hint) == Some(true) {
+        return Access::ReadOnly;
+    }
+    Access::Changes { description: live_tool.and_then(|live| live.description.map(|description| description.to_string())).unwrap_or_default() }
+}
+
+/// Whether a script's call to `name` reaches a plugin tool that only reads (see `access`).
+pub async fn is_read_only(app: &Arc<App>, catalog: &PluginCatalog, name: &str, cancel: &CancellationToken) -> bool {
+    match catalog.plugin_tool(name) {
+        Some(tool) => matches!(access(app, &tool, cancel).await, Access::ReadOnly),
+        None => false,
+    }
+}
+
 /// Auto-review, and the user's answer on a card when it asks, for a plugin call a script makes:
 /// at the loop's `before_tool_call` boundary, so a call that is not allowed never reaches the
 /// server and ends the script. A read-only tool runs at once. `None` lets the call run.
@@ -1121,25 +1160,13 @@ pub async fn review_call(
 ) -> Option<BeforeToolCallResult> {
     let tool = catalog.plugin_tool(&ctx.tool_call.name)?;
     let name = tool.tool.name.to_string();
-    let manifest_read_only =
-        app.plugins.lock().unwrap().get(&tool.plugin_id).is_some_and(|plugin| plugin.manifest.tools.readonly.iter().any(|pattern| pattern_matches(pattern, &name)));
-    if manifest_read_only {
-        return None;
-    }
-    // What the server says about the tool now, never what the saved list says: the bot can
-    // write that file. A server that cannot be reached says nothing, and the call is reviewed.
-    let live = tokio::select! {
-        biased;
-        _ = ctx.cancel.cancelled() => return Some(crate::local_review::blocked("Stopped".into())),
-        server = app.mcp.server(app, &tool.plugin_id, &tool.server_name) => server.ok(),
+    let review_description = match access(app, &tool, ctx.cancel).await {
+        Access::ReadOnly => return None,
+        Access::Stopped => return Some(crate::local_review::blocked("Stopped".into())),
+        Access::Changes { description } => description,
     };
-    let live_tool = live.as_ref().and_then(|server| server.tools.iter().find(|candidate| candidate.name == tool.tool.name).cloned());
-    if live_tool.as_ref().and_then(|live| live.annotations.as_ref()).and_then(|annotations| annotations.read_only_hint) == Some(true) {
-        return None;
-    }
     // The script the call comes from says what the whole batch is for.
     let script = ctx.parent.filter(|parent| parent.name == codemode::CODEMODE_TOOL_NAME).and_then(|parent| parent.arguments["code"].as_str());
-    let review_description = live_tool.and_then(|live| live.description.map(|description| description.to_string())).unwrap_or_default();
     let outcome = super::review::decide(app, bot, chat_id, trigger, &tool.plugin_id, &tool.plugin_name, &name, &review_description, ctx.args, script, ctx.cancel).await;
     let super::review::Outcome::Ask { reason, .. } = outcome else { return None };
     if unattended {

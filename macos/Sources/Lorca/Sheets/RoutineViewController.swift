@@ -1,9 +1,9 @@
 import AppKit
 
 /// One routine's details, after Grok Bot's routine page: the schedule and its next and last
-/// runs, the task, and the actions on it. Run Now starts it on the bot's Runner; Pause and
-/// Resume flip the switch the inspector shows; Edit in Chat hands the bot the change to make,
-/// since the bot owns its routines; Delete asks first.
+/// runs, the task, the check when it has one, and the actions on it. Run Now starts it on the
+/// bot's Runner; Pause and Resume flip the switch the inspector shows; Edit in Chat hands the bot
+/// the change to make, since the bot owns its routines; Delete asks first.
 final class RoutineViewController: SheetViewController {
     private let store = AppStore.shared
     private let routineID: Routine.ID
@@ -12,6 +12,8 @@ final class RoutineViewController: SheetViewController {
     private let schedule = SectionView(title: L("Schedule"))
     private let task = SectionView(title: L("Task"))
     private let prompt = NSTextView()
+    private let checkSection = SectionView(title: L("Check"))
+    private let check = NSTextView()
     private let runButton = NSButton()
     private let pauseButton = NSButton()
     private let editButton = NSButton()
@@ -37,23 +39,10 @@ final class RoutineViewController: SheetViewController {
     override func loadView() {
         super.loadView()
 
-        prompt.isEditable = false
-        prompt.isRichText = false
-        prompt.font = .systemFont(ofSize: 12)
-        prompt.textColor = .labelColor
-        prompt.drawsBackground = false
-        prompt.textContainerInset = NSSize(width: 8, height: 8)
-        prompt.isVerticallyResizable = true
-        prompt.isHorizontallyResizable = false
-        prompt.autoresizingMask = [.width]
-        prompt.textContainer?.widthTracksTextView = true
-        let scroll = NSScrollView()
-        scroll.documentView = prompt
-        scroll.hasVerticalScroller = true
-        scroll.autohidesScrollers = true
-        scroll.drawsBackground = false
-        scroll.translatesAutoresizingMaskIntoConstraints = false
+        let scroll = Self.readOnly(prompt, font: .systemFont(ofSize: 12))
         task.setRows([scroll])
+        let checkScroll = Self.readOnly(check, font: .monospacedSystemFont(ofSize: 11, weight: .regular))
+        checkSection.setRows([checkScroll])
 
         for (button, title, action) in [
             (runButton, L("Run Now"), #selector(runNow)),
@@ -73,16 +62,40 @@ final class RoutineViewController: SheetViewController {
 
         contentStack.addArrangedSubview(schedule)
         contentStack.addArrangedSubview(task)
+        contentStack.addArrangedSubview(checkSection)
         contentStack.addArrangedSubview(actions)
         NSLayoutConstraint.activate([
             schedule.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
             task.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
+            checkSection.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
             actions.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
             scroll.heightAnchor.constraint(equalToConstant: 96),
+            checkScroll.heightAnchor.constraint(equalToConstant: 120),
         ])
 
         setButtons(confirm: L("Done"), cancel: nil)
         refresh()
+    }
+
+    /// A text view that shows text to read and select, scrolling inside a fixed height.
+    private static func readOnly(_ text: NSTextView, font: NSFont) -> NSScrollView {
+        text.isEditable = false
+        text.isRichText = false
+        text.font = font
+        text.textColor = .labelColor
+        text.drawsBackground = false
+        text.textContainerInset = NSSize(width: 8, height: 8)
+        text.isVerticallyResizable = true
+        text.isHorizontallyResizable = false
+        text.autoresizingMask = [.width]
+        text.textContainer?.widthTracksTextView = true
+        let scroll = NSScrollView()
+        scroll.documentView = text
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.drawsBackground = false
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        return scroll
     }
 
     override func viewDidLoad() {
@@ -113,10 +126,12 @@ final class RoutineViewController: SheetViewController {
         schedule.setRows([
             KeyValueRow(key: L("State"), value: state.0, tint: state.1),
             scheduleRow,
-            KeyValueRow(key: L("Next run"), value: routine.nextRunAt.map { Format.upcoming($0) } ?? "—"),
+            KeyValueRow(key: routine.check == nil ? L("Next run") : L("Next check"), value: routine.nextRunAt.map { Format.upcoming($0) } ?? "—"),
             KeyValueRow(key: L("Last run"), value: routine.lastRunSummary),
         ])
         if prompt.string != routine.prompt { prompt.string = routine.prompt }
+        checkSection.isHidden = routine.check == nil
+        if check.string != (routine.check ?? "") { check.string = routine.check ?? "" }
         pauseButton.title = routine.isEnabled ? L("Pause") : L("Resume")
         runButton.isEnabled = !routine.isRunning
         let runner = store.device(bot.runnerID)

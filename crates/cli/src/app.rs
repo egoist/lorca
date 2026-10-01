@@ -203,6 +203,9 @@ pub struct App {
     /// Connected MCP servers.
     #[cfg(feature = "runner")]
     pub mcp: crate::plugins::mcp::Pool,
+    /// The checks of this Runner's routines.
+    #[cfg(feature = "runner")]
+    pub routine_checks: crate::routines::Checks,
     pub http: reqwest::Client,
 }
 
@@ -273,6 +276,8 @@ impl App {
             marketplace_cache: Mutex::new(None),
             #[cfg(feature = "runner")]
             mcp: crate::plugins::mcp::Pool::new(),
+            #[cfg(feature = "runner")]
+            routine_checks: crate::routines::Checks::default(),
             http,
         });
         // Normalize and persist the in-memory view before background work begins.
@@ -1225,7 +1230,8 @@ impl App {
     }
 
     /// Routines as the apps see them: the stored fields plus the schedule in words, when the
-    /// next run is due, and whether a run is going on right now.
+    /// next run is due (or the next check, for a routine with one), and whether a run is going
+    /// on right now.
     fn routines_out(&self, state: &State) -> Vec<Value> {
         state.routines.iter().map(|routine| self.routine_out(routine)).collect()
     }
@@ -1233,7 +1239,7 @@ impl App {
     pub fn routine_out(&self, routine: &Routine) -> Value {
         let mut out = serde_json::to_value(routine).unwrap_or_default();
         out["schedule_text"] = json!(crate::schedule::parse(&routine.schedule).map(|s| s.describe()).unwrap_or_else(|_| routine.schedule.clone()));
-        out["next_run_at"] = json!(routine.next_run_at().map(|t| t as f64));
+        out["next_run_at"] = json!(crate::routines::next_run_shown(self, routine).map(|t| t as f64));
         out["is_running"] = json!(self.is_routine_running(&routine.id));
         out
     }
@@ -1720,6 +1726,7 @@ mod tests {
             last_run_at: None,
             last_outcome: None,
             paused_reason: None,
+            check: None,
             created_at: 1.0,
         }
     }

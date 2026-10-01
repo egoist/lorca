@@ -6,6 +6,13 @@ and the update window shows it.
 
 ## [Unreleased]
 
+- A routine can watch for something without spending a turn each time: the bot gives it a check, a
+  short script that looks at an inbox, a repository, or a feed at each due time and starts the bot
+  only when it finds something new. Checks only read, never change anything, and cost nothing when
+  there is nothing to report. A routine's sheet shows its check, and the inspector its next check.
+- When a long chat fills a bot's context, the summary that replaces the older part, and the memory
+  save before it, reuse the prompt cache of the bot's own turn instead of sending the whole chat
+  again, so compacting while a bot works costs a fraction of what it did.
 - Lorca opens on your last chat, even when you quit it with Settings open.
 - Toggle Inspector shows the inspector in a window too narrow for it. Opening the inspector or the
   sidebar where there is no room widens the window by the pane; a maximized window keeps its size,

@@ -100,6 +100,8 @@ export interface Routine {
   last_outcome?: string;
   next_run_at?: number | null;
   is_running: boolean;
+  /** The script the Runner runs at each due time before the bot does; `next_run_at` is then the next check. */
+  check?: string | null;
   created_at: number;
 }
 

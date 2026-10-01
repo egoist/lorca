@@ -534,6 +534,11 @@ pub struct Routine {
     /// Why Lorca paused it, when it did: `away`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub paused_reason: Option<String>,
+    /// JavaScript the Runner runs at each due time before the bot does, without a model: a
+    /// codemode script with read-only tools. What it returns starts the run; returning nothing
+    /// skips it. `last_run_at` and `last_outcome` count the runs, not the checks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check: Option<String>,
     pub created_at: f64,
 }
 
@@ -545,11 +550,28 @@ impl Routine {
 
     /// When the next run is due, or `None` when paused or the schedule is unreadable.
     pub fn next_run_at(&self) -> Option<i64> {
+        self.next_run_after(self.anchor())
+    }
+
+    /// When the routine is next due counting from `since` as well as its anchor, such as the
+    /// check that last ran on its Runner.
+    pub fn next_run_after(&self, since: i64) -> Option<i64> {
         if !self.is_enabled {
             return None;
         }
-        crate::schedule::parse(&self.schedule).ok()?.next_after(self.anchor())
+        crate::schedule::parse(&self.schedule).ok()?.next_after(since.max(self.anchor()))
     }
+}
+
+/// How a routine's check went before the run it started.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CheckReport {
+    /// What the check returned, as text; empty when it returned nothing.
+    #[serde(default)]
+    pub found: String,
+    /// How the check failed, when it did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 // MARK: - Blob payloads
@@ -638,6 +660,10 @@ pub struct Job {
     /// `routine`: which routine is running.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub routine_id: Option<String>,
+    /// `routine`: what the routine's check found, when a due check started the run. A run
+    /// without one runs the check itself first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check: Option<CheckReport>,
     /// The Device that created the job; a `room_turn` result goes back to it.
     pub requested_by: String,
     /// The bot that sent a `message` job, so the recipient knows who to answer.

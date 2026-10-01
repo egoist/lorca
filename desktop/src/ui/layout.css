@@ -1582,6 +1582,16 @@ body.resizing * {
   white-space: pre-wrap;
 }
 
+.routine-check {
+  height: 120px;
+  overflow: auto;
+  padding: 8px 12px;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre;
+}
+
 .sheet-actions {
   display: flex;
   align-items: center;

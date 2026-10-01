@@ -178,6 +178,7 @@ export interface WireRoutine {
   last_outcome?: string | null;
   next_run_at?: number | null;
   is_running?: boolean | null;
+  check?: string | null;
   created_at: number;
 }
 
@@ -510,6 +511,7 @@ export function toRoutine(wire: WireRoutine): Routine {
     lastOutcome: optional(wire.last_outcome),
     nextRunAt: wire.next_run_at == null ? undefined : seconds(wire.next_run_at),
     isRunning: wire.is_running ?? false,
+    check: optional(wire.check),
     createdAt: seconds(wire.created_at),
   };
 }

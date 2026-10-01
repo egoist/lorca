@@ -358,7 +358,26 @@ impl Tool for CodemodeTool {
 
     async fn execute_with(&self, tool_call_id: &str, args: Value, cancel: CancellationToken, on_update: ToolUpdateFn, tools: &dyn ToolRunner) -> Result<ToolResult, ToolError> {
         let parsed = parse_source(args["code"].as_str().unwrap_or("")).map_err(ToolError)?;
-        Ok(Run::new(self, tool_call_id, &cancel, on_update, tools).execute(parsed).await)
+        Ok(Run::new(self, tool_call_id, &cancel, on_update, tools).execute(parsed).await.result)
+    }
+}
+
+/// A script a host ran itself, outside a model's turn.
+#[derive(Debug, Clone)]
+pub struct ScriptRun {
+    /// What a model would read had it run the script: the output, the returned value, or the
+    /// error, and the calls in `details`.
+    pub result: ToolResult,
+    /// What the script returned, when it finished and returned anything but `undefined`.
+    pub returned: Option<Value>,
+}
+
+impl CodemodeTool {
+    /// Runs `code` as a call of this tool would, with `tools` running the script's calls, and
+    /// keeps what it returned apart from what it printed.
+    pub async fn run_script(&self, call_id: &str, code: &str, cancel: CancellationToken, tools: &dyn ToolRunner) -> Result<ScriptRun, ToolError> {
+        let parsed = parse_source(code).map_err(ToolError)?;
+        Ok(Run::new(self, call_id, &cancel, Arc::new(|_| {}), tools).execute(parsed).await)
     }
 }
 
@@ -439,7 +458,7 @@ impl<'a> Run<'a> {
         Some(entry)
     }
 
-    async fn execute(self, parsed: ParsedSource) -> ToolResult {
+    async fn execute(self, parsed: ParsedSource) -> ScriptRun {
         let started = Instant::now();
         let entries: Vec<Entry> = self.tool.catalog.entries().into_iter().filter(|entry| entry.tool.name() != CODEMODE_TOOL_NAME).collect();
         let script_tools = entries
@@ -738,8 +757,9 @@ impl<'a> Run<'a> {
         }
     }
 
-    async fn finish(&self, end: End, mut items: Vec<ContentPart>, max_output_tokens: Option<u64>, stored: &BTreeMap<String, String>, started: Instant) -> ToolResult {
+    async fn finish(&self, end: End, mut items: Vec<ContentPart>, max_output_tokens: Option<u64>, stored: &BTreeMap<String, String>, started: Instant) -> ScriptRun {
         let calls = self.calls.lock().unwrap().clone();
+        let mut returned = None;
         // The store's limits hold here too, whatever the script did to its own copy of them.
         let end = match end {
             End::Done { value, writes } => match parse_writes(&writes).and_then(|writes| check_writes(stored, writes)) {
@@ -751,6 +771,7 @@ impl<'a> Run<'a> {
                     }
                     if let Some(value) = &value {
                         items.push(ContentPart::text(value_text(value)));
+                        returned = serde_json::from_str(value).ok();
                     }
                     End::Done { value, writes: String::new() }
                 }
@@ -801,7 +822,7 @@ impl<'a> Run<'a> {
         if let Some(path) = full_output_path {
             details["full_output_path"] = json!(path);
         }
-        ToolResult { content, details, structured: None, is_error: !ok, terminate }
+        ScriptRun { result: ToolResult { content, details, structured: None, is_error: !ok, terminate }, returned }
     }
 }
 

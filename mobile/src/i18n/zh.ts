@@ -181,6 +181,7 @@ export const zh: Record<string, string> = {
   "New Bot": "新建智能体",
   "New Group Chat": "新建群聊",
   "New rule": "新建规则",
+  "Next check {when}": "下次检查 {when}",
   "Next {when}": "下次 {when}",
   "No answer in time": "未及时答复",
   "No bots assigned": "未分配智能体",

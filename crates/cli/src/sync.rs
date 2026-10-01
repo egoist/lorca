@@ -724,10 +724,13 @@ fn apply_blob_contents(app: &Arc<App>, machine_file: &crate::keys::MachineFile, 
 fn apply_roster(app: &Arc<App>, mut roster: RosterBlob) {
     let removed: Vec<String>;
     let normalized_descriptions = roster.bots.iter_mut().fold(false, |changed, bot| bot.normalize_description() || changed);
+    let this_device = app.this_device_id();
+    let kept_checks;
     {
         let mut state = app.state.lock().unwrap();
         let local_updated = state.chats.iter().map(|_| 0.0).fold(0.0, f64::max);
         let _ = local_updated;
+        kept_checks = this_device.is_some_and(|this| crate::routines::keep_checks(&state.routines, &mut roster.routines, &roster.bots, &this));
         state.bots = roster.bots;
         state.routines = roster.routines;
         state.auto_review = roster.auto_review;
@@ -757,7 +760,7 @@ fn apply_roster(app: &Arc<App>, mut roster: RosterBlob) {
     #[cfg(feature = "runner")]
     app.shell_sessions.close_orphans(app);
     crate::runtime::prime_names(app);
-    app.roster_changed(normalized_descriptions);
+    app.roster_changed(normalized_descriptions || kept_checks);
 }
 
 fn apply_chat_op(app: &Arc<App>, op: ChatBlob) {
