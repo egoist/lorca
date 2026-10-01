@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 pub const MAX_GROUP_BOTS: usize = 6;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct ProviderStatus {
     pub kind: String,
     pub is_connected: bool,
@@ -13,6 +13,13 @@ pub struct ProviderStatus {
     /// A custom API base URL, when the credential has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
+    /// A custom provider's name, wire protocol, and models. Built-in providers have none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api: Option<crate::credentials::CustomApi>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<crate::credentials::CustomModel>,
 }
 
 /// A paired machine or phone. `os` decides whether it is a Runner.

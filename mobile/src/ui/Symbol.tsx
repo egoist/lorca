@@ -73,6 +73,7 @@ const ANDROID: Record<string, string> = {
   "waveform": "graphic_eq",
   "paperclip": "attach_file",
   "photo.on.rectangle": "photo_library",
+  photo: "image",
   "doc.fill": "description",
   "folder.fill": "folder",
   "xmark.circle.fill": "cancel",

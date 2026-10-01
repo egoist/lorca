@@ -69,8 +69,8 @@ final class NewBotViewController: SheetViewController {
         runnerPopup.action = #selector(runnerChanged)
 
         providerPopup.translatesAutoresizingMaskIntoConstraints = false
-        for kind in ProviderCredential.Kind.allCases {
-            providerPopup.addItem(withTitle: "\(kind.rawValue) (\(kind.subtitle))")
+        for kind in providerKinds {
+            providerPopup.addItem(withTitle: "\(kind.name) (\(kind.subtitle))")
         }
         providerPopup.target = self
         providerPopup.action = #selector(providerChanged)
@@ -164,8 +164,12 @@ final class NewBotViewController: SheetViewController {
         }
     }
 
+    /// The providers as the sheet opened, the built-in ones and then the custom ones, so the
+    /// pop-up's indexes hold while the account's list changes.
+    private lazy var providerKinds = store.providerKinds
+
     private var selectedProvider: ProviderCredential.Kind {
-        ProviderCredential.Kind.allCases[max(0, providerPopup.indexOfSelectedItem)]
+        providerKinds[max(0, providerPopup.indexOfSelectedItem)]
     }
 
     /// nil means the provider's default model.
@@ -224,11 +228,11 @@ final class NewBotViewController: SheetViewController {
         }
         let provider = selectedProvider
         if store.credential(for: provider)?.isConnected == true {
-            note.stringValue = L("%@ is connected. Turns run on %@.", provider.rawValue, runner.name)
+            note.stringValue = L("%@ is connected. Turns run on %@.", provider.name, runner.name)
             note.textColor = .tertiaryLabelColor
         } else {
             note.stringValue =
-                L("%@ is not connected yet. The bot is created now and its first turn waits until you connect it in Settings.", provider.rawValue)
+                L("%@ is not connected yet. The bot is created now and its first turn waits until you connect it in Settings.", provider.name)
             note.textColor = .systemOrange
         }
     }

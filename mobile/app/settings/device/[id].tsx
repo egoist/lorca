@@ -39,6 +39,7 @@ export default function DeviceScreen() {
   const device = useStore((s) => s.devices.find((d) => d.id === id));
   const seen = useStore((s) => s.device_seen[id]);
   const allBots = useStore((s) => s.bots);
+  const providers = useStore((s) => s.providers);
   const chats = useStore((s) => s.chats);
   const relayConnected = useStore((s) => s.relayConnected);
   const relayUpdateRequired = useStore((s) => s.relayUpdateRequired);
@@ -95,7 +96,7 @@ export default function DeviceScreen() {
 
         {runner && (
           <Section title={t("Bots assigned here")}>
-            {bots.length === 0 ? <Row title={t("No bots assigned")} /> : bots.map((bot) => <Row key={bot.id} title={bot.name} subtitle={providerLabel(bot.provider)} leading={<BotAvatar bot={bot} size={32} />} chevron onPress={() => openChat(bot.id)} />)}
+            {bots.length === 0 ? <Row title={t("No bots assigned")} /> : bots.map((bot) => <Row key={bot.id} title={bot.name} subtitle={providerLabel(bot.provider, providers)} leading={<BotAvatar bot={bot} size={32} />} chevron onPress={() => openChat(bot.id)} />)}
           </Section>
         )}
 

@@ -254,7 +254,7 @@ final class InspectorViewController: NSViewController {
                 let row = keptRow("bot:\(bot.id)") { BotRow() }
                 row.configure(
                     bot: bot,
-                    detailText: "\(bot.provider.rawValue) · \(host)",
+                    detailText: "\(bot.provider.name) · \(host)",
                     accessorySymbol: chat.canRemoveBot ? "minus.circle" : nil,
                     tooltip: L("Remove from chat")
                 )
@@ -274,8 +274,8 @@ final class InspectorViewController: NSViewController {
     }
 
     private func showRuntime(of bot: Bot, in chat: Chat) {
-        let credential = store.credential(for: bot.provider)
-        if changed(runtime, to: [chat.id, bot.id, bot.provider, bot.model, bot.thinking, credential, chat.usage == nil]) {
+        // The account's providers name the Provider pop-up's items and a custom provider's models.
+        if changed(runtime, to: [chat.id, bot.id, bot.provider, bot.model, bot.thinking, store.providers, chat.usage == nil]) {
             runtime.setRows(runtimeRows(for: bot, in: chat))
         }
         // What the turns used changes after every turn; the rows take the new values in place.
@@ -343,10 +343,12 @@ final class InspectorViewController: NSViewController {
     }
 
     private func runtimeRows(for bot: Bot, in chat: Chat) -> [NSView] {
-        let kinds = ProviderCredential.Kind.allCases
+        // A custom provider the account deleted stays listed while the bot is still on it.
+        var kinds = store.providerKinds
+        if !kinds.contains(bot.provider) { kinds.append(bot.provider) }
         let providerRow = PopUpRow(
             key: L("Provider"),
-            items: kinds.map(\.rawValue),
+            items: kinds.map(\.name),
             selected: kinds.firstIndex(of: bot.provider) ?? 0)
         providerRow.onChange = { [weak self] index in
             guard let self, kinds.indices.contains(index), kinds[index] != bot.provider else { return }

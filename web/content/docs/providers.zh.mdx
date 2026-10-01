@@ -39,6 +39,26 @@ lorca provider list
 
 如果要用代理或兼容的服务器，在接入任何 API 密钥类服务商时填写 **Base URL**。密钥会针对那个地址验证。
 
+## 自定义服务商
+
+任何兼容 OpenAI Chat Completions 或 Responses API，或 Anthropic Messages API 的服务器都可以作为服务商：OpenRouter 这样的网关、其他厂商的 API，或者你网络中的模型服务器，例如 Ollama、LM Studio 或 vLLM。打开 **设置 › 服务商**，选择 **添加服务商…**，再选择服务：OpenAI、OpenRouter、Gemini、Groq、Together AI、Ollama 和 LM Studio 会替你填好 API 和基础 URL，**其他服务器…** 则从空白开始。
+
+- **名称：**应用里显示的名字。
+- **API：**OpenAI Chat Completions、OpenAI Responses 或 Anthropic Messages。
+- **API 基础 URL：**API 路径所在的根地址，例如 `https://openrouter.ai/api/v1` 或 `http://localhost:11434/v1`。面板会显示 Lorca 实际请求的完整地址。
+- **API 密钥：**服务器不需要密钥时留空。
+- **模型：**填好服务器信息后，它的模型会连同上下文窗口和能否看图一起列出。勾选智能体可以使用的模型，并选择默认模型。服务器没有列出的模型，可以在搜索框里输入它的 ID 添加。
+
+保存时，Lorca 会再向服务器确认一次，借此验证密钥。自定义服务商会像其他凭据一样同步到你的其他设备，它的智能体在各自分配到的 Runner 上运行，所以你网络中的模型服务器要能从那台 Runner 访问。花费显示为 $0，因为 Lorca 不知道服务器的收费。
+
+在终端里：
+
+```bash
+lorca provider add "OpenRouter" https://openrouter.ai/api/v1 --model anthropic/claude-sonnet-5 --api-key-stdin
+lorca provider add "Ollama" http://localhost:11434/v1
+lorca provider add "Claude proxy" https://proxy.example.com --api messages --model claude-opus-5 --api-key-stdin
+```
+
 ## 为每个智能体选模型
 
 每个智能体在 New Bot 面板、桌面应用检查器的 **运行方式** 下，或手机的智能体详情中选择自己的服务商、模型和思考级别。没有指定模型的智能体使用服务商的默认模型。
@@ -47,7 +67,7 @@ lorca provider list
 
 ## 断开
 
-**断开** 会从每一台设备上移除这份凭据。对 Grok 来说，还会撤销登录。
+**断开** 会从每一台设备上移除这份凭据。对 Grok 来说，还会撤销登录。**删除** 会从每一台设备上移除一个自定义服务商；在终端里用 `lorca provider remove` 加上 `lorca provider list` 显示的标识（例如 `custom:openrouter`）也一样。
 
 ## 花费
 

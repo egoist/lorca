@@ -3,20 +3,49 @@
 
 import { describe, expect, test } from "bun:test";
 import {
+  addModelRow,
   attachmentSummary,
+  connectedProviders,
+  contextWindowLabel,
+  CUSTOM_PRESETS,
+  customAPI,
+  customPreset,
+  customProviderNamed,
+  customRequestURL,
+  defaultModelId,
+  defaultProviderName,
   fileSize,
+  filterModelRows,
+  isCustomProvider,
+  isHTTPURL,
+  isLoopbackHost,
   isProviderKind,
   isSentMessage,
+  mergeListedModels,
+  modelIdToAdd,
+  modelLabel,
+  modelListingNote,
+  presetForURL,
   providerConnectMethod,
   providerDefaultBaseURL,
+  providerKinds,
+  providerLabel,
+  providerModels,
+  providerThinkingLevels,
   providerUsesAPIKey,
+  PROVIDER_KINDS,
   PROVIDER_MODELS,
   runsInTerminal,
+  savedModelRows,
+  selectedModelIds,
   showsCard,
+  toggleModelRow,
+  urlHost,
   type Body,
   type Bot,
   type Chat,
   type CommandRun,
+  type ProviderStatus,
 } from "./model";
 import { parsePairingString } from "./pairing";
 import { daySeparator, joinDictation, preview, stamp, time, workingActivity, type WorkState } from "../ui/format";
@@ -96,6 +125,221 @@ describe("model", () => {
     expect(providerDefaultBaseURL("deepseek")).toBe("https://api.deepseek.com");
     expect(providerDefaultBaseURL("chatgpt")).toBe("");
     expect(PROVIDER_MODELS.chatgpt.map((m) => m.id)).toEqual(["gpt-6-sol", "gpt-6-astra", "gpt-6-luna"]);
+  });
+});
+
+describe("custom providers", () => {
+  // The statuses as the core lists them: the six built-ins, then custom providers in the order added.
+  const builtIn: ProviderStatus[] = PROVIDER_KINDS.map((kind) => ({ kind, is_connected: kind === "deepseek", detail: kind === "deepseek" ? "sk-…abcd" : "Not connected" }));
+  const openrouter: ProviderStatus = {
+    kind: "custom:openrouter",
+    is_connected: true,
+    detail: "sk-…abcd · https://openrouter.ai/api/v1",
+    base_url: "https://openrouter.ai/api/v1",
+    name: "OpenRouter",
+    api: "chat-completions",
+    models: [{ id: "anthropic/claude-sonnet-5", name: "Anthropic: Claude Sonnet 5", context_window: 1_000_000, max_output: 128_000, images: true }, { id: "qwen3:8b" }],
+  };
+  const lab: ProviderStatus = { kind: "custom:lab", is_connected: true, detail: "http://192.168.1.20:11434/v1", base_url: "http://192.168.1.20:11434/v1", name: "Lab", api: "responses", models: [{ id: "llama4", name: "" }] };
+  const statuses = [...builtIn, openrouter, lab];
+
+  test("kinds start with custom:", () => {
+    expect(isCustomProvider("custom:openrouter")).toBe(true);
+    expect(isCustomProvider("anthropic")).toBe(false);
+    expect(isProviderKind("custom:openrouter")).toBe(false);
+  });
+
+  test("a custom provider goes by its name, or its slug once it is gone", () => {
+    expect(providerLabel("custom:openrouter", statuses)).toBe("OpenRouter");
+    expect(providerLabel("custom:gone", statuses)).toBe("gone");
+    expect(providerLabel("custom:openrouter", [])).toBe("openrouter");
+    // Built-ins keep their names, with or without statuses.
+    expect(providerLabel("opencode-go", statuses)).toBe("OpenCode Go");
+    expect(providerLabel("anthropic", [])).toBe("Anthropic");
+  });
+
+  test("its models are the ones saved with it, named as its server lists them, the first the default", () => {
+    expect(providerModels("custom:openrouter", statuses)).toEqual([
+      { id: "anthropic/claude-sonnet-5", label: "Anthropic: Claude Sonnet 5" },
+      { id: "qwen3:8b", label: "qwen3:8b" },
+    ]);
+    expect(providerModels("custom:lab", statuses)).toEqual([{ id: "llama4", label: "llama4" }]);
+    expect(providerModels("custom:gone", statuses)).toEqual([]);
+    expect(providerModels("chatgpt", statuses)).toEqual(PROVIDER_MODELS.chatgpt);
+    expect(providerModels("unknown", statuses)).toEqual([]);
+  });
+
+  test("its thinking levels are off to high; built-ins keep their own", () => {
+    expect(providerThinkingLevels("custom:openrouter")).toEqual(["off", "low", "medium", "high"]);
+    expect(providerThinkingLevels("anthropic")).toEqual(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+    expect(providerThinkingLevels("grok")).toEqual(["low", "medium", "high", "xhigh"]);
+    expect(providerThinkingLevels("unknown")).toEqual([]);
+  });
+
+  test("custom providers come after the built-ins, in the order added", () => {
+    expect(providerKinds(statuses)).toEqual([...PROVIDER_KINDS, "custom:openrouter", "custom:lab"]);
+    expect(providerKinds([])).toEqual([...PROVIDER_KINDS]);
+    expect(connectedProviders(statuses)).toEqual(["deepseek", "custom:openrouter", "custom:lab"]);
+  });
+
+  test("the base URL becomes the URL the core calls", () => {
+    expect(customRequestURL("messages", "https://api.anthropic.com/v1")).toBe("https://api.anthropic.com/v1/messages");
+    expect(customRequestURL("messages", "https://api.anthropic.com/v1/messages")).toBe("https://api.anthropic.com/v1/messages");
+    expect(customRequestURL("messages", " https://api.anthropic.com/ ")).toBe("https://api.anthropic.com/v1/messages");
+    expect(customRequestURL("chat-completions", "http://localhost:11434/v1/chat/completions")).toBe("http://localhost:11434/v1/chat/completions");
+    expect(customRequestURL("chat-completions", "https://openrouter.ai/api/v1")).toBe("https://openrouter.ai/api/v1/chat/completions");
+    expect(customRequestURL("responses", "https://x/v1/")).toBe("https://x/v1/responses");
+    expect(customRequestURL("responses", "https://x/v1/responses//")).toBe("https://x/v1/responses");
+    // One endpoint is cut, and only the protocol's own.
+    expect(customRequestURL("chat-completions", "https://x/v1/responses")).toBe("https://x/v1/responses/chat/completions");
+    expect(customRequestURL("chat-completions", "  ")).toBe("");
+  });
+
+  test("protocols name their path and base URL example", () => {
+    expect(customAPI("messages")).toMatchObject({ title: "Anthropic Messages", path: "/v1/messages", placeholder: "https://api.example.com" });
+    expect(customAPI("responses")).toMatchObject({ title: "OpenAI Responses", path: "/responses", placeholder: "https://api.example.com/v1" });
+    // A protocol this build does not know reads as the first.
+    expect(customAPI(undefined).id).toBe("chat-completions");
+  });
+
+  test("presets start the form from a server people often add", () => {
+    expect(CUSTOM_PRESETS.map((preset) => [preset.name, preset.api, preset.baseURL])).toEqual([
+      ["OpenAI", "responses", "https://api.openai.com/v1"],
+      ["OpenRouter", "chat-completions", "https://openrouter.ai/api/v1"],
+      ["Gemini", "chat-completions", "https://generativelanguage.googleapis.com/v1beta/openai"],
+      ["Groq", "chat-completions", "https://api.groq.com/openai/v1"],
+      ["Together AI", "chat-completions", "https://api.together.xyz/v1"],
+      ["Ollama", "chat-completions", "http://localhost:11434/v1"],
+      ["LM Studio", "chat-completions", "http://localhost:1234/v1"],
+    ]);
+    expect(CUSTOM_PRESETS.filter((preset) => preset.local).map((preset) => preset.name)).toEqual(["Ollama", "LM Studio"]);
+    expect(customPreset("together ai")?.keyPlaceholder()).toBe("Key from api.together.ai");
+    expect(customPreset("Lab")).toBeUndefined();
+    expect(customPreset(undefined)).toBeUndefined();
+    // A preset the account has already is that provider, whatever the case of its name.
+    expect(customProviderNamed("openrouter", statuses)?.kind).toBe("custom:openrouter");
+    expect(customProviderNamed("Groq", statuses)).toBeUndefined();
+    expect(customProviderNamed("DeepSeek", statuses)).toBeUndefined();
+  });
+
+  test("a base URL names its host, which names a provider left unnamed", () => {
+    expect(urlHost("https://openrouter.ai/api/v1")).toBe("openrouter.ai");
+    expect(urlHost(" http://192.168.1.20:11434/v1 ")).toBe("192.168.1.20:11434");
+    expect(urlHost("https://user:secret@Gateway.Example.com?x=1")).toBe("gateway.example.com");
+    expect(urlHost("http://[::1]:8080/v1")).toBe("[::1]:8080");
+    expect(urlHost("openrouter.ai/api/v1")).toBe("");
+    expect(urlHost("")).toBe("");
+    expect(isHTTPURL("https://api.groq.com/openai/v1")).toBe(true);
+    expect(isHTTPURL("HTTP://localhost:1234")).toBe(true);
+    expect(isHTTPURL("https://")).toBe(false);
+    expect(isHTTPURL("ftp://example.com")).toBe(false);
+    expect(isHTTPURL("api.openai.com/v1")).toBe(false);
+    for (const host of ["localhost:11434", "127.0.0.1:1234", "[::1]:8080", "0.0.0.0", "ollama.localhost"]) expect(isLoopbackHost(host)).toBe(true);
+    for (const host of ["192.168.1.20:11434", "api.openai.com", "localhost.example.com", ""]) expect(isLoopbackHost(host)).toBe(false);
+  });
+
+  test("an unnamed provider takes the name of the preset whose server it names, else the host", () => {
+    expect(presetForURL("http://localhost:11434/v1")?.name).toBe("Ollama");
+    expect(presetForURL("http://localhost:1234")?.name).toBe("LM Studio");
+    expect(presetForURL("http://localhost:8080/v1")).toBeUndefined();
+    expect(defaultProviderName("http://localhost:11434/v1")).toBe("Ollama");
+    expect(defaultProviderName("https://openrouter.ai/api/v1/chat/completions")).toBe("OpenRouter");
+    expect(defaultProviderName("https://generativelanguage.googleapis.com/v1beta/openai")).toBe("Gemini");
+    expect(defaultProviderName("http://192.168.1.20:11434/v1")).toBe("192.168.1.20:11434");
+    expect(defaultProviderName("")).toBe("");
+  });
+
+  test("context windows read the short way", () => {
+    expect(contextWindowLabel(128_000)).toBe("128K");
+    expect(contextWindowLabel(131_072)).toBe("128K");
+    expect(contextWindowLabel(200_000)).toBe("200K");
+    expect(contextWindowLabel(32_768)).toBe("32K");
+    expect(contextWindowLabel(262_144)).toBe("256K");
+    expect(contextWindowLabel(1_000_000)).toBe("1M");
+    expect(contextWindowLabel(1_048_576)).toBe("1M");
+    expect(contextWindowLabel(1_047_576)).toBe("1M");
+    expect(contextWindowLabel(1_500_000)).toBe("1.5M");
+    expect(contextWindowLabel(999_999)).toBe("1M");
+    expect(contextWindowLabel(512)).toBe("512");
+  });
+
+  test("a listing joins the rows: the user's first, then the server's in its order", () => {
+    const saved = savedModelRows([{ id: "qwen3:8b" }, { id: "mystery" }]);
+    expect(saved).toEqual([
+      { id: "qwen3:8b", selected: true, source: "user" },
+      { id: "mystery", selected: true, source: "user" },
+    ]);
+    const listing = [{ id: "llama4", name: "Llama 4", context_window: 131_072 }, { id: "qwen3:8b", name: "Qwen3 8B", images: false }, { id: "llama4" }];
+    const merged = mergeListedModels(saved, listing);
+    // Saved rows stay picked and first, with what the server says of them; the rest come unpicked, once.
+    expect(merged).toEqual([
+      { id: "qwen3:8b", name: "Qwen3 8B", images: false, selected: true, source: "user" },
+      { id: "mystery", selected: true, source: "user" },
+      { id: "llama4", name: "Llama 4", context_window: 131_072, selected: false, source: "server" },
+    ]);
+    // A new list keeps what was picked from the last one, drops the rest of it, and adds its own.
+    const picked = toggleModelRow(merged, "llama4");
+    const next = mergeListedModels(toggleModelRow(picked, "mystery"), [{ id: "gpt-6-sol" }]);
+    expect(next.map((row) => [row.id, row.selected, row.source])).toEqual([
+      ["qwen3:8b", true, "user"],
+      ["mystery", false, "user"],
+      ["llama4", true, "server"],
+      ["gpt-6-sol", false, "server"],
+    ]);
+    // A server that lists nothing leaves the user's rows and the picked ones.
+    expect(mergeListedModels(next, []).map((row) => row.id)).toEqual(["qwen3:8b", "mystery", "llama4"]);
+  });
+
+  test("a short list arriving with nothing picked is picked whole; a long one is not", () => {
+    const short = mergeListedModels([], [{ id: "a" }, { id: "b" }]);
+    expect(short.map((row) => row.selected)).toEqual([true, true]);
+    const long = mergeListedModels([], Array.from({ length: 9 }, (_, n) => ({ id: `m${n}` })));
+    expect(long.some((row) => row.selected)).toBe(false);
+    // Something picked already: the list joins unpicked.
+    const added = addModelRow([], "my-model");
+    expect(mergeListedModels(added, [{ id: "a" }]).map((row) => [row.id, row.selected])).toEqual([
+      ["my-model", true],
+      ["a", false],
+    ]);
+  });
+
+  test("the search filters by id or name, and offers to add an id no row has", () => {
+    const rows = mergeListedModels([], [{ id: "anthropic/claude-sonnet-5", name: "Anthropic: Claude Sonnet 5" }, { id: "qwen/qwen3-coder", name: "Qwen: Qwen3 Coder" }]);
+    expect(filterModelRows(rows, "CLAUDE").map((row) => row.id)).toEqual(["anthropic/claude-sonnet-5"]);
+    expect(filterModelRows(rows, "qwen3").map((row) => row.id)).toEqual(["qwen/qwen3-coder"]);
+    expect(filterModelRows(rows, " ")).toHaveLength(2);
+    expect(modelIdToAdd(rows, "  my-finetune ")).toBe("my-finetune");
+    expect(modelIdToAdd(rows, "qwen/qwen3-coder")).toBeNull();
+    expect(modelIdToAdd(rows, "Qwen/Qwen3-Coder")).toBe("Qwen/Qwen3-Coder");
+    expect(modelIdToAdd(rows, "   ")).toBeNull();
+    // An added id goes to the top, picked.
+    expect(addModelRow(rows, "my-finetune").map((row) => [row.id, row.selected, row.source])).toEqual([
+      ["my-finetune", true, "user"],
+      ["anthropic/claude-sonnet-5", true, "server"],
+      ["qwen/qwen3-coder", true, "server"],
+    ]);
+  });
+
+  test("the picked ids go out with the default first", () => {
+    const rows = toggleModelRow(mergeListedModels([], [{ id: "a" }, { id: "b" }, { id: "c" }]), "b");
+    expect(defaultModelId(rows)).toBe("a");
+    expect(selectedModelIds(rows)).toEqual(["a", "c"]);
+    expect(defaultModelId(rows, "c")).toBe("c");
+    expect(selectedModelIds(rows, "c")).toEqual(["c", "a"]);
+    // A chosen default no longer picked gives way to the first picked.
+    expect(selectedModelIds(rows, "b")).toEqual(["a", "c"]);
+    expect(selectedModelIds(toggleModelRow(toggleModelRow(rows, "a"), "c"), "c")).toEqual([]);
+    expect(defaultModelId([], "a")).toBeUndefined();
+    expect(modelLabel({ id: "qwen3:8b", name: " " })).toBe("qwen3:8b");
+  });
+
+  test("the form says where the server's list stands", () => {
+    expect(modelListingNote({ state: "none" })).toBe("Enter the base URL to load the server’s models.");
+    expect(modelListingNote({ state: "loading" })).toBe("Loading models…");
+    expect(modelListingNote({ state: "unlisted" })).toBe("This server doesn’t list its models. Add model IDs in Models.");
+    expect(modelListingNote({ state: "error", message: "Lab rejected that key" })).toBe("Lab rejected that key. You can still add model IDs in Models.");
+    expect(modelListingNote({ state: "error", message: "Lab did not answer like an API at http://lab. Check the base URL." })).toBe("Lab did not answer like an API at http://lab. Check the base URL. You can still add model IDs in Models.");
+    expect(modelListingNote({ state: "listed" })).toBeUndefined();
   });
 });
 

@@ -89,7 +89,24 @@ enum ProviderCommand {
         #[usage(long)]
         base_url: Option<String>,
     },
-    /// Disconnect a provider on every Device.
+    /// Add a custom provider: any server that speaks OpenAI's Chat Completions or Responses, or
+    /// Anthropic's Messages, such as a gateway or a model server on your network.
+    Add {
+        /// The name the apps show.
+        name: String,
+        /// The API root, such as https://openrouter.ai/api/v1 or http://localhost:11434/v1.
+        base_url: String,
+        /// The wire protocol it speaks.
+        #[usage(long, choices("chat-completions", "responses", "messages"), default = "chat-completions")]
+        api: String,
+        /// A model id bots can pick; repeat for more. Omit to take every model the server lists.
+        #[usage(long)]
+        model: Vec<String>,
+        /// Read an API key from stdin. Without it the server is called with no key.
+        #[usage(long)]
+        api_key_stdin: bool,
+    },
+    /// Disconnect a provider on every Device, or delete a custom one.
     Remove { kind: String },
     /// List the providers and what is connected.
     List,
@@ -223,6 +240,11 @@ async fn provider(app: &std::sync::Arc<App>, command: ProviderCommand) -> anyhow
             let method_kind = if kind == "opencode-go" { "opencode_go" } else { &kind };
             (format!("providers.connect_{method_kind}"), params)
         }
+        ProviderCommand::Add { name, base_url, api, model, api_key_stdin } => {
+            let api_key = if api_key_stdin { read_api_key()? } else { String::new() };
+            let params = serde_json::json!({ "name": name, "base_url": base_url, "api": api, "models": model, "api_key": api_key });
+            ("providers.connect_custom".to_string(), params)
+        }
         ProviderCommand::Remove { kind } => ("providers.disconnect".to_string(), serde_json::json!({ "kind": kind })),
         ProviderCommand::List => {
             // A running serve holds the same set: both load and save the one credentials file.
@@ -255,7 +277,16 @@ fn read_api_key() -> anyhow::Result<String> {
 
 fn print_providers(providers: &serde_json::Value) {
     for provider in providers.as_array().into_iter().flatten() {
-        println!("{:<10} {}", provider["kind"].as_str().unwrap_or_default(), provider["detail"].as_str().unwrap_or_default());
+        let mut detail = provider["detail"].as_str().unwrap_or_default().to_string();
+        if let Some(name) = provider["name"].as_str() {
+            let models: Vec<&str> = provider["models"].as_array().into_iter().flatten().filter_map(|m| m["id"].as_str()).collect();
+            let mut shown = models.iter().take(5).copied().collect::<Vec<_>>().join(", ");
+            if models.len() > 5 {
+                shown.push_str(&format!(", and {} more", models.len() - 5));
+            }
+            detail = format!("{name} · {} · {detail} · {shown}", provider["api"].as_str().unwrap_or_default());
+        }
+        println!("{:<10} {detail}", provider["kind"].as_str().unwrap_or_default());
     }
 }
 

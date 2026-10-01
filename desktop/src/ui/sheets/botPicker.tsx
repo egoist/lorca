@@ -34,7 +34,7 @@ function SelectableBotRow(props: { bot: Bot; selected: boolean; enabled: boolean
       <Avatar content={botAvatar(props.bot)} size={28} />
       <div class="row-text">
         <span class="row-title truncate">{props.bot.name}</span>
-        <span class="row-subtitle truncate">{`${providerName(props.bot.provider)} · ${runner()?.name ?? L("unassigned")}`}</span>
+        <span class="row-subtitle truncate">{`${providerName(props.bot.provider, store.providers)} · ${runner()?.name ?? L("unassigned")}`}</span>
       </div>
       <Show when={runner()?.status === "offline"}>
         <span class="selectable-offline">{L("offline")}</span>

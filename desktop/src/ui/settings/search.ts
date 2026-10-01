@@ -3,7 +3,18 @@
 
 import { hostInfo } from "../../host";
 import { L } from "../../l10n";
-import { paneTitle, providerName, providerSubtitle, settingsPanes, type Bot, type Device, type InstalledPlugin, type ProviderKind, type SettingsPane } from "../../model/models";
+import {
+  paneTitle,
+  providerName,
+  providerSubtitle,
+  settingsPanes,
+  type Bot,
+  type Device,
+  type InstalledPlugin,
+  type ProviderCredential,
+  type ProviderKind,
+  type SettingsPane,
+} from "../../model/models";
 import type { AppStore } from "../../model/store";
 
 export interface SettingsEntry {
@@ -40,9 +51,12 @@ export const Entries = {
   deleteAccount: () => entry("advanced", L("Delete Account"), { row: L("Account"), keywords: [L("erase remove wipe relay data identity")] }),
   machineKey: () => entry("device", L("Machine key"), { keywords: [L("device os role runner last seen relay")] }),
   pairing: () => entry("device", L("Pairing"), { keywords: [L("unpair remove device paired")] }),
-  bot: (bot: Bot) => entry("bots", bot.name, { keywords: [bot.description, providerName(bot.provider), L("bot runner")] }),
+  bot: (bot: Bot, providers: readonly ProviderCredential[]) =>
+    entry("bots", bot.name, { keywords: [bot.description, providerName(bot.provider, providers), L("bot runner")] }),
   plugin: (plugin: InstalledPlugin) => entry("plugins", plugin.name, { keywords: [plugin.description, L("plugin mcp marketplace")] }),
-  provider: (kind: ProviderKind) => entry("providers", providerName(kind), { keywords: [providerSubtitle(kind), L("credential connect disconnect sign in model")] }),
+  // A custom provider goes by the name the user gave it, as its row on the pane does.
+  provider: (kind: ProviderKind, providers: readonly ProviderCredential[]) =>
+    entry("providers", providerName(kind, providers), { keywords: [providerSubtitle(kind), L("credential connect disconnect sign in model")] }),
 };
 
 /** Whether `text` holds `query` the way a search field matches: ignoring case and accents. */
@@ -66,9 +80,9 @@ export function entriesIn(pane: SettingsPane, device: Device | undefined, store:
     case "advanced":
       return [Entries.relayURL(), Entries.cliPort(), Entries.onboarding()].concat(store.hasIdentity === true ? [Entries.deleteAccount()] : []);
     case "bots":
-      return (device ? store.botsOn(device.id) : []).map(Entries.bot);
+      return (device ? store.botsOn(device.id) : []).map((bot) => Entries.bot(bot, store.providers));
     case "providers":
-      return store.providers.map((credential) => Entries.provider(credential.kind));
+      return store.providers.map((credential) => Entries.provider(credential.kind, store.providers));
     case "plugins":
       return (device?.plugins ?? []).map(Entries.plugin);
     case "device":

@@ -6,6 +6,12 @@ and the update window shows it.
 
 ## [Unreleased]
 
+- Custom providers: Add Provider… in Settings' Providers pane adds OpenAI, OpenRouter, Gemini,
+  Groq, Together AI, Ollama, LM Studio, or any other server that speaks OpenAI's Chat Completions
+  or Responses API or Anthropic's Messages API, such as a gateway or a model server on your
+  network. The sheet loads the models the server lists to pick from, and takes any it does not
+  list. Bots pick the provider, its models, and a thinking level as they do a built-in one, and it
+  reaches your paired Devices encrypted with the account key.
 - The marketplace adds plugins for 飞书, 飞书项目, 滴答清单, 腾讯文档, 秘塔 AI 搜索, 知乎, 高德地图, and
   可灵. 飞书, 飞书项目, 滴答清单, 腾讯文档, and 可灵 sign in with your account in the browser; 秘塔 AI
   搜索 and 知乎 take an API key from their sites, and 高德地图 a Web Service key from the Amap console.

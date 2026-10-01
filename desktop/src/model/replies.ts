@@ -192,7 +192,7 @@ export class ReplyEngine {
   private teammateDetail(members: Bot[]): string {
     const rows = members.map((bot) => {
       const host = this.store.device(bot.runnerID);
-      const status = host?.status === "offline" ? "offline" : providerName(bot.provider);
+      const status = host?.status === "offline" ? "offline" : providerName(bot.provider, this.store.providers);
       return `  { "name": "${bot.name}", "runner": "${host?.name ?? "?"}", "provider": "${status}" }`;
     });
     return `{\n  "teammates": [\n${rows.join(",\n")}\n  ]\n}`;

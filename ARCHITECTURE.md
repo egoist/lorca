@@ -13,7 +13,7 @@ Identity is a **key pair**. Devices pair. The relay stores public keys and ciphe
 3. **The CLI owns the agent loop:** inference, tools, streaming, cancellation, orchestration.
 4. **The relay is zero-knowledge:** opaque blobs and public keys. Auth is a signature challenge.
 5. **Every Device records its `os`.** A Device with a desktop `os` (`macos`, `linux`, `windows`) is a **Runner**. Phones and tablets (`ios`, `ipados`, `android`) are Devices, never Runners.
-6. **Provider credentials belong to the account.** API keys and ChatGPT and Grok tokens are connected once, on any Device, and reach every paired Device as a `credentials` blob encrypted with the account DEK. A bot runs with them on whichever Runner it is assigned to.
+6. **Provider credentials belong to the account.** API keys, ChatGPT and Grok tokens, and custom providers (any server that speaks OpenAI's or Anthropic's API) are connected once, on any Device, and reach every paired Device as a `credentials` blob encrypted with the account DEK. A bot runs with them on whichever Runner it is assigned to.
 7. **A bot runs on one Runner:** that Device’s CLI.
 
 ## Three processes
@@ -86,7 +86,7 @@ One doc per subject under `docs/architecture/`, each short enough to read in one
 | [Tools](docs/architecture/tools.md) | Team, memory, and coding tools, terminal sessions and command cards, running tasks, Auto-review |
 | [Codemode and Plugins](docs/architecture/plugins.md) | Scripts that call plugin tools, MCP plugins and their installs, the marketplace and bot templates, sign-in, plugin calls at turn time |
 | [Bots, Routines, and Memory](docs/architecture/bots.md) | The lead bot, DMs and groups, who answers, handoffs between bots, routines and their checks, a bot's memory |
-| [Providers](docs/architecture/providers.md) | Each model provider and its sign-in, thinking levels, the model catalog and cost, compaction, retries |
+| [Providers](docs/architecture/providers.md) | Each model provider and its sign-in, custom providers, thinking levels, the model catalog and cost, compaction, retries |
 | [macOS app](docs/architecture/macos-app.md) | The AppKit app: launching the CLI, windows and onboarding, settings, updates, the command palette, transcript, sidebar, inspector, composer, working state |
 | [Windows and Linux app](docs/architecture/desktop-app.md) | The MyGo app: its Go side and Solid page, title bar, commands, updates, development and builds |
 | [Phone app](docs/architecture/phone-app.md) | The Expo app over the Rust core: the native module, pairing, relay status, attachments, dictation, notifications, turns |

@@ -36,6 +36,9 @@ pub struct OpenAiCompatProvider {
     pub thinking_level: Option<ThinkingLevel>,
     /// The catalog entry for the model, when it has one.
     pub info: Option<&'static ModelInfo>,
+    /// Sends the session id as `prompt_cache_key`, OpenAI's routing hint for its prompt cache.
+    /// Off for a server that refuses fields it does not know.
+    pub prompt_cache_key: bool,
     client: reqwest::Client,
 }
 
@@ -51,6 +54,7 @@ impl OpenAiCompatProvider {
             max_retry_delay_ms: DEFAULT_MAX_RETRY_DELAY_MS,
             thinking_level: None,
             info: models::find(provider_id, model),
+            prompt_cache_key: true,
             client: reqwest::Client::new(),
         }
     }
@@ -86,7 +90,7 @@ impl OpenAiCompatProvider {
         if let Some(max_tokens) = request.max_tokens {
             body["max_tokens"] = Value::from(max_tokens);
         }
-        if let Some(session_id) = &request.options.session_id {
+        if let Some(session_id) = request.options.session_id.as_ref().filter(|_| self.prompt_cache_key) {
             body["prompt_cache_key"] = Value::String(session_id.clone());
         }
         let level = self.thinking_level.and_then(|level| match self.info {

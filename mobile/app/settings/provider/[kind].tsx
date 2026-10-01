@@ -21,7 +21,8 @@ export default function ProviderSettingsScreen() {
   const rawKind = Array.isArray(params.kind) ? params.kind[0] : params.kind;
   const router = useRouter();
   const p = usePalette();
-  const status = useStore((s) => s.providers.find((provider) => provider.kind === rawKind));
+  const providers = useStore((s) => s.providers);
+  const status = providers.find((provider) => provider.kind === rawKind);
   const [apiKey, setAPIKey] = useState("");
   const [baseURL, setBaseURL] = useState(status?.base_url ?? "");
   const [working, setWorking] = useState(false);
@@ -39,7 +40,7 @@ export default function ProviderSettingsScreen() {
   }
 
   const kind = rawKind;
-  const name = providerLabel(kind);
+  const name = providerLabel(kind, providers);
   const usesAPIKey = providerUsesAPIKey(kind);
 
   async function connect() {

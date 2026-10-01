@@ -14,6 +14,8 @@ let appState: (status: string) => void;
 const reads: string[] = [];
 const cleared: string[] = [];
 const opened: string[] = [];
+/// The provider calls the engine made, as the core got them.
+const providerCalls: { method: string; params: Record<string, any> }[] = [];
 let handleNotification: (notification: Notification) => Promise<NotificationBehavior>;
 let openNotification: (response: NotificationResponse) => void;
 mock.module("react-native", () => ({
@@ -37,8 +39,17 @@ mock.module("expo-notifications", () => ({
 mock.module("../../modules/lorca-core", () => ({
   start: () => {}, wake: () => {},
   onEvent: (listener: Listener) => { listeners.add(listener); return () => listeners.delete(listener); },
-  request: async (method: string, params: { chat_id?: string } = {}) => {
+  request: async (method: string, params: Record<string, any> = {}) => {
     if (method === "chats.mark_read") reads.push(params.chat_id!);
+    if (method.startsWith("providers.")) providerCalls.push({ method, params });
+    if (method === "providers.connect_custom") {
+      // The core answers with the kind it gave or kept, and every status.
+      const kind = params.kind ?? "custom:lab";
+      const models = (params.models as string[]).map((id) => ({ id }));
+      return { kind, providers: [{ kind, is_connected: true, detail: params.base_url, base_url: params.base_url, name: params.name, api: params.api, models }] };
+    }
+    if (method === "providers.disconnect") return { providers: [] };
+    if (method === "providers.list_models") return params.base_url.includes("unlisted") ? { listed: false } : { listed: true, models: [{ id: "llama4", context_window: 131072 }] };
     return method === "bootstrap" ? (heldSnapshot ?? snapshot([])) : null;
   },
 }));
@@ -241,4 +252,35 @@ test("a quick command never counts, and one running before the phone heard of it
   expect(useStore.getState().pendingTasks).toEqual({});
   event({ event: "snapshot", data: snapshot([{ ...chat("open"), messages: [command("running", "bash-2", "server")] }, chat("other")]) });
   expect(tasks()).toEqual(["server"]);
+});
+
+test("a custom provider is added without a kind and saved with one; the store takes the core's statuses", async () => {
+  providerCalls.length = 0;
+  const kind = await engine.saveCustomProvider({ name: "Lab", api: "responses", baseURL: "http://lab.local:8080/v1", apiKey: "", models: ["llama4", "qwen3:8b"] });
+  expect(kind).toBe("custom:lab");
+  expect(providerCalls[0]).toStrictEqual({ method: "providers.connect_custom", params: { name: "Lab", api: "responses", base_url: "http://lab.local:8080/v1", api_key: "", models: ["llama4", "qwen3:8b"] } });
+  expect(useStore.getState().providers).toMatchObject([{ kind: "custom:lab", name: "Lab", api: "responses", models: [{ id: "llama4" }, { id: "qwen3:8b" }] }]);
+  await engine.saveCustomProvider({ kind: "custom:lab", name: "Lab", api: "messages", baseURL: "http://lab.local:8080", apiKey: "sk-lab", models: [] });
+  expect(providerCalls[1]).toStrictEqual({ method: "providers.connect_custom", params: { kind: "custom:lab", name: "Lab", api: "messages", base_url: "http://lab.local:8080", api_key: "sk-lab", models: [] } });
+  // Deleting one is a disconnect of its kind, for the whole account.
+  await engine.disconnectProvider("custom:lab");
+  expect(providerCalls[2]).toStrictEqual({ method: "providers.disconnect", params: { kind: "custom:lab" } });
+  expect(useStore.getState().providers).toEqual([]);
+});
+
+test("custom provider statuses arrive with the roster and stay through one that carries none", () => {
+  const lab = { kind: "custom:lab", is_connected: true, detail: "http://lab.local:8080/v1", base_url: "http://lab.local:8080/v1", name: "Lab", api: "chat-completions" as const, models: [{ id: "llama4" }] };
+  event({ event: "roster.changed", data: { devices: [], bots: [], chats: [chat("open"), chat("other")], providers: [lab] } });
+  expect(useStore.getState().providers).toEqual([lab]);
+  event({ event: "roster.changed", data: { devices: [], bots: [], chats: [chat("open"), chat("other")] } });
+  expect(useStore.getState().providers).toEqual([lab]);
+});
+
+test("a custom server's models are asked for with the name only when there is one", async () => {
+  providerCalls.length = 0;
+  expect(await engine.listCustomModels({ api: "chat-completions", baseURL: "http://lab.local:8080/v1", apiKey: "" })).toEqual({ listed: true, models: [{ id: "llama4", context_window: 131072 }] });
+  expect(providerCalls[0]).toStrictEqual({ method: "providers.list_models", params: { api: "chat-completions", base_url: "http://lab.local:8080/v1", api_key: "" } });
+  // A server with no list answers without models.
+  expect(await engine.listCustomModels({ name: "Lab", api: "messages", baseURL: "http://unlisted.local", apiKey: "k" })).toEqual({ listed: false, models: [] });
+  expect(providerCalls[1]).toStrictEqual({ method: "providers.list_models", params: { name: "Lab", api: "messages", base_url: "http://unlisted.local", api_key: "k" } });
 });

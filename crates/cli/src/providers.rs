@@ -1,10 +1,12 @@
 //! Runtime providers built from the account's credentials. Credential setup lives in
 //! `provider_auth`, which is also linked by Devices that never run a bot.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, LazyLock, Mutex};
 
 use async_trait::async_trait;
 
+use lorca_agent::models::{ModelInfo, Rates, ThinkingMode};
 use lorca_agent::providers::anthropic::ANTHROPIC_BASE_URL;
 use lorca_agent::providers::{
     AnthropicProvider, ChatGptProvider, ChatGptTokens, GrokProvider, GrokTokenSource, GrokTokens, OpenAiCompatProvider,
@@ -14,6 +16,7 @@ use lorca_agent::{models, AssistantEventStream, ModelRequest, Provider, Thinking
 use tokio_util::sync::CancellationToken;
 
 use crate::app::App;
+use crate::credentials::{is_custom, CustomApi, CustomProvider};
 
 pub const OPENCODE_BASE_URL: &str = "https://opencode.ai/zen";
 pub const OPENCODE_DEFAULT_MODEL: &str = "deepseek-v4.1-flash";
@@ -89,7 +92,19 @@ impl GrokTokenSource for AppGrokTokenSource {
 
 /// Whether the model takes image content parts. A text-only model rejects the whole request,
 /// so a Runner sends it the attachment's path alone.
-pub fn supports_vision(kind: &str, model: Option<&str>) -> bool {
+pub fn supports_vision(app: &App, kind: &str, model: Option<&str>) -> bool {
+    if is_custom(kind) {
+        let credentials = app.credentials.lock().unwrap();
+        let Some(provider) = credentials.custom.get(kind) else { return false };
+        let model = model.map(str::trim).filter(|m| !m.is_empty()).or_else(|| provider.models.first().map(|m| m.id.as_str()));
+        return model.is_some_and(|model| custom_model_info(kind, provider, model).images);
+    }
+    built_in_vision(kind, model)
+}
+
+/// Whether a built-in provider's model takes images: the catalog's word, else a guess from the
+/// model's name.
+fn built_in_vision(kind: &str, model: Option<&str>) -> bool {
     let model = model.map(str::trim).filter(|m| !m.is_empty()).unwrap_or_else(|| default_model(kind));
     if let Some(info) = models::find(kind, model) {
         return info.images;
@@ -127,8 +142,17 @@ pub fn default_model(kind: &str) -> &'static str {
 
 /// The model Auto-review runs on for bots of `kind`, and how much it thinks: a small, fast
 /// model on the same account whatever the bot itself runs, with thinking off where the model
-/// allows it and at its lowest effort where it does not.
-pub fn review_model(kind: &str) -> (&'static str, ThinkingLevel) {
+/// allows it and at its lowest effort where it does not. A custom provider's is its first
+/// model, the one the user put at the top. Empty when `kind` has none.
+pub fn review_model(app: &App, kind: &str) -> (String, ThinkingLevel) {
+    if is_custom(kind) {
+        let credentials = app.credentials.lock().unwrap();
+        let Some((provider, model)) = credentials.custom.get(kind).and_then(|p| p.models.first().map(|m| (p, m.id.clone()))) else {
+            return (String::new(), ThinkingLevel::Off);
+        };
+        let thinking = custom_model_info(kind, provider, &model).levels.first().copied().unwrap_or(ThinkingLevel::Off);
+        return (model, thinking);
+    }
     let model = match kind {
         "deepseek" => "deepseek-flash",
         "anthropic" => "claude-haiku-4-5",
@@ -138,7 +162,7 @@ pub fn review_model(kind: &str) -> (&'static str, ThinkingLevel) {
         _ => "",
     };
     let thinking = models::find(kind, model).and_then(|info| info.levels.first().copied()).unwrap_or(ThinkingLevel::Off);
-    (model, thinking)
+    (model.to_string(), thinking)
 }
 
 /// A bot's thinking level as stored, or nothing for the provider's default.
@@ -149,6 +173,12 @@ pub fn thinking_level(bot: &crate::model::Bot) -> Option<ThinkingLevel> {
 pub fn provider_for(app: &Arc<App>, kind: &str, model: Option<&str>, thinking: Option<ThinkingLevel>) -> Result<Arc<dyn Provider>, String> {
     let model = model.map(str::trim).filter(|m| !m.is_empty()).map(str::to_string);
     match kind {
+        kind if is_custom(kind) => {
+            let credentials = app.credentials.lock().unwrap();
+            let provider = credentials.custom.get(kind).ok_or_else(|| format!("{} is not connected", credentials.label(kind)))?;
+            let model = model.or_else(|| provider.models.first().map(|m| m.id.clone())).ok_or_else(|| format!("{} has no models", provider.name))?;
+            Ok(custom_provider(kind, provider, &model, thinking))
+        }
         "deepseek" => {
             let key = app
                 .credentials
@@ -268,12 +298,12 @@ fn opencode_provider(
     let provider: Arc<dyn Provider> = match opencode_wire(kind, model) {
         OpenCodeWire::ChatCompletions => {
             let mut provider = OpenAiCompatProvider::new(kind, &format!("{root}/v1"), api_key, model).with_thinking(thinking);
-            provider.supports_images = supports_vision(kind, Some(model));
+            provider.supports_images = built_in_vision(kind, Some(model));
             Arc::new(provider)
         }
         OpenCodeWire::Messages => {
             let mut provider = AnthropicProvider::new(kind, root, api_key, model).with_thinking(thinking);
-            provider.supports_images = supports_vision(kind, Some(model));
+            provider.supports_images = built_in_vision(kind, Some(model));
             provider.eager_tool_streaming = false;
             provider.max_tokens = 32_000;
             Arc::new(provider)
@@ -284,6 +314,84 @@ fn opencode_provider(
         }
     };
     Ok(opencode_headers(provider))
+}
+
+/// The levels a custom provider's model takes when the catalog does not know it: the ones
+/// every server that has a reasoning setting understands.
+const CUSTOM_LEVELS: &[ThinkingLevel] = &[ThinkingLevel::Off, ThinkingLevel::Low, ThinkingLevel::Medium, ThinkingLevel::High];
+
+/// A bot's adapter for a custom provider: the wire protocol the user picked, at the root they
+/// gave, with what is known about the model.
+fn custom_provider(kind: &str, provider: &CustomProvider, model: &str, thinking: Option<ThinkingLevel>) -> Arc<dyn Provider> {
+    let info = custom_model_info(kind, provider, model);
+    match provider.api {
+        CustomApi::ChatCompletions => {
+            let mut adapter = OpenAiCompatProvider::new(kind, &provider.base_url, &provider.api_key, model).with_thinking(thinking);
+            adapter.info = Some(info);
+            adapter.supports_images = info.images;
+            // OpenAI's own field; servers such as Gemini's refuse a request with one they lack.
+            adapter.prompt_cache_key = false;
+            Arc::new(adapter)
+        }
+        CustomApi::Responses => {
+            let mut adapter = OpenAiResponsesProvider::new(kind, &provider.base_url, &provider.api_key, model).with_thinking(thinking);
+            adapter.info = Some(info);
+            adapter.supports_images = info.images;
+            Arc::new(adapter)
+        }
+        CustomApi::Messages => {
+            let mut adapter = AnthropicProvider::new(kind, &provider.base_url, &provider.api_key, model).with_thinking(thinking);
+            adapter.info = Some(info);
+            adapter.supports_images = info.images;
+            // Arguments streamed as they are generated are Anthropic's own extension.
+            adapter.eager_tool_streaming = false;
+            // Room for long replies where the model's cap is known; the API requires a cap.
+            adapter.max_tokens = if info.max_output > 0 { 32_000 } else { 16_384 };
+            Arc::new(adapter)
+        }
+    }
+}
+
+/// What a custom provider's model takes: the window, output cap, and inputs its server's list
+/// gave, else the catalog's for that model id, else nothing known, which means no window to
+/// compact by, text only, and the common thinking levels. Its cost is zero, since Lorca does
+/// not know what the server charges. Kept per kind and model, so a turn reuses the entry
+/// until the provider changes.
+fn custom_model_info(kind: &str, provider: &CustomProvider, model: &str) -> &'static ModelInfo {
+    static INFO: LazyLock<Mutex<HashMap<(String, String), &'static ModelInfo>>> = LazyLock::new(Default::default);
+    let listed = provider.models.iter().find(|m| m.id == model);
+    let known = models::find_any(model);
+    let (thinking, levels) = match known {
+        Some(known) => (known.thinking, known.levels),
+        // Messages servers that are not Anthropic take a token budget, not an effort.
+        None if provider.api == CustomApi::Messages => (ThinkingMode::Budget, CUSTOM_LEVELS),
+        None => (ThinkingMode::Effort, CUSTOM_LEVELS),
+    };
+    let wanted = ModelInfo {
+        id: "",
+        name: "",
+        provider: "",
+        context_window: listed.and_then(|m| m.context_window).or(known.map(|k| k.context_window)).unwrap_or(0),
+        max_output: listed.and_then(|m| m.max_output).or(known.map(|k| k.max_output)).unwrap_or(0),
+        reasoning: known.is_some_and(|k| k.reasoning),
+        images: listed.and_then(|m| m.images).or(known.map(|k| k.images)).unwrap_or(false),
+        rates: Rates { input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0 },
+        tiers: &[],
+        thinking,
+        levels,
+    };
+    let mut cache = INFO.lock().unwrap();
+    let key = (kind.to_string(), model.to_string());
+    if let Some(info) = cache.get(&key) {
+        if (ModelInfo { id: "", name: "", provider: "", ..**info }) == wanted {
+            return info;
+        }
+    }
+    let name = listed.and_then(|m| m.name.clone()).or(known.map(|k| k.name.to_string())).unwrap_or_else(|| model.to_string());
+    let leak = |text: String| -> &'static str { Box::leak(text.into_boxed_str()) };
+    let info: &'static ModelInfo = Box::leak(Box::new(ModelInfo { id: leak(model.to_string()), name: leak(name), provider: leak(kind.to_string()), ..wanted }));
+    cache.insert(key, info);
+    info
 }
 
 /// DeepSeek's API root when the credential has none: `LORCA_DEEPSEEK_BASE_URL` (a proxy or a
@@ -316,7 +424,7 @@ fn env_url(name: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
+    use crate::credentials::CustomModel;
 
     struct CaptureProvider(Arc<Mutex<Option<ModelRequest>>>);
 
@@ -355,16 +463,89 @@ mod tests {
         assert_eq!(opencode_root("https://opencode.ai/zen"), OPENCODE_BASE_URL);
     }
 
+    struct ScratchApp(Arc<App>, std::path::PathBuf);
+
+    impl Drop for ScratchApp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.1);
+        }
+    }
+
+    fn scratch_app() -> ScratchApp {
+        let home = std::env::temp_dir().join(format!("lorca-providers-{}", uuid::Uuid::new_v4()));
+        ScratchApp(App::load(crate::config::Config { home: home.clone(), port: 0 }).unwrap(), home)
+    }
+
+    fn model(id: &str) -> CustomModel {
+        CustomModel { id: id.into(), name: None, context_window: None, max_output: None, images: None }
+    }
+
+    fn add_custom(app: &App, kind: &str, api: CustomApi, models: Vec<CustomModel>) {
+        let provider = CustomProvider { name: "Lab".into(), api, base_url: "http://127.0.0.1:9/v1".into(), api_key: String::new(), models, created_at: 1 };
+        app.credentials.lock().unwrap().custom.insert(kind.into(), provider);
+    }
+
     #[test]
     fn auto_review_runs_a_small_model_that_thinks_least() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
         for kind in ["deepseek", "anthropic", "chatgpt", "grok", "opencode", "opencode-go"] {
-            assert!(models::find(kind, review_model(kind).0).is_some(), "{kind}");
+            assert!(models::find(kind, &review_model(app, kind).0).is_some(), "{kind}");
         }
-        assert_eq!(review_model("deepseek"), ("deepseek-flash", ThinkingLevel::Off));
-        assert_eq!(review_model("anthropic"), ("claude-haiku-4-5", ThinkingLevel::Off));
-        assert_eq!(review_model("chatgpt"), ("gpt-6-luna", ThinkingLevel::Low));
-        assert_eq!(review_model("grok"), ("grok-4.7", ThinkingLevel::Low));
-        assert_eq!(review_model("opencode-go"), ("deepseek-v4.1-flash", ThinkingLevel::Low));
+        assert_eq!(review_model(app, "deepseek"), ("deepseek-flash".into(), ThinkingLevel::Off));
+        assert_eq!(review_model(app, "anthropic"), ("claude-haiku-4-5".into(), ThinkingLevel::Off));
+        assert_eq!(review_model(app, "chatgpt"), ("gpt-6-luna".into(), ThinkingLevel::Low));
+        assert_eq!(review_model(app, "grok"), ("grok-4.7".into(), ThinkingLevel::Low));
+        assert_eq!(review_model(app, "opencode-go"), ("deepseek-v4.1-flash".into(), ThinkingLevel::Low));
+        // A custom provider reviews with its first model.
+        add_custom(app, "custom:lab", CustomApi::ChatCompletions, vec![model("qwen3:8b"), model("llama4")]);
+        assert_eq!(review_model(app, "custom:lab"), ("qwen3:8b".into(), ThinkingLevel::Off));
+        assert_eq!(review_model(app, "custom:gone"), (String::new(), ThinkingLevel::Off));
+    }
+
+    #[test]
+    fn custom_providers_run_their_first_model_with_what_is_known_of_it() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        let listed = CustomModel { context_window: Some(32_768), images: Some(true), ..model("qwen3:8b") };
+        add_custom(app, "custom:vision-lab", CustomApi::ChatCompletions, vec![listed, model("anthropic/claude-sonnet-5"), model("mystery")]);
+
+        let provider = provider_for(app, "custom:vision-lab", None, None).unwrap();
+        assert_eq!((provider.provider_id(), provider.model_id()), ("custom:vision-lab", "qwen3:8b"));
+        assert_eq!(provider.model_info().map(|info| (info.context_window, info.images)), Some((32_768, true)));
+        assert!(provider.supports_images());
+        assert!(supports_vision(app, "custom:vision-lab", None));
+
+        // The catalog knows a gateway's model by its id; the cost stays zero.
+        let known = provider_for(app, "custom:vision-lab", Some("anthropic/claude-sonnet-5"), None).unwrap();
+        let info = known.model_info().unwrap();
+        assert_eq!((info.context_window, info.images, info.rates.input), (1_000_000, true, 0.0));
+
+        // Nothing known: no window, text only, the common levels.
+        let unknown = provider_for(app, "custom:vision-lab", Some("mystery"), Some(ThinkingLevel::Max)).unwrap();
+        let info = unknown.model_info().unwrap();
+        assert_eq!((info.context_window, info.images, info.clamp_level(ThinkingLevel::Max)), (0, false, Some(ThinkingLevel::High)));
+        assert!(!supports_vision(app, "custom:vision-lab", Some("mystery")));
+
+        // The entry is kept until the provider changes.
+        let again = provider_for(app, "custom:vision-lab", None, None).unwrap();
+        assert!(std::ptr::eq(provider.model_info().unwrap(), again.model_info().unwrap()));
+        app.credentials.lock().unwrap().custom.get_mut("custom:vision-lab").unwrap().models[0].context_window = Some(65_536);
+        assert_eq!(provider_for(app, "custom:vision-lab", None, None).unwrap().model_info().map(|info| info.context_window), Some(65_536));
+
+        app.credentials.lock().unwrap().custom.clear();
+        assert_eq!(provider_for(app, "custom:vision-lab", None, None).err().unwrap(), "vision-lab is not connected");
+    }
+
+    #[test]
+    fn a_custom_messages_server_thinks_by_budget() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        add_custom(app, "custom:proxy", CustomApi::Messages, vec![model("glm-6"), model("claude-opus-5")]);
+        let info = provider_for(app, "custom:proxy", None, None).unwrap().model_info().unwrap();
+        assert_eq!(info.thinking, ThinkingMode::Budget);
+        let claude = provider_for(app, "custom:proxy", Some("claude-opus-5"), None).unwrap();
+        assert_eq!(claude.model_info().unwrap().thinking, ThinkingMode::Adaptive);
     }
 
     #[tokio::test]

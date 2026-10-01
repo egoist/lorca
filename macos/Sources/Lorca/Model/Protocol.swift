@@ -106,11 +106,37 @@ enum Wire {
         var isConnected: Bool
         var detail: String
         var baseUrl: String?
+        var name: String?
+        var api: String?
+        var models: [ProviderModel]?
 
         func toModel() -> ProviderCredential? {
             guard let kind = ProviderCredential.Kind(wireValue: kind) else { return nil }
-            return ProviderCredential(kind: kind, isConnected: isConnected, detail: detail, baseURL: baseUrl)
+            return ProviderCredential(
+                kind: kind, isConnected: isConnected, detail: detail, baseURL: baseUrl, name: name,
+                api: api.flatMap(CustomAPI.init(rawValue:)), models: (models ?? []).map { $0.toModel() })
         }
+    }
+
+    struct ProviderModel: Decodable {
+        var id: String
+        var name: String?
+        var contextWindow: Int?
+        var images: Bool?
+
+        func toModel() -> CustomModel {
+            CustomModel(id: id, name: name, contextWindow: contextWindow, images: images)
+        }
+    }
+
+    struct CustomProviderSaved: Decodable {
+        var kind: String
+    }
+
+    /// `providers.list_models`: the chat models a custom provider's server lists.
+    struct ListedModels: Decodable {
+        var listed: Bool
+        var models: [ProviderModel]
     }
 
     struct Device: Decodable {

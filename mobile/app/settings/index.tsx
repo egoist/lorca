@@ -5,10 +5,10 @@ import { Stack, useRouter } from "expo-router";
 import { useState } from "react";
 import { Alert, Platform, ScrollView, StyleSheet, Text, View } from "react-native";
 import { engine } from "../../src/core/engine";
-import { isRunner, providerLabel } from "../../src/core/model";
+import { CUSTOM_PRESETS, customProviderNamed, isCustomProvider, isRunner, providerLabel } from "../../src/core/model";
 import { deviceIsOnline, useStore } from "../../src/core/store";
 import { deviceLanguage, languageNames, languages, setAppLanguage, t, useLanguage } from "../../src/i18n";
-import { FieldRow, Row, Section, ToggleRow } from "../../src/ui/forms";
+import { FieldRow, MenuRow, Row, Section, ToggleRow, type MenuChoice } from "../../src/ui/forms";
 import { lastSeen } from "../../src/ui/format";
 import { Symbol } from "../../src/ui/Symbol";
 import { usePalette } from "../../src/ui/theme";
@@ -54,6 +54,22 @@ export default function SettingsScreen() {
   const appLanguageChoices = [
     { title: systemLanguage, selected: !appLanguage.chosen, onPress: () => setAppLanguage(undefined) },
     ...languages.map((code) => ({ title: languageNames[code], selected: appLanguage.chosen === code, onPress: () => setAppLanguage(code) })),
+  ];
+  // Add Custom Provider's menu: the hosted presets, the ones on the user's own computer, then any
+  // other server. A preset the account has already opens that provider, checked.
+  const customProviderChoices: MenuChoice[] = [
+    ...CUSTOM_PRESETS.map((preset, index) => {
+      const existing = customProviderNamed(preset.name, providers);
+      const next = CUSTOM_PRESETS[index + 1];
+      return {
+        title: preset.name,
+        selected: !!existing,
+        dividerAfter: !next || !!next.local !== !!preset.local,
+        onPress: () =>
+          router.push({ pathname: "/settings/custom-provider", params: existing ? { kind: existing.kind } : { preset: preset.name } }),
+      };
+    }),
+    { title: t("Other Server…"), selected: false, onPress: () => router.push("/settings/custom-provider") },
   ];
   const thisId = engine.deviceId;
   const sorted = [...devices].sort((a, b) =>
@@ -221,18 +237,33 @@ export default function SettingsScreen() {
           title={t("Providers")}
           footer={t("Credentials belong to your account and reach every paired Device encrypted.")}
         >
-          {providers.map((provider) => (
-            <Row
-              key={provider.kind}
-              title={providerLabel(provider.kind)}
-              subtitle={
-                provider.is_connected ? provider.detail || undefined : undefined
-              }
-              detail={provider.is_connected ? t("Connected") : t("Not connected")}
-              onPress={() => router.push(`/settings/provider/${provider.kind}`)}
-              chevron
-            />
-          ))}
+          {/* One list, so every row gets its separator: the built-ins, the custom providers in
+              the order they were added, then the row that adds one. */}
+          {[
+            ...providers.filter((provider) => !isCustomProvider(provider.kind)).map((provider) => (
+              <Row
+                key={provider.kind}
+                title={providerLabel(provider.kind, providers)}
+                subtitle={
+                  provider.is_connected ? provider.detail || undefined : undefined
+                }
+                detail={provider.is_connected ? t("Connected") : t("Not connected")}
+                onPress={() => router.push(`/settings/provider/${provider.kind}`)}
+                chevron
+              />
+            )),
+            ...providers.filter((provider) => isCustomProvider(provider.kind)).map((provider) => (
+              <Row
+                key={provider.kind}
+                title={providerLabel(provider.kind, providers)}
+                subtitle={provider.detail || undefined}
+                detail={t("Connected")}
+                onPress={() => router.push({ pathname: "/settings/custom-provider", params: { kind: provider.kind } })}
+                chevron
+              />
+            )),
+            <MenuRow key="add-custom-provider" title={t("Add Custom Provider")} choices={customProviderChoices} />,
+          ]}
         </Section>
 
         <Section

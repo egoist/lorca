@@ -2,9 +2,9 @@
 // cells on the grouped background, hairline separators.
 
 import { Button as MenuButton, Divider, HStack, Host, Image as MenuImage, Menu, Text as MenuText } from "@expo/ui/swift-ui";
-import { foregroundStyle, frame, lineLimit, tint, truncationMode } from "@expo/ui/swift-ui/modifiers";
-import { MenuView, type MenuAction } from "@expo/ui/community/menu";
-import { type ReactNode } from "react";
+import { contentShape, font, foregroundStyle, frame, lineLimit, menuOrder, padding, shapes, tint, truncationMode } from "@expo/ui/swift-ui/modifiers";
+import { MenuView, type MenuAction, type MenuComponentRef } from "@expo/ui/community/menu";
+import { useRef, type ReactNode } from "react";
 import { Platform, Pressable, StyleSheet, Switch, Text, TextInput, useWindowDimensions, View, type StyleProp, type TextInputProps, type ViewStyle } from "react-native";
 import { Symbol } from "./Symbol";
 import { Font, usePalette } from "./theme";
@@ -77,9 +77,53 @@ function MenuAccessory({ value, title, choices }: { value: string; title: string
           </HStack>
         }
       >
-        {choices.flatMap((choice) => [
-          <MenuButton key={choice.title} label={choice.title} systemImage={choice.selected ? "checkmark" : undefined} onPress={choice.onPress} />,
-          choice.dividerAfter ? <Divider key={`${choice.title}-divider`} /> : null,
+        {/* Keyed by place: two choices can share a title, as models a server names alike do. */}
+        {choices.flatMap((choice, index) => [
+          <MenuButton key={`choice-${index}`} label={choice.title} systemImage={choice.selected ? "checkmark" : undefined} onPress={choice.onPress} />,
+          choice.dividerAfter ? <Divider key={`divider-${index}`} /> : null,
+        ])}
+      </Menu>
+    </Host>
+  );
+}
+
+/// An action row whose tap drops a native menu of choices, for an action that comes in kinds:
+/// the title in the tint color, as an action row's is. On iOS the row is the SwiftUI menu's
+/// label, drawn to match a `Row`; Android opens a Material dropdown from the row.
+export function MenuRow({ title, choices }: { title: string; choices: MenuChoice[] }) {
+  const p = usePalette();
+  const menu = useRef<MenuComponentRef>(null);
+  if (Platform.OS !== "ios") {
+    // Groups between dividers become inline sections, which Material draws with a divider above
+    // and below: the first group and the last stay plain so no divider ends the menu.
+    const groups: { choice: MenuChoice; index: number }[][] = [[]];
+    choices.forEach((choice, index) => {
+      groups[groups.length - 1].push({ choice, index });
+      if (choice.dividerAfter && index < choices.length - 1) groups.push([]);
+    });
+    const action = ({ choice, index }: { choice: MenuChoice; index: number }): MenuAction => ({ id: String(index), title: choice.title, state: choice.selected ? "on" : undefined });
+    const actions = groups.flatMap((group, at): MenuAction[] =>
+      at === 0 || (at === groups.length - 1 && groups.length > 2) ? group.map(action) : [{ id: `group-${at}`, title: "", displayInline: true, subactions: group.map(action) }],
+    );
+    return (
+      <MenuView ref={menu} title={title} actions={actions} shouldOpenOnLongPress onPressAction={({ nativeEvent }) => choices[Number(nativeEvent.event)]?.onPress()}>
+        <Row title={title} onPress={() => menu.current?.show()} />
+      </MenuView>
+    );
+  }
+  return (
+    <Host matchContents={{ vertical: true }} style={styles.menuRow}>
+      <Menu
+        modifiers={[menuOrder("fixed"), tint(p.tint as any)]}
+        label={
+          <HStack modifiers={[frame({ maxWidth: 10000, minHeight: 44, alignment: "leading" }), padding({ horizontal: 16 }), contentShape(shapes.rectangle())]}>
+            <MenuText modifiers={[font({ size: Font.body }), foregroundStyle(p.tint as any), lineLimit(1)]}>{title}</MenuText>
+          </HStack>
+        }
+      >
+        {choices.flatMap((choice, index) => [
+          <MenuButton key={`choice-${index}`} label={choice.title} systemImage={choice.selected ? "checkmark" : undefined} onPress={choice.onPress} />,
+          choice.dividerAfter ? <Divider key={`divider-${index}`} /> : null,
         ])}
       </Menu>
     </Host>
@@ -159,7 +203,12 @@ export function FieldRow({ label, multiline, style, ...props }: TextInputProps &
   const p = usePalette();
   return (
     <View style={[styles.row, multiline && styles.rowMultiline]}>
-      {label ? <Text style={[styles.rowTitle, { color: p.label, width: 96 }]}>{label}</Text> : null}
+      {/* One line in the label column: a longer label ("API 基础地址") shrinks a little rather than wrap. */}
+      {label ? (
+        <Text style={[styles.rowTitle, { color: p.label, width: 96 }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>
+          {label}
+        </Text>
+      ) : null}
       <TextInput
         placeholderTextColor={p.tertiaryLabel}
         multiline={multiline}
@@ -201,6 +250,7 @@ const styles = StyleSheet.create({
   rowText: { flex: 1, gap: 2 },
   rowTextWhole: { flexShrink: 0, gap: 2 },
   menu: { flex: 1, minWidth: 0 },
+  menuRow: { alignSelf: "stretch" },
   androidMenu: { flex: 1, minWidth: 0, alignItems: "flex-end" },
   androidMenuTrigger: { minHeight: 36, maxWidth: "100%", flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: 4, paddingLeft: 8 },
   rowTitle: { fontSize: Font.body },

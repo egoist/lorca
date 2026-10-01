@@ -14,7 +14,6 @@ import {
   isDM,
   memoryBudgetSummary,
   memoryFilesSummary,
-  providerKinds,
   providerModels,
   providerName,
   routineDetail,
@@ -162,7 +161,7 @@ function Participants(props: { chat: Chat; members: Bot[] }) {
           return (
             <BotRow
               bot={bot()}
-              detail={`${providerName(bot().provider)} · ${host()}`}
+              detail={`${providerName(bot().provider, store.providers)} · ${host()}`}
               accessorySymbol={canRemoveBot(props.chat) ? "minus.circle" : undefined}
               accessoryTooltip={L("Remove from chat")}
               onAccessory={() => store.removeBot(bot().id, props.chat.id)}
@@ -195,7 +194,18 @@ function Profile(props: { bot: Bot }) {
 
 function Runtime(props: { bot: Bot; chat: Chat }) {
   const bot = () => props.bot;
-  const models = () => providerModels(bot().provider);
+  const providers = () => {
+    track.roster();
+    return store.providers;
+  };
+  /** The built-in providers, then the custom ones. A custom provider the account deleted stays
+   * listed, under its slug, while the bot is still on it. */
+  const kinds = () => {
+    track.roster();
+    const kinds = store.providerKinds;
+    return kinds.includes(bot().provider) ? kinds : [...kinds, bot().provider];
+  };
+  const models = () => providerModels(bot().provider, providers());
   const levels = () => thinkingLevels(bot().provider);
   const credential = () => {
     track.roster();
@@ -206,7 +216,7 @@ function Runtime(props: { bot: Bot; chat: Chat }) {
     <Section title={L("Runs with")}>
       <PopUpRow
         label={L("Provider")}
-        options={providerKinds.map((kind) => ({ value: kind, label: providerName(kind) }))}
+        options={kinds().map((kind) => ({ value: kind, label: providerName(kind, providers()) }))}
         value={bot().provider}
         // A new provider starts on its default model and thinking level.
         onChange={(kind) => store.setBotRuntime(bot().id, kind, undefined, undefined)}
@@ -229,7 +239,8 @@ function Runtime(props: { bot: Bot; chat: Chat }) {
           if (thinking !== bot().thinking) store.setBotRuntime(bot().id, bot().provider, bot().model, thinking);
         }}
       />
-      {/* Connected: the masked key and a Change link. Not connected: just the Connect link. */}
+      {/* Connected: the masked key and a Change link. Not connected: just the Connect link. A custom
+          provider's link opens its own sheet: to edit it, or to add it again once it is deleted. */}
       <ActionRow
         label={L("Credential")}
         value={connected() ? (credential()?.detail ?? L("Connected")) : ""}

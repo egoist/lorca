@@ -10,6 +10,7 @@ import * as Format from "../../model/format";
 import {
   behaviorTitle,
   deviceSymbol,
+  isCustomKind,
   isRunner,
   osDisplayName,
   paneSymbol,
@@ -31,6 +32,7 @@ import { alert, presentSheet, Sheet } from "../overlay";
 import { open, revealed, settingsDeviceID } from "../root";
 import { AccessoryRow, ActionRow, BotRow, EditableRow, KeyValueRow, NoteRow, PluginRow, Section, StatusRow } from "../sections";
 import { presentConnectProvider } from "../sheets/connectProvider";
+import { presentAddProviderMenu, presentCustomProvider } from "../sheets/customProvider";
 import { presentPlugin } from "../sheets/plugin";
 import { Entries } from "./search";
 
@@ -276,7 +278,8 @@ export function AdvancedPane() {
 
 // MARK: - Providers
 
-/** The account's provider credentials: connected on any Device, used by every Runner. */
+/** The account's provider credentials: connected on any Device, used by every Runner. The built-in
+ * providers come first, then the custom ones in the order they were added, and a row to add one. */
 function ProvidersPane() {
   const providers = () => {
     track.roster();
@@ -288,24 +291,33 @@ function ProvidersPane() {
         <Show when={providers().length > 0} fallback={<KeyValueRow label={L("Waiting for the CLI")} value="" />}>
           <For each={providers()} keyed={(credential) => credential.kind}>
             {(credential) => {
-              const signIn = () => credential().isConnected && !usesAPIKey(credential().kind);
+              // A subscription disconnects right here; an API key or a custom provider opens its sheet.
+              const disconnects = () => credential().isConnected && !usesAPIKey(credential().kind) && !isCustomKind(credential().kind);
               return (
                 <StatusRow
                   symbol={providerSymbol(credential().kind)}
-                  title={providerName(credential().kind)}
+                  title={providerName(credential().kind, providers())}
                   subtitle={`${providerSubtitle(credential().kind)} · ${credential().detail}`}
                   state={credential().isConnected ? L("Connected") : undefined}
                   stateColor="var(--green)"
-                  actionTitle={credential().isConnected ? (usesAPIKey(credential().kind) ? L("Edit…") : L("Disconnect")) : L("Connect…")}
-                  destructive={signIn()}
+                  actionTitle={credential().isConnected ? (disconnects() ? L("Disconnect") : L("Edit…")) : L("Connect…")}
+                  destructive={disconnects()}
                   onAction={() => {
-                    if (signIn()) void store.disconnectProvider(credential().kind).catch(() => {});
-                    else void presentConnectProvider(credential().kind, { baseURL: credential().baseURL });
+                    const kind = credential().kind;
+                    if (isCustomKind(kind)) void presentCustomProvider(kind);
+                    else if (disconnects()) void store.disconnectProvider(kind).catch(() => {});
+                    else void presentConnectProvider(kind, { baseURL: credential().baseURL });
                   }}
                 />
               );
             }}
           </For>
+          <ActionRow
+            label={L("Custom")}
+            tint="var(--label-2)"
+            actionTitle={L("Add Provider…")}
+            onAction={(event) => void presentAddProviderMenu(event.currentTarget as HTMLElement)}
+          />
         </Show>
       </Section>
       <Footnote
@@ -504,7 +516,7 @@ function BotsPane() {
             {(bot) => (
               <BotRow
                 bot={bot()}
-                detail={providerName(bot().provider)}
+                detail={providerName(bot().provider, store.providers)}
                 accessorySymbol="bubble.left"
                 accessoryTooltip={L("Open chat")}
                 onAccessory={() => openChat(bot().id)}

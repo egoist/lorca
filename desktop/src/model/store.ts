@@ -13,6 +13,7 @@ import {
   authorBotID,
   canAddBot,
   canRemoveBot,
+  isCustomKind,
   isDM,
   isGroup,
   isRunner,
@@ -30,8 +31,12 @@ import {
   type Bot,
   type BotMemory,
   type BotTemplate,
+  type BuiltInProviderKind,
   type Chat,
   type CommandState,
+  type CustomAPI,
+  type CustomModel,
+  type CustomProviderKind,
   type Device,
   type InstalledPlugin,
   type Marketplace,
@@ -48,6 +53,7 @@ import {
   toBot,
   toBotMemory,
   toChat,
+  toCustomModel,
   toDevice,
   toMarketplace,
   toMessage,
@@ -61,6 +67,7 @@ import {
   type WireJobRetry,
   type WireMessage,
   type WireMessagePage,
+  type WireModelList,
   type WirePairStart,
   type WirePairStatus,
   type WireRelayStatus,
@@ -579,7 +586,7 @@ export class AppStore {
     const only = members[0];
     if (isDM(chat) && only) {
       const host = this.device(only.runnerID)?.name ?? L("unassigned");
-      return L("%@ on %@", providerName(only.provider), host);
+      return L("%@ on %@", providerName(only.provider, this.providers), host);
     }
     const hosts = new Set(members.flatMap((bot) => this.device(bot.runnerID)?.name ?? []));
     const runnerLabel = hosts.size === 1 ? [...hosts][0]! : L("%d Runners", hosts.size);
@@ -779,7 +786,12 @@ export class AppStore {
 
   /** The provider a bot made without asking runs with: the first one the account connected. */
   get preferredProvider(): ProviderKind {
-    return providerKinds.find((kind) => this.credential(kind)?.isConnected) ?? "deepseek";
+    return this.providerKinds.find((kind) => this.credential(kind)?.isConnected) ?? "deepseek";
+  }
+
+  /** Every provider a bot can run with: the built-in ones, then the ones the user added. */
+  get providerKinds(): ProviderKind[] {
+    return [...providerKinds, ...this.providers.map((provider) => provider.kind).filter(isCustomKind)];
   }
 
   updateBotProfile(id: string, name: string, description?: string, provider?: ProviderKind): void {
@@ -1422,13 +1434,14 @@ export class AppStore {
     this.emit({ kind: "identityChanged" });
   }
 
+  /** The saved key of an API-key provider or a custom one, for its sheet. */
   providerAPIKey(kind: ProviderKind): Promise<{ api_key?: string | null; base_url?: string | null }> {
     if (this.isMock) return Promise.resolve({});
     return this.request("providers.api_key", { kind });
   }
 
   /** Connects an API-key provider. An empty `baseURL` means the provider's own API. */
-  async connectAPIKey(kind: ProviderKind, apiKey: string, baseURL = ""): Promise<void> {
+  async connectAPIKey(kind: BuiltInProviderKind, apiKey: string, baseURL = ""): Promise<void> {
     const params: Record<string, unknown> = { api_key: apiKey };
     const trimmed = baseURL.trim();
     if (trimmed) params.base_url = trimmed;
@@ -1437,7 +1450,7 @@ export class AppStore {
 
   /** Runs a subscription sign-in (`providers.connect_chatgpt`, `providers.connect_grok`): the CLI
    * opens the browser on this computer and the tokens go to the whole account. */
-  async connectSignIn(kind: ProviderKind): Promise<void> {
+  async connectSignIn(kind: BuiltInProviderKind): Promise<void> {
     await this.request(`providers.connect_${kind}`);
   }
 
@@ -1450,8 +1463,65 @@ export class AppStore {
     return this.providers.find((provider) => provider.kind === kind);
   }
 
+  /** Disconnects a provider for the whole account, or deletes a custom one. */
   async disconnectProvider(kind: ProviderKind): Promise<void> {
+    if (this.isMock && isCustomKind(kind)) {
+      this.providers = this.providers.filter((provider) => provider.kind !== kind);
+      this.emit({ kind: "rosterChanged" });
+      this.emit({ kind: "chatsChanged" });
+      return;
+    }
     await this.request("providers.disconnect", { kind });
+  }
+
+  /** The chat models a custom provider's server lists, in its order (`providers.list_models`), for
+   * the sheet to pick from; the base URL is read as the CLI saves it. Null when the server publishes
+   * no list. Throws why the server could not be asked: a key it refused, no answer, or an answer
+   * that is not an API's. */
+  async listCustomModels(options: { name: string; api: CustomAPI; baseURL: string; apiKey: string }): Promise<CustomModel[] | null> {
+    if (this.isMock) {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const { listedModels } = await import("./mock");
+      return listedModels(options.baseURL);
+    }
+    const reply = await this.request<WireModelList>("providers.list_models", {
+      name: options.name,
+      api: options.api,
+      base_url: options.baseURL.trim(),
+      api_key: options.apiKey,
+    });
+    return reply.listed ? reply.models.map(toCustomModel) : null;
+  }
+
+  /** Adds a custom provider, or saves the one `kind` names, once the CLI has heard from its server
+   * (`providers.connect_custom`). `models` are the ids it offers, the default first; empty takes
+   * every model the server lists. Answers the provider's kind. The provider reaches the account's
+   * Devices, and this store, in the roster. */
+  async saveCustomProvider(options: {
+    kind?: CustomProviderKind;
+    name: string;
+    api: CustomAPI;
+    baseURL: string;
+    apiKey: string;
+    models: string[];
+  }): Promise<CustomProviderKind> {
+    const name = options.name.trim();
+    const baseURL = options.baseURL.trim();
+    const models = options.models.map((id) => id.trim()).filter((id) => id !== "");
+    if (this.isMock) {
+      const kind = options.kind ?? (`custom:${name.toLowerCase().replaceAll(" ", "-")}` as const);
+      const saved: ProviderCredential = { kind, isConnected: true, detail: baseURL, baseURL, name, api: options.api, models: models.map((id) => ({ id })) };
+      this.providers = this.providers.some((provider) => provider.kind === kind)
+        ? this.providers.map((provider) => (provider.kind === kind ? saved : provider))
+        : [...this.providers, saved];
+      this.emit({ kind: "rosterChanged" });
+      this.emit({ kind: "chatsChanged" });
+      return kind;
+    }
+    const params: Record<string, unknown> = { name, api: options.api, base_url: baseURL, api_key: options.apiKey.trim(), models };
+    if (options.kind) params.kind = options.kind;
+    const saved = await this.request<{ kind: string }>("providers.connect_custom", params);
+    return isCustomKind(saved.kind) ? saved.kind : `custom:${saved.kind}`;
   }
 
   setRelayURL(url: string): void {

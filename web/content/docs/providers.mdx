@@ -39,6 +39,26 @@ lorca provider list
 
 For a proxy or a compatible server, fill in **Base URL** when you connect any API-key provider. The key is checked against that endpoint.
 
+## Custom providers
+
+Any server that speaks OpenAI's Chat Completions or Responses API, or Anthropic's Messages API, can be a provider: a gateway such as OpenRouter, another vendor's API, or a model server on your own network such as Ollama, LM Studio, or vLLM. Open **Settings › Providers**, choose **Add Provider…**, and pick the service: OpenAI, OpenRouter, Gemini, Groq, Together AI, Ollama, or LM Studio fill in the API and base URL for you, and **Other Server…** starts empty.
+
+- **Name:** what the apps call it.
+- **API:** OpenAI Chat Completions, OpenAI Responses, or Anthropic Messages.
+- **API base URL:** the root the API's paths go under, such as `https://openrouter.ai/api/v1` or `http://localhost:11434/v1`. The sheet shows the full URL Lorca will call.
+- **API key:** leave it empty for a server that takes none.
+- **Models:** as you fill in the server, its models appear with their context window and whether they see images. Check the ones bots can use and pick the default. For a model the server doesn't list, type its ID in the search field and add it.
+
+Lorca checks the server again when you save, which checks the key. A custom provider syncs to your other devices like any credential, and its bots run on whichever Runner they are assigned to, so a model server on your network has to be reachable from that Runner. Spending shows as $0, since Lorca does not know what the server charges.
+
+From a terminal:
+
+```bash
+lorca provider add "OpenRouter" https://openrouter.ai/api/v1 --model anthropic/claude-sonnet-5 --api-key-stdin
+lorca provider add "Ollama" http://localhost:11434/v1
+lorca provider add "Claude proxy" https://proxy.example.com --api messages --model claude-opus-5 --api-key-stdin
+```
+
 ## Pick a model per bot
 
 Each bot chooses its provider, model, and thinking level in the New Bot sheet, under **Runs with** in the desktop-app inspector, or in the phone's bot Details. A bot with no model set uses the provider's default.
@@ -47,7 +67,7 @@ If a bot's provider is not connected, its turn ends with a note that says to con
 
 ## Disconnect
 
-**Disconnect** removes the credential from every device. For Grok it also revokes the sign-in.
+**Disconnect** removes the credential from every device. For Grok it also revokes the sign-in. **Delete** removes a custom provider from every device; `lorca provider remove` does the same from a terminal, with the kind `lorca provider list` shows, such as `custom:openrouter`.
 
 ## Cost
 

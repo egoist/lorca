@@ -192,6 +192,35 @@ mod tests {
         .unwrap();
         assert_eq!(disconnected["result"]["providers"][0]["is_connected"], false);
 
+        // A custom provider is set up from the phone too: its server lists models for the form's
+        // picker, then the save checks it again and the provider joins the account's set.
+        let server_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let lab = format!("http://{}/v1", server_listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            for _ in 0..2 {
+                let (mut socket, _) = server_listener.accept().unwrap();
+                let mut request = [0u8; 2048];
+                let read = socket.read(&mut request).unwrap();
+                assert!(String::from_utf8_lossy(&request[..read]).starts_with("GET /v1/models "));
+                let body = r#"{"data":[{"id":"qwen3:8b","context_window":40960},{"id":"nomic-embed-text"}]}"#;
+                let reply = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                socket.write_all(reply.as_bytes()).unwrap();
+            }
+        });
+        let call = |method: &str, params: serde_json::Value| -> serde_json::Value { serde_json::from_str(&core.request(method.into(), params.to_string())).unwrap() };
+        let listed = call("providers.list_models", serde_json::json!({ "api": "chat-completions", "base_url": lab, "api_key": "" }));
+        assert_eq!(listed["result"]["listed"], true);
+        assert_eq!(listed["result"]["models"], serde_json::json!([{ "id": "qwen3:8b", "context_window": 40960 }]));
+        let saved = call("providers.connect_custom", serde_json::json!({ "name": "Lab", "api": "chat-completions", "base_url": lab, "api_key": "", "models": ["qwen3:8b"] }));
+        assert_eq!(saved["result"]["kind"], "custom:lab");
+        server.join().unwrap();
+        let custom = saved["result"]["providers"].as_array().unwrap().last().unwrap().clone();
+        assert_eq!((custom["name"].as_str(), custom["is_connected"].as_bool()), (Some("Lab"), Some(true)));
+        assert_eq!(call("providers.api_key", serde_json::json!({ "kind": "custom:lab" }))["result"]["base_url"], lab.as_str());
+        let deleted = call("providers.disconnect", serde_json::json!({ "kind": "custom:lab" }));
+        assert!(!deleted["result"]["providers"].as_array().unwrap().iter().any(|p| p["kind"] == "custom:lab"));
+
         // The Device build shares SQLite with the desktop core, but stores only the app view
         // of tool activity because a phone never rebuilds a model transcript.
         let chat_id = "mobile-chat";

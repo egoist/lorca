@@ -64,7 +64,37 @@ enum MockData {
             ProviderCredential(kind: .opencodeGo, isConnected: false, detail: "Not connected"),
             ProviderCredential(kind: .chatgpt, isConnected: true, detail: "you@lorca.app"),
             ProviderCredential(kind: .grok, isConnected: false, detail: "Not connected"),
+            ProviderCredential(
+                kind: .custom("custom:ollama"), isConnected: true, detail: "http://localhost:11434/v1",
+                baseURL: "http://localhost:11434/v1", name: "Ollama", api: .chatCompletions,
+                models: [CustomModel(id: "qwen3:8b"), CustomModel(id: "llava")]),
         ]
+    }
+
+    /// What a custom provider's server lists in mock mode: a gateway's catalog, a local
+    /// server's few models, or no list at all.
+    static func listedModels(baseURL: String) -> [CustomModel]? {
+        if baseURL.contains("openrouter") {
+            return [
+                CustomModel(id: "anthropic/claude-sonnet-5", name: "Anthropic: Claude Sonnet 5", contextWindow: 1_000_000, images: true),
+                CustomModel(id: "openai/gpt-6-sol", name: "OpenAI: GPT-6 Sol", contextWindow: 1_050_000, images: true),
+                CustomModel(id: "deepseek/deepseek-v4.1-flash", name: "DeepSeek: V4.1 Flash", contextWindow: 1_000_000, images: true),
+                CustomModel(id: "moonshotai/kimi-k3", name: "MoonshotAI: Kimi K3", contextWindow: 1_048_576, images: true),
+                CustomModel(id: "qwen/qwen3.8-flash", name: "Qwen: Qwen3.8 Flash", contextWindow: 1_000_000, images: true),
+                CustomModel(id: "z-ai/glm-5.3-flash", name: "Z.ai: GLM 5.3 Flash", contextWindow: 200_000, images: false),
+                CustomModel(id: "meta-llama/llama-4-maverick", name: "Meta: Llama 4 Maverick", contextWindow: 1_048_576, images: true),
+                CustomModel(id: "mistralai/mistral-large-3", name: "Mistral: Mistral Large 3", contextWindow: 262_144, images: true),
+                CustomModel(id: "google/gemini-3.8-flash", name: "Google: Gemini 3.8 Flash", contextWindow: 1_048_576, images: true),
+            ]
+        }
+        if baseURL.contains("localhost") || baseURL.contains("127.0.0.1") {
+            return [
+                CustomModel(id: "qwen3:8b", contextWindow: 40_960),
+                CustomModel(id: "gemma3:12b", contextWindow: 131_072, images: true),
+                CustomModel(id: "llava:13b", contextWindow: 4_096, images: true),
+            ]
+        }
+        return nil
     }
 
     static func plugins() -> [InstalledPlugin] {

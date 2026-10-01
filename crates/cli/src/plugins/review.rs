@@ -135,8 +135,8 @@ pub async fn review(app: &Arc<App>, bot: &Bot, chat_id: &str, trigger: &Trigger,
     if !auto_review.is_enabled {
         return Outcome::Ask { reason: None, rule: None };
     }
-    let (model, thinking) = crate::providers::review_model(&bot.provider);
-    let provider = match crate::providers::provider_for(app, &bot.provider, Some(model), Some(thinking)) {
+    let (model, thinking) = crate::providers::review_model(app, &bot.provider);
+    let provider = match crate::providers::provider_for(app, &bot.provider, Some(&model), Some(thinking)) {
         Ok(provider) => provider,
         Err(error) => return Outcome::ask(format!("Auto-review could not check this action ({error}).")),
     };

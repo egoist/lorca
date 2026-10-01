@@ -6,12 +6,7 @@ import AppKit
 final class ConnectProviderViewController: SheetViewController {
     private let store = AppStore.shared
     private let kind: ProviderCredential.Kind
-    private let secureKeyField = APIKeySecureTextField()
-    private let revealedKeyField = APIKeyTextField()
-    private var isKeyRevealed = false
-    private var keyField: NSTextField { isKeyRevealed ? revealedKeyField : secureKeyField }
-    private lazy var revealButton = Build.imageButton(
-        symbol: "eye", tooltip: L("Show API key"), target: self, action: #selector(toggleKeyVisibility))
+    private let keyField = APIKeyField()
     private let disconnectButton = NSButton()
     private let baseURLField = NSTextField()
     private let initialBaseURL: String?
@@ -32,6 +27,10 @@ final class ConnectProviderViewController: SheetViewController {
         kind: ProviderCredential.Kind, from presenter: NSViewController,
         baseURL: String? = nil, onDone: @escaping () -> Void = {}
     ) {
+        if kind.isCustom {
+            CustomProviderViewController.present(kind: kind, from: presenter) { _ in onDone() }
+            return
+        }
         Task { [weak presenter] in
             do {
                 let store = AppStore.shared
@@ -60,10 +59,10 @@ final class ConnectProviderViewController: SheetViewController {
             if kind.usesAPIKey {
                 L("Encrypted and shared with your paired Devices.")
             } else {
-                L("Your browser opens a %@ sign-in. The tokens are shared with your paired Devices, encrypted with your account key; the relay cannot read them.", kind.rawValue)
+                L("Your browser opens a %@ sign-in. The tokens are shared with your paired Devices, encrypted with your account key; the relay cannot read them.", kind.name)
             }
-        super.init(title: isEditing ? kind.rawValue : L("Connect %@", kind.rawValue), subtitle: subtitle, width: 420)
-        secureKeyField.stringValue = credential?.apiKey ?? ""
+        super.init(title: isEditing ? kind.name : L("Connect %@", kind.name), subtitle: subtitle, width: 420)
+        keyField.stringValue = credential?.apiKey ?? ""
     }
 
     @available(*, unavailable)
@@ -81,34 +80,16 @@ final class ConnectProviderViewController: SheetViewController {
         statusRow.isHidden = true
 
         if kind.usesAPIKey {
-            let keyContainer = NSView()
-            keyContainer.translatesAutoresizingMaskIntoConstraints = false
-            revealedKeyField.isHidden = true
-            for field in [secureKeyField, revealedKeyField] {
-                field.placeholderString = kind.keyPlaceholder
-                field.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
-                field.delegate = self
-                field.setAccessibilityLabel(L("API key"))
-                field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-                keyContainer.addSubview(field)
-                field.pin(to: keyContainer)
-            }
-            revealButton.setAccessibilityLabel(L("Show API key"))
-            keyContainer.addSubview(revealButton)
-            NSLayoutConstraint.activate([
-                revealButton.trailingAnchor.constraint(equalTo: keyContainer.trailingAnchor, constant: -4),
-                revealButton.centerYAnchor.constraint(equalTo: keyContainer.centerYAnchor),
-                revealButton.widthAnchor.constraint(equalToConstant: 24),
-                revealButton.heightAnchor.constraint(equalToConstant: 20),
-            ])
-            addField(keyContainer, label: L("API key"))
+            keyField.placeholderString = kind.keyPlaceholder
+            keyField.onChange = { [weak self] in self?.updateControls() }
+            addField(keyField, label: L("API key"))
 
             baseURLField.placeholderString = kind.defaultBaseURL
             baseURLField.stringValue = initialBaseURL ?? ""
             baseURLField.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
             baseURLField.translatesAutoresizingMaskIntoConstraints = false
             let baseURLNote = Build.label(
-                L("Leave empty to use %@’s API.", kind.rawValue),
+                L("Leave empty to use %@’s API.", kind.name),
                 font: Theme.Font.caption, color: .tertiaryLabelColor, lines: 0)
             let baseURLRow = addField(baseURLField, label: L("API base URL"))
             contentStack.addArrangedSubview(baseURLNote)
@@ -133,7 +114,7 @@ final class ConnectProviderViewController: SheetViewController {
                 font: Theme.Font.caption, color: .tertiaryLabelColor, lines: 0)
             contentStack.addArrangedSubview(note)
             note.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
-            setButtons(confirm: L("Sign in with %@…", kind.rawValue))
+            setButtons(confirm: L("Sign in with %@…", kind.name))
         }
 
         contentStack.addArrangedSubview(statusRow)
@@ -142,7 +123,7 @@ final class ConnectProviderViewController: SheetViewController {
 
     override func confirmTapped() {
         guard confirmButton.isEnabled else { return }
-        beginOperation(kind.usesAPIKey ? L("Checking the key with %@…", kind.rawValue) : L("Waiting for the browser…"))
+        beginOperation(kind.usesAPIKey ? L("Checking the key with %@…", kind.name) : L("Waiting for the browser…"))
 
         let key = keyField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let baseURL = baseURLField.stringValue
@@ -159,7 +140,7 @@ final class ConnectProviderViewController: SheetViewController {
                 try Task.checkCancellation()
                 self.spinner.stopAnimation(nil)
                 self.status.textColor = .systemGreen
-                self.status.stringValue = L("%@ connected.", self.kind.rawValue)
+                self.status.stringValue = L("%@ connected.", self.kind.name)
                 try await Task.sleep(nanoseconds: 600_000_000)
                 self.dismiss(nil)
                 self.onDone()
@@ -181,27 +162,7 @@ final class ConnectProviderViewController: SheetViewController {
     override func viewDidDisappear() {
         super.viewDidDisappear()
         task?.cancel()
-        secureKeyField.stringValue = ""
-        revealedKeyField.stringValue = ""
-    }
-
-    @objc private func toggleKeyVisibility() {
-        let oldField = keyField
-        let selection = (oldField.currentEditor() as? NSTextView)?.selectedRange()
-        if selection != nil { view.window?.makeFirstResponder(nil) }
-        isKeyRevealed.toggle()
-        keyField.stringValue = oldField.stringValue
-        oldField.isHidden = true
-        keyField.isHidden = false
-        oldField.stringValue = ""
-        let label = isKeyRevealed ? L("Hide API key") : L("Show API key")
-        revealButton.image = NSImage(systemSymbolName: isKeyRevealed ? "eye.slash" : "eye", accessibilityDescription: label)
-        revealButton.toolTip = label
-        revealButton.setAccessibilityLabel(label)
-        if let selection {
-            view.window?.makeFirstResponder(keyField)
-            (keyField.currentEditor() as? NSTextView)?.setSelectedRange(selection)
-        }
+        keyField.clear()
     }
 
     @objc private func disconnectTapped() {
@@ -245,9 +206,7 @@ final class ConnectProviderViewController: SheetViewController {
     }
 
     private func updateControls() {
-        secureKeyField.isEnabled = !isBusy
-        revealedKeyField.isEnabled = !isBusy
-        revealButton.isEnabled = !isBusy
+        keyField.isEnabled = !isBusy
         baseURLField.isEnabled = !isBusy
         disconnectButton.isEnabled = !isBusy
         confirmButton.isEnabled = !isBusy && (!kind.usesAPIKey || !keyField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -260,54 +219,5 @@ final class ConnectProviderViewController: SheetViewController {
         row.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
         field.widthAnchor.constraint(equalTo: row.widthAnchor).isActive = true
         return row
-    }
-}
-
-extension ConnectProviderViewController: NSTextFieldDelegate {
-    func controlTextDidChange(_ obj: Notification) {
-        updateControls()
-    }
-}
-
-// Reserve space inside the native bezel for the reveal button, including while editing.
-private final class APIKeyTextFieldCell: NSTextFieldCell {
-    override func drawingRect(forBounds rect: NSRect) -> NSRect {
-        var rect = super.drawingRect(forBounds: rect)
-        rect.size.width = max(0, rect.width - 28)
-        return rect
-    }
-
-    override func resetCursorRect(_ cellFrame: NSRect, in controlView: NSView) {
-        let (accessory, text) = cellFrame.divided(atDistance: min(28, cellFrame.width), from: .maxXEdge)
-        super.resetCursorRect(text, in: controlView)
-        controlView.addCursorRect(accessory, cursor: .arrow)
-    }
-}
-
-private final class APIKeySecureTextFieldCell: NSSecureTextFieldCell {
-    override func drawingRect(forBounds rect: NSRect) -> NSRect {
-        var rect = super.drawingRect(forBounds: rect)
-        rect.size.width = max(0, rect.width - 28)
-        return rect
-    }
-
-    override func resetCursorRect(_ cellFrame: NSRect, in controlView: NSView) {
-        let (accessory, text) = cellFrame.divided(atDistance: min(28, cellFrame.width), from: .maxXEdge)
-        super.resetCursorRect(text, in: controlView)
-        controlView.addCursorRect(accessory, cursor: .arrow)
-    }
-}
-
-private final class APIKeyTextField: NSTextField {
-    override class var cellClass: AnyClass? {
-        get { APIKeyTextFieldCell.self }
-        set {}
-    }
-}
-
-private final class APIKeySecureTextField: NSSecureTextField {
-    override class var cellClass: AnyClass? {
-        get { APIKeySecureTextFieldCell.self }
-        set {}
     }
 }

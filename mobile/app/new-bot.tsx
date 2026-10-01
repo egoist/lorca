@@ -3,7 +3,7 @@ import { useMemo, useState } from "react";
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { engine } from "../src/core/engine";
-import { connectedProviders, isRunner, providerLabel, PROVIDER_MODELS, THINKING_LEVELS, thinkingLabel } from "../src/core/model";
+import { connectedProviders, isRunner, providerLabel, providerModels, PROVIDER_KINDS, providerThinkingLevels, thinkingLabel } from "../src/core/model";
 import { deviceIsOnline, useStore } from "../src/core/store";
 import { t, useLanguage } from "../src/i18n";
 import { CheckRow, FieldRow, Section } from "../src/ui/forms";
@@ -24,12 +24,16 @@ export default function NewBotScreen() {
   const [accent, setAccent] = useState("indigo");
   const [runnerId, setRunnerId] = useState<string>(() => runners.find((r) => deviceIsOnline(r.id))?.id ?? runners[0]?.id ?? "");
   const runner = runners.find((r) => r.id === runnerId);
-  const connected = connectedProviders(useStore((s) => s.providers));
-  const providers = connected.length ? connected : ["deepseek", "anthropic", "opencode", "opencode-go", "chatgpt", "grok"];
+  const statuses = useStore((s) => s.providers);
+  // The connected providers, custom ones after the built-ins, or every built-in while none is.
+  const connected = connectedProviders(statuses);
+  const providers: readonly string[] = connected.length ? connected : PROVIDER_KINDS;
   const [provider, setProvider] = useState<string>(providers[0]);
   const [model, setModel] = useState<string | undefined>(undefined);
   const [thinking, setThinking] = useState<string | undefined>(undefined);
   const effectiveProvider = providers.includes(provider) ? provider : providers[0];
+  const models = providerModels(effectiveProvider, statuses);
+  const levels = providerThinkingLevels(effectiveProvider);
   const canSave = name.trim().length > 0 && !!runnerId;
 
   async function save() {
@@ -89,22 +93,22 @@ export default function NewBotScreen() {
         {runner && (
           <Section title={t("Provider")} footer={connected.length ? undefined : t("No provider is connected yet; connect one in Settings before this bot answers.")}>
             {providers.map((kind) => (
-              <CheckRow key={kind} title={providerLabel(kind)} checked={kind === effectiveProvider} onPress={() => { setProvider(kind); setModel(undefined); setThinking(undefined); }} />
+              <CheckRow key={kind} title={providerLabel(kind, statuses)} checked={kind === effectiveProvider} onPress={() => { setProvider(kind); setModel(undefined); setThinking(undefined); }} />
             ))}
           </Section>
         )}
-        {runner && PROVIDER_MODELS[effectiveProvider] && (
+        {runner && models.length > 0 && (
           <Section title={t("Model")}>
-            <CheckRow title={t("Default")} subtitle={PROVIDER_MODELS[effectiveProvider][0].label} checked={!model} onPress={() => setModel(undefined)} />
-            {PROVIDER_MODELS[effectiveProvider].map((m) => (
+            <CheckRow title={t("Default")} subtitle={models[0].label} checked={!model} onPress={() => setModel(undefined)} />
+            {models.map((m) => (
               <CheckRow key={m.id} title={m.label} subtitle={m.id} checked={model === m.id} onPress={() => setModel(m.id)} />
             ))}
           </Section>
         )}
-        {runner && THINKING_LEVELS[effectiveProvider] && (
+        {runner && levels.length > 0 && (
           <Section title={t("Thinking")} footer={t("How much the model reasons before it answers. Higher levels are slower and cost more.")}>
             <CheckRow title={t("Default")} checked={!thinking} onPress={() => setThinking(undefined)} />
-            {THINKING_LEVELS[effectiveProvider].map((level) => (
+            {levels.map((level) => (
               <CheckRow key={level} title={thinkingLabel(level)} checked={thinking === level} onPress={() => setThinking(level)} />
             ))}
           </Section>

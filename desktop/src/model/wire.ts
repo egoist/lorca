@@ -5,6 +5,8 @@ import { L } from "../l10n";
 import * as Format from "./format";
 import {
   isAccent,
+  isCustomAPI,
+  isCustomKind,
   isProviderKind,
   type Attachment,
   type AutoReview,
@@ -14,6 +16,7 @@ import {
   type Chat,
   type ChatUsage,
   type CommandState,
+  type CustomModel,
   type Device,
   type DeviceOS,
   type InstalledPlugin,
@@ -192,6 +195,26 @@ export interface WireProvider {
   is_connected: boolean;
   detail: string;
   base_url?: string | null;
+  /** A custom provider's name, wire protocol, and models. Built-in providers have none. */
+  name?: string | null;
+  api?: string | null;
+  models?: WireCustomModel[] | null;
+}
+
+/** A custom provider's model, with what its server's model list said of it. */
+export interface WireCustomModel {
+  id: string;
+  name?: string | null;
+  context_window?: number | null;
+  max_output?: number | null;
+  images?: boolean | null;
+}
+
+/** `providers.list_models`: the chat models a server lists, in its order. `listed` is false when
+ * the server publishes no list. */
+export interface WireModelList {
+  listed: boolean;
+  models: WireCustomModel[];
 }
 
 export interface WireRunningTurn {
@@ -529,12 +552,34 @@ export function toAutoReview(wire: WireAutoReview | null | undefined): AutoRevie
   };
 }
 
+/** The built-in providers, then the custom ones in the order they were added. A kind this build
+ * does not know is left out. */
 export function toProviders(wire: WireProvider[] | null | undefined): ProviderCredential[] {
-  return (wire ?? []).flatMap((provider) =>
-    isProviderKind(provider.kind)
-      ? [{ kind: provider.kind, isConnected: provider.is_connected, detail: provider.detail, baseURL: optional(provider.base_url) }]
-      : [],
-  );
+  return (wire ?? []).flatMap((provider): ProviderCredential[] => {
+    if (!isProviderKind(provider.kind)) return [];
+    const credential: ProviderCredential = {
+      kind: provider.kind,
+      isConnected: provider.is_connected,
+      detail: provider.detail,
+      baseURL: optional(provider.base_url),
+    };
+    if (isCustomKind(provider.kind)) {
+      credential.name = optional(provider.name);
+      credential.api = provider.api && isCustomAPI(provider.api) ? provider.api : undefined;
+      credential.models = (provider.models ?? []).map(toCustomModel);
+    }
+    return [credential];
+  });
+}
+
+export function toCustomModel(wire: WireCustomModel): CustomModel {
+  return {
+    id: wire.id,
+    name: optional(wire.name),
+    contextWindow: optional(wire.context_window),
+    maxOutput: optional(wire.max_output),
+    images: optional(wire.images),
+  };
 }
 
 export function toMarketplacePlugin(wire: WireMarketplacePlugin): MarketplacePlugin {

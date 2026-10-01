@@ -488,7 +488,7 @@ export function Composer(props: {
                     <span class="mention-text">
                       <span class="mention-name truncate">{bot.name}</span>
                       <span class="mention-detail truncate">
-                        {store.device(bot.runnerID)?.name ? L("on %@", store.device(bot.runnerID)!.name) : providerName(bot.provider)}
+                        {store.device(bot.runnerID)?.name ? L("on %@", store.device(bot.runnerID)!.name) : providerName(bot.provider, store.providers)}
                       </span>
                     </span>
                   </div>

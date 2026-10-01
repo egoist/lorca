@@ -483,7 +483,7 @@ final class AppStore {
         let members = bots(in: chat)
         if chat.isDM, let only = members.first {
             let host = device(only.runnerID)?.name ?? L("unassigned")
-            return L("%@ on %@", only.provider.rawValue, host)
+            return L("%@ on %@", only.provider.name, host)
         }
         let hosts = Set(members.compactMap { device($0.runnerID)?.name })
         let runnerLabel = hosts.count == 1 ? (hosts.first ?? "") : L("%d Runners", hosts.count)
@@ -656,7 +656,12 @@ final class AppStore {
 
     /// The provider a bot made without asking runs with: the first one the account connected.
     var preferredProvider: ProviderCredential.Kind {
-        ProviderCredential.Kind.allCases.first { credential(for: $0)?.isConnected == true } ?? .deepseek
+        providerKinds.first { credential(for: $0)?.isConnected == true } ?? .deepseek
+    }
+
+    /// Every provider a bot can run with: the built-in ones, then the ones the user added.
+    var providerKinds: [ProviderCredential.Kind] {
+        ProviderCredential.Kind.builtIn + providers.map(\.kind).filter(\.isCustom)
     }
 
     func updateBot(_ id: Bot.ID, name: String, description: String? = nil, provider: ProviderCredential.Kind? = nil) {
@@ -1312,8 +1317,47 @@ final class AppStore {
         providers.first { $0.kind == kind }
     }
 
+    /// Disconnects a provider for the whole account, or deletes a custom one.
     func disconnectProvider(_ kind: ProviderCredential.Kind) async throws {
+        if isMock, kind.isCustom {
+            providers.removeAll { $0.kind == kind }
+            emit(.rosterChanged)
+            return
+        }
         _ = try await client.request("providers.disconnect", ["kind": kind.wireValue])
+    }
+
+    /// The chat models a custom provider's server lists, asked through the CLI on this
+    /// computer; nil when the server publishes no list.
+    func listCustomModels(name: String, api: CustomAPI, baseURL: String, apiKey: String) async throws -> [CustomModel]? {
+        if isMock { return MockData.listedModels(baseURL: baseURL) }
+        let params: [String: Any] = ["name": name, "api": api.rawValue, "base_url": baseURL, "api_key": apiKey]
+        let listing = try await client.request("providers.list_models", params, as: Wire.ListedModels.self)
+        return listing.listed ? listing.models.map { $0.toModel() } : nil
+    }
+
+    /// Adds a custom provider, or saves the one `kind` names, once the CLI has heard from its
+    /// server. `models` lists the ids bots can pick, the default first. Answers the provider's kind.
+    @discardableResult
+    func saveCustomProvider(
+        kind: ProviderCredential.Kind?, name: String, api: CustomAPI, baseURL: String, apiKey: String, models: [String]
+    ) async throws -> ProviderCredential.Kind {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let baseURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let models = models.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        if isMock {
+            let kind = kind ?? .custom(ProviderCredential.Kind.customPrefix + name.lowercased().replacingOccurrences(of: " ", with: "-"))
+            let saved = ProviderCredential(
+                kind: kind, isConnected: true, detail: baseURL, baseURL: baseURL, name: name, api: api,
+                models: models.map { CustomModel(id: $0) })
+            if let index = providers.firstIndex(where: { $0.kind == kind }) { providers[index] = saved } else { providers.append(saved) }
+            emit(.rosterChanged)
+            return kind
+        }
+        var params: [String: Any] = ["name": name, "api": api.rawValue, "base_url": baseURL, "api_key": apiKey, "models": models]
+        if let kind { params["kind"] = kind.wireValue }
+        let saved = try await client.request("providers.connect_custom", params, as: Wire.CustomProviderSaved.self)
+        return ProviderCredential.Kind(wireValue: saved.kind) ?? .custom(saved.kind)
     }
 
     func setRelayURL(_ url: String) {

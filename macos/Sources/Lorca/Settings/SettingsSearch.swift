@@ -55,17 +55,17 @@ struct SettingsEntry: Hashable {
         .device, L("Machine key"), keywords: [L("device os role runner last seen relay")]) }
     static var pairing: SettingsEntry { SettingsEntry(.device, L("Pairing"), keywords: [L("unpair remove device paired")]) }
 
-    static func bot(_ bot: Bot) -> SettingsEntry {
-        SettingsEntry(.bots, bot.name, keywords: [bot.description, bot.provider.rawValue, L("bot runner")])
+    @MainActor static func bot(_ bot: Bot) -> SettingsEntry {
+        SettingsEntry(.bots, bot.name, keywords: [bot.description, bot.provider.name, L("bot runner")])
     }
 
     static func plugin(_ plugin: InstalledPlugin) -> SettingsEntry {
         SettingsEntry(.plugins, plugin.name, keywords: [plugin.description, L("plugin mcp marketplace")])
     }
 
-    static func provider(_ kind: ProviderCredential.Kind) -> SettingsEntry {
+    @MainActor static func provider(_ kind: ProviderCredential.Kind) -> SettingsEntry {
         SettingsEntry(
-            .providers, kind.rawValue,
+            .providers, kind.name,
             keywords: [kind.subtitle, L("credential connect disconnect sign in model")])
     }
 

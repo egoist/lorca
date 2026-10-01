@@ -620,6 +620,9 @@ final class ActionRow: NSView {
         button.showCopied()
     }
 
+    /// The action's button, for a menu that opens under it.
+    var actionView: NSView { button }
+
     @objc private func tapped() {
         onAction?()
     }
