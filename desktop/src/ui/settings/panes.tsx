@@ -544,8 +544,12 @@ export async function confirmUnpair(device: Device): Promise<void> {
   });
   if (answer !== 0) return;
   try {
-    if (device.isThisDevice) await store.forgetIdentity();
-    else await store.unpairDevice(device.id);
+    if (!device.isThisDevice) await store.unpairDevice(device.id);
+    // The demo has no CLI to forget the identity: onboarding opens over the demo account, as Show
+    // Onboarding Again opens it, and closing it brings the demo back. It hides this window, so the
+    // click returns first.
+    else if (store.isMock) setTimeout(() => void host.showOnboarding());
+    else await store.forgetIdentity();
   } catch (error) {
     void alert({ message: L("Couldn’t unpair %@", device.name), informative: errorText(error) });
   }

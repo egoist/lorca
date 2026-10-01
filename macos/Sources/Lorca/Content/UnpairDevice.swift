@@ -31,10 +31,14 @@ enum UnpairDevice {
             guard response == .alertFirstButtonReturn else { return }
             Task { @MainActor in
                 do {
-                    if device.isThisDevice {
-                        try await store.forgetIdentity()
-                    } else {
+                    if !device.isThisDevice {
                         try await store.unpairDevice(device.id)
+                    } else if store.isMock {
+                        // The demo has no CLI to forget the identity: onboarding opens over the demo
+                        // account, as Show Onboarding Again opens it, and closing it brings the demo back.
+                        NSApp.sendAction(#selector(AppDelegate.showOnboarding(_:)), to: nil, from: nil)
+                    } else {
+                        try await store.forgetIdentity()
                     }
                 } catch {
                     let failed = NSAlert()

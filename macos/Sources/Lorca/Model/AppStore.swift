@@ -1251,7 +1251,8 @@ final class AppStore {
     }
 
     /// Unpairs this Device. The CLI asks the relay to drop its key, best effort, then forgets the
-    /// identity here; the `identity.changed` it sends brings back onboarding.
+    /// identity here; the `identity.changed` it sends brings back onboarding. The demo has no CLI,
+    /// so its Unpair opens onboarding instead (`UnpairDevice`).
     func forgetIdentity() async throws {
         _ = try await client.request("identity.forget")
     }

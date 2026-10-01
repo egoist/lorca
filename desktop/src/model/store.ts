@@ -1388,7 +1388,8 @@ export class AppStore {
   }
 
   /** Unpairs this Device. The CLI asks the relay to drop its key, best effort, then forgets the
-   * identity here; the `identity.changed` it sends brings back onboarding. */
+   * identity here; the `identity.changed` it sends brings back onboarding. The demo has no CLI, so
+   * its Unpair opens onboarding instead (`confirmUnpair`). */
   async forgetIdentity(): Promise<void> {
     await this.request("identity.forget");
   }
