@@ -80,6 +80,9 @@ final class OnboardingViewController: NSViewController {
 
     var isOnFinalStep: Bool { step == .done || step == .create || step == .bot || step == .provider }
     private var providerKind: ProviderCredential.Kind = .deepseek
+    /// A custom provider picked instead of a built-in one: a preset, or `nil` inside for Other
+    /// Server. It is set up in its own sheet, and the first bot moves to it once it is saved.
+    private var customChoice: CustomProviderPreset?? = nil
 
     init(onFinish: @escaping () -> Void) {
         self.onFinish = onFinish
@@ -379,8 +382,26 @@ final class OnboardingViewController: NSViewController {
     /// swaps only the credential row, so the page never re-renders.
     private func providerRows() -> [(String, NSView)] {
         let picker = NSPopUpButton()
-        picker.addItems(withTitles: ProviderCredential.Kind.allCases.map(\.rawValue))
-        picker.selectItem(at: ProviderCredential.Kind.allCases.firstIndex(of: providerKind) ?? 0)
+        for kind in ProviderCredential.Kind.builtIn {
+            picker.addItem(withTitle: kind.name)
+            picker.lastItem?.representedObject = kind
+        }
+        // Any other server, for an account whose models run on a gateway or its own computers.
+        picker.menu?.addItem(.separator())
+        for preset in CustomProviderPreset.cloud + CustomProviderPreset.local {
+            picker.addItem(withTitle: preset.name)
+            picker.lastItem?.representedObject = preset
+        }
+        picker.addItem(withTitle: L("Other Server…"))
+        picker.lastItem?.representedObject = NSNull()
+        let selected = picker.itemArray.first { item in
+            switch customChoice {
+            case .none: (item.representedObject as? ProviderCredential.Kind) == providerKind
+            case .some(.none): item.representedObject is NSNull
+            case .some(.some(let preset)): (item.representedObject as? CustomProviderPreset) == preset
+            }
+        }
+        picker.select(selected)
         picker.target = self
         picker.action = #selector(providerPicked(_:))
 
@@ -402,6 +423,22 @@ final class OnboardingViewController: NSViewController {
         guard let host = credentialHost else { return }
         for subview in host.subviews { subview.removeFromSuperview() }
 
+        if let preset = customChoice {
+            let note = Build.label(
+                L("Any server that speaks OpenAI’s or Anthropic’s API, such as a gateway or a model server on your network. Set up its address, key, and models next."),
+                font: .systemFont(ofSize: 12), color: .secondaryLabelColor, lines: 0)
+            note.translatesAutoresizingMaskIntoConstraints = false
+            host.addSubview(note)
+            note.pin(to: host)
+            credentialLabel?.stringValue = L("Server")
+            setStatus(L("Lorca checks the server, then shares it with your paired Devices, encrypted."), color: .tertiaryLabelColor)
+            if let button = findContinueButton() {
+                button.title = preset.map { L("Set Up %@…", $0.name) } ?? L("Set Up…")
+                button.isEnabled = true
+            }
+            return
+        }
+
         let control: NSView
         if providerKind.usesAPIKey {
             let keyField = NSSecureTextField()
@@ -412,7 +449,7 @@ final class OnboardingViewController: NSViewController {
             control = keyField
         } else {
             control = Build.label(
-                L("Your browser opens a %@ sign-in when you continue. %@", providerKind.rawValue, providerKind.signInRequirement),
+                L("Your browser opens a %@ sign-in when you continue. %@", providerKind.name, providerKind.signInRequirement),
                 font: .systemFont(ofSize: 12), color: .secondaryLabelColor, lines: 0)
         }
         control.translatesAutoresizingMaskIntoConstraints = false
@@ -422,11 +459,11 @@ final class OnboardingViewController: NSViewController {
         credentialLabel?.stringValue = providerKind.usesAPIKey ? L("API key") : L("Account")
         setStatus(
             providerKind.usesAPIKey
-                ? L("The key is checked against %@ and shared with your paired Devices, encrypted.", providerKind.rawValue)
+                ? L("The key is checked against %@ and shared with your paired Devices, encrypted.", providerKind.name)
                 : L("Tokens from the sign-in are shared with your paired Devices, encrypted."),
             color: .tertiaryLabelColor)
         if let button = findContinueButton() {
-            button.title = providerKind.usesAPIKey ? L("Continue") : L("Sign in with %@", providerKind.rawValue)
+            button.title = providerKind.usesAPIKey ? L("Continue") : L("Sign in with %@", providerKind.name)
             button.isEnabled = !providerKind.usesAPIKey
         }
     }
@@ -668,7 +705,15 @@ final class OnboardingViewController: NSViewController {
     }
 
     @objc private func providerPicked(_ sender: NSPopUpButton) {
-        providerKind = ProviderCredential.Kind.allCases[max(0, sender.indexOfSelectedItem)]
+        switch sender.selectedItem?.representedObject {
+        case let kind as ProviderCredential.Kind:
+            providerKind = kind
+            customChoice = nil
+        case let preset as CustomProviderPreset:
+            customChoice = .some(preset)
+        default:
+            customChoice = .some(nil)
+        }
         renderCredential()
     }
 
@@ -683,15 +728,21 @@ final class OnboardingViewController: NSViewController {
             setStatus(L("Give the bot a name."), color: .systemRed)
             return
         }
-        // The bot runs with the provider chosen here, not the CLI's default.
-        if name != bot.name || description != bot.description || providerKind != bot.provider {
-            store.updateBot(bot.id, name: name, description: description, provider: providerKind)
+        // The bot runs with the provider chosen here, not the CLI's default; a custom one is
+        // set once its sheet saves it.
+        let provider = customChoice == nil ? providerKind : bot.provider
+        if name != bot.name || description != bot.description || provider != bot.provider {
+            store.updateBot(bot.id, name: name, description: description, provider: provider)
         }
         connectProvider()
     }
 
     @objc private func connectProvider() {
         guard !busy else { return }
+        if let preset = customChoice {
+            setUpCustomProvider(preset)
+            return
+        }
         if store.isMock {
             transition(to: .done)
             return
@@ -700,13 +751,13 @@ final class OnboardingViewController: NSViewController {
         if providerKind.usesAPIKey, key.isEmpty {
             setStatus(
                 providerKind == .anthropic
-                    ? L("Paste an %@ API key to continue.", providerKind.rawValue)
-                    : L("Paste a %@ API key to continue.", providerKind.rawValue),
+                    ? L("Paste an %@ API key to continue.", providerKind.name)
+                    : L("Paste a %@ API key to continue.", providerKind.name),
                 color: .systemRed)
             return
         }
         busy = true
-        setStatus(providerKind.usesAPIKey ? L("Checking the key with %@…", providerKind.rawValue) : L("Waiting for the browser…"), color: .secondaryLabelColor)
+        setStatus(providerKind.usesAPIKey ? L("Checking the key with %@…", providerKind.name) : L("Waiting for the browser…"), color: .secondaryLabelColor)
         Task { [weak self] in
             guard let self else { return }
             defer { self.busy = false }
@@ -725,6 +776,18 @@ final class OnboardingViewController: NSViewController {
                 guard self.step != .done else { return }
                 self.setStatus(error.localizedDescription, color: .systemRed)
             }
+        }
+    }
+
+    /// Opens the custom provider sheet over onboarding; once the provider is saved, the first
+    /// bot runs with it and onboarding is done.
+    private func setUpCustomProvider(_ preset: CustomProviderPreset?) {
+        CustomProviderViewController.present(kind: nil, preset: preset, from: self) { [weak self] kind in
+            guard let self, self.step != .done else { return }
+            if let bot = self.firstBot, bot.provider != kind {
+                self.store.updateBot(bot.id, name: bot.name, provider: kind)
+            }
+            self.transition(to: .done)
         }
     }
 

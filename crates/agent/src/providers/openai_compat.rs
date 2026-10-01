@@ -10,6 +10,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::models::{self, ModelInfo};
 use crate::provider::{channel_stream, AssistantEvent, AssistantEventStream, ModelRequest, Provider};
+use crate::request::bearer_auth;
 use crate::retry::{send_with_retry, RequestFailure, DEFAULT_MAX_RETRY_DELAY_MS};
 use crate::sse::SseParser;
 use crate::transform::{transform_messages, TransformOptions};
@@ -32,10 +33,14 @@ pub struct OpenAiCompatProvider {
     /// Retries of a request that fails before it streams (408, 409, 429, 5xx, transport).
     pub max_retries: u32,
     pub max_retry_delay_ms: u64,
-    /// Sent as `reasoning_effort` (`Off` sends nothing).
+    /// Sent as `reasoning_effort`. `Off` is `thinking: { type: "disabled" }` on a model the
+    /// catalog says can stop thinking, and sends nothing on any other.
     pub thinking_level: Option<ThinkingLevel>,
     /// The catalog entry for the model, when it has one.
     pub info: Option<&'static ModelInfo>,
+    /// Sends the session id as `prompt_cache_key`, OpenAI's routing hint for its prompt cache.
+    /// Off for a server that refuses fields it does not know.
+    pub prompt_cache_key: bool,
     client: reqwest::Client,
 }
 
@@ -51,6 +56,7 @@ impl OpenAiCompatProvider {
             max_retry_delay_ms: DEFAULT_MAX_RETRY_DELAY_MS,
             thinking_level: None,
             info: models::find(provider_id, model),
+            prompt_cache_key: true,
             client: reqwest::Client::new(),
         }
     }
@@ -86,7 +92,7 @@ impl OpenAiCompatProvider {
         if let Some(max_tokens) = request.max_tokens {
             body["max_tokens"] = Value::from(max_tokens);
         }
-        if let Some(session_id) = &request.options.session_id {
+        if let Some(session_id) = request.options.session_id.as_ref().filter(|_| self.prompt_cache_key) {
             body["prompt_cache_key"] = Value::String(session_id.clone());
         }
         let level = self.thinking_level.and_then(|level| match self.info {
@@ -94,11 +100,21 @@ impl OpenAiCompatProvider {
             None if level == ThinkingLevel::Off => None,
             None => Some(level),
         });
+        // A catalogued model gets the word for its level, since its levels are the words it
+        // takes; any other model gets at most `high`, which every gateway takes.
+        let catalogued = self.info.is_some();
         let effort = match level {
-            None | Some(ThinkingLevel::Off) => None,
+            None => None,
+            // Only a model the catalog says can stop thinking keeps `Off` through the clamp.
+            Some(ThinkingLevel::Off) => {
+                body["thinking"] = json!({ "type": "disabled" });
+                None
+            }
             Some(ThinkingLevel::Minimal) => Some("minimal"),
             Some(ThinkingLevel::Low) => Some("low"),
             Some(ThinkingLevel::Medium) => Some("medium"),
+            Some(ThinkingLevel::XHigh) if catalogued => Some("xhigh"),
+            Some(ThinkingLevel::Max) if catalogued => Some("max"),
             Some(ThinkingLevel::High | ThinkingLevel::XHigh | ThinkingLevel::Max) => Some("high"),
         };
         if let Some(effort) = effort {
@@ -353,7 +369,7 @@ impl Provider for OpenAiCompatProvider {
         let info = self.info;
 
         tokio::spawn(async move {
-            let build = || options.apply_to(client.post(&url).bearer_auth(&api_key).header("User-Agent", USER_AGENT)).json(&body);
+            let build = || options.apply_to(bearer_auth(client.post(&url), &api_key).header("User-Agent", USER_AGENT)).json(&body);
             let response = match send_with_retry(build, max_retries, max_retry_delay_ms, &cancel).await {
                 Ok(response) => {
                     options.report(&response);
@@ -449,5 +465,35 @@ mod tests {
         openai.apply_chunk(&usage, &tx).await;
         assert_eq!((openai.usage.input, openai.usage.cache_read), (36, 64));
         assert_eq!(crate::estimate::context_tokens(&openai.usage), 107);
+    }
+
+    #[test]
+    fn a_thinking_level_is_the_word_the_model_takes() {
+        let request = ModelRequest {
+            system_prompt: String::new(),
+            messages: vec![LlmMessage::User(crate::types::UserMessage::text("hi"))],
+            tools: Vec::new(),
+            cache_points: Vec::new(),
+            max_tokens: None,
+            options: Default::default(),
+        };
+        let body = |kind: &str, model: &str, level: ThinkingLevel| {
+            OpenAiCompatProvider::new(kind, "https://opencode.ai/zen/v1", "k", model).with_thinking(Some(level)).body(&request)
+        };
+        let max = body("opencode", "deepseek-v4-pro", ThinkingLevel::Max);
+        assert_eq!(max["reasoning_effort"], "max");
+        assert!(max.get("thinking").is_none());
+        // Zen turns DeepSeek V4 Pro's thinking off; Go cannot, so Off runs at its lowest effort.
+        let off = body("opencode", "deepseek-v4-pro", ThinkingLevel::Off);
+        assert_eq!(off["thinking"], json!({ "type": "disabled" }));
+        assert!(off.get("reasoning_effort").is_none());
+        let go = body("opencode-go", "deepseek-v4-pro", ThinkingLevel::Off);
+        assert_eq!(go["reasoning_effort"], "high");
+        assert!(go.get("thinking").is_none());
+        assert_eq!(body("opencode", "kimi-k3", ThinkingLevel::Low)["reasoning_effort"], "max");
+        // A model the catalog does not know gets at most `high`, and nothing for Off.
+        assert_eq!(body("openai", "some-model", ThinkingLevel::Max)["reasoning_effort"], "high");
+        let unknown_off = body("openai", "some-model", ThinkingLevel::Off);
+        assert!(unknown_off.get("thinking").is_none() && unknown_off.get("reasoning_effort").is_none());
     }
 }

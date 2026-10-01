@@ -8,13 +8,14 @@ import iconURL from "./images/icon.png";
 import devIconURL from "./images/icon-dev.png";
 import { host, hostInfo } from "../host";
 import { L, Lc } from "../l10n";
-import { keyPlaceholder, providerKinds, providerName, signInRequirement, usesAPIKey, type ProviderKind } from "../model/models";
+import { customPresets, keyPlaceholder, providerKinds, providerName, signInRequirement, usesAPIKey, type BuiltInProviderKind, type CustomPreset } from "../model/models";
 import { onStoreEvent, track } from "../model/reactive";
 import { errorText, store } from "../model/store";
 import { Avatar, botAvatar } from "./avatar";
 import { Button, CopyButton, PopUpButton, Spinner } from "./controls";
 import { Icon } from "./icons";
 import { alert, hasSheet } from "./overlay";
+import { presentCustomProvider } from "./sheets/customProvider";
 
 type Step = "welcome" | "create" | "restore" | "pair" | "bot" | "provider" | "done";
 /** How this computer came by its identity, which the last step words. */
@@ -32,7 +33,10 @@ const [step, setStep] = createSignal<Step>("welcome");
 const [phrase, setPhrase] = createSignal<string[]>([]);
 const [savedPhrase, setSavedPhrase] = createSignal(false);
 const [status, setStatus] = createSignal<{ text: string; color: string } | null>(null);
-const [providerKind, setProviderKind] = createSignal<ProviderKind>("deepseek");
+const [providerKind, setProviderKind] = createSignal<BuiltInProviderKind>("deepseek");
+/** A custom provider picked instead of a built-in one: a preset, or none inside for Other Server.
+ * It is set up in its own sheet, and the first bot moves to it once it is saved. */
+const [customChoice, setCustomChoice] = createSignal<{ preset?: CustomPreset } | null>(null);
 const [apiKey, setAPIKey] = createSignal("");
 /** `null` when the identity arrived from elsewhere while the page waited. */
 const [origin, setOrigin] = createSignal<Origin | null>(null);
@@ -151,6 +155,11 @@ export function Onboarding() {
 
   const connectProvider = async () => {
     if (busy) return;
+    const choice = customChoice();
+    if (choice) {
+      setUpCustomProvider(choice.preset);
+      return;
+    }
     if (store.isMock) {
       go("done");
       return;
@@ -180,6 +189,20 @@ export function Onboarding() {
     }
   };
 
+  /** Opens the custom provider sheet over onboarding; once the provider is saved, the first bot
+   * runs with it and onboarding is done. Cancel leaves onboarding where it was. */
+  const setUpCustomProvider = (preset: CustomPreset | undefined) => {
+    void presentCustomProvider(undefined, {
+      preset,
+      onSave: (kind) => {
+        if (step() === "done") return;
+        const bot = firstBot();
+        if (bot && bot.provider !== kind) store.updateBotProfile(bot.id, bot.name, undefined, kind);
+        go("done");
+      },
+    });
+  };
+
   /** Skip for Now leaves the provider for later, a sign-in still waiting on the browser included,
    * so finishing it there afterwards connects nothing. */
   const skipProvider = () => {
@@ -197,8 +220,10 @@ export function Onboarding() {
       setStatus({ text: L("Give the bot a name."), color: "var(--red)" });
       return;
     }
-    // The bot runs with the provider chosen here, not the CLI's default.
-    if (name !== bot.name || description !== bot.description || providerKind() !== bot.provider) store.updateBotProfile(bot.id, name, description, providerKind());
+    // The bot runs with the provider chosen here, not the CLI's default; a custom one is set once
+    // its sheet saves it.
+    const provider = customChoice() ? bot.provider : providerKind();
+    if (name !== bot.name || description !== bot.description || provider !== bot.provider) store.updateBotProfile(bot.id, name, description, provider);
     void connectProvider();
   };
 
@@ -208,19 +233,30 @@ export function Onboarding() {
       setKind={(kind) => {
         // The note under the key is the new provider's, not the last one's error.
         setStatus(null);
+        setCustomChoice(null);
         setProviderKind(kind);
+      }}
+      custom={customChoice}
+      setCustom={(choice) => {
+        setStatus(null);
+        setCustomChoice(choice);
       }}
       apiKey={apiKey}
       setAPIKey={setAPIKey}
       status={status}
     />
   );
-  /** The Continue button of a step with a credential: signing in says so, a key must be typed. */
-  const credentialButton = (run: () => void) => ({
-    title: usesAPIKey(providerKind()) ? L("Continue") : L("Sign in with %@", providerName(providerKind())),
-    enabled: !usesAPIKey(providerKind()) || apiKey().trim() !== "",
-    run,
-  });
+  /** The Continue button of a step with a credential: signing in says so, a key must be typed, and
+   * a custom provider is set up next. */
+  const credentialButton = (run: () => void) => {
+    const choice = customChoice();
+    if (choice) return { title: choice.preset ? L("Set Up %@…", choice.preset.name) : L("Set Up…"), enabled: true, run };
+    return {
+      title: usesAPIKey(providerKind()) ? L("Continue") : L("Sign in with %@", providerName(providerKind())),
+      enabled: !usesAPIKey(providerKind()) || apiKey().trim() !== "",
+      run,
+    };
+  };
 
   return (
     <div class="onboarding">
@@ -323,7 +359,7 @@ function Welcome(props: { onCreate: () => void; onRestore: () => void; onPair: (
   return (
     <div class="onboarding-center">
       <div class="onboarding-column">
-        <img class="onboarding-icon" src={hostInfo().isDevelopment ? devIconURL : iconURL} width={96} height={96} alt="" draggable={false} />
+        <img class="onboarding-icon" src={hostInfo().isDevelopment ? devIconURL : iconURL} width={96} height={96} alt="" draggable="false" />
         <div class="onboarding-app-name">{hostInfo().name}</div>
         <div class="onboarding-lede">
           {L("Bots that run on computers you own. Your identity is a key pair on this computer — no account, no server that can read your chats.")}
@@ -442,11 +478,14 @@ function FormRow(props: { label: string; top?: boolean; children: JSX.Element })
   );
 }
 
-/** The provider picker and the credential for the chosen provider: a key field, or what signing in
- * does. Switching providers swaps only the credential row. */
+/** The provider picker and the credential for the chosen provider: a key field, what signing in
+ * does, or that a custom provider's server is set up next. Switching providers swaps only the
+ * credential row. */
 function ProviderRows(props: {
-  kind: Accessor<ProviderKind>;
-  setKind: (kind: ProviderKind) => void;
+  kind: Accessor<BuiltInProviderKind>;
+  setKind: (kind: BuiltInProviderKind) => void;
+  custom: Accessor<{ preset?: CustomPreset } | null>;
+  setCustom: (choice: { preset?: CustomPreset }) => void;
   apiKey: Accessor<string>;
   setAPIKey: (key: string) => void;
   status: Accessor<{ text: string; color: string } | null>;
@@ -454,39 +493,60 @@ function ProviderRows(props: {
   const kind = props.kind;
   const note = () =>
     props.status() ?? {
-      text: usesAPIKey(kind())
-        ? L("The key is checked against %@ and shared with your paired Devices, encrypted.", providerName(kind()))
-        : L("Tokens from the sign-in are shared with your paired Devices, encrypted."),
+      text: props.custom()
+        ? L("Lorca checks the server, then shares it with your paired Devices, encrypted.")
+        : usesAPIKey(kind())
+          ? L("The key is checked against %@ and shared with your paired Devices, encrypted.", providerName(kind()))
+          : L("Tokens from the sign-in are shared with your paired Devices, encrypted."),
       color: "var(--label-3)",
     };
+  // The built-in providers, then any other server: for an account whose models run on a gateway or
+  // its own computers.
+  const options = () => [
+    ...providerKinds.map((each) => ({ value: each as string, label: providerName(each) })),
+    ...customPresets.map((preset, index) => ({ value: `preset:${preset.name}`, label: preset.name, separated: index === 0 })),
+    { value: "other", label: L("Other Server…") },
+  ];
+  const picked = () => {
+    const choice = props.custom();
+    if (!choice) return kind() as string;
+    return choice.preset ? `preset:${choice.preset.name}` : "other";
+  };
+  const pick = (value: string) => {
+    props.setAPIKey("");
+    if (value === "other") props.setCustom({});
+    else if (value.startsWith("preset:")) props.setCustom({ preset: customPresets.find((preset) => `preset:${preset.name}` === value) });
+    else props.setKind(value as BuiltInProviderKind);
+  };
   return (
     <>
       <FormRow label={L("Provider")}>
-        <PopUpButton
-          class="fill"
-          options={providerKinds.map((each) => ({ value: each, label: providerName(each) }))}
-          value={kind()}
-          onChange={(each) => {
-            props.setAPIKey("");
-            props.setKind(each);
-          }}
-        />
+        <PopUpButton class="fill" options={options()} value={picked()} onChange={pick} />
       </FormRow>
-      <FormRow label={usesAPIKey(kind()) ? L("API key") : L("Account")} top={!usesAPIKey(kind())}>
+      <FormRow label={props.custom() ? L("Server") : usesAPIKey(kind()) ? L("API key") : L("Account")} top={props.custom() !== null || !usesAPIKey(kind())}>
         <Show
-          when={usesAPIKey(kind())}
-          fallback={<div class="form-text">{L("Your browser opens a %@ sign-in when you continue. %@", providerName(kind()), signInRequirement(kind()))}</div>}
+          when={!props.custom()}
+          fallback={
+            <div class="form-text">
+              {L("Any server that speaks OpenAI’s or Anthropic’s API, such as a gateway or a model server on your network. Set up its address, key, and models next.")}
+            </div>
+          }
         >
-          <input
-            class="text-field mono"
-            type="password"
-            placeholder={keyPlaceholder(kind())}
-            aria-label={L("API key")}
-            spellcheck="false"
-            autocomplete="off"
-            value={props.apiKey()}
-            onInput={(event) => props.setAPIKey(event.currentTarget.value)}
-          />
+          <Show
+            when={usesAPIKey(kind())}
+            fallback={<div class="form-text">{L("Your browser opens a %@ sign-in when you continue. %@", providerName(kind()), signInRequirement(kind()))}</div>}
+          >
+            <input
+              class="text-field mono"
+              type="password"
+              placeholder={keyPlaceholder(kind())}
+              aria-label={L("API key")}
+              spellcheck="false"
+              autocomplete="off"
+              value={props.apiKey()}
+              onInput={(event) => props.setAPIKey(event.currentTarget.value)}
+            />
+          </Show>
         </Show>
       </FormRow>
       <FormRow label="">

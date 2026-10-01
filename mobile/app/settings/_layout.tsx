@@ -1,5 +1,5 @@
-// The settings sheet's own stack: Settings first, and a Device sliding in from its row, inside
-// the one form sheet the root presents.
+// The settings sheet's own stack: Settings first, and a Device or a provider sliding in from its
+// row, inside the one form sheet the root presents.
 
 import { Stack } from "expo-router";
 import { Platform } from "react-native";
@@ -22,6 +22,8 @@ export default function SettingsLayout() {
       <Stack.Screen name="index" />
       <Stack.Screen name="device/[id]" />
       <Stack.Screen name="provider/[kind]" />
+      <Stack.Screen name="custom-provider" />
+      <Stack.Screen name="custom-models" />
     </Stack>
   );
 }

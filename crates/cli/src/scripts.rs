@@ -64,7 +64,7 @@ pub struct ModelsAsk {
 impl ModelsAsk {
     /// `None` for a provider with no small model to ask.
     pub fn new(app: &Arc<App>, chat_id: &str, provider: &str) -> Option<Self> {
-        let (model, _) = crate::providers::review_model(provider);
+        let (model, _) = crate::providers::review_model(app, provider);
         (!model.is_empty()).then(|| ModelsAsk { app: app.clone(), chat_id: chat_id.to_string(), provider: provider.to_string(), in_flight: tokio::sync::Semaphore::new(IN_FLIGHT), calls: AtomicUsize::new(0) })
     }
 }
@@ -108,8 +108,8 @@ impl HostFunction for ModelsAsk {
             _ = cancel.cancelled() => return Err("Stopped".into()),
         };
 
-        let (model, thinking) = crate::providers::review_model(&self.provider);
-        let provider = crate::providers::provider_for(&self.app, &self.provider, Some(model), Some(thinking))?;
+        let (model, thinking) = crate::providers::review_model(&self.app, &self.provider);
+        let provider = crate::providers::provider_for(&self.app, &self.provider, Some(&model), thinking)?;
         let request = ModelRequest {
             system_prompt: system,
             messages: vec![LlmMessage::User(UserMessage::text(prompt))],

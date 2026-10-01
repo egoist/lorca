@@ -13,6 +13,7 @@ export default function NewGroupScreen() {
   useLanguage();
   const router = useRouter();
   const bots = useStore((s) => s.bots);
+  const providers = useStore((s) => s.providers);
   const [title, setTitle] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
 
@@ -40,7 +41,7 @@ export default function NewGroupScreen() {
         </Section>
         <Section title={t("Members · {count} of {max}", { count: selected.length, max: MAX_GROUP_BOTS })} footer={t("Members take turns after every message; the first one you pick owns the work.")}>
           {bots.map((bot) => (
-            <CheckRow key={bot.id} title={bot.name} subtitle={providerLabel(bot.provider)} checked={selected.includes(bot.id)} onPress={() => toggle(bot.id)} leading={<BotAvatar bot={bot} size={36} />} />
+            <CheckRow key={bot.id} title={bot.name} subtitle={providerLabel(bot.provider, providers)} checked={selected.includes(bot.id)} onPress={() => toggle(bot.id)} leading={<BotAvatar bot={bot} size={36} />} />
           ))}
         </Section>
       </ScrollView>

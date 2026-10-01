@@ -25,9 +25,15 @@ function escapeFor(text: string) {
   return text.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n").replace(/\t/g, "\\t")
 }
 
+/// The paths under `dir` that match `pattern`, with `/` between folders on every platform: Bun
+/// scans with `\` on Windows, and the skips look for `l10n/` and `i18n/`.
+async function* scan(dir: string, pattern: string) {
+  for await (const path of new Glob(pattern).scan({ cwd: dir })) yield path.replaceAll("\\", "/")
+}
+
 async function keysIn(dir: string, pattern: string, call: RegExp, skip: (path: string) => boolean) {
   const keys = new Map<string, string>()
-  for await (const path of new Glob(pattern).scan({ cwd: dir })) {
+  for await (const path of scan(dir, pattern)) {
     if (skip(path)) continue
     const source = await Bun.file(join(dir, path)).text()
     for (const match of source.matchAll(call)) {
@@ -52,7 +58,7 @@ async function readMacTable(): Promise<Table> {
 /// The desktop app's keys: `L("…")` or `L('…')`, and `Lc("…", "…")` as the key `…|…`.
 async function desktopKeysIn(dir: string) {
   const keys = new Map<string, string>()
-  for await (const path of new Glob("src/**/*.{ts,tsx}").scan({ cwd: dir })) {
+  for await (const path of scan(dir, "src/**/*.{ts,tsx}")) {
     if (path.includes("l10n/") || path.endsWith("mygo.ts") || path.endsWith(".test.ts")) continue
     const source = await Bun.file(join(dir, path)).text()
     for (const match of source.matchAll(/\bL\(\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)')/g)) {

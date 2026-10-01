@@ -1,14 +1,14 @@
-//! The account's provider credentials: API keys with an optional base URL, and the ChatGPT
-//! and Grok sign-ins. They travel as one `credentials` blob under the account DEK, so every
-//! Device holds the same set in its private core folder; a Runner builds its providers from
-//! them (`runner` feature).
+//! The account's provider credentials: API keys with an optional base URL, the ChatGPT and
+//! Grok sign-ins, and the custom providers the user added. They travel as one `credentials`
+//! blob under the account DEK, so every Device holds the same set in its private core folder;
+//! a Runner builds its providers from them (`runner` feature).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
 use crate::config::{self, Config};
-use crate::model::ProviderStatus;
+use crate::model::{ProviderStatus, StatusModel};
 
 #[cfg(feature = "provider-auth")]
 pub use lorca_provider_auth::{chatgpt::ChatGptTokens, grok::GrokTokens};
@@ -18,7 +18,82 @@ pub type ChatGptTokens = serde_json::Value;
 #[cfg(not(feature = "provider-auth"))]
 pub type GrokTokens = serde_json::Value;
 
+/// The built-in providers. A custom provider's kind is `custom:` and a slug of its name.
 pub const PROVIDER_KINDS: [&str; 6] = ["deepseek", "anthropic", "opencode", "opencode-go", "chatgpt", "grok"];
+
+pub const CUSTOM_PREFIX: &str = "custom:";
+
+/// Whether `kind` names a provider the user added.
+pub fn is_custom(kind: &str) -> bool {
+    kind.starts_with(CUSTOM_PREFIX)
+}
+
+/// The wire protocol a custom provider speaks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CustomApi {
+    /// OpenAI-compatible Chat Completions, at `{base_url}/chat/completions`.
+    ChatCompletions,
+    /// OpenAI-compatible Responses, at `{base_url}/responses`.
+    Responses,
+    /// Anthropic-compatible Messages, at `{base_url}/v1/messages`.
+    Messages,
+}
+
+impl CustomApi {
+    pub const ALL: [CustomApi; 3] = [CustomApi::ChatCompletions, CustomApi::Responses, CustomApi::Messages];
+
+    pub fn id(self) -> &'static str {
+        match self {
+            CustomApi::ChatCompletions => "chat-completions",
+            CustomApi::Responses => "responses",
+            CustomApi::Messages => "messages",
+        }
+    }
+
+    pub fn parse(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|api| api.id() == id)
+    }
+}
+
+/// The thinking levels a custom provider's model takes: the catalog's for a model it knows by
+/// id, else low, medium, and high, which every server with a reasoning setting understands. An
+/// unknown server has no one way to turn its thinking off, so Off is not among them; the
+/// provider's default sends nothing.
+pub fn custom_levels(model: &str) -> &'static [lorca_models::ThinkingLevel] {
+    use lorca_models::ThinkingLevel::{High, Low, Medium};
+    lorca_models::find_any(model).map(|known| known.levels).unwrap_or(&[Low, Medium, High])
+}
+
+/// A model a custom provider offers, with what its server's model list said about it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CustomModel {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output: Option<u64>,
+    /// Whether it takes images.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub images: Option<bool>,
+}
+
+/// A server the user added that speaks one of the wire protocols Lorca has: a gateway, another
+/// vendor's API, or a model server on their own network.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CustomProvider {
+    pub name: String,
+    pub api: CustomApi,
+    pub base_url: String,
+    /// Empty for a server that takes no key.
+    #[serde(default)]
+    pub api_key: String,
+    /// The models bots can pick, in the user's order; the first is the default.
+    pub models: Vec<CustomModel>,
+    pub created_at: i64,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiKeyCredential {
@@ -43,6 +118,9 @@ pub struct Credentials {
     pub chatgpt: Option<ChatGptTokens>,
     #[serde(default)]
     pub grok: Option<GrokTokens>,
+    /// The providers the user added, by kind.
+    #[serde(default)]
+    pub custom: BTreeMap<String, CustomProvider>,
     /// When each kind last changed on any Device (connected, tokens refreshed, disconnected),
     /// in seconds. Two Devices' sets merge kind by kind, the later change winning, so a
     /// disconnect is an entry here with no credential beside it.
@@ -87,21 +165,31 @@ impl Credentials {
     /// Takes every kind `other` changed later than this set did.
     pub fn merge(&mut self, other: &Credentials) -> Merge {
         let mut merge = Merge::default();
-        for kind in PROVIDER_KINDS {
-            let (ours, theirs) = (self.changed_at.get(kind).copied(), other.changed_at.get(kind).copied());
+        // A deleted custom provider stays in `changed_at`, so the deletion travels too.
+        let custom: BTreeSet<&String> = self.changed_at.keys().chain(other.changed_at.keys()).filter(|kind| is_custom(kind)).collect();
+        let kinds: Vec<String> = PROVIDER_KINDS.iter().map(|kind| kind.to_string()).chain(custom.into_iter().cloned()).collect();
+        for kind in kinds {
+            let (ours, theirs) = (self.changed_at.get(&kind).copied(), other.changed_at.get(&kind).copied());
             match (ours, theirs) {
                 (ours, Some(theirs)) if ours.is_none_or(|ours| theirs > ours) => {
-                    match kind {
+                    match kind.as_str() {
                         "deepseek" => self.deepseek = other.deepseek.clone(),
                         "anthropic" => self.anthropic = other.anthropic.clone(),
                         "opencode" => self.opencode = other.opencode.clone(),
                         "opencode-go" => self.opencode_go = other.opencode_go.clone(),
                         "chatgpt" => self.chatgpt = other.chatgpt.clone(),
                         "grok" => self.grok = other.grok.clone(),
-                        _ => unreachable!(),
+                        _ => match other.custom.get(&kind) {
+                            Some(provider) => {
+                                self.custom.insert(kind.clone(), provider.clone());
+                            }
+                            None => {
+                                self.custom.remove(&kind);
+                            }
+                        },
                     }
-                    self.changed_at.insert(kind.to_string(), theirs);
-                    merge.taken.push(kind.to_string());
+                    self.changed_at.insert(kind.clone(), theirs);
+                    merge.taken.push(kind);
                 }
                 (Some(ours), theirs) if theirs.is_none_or(|theirs| ours > theirs) => merge.is_ahead = true,
                 _ => {}
@@ -128,28 +216,71 @@ impl Credentials {
         self.statuses().into_iter().filter(|s| s.is_connected).map(|s| s.kind).collect()
     }
 
+    /// Every kind a bot can run with: the built-in providers, then the custom ones.
+    pub fn kinds(&self) -> Vec<String> {
+        PROVIDER_KINDS.iter().map(|kind| kind.to_string()).chain(self.custom_kinds()).collect()
+    }
+
+    /// The custom providers' kinds, in the order the user added them.
+    pub fn custom_kinds(&self) -> Vec<String> {
+        let mut custom: Vec<(&String, &CustomProvider)> = self.custom.iter().collect();
+        custom.sort_by(|a, b| a.1.created_at.cmp(&b.1.created_at).then_with(|| a.0.cmp(b.0)));
+        custom.into_iter().map(|(kind, _)| kind.clone()).collect()
+    }
+
+    /// The name people know a provider by: a custom provider's own, else the built-in's.
+    pub fn label(&self, kind: &str) -> String {
+        match self.custom.get(kind) {
+            Some(provider) => provider.name.clone(),
+            None => match kind {
+                "deepseek" => "DeepSeek".into(),
+                "anthropic" => "Anthropic".into(),
+                "opencode" => "OpenCode Zen".into(),
+                "opencode-go" => "OpenCode Go".into(),
+                "chatgpt" => "ChatGPT".into(),
+                "grok" => "Grok".into(),
+                other => other.strip_prefix(CUSTOM_PREFIX).unwrap_or(other).to_string(),
+            },
+        }
+    }
+
     pub fn statuses(&self) -> Vec<ProviderStatus> {
-        PROVIDER_KINDS
-            .iter()
-            .map(|kind| {
-                let detail = if *kind == "chatgpt" {
-                    self.chatgpt.as_ref().map(|t| chatgpt_email(t).unwrap_or_else(|| "Signed in".into()))
-                } else if *kind == "grok" {
-                    self.grok.as_ref().map(|t| grok_email(t).unwrap_or_else(|| "Signed in".into()))
-                } else {
-                    self.api_key(kind).map(|c| match &c.base_url {
-                        Some(base_url) => format!("{} · {base_url}", mask_key(&c.api_key)),
-                        None => mask_key(&c.api_key),
-                    })
-                };
-                ProviderStatus {
-                    kind: kind.to_string(),
-                    is_connected: detail.is_some(),
-                    detail: detail.unwrap_or_else(|| "Not connected".into()),
-                    base_url: self.api_key(kind).and_then(|c| c.base_url.clone()),
-                }
-            })
-            .collect()
+        let built_in = PROVIDER_KINDS.iter().map(|kind| {
+            let detail = if *kind == "chatgpt" {
+                self.chatgpt.as_ref().map(|t| chatgpt_email(t).unwrap_or_else(|| "Signed in".into()))
+            } else if *kind == "grok" {
+                self.grok.as_ref().map(|t| grok_email(t).unwrap_or_else(|| "Signed in".into()))
+            } else {
+                self.api_key(kind).map(|c| match &c.base_url {
+                    Some(base_url) => format!("{} · {base_url}", mask_key(&c.api_key)),
+                    None => mask_key(&c.api_key),
+                })
+            };
+            ProviderStatus {
+                kind: kind.to_string(),
+                is_connected: detail.is_some(),
+                detail: detail.unwrap_or_else(|| "Not connected".into()),
+                base_url: self.api_key(kind).and_then(|c| c.base_url.clone()),
+                ..Default::default()
+            }
+        });
+        let custom = self.custom_kinds().into_iter().map(|kind| {
+            let provider = &self.custom[&kind];
+            let detail = match provider.api_key.trim() {
+                "" => provider.base_url.clone(),
+                key => format!("{} · {}", mask_key(key), provider.base_url),
+            };
+            ProviderStatus {
+                kind,
+                is_connected: true,
+                detail,
+                base_url: Some(provider.base_url.clone()),
+                name: Some(provider.name.clone()),
+                api: Some(provider.api),
+                models: provider.models.iter().map(|model| StatusModel { model: model.clone(), levels: custom_levels(&model.id).to_vec() }).collect(),
+            }
+        });
+        built_in.chain(custom).collect()
     }
 }
 
@@ -218,6 +349,46 @@ mod tests {
         assert_eq!(ours.merge(&theirs).taken, vec!["deepseek".to_string()]);
         assert!(ours.deepseek.is_none());
         assert!(ours.connected_kinds().is_empty());
+    }
+
+    fn custom(name: &str, created_at: i64) -> CustomProvider {
+        let models = vec![CustomModel { id: "m".into(), name: None, context_window: None, max_output: None, images: None }];
+        CustomProvider { name: name.into(), api: CustomApi::ChatCompletions, base_url: "http://lab/v1".into(), api_key: String::new(), models, created_at }
+    }
+
+    #[test]
+    fn custom_providers_merge_one_by_one_and_deletions_travel() {
+        let mut ours = Credentials::default();
+        ours.custom.insert("custom:lab".into(), custom("Lab", 1));
+        ours.changed_at.insert("custom:lab".into(), 1.0);
+        ours.custom.insert("custom:mine".into(), custom("Mine", 2));
+        ours.changed_at.insert("custom:mine".into(), 5.0);
+
+        let mut theirs = Credentials::default();
+        theirs.custom.insert("custom:router".into(), custom("Router", 3));
+        theirs.changed_at.insert("custom:router".into(), 2.0);
+        // Deleted on the other Device after this one added it.
+        theirs.changed_at.insert("custom:lab".into(), 3.0);
+
+        let merge = ours.merge(&theirs);
+        assert_eq!(merge, Merge { taken: vec!["custom:lab".into(), "custom:router".into()], is_ahead: true });
+        assert_eq!(ours.custom_kinds(), ["custom:mine", "custom:router"]);
+        assert_eq!(ours.kinds().len(), PROVIDER_KINDS.len() + 2);
+        assert_eq!(ours.label("custom:router"), "Router");
+        assert_eq!(ours.label("custom:lab"), "lab");
+        assert_eq!(ours.label("opencode-go"), "OpenCode Go");
+
+        // Custom providers follow the built-in ones, in the order they were added.
+        let statuses = ours.statuses();
+        assert_eq!(statuses.len(), PROVIDER_KINDS.len() + 2);
+        let mine = &statuses[PROVIDER_KINDS.len()];
+        assert_eq!((mine.kind.as_str(), mine.is_connected, mine.detail.as_str()), ("custom:mine", true, "http://lab/v1"));
+        assert_eq!(mine.models.len(), 1);
+        // An unknown model takes the levels every server understands; the catalog's model its own.
+        use lorca_models::ThinkingLevel::{High, Low, Medium};
+        assert_eq!(mine.models[0].levels, [Low, Medium, High]);
+        assert_eq!(custom_levels("anthropic/claude-opus-5"), lorca_models::find("anthropic", "claude-opus-5").unwrap().levels);
+        assert!(ours.connected_kinds().contains(&"custom:router".to_string()));
     }
 
     #[test]

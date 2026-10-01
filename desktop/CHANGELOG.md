@@ -6,6 +6,12 @@ and the update window shows it.
 
 ## [Unreleased]
 
+- Custom providers: Add Provider… in Settings' Providers pane adds OpenAI, OpenRouter, Gemini,
+  Groq, Together AI, Ollama, LM Studio, or any other server that speaks OpenAI's Chat Completions
+  or Responses API or Anthropic's Messages API, such as a gateway or a model server on your
+  network. The sheet loads the models the server lists to pick from, and takes any it does not
+  list. Bots pick the provider, its models, and a thinking level as they do a built-in one, and it
+  reaches your paired Devices encrypted with the account key.
 - Pairing a computer or restoring your identity no longer asks you to connect a provider your
   account already has. Onboarding waits until the account's providers arrive from the relay, which a
   slow connection or a long list of chats used to outlast.
@@ -29,6 +35,10 @@ and the update window shows it.
 - Red spelling underlines no longer appear under API keys, URLs, plugin variables, names, and
   searches as you type them, or in the description, rule, and memory sheets. The composer still
   checks spelling.
+- Bot avatars, image attachments, and the app icon can no longer be dragged out of the window.
+- On Windows, plugins that start with `npx`, such as Browser and 高德地图, no longer fail with
+  "Cannot start npx: program not found". Lorca finds a plugin's program as a terminal does, so it
+  finds the `npx.cmd` that Node.js installs.
 
 ## [0.1.1]
 

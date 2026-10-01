@@ -8,7 +8,7 @@ import { AppState, Platform, type AppStateStatus } from "react-native";
 import * as core from "../../modules/lorca-core";
 import { t } from "../i18n";
 import { hostFacts } from "./host";
-import { providerConnectMethod, type Attachment, type AutoReview, type Bot, type Chat, type ChatMeta, type ChatSearchResults, type ChatUsage, type Message, type ProviderKind, type ProviderStatus } from "./model";
+import { providerConnectMethod, type Attachment, type AutoReview, type Bot, type Chat, type ChatMeta, type ChatSearchResults, type ChatUsage, type CustomAPI, type CustomModel, type Message, type ProviderKind, type ProviderStatus } from "./model";
 import { coreHome, loadPrefs, pathOf, wipePrefs } from "./prefs";
 import { clearPushes, installPushHandlers, registerForPushes } from "./push";
 import {
@@ -361,7 +361,34 @@ class Engine {
     }
   }
 
-  async disconnectProvider(kind: ProviderKind): Promise<void> {
+  /// Adds a custom provider, or saves the one `kind` names, once the core has reached its server
+  /// with the key. With no model ids the core takes every chat model the server lists. The
+  /// provider joins the account's encrypted credentials, shared with every paired Device.
+  /// Answers its kind; rejects with what to fix.
+  async saveCustomProvider(input: { kind?: string; name: string; api: CustomAPI; baseURL: string; apiKey: string; models: string[] }): Promise<string> {
+    const params = { ...(input.kind ? { kind: input.kind } : {}), name: input.name, api: input.api, base_url: input.baseURL, api_key: input.apiKey, models: input.models };
+    const { kind, providers } = await core.request<{ kind: string; providers: ProviderStatus[] }>("providers.connect_custom", params);
+    useStore.setState({ providers });
+    return kind;
+  }
+
+  /// The chat models a custom provider's server lists, in its order, with what it says of them;
+  /// `listed` is false when the server publishes no list. Rejects with what is wrong: a key it
+  /// refuses, a server out of reach, an answer that is not an API's. `name` goes in the messages.
+  async listCustomModels(input: { name?: string; api: CustomAPI; baseURL: string; apiKey: string }): Promise<{ listed: boolean; models: CustomModel[] }> {
+    const params = { ...(input.name ? { name: input.name } : {}), api: input.api, base_url: input.baseURL, api_key: input.apiKey };
+    const { listed, models } = await core.request<{ listed: boolean; models?: CustomModel[] }>("providers.list_models", params);
+    return { listed: !!listed, models: models ?? [] };
+  }
+
+  /// The saved key and base URL of an API-key or custom provider, for its form. Statuses carry
+  /// only a masked key.
+  async providerAPIKey(kind: string): Promise<{ api_key?: string | null; base_url?: string | null }> {
+    return core.request("providers.api_key", { kind });
+  }
+
+  /// Disconnects a built-in provider, or deletes a custom one, for the whole account.
+  async disconnectProvider(kind: string): Promise<void> {
     const { providers } = await core.request<{ providers: ProviderStatus[] }>("providers.disconnect", { kind });
     useStore.setState({ providers });
   }

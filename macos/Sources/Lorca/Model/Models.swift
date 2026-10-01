@@ -4,18 +4,45 @@ import Foundation
 // MARK: - Device
 
 struct ProviderCredential: Hashable, Identifiable {
-    enum Kind: String, Hashable, CaseIterable {
-        case deepseek = "DeepSeek"
-        case anthropic = "Anthropic"
-        case opencode = "OpenCode Zen"
-        case opencodeGo = "OpenCode Go"
-        case chatgpt = "ChatGPT"
-        case grok = "Grok"
+    enum Kind: Hashable {
+        case deepseek
+        case anthropic
+        case opencode
+        case opencodeGo
+        case chatgpt
+        case grok
+        /// A provider the user added: any server that speaks OpenAI's or Anthropic's API. Its
+        /// wire value is `custom:` and a slug of the name it was added with.
+        case custom(String)
+
+        /// The providers Lorca has built in, in the order the CLI lists them.
+        static let builtIn: [Kind] = [.deepseek, .anthropic, .opencode, .opencodeGo, .chatgpt, .grok]
+
+        static let customPrefix = "custom:"
+
+        var isCustom: Bool {
+            if case .custom = self { true } else { false }
+        }
+
+        /// The name people know the provider by. A custom provider's is the one the user gave it,
+        /// from the account's credentials, and its slug once it is deleted.
+        @MainActor var name: String {
+            switch self {
+            case .deepseek: "DeepSeek"
+            case .anthropic: "Anthropic"
+            case .opencode: "OpenCode Zen"
+            case .opencodeGo: "OpenCode Go"
+            case .chatgpt: "ChatGPT"
+            case .grok: "Grok"
+            case .custom(let wire): AppStore.shared.credential(for: self)?.name ?? String(wire.dropFirst(Self.customPrefix.count))
+            }
+        }
 
         var symbolName: String {
             switch self {
             case .deepseek, .anthropic, .opencode, .opencodeGo: "key.fill"
             case .chatgpt, .grok: "person.badge.key.fill"
+            case .custom: "server.rack"
             }
         }
 
@@ -23,18 +50,25 @@ struct ProviderCredential: Hashable, Identifiable {
             switch self {
             case .deepseek, .anthropic, .opencode, .opencodeGo: L("API key")
             case .chatgpt, .grok: L("Subscription")
+            case .custom: L("Custom")
             }
         }
 
-        /// Connects with a pasted API key; ChatGPT and Grok sign in through the browser instead.
-        var usesAPIKey: Bool { self != .chatgpt && self != .grok }
+        /// Connects with a pasted API key; ChatGPT and Grok sign in through the browser instead,
+        /// and a custom provider is set up in its own sheet.
+        var usesAPIKey: Bool {
+            switch self {
+            case .deepseek, .anthropic, .opencode, .opencodeGo: true
+            case .chatgpt, .grok, .custom: false
+            }
+        }
 
         /// What the sign-in needs, for the subscription providers.
         var signInRequirement: String {
             switch self {
             case .chatgpt: L("It needs a ChatGPT subscription.")
             case .grok: L("It needs a SuperGrok or X Premium+ subscription.")
-            case .deepseek, .anthropic, .opencode, .opencodeGo: ""
+            case .deepseek, .anthropic, .opencode, .opencodeGo, .custom: ""
             }
         }
 
@@ -45,7 +79,7 @@ struct ProviderCredential: Hashable, Identifiable {
             case .anthropic: "https://api.anthropic.com"
             case .opencode: "https://opencode.ai/zen"
             case .opencodeGo: "https://opencode.ai/zen/go"
-            case .chatgpt, .grok: ""
+            case .chatgpt, .grok, .custom: ""
             }
         }
 
@@ -55,6 +89,7 @@ struct ProviderCredential: Hashable, Identifiable {
             case .deepseek: L("sk-… from platform.deepseek.com")
             case .anthropic: L("sk-ant-… from console.anthropic.com")
             case .opencode, .opencodeGo: L("API key from opencode.ai/auth")
+            case .custom: L("Optional for a server on your network")
             case .chatgpt, .grok: ""
             }
         }
@@ -68,6 +103,7 @@ struct ProviderCredential: Hashable, Identifiable {
             case .opencodeGo: "opencode-go"
             case .chatgpt: "chatgpt"
             case .grok: "grok"
+            case .custom(let wire): wire
             }
         }
 
@@ -79,6 +115,7 @@ struct ProviderCredential: Hashable, Identifiable {
             case "opencode-go": self = .opencodeGo
             case "chatgpt": self = .chatgpt
             case "grok": self = .grok
+            case let wire where wire.hasPrefix(Self.customPrefix): self = .custom(wire)
             default: return nil
             }
         }
@@ -86,21 +123,11 @@ struct ProviderCredential: Hashable, Identifiable {
         /// Provider connect methods use underscores even when the stored provider id has a
         /// hyphen.
         var connectMethodSuffix: String {
-            self == .opencodeGo ? "opencode_go" : wireValue
-        }
-
-        /// The thinking levels this provider's models take, lowest first. nil on a bot means
-        /// the provider's default.
-        var thinkingLevels: [(id: String, label: String)] {
-            let ids: [String] =
-                switch self {
-                case .deepseek: ["off", "low", "medium", "high", "xhigh", "max"]
-                case .anthropic: ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
-                case .opencode, .opencodeGo: ["off", "low", "medium", "high", "xhigh", "max"]
-                case .chatgpt: ["low", "medium", "high", "xhigh", "max"]
-                case .grok: ["low", "medium", "high", "xhigh"]
-                }
-            return ids.map { ($0, Self.thinkingLabel($0)) }
+            switch self {
+            case .opencodeGo: "opencode_go"
+            case .custom: "custom"
+            default: wireValue
+            }
         }
 
         static func thinkingLabel(_ level: String) -> String {
@@ -115,56 +142,6 @@ struct ProviderCredential: Hashable, Identifiable {
             default: level.prefix(1).uppercased() + level.dropFirst()
             }
         }
-
-        /// Model ids this provider accepts, first is the default the CLI uses.
-        var models: [(id: String, label: String)] {
-            switch self {
-            case .deepseek:
-                [
-                    ("deepseek-flash", "V4.1 Flash"),
-                    ("deepseek-v4-pro", "V4 Pro (reasoning)"),
-                ]
-            case .anthropic:
-                [
-                    ("claude-opus-5", "Opus 5"),
-                    ("claude-opus-5-5", "Opus 5.5"),
-                    ("claude-sonnet-5", "Sonnet 5"),
-                    ("claude-fable-5-1", "Fable 5.1"),
-                    ("claude-opus-4-8", "Opus 4.8"),
-                    ("claude-haiku-4-5", "Haiku 4.5"),
-                ]
-            case .opencode:
-                [
-                    ("deepseek-v4.1-flash", "DeepSeek V4.1 Flash"),
-                    ("claude-sonnet-5", "Claude Sonnet 5"),
-                    ("gpt-5.6-terra", "GPT-5.6 Terra"),
-                    ("grok-4.6", "Grok 4.6"),
-                    ("kimi-k3", "Kimi K3"),
-                    ("big-pickle", "Big Pickle (free)"),
-                ]
-            case .opencodeGo:
-                [
-                    ("glm-5.3-flash", "GLM-5.3 Flash"),
-                    ("deepseek-v4.1-flash", "DeepSeek V4.1 Flash"),
-                    ("gpt-5.6-luna", "GPT-5.6 Luna"),
-                    ("grok-4.6", "Grok 4.6"),
-                    ("kimi-k3", "Kimi K3"),
-                    ("qwen3.8-flash", "Qwen3.8 Flash"),
-                    ("minimax-m3", "MiniMax M3"),
-                ]
-            case .chatgpt:
-                [
-                    ("gpt-6-sol", "GPT-6 Sol"),
-                    ("gpt-6-astra", "GPT-6 Astra"),
-                    ("gpt-6-luna", "GPT-6 Luna"),
-                ]
-            case .grok:
-                [
-                    ("grok-4.7", "Grok 4.7"),
-                    ("grok-4.6", "Grok 4.6"),
-                ]
-            }
-        }
     }
 
     var id: Kind { kind }
@@ -173,6 +150,172 @@ struct ProviderCredential: Hashable, Identifiable {
     var detail: String
     /// A custom API root, when the account credential has one.
     var baseURL: String? = nil
+    /// A custom provider's name, the protocol its server speaks, and the models it offers.
+    var name: String? = nil
+    var api: CustomAPI? = nil
+    var models: [CustomModel] = []
+}
+
+/// The wire protocol a custom provider's server speaks.
+enum CustomAPI: String, CaseIterable, Hashable {
+    case chatCompletions = "chat-completions"
+    case responses
+    case messages
+
+    /// Product names, the same in every language.
+    var title: String {
+        switch self {
+        case .chatCompletions: "OpenAI Chat Completions"
+        case .responses: "OpenAI Responses"
+        case .messages: "Anthropic Messages"
+        }
+    }
+
+    /// What the CLI adds to the base URL for a model call.
+    var path: String {
+        switch self {
+        case .chatCompletions: "/chat/completions"
+        case .responses: "/responses"
+        case .messages: "/v1/messages"
+        }
+    }
+
+    var baseURLPlaceholder: String {
+        self == .messages ? "https://api.example.com" : "https://api.example.com/v1"
+    }
+
+    /// The URL the CLI calls for a base URL as typed: a pasted endpoint is cut back to its root
+    /// first, as the CLI does, then this protocol's path goes on.
+    func endpoint(for baseURL: String) -> String {
+        var root = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        while root.hasSuffix("/") { root.removeLast() }
+        let pasted: [String] =
+            switch self {
+            case .chatCompletions: ["/chat/completions"]
+            case .responses: ["/responses"]
+            case .messages: ["/v1/messages", "/v1"]
+            }
+        if let suffix = pasted.first(where: { root.hasSuffix($0) }) { root.removeLast(suffix.count) }
+        return root + path
+    }
+}
+
+/// A model a custom provider offers, with what its server's model list says of it and the
+/// thinking levels the CLI says it takes.
+struct CustomModel: Hashable {
+    var id: String
+    var name: String? = nil
+    var contextWindow: Int? = nil
+    /// Whether it takes images.
+    var images: Bool? = nil
+    var levels: [String] = []
+
+    var displayName: String { name ?? id }
+}
+
+/// A server people often add: its API, its base URL, and where its key comes from.
+struct CustomProviderPreset: Hashable {
+    let name: String
+    let api: CustomAPI
+    let baseURL: String
+    let keyPlaceholder: String
+
+    /// Services in the cloud, for the Add Provider menu.
+    static var cloud: [CustomProviderPreset] {
+        [
+            CustomProviderPreset(
+                name: "OpenAI", api: .responses, baseURL: "https://api.openai.com/v1",
+                keyPlaceholder: L("sk-… from platform.openai.com")),
+            CustomProviderPreset(
+                name: "OpenRouter", api: .chatCompletions, baseURL: "https://openrouter.ai/api/v1",
+                keyPlaceholder: L("sk-or-… from openrouter.ai/keys")),
+            CustomProviderPreset(
+                name: "Gemini", api: .chatCompletions, baseURL: "https://generativelanguage.googleapis.com/v1beta/openai",
+                keyPlaceholder: L("Key from aistudio.google.com")),
+            CustomProviderPreset(
+                name: "Groq", api: .chatCompletions, baseURL: "https://api.groq.com/openai/v1",
+                keyPlaceholder: L("gsk_… from console.groq.com")),
+            CustomProviderPreset(
+                name: "Together AI", api: .chatCompletions, baseURL: "https://api.together.xyz/v1",
+                keyPlaceholder: L("Key from api.together.ai")),
+        ]
+    }
+
+    /// The preset for a base URL as typed, by its host and port, so a URL pasted into an empty
+    /// sheet still finds the server's name and key hint.
+    static func matching(_ baseURL: String) -> CustomProviderPreset? {
+        guard let url = URL(string: baseURL.trimmingCharacters(in: .whitespacesAndNewlines)), let host = url.host else { return nil }
+        return (cloud + local).first { preset in
+            let known = URL(string: preset.baseURL)
+            return known?.host == host && known?.port == url.port
+        }
+    }
+
+    /// Model servers that run on the user's own computers.
+    static var local: [CustomProviderPreset] {
+        [
+            CustomProviderPreset(
+                name: "Ollama", api: .chatCompletions, baseURL: "http://localhost:11434/v1",
+                keyPlaceholder: L("Optional for a server on your network")),
+            CustomProviderPreset(
+                name: "LM Studio", api: .chatCompletions, baseURL: "http://localhost:1234/v1",
+                keyPlaceholder: L("Optional for a server on your network")),
+        ]
+    }
+}
+
+/// The custom provider sheet's model list: the models the server listed and the ones the user
+/// added or saved, which of them bots can pick, and the default.
+enum ModelChecklist {
+    /// Takes a new listing: the models to keep (picked or added by hand) stay where they are
+    /// with the listing's facts, the rest of the old listing goes, and the new one follows.
+    static func merge(_ models: [CustomModel], keeping keep: (String) -> Bool, with listed: [CustomModel]) -> [CustomModel] {
+        let facts = Dictionary(listed.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var merged = models.filter { keep($0.id) }.map { model in facts[model.id] ?? model }
+        var seen = Set(merged.map(\.id))
+        for model in listed where seen.insert(model.id).inserted { merged.append(model) }
+        return merged
+    }
+
+    /// The models whose name or id holds the query.
+    static func filter(_ models: [CustomModel], _ query: String) -> [CustomModel] {
+        guard !query.isEmpty else { return models }
+        return models.filter { $0.id.localizedCaseInsensitiveContains(query) || ($0.name?.localizedCaseInsensitiveContains(query) ?? false) }
+    }
+
+    /// The id an Add row offers for a query: one no model has yet.
+    static func addCandidate(_ query: String, in models: [CustomModel]) -> String? {
+        let id = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return id.isEmpty || models.contains { $0.id == id } ? nil : id
+    }
+
+    /// The picked ids as the CLI keeps them: the default first, then the others in list order.
+    static func orderedIDs(_ models: [CustomModel], selected: Set<String>, defaultID: String?) -> [String] {
+        let picked = models.map(\.id).filter { selected.contains($0) }
+        guard let defaultID, picked.contains(defaultID) else { return picked }
+        return [defaultID] + picked.filter { $0 != defaultID }
+    }
+}
+
+/// A model the CLI's catalog offers, as the snapshot names it, and the thinking levels it
+/// takes, lowest first.
+struct ProviderModel: Hashable {
+    var provider: ProviderCredential.Kind
+    var id: String
+    var label: String
+    var levels: [String]
+
+    /// Every thinking level, lowest first.
+    private static let allThinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
+
+    /// The thinking levels `model` takes among `models`, one provider's in the catalog's order:
+    /// the default model's when it is nil, and every level they take for a model the catalog
+    /// does not have. nil on a bot means the model's default.
+    static func thinkingLevels(for model: String?, among models: [ProviderModel]) -> [(id: String, label: String)] {
+        let known = models.first { $0.id == (model ?? models.first?.id) }
+        let ids = known?.levels ?? allThinkingLevels.filter { level in models.contains { $0.levels.contains(level) } }
+        return ids.map { ($0, ProviderCredential.Kind.thinkingLabel($0)) }
+    }
 }
 
 /// A paired machine or phone. Its `os` decides whether it is a Runner: only desktop

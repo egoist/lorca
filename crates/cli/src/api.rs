@@ -623,10 +623,14 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
         // continue to carry masked provider statuses.
         "providers.api_key" => {
             let kind = string(&params, "kind")?;
+            let credentials = app.credentials.lock().unwrap();
+            if crate::credentials::is_custom(&kind) {
+                let provider = credentials.custom.get(&kind).ok_or("Unknown provider")?;
+                return Ok(json!({ "api_key": provider.api_key, "base_url": provider.base_url }));
+            }
             if !matches!(kind.as_str(), "deepseek" | "anthropic" | "opencode" | "opencode-go") {
                 return Err("Not an API-key provider".into());
             }
-            let credentials = app.credentials.lock().unwrap();
             let credential = credentials.api_key(&kind);
             Ok(json!({
                 "api_key": credential.map(|c| &c.api_key),
@@ -652,6 +656,27 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
         "providers.connect_opencode_go" => {
             provider_auth::connect_opencode_go(app, &string(&params, "api_key")?, opt_string(&params, "base_url").as_deref()).await?;
             Ok(json!({ "providers": app.credentials.lock().unwrap().statuses() }))
+        }
+        // The chat models a custom provider's server lists, for the model picker.
+        #[cfg(feature = "provider-auth")]
+        "providers.list_models" => {
+            let str_param = |key: &str| params[key].as_str().unwrap_or_default().to_string();
+            let listed = provider_auth::list_custom_models(app, &str_param("name"), &str_param("api"), &str_param("base_url"), &str_param("api_key")).await?;
+            Ok(json!({ "listed": listed.is_some(), "models": listed.unwrap_or_default() }))
+        }
+        // Adds a custom provider, or saves one with `kind`, once its server answers.
+        #[cfg(feature = "provider-auth")]
+        "providers.connect_custom" => {
+            let input = provider_auth::CustomInput {
+                kind: opt_string(&params, "kind"),
+                name: params["name"].as_str().unwrap_or_default().to_string(),
+                api: opt_string(&params, "api").unwrap_or_else(|| "chat-completions".into()),
+                base_url: params["base_url"].as_str().unwrap_or_default().to_string(),
+                api_key: params["api_key"].as_str().unwrap_or_default().to_string(),
+                models: params["models"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect(),
+            };
+            let kind = provider_auth::connect_custom(app, input).await?;
+            Ok(json!({ "kind": kind, "providers": app.credentials.lock().unwrap().statuses() }))
         }
         #[cfg(feature = "provider-auth")]
         "providers.connect_chatgpt" => {

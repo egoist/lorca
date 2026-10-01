@@ -30,7 +30,7 @@ export function ChatEmptyState(props: { chat: Chat; bots: Bot[]; onPick: (prompt
     const only = props.bots[0];
     if (isDM(props.chat) && only) {
       const host = store.device(only.runnerID);
-      return L("Runs on %@ with %@", host?.name ?? L("an unassigned Runner"), providerName(only.provider));
+      return L("Runs on %@ with %@", host?.name ?? L("an unassigned Runner"), providerName(only.provider, store.providers));
     }
     if (props.bots.length > 1) {
       return `${props.bots.map((bot) => bot.name).join(L(", "))}\n${L("Address one with @, or say @everyone to hear from all of them.")}`;

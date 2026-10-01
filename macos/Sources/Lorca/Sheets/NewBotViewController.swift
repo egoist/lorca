@@ -24,6 +24,10 @@ final class NewBotViewController: SheetViewController {
     private let providerPopup = NSPopUpButton()
     private let modelPopup = NSPopUpButton()
     private let thinkingPopup = NSPopUpButton()
+    /// The Thinking row, hidden for a model without levels.
+    private var thinkingRow: NSView?
+    /// The levels in the thinking pop-up after its Default item.
+    private var shownLevels: [(id: String, label: String)] = []
     private let lookRow = Build.stack([], orientation: .horizontal, spacing: 8)
     private let note = Build.label("", font: Theme.Font.caption, color: .tertiaryLabelColor, lines: 0)
 
@@ -69,17 +73,20 @@ final class NewBotViewController: SheetViewController {
         runnerPopup.action = #selector(runnerChanged)
 
         providerPopup.translatesAutoresizingMaskIntoConstraints = false
-        for kind in ProviderCredential.Kind.allCases {
-            providerPopup.addItem(withTitle: "\(kind.rawValue) (\(kind.subtitle))")
+        for kind in providerKinds {
+            providerPopup.addItem(withTitle: "\(kind.name) (\(kind.subtitle))")
         }
         providerPopup.target = self
         providerPopup.action = #selector(providerChanged)
         modelPopup.translatesAutoresizingMaskIntoConstraints = false
+        modelPopup.target = self
+        modelPopup.action = #selector(modelChanged)
         thinkingPopup.translatesAutoresizingMaskIntoConstraints = false
-        reloadModels()
 
         buildLookRow()
 
+        let thinkingRow = labeled(L("Thinking"), thinkingPopup)
+        self.thinkingRow = thinkingRow
         let rows = [
             labeled(L("Name"), nameField),
             labeled(L("Description"), descriptionField, topAligned: true),
@@ -87,7 +94,7 @@ final class NewBotViewController: SheetViewController {
             labeled(L("Runner"), runnerPopup),
             labeled(L("Provider"), providerPopup),
             labeled(L("Model"), modelPopup),
-            labeled(L("Thinking"), thinkingPopup),
+            thinkingRow,
             note,
         ]
         // Width constraints need a common ancestor, so they go on after each row joins the stack.
@@ -95,6 +102,7 @@ final class NewBotViewController: SheetViewController {
             contentStack.addArrangedSubview(row)
             row.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
         }
+        reloadModels()
 
         setButtons(confirm: L("Create Bot"))
         runnerChanged()
@@ -164,22 +172,25 @@ final class NewBotViewController: SheetViewController {
         }
     }
 
+    /// The providers as the sheet opened, the built-in ones and then the custom ones, so the
+    /// pop-up's indexes hold while the account's list changes.
+    private lazy var providerKinds = store.providerKinds
+
     private var selectedProvider: ProviderCredential.Kind {
-        ProviderCredential.Kind.allCases[max(0, providerPopup.indexOfSelectedItem)]
+        providerKinds[max(0, providerPopup.indexOfSelectedItem)]
     }
 
     /// nil means the provider's default model.
     private var selectedModel: String? {
-        let models = selectedProvider.models
+        let models = store.models(for: selectedProvider)
         let index = modelPopup.indexOfSelectedItem
         return index <= 0 || index > models.count ? nil : models[index - 1].id
     }
 
-    /// nil means the provider's default thinking level.
+    /// nil means the model's default thinking level.
     private var selectedThinking: String? {
-        let levels = selectedProvider.thinkingLevels
         let index = thinkingPopup.indexOfSelectedItem
-        return index <= 0 || index > levels.count ? nil : levels[index - 1].id
+        return index <= 0 || index > shownLevels.count ? nil : shownLevels[index - 1].id
     }
 
     @objc private func providerChanged() {
@@ -187,16 +198,30 @@ final class NewBotViewController: SheetViewController {
         runnerChanged()
     }
 
+    /// A new model keeps the thinking level only if it takes it too.
+    @objc private func modelChanged() {
+        reloadThinking(keeping: selectedThinking)
+    }
+
     private func reloadModels() {
-        let models = selectedProvider.models
+        let models = store.models(for: selectedProvider)
         modelPopup.removeAllItems()
         modelPopup.addItem(withTitle: L("Default (%@)", models.first?.label ?? ""))
         for model in models { modelPopup.addItem(withTitle: model.label) }
         modelPopup.selectItem(at: 0)
+        reloadThinking(keeping: nil)
+    }
+
+    /// Fills the thinking pop-up with the levels the selected model takes, selecting `level`
+    /// when it is one of them and Default otherwise.
+    private func reloadThinking(keeping level: String?) {
+        shownLevels = store.thinkingLevels(for: selectedProvider, model: selectedModel)
         thinkingPopup.removeAllItems()
         thinkingPopup.addItem(withTitle: L("Default"))
-        for level in selectedProvider.thinkingLevels { thinkingPopup.addItem(withTitle: level.label) }
-        thinkingPopup.selectItem(at: 0)
+        for level in shownLevels { thinkingPopup.addItem(withTitle: level.label) }
+        thinkingPopup.selectItem(at: level.flatMap { id in shownLevels.firstIndex { $0.id == id } }.map { $0 + 1 } ?? 0)
+        // A model without levels has no choice to make.
+        thinkingRow?.isHidden = shownLevels.isEmpty
     }
 
     /// The Runner picked in the pop-up; nil while none is paired.
@@ -224,11 +249,11 @@ final class NewBotViewController: SheetViewController {
         }
         let provider = selectedProvider
         if store.credential(for: provider)?.isConnected == true {
-            note.stringValue = L("%@ is connected. Turns run on %@.", provider.rawValue, runner.name)
+            note.stringValue = L("%@ is connected. Turns run on %@.", provider.name, runner.name)
             note.textColor = .tertiaryLabelColor
         } else {
             note.stringValue =
-                L("%@ is not connected yet. The bot is created now and its first turn waits until you connect it in Settings.", provider.rawValue)
+                L("%@ is not connected yet. The bot is created now and its first turn waits until you connect it in Settings.", provider.name)
             note.textColor = .systemOrange
         }
     }

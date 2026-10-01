@@ -94,7 +94,8 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
     let provider = match providers::provider_for(app, &bot.provider, bot.model.as_deref(), providers::thinking_level(&bot)) {
         Ok(provider) => provider,
         Err(reason) => {
-            app.notice(&job.chat_id, format!("{} cannot run yet: {reason}. Connect {} in Settings.", bot.name, provider_label(&bot.provider)));
+            let label = app.credentials.lock().unwrap().label(&bot.provider);
+            app.notice(&job.chat_id, format!("{} cannot run yet: {reason}. Connect {label} in Settings.", bot.name));
             return TurnOutcome::Skipped;
         }
     };
@@ -477,7 +478,7 @@ async fn materialize_steering_messages(
     workdir: &std::path::Path,
     messages: Vec<AgentMessage>,
 ) -> Vec<AgentMessage> {
-    let pixels = providers::supports_vision(&bot.provider, bot.model.as_deref());
+    let pixels = providers::supports_vision(app, &bot.provider, bot.model.as_deref());
     let mut out = Vec::with_capacity(messages.len());
     for message in messages {
         let AgentMessage::Custom { kind, data, .. } = &message else {
@@ -922,18 +923,6 @@ struct TurnSink(std::sync::Mutex<TurnState>);
 impl EventSink for TurnSink {
     async fn on_event(&self, event: &AgentEvent) {
         self.0.lock().unwrap().handle(event.clone());
-    }
-}
-
-fn provider_label(kind: &str) -> &str {
-    match kind {
-        "deepseek" => "DeepSeek",
-        "anthropic" => "Anthropic",
-        "opencode" => "OpenCode Zen",
-        "opencode-go" => "OpenCode Go",
-        "chatgpt" => "ChatGPT",
-        "grok" => "Grok",
-        other => other,
     }
 }
 
@@ -1718,7 +1707,7 @@ fn uncovered_count(app: &App, chat: &Chat, bot: &Bot) -> usize {
 /// whole chat since its summary, for compaction.
 fn transcript_bounded(app: &App, chat: &Chat, bot: &Bot, workdir: &std::path::Path, max_messages: Option<usize>) -> Vec<AgentMessage> {
     let mut out = Vec::new();
-    let pixels = providers::supports_vision(&bot.provider, bot.model.as_deref());
+    let pixels = providers::supports_vision(app, &bot.provider, bot.model.as_deref());
     // A compaction summary stands in for everything up to its message; without one, a window
     // of recent messages.
     let compaction = chat.compactions.iter().find(|c| c.bot_id == bot.id);
@@ -2174,6 +2163,15 @@ fn chat_hits(app: &App, bot: &Bot, regex: Option<&regex::Regex>, since: Option<i
     hits
 }
 
+/// A provider a teammate can run with: a built-in one or one the user added.
+fn check_provider(app: &App, provider: &str) -> Result<(), ToolError> {
+    let kinds = app.credentials.lock().unwrap().kinds();
+    if kinds.iter().any(|kind| kind == provider) {
+        return Ok(());
+    }
+    Err(ToolError(format!("Unknown provider {provider}. Use one of: {}.", kinds.join(", "))))
+}
+
 struct CreateBot {
     app: Arc<App>,
     chat_id: String,
@@ -2196,7 +2194,7 @@ impl Tool for CreateBot {
             "properties": {
                 "name": { "type": "string", "description": "Short name, one or two words" },
                 "description": { "type": "string", "description": "What it does and how it should work: scope, standards, tone, constraints, and what to ask before acting" },
-                "provider": { "type": "string", "enum": crate::credentials::PROVIDER_KINDS, "description": "Defaults to your own provider" },
+                "provider": { "type": "string", "enum": self.app.credentials.lock().unwrap().kinds(), "description": "Defaults to your own provider" },
                 "thinking": { "type": "string", "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "max"], "description": "How much the model thinks. Defaults to the provider's default" },
                 "workdir": { "type": "string", "description": "Working directory for its tools. Defaults to a private workspace under the CLI home; give it your own path to share files" }
             },
@@ -2220,6 +2218,7 @@ impl Tool for CreateBot {
             return Err(ToolError(format!("A bot named {name} already exists. Pick another name or use message_bot.")));
         }
         let provider = args["provider"].as_str().map(str::to_string).unwrap_or_else(|| self.bot.provider.clone());
+        check_provider(&self.app, &provider)?;
         let (symbol_name, accent) = look_for(&name);
         let bot = Bot {
             id: String::new(),
@@ -2290,7 +2289,7 @@ impl Tool for EditBot {
                 "bot_id": { "type": "string", "description": "The bot's id, from the user's @mention or list_teammates" },
                 "name": { "type": "string", "description": "New name, one or two words" },
                 "description": { "type": "string", "description": "New complete description of what it does and how it should work" },
-                "provider": { "type": "string", "enum": crate::credentials::PROVIDER_KINDS },
+                "provider": { "type": "string", "enum": self.app.credentials.lock().unwrap().kinds() },
                 "thinking": { "type": "string", "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "max"], "description": "How much the model thinks" },
                 "workdir": { "type": "string", "description": "New working directory for its tools" }
             },
@@ -2324,9 +2323,7 @@ impl Tool for EditBot {
             }
         }
         if let Some(p) = &provider {
-            if !crate::credentials::PROVIDER_KINDS.contains(&p.as_str()) {
-                return Err(ToolError(format!("Unknown provider {p}. Use one of: {}.", crate::credentials::PROVIDER_KINDS.join(", "))));
-            }
+            check_provider(&self.app, p)?;
         }
         let changed: Vec<&str> = [
             ("name", new_name.is_some()),

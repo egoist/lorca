@@ -2,7 +2,20 @@
 // for screenshots and for working on the views without a CLI. The marketplace is the CLI's own
 // bundled index.
 
-import { newMessageID, type AutoReview, type Bot, type Chat, type Device, type InstalledPlugin, type Marketplace, type Message, type ProviderCredential, type Routine } from "./models";
+import {
+  newMessageID,
+  type AutoReview,
+  type Bot,
+  type Chat,
+  type CustomModel,
+  type Device,
+  type InstalledPlugin,
+  type Marketplace,
+  type Message,
+  type ProviderCredential,
+  type ProviderModel,
+  type Routine,
+} from "./models";
 import { toMarketplace, type WireBotTemplate, type WireMarketplacePlugin } from "./wire";
 
 const minutesAgo = (minutes: number) => Date.now() - minutes * 60_000;
@@ -39,6 +52,63 @@ export function providers(): ProviderCredential[] {
     { kind: "opencode-go", isConnected: false, detail: "Not connected" },
     { kind: "chatgpt", isConnected: true, detail: "you@lorca.app" },
     { kind: "grok", isConnected: false, detail: "Not connected" },
+    {
+      kind: "custom:ollama",
+      isConnected: true,
+      detail: "http://localhost:11434/v1",
+      baseURL: "http://localhost:11434/v1",
+      name: "Ollama",
+      api: "chat-completions",
+      models: [
+        { id: "qwen3:8b", levels: ["low", "medium", "high"] },
+        { id: "llava", levels: ["low", "medium", "high"] },
+      ],
+    },
+  ];
+}
+
+/** What a custom provider's server lists in the demo: a gateway's catalog, a local server's few
+ * models, or no list at all. */
+export function listedModels(baseURL: string): CustomModel[] | null {
+  if (baseURL.includes("openrouter")) {
+    return [
+      { id: "anthropic/claude-sonnet-5", name: "Anthropic: Claude Sonnet 5", contextWindow: 1_000_000, images: true },
+      { id: "openai/gpt-6-sol", name: "OpenAI: GPT-6 Sol", contextWindow: 1_050_000, images: true },
+      { id: "deepseek/deepseek-v4.1-flash", name: "DeepSeek: V4.1 Flash", contextWindow: 1_000_000, images: true },
+      { id: "moonshotai/kimi-k3", name: "MoonshotAI: Kimi K3", contextWindow: 1_048_576, images: true },
+      { id: "qwen/qwen3.8-flash", name: "Qwen: Qwen3.8 Flash", contextWindow: 1_000_000, images: true },
+      { id: "z-ai/glm-5.3-flash", name: "Z.ai: GLM 5.3 Flash", contextWindow: 200_000, images: false },
+      { id: "meta-llama/llama-4-maverick", name: "Meta: Llama 4 Maverick", contextWindow: 1_048_576, images: true },
+      { id: "mistralai/mistral-large-3", name: "Mistral: Mistral Large 3", contextWindow: 262_144, images: true },
+      { id: "google/gemini-3.8-flash", name: "Google: Gemini 3.8 Flash", contextWindow: 1_048_576, images: true },
+    ];
+  }
+  if (baseURL.includes("localhost") || baseURL.includes("127.0.0.1")) {
+    return [
+      { id: "qwen3:8b", contextWindow: 40_960 },
+      { id: "gemma3:12b", contextWindow: 131_072, images: true },
+      { id: "llava:13b", contextWindow: 4_096, images: true },
+    ];
+  }
+  return null;
+}
+
+/** A few of the catalog's models for each provider, with their thinking levels. */
+export function models(): ProviderModel[] {
+  const all = ["off", "low", "medium", "high", "xhigh", "max"];
+  const on = ["low", "medium", "high", "xhigh", "max"];
+  return [
+    { provider: "deepseek", id: "deepseek-flash", label: "DeepSeek V4.1 Flash", levels: all },
+    { provider: "anthropic", id: "claude-opus-5", label: "Claude Opus 5", levels: all },
+    { provider: "anthropic", id: "claude-fable-5-1", label: "Claude Fable 5.1", levels: on },
+    { provider: "anthropic", id: "claude-haiku-4-5", label: "Claude Haiku 4.5", levels: ["off", "minimal", "low", "medium", "high"] },
+    { provider: "opencode", id: "deepseek-v4.1-flash", label: "DeepSeek V4.1 Flash", levels: ["low", "high", "max"] },
+    { provider: "opencode", id: "kimi-k3", label: "Kimi K3", levels: ["max"] },
+    { provider: "opencode", id: "big-pickle", label: "Big Pickle", levels: [] },
+    { provider: "opencode-go", id: "glm-5.3-flash", label: "GLM-5.3 Flash", levels: ["low", "high", "max"] },
+    { provider: "chatgpt", id: "gpt-6.1-sol", label: "GPT-6.1 Sol", levels: on },
+    { provider: "chatgpt", id: "gpt-6-luna", label: "GPT-6 Luna", levels: on },
+    { provider: "grok", id: "grok-4.7", label: "Grok 4.7", levels: ["low", "medium", "high", "xhigh"] },
   ];
 }
 

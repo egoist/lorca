@@ -13,7 +13,7 @@ Identity is a **key pair**. Devices pair. The relay stores public keys and ciphe
 3. **The CLI owns the agent loop:** inference, tools, streaming, cancellation, orchestration.
 4. **The relay is zero-knowledge:** opaque blobs and public keys. Auth is a signature challenge.
 5. **Every Device records its `os`.** A Device with a desktop `os` (`macos`, `linux`, `windows`) is a **Runner**. Phones and tablets (`ios`, `ipados`, `android`) are Devices, never Runners.
-6. **Provider credentials belong to the account.** API keys and ChatGPT and Grok tokens are connected once, on any Device, and reach every paired Device as a `credentials` blob encrypted with the account DEK. A bot runs with them on whichever Runner it is assigned to.
+6. **Provider credentials belong to the account.** API keys, ChatGPT and Grok tokens, and custom providers (any server that speaks OpenAI's or Anthropic's API) are connected once, on any Device, and reach every paired Device as a `credentials` blob encrypted with the account DEK. A bot runs with them on whichever Runner it is assigned to.
 7. **A bot runs on one Runner:** that Device’s CLI.
 
 ## Three processes
@@ -67,7 +67,7 @@ Bot      1──* Job          (a turn on the bot's Runner)
 | Chat / Message     | Account/chat DEK                                          | Encrypted blobs                                        |
 | Job                | Any paired Device may create; the assigned Runner runs it | Sealed envelope to that Runner’s machine box key; deleted once run. A hard Stop sends `job_cancel` to the Device running it; the Runner seals how the turn ended (`job_result`) to the requesting Device, and lists the turn and what it is doing in its `machine` blob for every Device |
 
-A bot's look is an SF Symbol (`symbol_name`) on an accent gradient (`accent`), or a profile image of the user's own: `avatar` is an attachment record whose bytes travel as an encrypted `file` blob, the same way a message attachment does, and every Device shows the image in place of the symbol once it has fetched it. Clicking a bot's avatar in the macOS inspector opens the Look sheet. The macOS Profile card keeps Name trailing-aligned and opens Description in its own editing sheet. On the phone, tapping the avatar in Details slides the Look screen in inside the same form sheet (`app/chat-info` has its own stack); Name is trailing-aligned there too, and the Description row pushes a full editor. Details also has native Provider, Model, and Thinking menus under Runs with; a provider change clears the other two to that provider's defaults. `bots.update` carries all of these changes, including `symbol_name`, `accent`, and `avatar` (a `{ path, … }` file to store and upload, or `null` to remove).
+A bot's look is an SF Symbol (`symbol_name`) on an accent gradient (`accent`), or a profile image of the user's own: `avatar` is an attachment record whose bytes travel as an encrypted `file` blob, the same way a message attachment does, and every Device shows the image in place of the symbol once it has fetched it. Clicking a bot's avatar in the macOS inspector opens the Look sheet. The macOS Profile card keeps Name trailing-aligned and opens Description in its own editing sheet. On the phone, tapping the avatar in Details slides the Look screen in inside the same form sheet (`app/chat-info` has its own stack); Name is trailing-aligned there too, and the Description row pushes a full editor. Details also has native Provider, Model, and Thinking menus under Runs with; a provider change clears the other two to that provider's defaults, and Thinking offers only the levels the model takes (see [Providers](docs/architecture/providers.md)). `bots.update` carries all of these changes, including `symbol_name`, `accent`, and `avatar` (a `{ path, … }` file to store and upload, or `null` to remove).
 
 Creating a bot for Runner B from Device A: A writes an encrypted bot profile into the roster (paired Devices can read it) and pins B’s machine id. Bot create rejects a target whose `os` is not desktop. Turns are job envelopes addressed to B. B decrypts the job, runs the loop with the account’s provider credentials, and uploads encrypted replies.
 
@@ -86,7 +86,7 @@ One doc per subject under `docs/architecture/`, each short enough to read in one
 | [Tools](docs/architecture/tools.md) | Team, memory, and coding tools, terminal sessions and command cards, running tasks, Auto-review |
 | [Codemode and Plugins](docs/architecture/plugins.md) | Scripts that call plugin tools, MCP plugins and their installs, the marketplace and bot templates, sign-in, plugin calls at turn time |
 | [Bots, Routines, and Memory](docs/architecture/bots.md) | The lead bot, DMs and groups, who answers, handoffs between bots, routines and their checks, a bot's memory |
-| [Providers](docs/architecture/providers.md) | Each model provider and its sign-in, thinking levels, the model catalog and cost, compaction, retries |
+| [Providers](docs/architecture/providers.md) | Each model provider and its sign-in, custom providers, thinking levels, the model catalog and cost, compaction, retries |
 | [macOS app](docs/architecture/macos-app.md) | The AppKit app: launching the CLI, windows and onboarding, settings, updates, the command palette, transcript, sidebar, inspector, composer, working state |
 | [Windows and Linux app](docs/architecture/desktop-app.md) | The MyGo app: its Go side and Solid page, title bar, commands, updates, development and builds |
 | [Phone app](docs/architecture/phone-app.md) | The Expo app over the Rust core: the native module, pairing, relay status, attachments, dictation, notifications, turns |
@@ -103,6 +103,7 @@ lorca/
   docs/agent/          # lorca-agent's own documentation
   Cargo.toml           # workspace
   crates/agent/        # lorca-agent: loop, tools, codemode (QuickJS), and Messages, Chat Completions, Responses, ChatGPT, and Grok providers
+  crates/models/       # lorca-models: the model catalog (windows, thinking levels, rates), on every Device and in every app's pickers
   crates/provider-auth/ # OAuth token types and PKCE flows shared by every Device
   crates/cli/          # lorca: the Device core as a library (keys, relay sync, jobs, the JSON API) + runner and server features + the binary
   crates/mobile/       # lorca-mobile: the core for the phone over UniFFI

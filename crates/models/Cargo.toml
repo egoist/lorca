@@ -1,0 +1,9 @@
+[package]
+name = "lorca-models"
+description = "The models Lorca offers: windows, thinking levels, and rates, shared by every Device"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true

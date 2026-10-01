@@ -7,17 +7,36 @@ import * as Format from "./format";
 
 // MARK: - Providers
 
-export type ProviderKind = "deepseek" | "anthropic" | "opencode" | "opencode-go" | "chatgpt" | "grok";
+/** The providers Lorca has built in. */
+export type BuiltInProviderKind = "deepseek" | "anthropic" | "opencode" | "opencode-go" | "chatgpt" | "grok";
 
-/** Every kind, in the order Settings lists them. */
-export const providerKinds: ProviderKind[] = ["deepseek", "anthropic", "opencode", "opencode-go", "chatgpt", "grok"];
+/** A provider the user added: any server that speaks OpenAI's or Anthropic's API. Its kind is
+ * `custom:` and a slug of the name it was added with. */
+export type CustomProviderKind = `custom:${string}`;
 
-export function isProviderKind(value: string): value is ProviderKind {
-  return (providerKinds as string[]).includes(value);
+export type ProviderKind = BuiltInProviderKind | CustomProviderKind;
+
+/** The built-in kinds, in the order Settings lists them. The account's custom providers follow
+ * them, in the order they were added (`store.providerKinds`). */
+export const providerKinds: BuiltInProviderKind[] = ["deepseek", "anthropic", "opencode", "opencode-go", "chatgpt", "grok"];
+
+const customPrefix = "custom:";
+
+export function isCustomKind(kind: string): kind is CustomProviderKind {
+  return kind.startsWith(customPrefix);
 }
 
-/** The provider's name: "DeepSeek", "OpenCode Zen". */
-export function providerName(kind: ProviderKind): string {
+/** A built-in kind or a custom one. Any other kind is one this build does not know. */
+export function isProviderKind(value: string): value is ProviderKind {
+  return (providerKinds as string[]).includes(value) || isCustomKind(value);
+}
+
+/** The name people know the provider by: "DeepSeek", "OpenCode Zen". A custom provider's is the one
+ * the user gave it, from the account's `providers`, and its slug once it is deleted. */
+export function providerName(kind: BuiltInProviderKind): string;
+export function providerName(kind: ProviderKind, providers: readonly ProviderCredential[]): string;
+export function providerName(kind: ProviderKind, providers: readonly ProviderCredential[] = []): string {
+  if (isCustomKind(kind)) return providers.find((provider) => provider.kind === kind)?.name ?? kind.slice(customPrefix.length);
   switch (kind) {
     case "deepseek":
       return "DeepSeek";
@@ -34,28 +53,31 @@ export function providerName(kind: ProviderKind): string {
   }
 }
 
-/** Connects with a pasted API key; ChatGPT and Grok sign in through the browser instead. */
+/** Connects with a pasted API key; ChatGPT and Grok sign in through the browser instead, and a
+ * custom provider is set up in its own sheet. */
 export function usesAPIKey(kind: ProviderKind): boolean {
-  return kind !== "chatgpt" && kind !== "grok";
+  return kind === "deepseek" || kind === "anthropic" || kind === "opencode" || kind === "opencode-go";
 }
 
 export function providerSymbol(kind: ProviderKind): string {
+  if (isCustomKind(kind)) return "server.rack";
   return usesAPIKey(kind) ? "key.fill" : "person.badge.key.fill";
 }
 
 export function providerSubtitle(kind: ProviderKind): string {
+  if (isCustomKind(kind)) return L("Custom");
   return usesAPIKey(kind) ? L("API key") : L("Subscription");
 }
 
 /** What the sign-in needs, for the subscription providers. */
-export function signInRequirement(kind: ProviderKind): string {
+export function signInRequirement(kind: BuiltInProviderKind): string {
   if (kind === "chatgpt") return L("It needs a ChatGPT subscription.");
   if (kind === "grok") return L("It needs a SuperGrok or X Premium+ subscription.");
   return "";
 }
 
 /** The API root the CLI calls unless the credential names another. */
-export function defaultBaseURL(kind: ProviderKind): string {
+export function defaultBaseURL(kind: BuiltInProviderKind): string {
   switch (kind) {
     case "deepseek":
       return "https://api.deepseek.com";
@@ -71,7 +93,7 @@ export function defaultBaseURL(kind: ProviderKind): string {
 }
 
 /** Placeholder for the key field, naming where the key comes from. */
-export function keyPlaceholder(kind: ProviderKind): string {
+export function keyPlaceholder(kind: BuiltInProviderKind): string {
   switch (kind) {
     case "deepseek":
       return L("sk-… from platform.deepseek.com");
@@ -86,7 +108,7 @@ export function keyPlaceholder(kind: ProviderKind): string {
 }
 
 /** Provider connect methods use underscores even when the stored provider id has a hyphen. */
-export function connectMethod(kind: ProviderKind): string {
+export function connectMethod(kind: BuiltInProviderKind): string {
   return `providers.connect_${kind === "opencode-go" ? "opencode_go" : kind}`;
 }
 
@@ -111,68 +133,43 @@ export function thinkingLabel(level: string): string {
   }
 }
 
-/** The thinking levels this provider's models take, lowest first. None on a bot means the
- * provider's default. */
-export function thinkingLevels(kind: ProviderKind): { id: string; label: string }[] {
-  const ids: Record<ProviderKind, string[]> = {
-    deepseek: ["off", "low", "medium", "high", "xhigh", "max"],
-    anthropic: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
-    opencode: ["off", "low", "medium", "high", "xhigh", "max"],
-    "opencode-go": ["off", "low", "medium", "high", "xhigh", "max"],
-    chatgpt: ["low", "medium", "high", "xhigh", "max"],
-    grok: ["low", "medium", "high", "xhigh"],
-  };
-  return ids[kind].map((id) => ({ id, label: thinkingLabel(id) }));
+/** A model the CLI's catalog offers, as the snapshot names it: its provider, id, and name, and
+ * the thinking levels it takes, lowest first. */
+export interface ProviderModel {
+  provider: string;
+  id: string;
+  label: string;
+  levels: string[];
 }
 
-/** Model ids this provider accepts; the first is the default the CLI uses. */
-export function providerModels(kind: ProviderKind): { id: string; label: string }[] {
-  switch (kind) {
-    case "deepseek":
-      return [
-        { id: "deepseek-flash", label: "V4.1 Flash" },
-        { id: "deepseek-v4-pro", label: "V4 Pro (reasoning)" },
-      ];
-    case "anthropic":
-      return [
-        { id: "claude-opus-5", label: "Opus 5" },
-        { id: "claude-opus-5-5", label: "Opus 5.5" },
-        { id: "claude-sonnet-5", label: "Sonnet 5" },
-        { id: "claude-fable-5-1", label: "Fable 5.1" },
-        { id: "claude-opus-4-8", label: "Opus 4.8" },
-        { id: "claude-haiku-4-5", label: "Haiku 4.5" },
-      ];
-    case "opencode":
-      return [
-        { id: "deepseek-v4.1-flash", label: "DeepSeek V4.1 Flash" },
-        { id: "claude-sonnet-5", label: "Claude Sonnet 5" },
-        { id: "gpt-5.6-terra", label: "GPT-5.6 Terra" },
-        { id: "grok-4.6", label: "Grok 4.6" },
-        { id: "kimi-k3", label: "Kimi K3" },
-        { id: "big-pickle", label: "Big Pickle (free)" },
-      ];
-    case "opencode-go":
-      return [
-        { id: "glm-5.3-flash", label: "GLM-5.3 Flash" },
-        { id: "deepseek-v4.1-flash", label: "DeepSeek V4.1 Flash" },
-        { id: "gpt-5.6-luna", label: "GPT-5.6 Luna" },
-        { id: "grok-4.6", label: "Grok 4.6" },
-        { id: "kimi-k3", label: "Kimi K3" },
-        { id: "qwen3.8-flash", label: "Qwen3.8 Flash" },
-        { id: "minimax-m3", label: "MiniMax M3" },
-      ];
-    case "chatgpt":
-      return [
-        { id: "gpt-6-sol", label: "GPT-6 Sol" },
-        { id: "gpt-6-astra", label: "GPT-6 Astra" },
-        { id: "gpt-6-luna", label: "GPT-6 Luna" },
-      ];
-    case "grok":
-      return [
-        { id: "grok-4.7", label: "Grok 4.7" },
-        { id: "grok-4.6", label: "Grok 4.6" },
-      ];
-  }
+/** The models a provider offers, in the catalog's order; the first is the default the CLI uses. */
+export function providerModels(models: ProviderModel[], kind: ProviderKind): ProviderModel[] {
+  return models.filter((model) => model.provider === kind);
+}
+
+/** Every thinking level, lowest first. */
+const allThinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+/** The thinking levels `model` takes, lowest first: the provider's default model's when it is
+ * undefined, and every level the provider's models take for a model the catalog does not have.
+ * None on a bot means the model's default. */
+export function thinkingLevels(models: ProviderModel[], kind: ProviderKind, model: string | undefined): { id: string; label: string }[] {
+  const offered = providerModels(models, kind);
+  const known = offered.find((each) => each.id === (model ?? offered[0]?.id));
+  const ids = known?.levels ?? allThinkingLevels.filter((id) => offered.some((each) => each.levels.includes(id)));
+  return ids.map((id) => ({ id, label: thinkingLabel(id) }));
+}
+
+/** The catalog with each custom provider's saved models after it, so the pickers offer them as
+ * they do the catalog's: named as the provider's server names them, with the thinking levels the
+ * CLI says each takes. */
+export function withCustomModels(models: ProviderModel[], providers: readonly ProviderCredential[]): ProviderModel[] {
+  const custom = providers.flatMap((provider) =>
+    isCustomKind(provider.kind)
+      ? (provider.models ?? []).map((model) => ({ provider: provider.kind, id: model.id, label: model.name ?? model.id, levels: model.levels ?? [] }))
+      : [],
+  );
+  return [...models, ...custom];
 }
 
 /** One of the account's provider credentials, as statuses: never a key. */
@@ -182,6 +179,233 @@ export interface ProviderCredential {
   detail: string;
   /** A custom API root, when the account credential has one. */
   baseURL?: string;
+  /** A custom provider's name, the protocol its server speaks, and the models it offers. Built-in
+   * providers have none. */
+  name?: string;
+  api?: CustomAPI;
+  models?: CustomModel[];
+}
+
+/** The wire protocol a custom provider's server speaks. */
+export type CustomAPI = "chat-completions" | "responses" | "messages";
+
+/** Every protocol, in the order the custom provider sheet offers them. */
+export const customAPIs: CustomAPI[] = ["chat-completions", "responses", "messages"];
+
+export function isCustomAPI(value: string): value is CustomAPI {
+  return (customAPIs as string[]).includes(value);
+}
+
+/** Product names, the same in every language. */
+export function customAPITitle(api: CustomAPI): string {
+  switch (api) {
+    case "chat-completions":
+      return "OpenAI Chat Completions";
+    case "responses":
+      return "OpenAI Responses";
+    case "messages":
+      return "Anthropic Messages";
+  }
+}
+
+/** What the CLI adds to the base URL for a model call. */
+export function customAPIPath(api: CustomAPI): string {
+  switch (api) {
+    case "chat-completions":
+      return "/chat/completions";
+    case "responses":
+      return "/responses";
+    case "messages":
+      return "/v1/messages";
+  }
+}
+
+export function customBaseURLPlaceholder(api: CustomAPI): string {
+  return api === "messages" ? "https://api.example.com" : "https://api.example.com/v1";
+}
+
+/** The URL the CLI calls for a base URL as typed: a pasted endpoint is cut back to its root first,
+ * as the CLI does (trailing slashes, then `/chat/completions`, `/responses`, or for Messages
+ * `/v1/messages` or `/v1`), then the API's path goes on. */
+export function customEndpoint(api: CustomAPI, baseURL: string): string {
+  const root = baseURL.trim().replace(/\/+$/, "");
+  const pasted = (api === "messages" ? ["/v1/messages", "/v1"] : [customAPIPath(api)]).find((path) => root.endsWith(path));
+  return (pasted ? root.slice(0, -pasted.length) : root) + customAPIPath(api);
+}
+
+/** The note under the base URL field, naming the URL the CLI calls, so a base URL with a missing or
+ * doubled path shows there. */
+export function customEndpointNote(api: CustomAPI, baseURL: string): string {
+  return baseURL.trim() === "" ? L("Lorca adds %@ to it.", customAPIPath(api)) : L("Requests go to %@.", customEndpoint(api, baseURL));
+}
+
+/** The base URL's host: "api.example.com". Empty until the base URL has one. */
+export function customHost(baseURL: string): string {
+  try {
+    return new URL(baseURL.trim()).hostname;
+  } catch {
+    return "";
+  }
+}
+
+/** A base URL the sheet can ask a server at for its models: http or https, with a host. */
+export function isUsableBaseURL(baseURL: string): boolean {
+  const url = baseURL.trim();
+  return (url.startsWith("http://") || url.startsWith("https://")) && customHost(url) !== "";
+}
+
+/** The preset for a base URL as typed, by its host and port, so a URL pasted into an empty sheet
+ * still finds the server's name and key hint. */
+export function matchingPreset(baseURL: string): CustomPreset | undefined {
+  let url: URL;
+  try {
+    url = new URL(baseURL.trim());
+  } catch {
+    return undefined;
+  }
+  if (url.hostname === "") return undefined;
+  return customPresets.find((preset) => {
+    const known = new URL(preset.baseURL);
+    return known.hostname === url.hostname && known.port === url.port;
+  });
+}
+
+/** What a provider left unnamed is saved as: the known server's name, else the base URL's host.
+ * Empty without either. */
+export function suggestedProviderName(baseURL: string): string {
+  return matchingPreset(baseURL)?.name ?? customHost(baseURL);
+}
+
+/** A server people often add, with what the sheet fills in for it. */
+export interface CustomPreset {
+  /** A product name, the same in every language. */
+  name: string;
+  api: CustomAPI;
+  baseURL: string;
+  /** A model server on the user's own network, which takes no key. */
+  local: boolean;
+  /** The key field's placeholder, naming where the key comes from. Called while a view is built. */
+  keyPlaceholder: () => string;
+}
+
+/** What Add Provider… offers, in its menu's order: hosted APIs, then servers on the user's network. */
+export const customPresets: CustomPreset[] = [
+  { name: "OpenAI", api: "responses", baseURL: "https://api.openai.com/v1", local: false, keyPlaceholder: () => L("sk-… from platform.openai.com") },
+  { name: "OpenRouter", api: "chat-completions", baseURL: "https://openrouter.ai/api/v1", local: false, keyPlaceholder: () => L("sk-or-… from openrouter.ai/keys") },
+  {
+    name: "Gemini",
+    api: "chat-completions",
+    baseURL: "https://generativelanguage.googleapis.com/v1beta/openai",
+    local: false,
+    keyPlaceholder: () => L("Key from aistudio.google.com"),
+  },
+  { name: "Groq", api: "chat-completions", baseURL: "https://api.groq.com/openai/v1", local: false, keyPlaceholder: () => L("gsk_… from console.groq.com") },
+  { name: "Together AI", api: "chat-completions", baseURL: "https://api.together.xyz/v1", local: false, keyPlaceholder: () => L("Key from api.together.ai") },
+  { name: "Ollama", api: "chat-completions", baseURL: "http://localhost:11434/v1", local: true, keyPlaceholder: () => L("Optional for a server on your network") },
+  { name: "LM Studio", api: "chat-completions", baseURL: "http://localhost:1234/v1", local: true, keyPlaceholder: () => L("Optional for a server on your network") },
+];
+
+/** The custom provider the account has under a preset's name, in any case, which the preset's menu
+ * item opens instead of adding another. */
+export function presetProvider(preset: CustomPreset, providers: readonly ProviderCredential[]): ProviderCredential | undefined {
+  const name = preset.name.toLowerCase();
+  return providers.find((provider) => isCustomKind(provider.kind) && provider.name?.toLowerCase() === name);
+}
+
+/** A model a custom provider offers, with what its server's model list says of it. */
+export interface CustomModel {
+  id: string;
+  name?: string;
+  contextWindow?: number;
+  maxOutput?: number;
+  /** Whether it takes images. */
+  images?: boolean;
+  /** The thinking levels the CLI says it takes, lowest first: in a provider's status only. */
+  levels?: string[];
+}
+
+/** The name a model goes by in the list: what its server calls it, else its id. */
+export function modelDisplayName(model: CustomModel): string {
+  return model.name ?? model.id;
+}
+
+/** The custom provider sheet's model list: every model it knows in list order (saved, added by
+ * hand, or listed by the server), the ones bots can pick, the ids the user typed in, and the
+ * default, which is one of the picked ones or none. */
+export interface ModelChecklist {
+  models: readonly CustomModel[];
+  selected: ReadonlySet<string>;
+  added: ReadonlySet<string>;
+  defaultID?: string;
+}
+
+/** A provider's saved models, all picked, the first the default; or an empty list. */
+export function savedChecklist(models: readonly CustomModel[] = []): ModelChecklist {
+  return { models, selected: new Set(models.map((model) => model.id)), added: new Set(), defaultID: models[0]?.id };
+}
+
+/** Takes a new listing: the models to keep (picked or added by hand) stay where they are with the
+ * listing's facts, the rest of the old listing goes, and the new one follows. With nothing picked
+ * yet, a list of eight models or fewer, as a model server on the user's network has, starts picked,
+ * its first the default. An empty listing, a server with none, keeps only the models to keep. */
+export function takeListing(checklist: ModelChecklist, listed: readonly CustomModel[]): ModelChecklist {
+  const facts = new Map<string, CustomModel>();
+  for (const model of listed) if (!facts.has(model.id)) facts.set(model.id, model);
+  const keep = (id: string) => checklist.selected.has(id) || checklist.added.has(id);
+  const models = checklist.models.filter((model) => keep(model.id)).map((model) => facts.get(model.id) ?? model);
+  const seen = new Set(models.map((model) => model.id));
+  for (const model of listed) {
+    if (seen.has(model.id)) continue;
+    seen.add(model.id);
+    models.push(model);
+  }
+  if (checklist.selected.size > 0 || listed.length === 0 || listed.length > 8) return { ...checklist, models };
+  return { ...checklist, models, selected: new Set(listed.map((model) => model.id)), defaultID: listed[0]?.id };
+}
+
+/** Picks or unpicks a model. The first one picked becomes the default; unpicking the default makes
+ * the first picked one in the list the default. */
+export function toggleModel(checklist: ModelChecklist, id: string): ModelChecklist {
+  const selected = new Set(checklist.selected);
+  let defaultID = checklist.defaultID;
+  if (selected.delete(id)) {
+    if (defaultID === id) defaultID = checklist.models.find((model) => selected.has(model.id))?.id;
+  } else {
+    selected.add(id);
+    defaultID ??= id;
+  }
+  return { ...checklist, selected, defaultID };
+}
+
+/** A model the server does not list, picked, at the top of the list. It stays when another
+ * listing replaces the server's. */
+export function addModel(checklist: ModelChecklist, id: string): ModelChecklist {
+  return {
+    models: checklist.models.some((model) => model.id === id) ? checklist.models : [{ id }, ...checklist.models],
+    selected: new Set(checklist.selected).add(id),
+    added: new Set(checklist.added).add(id),
+    defaultID: checklist.defaultID ?? id,
+  };
+}
+
+/** The models whose name or id holds the search text, in any case. */
+export function filterModels(models: readonly CustomModel[], query: string): readonly CustomModel[] {
+  const text = query.trim().toLowerCase();
+  if (text === "") return models;
+  return models.filter((model) => model.id.toLowerCase().includes(text) || (model.name?.toLowerCase().includes(text) ?? false));
+}
+
+/** The id an Add row offers for the search text: one no model has yet. */
+export function addCandidate(query: string, models: readonly CustomModel[]): string | undefined {
+  const id = query.trim();
+  return id === "" || models.some((model) => model.id === id) ? undefined : id;
+}
+
+/** The picked ids as the CLI keeps them: the default first, then the others in list order. */
+export function orderedModelIDs(checklist: ModelChecklist): string[] {
+  const picked = checklist.models.map((model) => model.id).filter((id) => checklist.selected.has(id));
+  const defaultID = checklist.defaultID;
+  return defaultID !== undefined && picked.includes(defaultID) ? [defaultID, ...picked.filter((id) => id !== defaultID)] : picked;
 }
 
 // MARK: - Device

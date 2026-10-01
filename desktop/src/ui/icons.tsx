@@ -31,6 +31,7 @@ import {
   CircleDollarSign,
   CircleMinus,
   CirclePause,
+  CirclePlus,
   ClipboardList,
   Clock,
   Cloud,
@@ -134,6 +135,7 @@ import type { JSX } from "@solidjs/web";
 const symbols: Record<string, IconNode> = {
   // The app's own controls.
   plus: Plus,
+  "plus.circle.fill": CirclePlus,
   "plus.message": MessageSquarePlus,
   "line.3.horizontal": Menu,
   circle: Circle,

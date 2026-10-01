@@ -27,6 +27,7 @@ server = ["dep:axum"]
 
 [dependencies]
 lorca-agent = { path = "../agent", optional = true }
+lorca-models = { path = "../models" }
 lorca-provider-auth = { path = "../provider-auth", optional = true }
 anyhow.workspace = true
 async-trait.workspace = true

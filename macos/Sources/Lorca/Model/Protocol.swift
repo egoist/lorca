@@ -35,8 +35,22 @@ enum Wire {
         var routines: [Routine]?
         var autoReview: AutoReview?
         var providers: [Provider]?
+        var models: [Model]?
         var runningChatIds: [String]
         var runningTurns: [RunningTurn]?
+    }
+
+    /// A model the CLI's catalog offers, in the catalog's order.
+    struct Model: Decodable {
+        var provider: String
+        var id: String
+        var name: String
+        var levels: [String]
+
+        func toModel() -> ProviderModel? {
+            guard let kind = ProviderCredential.Kind(wireValue: provider) else { return nil }
+            return ProviderModel(provider: kind, id: id, label: name, levels: levels)
+        }
     }
 
     struct AutoReviewRule: Decodable {
@@ -106,11 +120,39 @@ enum Wire {
         var isConnected: Bool
         var detail: String
         var baseUrl: String?
+        var name: String?
+        var api: String?
+        var models: [StatusModel]?
 
         func toModel() -> ProviderCredential? {
             guard let kind = ProviderCredential.Kind(wireValue: kind) else { return nil }
-            return ProviderCredential(kind: kind, isConnected: isConnected, detail: detail, baseURL: baseUrl)
+            return ProviderCredential(
+                kind: kind, isConnected: isConnected, detail: detail, baseURL: baseUrl, name: name,
+                api: api.flatMap(CustomAPI.init(rawValue:)), models: (models ?? []).map { $0.toModel() })
         }
+    }
+
+    /// A custom provider's model in its status, or in a server's model list.
+    struct StatusModel: Decodable {
+        var id: String
+        var name: String?
+        var contextWindow: Int?
+        var images: Bool?
+        var levels: [String]?
+
+        func toModel() -> CustomModel {
+            CustomModel(id: id, name: name, contextWindow: contextWindow, images: images, levels: levels ?? [])
+        }
+    }
+
+    struct CustomProviderSaved: Decodable {
+        var kind: String
+    }
+
+    /// `providers.list_models`: the chat models a custom provider's server lists.
+    struct ListedModels: Decodable {
+        var listed: Bool
+        var models: [StatusModel]
     }
 
     struct Device: Decodable {

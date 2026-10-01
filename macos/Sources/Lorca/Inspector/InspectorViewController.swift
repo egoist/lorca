@@ -254,7 +254,7 @@ final class InspectorViewController: NSViewController {
                 let row = keptRow("bot:\(bot.id)") { BotRow() }
                 row.configure(
                     bot: bot,
-                    detailText: "\(bot.provider.rawValue) · \(host)",
+                    detailText: "\(bot.provider.name) · \(host)",
                     accessorySymbol: chat.canRemoveBot ? "minus.circle" : nil,
                     tooltip: L("Remove from chat")
                 )
@@ -274,8 +274,8 @@ final class InspectorViewController: NSViewController {
     }
 
     private func showRuntime(of bot: Bot, in chat: Chat) {
-        let credential = store.credential(for: bot.provider)
-        if changed(runtime, to: [chat.id, bot.id, bot.provider, bot.model, bot.thinking, credential, chat.usage == nil]) {
+        // The account's providers name the Provider pop-up's items and a custom provider's models.
+        if changed(runtime, to: [chat.id, bot.id, bot.provider, bot.model, bot.thinking, store.providers, chat.usage == nil]) {
             runtime.setRows(runtimeRows(for: bot, in: chat))
         }
         // What the turns used changes after every turn; the rows take the new values in place.
@@ -343,10 +343,12 @@ final class InspectorViewController: NSViewController {
     }
 
     private func runtimeRows(for bot: Bot, in chat: Chat) -> [NSView] {
-        let kinds = ProviderCredential.Kind.allCases
+        // A custom provider the account deleted stays listed while the bot is still on it.
+        var kinds = store.providerKinds
+        if !kinds.contains(bot.provider) { kinds.append(bot.provider) }
         let providerRow = PopUpRow(
             key: L("Provider"),
-            items: kinds.map(\.rawValue),
+            items: kinds.map(\.name),
             selected: kinds.firstIndex(of: bot.provider) ?? 0)
         providerRow.onChange = { [weak self] index in
             guard let self, kinds.indices.contains(index), kinds[index] != bot.provider else { return }
@@ -354,7 +356,7 @@ final class InspectorViewController: NSViewController {
             self.store.setBotRuntime(bot.id, provider: kinds[index], model: nil, thinking: nil)
         }
 
-        let models = bot.provider.models
+        let models = store.models(for: bot.provider)
         let modelItems = [L("Default (%@)", models.first?.label ?? "")] + models.map(\.label)
         let selectedModel = bot.model.flatMap { id in models.firstIndex { $0.id == id } }.map { $0 + 1 } ?? 0
         let modelRow = PopUpRow(key: L("Model"), items: modelItems, selected: selectedModel)
@@ -362,10 +364,12 @@ final class InspectorViewController: NSViewController {
             guard let self else { return }
             let model: String? = index == 0 ? nil : models[index - 1].id
             guard model != bot.model else { return }
-            self.store.setBotRuntime(bot.id, provider: bot.provider, model: model, thinking: bot.thinking)
+            // A level the new model does not take goes back to the default.
+            let kept = self.store.thinkingLevels(for: bot.provider, model: model).contains { $0.id == bot.thinking }
+            self.store.setBotRuntime(bot.id, provider: bot.provider, model: model, thinking: kept ? bot.thinking : nil)
         }
 
-        let levels = bot.provider.thinkingLevels
+        let levels = store.thinkingLevels(for: bot.provider, model: bot.model)
         let thinkingItems = [L("Default")] + levels.map(\.label)
         let selectedThinking = bot.thinking.flatMap { id in levels.firstIndex { $0.id == id } }.map { $0 + 1 } ?? 0
         let thinkingRow = PopUpRow(key: L("Thinking"), items: thinkingItems, selected: selectedThinking)
@@ -403,7 +407,8 @@ final class InspectorViewController: NSViewController {
             ConnectProviderViewController.present(kind: bot.provider, from: self)
         }
 
-        return [providerRow, modelRow, thinkingRow, status] + usageRows
+        // Only the levels this model takes; a model without any has no choice to make.
+        return [providerRow, modelRow] + (levels.isEmpty ? [] : [thinkingRow]) + [status] + usageRows
     }
 
     /// What the bot remembers, as its Runner reports it: the index against its load budget with

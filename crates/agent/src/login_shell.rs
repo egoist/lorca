@@ -3,10 +3,10 @@
 //! may be fish, whose files bash never reads. So the account's shell runs once as an interactive
 //! login shell and prints its environment, and every command a bot runs and every stdio plugin
 //! server starts with it, as from the user's terminal. Windows keeps the environment the CLI
-//! started with.
+//! started with, and finds a bare program name as its terminals do, through `PATHEXT`: npm
+//! installs `npx` as `npx.cmd`.
 
 use std::ffi::{OsStr, OsString};
-#[cfg(unix)]
 use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::time::Duration;
@@ -35,7 +35,8 @@ const CAPTURE_COMMAND: &str = "/usr/bin/env -0 > \"$LORCA_SHELL_ENV_FILE\"";
 const DROPPED: [&str; 8] = ["PWD", "OLDPWD", "SHLVL", "_", CAPTURE_VARIABLE, "DISABLE_AUTO_UPDATE", "ZSH_TMUX_AUTOSTARTED", "ZSH_TMUX_AUTOSTART"];
 
 /// `program` with the login shell's environment. The first call waits for the shell (five
-/// seconds at most); `lorca serve` starts reading it at launch.
+/// seconds at most); `lorca serve` starts reading it at launch. On Windows a bare name starts
+/// the file a terminal would run ([`find_program`]).
 pub async fn command(program: impl AsRef<OsStr>) -> Command {
     command_with(program, environment().await)
 }
@@ -47,9 +48,59 @@ pub async fn environment() -> &'static [(OsString, OsString)] {
 }
 
 fn command_with(program: impl AsRef<OsStr>, environment: &[(OsString, OsString)]) -> Command {
+    #[cfg(windows)]
+    let program = windows_program(program.as_ref(), environment);
     let mut command = Command::new(program);
     command.envs(environment.iter().map(|(name, value)| (name, value)));
     command
+}
+
+/// What Windows starts for `program`. `Command` gives a bare name `.exe` and no other extension
+/// (rust-lang/rust#94743), so `npx` would never find `npx.cmd`. A name the lookup finds on the
+/// child's `PATH` starts from that file; anything else goes to `Command` as it is, for its own
+/// search and error. `Command` runs a batch file through `cmd.exe`, escaping each argument so it
+/// arrives as written (CVE-2024-24576), and refuses one that holds a line break.
+#[cfg(windows)]
+fn windows_program(program: &OsStr, environment: &[(OsString, OsString)]) -> OsString {
+    let variable = |name: &str| environment.iter().rev().find(|(key, _)| key.eq_ignore_ascii_case(name)).map(|(_, value)| value.clone()).or_else(|| std::env::var_os(name));
+    find_program(program, variable("PATH").as_deref(), variable("PATHEXT").as_deref(), Path::is_file).map_or_else(|| program.to_owned(), PathBuf::into_os_string)
+}
+
+/// The extensions of the files `Command` can start, programs and batch files, in the order of
+/// Windows' own `PATHEXT`.
+#[cfg(any(windows, test))]
+const STARTABLE: [&str; 4] = [".com", ".exe", ".bat", ".cmd"];
+
+/// The file a Windows terminal runs for a bare `name`: `name` with an extension from `pathext`
+/// (Windows' own when unset), or `name` itself when it already ends in one, in the first folder
+/// of `path` that holds such a file, the extensions tried in `pathext`'s order. Only
+/// [`STARTABLE`] extensions count: a terminal opens a `.js` on `PATHEXT` through its file
+/// association, and Node installs an extensionless shell script beside `npx.cmd`. A relative
+/// folder is skipped, as it would be looked up from the CLI's working directory, not the
+/// child's. `exists` says whether a file is there, so tests run the lookup on any platform.
+#[cfg(any(windows, test))]
+fn find_program(name: &OsStr, path: Option<&OsStr>, pathext: Option<&OsStr>, exists: impl Fn(&Path) -> bool) -> Option<PathBuf> {
+    if Path::new(name).file_name() != Some(name) {
+        return None;
+    }
+    let startable = |extension: &str| STARTABLE.iter().any(|known| extension.eq_ignore_ascii_case(known));
+    let mut extensions: Vec<&str> = pathext.and_then(OsStr::to_str).unwrap_or_default().split(';').filter(|extension| startable(extension)).collect();
+    if extensions.is_empty() {
+        extensions = STARTABLE.to_vec();
+    }
+    let names: Vec<OsString> = match Path::new(name).extension().and_then(OsStr::to_str) {
+        Some(extension) if startable(&format!(".{extension}")) => vec![name.to_owned()],
+        // Lowercase, as the files are named: `npx.cmd`, not PATHEXT's `npx.CMD`.
+        _ => extensions
+            .iter()
+            .map(|extension| {
+                let mut file = name.to_owned();
+                file.push(extension.to_ascii_lowercase());
+                file
+            })
+            .collect(),
+    };
+    std::env::split_paths(path?).filter(|folder| folder.is_absolute()).flat_map(|folder| names.iter().map(move |file| folder.join(file))).find(|file| exists(file))
 }
 
 #[cfg(unix)]
@@ -238,9 +289,10 @@ impl Drop for CaptureFile {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
     fn fixture_dir(name: &str) -> PathBuf {
@@ -249,6 +301,7 @@ mod tests {
         dir
     }
 
+    #[cfg(unix)]
     fn executable(dir: &Path, name: &str, script: &str) -> PathBuf {
         let path = dir.join(name);
         std::fs::write(&path, script).unwrap();
@@ -256,6 +309,7 @@ mod tests {
         path
     }
 
+    #[cfg(unix)]
     #[test]
     fn the_accounts_shell_outranks_an_inherited_shell_variable() {
         let shells = shell_candidates(Some("/opt/homebrew/bin/fish".into()), Some(OsStr::new("/bin/zsh")));
@@ -266,6 +320,7 @@ mod tests {
         assert!(!shells.is_empty() && shells.iter().all(|shell| shell.is_absolute()));
     }
 
+    #[cfg(unix)]
     #[test]
     fn parses_nul_separated_entries_and_drops_the_capture_shells_own() {
         let environment = parse(b"PATH=/Users/me/.bun/bin:/usr/bin\0TOKEN=line one\nline two=rest\0EMPTY=\0PWD=/tmp\0SHLVL=2\0_=/usr/bin/env\0LORCA_SHELL_ENV_FILE=/tmp/x\0").unwrap();
@@ -280,6 +335,7 @@ mod tests {
         assert_eq!(parse(b""), None);
     }
 
+    #[cfg(unix)]
     #[test]
     fn the_login_path_comes_before_the_inherited_one_and_install_folders_last() {
         let environment = child_environment(
@@ -296,6 +352,7 @@ mod tests {
         assert_eq!(directories.iter().filter(|directory| *directory == Path::new("/usr/bin")).count(), 1);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn reads_what_an_interactive_login_shell_exports() {
         let dir = fixture_dir("capture");
@@ -310,6 +367,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_hanging_interactive_shell_falls_back_to_a_login_shell_and_is_killed() {
         let dir = fixture_dir("hang");
@@ -339,6 +397,7 @@ mod tests {
     }
 
     /// A stdio plugin server is named bare (`npx`), so the lookup has to use the child's `PATH`.
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_bare_program_resolves_through_the_environments_path() {
         let dir = fixture_dir("path");
@@ -346,5 +405,68 @@ mod tests {
         let output = command_with("lorca-fixture-tool", &[("PATH".into(), dir.clone().into_os_string())]).output().await.unwrap();
         assert_eq!(output.stdout, b"found");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// npm installs `npx` as `npx.cmd`, beside an extensionless shell script. The batch file runs
+    /// through `cmd.exe`, and its arguments reach it as written: quoted where they need it, with
+    /// `%PATH%` left as it is and `&` no second command. One with a line break cannot be passed.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn a_bare_program_starts_a_batch_file_from_the_environments_path() {
+        let dir = fixture_dir("Program Files");
+        std::fs::write(dir.join("lorca-fixture-tool"), "#!/bin/sh\necho the shell script\n").unwrap();
+        std::fs::write(dir.join("lorca-fixture-tool.cmd"), "@echo %*\r\n").unwrap();
+        let environment = [("PATH".into(), dir.clone().into_os_string())];
+        let command = || command_with("lorca-fixture-tool", &environment);
+        assert_eq!(Path::new(command().as_std().get_program()), dir.join("lorca-fixture-tool.cmd"));
+
+        let output = command().args(["-y", "@playwright/mcp@latest", "--headless", "two words", "%PATH%", "a&echo injected"]).output().await.unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "-y @playwright/mcp@latest --headless \"two words\" \"%PATH%\" \"a&echo injected\"\r\n");
+
+        let refused = command().arg("two\nlines").output().await.unwrap_err();
+        assert_eq!(refused.kind(), std::io::ErrorKind::InvalidInput);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The Windows lookup, on any platform: PATH's folders in order, PATHEXT's order within one,
+    /// and only the files `Command` can start.
+    #[test]
+    fn a_bare_name_finds_what_a_windows_terminal_runs() {
+        let root = PathBuf::from(if cfg!(windows) { "C:\\" } else { "/" });
+        let system32 = root.join("Windows").join("System32");
+        let node = root.join("Program Files").join("nodejs");
+        let local = root.join("Users").join("me").join(".local").join("bin");
+        let relative = PathBuf::from("relative");
+        let path = std::env::join_paths([&system32, &relative, &node, &local]).unwrap();
+        let files = [
+            node.join("npx"),
+            node.join("npx.ps1"),
+            node.join("npx.cmd"),
+            local.join("npx.exe"),
+            relative.join("uvx.exe"),
+            local.join("uvx.exe"),
+            system32.join("tool.js"),
+            local.join("tool.bat"),
+            local.join("both.cmd"),
+            local.join("both.exe"),
+            local.join("python3.12.exe"),
+        ];
+        let find = |name: &str, pathext: Option<&str>| find_program(OsStr::new(name), Some(path.as_os_str()), pathext.map(OsStr::new), |file| files.iter().any(|known| known == file));
+        let pathext = Some(".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC;.PS1");
+
+        // npm's batch file, not the shell or PowerShell script beside it, nor an npx.exe further on.
+        assert_eq!(find("npx", pathext), Some(node.join("npx.cmd")));
+        assert_eq!(find("uvx", pathext), Some(local.join("uvx.exe")), "a relative folder is skipped");
+        assert_eq!(find("tool", pathext), Some(local.join("tool.bat")), "a .js opens through its file association, which Command does not use");
+        assert_eq!(find("both", pathext), Some(local.join("both.exe")));
+        assert_eq!(find("both", Some(".CMD;.EXE")), Some(local.join("both.cmd")));
+        assert_eq!(find("both", None), Some(local.join("both.exe")), "Windows' own PATHEXT when unset");
+        assert_eq!(find("npx", Some(".JS;.PS1")), Some(node.join("npx.cmd")));
+        assert_eq!(find("npx.exe", pathext), Some(local.join("npx.exe")), "a name with its extension is looked up as it is");
+        assert_eq!(find("python3.12", pathext), Some(local.join("python3.12.exe")));
+        assert_eq!(find("missing", pathext), None);
+        assert_eq!(find("node_modules/.bin/npx", pathext), None, "a path goes to Command as it is");
+        assert_eq!(find_program(OsStr::new("npx"), None, None, |_| true), None);
     }
 }

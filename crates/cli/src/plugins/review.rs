@@ -135,8 +135,8 @@ pub async fn review(app: &Arc<App>, bot: &Bot, chat_id: &str, trigger: &Trigger,
     if !auto_review.is_enabled {
         return Outcome::Ask { reason: None, rule: None };
     }
-    let (model, thinking) = crate::providers::review_model(&bot.provider);
-    let provider = match crate::providers::provider_for(app, &bot.provider, Some(model), Some(thinking)) {
+    let (model, thinking) = crate::providers::review_model(app, &bot.provider);
+    let provider = match crate::providers::provider_for(app, &bot.provider, Some(&model), thinking) {
         Ok(provider) => provider,
         Err(error) => return Outcome::ask(format!("Auto-review could not check this action ({error}).")),
     };
@@ -195,7 +195,7 @@ pub async fn review(app: &Arc<App>, bot: &Bot, chat_id: &str, trigger: &Trigger,
         // The verdict is short; the rest is room for a model that reasons at its lowest effort.
         max_tokens: Some(4096),
         options: match thinking {
-            ThinkingLevel::Off => RequestOptions::default().with_session_id(chat_id).with_hooks(Arc::new(Steady)),
+            Some(ThinkingLevel::Off) => RequestOptions::default().with_session_id(chat_id).with_hooks(Arc::new(Steady)),
             _ => RequestOptions::default().with_session_id(chat_id),
         },
     };

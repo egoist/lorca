@@ -244,7 +244,8 @@ export function ActionRow(props: {
   tooltip?: string;
   /** The action just copied something: a green check and its title, as a copy button shows. */
   actionCopied?: boolean;
-  onAction?: () => void;
+  /** Gets the click, whose target a menu can pop up under. */
+  onAction?: (event: MouseEvent) => void;
 }) {
   return (
     <div class="row action-row" data-label={props.label} title={props.tooltip}>
@@ -253,7 +254,7 @@ export function ActionRow(props: {
         {props.value ?? ""}
       </span>
       <Show when={props.actionTitle}>
-        <LinkButton class={props.actionCopied ? "copied" : undefined} onClick={() => props.onAction?.()}>
+        <LinkButton class={props.actionCopied ? "copied" : undefined} onClick={(event) => props.onAction?.(event)}>
           <Show when={props.actionCopied}>
             <Icon name="checkmark" size={11} strokeWidth={2.6} />
           </Show>

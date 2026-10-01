@@ -16,6 +16,16 @@ pub struct ResponseInfo {
     pub headers: BTreeMap<String, String>,
 }
 
+/// A request with the key as a bearer token, or with no `Authorization` at all for a server that
+/// takes no key, which may refuse an empty one.
+pub(crate) fn bearer_auth(request: reqwest::RequestBuilder, key: &str) -> reqwest::RequestBuilder {
+    if key.is_empty() {
+        request
+    } else {
+        request.bearer_auth(key)
+    }
+}
+
 /// Hooks the adapters call around one request. Every method has a default that does nothing.
 #[async_trait]
 pub trait RequestHooks: Send + Sync {

@@ -4,16 +4,19 @@
 
 import { createSignal, Show } from "solid-js";
 import { L } from "../../l10n";
-import { defaultBaseURL, keyPlaceholder, providerName, signInRequirement, usesAPIKey, type ProviderKind } from "../../model/models";
+import { defaultBaseURL, isCustomKind, keyPlaceholder, providerName, signInRequirement, usesAPIKey, type BuiltInProviderKind, type ProviderKind } from "../../model/models";
 import { errorText, store } from "../../model/store";
-import { Button, HoverButton, Spinner } from "../controls";
+import { Button, Spinner } from "../controls";
 import { alert, presentSheet, Sheet } from "../overlay";
+import { APIKeyField } from "./apiKeyField";
+import { presentCustomProvider } from "./customProvider";
 
 let fetching = false;
 
 /** Fetches the saved credential before presenting, so the first frame is filled in and masked,
- * with no loading row changing the sheet's size. */
+ * with no loading row changing the sheet's size. A custom provider opens its own sheet. */
 export async function presentConnectProvider(kind: ProviderKind, options: { baseURL?: string; onDone?: () => void } = {}): Promise<void> {
+  if (isCustomKind(kind)) return presentCustomProvider(kind, { onSave: () => options.onDone?.() });
   if (fetching) return;
   fetching = true;
   let credential: { api_key?: string | null; base_url?: string | null } | null = null;
@@ -29,7 +32,7 @@ export async function presentConnectProvider(kind: ProviderKind, options: { base
 }
 
 function ConnectProviderSheet(props: {
-  kind: ProviderKind;
+  kind: BuiltInProviderKind;
   credential: { api_key?: string | null; base_url?: string | null } | null;
   baseURL?: string;
   onDone: () => void;
@@ -40,11 +43,9 @@ function ConnectProviderSheet(props: {
   const isEditing = props.credential?.api_key != null;
   const [key, setKey] = createSignal(props.credential?.api_key ?? "");
   const [baseURL, setBaseURL] = createSignal((props.credential === null ? props.baseURL : props.credential.base_url) ?? "");
-  const [revealed, setRevealed] = createSignal(false);
   const [busy, setBusy] = createSignal(false);
   const [spinning, setSpinning] = createSignal(false);
   const [status, setStatus] = createSignal<{ text: string; color: string } | null>(null);
-  let keyField: HTMLInputElement | undefined;
   let closed = false;
   let signingIn = false;
 
@@ -104,18 +105,6 @@ function ConnectProviderSheet(props: {
     props.dismiss();
   };
 
-  const toggleReveal = () => {
-    const selection: [number | null, number | null] | null = keyField && document.activeElement === keyField ? [keyField.selectionStart, keyField.selectionEnd] : null;
-    setRevealed(!revealed());
-    if (selection && keyField) {
-      const field = keyField;
-      queueMicrotask(() => {
-        field.focus();
-        field.setSelectionRange(selection[0], selection[1]);
-      });
-    }
-  };
-
   const flow = kind === "chatgpt" ? L("Sign-in uses the same OAuth flow as the Codex CLI.") : L("Sign-in uses the same OAuth flow as xAI's Grok CLI.");
   return (
     <Sheet
@@ -144,29 +133,7 @@ function ConnectProviderSheet(props: {
       >
         <label class="field-stack">
           <span class="field-label">{L("API key")}</span>
-          <span class="key-field">
-            <input
-              ref={(element) => (keyField = element)}
-              class="text-field mono"
-              type={revealed() ? "text" : "password"}
-              value={key()}
-              placeholder={keyPlaceholder(kind)}
-              aria-label={L("API key")}
-              disabled={busy()}
-              spellcheck="false"
-              autocomplete="off"
-              onInput={(event) => setKey(event.currentTarget.value)}
-            />
-            <HoverButton
-              class="key-reveal"
-              symbol={revealed() ? "eye.slash" : "eye"}
-              size={14}
-              tooltip={revealed() ? L("Hide API key") : L("Show API key")}
-              disabled={busy()}
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={toggleReveal}
-            />
-          </span>
+          <APIKeyField value={key()} placeholder={keyPlaceholder(kind)} disabled={busy()} onInput={setKey} />
         </label>
         <div class="field-group">
           <label class="field-stack">

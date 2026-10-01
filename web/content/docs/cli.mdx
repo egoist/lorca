@@ -39,7 +39,8 @@ On Windows, bots run their commands in Git for Windows' bash, not WSL's, so inst
 | `lorca pair` | Shows a pairing string and waits for the other device. |
 | `lorca pair <string>` | Joins an account with a pairing string. |
 | `lorca provider set <kind> [api-key]` | Connects `deepseek`, `anthropic`, `opencode`, `opencode-go`, `chatgpt`, or `grok`. The key is read from stdin when omitted; `--base-url` sets a custom endpoint. |
-| `lorca provider remove <kind>` | Disconnects a provider on every device. |
+| `lorca provider add <name> <base-url>` | Adds a custom provider: any server that speaks OpenAI's or Anthropic's API. `--api` picks `chat-completions` (the default), `responses`, or `messages`; `--model` names a model, once per model; `--api-key-stdin` reads a key. |
+| `lorca provider remove <kind>` | Disconnects a provider on every device, or deletes a custom one (`custom:openrouter`, as `provider list` shows it). |
 | `lorca provider list` | Lists the connected providers. |
 | `lorca status` | Prints this device's state as JSON: devices, bots, chats, providers. |
 | `lorca doctor` | Checks the home folder, identity, port, and relay, and says what is wrong. |

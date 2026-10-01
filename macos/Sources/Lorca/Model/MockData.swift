@@ -64,6 +64,55 @@ enum MockData {
             ProviderCredential(kind: .opencodeGo, isConnected: false, detail: "Not connected"),
             ProviderCredential(kind: .chatgpt, isConnected: true, detail: "you@lorca.app"),
             ProviderCredential(kind: .grok, isConnected: false, detail: "Not connected"),
+            ProviderCredential(
+                kind: .custom("custom:ollama"), isConnected: true, detail: "http://localhost:11434/v1",
+                baseURL: "http://localhost:11434/v1", name: "Ollama", api: .chatCompletions,
+                models: [CustomModel(id: "qwen3:8b", levels: ["low", "medium", "high"]), CustomModel(id: "llava", levels: ["low", "medium", "high"])]),
+        ]
+    }
+
+    /// What a custom provider's server lists in mock mode: a gateway's catalog, a local
+    /// server's few models, or no list at all.
+    static func listedModels(baseURL: String) -> [CustomModel]? {
+        if baseURL.contains("openrouter") {
+            return [
+                CustomModel(id: "anthropic/claude-sonnet-5", name: "Anthropic: Claude Sonnet 5", contextWindow: 1_000_000, images: true),
+                CustomModel(id: "openai/gpt-6-sol", name: "OpenAI: GPT-6 Sol", contextWindow: 1_050_000, images: true),
+                CustomModel(id: "deepseek/deepseek-v4.1-flash", name: "DeepSeek: V4.1 Flash", contextWindow: 1_000_000, images: true),
+                CustomModel(id: "moonshotai/kimi-k3", name: "MoonshotAI: Kimi K3", contextWindow: 1_048_576, images: true),
+                CustomModel(id: "qwen/qwen3.8-flash", name: "Qwen: Qwen3.8 Flash", contextWindow: 1_000_000, images: true),
+                CustomModel(id: "z-ai/glm-5.3-flash", name: "Z.ai: GLM 5.3 Flash", contextWindow: 200_000, images: false),
+                CustomModel(id: "meta-llama/llama-4-maverick", name: "Meta: Llama 4 Maverick", contextWindow: 1_048_576, images: true),
+                CustomModel(id: "mistralai/mistral-large-3", name: "Mistral: Mistral Large 3", contextWindow: 262_144, images: true),
+                CustomModel(id: "google/gemini-3.8-flash", name: "Google: Gemini 3.8 Flash", contextWindow: 1_048_576, images: true),
+            ]
+        }
+        if baseURL.contains("localhost") || baseURL.contains("127.0.0.1") {
+            return [
+                CustomModel(id: "qwen3:8b", contextWindow: 40_960),
+                CustomModel(id: "gemma3:12b", contextWindow: 131_072, images: true),
+                CustomModel(id: "llava:13b", contextWindow: 4_096, images: true),
+            ]
+        }
+        return nil
+    }
+
+    /// A few of the catalog's models for each provider, with their thinking levels.
+    static func models() -> [ProviderModel] {
+        let all = ["off", "low", "medium", "high", "xhigh", "max"]
+        let on = ["low", "medium", "high", "xhigh", "max"]
+        return [
+            ProviderModel(provider: .deepseek, id: "deepseek-flash", label: "DeepSeek V4.1 Flash", levels: all),
+            ProviderModel(provider: .anthropic, id: "claude-opus-5", label: "Claude Opus 5", levels: all),
+            ProviderModel(provider: .anthropic, id: "claude-fable-5-1", label: "Claude Fable 5.1", levels: on),
+            ProviderModel(provider: .anthropic, id: "claude-haiku-4-5", label: "Claude Haiku 4.5", levels: ["off", "minimal", "low", "medium", "high"]),
+            ProviderModel(provider: .opencode, id: "deepseek-v4.1-flash", label: "DeepSeek V4.1 Flash", levels: ["low", "high", "max"]),
+            ProviderModel(provider: .opencode, id: "kimi-k3", label: "Kimi K3", levels: ["max"]),
+            ProviderModel(provider: .opencode, id: "big-pickle", label: "Big Pickle", levels: []),
+            ProviderModel(provider: .opencodeGo, id: "glm-5.3-flash", label: "GLM-5.3 Flash", levels: ["low", "high", "max"]),
+            ProviderModel(provider: .chatgpt, id: "gpt-6.1-sol", label: "GPT-6.1 Sol", levels: on),
+            ProviderModel(provider: .chatgpt, id: "gpt-6-luna", label: "GPT-6 Luna", levels: on),
+            ProviderModel(provider: .grok, id: "grok-4.7", label: "Grok 4.7", levels: ["low", "medium", "high", "xhigh"]),
         ]
     }
 
