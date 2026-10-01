@@ -112,7 +112,7 @@ lorca/
   mobile/              # Expo app for iOS and Android: a paired Device over the core (modules/lorca-core)
   web/                 # the site
   scripts/             # bun scripts: dev loop, bundle build, macOS release, the desktop app's dev loop and builds, string and doc checks
-  .github/workflows/   # release-cli.yml and release-desktop.yml: release builds; docs.yml: the doc check; bash-windows.yml: the bash tool's tests on Windows
+  .github/workflows/   # release-cli.yml and release-desktop.yml: release builds; docs.yml: the doc check; windows.yml: the unit tests on Windows
 ```
 
 `bun run android` rebuilds the Rust core for Android, then builds and runs the Expo dev client on the Android emulator. `cd mobile && bun run core` rebuilds the Rust core for both phone platforms; `bun run mobile:dev` is the iOS development loop described below.

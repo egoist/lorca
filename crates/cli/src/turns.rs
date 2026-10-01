@@ -3233,6 +3233,7 @@ mod tests {
 
     /// One call as `run_job` makes it: the row goes up as the call starts, and the result lands
     /// in it when the call returns. Returns the row as it is then.
+    #[cfg(unix)]
     async fn call_tool(turn: &mut TurnState, tool: &dyn Tool, call_id: &str, args: Value) -> (Message, Result<ToolResult, ToolError>) {
         turn.handle(AgentEvent::ToolExecutionStart { tool_call_id: call_id.into(), tool_name: tool.name().into(), args: args.clone() });
         let result = tool.execute(call_id, args, CancellationToken::new(), Arc::new(|_| {})).await;
@@ -3254,6 +3255,7 @@ mod tests {
     }
 
     /// The row once its session's state reached it: the watcher writes it when the command ends.
+    #[cfg(unix)]
     async fn row_when(app: &Arc<App>, message_id: &str, done: impl Fn(&CommandRun) -> bool) -> Message {
         tokio::time::timeout(Duration::from_secs(10), async {
             loop {
