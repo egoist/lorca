@@ -8,8 +8,10 @@ and the update window shows it.
 
 - A routine can watch for something without spending a turn each time: the bot gives it a check, a
   short script that looks at an inbox, a repository, or a feed at each due time and starts the bot
-  only when it finds something new. Checks only read, never change anything, and cost nothing when
-  there is nothing to report. A routine's sheet shows its check, and the inspector its next check.
+  only when it finds something new. Checks only read and never change anything. A check that finds
+  nothing runs no turn, so it spends nothing on the bot's model; one that asks the small model to
+  sort or screen what it read pays for those calls, which count in the chat's Spent figure. A
+  routine's sheet shows its check, and the inspector its next check.
 - When a long chat fills a bot's context, the summary that replaces the older part, and the memory
   save before it, reuse the prompt cache of the bot's own turn instead of sending the whole chat
   again, so compacting while a bot works costs a fraction of what it did.

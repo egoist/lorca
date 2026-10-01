@@ -315,9 +315,29 @@ impl Checks {
         !std::mem::replace(&mut state.running, true)
     }
 
+    /// Marks the routine's check running once no other check of it runs; false when `cancel`
+    /// stops the wait.
+    async fn start_when_free(&self, id: &str, cancel: &CancellationToken) -> bool {
+        while !self.start(id) {
+            tokio::select! {
+                _ = cancel.cancelled() => return false,
+                _ = tokio::time::sleep(std::time::Duration::from_millis(250)) => {}
+            }
+        }
+        true
+    }
+
     fn finish(&self, id: &str, at: i64) {
         self.0.lock().unwrap().insert(id.to_string(), CheckState { last_at: Some(at), running: false });
     }
+}
+
+/// A check of the routine ended now: the schedule counts from it, and the apps hear of the
+/// next check, which no roster change tells them.
+#[cfg(feature = "runner")]
+fn checked(app: &App, id: &str) {
+    app.routine_checks.finish(id, now_unix());
+    app.emit(app.roster_summary());
 }
 
 /// When this Runner runs the routine next: its schedule from the last run, or from the last
@@ -351,6 +371,11 @@ pub fn next_run_shown(app: &App, routine: &Routine) -> Option<i64> {
 /// Runs a due routine's check, then the routine when the check found something or failed. A
 /// check that found nothing leaves no trace but the time it ran, which the schedule counts
 /// from: no marker, no turn, and no roster change.
+///
+/// One check of a routine runs at a time. A run started by hand meanwhile waits for this check
+/// before it runs its own (`check_now`), which no longer sees what this one found and stored as
+/// seen; so what this one found still starts its run, after that one, as the chat runs one turn
+/// at a time.
 #[cfg(feature = "runner")]
 fn check_then_run(app: &Arc<App>, routine: Routine) {
     if !app.routine_checks.start(&routine.id) {
@@ -358,11 +383,11 @@ fn check_then_run(app: &Arc<App>, routine: Routine) {
     }
     let app = app.clone();
     tokio::spawn(async move {
-        let checked = run_check(&app, &routine, &CancellationToken::new()).await;
-        app.routine_checks.finish(&routine.id, now_unix());
+        let found = run_check(&app, &routine, &CancellationToken::new()).await;
+        checked(&app, &routine.id);
         // A routine paused, deleted, or given another check meanwhile does not run on this one.
         let Some(current) = app.routine(&routine.id).filter(|current| current.is_enabled && current.check == routine.check) else { return };
-        let Some(report) = checked.report() else { return };
+        let Some(report) = found.report() else { return };
         started(&app, &current.id);
         match job_for(&app, &current) {
             Ok(mut job) => {
@@ -392,6 +417,19 @@ impl CheckRun {
     pub fn report(&self) -> Option<CheckReport> {
         (self.found.is_some() || self.error.is_some()).then(|| CheckReport { found: self.found.clone().unwrap_or_default(), error: self.error.clone() })
     }
+}
+
+/// Runs a routine's check now, for a run started by hand or a check just saved: after a check of
+/// the routine already running, and counted like a due one, so the schedule counts from it.
+#[cfg(feature = "runner")]
+pub async fn check_now(app: &Arc<App>, routine: &Routine, cancel: &CancellationToken) -> CheckRun {
+    if !app.routine_checks.start_when_free(&routine.id, cancel).await {
+        let stopped = "Stopped before the check ran.".to_string();
+        return CheckRun { found: None, error: Some(stopped.clone()), result: stopped };
+    }
+    let found = run_check(app, routine, cancel).await;
+    checked(app, &routine.id);
+    found
 }
 
 /// Runs a routine's check: its script in a codemode sandbox of its own, with the bot's file
@@ -787,6 +825,7 @@ mod tests {
         let quiet = create(app, "b1", "Quiet", "every 10m", "Tell me what is new.", Some("return null;"), true).unwrap();
         let now = now_secs();
         app.update_routine(&quiet.id, |r| r.enabled_at = now - 700.0).unwrap();
+        let mut events = app.events.subscribe();
         tick(app);
         for _ in 0..200 {
             if app.routine_checks.last_at(&quiet.id).is_some() && !app.routine_checks.is_running(&quiet.id) {
@@ -801,6 +840,14 @@ mod tests {
         assert!(due_at(app, &after).unwrap() > now_unix() + 500);
         let dm = app.dm_with("b1", None).unwrap();
         assert!(app.messages(&dm.meta.id).is_empty(), "no marker, no turn");
+        // The local app hears the next check, which no roster change carries.
+        let mut heard = false;
+        while let Ok(event) = events.try_recv() {
+            if let crate::events::Event::RosterChanged { routines, .. } = event {
+                heard |= routines.iter().any(|r| r["id"] == quiet.id.as_str() && r["next_run_at"].as_f64().is_some_and(|next| next > (now_unix() + 500) as f64));
+            }
+        }
+        assert!(heard, "a roster event with the next check");
 
         let found = create(app, "b1", "Found", "every 10m", "Tell me what is new.", Some("return 'Two new pull requests';"), true).unwrap();
         app.update_routine(&found.id, |r| r.enabled_at = now - 700.0).unwrap();
@@ -817,6 +864,30 @@ mod tests {
         assert_eq!(ran.last_outcome.as_deref(), Some("error"));
         let notices: Vec<String> = app.messages(&dm.meta.id).iter().filter_map(|m| match &m.body { Body::Notice { text, .. } => Some(text.clone()), _ => None }).collect();
         assert_eq!(notices[0], "Routine · Found");
+    }
+
+    /// A check on save or by hand waits for a due check already running, and counts as the
+    /// routine's last check, so an overdue routine is not checked again at the next tick.
+    #[cfg(feature = "runner")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_check_by_hand_waits_for_a_running_one_and_counts_as_the_last() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        let watch = create(app, "b1", "Watch", "every 10m", "Tell me what is new.", Some("return 'new';"), true).unwrap();
+        app.update_routine(&watch.id, |r| r.enabled_at = now_secs() - 7200.0).unwrap();
+        let watch = app.routine(&watch.id).unwrap();
+        assert!(app.routine_checks.start(&watch.id), "a due check holds the routine");
+        let waiting = {
+            let (app, watch) = (app.clone(), watch.clone());
+            tokio::spawn(async move { check_now(&app, &watch, &CancellationToken::new()).await })
+        };
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        assert!(!waiting.is_finished(), "it waits for the running check");
+        app.routine_checks.finish(&watch.id, now_unix() - 7000);
+        let checked = waiting.await.unwrap();
+        assert_eq!(checked.found.as_deref(), Some("new"), "{}", checked.result);
+        assert!(!app.routine_checks.is_running(&watch.id));
+        assert!(due_at(app, &watch).unwrap() > now_unix() + 500, "the schedule counts from it");
     }
 
     #[cfg(feature = "runner")]

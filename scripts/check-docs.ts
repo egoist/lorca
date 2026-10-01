@@ -90,10 +90,22 @@ for (const doc of docs) {
   }
 }
 
-// Every subject is in the overview's list, and the list names only subjects.
+/// The text of a doc's `## <title>` section, up to the next heading of its level or above.
+function section(markdown: string, title: string) {
+  const lines = markdown.split("\n")
+  const start = lines.findIndex((line) => line.trim() === `## ${title}`)
+  if (start < 0) return undefined
+  const end = lines.findIndex((line, index) => index > start && /^#{1,2}\s/.test(line))
+  return lines.slice(start + 1, end < 0 ? undefined : end).join("\n")
+}
+
+// Every subject is in the overview's Subjects section; a link to it elsewhere in the overview
+// does not count.
 const subjects = await scan(`${SUBJECTS}/*.md`)
+const table = section(await text(OVERVIEW), "Subjects")
+if (table === undefined) problems.push(`${OVERVIEW} has no ## Subjects section`)
 const listed = new Set(
-  links(await text(OVERVIEW))
+  links(table ?? "")
     .map(({ target }) => target.split("#")[0])
     .filter((target) => target.startsWith(`${SUBJECTS}/`)),
 )

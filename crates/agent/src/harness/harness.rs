@@ -311,14 +311,27 @@ impl LoopHooks for RunHooks {
         self.events.emit(HarnessEvent::CompactionStart { run_id: self.run_id.clone(), reason: CompactionReason::Threshold }).await;
         let cancel = CancellationToken::new();
         // Between the run's own model calls the summary is the run's next request, so the
-        // provider's prompt cache serves the transcript.
-        let shape = RequestShape {
+        // provider's prompt cache serves the transcript. The run's requests send the messages
+        // through the hooks' `transform_context`: when that changes them, no request sends these
+        // messages as they are, and the transcript is summarized as text instead.
+        let (view, _) = self.registry.transform_context(ctx.context.messages.clone(), String::new()).await;
+        let shape = (view == ctx.context.messages).then(|| RequestShape {
             system_prompt: ctx.context.system_prompt.clone(),
             tools: ctx.context.tools.iter().map(|tool| tool.spec()).collect(),
             cache_points: ctx.context.cache_points.clone(),
-        };
-        let result =
-            compact_transcript(&self.registry, self.provider.as_ref(), &ctx.context.messages, Some(&shape), &self.compaction, CompactionReason::Threshold, None, &self.request, &cancel).await;
+        });
+        let result = compact_transcript(
+            &self.registry,
+            self.provider.as_ref(),
+            &ctx.context.messages,
+            shape.as_ref(),
+            &self.compaction,
+            CompactionReason::Threshold,
+            None,
+            &self.request,
+            &cancel,
+        )
+        .await;
         match result {
             Ok(Some((messages, tokens_before))) => {
                 *self.replacement.lock().unwrap() = Some((messages.clone(), tokens_before));
@@ -1143,6 +1156,69 @@ mod tests {
         let events = events.await.unwrap();
         assert!(events.iter().any(|e| matches!(e, HarnessEvent::CompactionEnd { reason: CompactionReason::Overflow, outcome: Outcome::Completed, .. })));
         assert_eq!(provider.requests.lock().unwrap().len(), 3);
+    }
+
+    /// A tool whose result is short however long its argument is.
+    struct Count;
+
+    #[async_trait]
+    impl Tool for Count {
+        fn name(&self) -> &str {
+            "count"
+        }
+        fn description(&self) -> &str {
+            "count"
+        }
+        fn parameters(&self) -> Value {
+            json!({ "type": "object", "properties": { "text": { "type": "string" } } })
+        }
+        async fn execute(&self, _id: &str, args: Value, _cancel: CancellationToken, _on_update: ToolUpdateFn) -> Result<ToolResult, ToolError> {
+            Ok(ToolResult::text(format!("{} chars", args["text"].as_str().map_or(0, str::len))))
+        }
+    }
+
+    /// Between a run's model calls the summary is the run's next request, unless a hook
+    /// rewrites what the run's requests send: then no request sends the messages as they are,
+    /// and the transcript is summarized as text.
+    #[tokio::test]
+    async fn a_compaction_between_calls_is_the_runs_next_request_unless_a_hook_rewrites_the_context() {
+        struct Redact;
+        #[async_trait]
+        impl super::super::hooks::HarnessHooks for Redact {
+            async fn transform_context(&self, messages: Vec<AgentMessage>, system_prompt: String) -> (Vec<AgentMessage>, String) {
+                let hidden = |message: AgentMessage| match message {
+                    AgentMessage::User(user) if user.content[0].as_text() == Some("secret") => AgentMessage::user("(hidden)"),
+                    other => other,
+                };
+                (messages.into_iter().map(hidden).collect(), system_prompt)
+            }
+        }
+        let args: &'static str = Box::leak(json!({ "text": "x".repeat(240_000) }).to_string().into_boxed_str());
+        for redact in [false, true] {
+            let provider = Scripted::with_window(vec![Turn::Call { name: "count", args }, Turn::Text("## Goal\nS"), Turn::Text("done")]);
+            let mut options = HarnessOptions::new(provider.clone());
+            options.tools = vec![Arc::new(Count)];
+            options.system_prompt = "be brief".into();
+            // A threshold of about 50k tokens, which the call's argument passes.
+            options.compaction.reserve_tokens = 150_000;
+            options.compaction.keep_recent_tokens = 5;
+            let mut ok = AssistantMessage::empty("scripted", "s1");
+            ok.content = vec![AssistantPart::Text { text: "ok".into() }];
+            options.messages = vec![AgentMessage::user("secret"), AgentMessage::Assistant(ok)];
+            let mut harness = AgentHarness::new(options);
+            if redact {
+                harness.hooks().register("redact", Arc::new(Redact));
+            }
+            assert_eq!(harness.prompt("go").await.unwrap().outcome, Outcome::Completed);
+            assert!(matches!(harness.messages().first(), Some(AgentMessage::Custom { kind, .. }) if kind == "compaction"));
+            let requests = provider.requests.lock().unwrap();
+            if redact {
+                assert_eq!(requests[1].system_prompt, compaction::SUMMARIZATION_SYSTEM_PROMPT);
+            } else {
+                assert_eq!((requests.len(), requests[1].system_prompt.as_str(), requests[1].tools.len()), (3, "be brief", 1));
+                assert_eq!(requests[1].messages.len(), requests[0].messages.len() + 3, "the call, its result, and the prompt");
+            }
+        }
     }
 
     impl LlmMessage {

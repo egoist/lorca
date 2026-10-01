@@ -203,7 +203,7 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
     let check_found = match (&routine, &job.check) {
         (Some(_), Some(report)) => Some(check_cue(report)),
         (Some(routine), None) if routine.check.is_some() => {
-            let checked = crate::routines::run_check(app, routine, &cancel).await;
+            let checked = crate::routines::check_now(app, routine, &cancel).await;
             Some(checked.report().map(|report| check_cue(&report)).unwrap_or_else(|| "[Your check found nothing new. The user started this run by hand.]".to_string()))
         }
         _ => None,
@@ -2393,7 +2393,7 @@ impl Tool for Routines {
          name. A schedule is every 30m, every 2h, every 1d, or five cron fields in your Runner's local time (0 9 * * 1-5 is \
          weekdays at 9:00 AM); at most one run per five minutes. Set one up when the user asks for something regular, and \
          tell them the schedule in words.\n\
-         A check is JavaScript your Runner runs at each due time before you, with no model, so a quiet one costs nothing: \
+         A check is JavaScript your Runner runs at each due time before you, with no model, so a quiet one runs no turn: \
          use one to watch something (an inbox, a repository, a feed, a page). It runs like a codemode script with only the \
          read-only plugin tools, read, grep, find, ls, store() and load() (shared with your scripts in your direct chat), and \
          models.ask(). Return what needs you, as text or JSON, and the run starts with it; return nothing (or null, false, \
@@ -2432,12 +2432,12 @@ impl Tool for Routines {
             };
             format!("{} · {} · {state}", routine.name, schedule_words(&routine.schedule))
         };
-        // A check runs once as it is saved: a bad one shows now, and its first run records what
-        // is already there.
+        // A check runs once as it is saved: a bad one shows now, its first run records what is
+        // already there, and the schedule counts from it.
         let tried = |routine: Routine| {
             let cancel = cancel.clone();
             async move {
-                let checked = crate::routines::run_check(&self.app, &routine, &cancel).await;
+                let checked = crate::routines::check_now(&self.app, &routine, &cancel).await;
                 let verdict = match (&checked.error, &checked.found) {
                     (Some(_), _) => "The check failed when it ran just now; a failing check starts each run with its error, so fix it.",
                     (None, Some(_)) => "The check ran just now and found something, so a due run would start with it.",
