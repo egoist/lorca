@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use crate::config::{self, Config};
-use crate::model::ProviderStatus;
+use crate::model::{ProviderStatus, StatusModel};
 
 #[cfg(feature = "provider-auth")]
 pub use lorca_provider_auth::{chatgpt::ChatGptTokens, grok::GrokTokens};
@@ -54,6 +54,15 @@ impl CustomApi {
     pub fn parse(id: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|api| api.id() == id)
     }
+}
+
+/// The thinking levels a custom provider's model takes: the catalog's for a model it knows by
+/// id, else low, medium, and high, which every server with a reasoning setting understands. An
+/// unknown server has no one way to turn its thinking off, so Off is not among them; the
+/// provider's default sends nothing.
+pub fn custom_levels(model: &str) -> &'static [lorca_models::ThinkingLevel] {
+    use lorca_models::ThinkingLevel::{High, Low, Medium};
+    lorca_models::find_any(model).map(|known| known.levels).unwrap_or(&[Low, Medium, High])
 }
 
 /// A model a custom provider offers, with what its server's model list said about it.
@@ -268,7 +277,7 @@ impl Credentials {
                 base_url: Some(provider.base_url.clone()),
                 name: Some(provider.name.clone()),
                 api: Some(provider.api),
-                models: provider.models.clone(),
+                models: provider.models.iter().map(|model| StatusModel { model: model.clone(), levels: custom_levels(&model.id).to_vec() }).collect(),
             }
         });
         built_in.chain(custom).collect()
@@ -375,6 +384,10 @@ mod tests {
         let mine = &statuses[PROVIDER_KINDS.len()];
         assert_eq!((mine.kind.as_str(), mine.is_connected, mine.detail.as_str()), ("custom:mine", true, "http://lab/v1"));
         assert_eq!(mine.models.len(), 1);
+        // An unknown model takes the levels every server understands; the catalog's model its own.
+        use lorca_models::ThinkingLevel::{High, Low, Medium};
+        assert_eq!(mine.models[0].levels, [Low, Medium, High]);
+        assert_eq!(custom_levels("anthropic/claude-opus-5"), lorca_models::find("anthropic", "claude-opus-5").unwrap().levels);
         assert!(ours.connected_kinds().contains(&"custom:router".to_string()));
     }
 

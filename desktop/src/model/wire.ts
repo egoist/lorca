@@ -202,13 +202,15 @@ export interface WireProvider {
   models?: WireCustomModel[] | null;
 }
 
-/** A custom provider's model, with what its server's model list said of it. */
+/** A custom provider's model, with what its server's model list said of it, and in a status the
+ * thinking levels it takes. */
 export interface WireCustomModel {
   id: string;
   name?: string | null;
   context_window?: number | null;
   max_output?: number | null;
   images?: boolean | null;
+  levels?: string[] | null;
 }
 
 /** `providers.list_models`: the chat models a server lists, in its order. `listed` is false when
@@ -595,6 +597,7 @@ export function toCustomModel(wire: WireCustomModel): CustomModel {
     contextWindow: optional(wire.context_window),
     maxOutput: optional(wire.max_output),
     images: optional(wire.images),
+    levels: optional(wire.levels),
   };
 }
 

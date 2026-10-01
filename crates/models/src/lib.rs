@@ -689,6 +689,17 @@ pub fn find(provider: &str, model: &str) -> Option<&'static ModelInfo> {
         .or_else(|| MODELS.iter().find(|m| m.provider == provider && model.starts_with(m.id) && model[m.id.len()..].starts_with('-')))
 }
 
+/// The catalog entry for a model id under whichever provider offers it, for a server the
+/// catalog does not know: a gateway's `vendor/` prefix is ignored, a dated variant finds its
+/// model, and the first provider in catalog order that lists the id answers.
+pub fn find_any(model: &str) -> Option<&'static ModelInfo> {
+    let model = model.rsplit('/').next().unwrap_or(model);
+    let dated = |m: &&ModelInfo| {
+        model.strip_prefix(m.id).and_then(|rest| rest.strip_prefix('-')).is_some_and(|date| !date.is_empty() && date.chars().all(|c| c.is_ascii_digit()))
+    };
+    MODELS.iter().find(|m| m.id == model).or_else(|| MODELS.iter().find(dated))
+}
+
 /// The models a provider offers, in the catalog's order (the first is the default).
 pub fn for_provider(provider: &str) -> Vec<&'static ModelInfo> {
     MODELS.iter().filter(|m| m.provider == provider).collect()
@@ -724,6 +735,15 @@ mod tests {
         assert_eq!(for_provider("opencode").first().map(|m| m.id), Some("deepseek-v4.1-flash"));
         assert_eq!(for_provider("opencode-go").first().map(|m| m.id), Some("glm-5.3-flash"));
         assert_eq!(find("opencode-go", "qwen3.8-flash").map(|m| m.images), Some(true));
+    }
+
+    #[test]
+    fn any_provider_knows_a_gateway_model() {
+        assert_eq!(find_any("anthropic/claude-sonnet-5").map(|m| m.id), Some("claude-sonnet-5"));
+        assert_eq!(find_any("claude-haiku-4-5-20251001").map(|m| m.id), Some("claude-haiku-4-5"));
+        assert_eq!(find_any("moonshotai/kimi-k3").map(|m| m.provider), Some("opencode"));
+        assert!(find_any("gpt-6-sol-mini").is_none(), "only a date extends an id");
+        assert!(find_any("qwen3:8b").is_none());
     }
 
     #[test]

@@ -26,6 +26,7 @@ import {
   suggestedProviderName,
   takeListing,
   thinkingLevels,
+  withCustomModels,
   toggleModel,
   usesAPIKey,
   type CustomModel,
@@ -40,7 +41,10 @@ const ollama: ProviderCredential = {
   baseURL: "http://localhost:11434/v1",
   name: "Ollama",
   api: "chat-completions",
-  models: [{ id: "qwen3:8b" }, { id: "anthropic/claude-sonnet-5", name: "Anthropic: Claude Sonnet 5" }],
+  models: [
+    { id: "qwen3:8b", levels: ["low", "medium", "high"] },
+    { id: "anthropic/claude-sonnet-5", name: "Anthropic: Claude Sonnet 5", levels: ["off", "low", "medium", "high", "xhigh", "max"] },
+  ],
 };
 
 test("a custom kind is a provider kind, and an unknown one is not", () => {
@@ -58,15 +62,16 @@ test("a custom provider goes by its name, and by its slug once it is deleted", (
   expect(providerName("custom:my-lab", [ollama])).toBe("my-lab");
 });
 
-test("a custom provider offers its saved models and the common thinking levels", () => {
-  expect(providerModels("custom:ollama", [ollama])).toEqual([
-    { id: "qwen3:8b", label: "qwen3:8b" },
-    { id: "anthropic/claude-sonnet-5", label: "Anthropic: Claude Sonnet 5" },
+test("a custom provider offers its saved models with the levels the CLI gives each", () => {
+  const catalog = withCustomModels([{ provider: "grok", id: "grok-4.7", label: "Grok 4.7", levels: ["low", "medium", "high", "xhigh"] }], [ollama]);
+  expect(providerModels(catalog, "custom:ollama")).toEqual([
+    { provider: "custom:ollama", id: "qwen3:8b", label: "qwen3:8b", levels: ["low", "medium", "high"] },
+    { provider: "custom:ollama", id: "anthropic/claude-sonnet-5", label: "Anthropic: Claude Sonnet 5", levels: ["off", "low", "medium", "high", "xhigh", "max"] },
   ]);
-  expect(providerModels("custom:gone", [ollama])).toEqual([]);
-  expect(providerModels("grok")[0]).toEqual({ id: "grok-4.7", label: "Grok 4.7" });
-  expect(thinkingLevels("custom:ollama").map((level) => level.id)).toEqual(["off", "low", "medium", "high"]);
-  expect(thinkingLevels("chatgpt").map((level) => level.id)).toEqual(["low", "medium", "high", "xhigh", "max"]);
+  expect(providerModels(catalog, "custom:gone")).toEqual([]);
+  expect(providerModels(catalog, "grok")[0]?.label).toBe("Grok 4.7");
+  expect(thinkingLevels(catalog, "custom:ollama", undefined).map((level) => level.id)).toEqual(["low", "medium", "high"]);
+  expect(thinkingLevels(catalog, "custom:ollama", "anthropic/claude-sonnet-5").map((level) => level.id)).toEqual(["off", "low", "medium", "high", "xhigh", "max"]);
 });
 
 test("a custom provider's row has a server symbol and says Custom", () => {

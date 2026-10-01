@@ -27,6 +27,8 @@ export interface CustomModel {
   context_window?: number;
   max_output?: number;
   images?: boolean;
+  /// The thinking levels the core says it takes, lowest first: in a provider's status only.
+  levels?: string[];
 }
 
 /// Why this phone's last try to connect to the relay failed.
@@ -605,19 +607,16 @@ export function thinkingLevels(models: ProviderModel[], provider: string, model:
   return known?.levels ?? ALL_THINKING_LEVELS.filter((level) => offered.some((each) => each.levels.includes(level)));
 }
 
-/// What a custom provider offers: the levels every server with a reasoning setting understands.
-export const CUSTOM_THINKING_LEVELS = ["off", "low", "medium", "high"];
-
-/// The models a bot can run on a provider, its default first: the built-in list, or the ones
-/// saved with a custom provider, named the way its server lists them.
-export function providerModels(kind: string, providers: readonly ProviderStatus[]): { id: string; label: string }[] {
-  if (!isCustomProvider(kind)) return PROVIDER_MODELS[kind] ?? [];
-  return (providers.find((p) => p.kind === kind)?.models ?? []).map((model) => ({ id: model.id, label: modelLabel(model) }));
-}
-
-/// The thinking levels a provider's models take, lowest first.
-export function providerThinkingLevels(kind: string): string[] {
-  return isCustomProvider(kind) ? CUSTOM_THINKING_LEVELS : (THINKING_LEVELS[kind] ?? []);
+/// The catalog with each custom provider's saved models after it, so the pickers offer them as
+/// they do the catalog's: named as the provider's server names them, with the thinking levels the
+/// core says each takes.
+export function withCustomModels(models: ProviderModel[], providers: readonly ProviderStatus[]): ProviderModel[] {
+  const custom = providers.flatMap((provider) =>
+    isCustomProvider(provider.kind)
+      ? (provider.models ?? []).map((model) => ({ provider: provider.kind, id: model.id, name: modelLabel(model), levels: model.levels ?? [] }))
+      : [],
+  );
+  return [...models, ...custom];
 }
 
 export function thinkingLabel(level: string): string {

@@ -19,7 +19,16 @@ pub struct ProviderStatus {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api: Option<crate::credentials::CustomApi>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub models: Vec<crate::credentials::CustomModel>,
+    pub models: Vec<StatusModel>,
+}
+
+/// A custom provider's model as the apps show it: what its server's list said, and the thinking
+/// levels it takes.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StatusModel {
+    #[serde(flatten)]
+    pub model: crate::credentials::CustomModel,
+    pub levels: Vec<lorca_models::ThinkingLevel>,
 }
 
 /// A paired machine or phone. `os` decides whether it is a Runner.

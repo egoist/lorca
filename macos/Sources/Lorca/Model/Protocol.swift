@@ -122,7 +122,7 @@ enum Wire {
         var baseUrl: String?
         var name: String?
         var api: String?
-        var models: [ProviderModel]?
+        var models: [StatusModel]?
 
         func toModel() -> ProviderCredential? {
             guard let kind = ProviderCredential.Kind(wireValue: kind) else { return nil }
@@ -132,14 +132,16 @@ enum Wire {
         }
     }
 
-    struct ProviderModel: Decodable {
+    /// A custom provider's model in its status, or in a server's model list.
+    struct StatusModel: Decodable {
         var id: String
         var name: String?
         var contextWindow: Int?
         var images: Bool?
+        var levels: [String]?
 
         func toModel() -> CustomModel {
-            CustomModel(id: id, name: name, contextWindow: contextWindow, images: images)
+            CustomModel(id: id, name: name, contextWindow: contextWindow, images: images, levels: levels ?? [])
         }
     }
 
@@ -150,7 +152,7 @@ enum Wire {
     /// `providers.list_models`: the chat models a custom provider's server lists.
     struct ListedModels: Decodable {
         var listed: Bool
-        var models: [ProviderModel]
+        var models: [StatusModel]
     }
 
     struct Device: Decodable {

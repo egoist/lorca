@@ -1541,7 +1541,7 @@ export class AppStore {
     const models = options.models.map((id) => id.trim()).filter((id) => id !== "");
     if (this.isMock) {
       const kind = options.kind ?? (`custom:${name.toLowerCase().replaceAll(" ", "-")}` as const);
-      const saved: ProviderCredential = { kind, isConnected: true, detail: baseURL, baseURL, name, api: options.api, models: models.map((id) => ({ id })) };
+      const saved: ProviderCredential = { kind, isConnected: true, detail: baseURL, baseURL, name, api: options.api, models: models.map((id) => ({ id, levels: ["low", "medium", "high"] })) };
       this.providers = this.providers.some((provider) => provider.kind === kind)
         ? this.providers.map((provider) => (provider.kind === kind ? saved : provider))
         : [...this.providers, saved];

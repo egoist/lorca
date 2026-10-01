@@ -109,7 +109,7 @@ impl HostFunction for ModelsAsk {
         };
 
         let (model, thinking) = crate::providers::review_model(&self.app, &self.provider);
-        let provider = crate::providers::provider_for(&self.app, &self.provider, Some(&model), Some(thinking))?;
+        let provider = crate::providers::provider_for(&self.app, &self.provider, Some(&model), thinking)?;
         let request = ModelRequest {
             system_prompt: system,
             messages: vec![LlmMessage::User(UserMessage::text(prompt))],

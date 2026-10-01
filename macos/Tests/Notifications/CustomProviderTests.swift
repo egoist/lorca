@@ -19,7 +19,15 @@ final class CustomProviderTests: XCTestCase {
         XCTAssertEqual(kind?.isCustom, true)
         XCTAssertNil(ProviderCredential.Kind(wireValue: "openrouter"))
         XCTAssertFalse(ProviderCredential.Kind.builtIn.contains { $0.isCustom })
-        XCTAssertEqual(kind?.thinkingLevels.map(\.id), ["off", "low", "medium", "high"])
+    }
+
+    func testACustomModelOffersTheLevelsTheCLIGivesIt() {
+        let models = [
+            ProviderModel(provider: .custom("custom:lab"), id: "qwen3:8b", label: "qwen3:8b", levels: ["low", "medium", "high"]),
+            ProviderModel(provider: .custom("custom:lab"), id: "claude-opus-5", label: "Claude Opus 5", levels: ["off", "low", "medium", "high", "xhigh", "max"]),
+        ]
+        XCTAssertEqual(ProviderModel.thinkingLevels(for: nil, among: models).map(\.id), ["low", "medium", "high"])
+        XCTAssertEqual(ProviderModel.thinkingLevels(for: "claude-opus-5", among: models).map(\.id), ["off", "low", "medium", "high", "xhigh", "max"])
     }
 
     func testANewListingKeepsPickedAndTypedModelsAndReplacesTheRest() {
@@ -59,12 +67,12 @@ final class CustomProviderTests: XCTestCase {
     func testACustomStatusDecodesWithItsModels() throws {
         let json = """
             {"kind": "custom:lab", "is_connected": true, "detail": "http://lab/v1", "base_url": "http://lab/v1",
-             "name": "Lab", "api": "messages", "models": [{"id": "glm-6", "name": "GLM 6", "context_window": 128000}, {"id": "qwen3:8b"}]}
+             "name": "Lab", "api": "messages", "models": [{"id": "glm-6", "name": "GLM 6", "context_window": 128000, "levels": ["low", "medium", "high"]}, {"id": "qwen3:8b"}]}
             """
         let provider = try Wire.decoder.decode(Wire.Provider.self, from: Data(json.utf8)).toModel()
         XCTAssertEqual(provider?.kind, .custom("custom:lab"))
         XCTAssertEqual(provider?.name, "Lab")
         XCTAssertEqual(provider?.api, .messages)
-        XCTAssertEqual(provider?.models, [CustomModel(id: "glm-6", name: "GLM 6", contextWindow: 128_000), CustomModel(id: "qwen3:8b")])
+        XCTAssertEqual(provider?.models, [CustomModel(id: "glm-6", name: "GLM 6", contextWindow: 128_000, levels: ["low", "medium", "high"]), CustomModel(id: "qwen3:8b")])
     }
 }

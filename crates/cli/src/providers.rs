@@ -143,14 +143,15 @@ pub fn default_model(kind: &str) -> &'static str {
 /// The model Auto-review runs on for bots of `kind`, and how much it thinks: a small, fast
 /// model on the same account whatever the bot itself runs, with thinking off where the model
 /// allows it and at its lowest effort where it does not. A custom provider's is its first
-/// model, the one the user put at the top. Empty when `kind` has none.
-pub fn review_model(app: &App, kind: &str) -> (String, ThinkingLevel) {
+/// model, the one the user put at the top, at the catalog's lowest level for a model the
+/// catalog knows and the server's default for any other. Empty when `kind` has none.
+pub fn review_model(app: &App, kind: &str) -> (String, Option<ThinkingLevel>) {
     if is_custom(kind) {
         let credentials = app.credentials.lock().unwrap();
-        let Some((provider, model)) = credentials.custom.get(kind).and_then(|p| p.models.first().map(|m| (p, m.id.clone()))) else {
-            return (String::new(), ThinkingLevel::Off);
+        let Some(model) = credentials.custom.get(kind).and_then(|p| p.models.first().map(|m| m.id.clone())) else {
+            return (String::new(), None);
         };
-        let thinking = custom_model_info(kind, provider, &model).levels.first().copied().unwrap_or(ThinkingLevel::Off);
+        let thinking = models::find_any(&model).and_then(|known| known.levels.first().copied());
         return (model, thinking);
     }
     let model = match kind {
@@ -162,7 +163,7 @@ pub fn review_model(app: &App, kind: &str) -> (String, ThinkingLevel) {
         _ => "",
     };
     let thinking = models::find(kind, model).and_then(|info| info.levels.first().copied()).unwrap_or(ThinkingLevel::Off);
-    (model.to_string(), thinking)
+    (model.to_string(), Some(thinking))
 }
 
 /// A bot's thinking level as stored, or nothing for the provider's default.
@@ -318,10 +319,6 @@ fn opencode_provider(
     Ok(opencode_headers(provider))
 }
 
-/// The levels a custom provider's model takes when the catalog does not know it: the ones
-/// every server that has a reasoning setting understands.
-const CUSTOM_LEVELS: &[ThinkingLevel] = &[ThinkingLevel::Off, ThinkingLevel::Low, ThinkingLevel::Medium, ThinkingLevel::High];
-
 /// A bot's adapter for a custom provider: the wire protocol the user picked, at the root they
 /// gave, with what is known about the model.
 fn custom_provider(kind: &str, provider: &CustomProvider, model: &str, thinking: Option<ThinkingLevel>) -> Arc<dyn Provider> {
@@ -363,12 +360,13 @@ fn custom_model_info(kind: &str, provider: &CustomProvider, model: &str) -> &'st
     static INFO: LazyLock<Mutex<HashMap<(String, String), &'static ModelInfo>>> = LazyLock::new(Default::default);
     let listed = provider.models.iter().find(|m| m.id == model);
     let known = models::find_any(model);
-    let (thinking, levels) = match known {
-        Some(known) => (known.thinking, known.levels),
+    let thinking = match known {
+        Some(known) => known.thinking,
         // Messages servers that are not Anthropic take a token budget, not an effort.
-        None if provider.api == CustomApi::Messages => (ThinkingMode::Budget, CUSTOM_LEVELS),
-        None => (ThinkingMode::Effort, CUSTOM_LEVELS),
+        None if provider.api == CustomApi::Messages => ThinkingMode::Budget,
+        None => ThinkingMode::Effort,
     };
+    let levels = crate::credentials::custom_levels(model);
     let wanted = ModelInfo {
         id: "",
         name: "",
@@ -504,15 +502,18 @@ mod tests {
         for kind in ["deepseek", "anthropic", "chatgpt", "grok", "opencode", "opencode-go"] {
             assert!(models::find(kind, &review_model(app, kind).0).is_some(), "{kind}");
         }
-        assert_eq!(review_model(app, "deepseek"), ("deepseek-flash".into(), ThinkingLevel::Off));
-        assert_eq!(review_model(app, "anthropic"), ("claude-haiku-4-5".into(), ThinkingLevel::Off));
-        assert_eq!(review_model(app, "chatgpt"), ("gpt-6-luna".into(), ThinkingLevel::Low));
-        assert_eq!(review_model(app, "grok"), ("grok-4.7".into(), ThinkingLevel::Low));
-        assert_eq!(review_model(app, "opencode-go"), ("deepseek-v4.1-flash".into(), ThinkingLevel::Low));
-        // A custom provider reviews with its first model.
+        assert_eq!(review_model(app, "deepseek"), ("deepseek-flash".into(), Some(ThinkingLevel::Off)));
+        assert_eq!(review_model(app, "anthropic"), ("claude-haiku-4-5".into(), Some(ThinkingLevel::Off)));
+        assert_eq!(review_model(app, "chatgpt"), ("gpt-6-luna".into(), Some(ThinkingLevel::Low)));
+        assert_eq!(review_model(app, "grok"), ("grok-4.7".into(), Some(ThinkingLevel::Low)));
+        assert_eq!(review_model(app, "opencode-go"), ("deepseek-v4.1-flash".into(), Some(ThinkingLevel::Low)));
+        // A custom provider reviews with its first model, at the server's default unless the
+        // catalog knows the model.
         add_custom(app, "custom:lab", CustomApi::ChatCompletions, vec![model("qwen3:8b"), model("llama4")]);
-        assert_eq!(review_model(app, "custom:lab"), ("qwen3:8b".into(), ThinkingLevel::Off));
-        assert_eq!(review_model(app, "custom:gone"), (String::new(), ThinkingLevel::Off));
+        assert_eq!(review_model(app, "custom:lab"), ("qwen3:8b".into(), None));
+        add_custom(app, "custom:proxy", CustomApi::Messages, vec![model("anthropic/claude-haiku-4-5")]);
+        assert_eq!(review_model(app, "custom:proxy"), ("anthropic/claude-haiku-4-5".into(), Some(ThinkingLevel::Off)));
+        assert_eq!(review_model(app, "custom:gone"), (String::new(), None));
     }
 
     #[test]
