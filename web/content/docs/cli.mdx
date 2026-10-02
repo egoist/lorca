@@ -44,6 +44,7 @@ On Windows, bots run their commands in Git for Windows' bash, not WSL's, so inst
 | `lorca provider remove <kind>` | Disconnects a provider on every device, or deletes a custom one (`custom:openrouter`, as `provider list` shows it). |
 | `lorca provider list` | Lists the connected providers. |
 | `lorca mcp …` | Manages this computer's own MCP servers; see [MCP servers](#mcp-servers). |
+| `lorca models reload` | Checks lorca.app for a newer model catalog now. Lorca also checks on its own when it starts and when an app connects, at most once an hour, so new models arrive without an update. |
 | `lorca status` | Prints this device's state as JSON: devices, bots, chats, providers. |
 | `lorca doctor` | Checks the home folder, identity, port, relay, and `mcp.json`, and says what is wrong. |
 
@@ -94,9 +95,10 @@ The computer shows up in your Device list, and you can create bots for it from t
 | `LORCA_RELAY_URL` | The relay. |
 | `LORCA_SHELL` | The shell bots run commands in. Default `/bin/bash`; on Windows, Git for Windows' bash. On macOS and Linux, commands get your login shell's `PATH` and variables either way. |
 | `LORCA_DEEPSEEK_MODEL`, `LORCA_ANTHROPIC_MODEL`, `LORCA_CHATGPT_MODEL`, `LORCA_GROK_MODEL` | The default model for bots that do not pick one. |
+| `LORCA_MODELS_URL` | Where Lorca checks for a newer model catalog. Default `https://lorca.app/models/v1.json`; `LORCA_MODELS_FETCH=0` turns the checks off. |
 
 ## Files
 
-Everything is under `~/.lorca/`, readable only by your user: your identity and machine keys, provider credentials, settings, chats, attachments, plugins, your MCP servers in `mcp.json`, and one workspace folder per bot with its memory.
+Everything is under `~/.lorca/`, readable only by your user: your identity and machine keys, provider credentials, settings, chats, attachments, plugins, your MCP servers in `mcp.json`, the last model catalog fetched in `catalog.json`, and one workspace folder per bot with its memory.
 
 The macOS app logs the service to `~/Library/Logs/Lorca/cli.log`.

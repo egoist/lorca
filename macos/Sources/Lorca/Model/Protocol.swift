@@ -507,6 +507,8 @@ enum Wire {
         var routines: [Routine]?
         var autoReview: AutoReview?
         var providers: [Provider]?
+        /// The catalog's models again, so a newer catalog the CLI installs reaches the pickers.
+        var models: [Model]?
     }
 
     struct MessageEvent: Decodable {

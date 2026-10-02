@@ -5,3 +5,5 @@ dist
 *.local
 .DS_Store
 .tanstack
+# Copied from crates/models/catalog.json by vite.config.ts.
+public/models

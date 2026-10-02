@@ -1960,6 +1960,7 @@ name = "lorca-models"
 version = "0.1.8"
 dependencies = [
  "serde",
+ "serde_json",
 ]
 
 [[package]]

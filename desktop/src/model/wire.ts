@@ -293,6 +293,8 @@ export interface WireRosterChanged {
   routines?: WireRoutine[] | null;
   auto_review?: WireAutoReview | null;
   providers?: WireProvider[] | null;
+  /** The catalog's models again, so a newer catalog the CLI installs reaches the pickers. */
+  models?: WireModel[] | null;
 }
 
 export interface WireMessagePage {

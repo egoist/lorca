@@ -59,6 +59,11 @@ enum Command {
         #[usage(subcommand)]
         command: McpCommand,
     },
+    /// The model catalog: the models Lorca offers, with their windows, thinking levels, and rates.
+    Models {
+        #[usage(subcommand)]
+        command: ModelsCommand,
+    },
     /// Show identity, Devices, bots, and relay state.
     Status,
     /// Check the local setup.
@@ -179,6 +184,12 @@ enum McpCommand {
     Import { file: Option<PathBuf> },
 }
 
+#[derive(Subcommands, Debug)]
+enum ModelsCommand {
+    /// Fetch the latest model catalog from lorca.app now, rather than at the next hourly check.
+    Reload,
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -190,7 +201,7 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     };
     // `lorca mcp` says how each step went in its own words; the log keeps to warnings.
-    let quiet = matches!(command, Command::Mcp { .. });
+    let quiet = matches!(command, Command::Mcp { .. } | Command::Models { .. });
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| if quiet { "lorca=warn,lorca_agent=warn".into() } else { "lorca=info,lorca_agent=info".into() }))
         .with_target(false)
@@ -214,6 +225,8 @@ async fn main() -> anyhow::Result<()> {
             lorca::plugins::refresh_installed(&app, &lorca::marketplace::bundled().plugins);
             // The servers in mcp.json, followed as the file changes.
             lorca::plugins::mcp_json::start(&app);
+            lorca::catalog::enable(&app);
+            lorca::catalog::check_in_background(&app);
             if let Some(pid) = parent_pid {
                 tokio::spawn(watch_parent(app.clone(), pid));
             }
@@ -288,6 +301,24 @@ async fn main() -> anyhow::Result<()> {
         Command::Mcp { command } => {
             let app = app.clone();
             tokio::spawn(async move { mcp(&app, command).await }).await?
+        }
+        Command::Models { command: ModelsCommand::Reload } => {
+            let (reply, live) = match serve_call(app.config.port, "models.reload", &serde_json::json!({})).await? {
+                Some(reply) => (reply, true),
+                None => {
+                    lorca::catalog::enable(&app);
+                    // Boxed, as `main`'s future lives on the main thread's stack, a megabyte on Windows.
+                    (Box::pin(lorca::api::dispatch(&app, "models.reload", serde_json::json!({}))).await, false)
+                }
+            };
+            let reply = reply.map_err(|message| anyhow::anyhow!(message))?;
+            let updated = reply["updated"].as_str().unwrap_or_default();
+            match (reply["changed"] == true, live) {
+                (true, true) => println!("lorca serve now uses the model catalog of {updated}."),
+                (true, false) => println!("Saved the model catalog of {updated}; lorca serve uses it when it starts."),
+                (false, _) => println!("The model catalog of {updated} is the latest."),
+            }
+            Ok(())
         }
         Command::Status => {
             let snapshot = app.snapshot();

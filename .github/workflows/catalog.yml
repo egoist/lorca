@@ -1,0 +1,23 @@
+# Checks a change to the model catalog: crates/models/catalog.json moves its "updated" time
+# forward whenever anything else in it changes, as Devices keep whichever catalog is later.
+# The rules a catalog must read by are checked by the lorca-models tests in the Tests workflow.
+# scripts/check-catalog.ts is the check; `bun run check:catalog` runs it locally.
+name: Catalog
+
+on:
+  pull_request:
+    paths: ["crates/models/catalog.json", "scripts/check-catalog.ts", ".github/workflows/catalog.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+      - run: git fetch --depth=1 origin "+refs/heads/$GITHUB_BASE_REF:refs/remotes/origin/$GITHUB_BASE_REF"
+      - run: bun run check:catalog
+        env:
+          CATALOG_BASE: origin/${{ github.base_ref }}

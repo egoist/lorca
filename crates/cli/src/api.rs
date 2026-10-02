@@ -69,7 +69,11 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             "relay_update_required": app.relay_update_required.load(std::sync::atomic::Ordering::Relaxed),
             "relay_error": app.relay_problem.lock().unwrap().clone(),
         })),
-        "bootstrap" => Ok(app.snapshot()),
+        // An app connecting checks for a newer model catalog, unless one was checked within the hour.
+        "bootstrap" => {
+            crate::catalog::check_in_background(app);
+            Ok(app.snapshot())
+        }
 
         "identity.create" => {
             let phrase = identity::create(app, opt_string(&params, "device_name")).map_err(|e| e.to_string())?;
@@ -724,6 +728,11 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             app.cancel_provider_auth();
             provider_auth::disconnect(app, &string(&params, "kind")?)?;
             Ok(json!({ "providers": app.credentials.lock().unwrap().statuses() }))
+        }
+        // Asks lorca.app for a newer model catalog now, even within the hour of the last check.
+        "models.reload" => {
+            let changed = crate::catalog::check(app, true).await?;
+            Ok(json!({ "updated": lorca_models::updated(), "changed": changed }))
         }
 
         other => Err(format!("unknown method {other}")),

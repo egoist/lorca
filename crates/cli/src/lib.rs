@@ -5,6 +5,7 @@
 
 pub mod api;
 pub mod app;
+pub mod catalog;
 pub mod config;
 pub mod credentials;
 pub mod crypto;

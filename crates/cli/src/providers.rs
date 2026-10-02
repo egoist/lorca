@@ -6,7 +6,7 @@ use std::sync::{Arc, LazyLock, Mutex};
 
 use async_trait::async_trait;
 
-use lorca_agent::models::{ModelInfo, Rates, ThinkingMode};
+use lorca_agent::models::{ModelInfo, Rates, ThinkingMode, Wire};
 use lorca_agent::providers::anthropic::ANTHROPIC_BASE_URL;
 use lorca_agent::providers::{
     AnthropicProvider, ChatGptProvider, ChatGptTokens, GrokProvider, GrokTokenSource, GrokTokens, OpenAiCompatProvider,
@@ -19,9 +19,7 @@ use crate::app::App;
 use crate::credentials::{is_custom, CustomApi, CustomProvider};
 
 pub const OPENCODE_BASE_URL: &str = "https://opencode.ai/zen";
-pub const OPENCODE_DEFAULT_MODEL: &str = "deepseek-v4.1-flash";
 pub const OPENCODE_GO_BASE_URL: &str = "https://opencode.ai/zen/go";
-pub const OPENCODE_GO_DEFAULT_MODEL: &str = "glm-5.3-flash";
 
 const USER_AGENT: &str = concat!("lorca/", env!("CARGO_PKG_VERSION"));
 
@@ -127,22 +125,15 @@ fn built_in_vision(kind: &str, model: Option<&str>) -> bool {
     }
 }
 
-/// The model a bot of `kind` runs without one of its own.
+/// The model a bot of `kind` runs without one of its own: the first the catalog lists for it.
 pub fn default_model(kind: &str) -> &'static str {
-    match kind {
-        "deepseek" => lorca_agent::providers::openai_compat::DEEPSEEK_DEFAULT_MODEL,
-        "anthropic" => lorca_agent::providers::anthropic::ANTHROPIC_DEFAULT_MODEL,
-        "chatgpt" => lorca_agent::providers::chatgpt::CHATGPT_DEFAULT_MODEL,
-        "grok" => lorca_agent::providers::grok::GROK_DEFAULT_MODEL,
-        "opencode" => OPENCODE_DEFAULT_MODEL,
-        "opencode-go" => OPENCODE_GO_DEFAULT_MODEL,
-        _ => "",
-    }
+    models::default_model(kind).unwrap_or_default()
 }
 
-/// The model Auto-review runs on for bots of `kind`, and how much it thinks: a small, fast
-/// model on the same account whatever the bot itself runs, with thinking off where the model
-/// allows it and at its lowest effort where it does not. A custom provider's is its first
+/// The model Auto-review runs on for bots of `kind`, and how much it thinks: the catalog's
+/// `review` model for the provider, a small, fast one on the same account whatever the bot
+/// itself runs, with thinking off where the model allows it and at its lowest effort where it
+/// does not. A custom provider's is its first
 /// model, the one the user put at the top, at the catalog's lowest level for a model the
 /// catalog knows and the server's default for any other. Empty when `kind` has none.
 pub fn review_model(app: &App, kind: &str) -> (String, Option<ThinkingLevel>) {
@@ -154,14 +145,7 @@ pub fn review_model(app: &App, kind: &str) -> (String, Option<ThinkingLevel>) {
         let thinking = models::find_any(&model).and_then(|known| known.levels.first().copied());
         return (model, thinking);
     }
-    let model = match kind {
-        "deepseek" => "deepseek-flash",
-        "anthropic" => "claude-haiku-4-5",
-        "chatgpt" => "gpt-6-luna",
-        "grok" => "grok-4.7",
-        "opencode" | "opencode-go" => "deepseek-v4.1-flash",
-        _ => "",
-    };
+    let model = models::review_model(kind).unwrap_or_default();
     let thinking = models::find(kind, model).and_then(|info| info.levels.first().copied()).unwrap_or(ThinkingLevel::Off);
     (model.to_string(), Some(thinking))
 }
@@ -188,10 +172,10 @@ pub fn provider_for(app: &Arc<App>, kind: &str, model: Option<&str>, thinking: O
                 .deepseek
                 .clone()
                 .ok_or_else(|| "DeepSeek is not connected".to_string())?;
-            let model = model.or_else(|| std::env::var("LORCA_DEEPSEEK_MODEL").ok());
+            let model = model.or_else(|| std::env::var("LORCA_DEEPSEEK_MODEL").ok()).unwrap_or_else(|| default_model(kind).into());
             // The Anthropic-compatible endpoint: the one with DeepSeek's server-side web search.
             let base_url = deepseek_anthropic_url(&key.base_url.clone().unwrap_or_else(deepseek_base_url));
-            Ok(Arc::new(AnthropicProvider::deepseek(&key.api_key, model.as_deref()).with_base_url(&base_url).with_thinking(thinking)))
+            Ok(Arc::new(AnthropicProvider::deepseek(&key.api_key, Some(model.as_str())).with_base_url(&base_url).with_thinking(thinking)))
         }
         "anthropic" => {
             let key = app
@@ -201,9 +185,9 @@ pub fn provider_for(app: &Arc<App>, kind: &str, model: Option<&str>, thinking: O
                 .anthropic
                 .clone()
                 .ok_or_else(|| "Anthropic is not connected".to_string())?;
-            let model = model.or_else(|| std::env::var("LORCA_ANTHROPIC_MODEL").ok());
+            let model = model.or_else(|| std::env::var("LORCA_ANTHROPIC_MODEL").ok()).unwrap_or_else(|| default_model(kind).into());
             let base_url = key.base_url.clone().unwrap_or_else(anthropic_base_url);
-            Ok(Arc::new(AnthropicProvider::anthropic(&key.api_key, model.as_deref()).with_base_url(&base_url).with_thinking(thinking)))
+            Ok(Arc::new(AnthropicProvider::anthropic(&key.api_key, Some(model.as_str())).with_base_url(&base_url).with_thinking(thinking)))
         }
         "opencode" => {
             let key = app
@@ -213,7 +197,7 @@ pub fn provider_for(app: &Arc<App>, kind: &str, model: Option<&str>, thinking: O
                 .opencode
                 .clone()
                 .ok_or_else(|| "OpenCode Zen is not connected".to_string())?;
-            let model = model.or_else(|| std::env::var("LORCA_OPENCODE_MODEL").ok()).unwrap_or_else(|| OPENCODE_DEFAULT_MODEL.into());
+            let model = model.or_else(|| std::env::var("LORCA_OPENCODE_MODEL").ok()).unwrap_or_else(|| default_model(kind).into());
             let root = key.base_url.clone().or_else(|| env_url("LORCA_OPENCODE_BASE_URL")).unwrap_or_else(|| OPENCODE_BASE_URL.into());
             opencode_provider("opencode", &root, &key.api_key, &model, thinking)
         }
@@ -225,7 +209,7 @@ pub fn provider_for(app: &Arc<App>, kind: &str, model: Option<&str>, thinking: O
                 .opencode_go
                 .clone()
                 .ok_or_else(|| "OpenCode Go is not connected".to_string())?;
-            let model = model.or_else(|| std::env::var("LORCA_OPENCODE_GO_MODEL").ok()).unwrap_or_else(|| OPENCODE_GO_DEFAULT_MODEL.into());
+            let model = model.or_else(|| std::env::var("LORCA_OPENCODE_GO_MODEL").ok()).unwrap_or_else(|| default_model(kind).into());
             let root = key
                 .base_url
                 .clone()
@@ -237,15 +221,15 @@ pub fn provider_for(app: &Arc<App>, kind: &str, model: Option<&str>, thinking: O
             if app.credentials.lock().unwrap().chatgpt.is_none() {
                 return Err("ChatGPT is not connected".into());
             }
-            let model = model.or_else(|| std::env::var("LORCA_CHATGPT_MODEL").ok());
-            Ok(Arc::new(ChatGptProvider::new(Arc::new(AppTokenSource(app.clone())), model.as_deref()).with_thinking(thinking)))
+            let model = model.or_else(|| std::env::var("LORCA_CHATGPT_MODEL").ok()).unwrap_or_else(|| default_model(kind).into());
+            Ok(Arc::new(ChatGptProvider::new(Arc::new(AppTokenSource(app.clone())), Some(model.as_str())).with_thinking(thinking)))
         }
         "grok" => {
             if app.credentials.lock().unwrap().grok.is_none() {
                 return Err("Grok is not connected".into());
             }
-            let model = model.or_else(|| std::env::var("LORCA_GROK_MODEL").ok());
-            let mut provider = GrokProvider::new(Arc::new(AppGrokTokenSource(app.clone())), model.as_deref()).with_thinking(thinking);
+            let model = model.or_else(|| std::env::var("LORCA_GROK_MODEL").ok()).unwrap_or_else(|| default_model(kind).into());
+            let mut provider = GrokProvider::new(Arc::new(AppGrokTokenSource(app.clone())), Some(model.as_str())).with_thinking(thinking);
             if let Some(base_url) = env_url("LORCA_GROK_BASE_URL") {
                 provider = provider.with_base_url(&base_url);
             }
@@ -266,10 +250,17 @@ enum OpenCodeWire {
     Unsupported,
 }
 
-/// OpenCode publishes the wire protocol beside every model. Zen and Go differ for MiniMax and
-/// for Qwen3.8 Max, which Zen serves on Chat Completions, while their GPT, Grok, and Muse
-/// families use Responses and the rest of their Qwen family uses Messages.
+/// OpenCode publishes the wire protocol beside every model, and the catalog carries it. A model
+/// the catalog lacks goes by its family: Zen and Go differ for MiniMax and for Qwen3.8 Max,
+/// which Zen serves on Chat Completions, while their GPT, Grok, and Muse families use Responses
+/// and the rest of their Qwen family uses Messages.
 fn opencode_wire(kind: &str, model: &str) -> OpenCodeWire {
+    match models::find(kind, model).and_then(|info| info.wire) {
+        Some(Wire::ChatCompletions) => return OpenCodeWire::ChatCompletions,
+        Some(Wire::Messages) => return OpenCodeWire::Messages,
+        Some(Wire::Responses) => return OpenCodeWire::Responses,
+        None => {}
+    }
     let model = model.to_ascii_lowercase();
     if (kind == "opencode" && model.starts_with("gemini-")) || model.starts_with("jev-") {
         return OpenCodeWire::Unsupported;
@@ -383,6 +374,8 @@ fn custom_model_info(kind: &str, provider: &CustomProvider, model: &str) -> &'st
         tiers: &[],
         thinking,
         levels,
+        // The user picked the protocol for the whole provider.
+        wire: None,
     };
     let mut cache = INFO.lock().unwrap();
     let key = (kind.to_string(), model.to_string());
@@ -480,10 +473,13 @@ mod tests {
     }
 
     #[test]
-    fn defaults_are_the_first_catalog_models_and_roots_accept_v1() {
+    fn every_provider_has_a_default_and_roots_accept_v1() {
         for kind in ["deepseek", "anthropic", "chatgpt", "grok", "opencode", "opencode-go"] {
-            assert_eq!(models::for_provider(kind)[0].id, default_model(kind), "{kind}");
+            assert!(models::find(kind, default_model(kind)).is_some(), "{kind}");
         }
+        assert_eq!(default_model("custom:lab"), "");
+        // A model the catalog lacks goes by its family.
+        assert_eq!(opencode_wire("opencode-go", "claude-unlisted-9"), OpenCodeWire::Messages);
         assert_eq!(opencode_root("https://opencode.ai/zen/v1/"), OPENCODE_BASE_URL);
         assert_eq!(opencode_root("https://opencode.ai/zen"), OPENCODE_BASE_URL);
     }

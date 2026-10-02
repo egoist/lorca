@@ -44,6 +44,7 @@ irm https://lorca.app/install-cli.ps1 | iex
 | `lorca provider remove <kind>` | 在每台设备上断开一个服务商，或删除一个自定义服务商（例如 `custom:openrouter`，以 `provider list` 显示的为准）。 |
 | `lorca provider list` | 列出已接入的服务商。 |
 | `lorca mcp …` | 管理这台电脑自己的 MCP 服务器；见 [MCP 服务器](#mcp-服务器)。 |
+| `lorca models reload` | 立即向 lorca.app 检查有没有更新的模型目录。Lorca 启动时和应用连接时也会自己检查，最多每小时一次，所以新模型无需更新应用就能用上。 |
 | `lorca status` | 以 JSON 打印这台设备的状态：设备、智能体、聊天、服务商。 |
 | `lorca doctor` | 检查主目录、身份、端口、中继和 `mcp.json`，并指出哪里有问题。 |
 
@@ -94,9 +95,10 @@ lorca serve
 | `LORCA_RELAY_URL` | 中继地址。 |
 | `LORCA_SHELL` | 智能体运行命令所用的 shell。默认 `/bin/bash`；在 Windows 上是 Git for Windows 的 bash。在 macOS 和 Linux 上，无论用哪个 shell，命令都会得到你的登录 shell 的 `PATH` 和环境变量。 |
 | `LORCA_DEEPSEEK_MODEL`、`LORCA_ANTHROPIC_MODEL`、`LORCA_CHATGPT_MODEL`、`LORCA_GROK_MODEL` | 没有指定模型的智能体使用的默认模型。 |
+| `LORCA_MODELS_URL` | Lorca 检查更新模型目录的地址。默认 `https://lorca.app/models/v1.json`；设置 `LORCA_MODELS_FETCH=0` 则不再检查。 |
 
 ## 文件
 
-一切都在 `~/.lorca/` 下，只有你的用户可读：身份和机器密钥、服务商凭据、设置、聊天、附件、插件、`mcp.json` 里你自己的 MCP 服务器，以及每个智能体一个的工作区文件夹（里面有它的记忆）。
+一切都在 `~/.lorca/` 下，只有你的用户可读：身份和机器密钥、服务商凭据、设置、聊天、附件、插件、`mcp.json` 里你自己的 MCP 服务器、`catalog.json` 里最近一次获取的模型目录，以及每个智能体一个的工作区文件夹（里面有它的记忆）。
 
 macOS 应用把服务的日志写到 `~/Library/Logs/Lorca/cli.log`。

@@ -1,17 +1,22 @@
 //! What is known about a model ahead of time: its context window and output cap, whether it
-//! reasons or sees images, how it is asked to think, and what its tokens cost. A snapshot of
-//! models.dev (fetched 2026-10-01) for the models Lorca offers. A model that is not listed
-//! runs with no window, no levels beyond the provider's default, and zero cost.
+//! reasons or sees images, how it is asked to think, and what its tokens cost. The catalog is
+//! `catalog.json`, which every build carries and lorca.app serves, so a Device takes a newer one
+//! without a new release (see [`install`]). A model that is not listed runs with no window, no
+//! levels beyond the provider's default, and zero cost.
 //!
 //! Every Device has it, the phone included: the agent's adapters read it, and the snapshot each
 //! app gets carries its models for the Model and Thinking pickers.
 
+mod catalog;
 mod types;
 
+use serde::Deserialize;
+
+pub use catalog::{install, parse, updated, Catalog, BUNDLED};
 pub use types::{Cost, ThinkingLevel, Usage};
 
 /// Dollars per million tokens.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
 pub struct Rates {
     pub input: f64,
     pub output: f64,
@@ -20,7 +25,7 @@ pub struct Rates {
 }
 
 /// Rates that apply once a request's input tokens exceed a size.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
 pub struct CostTier {
     pub input_tokens_above: u64,
     pub rates: Rates,
@@ -43,6 +48,59 @@ pub enum ThinkingMode {
     Effort,
 }
 
+impl ThinkingMode {
+    const ALL: [ThinkingMode; 4] = [ThinkingMode::Adaptive, ThinkingMode::AdaptiveBetweenTools, ThinkingMode::Budget, ThinkingMode::Effort];
+
+    /// Its name in the catalog.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ThinkingMode::Adaptive => "adaptive",
+            ThinkingMode::AdaptiveBetweenTools => "adaptive-between-tools",
+            ThinkingMode::Budget => "budget",
+            ThinkingMode::Effort => "effort",
+        }
+    }
+}
+
+impl std::str::FromStr for ThinkingMode {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        ThinkingMode::ALL.into_iter().find(|mode| mode.as_str() == s).ok_or_else(|| format!("Unknown thinking mode: {s}"))
+    }
+}
+
+/// The wire protocol a provider serves a model on, for a gateway that publishes one per model
+/// (OpenCode).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Wire {
+    /// `/v1/chat/completions`
+    ChatCompletions,
+    /// `/v1/messages`
+    Messages,
+    /// `/v1/responses`
+    Responses,
+}
+
+impl Wire {
+    const ALL: [Wire; 3] = [Wire::ChatCompletions, Wire::Messages, Wire::Responses];
+
+    /// Its name in the catalog, the one custom providers use for their protocol.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Wire::ChatCompletions => "chat-completions",
+            Wire::Messages => "messages",
+            Wire::Responses => "responses",
+        }
+    }
+}
+
+impl std::str::FromStr for Wire {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Wire::ALL.into_iter().find(|wire| wire.as_str() == s).ok_or_else(|| format!("Unknown wire protocol: {s}"))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ModelInfo {
     pub id: &'static str,
@@ -58,6 +116,8 @@ pub struct ModelInfo {
     /// The levels the model takes, lowest first. A model whose thinking cannot be turned off
     /// lists no `Off`.
     pub levels: &'static [ThinkingLevel],
+    /// The wire protocol its provider serves it on, for a provider whose models differ (OpenCode).
+    pub wire: Option<Wire>,
 }
 
 impl ModelInfo {
@@ -97,596 +157,19 @@ impl ModelInfo {
     }
 }
 
-use ThinkingLevel::{High, Low, Max, Medium, Minimal, Off, XHigh};
-
-const NO_TIERS: &[CostTier] = &[];
-/// Adaptive Claude efforts start at `low`; there is no `minimal` to offer.
-const ADAPTIVE_LEVELS: &[ThinkingLevel] = &[Off, Low, Medium, High, XHigh, Max];
-/// Fable 5.1 and Opus 5.5 always think.
-const ALWAYS_ON_LEVELS: &[ThinkingLevel] = &[Low, Medium, High, XHigh, Max];
-const BUDGET_LEVELS: &[ThinkingLevel] = &[Off, Minimal, Low, Medium, High];
-const DEEPSEEK_LEVELS: &[ThinkingLevel] = &[Off, Low, Medium, High, XHigh, Max];
-const CODEX_LEVELS: &[ThinkingLevel] = &[Low, Medium, High, XHigh, Max];
-/// Grok 4.6 and 4.7 take `reasoning.effort` up to `xhigh`.
-const GROK_LEVELS: &[ThinkingLevel] = &[Low, Medium, High, XHigh];
-const FULL_EFFORT_LEVELS: &[ThinkingLevel] = &[Off, Low, Medium, High, XHigh, Max];
-const ALWAYS_EFFORT_LEVELS: &[ThinkingLevel] = &[Low, Medium, High, XHigh, Max];
-const LOW_HIGH_MAX_LEVELS: &[ThinkingLevel] = &[Low, High, Max];
-/// DeepSeek V4 Pro on OpenCode: Zen can turn its thinking off, Go cannot.
-const OFF_HIGH_MAX_LEVELS: &[ThinkingLevel] = &[Off, High, Max];
-const HIGH_MAX_LEVELS: &[ThinkingLevel] = &[High, Max];
-const MUSE_LEVELS: &[ThinkingLevel] = &[Minimal, Low, Medium, High, XHigh];
-const MAX_ONLY_LEVELS: &[ThinkingLevel] = &[Max];
-const QWEN_LEVELS: &[ThinkingLevel] = &[Off, Low, Medium, XHigh];
-const NO_LEVELS: &[ThinkingLevel] = &[];
-
-const fn rates(input: f64, output: f64, cache_read: f64, cache_write: f64) -> Rates {
-    Rates { input, output, cache_read, cache_write }
+/// Every model the catalog in use offers, in its order.
+pub fn models() -> &'static [ModelInfo] {
+    &catalog::current().models
 }
-
-macro_rules! tier_272k {
-    ($input:expr, $output:expr, $cache_read:expr, $cache_write:expr) => {{
-        const TIERS: &[CostTier] = &[CostTier { input_tokens_above: 272_000, rates: rates($input, $output, $cache_read, $cache_write) }];
-        TIERS
-    }};
-}
-
-macro_rules! tier_200k {
-    ($input:expr, $output:expr, $cache_read:expr, $cache_write:expr) => {{
-        const TIERS: &[CostTier] = &[CostTier { input_tokens_above: 200_000, rates: rates($input, $output, $cache_read, $cache_write) }];
-        TIERS
-    }};
-}
-
-macro_rules! tier_512k {
-    ($input:expr, $output:expr, $cache_read:expr, $cache_write:expr) => {{
-        const TIERS: &[CostTier] = &[CostTier { input_tokens_above: 512_000, rates: rates($input, $output, $cache_read, $cache_write) }];
-        TIERS
-    }};
-}
-
-pub const MODELS: &[ModelInfo] = &[
-    // DeepSeek
-    ModelInfo {
-        id: "deepseek-flash",
-        name: "DeepSeek V4.1 Flash",
-        provider: "deepseek",
-        context_window: 1_000_000,
-        max_output: 384_000,
-        reasoning: true,
-        images: true,
-        rates: rates(0.15, 0.6, 0.003, 0.0),
-        tiers: NO_TIERS,
-        thinking: ThinkingMode::Adaptive,
-        levels: DEEPSEEK_LEVELS,
-    },
-    ModelInfo {
-        id: "deepseek-v4-pro",
-        name: "DeepSeek V4 Pro",
-        provider: "deepseek",
-        context_window: 1_000_000,
-        max_output: 384_000,
-        reasoning: true,
-        images: false,
-        rates: rates(0.435, 0.87, 0.003625, 0.0),
-        tiers: NO_TIERS,
-        thinking: ThinkingMode::Adaptive,
-        levels: DEEPSEEK_LEVELS,
-    },
-    // Anthropic
-    ModelInfo {
-        id: "claude-opus-5",
-        name: "Claude Opus 5",
-        provider: "anthropic",
-        context_window: 1_000_000,
-        max_output: 128_000,
-        reasoning: true,
-        images: true,
-        rates: rates(5.0, 25.0, 0.5, 6.25),
-        tiers: NO_TIERS,
-        thinking: ThinkingMode::Adaptive,
-        levels: ADAPTIVE_LEVELS,
-    },
-    ModelInfo {
-        id: "claude-opus-5-5",
-        name: "Claude Opus 5.5",
-        provider: "anthropic",
-        context_window: 1_000_000,
-        max_output: 128_000,
-        reasoning: true,
-        images: true,
-        rates: rates(4.0, 20.0, 0.2, 5.0),
-        tiers: NO_TIERS,
-        thinking: ThinkingMode::Adaptive,
-        levels: ALWAYS_ON_LEVELS,
-    },
-    ModelInfo {
-        id: "claude-sonnet-5",
-        name: "Claude Sonnet 5",
-        provider: "anthropic",
-        context_window: 1_000_000,
-        max_output: 128_000,
-        reasoning: true,
-        images: true,
-        rates: rates(2.0, 10.0, 0.2, 2.5),
-        tiers: NO_TIERS,
-        thinking: ThinkingMode::Adaptive,
-        levels: ADAPTIVE_LEVELS,
-    },
-    ModelInfo {
-        id: "claude-sonnet-5-5",
-        name: "Claude Sonnet 5.5",
-        provider: "anthropic",
-        context_window: 1_000_000,
-        max_output: 128_000,
-        reasoning: true,
-        images: true,
-        rates: rates(2.0, 10.0, 0.2, 2.5),
-        tiers: NO_TIERS,
-        thinking: ThinkingMode::AdaptiveBetweenTools,
-        levels: ADAPTIVE_LEVELS,
-    },
-    ModelInfo {
-        id: "claude-fable-5-1",
-        name: "Claude Fable 5.1",
-        provider: "anthropic",
-        context_window: 1_000_000,
-        max_output: 128_000,
-        reasoning: true,
-        images: true,
-        rates: rates(10.0, 50.0, 0.25, 12.5),
-        tiers: NO_TIERS,
-        thinking: ThinkingMode::Adaptive,
-        levels: ALWAYS_ON_LEVELS,
-    },
-    ModelInfo {
-        id: "claude-opus-4-8",
-        name: "Claude Opus 4.8",
-        provider: "anthropic",
-        context_window: 1_000_000,
-        max_output: 128_000,
-        reasoning: true,
-        images: true,
-        rates: rates(5.0, 25.0, 0.5, 6.25),
-        tiers: NO_TIERS,
-        thinking: ThinkingMode::Adaptive,
-        levels: ADAPTIVE_LEVELS,
-    },
-    ModelInfo {
-        id: "claude-haiku-4-5",
-        name: "Claude Haiku 4.5",
-        provider: "anthropic",
-        context_window: 200_000,
-        max_output: 64_000,
-        reasoning: true,
-        images: true,
-        rates: rates(1.0, 5.0, 0.1, 1.25),
-        tiers: NO_TIERS,
-        thinking: ThinkingMode::Budget,
-        levels: BUDGET_LEVELS,
-    },
-    // ChatGPT sign-ins: the subscription is not billed per token; these are the API rates, so
-    // a turn's cost still says what the work was worth.
-    ModelInfo {
-        id: "gpt-6.1-sol",
-        name: "GPT-6.1 Sol",
-        provider: "chatgpt",
-        context_window: 1_050_000,
-        max_output: 128_000,
-        reasoning: true,
-        images: true,
-        rates: rates(2.0, 10.0, 0.1, 2.5),
-        tiers: tier_272k!(4.0, 15.0, 0.2, 5.0),
-        thinking: ThinkingMode::Effort,
-        levels: CODEX_LEVELS,
-    },
-    ModelInfo {
-        id: "gpt-6-astra",
-        name: "GPT-6 Astra",
-        provider: "chatgpt",
-        context_window: 1_050_000,
-        max_output: 128_000,
-        reasoning: true,
-        images: true,
-        rates: rates(10.0, 50.0, 1.0, 12.5),
-        tiers: tier_272k!(20.0, 75.0, 2.0, 25.0),
-        thinking: ThinkingMode::Effort,
-        levels: CODEX_LEVELS,
-    },
-    ModelInfo {
-        id: "gpt-6-sol",
-        name: "GPT-6 Sol",
-        provider: "chatgpt",
-        context_window: 1_050_000,
-        max_output: 128_000,
-        reasoning: true,
-        images: true,
-        rates: rates(2.0, 10.0, 0.2, 2.5),
-        tiers: tier_272k!(4.0, 15.0, 0.4, 5.0),
-        thinking: ThinkingMode::Effort,
-        levels: CODEX_LEVELS,
-    },
-    ModelInfo {
-        id: "gpt-6-luna",
-        name: "GPT-6 Luna",
-        provider: "chatgpt",
-        context_window: 1_050_000,
-        max_output: 128_000,
-        reasoning: true,
-        images: true,
-        rates: rates(0.1, 0.5, 0.01, 0.125),
-        tiers: tier_272k!(0.2, 0.75, 0.02, 0.25),
-        thinking: ThinkingMode::Effort,
-        levels: CODEX_LEVELS,
-    },
-    // Grok sign-ins: a SuperGrok or X Premium+ subscription, not billed per token; these are
-    // xAI's API rates (docs.x.ai, 2026-09), so a turn's cost still says what the work was worth.
-    ModelInfo {
-        id: "grok-4.7",
-        name: "Grok 4.7",
-        provider: "grok",
-        context_window: 500_000,
-        max_output: 64_000,
-        reasoning: true,
-        images: true,
-        rates: rates(2.0, 6.0, 0.5, 0.0),
-        tiers: tier_200k!(4.0, 12.0, 1.0, 0.0),
-        thinking: ThinkingMode::Effort,
-        levels: GROK_LEVELS,
-    },
-    ModelInfo {
-        id: "grok-4.6",
-        name: "Grok 4.6",
-        provider: "grok",
-        context_window: 500_000,
-        max_output: 64_000,
-        reasoning: true,
-        images: true,
-        rates: rates(2.0, 6.0, 0.5, 0.0),
-        tiers: tier_200k!(4.0, 12.0, 1.0, 0.0),
-        thinking: ThinkingMode::Effort,
-        levels: GROK_LEVELS,
-    },
-    // OpenCode Zen. Its gateway routes each model to Responses, Messages, or Chat
-    // Completions; the catalog still presents them as one provider. After the default, each
-    // lab's frontier model that Zen serves on a wire Lorca speaks.
-    ModelInfo {
-        id: "deepseek-v4.1-flash",
-        name: "DeepSeek V4.1 Flash",
-        provider: "opencode",
-        context_window: 1_000_000,
-        max_output: 384_000,
-        reasoning: true,
-        images: true,
-        rates: rates(0.3, 1.2, 0.006, 0.0),
-        tiers: NO_TIERS,
-        thinking: ThinkingMode::Effort,
-        levels: LOW_HIGH_MAX_LEVELS,
-    },
-    ModelInfo {
-        id: "claude-fable-5-1",
-        name: "Claude Fable 5.1",
-        provider: "opencode",
-        context_window: 1_000_000,
-        max_output: 128_000,
-        reasoning: true,
-        images: true,
-        rates: rates(10.0, 50.0, 0.25, 12.5),
-        tiers: NO_TIERS,
-        thinking: ThinkingMode::Adaptive,
-        levels: ALWAYS_EFFORT_LEVELS,
-    },
-    ModelInfo {
-        id: "claude-opus-5-5",
-        name: "Claude Opus 5.5",
-        provider: "opencode",
-        context_window: 1_000_000,
-        max_output: 128_000,
-        reasoning: true,
-        images: true,
-        rates: rates(4.0, 20.0, 0.2, 5.0),
-        tiers: NO_TIERS,
-        thinking: ThinkingMode::Adaptive,
-        levels: ALWAYS_EFFORT_LEVELS,
-    },
-    ModelInfo {
-        id: "claude-sonnet-5-5",
-        name: "Claude Sonnet 5.5",
-        provider: "opencode",
-        context_window: 1_000_000,
-        max_output: 128_000,
-        reasoning: true,
-        images: true,
-        rates: rates(2.0, 10.0, 0.2, 2.5),
-        tiers: NO_TIERS,
-        thinking: ThinkingMode::Adaptive,
-        levels: ALWAYS_EFFORT_LEVELS,
-    },
-    ModelInfo {
-        id: "gpt-6-astra",
-        name: "GPT-6 Astra",
-        provider: "opencode",
-        context_window: 1_050_000,
-        max_output: 128_000,
-        reasoning: true,
-        images: true,
-        rates: rates(10.0, 50.0, 1.0, 12.5),
-        tiers: tier_272k!(20.0, 75.0, 2.0, 25.0),
-        thinking: ThinkingMode::Effort,
-        levels: ALWAYS_EFFORT_LEVELS,
-    },
-    ModelInfo {
-        id: "gpt-6.1-sol",
-        name: "GPT-6.1 Sol",
-        provider: "opencode",
-        context_window: 1_050_000,
-        max_output: 128_000,
-        reasoning: true,
-        images: true,
-        rates: rates(2.0, 10.0, 0.1, 2.5),
-        tiers: tier_272k!(4.0, 15.0, 0.2, 5.0),
-        thinking: ThinkingMode::Effort,
-        levels: ALWAYS_EFFORT_LEVELS,
-    },
-    ModelInfo {
-        id: "grok-4.7",
-        name: "Grok 4.7",
-        provider: "opencode",
-        context_window: 500_000,
-        max_output: 500_000,
-        reasoning: true,
-        images: true,
-        rates: rates(2.0, 6.0, 0.5, 0.0),
-        tiers: tier_200k!(4.0, 12.0, 1.0, 0.0),
-        thinking: ThinkingMode::Effort,
-        levels: GROK_LEVELS,
-    },
-    ModelInfo {
-        id: "muse-spark-1.3",
-        name: "Muse Spark 1.3",
-        provider: "opencode",
-        context_window: 1_048_576,
-        max_output: 131_072,
-        reasoning: true,
-        images: true,
-        rates: rates(1.25, 4.25, 0.15, 0.0),
-        tiers: NO_TIERS,
-        thinking: ThinkingMode::Effort,
-        levels: MUSE_LEVELS,
-    },
-    ModelInfo {
-        id: "deepseek-v4-pro",
-        name: "DeepSeek V4 Pro",
-        provider: "opencode",
-        context_window: 1_000_000,
-        max_output: 384_000,
-        reasoning: true,
-        images: false,
-        rates: rates(1.74, 3.84, 0.145, 0.0),
-        tiers: NO_TIERS,
-        thinking: ThinkingMode::Effort,
-        levels: OFF_HIGH_MAX_LEVELS,
-    },
-    ModelInfo {
-        id: "kimi-k3",
-        name: "Kimi K3",
-        provider: "opencode",
-        context_window: 1_048_576,
-        max_output: 131_072,
-        reasoning: true,
-        images: true,
-        rates: rates(3.0, 15.0, 0.3, 0.0),
-        tiers: NO_TIERS,
-        thinking: ThinkingMode::Effort,
-        levels: MAX_ONLY_LEVELS,
-    },
-    ModelInfo {
-        id: "glm-5.3",
-        name: "GLM-5.3",
-        provider: "opencode",
-        context_window: 1_000_000,
-        max_output: 131_072,
-        reasoning: true,
-        images: false,
-        rates: rates(1.4, 4.4, 0.26, 0.0),
-        tiers: NO_TIERS,
-        thinking: ThinkingMode::Effort,
-        levels: LOW_HIGH_MAX_LEVELS,
-    },
-    ModelInfo {
-        id: "qwen3.8-max",
-        name: "Qwen3.8 Max",
-        provider: "opencode",
-        context_window: 262_144,
-        max_output: 131_072,
-        reasoning: true,
-        images: true,
-        rates: rates(2.0, 6.0, 0.25, 2.5),
-        tiers: NO_TIERS,
-        thinking: ThinkingMode::Effort,
-        levels: NO_LEVELS,
-    },
-    ModelInfo {
-        id: "minimax-m3",
-        name: "MiniMax M3",
-        provider: "opencode",
-        context_window: 512_000,
-        max_output: 128_000,
-        reasoning: true,
-        images: true,
-        rates: rates(0.3, 1.2, 0.06, 0.0),
-        tiers: NO_TIERS,
-        thinking: ThinkingMode::Effort,
-        levels: NO_LEVELS,
-    },
-    ModelInfo {
-        id: "big-pickle",
-        name: "Big Pickle",
-        provider: "opencode",
-        context_window: 200_000,
-        max_output: 32_000,
-        reasoning: true,
-        images: false,
-        rates: rates(0.0, 0.0, 0.0, 0.0),
-        tiers: NO_TIERS,
-        thinking: ThinkingMode::Effort,
-        levels: NO_LEVELS,
-    },
-    // OpenCode Go. The first entry is Lorca's default for the subscription; each lab's
-    // frontier model on the plan follows. The Muse Spark Contributor models are left out:
-    // their discount pays for Meta training on the prompts.
-    ModelInfo {
-        id: "glm-5.3-flash",
-        name: "GLM-5.3 Flash",
-        provider: "opencode-go",
-        context_window: 1_000_000,
-        max_output: 131_072,
-        reasoning: true,
-        images: true,
-        rates: rates(0.15, 0.5, 0.03, 0.0),
-        tiers: NO_TIERS,
-        thinking: ThinkingMode::Effort,
-        levels: LOW_HIGH_MAX_LEVELS,
-    },
-    ModelInfo {
-        id: "glm-5.3",
-        name: "GLM-5.3",
-        provider: "opencode-go",
-        context_window: 1_000_000,
-        max_output: 131_072,
-        reasoning: true,
-        images: false,
-        rates: rates(1.4, 4.4, 0.26, 0.0),
-        tiers: NO_TIERS,
-        thinking: ThinkingMode::Effort,
-        levels: LOW_HIGH_MAX_LEVELS,
-    },
-    ModelInfo {
-        id: "deepseek-v4.1-flash",
-        name: "DeepSeek V4.1 Flash",
-        provider: "opencode-go",
-        context_window: 1_000_000,
-        max_output: 384_000,
-        reasoning: true,
-        images: true,
-        rates: rates(0.15, 0.6, 0.003, 0.0),
-        tiers: NO_TIERS,
-        thinking: ThinkingMode::Effort,
-        levels: LOW_HIGH_MAX_LEVELS,
-    },
-    ModelInfo {
-        id: "deepseek-v4-pro",
-        name: "DeepSeek V4 Pro",
-        provider: "opencode-go",
-        context_window: 1_000_000,
-        max_output: 384_000,
-        reasoning: true,
-        images: false,
-        rates: rates(0.66, 1.98, 0.022, 0.0),
-        tiers: NO_TIERS,
-        thinking: ThinkingMode::Effort,
-        levels: HIGH_MAX_LEVELS,
-    },
-    ModelInfo {
-        id: "gpt-6-luna",
-        name: "GPT-6 Luna",
-        provider: "opencode-go",
-        context_window: 1_050_000,
-        max_output: 128_000,
-        reasoning: true,
-        images: true,
-        rates: rates(0.1, 0.5, 0.01, 0.125),
-        tiers: tier_272k!(0.2, 0.75, 0.02, 0.25),
-        thinking: ThinkingMode::Effort,
-        levels: FULL_EFFORT_LEVELS,
-    },
-    ModelInfo {
-        id: "grok-4.7",
-        name: "Grok 4.7",
-        provider: "opencode-go",
-        context_window: 500_000,
-        max_output: 500_000,
-        reasoning: true,
-        images: true,
-        rates: rates(2.0, 6.0, 0.5, 0.0),
-        tiers: tier_200k!(4.0, 12.0, 1.0, 0.0),
-        thinking: ThinkingMode::Effort,
-        levels: GROK_LEVELS,
-    },
-    ModelInfo {
-        id: "kimi-k3",
-        name: "Kimi K3",
-        provider: "opencode-go",
-        context_window: 1_048_576,
-        max_output: 131_072,
-        reasoning: true,
-        images: true,
-        rates: rates(3.0, 15.0, 0.3, 0.0),
-        tiers: NO_TIERS,
-        thinking: ThinkingMode::Effort,
-        levels: MAX_ONLY_LEVELS,
-    },
-    ModelInfo {
-        id: "qwen3.8-max",
-        name: "Qwen3.8 Max",
-        provider: "opencode-go",
-        context_window: 1_000_000,
-        max_output: 131_072,
-        reasoning: true,
-        images: true,
-        rates: rates(2.0, 6.0, 0.25, 2.5),
-        tiers: NO_TIERS,
-        thinking: ThinkingMode::Effort,
-        levels: QWEN_LEVELS,
-    },
-    ModelInfo {
-        id: "qwen3.8-flash",
-        name: "Qwen3.8 Flash",
-        provider: "opencode-go",
-        context_window: 1_000_000,
-        max_output: 131_072,
-        reasoning: true,
-        images: true,
-        rates: rates(0.15, 0.47, 0.016, 0.2),
-        tiers: NO_TIERS,
-        thinking: ThinkingMode::Effort,
-        levels: QWEN_LEVELS,
-    },
-    ModelInfo {
-        id: "minimax-m3",
-        name: "MiniMax M3",
-        provider: "opencode-go",
-        context_window: 1_000_000,
-        max_output: 131_072,
-        reasoning: true,
-        images: true,
-        rates: rates(0.3, 1.2, 0.06, 0.0),
-        tiers: tier_512k!(0.6, 2.4, 0.12, 0.0),
-        thinking: ThinkingMode::Effort,
-        levels: NO_LEVELS,
-    },
-    ModelInfo {
-        id: "mimo-v2.6-pro",
-        name: "MiMo-V2.6-Pro",
-        provider: "opencode-go",
-        context_window: 1_048_576,
-        max_output: 131_072,
-        reasoning: true,
-        images: true,
-        rates: rates(0.435, 0.87, 0.003625, 0.0),
-        tiers: NO_TIERS,
-        thinking: ThinkingMode::Effort,
-        levels: NO_LEVELS,
-    },
-];
 
 /// The catalog entry for a model of a provider: an exact id, or a dated variant of one
 /// (`claude-haiku-4-5-20251001`).
 pub fn find(provider: &str, model: &str) -> Option<&'static ModelInfo> {
-    MODELS
+    let models = models();
+    models
         .iter()
         .find(|m| m.provider == provider && m.id == model)
-        .or_else(|| MODELS.iter().find(|m| m.provider == provider && model.starts_with(m.id) && model[m.id.len()..].starts_with('-')))
+        .or_else(|| models.iter().find(|m| m.provider == provider && model.starts_with(m.id) && model[m.id.len()..].starts_with('-')))
 }
 
 /// The catalog entry for a model id under whichever provider offers it, for a server the
@@ -697,17 +180,29 @@ pub fn find_any(model: &str) -> Option<&'static ModelInfo> {
     let dated = |m: &&ModelInfo| {
         model.strip_prefix(m.id).and_then(|rest| rest.strip_prefix('-')).is_some_and(|date| !date.is_empty() && date.chars().all(|c| c.is_ascii_digit()))
     };
-    MODELS.iter().find(|m| m.id == model).or_else(|| MODELS.iter().find(dated))
+    let models = models();
+    models.iter().find(|m| m.id == model).or_else(|| models.iter().find(dated))
 }
 
 /// The models a provider offers, in the catalog's order (the first is the default).
 pub fn for_provider(provider: &str) -> Vec<&'static ModelInfo> {
-    MODELS.iter().filter(|m| m.provider == provider).collect()
+    models().iter().filter(|m| m.provider == provider).collect()
+}
+
+/// The model a provider runs when a bot names none: the first it lists.
+pub fn default_model(provider: &str) -> Option<&'static str> {
+    models().iter().find(|m| m.provider == provider).map(|m| m.id)
+}
+
+/// The small, fast model Auto-review runs on for a provider.
+pub fn review_model(provider: &str) -> Option<&'static str> {
+    catalog::current().review.get(provider).map(String::as_str)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ThinkingLevel::{High, Low, Max, Minimal, Off, XHigh};
 
     #[test]
     fn cost_follows_the_rates_and_the_tier() {
@@ -731,9 +226,10 @@ mod tests {
         assert!(find("anthropic", "claude-haiku-4").is_none());
         assert!(find("deepseek", "deepseek-chat").is_none());
         assert_eq!(for_provider("deepseek").first().map(|m| m.id), Some("deepseek-flash"));
-        assert_eq!(for_provider("chatgpt").first().map(|m| m.id), Some("gpt-6.1-sol"));
-        assert_eq!(for_provider("opencode").first().map(|m| m.id), Some("deepseek-v4.1-flash"));
-        assert_eq!(for_provider("opencode-go").first().map(|m| m.id), Some("glm-5.3-flash"));
+        assert_eq!(default_model("chatgpt"), Some("gpt-6.1-sol"));
+        assert_eq!(default_model("opencode"), Some("deepseek-v4.1-flash"));
+        assert_eq!(default_model("opencode-go"), Some("glm-5.3-flash"));
+        assert_eq!(default_model("custom:lab"), None);
         assert_eq!(find("opencode-go", "qwen3.8-flash").map(|m| m.images), Some(true));
     }
 
@@ -764,5 +260,14 @@ mod tests {
         // Zen can turn DeepSeek V4 Pro's thinking off; on Go it thinks at least at high.
         assert_eq!(find("opencode", "deepseek-v4-pro").unwrap().clamp_level(Off), Some(Off));
         assert_eq!(find("opencode-go", "deepseek-v4-pro").unwrap().clamp_level(Off), Some(High));
+    }
+
+    #[test]
+    fn every_provider_has_a_review_model_it_lists() {
+        for provider in ["deepseek", "anthropic", "chatgpt", "grok", "opencode", "opencode-go"] {
+            let review = review_model(provider).unwrap_or_else(|| panic!("{provider} has no review model"));
+            assert!(find(provider, review).is_some(), "{provider}/{review}");
+        }
+        assert_eq!(review_model("anthropic"), Some("claude-haiku-4-5"));
     }
 }

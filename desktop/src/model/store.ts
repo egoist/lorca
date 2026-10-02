@@ -365,6 +365,7 @@ export class AppStore {
         if (roster.routines) this.routines = roster.routines.map(toRoutine);
         if (roster.auto_review) this.autoReview = toAutoReview(roster.auto_review);
         if (roster.providers) this.providers = toProviders(roster.providers);
+        if (roster.models) this.models = toModels(roster.models);
         const changed: string[] = [];
         this.chats = roster.chats.map((summary) => {
           const existing = this.chat(summary.id);

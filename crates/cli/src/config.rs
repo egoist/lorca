@@ -55,6 +55,11 @@ impl Config {
         self.home.join("mcp.json")
     }
 
+    /// The last model catalog fetched, with what the next check sends back.
+    pub fn catalog_path(&self) -> PathBuf {
+        self.home.join("catalog.json")
+    }
+
     pub fn ensure_home(&self) -> anyhow::Result<()> {
         std::fs::create_dir_all(&self.home)?;
         set_private(&self.home)?;

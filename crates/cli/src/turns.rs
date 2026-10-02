@@ -91,6 +91,8 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
         None => None,
     };
 
+    // A model this Device's catalog lacks may have been picked on one with a newer catalog.
+    crate::catalog::check_for_model(app, &bot.provider, bot.model.as_deref()).await;
     let provider = match providers::provider_for(app, &bot.provider, bot.model.as_deref(), providers::thinking_level(&bot)) {
         Ok(provider) => provider,
         Err(reason) => {

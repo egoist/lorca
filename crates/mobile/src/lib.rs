@@ -76,6 +76,10 @@ impl Core {
             .build()
             .map_err(|e| CoreError::Failed(e.to_string()))?;
         let app = App::load(Config { home: PathBuf::from(home), port: 0 }).map_err(|e| CoreError::Failed(e.to_string()))?;
+        // The app's first `bootstrap` checks lorca.app for a newer model catalog. Tests never do.
+        if !cfg!(test) {
+            lorca::catalog::enable(&app);
+        }
         let _guard = runtime.enter();
         // Before the first snapshot and the first pull: a turn sent before the app was closed
         // still shows, and a result that landed meanwhile ends it.

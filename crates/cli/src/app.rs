@@ -214,6 +214,8 @@ pub struct App {
     pub plugins: Mutex<crate::plugins::Store>,
     /// The index fetched from `marketplace_url`: (fetched at, index).
     pub marketplace_cache: Mutex<Option<(f64, crate::marketplace::Index)>>,
+    /// Checks for a newer model catalog.
+    pub catalog: crate::catalog::Updates,
     /// Connected MCP servers.
     #[cfg(feature = "runner")]
     pub mcp: crate::plugins::mcp::Pool,
@@ -235,6 +237,7 @@ impl App {
             }
         }
         let settings = Settings::load(&config);
+        crate::catalog::load_cached(&config);
         let identity: Option<IdentityFile> = config::read_json(&config.identity_path());
         let machine: Option<MachineFile> = config::read_json(&config.machine_path());
         let credentials = Credentials::load(&config);
@@ -290,6 +293,7 @@ impl App {
             shell_sessions: crate::shell::Sessions::default(),
             plugins: Mutex::new(plugins),
             marketplace_cache: Mutex::new(None),
+            catalog: crate::catalog::Updates::default(),
             #[cfg(feature = "runner")]
             mcp: crate::plugins::mcp::Pool::new(),
             #[cfg(feature = "runner")]
@@ -917,6 +921,7 @@ impl App {
             routines: self.routines_out(&state),
             auto_review: state.auto_review.clone(),
             providers: self.credentials.lock().unwrap().statuses(),
+            models: models_out(),
         }
     }
 
@@ -1654,7 +1659,7 @@ impl App {
 /// The models the apps offer in their pickers, in the catalog's order, so each provider's first
 /// is its default: the provider, id, and name, and the thinking levels each one takes.
 fn models_out() -> Vec<Value> {
-    lorca_models::MODELS
+    lorca_models::models()
         .iter()
         .map(|model| json!({ "provider": model.provider, "id": model.id, "name": model.name, "levels": model.levels }))
         .collect()

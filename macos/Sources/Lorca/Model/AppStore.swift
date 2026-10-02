@@ -302,6 +302,7 @@ final class AppStore {
             if let incoming = roster.routines { routines = incoming.map { $0.toModel() } }
             if let incoming = roster.autoReview { autoReview = incoming.toModel() }
             if let incoming = roster.providers { providers = incoming.compactMap { $0.toModel() } }
+            if let incoming = roster.models { catalog = incoming.compactMap { $0.toModel() } }
             var merged: [Chat] = []
             var changed: [Chat.ID] = []
             for summary in roster.chats {
