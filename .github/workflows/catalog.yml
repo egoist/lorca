@@ -1,12 +1,13 @@
-# Checks a change to the model catalog: crates/models/catalog.json moves its "updated" time
-# forward whenever anything else in it changes, as Devices keep whichever catalog is later.
-# The rules a catalog must read by are checked by the lorca-models tests in the Tests workflow.
+# Checks a change to what lorca.app serves Devices: the model catalog (crates/models/catalog.json)
+# and the marketplace index (crates/cli/marketplace/index.json) each move their "updated" time
+# forward whenever anything else in them changes, as Devices keep whichever copy is later. The
+# rules each must read by are checked by the lorca-models and lorca tests in the Tests workflow.
 # scripts/check-catalog.ts is the check; `bun run check:catalog` runs it locally.
 name: Catalog
 
 on:
   pull_request:
-    paths: ["crates/models/catalog.json", "scripts/check-catalog.ts", ".github/workflows/catalog.yml"]
+    paths: ["crates/models/catalog.json", "crates/cli/marketplace/index.json", "scripts/check-catalog.ts", ".github/workflows/catalog.yml"]
 
 permissions:
   contents: read

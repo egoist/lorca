@@ -10,20 +10,16 @@
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use reqwest::header::{ETAG, IF_NONE_MATCH, USER_AGENT};
-use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::app::App;
 use crate::config::{self, Config};
+use crate::served;
 
 pub const DEFAULT_URL: &str = "https://lorca.app/models/v1.json";
-/// A check this soon after the last one is skipped, unless forced.
-const FRESH_SECS: i64 = 60 * 60;
 /// How often a turn on a model the catalog lacks may check.
 const UNKNOWN_MODEL_EVERY: Duration = Duration::from_secs(5 * 60);
-const TIMEOUT: Duration = Duration::from_secs(5);
 
 /// This Device's checks for a newer catalog.
 #[derive(Default)]
@@ -115,7 +111,7 @@ pub async fn check(app: &Arc<App>, force: bool) -> Result<bool, String> {
     let path = app.config.catalog_path();
     let mut cache: Cache = config::read_json(&path).unwrap_or_default();
     let now = config::now_unix();
-    if !force && (0..FRESH_SECS).contains(&(now - cache.checked_at)) {
+    if !force && (0..served::FRESH_SECS).contains(&(now - cache.checked_at)) {
         return Ok(false);
     }
     let fetched = fetch(app, url, &cache).await;
@@ -143,20 +139,9 @@ pub async fn check(app: &Arc<App>, force: bool) -> Result<bool, String> {
 
 /// The catalog at `url` with its ETag, or `None` when it has not changed since the cached one.
 async fn fetch(app: &App, url: &str, cache: &Cache) -> Result<Option<(Option<String>, String, lorca_models::Catalog)>, String> {
-    let mut request = app.http.get(url).timeout(TIMEOUT).header(USER_AGENT, concat!("lorca/", env!("CARGO_PKG_VERSION")));
     // The validator goes only with the catalog it names, so a 304 always leaves one to keep.
-    if let Some(etag) = cache.etag.as_deref().filter(|_| !cache.catalog.is_null()) {
-        request = request.header(IF_NONE_MATCH, etag);
-    }
-    let response = request.send().await.map_err(|e| e.to_string())?;
-    if response.status() == StatusCode::NOT_MODIFIED {
-        return Ok(None);
-    }
-    if !response.status().is_success() {
-        return Err(format!("{url} answered {}", response.status()));
-    }
-    let etag = response.headers().get(ETAG).and_then(|value| value.to_str().ok()).map(str::to_string);
-    let text = response.text().await.map_err(|e| e.to_string())?;
+    let etag = cache.etag.as_deref().filter(|_| !cache.catalog.is_null());
+    let Some((etag, text)) = served::fetch(app, url, etag).await? else { return Ok(None) };
     let catalog = lorca_models::parse(&text)?;
     Ok(Some((etag, text, catalog)))
 }
@@ -165,38 +150,6 @@ async fn fetch(app: &App, url: &str, cache: &Cache) -> Result<Option<(Option<Str
 mod tests {
     use super::*;
     use crate::events::Event;
-
-    /// Answers every request with `body` and the ETag `"v1"`, or a 304 to one that sends it back,
-    /// and keeps each request it got.
-    fn catalog_server(body: String) -> (String, Arc<Mutex<Vec<String>>>) {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let url = format!("http://{}/models/v1.json", listener.local_addr().unwrap());
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        let log = seen.clone();
-        std::thread::spawn(move || {
-            use std::io::{Read, Write};
-            for socket in listener.incoming() {
-                let Ok(mut socket) = socket else { break };
-                let mut request = Vec::new();
-                let mut buffer = [0u8; 4096];
-                while !request.windows(4).any(|end| end == b"\r\n\r\n") {
-                    match socket.read(&mut buffer) {
-                        Ok(0) | Err(_) => break,
-                        Ok(read) => request.extend_from_slice(&buffer[..read]),
-                    }
-                }
-                let request = String::from_utf8_lossy(&request).to_ascii_lowercase();
-                let reply = if request.contains("\r\nif-none-match: \"v1\"\r\n") {
-                    "HTTP/1.1 304 Not Modified\r\nETag: \"v1\"\r\nConnection: close\r\n\r\n".to_string()
-                } else {
-                    format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nETag: \"v1\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
-                };
-                log.lock().unwrap().push(request);
-                let _ = socket.write_all(reply.as_bytes());
-            }
-        });
-        (url, seen)
-    }
 
     struct Scratch(Arc<App>, std::path::PathBuf);
 
@@ -216,7 +169,7 @@ mod tests {
         // The bundled models under a later time, so other tests' lookups answer the same.
         let mut later: Value = serde_json::from_str(lorca_models::BUNDLED).unwrap();
         later["updated"] = Value::from("2999-01-01T00:00:00Z");
-        let (url, seen) = catalog_server(later.to_string());
+        let (url, seen) = served::test_server("/models/v1.json", later.to_string());
         let scratch = scratch_app();
         let app = &scratch.0;
         assert_eq!(check(app, true).await, Err("Model catalog updates are off".into()));

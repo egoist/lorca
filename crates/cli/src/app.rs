@@ -212,8 +212,8 @@ pub struct App {
     pub shell_sessions: crate::shell::Sessions,
     /// What this Runner has installed, with the secrets kept apart.
     pub plugins: Mutex<crate::plugins::Store>,
-    /// The index fetched from `marketplace_url`: (fetched at, index).
-    pub marketplace_cache: Mutex<Option<(f64, crate::marketplace::Index)>>,
+    /// The marketplace index in use, and the checks for a newer one.
+    pub marketplace: crate::marketplace::Updates,
     /// Checks for a newer model catalog.
     pub catalog: crate::catalog::Updates,
     /// Connected MCP servers.
@@ -242,6 +242,7 @@ impl App {
         let machine: Option<MachineFile> = config::read_json(&config.machine_path());
         let credentials = Credentials::load(&config);
         let plugins = crate::plugins::Store::load(&config);
+        let marketplace = crate::marketplace::Updates::load(&config);
         let store = LocalStore::open(&config.database_path())?;
         let mut state = store.load_state()?;
         for bot in &mut state.bots {
@@ -292,7 +293,7 @@ impl App {
             #[cfg(feature = "runner")]
             shell_sessions: crate::shell::Sessions::default(),
             plugins: Mutex::new(plugins),
-            marketplace_cache: Mutex::new(None),
+            marketplace,
             catalog: crate::catalog::Updates::default(),
             #[cfg(feature = "runner")]
             mcp: crate::plugins::mcp::Pool::new(),

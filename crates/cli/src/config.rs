@@ -60,6 +60,11 @@ impl Config {
         self.home.join("catalog.json")
     }
 
+    /// The last marketplace index fetched, with what the next check sends back.
+    pub fn marketplace_path(&self) -> PathBuf {
+        self.home.join("marketplace.json")
+    }
+
     pub fn ensure_home(&self) -> anyhow::Result<()> {
         std::fs::create_dir_all(&self.home)?;
         set_private(&self.home)?;
@@ -72,9 +77,6 @@ impl Config {
 pub struct Settings {
     #[serde(default)]
     pub relay_url: Option<String>,
-    /// A marketplace index to list beside the bundled one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub marketplace_url: Option<String>,
 }
 
 impl Settings {

@@ -1,28 +1,43 @@
 //! The marketplace, after Grok Bot's: plugins to install on a Runner and bots to add from a
-//! template, with the ones worth a first look featured. The index ships in the CLI
-//! (`marketplace/index.json`); `marketplace_url` in settings (or `LORCA_MARKETPLACE_URL`) names
-//! another, fetched at most once an hour, whose entries add to the bundled ones or replace them
-//! by id.
+//! template, with the ones worth a first look featured. The index in use is the latest of the
+//! one this build carries (`marketplace/index.json`), the one cached in `marketplace.json`, and
+//! the one served at [`DEFAULT_URL`] (`LORCA_MARKETPLACE_URL`; `LORCA_MARKETPLACE_FETCH=0` turns
+//! fetching off), so a plugin added to the index reaches every Device without a release.
+//! `lorca serve` checks the server when it starts; after that an app's `bootstrap` and each use
+//! of the index ([`index`]) check, and `marketplace.reload` checks even within the hour. A check
+//! within the hour of the last one is skipped, and nothing checks on a timer. A bot's search or
+//! install that finds nothing checks first, at most every five minutes, since the plugin may have
+//! been published since. Installed marketplace plugins follow the index in use.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::app::App;
-use crate::config::now_secs;
+use crate::config::{self, Config};
 use crate::model::{Bot, SetupPlugin, TemplateSetup};
 use crate::plugins::Manifest;
+use crate::served;
 
 /// The bundled index: first-party plugins and bots.
 const BUNDLED_INDEX: &str = include_str!("../marketplace/index.json");
 
-/// How long a fetched index is kept before it is asked for again.
-const INDEX_TTL_SECS: f64 = 3600.0;
+pub const DEFAULT_URL: &str = "https://lorca.app/marketplace/v1.json";
+
+/// The format this build reads. A change older builds cannot read gets a new version, served
+/// beside this one.
+const VERSION: u64 = 1;
+
+/// How often a search or an install that found nothing may check.
+const MISSING_EVERY: Duration = Duration::from_secs(5 * 60);
 
 /// What the marketplace offers, in index order.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Index {
+    /// When it last changed, as `YYYY-MM-DDTHH:MM:SSZ`; of two indexes the later one wins.
+    pub updated: String,
     pub plugins: Vec<Manifest>,
     pub bots: Vec<BotTemplate>,
 }
@@ -34,22 +49,6 @@ impl Index {
 
     pub fn bot(&self, id: &str) -> Option<&BotTemplate> {
         self.bots.iter().find(|b| b.id == id)
-    }
-
-    /// Entries of `other` replace the ones with the same id and follow the rest.
-    fn merge(&mut self, other: Index) {
-        for plugin in other.plugins {
-            match self.plugins.iter_mut().find(|p| p.id == plugin.id) {
-                Some(existing) => *existing = plugin,
-                None => self.plugins.push(plugin),
-            }
-        }
-        for bot in other.bots {
-            match self.bots.iter_mut().find(|b| b.id == bot.id) {
-                Some(existing) => *existing = bot,
-                None => self.bots.push(bot),
-            }
-        }
     }
 }
 
@@ -126,63 +125,202 @@ impl BotTemplate {
 
 // MARK: - The index
 
-/// The index on offer: the bundled one, plus the one at `marketplace_url` when set. A fetch
-/// that fails leaves the bundled index. Installed marketplace plugins follow what it lists.
-pub async fn index(app: &Arc<App>) -> Index {
-    let mut index = bundled();
-    let url = app.settings.lock().unwrap().marketplace_url.clone().or_else(|| std::env::var("LORCA_MARKETPLACE_URL").ok()).filter(|u| !u.trim().is_empty());
-    if let Some(url) = url {
-        let cached = app.marketplace_cache.lock().unwrap().clone();
-        let extra = match cached {
-            Some((at, extra)) if now_secs() - at < INDEX_TTL_SECS => extra,
-            _ => match fetch(app, &url).await {
-                Ok(extra) => {
-                    *app.marketplace_cache.lock().unwrap() = Some((now_secs(), extra.clone()));
-                    extra
-                }
-                Err(error) => {
-                    tracing::warn!(%error, url, "fetching the marketplace index");
-                    Index::default()
-                }
-            },
-        };
-        index.merge(extra);
-    }
-    crate::plugins::refresh_installed(app, &index.plugins);
-    index
+/// This Device's marketplace: the index in use, and its checks for a newer one.
+pub struct Updates {
+    /// The latest of the bundled index, the cached one, and the served one.
+    current: RwLock<Arc<Index>>,
+    /// Where newer indexes come from. Unset until [`enable`], so an App that never enables it,
+    /// a test or a one-shot command, reads only the bundled and cached indexes.
+    url: OnceLock<String>,
+    /// One check at a time.
+    checking: tokio::sync::Mutex<()>,
+    /// When a search or an install that found nothing last checked.
+    missing_checked: Mutex<Option<Instant>>,
 }
 
-/// The bundled index alone, for startup.
+impl Updates {
+    /// The bundled index, or the cached one when it is later.
+    pub fn load(config: &Config) -> Updates {
+        let mut index = bundled();
+        if let Some(cache) = config::read_json::<Cache>(&config.marketplace_path()).filter(|cache| !cache.index.is_null()) {
+            match parse(&cache.index.to_string()) {
+                Ok(cached) if cached.updated > index.updated => index = cached,
+                Ok(_) => {}
+                Err(error) => tracing::warn!(%error, "reading the cached marketplace index"),
+            }
+        }
+        Updates { current: RwLock::new(Arc::new(index)), url: OnceLock::new(), checking: tokio::sync::Mutex::new(()), missing_checked: Mutex::new(None) }
+    }
+}
+
+/// `marketplace.json` in Lorca's folder: the last index fetched, as served, and what the next
+/// check sends back.
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct Cache {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    etag: Option<String>,
+    /// Unix seconds of the last check, answered or not.
+    #[serde(default)]
+    checked_at: i64,
+    #[serde(default)]
+    index: Value,
+}
+
+/// Lets this Device check for newer indexes, at `LORCA_MARKETPLACE_URL` or lorca.app, unless
+/// `LORCA_MARKETPLACE_FETCH=0`.
+pub fn enable(app: &App) {
+    if std::env::var("LORCA_MARKETPLACE_FETCH").is_ok_and(|value| value.trim() == "0") {
+        return;
+    }
+    let url = std::env::var("LORCA_MARKETPLACE_URL").ok().map(|url| url.trim().to_string()).filter(|url| !url.is_empty());
+    let _ = app.marketplace.url.set(url.unwrap_or_else(|| DEFAULT_URL.into()));
+}
+
+/// The index in use, as it stands.
+pub fn current(app: &App) -> Arc<Index> {
+    app.marketplace.current.read().unwrap().clone()
+}
+
+/// The index on offer, after a check for a newer one unless the last was within the hour.
+pub async fn index(app: &Arc<App>) -> Arc<Index> {
+    if app.marketplace.url.get().is_some() {
+        if let Err(error) = check(app, false).await {
+            tracing::warn!(%error, "checking for a newer marketplace index");
+        }
+    }
+    current(app)
+}
+
+/// Checks for a newer index in the background, unless updates are off.
+pub fn check_in_background(app: &Arc<App>) {
+    if app.marketplace.url.get().is_none() {
+        return;
+    }
+    let app = app.clone();
+    tokio::spawn(async move {
+        if let Err(error) = check(&app, false).await {
+            tracing::warn!(%error, "checking for a newer marketplace index");
+        }
+    });
+}
+
+/// After a bot's search or install found nothing: the plugin may have been published since the
+/// last check. Checks now, at most every five minutes. True when a newer index came.
+pub async fn check_for_missing(app: &Arc<App>) -> bool {
+    if app.marketplace.url.get().is_none() {
+        return false;
+    }
+    {
+        let mut last = app.marketplace.missing_checked.lock().unwrap();
+        if last.is_some_and(|at| at.elapsed() < MISSING_EVERY) {
+            return false;
+        }
+        *last = Some(Instant::now());
+    }
+    check(app, true).await.unwrap_or_else(|error| {
+        tracing::warn!(%error, "checking for a newer marketplace index");
+        false
+    })
+}
+
+/// Asks the server for its index, unless the last check was within the hour and this one is not
+/// forced. A later index than the one in use replaces it, and the installed marketplace plugins
+/// follow it. True when one did.
+pub async fn check(app: &Arc<App>, force: bool) -> Result<bool, String> {
+    let Some(url) = app.marketplace.url.get() else { return Err("Marketplace updates are off".into()) };
+    let _one_at_a_time = app.marketplace.checking.lock().await;
+    let path = app.config.marketplace_path();
+    let mut cache: Cache = config::read_json(&path).unwrap_or_default();
+    let now = config::now_unix();
+    if !force && (0..served::FRESH_SECS).contains(&(now - cache.checked_at)) {
+        return Ok(false);
+    }
+    // The validator goes only with the index it names, so a 304 always leaves one to keep.
+    let etag = cache.etag.as_deref().filter(|_| !cache.index.is_null());
+    let fetched = match served::fetch(app, url, etag).await {
+        Ok(Some((etag, text))) => parse(&text).map(|index| Some((etag, text, index))),
+        Ok(None) => Ok(None),
+        Err(error) => Err(error),
+    };
+    cache.checked_at = now;
+    let installed = match fetched {
+        Ok(Some((etag, text, index))) => {
+            let installed = install_index(app, index);
+            // Kept even when it is not newer than the one in use, so the next check can ask
+            // whether it changed.
+            cache.index = serde_json::from_str(&text).unwrap_or_default();
+            cache.etag = etag;
+            Ok(installed)
+        }
+        Ok(None) => Ok(false),
+        Err(error) => Err(error),
+    };
+    if let Err(error) = config::write_json_private(&path, &cache) {
+        tracing::warn!(%error, "saving the marketplace index");
+    }
+    installed
+}
+
+/// Makes `index` the one in use when it is later than that one, and has the installed
+/// marketplace plugins follow it. True when it was.
+fn install_index(app: &Arc<App>, index: Index) -> bool {
+    let index = Arc::new(index);
+    {
+        let mut current = app.marketplace.current.write().unwrap();
+        if index.updated <= current.updated {
+            return false;
+        }
+        *current = index.clone();
+    }
+    crate::plugins::refresh_installed(app, &index.plugins);
+    true
+}
+
+/// The index this build carries.
 pub fn bundled() -> Index {
     parse(BUNDLED_INDEX).unwrap_or_default()
 }
 
-async fn fetch(app: &Arc<App>, url: &str) -> Result<Index, String> {
-    let text = app.http.get(url).send().await.map_err(|e| e.to_string())?.error_for_status().map_err(|e| e.to_string())?.text().await.map_err(|e| e.to_string())?;
-    parse(&text)
+#[derive(Deserialize)]
+struct RawIndex {
+    version: u64,
+    updated: String,
+    #[serde(default)]
+    plugins: Vec<Value>,
+    #[serde(default)]
+    bots: Vec<Value>,
 }
 
-/// `{ "plugins": [manifest…], "bots": [template…] }`; either list may be missing. An entry
-/// that does not read is skipped.
+/// Reads an index by rules every later version keeps, so an index written for a newer Lorca
+/// never breaks an older one: fields this version does not know are ignored, and an entry it
+/// cannot read, or one whose id came before, is left out. An index is refused whole when its
+/// `version` is not one this build reads, its `updated` is not a UTC time, or it lists no plugin
+/// this build reads.
 fn parse(text: &str) -> Result<Index, String> {
-    let value: Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
-    let plugins = value.get("plugins").and_then(Value::as_array);
-    let bots = value.get("bots").and_then(Value::as_array);
-    if plugins.is_none() && bots.is_none() {
-        return Err("The index has no plugins or bots list".into());
+    let raw: RawIndex = serde_json::from_str(text).map_err(|e| format!("The marketplace index does not read: {e}"))?;
+    if raw.version != VERSION {
+        return Err(format!("The marketplace index is version {}; this Lorca reads version {VERSION}", raw.version));
     }
-    let mut index = Index::default();
-    for entry in plugins.into_iter().flatten() {
+    if !served::is_utc_time(&raw.updated) {
+        return Err(format!("The marketplace index's updated time {:?} is not YYYY-MM-DDTHH:MM:SSZ", raw.updated));
+    }
+    let mut index = Index { updated: raw.updated, ..Index::default() };
+    for entry in &raw.plugins {
         match Manifest::parse(entry) {
+            Ok(manifest) if index.plugin(&manifest.id).is_some() => tracing::warn!(id = %manifest.id, "skipping a marketplace plugin listed twice"),
             Ok(manifest) => index.plugins.push(manifest),
             Err(error) => tracing::warn!(%error, "skipping a marketplace plugin"),
         }
     }
-    for entry in bots.into_iter().flatten() {
+    for entry in &raw.bots {
         match BotTemplate::parse(entry) {
+            Ok(template) if index.bot(&template.id).is_some() => tracing::warn!(id = %template.id, "skipping a marketplace bot listed twice"),
             Ok(template) => index.bots.push(template),
             Err(error) => tracing::warn!(%error, "skipping a marketplace bot"),
         }
+    }
+    if index.plugins.is_empty() {
+        return Err("The marketplace index lists no plugin this Lorca reads".into());
     }
     Ok(index)
 }
@@ -276,24 +414,72 @@ mod tests {
     }
 
     #[test]
-    fn an_index_merges_by_id_and_skips_what_does_not_read() {
-        let mut index = parse(r#"{ "plugins": [ { "id": "a", "name": "A", "servers": { "s": { "type": "http", "url": "https://a.test/mcp" } } } ],
-                                   "bots": [ { "id": "b", "name": "B", "description": "Does b." } ] }"#)
-        .unwrap();
-        let other = parse(
-            r#"{ "bots": [ { "id": "b", "name": "B2", "description": "Does b better.", "featured": true },
+    fn an_index_leaves_out_what_this_build_cannot_read() {
+        let index = parse(
+            r#"{ "version": 1, "updated": "2026-10-02T00:00:00Z", "later": true,
+                 "plugins": [ { "id": "a", "name": "A", "servers": { "s": { "type": "http", "url": "https://a.test/mcp" } }, "later": 1 },
+                              { "id": "a", "name": "A again", "servers": { "s": { "type": "http", "url": "https://a.test/mcp" } } },
+                              { "id": "w", "name": "W", "servers": { "s": { "type": "websocket", "url": "wss://w.test/mcp" } } } ],
+                 "bots": [ { "id": "b", "name": "B", "description": "Does b.", "featured": true },
                            { "id": "Bad Id", "name": "X", "description": "x" },
                            { "id": "c", "name": "C", "description": "Does c.", "routines": [ { "name": "r", "schedule": "every fortnight", "prompt": "p" } ] },
                            { "id": "d", "name": "D", "description": "Does d.", "routines": [ { "name": "Daily", "schedule": "0 9 * * *", "prompt": "Report." } ] } ] }"#,
         )
         .unwrap();
-        assert_eq!(other.bots.iter().map(|b| b.id.as_str()).collect::<Vec<_>>(), ["b", "d"], "a bad id and a bad schedule are skipped");
-        index.merge(other);
-        assert_eq!(index.plugins.len(), 1);
-        assert_eq!(index.bots.iter().map(|b| (b.id.as_str(), b.name.as_str())).collect::<Vec<_>>(), [("b", "B2"), ("d", "D")]);
+        assert_eq!(index.updated, "2026-10-02T00:00:00Z");
+        assert_eq!(index.plugins.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["A"], "a second a and a server this build cannot run are left out");
+        assert_eq!(index.bots.iter().map(|b| b.id.as_str()).collect::<Vec<_>>(), ["b", "d"], "a bad id and a bad schedule are left out");
         assert!(index.bot("b").unwrap().featured);
         assert_eq!(index.bot("d").unwrap().symbol_name, "sparkles", "a template without a look gets the default");
-        assert!(parse(r#"{ "nothing": [] }"#).is_err());
+
+        let a = r#"[ { "id": "a", "name": "A", "servers": { "s": { "type": "http", "url": "https://a.test/mcp" } } } ]"#;
+        let refused = [
+            format!(r#"{{ "version": 2, "updated": "2026-10-02T00:00:00Z", "plugins": {a} }}"#),
+            format!(r#"{{ "updated": "2026-10-02T00:00:00Z", "plugins": {a} }}"#),
+            format!(r#"{{ "version": 1, "updated": "2026-10-02", "plugins": {a} }}"#),
+            r#"{ "version": 1, "updated": "2026-10-02T00:00:00Z", "plugins": [ { "id": "Bad Id", "name": "X" } ] }"#.to_string(),
+        ];
+        for text in refused {
+            assert!(parse(&text).is_err(), "{text}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_later_index_is_fetched_cached_and_followed_by_installed_plugins() {
+        // The bundled index under a later time, with GitHub's entry changed and a plugin it lacks.
+        let mut later: Value = serde_json::from_str(BUNDLED_INDEX).unwrap();
+        later["updated"] = Value::from("2999-01-01T00:00:00Z");
+        let plugins = later["plugins"].as_array_mut().unwrap();
+        plugins.iter_mut().find(|p| p["id"] == "github").unwrap()["description"] = Value::from("GitHub, as served.");
+        plugins.push(serde_json::json!({ "id": "newcomer", "name": "Newcomer", "servers": { "s": { "type": "http", "url": "https://newcomer.test/mcp" } } }));
+        let (url, seen) = served::test_server("/marketplace/v1.json", later.to_string());
+        let home = std::env::temp_dir().join(format!("lorca-marketplace-{}", uuid::Uuid::new_v4()));
+        let app = &App::load(Config { home: home.clone(), port: 0 }).unwrap();
+        crate::plugins::install(app, bundled().plugins.into_iter().find(|m| m.id == "github").unwrap(), "marketplace").unwrap();
+        assert_eq!(check(app, true).await, Err("Marketplace updates are off".into()));
+        assert!(!check_for_missing(app).await);
+        app.marketplace.url.set(url).unwrap();
+
+        assert!(index(app).await.plugin("newcomer").is_some(), "the marketplace checks first");
+        assert_eq!(current(app).updated, "2999-01-01T00:00:00Z");
+        let description = app.plugins.lock().unwrap().get("github").unwrap().manifest.description.clone();
+        assert_eq!(description, "GitHub, as served.", "an installed plugin follows the later index");
+        let cache: Cache = config::read_json(&app.config.marketplace_path()).unwrap();
+        assert_eq!((cache.etag.as_deref(), cache.index["updated"].as_str()), (Some("\"v1\""), Some("2999-01-01T00:00:00Z")));
+        assert_eq!(Updates::load(&app.config).current.read().unwrap().updated, "2999-01-01T00:00:00Z", "the next start reads the cached index");
+
+        // Within the hour nothing is asked; forced, the server is asked whether it changed.
+        assert_eq!(check(app, false).await, Ok(false));
+        assert_eq!(seen.lock().unwrap().len(), 1);
+        assert_eq!(check(app, true).await, Ok(false));
+        assert!(seen.lock().unwrap()[1].contains("\r\nif-none-match: \"v1\"\r\n"));
+
+        // A search that found nothing checks again, at most every five minutes.
+        assert!(!check_for_missing(app).await);
+        assert_eq!(seen.lock().unwrap().len(), 3);
+        assert!(!check_for_missing(app).await);
+        assert_eq!(seen.lock().unwrap().len(), 3);
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[tokio::test]

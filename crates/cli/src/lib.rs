@@ -32,6 +32,7 @@ pub mod runtime;
 pub mod schedule;
 #[cfg(feature = "runner")]
 pub mod scripts;
+pub mod served;
 #[cfg(feature = "runner")]
 pub mod shell;
 pub mod sync;

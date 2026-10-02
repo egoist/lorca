@@ -2704,8 +2704,12 @@ impl Tool for SearchPlugins {
     }
     async fn execute(&self, _id: &str, args: Value, _cancel: CancellationToken, _on_update: ToolUpdateFn) -> Result<ToolResult, ToolError> {
         let query = args["query"].as_str().unwrap_or("");
-        let all = crate::marketplace::index(&self.app).await.plugins;
-        let found = crate::marketplace::search_plugins(&all, query);
+        let mut index = crate::marketplace::index(&self.app).await;
+        // A plugin published since this Runner's last check is in a newer index.
+        if !query.trim().is_empty() && crate::marketplace::search_plugins(&index.plugins, query).is_empty() && crate::marketplace::check_for_missing(&self.app).await {
+            index = crate::marketplace::current(&self.app);
+        }
+        let found = crate::marketplace::search_plugins(&index.plugins, query);
         let rows: Vec<Value> = found
             .iter()
             .map(|m| {
@@ -2768,12 +2772,13 @@ impl Tool for InstallPlugin {
         if self.app.this_device_id().as_deref() != Some(self.bot.runner_id.as_str()) {
             return Err("Plugins are installed on your Runner, which is not this Device.".into());
         }
-        let all = crate::marketplace::index(&self.app).await.plugins;
-        let manifest = all
-            .iter()
-            .find(|m| m.id.eq_ignore_ascii_case(&wanted) || m.name.eq_ignore_ascii_case(&wanted))
-            .cloned()
-            .ok_or_else(|| ToolError(format!("No plugin {wanted:?} in the marketplace. Use search_plugins to see what exists.")))?;
+        let find = |index: Arc<crate::marketplace::Index>| index.plugins.iter().find(|m| m.id.eq_ignore_ascii_case(&wanted) || m.name.eq_ignore_ascii_case(&wanted)).cloned();
+        let mut manifest = find(crate::marketplace::index(&self.app).await);
+        // A plugin published since this Runner's last check is in a newer index.
+        if manifest.is_none() && crate::marketplace::check_for_missing(&self.app).await {
+            manifest = find(crate::marketplace::current(&self.app));
+        }
+        let manifest = manifest.ok_or_else(|| ToolError(format!("No plugin {wanted:?} in the marketplace. Use search_plugins to see what exists.")))?;
         let runner = self.app.device(&self.bot.runner_id).map(|d| d.name).unwrap_or_else(|| "this Runner".into());
         if let Some(status) = self.app.plugins.lock().unwrap().status(&manifest.id) {
             let next = match status.state.as_str() {

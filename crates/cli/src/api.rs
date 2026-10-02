@@ -69,9 +69,11 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             "relay_update_required": app.relay_update_required.load(std::sync::atomic::Ordering::Relaxed),
             "relay_error": app.relay_problem.lock().unwrap().clone(),
         })),
-        // An app connecting checks for a newer model catalog, unless one was checked within the hour.
+        // An app connecting checks for a newer model catalog and marketplace index, unless each
+        // was checked within the hour.
         "bootstrap" => {
             crate::catalog::check_in_background(app);
+            crate::marketplace::check_in_background(app);
             Ok(app.snapshot())
         }
 
@@ -513,6 +515,11 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
                 })
                 .collect();
             Ok(json!({ "plugins": plugins, "bots": bots }))
+        }
+        // Asks lorca.app for a newer marketplace index now, even within the hour of the last check.
+        "marketplace.reload" => {
+            let changed = crate::marketplace::check(app, true).await?;
+            Ok(json!({ "updated": crate::marketplace::current(app).updated, "changed": changed }))
         }
         // Plugins are installed per Runner, here or through a sealed request to that Runner.
         "plugins.install" => {

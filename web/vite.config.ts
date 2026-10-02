@@ -1,4 +1,5 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { defineConfig, type Plugin } from 'vite'
 import { devtools } from '@tanstack/devtools-vite'
@@ -12,16 +13,25 @@ import { fumadocsMdx } from 'fumadocs-mdx/vite'
 
 import { fetchDesktopRelease } from './src/lib/desktop-release.ts'
 
-/** The model catalog every Device checks for a newer one, at `/models/v1.json`: the CLI's own
- * `crates/models/catalog.json`, minified into `public` so it is served as a static file, whose
- * ETag makes each check a 304 until the catalog itself changes. */
-function modelCatalog(): Plugin {
+/** The files every Device checks for a newer copy of: the model catalog at `/models/v1.json` and
+ * the marketplace index at `/marketplace/v1.json`, the CLI's own `crates/models/catalog.json` and
+ * `crates/cli/marketplace/index.json`, minified into `public` so each is served as a static file,
+ * whose ETag makes a check a 304 until the file itself changes. */
+const SERVED = [
+  ['../crates/models/catalog.json', './public/models/v1.json'],
+  ['../crates/cli/marketplace/index.json', './public/marketplace/v1.json'],
+]
+
+function servedFiles(): Plugin {
   return {
-    name: 'lorca-model-catalog',
+    name: 'lorca-served-files',
     buildStart() {
-      const catalog = JSON.parse(readFileSync(fileURLToPath(new URL('../crates/models/catalog.json', import.meta.url)), 'utf8'))
-      mkdirSync(fileURLToPath(new URL('./public/models', import.meta.url)), { recursive: true })
-      writeFileSync(fileURLToPath(new URL('./public/models/v1.json', import.meta.url)), JSON.stringify(catalog))
+      for (const [from, to] of SERVED) {
+        const file = JSON.parse(readFileSync(fileURLToPath(new URL(from, import.meta.url)), 'utf8'))
+        const out = fileURLToPath(new URL(to, import.meta.url))
+        mkdirSync(dirname(out), { recursive: true })
+        writeFileSync(out, JSON.stringify(file))
+      }
     },
   }
 }
@@ -40,7 +50,7 @@ const config = defineConfig(async ({ command }) => ({
     ssr: { optimizeDeps: { include: ['fumadocs-mdx/runtime/macro'] } },
   },
   plugins: [
-    modelCatalog(),
+    servedFiles(),
     fumadocsMdx(),
     devtools(),
     cloudflare({ viteEnvironment: { name: 'ssr' } }),

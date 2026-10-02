@@ -6,6 +6,8 @@ Sparkle shows it in the update window. The Windows and Linux app's are in
 
 ## [Unreleased]
 
+- The marketplace comes from lorca.app, so new plugins and bots show up without an update, and plugins you installed from it get their fixes the same way. Lorca checks when it starts, when the app connects, and when you or a bot look through the marketplace, at most once an hour, and a bot that can't find a plugin you asked for checks again first. `lorca marketplace reload` checks right away.
+
 ## [0.1.9]
 
 - Your own MCP servers: Settings › Plugins has an MCP Servers section, where you add a server by the command that runs it or its URL, or paste its JSON from a README or another app's settings, and edit, turn off, or remove it. Each server shows how it stands and the tools it offers, with Sign in when it asks for one, and every bot on that computer can use it. Lorca keeps them in `mcp.json` in its folder, in the format Claude Desktop, Cursor, and Claude Code use; after editing the file by hand, click Reload. Servers that offer resources, such as files or records, give bots tools to list and read them. Pick another Runner in Settings to manage its servers.
