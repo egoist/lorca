@@ -744,6 +744,9 @@ struct ToolInvocation: Hashable {
     var description: String?
     /// The bot a message_bot call goes to.
     var targetBotID: Bot.ID?
+    /// A codemode script's latest command, by its description, while no plugin call came after
+    /// it: the status line reads "Running command: Run the tests".
+    var scriptCommand: String?
     /// A shell command's card, which the transcript shows only while the command needs the user
     /// (`isShown`). Every `bash` row has one.
     var run: CommandRun? = nil

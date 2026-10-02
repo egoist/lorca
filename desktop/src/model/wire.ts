@@ -146,6 +146,7 @@ export interface WireBody {
   is_running?: boolean | null;
   description?: string | null;
   target_bot_id?: string | null;
+  script_command?: string | null;
   from?: string | null;
   to?: string | null;
   reason?: string | null;
@@ -528,6 +529,7 @@ export function toMessage(wire: WireMessage): Message {
           isRunning: body.is_running ?? false,
           description: optional(body.description),
           targetBotID: optional(body.target_bot_id),
+          scriptCommand: optional(body.script_command),
           run,
         },
       };

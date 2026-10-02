@@ -7,6 +7,8 @@ Sparkle shows it in the update window. The Windows and Linux app's are in
 ## [Unreleased]
 
 - The marketplace comes from lorca.app, so new plugins and bots show up without an update, and plugins you installed from it get their fixes the same way. Lorca checks when it starts, when the app connects, and when you or a bot look through the marketplace, at most once an hour, and a bot that can't find a plugin you asked for checks again first. `lorca marketplace reload` checks right away.
+- A bot's scripts can run commands, edit files, and use its memory, as pi's do, not just read and write files and call plugins. A script can run a command for each project or file it finds, keep going when one fails, and hand the bot only what matters. Auto-review checks each command with the script that runs it, and one that needs your permission asks in the chat.
+- While a bot's script runs a command, the working row says which, as it does for a command the bot runs itself, and bots can read a plugin's whole instructions from its server, not just their start.
 
 ## [0.1.9]
 

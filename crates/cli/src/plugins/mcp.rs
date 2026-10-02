@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use lorca_agent::codemode::{self, Entry, Exposure, Namespace};
+use lorca_agent::codemode::{self, Entry, Exposure, Namespace, NamespaceDetails};
 use lorca_agent::{BeforeToolCallContext, BeforeToolCallResult};
 use rmcp::model::{CallToolRequestParams, ClientConfig, ContentBlock, Implementation};
 use rmcp::service::RunningService;
@@ -1524,6 +1524,9 @@ struct CatalogTool {
 struct PluginGroup {
     id: String,
     description: String,
+    /// The description without its servers' instructions, which `describeNamespace()` gives
+    /// whole beside it.
+    about: String,
 }
 
 #[derive(Default)]
@@ -1531,6 +1534,8 @@ struct CatalogState {
     tools: BTreeMap<String, Arc<CatalogTool>>,
     /// Plugins whose servers connected during this turn, so their live tool lists are in.
     connected: std::collections::HashSet<String>,
+    /// Each server's instructions, whole, by plugin id and server name.
+    instructions: BTreeMap<(String, String), String>,
 }
 
 /// What a turn's codemode scripts can call: the bot's own read and write tools, and every tool
@@ -1560,6 +1565,11 @@ impl PluginCatalog {
 
     fn add_tools(&self, plugin: &Installed, server_name: &str, instructions: Option<&str>, tools: &[rmcp::model::Tool], resources: bool) {
         let mut state = self.state.lock().unwrap();
+        let key = (plugin.manifest.id.clone(), server_name.to_string());
+        match instructions.map(str::trim).filter(|text| !text.is_empty()) {
+            Some(text) => state.instructions.insert(key, text.to_string()),
+            None => state.instructions.remove(&key),
+        };
         let server_instructions = instructions.map(|text| utf8_prefix(text, MAX_SERVER_INSTRUCTIONS_BYTES).to_string()).unwrap_or_default();
         // A server that offers resources lists and reads them through three tools of its own.
         let resource_tools: Vec<(rmcp::model::Tool, ToolKind)> = if resources { resource_tools(&plugin.manifest.name) } else { Vec::new() };
@@ -1663,8 +1673,9 @@ impl PluginCatalog {
 }
 
 /// How the codemode description names a plugin: its id, its name and what it does, what it
-/// still needs, and the start of its servers' own instructions. Only the needs that last are
-/// named, so the description stays the same from turn to turn.
+/// still needs, and the start of its servers' own instructions, pointing at `describeNamespace()`
+/// for the rest. Only the needs that last are named, so the description stays the same from
+/// turn to turn.
 fn plugin_group(app: &App, plugin: &Installed, saved: &[Offered]) -> PluginGroup {
     let manifest = &plugin.manifest;
     let mut description = manifest.name.clone();
@@ -1677,13 +1688,15 @@ fn plugin_group(app: &App, plugin: &Installed, saved: &[Offered]) -> PluginGroup
         Some("needs_setup") => description.push_str(&format!("\nNot set up yet ({}): the user sets it up in the plugin's settings.", status.map(|status| status.detail).unwrap_or_default())),
         _ => {}
     }
+    let about = description.clone();
     for (_, instructions, _, _) in saved {
         if let Some(instructions) = instructions.as_deref().map(str::trim).filter(|text| !text.is_empty()) {
             let shown = utf8_prefix(instructions, MAX_NAMESPACE_INSTRUCTIONS_BYTES);
-            description.push_str(&format!("\nServer instructions: {shown}{}", if shown.len() < instructions.len() { "…" } else { "" }));
+            let rest = if shown.len() < instructions.len() { format!("… (describeNamespace(\"{}\") has the rest)", manifest.id) } else { String::new() };
+            description.push_str(&format!("\nServer instructions: {shown}{rest}"));
         }
     }
-    PluginGroup { id: manifest.id.clone(), description }
+    PluginGroup { id: manifest.id.clone(), description, about }
 }
 
 #[async_trait]
@@ -1710,6 +1723,22 @@ impl codemode::Catalog for PluginCatalog {
         let plugin = self.app.plugins.lock().unwrap().installed().iter().find(|plugin| plugin.manifest.id == prefix || codemode::to_identifier(&plugin.manifest.id) == prefix).cloned()?;
         self.connect_plugin(&plugin, cancel).await;
         self.lookup(name).map(|tool| PluginCatalog::entry(&tool))
+    }
+
+    /// A plugin by its id or identifier: what it is, its servers' instructions whole, and its
+    /// tools. One with no saved tool list connects first, as a search does.
+    async fn describe_namespace(&self, name: &str, cancel: &CancellationToken) -> Option<NamespaceDetails> {
+        let plugin = self.app.plugins.lock().unwrap().installed().iter().find(|plugin| plugin.manifest.id == name || codemode::to_identifier(&plugin.manifest.id) == name).cloned()?;
+        let id = plugin.manifest.id.clone();
+        let known = self.state.lock().unwrap().tools.values().any(|tool| tool.plugin_id == id);
+        if !known {
+            self.connect_plugin(&plugin, cancel).await;
+        }
+        let about = self.groups.iter().find(|group| group.id == id).map(|group| group.about.clone()).unwrap_or_else(|| plugin.manifest.name.clone());
+        let state = self.state.lock().unwrap();
+        let instructions: Vec<&str> = state.instructions.iter().filter(|((plugin_id, _), _)| *plugin_id == id).map(|(_, text)| text.as_str()).collect();
+        let tools = state.tools.values().filter(|tool| tool.plugin_id == id).map(|tool| tool.name.clone()).collect();
+        Some(NamespaceDetails { name: id, description: about, instructions: instructions.join("\n\n"), tools })
     }
 
     async fn search(&self, query: &str, namespace: Option<&str>, limit: usize, cancel: &CancellationToken) -> Result<Vec<Entry>, String> {
@@ -2952,19 +2981,25 @@ mod tests {
         let issues = mcp_tool("list_issues", "List issues in a team", r#"{"type":"object","properties":{"team":{"type":"string","description":"Team key"}},"required":["team"]}"#);
         let comment = mcp_tool("create_comment", "Comment on an issue", r#"{"type":"object","properties":{"issue":{"type":"string"},"body":{"type":"string"}}}"#);
         let hidden = mcp_tool("secret_admin", "Never offered", r#"{"type":"object"}"#);
+        let instructions = format!("Use team keys like ENG.{}", " Cycles start on Monday.".repeat(60));
         let saved = SavedCatalog {
             servers: BTreeMap::from([
-                ("api".to_string(), SavedServer { instructions: Some("Use team keys like ENG.".into()), tools: vec![issues, comment, hidden], resources: false }),
+                ("api".to_string(), SavedServer { instructions: Some(instructions.clone()), tools: vec![issues, comment, hidden], resources: false }),
                 ("gone".to_string(), SavedServer { instructions: None, tools: vec![mcp_tool("old", "A server the manifest no longer has", r#"{}"#)], resources: false }),
             ]),
         };
         crate::config::write_json_private(&catalog_path(app, "linear"), &saved).unwrap();
 
-        let local: Vec<Arc<dyn Tool>> = lorca_agent::tools::coding_tools(scratch.1.clone()).into_iter().filter(|tool| tool.name() == "read").collect();
+        let mut local: Vec<Arc<dyn Tool>> = lorca_agent::tools::coding_tools(scratch.1.clone()).into_iter().filter(|tool| tool.name() == "read").collect();
+        // The scripts' own bash: one command at a time, resolving to its output and exit code.
+        let bash = crate::shell::script_bash(app, &scratch.1);
+        assert_eq!(bash.execution_mode(), Some(lorca_agent::agent_loop::ToolExecutionMode::Sequential));
+        assert!(bash.output_schema().is_some() && !bash.description().contains("session id"), "{}", bash.description());
+        local.push(bash);
         let catalog = turn_catalog(app, local);
         assert_eq!(plugin_briefs(app).len(), 2);
         let names: Vec<String> = catalog.entries().iter().map(|entry| entry.tool.name().to_string()).collect();
-        assert_eq!(names, vec!["read", "linear__create_comment", "linear__list_issues"]);
+        assert_eq!(names, vec!["read", "bash", "linear__create_comment", "linear__list_issues"]);
         assert_eq!(catalog.plugin_name("linear__list_issues").as_deref(), Some("Linear"));
         assert!(catalog.plugin_tool("linear__list_issues").unwrap().read_only, "the manifest's readonly pattern applies");
         assert!(!catalog.plugin_tool("linear__create_comment").unwrap().read_only);
@@ -2974,10 +3009,25 @@ mod tests {
         let description = codemode.description().to_string();
         assert!(description.contains("## linear\nLinear: Linear for the team.\nServer instructions: Use team keys like ENG."), "{description}");
         assert!(description.contains("linear__list_issues(args: {\n  // Team key\n  team: string;\n}): Promise<CallToolResult>;"), "{description}");
-        assert!(description.contains("## notion (tools not known yet; searchTools() finds them)\nNotion: Notion for the team."), "{description}");
-        assert!(description.contains("Your own tools `read` are callable here too"), "{description}");
+        assert!(description.contains("## notion (tools not known yet; describeNamespace() lists them)\nNotion: Notion for the team."), "{description}");
+        assert!(
+            description.contains(
+                "Your own tools `read`, `bash` are callable here too, with the same arguments. `bash` resolves to \
+                 `{ exit_code, full_output_path?, output, truncated, wall_time_seconds }`; the others resolve to their text output."
+            ),
+            "{description}"
+        );
         assert!(!description.contains("secret_admin") && !description.contains("linear__old"), "{description}");
-        assert_eq!(CodemodeTool::new(catalog, CodemodeOptions::default()).description(), description, "the same listing every time");
+        assert!(description.contains("… (describeNamespace(\"linear\") has the rest)"), "long instructions are cut: {description}");
+        assert_eq!(CodemodeTool::new(catalog.clone(), CodemodeOptions::default()).description(), description, "the same listing every time");
+
+        // describeNamespace() gives the instructions whole, apart from what the plugin is.
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let details = runtime.block_on(catalog.describe_namespace("linear", &CancellationToken::new())).unwrap();
+        assert_eq!(details.description, "Linear: Linear for the team.");
+        assert_eq!(details.instructions, instructions);
+        assert_eq!(details.tools, vec!["linear__create_comment", "linear__list_issues"]);
+        assert!(runtime.block_on(catalog.describe_namespace("jira", &CancellationToken::new())).is_none());
     }
 
     #[tokio::test]

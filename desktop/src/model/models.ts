@@ -912,6 +912,9 @@ export interface ToolInvocation {
   description?: string;
   /** The bot a message_bot call goes to. */
   targetBotID?: string;
+  /** A codemode script's latest command, by its description, while no plugin call came after
+   * it: the status line reads "Running command: Run the tests". */
+  scriptCommand?: string;
   /** A shell command's card, which the transcript shows only while the command needs the user
    * (`isShown`). Every `bash` row has one. */
   run?: CommandRun;

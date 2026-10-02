@@ -274,7 +274,9 @@ function toolActivity(s: WorkState, botId: string, tool: Extract<Body, { kind: "
     case "bash_output":
       return t("Waiting on a command…");
     case "codemode":
-      // A script: the plugin of its latest plugin call, which the CLI names.
+      // A script: its latest command, else the plugin of its latest plugin call, which the CLI
+      // names.
+      if (tool.script_command) return t("Running command: {description}…", { description: tool.script_command });
       return tool.description ? t("Using {name}…", { name: tool.description }) : t("Working…");
   }
   // A plugin's tool, `<plugin>__<tool>`: "Using GitHub", whether the call is running or just

@@ -459,7 +459,7 @@ mod tests {
         let devops_said = || Author::Bot { bot_id: devops.id.clone() };
         let ran = |command: &str, decision: Option<&str>, is_running: bool| Body::Tool {
             name: "bash".into(), summary: format!("$ {command}"), detail: String::new(), is_running, call_id: String::new(),
-            arguments: serde_json::json!({ "command": command }), result: None, is_error: false, description: None, target_bot_id: None,
+            arguments: serde_json::json!({ "command": command }), result: None, is_error: false, description: None, target_bot_id: None, script_command: None,
             run: Some(CommandRun { command: command.into(), state: "exited".into(), decision: decision.map(str::to_string), ..Default::default() }),
         };
         let at = |message_id: &str| Trigger { message_id: message_id.into(), routine: None };

@@ -4,8 +4,10 @@
 //! the process tree).
 //!
 //! Built with [`BashTool::new`], it is pi's bash: pipes, nothing on stdin, and the call lasts
-//! as long as the command. Built with [`BashTool::with_sessions`], a command runs in a terminal
-//! of its own that can outlive the call and take input ([`super::bash_session`]).
+//! as long as the command. Its results carry structured output for codemode scripts: the output
+//! up to 1 MB, the exit code, and the wall time, also when the command fails. Built with
+//! [`BashTool::with_sessions`], a command runs in a terminal of its own that can outlive the
+//! call and take input ([`super::bash_session`]).
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -22,6 +24,9 @@ use super::truncate::{format_size, truncate_tail, TruncatedBy, TruncationOptions
 use crate::tool::{Tool, ToolError, ToolResult, ToolUpdateFn};
 
 pub(crate) const UPDATE_THROTTLE_MS: u64 = 250;
+
+/// The most of a command's output a script receives in `output`, as pi's bash gives it.
+const SCRIPT_OUTPUT_MAX_BYTES: usize = 1024 * 1024;
 
 const DESCRIPTION: &str = "Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last 2000 lines \
      or 50KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.";
@@ -180,6 +185,43 @@ fn describe(text: &str, truncation: &super::truncate::TruncationResult, full_out
     out
 }
 
+/// The output a script receives: all of it up to `max` bytes, else its start and end around a
+/// note of what was left out, cut between characters. The second value says whether it was cut.
+fn script_output(output: &[u8], max: usize) -> (String, bool) {
+    if output.len() <= max {
+        return (String::from_utf8_lossy(output).into_owned(), false);
+    }
+    let continues = |index: usize| output.get(index).is_some_and(|byte| byte & 0xC0 == 0x80);
+    let mut head = max / 2;
+    while head > 0 && continues(head) {
+        head -= 1;
+    }
+    let mut tail = output.len() - (max - max / 2);
+    while continues(tail) {
+        tail += 1;
+    }
+    let text = format!(
+        "{}\n\n[... {} bytes omitted ...]\n\n{}",
+        String::from_utf8_lossy(&output[..head]),
+        tail - head,
+        String::from_utf8_lossy(&output[tail..])
+    );
+    (text, true)
+}
+
+/// How a command with no exit code ended: killed by a signal, on Unix.
+fn ended_without_code(status: Option<&std::process::ExitStatus>) -> String {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(signal) = status.and_then(|status| status.signal()) {
+            return format!("Command terminated by signal {signal}");
+        }
+    }
+    let _ = status;
+    "Command terminated without an exit code".into()
+}
+
 #[async_trait]
 impl Tool for BashTool {
     fn name(&self) -> &str {
@@ -206,6 +248,23 @@ impl Tool for BashTool {
             "required": ["command", "description"]
         })
     }
+    /// On pipes, after pi's: a nonzero exit is an error result for the model, and a script still
+    /// receives this. A command in a terminal, which can return while it runs, has none.
+    fn output_schema(&self) -> Option<Value> {
+        self.terminal().is_none().then(|| {
+            json!({
+                "type": "object",
+                "properties": {
+                    "output": { "type": "string", "description": "stdout and stderr together, with the middle left out past 1 MB" },
+                    "truncated": { "type": "boolean" },
+                    "full_output_path": { "type": "string", "description": "The full output, when truncated" },
+                    "exit_code": { "type": "number" },
+                    "wall_time_seconds": { "type": "number" }
+                },
+                "required": ["output", "truncated", "exit_code", "wall_time_seconds"]
+            })
+        })
+    }
     async fn execute(&self, id: &str, args: Value, cancel: CancellationToken, on_update: ToolUpdateFn) -> Result<ToolResult, ToolError> {
         let command = args["command"].as_str().ok_or("command is required")?.to_string();
         let timeout = args["timeout"].as_f64();
@@ -229,6 +288,7 @@ impl Tool for BashTool {
         {
             cmd.process_group(0);
         }
+        let started = std::time::Instant::now();
         let mut child = cmd.spawn().map_err(|e| ToolError(format!("Failed to start {shell}: {e}")))?;
         let pid = child.id().unwrap_or(0);
 
@@ -307,18 +367,31 @@ impl Tool for BashTool {
         if timed_out {
             return Err(ToolError(with_status(&format!("Command timed out after {} seconds", timeout.unwrap_or(0.0)))));
         }
-        let code = status.and_then(|s| s.code());
-        if let Some(code) = code.filter(|c| *c != 0) {
-            return Err(ToolError(with_status(&format!("Command exited with code {code}"))));
+        let Some(code) = status.as_ref().and_then(|s| s.code()) else {
+            return Err(ToolError(with_status(&ended_without_code(status.as_ref()))));
+        };
+        let (script_text, script_truncated) = script_output(&output, SCRIPT_OUTPUT_MAX_BYTES);
+        let mut structured = json!({
+            "output": script_text,
+            "truncated": script_truncated,
+            "exit_code": code,
+            "wall_time_seconds": (started.elapsed().as_secs_f64() * 10.0).round() / 10.0,
+        });
+        if let Some(path) = full_output_path.as_ref().filter(|_| script_truncated) {
+            structured["full_output_path"] = json!(path);
         }
-        let body = if shown.is_empty() { "(no output)".to_string() } else { shown };
         let details = json!({
             "summary": format!("$ {}", command.lines().next().unwrap_or("").chars().take(60).collect::<String>()),
             "exit_code": code,
             "truncation": if truncation.truncated { serde_json::to_value(&truncation).unwrap_or(Value::Null) } else { Value::Null },
             "full_output_path": full_output_path,
         });
-        Ok(ToolResult::text(body).with_details(details))
+        let result = if code != 0 {
+            ToolResult { is_error: true, ..ToolResult::text(with_status(&format!("Command exited with code {code}"))) }
+        } else {
+            ToolResult::text(if shown.is_empty() { "(no output)".to_string() } else { shown })
+        };
+        Ok(ToolResult { structured: Some(structured), ..result.with_details(details) })
     }
 }
 
@@ -351,10 +424,53 @@ mod tests {
         let tool = BashTool::new(std::env::temp_dir());
         let ok = tool.execute("1", json!({"command": "printf 'hi\\nthere'"}), CancellationToken::new(), Arc::new(|_| {})).await.unwrap();
         assert_eq!(ok.text_content(), "hi\nthere");
-        let err = tool.execute("2", json!({"command": "echo boom >&2; exit 3"}), CancellationToken::new(), Arc::new(|_| {})).await.unwrap_err();
-        assert!(err.0.contains("boom") && err.0.contains("exited with code 3"), "{}", err.0);
+        assert!(!ok.is_error);
+        let failed = tool.execute("2", json!({"command": "echo boom >&2; exit 3"}), CancellationToken::new(), Arc::new(|_| {})).await.unwrap();
+        let text = failed.text_content();
+        assert!(failed.is_error && text.contains("boom") && text.ends_with("Command exited with code 3"), "{text}");
         let timeout = tool.execute("3", json!({"command": "sleep 5", "timeout": 0.2}), CancellationToken::new(), Arc::new(|_| {})).await.unwrap_err();
         assert!(timeout.0.contains("timed out"));
+    }
+
+    /// What a codemode script receives: the output whole, the exit code, and the time, for a
+    /// command that failed too.
+    #[tokio::test]
+    async fn gives_scripts_structured_output() {
+        let tool = BashTool::new(std::env::temp_dir());
+        assert!(tool.output_schema().is_some());
+        let ok = tool.execute("1", json!({"command": "printf 'hi\\nthere'"}), CancellationToken::new(), Arc::new(|_| {})).await.unwrap();
+        let structured = ok.structured.unwrap();
+        assert_eq!((&structured["output"], &structured["truncated"], &structured["exit_code"]), (&json!("hi\nthere"), &json!(false), &json!(0)));
+        assert!(structured["wall_time_seconds"].is_number() && structured.get("full_output_path").is_none(), "{structured}");
+
+        let failed = tool.execute("2", json!({"command": "echo boom; exit 3"}), CancellationToken::new(), Arc::new(|_| {})).await.unwrap();
+        let structured = failed.structured.unwrap();
+        assert_eq!((&structured["output"], &structured["exit_code"]), (&json!("boom\n"), &json!(3)));
+
+        // Past what the model reads, a script still gets the whole output.
+        let long = tool.execute("3", json!({"command": "seq 1 5000"}), CancellationToken::new(), Arc::new(|_| {})).await.unwrap();
+        assert!(long.text_content().contains("[Showing lines"), "the model's copy is cut");
+        let output = long.structured.unwrap()["output"].as_str().unwrap().to_string();
+        assert!(output.starts_with("1\n2\n") && output.ends_with("4999\n5000\n"), "{}", &output[..20]);
+    }
+
+    #[test]
+    fn script_output_keeps_the_start_and_end_past_its_limit() {
+        assert_eq!(script_output(b"short", 10), ("short".to_string(), false));
+        let (text, truncated) = script_output("aaaaé€bbbbb".as_bytes(), 8);
+        assert!(truncated);
+        assert_eq!(text, "aaaa\n\n[... 6 bytes omitted ...]\n\nbbbb");
+        // A cut inside a character moves to its edge instead of splitting it.
+        let (text, _) = script_output("aaé€€bb".as_bytes(), 6);
+        assert_eq!(text, "aa\n\n[... 8 bytes omitted ...]\n\nbb");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_command_killed_by_a_signal_fails() {
+        let tool = BashTool::new(std::env::temp_dir());
+        let err = tool.execute("1", json!({"command": "echo before; kill -9 $$"}), CancellationToken::new(), Arc::new(|_| {})).await.unwrap_err();
+        assert!(err.0.contains("before") && err.0.ends_with("Command terminated by signal 9"), "{}", err.0);
     }
 
     /// A drive root on Windows, `/` elsewhere, so the fixture paths are absolute where the test runs.

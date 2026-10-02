@@ -62,6 +62,19 @@ pub struct Namespace {
     pub description: String,
 }
 
+/// What `describeNamespace()` gives a script, after pi's: a group's description, its whole
+/// instructions, and its tools.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NamespaceDetails {
+    pub name: String,
+    pub description: String,
+    /// Guidance for the group's tools, such as its servers' instructions, whole: the listing
+    /// may carry only their start. Empty when there is none.
+    pub instructions: String,
+    /// Its tools' names.
+    pub tools: Vec<String>,
+}
+
 /// One tool scripts can call.
 #[derive(Clone)]
 pub struct Entry {
@@ -119,6 +132,20 @@ pub trait Catalog: Send + Sync {
         let namespaces = self.namespaces();
         let entries: Vec<Entry> = self.entries().into_iter().filter(|entry| namespace.is_none() || entry.namespace.as_deref() == namespace).collect();
         Ok(rank_entries(query, entries, &namespaces, limit))
+    }
+
+    /// `describeNamespace()`: the group named `name`, or by its identifier, with its tools; `None`
+    /// for no such group. The default reads `namespaces` and `entries`.
+    async fn describe_namespace(&self, name: &str, cancel: &CancellationToken) -> Option<NamespaceDetails> {
+        let _ = cancel;
+        let entries = self.entries();
+        let named = |candidate: &str| candidate == name || to_identifier(candidate) == name;
+        let namespace = self.namespaces().into_iter().find(|namespace| named(&namespace.name)).or_else(|| {
+            let found = entries.iter().filter_map(|entry| entry.namespace.as_deref()).find(|namespace| named(namespace))?;
+            Some(Namespace { name: found.to_string(), description: String::new() })
+        })?;
+        let tools = entries.iter().filter(|entry| entry.namespace.as_deref() == Some(namespace.name.as_str())).map(|entry| entry.tool.name().to_string()).collect();
+        Some(NamespaceDetails { name: namespace.name, description: namespace.description, instructions: String::new(), tools })
     }
 }
 
@@ -245,6 +272,10 @@ pub struct NestedCall {
     pub name: String,
     /// Compact JSON of the arguments, cut for display.
     pub args: String,
+    /// What the call says it does, from a `description` string among its arguments (a
+    /// command's "Run the tests"), cut, for a host's status line.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     pub status: CallStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u64>,
@@ -318,7 +349,7 @@ impl CodemodeTool {
 }
 
 /// The helpers every script has, which a host function may not replace.
-const BUILT_INS: [&str; 11] = ["tools", "ALL_TOOLS", "console", "text", "image", "exit", "store", "load", "searchTools", "describeTool", "globalThis"];
+const BUILT_INS: [&str; 12] = ["tools", "ALL_TOOLS", "console", "text", "image", "exit", "store", "load", "searchTools", "describeTool", "describeNamespace", "globalThis"];
 
 fn valid_function_name(name: &str) -> bool {
     let parts: Vec<&str> = name.split('.').collect();
@@ -505,7 +536,7 @@ impl<'a> Run<'a> {
         let script = Script {
             code: parsed.code,
             tools: script_tools,
-            globals: ["searchTools", "describeTool"]
+            globals: ["searchTools", "describeTool", "describeNamespace"]
                 .into_iter()
                 .map(str::to_string)
                 .chain(self.tool.functions.iter().map(|function| function.name().to_string()))
@@ -628,6 +659,7 @@ impl<'a> Run<'a> {
             id: call_id.to_string(),
             name: self.lookup(name).map(|entry| entry.tool.name().to_string()).unwrap_or_else(|| name.to_string()),
             args: clipped(&serde_json::to_string(args).unwrap_or_default(), ARGS_PREVIEW_CHARS),
+            description: args.get("description").and_then(Value::as_str).map(str::trim).filter(|text| !text.is_empty()).map(|text| clipped(text, ARGS_PREVIEW_CHARS)),
             status: CallStatus::Running,
             duration_ms: None,
             error: None,
@@ -718,7 +750,7 @@ impl<'a> Run<'a> {
         Reply::Throw("The script ended before this call started".into())
     }
 
-    /// `searchTools()`, `describeTool()`, and the host's functions.
+    /// `searchTools()`, `describeTool()`, `describeNamespace()`, and the host's functions.
     async fn global(&self, name: &str, args: Result<Value, String>) -> Reply {
         let args: Vec<Value> = match args {
             Ok(Value::Array(args)) => args,
@@ -762,6 +794,19 @@ impl<'a> Run<'a> {
                     Some(entry) => Reply::Value(Some(Value::String(entry.sample()).to_string())),
                     None => Reply::Value(None),
                 }
+            }
+            "describeNamespace" => {
+                let Some(name) = args.first().and_then(Value::as_str) else { return Reply::Throw("describeNamespace() expects a namespace name".into()) };
+                let Some(details) = self.tool.catalog.describe_namespace(name, &self.calls_cancel).await else { return Reply::Value(None) };
+                let tools: Vec<String> = details.tools.iter().filter(|tool| *tool != CODEMODE_TOOL_NAME).map(|tool| to_identifier(tool)).collect();
+                let mut value = json!({ "name": details.name, "tools": tools });
+                if !details.description.trim().is_empty() {
+                    value["description"] = json!(details.description);
+                }
+                if !details.instructions.trim().is_empty() {
+                    value["instructions"] = json!(details.instructions);
+                }
+                Reply::Value(Some(value.to_string()))
             }
             other => {
                 let Some(function) = self.tool.functions.iter().find(|function| function.name() == other).cloned() else {
@@ -1051,7 +1096,8 @@ sandbox: top-level `await` and `return` work. No Node, file system, network, or 
 Globals:
 - `text(value)`, `image(dataUrlOrImageBlock)`, `console.log(...)`, and top-level `return` add output; `exit()` ends the script.
 - `store(key, value)` and `load(key)` keep JSON values for later scripts in this chat.
-- `ALL_TOOLS`, `searchTools(query, { limit?, namespace? })`, and `describeTool(name)` find tools that are not listed below.";
+- `ALL_TOOLS`, `searchTools(query, { limit?, namespace? })`, and `describeTool(name)` find tools that are not listed below. \
+`describeNamespace(name)` gives a namespace's description, its whole instructions, and every tool in it.";
 
 const MCP_RESULT_GUIDANCE: &str = "Shared MCP types. An MCP tool resolves to its whole `CallToolResult`: `structuredContent` when \
 its declaration types it, else `content`, usually one text block of JSON (`JSON.parse(result.content[0].text)`). `isError: true` \
@@ -1071,7 +1117,7 @@ fn describe(entries: &[Entry], namespaces: &[Namespace], functions: &[Arc<dyn Ho
     let mut sections = vec![DESCRIPTION_INTRO.replace("{max_output_tokens}", &options.max_output_tokens.to_string())];
 
     let callable: Vec<&Entry> = entries.iter().filter(|entry| entry.tool.name() != CODEMODE_TOOL_NAME).collect();
-    let direct: Vec<&str> = callable.iter().filter(|entry| entry.exposure == Exposure::Direct).map(|entry| entry.tool.name()).collect();
+    let direct: Vec<&Entry> = callable.iter().copied().filter(|entry| entry.exposure == Exposure::Direct).collect();
     let listable: Vec<&Entry> = callable.iter().copied().filter(|entry| entry.exposure != Exposure::Direct).collect();
 
     // Groups: tools in no namespace first, then namespaces by name, with every known namespace
@@ -1113,10 +1159,18 @@ fn describe(entries: &[Entry], namespaces: &[Namespace], functions: &[Arc<dyn Ho
         sections.push(format!("Host functions:\n```ts\n{}\n```", render_functions(functions)));
     }
     if !direct.is_empty() {
-        sections.push(format!(
-            "Your own tools {} are callable here too, with the same arguments, and resolve to their text output.",
-            direct.iter().map(|name| format!("`{name}`")).collect::<Vec<_>>().join(", ")
-        ));
+        let names = direct.iter().map(|entry| format!("`{}`", entry.tool.name())).collect::<Vec<_>>().join(", ");
+        // A tool with an output schema says what it resolves to, as pi's descriptions do.
+        let typed: Vec<String> = direct
+            .iter()
+            .filter_map(|entry| entry.tool.output_schema().map(|schema| format!("`{}` resolves to `{}`", entry.tool.name(), declarations::output_summary(&schema))))
+            .collect();
+        sections.push(if typed.is_empty() {
+            format!("Your own tools {names} are callable here too, with the same arguments, and resolve to their text output.")
+        } else {
+            let others = if typed.len() < direct.len() { "; the others resolve to their text output" } else { "" };
+            format!("Your own tools {names} are callable here too, with the same arguments. {}{others}.", typed.join("; "))
+        });
     }
 
     let mut listing = vec!["Nested tools:".to_string()];
@@ -1125,7 +1179,7 @@ fn describe(entries: &[Entry], namespaces: &[Namespace], functions: &[Arc<dyn Ho
         if let Some(namespace) = namespace {
             // Only what is missing is marked, so the heading stays the same while the tools do.
             let marker = if members.is_empty() {
-                " (tools not known yet; searchTools() finds them)"
+                " (tools not known yet; describeNamespace() lists them)"
             } else if visible.is_empty() {
                 " (tools not listed)"
             } else if visible.len() < members.len() {

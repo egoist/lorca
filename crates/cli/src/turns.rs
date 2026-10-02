@@ -149,16 +149,18 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
     // wait for input.
     let sessions = Arc::new(crate::shell::TurnSessions::new(app, &chat.meta.id, &bot.id));
     tools.extend(lorca_agent::tools::coding_tools_with_sessions(workdir.clone(), sessions, crate::shell::bot_shell_extras(app)));
-    // Plugin tools are called from codemode scripts, with the bot's own file tools. The tool
-    // list stays the same for the whole turn, and so does its prompt cache.
-    let scriptable: Vec<Arc<dyn Tool>> = tools.iter().filter(|tool| SCRIPTABLE_TOOLS.contains(&tool.name())).cloned().collect();
+    // Plugin tools are called from codemode scripts, with the bot's own file and memory tools
+    // and a bash of the scripts' own, on pipes. The tool list stays the same for the whole
+    // turn, and so does its prompt cache.
+    let mut scriptable: Vec<Arc<dyn Tool>> = tools.iter().filter(|tool| SCRIPTABLE_TOOLS.contains(&tool.name())).cloned().collect();
+    scriptable.push(crate::shell::script_bash(app, &workdir));
     let plugin_tools = crate::plugins::mcp::turn_catalog(app, scriptable);
     let script_store = Arc::new(crate::scripts::ScriptStore { app: app.clone(), chat_id: chat.meta.id.clone(), bot_id: bot.id.clone() });
     let functions: Vec<Arc<dyn HostFunction>> =
         crate::scripts::ModelsAsk::new(app, &chat.meta.id, &bot.provider).map(|ask| Arc::new(ask) as Arc<dyn HostFunction>).into_iter().collect();
     // A routine's script has nobody to press Stop, so it gets less time.
     let timeout = std::time::Duration::from_secs(if unattended { 10 * 60 } else { 30 * 60 });
-    let options = CodemodeOptions { mcp_types: !plugin_briefs.is_empty(), timeout, ..CodemodeOptions::default() };
+    let options = CodemodeOptions { mcp_types: !plugin_briefs.is_empty(), timeout, guidance: Some(SCRIPT_GUIDANCE.into()), ..CodemodeOptions::default() };
     tools.push(Arc::new(CodemodeTool::new(plugin_tools.clone(), options).with_store(script_store).with_functions(functions)));
 
     // A transcript that no longer fits, or that has outgrown what a turn rebuilds, is
@@ -1037,6 +1039,7 @@ impl TurnState {
                         is_error: false,
                         description: None,
                         target_bot_id: None,
+                        script_command: None,
                         run: None,
                     },
                 );
@@ -1128,6 +1131,7 @@ impl TurnState {
                         is_error: false,
                         description,
                         target_bot_id,
+                        script_command: None,
                         run,
                     },
                 );
@@ -1142,26 +1146,31 @@ impl TurnState {
                 self.tool_messages.push((tool_call_id, message.id));
             }
             // A script's progress: the plugin of its latest plugin call names the working row, as
-            // "Using Linear…", and keeps it between calls.
+            // "Using Linear…", or its latest command does, as "Running command: Run the tests…",
+            // and keeps it between calls.
             AgentEvent::ToolExecutionUpdate { tool_call_id, tool_name, partial_result, .. } if tool_name == CODEMODE_TOOL_NAME => {
                 let Some((_, message_id)) = self.tool_messages.iter().find(|(id, _)| *id == tool_call_id).cloned() else { return };
                 let using = self.latest_plugin(&partial_result.details);
+                let command = self.latest_command(&partial_result.details);
                 let Some(mut message) = self.app.message(&self.chat_id, &message_id) else { return };
-                let Body::Tool { summary, description, is_running: true, .. } = &mut message.body else { return };
-                if *description == using {
+                let Body::Tool { summary, description, script_command, is_running: true, .. } = &mut message.body else { return };
+                if *description == using && *script_command == command {
                     return;
                 }
-                *summary = match &using {
-                    Some(plugin) => format!("Using {plugin}…"),
-                    None => format!("Running {}…", tool_label(&tool_name)),
+                *summary = match (&command, &using) {
+                    (Some(command), _) => format!("Running command: {command}…"),
+                    (None, Some(plugin)) => format!("Using {plugin}…"),
+                    (None, None) => format!("Running {}…", tool_label(&tool_name)),
                 };
                 *description = using;
+                *script_command = command;
                 self.start_tool(message);
             }
             AgentEvent::ToolExecutionEnd { tool_call_id, tool_name, result, is_error } => {
                 let Some((_, message_id)) = self.tool_messages.iter().find(|(id, _)| *id == tool_call_id).cloned() else { return };
                 let text = result.details["message"].as_str().map(str::to_string).unwrap_or_else(|| result.text_content());
                 let last_plugin = if tool_name == CODEMODE_TOOL_NAME { self.latest_plugin(&result.details) } else { None };
+                let last_command = if tool_name == CODEMODE_TOOL_NAME { self.latest_command(&result.details) } else { None };
                 let summary = if tool_name == CODEMODE_TOOL_NAME {
                     let plugins = self.script_plugins(&result.details);
                     for plugin in &plugins {
@@ -1178,7 +1187,7 @@ impl TurnState {
                 };
                 let summary = if is_error && tool_name != CODEMODE_TOOL_NAME { format!("{} failed", tool_label(&tool_name)) } else { summary };
                 let finish = |message: &mut Message| {
-                    if let Body::Tool { summary: s, detail, is_running, result: r, is_error: e, description, name, .. } = &mut message.body {
+                    if let Body::Tool { summary: s, detail, is_running, result: r, is_error: e, description, script_command, name, .. } = &mut message.body {
                         *s = summary;
                         *detail = text.clone();
                         *is_running = false;
@@ -1187,6 +1196,7 @@ impl TurnState {
                         if name == CODEMODE_TOOL_NAME {
                             // The row keeps reading "Using Linear" until the bot says something.
                             *description = last_plugin.clone();
+                            *script_command = last_command.clone();
                         }
                     }
                     message.state = MessageState::Complete;
@@ -1214,6 +1224,21 @@ impl TurnState {
             .rev()
             .filter(|(_, status)| matches!(status.as_str(), "running" | "ok" | "error"))
             .find_map(|(name, _)| self.plugin_tools.plugin_name(&name))
+    }
+
+    /// What a script's latest command that ran or runs says it does, while no plugin call came
+    /// after it.
+    fn latest_command(&self, details: &Value) -> Option<String> {
+        let latest = details["calls"]
+            .as_array()?
+            .iter()
+            .rev()
+            .filter(|call| matches!(call["status"].as_str(), Some("running" | "ok" | "error")))
+            .find(|call| call["name"] == "bash" || call["name"].as_str().is_some_and(|name| self.plugin_tools.plugin_name(name).is_some()))?;
+        if latest["name"] != "bash" {
+            return None;
+        }
+        latest["description"].as_str().and_then(|text| first_line(text, 80))
     }
 
     /// The plugins a script's calls used, by name, in the order it first used each. A call that
@@ -1375,9 +1400,16 @@ fn script_summary(plugins: &[String], failed: bool) -> String {
     }
 }
 
-/// What codemode scripts call besides plugin tools: the bot's own file tools. `bash` stays out:
-/// its review and card belong to a call of its own.
-const SCRIPTABLE_TOOLS: [&str; 5] = ["read", "write", "grep", "find", "ls"];
+/// What codemode scripts call besides plugin tools: the bot's own file and memory tools. `bash`
+/// is the scripts' own (`shell::script_bash`); the tools that hand work to teammates, change
+/// bots or routines, or install and sign in to plugins stay calls of their own, as `bash_input`
+/// and `bash_output` do.
+const SCRIPTABLE_TOOLS: [&str; 9] = ["read", "write", "edit", "grep", "find", "ls", "memory_update", "memory_log", "recall"];
+
+/// What a script's `bash` does differently from the bot's own.
+const SCRIPT_GUIDANCE: &str = "In a script, `bash` runs one command at a time, on pipes with nothing on stdin: a command that asks \
+for input gets none, so pass answers as flags (--yes, -y) or through files. A command that exits with a nonzero code resolves too; \
+check `exit_code`.";
 
 fn first_line(text: &str, max: usize) -> Option<String> {
     let line = text.lines().next()?.trim();
@@ -3324,6 +3356,48 @@ mod tests {
         assert_eq!(script_summary(&[], true), "The script failed");
     }
 
+    /// A script's latest command names the working row by its description, until a plugin call
+    /// comes after it; the plugin stays in `description` beside it.
+    #[test]
+    fn a_scripts_row_names_the_command_it_runs() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        let chef = bot("b1", "Chef");
+        {
+            let mut state = app.state.lock().unwrap();
+            state.bots.push(chef.clone());
+            state.chats.push(chat("chat", "dm", None, &["b1"]));
+        }
+        let mut turn = turn_state(app, &chef, "");
+        turn.plugin_tools = linear_catalog(app);
+        let args = json!({ "code": "await tools.linear__list_issues({});\nawait tools.bash({ command: 'cargo test', description: 'Run the tests' });" });
+        let row = |turn: &TurnState| {
+            let message_id = turn.tool_messages.iter().find(|(id, _)| id == "c1").map(|(_, message)| message.clone()).unwrap();
+            let Body::Tool { summary, description, script_command, .. } = app.message("chat", &message_id).unwrap().body else { unreachable!() };
+            (summary, description, script_command)
+        };
+        let update = |calls: Value| ToolResult { details: json!({ "calls": calls }), ..ToolResult::default() };
+        let issues = |status: &str| json!({ "id": "c1/1", "name": "linear__list_issues", "args": "{}", "status": status });
+        let tests = |status: &str| json!({ "id": "c1/2", "name": "bash", "args": "{}", "description": "Run the tests\nwith cargo", "status": status });
+        let read = json!({ "id": "c1/3", "name": "read", "args": "{}", "status": "ok" });
+
+        turn.handle(AgentEvent::ToolExecutionStart { tool_call_id: "c1".into(), tool_name: "codemode".into(), args: args.clone() });
+        turn.handle(AgentEvent::ToolExecutionUpdate { tool_call_id: "c1".into(), tool_name: "codemode".into(), args: args.clone(), partial_result: update(json!([issues("ok"), tests("running")])) });
+        assert_eq!(row(&turn), ("Running command: Run the tests…".to_string(), Some("Linear".to_string()), Some("Run the tests".to_string())));
+        // A file read in between keeps the command.
+        turn.handle(AgentEvent::ToolExecutionUpdate { tool_call_id: "c1".into(), tool_name: "codemode".into(), args: args.clone(), partial_result: update(json!([issues("ok"), tests("ok"), read.clone()])) });
+        assert_eq!(row(&turn).2.as_deref(), Some("Run the tests"));
+        // A plugin call after it takes the row back.
+        let mut later = issues("running");
+        later["id"] = json!("c1/4");
+        turn.handle(AgentEvent::ToolExecutionUpdate { tool_call_id: "c1".into(), tool_name: "codemode".into(), args: args.clone(), partial_result: update(json!([issues("ok"), tests("ok"), read, later])) });
+        assert_eq!(row(&turn), ("Using Linear…".to_string(), Some("Linear".to_string()), None));
+
+        let done = update(json!([issues("ok"), tests("error")]));
+        turn.handle(AgentEvent::ToolExecutionEnd { tool_call_id: "c1".into(), tool_name: "codemode".into(), result: done, is_error: false });
+        assert_eq!(row(&turn), ("Used Linear".to_string(), Some("Linear".to_string()), Some("Run the tests".to_string())), "the finished row keeps the command");
+    }
+
     #[test]
     fn script_values_stay_with_their_chat_and_bot() {
         let scratch = scratch_app();
@@ -3869,7 +3943,7 @@ mod tests {
         let waiting = |bot: &Bot, state: &str| {
             let mut message = Message::new("chat", Author::Bot { bot_id: bot.id.clone() }, Body::Tool {
                 name: "bash".into(), summary: "Waiting for input".into(), detail: String::new(), is_running: false, call_id: format!("call-{}", bot.id),
-                arguments: json!({}), result: Some("…".into()), is_error: false, description: None, target_bot_id: None,
+                arguments: json!({}), result: Some("…".into()), is_error: false, description: None, target_bot_id: None, script_command: None,
                 run: Some(CommandRun { session_id: Some(format!("bash-{}", bot.id)), command: "sudo -v".into(), state: state.into(), prompt: Some("Password:".into()), ..CommandRun::default() }),
             });
             message.state = MessageState::Complete;

@@ -200,8 +200,10 @@ export function toolActivity(tool: ToolInvocation, targetName: string | undefine
       return L("Answering a command");
     case "bash_output":
       return L("Waiting on a command");
-    // A codemode script: the plugin of its latest plugin call, which the CLI names.
+    // A codemode script: its latest command, else the plugin of its latest plugin call, which
+    // the CLI names.
     case "codemode":
+      if (tool.scriptCommand) return L("Running command: %@", tool.scriptCommand);
       return tool.description ? L("Using %@", tool.description) : L("Working");
     default:
       if (pluginName) return L("Using %@", pluginName);

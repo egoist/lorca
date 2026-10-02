@@ -245,6 +245,11 @@ pub enum Body {
         /// runs and show the finished row as "Messaged ◉ Scout".
         #[serde(default, skip_serializing_if = "Option::is_none")]
         target_bot_id: Option<String>,
+        /// A codemode script's latest command, by its `description`, while no plugin call came
+        /// after it: the status line reads "Running command: Run the tests…" instead of the
+        /// plugin `description` names.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        script_command: Option<String>,
         /// A `bash` call's card, from Auto-review's question to how the command ended. Every
         /// `bash` row has one; the apps show it in place of the row.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -985,7 +990,7 @@ mod app_view_tests {
     fn the_apps_get_a_tool_row_without_its_payload() {
         let tool = Message::new("c", Author::Bot { bot_id: "b".into() }, Body::Tool {
             name: "read".into(), summary: "Read a file".into(), detail: "x".repeat(5000), is_running: false,
-            call_id: "call".into(), arguments: serde_json::json!({ "path": "big" }), result: Some("y".repeat(100_000)), is_error: false, description: None, target_bot_id: None,
+            call_id: "call".into(), arguments: serde_json::json!({ "path": "big" }), result: Some("y".repeat(100_000)), is_error: false, description: None, target_bot_id: None, script_command: None,
             run: None,
         });
         let Body::Tool { detail, arguments, result, summary, .. } = tool.for_app().body else { panic!() };

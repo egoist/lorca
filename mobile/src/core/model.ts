@@ -187,6 +187,9 @@ export type Body =
       description?: string;
       /** The bot a message_bot call goes to. */
       target_bot_id?: string;
+      /** A codemode script's latest command, by its description, while no plugin call came
+       * after it: the working row reads "Running command: Run the tests…". */
+      script_command?: string;
       /** A bash call's card, from Auto-review's question to how the command ended. */
       run?: CommandRun;
     }

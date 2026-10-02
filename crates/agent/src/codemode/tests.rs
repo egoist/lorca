@@ -153,7 +153,7 @@ async fn searches_and_lookups_reach_tools_the_catalog_finds_late() {
     let codemode = CodemodeTool::new(Arc::new(Late), CodemodeOptions::default());
     let description = codemode.description();
     assert!(description.contains("Your own tools `echo` are callable here too"), "{description}");
-    assert!(description.contains("## late (tools not known yet; searchTools() finds them)\nConnects on first use"), "{description}");
+    assert!(description.contains("## late (tools not known yet; describeNamespace() lists them)\nConnects on first use"), "{description}");
     let code = "const found = await searchTools('lookup things');\nconst described = await describeTool(found[0].name);\n\
                 const missing = await describeTool('nothing');\nconst { id } = await tools[found[0].name]({ id: 7 });\n\
                 return [found.length, found[0].name, described.includes('codemode tool declaration'), missing === undefined, id, ALL_TOOLS.length];";
@@ -297,7 +297,7 @@ fn the_description_lists_tools_by_namespace_within_its_budget() {
     assert!(complete.contains("## linear (some tools not listed)"), "a deferred tool is never listed: {complete}");
     assert!(complete.contains("Shared MCP types. An MCP tool resolves to its whole `CallToolResult`"));
     assert!(complete.contains("Nested tools:\n\n## github\nGitHub: issues and pull requests"), "no counts, so the heading stays while the tools change: {complete}");
-    assert!(complete.contains("## notion (tools not known yet; searchTools() finds them)\nNotion"), "{complete}");
+    assert!(complete.contains("## notion (tools not known yet; describeNamespace() lists them)\nNotion"), "{complete}");
     assert!(complete.contains("github__create_issue(args: { q: string; }): Promise<CallToolResult>;"), "{complete}");
     assert!(!complete.contains("### `read`"), "a direct tool is named, not listed");
 
@@ -309,6 +309,72 @@ fn the_description_lists_tools_by_namespace_within_its_budget() {
     let tight = describe(&entries, &namespaces, &[], &CodemodeOptions { inline_budget: 150, ..CodemodeOptions::default() });
     assert!(tight.contains("## github (some tools not listed)") && tight.contains("## linear (some tools not listed)"), "each namespace gets one tool in first: {tight}");
     assert_eq!(tight.matches("\n### `").count(), 2, "{tight}");
+}
+
+/// `describeNamespace()` lists a group's tools, by its name or its identifier, deferred ones
+/// too; a group the catalog does not have is undefined.
+#[tokio::test]
+async fn describe_namespace_lists_every_tool_of_a_group() {
+    let entries = vec![
+        Entry::new(Probe::tool("read", Mode::Echo), Exposure::Direct),
+        Entry::new(Probe::tool("my-tools__lookup", Mode::Structured), Exposure::Listed).in_namespace("my-tools"),
+        Entry::new(Probe::tool("my-tools__echo", Mode::Echo), Exposure::Deferred).in_namespace("my-tools"),
+        Entry::new(Probe::tool("other__echo", Mode::Echo), Exposure::Listed).in_namespace("other"),
+    ];
+    let catalog = StaticCatalog::with_entries(entries, vec![Namespace { name: "my-tools".into(), description: "Tools of mine".into() }]);
+    let codemode = CodemodeTool::new(Arc::new(catalog), CodemodeOptions::default());
+    assert!(codemode.description().contains("`describeNamespace(name)` gives a namespace's description"), "{}", codemode.description());
+    let code = "return [await describeNamespace('my_tools'), await describeNamespace('other'), await describeNamespace('nothing')];";
+    let result = run(&codemode, code).await;
+    let text = text_of(&result);
+    assert!(
+        text.ends_with(r#"[{"description":"Tools of mine","name":"my-tools","tools":["my_tools__lookup","my_tools__echo"]},{"name":"other","tools":["other__echo"]},null]"#),
+        "{text}"
+    );
+    let failed = run(&codemode, "return await describeNamespace();").await;
+    assert!(failed.is_error && text_of(&failed).contains("describeNamespace() expects a namespace name"), "{}", text_of(&failed));
+}
+
+/// A call's record carries the `description` its arguments give, for a host's status line.
+#[tokio::test]
+async fn a_calls_record_carries_its_description() {
+    let codemode = tool(vec![Probe::tool("echo", Mode::Echo)]);
+    let result = run(&codemode, "await tools.echo({ id: 1, description: '  Run the tests ' });\nawait tools.echo({ id: 2 });").await;
+    assert_eq!(result.details["calls"][0]["description"], "Run the tests");
+    assert!(result.details["calls"][1].get("description").is_none(), "{}", result.details);
+}
+
+/// A command that fails still resolves, with its output and exit code, so a script can go on.
+#[tokio::test]
+async fn a_script_reads_a_failed_commands_exit_code() {
+    let codemode = tool(vec![Arc::new(crate::tools::BashTool::new(std::env::temp_dir()))]);
+    let code = "const failed = await tools.bash({ command: 'echo boom; exit 3', description: 'Fail' });\nreturn [failed.exit_code, failed.output];";
+    let result = run(&codemode, code).await;
+    assert!(!result.is_error && text_of(&result).ends_with("[3,\"boom\\n\"]"), "{}", text_of(&result));
+}
+
+/// A direct tool with an output schema says what a script's call resolves to; the others
+/// resolve to their text.
+#[test]
+fn the_description_says_what_direct_tools_resolve_to() {
+    let bash = crate::tools::BashTool::new(std::env::temp_dir());
+    let entries = vec![
+        Entry::new(Probe::tool("read", Mode::Echo), Exposure::Direct),
+        Entry::new(Arc::new(bash), Exposure::Direct),
+        Entry::new(Probe::tool("lookup", Mode::Structured), Exposure::Direct),
+    ];
+    let description = describe(&entries, &[], &[], &CodemodeOptions::default());
+    assert!(
+        description.contains(
+            "Your own tools `read`, `bash`, `lookup` are callable here too, with the same arguments. \
+             `bash` resolves to `{ exit_code, full_output_path?, output, truncated, wall_time_seconds }`; \
+             `lookup` resolves to `{ id? }`; the others resolve to their text output."
+        ),
+        "{description}"
+    );
+    let typed_only = describe(&entries[1..2], &[], &[], &CodemodeOptions::default());
+    assert!(typed_only.contains("Your own tools `bash` are callable here too, with the same arguments. `bash` resolves to `{"), "{typed_only}");
+    assert!(!typed_only.contains("the others"), "{typed_only}");
 }
 
 /// `models.ask` as a host might give it: the prompt back in capitals, or a failure.

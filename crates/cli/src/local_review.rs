@@ -4,6 +4,7 @@
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, LazyLock};
 
+use lorca_agent::codemode::CODEMODE_TOOL_NAME;
 use lorca_agent::{BeforeToolCallContext, BeforeToolCallResult};
 use regex::Regex;
 use serde_json::Value;
@@ -20,7 +21,8 @@ const LOCAL_TARGET_ID: &str = "computer";
 /// on, a command the parser proves read-only, or one that stays in Lorca's own folders, runs at
 /// once; the review judges everything else, against the request behind the turn that
 /// `trigger` started. The call's card says so while it checks and asks the user's permission
-/// itself when the review wants it.
+/// itself when the review wants it. A command from a codemode script has no card: the review
+/// reads the script with it, and asks in a `permission` message.
 pub async fn before_tool_call(
     app: &Arc<App>,
     chat_id: &str,
@@ -65,7 +67,9 @@ pub async fn before_tool_call(
         run.state = "checking".into();
         run.device = Some(runner_name.clone());
     });
-    let action = Action { target_name: &runner_name, tool: "bash", description: &description, args: &args, script: None, propose_rule: true };
+    // A command from a codemode script comes with the script, which says what the batch is for.
+    let script = ctx.parent.filter(|parent| parent.name == CODEMODE_TOOL_NAME).and_then(|parent| parent.arguments["code"].as_str());
+    let action = Action { target_name: &runner_name, tool: "bash", description: &description, args: &args, script, propose_rule: true };
     let Outcome::Ask { reason, rule } = review::review(app, bot, chat_id, trigger, action, ctx.cancel).await else {
         update(&|run| run.state = "running".into());
         return None;
@@ -963,6 +967,65 @@ mod tests {
         let ctx = BeforeToolCallContext { assistant_message: &assistant, tool_call: &call, args: &args, context: &context, cancel: &cancel, parent: None };
         let blocked = before_tool_call(&app, "chat", &Trigger::default(), &bot, &work, true, ctx).await.unwrap();
         assert!(blocked.reason.as_deref().is_some_and(|reason| reason.contains("Auto-review is off")), "{:?}", blocked.reason);
+        let _ = std::fs::remove_dir_all(scratch);
+    }
+
+    /// A command from a codemode script has no card, so a held one asks in a `permission`
+    /// message, and the user's answer decides it.
+    #[tokio::test]
+    async fn a_script_command_asks_in_a_permission_message() {
+        use crate::model::Body;
+        use lorca_agent::{AgentContext, AssistantMessage, ToolCall};
+        use tokio_util::sync::CancellationToken;
+
+        let scratch = std::env::temp_dir().join(format!("lorca-review-script-{}", uuid::Uuid::new_v4()));
+        let work = scratch.join("project");
+        std::fs::create_dir_all(&work).unwrap();
+        let app = App::load(crate::config::Config { home: scratch.join("lorca"), port: 0 }).unwrap();
+        let bot: Bot = serde_json::from_value(serde_json::json!({
+            "id": "bot", "name": "Bot", "description": "", "symbol_name": "", "accent": "", "runner_id": "runner", "provider": "deepseek", "created_at": 0.0
+        }))
+        .unwrap();
+        app.state.lock().unwrap().chats.push(serde_json::from_value(serde_json::json!({ "id": "chat", "kind": "dm", "bot_ids": ["bot"], "created_at": 0.0 })).unwrap());
+        let mut review = app.auto_review();
+        review.is_enabled = false;
+        app.set_auto_review(review);
+
+        let assistant = AssistantMessage::empty("test", "test");
+        let context = AgentContext { system_prompt: String::new(), messages: Vec::new(), tools: Vec::new(), cache_points: Vec::new() };
+        let cancel = CancellationToken::new();
+        let trigger = Trigger::default();
+        let script = ToolCall {
+            id: "script".into(),
+            name: CODEMODE_TOOL_NAME.into(),
+            arguments: serde_json::json!({ "code": "return (await tools.bash({ command: 'cargo test', description: 'Run the tests' })).exit_code;" }),
+        };
+        let args = serde_json::json!({ "command": "cargo test", "description": "Run the tests" });
+        let call = ToolCall { id: "script/1".into(), name: "bash".into(), arguments: args.clone() };
+        let answer_with = |decision: Decision| {
+            let app = app.clone();
+            async move {
+                loop {
+                    let pending = app.pending_permissions.lock().unwrap().keys().next().cloned();
+                    if let Some(id) = pending {
+                        assert!(mcp::answer(&app, &id, decision));
+                        return id;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            }
+        };
+
+        let ctx = BeforeToolCallContext { assistant_message: &assistant, tool_call: &call, args: &args, context: &context, cancel: &cancel, parent: Some(&script) };
+        let (allowed, asked) = tokio::join!(before_tool_call(&app, "chat", &trigger, &bot, &work, false, ctx), answer_with(Decision::Allowed));
+        assert!(allowed.is_none(), "an allowed command runs");
+        let Body::Permission { tool, summary, decision, .. } = app.message("chat", &asked).unwrap().body else { panic!("not a permission message") };
+        assert_eq!((tool.as_str(), decision.as_str()), ("bash", "allowed"));
+        assert!(summary.contains("cargo test"), "{summary}");
+
+        let ctx = BeforeToolCallContext { assistant_message: &assistant, tool_call: &call, args: &args, context: &context, cancel: &cancel, parent: Some(&script) };
+        let (denied, _) = tokio::join!(before_tool_call(&app, "chat", &trigger, &bot, &work, false, ctx), answer_with(Decision::Denied));
+        assert!(denied.is_some_and(|blocked| blocked.block), "a refused command ends the script");
         let _ = std::fs::remove_dir_all(scratch);
     }
 }

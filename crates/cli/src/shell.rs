@@ -13,10 +13,14 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use async_trait::async_trait;
+use lorca_agent::agent_loop::ToolExecutionMode;
 use lorca_agent::tools::bash_session::{PROMPT_QUIET, WAITING_AFTER};
-use lorca_agent::tools::{BashSession, BashSessions, SessionEnd};
+use lorca_agent::tools::{BashSession, BashSessions, BashTool, SessionEnd};
+use lorca_agent::{Tool, ToolError, ToolResult, ToolUpdateFn};
 use serde_json::{json, Value};
 use tokio::time::Instant;
+use tokio_util::sync::CancellationToken;
 
 use crate::app::App;
 use crate::model::{Author, Body, CommandRun, Message};
@@ -539,6 +543,39 @@ pub fn bot_shell_extras(app: &App) -> lorca_agent::login_shell::Extras {
     lorca_agent::login_shell::Extras {
         variables: vec![("LORCA_HOME".into(), app.config.home.clone().into_os_string()), ("LORCA_PORT".into(), app.config.port.to_string().into())],
         path_first,
+    }
+}
+
+/// The `bash` a turn's codemode scripts call, beside the bot's own: pi's, on pipes with nothing
+/// on stdin, so a call lasts as long as its command, and a script gets the output, exit code,
+/// and time (`BashTool::output_schema`), whatever the code. It keeps no session and has no
+/// card: Auto-review judges each command with the script, and one it holds asks in a
+/// `permission` message. Calls run one at a time, so a script's commands never ask at once.
+pub fn script_bash(app: &App, workdir: &std::path::Path) -> Arc<dyn Tool> {
+    Arc::new(ScriptBash(BashTool::new(workdir.to_path_buf()).with_extras(bot_shell_extras(app))))
+}
+
+struct ScriptBash(BashTool);
+
+#[async_trait]
+impl Tool for ScriptBash {
+    fn name(&self) -> &str {
+        self.0.name()
+    }
+    fn description(&self) -> &str {
+        self.0.description()
+    }
+    fn parameters(&self) -> Value {
+        self.0.parameters()
+    }
+    fn output_schema(&self) -> Option<Value> {
+        self.0.output_schema()
+    }
+    fn execution_mode(&self) -> Option<ToolExecutionMode> {
+        Some(ToolExecutionMode::Sequential)
+    }
+    async fn execute(&self, id: &str, args: Value, cancel: CancellationToken, on_update: ToolUpdateFn) -> Result<ToolResult, ToolError> {
+        self.0.execute(id, args, cancel, on_update).await
     }
 }
 
