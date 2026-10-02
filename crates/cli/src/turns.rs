@@ -19,13 +19,14 @@ use lorca_agent::retry::{is_context_overflow, RetryPolicy};
 use lorca_agent::{LlmMessage, Provider};
 use lorca_agent::{
     AgentEvent, AgentMessage, AgentMessageQueue, AssistantMessage, AssistantPart, ContentPart, QueueMode,
-    StopReason, Tool, ToolCall, ToolError, ToolResult, ToolResultMessage, ToolUpdateFn, UserMessage,
+    StopReason, ThinkingLevel, Tool, ToolCall, ToolError, ToolResult, ToolResultMessage, ToolUpdateFn, UserMessage,
 };
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::app::App;
 use crate::config::now_secs;
+use crate::credentials::OfferedModel;
 use crate::memory::{self, MemoryStore};
 use crate::model::*;
 use crate::plugins::review::Trigger;
@@ -1859,7 +1860,8 @@ impl Tool for ListTeammates {
         "list_teammates"
     }
     fn description(&self) -> &str {
-        "List the other bots on this account: their id, name, what they are good at, which Runner they run on, and whether that Runner is online."
+        "List the other bots on this account: their id, name, what they are good at, which Runner they run on, whether that \
+         Runner is online, and the provider, model, and thinking they run with."
     }
     fn parameters(&self) -> Value {
         json!({ "type": "object", "properties": {}, "additionalProperties": false })
@@ -1877,6 +1879,9 @@ impl Tool for ListTeammates {
                     "description": bot.description,
                     "runner": runner.as_ref().map(|d| d.name.clone()).unwrap_or_else(|| "unassigned".into()),
                     "provider": bot.provider,
+                    // The model it runs: its own, else the provider's default.
+                    "model": bot.model.clone().or_else(|| self.app.credentials.lock().unwrap().models(&bot.provider).first().map(|m| m.id.clone())),
+                    "thinking": bot.thinking.as_deref().unwrap_or("default"),
                     "online": self.app.device_is_online(&bot.runner_id),
                     "in_this_chat": chat.as_ref().map(|c| c.meta.bot_ids.contains(&bot.id)).unwrap_or(false),
                 })
@@ -2180,6 +2185,142 @@ fn check_provider(app: &App, provider: &str) -> Result<(), ToolError> {
     Err(ToolError(format!("Unknown provider {provider}. Use one of: {}.", kinds.join(", "))))
 }
 
+/// The most models a refusal lists; a gateway can offer hundreds.
+const MODELS_LISTED: usize = 40;
+
+/// What a bot runs with: a provider, one of its models (`None` for its default), and a thinking
+/// level that model takes (`None` for the model's default).
+struct Runs {
+    provider: String,
+    model: Option<String>,
+    thinking: Option<String>,
+}
+
+impl Runs {
+    fn of(bot: &Bot) -> Self {
+        Runs { provider: bot.provider.clone(), model: bot.model.clone(), thinking: bot.thinking.clone() }
+    }
+
+    /// These runs after a team tool's `provider`, `model`, and `thinking`, held to what the apps'
+    /// menus offer, as the inspector holds them: another provider starts on its default model and
+    /// thinking, another model keeps a level only when it takes it, and a model or level the
+    /// provider lacks is refused with the ones it has. `default` picks the default.
+    fn change(mut self, app: &App, provider: Option<&str>, model: Option<&str>, thinking: Option<&str>) -> Result<Self, ToolError> {
+        if provider.is_none() && model.is_none() && thinking.is_none() {
+            return Ok(self);
+        }
+        if let Some(provider) = provider.filter(|p| *p != self.provider) {
+            self = Runs { provider: provider.to_string(), model: None, thinking: None };
+        }
+        // Also a bot whose custom provider was deleted: it has no models left to pick from.
+        check_provider(app, &self.provider)?;
+        let offered = app.credentials.lock().unwrap().models(&self.provider);
+        if let Some(wanted) = model {
+            let model = pick_model(app, &self.provider, &offered, wanted)?;
+            if model != self.model {
+                let levels = levels_of(&offered, model.as_deref());
+                if !self.thinking.as_deref().and_then(|t| t.parse().ok()).is_some_and(|t| levels.contains(&t)) {
+                    self.thinking = None;
+                }
+                self.model = model;
+            }
+        }
+        if let Some(wanted) = thinking {
+            self.thinking = pick_thinking(&offered, self.model.as_deref(), wanted)?;
+        }
+        Ok(self)
+    }
+
+    /// "Claude Opus 5.5 on Anthropic, thinking high", for a tool's result.
+    fn describe(&self, app: &App) -> String {
+        let (offered, label) = {
+            let credentials = app.credentials.lock().unwrap();
+            (credentials.models(&self.provider), credentials.label(&self.provider))
+        };
+        let model = match (&self.model, offered.first()) {
+            (Some(_), _) => model_name(&offered, self.model.as_deref()),
+            (None, Some(default)) => format!("{} (the default)", default.name),
+            (None, None) => "the default model".into(),
+        };
+        let thinking = match &self.thinking {
+            Some(level) => format!(", thinking {level}"),
+            None if levels_of(&offered, self.model.as_deref()).is_empty() => String::new(),
+            None => ", thinking at its default".into(),
+        };
+        format!("{model} on {label}{thinking}")
+    }
+}
+
+/// The model `wanted` names among the ones `kind` offers: by id, else by its name or by the id
+/// after a gateway's `vendor/`, in any case. `None` for `default`. An unknown model is refused
+/// with the provider's models, and with the providers that offer it.
+fn pick_model(app: &App, kind: &str, offered: &[OfferedModel], wanted: &str) -> Result<Option<String>, ToolError> {
+    if wanted.eq_ignore_ascii_case("default") {
+        return Ok(None);
+    }
+    let names = |model: &OfferedModel| {
+        model.id.eq_ignore_ascii_case(wanted) || model.name.eq_ignore_ascii_case(wanted) || model.id.rsplit('/').next().is_some_and(|id| id.eq_ignore_ascii_case(wanted))
+    };
+    if let Some(model) = offered.iter().find(|m| m.id == wanted).or_else(|| offered.iter().find(|m| names(m))) {
+        return Ok(Some(model.id.clone()));
+    }
+    let credentials = app.credentials.lock().unwrap();
+    let Some(default) = offered.first() else {
+        return Err(ToolError(format!("{} lists no models.", credentials.label(kind))));
+    };
+    let mut listed: Vec<String> = offered.iter().take(MODELS_LISTED).map(|m| if m.name == m.id { m.id.clone() } else { format!("{} ({})", m.id, m.name) }).collect();
+    if offered.len() > MODELS_LISTED {
+        listed.push(format!("and {} more", offered.len() - MODELS_LISTED));
+    }
+    let mut text = format!("{} has no model {wanted}. Use one of: {}; or default, which is {}.", credentials.label(kind), listed.join(", "), default.name);
+    let connected = credentials.connected_kinds();
+    let elsewhere: Vec<String> = credentials
+        .kinds()
+        .into_iter()
+        .filter(|other| other != kind && credentials.models(other).iter().any(names))
+        .map(|other| if connected.contains(&other) { other } else { format!("{other} (not connected)") })
+        .collect();
+    if !elsewhere.is_empty() {
+        text.push_str(&format!(" {wanted} runs on another provider: pass provider {} with it.", elsewhere.join(" or ")));
+    }
+    Err(ToolError(text))
+}
+
+/// The thinking level `wanted` names, held to the levels `model` takes; `None` for `default`.
+fn pick_thinking(offered: &[OfferedModel], model: Option<&str>, wanted: &str) -> Result<Option<String>, ToolError> {
+    if wanted.eq_ignore_ascii_case("default") {
+        return Ok(None);
+    }
+    let level: ThinkingLevel = wanted.parse().map_err(ToolError)?;
+    let levels = levels_of(offered, model);
+    if levels.contains(&level) {
+        return Ok(Some(level.to_string()));
+    }
+    let name = model_name(offered, model);
+    if levels.is_empty() {
+        return Err(ToolError(format!("{name} has no thinking levels to pick from. Leave thinking out, or pass default.")));
+    }
+    let levels: Vec<&str> = levels.iter().map(ThinkingLevel::as_str).collect();
+    Err(ToolError(format!("{name} does not think at {level}. Use one of: {}; or default.", levels.join(", "))))
+}
+
+/// The thinking levels `model` takes (the provider's default model for `None`), as the apps'
+/// Thinking menu offers them: a model the provider does not list takes every level its models
+/// take.
+fn levels_of(offered: &[OfferedModel], model: Option<&str>) -> Vec<ThinkingLevel> {
+    let id = model.or(offered.first().map(|m| m.id.as_str()));
+    match offered.iter().find(|m| Some(m.id.as_str()) == id) {
+        Some(known) => known.levels.clone(),
+        None => ThinkingLevel::ALL.into_iter().filter(|level| offered.iter().any(|m| m.levels.contains(level))).collect(),
+    }
+}
+
+/// The name of `model` (the provider's default model for `None`), else its id.
+fn model_name(offered: &[OfferedModel], model: Option<&str>) -> String {
+    let id = model.or(offered.first().map(|m| m.id.as_str())).unwrap_or("the default model");
+    offered.iter().find(|m| m.id == id).map_or_else(|| id.to_string(), |m| m.name.clone())
+}
+
 struct CreateBot {
     app: Arc<App>,
     chat_id: String,
@@ -2203,7 +2344,8 @@ impl Tool for CreateBot {
                 "name": { "type": "string", "description": "Short name, one or two words" },
                 "description": { "type": "string", "description": "What it does and how it should work: scope, standards, tone, constraints, and what to ask before acting" },
                 "provider": { "type": "string", "enum": self.app.credentials.lock().unwrap().kinds(), "description": "Defaults to your own provider" },
-                "thinking": { "type": "string", "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "max"], "description": "How much the model thinks. Defaults to the provider's default" },
+                "model": { "type": "string", "description": "A model id the provider offers. Defaults to the provider's default model" },
+                "thinking": { "type": "string", "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "max"], "description": "How much the model thinks, a level the model takes. Defaults to the model's default" },
                 "workdir": { "type": "string", "description": "Working directory for its tools. Defaults to a private workspace under the CLI home; give it your own path to share files" }
             },
             "required": ["name", "description"],
@@ -2227,6 +2369,10 @@ impl Tool for CreateBot {
         }
         let provider = args["provider"].as_str().map(str::to_string).unwrap_or_else(|| self.bot.provider.clone());
         check_provider(&self.app, &provider)?;
+        let field = |key: &str| args[key].as_str().map(str::trim).filter(|v| !v.is_empty());
+        let (model, thinking) = (field("model"), field("thinking"));
+        let runs = Runs { provider, model: None, thinking: None }.change(&self.app, None, model, thinking)?;
+        let runs_with = (args["provider"].is_string() || model.is_some() || thinking.is_some()).then(|| runs.describe(&self.app));
         let (symbol_name, accent) = look_for(&name);
         let bot = Bot {
             id: String::new(),
@@ -2236,9 +2382,9 @@ impl Tool for CreateBot {
             accent,
             avatar: None,
             runner_id: self.bot.runner_id.clone(),
-            provider,
-            model: None,
-            thinking: args["thinking"].as_str().map(|t| t.trim().to_string()).filter(|t| !t.is_empty()),
+            provider: runs.provider,
+            model: runs.model,
+            thinking: runs.thinking,
             legacy_instructions: String::new(),
             workdir: args["workdir"].as_str().map(|w| w.trim().to_string()).filter(|w| !w.is_empty()),
             created_at: 0.0,
@@ -2262,7 +2408,7 @@ impl Tool for CreateBot {
         }
 
         let runner = self.app.device(&created.runner_id).map(|d| d.name).unwrap_or_else(|| "this Runner".into());
-        let text = if joined_here {
+        let mut text = if joined_here {
             format!("Created {} (id {}) on {runner}. They are in this chat now and take turns after you.", created.name, created.id)
         } else {
             format!(
@@ -2270,6 +2416,9 @@ impl Tool for CreateBot {
                 created.name, created.id
             )
         };
+        if let Some(runs) = runs_with {
+            text.push_str(&format!(" They run {runs}."));
+        }
         Ok(ToolResult::text(text).with_details(json!({ "summary": format!("Created {}", created.name), "bot_id": created.id })))
     }
 }
@@ -2286,9 +2435,9 @@ impl Tool for EditBot {
         "edit_bot"
     }
     fn description(&self) -> &str {
-        "Change a teammate's profile: name, description, provider, or working directory. Only the fields you \
-         pass change. Description is the complete account of what the bot does and how it works. You can edit \
-         yourself. Changes apply from that bot's next turn. Edit only when the user asks or agrees."
+        "Change a teammate's profile: name, description, provider, model, thinking, or working directory. Only the \
+         fields you pass change. Description is the complete account of what the bot does and how it works. You can \
+         edit yourself. Changes apply from that bot's next turn. Edit only when the user asks or agrees."
     }
     fn parameters(&self) -> Value {
         json!({
@@ -2297,8 +2446,9 @@ impl Tool for EditBot {
                 "bot_id": { "type": "string", "description": "The bot's id, from the user's @mention or list_teammates" },
                 "name": { "type": "string", "description": "New name, one or two words" },
                 "description": { "type": "string", "description": "New complete description of what it does and how it should work" },
-                "provider": { "type": "string", "enum": self.app.credentials.lock().unwrap().kinds() },
-                "thinking": { "type": "string", "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "max"], "description": "How much the model thinks" },
+                "provider": { "type": "string", "enum": self.app.credentials.lock().unwrap().kinds(), "description": "Another provider starts on its default model and thinking, unless you pass them too" },
+                "model": { "type": "string", "description": "A model id the provider offers, or default for the provider's default model" },
+                "thinking": { "type": "string", "enum": ["default", "off", "minimal", "low", "medium", "high", "xhigh", "max"], "description": "How much the model thinks: a level the model takes, or default" },
                 "workdir": { "type": "string", "description": "New working directory for its tools" }
             },
             "required": ["bot_id"],
@@ -2320,6 +2470,7 @@ impl Tool for EditBot {
         let new_name = field("name").map(|n| n.trim_start_matches('@').to_string());
         let description = field("description");
         let provider = field("provider");
+        let model = field("model");
         let thinking = field("thinking");
         let workdir = field("workdir");
         if let Some(n) = &new_name {
@@ -2330,13 +2481,12 @@ impl Tool for EditBot {
                 return Err(ToolError(format!("A bot named {n} already exists. Pick another name.")));
             }
         }
-        if let Some(p) = &provider {
-            check_provider(&self.app, p)?;
-        }
+        let runs = Runs::of(&target).change(&self.app, provider.as_deref(), model.as_deref(), thinking.as_deref())?;
         let changed: Vec<&str> = [
             ("name", new_name.is_some()),
             ("description", description.is_some()),
             ("provider", provider.is_some()),
+            ("model", model.is_some()),
             ("thinking", thinking.is_some()),
             ("working directory", workdir.is_some()),
         ]
@@ -2344,8 +2494,10 @@ impl Tool for EditBot {
         .filter_map(|(label, set)| set.then_some(label))
         .collect();
         if changed.is_empty() {
-            return Err("Pass at least one field to change: name, description, provider, thinking, or workdir".into());
+            return Err("Pass at least one field to change: name, description, provider, model, thinking, or workdir".into());
         }
+        let runtime = provider.is_some() || model.is_some() || thinking.is_some();
+        let runs_with = runtime.then(|| runs.describe(&self.app));
 
         let updated = self
             .app
@@ -2356,11 +2508,10 @@ impl Tool for EditBot {
                 if let Some(v) = description {
                     bot.description = v;
                 }
-                if let Some(v) = provider {
-                    bot.provider = v;
-                }
-                if let Some(v) = thinking {
-                    bot.thinking = Some(v);
+                if runtime {
+                    bot.provider = runs.provider;
+                    bot.model = runs.model;
+                    bot.thinking = runs.thinking;
                 }
                 if let Some(v) = workdir {
                     bot.workdir = Some(v);
@@ -2369,10 +2520,11 @@ impl Tool for EditBot {
             .map_err(|e| ToolError(e.to_string()))?;
 
         let what = changed.join(", ");
-        let text = if target.id == self.bot.id {
-            format!("Updated your own profile ({what}). The new profile applies from your next turn; finish this one as you are.")
-        } else {
-            format!("Updated {} ({what}). The new profile applies from their next turn.", updated.name)
+        let text = match (target.id == self.bot.id, runs_with) {
+            (true, Some(runs)) => format!("Updated your own profile ({what}). From your next turn you run {runs}; finish this one as you are."),
+            (true, None) => format!("Updated your own profile ({what}). The new profile applies from your next turn; finish this one as you are."),
+            (false, Some(runs)) => format!("Updated {} ({what}). From their next turn they run {runs}.", updated.name),
+            (false, None) => format!("Updated {} ({what}). The new profile applies from their next turn.", updated.name),
         };
         Ok(ToolResult::text(text).with_details(json!({ "summary": format!("Updated {}", updated.name), "bot_id": updated.id, "changed": changed })))
     }
@@ -3922,6 +4074,107 @@ mod tests {
         turn.handle(AgentEvent::ToolExecutionStart { tool_call_id: "call".into(), tool_name: "message_bot".into(), args: json!({ "bot_id": "b2", "message": "hi" }) });
         let row = app.message("chat", &turn.tool_messages[0].1).unwrap();
         assert!(matches!(row.body, Body::Tool { target_bot_id: Some(ref id), .. } if id == "b2"));
+    }
+
+    #[tokio::test]
+    async fn edit_bot_changes_the_model_and_thinking_as_the_inspector_does() {
+        use crate::credentials::{ApiKeyCredential, CustomApi, CustomModel, CustomProvider};
+
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        let chef = bot("b1", "Chef");
+        let scout = Bot { provider: "anthropic".into(), thinking: Some("minimal".into()), ..bot("b2", "Scout") };
+        app.state.lock().unwrap().bots = vec![chef.clone(), scout];
+        let no_updates: ToolUpdateFn = Arc::new(|_| {});
+        let tool = EditBot { app: app.clone(), bot: chef.clone() };
+        let edit = |mut args: Value| {
+            args["bot_id"] = json!("b2");
+            tool.execute("call", args, CancellationToken::new(), no_updates.clone())
+        };
+        let runs = || {
+            let scout = app.bot("b2").unwrap();
+            (scout.provider, scout.model, scout.thinking)
+        };
+        let text = |result: ToolResult| result.content[0].as_text().unwrap().to_string();
+
+        // By name, in any case. Haiku takes minimal, so the level stays.
+        let result = edit(json!({ "model": "claude haiku 4.5" })).await.unwrap();
+        assert_eq!(runs(), ("anthropic".into(), Some("claude-haiku-4-5".into()), Some("minimal".into())));
+        assert_eq!(text(result), "Updated Scout (model). From their next turn they run Claude Haiku 4.5 on Anthropic, thinking minimal.");
+        // Opus 5.5 has no minimal: the level goes back to the default.
+        edit(json!({ "model": "claude-opus-5-5" })).await.unwrap();
+        assert_eq!(runs(), ("anthropic".into(), Some("claude-opus-5-5".into()), None));
+        // A level the model does not take, or a model the provider lacks, is refused with the
+        // choices, and nothing changes.
+        let error = edit(json!({ "thinking": "off" })).await.unwrap_err();
+        assert_eq!(error.0, "Claude Opus 5.5 does not think at off. Use one of: low, medium, high, xhigh, max; or default.");
+        app.credentials.lock().unwrap().opencode = Some(ApiKeyCredential { api_key: "key".into(), base_url: None, connected_at: 1 });
+        let error = edit(json!({ "model": "gpt-6.1-sol", "name": "Ranger" })).await.unwrap_err();
+        assert!(error.0.starts_with("Anthropic has no model gpt-6.1-sol. Use one of: claude-opus-5 (Claude Opus 5), claude-opus-5-5 (Claude Opus 5.5),"), "{}", error.0);
+        assert!(error.0.ends_with("; or default, which is Claude Opus 5. gpt-6.1-sol runs on another provider: pass provider opencode or chatgpt (not connected) with it."), "{}", error.0);
+        assert_eq!((app.bot("b2").unwrap().name, runs().1), ("Scout".into(), Some("claude-opus-5-5".into())));
+        // A level and a model together.
+        edit(json!({ "model": "claude-haiku-4-5", "thinking": "off" })).await.unwrap();
+        assert_eq!(runs(), ("anthropic".into(), Some("claude-haiku-4-5".into()), Some("off".into())));
+
+        // Another provider starts on its default model and thinking.
+        let result = edit(json!({ "provider": "chatgpt" })).await.unwrap();
+        assert_eq!(runs(), ("chatgpt".into(), None, None));
+        assert_eq!(text(result), "Updated Scout (provider). From their next turn they run GPT-6.1 Sol (the default) on ChatGPT, thinking at its default.");
+        edit(json!({ "provider": "anthropic", "model": "claude-sonnet-5-5", "thinking": "high" })).await.unwrap();
+        assert_eq!(runs(), ("anthropic".into(), Some("claude-sonnet-5-5".into()), Some("high".into())));
+        // The same provider again keeps the model; default returns to the default.
+        edit(json!({ "provider": "anthropic", "thinking": "default" })).await.unwrap();
+        assert_eq!(runs(), ("anthropic".into(), Some("claude-sonnet-5-5".into()), None));
+        edit(json!({ "model": "default" })).await.unwrap();
+        assert_eq!(runs(), ("anthropic".into(), None, None));
+
+        // A model set elsewhere that the menu lacks takes every level its provider's models take.
+        app.update_bot("b2", |bot| bot.model = Some("claude-next".into())).unwrap();
+        edit(json!({ "thinking": "minimal" })).await.unwrap();
+        assert_eq!(runs(), ("anthropic".into(), Some("claude-next".into()), Some("minimal".into())));
+
+        // A custom provider offers its saved models, found by the id after a gateway's `vendor/`.
+        let models = ["anthropic/claude-opus-5", "qwen3:8b"].map(|id| CustomModel { id: id.into(), name: None, context_window: None, max_output: None, images: None }).to_vec();
+        let router = CustomProvider { name: "Router".into(), api: CustomApi::ChatCompletions, base_url: "http://router/v1".into(), api_key: String::new(), models, created_at: 1 };
+        app.credentials.lock().unwrap().custom.insert("custom:router".into(), router);
+        edit(json!({ "provider": "custom:router", "model": "claude-opus-5", "thinking": "max" })).await.unwrap();
+        assert_eq!(runs(), ("custom:router".into(), Some("anthropic/claude-opus-5".into()), Some("max".into())));
+        let error = edit(json!({ "model": "qwen3:8b", "thinking": "off" })).await.unwrap_err();
+        assert_eq!(error.0, "qwen3:8b does not think at off. Use one of: low, medium, high; or default.");
+        // Deleted, it has no models to pick from until the bot moves.
+        app.credentials.lock().unwrap().custom.clear();
+        let error = edit(json!({ "model": "qwen3:8b" })).await.unwrap_err();
+        assert!(error.0.starts_with("Unknown provider custom:router."), "{}", error.0);
+        edit(json!({ "name": "Ranger" })).await.unwrap();
+
+        // Teammates are listed with what they run.
+        let listed = ListTeammates { app: app.clone(), chat_id: "chat".into() }.execute("call", json!({}), CancellationToken::new(), no_updates.clone()).await.unwrap();
+        let listed: Value = serde_json::from_str(listed.content[0].as_text().unwrap()).unwrap();
+        let runs_with = |t: &Value| (t["provider"].clone(), t["model"].clone(), t["thinking"].clone());
+        assert_eq!(runs_with(&listed["teammates"][0]), (json!("deepseek"), json!("deepseek-flash"), json!("default")));
+        assert_eq!(runs_with(&listed["teammates"][1]), (json!("custom:router"), json!("anthropic/claude-opus-5"), json!("max")));
+    }
+
+    #[tokio::test]
+    async fn create_bot_starts_a_teammate_on_a_model_the_provider_offers() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        crate::identity::create(app, Some("Runner".into())).unwrap();
+        let chef = Bot { runner_id: app.this_device_id().unwrap(), ..bot("b1", "Chef") };
+        app.state.lock().unwrap().bots = vec![chef.clone()];
+        let create = CreateBot { app: app.clone(), chat_id: "chat".into(), bot: chef };
+        let no_updates: ToolUpdateFn = Arc::new(|_| {});
+        let run = |args: Value| create.execute("call", args, CancellationToken::new(), no_updates.clone());
+
+        let error = run(json!({ "name": "Scout", "description": "Finds sources", "model": "claude-opus-5-5" })).await.unwrap_err();
+        assert!(error.0.starts_with("DeepSeek has no model claude-opus-5-5."), "{}", error.0);
+        assert!(app.state.lock().unwrap().bots.iter().all(|b| b.name != "Scout"));
+
+        let result = run(json!({ "name": "Scout", "description": "Finds sources", "provider": "anthropic", "model": "claude-opus-5-5", "thinking": "high" })).await.unwrap();
+        assert!(result.content[0].as_text().unwrap().ends_with(" They run Claude Opus 5.5 on Anthropic, thinking high."));
+        let scout = app.state.lock().unwrap().bots.iter().find(|b| b.name == "Scout").cloned().unwrap();
+        assert_eq!((scout.provider, scout.model, scout.thinking), ("anthropic".into(), Some("claude-opus-5-5".into()), Some("high".into())));
     }
 
     #[test]
