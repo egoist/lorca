@@ -1,4 +1,4 @@
-import { copyFileSync, mkdirSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { defineConfig, type Plugin } from 'vite'
 import { devtools } from '@tanstack/devtools-vite'
@@ -13,14 +13,15 @@ import { fumadocsMdx } from 'fumadocs-mdx/vite'
 import { fetchDesktopRelease } from './src/lib/desktop-release.ts'
 
 /** The model catalog every Device checks for a newer one, at `/models/v1.json`: the CLI's own
- * `crates/models/catalog.json`, copied into `public` so it is served as a static file, whose
- * ETag makes each check a 304 until the next deploy changes it. */
+ * `crates/models/catalog.json`, minified into `public` so it is served as a static file, whose
+ * ETag makes each check a 304 until the catalog itself changes. */
 function modelCatalog(): Plugin {
   return {
     name: 'lorca-model-catalog',
     buildStart() {
+      const catalog = JSON.parse(readFileSync(fileURLToPath(new URL('../crates/models/catalog.json', import.meta.url)), 'utf8'))
       mkdirSync(fileURLToPath(new URL('./public/models', import.meta.url)), { recursive: true })
-      copyFileSync(fileURLToPath(new URL('../crates/models/catalog.json', import.meta.url)), fileURLToPath(new URL('./public/models/v1.json', import.meta.url)))
+      writeFileSync(fileURLToPath(new URL('./public/models/v1.json', import.meta.url)), JSON.stringify(catalog))
     },
   }
 }

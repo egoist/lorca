@@ -176,10 +176,11 @@ mod tests {
         catalog.to_string()
     }
 
+    /// Whole-dollar rates are written as integers, as the site's minified copy has them.
     fn entry(provider: &str, id: &str) -> Value {
         json!({
             "provider": provider, "id": id, "name": id, "context_window": 200_000, "max_output": 32_000,
-            "rates": { "input": 1.0, "output": 2.0, "cache_read": 0.1, "cache_write": 0.0 },
+            "rates": { "input": 1, "output": 2, "cache_read": 0.1, "cache_write": 0 },
             "thinking": "effort", "levels": ["low", "high"]
         })
     }
