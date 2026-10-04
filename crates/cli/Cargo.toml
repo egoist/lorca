@@ -17,7 +17,7 @@ required-features = ["cli"]
 [features]
 default = ["cli"]
 # The command-line binary: everything.
-cli = ["runner", "server", "dep:usage", "dep:tracing-subscriber"]
+cli = ["runner", "server", "dep:usage", "dep:tracing-subscriber", "dep:flate2", "dep:tar", "dep:zip"]
 # Connecting and disconnecting account providers. Devices use this without the agent loop.
 provider-auth = ["dep:lorca-provider-auth"]
 # Running bots: the agent loop, providers, tools. Off for a Device that only takes part.
@@ -61,6 +61,9 @@ tracing-subscriber = { workspace = true, optional = true }
 uuid.workspace = true
 x25519-dalek.workspace = true
 if-addrs = "0.15.0"
+# The release archives `lorca update` unpacks: .tar.gz for macOS and Linux.
+flate2 = { version = "1", optional = true }
+tar = { version = "0.4", default-features = false, optional = true }
 # rmcp speaks reqwest 0.13; the rest of the crate is on the workspace's 0.12, so the MCP side has its own client.
 mcp_http = { package = "reqwest", version = "0.13", default-features = false, features = ["json", "stream", "rustls", "http2"], optional = true }
 rmcp = { version = "3.4.0", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "auth", "reqwest"], optional = true }
@@ -68,8 +71,11 @@ rmcp = { version = "3.4.0", default-features = false, features = ["client", "tra
 process-wrap = { version = "10", features = ["tokio1"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
-# `serve --parent-pid` watches the parent through a process handle.
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }
+# `serve --parent-pid` watches the parent through a process handle; `lorca service run` leaves
+# the console a sign-in opened.
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_System_Console"] }
+# The Windows release archive `lorca update` unpacks.
+zip = { version = "2", default-features = false, features = ["deflate"], optional = true }
 
 [dev-dependencies]
 # Real images for the attachment tests; the agent crate builds the same crate already.

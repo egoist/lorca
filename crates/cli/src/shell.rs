@@ -131,6 +131,11 @@ impl Sessions {
         entries.iter().filter_map(|e| e.session.as_ref().filter(|s| s.id() == id && e.chat_id == chat_id && e.bot_id == bot_id)).next().cloned()
     }
 
+    /// No `bash` call has a card open and no session runs: nothing a restart would cut off.
+    pub fn is_empty(&self) -> bool {
+        self.entries.lock().unwrap().is_empty()
+    }
+
     /// Whether session `id` is still kept: it runs, or it ended and its bot has not read how.
     pub fn contains(&self, id: &str) -> bool {
         self.entries.lock().unwrap().iter().any(|e| e.session.as_ref().is_some_and(|s| s.id() == id))

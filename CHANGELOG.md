@@ -6,6 +6,8 @@ Sparkle shows it in the update window. The Windows and Linux app's are in
 
 ## [Unreleased]
 
+- A computer that runs the Lorca command line without the app keeps it up to date by itself: it installs each new release, signed by Lorca, and restarts into it once no bot is working there. Settings › Devices shows the version it runs, and Update when a newer one is out, so you can update it from this Mac. `lorca service install` keeps `lorca serve` running on such a computer, from login on.
+
 ## [0.1.10]
 
 - The marketplace comes from lorca.app, so new plugins and bots show up without an update, and plugins you installed from it get their fixes the same way. Lorca checks when it starts, when the app connects, and when you or a bot look through the marketplace, at most once an hour, and a bot that can't find a plugin you asked for checks again first. `lorca marketplace reload` checks right away.

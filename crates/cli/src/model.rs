@@ -32,7 +32,7 @@ pub struct StatusModel {
 }
 
 /// A paired machine or phone. `os` decides whether it is a Runner.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct Device {
     /// The machine signing public key, base64url.
     pub id: String,
@@ -44,8 +44,32 @@ pub struct Device {
     /// Plugins installed on that Runner, with their setup state. Secrets stay on the Runner.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub plugins: Vec<PluginStatus>,
+    /// The `lorca` this Device runs, as `lorca --version` says it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub version: String,
+    /// How a CLI that replaces itself keeps current: one installed with the site's script. Unset
+    /// where an app updates the CLI it carries, and on phones.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update: Option<UpdateStatus>,
     #[serde(default)]
     pub updated_at: i64,
+}
+
+/// A self-updating CLI's updates, as every Device sees them in its `machine` blob.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct UpdateStatus {
+    /// Installs a newer release by itself, and restarts into it once no bot is at work there.
+    pub auto: bool,
+    /// The newest release the last check found, when it is newer than the running one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest: Option<String>,
+    /// `installing` while it downloads and swaps the binary; `restarting` once the new one is in
+    /// place and the CLI waits for its bots to finish; empty otherwise.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub state: String,
+    /// Why the last check or install failed, until one goes through.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 /// A plugin as its Runner advertises it in the machine blob: what is installed and whether it

@@ -22,7 +22,7 @@ curl -fsSL https://lorca.app/install-cli.sh | sh
 irm https://lorca.app/install-cli.ps1 | iex
 ```
 
-脚本会下载适合这台电脑的最新版本，用该版本的校验和核对下载的文件，把 `lorca` 放进 `~/.local/bin`，并把这个文件夹加入 PATH。再运行一次即可更新；正在运行的 `lorca serve` 会继续使用旧版本，直到重启。
+脚本会下载适合这台电脑的最新版本，用该版本的校验和核对下载的文件，把 `lorca` 放进 `~/.local/bin`，并把这个文件夹加入 PATH。之后 `lorca` 会[自己更新](#更新)。
 
 设置 `LORCA_VERSION=1.0.0` 安装指定版本，设置 `LORCA_INSTALL_DIR` 把 `lorca` 放到别的文件夹，设置 `LORCA_NO_MODIFY_PATH=1` 则不改动 PATH：`curl -fsSL https://lorca.app/install-cli.sh | LORCA_VERSION=1.0.0 sh`；在 PowerShell 里，先运行 `$env:LORCA_VERSION = '1.0.0'` 再运行 `irm`。
 
@@ -48,6 +48,8 @@ irm https://lorca.app/install-cli.ps1 | iex
 | `lorca chats set-owner <group> <bot>` | 把某个智能体设为群聊的[负责人](/zh/docs/group-chats#负责人)。群聊用标题或 ID 指定，智能体用名字或 ID 指定。 |
 | `lorca marketplace reload` | 立即向 lorca.app 检查有没有更新的市场。Lorca 启动时、应用连接时，以及你或智能体浏览市场时也会自己检查，最多每小时一次，所以新的插件和智能体无需更新应用就能用上。 |
 | `lorca models reload` | 立即向 lorca.app 检查有没有更新的模型目录。Lorca 启动时和应用连接时也会自己检查，最多每小时一次，所以新模型无需更新应用就能用上。 |
+| `lorca update` | 立即安装最新版本。正在运行的 `lorca serve` 会在没有智能体工作时重启到新版本。`--check` 只告诉你有没有新版本；`--auto off` 关闭自动更新，`--auto on` 重新打开。 |
+| `lorca service install` | 让 `lorca serve` 在后台运行：现在启动，每次登录时启动，停止后会再次启动。`lorca service uninstall` 停止它；`lorca service status` 告诉你它是否在运行、日志在哪里。 |
 | `lorca status` | 以 JSON 打印这台设备的状态：设备、智能体、聊天、服务商。 |
 | `lorca doctor` | 检查主目录、身份、端口、中继和 `mcp.json`，并指出哪里有问题。 |
 
@@ -84,10 +86,18 @@ lorca mcp add-json time '{"command": "uvx", "args": ["mcp-server-time"]}'
 ```bash
 export LORCA_RELAY_URL=https://relay.example.com
 lorca pair 'lorca://pair?…'   # 来自已有设备上的“配对设备…”或 `lorca pair`
-lorca serve
+lorca service install
 ```
 
-这台电脑会出现在你的设备列表里，你可以从桌面应用或手机为它创建智能体。
+这台电脑会出现在你的设备列表里，你可以从桌面应用或手机为它创建智能体。`lorca service install` 让 `lorca serve` 一直运行：在 macOS 上是一个启动代理，在 Linux 上是一个 systemd 用户服务，在 Windows 上是一个登录项。在 Linux 上，它还会请 systemd 在你退出登录后继续运行你的服务；如果这需要管理员权限，它会打印需要运行的 `sudo loginctl enable-linger` 命令。在容器里或其他没有 systemd 的地方，请用你自己的 init 或在 tmux 里运行 `lorca serve`。
+
+## 更新
+
+用脚本安装的 `lorca` 会自己更新。`lorca serve` 启动几分钟后检查最新版本，之后每天检查一次，安装更新的版本，并在没有智能体工作时重启到新版本，不会打断正在进行的对话。它只安装用 Lorca 更新密钥签名的版本，并在替换任何文件之前，用签名的清单核对下载的文件。如果新版本启动后总是很快停止，它会换回之前的版本。
+
+**设置 › 设备** 显示一台电脑运行的版本。有更新的版本时，可以在你的任何一台设备上点 **更新** 来安装，所以你也能从手机更新一台 Runner。装了桌面应用的电脑则随应用一起更新。
+
+在 Windows 上，重启到新版本需要 `lorca service`；没有它时，`lorca serve` 会一直运行旧版本，直到你再次启动它。
 
 ## 环境变量
 
@@ -103,6 +113,6 @@ lorca serve
 
 ## 文件
 
-一切都在 `~/.lorca/` 下，只有你的用户可读：身份和机器密钥、服务商凭据、设置、聊天、附件、插件、`mcp.json` 里你自己的 MCP 服务器、`catalog.json` 里最近一次获取的模型目录、`marketplace.json` 里最近一次获取的市场，以及每个智能体一个的工作区文件夹（里面有它的记忆）。
+一切都在 `~/.lorca/` 下，只有你的用户可读：身份和机器密钥、服务商凭据、设置、聊天、附件、插件、`mcp.json` 里你自己的 MCP 服务器、`catalog.json` 里最近一次获取的模型目录、`marketplace.json` 里最近一次获取的市场、`update.json` 里最近一次的更新检查，以及每个智能体一个的工作区文件夹（里面有它的记忆）。
 
-macOS 应用把服务的日志写到 `~/Library/Logs/Lorca/cli.log`。
+macOS 应用把服务的日志写到 `~/Library/Logs/Lorca/cli.log`。使用 `lorca service` 时，日志在 macOS 上是 `~/Library/Logs/Lorca/serve.log`，在 Linux 上用 `journalctl --user -u lorca` 查看，在 Windows 上是 `~/.lorca` 里的 `serve.log`。

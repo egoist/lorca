@@ -55,8 +55,26 @@ export interface Device {
   last_seen: number;
   /// Plugins installed on that Runner, with their setup state.
   plugins?: PluginStatus[];
+  /// The `lorca` that Device runs, as `lorca --version` says it.
+  version?: string;
+  /// Only on a Runner whose CLI replaces itself (installed with lorca.app's script).
+  update?: UpdateStatus | null;
   /// The relay lists the machine, but it never sent its `machine` blob: no name, no `os`.
   unknown?: boolean;
+}
+
+/// A self-updating CLI's updates, as its Runner lists them in its `machine` blob.
+export interface UpdateStatus {
+  /// It installs a newer release by itself and restarts into it once no bot is at work there.
+  auto: boolean;
+  /// The newest release the last check found, when it is newer than `version`.
+  latest?: string;
+  /// `installing` while it downloads and swaps the binary; `restarting` once the new one is in
+  /// place and it waits for its bots to finish; `installed` when `lorca serve` has to be
+  /// restarted by hand to run it.
+  state?: "installing" | "restarting" | "installed";
+  /// The CLI's words for the last check or install that failed.
+  error?: string;
 }
 
 /// A plugin as its Runner advertises it: installed, and in what state.

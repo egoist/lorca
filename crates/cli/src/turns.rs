@@ -4057,6 +4057,8 @@ mod tests {
                 os_version: String::new(),
                 box_pubkey: phone_keys.box_pubkey(),
                 plugins: Vec::new(),
+                version: String::new(),
+                update: None,
                 updated_at: 1,
             });
         }

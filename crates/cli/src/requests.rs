@@ -91,7 +91,9 @@ pub fn serve(app: Arc<App>, request: Request, blob_id: String) {
 /// that reached the wrong machine is refused, not forwarded. The plugin verbs act on this
 /// Runner's own installs, and the `mcp.*` verbs on its mcp.json; the permission verb answers a
 /// card a bot here is waiting on; the bash verbs type into, or stop, a command a bot here left
-/// waiting.
+/// waiting; the update verbs install the latest release of this CLI, or turn its automatic
+/// updates on or off. A request names no release and no download: the Runner installs only what
+/// its own signed manifest offers.
 async fn answer(app: &Arc<App>, request: &Request) -> Result<Value, String> {
     let body = &request.body;
     match request.verb.as_str() {
@@ -106,6 +108,10 @@ async fn answer(app: &Arc<App>, request: &Request) -> Result<Value, String> {
         verb if verb.starts_with("mcp.") => crate::plugins::mcp_json::serve_request(app, verb, body).await,
         #[cfg(feature = "runner")]
         "bash.stdin" | "bash.stop" => crate::shell::serve(app, &request.verb, body).await,
+        #[cfg(feature = "cli")]
+        "update.install" => crate::update::install_now(app).await,
+        #[cfg(feature = "cli")]
+        "update.auto" => crate::update::set_auto(app, body["on"].as_bool().ok_or("missing on")?),
         other => Err(format!("Unknown request {other}")),
     }
 }

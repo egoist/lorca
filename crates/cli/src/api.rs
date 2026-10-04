@@ -57,6 +57,10 @@ fn store_avatar(app: &Arc<App>, params: &Value) -> Result<Option<Option<Attachme
     }
 }
 
+/// How long `device.update` waits for another Runner, which reads the latest release's
+/// manifest before it answers.
+const UPDATE_WAIT: std::time::Duration = std::time::Duration::from_secs(45);
+
 pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Value, String> {
     match method {
         "hello" => Ok(json!({
@@ -120,6 +124,29 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
                 crate::sync::unpair_device(app, &id).await?;
             }
             Ok(Value::Null)
+        }
+        // Another Device's CLI by id, or this one's (no id: also before it pairs): installs the
+        // latest release, which the CLI restarts into once no bot is at work there.
+        "device.update" => {
+            let id = opt_string(&params, "id").filter(|id| app.this_device_id().as_deref() != Some(id.as_str()));
+            let Some(id) = id else {
+                #[cfg(feature = "cli")]
+                return crate::update::install_now(app).await;
+                #[cfg(not(feature = "cli"))]
+                return Err("This Device's Lorca updates with its app.".into());
+            };
+            crate::requests::ask_within(app, &id, "update.install", json!({}), UPDATE_WAIT).await
+        }
+        "device.auto_update" => {
+            let id = opt_string(&params, "id").filter(|id| app.this_device_id().as_deref() != Some(id.as_str()));
+            let on = params["on"].as_bool().ok_or("missing on")?;
+            let Some(id) = id else {
+                #[cfg(feature = "cli")]
+                return crate::update::set_auto(app, on);
+                #[cfg(not(feature = "cli"))]
+                return Err("This Device's Lorca updates with its app.".into());
+            };
+            crate::requests::ask(app, &id, "update.auto", json!({ "on": on })).await
         }
         "identity.forget" => {
             crate::sync::revoke_self(app).await;

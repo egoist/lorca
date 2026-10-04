@@ -412,6 +412,9 @@ final class AboutDeviceSettingsViewController: DevicePaneViewController {
         if !unknown {
             rows.append(KeyValueRow(key: L("OS"), value: "\(device.os.displayName) · \(device.osVersion)"))
         }
+        if let update = device.update {
+            rows.append(updateRow(device, update))
+        }
         rows.append(
             KeyValueRow(
                 key: L("Role"),
@@ -436,6 +439,52 @@ final class AboutDeviceSettingsViewController: DevicePaneViewController {
         unpair.onAction = { [weak self] in UnpairDevice.confirm(device, in: self?.view.window) }
         rows.append(unpair)
         machineSection.setRows(rows)
+    }
+
+    /// The version of a CLI that updates itself, how its update goes, and Update while a newer
+    /// release waits and the Runner is online.
+    private func updateRow(_ device: Device, _ update: Device.CLIUpdate) -> NSView {
+        let version = device.version
+        let latest = update.latest ?? ""
+        let value: String
+        var offersUpdate = false
+        switch update.state {
+        case "installing": value = L("%@ · Installing %@…", version, latest)
+        case "restarting": value = L("%@ · Restarts into %@ once no bot is at work", version, latest)
+        case "installed": value = L("%@ · %@ is installed; restart lorca serve to run it", version, latest)
+        default:
+            if !latest.isEmpty {
+                value = L("%@ · %@ is available", version, latest)
+                offersUpdate = device.status == .online
+            } else if let error = update.error {
+                value = "\(version) · \(error)"
+            } else if update.auto {
+                value = L("%@ · Up to date", version)
+            } else {
+                value = L("%@ · Up to date · automatic updates off", version)
+            }
+        }
+        let row = ActionRow(
+            key: L("Lorca CLI"), value: value, tint: .secondaryLabelColor, actionTitle: offersUpdate ? L("Update") : nil)
+        row.toolTip = update.error
+        row.onAction = { [weak self] in
+            Task { @MainActor in
+                do {
+                    try await self?.store.updateDevice(device.id)
+                } catch {
+                    let failed = NSAlert()
+                    failed.messageText = L("Couldn’t update %@", device.name)
+                    failed.informativeText = error.localizedDescription
+                    failed.addButton(withTitle: L("OK"))
+                    if let window = self?.view.window {
+                        failed.beginSheetModal(for: window) { _ in }
+                    } else {
+                        failed.runModal()
+                    }
+                }
+            }
+        }
+        return row
     }
 }
 

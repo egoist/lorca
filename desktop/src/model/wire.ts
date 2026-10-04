@@ -19,6 +19,7 @@ import {
   type CustomModel,
   type Device,
   type DeviceOS,
+  type DeviceUpdate,
   type InstalledPlugin,
   type Marketplace,
   type MarketplacePlugin,
@@ -99,6 +100,10 @@ export interface WireDevice {
   plugins?: WirePluginStatus[];
   /** The relay lists the machine, but it never sent its `machine` blob: no name, no `os`. */
   unknown?: boolean;
+  /** The `lorca` that Device runs. */
+  version?: string | null;
+  /** Only a CLI that updates itself, one installed with the install script, sends it. */
+  update?: { auto?: boolean; latest?: string | null; state?: string | null; error?: string | null } | null;
 }
 
 export interface WireAttachment {
@@ -470,6 +475,18 @@ export function toDevice(wire: WireDevice): Device {
     lastSeen: seconds(wire.last_seen),
     machineKey: wire.machine_key,
     plugins: (wire.plugins ?? []).map(toPlugin),
+    version: wire.version ?? "",
+    update: wire.update ? toDeviceUpdate(wire.update) : undefined,
+  };
+}
+
+function toDeviceUpdate(wire: NonNullable<WireDevice["update"]>): DeviceUpdate {
+  const states: string[] = ["installing", "restarting", "installed"];
+  return {
+    auto: wire.auto ?? false,
+    latest: optional(wire.latest) || undefined,
+    state: wire.state && states.includes(wire.state) ? (wire.state as DeviceUpdate["state"]) : undefined,
+    error: optional(wire.error) || undefined,
   };
 }
 

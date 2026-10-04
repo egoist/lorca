@@ -174,11 +174,11 @@ main() {
 
 	say ""
 	if [ -f "${LORCA_HOME:-$HOME/.lorca}/machine.json" ]; then
-		say "If lorca serve is running, restart it to run the new version."
+		say "If lorca serve is running, restart it to run the new version. From now on lorca updates itself."
 	else
 		say "To make this computer a Runner, pair it with your account and start the service:"
 		say "  lorca pair 'lorca://pair?...'   # from Pair a Device in the app"
-		say "  lorca serve"
+		say "  lorca service install           # runs lorca serve now and at every login"
 	fi
 	say "Docs: https://lorca.app/docs/cli"
 }

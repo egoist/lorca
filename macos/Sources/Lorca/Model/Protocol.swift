@@ -166,8 +166,17 @@ enum Wire {
         var status: String
         var lastSeen: Double
         var plugins: [PluginStatus]?
+        var version: String?
+        var update: CLIUpdate?
         /// The relay lists the machine, but it never sent its `machine` blob: no name, no `os`.
         var unknown: Bool?
+    }
+
+    struct CLIUpdate: Decodable {
+        var auto: Bool
+        var latest: String?
+        var state: String?
+        var error: String?
     }
 
     struct PluginStatus: Decodable {
@@ -610,7 +619,9 @@ extension Wire.Device {
             status: status == "online" ? .online : (status == "pairing" ? .pairing : .offline),
             lastSeen: Date(timeIntervalSince1970: lastSeen),
             machineKey: machineKey,
-            plugins: (plugins ?? []).map { $0.toModel() }
+            plugins: (plugins ?? []).map { $0.toModel() },
+            version: version ?? "",
+            update: update.map { Device.CLIUpdate(auto: $0.auto, latest: $0.latest, state: $0.state, error: $0.error) }
         )
     }
 }

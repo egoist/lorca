@@ -103,10 +103,10 @@ export function mcpServers(): McpServer[] {
 
 export function devices(): Device[] {
   return [
-    { id: "dev-workbench", name: "Workbench", model: "ThinkPad X1 Carbon Gen 13", os: "linux", osVersion: "Ubuntu 26.04", isThisDevice: true, status: "online", lastSeen: Date.now(), machineKey: "mk_7c41…a09f", plugins: plugins() },
-    { id: "dev-studio", name: "Studio", model: "Mac Studio (M3 Ultra)", os: "macos", osVersion: "macOS 27.0", isThisDevice: false, status: "online", lastSeen: minutesAgo(1), machineKey: "mk_1f88…23bd", plugins: [] },
-    { id: "dev-closet", name: "Closet PC", model: "Desktop", os: "windows", osVersion: "Windows 11 25H2", isThisDevice: false, status: "offline", lastSeen: minutesAgo(184), machineKey: "mk_c052…77e1", plugins: [] },
-    { id: "dev-phone", name: "iPhone", model: "iPhone 17 Pro", os: "ios", osVersion: "iOS 27.0", isThisDevice: false, status: "online", lastSeen: minutesAgo(12), machineKey: "mk_9e3d…51c8", plugins: [] },
+    { id: "dev-workbench", name: "Workbench", model: "ThinkPad X1 Carbon Gen 13", os: "linux", osVersion: "Ubuntu 26.04", isThisDevice: true, status: "online", lastSeen: Date.now(), machineKey: "mk_7c41…a09f", plugins: plugins(), version: "0.1.11" },
+    { id: "dev-studio", name: "Studio", model: "Mac Studio (M3 Ultra)", os: "macos", osVersion: "macOS 27.0", isThisDevice: false, status: "online", lastSeen: minutesAgo(1), machineKey: "mk_1f88…23bd", plugins: [], version: "0.1.10", update: { auto: true, latest: "0.1.11" } },
+    { id: "dev-closet", name: "Closet PC", model: "Desktop", os: "windows", osVersion: "Windows 11 25H2", isThisDevice: false, status: "offline", lastSeen: minutesAgo(184), machineKey: "mk_c052…77e1", plugins: [], version: "0.1.11" },
+    { id: "dev-phone", name: "iPhone", model: "iPhone 17 Pro", os: "ios", osVersion: "iOS 27.0", isThisDevice: false, status: "online", lastSeen: minutesAgo(12), machineKey: "mk_9e3d…51c8", plugins: [], version: "" },
   ];
 }
 

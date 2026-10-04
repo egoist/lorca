@@ -106,11 +106,11 @@
     $lorcaHome = $env:LORCA_HOME
     if (-not $lorcaHome) { $lorcaHome = Join-Path $HOME '.lorca' }
     if (Test-Path (Join-Path $lorcaHome 'machine.json')) {
-        Write-Host 'If lorca serve is running, restart it to run the new version.'
+        Write-Host 'If lorca serve is running, restart it to run the new version. From now on lorca updates itself.'
     } else {
         Write-Host 'To make this computer a Runner, pair it with your account and start the service:'
         Write-Host "  lorca pair 'lorca://pair?...'   # from Pair a Device in the app"
-        Write-Host '  lorca serve'
+        Write-Host '  lorca service install           # runs lorca serve now and at every sign-in'
     }
     Write-Host 'Docs: https://lorca.app/docs/cli'
 }

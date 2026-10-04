@@ -2,9 +2,10 @@
 // its plugins when it is a Runner, and the machine itself.
 
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
-import { Alert, ScrollView, StyleSheet, Text, View } from "react-native";
+import { useState } from "react";
+import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, View } from "react-native";
 import { engine } from "../../../src/core/engine";
-import { deviceName, isRunner, providerLabel, type Device, type PluginStatus } from "../../../src/core/model";
+import { deviceName, isRunner, providerLabel, type Device, type PluginStatus, type UpdateStatus } from "../../../src/core/model";
 import { deviceIsOnline, useStore } from "../../../src/core/store";
 import { t, useLanguage } from "../../../src/i18n";
 import { BotAvatar } from "../../../src/ui/Avatar";
@@ -12,7 +13,7 @@ import { deviceSymbol } from "../../../src/ui/devices";
 import { Row, Section } from "../../../src/ui/forms";
 import { lastSeen } from "../../../src/ui/format";
 import { Symbol } from "../../../src/ui/Symbol";
-import { usePalette } from "../../../src/ui/theme";
+import { Font, usePalette } from "../../../src/ui/theme";
 
 const OS_NAMES: Record<string, string> = { macos: "macOS", linux: "Linux", windows: "Windows", ios: "iOS", ipados: "iPadOS", android: "Android" };
 
@@ -31,6 +32,22 @@ function pluginState(state: PluginStatus["state"]): string {
   }
 }
 
+/// A self-updating Runner's CLI: its version, then where its updates stand.
+function cliStatus(version: string, update: UpdateStatus): string {
+  const latest = update.latest ?? "";
+  switch (update.state) {
+    case "installing":
+      return t("{version} · Installing {latest}…", { version, latest });
+    case "restarting":
+      return t("{version} · Restarts into {latest} once no bot is at work", { version, latest });
+    case "installed":
+      return t("{version} · {latest} is installed; restart lorca serve to run it", { version, latest });
+  }
+  if (update.latest) return t("{version} · {latest} is available", { version, latest });
+  if (update.error) return `${version} · ${update.error}`;
+  return update.auto ? t("{version} · Up to date", { version }) : t("{version} · Up to date · automatic updates off", { version });
+}
+
 export default function DeviceScreen() {
   useLanguage();
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -44,6 +61,7 @@ export default function DeviceScreen() {
   const relayConnected = useStore((s) => s.relayConnected);
   const relayUpdateRequired = useStore((s) => s.relayUpdateRequired);
   const relayUrl = useStore((s) => s.relayUrl);
+  const [updating, setUpdating] = useState(false);
 
   if (!device) return null;
 
@@ -78,6 +96,17 @@ export default function DeviceScreen() {
         },
       },
     ]);
+  }
+
+  // A newer release than the CLI runs, not yet on its way: the Lorca CLI row installs it.
+  const update = device.update;
+  const offersUpdate = !!update?.latest && !update.state;
+  function installUpdate(target: Device) {
+    setUpdating(true);
+    engine
+      .updateDevice(target.id)
+      .catch((error: unknown) => Alert.alert(t("Couldn’t update {name}", { name: deviceName(target) }), error instanceof Error ? error.message : String(error)))
+      .finally(() => setUpdating(false));
   }
 
   return (
@@ -122,6 +151,21 @@ export default function DeviceScreen() {
         >
           <Row title={t("Machine key")} detail={device.machine_key} />
           {!device.unknown && <Row title={t("OS")} detail={device.os_version || osName} />}
+          {update && (
+            <Row
+              title={t("Lorca CLI")}
+              subtitle={cliStatus(device.version ?? "", update)}
+              subtitleLines={3}
+              onPress={offersUpdate && online && !updating ? () => installUpdate(device) : undefined}
+              accessory={
+                updating ? (
+                  <ActivityIndicator />
+                ) : offersUpdate ? (
+                  <Text style={[styles.action, { color: online ? p.tint : p.tertiaryLabel }]}>{t("Update")}</Text>
+                ) : undefined
+              }
+            />
+          )}
           <Row title={t("Role")} detail={runner ? t("Runner") : t("Device")} />
           <Row title={t("Last seen")} detail={online ? t("Active now") : lastSeen(seen)} />
           <Row title={t("Relay")} detail={relay ? (relayUpdateRequired ? t("{relay} · update Lorca to sync", { relay }) : relayConnected ? relay : t("{relay} · offline", { relay })) : t("Not configured")} />
@@ -144,4 +188,5 @@ const styles = StyleSheet.create({
   status: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 4 },
   dot: { width: 8, height: 8, borderRadius: 4 },
   statusText: { fontSize: 13, fontWeight: "500" },
+  action: { fontSize: Font.body },
 });

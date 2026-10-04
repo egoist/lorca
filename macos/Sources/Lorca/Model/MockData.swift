@@ -29,7 +29,9 @@ enum MockData {
                 isThisDevice: false,
                 status: .online,
                 lastSeen: minutesAgo(1),
-                machineKey: "mk_1f88…23bd"
+                machineKey: "mk_1f88…23bd",
+                version: "0.1.10",
+                update: Device.CLIUpdate(auto: true, latest: "0.1.11")
             ),
             Device(
                 id: "dev-closet",

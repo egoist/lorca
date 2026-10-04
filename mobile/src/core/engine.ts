@@ -536,6 +536,16 @@ class Engine {
     useStore.setState((s) => ({ devices: s.devices.filter((d) => d.id !== id) }));
   }
 
+  /// Asks a self-updating Runner, through the relay, to install the latest release, which it
+  /// restarts into once no bot is at work there. Rejects with the Runner's words, or when it
+  /// does not answer. "Installing" shows at once; the Runner's `machine` blob confirms it.
+  async updateDevice(id: string) {
+    const answer = await core.request<{ version: string; latest?: string | null; installing?: boolean }>("device.update", { id });
+    if (!answer.installing || !answer.latest) return;
+    const latest = answer.latest;
+    useStore.setState((s) => ({ devices: s.devices.map((d) => (d.id === id && d.update ? { ...d, update: { ...d.update, latest, state: "installing", error: undefined } } : d)) }));
+  }
+
   /// Forgets the identity: keys, account key, and everything synced.
   async unpair() {
     await core.request("identity.forget");

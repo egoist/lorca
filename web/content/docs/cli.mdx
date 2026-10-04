@@ -22,7 +22,7 @@ On Windows, in PowerShell:
 irm https://lorca.app/install-cli.ps1 | iex
 ```
 
-The script downloads the latest release for your computer, checks it against the release's checksums, puts `lorca` in `~/.local/bin`, and adds that folder to your PATH. Run it again to update; a running `lorca serve` keeps the old version until it restarts.
+The script downloads the latest release for your computer, checks it against the release's checksums, puts `lorca` in `~/.local/bin`, and adds that folder to your PATH. From then on `lorca` [updates itself](#updates).
 
 Set `LORCA_VERSION=1.0.0` to install that release, `LORCA_INSTALL_DIR` to put `lorca` in another folder, or `LORCA_NO_MODIFY_PATH=1` to leave your PATH alone: `curl -fsSL https://lorca.app/install-cli.sh | LORCA_VERSION=1.0.0 sh`, or `$env:LORCA_VERSION = '1.0.0'` before `irm` in PowerShell.
 
@@ -48,6 +48,8 @@ On Windows, bots run their commands in Git for Windows' bash, not WSL's, so inst
 | `lorca chats set-owner <group> <bot>` | Makes a bot the [owner](/docs/group-chats#the-owner) of a group. Name the group by its title or id, and the bot by its name or id. |
 | `lorca marketplace reload` | Checks lorca.app for a newer marketplace now. Lorca also checks on its own when it starts, when an app connects, and when you or a bot look through the marketplace, at most once an hour, so new plugins and bots arrive without an update. |
 | `lorca models reload` | Checks lorca.app for a newer model catalog now. Lorca also checks on its own when it starts and when an app connects, at most once an hour, so new models arrive without an update. |
+| `lorca update` | Installs the latest release now. A running `lorca serve` restarts into it once no bot is working. `--check` only says whether one is out; `--auto off` turns automatic updates off, `--auto on` back on. |
+| `lorca service install` | Runs `lorca serve` in the background, now and at every login, and starts it again if it stops. `lorca service uninstall` stops it; `lorca service status` says whether it runs and where its log is. |
 | `lorca status` | Prints this device's state as JSON: devices, bots, chats, providers. |
 | `lorca doctor` | Checks the home folder, identity, port, relay, and `mcp.json`, and says what is wrong. |
 
@@ -84,10 +86,18 @@ lorca mcp add-json time '{"command": "uvx", "args": ["mcp-server-time"]}'
 ```bash
 export LORCA_RELAY_URL=https://relay.example.com
 lorca pair 'lorca://pair?…'   # from Pair a Device… or `lorca pair` on an existing Device
-lorca serve
+lorca service install
 ```
 
-The computer shows up in your Device list, and you can create bots for it from the desktop app or your phone.
+The computer shows up in your Device list, and you can create bots for it from the desktop app or your phone. `lorca service install` keeps `lorca serve` running: a launch agent on macOS, a systemd user service on Linux, and a sign-in item on Windows. On Linux it also asks systemd to keep your services running after you log out; if that needs an administrator, it prints the `sudo loginctl enable-linger` command to run. In a container or anywhere else without systemd, run `lorca serve` under your own init or in tmux.
+
+## Updates
+
+A `lorca` installed with the script updates itself. `lorca serve` checks the latest release a few minutes after it starts and then once a day, installs a newer one, and restarts into it once no bot is working, so a turn is never cut off. It installs only a release signed with Lorca's update key, and checks the download against the signed list before it replaces anything. A new release that keeps stopping right after it starts is replaced by the one before.
+
+**Settings › Devices** shows the version a computer runs. When a newer release is out, **Update** installs it from any of your devices, so you can update a Runner from your phone. A computer with the desktop app updates with the app instead.
+
+Restarting into a new release on Windows takes `lorca service`; without it, `lorca serve` keeps running the old version until you start it again.
 
 ## Environment
 
@@ -103,6 +113,6 @@ The computer shows up in your Device list, and you can create bots for it from t
 
 ## Files
 
-Everything is under `~/.lorca/`, readable only by your user: your identity and machine keys, provider credentials, settings, chats, attachments, plugins, your MCP servers in `mcp.json`, the last model catalog fetched in `catalog.json`, the last marketplace fetched in `marketplace.json`, and one workspace folder per bot with its memory.
+Everything is under `~/.lorca/`, readable only by your user: your identity and machine keys, provider credentials, settings, chats, attachments, plugins, your MCP servers in `mcp.json`, the last model catalog fetched in `catalog.json`, the last marketplace fetched in `marketplace.json`, the last update check in `update.json`, and one workspace folder per bot with its memory.
 
-The macOS app logs the service to `~/Library/Logs/Lorca/cli.log`.
+The macOS app logs the service to `~/Library/Logs/Lorca/cli.log`. Under `lorca service` the log is `~/Library/Logs/Lorca/serve.log` on macOS, `journalctl --user -u lorca` on Linux, and `serve.log` in `~/.lorca` on Windows.

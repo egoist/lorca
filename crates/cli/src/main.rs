@@ -74,6 +74,21 @@ enum Command {
         #[usage(subcommand)]
         command: ChatsCommand,
     },
+    /// Update this computer's lorca to the latest release. `lorca serve` checks once a day and
+    /// installs what it finds, then restarts into it once no bot is at work.
+    Update {
+        /// Only say whether a newer release is out.
+        #[usage(long)]
+        check: bool,
+        /// Turn automatic updates on or off.
+        #[usage(long, choices("on", "off"))]
+        auto: Option<String>,
+    },
+    /// Keep lorca serve running in the background, from login on and whenever it stops.
+    Service {
+        #[usage(subcommand)]
+        command: ServiceCommand,
+    },
     /// Show identity, Devices, bots, and relay state.
     Status,
     /// Check the local setup.
@@ -211,6 +226,24 @@ enum ChatsCommand {
 }
 
 #[derive(Subcommands, Debug)]
+enum ServiceCommand {
+    /// Start lorca serve now and at every login: a launchd agent on macOS, a systemd user unit on
+    /// Linux, a sign-in item on Windows.
+    Install,
+    /// Stop lorca serve and no longer start it at login.
+    Uninstall,
+    /// Whether the service is installed and running, and where its log is.
+    Status,
+    /// The supervisor a sign-in starts on Windows.
+    #[usage(hide)]
+    Run {
+        /// A variable for lorca serve, as NAME=value.
+        #[usage(long)]
+        env: Vec<String>,
+    },
+}
+
+#[derive(Subcommands, Debug)]
 enum MarketplaceCommand {
     /// Fetch the latest marketplace index from lorca.app now, rather than at the next hourly check.
     Reload,
@@ -238,14 +271,23 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| if quiet { "lorca=warn,lorca_agent=warn".into() } else { "lorca=info,lorca_agent=info".into() }))
         .with_target(false)
+        // Colors for a terminal; a service's log file or journal gets plain text.
+        .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
         .with_writer(std::io::stderr)
         .init();
 
     let config = Config::load(cli.home, cli.port);
+    // The service manages a process; it needs no account of its own.
+    let command = match command {
+        Command::Service { command } => return service(&config, command).await,
+        command => command,
+    };
     let app = App::load(config)?;
 
     match command {
         Command::Serve { parent_pid, ready_stdout } => {
+            lorca::service::trim_log();
+            lorca::update::start(&app);
             runtime::resume_sent_jobs(&app);
             // A command a Lorca that quit left waiting went with it; its row says so now.
             {
@@ -341,6 +383,8 @@ async fn main() -> anyhow::Result<()> {
         Command::Marketplace { command: MarketplaceCommand::Reload } => reload(&app, "marketplace.reload", lorca::marketplace::enable, "marketplace").await,
         Command::Models { command: ModelsCommand::Reload } => reload(&app, "models.reload", lorca::catalog::enable, "model catalog").await,
         Command::Chats { command } => chats(&app, command).await,
+        Command::Update { check, auto } => update(&app, check, auto).await,
+        Command::Service { .. } => unreachable!(),
         Command::Status => {
             let snapshot = app.snapshot();
             println!("{}", serde_json::to_string_pretty(&snapshot)?);
@@ -911,6 +955,112 @@ async fn reload(app: &std::sync::Arc<App>, method: &str, enable: fn(&App), what:
         (true, true) => println!("lorca serve now uses the {what} of {updated}."),
         (true, false) => println!("Saved the {what} of {updated}; lorca serve uses it when it starts."),
         (false, _) => println!("The {what} of {updated} is the latest."),
+    }
+    Ok(())
+}
+
+/// `lorca update`: through the running `lorca serve` when there is one, which installs and then
+/// restarts once its bots are done; with none, here, over this binary.
+async fn update(app: &std::sync::Arc<App>, check: bool, auto: Option<String>) -> anyhow::Result<()> {
+    use lorca::config::VERSION;
+    if !lorca::update::SELF_UPDATING {
+        let bundled = std::env::current_exe().is_ok_and(|exe| exe.components().any(|part| part.as_os_str().to_string_lossy().ends_with(".app")));
+        anyhow::bail!(if bundled {
+            "This lorca came with the Lorca app, which updates it: choose Check for Updates in the app.".to_string()
+        } else {
+            format!("This lorca {VERSION} was not installed from a release, so it does not update itself. Install a release with: curl -fsSL https://lorca.app/install-cli.sh | sh")
+        });
+    }
+    if let Some(auto) = auto {
+        let on = auto == "on";
+        match serve_call(app.config.port, "device.auto_update", &serde_json::json!({ "on": on })).await? {
+            Some(reply) => {
+                reply.map_err(|message| anyhow::anyhow!(message))?;
+            }
+            None => {
+                let mut settings = app.settings.lock().unwrap();
+                settings.auto_update = Some(on);
+                settings.save(&app.config)?;
+            }
+        }
+        println!("{}", if on { "Automatic updates are on: lorca serve installs a new release when it finds one." } else { "Automatic updates are off: run lorca update to install a new release." });
+        return Ok(());
+    }
+    if check {
+        let latest = lorca::update::latest_version(app).await.map_err(|message| anyhow::anyhow!(message))?;
+        if lorca::update::is_newer(&latest, VERSION) {
+            println!("lorca {latest} is out; this is {VERSION}. Run lorca update to install it.");
+        } else {
+            println!("lorca {VERSION} is the latest.");
+        }
+        return Ok(());
+    }
+    match serve_call(app.config.port, "device.update", &serde_json::json!({})).await? {
+        Some(reply) => {
+            let reply = reply.map_err(|message| anyhow::anyhow!(message))?;
+            match (reply["installed"].as_str(), reply["latest"].as_str()) {
+                (Some(version), _) => println!("lorca {version} is installed; lorca serve restarts into it once no bot is at work."),
+                (None, Some(version)) if reply["installing"] == true => println!("Installing lorca {version}; lorca serve restarts into it once no bot is at work."),
+                _ => println!("lorca {VERSION} is the latest."),
+            }
+        }
+        None => match lorca::update::install_here(app).await.map_err(|message| anyhow::anyhow!(message))? {
+            Some(version) => println!("Installed lorca {version}."),
+            None => println!("lorca {VERSION} is the latest."),
+        },
+    }
+    Ok(())
+}
+
+/// `lorca service`.
+async fn service(config: &Config, command: ServiceCommand) -> anyhow::Result<()> {
+    use lorca::service;
+    match command {
+        ServiceCommand::Install => {
+            // Another lorca serve on the port would keep the service's from starting.
+            if !service::status(config).running.is_some() && serve_call(config.port, "hello", &serde_json::json!({})).await?.is_some() {
+                anyhow::bail!(
+                    "A lorca serve already answers on port {}. Stop it first; on a computer with the Lorca app, the app runs lorca serve itself.",
+                    config.port
+                );
+            }
+            let status = service::install(config)?;
+            match status.running {
+                Some(pid) => println!("lorca serve runs in the background (pid {pid}) and starts again at every login. Log: {}", status.log),
+                None => println!("Installed the service, but lorca serve is not running yet. Log: {}", status.log),
+            }
+        }
+        ServiceCommand::Uninstall => {
+            if service::uninstall(config)? {
+                println!("Stopped lorca serve; it no longer starts at login.");
+            } else {
+                println!("The service is not installed.");
+            }
+        }
+        ServiceCommand::Status => {
+            let status = service::status(config);
+            match (status.installed, status.running) {
+                (true, Some(pid)) => println!("Installed, running (pid {pid}). Log: {}", status.log),
+                (true, None) => println!("Installed, not running. Log: {}", status.log),
+                (false, _) => println!("Not installed. Run lorca service install to keep lorca serve running."),
+            }
+        }
+        ServiceCommand::Run { env } => {
+            #[cfg(windows)]
+            {
+                let env: Vec<(String, String)> = env.iter().filter_map(|pair| pair.split_once('=')).map(|(name, value)| (name.to_string(), value.to_string())).collect();
+                for (name, value) in &env {
+                    std::env::set_var(name, value);
+                }
+                let config = Config::load(None, None);
+                return service::supervise(&config, &env);
+            }
+            #[cfg(not(windows))]
+            {
+                let _ = env;
+                anyhow::bail!("lorca service run is the supervisor on Windows; elsewhere the system's own service manager runs lorca serve.");
+            }
+        }
     }
     Ok(())
 }

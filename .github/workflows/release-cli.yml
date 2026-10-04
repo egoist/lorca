@@ -1,8 +1,10 @@
 # Releases the lorca CLI for computers without the app. A tag cli-vX.Y.Z, or a run by hand, builds
-# the version in Cargo.toml for macOS, Linux, and Windows, installs the builds with the site's
-# install scripts on each system, and drafts the release cli-vX.Y.Z with the archives. Once the
-# draft is published, install-cli.sh and install-cli.ps1 download from it. A release that is
-# already published is left alone. docs/releasing-cli.md has the steps.
+# the version in Cargo.toml for macOS, Linux, and Windows, writes lorca-cli.json, the manifest
+# lorca update reads, and signs it with the CLI_UPDATE_SIGNING_KEY secret, installs the builds with
+# the site's install scripts on each system and checks the manifest from each, and drafts the
+# release cli-vX.Y.Z with the archives and the manifest. Once the draft is published,
+# install-cli.sh and install-cli.ps1 download from it, and every CLI they installed updates to it.
+# A release that is already published is left alone. docs/releasing-cli.md has the steps.
 name: Release CLI
 
 on:
@@ -94,6 +96,9 @@ jobs:
         with:
           key: ${{ matrix.target }}
       - name: Build
+        # A release build replaces itself with later releases (`lorca update`).
+        env:
+          LORCA_SELF_UPDATE: "1"
         run: cargo ${{ matrix.zig && 'zigbuild' || 'build' }} --release --locked -p lorca --target ${{ matrix.target }}
       - name: Pack
         env:
@@ -120,9 +125,58 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  manifest:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Write and sign lorca-cli.json
+        env:
+          KEY: ${{ secrets.CLI_UPDATE_SIGNING_KEY }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          if [[ -z $KEY ]]; then
+            echo "::error::the CLI_UPDATE_SIGNING_KEY secret is missing: docs/releasing-cli.md"
+            exit 1
+          fi
+          umask 077
+          printf '%s\n' "$KEY" > "$RUNNER_TEMP/key.pem"
+          trap 'rm -f "$RUNNER_TEMP/key.pem"' EXIT
+          # The key has to be the one the CLI trusts, or no CLI would take the release.
+          public=$(openssl pkey -in "$RUNNER_TEMP/key.pem" -pubout -outform DER | tail -c 32 | base64 -w0)
+          if ! grep -qF "\"$public\"" crates/cli/src/update.rs; then
+            echo "::error::CLI_UPDATE_SIGNING_KEY is not a key that KEYS in crates/cli/src/update.rs trusts ($public)"
+            exit 1
+          fi
+          cd dist
+          builds='{}'
+          for archive in lorca-cli-*.tar.gz lorca-cli-*.zip; do
+            name=${archive#lorca-cli-}
+            name=${name%.tar.gz}
+            name=${name%.zip}
+            builds=$(jq -c --arg name "$name" --arg file "$archive" --arg sha256 "$(sha256sum "$archive" | cut -d' ' -f1)" --argjson size "$(stat -c %s "$archive")" \
+              '.[$name] = { file: $file, sha256: $sha256, size: $size }' <<<"$builds")
+          done
+          mkdir ../manifest
+          jq -n --arg version "$VERSION" --argjson builds "$builds" '{ kind: "lorca-cli", version: $version, builds: $builds }' > ../manifest/lorca-cli.json
+          cd ../manifest
+          openssl pkeyutl -sign -inkey "$RUNNER_TEMP/key.pem" -rawin -in lorca-cli.json -out lorca-cli.sig.bin
+          base64 -w0 lorca-cli.sig.bin > lorca-cli.json.sig
+          rm lorca-cli.sig.bin
+          cat lorca-cli.json
+      - uses: actions/upload-artifact@v7
+        with:
+          name: lorca-cli-manifest
+          path: manifest/*
+          if-no-files-found: error
+
   test:
     name: install on ${{ matrix.os }}
-    needs: [version, build]
+    needs: [version, manifest]
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -147,6 +201,9 @@ jobs:
           sh web/public/install-cli.sh
           version=$(~/.local/bin/lorca --version)
           if [[ "$version" != "$WANT" ]]; then echo "::error::lorca --version says $version"; exit 1; fi
+          # The build reads the signed manifest beside the archives, and is the release it names.
+          checked=$(~/.local/bin/lorca update --check)
+          if [[ "$checked" != "$WANT is the latest." ]]; then echo "::error::lorca update --check says $checked"; exit 1; fi
       - name: Install with install-cli.ps1 in Windows PowerShell, then again in PowerShell 7
         if: runner.os == 'Windows'
         shell: pwsh
@@ -161,6 +218,8 @@ jobs:
           Get-Content -Raw web/public/install-cli.ps1 | Invoke-Expression
           $version = lorca --version
           if ($version -ne $env:WANT) { throw "lorca --version says $version" }
+          $checked = lorca update --check
+          if ($checked -ne "$env:WANT is the latest.") { throw "lorca update --check says $checked" }
           $userPath = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment').GetValue('Path')
           if ($userPath -notlike "*$HOME\.local\bin*") { throw "the user PATH lacks .local\bin: $userPath" }
 
@@ -194,12 +253,14 @@ jobs:
               ;;
             none)
               cat > notes.md <<'EOF'
-          Install or update:
+          Install:
 
           ```sh
           curl -fsSL https://lorca.app/install-cli.sh | sh    # macOS and Linux
           irm https://lorca.app/install-cli.ps1 | iex         # Windows, in PowerShell
           ```
+
+          A CLI installed this way updates itself; `lorca update` installs this release now.
           EOF
               gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --draft --target "$GITHUB_SHA" --title "Lorca CLI $VERSION" --notes-file notes.md
               ;;

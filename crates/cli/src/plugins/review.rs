@@ -439,7 +439,7 @@ mod tests {
         let app = App::load(crate::config::Config { home: home.clone(), port: 0 }).unwrap();
         app.state.lock().unwrap().devices.push(Device {
             id: "runner".into(), name: "MacBook Air".into(), model: String::new(), os: "macos".into(), os_version: String::new(),
-            box_pubkey: String::new(), plugins: Vec::new(), updated_at: 0,
+            box_pubkey: String::new(), plugins: Vec::new(), version: String::new(), update: None, updated_at: 0,
         });
         let bot = |id: &str, name: &str| Bot {
             id: id.into(), name: name.into(), description: String::new(), symbol_name: String::new(), accent: String::new(), avatar: None,

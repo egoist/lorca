@@ -1565,6 +1565,18 @@ export class AppStore {
     this.emit({ kind: "rosterChanged" });
   }
 
+  /** Has a self-updating CLI, this Device's or another's through the relay, install the latest
+   * release, which it restarts into once no bot is at work there. Its `machine` blob brings the
+   * state back; the demo, which has no CLI, waits to restart. Throws with the CLI's reason. */
+  async updateDevice(id: string): Promise<void> {
+    if (!this.isMock) {
+      await this.request("device.update", { id });
+      return;
+    }
+    this.devices = this.devices.map((device) => (device.id === id && device.update ? { ...device, update: { ...device.update, state: "restarting" } } : device));
+    this.emit({ kind: "rosterChanged" });
+  }
+
   /** Unpairs this Device. The CLI asks the relay to drop its key, best effort, then forgets the
    * identity here; the `identity.changed` it sends brings back onboarding. The demo has no CLI, so
    * its Unpair opens onboarding instead (`confirmUnpair`). */

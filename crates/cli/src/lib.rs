@@ -33,11 +33,15 @@ pub mod schedule;
 #[cfg(feature = "runner")]
 pub mod scripts;
 pub mod served;
+#[cfg(feature = "cli")]
+pub mod service;
 #[cfg(feature = "runner")]
 pub mod shell;
 pub mod sync;
 pub mod local_store;
 #[cfg(feature = "runner")]
 pub mod turns;
+#[cfg(feature = "cli")]
+pub mod update;
 #[cfg(feature = "server")]
 pub mod ws;

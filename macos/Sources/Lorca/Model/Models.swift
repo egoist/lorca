@@ -377,6 +377,22 @@ struct Device: Identifiable, Hashable {
     var machineKey: String
     /// Plugins installed on this Runner, as it advertises them. Secrets stay on the Runner.
     var plugins: [InstalledPlugin] = []
+    /// The `lorca` this Device runs.
+    var version: String = ""
+    /// Set for a CLI that updates itself (one installed with the site's script); a CLI an app
+    /// carries updates with the app.
+    var update: CLIUpdate? = nil
+
+    /// A self-updating CLI's updates, as its `machine` blob says.
+    struct CLIUpdate: Hashable {
+        var auto: Bool
+        /// A newer release than `version`, when the last check found one.
+        var latest: String?
+        /// `installing`, `restarting` (waits for its bots to finish), or `installed` (restart
+        /// lorca serve by hand); nil otherwise.
+        var state: String?
+        var error: String?
+    }
 
     /// Derived from `os` alone: a desktop Device is a Runner and can be assigned bots.
     var isRunner: Bool { os.isDesktop }

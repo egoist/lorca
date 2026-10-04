@@ -256,6 +256,8 @@ async fn join(app: &Arc<App>, pairing_string: &str, device_name: Option<String>)
         os_version,
         box_pubkey: machine.box_pubkey(),
         plugins: Vec::new(),
+        version: crate::config::VERSION.into(),
+        update: None,
         updated_at: now_unix(),
     };
     let request = PairRequest { machine_pubkey: machine.pubkey(), box_pubkey: machine.box_pubkey(), device: device.clone() };

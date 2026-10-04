@@ -465,6 +465,24 @@ export interface Device {
   machineKey: string;
   /** Plugins installed on this Runner, as it advertises them. Secrets stay on the Runner. */
   plugins: InstalledPlugin[];
+  /** The `lorca` this Device runs; empty when its CLI has not said. */
+  version: string;
+  /** How a CLI that replaces itself keeps current: one installed with the install script. Unset
+   * where an app updates the CLI it carries, and on phones. */
+  update?: DeviceUpdate;
+}
+
+/** A self-updating CLI's updates, as its `machine` blob tells every Device. */
+export interface DeviceUpdate {
+  /** It installs a newer release by itself and restarts into it once no bot is at work there. */
+  auto: boolean;
+  /** The newest release, when it is newer than `version`. */
+  latest?: string;
+  /** `installing` while it downloads and swaps the binary, `restarting` while it waits for its
+   * bots to finish, `installed` when `lorca serve` must be restarted by hand to run it. */
+  state?: "installing" | "restarting" | "installed";
+  /** Why the last check or install failed, in the CLI's words. */
+  error?: string;
 }
 
 /** Derived from `os` alone: a desktop Device is a Runner and can be assigned bots. */

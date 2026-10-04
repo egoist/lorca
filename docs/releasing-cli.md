@@ -18,10 +18,35 @@ lorca-cli-linux-aarch64.tar.gz    static (musl), for any distribution
 lorca-cli-linux-x86_64.tar.gz
 lorca-cli-windows-x86_64.zip
 <archive>.sha256
+lorca-cli.json                    the version, and each archive's SHA-256 and size
+lorca-cli.json.sig                an Ed25519 signature of lorca-cli.json
 ```
 
-[`.github/workflows/release-cli.yml`](../.github/workflows/release-cli.yml) builds, tests, and
-drafts them. It needs no secret: the workflow's own token writes the release.
+A CLI installed this way updates itself from the latest release, and installs only a
+`lorca-cli.json` signed by a key it trusts ([Updates and the service](architecture/runtime.md#updates-and-the-service)).
+[`.github/workflows/release-cli.yml`](../.github/workflows/release-cli.yml) builds, signs, tests,
+and drafts them. It writes the release with the workflow's own token and signs with the
+`CLI_UPDATE_SIGNING_KEY` secret.
+
+## Update key
+
+The key is an Ed25519 key pair in PEM. Its public half, base64 of the 32 raw bytes, is in `KEYS` in
+[`crates/cli/src/update.rs`](../crates/cli/src/update.rs); the private half is the Actions secret
+`CLI_UPDATE_SIGNING_KEY` (Settings ▸ Secrets and variables ▸ Actions). The key in use was made on
+the maintainer's Mac and is kept at `~/Library/Application Support/lorca/update-keys/cli-update.key`;
+keep a copy in a password manager. Without it no CLI in the field takes another release, and a
+script install is the only way to a new one.
+
+To make a key and read its public half:
+
+```sh
+openssl genpkey -algorithm ed25519 -out cli-update.key
+openssl pkey -in cli-update.key -pubout -outform DER | tail -c 32 | base64
+gh secret set CLI_UPDATE_SIGNING_KEY < cli-update.key
+```
+
+To move to a new key, add its public half to `KEYS` and release with the old key first, so the CLIs
+in the field trust the new one before it signs; then set the secret to the new key.
 
 ## Cutting a release
 
@@ -47,15 +72,23 @@ The workflow:
 1. names the release `cli-v<version>` after the `lorca` crate. It refuses a pushed tag that says
    another version, and a tag that already exists on another commit, since a release takes the
    tag's commit. When that release is already published, it stops there;
-2. builds `lorca` with `--release --locked`: `cargo build` on a macOS runner for the Mac, and
-   `cargo zigbuild` on Linux for Linux (musl) and Windows (`x86_64-pc-windows-gnu`). Each binary
-   goes alone into `lorca-cli-<os>-<cpu>.tar.gz` (`.zip` for Windows) with a `.sha256` beside it;
-3. serves the archives the way a release does on Linux, macOS, and Windows runners and installs
-   from them with the site's scripts: `install-cli.sh` twice, an install and then an update, and
-   `install-cli.ps1` through `Invoke-Expression` in Windows PowerShell and then in PowerShell 7,
-   checking `lorca --version` and the user PATH;
-4. drafts the release with the archives, its tag to be made at the built commit when the draft is
-   published. A draft left by an earlier run takes the new archives and keeps its title and notes.
+2. builds `lorca` with `--release --locked` and `LORCA_SELF_UPDATE=1`, which makes a build that
+   updates itself: `cargo build` on a macOS runner for the Mac, and `cargo zigbuild` on Linux for
+   Linux (musl) and Windows (`x86_64-pc-windows-gnu`). Each binary goes alone into
+   `lorca-cli-<os>-<cpu>.tar.gz` (`.zip` for Windows) with a `.sha256` beside it;
+3. writes `lorca-cli.json` from the archives and signs it with `CLI_UPDATE_SIGNING_KEY`, after
+   checking that the key's public half is in `KEYS`; it stops when the secret is missing;
+4. serves the archives and the manifest the way a release does on Linux, macOS, and Windows
+   runners and installs from them with the site's scripts: `install-cli.sh` twice, an install and
+   then an update, and `install-cli.ps1` through `Invoke-Expression` in Windows PowerShell and then
+   in PowerShell 7, checking `lorca --version`, the user PATH, and that `lorca update --check`
+   reads the signed manifest and finds itself the latest;
+5. drafts the release with the archives and the manifest, its tag to be made at the built commit
+   when the draft is published. A draft left by an earlier run takes the new archives and keeps its
+   title and notes.
+
+Publishing the draft releases the update: every CLI installed with the scripts finds it within a
+day and restarts into it once its bots are idle.
 
 Runs go one at a time. To rebuild a published release, delete it and its tag first.
 

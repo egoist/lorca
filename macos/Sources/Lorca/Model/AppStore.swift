@@ -1464,6 +1464,18 @@ final class AppStore {
 
     /// Unpairs another Device. The CLI has the relay drop its key; the Device wipes its copy of
     /// the account the next time it connects. Throws when the relay could not be told.
+    /// Has a Runner whose CLI updates itself install the latest release now; it restarts into it
+    /// once its bots are done, and its `machine` blob says how that goes.
+    func updateDevice(_ id: Device.ID) async throws {
+        if isMock {
+            guard let index = devices.firstIndex(where: { $0.id == id }) else { return }
+            devices[index].update?.state = "restarting"
+            emit(.rosterChanged)
+            return
+        }
+        _ = try await client.request("device.update", ["id": id])
+    }
+
     func unpairDevice(_ id: Device.ID) async throws {
         if !isMock {
             _ = try await client.request("device.unpair", ["id": id])

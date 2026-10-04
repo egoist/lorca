@@ -23,6 +23,7 @@ import {
   usesAPIKey,
   type AutoReviewRule,
   type Device,
+  type DeviceUpdate,
   type SettingsPane,
 } from "../../model/models";
 import { onStoreEvent, track } from "../../model/reactive";
@@ -782,6 +783,7 @@ function DevicePane() {
               <Show when={current().os !== "unknown"}>
                 <KeyValueRow label={L("OS")} value={`${osDisplayName(current().os)} · ${current().osVersion}`} />
               </Show>
+              <Show when={current().update}>{(update) => <CLIUpdateRow device={current()} update={update()} />}</Show>
               <KeyValueRow label={L("Role")} value={isRunner(current()) ? L("Runner · runs bots with its own credentials") : L("Device · never runs bots")} />
               <KeyValueRow label={L("Last seen")} value={current().status === "online" ? L("Active now") : Format.lastSeen(current().lastSeen)} />
               <KeyValueRow label={L("Relay")} value={relay()} monospaced />
@@ -797,6 +799,44 @@ function DevicePane() {
         )}
       </Show>
     </PaneFrame>
+  );
+}
+
+/** The version of a CLI that updates itself, how its update goes, and Update while a newer release
+ * waits and the Runner is online. */
+function CLIUpdateRow(props: { device: Device; update: DeviceUpdate }) {
+  const row = () => {
+    const version = props.device.version;
+    const latest = props.update.latest ?? "";
+    switch (props.update.state) {
+      case "installing":
+        return { value: L("%@ · Installing %@…", version, latest), offersUpdate: false };
+      case "restarting":
+        return { value: L("%@ · Restarts into %@ once no bot is at work", version, latest), offersUpdate: false };
+      case "installed":
+        return { value: L("%@ · %@ is installed; restart lorca serve to run it", version, latest), offersUpdate: false };
+    }
+    if (latest) return { value: L("%@ · %@ is available", version, latest), offersUpdate: props.device.status === "online" };
+    if (props.update.error) return { value: `${version} · ${props.update.error}`, offersUpdate: false };
+    return { value: props.update.auto ? L("%@ · Up to date", version) : L("%@ · Up to date · automatic updates off", version), offersUpdate: false };
+  };
+  const update = async () => {
+    const device = props.device;
+    try {
+      await store.updateDevice(device.id);
+    } catch (error) {
+      void alert({ message: L("Couldn’t update %@", device.name), informative: errorText(error) });
+    }
+  };
+  return (
+    <ActionRow
+      label={L("Lorca CLI")}
+      value={row().value}
+      tint="var(--label-2)"
+      tooltip={props.update.error}
+      actionTitle={row().offersUpdate ? L("Update") : undefined}
+      onAction={() => void update()}
+    />
   );
 }
 

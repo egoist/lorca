@@ -65,6 +65,12 @@ impl Config {
         self.home.join("marketplace.json")
     }
 
+    /// The CLI's own updates: the last check, a restart into a new release under way, and a
+    /// release that went back.
+    pub fn update_path(&self) -> PathBuf {
+        self.home.join("update.json")
+    }
+
     pub fn ensure_home(&self) -> anyhow::Result<()> {
         std::fs::create_dir_all(&self.home)?;
         set_private(&self.home)?;
@@ -77,6 +83,10 @@ impl Config {
 pub struct Settings {
     #[serde(default)]
     pub relay_url: Option<String>,
+    /// Whether a CLI that replaces itself installs newer releases by itself; on unless set to
+    /// false (`lorca update --auto off`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_update: Option<bool>,
 }
 
 impl Settings {
