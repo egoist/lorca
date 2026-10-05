@@ -62,7 +62,7 @@ uuid.workspace = true
 x25519-dalek.workspace = true
 if-addrs = "0.15.0"
 # rmcp speaks reqwest 0.13; the rest of the crate is on the workspace's 0.12, so the MCP side has its own client.
-mcp_http = { package = "reqwest", version = "0.13", default-features = false, features = ["json", "stream", "rustls", "http2"], optional = true }
+mcp_http = { package = "reqwest", version = "0.13", default-features = false, features = ["json", "stream", "rustls", "http2", "system-proxy"], optional = true }
 rmcp = { version = "3.4.0", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "auth", "reqwest"], optional = true }
 # rmcp's process wrapper, to start a stdio server in a process group (a job object on Windows) that stops as one.
 process-wrap = { version = "10", features = ["tokio1"], optional = true }

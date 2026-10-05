@@ -405,7 +405,7 @@ async fn tokens_from_response(response: reqwest::Response, previous_refresh: Opt
     let text = response.text().await.map_err(|e| format!("Token response unreadable: {e}"))?;
     let body: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
     if !status.is_success() {
-        let message = body["error_description"].as_str().or(body["error"].as_str()).unwrap_or("Token request rejected");
+        let message = crate::error_message(&body).unwrap_or("Token request rejected");
         if status == reqwest::StatusCode::FORBIDDEN || message.contains("subscription") || message.contains("not eligible") {
             return Err(format!("{status}: {message}. Grok sign-in needs a SuperGrok or X Premium+ subscription."));
         }
