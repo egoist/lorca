@@ -115,7 +115,7 @@ pub async fn connect_opencode_go(app: &Arc<App>, api_key: &str, base_url: Option
 }
 
 async fn check_key(name: &str, request: reqwest::RequestBuilder) -> Result<(), String> {
-    let response = request.send().await.map_err(|e| format!("{name} unreachable: {e}"))?;
+    let response = request.send().await.map_err(|e| format!("{name} unreachable: {}", lorca_tls::describe(&e)))?;
     match response.status() {
         reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN => Err(format!("{name} rejected that key")),
         status if status.is_success() => Ok(()),
@@ -124,7 +124,7 @@ async fn check_key(name: &str, request: reqwest::RequestBuilder) -> Result<(), S
 }
 
 async fn check_opencode_key(name: &str, request: reqwest::RequestBuilder, requires_go: bool) -> Result<(), String> {
-    let response = request.send().await.map_err(|e| format!("{name} unreachable: {e}"))?;
+    let response = request.send().await.map_err(|e| format!("{name} unreachable: {}", lorca_tls::describe(&e)))?;
     match response.status() {
         reqwest::StatusCode::UNAUTHORIZED => Err(format!("{name} rejected that key")),
         reqwest::StatusCode::FORBIDDEN if requires_go => Err("OpenCode Go needs an active subscription".into()),
@@ -285,7 +285,7 @@ async fn list_models(app: &Arc<App>, name: &str, api: CustomApi, root: &str, api
         }
     };
     request = request.timeout(std::time::Duration::from_secs(20));
-    let response = request.send().await.map_err(|e| format!("{name} unreachable: {e}"))?;
+    let response = request.send().await.map_err(|e| format!("{name} unreachable: {}", lorca_tls::describe(&e)))?;
     match response.status() {
         reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN if api_key.is_empty() => Err(format!("{name} needs an API key")),
         reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN => Err(format!("{name} rejected that key")),

@@ -22,11 +22,20 @@ const mentionRows = 5;
 
 /** The draft left in the composer when Settings took the window, for the chat it was typed in, as
  * the macOS app's one chat view keeps its composer. Another chat starts empty. */
-let kept: { chatID: string; text: string; attachments: OutgoingAttachment[]; picked: Bot[] } | null = null;
+let kept: { chatID: string; text: string; attachments: OutgoingAttachment[]; picked: Bot[]; reply: ComposerReply | null } | null = null;
+
+/** The message a draft answers: its id, who wrote it, and how it opens. */
+export interface ComposerReply {
+  messageID: string;
+  name: string;
+  text: string;
+}
 
 export interface ComposerHandle {
   focus(): void;
   setText(text: string): void;
+  /** Makes the draft a reply to a message, shown above the text until it is sent or dropped. */
+  reply(to: ComposerReply): void;
 }
 
 /** Where the caret sits in a textarea, in viewport pixels: the top of its line and its x. */
@@ -66,7 +75,7 @@ export function Composer(props: {
   placeholder: string;
   bots: Bot[];
   isResponding: boolean;
-  onSend: (text: string, attachments: OutgoingAttachment[], mentions: string[]) => void;
+  onSend: (text: string, attachments: OutgoingAttachment[], mentions: string[], replyTo?: string) => void;
   onStop: () => void;
   ref?: (handle: ComposerHandle) => void;
   onHeight?: (height: number) => void;
@@ -75,6 +84,7 @@ export function Composer(props: {
   kept = null;
   const [text, setText] = createSignal(draft?.text ?? "");
   const [attachments, setAttachments] = createSignal<OutgoingAttachment[]>(draft?.attachments ?? []);
+  const [reply, setReply] = createSignal<ComposerReply | null>(draft?.reply ?? null);
   const [expanded, setExpanded] = createSignal(false);
   const [mention, setMention] = createSignal<{ start: number; end: number; bots: Bot[]; x: number; top: number; bottom: number } | null>(null);
   const [mentionIndex, setMentionIndex] = createSignal(0);
@@ -97,7 +107,16 @@ export function Composer(props: {
       if (area) area.setSelectionRange(value.length, value.length);
     });
   };
-  props.ref?.({ focus, setText: replaceText });
+  const startReply = (to: ComposerReply) => {
+    setReply(to);
+    updateLayout();
+    focus();
+  };
+  const cancelReply = () => {
+    setReply(null);
+    updateLayout();
+  };
+  props.ref?.({ focus, setText: replaceText, reply: startReply });
 
   /** One line beside the controls unless the text needs more room: a newline, a wrap, or files. */
   const updateLayout = () => {
@@ -105,7 +124,7 @@ export function Composer(props: {
     const style = getComputedStyle(area);
     const line = parseFloat(style.lineHeight) || 19;
     const value = area.value;
-    let wants = attachments().length > 0 || value.includes("\n");
+    let wants = attachments().length > 0 || reply() !== null || value.includes("\n");
     if (!wants) {
       const measure = document.createElement("span");
       measure.style.font = style.font;
@@ -265,7 +284,7 @@ export function Composer(props: {
       offDrop();
       observer.disconnect();
       window.removeEventListener("resize", onResize);
-      if (text() !== "" || attachments().length > 0) kept = { chatID: props.chatID, text: text(), attachments: attachments(), picked };
+      if (text() !== "" || attachments().length > 0 || reply()) kept = { chatID: props.chatID, text: text(), attachments: attachments(), picked, reply: reply() };
     };
   });
 
@@ -275,6 +294,7 @@ export function Composer(props: {
     () => {
       setAttachments([]);
       setMention(null);
+      setReply(null);
       replaceText("");
     },
     { defer: true },
@@ -294,11 +314,13 @@ export function Composer(props: {
     const lowered = value.toLowerCase();
     const mentions = picked.filter((bot) => lowered.includes(`@${bot.name.toLowerCase()}`)).map((bot) => bot.id);
     const sending = attachments();
+    const answering = reply()?.messageID;
     picked = [];
     setAttachments([]);
     setMention(null);
+    setReply(null);
     replaceText("");
-    props.onSend(value, sending, mentions);
+    props.onSend(value, sending, mentions, answering);
   };
 
   const onKeyDown = (event: KeyboardEvent) => {
@@ -323,6 +345,12 @@ export function Composer(props: {
         setMention(null);
         return;
       }
+    }
+    if (event.key === "Escape" && reply()) {
+      event.preventDefault();
+      event.stopPropagation();
+      cancelReply();
+      return;
     }
     if (event.key !== "Enter") return;
     const primary = hostInfo().platform === "darwin" ? event.metaKey : event.ctrlKey;
@@ -376,12 +404,33 @@ export function Composer(props: {
 
   return (
     <div class="composer" ref={(el) => (root = el)}>
-      <div ref={(el) => (field = el)} class={["composer-field", { expanded: expanded() }]} onMouseDown={(event) => {
+      <div ref={(el) => (field = el)} class={["composer-field", { expanded: expanded(), replying: reply() !== null }]} onMouseDown={(event) => {
         if (event.target === event.currentTarget) {
           event.preventDefault();
           focus();
         }
       }}>
+        <Show when={reply()}>
+          {(to) => (
+            <div class="composer-reply">
+              <Icon name="arrowshape.turn.up.left.fill" size={13} strokeWidth={2.4} />
+              <span class="composer-reply-text truncate">
+                <span class="composer-reply-name">{L("Replying to %@", to().name)}</span> {to().text}
+              </span>
+              <button
+                class="composer-reply-cancel"
+                title={L("Cancel reply")}
+                aria-label={L("Cancel reply")}
+                onClick={() => {
+                  cancelReply();
+                  focus();
+                }}
+              >
+                <Icon name="xmark.circle.fill" size={15} strokeWidth={2} />
+              </button>
+            </div>
+          )}
+        </Show>
         <Show when={attachments().length > 0}>
           <div class="composer-strip">
             <For each={attachments()}>
@@ -430,8 +479,8 @@ export function Composer(props: {
             ref={(el) => (area = el)}
             class="composer-input"
             rows={1}
-            placeholder={props.placeholder}
-            aria-label={props.placeholder}
+            placeholder={reply() ? L("Reply…") : props.placeholder}
+            aria-label={reply() ? L("Reply…") : props.placeholder}
             spellcheck={true}
             onInput={(event) => {
               setText(event.currentTarget.value);

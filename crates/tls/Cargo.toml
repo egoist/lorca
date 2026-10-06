@@ -1,0 +1,26 @@
+[package]
+name = "lorca-tls"
+description = "The certificate trust every Lorca Device connection uses"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+reqwest.workspace = true
+rustls.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+
+# The system checks certificates: the Keychain on macOS, the certificate store on Windows.
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+rustls-platform-verifier = "0.7"
+
+# The roots bundled for Linux and the phones.
+[target.'cfg(not(any(target_os = "macos", target_os = "windows")))'.dependencies]
+webpki-roots.workspace = true
+
+# The system's CA store on Linux, or what SSL_CERT_FILE and SSL_CERT_DIR name.
+[target.'cfg(target_os = "linux")'.dependencies]
+rustls-native-certs = "0.8"

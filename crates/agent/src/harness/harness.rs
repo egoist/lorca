@@ -813,6 +813,7 @@ impl AgentHarness {
                 sink: None,
                 retry: Some(self.retry.clone()),
                 request: request.clone(),
+                interrupt: None,
             };
             let (tx, mut rx) = mpsc::channel::<AgentEvent>(256);
             let loop_cancel = cancel.clone();

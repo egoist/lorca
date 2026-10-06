@@ -78,6 +78,7 @@ const ANDROID: Record<string, string> = {
   "doc.fill": "description",
   "folder.fill": "folder",
   "xmark.circle.fill": "cancel",
+  "arrowshape.turn.up.left.fill": "reply",
   "binoculars.fill": "search",
   "chevron.left.forwardslash.chevron.right": "code",
   "pencil.and.scribble": "draw",

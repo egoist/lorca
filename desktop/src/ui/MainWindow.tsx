@@ -327,6 +327,12 @@ function startServices(notifier: Notifier): () => void {
       const id = selectedChatID();
       if (id) store.stopResponding(id);
     },
+    // Every command in the chat that a bot's call still waits on.
+    runInBackground: () => {
+      const id = selectedChatID();
+      if (!id) return;
+      for (const message of store.foregroundCommands(id)) void store.sendCommandToBackground(id, message.id).catch(() => {});
+    },
     deleteChat: () => void deleteChat(),
   });
   // Ctrl+1 to Ctrl+9: the chat at that place in the sidebar, ready for a reply, its row in view.

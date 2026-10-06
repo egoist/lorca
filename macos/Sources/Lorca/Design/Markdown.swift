@@ -356,6 +356,8 @@ final class MarkdownTextView: NSTextView {
     /// The run on show. Showing the same run again leaves the text, and the selection, alone.
     private weak var shown: NSAttributedString?
     private var linkBase: NSColor?
+    /// Items a right-click offers above the text view's own (Copy, Look Up, …).
+    var contextItems: (() -> [NSMenuItem])?
 
     init(textColor: NSColor) {
         let storage = NSTextStorage()
@@ -390,6 +392,15 @@ final class MarkdownTextView: NSTextView {
             .underlineStyle: NSUnderlineStyle.single.rawValue,
             .cursor: NSCursor.pointingHand,
         ]
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = super.menu(for: event)
+        guard let items = contextItems?(), !items.isEmpty else { return menu }
+        let combined = menu ?? NSMenu()
+        if !combined.items.isEmpty { combined.insertItem(.separator(), at: 0) }
+        for item in items.reversed() { combined.insertItem(item, at: 0) }
+        return combined
     }
 
     /// A link in a message opens only as a web or mail link; the text view would open any scheme.

@@ -80,7 +80,7 @@ impl AnthropicProvider {
             eager_tool_streaming: true,
             max_retries: 2,
             max_retry_delay_ms: DEFAULT_MAX_RETRY_DELAY_MS,
-            client: reqwest::Client::new(),
+            client: lorca_tls::client(),
         }
     }
 

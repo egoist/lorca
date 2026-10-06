@@ -203,6 +203,19 @@ export function joinDictation(base: string, transcript: string): string {
 }
 
 /// The first non-empty line of a message, fence markers skipped: what a one-line preview shows.
+/// A message's words on one line without the Markdown markers, for the composer's reply bar until
+/// the core sends its own quote.
+export function quoteText(text: string): string {
+  return text
+    .replace(/```[^\n]*\n?/g, "")
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/^\s{0,3}(?:[-+*]|\d+[.)]|#{1,6}|>)\s+/gm, "")
+    .replace(/[*_`~]/g, "")
+    .split(/\s+/)
+    .filter(Boolean)
+    .join(" ");
+}
+
 export function firstLine(text: string): string {
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.trim();

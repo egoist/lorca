@@ -217,7 +217,7 @@ mod tests {
 
         let chat = Chat {
             meta: ChatMeta { id: id.into(), kind: "dm".into(), title: None, bot_ids: vec![bot.id.clone()],
-                owner_bot_id: None, is_pinned: false, created_at: 1.0 },
+                owner_bot_id: None, description: None, is_pinned: false, created_at: 1.0 },
             unread_count: 0, usage: None, compactions: vec![],
         };
         app.state.lock().unwrap().chats.push(chat.clone());

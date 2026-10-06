@@ -846,6 +846,9 @@ struct CommandRun: Hashable {
     /// The bot left the command to the user: its turn ended with the command still running, or
     /// it waits on the command at a question.
     var handedOver = false
+    /// It runs in the background: the bot started it there, or the user sent it. Stop in the chat
+    /// leaves it running.
+    var background = false
 
     var isLive: Bool { state == .waiting || state == .running }
     /// The command runs in a session here or on its Runner: it takes answers and a Stop.
@@ -933,6 +936,10 @@ struct Message: Identifiable, Hashable {
     var createdAt: Date
     /// Files sent with a text body; other bodies carry none.
     var attachments: [Attachment]
+    /// The message the user answers with this one, quoted.
+    var replyTo: ReplyQuote?
+    /// A message of the user's the bot's turn holds for its next step; Send now has it read now.
+    var queued = false
 
     init(
         id: String = "msg-\(UUID().uuidString.lowercased())",
@@ -940,7 +947,8 @@ struct Message: Identifiable, Hashable {
         body: Body,
         state: State = .complete,
         createdAt: Date = Date(),
-        attachments: [Attachment] = []
+        attachments: [Attachment] = [],
+        replyTo: ReplyQuote? = nil
     ) {
         self.id = id
         self.author = author
@@ -948,12 +956,26 @@ struct Message: Identifiable, Hashable {
         self.state = state
         self.createdAt = createdAt
         self.attachments = attachments
+        self.replyTo = replyTo
+    }
+
+    /// A finished text message, the user's or a bot's, which a reply can answer.
+    var canBeQuoted: Bool {
+        guard case .text = body else { return false }
+        return state == .complete && author != .system
     }
 
     /// A `bash` row's command.
     var commandRun: CommandRun? {
         if case let .tool(tool) = body { return tool.run }
         return nil
+    }
+
+    /// A command running in its terminal that the bot's call still waits on: Run in Background
+    /// sends it there, and the call returns.
+    var runsInForeground: Bool {
+        guard case let .tool(tool) = body, let run = tool.run else { return false }
+        return tool.isRunning && run.takesInput && !run.background
     }
 
     var text: String {
@@ -969,6 +991,32 @@ struct Message: Identifiable, Hashable {
     var isTranscriptText: Bool {
         if case .text = body { return true }
         return false
+    }
+}
+
+/// A message quoted by the user's reply: who wrote it and how it opens, as the CLI keeps it
+/// with the reply, so the quote reads the same where the original has not loaded.
+struct ReplyQuote: Hashable {
+    let messageID: Message.ID
+    let author: Message.Author
+    let text: String
+
+    /// The quote of `message` the CLI makes, for a reply it has not confirmed yet: its words
+    /// without the Markdown, on one line.
+    @MainActor
+    init?(quoting message: Message) {
+        guard message.canBeQuoted else { return nil }
+        let words = RenderedMessage(message.text, textColor: .labelColor).plainText
+        var line = words.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        if line.isEmpty { line = message.attachments.map(\.name).joined(separator: ", ") }
+        if line.count > 280 { line = String(line.prefix(280)).trimmingCharacters(in: .whitespaces) + "…" }
+        self.init(messageID: message.id, author: message.author, text: line)
+    }
+
+    init(messageID: Message.ID, author: Message.Author, text: String) {
+        self.messageID = messageID
+        self.author = author
+        self.text = text
     }
 }
 
@@ -998,6 +1046,8 @@ struct Chat: Identifiable, Hashable {
     var hasMore = false
     /// The group member holding the work, as the CLI last said.
     var ownerBotID: Bot.ID? = nil
+    /// What a group is for, which every member reads in its system prompt; empty for none.
+    var groupDescription = ""
 
     var isGroup: Bool { kind == .group }
 

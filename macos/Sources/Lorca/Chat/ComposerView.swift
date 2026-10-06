@@ -148,6 +148,7 @@ final class ComposerView: NSView {
     private let scrollView = NSScrollView()
     private let textView: ComposerTextView
     private let strip = ComposerAttachmentStrip()
+    private let replyBar = ComposerReplyBar()
     private let attachButton: ComposerButton
     private let voiceButton: ComposerButton
     private let sendButton: ComposerButton
@@ -166,6 +167,8 @@ final class ComposerView: NSView {
     private var heightConstraint: NSLayoutConstraint!
     private var stripTopConstraint: NSLayoutConstraint!
     private var stripHeightConstraint: NSLayoutConstraint!
+    private var replyTopConstraint: NSLayoutConstraint!
+    private var replyHeightConstraint: NSLayoutConstraint!
 
     private let controlSize: CGFloat = 28
     private let controlInset: CGFloat = 8
@@ -191,8 +194,12 @@ final class ComposerView: NSView {
     private var escapeMonitor: Any?
     private var placeholder = ""
 
-    /// The text, its files, and the bots its `@Name`s picked from the menu, by id.
-    var onSend: ((String, [OutgoingAttachment], [Bot.ID]) -> Void)?
+    /// The message the draft answers, shown above the text until it is sent or dropped.
+    private(set) var replyTo: Message.ID?
+
+    /// The text, its files, the bots its `@Name`s picked from the menu, by id, and the message
+    /// it answers.
+    var onSend: ((String, [OutgoingAttachment], [Bot.ID], Message.ID?) -> Void)?
     var onStop: (() -> Void)?
     var mentionableBots: [Bot] = []
     /// The bots picked from the `@` menu since the last send, in order. Two bots can share a
@@ -281,6 +288,7 @@ final class ComposerView: NSView {
         scrollView.translatesAutoresizingMaskIntoConstraints = false
 
         addSubview(field)
+        field.addSubview(replyBar)
         field.addSubview(strip)
         field.addSubview(scrollView)
         field.addSubview(pill)
@@ -290,14 +298,26 @@ final class ComposerView: NSView {
         pill.onStop = { [weak self] in self?.dictation.stop() }
 
         heightConstraint = scrollView.heightAnchor.constraint(equalToConstant: minTextHeight)
-        stripTopConstraint = strip.topAnchor.constraint(equalTo: field.topAnchor)
+        replyTopConstraint = replyBar.topAnchor.constraint(equalTo: field.topAnchor)
+        replyHeightConstraint = replyBar.heightAnchor.constraint(equalToConstant: 0)
+        stripTopConstraint = strip.topAnchor.constraint(equalTo: replyBar.bottomAnchor)
         stripHeightConstraint = strip.heightAnchor.constraint(equalToConstant: 0)
+        replyBar.isHidden = true
+        replyBar.onCancel = { [weak self] in
+            self?.cancelReply()
+            self?.focus()
+        }
 
         NSLayoutConstraint.activate([
             field.topAnchor.constraint(equalTo: topAnchor, constant: 8),
             field.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
             field.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -20),
             field.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -14),
+
+            replyBar.leadingAnchor.constraint(equalTo: field.leadingAnchor, constant: expandedTextInset + 2),
+            replyBar.trailingAnchor.constraint(equalTo: field.trailingAnchor, constant: -expandedTextInset),
+            replyTopConstraint,
+            replyHeightConstraint,
 
             strip.leadingAnchor.constraint(equalTo: field.leadingAnchor, constant: expandedTextInset),
             strip.trailingAnchor.constraint(equalTo: field.trailingAnchor, constant: -expandedTextInset),
@@ -388,16 +408,42 @@ final class ComposerView: NSView {
 
     func configure(placeholder: String, bots: [Bot]) {
         self.placeholder = placeholder
-        if !dictation.isListening { textView.placeholder = placeholder }
+        if !dictation.isListening { textView.placeholder = replyTo == nil ? placeholder : L("Reply…") }
         mentionableBots = bots
         updateButtons()
     }
 
-    /// Drops the draft: its text, its files, and the bots picked from the `@` menu.
+    /// Drops the draft: its text, its files, the bots picked from the `@` menu, and the message
+    /// it answers.
     func clearDraft() {
         attachments = []
         updateAttachments()
+        cancelReply()
         text = ""
+    }
+
+    // MARK: - Reply
+
+    /// Makes the draft a reply to a message: who wrote it and how it opens show above the text.
+    func reply(to messageID: Message.ID, name: String, text: String) {
+        replyTo = messageID
+        replyBar.configure(name: name, text: text)
+        showReplyBar()
+    }
+
+    func cancelReply() {
+        guard replyTo != nil else { return }
+        replyTo = nil
+        showReplyBar()
+    }
+
+    private func showReplyBar() {
+        let replying = replyTo != nil
+        replyBar.isHidden = !replying
+        replyTopConstraint.constant = replying ? 10 : 0
+        replyHeightConstraint.constant = replying ? 18 : 0
+        if !dictation.isListening { textView.placeholder = replying ? L("Reply…") : placeholder }
+        updateLayout()
     }
 
     // MARK: - Actions
@@ -418,13 +464,15 @@ final class ComposerView: NSView {
         let files = attachments
         // A pick counts while its `@Name` is still in the text.
         let mentioned = pickedMentions.filter { value.range(of: "@\($0.name)", options: .caseInsensitive) != nil }.map(\.id)
+        let reply = replyTo
         pickedMentions = []
         textView.string = ""
         attachments = []
         mentions.dismiss()
         updateAttachments()
+        cancelReply()
         handleTextChange()
-        onSend?(value, files, mentioned)
+        onSend?(value, files, mentioned, reply)
     }
 
     @objc private func stop() {
@@ -647,6 +695,11 @@ final class ComposerView: NSView {
             return true
         }
 
+        if selector == #selector(NSResponder.cancelOperation(_:)), replyTo != nil {
+            cancelReply()
+            return true
+        }
+
         guard selector == #selector(NSResponder.insertNewline(_:)) else { return false }
 
         // Shift-Return always breaks the line; plain Return sends unless the
@@ -693,7 +746,7 @@ final class ComposerView: NSView {
         let used = layoutManager.usedRect(for: container)
 
         let wanted: Mode
-        if !attachments.isEmpty || textView.string.contains("\n") || used.height > lineHeight * 1.5 {
+        if !attachments.isEmpty || replyTo != nil || textView.string.contains("\n") || used.height > lineHeight * 1.5 {
             wanted = .expanded
         } else if mode == .expanded, used.width > compactTextWidth - 12 {
             // One line in the wide layout that would wrap beside the controls.

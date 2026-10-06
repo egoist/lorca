@@ -252,7 +252,7 @@ pub async fn send_with_retry(
                 }
             }
             Err(error) => {
-                let failure = RequestFailure::Transport(error.to_string());
+                let failure = RequestFailure::Transport(lorca_tls::describe(&error));
                 if retries_left == 0 {
                     return Err(failure);
                 }

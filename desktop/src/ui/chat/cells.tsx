@@ -7,13 +7,15 @@ import { For, Show } from "solid-js";
 import { files, preferences } from "../../host";
 import { L } from "../../l10n";
 import * as Format from "../../model/format";
-import { isImage, sizeText, type Attachment, type Bot, type Message, type ToolInvocation } from "../../model/models";
+import { isImage, sizeText, type Attachment, type Author, type Bot, type Message, type ToolInvocation } from "../../model/models";
 import { track } from "../../model/reactive";
 import { store } from "../../model/store";
 import { Avatar, authorAvatar, botAvatar, type AvatarContent } from "../avatar";
 import { Icon } from "../icons";
 import { Markdown } from "../markdown";
 import { firstLineOf, showTextPopover } from "../overlay";
+import { popupMenu, separator } from "../menu";
+import { host } from "../../host";
 
 export const ChatMetrics = {
   horizontalInset: 22,
@@ -103,7 +105,25 @@ function AttachmentTile(props: { attachment: Attachment; chatID: string; message
 
 // MARK: - Message
 
-export function MessageCell(props: { message: Message; groupStart: boolean; chatID: string; showsAvatar: boolean }) {
+/** Who wrote a quoted message, as a reply's quote names them. */
+export function quoteAuthorName(author: Author): string {
+  track.roster();
+  if (author.kind === "you") return L("You");
+  if (author.kind === "bot") return store.bot(author.botID)?.name ?? L("Bot");
+  return "Lorca";
+}
+
+/** `onReply` makes the draft a reply to this message (a right-click on the bubble offers it);
+ * `onQuoteClick` brings the message a reply answers into view. */
+export function MessageCell(props: {
+  message: Message;
+  groupStart: boolean;
+  chatID: string;
+  showsAvatar: boolean;
+  onReply?: () => void;
+  onQuoteClick?: (messageID: string) => void;
+}) {
+  const held = () => props.message.queued === true;
   const isUser = () => props.message.author.kind === "you";
   const text = () => (props.message.body.kind === "text" ? props.message.body.text : "");
   // A bot's name and look follow a rename or a new image.
@@ -128,7 +148,35 @@ export function MessageCell(props: { message: Message; groupStart: boolean; chat
             {bot()?.name ?? L("Bot")}
           </div>
         </Show>
-        <div class={["bubble", isUser() ? "user" : "bot"]}>
+        <Show when={props.message.replyTo}>
+          {(quote) => (
+            <button
+              class="reply-quote"
+              title={L("In reply to %@: %@", quoteAuthorName(quote().author), quote().text)}
+              aria-label={L("In reply to %@: %@", quoteAuthorName(quote().author), quote().text)}
+              onClick={() => props.onQuoteClick?.(quote().messageID)}
+            >
+              <Icon name="arrowshape.turn.up.left.fill" size={11} strokeWidth={2.4} />
+              <span class="reply-quote-text truncate">
+                <span class="reply-quote-name">{quoteAuthorName(quote().author)}:</span> {quote().text}
+              </span>
+            </button>
+          )}
+        </Show>
+        <div
+          class={["bubble", isUser() ? "user" : "bot", { held: held() }]}
+          data-bubble={props.message.id}
+          onContextMenu={(event) => {
+            if (!props.onReply) return;
+            event.preventDefault();
+            const selected = window.getSelection()?.toString() ?? "";
+            const entries = [{ id: "reply", label: L("Reply") }, ...(selected.trim() !== "" ? [separator, { id: "copy", label: L("Copy") }] : [])];
+            void popupMenu(entries, { x: event.clientX, y: event.clientY }).then((picked) => {
+              if (picked === "reply") props.onReply?.();
+              else if (picked === "copy") void host.copyText(selected);
+            });
+          }}
+        >
           <Show when={props.message.attachments.length > 0}>
             <AttachmentTiles
               attachments={props.message.attachments}
@@ -149,6 +197,15 @@ export function MessageCell(props: { message: Message; groupStart: boolean; chat
             </div>
           </Show>
         </div>
+        <Show when={held()}>
+          <button
+            class="send-now"
+            title={L("Have the bot read this now. A command it is running moves to the background.")}
+            onClick={() => store.sendNow(props.message.id, props.chatID)}
+          >
+            {L("Send now")}
+          </button>
+        </Show>
       </div>
       <Show when={showsName()}>
         <span class="message-avatar">

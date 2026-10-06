@@ -216,6 +216,8 @@ On macOS and Linux, `bash` then starts each command on a pseudo-terminal of its 
 
 A call returns when the command exits, with the same text as on pipes and no `structured` output (it declares no output schema, so a codemode script gets the text), or while it still runs: 2 s after it stops on an open line that reads like a question (`BashSession::prompt` has the heuristic), or after 20 s with no output (`bash_session::WAITING_AFTER`; `BashTool::waiting_after` changes it). That result is the output so far, a note that the command waits, and its session id, which `details["session_id"]` also carries. `timeout` still kills the command when it runs that long; cancellation kills its process group.
 
+With sessions, `bash` also takes `background: true`, for a server, a watcher, or a long build: the call waits at most 2 s (`bash_session::BACKGROUND_SETTLE`), so a command that fails or asks at once still reads as usual, then returns with the output so far, the session id, and a note that it runs in the background. `BashSession::background` tells the host, which can let such a session outlive the user's stop and its own idle limit. A cancelled `bash_input` or `bash_output` call on it leaves it running. A host sends a running command there from its own UI with `BashSession::send_to_background`: the call waiting on it returns at once, with a note that the user sent it there.
+
 | Tool | Arguments | Behavior |
 | --- | --- | --- |
 | `bash_input` | `session_id`, `text`, `enter?` (default `true`) | Types the text into the session's terminal, then Return unless `enter` is false. Control characters are keys: `\u0003` is Ctrl-C, `\u0004` Ctrl-D. Returns what the command printed since the model last read it, once it ends, asks again, or goes quiet. |

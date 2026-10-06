@@ -35,7 +35,9 @@ const TERMINAL_DESCRIPTION: &str = "Execute a bash command in the current workin
      stderr together, with colors and other terminal codes removed. Output is truncated to last 2000 lines or 50KB (whichever is hit \
      first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds. A command that stops at \
      what looks like a prompt, or prints nothing for 20 seconds, returns while it still runs, with a session id: it may be waiting \
-     for input, such as a password, a yes/no answer, or a key. Answer it with bash_input, or wait for more with bash_output.";
+     for input, such as a password, a yes/no answer, or a key. Answer it with bash_input, or wait for more with bash_output. \
+     For a server, a watcher, or a long build, set background: the call returns after 2 seconds with the session id while \
+     the command runs on. Prefer this to & or nohup, which leave the command where its session cannot follow or stop it.";
 
 const NO_INPUT_DESCRIPTION: &str = "Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last 2000 \
      lines or 50KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in \
@@ -235,7 +237,7 @@ impl Tool for BashTool {
         }
     }
     fn parameters(&self) -> Value {
-        json!({
+        let mut parameters = json!({
             "type": "object",
             "properties": {
                 "command": { "type": "string", "description": "Shell command to execute" },
@@ -246,7 +248,14 @@ impl Tool for BashTool {
                 "timeout": { "type": "number", "description": "Timeout in seconds (optional, no default timeout)" }
             },
             "required": ["command", "description"]
-        })
+        });
+        if self.terminal().is_some() {
+            parameters["properties"]["background"] = json!({
+                "type": "boolean",
+                "description": "Leave it running: return after 2 seconds with its session id, for a server, a watcher, or a long build (default false)"
+            });
+        }
+        parameters
     }
     /// On pipes, after pi's: a nonzero exit is an error result for the model, and a script still
     /// receives this. A command in a terminal, which can return while it runs, has none.
@@ -278,7 +287,8 @@ impl Tool for BashTool {
         }
         let shell = self.shell.as_deref().ok_or_else(|| ToolError(NO_SHELL.into()))?;
         if let Some(sessions) = self.terminal() {
-            return super::bash_session::run(shell, &command, &self.cwd, timeout, &self.extras, sessions, id, self.waiting_after, cancel, on_update).await;
+            let background = args["background"].as_bool().unwrap_or(false);
+            return super::bash_session::run(shell, &command, &self.cwd, timeout, background, &self.extras, sessions, id, self.waiting_after, cancel, on_update).await;
         }
 
         let mut cmd = crate::login_shell::command(shell).await;

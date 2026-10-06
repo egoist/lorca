@@ -58,7 +58,7 @@ impl GrokProvider {
             thinking_level: None,
             info: models::find("grok", model),
             tool_images: ToolImages::UserMessage,
-            client: reqwest::Client::new(),
+            client: lorca_tls::client(),
         }
     }
 

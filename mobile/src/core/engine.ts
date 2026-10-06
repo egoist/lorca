@@ -216,12 +216,19 @@ class Engine {
 
   /// Sends the user's message with its files and the bots picked by `@`; the core starts the
   /// turns it calls for.
-  async sendMessage(chatId: string, text: string, files: PickedFile[] = [], mentions: string[] = []): Promise<Message> {
+  /// `replyTo` is the message the user answers, which the bot reads quoted.
+  async sendMessage(chatId: string, text: string, files: PickedFile[] = [], mentions: string[] = [], replyTo?: string): Promise<Message> {
     const attachments = files.map((file) => ({ path: pathOf(file.uri), name: file.name, mime: file.mime, width: file.width, height: file.height }));
-    const { message } = await core.request<{ message: Message }>("chats.send", { chat_id: chatId, text, attachments, mentions });
+    const { message } = await core.request<{ message: Message }>("chats.send", { chat_id: chatId, text, attachments, mentions, ...(replyTo ? { reply_to: replyTo } : {}) });
     upsertMessage(message);
     setStatus(chatId, null);
     return message;
+  }
+
+  /// Has the bot's turn read a message it holds for its next step now: a command it waits on goes
+  /// to the background, and a reply in progress stops where it got to. The bot's Runner does it.
+  async sendNow(chatId: string, messageId: string): Promise<void> {
+    await core.request("chats.send_now", { chat_id: chatId, message_id: messageId });
   }
 
   /// The page of messages before the chat's first one, as the transcript nears its top. One
@@ -313,6 +320,15 @@ class Engine {
     if (chatById(chatId)?.kind !== "group") return;
     this.patchChat(chatId, (meta) => ({ ...meta, title: title.trim() || null }));
     void core.request("chats.rename", { chat_id: chatId, title });
+  }
+
+  /// What a group is for; every member reads it in its system prompt.
+  setGroupDescription(chatId: string, description: string) {
+    const trimmed = description.trim();
+    const chat = chatById(chatId);
+    if (chat?.kind !== "group" || (chat.description ?? "") === trimmed) return;
+    this.patchChat(chatId, (meta) => ({ ...meta, description: trimmed || null }));
+    void core.request("chats.set_description", { chat_id: chatId, description: trimmed });
   }
 
   pinChat(chatId: string, pinned: boolean) {
@@ -475,6 +491,12 @@ class Engine {
   /// Stops a running command; its card says so once the Runner has.
   async stopCommand(chatId: string, messageId: string) {
     await core.request("bash.stop", { chat_id: chatId, message_id: messageId });
+  }
+
+  /// Sends a command the bot is waiting on to the background: the bot's call returns and the
+  /// command runs on, out of the way of Stop in the chat.
+  async sendCommandToBackground(chatId: string, messageId: string) {
+    await core.request("bash.background", { chat_id: chatId, message_id: messageId });
   }
 
   // MARK: - Routines

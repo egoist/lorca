@@ -237,9 +237,10 @@ pub async fn refresh(client: &reqwest::Client, refresh_token: &str) -> Result<Ch
 
 async fn tokens_from_response(response: reqwest::Response) -> Result<ChatGptTokens, String> {
     let status = response.status();
-    let body: Value = response.json().await.map_err(|e| format!("Token response unreadable: {e}"))?;
+    let text = response.text().await.map_err(|e| format!("Token response unreadable: {e}"))?;
+    let body: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
     if !status.is_success() {
-        let message = body["error_description"].as_str().or(body["error"].as_str()).unwrap_or("Token request rejected");
+        let message = crate::error_message(&body).unwrap_or("Token request rejected");
         return Err(format!("{status}: {message}"));
     }
     let access_token = body["access_token"].as_str().ok_or("Token response has no access_token")?.to_string();

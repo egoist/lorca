@@ -139,6 +139,7 @@ enum MainMenu {
         add(menu, L("Pin Chat"), #selector(RootSplitViewController.togglePinChat(_:)), "p")
         menu.addItem(.separator())
         add(menu, L("Stop Responding"), #selector(ChatViewController.stopResponding(_:)), ".")
+        add(menu, L("Run Command in Background"), #selector(ChatViewController.runCommandsInBackground(_:)), "b", modifiers: .control)
         menu.addItem(.separator())
         add(menu, L("Delete Chat"), #selector(RootSplitViewController.deleteChat(_:)))
 

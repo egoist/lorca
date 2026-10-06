@@ -330,12 +330,17 @@ export function bots(): Bot[] {
 }
 
 function chat(id: string, kind: Chat["kind"], botIDs: string[], messages: Message[], extra: Partial<Chat>): Chat {
-  return { id, kind, botIDs, messages, unreadCount: 0, isPinned: false, createdAt: Date.now(), hasMore: false, ...extra };
+  return { id, kind, botIDs, messages, unreadCount: 0, isPinned: false, createdAt: Date.now(), hasMore: false, groupDescription: "", ...extra };
 }
 
 export function chats(): Chat[] {
   return [
-    chat("chat-relay", "group", ["bot-nova", "bot-patch", "bot-scout"], launchRoomThread(), { customTitle: "Launch room", isPinned: true, createdAt: minutesAgo(400) }),
+    chat("chat-relay", "group", ["bot-nova", "bot-patch", "bot-scout"], launchRoomThread(), {
+      customTitle: "Launch room",
+      groupDescription: "Ship the relay launch: the TLS rollout, the release notes, and the go/no-go call on Friday.",
+      isPinned: true,
+      createdAt: minutesAgo(400),
+    }),
     chat("chat-nova", "dm", ["bot-nova"], managerThread(), { createdAt: minutesAgo(60 * 30) }),
     chat("chat-patch", "dm", ["bot-patch"], developerThread(), { unreadCount: 2, createdAt: minutesAgo(60 * 26) }),
     chat("chat-launch", "group", ["bot-quill", "bot-nova"], launchThread(), { customTitle: "Launch copy", createdAt: minutesAgo(60 * 52) }),
@@ -354,12 +359,22 @@ function launchRoomThread(): Message[] {
       minutesAgo(12),
     ),
     message(bot("bot-patch"), text("Updated the getting-started guide and checked every download link. The site builds cleanly. The changes are ready to review."), minutesAgo(9)),
-    message(
-      bot("bot-nova"),
-      text("The launch checklist is ready:\n\n- **Onboarding** — reviewed on Linux, Windows, and iPhone\n- **Website** — guide updated, links checked\n- **Launch copy** — Writer's draft is ready\n\nOnly your final review is left."),
-      minutesAgo(7),
-    ),
-    message(you, text("Great. Keep the announcement as a draft until I've reviewed it."), minutesAgo(5)),
+    {
+      ...message(
+        bot("bot-nova"),
+        text("The launch checklist is ready:\n\n- **Onboarding** — reviewed on Linux, Windows, and iPhone\n- **Website** — guide updated, links checked\n- **Launch copy** — Writer's draft is ready\n\nOnly your final review is left."),
+        minutesAgo(7),
+      ),
+      id: "msg-mock-checklist",
+    },
+    {
+      ...message(you, text("Great. Keep the announcement as a draft until I've reviewed it."), minutesAgo(5)),
+      replyTo: {
+        messageID: "msg-mock-checklist",
+        author: bot("bot-nova"),
+        text: "The launch checklist is ready: Onboarding — reviewed on Linux, Windows, and iPhone Website — guide updated, links checked Launch copy — Writer's draft is ready Only your final review is left.",
+      },
+    },
     message(bot("bot-nova"), text("Saved in `launch/announcement.md`. I'll include the checklist in your morning brief."), minutesAgo(4)),
   ];
 }

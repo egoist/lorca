@@ -29,6 +29,7 @@ server = ["dep:axum"]
 lorca-agent = { path = "../agent", optional = true }
 lorca-models = { path = "../models" }
 lorca-provider-auth = { path = "../provider-auth", optional = true }
+lorca-tls = { path = "../tls" }
 anyhow.workspace = true
 async-trait.workspace = true
 axum = { workspace = true, optional = true }
@@ -43,6 +44,8 @@ futures.workspace = true
 hkdf.workspace = true
 libc.workspace = true
 open = { workspace = true, optional = true }
+# A reply's quote of a message reads as plain text.
+pulldown-cmark = { version = "0.13", default-features = false }
 rand.workspace = true
 regex.workspace = true
 reqwest.workspace = true
@@ -55,7 +58,6 @@ tokio.workspace = true
 tokio-util.workspace = true
 tokio-tungstenite.workspace = true
 rustls.workspace = true
-webpki-roots.workspace = true
 tracing.workspace = true
 tracing-subscriber = { workspace = true, optional = true }
 uuid.workspace = true
@@ -65,7 +67,7 @@ if-addrs = "0.15.0"
 flate2 = { version = "1", optional = true }
 tar = { version = "0.4", default-features = false, optional = true }
 # rmcp speaks reqwest 0.13; the rest of the crate is on the workspace's 0.12, so the MCP side has its own client.
-mcp_http = { package = "reqwest", version = "0.13", default-features = false, features = ["json", "stream", "rustls", "http2"], optional = true }
+mcp_http = { package = "reqwest", version = "0.13", default-features = false, features = ["json", "stream", "rustls", "http2", "system-proxy"], optional = true }
 rmcp = { version = "3.4.0", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "auth", "reqwest"], optional = true }
 # rmcp's process wrapper, to start a stdio server in a process group (a job object on Windows) that stops as one.
 process-wrap = { version = "10", features = ["tokio1"], optional = true }

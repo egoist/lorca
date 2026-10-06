@@ -4,12 +4,16 @@
 // centered "Message from ◉ Name" / "Messaged ◉ Name" markers. Tool calls never render, except a
 // command, which shows as its card while it needs the user.
 
-import { useEffect, useRef, useState } from "react";
-import { Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Alert, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import * as Clipboard from "expo-clipboard";
+import * as Haptics from "expo-haptics";
+import { Gesture, GestureDetector } from "react-native-gesture-handler";
+import Animated, { useAnimatedStyle, useSharedValue, withSequence, withSpring, withTiming } from "react-native-reanimated";
 import { LinearGradient } from "expo-linear-gradient";
 import { ShimmerView } from "../../modules/lorca-core/ShimmerView";
-import { isLive, isSentMessage, showsCard, type Body, type Bot, type Chat, type CommandRun, type Message } from "../core/model";
+import { isLive, isSentMessage, showsCard, type Author, type Body, type Bot, type Chat, type CommandRun, type Message } from "../core/model";
+import { engine } from "../core/engine";
 import { useStore } from "../core/store";
 import { language, t, useLanguage } from "../i18n";
 import { AttachmentBlock } from "./attachments";
@@ -120,11 +124,92 @@ export function DayRow({ at }: { at: number }) {
   );
 }
 
-export function MessageRow({ row, bots, isGroup }: { row: Extract<Row, { type: "message" }>; bots: Map<string, Bot>; isGroup: boolean }) {
+/// Swiping a bubble this far to the left makes the draft a reply to it.
+const REPLY_SWIPE = 56;
+
+/// Who wrote a quoted message, as a reply's quote names them.
+export function quoteAuthorName(author: Author, bots: Map<string, Bot>): string {
+  if (author.kind === "you") return t("You");
+  if (author.kind === "bot") return bots.get(author.bot_id)?.name ?? t("Bot");
+  return "Lorca";
+}
+
+/// A message that follows a leftward swipe, with a reply arrow fading in behind it; let go past
+/// `REPLY_SWIPE` and the draft answers it. Vertical drags stay with the transcript.
+function SwipeToReply({ onReply, children }: { onReply?: () => void; children: React.ReactNode }) {
+  const p = usePalette();
+  const offset = useSharedValue(0);
+  const armed = useRef(false);
+  const pan = useMemo(
+    () =>
+      Gesture.Pan()
+        .runOnJS(true)
+        .enabled(!!onReply)
+        .activeOffsetX([-14, 14])
+        .failOffsetY([-10, 10])
+        .onUpdate((event) => {
+          offset.value = Math.min(0, Math.max(-REPLY_SWIPE * 1.4, event.translationX));
+          const past = offset.value <= -REPLY_SWIPE;
+          if (past !== armed.current) {
+            armed.current = past;
+            if (past) void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+          }
+        })
+        .onEnd(() => {
+          if (armed.current) onReply?.();
+        })
+        .onFinalize(() => {
+          armed.current = false;
+          offset.value = withSpring(0, { damping: 22, stiffness: 260 });
+        }),
+    [onReply, offset],
+  );
+  const follow = useAnimatedStyle(() => ({ transform: [{ translateX: offset.value }] }));
+  const arrow = useAnimatedStyle(() => {
+    const progress = Math.min(1, -offset.value / REPLY_SWIPE);
+    return { opacity: progress, transform: [{ scale: 0.6 + 0.4 * progress }] };
+  });
+  return (
+    <GestureDetector gesture={pan}>
+      <View>
+        <Animated.View style={[styles.replyArrow, arrow]} pointerEvents="none">
+          <Symbol name="arrowshape.turn.up.left.fill" size={16} color={p.secondaryLabel} />
+        </Animated.View>
+        <Animated.View style={follow}>{children}</Animated.View>
+      </View>
+    </GestureDetector>
+  );
+}
+
+/// `onReply` makes the draft a reply to this message (a swipe to the left); `onQuotePress` brings
+/// the message a reply answers into view; `flashing` pulses the bubble once it is there.
+export function MessageRow({
+  row,
+  bots,
+  isGroup,
+  onReply,
+  onQuotePress,
+  flashing,
+}: {
+  row: Extract<Row, { type: "message" }>;
+  bots: Map<string, Bot>;
+  isGroup: boolean;
+  onReply?: () => void;
+  onQuotePress?: (messageID: string) => void;
+  flashing?: boolean;
+}) {
+  const held = row.message.queued === true;
   useLanguage();
   const p = usePalette();
   const paneWidth = usePaneWidth();
   const { message, groupStart, groupEnd, showsName } = row;
+  const quote = message.body.kind === "text" ? message.body.reply_to : undefined;
+  const pulse = useSharedValue(1);
+  useEffect(() => {
+    if (!flashing) return;
+    pulse.value = withSequence(withTiming(0.35, { duration: 260 }), withTiming(1, { duration: 260 }), withTiming(0.35, { duration: 260 }), withTiming(1, { duration: 260 }));
+  }, [flashing, pulse]);
+  const pulsing = useAnimatedStyle(() => ({ opacity: pulse.value }));
   const isYou = message.author.kind === "you";
   const bot = message.author.kind === "bot" ? bots.get(message.author.bot_id) : undefined;
   const text = message.body.kind === "text" ? message.body.text : "";
@@ -135,7 +220,9 @@ export function MessageRow({ row, bots, isGroup }: { row: Extract<Row, { type: "
   // Attachments and the text both fit that width.
   const columnWidth = Math.min(Math.floor(paneWidth * 0.8), BUBBLE_COLUMN_MAX);
   const attachmentWidth = columnWidth - 26 - (showsAvatar ? AVATAR + GUTTER : 0);
+  const quoteName = quote ? quoteAuthorName(quote.author, bots) : "";
   return (
+    <SwipeToReply onReply={onReply}>
     <View style={[styles.messageRow, { paddingTop: groupStart ? 14 : 3 }, isYou ? styles.messageRowYou : styles.messageRowBot]}>
       {showsAvatar && <View style={{ width: AVATAR + GUTTER, alignSelf: "flex-end" }}>{groupEnd && <BotAvatar bot={bot} size={AVATAR} />}</View>}
       <View style={[styles.bubbleColumn, { maxWidth: columnWidth }, isYou && styles.bubbleColumnYou]}>
@@ -144,10 +231,26 @@ export function MessageRow({ row, bots, isGroup }: { row: Extract<Row, { type: "
             {bot?.name ?? t("Bot")}
           </Text>
         )}
-        <View
+        {quote && (
+          <Pressable
+            onPress={() => onQuotePress?.(quote.message_id)}
+            hitSlop={6}
+            style={[styles.quote, isYou && styles.quoteYou]}
+            accessibilityRole="button"
+            accessibilityLabel={t("In reply to {name}: {text}", { name: quoteName, text: quote.text })}
+          >
+            <Symbol name="arrowshape.turn.up.left.fill" size={10} color={p.tertiaryLabel} />
+            <Text style={[styles.quoteText, { color: p.secondaryLabel }]} numberOfLines={1}>
+              <Text style={styles.quoteName}>{quoteName}:</Text> {quote.text}
+            </Text>
+          </Pressable>
+        )}
+        <Animated.View
           style={[
             styles.bubble,
             isYou ? { backgroundColor: p.userBubble, borderBottomRightRadius: groupEnd ? 6 : 18 } : { backgroundColor: failed ? "rgba(255,59,48,0.14)" : p.botBubble, borderBottomLeftRadius: groupEnd ? 6 : 18 },
+            pulsing,
+            held && styles.held,
           ]}
         >
           {attachments.length > 0 && <AttachmentBlock attachments={attachments} onUserBubble={isYou} maxWidth={attachmentWidth} />}
@@ -157,9 +260,21 @@ export function MessageRow({ row, bots, isGroup }: { row: Extract<Row, { type: "
               <Symbol name="exclamationmark.triangle.fill" size={11} color={p.red} />
             </View>
           )}
-        </View>
+        </Animated.View>
+        {held && (
+          <Pressable
+            onPress={() => engine.sendNow(message.chat_id, message.id).catch((error) => Alert.alert(t("Could not send now"), error instanceof Error ? error.message : String(error)))}
+            hitSlop={8}
+            style={styles.sendNow}
+            accessibilityRole="button"
+            accessibilityHint={t("Have the bot read this now. A command it is running moves to the background.")}
+          >
+            <Text style={[styles.sendNowText, { color: p.tint }]}>{t("Send now")}</Text>
+          </Pressable>
+        )}
       </View>
     </View>
+    </SwipeToReply>
   );
 }
 
@@ -564,6 +679,15 @@ const styles = StyleSheet.create({
   bubbleColumn: { maxWidth: "80%", alignItems: "flex-start" },
   bubbleColumnYou: { alignItems: "flex-end" },
   author: { fontSize: Font.author, fontWeight: "600", marginLeft: 12, marginBottom: 2 },
+  quote: { flexDirection: "row", alignItems: "center", gap: 4, maxWidth: "100%", marginHorizontal: 6, marginBottom: 3 },
+  quoteYou: { alignSelf: "flex-end" },
+  quoteText: { flexShrink: 1, fontSize: 12 },
+  quoteName: { fontWeight: "600" },
+  replyArrow: { position: "absolute", right: 18, top: 0, bottom: 0, justifyContent: "center" },
+  // Held for the bot's next step: the bubble waits, dimmed, over Send now.
+  held: { opacity: 0.55 },
+  sendNow: { alignSelf: "flex-end", marginTop: 4, marginRight: 6 },
+  sendNowText: { fontSize: 13, fontWeight: "600" },
   bubble: { borderRadius: 18, paddingHorizontal: 13, paddingVertical: 9, gap: 2 },
   bubbleFooter: { flexDirection: "row", justifyContent: "flex-end", alignItems: "center" },
   centered: { alignItems: "center", paddingHorizontal: INSET },

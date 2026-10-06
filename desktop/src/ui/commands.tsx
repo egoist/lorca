@@ -93,6 +93,17 @@ export const commandTable: Command[] = [
   { id: "pinChat", title: () => L("Pin Chat"), accelerator: "CmdOrCtrl+P", enabled: chatSelected },
   { id: "stopResponding", title: () => L("Stop Responding"), accelerator: "CmdOrCtrl+.", enabled: chatSelected },
   {
+    // The Mac's ⌃B has no counterpart here: Ctrl+B toggles the sidebar.
+    id: "runInBackground",
+    title: () => L("Run Command in Background"),
+    enabled: () => {
+      const chat = selectedChat();
+      if (!chat) return false;
+      track.chat(chat.id);
+      return store.foregroundCommands(chat.id).length > 0;
+    },
+  },
+  {
     id: "deleteChat",
     title: () => {
       const chat = selectedChat();
@@ -207,7 +218,7 @@ function menuBar(window: "main" | "other"): MenuItemSpec[] {
       label: L("View"),
       submenu: [at("palette"), separator, at("toggleSidebar"), at("toggleInspector"), separator, at("scrollToLatest"), separator, at("fullScreen")],
     },
-    { label: L("Chat"), submenu: [at("addBot"), at("renameChat"), at("pinChat"), separator, at("stopResponding"), separator, at("deleteChat")] },
+    { label: L("Chat"), submenu: [at("addBot"), at("renameChat"), at("pinChat"), separator, at("stopResponding"), at("runInBackground"), separator, at("deleteChat")] },
     { label: L("Window"), submenu: [{ role: "minimize", label: L("Minimize") }, { role: "zoom", label: L("Zoom") }] },
     { label: "Debug", submenu: [at("simulateOffline"), at("replayMock"), separator, at("showOnboarding")] },
     { label: L("Help"), submenu: [at("help"), at("architecture"), ...updates, separator, at("about")] },

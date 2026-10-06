@@ -1,8 +1,9 @@
-// Custom providers as the CLI sends them: in the account's provider statuses, and as a bot's
-// provider.
+// What the CLI sends, as the app reads it: custom providers in the account's provider statuses and
+// as a bot's provider, and a command's card.
 
 import { expect, test } from "bun:test";
-import { toBot, toCustomModel, toProviders, type WireBot } from "./wire";
+import { runsInForeground } from "./models";
+import { toBot, toCustomModel, toMessage, toProviders, type WireBot } from "./wire";
 
 test("statuses keep custom providers after the built-in ones and leave out unknown kinds", () => {
   const providers = toProviders([
@@ -58,4 +59,27 @@ test("a bot keeps its custom provider, and one this build does not know runs as 
   expect(toBot(wire)).toMatchObject({ provider: "custom:openrouter", model: "qwen3:8b", thinking: "low" });
   expect(toBot({ ...wire, provider: "custom:gone", model: null, thinking: "" })).toMatchObject({ provider: "custom:gone", model: undefined, thinking: undefined });
   expect(toBot({ ...wire, provider: "mistral" }).provider).toBe("deepseek");
+});
+
+test("Run in Background is offered while the bot's call waits on a command that is not in the background yet", () => {
+  const row = (isRunning: boolean, run: Record<string, unknown>) =>
+    toMessage({
+      id: "m1",
+      chat_id: "c1",
+      author: { kind: "bot", bot_id: "b1" },
+      body: { kind: "tool", name: "bash", summary: "Running", is_running: isRunning, run: { session_id: "bash-1a2b3c", command: "npm run dev", state: "running", ...run } },
+      state: { kind: "complete" },
+      created_at: 1,
+    });
+  const waitedOn = row(true, {});
+  expect(waitedOn.body.kind === "tool" && waitedOn.body.tool.run?.background).toBe(false);
+  expect(runsInForeground(waitedOn)).toBe(true);
+  const sent = row(false, { background: true });
+  expect(sent.body.kind === "tool" && sent.body.tool.run?.background).toBe(true);
+  expect(runsInForeground(sent)).toBe(false);
+  // Started in the background, during its first two seconds.
+  expect(runsInForeground(row(true, { background: true }))).toBe(false);
+  // Its call returned; the bot is no longer waiting on it.
+  expect(runsInForeground(row(false, {}))).toBe(false);
+  expect(runsInForeground(row(true, { state: "checking", session_id: null }))).toBe(false);
 });

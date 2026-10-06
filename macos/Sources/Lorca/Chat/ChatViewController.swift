@@ -54,7 +54,9 @@ final class ChatViewController: NSViewController {
         jumpButton.isHidden = true
         jumpButton.translatesAutoresizingMaskIntoConstraints = false
 
-        composer.onSend = { [weak self] text, attachments, mentions in self?.send(text, attachments: attachments, mentions: mentions) }
+        composer.onSend = { [weak self] text, attachments, mentions, replyTo in
+            self?.send(text, attachments: attachments, mentions: mentions, replyTo: replyTo)
+        }
         composer.onStop = { [weak self] in self?.stopResponding(nil) }
         // The composer floats over the transcript, as on the phone: the scroll view runs to
         // the bottom of the window and keeps an inset the height of the composer, so the last
@@ -588,10 +590,10 @@ final class ChatViewController: NSViewController {
     /// Set by the split view so a message that moves to a new group chat opens it.
     var onRedirect: ((Chat.ID) -> Void)?
 
-    private func send(_ text: String, attachments: [OutgoingAttachment], mentions: [Bot.ID]) {
+    private func send(_ text: String, attachments: [OutgoingAttachment], mentions: [Bot.ID], replyTo: Message.ID?) {
         guard let chatID else { return }
         isPinnedToBottom = true
-        let destination = store.send(text, attachments: attachments, mentions: mentions, in: chatID)
+        let destination = store.send(text, attachments: attachments, mentions: mentions, replyTo: replyTo, in: chatID)
         composer.isResponding = store.isResponding(in: chatID)
         if destination != chatID { onRedirect?(destination) }
     }
@@ -600,10 +602,64 @@ final class ChatViewController: NSViewController {
         scrollToBottom(animated: true)
     }
 
+    /// Makes the draft a reply to `message`, from the bubble's Reply.
+    private func startReply(to message: Message) {
+        guard let quote = ReplyQuote(quoting: message) else { return }
+        composer.reply(to: message.id, name: authorName(of: quote.author), text: quote.text)
+        composer.focus()
+    }
+
+    /// Who wrote a quoted message, as a reply's quote names them.
+    private func authorName(of author: Message.Author) -> String {
+        switch author {
+        case .you: L("You")
+        case let .bot(botID): store.bot(botID)?.name ?? L("Bot")
+        case .system: "Lorca"
+        }
+    }
+
+    /// Brings a quoted message into view and pulses its bubble. One on a page not loaded yet
+    /// stays where it is.
+    private func reveal(_ messageID: Message.ID) {
+        guard let row = rows.firstIndex(where: { $0.messageID == messageID }) else {
+            NSSound.beep()
+            return
+        }
+        scrollIntoView(row: row)
+        isPinnedToBottom = false
+        (tableView.view(atColumn: 0, row: row, makeIfNecessary: false) as? MessageCellView)?.flash()
+    }
+
     @objc func stopResponding(_ sender: Any?) {
         guard let chatID else { return }
         store.stopResponding(in: chatID)
         composer.isResponding = false
+    }
+
+    /// Run Command in Background (⌃B): every command in the chat that a bot's call still waits
+    /// on goes to the background, and the calls return.
+    @objc func runCommandsInBackground(_ sender: Any?) {
+        guard let chatID else { return }
+        for message in store.foregroundCommands(in: chatID) {
+            Task { @MainActor in
+                do {
+                    try await store.sendCommandToBackground(chatID: chatID, messageID: message.id)
+                } catch {
+                    NSSound.beep()
+                }
+            }
+        }
+    }
+}
+
+extension ChatViewController: NSMenuItemValidation {
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(runCommandsInBackground(_:)) {
+            // Disabled, ⌃B stays the composer's.
+            guard let chatID else { return false }
+            return !store.foregroundCommands(in: chatID).isEmpty
+        }
+        return true
     }
 }
 
@@ -770,14 +826,11 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
             guard let message = message(for: id) else { return "" }
             switch message.body {
             case .text:
-                let author: String
-                switch message.author {
-                case .you: author = L("You")
-                case let .bot(botID): author = store.bot(botID)?.name ?? L("Bot")
-                case .system: author = "Lorca"
-                }
                 let words = layout.rendered(for: message).plainText
-                return "\(author): \(words.isEmpty ? Attachment.summary(message.attachments) : words)"
+                let said = "\(authorName(of: message.author)): \(words.isEmpty ? Attachment.summary(message.attachments) : words)"
+                let held = message.queued ? " \(L("Waiting for the bot to finish its step."))" : ""
+                guard let quote = message.replyTo else { return said + held }
+                return "\(said) \(L("In reply to %@: %@", authorName(of: quote.author), quote.text))\(held)"
             case let .tool(tool) where tool.run != nil:
                 return CommandCellView.spokenText(run: tool.run!, botName: botName(of: message))
             case .tool, .handoff:
@@ -840,8 +893,12 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
                     avatarContent: AvatarView.content(for: message.author, store: store),
                     segments: layout.rendered(for: message).segments,
                     attachments: items,
+                    quote: message.replyTo.map { (name: authorName(of: $0.author), text: $0.text) },
                     metrics: metrics
                 )
+                messageCell.onReply = message.canBeQuoted ? { [weak self] in self?.startReply(to: message) } : nil
+                messageCell.onQuoteClick = message.replyTo.map { quote in { [weak self] in self?.reveal(quote.messageID) } }
+                messageCell.onSendNow = { [weak self] in self?.store.sendNow(message.id, in: chat.id) }
 
             case let .tool(tool) where tool.run != nil:
                 guard let commandCell = cell as? CommandCellView, let run = tool.run else { return }

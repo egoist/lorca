@@ -50,6 +50,7 @@ const paletteCommands: { id: string; symbol: string; keywords: string }[] = [
   { id: "renameChat", symbol: "pencil", keywords: "title name" },
   { id: "pinChat", symbol: "pin", keywords: "unpin favorite" },
   { id: "stopResponding", symbol: "stop.circle", keywords: "cancel interrupt" },
+  { id: "runInBackground", symbol: "terminal", keywords: "detach server task" },
   { id: "scrollToLatest", symbol: "arrow.down.to.line", keywords: "bottom newest jump" },
   { id: "toggleSidebar", symbol: "sidebar.leading", keywords: "show hide" },
   { id: "toggleInspector", symbol: "sidebar.trailing", keywords: "show hide details" },

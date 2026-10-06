@@ -57,7 +57,7 @@ impl OpenAiResponsesProvider {
             max_retry_delay_ms: DEFAULT_MAX_RETRY_DELAY_MS,
             thinking_level: None,
             info,
-            client: reqwest::Client::new(),
+            client: lorca_tls::client(),
         }
     }
 

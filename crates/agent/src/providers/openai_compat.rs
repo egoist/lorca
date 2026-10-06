@@ -57,7 +57,7 @@ impl OpenAiCompatProvider {
             thinking_level: None,
             info: models::find(provider_id, model),
             prompt_cache_key: true,
-            client: reqwest::Client::new(),
+            client: lorca_tls::client(),
         }
     }
 

@@ -32,12 +32,18 @@ A command shows in the chat as a card only while it needs you: while Auto-review
 
 Every command the chat's bots have running shows under **Running tasks**, including the ones a bot is still dealing with. While a chat has one, a terminal button sits in the chat's toolbar, beside **⋯** on a phone; in the desktop app, a badge on it counts them when there are two or more. It opens the list: what each command does, who runs it, and for how long. The desktop app shows each command, its latest output, and **Stop** right in the list; on a phone, tap a command for them. **Stop** ends that command alone; the bot hears that it stopped and carries on. A command shows there once it has run for two seconds, so quick ones never do.
 
+## Servers and long builds
+
+A bot starts a dev server, a file watcher, or a long build in the background. It reads the command's first two seconds of output, so a server that fails to start or says where it listens still reaches it, then goes on with its work, and the command keeps running after the bot's turn ends. It shows under **Running tasks** rather than in the chat, unless it asks a question. **Stop** in the desktop app's composer leaves it running; stop it from Running tasks. It isn't stopped for being quiet either. When it ends by itself, say a server crashed or a build finished, the bot hears how it went and carries on. On Windows, commands don't run in the background.
+
+You can send one there yourself. While the bot is still waiting on a command, **Run in Background** sits beside **Stop** under **Running tasks**: the bot goes on with its work, and the command keeps running as if the bot had started it in the background. In the desktop app, **Chat › Run Command in Background** does the same for every such command in the chat, with **⌃B** on a Mac.
+
 ## When a command asks for input
 
 Each command runs in a terminal of its own, so `sudo`, `ssh`, a key's passphrase, or a `[Y/n]` can ask for an answer. A command that stops at a question, or prints nothing for 20 seconds, doesn't hold up the bot: its turn goes on, and the bot answers what it knows. The rest is yours, on the command's card.
 
 - **Answer** from the card, on any of your Devices. What you type goes straight to the command. It is never saved in the chat, and the terminal doesn't echo it, so the bot doesn't read it back. Bots are told to leave passwords and one-time codes to you. When the command finishes, the bot hears how it went and carries on.
-- **Stop** from the card or from Running tasks. **Stop** in the desktop app's composer ends the whole turn, its commands included.
+- **Stop** from the card or from Running tasks. **Stop** in the desktop app's composer ends the whole turn, its commands included, except those running in the background.
 
 Anything a bot types into a command goes through [Auto-review](/docs/auto-review) first, like a new command. A command still waiting stops by itself after 30 minutes without output, when Lorca quits, and when its chat is deleted. On Windows, commands get no input.
 

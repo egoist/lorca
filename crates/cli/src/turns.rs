@@ -244,6 +244,8 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
         last_flush: std::time::Instant::now(),
     })));
     let steering = (!chat.meta.is_group()).then(|| AgentMessageQueue::new(QueueMode::All));
+    // Send now cuts the step short for a message the queue holds.
+    let interrupt = steering.is_some().then(lorca_agent::StepInterrupt::new);
     let hooks = Arc::new(TurnHooks {
         app: app.clone(),
         chat_id: chat.meta.id.clone(),
@@ -264,6 +266,7 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
         sink: Some(sink.clone()),
         retry: Some(RetryPolicy::default()),
         request: lorca_agent::RequestOptions::default().with_session_id(&chat.meta.id),
+        interrupt: interrupt.clone(),
     };
 
     // Events reach the transcript through the sink, in order with the tools' own writes.
@@ -271,6 +274,9 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
     drop(_rx);
     if let Some(queue) = &steering {
         app.register_steering_queue(&chat.meta.id, &job.id, queue.clone());
+    }
+    if let Some(interrupt) = &interrupt {
+        app.register_step_interrupt(&chat.meta.id, &job.id, interrupt.clone());
     }
     let mut failed = false;
     let mut recovered = false;
@@ -318,10 +324,13 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
     }
     if steering.is_some() {
         app.unregister_steering_queue(&chat.meta.id, &job.id);
+        app.unregister_step_interrupt(&chat.meta.id, &job.id);
     }
-    // Stop ends what the bot left running in the chat too; a turn that ends on its own does not.
+    // Stop ends what the bot left running in the chat too, and what the user sent meanwhile no
+    // longer waits for a step; a turn that ends on its own leaves both.
     if cancel.is_cancelled() {
         app.shell_sessions.stop_chat(&chat.meta.id);
+        app.unqueue_chat(&chat.meta.id);
     }
     let mut state = sink.0.lock().unwrap();
     state.finish();
@@ -429,13 +438,14 @@ fn convert_with_compaction(messages: &[AgentMessage]) -> Vec<LlmMessage> {
 /// to the transcript a second time.
 fn steering_message(
     app: &App,
+    bot: &Bot,
     message: &Message,
     workdir: &std::path::Path,
     pixels: bool,
 ) -> Option<AgentMessage> {
-    let (Author::You, Body::Text { text, attachments, mentions }) = (&message.author, &message.body) else { return None };
+    let (Author::You, Body::Text { text, attachments, mentions, reply_to }) = (&message.author, &message.body) else { return None };
     let timestamp = (message.promoted_at.unwrap_or(message.created_at) * 1000.0) as u64;
-    let text = with_mention_ids(app, text, mentions);
+    let text = user_words(app, bot, text, mentions, reply_to.as_ref());
     if attachments.is_empty() {
         return Some(user(&text, timestamp));
     }
@@ -450,6 +460,25 @@ fn steering_message(
 }
 
 const STEERING_MESSAGE_KIND: &str = "lorca_steering";
+
+/// Send now: the direct chat's turn reads the messages it holds at once. The commands it runs go
+/// to the background and run on, its reply in progress stops where it got to, its other tools are
+/// cancelled, and its next step starts from what the user said. False when nothing held the
+/// message any more.
+pub fn send_now(app: &Arc<App>, chat_id: &str, message_id: &str) -> Result<bool, String> {
+    let message = app.message(chat_id, message_id).ok_or("Unknown message")?;
+    if message.author != Author::You || !message.queued {
+        return Ok(false);
+    }
+    let Some(interrupt) = app.step_interrupt(chat_id) else {
+        // The turn that held it has ended; the message's own turn reads it.
+        app.set_queued(chat_id, message_id, false);
+        return Ok(false);
+    };
+    app.shell_sessions.background_chat(app, chat_id);
+    interrupt.interrupt();
+    Ok(true)
+}
 
 /// A new message from the user reached this Runner. The direct-chat loop that owns the chat
 /// takes it as steering, and the questions the chat's turn waits on are dismissed: the user
@@ -472,6 +501,8 @@ pub(crate) fn steer_message(app: &App, message: &Message) -> bool {
     }
     let Some(queue) = app.steering_queue(&message.chat_id) else { return false };
     let Ok(data) = serde_json::to_value(message) else { return false };
+    // Held before it is queued, so the turn's promotion, which clears it, comes after.
+    app.set_queued(&message.chat_id, &message.id, true);
     queue.push(AgentMessage::Custom {
         kind: STEERING_MESSAGE_KIND.into(),
         data,
@@ -506,7 +537,7 @@ async fn materialize_steering_messages(
         if pixels {
             crate::files::make_images(app, attachments).await;
         }
-        if let Some(message) = steering_message(app, &chat_message, workdir, pixels) {
+        if let Some(message) = steering_message(app, bot, &chat_message, workdir, pixels) {
             out.push(message);
         }
     }
@@ -770,6 +801,7 @@ async fn memory_flush(
         sink: None,
         retry: Some(RetryPolicy::default()),
         request: lorca_agent::RequestOptions::default().with_session_id(&chat.meta.id),
+        interrupt: None,
     };
     let (tx, _rx) = mpsc::channel::<AgentEvent>(1);
     drop(_rx);
@@ -1444,11 +1476,14 @@ fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job, store: &Memo
                 prompt.push_str(&format!("- {}{marker}{owner} · runs on {host}\n", member.name));
             }
         }
+        if let Some(purpose) = chat.meta.purpose() {
+            prompt.push_str(&format!("\nThe user describes what this group is for:\n{purpose}\n"));
+        }
         prompt.push_str(
             "\nEveryone here, including the user, reads every message. After each new message the bots take turns in that \
              order, and a turn is yours now. Other bots' messages appear as \"[Name]: …\".\n\
-             - Speak when the new messages ask something of you, name you with @, or need what only you know. \
-             Otherwise answer with exactly PASS and nothing else.\n\
+             - Speak when the new messages ask something of you, name you with @, reply to your message, or need what only \
+             you know. Otherwise answer with exactly PASS and nothing else.\n\
              - When a message names other bots with @ and not you, PASS.\n\
              - One message per turn, short, addressed to the group. Do not narrate or repeat what others said.\n\
              - Teammates in this chat read it: talk to them here. message_bot is only for bots outside this chat.\n\
@@ -1530,7 +1565,8 @@ fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job, store: &Memo
              waiting and that they can type it into the command's card in this chat, then end your turn. Never ask for it in \
              a message: what they type in the card goes straight to the command and never reaches you or the chat. When a \
              command you left running ends by itself, you get a turn to hear how it went and carry on; bash_output shows \
-             more of what it printed.\n",
+             more of what it printed. Start a server, a watcher, or a long build with background: true, never with & or \
+             nohup: it keeps running after your turn, the user can see and stop it, and you hear when it ends.\n",
         );
     }
     if let Some(runner) = runner {
@@ -1775,12 +1811,15 @@ fn transcript_bounded(app: &App, chat: &Chat, bot: &Bot, workdir: &std::path::Pa
         }
         let timestamp = (message.promoted_at.unwrap_or(message.created_at) * 1000.0) as u64;
         match (&message.author, &message.body) {
-            (Author::You, Body::Text { text, attachments, mentions }) if attachments.is_empty() => out.push(user(&with_mention_ids(app, text, mentions), timestamp)),
-            (Author::You, Body::Text { text, attachments, mentions }) => {
+            (Author::You, Body::Text { text, attachments, mentions, reply_to }) if attachments.is_empty() => {
+                out.push(user(&user_words(app, bot, text, mentions, reply_to.as_ref()), timestamp))
+            }
+            (Author::You, Body::Text { text, attachments, mentions, reply_to }) => {
                 // A file is named by its path in the workspace; an image is shown as well.
                 let mut content = Vec::new();
-                if !text.is_empty() {
-                    content.push(ContentPart::text(with_mention_ids(app, text, mentions)));
+                let words = user_words(app, bot, text, mentions, reply_to.as_ref());
+                if !words.is_empty() {
+                    content.push(ContentPart::text(words));
                 }
                 for attachment in attachments {
                     content.extend(crate::files::content_parts(app, attachment, workdir, pixels));
@@ -1857,6 +1896,20 @@ fn transcript_bounded(app: &App, chat: &Chat, bot: &Bot, workdir: &std::path::Pa
 
 fn user(text: &str, timestamp: u64) -> AgentMessage {
     AgentMessage::User(UserMessage { content: vec![ContentPart::text(text)], timestamp })
+}
+
+/// The user's words as `bot` reads them: the message they answer, quoted, then the text with
+/// the ids of the bots it mentions.
+fn user_words(app: &App, bot: &Bot, text: &str, mentions: &[String], reply_to: Option<&ReplyTo>) -> String {
+    let text = with_mention_ids(app, text, mentions);
+    let Some(reply) = reply_to else { return text };
+    let whose = match &reply.author {
+        Author::Bot { bot_id } if bot_id == &bot.id => "your message".to_string(),
+        Author::Bot { bot_id } => format!("{}'s message", name_of(app, bot_id)),
+        _ => "their earlier message".to_string(),
+    };
+    let quote = format!("[Replying to {whose}: \"{}\"]", reply.text);
+    if text.is_empty() { quote } else { format!("{quote}\n{text}") }
 }
 
 /// The user's words as a bot reads them: the first `@Name` of each bot the message mentions
@@ -3134,7 +3187,7 @@ mod tests {
 
     fn chat(id: &str, kind: &str, title: Option<&str>, bot_ids: &[&str]) -> Chat {
         Chat {
-            meta: ChatMeta { id: id.into(), kind: kind.into(), title: title.map(str::to_string), bot_ids: bot_ids.iter().map(|b| b.to_string()).collect(), owner_bot_id: None, is_pinned: false, created_at: 0.0 },
+            meta: ChatMeta { id: id.into(), kind: kind.into(), title: title.map(str::to_string), bot_ids: bot_ids.iter().map(|b| b.to_string()).collect(), owner_bot_id: None, description: None, is_pinned: false, created_at: 0.0 },
             unread_count: 0,
             usage: None,
             compactions: Vec::new(),
@@ -3146,6 +3199,114 @@ mod tests {
         message.created_at = at;
         message.state = MessageState::Complete;
         message
+    }
+
+    /// A bot reads the quote a reply carries before the user's words, naming whose message it was.
+    #[test]
+    fn a_bot_reads_what_the_user_replies_to() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        let (chef, scout) = (bot("b1", "Chef"), bot("b2", "Scout"));
+        app.state.lock().unwrap().bots.extend([chef.clone(), scout.clone()]);
+        let quote = |author: Author| ReplyTo { message_id: "m".into(), author, text: "Ship on Friday?".into() };
+
+        let reply = quote(Author::Bot { bot_id: "b1".into() });
+        assert_eq!(user_words(app, &chef, "yes", &[], Some(&reply)), "[Replying to your message: \"Ship on Friday?\"]\nyes");
+        assert_eq!(user_words(app, &scout, "yes", &[], Some(&reply)), "[Replying to Chef's message: \"Ship on Friday?\"]\nyes");
+        let own = quote(Author::You);
+        assert_eq!(user_words(app, &chef, "", &[], Some(&own)), "[Replying to their earlier message: \"Ship on Friday?\"]");
+        assert_eq!(user_words(app, &chef, "ask @Scout", &["b2".into()], None), "ask @Scout (id b2)");
+
+        let dm = chat("chat", "dm", None, &["b1"]);
+        app.state.lock().unwrap().chats.push(dm.clone());
+        let mut message = said("chat", Author::You, "yes", 1.0);
+        message.body = Body::Text { text: "yes".into(), attachments: Vec::new(), mentions: Vec::new(), reply_to: Some(reply) };
+        app.upsert_message(message, false);
+        let transcript = transcript_for(app, &dm, &chef, &scratch.1);
+        let Some(AgentMessage::User(UserMessage { content, .. })) = transcript.last() else { panic!("{transcript:?}") };
+        assert!(matches!(&content[0], ContentPart::Text { text, .. } if text.starts_with("[Replying to your message:")), "{content:?}");
+    }
+
+    fn room_job(chat_id: &str, bot_id: &str) -> Job {
+        Job {
+            id: "job".into(),
+            chat_id: chat_id.into(),
+            bot_id: bot_id.into(),
+            kind: "room_turn".into(),
+            trigger_message_id: String::new(),
+            routine_id: None,
+            check: None,
+            requested_by: "dev".into(),
+            from_bot_id: None,
+            hops: 0,
+            round: 1,
+            is_winding_down: false,
+            setup: None,
+            created_at: 0.0,
+        }
+    }
+
+    /// Every member reads what the group is for, and a direct chat has no such line.
+    #[test]
+    fn a_groups_description_reaches_every_members_prompt() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        let (chef, scout) = (bot("b1", "Chef"), bot("b2", "Scout"));
+        let mut group = chat("room", "group", Some("Launch room"), &["b1", "b2"]);
+        group.meta.description = Some("  Plan the October launch and keep the checklist current.  ".into());
+        let dm = chat("dm", "dm", None, &["b1"]);
+        {
+            let mut state = app.state.lock().unwrap();
+            state.bots.extend([chef.clone(), scout.clone()]);
+            state.chats.extend([group.clone(), dm.clone()]);
+        }
+        for member in [&chef, &scout] {
+            let store = MemoryStore::for_bot(&app.config.home, member);
+            let prompt = system_prompt(app, &group, member, &room_job("room", &member.id), &store, None, &[]);
+            assert!(prompt.contains("The user describes what this group is for:\nPlan the October launch and keep the checklist current.\n"), "{prompt}");
+        }
+
+        group.meta.description = Some("   ".into());
+        let store = MemoryStore::for_bot(&app.config.home, &chef);
+        assert!(!system_prompt(app, &group, &chef, &room_job("room", "b1"), &store, None, &[]).contains("what this group is for"));
+        assert!(!system_prompt(app, &dm, &chef, &room_job("dm", "b1"), &store, None, &[]).contains("what this group is for"));
+    }
+
+    /// A message the turn holds for its next step says so on every Device until the turn reads
+    /// it; Send now has the turn read it at once.
+    #[tokio::test]
+    async fn send_now_reads_a_held_message_at_once() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        {
+            let mut state = app.state.lock().unwrap();
+            state.bots.push(bot("b1", "Chef"));
+            state.chats.push(chat("chat", "dm", None, &["b1"]));
+        }
+        app.upsert_message(said("chat", Author::You, "run the checks", 1.0), false);
+        let queue = AgentMessageQueue::new(QueueMode::All);
+        app.register_steering_queue("chat", "job", queue.clone());
+        app.register_step_interrupt("chat", "job", lorca_agent::StepInterrupt::new());
+        let steer = said("chat", Author::You, "skip the slow suite", 2.0);
+        app.upsert_message(steer.clone(), false);
+
+        assert!(steer_message(app, &steer));
+        assert!(app.message("chat", &steer.id).unwrap().queued, "held for the next step");
+        assert_eq!(send_now(app, "chat", &steer.id), Ok(true));
+        // The loop reads it: the promotion lets go of it.
+        assert!(app.claim_steering_message("chat", &steer.id));
+        let read = app.message("chat", &steer.id).unwrap();
+        assert!(!read.queued && read.promoted_at.is_some());
+        assert_eq!(send_now(app, "chat", &steer.id), Ok(false), "nothing holds it any more");
+
+        // A turn that ended before it read one: Send now lets go of it for its own turn.
+        let late = said("chat", Author::You, "and the docs", 3.0);
+        app.upsert_message(late.clone(), false);
+        assert!(steer_message(app, &late));
+        app.unregister_steering_queue("chat", "job");
+        app.unregister_step_interrupt("chat", "job");
+        assert_eq!(send_now(app, "chat", &late.id), Ok(false));
+        assert!(!app.message("chat", &late.id).unwrap().queued);
     }
 
     #[tokio::test]
@@ -3998,6 +4159,123 @@ mod tests {
         assert!(app.shell_sessions.find("chat", "b1", session.id()).is_none());
     }
 
+    /// A server the bot starts in the background outlives its turn: its end, Stop in the chat,
+    /// and the idle limit leave it running and out of the transcript.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_background_command_outlives_stop_and_the_limits() {
+        use lorca_agent::tools::{BashSessions, BashTool};
+        let (scratch, chef) = chef_in_a_dm();
+        let app = &scratch.0;
+        let sessions: Arc<dyn BashSessions> = Arc::new(crate::shell::TurnSessions::new(app, "chat", "b1"));
+        let bash = BashTool::with_sessions(scratch.1.clone(), sessions).waiting_after(Duration::from_millis(300));
+        let card = |row: &Message| run_of(&app.message("chat", &row.id).unwrap()).unwrap();
+        let wait = |background: bool| json!({ "command": "sleep 60", "description": "Wait", "background": background });
+        app.shell_sessions.set_limits(crate::shell::Limits { idle: Duration::from_millis(900), max: 8 });
+
+        let mut turn = turn_state(app, &chef, "dev");
+        let (server, result) = call_tool(&mut turn, &bash, "call-1", json!({ "command": "echo listening; sleep 60", "description": "Serve", "background": true })).await;
+        let text = result.unwrap().text_content();
+        assert!(text.starts_with("listening\n") && text.contains("[Running in the background as session "), "{text}");
+        let (waiting, _) = call_tool(&mut turn, &bash, "call-2", wait(false)).await;
+        turn.finish();
+        assert_eq!((card(&server).state.as_str(), card(&server).handed_over), ("running", false), "Running tasks shows it, not the chat");
+        assert!(card(&waiting).handed_over);
+
+        // Silent past the idle limit, it runs on; Stop ends only the other.
+        row_when(app, &waiting.id, |run| run.outcome.as_deref() == Some("Stopped after 0.9 seconds without output")).await;
+        assert_eq!(card(&server).state, "running");
+        app.shell_sessions.set_limits(crate::shell::Limits::default());
+        let mut turn = turn_state(app, &chef, "dev");
+        let (waiting, _) = call_tool(&mut turn, &bash, "call-3", wait(false)).await;
+        crate::runtime::cancel_chat(app, "chat");
+        row_when(app, &waiting.id, |run| run.outcome.as_deref() == Some("Stopped")).await;
+        assert_eq!(card(&server).state, "running");
+
+        // Too many: every other command stops before a background one, and the one starting never.
+        app.shell_sessions.set_limits(crate::shell::Limits { idle: crate::shell::IDLE_LIMIT, max: 2 });
+        let (first, _) = call_tool(&mut turn, &bash, "call-4", wait(false)).await;
+        let (second, _) = call_tool(&mut turn, &bash, "call-5", wait(false)).await;
+        row_when(app, &first.id, |run| run.state == "stopped").await;
+        let (other, _) = call_tool(&mut turn, &bash, "call-6", wait(true)).await;
+        row_when(app, &second.id, |run| run.state == "stopped").await;
+        assert_eq!(card(&server).state, "running");
+        call_tool(&mut turn, &bash, "call-7", wait(true)).await.1.unwrap();
+        let stopped = row_when(app, &server.id, |run| run.state == "stopped").await;
+        assert_eq!(run_of(&stopped).unwrap().outcome.as_deref(), Some("Stopped to make room for a newer command (2 at most)"));
+        assert_eq!(card(&other).state, "running");
+        app.shell_sessions.shutdown(app);
+
+        // At a question its card shows, once no turn runs in the chat that could answer it.
+        app.shell_sessions.set_limits(crate::shell::Limits::default());
+        let lock = app.chat_lock("chat");
+        let turn_runs = lock.lock().await;
+        let mut turn = turn_state(app, &chef, "dev");
+        let command = "sleep 0.1; read -r -p 'Port 3000 is in use. Use another? (Y/n) ' x </dev/tty; echo port:$x; sleep 60";
+        let (asks, _) = call_tool(&mut turn, &bash, "call-8", json!({ "command": command, "description": "Serve", "background": true })).await;
+        turn.finish();
+        row_when(app, &asks.id, |run| run.state == "waiting").await;
+        assert!(!card(&asks).handed_over, "a turn may still answer it");
+        drop(turn_runs);
+        let asked = row_when(app, &asks.id, |run| run.handed_over).await;
+        assert_eq!(run_of(&asked).unwrap().prompt.as_deref(), Some("Port 3000 is in use. Use another? (Y/n)"));
+        app.shell_sessions.shutdown(app);
+
+        // One that ends by itself wakes its bot, as any command it left running does.
+        let mut turn = turn_state(app, &chef, "dev");
+        let (build, _) = call_tool(&mut turn, &bash, "call-9", json!({ "command": "sleep 2.5; echo built", "description": "Build", "background": true })).await;
+        let id = card(&build).session_id.unwrap();
+        assert!(card(&build).is_live());
+        row_when(app, &build.id, |run| run.state == "exited").await;
+        let job = crate::shell::wake_job(app, &app.shell_sessions, &id).expect("a command turn");
+        assert!(command_cue(app, &job).unwrap().contains("built"));
+    }
+
+    /// Run in Background on a command the bot is waiting on: its call returns, and from then on
+    /// it is a background command.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_user_sends_a_running_command_to_the_background() {
+        use lorca_agent::tools::{BashSessions, BashTool};
+        let (scratch, chef) = chef_in_a_dm();
+        let app = &scratch.0;
+        let mut turn = turn_state(app, &chef, "dev");
+        let sessions: Arc<dyn BashSessions> = Arc::new(crate::shell::TurnSessions::new(app, "chat", "b1"));
+        let bash = BashTool::with_sessions(scratch.1.clone(), sessions);
+        let args = json!({ "command": "echo building; while true; do echo tick; sleep 0.1; done", "description": "Build" });
+        let send = async {
+            let row = tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    let running = app.messages("chat").into_iter().find(|m| run_of(m).is_some_and(|run| run.state == "running" && run.session_id.is_some()));
+                    if let Some(row) = running {
+                        return row;
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .expect("the command runs");
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            crate::api::dispatch(app, "bash.background", json!({ "chat_id": "chat", "message_id": row.id })).await
+        };
+        let ((row, result), sent) = tokio::join!(call_tool(&mut turn, &bash, "call-1", args), send);
+        assert_eq!(sent, Ok(json!({ "background": true })));
+        let text = result.unwrap().text_content();
+        assert!(text.starts_with("building\n") && text.contains("[The user sent the command to the background, where it runs on as session "), "{text}");
+        let card = || run_of(&app.message("chat", &row.id).unwrap()).unwrap();
+        assert_eq!((card().state.as_str(), card().background), ("running", true));
+        let Body::Tool { is_running, .. } = &app.message("chat", &row.id).unwrap().body else { panic!("a tool row") };
+        assert!(!is_running, "the call returned");
+
+        turn.finish();
+        assert!(!card().handed_over, "Running tasks shows it, not the chat");
+        crate::runtime::cancel_chat(app, "chat");
+        assert_eq!(card().state, "running", "Stop leaves it running");
+        app.shell_sessions.shutdown(app);
+        let late = crate::api::dispatch(app, "bash.background", json!({ "chat_id": "chat", "message_id": row.id })).await;
+        assert_eq!(late, Err("The command has already ended".to_string()));
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn input_the_bot_types_goes_through_auto_review() {
@@ -4278,7 +4556,7 @@ mod tests {
         );
 
         let mut message = said("chat", Author::You, "", 1.0);
-        message.body = Body::Text { text: "ask @Chef".into(), attachments: Vec::new(), mentions: vec!["b2".into()] };
+        message.body = Body::Text { text: "ask @Chef".into(), attachments: Vec::new(), mentions: vec!["b2".into()], reply_to: None };
         app.upsert_message(message, false);
         let messages = transcript_for(app, &dm, &scout, &scratch.1);
         assert!(matches!(&messages[0], AgentMessage::User(m) if m.content.first().and_then(ContentPart::as_text) == Some("ask @Chef (id b2)")));

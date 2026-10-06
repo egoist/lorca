@@ -277,6 +277,7 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
                     kind,
                     title: opt_string(&params, "title"),
                     owner_bot_id: opt_string(&params, "owner_bot_id").or_else(|| bot_ids.first().cloned()),
+                    description: opt_string(&params, "description").map(|text| text.trim().to_string()),
                     bot_ids,
                     is_pinned: false,
                     created_at: 0.0,
@@ -298,7 +299,15 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             let text = opt_string(&params, "text").unwrap_or_default();
             let mentions: Vec<String> = serde_json::from_value(params["mentions"].clone()).unwrap_or_default();
             let message =
-                runtime::send_user_message(app.clone(), &string(&params, "chat_id")?, &text, opt_string(&params, "message_id"), attachments, mentions)
+                runtime::send_user_message(
+                    app.clone(),
+                    &string(&params, "chat_id")?,
+                    &text,
+                    opt_string(&params, "message_id"),
+                    attachments,
+                    mentions,
+                    opt_string(&params, "reply_to"),
+                )
                     .map_err(|e| e.to_string())?;
             Ok(json!({ "message": message }))
         }
@@ -312,6 +321,22 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
         "chats.stop" => {
             runtime::cancel_chat(app, &string(&params, "chat_id")?);
             Ok(Value::Null)
+        }
+        // A message the direct chat's turn holds for its next step: read now. Here when the bot
+        // runs here, else sealed to its Runner.
+        "chats.send_now" => {
+            let chat_id = string(&params, "chat_id")?;
+            let message_id = string(&params, "message_id")?;
+            let chat = app.chat(&chat_id).ok_or("Unknown chat")?;
+            if chat.meta.is_group() {
+                return Err("Send now is for a direct chat".into());
+            }
+            let bot = chat.meta.bot_ids.first().and_then(|id| app.bot(id)).ok_or("The chat has no bot")?;
+            if app.this_device_id().as_deref() == Some(bot.runner_id.as_str()) {
+                #[cfg(feature = "runner")]
+                return crate::turns::send_now(app, &chat_id, &message_id).map(|sent| json!({ "sent": sent }));
+            }
+            requests::ask(app, &bot.runner_id, "chats.send_now", json!({ "chat_id": chat_id, "message_id": message_id })).await
         }
         #[cfg(feature = "runner")]
         "chats.compact" => {
@@ -352,6 +377,11 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
         "chats.rename" => {
             let title = params["title"].as_str().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
             app.rename_chat(&string(&params, "chat_id")?, title).map_err(|e| e.to_string())?;
+            Ok(Value::Null)
+        }
+        "chats.set_description" => {
+            let description = params["description"].as_str().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+            app.describe_chat(&string(&params, "chat_id")?, description).map_err(|e| e.to_string())?;
             Ok(Value::Null)
         }
         "chats.pin" => {
@@ -659,7 +689,7 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
 
         // A command running in its terminal: the user's answer goes to it from its card, or it
         // stops. Here when the bot runs here, else sealed to its Runner. The text is never kept.
-        "bash.stdin" | "bash.stop" => {
+        "bash.stdin" | "bash.stop" | "bash.background" => {
             let chat_id = string(&params, "chat_id")?;
             let message_id = string(&params, "message_id")?;
             let message = app.message(&chat_id, &message_id).ok_or("Unknown message")?;

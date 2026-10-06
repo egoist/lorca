@@ -99,7 +99,11 @@ impl Default for Pool {
 
 impl Pool {
     pub fn new() -> Self {
-        let http = mcp_http::Client::builder().timeout(std::time::Duration::from_secs(600)).build().unwrap_or_default();
+        let http = mcp_http::Client::builder()
+            .tls_backend_preconfigured(lorca_tls::client_config(&["h2", "http/1.1"]))
+            .timeout(std::time::Duration::from_secs(600))
+            .build()
+            .unwrap_or_default();
         Pool { servers: Mutex::new(HashMap::new()), generations: Mutex::new(HashMap::new()), connecting: Mutex::new(HashMap::new()), http, sign_ins: Mutex::new(HashMap::new()) }
     }
 

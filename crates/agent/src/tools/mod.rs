@@ -86,7 +86,7 @@ pub fn coding_tools_snippet() -> &'static str {
 /// The one-line summaries of `bash_input` and `bash_output`, beside [`coding_tools_snippet`].
 pub fn session_tools_snippet() -> &'static str {
     "bash_input: Type into a command bash left running (a password prompt, a [Y/n]). bash_output: Read more from a command \
-     bash left running."
+     bash left running or started in the background."
 }
 
 pub fn coding_tools_guidelines() -> &'static [&'static str] {

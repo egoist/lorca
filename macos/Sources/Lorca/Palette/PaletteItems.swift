@@ -39,6 +39,7 @@ enum PaletteIndex {
         (#selector(RootSplitViewController.renameChat(_:)), "pencil", "title name"),
         (#selector(RootSplitViewController.togglePinChat(_:)), "pin", "unpin favorite"),
         (#selector(ChatViewController.stopResponding(_:)), "stop.circle", "cancel interrupt"),
+        (#selector(ChatViewController.runCommandsInBackground(_:)), "terminal", "detach server task"),
         (#selector(ChatViewController.scrollToLatest(_:)), "arrow.down.to.line", "bottom newest jump"),
         (#selector(NSSplitViewController.toggleSidebar(_:)), "sidebar.leading", "show hide"),
         (#selector(RootSplitViewController.toggleInspector(_:)), "sidebar.trailing", "show hide details"),

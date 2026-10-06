@@ -54,7 +54,7 @@ impl ChatGptProvider {
             thinking_level: None,
             info: models::find("chatgpt", model),
             tool_images: ToolImages::InOutput,
-            client: reqwest::Client::new(),
+            client: lorca_tls::client(),
         }
     }
 

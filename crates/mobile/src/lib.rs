@@ -239,6 +239,7 @@ mod tests {
                 title: None,
                 bot_ids: Vec::new(),
                 owner_bot_id: None,
+                description: None,
                 is_pinned: false,
                 created_at: 1.0,
             },

@@ -20,7 +20,7 @@ export class ReplyEngine {
   private tasks = new Map<string, { cancelled: boolean }>();
   private working = new Map<string, string>();
   /** Messages typed during a mock turn, promoted together at its next tool or answer boundary. */
-  private steering = new Map<string, { prompt: string; chat: Chat }[]>();
+  private steering = new Map<string, { prompt: string; chat: Chat; messageID: string }[]>();
   private turnCount = 0;
 
   constructor(private readonly store: AppStore) {}
@@ -33,8 +33,19 @@ export class ReplyEngine {
     const task = this.tasks.get(chatID);
     if (task) task.cancelled = true;
     this.tasks.delete(chatID);
+    for (const held of this.steering.get(chatID) ?? []) this.store.setMockQueued(held.messageID, chatID, false);
     this.steering.delete(chatID);
     this.setWorking(undefined, chatID);
+  }
+
+  /** Send now: the mock turn drops its step and answers the messages it holds. */
+  sendNow(chatID: string): void {
+    const task = this.tasks.get(chatID);
+    const steered = task ? this.takeSteering(chatID) : undefined;
+    if (!task || !steered) return;
+    task.cancelled = true;
+    this.tasks.delete(chatID);
+    this.start(steered.prompt, steered.chat);
   }
 
   private setWorking(botID: string | undefined, chatID: string): void {
@@ -48,9 +59,10 @@ export class ReplyEngine {
     }
   }
 
-  respond(prompt: string, chat: Chat): void {
+  respond(prompt: string, chat: Chat, messageID: string): void {
     if (this.tasks.has(chat.id)) {
-      this.steering.set(chat.id, [...(this.steering.get(chat.id) ?? []), { prompt, chat }]);
+      this.steering.set(chat.id, [...(this.steering.get(chat.id) ?? []), { prompt, chat, messageID }]);
+      this.store.setMockQueued(messageID, chat.id, true);
       return;
     }
     this.start(prompt, chat);
@@ -83,6 +95,7 @@ export class ReplyEngine {
     this.steering.delete(chatID);
     const last = queued?.[queued.length - 1];
     if (!queued || !last) return undefined;
+    for (const held of queued) this.store.setMockQueued(held.messageID, chatID, false);
     return { prompt: queued.map((entry) => entry.prompt).join("\n"), chat: last.chat };
   }
 

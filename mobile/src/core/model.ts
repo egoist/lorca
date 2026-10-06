@@ -190,7 +190,7 @@ export const MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024;
 export const MAX_ATTACHMENTS = 10;
 
 export type Body =
-  | { kind: "text"; text: string; attachments?: Attachment[] }
+  | { kind: "text"; text: string; attachments?: Attachment[]; reply_to?: ReplyTo | null }
   | {
       kind: "tool";
       name: string;
@@ -238,6 +238,8 @@ export interface CommandRun {
   prompt?: string;
   /** The bot left the command to the user: its turn ended with the command still running, or it waits on the command at a question. */
   handed_over?: boolean;
+  /** It runs in the background: the bot started it there, or the user sent it. Stop in the chat leaves it running. */
+  background?: boolean;
   /** Its last lines, as the bottom of a terminal shows them. Never what was typed. */
   output?: string;
   /** The Runner it runs on, for the question: "Workbench". */
@@ -262,6 +264,13 @@ export function hasEnded(run: CommandRun): boolean {
 export function runsInTerminal(message: Message | undefined): boolean {
   const run = message?.body.kind === "tool" ? message.body.run : undefined;
   return !!run && isLive(run) && !!run.session_id;
+}
+
+/// A `bash` row whose command runs in its terminal while the bot's call still waits on it: Run in
+/// Background sends it there, and the call returns.
+export function runsInForeground(message: Message | undefined): boolean {
+  if (message?.body.kind !== "tool") return false;
+  return message.body.is_running && runsInTerminal(message) && !message.body.run?.background;
 }
 
 /// Whether a tool row shows as a command's card: while the command needs the user. That is while
@@ -297,6 +306,21 @@ export interface Message {
   created_at: number;
   /** Later model-context position when this message steered work already in flight. */
   promoted_at?: number;
+  /** A message of the user's the bot's turn holds for its next step; Send now has it read now. */
+  queued?: boolean;
+}
+
+/// A message quoted by the user's reply: who wrote it and how it opens, as the core keeps it with
+/// the reply, so the quote reads the same where the original has not loaded.
+export interface ReplyTo {
+  message_id: string;
+  author: Author;
+  text: string;
+}
+
+/// A finished text message, the user's or a bot's, which a reply can answer.
+export function canBeQuoted(message: Message): boolean {
+  return message.body.kind === "text" && message.state.kind === "complete" && message.author.kind !== "system";
 }
 
 export function isComplete(message: Message): boolean {
@@ -315,6 +339,8 @@ export interface ChatMeta {
   title?: string | null;
   bot_ids: string[];
   owner_bot_id?: string;
+  /// What a group is for, which every member reads in its system prompt.
+  description?: string | null;
   is_pinned: boolean;
   created_at: number;
 }

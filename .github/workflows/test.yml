@@ -71,7 +71,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # Every suite runs, so one failing on Windows does not hide the others.
-      - run: cargo test --locked --no-fail-fast -p lorca -p lorca-agent -p lorca-models -p lorca-provider-auth
+      - run: cargo test --locked --no-fail-fast -p lorca -p lorca-agent -p lorca-models -p lorca-provider-auth -p lorca-tls
 
   macos-app:
     name: macOS app

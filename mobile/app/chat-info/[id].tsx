@@ -128,8 +128,9 @@ export default function ChatInfoScreen() {
       )}
 
       {isGroup && (
-        <Section title={t("Name")}>
-          <FieldRow value={title} onChangeText={setTitle} placeholder={members.map((m) => m.name).join(", ")} onBlur={commitTitle} onSubmitEditing={commitTitle} returnKeyType="done" />
+        <Section>
+          <FieldRow label={t("Name")} value={title} onChangeText={setTitle} placeholder={members.map((m) => m.name).join(", ")} onBlur={commitTitle} onSubmitEditing={commitTitle} returnKeyType="done" textAlign="right" />
+          <Row title={t("Description")} subtitle={chat.description || undefined} subtitleLines={2} chevron onPress={() => router.push(`/chat-info/group-description/${chat.id}`)} />
         </Section>
       )}
 

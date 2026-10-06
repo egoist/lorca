@@ -1,5 +1,5 @@
-// The pane beside a chat, after the macOS app's InspectorViewController: the bots in the chat, and
-// for a DM the bot's profile, what it runs with (provider, model, thinking, the credential, and what
+// The pane beside a chat, after the macOS app's InspectorViewController: the bots in the chat, a
+// group's name and description, and for a DM the bot's profile, what it runs with (provider, model, thinking, the credential, and what
 // the turns used), its memory, its routines, the plugins on its Runner, and where turns run.
 
 import { createEffect, createMemo, For, onSettled, Show } from "solid-js";
@@ -34,7 +34,7 @@ import { Button } from "./controls";
 import { popupMenu, separator } from "./menu";
 import { chatActions, openDevice } from "./root";
 import { ActionRow, BotRow, EditableRow, KeyValueRow, NoteRow, PluginRow, PopUpRow, Section, StatusRow, SummaryActionRow, SwitchRow } from "./sections";
-import { presentBotDescription } from "./sheets/botDescription";
+import { presentBotDescription, presentGroupDescription } from "./sheets/description";
 import { presentBotLook } from "./sheets/botLook";
 import { presentConnectProvider } from "./sheets/connectProvider";
 import { presentMemory } from "./sheets/memory";
@@ -132,6 +132,7 @@ export function Inspector(props: { chatID: string }) {
                     {L("Add Bot…")}
                   </Button>
                 </div>
+                <Group chat={current()} members={members()} />
               </Show>
               <Show when={single()}>
                 {(bot) => (
@@ -190,6 +191,26 @@ function Participants(props: { chat: Chat; members: Bot[] }) {
           );
         }}
       </For>
+    </Section>
+  );
+}
+
+/** A group's name and what it is for. Without a name of its own, a group goes by its members' names. */
+function Group(props: { chat: Chat; members: Bot[] }) {
+  const commit = (value: string) => {
+    const chat = store.chat(props.chat.id);
+    if (chat && value !== (chat.customTitle ?? "")) store.rename(chat.id, value);
+  };
+  return (
+    <Section title={L("Group")}>
+      <EditableRow
+        label={L("Name")}
+        value={props.chat.customTitle ?? ""}
+        placeholder={props.members.map((bot) => bot.name).join(", ")}
+        alignRight
+        onCommit={commit}
+      />
+      <SummaryActionRow label={L("Description")} value={props.chat.groupDescription} actionTitle={L("Edit…")} onAction={() => presentGroupDescription(props.chat.id)} />
     </Section>
   );
 }

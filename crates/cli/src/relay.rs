@@ -159,21 +159,9 @@ fn socket_error(error: tokio_tungstenite::tungstenite::Error) -> RelayError {
     }
 }
 
-/// TLS for `wss://`, with the provider named: the build links both ring and aws-lc-rs, and
-/// rustls picks neither by itself.
+/// TLS for `wss://`: an upgrade is an HTTP/1.1 request, so it offers no ALPN.
 fn tls() -> Arc<rustls::ClientConfig> {
-    static CONFIG: std::sync::OnceLock<Arc<rustls::ClientConfig>> = std::sync::OnceLock::new();
-    CONFIG
-        .get_or_init(|| {
-            let roots = rustls::RootCertStore { roots: webpki_roots::TLS_SERVER_ROOTS.to_vec() };
-            let config = rustls::ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
-                .with_safe_default_protocol_versions()
-                .expect("ring supports the default TLS versions")
-                .with_root_certificates(roots)
-                .with_no_client_auth();
-            Arc::new(config)
-        })
-        .clone()
+    Arc::new(lorca_tls::client_config(&[]))
 }
 
 /// The relay protocol this client speaks, sent as `Lorca-Protocol` with every request. A
@@ -199,7 +187,7 @@ impl RelayClient {
     fn http_client() -> anyhow::Result<reqwest::Client> {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert("lorca-protocol", reqwest::header::HeaderValue::from(PROTOCOL));
-        Ok(reqwest::Client::builder()
+        Ok(lorca_tls::client_builder()
             .timeout(std::time::Duration::from_secs(60))
             .user_agent(format!("lorca/{} ({})", crate::config::VERSION, std::env::consts::OS))
             .default_headers(headers)

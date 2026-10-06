@@ -4,7 +4,7 @@
 
 import { createEffect, createMemo, createSignal, For, Match, onSettled, Show, Switch } from "solid-js";
 import { L, Lc } from "../../l10n";
-import { fullCommand, isGroup, isSentMessage, verbPhrase, type Chat, type Message } from "../../model/models";
+import { canBeQuoted, fullCommand, isGroup, isSentMessage, quoteOf, verbPhrase, type Chat, type Message } from "../../model/models";
 import { onStoreEvent, track } from "../../model/reactive";
 import { store } from "../../model/store";
 import { authorAvatar } from "../avatar";
@@ -12,7 +12,7 @@ import { shortcutText } from "../commands";
 import { Icon } from "../icons";
 import { chatActions } from "../root";
 import { CommandCard, PermissionCard, presentCommandSheet } from "./cards";
-import { DayCell, HandoffCell, MessageCell, NoticeCell, StatusCell, toolActivity, WorkingCell, type HandoffMode } from "./cells";
+import { DayCell, HandoffCell, MessageCell, NoticeCell, quoteAuthorName, StatusCell, toolActivity, WorkingCell, type HandoffMode } from "./cells";
 import { Composer, type ComposerHandle } from "./composer";
 import { ChatEmptyState } from "./empty";
 import { buildRows, type ChatRow } from "./rows";
@@ -87,7 +87,7 @@ function handoffMode(message: Message, chat: Chat): { mode: HandoffMode; reason:
   return undefined;
 }
 
-function RowView(props: { row: ChatRow; chat: Chat }) {
+function RowView(props: { row: ChatRow; chat: Chat; onReply: (message: Message) => void; onReveal: (messageID: string) => void }) {
   const group = () => isGroup(props.chat);
   const message = () => (props.row.kind === "message" ? props.row.message : undefined);
   const groupStart = () => (props.row.kind === "message" ? props.row.groupStart : true);
@@ -117,7 +117,16 @@ function RowView(props: { row: ChatRow; chat: Chat }) {
         }}
       </Match>
       <Match when={message()?.body.kind === "text" && message()}>
-        {(text) => <MessageCell message={text()} groupStart={groupStart()} chatID={props.chat.id} showsAvatar={showsAvatar()} />}
+        {(text) => (
+          <MessageCell
+            message={text()}
+            groupStart={groupStart()}
+            chatID={props.chat.id}
+            showsAvatar={showsAvatar()}
+            onReply={canBeQuoted(text()) ? () => props.onReply(text()) : undefined}
+            onQuoteClick={props.onReveal}
+          />
+        )}
       </Match>
       <Match when={message()?.body.kind === "tool" && (message()!.body as { tool: { run?: unknown } }).tool.run !== undefined && message()}>
         {(command) => {
@@ -262,6 +271,25 @@ export function ChatView(props: { chatID: string; onRedirect: (chatID: string) =
     setShowsJump(false);
   };
 
+  /** Makes the draft a reply to `message`, from the bubble's Reply. */
+  const startReply = (message: Message) => {
+    const quote = quoteOf(message);
+    if (quote) composer?.reply({ messageID: quote.messageID, name: quoteAuthorName(quote.author), text: quote.text });
+  };
+
+  /** Brings a quoted message into view and pulses its bubble. One on a page not loaded yet stays
+   * where it is. */
+  const reveal = (messageID: string) => {
+    const bubble = scroller?.querySelector<HTMLElement>(`[data-bubble="${CSS.escape(messageID)}"]`);
+    if (!bubble) return;
+    pinned = false;
+    bubble.scrollIntoView({ block: "center", behavior: "smooth" });
+    bubble.classList.remove("flash");
+    void bubble.offsetWidth;
+    bubble.classList.add("flash");
+    setTimeout(() => bubble.classList.remove("flash"), 1200);
+  };
+
   // New rows land: a transcript resting at its end follows them, over a moment for a new message;
   // one scrolled back keeps the message being read where it was. When the card holding the
   // keyboard went with the rows, the composer takes it back.
@@ -378,7 +406,7 @@ export function ChatView(props: { chatID: string; onRedirect: (chatID: string) =
               <For each={rows()} keyed={(row) => row.key}>
                 {(row) => (
                   <div class="transcript-row" data-row={row().key} data-message={row().kind === "message" ? "1" : "0"}>
-                    <RowView row={row()} chat={current()} />
+                    <RowView row={row()} chat={current()} onReply={startReply} onReveal={reveal} />
                   </div>
                 )}
               </For>
@@ -420,9 +448,9 @@ export function ChatView(props: { chatID: string; onRedirect: (chatID: string) =
           setStopping(true);
           store.stopResponding(props.chatID);
         }}
-        onSend={(text, attachments, mentions) => {
+        onSend={(text, attachments, mentions, replyTo) => {
           pinned = true;
-          const destination = store.send(text, attachments, mentions, props.chatID);
+          const destination = store.send(text, attachments, mentions, props.chatID, replyTo);
           if (destination !== props.chatID) props.onRedirect(destination);
         }}
       />

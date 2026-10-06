@@ -99,11 +99,16 @@ export function Composer({
   members,
   isGroup,
   placeholder,
+  reply,
+  onCancelReply,
   onSend,
 }: {
   members: Bot[];
   isGroup: boolean;
   placeholder: string;
+  /** The message the draft answers, shown above the text until it is sent or dropped. */
+  reply?: { name: string; text: string } | null;
+  onCancelReply?: () => void;
   /** The text, its files, and the bots its `@Name`s picked from the chips, by id. */
   onSend: (text: string, attachments: PickedFile[], mentions: string[]) => void;
 }) {
@@ -128,6 +133,10 @@ export function Composer({
   const { language, setting: dictationSetting } = useDictationLanguage();
   const dictationLanguages = useSupportedLanguages();
   const canSend = text.trim().length > 0 || attachments.length > 0;
+  // A swipe on a bubble starts a reply; the keyboard comes up for it.
+  useEffect(() => {
+    if (reply) inputRef.current?.focus();
+  }, [reply]);
   const lineHeight = Font.body * 1.3;
 
   const mention = useMemo(() => {
@@ -307,7 +316,7 @@ export function Composer({
 
   const primary = listening || canSend ? "send" : "dictate";
   const edge = p.dark ? "rgba(255,255,255,0.14)" : "rgba(0,0,0,0.1)";
-  const expanded = focused || text.length > 0 || attachments.length > 0;
+  const expanded = focused || text.length > 0 || attachments.length > 0 || !!reply;
 
   // The pieces below carry keys and always share one parent view, so switching between the
   // compact row and the expanded stack reorders them instead of remounting them: a remounted
@@ -364,7 +373,7 @@ export function Composer({
       ref={inputRef}
       value={text}
       onChangeText={setText}
-      placeholder={placeholder}
+      placeholder={reply ? t("Reply…") : placeholder}
       placeholderTextColor={p.tertiaryLabel}
       multiline
       onFocus={() => setFocused(true)}
@@ -434,6 +443,19 @@ export function Composer({
           discs sit beside the placeholder. The input is one line tall inside a taller pill, so
           a tap anywhere on the pill outside the discs focuses it. */}
       <Surface style={[styles.field, expanded ? styles.fieldExpanded : styles.fieldCompact]} tint={p.cell} edge={edge} onPress={() => inputRef.current?.focus()}>
+        {reply && (
+          <View style={styles.reply}>
+            <Symbol name="arrowshape.turn.up.left.fill" size={12} color={p.secondaryLabel} />
+            <Text style={[styles.replyText, { color: p.secondaryLabel }]} numberOfLines={1}>
+              <Text style={{ color: p.label, fontWeight: "600" }}>{t("Replying to {name}", { name: reply.name })}</Text>
+              {"  "}
+              {reply.text}
+            </Text>
+            <Pressable onPress={onCancelReply} hitSlop={10} accessibilityRole="button" accessibilityLabel={t("Cancel reply")}>
+              <Symbol name="xmark.circle.fill" size={17} color={p.tertiaryLabel} />
+            </Pressable>
+          </View>
+        )}
         {attachments.length > 0 && (
           <View style={styles.files}>
             {attachments.map((file, index) => (
@@ -541,6 +563,8 @@ const styles = StyleSheet.create({
   stack: { flexDirection: "column", alignItems: "stretch" },
   // Chips wrap; the padding leaves room for the remove button hanging off a chip's corner.
   files: { flexDirection: "row", flexWrap: "wrap", gap: 12, paddingTop: 12, paddingHorizontal: 6, paddingBottom: 2 },
+  reply: { flexDirection: "row", alignItems: "center", gap: 6, paddingTop: 10, paddingHorizontal: 10 },
+  replyText: { flex: 1, fontSize: 13 },
   controls: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 6, paddingTop: 4 },
   input: { flex: 1, fontSize: Font.body, paddingTop: 0, paddingBottom: 0, margin: 0, marginVertical: 6, marginHorizontal: 6 },
   // In the stack the input is a row of its own: no growing into the column, wider margins.
