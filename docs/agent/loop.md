@@ -18,6 +18,8 @@ pub struct AgentLoopConfig {
     pub tool_execution: ToolExecutionMode,     // default Parallel
     pub sink: Option<Arc<dyn EventSink>>,      // default None
     pub retry: Option<RetryPolicy>,            // default None: one try per model call
+    pub request: RequestOptions,               // headers, timeout, session affinity, metadata
+    pub interrupt: Option<StepInterrupt>,      // default None: see Interrupting a step
 }
 ```
 
@@ -144,3 +146,17 @@ steering.push(AgentMessage::User(UserMessage::text("change direction")));
 ```
 
 See [Hooks](hooks.md#queues) for when each is polled.
+
+## Interrupting a step
+
+A steering message waits for the step under way: the model's reply and the tool calls it makes. To have it read at once, give the config a `StepInterrupt` and call `interrupt()` on a clone after queueing the message:
+
+```rust
+let interrupt = StepInterrupt::new();
+let config = AgentLoopConfig::new(provider).with_hooks(Arc::new(Inbox { steering: steering.clone() })).with_interrupt(interrupt.clone());
+
+steering.push(AgentMessage::user("skip that, ship it"));
+interrupt.interrupt(); // false between steps, where the queue is read anyway
+```
+
+Each step runs under a child of the run's token, and `interrupt()` cancels only that one. A reply cut short keeps its text in the context as said, without its thinking or the tool calls it was cut off in. The tools running get a cancelled token, and a call the step had not started yet gets an error result saying the user interrupted. The loop then reads the steering queue and goes on. Cancelling the run's token still ends the run.

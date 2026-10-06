@@ -38,7 +38,7 @@ import Animated, {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { SoftScrollEdgeView } from "../../../modules/lorca-core/SoftScrollEdgeView";
 import { chatTitle, engine } from "../../../src/core/engine";
-import { isLive, type Bot, type Message } from "../../../src/core/model";
+import { canBeQuoted, isLive, type Bot, type Message } from "../../../src/core/model";
 import {
   useBotMap,
   useChat,
@@ -54,12 +54,14 @@ import { KeyboardFoot } from "../../../src/ui/KeyboardFoot";
 import { useWide } from "../../../src/ui/layout";
 import { Symbol } from "../../../src/ui/Symbol";
 import { usePalette } from "../../../src/ui/theme";
+import { quoteText } from "../../../src/ui/format";
 import { AnswerSheet } from "../../../src/ui/AnswerSheet";
 import {
   buildRows,
   DayRow,
   MarkerRow,
   MessageRow,
+  quoteAuthorName,
   NoticeRow,
   PermissionRow,
   CommandRow,
@@ -687,6 +689,28 @@ export default function ChatScreen() {
   const answering = answeringId ? chat?.messages.find((m) => m.id === answeringId) : undefined;
   const answeringRun = answering?.body.kind === "tool" ? answering.body.run : undefined;
 
+  /// The message the draft answers, from a swipe on its bubble; another chat starts without one.
+  const [replying, setReplying] = useState<{ messageID: string; name: string; text: string } | null>(null);
+  useEffect(() => setReplying(null), [id]);
+  const startReply = useCallback(
+    (message: Message) => {
+      if (message.body.kind !== "text") return;
+      const words = quoteText(message.body.text) || (message.body.attachments ?? []).map((file) => file.name).join(", ");
+      setReplying({ messageID: message.id, name: quoteAuthorName(message.author, bots), text: words });
+    },
+    [bots],
+  );
+  /// The message a reply's quote names, brought into view with its bubble pulsing. One on a page
+  /// not loaded yet stays where it is.
+  const [flashId, setFlashId] = useState<string | null>(null);
+  const revealQuoted = useCallback((messageID: string) => {
+    const index = rowsRef.current.findIndex((row) => row.type === "message" && row.message.id === messageID);
+    if (index < 0) return;
+    listRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0.4 });
+    setFlashId(messageID);
+    setTimeout(() => setFlashId((current) => (current === messageID ? null : current)), 1400);
+  }, []);
+
   /// The whole message behind a "Messaged ◉ Name" marker, as a sheet.
   const openMarker = useCallback(
     (row: Extract<Row, { type: "marker" }>) => {
@@ -712,7 +736,16 @@ export default function ChatScreen() {
         case "day":
           return <DayRow at={item.at} />;
         case "message":
-          return <MessageRow row={item} bots={bots} isGroup={isGroup} />;
+          return (
+            <MessageRow
+              row={item}
+              bots={bots}
+              isGroup={isGroup}
+              onReply={canBeQuoted(item.message) ? () => startReply(item.message) : undefined}
+              onQuotePress={revealQuoted}
+              flashing={flashId === item.message.id}
+            />
+          );
         case "marker":
           return <MarkerRow row={item} onPress={openMarker} />;
         case "notice":
@@ -741,7 +774,7 @@ export default function ChatScreen() {
           return <StatusRow text={item.text} />;
       }
     },
-    [answerCard, bots, id, isGroup, openMarker],
+    [answerCard, bots, id, isGroup, openMarker, startReply, revealQuoted, flashId],
   );
 
   if (!chat) {
@@ -939,14 +972,18 @@ export default function ChatScreen() {
             members={members}
             isGroup={isGroup}
             placeholder={placeholder}
+            reply={replying}
+            onCancelReply={() => setReplying(null)}
             onSend={(text, files, mentions) => {
               // The anchor is measured against the screen without the keyboard.
               void KeyboardController.dismiss();
               // Before the message reaches the list: FlashList notes "near the end" on a commit
               // made while its catch-up is on, and scrolls to the end on the change after it.
               setAnchored(true);
+              const replyTo = replying?.messageID;
+              setReplying(null);
               const sent = engine
-                .sendMessage(id, text, files, mentions)
+                .sendMessage(id, text, files, mentions, replyTo)
                 .then((message) => {
                   stopSettling();
                   anchorKey.current = message.id;

@@ -793,6 +793,7 @@ enum MockData {
                 createdAt: minutesAgo(9)
             ),
             Message(
+                id: "msg-mock-checklist",
                 author: .bot("bot-nova"),
                 body: .text("The launch checklist is ready:\n\n- **Onboarding** — reviewed on Mac and iPhone\n- **Website** — guide updated, links checked\n- **Launch copy** — Writer's draft is ready\n\nOnly your final review is left."),
                 createdAt: minutesAgo(7)
@@ -800,7 +801,10 @@ enum MockData {
             Message(
                 author: .you,
                 body: .text("Great. Keep the announcement as a draft until I've reviewed it."),
-                createdAt: minutesAgo(5)
+                createdAt: minutesAgo(5),
+                replyTo: ReplyQuote(
+                    messageID: "msg-mock-checklist", author: .bot("bot-nova"),
+                    text: "The launch checklist is ready: Onboarding — reviewed on Mac and iPhone Website — guide updated, links checked Launch copy — Writer's draft is ready Only your final review is left.")
             ),
             Message(
                 author: .bot("bot-nova"),

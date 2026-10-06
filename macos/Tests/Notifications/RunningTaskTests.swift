@@ -7,7 +7,7 @@ final class RunningTaskTests: XCTestCase {
     private func task(_ state: CommandRun.State, inGroup: Bool = false) -> RunningTask {
         RunningTask(
             id: "call", title: "Install dependencies", botName: "Scout", showsBotName: inGroup, command: "bun install",
-            firstLine: "bun install", output: "", state: state, startedAt: start)
+            firstLine: "bun install", output: "", state: state, runsInForeground: false, startedAt: start)
     }
 
     func testTheRunningTimeCountsUpFromTheStart() {
@@ -41,5 +41,20 @@ final class RunningTaskTests: XCTestCase {
         XCTAssertTrue(run.hasEnded)
         run.state = .denied
         XCTAssertFalse(run.hasEnded)
+    }
+
+    func testRunInBackgroundIsOfferedWhileTheBotsCallWaitsOnACommandInTheForeground() {
+        func row(isRunning: Bool, state: CommandRun.State = .running, sessionID: String? = "bash-1", background: Bool = false) -> Message {
+            let run = CommandRun(sessionID: sessionID, command: "npm run dev", state: state, background: background)
+            let tool = ToolInvocation(name: "bash", summary: "Running", detail: "", isRunning: isRunning, run: run)
+            return Message(author: .bot("bot"), body: .tool(tool), createdAt: start)
+        }
+        XCTAssertTrue(row(isRunning: true).runsInForeground)
+        // Sent there, or started there and still in its first two seconds.
+        XCTAssertFalse(row(isRunning: false, background: true).runsInForeground)
+        XCTAssertFalse(row(isRunning: true, background: true).runsInForeground)
+        // Its call returned, or no terminal runs it yet.
+        XCTAssertFalse(row(isRunning: false).runsInForeground)
+        XCTAssertFalse(row(isRunning: true, state: .checking, sessionID: nil).runsInForeground)
     }
 }

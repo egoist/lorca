@@ -196,6 +196,9 @@ pub struct App {
     /// The direct-chat agent loop that currently owns each chat lock: `(job id, queue)`.
     #[cfg(feature = "runner")]
     pub steering_queues: Mutex<HashMap<String, (String, lorca_agent::AgentMessageQueue)>>,
+    /// The same loops' step interrupts, for Send now: `(job id, interrupt)`.
+    #[cfg(feature = "runner")]
+    step_interrupts: Mutex<HashMap<String, (String, lorca_agent::StepInterrupt)>>,
     pub chat_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// The chat on screen in the local app while it is frontmost; a reply there needs no push.
     pub watched_chat: Mutex<Option<String>>,
@@ -284,6 +287,8 @@ impl App {
             announced_turns: Mutex::new(std::collections::BTreeMap::new()),
             #[cfg(feature = "runner")]
             steering_queues: Mutex::new(HashMap::new()),
+            #[cfg(feature = "runner")]
+            step_interrupts: Mutex::new(HashMap::new()),
             chat_locks: Mutex::new(HashMap::new()),
             watched_chat: Mutex::new(None),
             pending_results: Mutex::new(HashMap::new()),
@@ -528,6 +533,8 @@ impl App {
         self.cancel_plugin_sign_in(None);
         #[cfg(feature = "runner")]
         self.steering_queues.lock().unwrap().clear();
+        #[cfg(feature = "runner")]
+        self.step_interrupts.lock().unwrap().clear();
         *self.identity.lock().unwrap() = None;
         *self.machine.lock().unwrap() = None;
         *self.credentials.lock().unwrap() = Credentials::default();
@@ -1607,15 +1614,49 @@ impl App {
                 return None;
             }
             message.promoted_at = Some(config::now_secs());
+            message.queued = false;
             Some(message)
         });
         let Some(message) = promoted else { return false };
-        if let Err(error) = self.store.upsert(&message) {
-            tracing::error!(%error, %chat_id, %message_id, "promoting steering message");
-            return false;
-        }
-        self.push_chat_op(&ChatBlob::Upsert { message });
+        // The apps here hear it too: the message no longer waits, and its Send now goes.
+        self.upsert_message(message, true);
         true
+    }
+
+    /// Marks a user message as held for the next step of the turn at work, or as no longer
+    /// held, here and on every Device. Unchanged when it already is.
+    pub fn set_queued(&self, chat_id: &str, message_id: &str, queued: bool) {
+        let Some(mut message) = self.message(chat_id, message_id).filter(|m| m.queued != queued) else { return };
+        message.queued = queued;
+        self.upsert_message(message, true);
+    }
+
+    /// Stop: nothing in the chat waits for a step any more.
+    pub fn unqueue_chat(&self, chat_id: &str) {
+        // A held message is among the newest: the turn it waits on is the chat's latest.
+        let recent = self.store.page(chat_id, None, 40).map(|(messages, _)| messages).unwrap_or_default();
+        let held: Vec<String> = recent.into_iter().filter(|m| m.queued).map(|m| m.id).collect();
+        for id in held {
+            self.set_queued(chat_id, &id, false);
+        }
+    }
+
+    #[cfg(feature = "runner")]
+    pub fn register_step_interrupt(&self, chat_id: &str, job_id: &str, interrupt: lorca_agent::StepInterrupt) {
+        self.step_interrupts.lock().unwrap().insert(chat_id.to_string(), (job_id.to_string(), interrupt));
+    }
+
+    #[cfg(feature = "runner")]
+    pub fn unregister_step_interrupt(&self, chat_id: &str, job_id: &str) {
+        let mut interrupts = self.step_interrupts.lock().unwrap();
+        if interrupts.get(chat_id).is_some_and(|(active, _)| active == job_id) {
+            interrupts.remove(chat_id);
+        }
+    }
+
+    #[cfg(feature = "runner")]
+    pub fn step_interrupt(&self, chat_id: &str) -> Option<lorca_agent::StepInterrupt> {
+        self.step_interrupts.lock().unwrap().get(chat_id).map(|(_, interrupt)| interrupt.clone())
     }
 
     /// A replacement user job calls this after it reaches the chat lock. True means an older

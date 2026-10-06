@@ -37,6 +37,10 @@ pub const WAITING_AFTER: Duration = Duration::from_secs(20);
 /// How long a command whose last line reads like a prompt ("Password:", "[Y/n]") may be quiet
 /// before its call returns, so the question reaches the model and the user at once.
 pub const PROMPT_QUIET: Duration = Duration::from_secs(2);
+/// How long `bash` with `background` waits before it returns while the command runs on: long
+/// enough to catch a command that fails at once (a port in use, a typo) or prints where it
+/// listens.
+pub const BACKGROUND_SETTLE: Duration = Duration::from_secs(2);
 /// The longest `bash_output` waits in one call: a wait holds the turn, and with it the user's
 /// next message.
 pub const MAX_OUTPUT_WAIT: Duration = Duration::from_secs(300);
@@ -120,6 +124,9 @@ pub struct BashSession {
     command: String,
     pid: u32,
     started: Instant,
+    /// Started with `background`, or sent there since ([`BashSession::send_to_background`]): a
+    /// server, a watcher, or a long build meant to keep running, not a command that stopped on it.
+    background: std::sync::atomic::AtomicBool,
     state: Mutex<SessionState>,
     changed: watch::Sender<u64>,
     #[cfg(unix)]
@@ -246,6 +253,8 @@ pub(crate) enum Stop {
     Waiting,
     /// The caller's deadline passed while the command ran on.
     Deadline,
+    /// The command was sent to the background while the call waited on it.
+    Backgrounded,
     Cancelled,
 }
 
@@ -261,6 +270,24 @@ impl BashSession {
 
     pub fn pid(&self) -> u32 {
         self.pid
+    }
+
+    /// Whether it runs in the background: the model started it there, or the user sent it.
+    pub fn background(&self) -> bool {
+        self.background.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Sends a running command to the background, as the user does from the host's UI: a call
+    /// waiting on it returns at once ([`Stop::Backgrounded`]) and the command runs on. False when
+    /// it has ended.
+    pub fn send_to_background(&self) -> bool {
+        if self.end().is_some() {
+            return false;
+        }
+        if !self.background.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            self.changed.send_modify(|version| *version += 1);
+        }
+        true
     }
 
     /// How it ended, or `None` while it runs.
@@ -413,7 +440,7 @@ impl BashSession {
     }
 
     /// Waits until the command ends, goes quiet (at a prompt, or past `idle`), `until`
-    /// passes, or `cancel` fires. `base` is how much output there was when the wait began and
+    /// passes, it is sent to the background, or `cancel` fires. `base` is how much output there was when the wait began and
     /// `since` when it began: silence counts from the later of `since` and the last output,
     /// and only output past `base` counts as new. `on_output` runs after each chunk.
     pub(crate) async fn wait(
@@ -426,8 +453,12 @@ impl BashSession {
         mut on_output: impl FnMut(&BashSession),
     ) -> Stop {
         let mut changes = self.changed.subscribe();
+        let in_background = self.background();
         loop {
             let now = Instant::now();
+            if !in_background && self.background() {
+                return Stop::Backgrounded;
+            }
             let (ended, fresh, quiet_since) = {
                 let state = self.state.lock().unwrap();
                 (state.end.is_some(), state.output.total > base, state.last_output.max(since))
@@ -453,7 +484,9 @@ impl BashSession {
                     on_output(self);
                 }
                 _ = sleep_until_some(wake) => {}
-                _ = cancel.cancelled() => return Stop::Cancelled,
+                // A command sent to the background as the call is cancelled (the user's new message
+                // interrupting the step) runs on: the call reads as sent there.
+                _ = cancel.cancelled() => return if !in_background && self.background() { Stop::Backgrounded } else { Stop::Cancelled },
             }
         }
     }
@@ -568,7 +601,8 @@ fn new_id() -> String {
 impl BashSession {
     /// Starts `command` under `shell -c` in `cwd`, on a new pseudo-terminal that is the
     /// command's controlling terminal. `timeout` (seconds) kills it when it runs that long.
-    pub async fn spawn(shell: &str, command: &str, cwd: &Path, timeout: Option<f64>, extras: &crate::login_shell::Extras) -> std::io::Result<Arc<BashSession>> {
+    /// `background` marks a command the model means to leave running ([`BashSession::background`]).
+    pub async fn spawn(shell: &str, command: &str, cwd: &Path, timeout: Option<f64>, background: bool, extras: &crate::login_shell::Extras) -> std::io::Result<Arc<BashSession>> {
         use std::os::fd::AsRawFd;
         use std::process::Stdio;
         use tokio::io::unix::AsyncFd;
@@ -619,6 +653,7 @@ impl BashSession {
             command: command.to_string(),
             pid,
             started: now,
+            background: background.into(),
             state: Mutex::new(SessionState { output: Output::new(), last_output: now, last_input: now, end: None, read: 0, drained: false }),
             changed: watch::channel(0).0,
             master: Mutex::new(Some(fd.clone())),
@@ -696,7 +731,7 @@ impl BashSession {
 
 #[cfg(not(unix))]
 impl BashSession {
-    pub async fn spawn(_shell: &str, _command: &str, _cwd: &Path, _timeout: Option<f64>, _extras: &crate::login_shell::Extras) -> std::io::Result<Arc<BashSession>> {
+    pub async fn spawn(_shell: &str, _command: &str, _cwd: &Path, _timeout: Option<f64>, _background: bool, _extras: &crate::login_shell::Extras) -> std::io::Result<Arc<BashSession>> {
         Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "interactive terminals are not available on this platform"))
     }
 }
@@ -802,6 +837,14 @@ fn running_note(session: &BashSession, stop: Stop, idle: Duration) -> String {
         (Stop::Waiting, Some(prompt)) => format!(
             "[Waiting for input: \"{prompt}\". The command is still running as session {id}: answer it with bash_input, or check on it with bash_output.]"
         ),
+        (Stop::Backgrounded, _) => format!(
+            "[The user sent the command to the background, where it runs on as session {id}: go on with your work. Read what it \
+             prints with bash_output, or stop it with bash_input \"\\u0003\".]"
+        ),
+        // Quiet, or in raw mode for its own keys (a dev server's shortcuts), is how a server waits.
+        _ if session.background() => format!(
+            "[Running in the background as session {id}. Read what it prints with bash_output, or stop it with bash_input \"\\u0003\".]"
+        ),
         (Stop::Waiting, None) if session.reads_keys() => format!(
             "[No output for {} seconds, and the command has put its terminal in raw mode, as a program does to read keys at a menu \
              or a yes/no choice: it is probably waiting for one. If its question is not above, it went into a pipe or a file (`| \
@@ -824,7 +867,9 @@ fn running_note(session: &BashSession, stop: Stop, idle: Duration) -> String {
 /// command stands. `first` is the call that started it, whose result on a normal end reads
 /// exactly like a command run on pipes.
 pub(crate) fn session_result(session: &Arc<BashSession>, sessions: &dyn BashSessions, from: u64, stop: Stop, idle: Duration, first: bool) -> Result<ToolResult, ToolError> {
-    if stop == Stop::Cancelled {
+    // A cancelled wait on a command in the background leaves it running; only the call that
+    // starts one takes it down with it.
+    if stop == Stop::Cancelled && (first || !session.background()) {
         session.stop("Command aborted");
     }
     let shown = session.read_from(from);
@@ -991,13 +1036,15 @@ fn unknown_session(id: &str) -> ToolError {
 }
 
 /// `bash` in a terminal session: starts the command, keeps it with the host, and waits for it
-/// the way every call on a session does. `on_update` streams the output so far.
+/// the way every call on a session does, or in the `background` for `BACKGROUND_SETTLE` at
+/// most. `on_update` streams the output so far.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn run(
     shell: &str,
     command: &str,
     cwd: &Path,
     timeout: Option<f64>,
+    background: bool,
     extras: &crate::login_shell::Extras,
     sessions: &Arc<dyn BashSessions>,
     call_id: &str,
@@ -1005,12 +1052,14 @@ pub(crate) async fn run(
     cancel: CancellationToken,
     on_update: ToolUpdateFn,
 ) -> Result<ToolResult, ToolError> {
-    let session = BashSession::spawn(shell, command, cwd, timeout, extras).await.map_err(|e| ToolError(format!("Failed to start {shell}: {e}")))?;
+    let session = BashSession::spawn(shell, command, cwd, timeout, background, extras).await.map_err(|e| ToolError(format!("Failed to start {shell}: {e}")))?;
     sessions.insert(call_id, session.clone());
     let mut last_update = Instant::now() - Duration::from_secs(1);
     let idle = Idle { after: waiting_after, needs_output: false };
+    // Sent to the background before the wait began, it waits as one started there.
+    let until = session.background().then(|| session.started + BACKGROUND_SETTLE);
     let stop = session
-        .wait(0, session.started, idle, None, &cancel, |session| {
+        .wait(0, session.started, idle, until, &cancel, |session| {
             if last_update.elapsed() >= Duration::from_millis(super::bash::UPDATE_THROTTLE_MS) {
                 last_update = Instant::now();
                 on_update(ToolResult::text(session.preview()));
@@ -1233,6 +1282,104 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(300)).await;
         assert!(alive(pid), "as under nohup: the terminal's hangup does not reach it");
         unsafe { libc::kill(pid, libc::SIGKILL) };
+    }
+
+    /// A server prints as long as it runs, so only `background` returns its call before it ends.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_background_command_returns_while_it_prints() {
+        let t = tools(WAITING_AFTER);
+        assert_eq!(t.bash.parameters()["properties"]["background"]["type"], "boolean");
+        assert!(BashTool::new(std::env::temp_dir()).parameters()["properties"].get("background").is_none(), "not on pipes");
+        let command = "echo listening; while true; do echo tick; sleep 0.1; done";
+        let started = std::time::Instant::now();
+        let running = call(&t.bash, json!({"command": command, "background": true})).await.unwrap();
+        let elapsed = started.elapsed();
+        assert!(elapsed >= BACKGROUND_SETTLE && elapsed < BACKGROUND_SETTLE + Duration::from_secs(2), "{elapsed:?}");
+        let text = running.text_content();
+        let id = session_id(&running);
+        assert!(text.starts_with("listening\ntick\n"), "{text}");
+        assert!(text.ends_with(&format!("[Running in the background as session {id}. Read what it prints with bash_output, or stop it with bash_input \"\\u0003\".]")), "{text}");
+        assert_eq!(running.details["summary"], "Running");
+        assert!(t.host.get(&id).unwrap().background());
+
+        let more = call(&t.output, json!({"session_id": id, "wait_seconds": 0.3})).await.unwrap();
+        assert!(more.text_content().starts_with("tick\n"), "{}", more.text_content());
+        let stopped = call(&t.input, json!({"session_id": id, "text": "\u{3}", "enter": false})).await.unwrap();
+        assert!(stopped.text_content().ends_with("Command terminated by signal 2"), "{}", stopped.text_content());
+        assert!(t.host.0.lock().unwrap().is_empty());
+
+        // One that ends first reads as it would have without it.
+        let failed = call(&t.bash, json!({"command": "echo 'port 3000 is in use' >&2; exit 1", "background": true})).await.unwrap_err();
+        assert!(failed.0.contains("port 3000 is in use") && failed.0.contains("exited with code 1"), "{}", failed.0);
+        let quick = call(&t.bash, json!({"command": "echo done", "background": true})).await.unwrap();
+        assert_eq!(quick.text_content(), "done\n");
+    }
+
+    /// The user sends a command the model is waiting on to the background: the call returns and
+    /// the command runs on.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_command_sent_to_the_background_returns_its_call() {
+        let t = Arc::new(tools(WAITING_AFTER));
+        let running = tokio::spawn({
+            let t = t.clone();
+            async move { call(&t.bash, json!({"command": "echo building; while true; do echo tick; sleep 0.1; done"})).await }
+        });
+        let session = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(session) = t.host.0.lock().unwrap().values().next().cloned() {
+                    return session;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(!running.is_finished(), "it prints, so the call waits");
+
+        assert!(session.send_to_background());
+        let result = tokio::time::timeout(Duration::from_secs(2), running).await.expect("the call returned").unwrap().unwrap();
+        let text = result.text_content();
+        assert!(text.starts_with("building\ntick\n"), "{text}");
+        assert!(text.ends_with(&format!("[The user sent the command to the background, where it runs on as session {}: go on with your work. Read what it prints with bash_output, or stop it with bash_input \"\\u0003\".]", session.id())), "{text}");
+        assert!(session.end().is_none() && session.background());
+        let more = call(&t.output, json!({"session_id": session.id(), "wait_seconds": 0.3})).await.unwrap();
+        assert!(more.text_content().contains("[Running in the background as session "), "{}", more.text_content());
+
+        session.stop("Stopped");
+        assert!(!session.send_to_background(), "it ended");
+    }
+
+    /// Send now sends the command to the background and cancels the step at once: the call reads
+    /// as sent there, whichever it saw first, and the command runs on.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_command_sent_to_the_background_outlives_its_cancelled_call() {
+        let t = Arc::new(tools(WAITING_AFTER));
+        let cancel = CancellationToken::new();
+        let running = tokio::spawn({
+            let (t, cancel) = (t.clone(), cancel.clone());
+            async move { t.bash.execute("call", json!({"command": "echo building; while true; do echo tick; sleep 0.1; done"}), cancel, Arc::new(|_| {})).await }
+        });
+        let session = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(session) = t.host.0.lock().unwrap().values().next().cloned().filter(|s| s.preview().contains("tick")) {
+                    return session;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+
+        assert!(session.send_to_background());
+        cancel.cancel();
+        let result = tokio::time::timeout(Duration::from_secs(2), running).await.expect("the call returned").unwrap().unwrap();
+        assert!(result.text_content().contains("The user sent the command to the background"), "{}", result.text_content());
+        assert!(session.end().is_none(), "it runs on");
+        session.stop("Stopped");
     }
 
     #[cfg(unix)]

@@ -4,8 +4,9 @@ import AppKit
 /// its bots have running in their terminals (`AppStore.runningCommands`). The working row only
 /// says what a bot is doing, and a command's card shows only once the bot hands the command over;
 /// here each one shows what it does in the bot's words, who runs it and for how long, the command
-/// (a click shows all of it), its last lines, and Stop. One that ends while the popover is open
-/// stays, saying how it ended, until the popover closes.
+/// (a click shows all of it), its last lines, and Stop, with Run in Background while the bot's call
+/// still waits on it. One that ends while the popover is open stays, saying how it ended, until
+/// the popover closes.
 final class RunningTasksViewController: NSViewController {
     static let width: CGFloat = 420
     private static let maxHeight: CGFloat = 480
@@ -19,7 +20,7 @@ final class RunningTasksViewController: NSViewController {
     private var separators: [HairlineView] = []
     /// Every command listed since the popover opened, so one that ends stays.
     private var listed: Set<Message.ID> = []
-    /// Why a Stop did not go through, by row.
+    /// Why a Stop or Run in Background did not go through, by row.
     private var errors: [Message.ID: String] = [:]
     private var clock: Timer?
 
@@ -93,10 +94,11 @@ final class RunningTasksViewController: NSViewController {
                     firstLine: run.firstLine,
                     output: run.output ?? "",
                     state: run.state,
+                    runsInForeground: message.runsInForeground,
                     startedAt: message.createdAt))
             }
         }
-        // What went wrong with a Stop matters while the command runs.
+        // What went wrong with a Stop or Run in Background matters while the command runs.
         errors = errors.filter { id, _ in tasks.contains { $0.id == id && $0.isLive } }
         guard tasks != self.tasks else { return }
         let hadTasks = !self.tasks.isEmpty
@@ -127,6 +129,16 @@ final class RunningTasksViewController: NSViewController {
             guard let self else { return }
             do {
                 try await store.stopCommand(chatID: chatID, messageID: id)
+                errors[id] = nil
+            } catch {
+                errors[id] = error.localizedDescription
+            }
+            apply()
+        }
+        row.onBackground = { [weak self] id in
+            guard let self else { return }
+            do {
+                try await store.sendCommandToBackground(chatID: chatID, messageID: id)
                 errors[id] = nil
             } catch {
                 errors[id] = error.localizedDescription
@@ -187,6 +199,8 @@ struct RunningTask: Equatable {
     var firstLine: String
     var output: String
     var state: CommandRun.State
+    /// The bot's call still waits on it: Run in Background sends it there.
+    var runsInForeground: Bool
     var startedAt: Date
 
     var isLive: Bool { state == .running || state == .waiting }
@@ -212,7 +226,8 @@ struct RunningTask: Equatable {
     }
 }
 
-/// One running command: the terminal symbol and what it does, with Stop at the end of that line;
+/// One running command: the terminal symbol and what it does, with Stop at the end of that line,
+/// and Run in Background before it while the bot's call waits on the command;
 /// who runs it and for how long; the command on one line, which shows all of it on click; and its
 /// last lines, which grow to `outputLines` and then scroll.
 final class RunningTaskView: NSView {
@@ -226,7 +241,8 @@ final class RunningTaskView: NSView {
     private static let commandPadding = NSSize(width: 8, height: 5)
     private static let controlHeight: CGFloat = 22
 
-    /// The row's height for `task` at `width`, with what went wrong with a Stop under it.
+    /// The row's height for `task` at `width`, with what went wrong with a Stop or Run in
+    /// Background under it.
     static func height(of task: RunningTask, error: String?, width: CGFloat) -> CGFloat {
         Layout(task: task, error: error, width: width).height
     }
@@ -272,14 +288,22 @@ final class RunningTaskView: NSView {
     private let command = CommandBlockView(font: RunningTaskView.commandFont, lines: 1, padding: RunningTaskView.commandPadding)
     private let output = CommandOutputView()
     private let stopButton = NSButton()
-    /// Why a Stop did not go through.
+    private let backgroundButton = NSButton()
+    /// Why a Stop or Run in Background did not go through.
     private let errorLabel = Build.label("", font: RunningTaskView.statusFont, color: .systemRed, lines: 2)
     private var task: RunningTask?
     private var error: String?
-    private var busy = false { didSet { stopButton.isEnabled = !busy } }
+    private var busy = false {
+        didSet {
+            stopButton.isEnabled = !busy
+            backgroundButton.isEnabled = !busy
+        }
+    }
 
     /// Stops the command in row `id`.
     var onStop: ((_ id: Message.ID) async -> Void)?
+    /// Sends the command in row `id` to the background.
+    var onBackground: ((_ id: Message.ID) async -> Void)?
     var onShowCommand: ((RunningTask) -> Void)?
 
     init() {
@@ -291,13 +315,17 @@ final class RunningTaskView: NSView {
             guard let self, let task else { return }
             onShowCommand?(task)
         }
-        stopButton.title = L("Stop")
-        stopButton.bezelStyle = .rounded
-        stopButton.controlSize = .small
-        stopButton.font = .systemFont(ofSize: 11)
-        stopButton.target = self
-        stopButton.action = #selector(stop(_:))
-        for view: NSView in [icon, title, status, command, output, stopButton, errorLabel] {
+        for (button, label, action) in [
+            (stopButton, L("Stop"), #selector(stop(_:))), (backgroundButton, L("Run in Background"), #selector(runInBackground(_:))),
+        ] {
+            button.title = label
+            button.bezelStyle = .rounded
+            button.controlSize = .small
+            button.font = .systemFont(ofSize: 11)
+            button.target = self
+            button.action = action
+        }
+        for view: NSView in [icon, title, status, command, output, stopButton, backgroundButton, errorLabel] {
             addSubview(view.framePositioned())
         }
         setAccessibilityElement(true)
@@ -320,6 +348,7 @@ final class RunningTaskView: NSView {
         title.stringValue = task.title
         title.toolTip = task.title
         stopButton.isHidden = !task.isLive
+        backgroundButton.isHidden = !(task.isLive && task.runsInForeground)
         errorLabel.stringValue = error ?? ""
         setAccessibilityLabel(task.title)
         tick(now)
@@ -334,10 +363,18 @@ final class RunningTaskView: NSView {
     }
 
     @objc private func stop(_ sender: Any?) {
-        guard let onStop, let id = task?.id, !busy else { return }
+        perform(onStop)
+    }
+
+    @objc private func runInBackground(_ sender: Any?) {
+        perform(onBackground)
+    }
+
+    private func perform(_ action: ((_ id: Message.ID) async -> Void)?) {
+        guard let action, let id = task?.id, !busy else { return }
         busy = true
         Task { @MainActor in
-            await onStop(id)
+            await action(id)
             busy = false
         }
     }
@@ -349,10 +386,14 @@ final class RunningTaskView: NSView {
         icon.frame = NSRect(x: Self.inset, y: Self.top - 1, width: 18, height: 18)
         title.frame = layout.title
         if !stopButton.isHidden {
-            // Stop ends the title's line, as on the command's card.
-            let size = stopButton.intrinsicContentSize
-            stopButton.frame = NSRect(x: bounds.width - Self.inset - size.width - 4, y: Self.top - 3, width: size.width + 4, height: Self.controlHeight)
-            title.frame.size.width = stopButton.frame.minX - 8 - title.frame.minX
+            // Stop ends the title's line, as on the command's card, with Run in Background before it.
+            var trailing = bounds.width - Self.inset
+            for button in [stopButton, backgroundButton] where !button.isHidden {
+                let size = button.intrinsicContentSize
+                button.frame = NSRect(x: trailing - size.width - 4, y: Self.top - 3, width: size.width + 4, height: Self.controlHeight)
+                trailing = button.frame.minX - 6
+            }
+            title.frame.size.width = trailing - 6 - title.frame.minX
         }
         status.frame = layout.status
         command.frame = layout.command

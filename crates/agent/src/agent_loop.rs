@@ -179,11 +179,26 @@ pub struct AgentLoopConfig {
     pub retry: Option<crate::retry::RetryPolicy>,
     /// Headers, timeout, session affinity, metadata, and hooks for every model call.
     pub request: crate::request::RequestOptions,
+    /// Lets the host cut a step short without ending the run.
+    pub interrupt: Option<StepInterrupt>,
 }
 
 impl AgentLoopConfig {
     pub fn new(provider: Arc<dyn Provider>) -> Self {
-        AgentLoopConfig { provider, hooks: Arc::new(NoHooks), tool_execution: ToolExecutionMode::Parallel, sink: None, retry: None, request: Default::default() }
+        AgentLoopConfig {
+            provider,
+            hooks: Arc::new(NoHooks),
+            tool_execution: ToolExecutionMode::Parallel,
+            sink: None,
+            retry: None,
+            request: Default::default(),
+            interrupt: None,
+        }
+    }
+
+    pub fn with_interrupt(mut self, interrupt: StepInterrupt) -> Self {
+        self.interrupt = Some(interrupt);
+        self
     }
 
     pub fn with_retry(mut self, policy: crate::retry::RetryPolicy) -> Self {
@@ -200,6 +215,58 @@ impl AgentLoopConfig {
         self.sink = Some(sink);
         self
     }
+}
+
+/// Cuts the run's current step short without ending the run, for a host whose user has
+/// something to say now. The reply streaming stops where it is: its text stays, and the tool
+/// calls it was cut off in do not run. The tools running get a cancelled token, and a call the
+/// step had not started yet gets a result saying so. The loop then reads its steering messages
+/// and goes on. Cancelling the run's own token still ends the run.
+#[derive(Clone, Default)]
+pub struct StepInterrupt {
+    step: Arc<std::sync::Mutex<Option<CancellationToken>>>,
+}
+
+impl StepInterrupt {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Interrupts the step under way. False when none is: the run is between steps, where it
+    /// reads its steering messages anyway, or it has ended.
+    pub fn interrupt(&self) -> bool {
+        match self.step.lock().unwrap().as_ref() {
+            Some(step) if !step.is_cancelled() => {
+                step.cancel();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// The token for the next step, a child of the run's.
+    fn begin(&self, run: &CancellationToken) -> CancellationToken {
+        let step = run.child_token();
+        *self.step.lock().unwrap() = Some(step.clone());
+        step
+    }
+
+    fn end(&self) {
+        *self.step.lock().unwrap() = None;
+    }
+}
+
+/// What stays of a reply a step interrupt cut short: its text, as said. Its thinking and its tool
+/// calls, which the stream may have cut off, go. `None` when it had said nothing yet.
+fn interrupted_reply(message: &AssistantMessage) -> Option<AssistantMessage> {
+    let mut kept = message.clone();
+    kept.content.retain(|part| matches!(part, crate::types::AssistantPart::Text { text } if !text.trim().is_empty()));
+    if kept.content.is_empty() {
+        return None;
+    }
+    kept.stop_reason = StopReason::Stop;
+    kept.error_message = None;
+    Some(kept)
 }
 
 /// Delivers events to the sink, then the channel. A closed channel only means nobody is
@@ -333,7 +400,30 @@ async fn run_loop(
                 new_messages.push(message);
             }
 
-            let message = stream_assistant_response(context, &provider, config, emit, &cancel).await;
+            // A step is one reply and the tool calls it makes; an interrupt ends only the step.
+            let step = config.interrupt.as_ref().map_or_else(|| cancel.clone(), |interrupt| interrupt.begin(&cancel));
+            let interrupted = || step.is_cancelled() && !cancel.is_cancelled();
+            let message = stream_assistant_response(context, &provider, config, emit, &step).await;
+
+            if message.stop_reason == StopReason::Aborted && interrupted() {
+                // The reply stays as far as it got; the loop goes on to what the user said.
+                if let Some(interrupt) = &config.interrupt {
+                    interrupt.end();
+                }
+                let kept = interrupted_reply(&message);
+                if matches!(context.messages.last(), Some(AgentMessage::Assistant(_))) {
+                    context.messages.pop();
+                }
+                if let Some(kept) = &kept {
+                    context.messages.push(AgentMessage::Assistant(kept.clone()));
+                    new_messages.push(AgentMessage::Assistant(kept.clone()));
+                }
+                emit.send(AgentEvent::TurnEnd { message: AgentMessage::Assistant(message), tool_results: vec![] }).await;
+                last_turn = None;
+                has_more_tool_calls = false;
+                pending = hooks.steering_messages().await;
+                continue;
+            }
             new_messages.push(AgentMessage::Assistant(message.clone()));
 
             if matches!(message.stop_reason, StopReason::Error | StopReason::Aborted) {
@@ -348,17 +438,33 @@ async fn run_loop(
             if !message.tool_calls().is_empty() {
                 // A `Length` stop cut the output at the token limit, so every call's arguments
                 // may be truncated; none is safe to run.
-                let batch = if message.stop_reason == StopReason::Length {
+                let mut batch = if message.stop_reason == StopReason::Length {
                     fail_truncated_tool_calls(&message, emit).await
                 } else {
-                    execute_tool_calls(context, &message, config, emit, &cancel).await
+                    execute_tool_calls(context, &message, config, emit, &step).await
                 };
+                if interrupted() {
+                    // The calls the interrupt came before never ran; each still gets its answer.
+                    for call in message.tool_calls() {
+                        if !batch.messages.iter().any(|result| result.tool_call_id == call.id) {
+                            batch.messages.push(tool_result_message(&FinalizedCall {
+                                tool_call: call.clone(),
+                                result: error_result("Not run: the user interrupted with a new message.".into()),
+                                is_error: true,
+                            }));
+                        }
+                    }
+                    batch.terminate = false;
+                }
                 has_more_tool_calls = !batch.terminate;
                 for result in batch.messages {
                     context.messages.push(AgentMessage::ToolResult(result.clone()));
                     new_messages.push(AgentMessage::ToolResult(result.clone()));
                     tool_results.push(result);
                 }
+            }
+            if let Some(interrupt) = &config.interrupt {
+                interrupt.end();
             }
 
             emit.send(AgentEvent::TurnEnd { message: AgentMessage::Assistant(message.clone()), tool_results: tool_results.clone() },
@@ -1201,6 +1307,123 @@ mod tests {
         assert!(matches!(&messages[3], AgentMessage::User(user) if user.content[0].as_text() == Some("use yay instead")));
         let AgentMessage::Assistant(last) = messages.last().unwrap() else { panic!() };
         assert_eq!((messages.len(), last.text().as_str()), (5, "on it"));
+    }
+
+    /// Waits for its token, then reports how it ended: a command that would hold the step.
+    struct Waits(crate::AgentMessageQueue, StepInterrupt);
+
+    #[async_trait]
+    impl Tool for Waits {
+        fn name(&self) -> &str {
+            "wait"
+        }
+        fn description(&self) -> &str {
+            "waits"
+        }
+        fn parameters(&self) -> Value {
+            json!({ "type": "object", "properties": {} })
+        }
+        async fn execute(&self, _id: &str, _args: Value, cancel: CancellationToken, _on_update: ToolUpdateFn) -> Result<ToolResult, ToolError> {
+            // The user writes, then asks for it to be read now.
+            self.0.push(AgentMessage::user("skip that, ship it"));
+            assert!(self.1.interrupt());
+            cancel.cancelled().await;
+            Ok(ToolResult::text("cut short"))
+        }
+    }
+
+    struct Steering(crate::AgentMessageQueue);
+
+    #[async_trait]
+    impl LoopHooks for Steering {
+        async fn steering_messages(&self) -> Vec<AgentMessage> {
+            self.0.drain()
+        }
+    }
+
+    /// An interrupt cuts the step's tools short, and the run goes on with what the user said.
+    #[tokio::test]
+    async fn an_interrupt_ends_the_step_not_the_run() {
+        let provider = Scripted::new("p", vec![Turn::Call { name: "wait", args: "{}", stop: StopReason::ToolUse }, Turn::Text("shipping")]);
+        let queue = crate::AgentMessageQueue::new(crate::QueueMode::All);
+        let interrupt = StepInterrupt::new();
+        let tool = Arc::new(Waits(queue.clone(), interrupt.clone()));
+        let config = AgentLoopConfig::new(provider.clone()).with_hooks(Arc::new(Steering(queue))).with_interrupt(interrupt.clone());
+        let (messages, _) = tokio::time::timeout(std::time::Duration::from_secs(5), run_with(config, vec![tool], CancellationToken::new())).await.expect("the step let go");
+        assert_eq!(tool_results(&messages)[0].text(), "cut short");
+        assert!(matches!(&messages[3], AgentMessage::User(user) if user.content[0].as_text() == Some("skip that, ship it")));
+        let AgentMessage::Assistant(last) = messages.last().unwrap() else { panic!() };
+        assert_eq!((last.stop_reason, last.text().as_str()), (StopReason::Stop, "shipping"));
+        assert_eq!(provider.requests.lock().unwrap().len(), 2);
+        assert!(!interrupt.interrupt(), "no step runs once the run has ended");
+    }
+
+    /// Says a few words, then holds its reply open until it is cancelled.
+    struct Stalls(Mutex<u32>);
+
+    #[async_trait]
+    impl Provider for Stalls {
+        fn provider_id(&self) -> &str {
+            "p"
+        }
+        fn model_id(&self) -> &str {
+            "stalls"
+        }
+        async fn stream(&self, _request: ModelRequest, cancel: CancellationToken) -> AssistantEventStream {
+            let first = {
+                let mut calls = self.0.lock().unwrap();
+                *calls += 1;
+                *calls == 1
+            };
+            let (tx, rx) = mpsc::channel(16);
+            tokio::spawn(async move {
+                let _ = tx.send(AssistantEvent::Start).await;
+                let _ = tx.send(AssistantEvent::TextStart { index: 0 }).await;
+                if first {
+                    let _ = tx.send(AssistantEvent::ThinkingStart { index: 1 }).await;
+                    let _ = tx.send(AssistantEvent::TextDelta { index: 0, delta: "First I will".into() }).await;
+                    cancel.cancelled().await;
+                    let _ = tx.send(AssistantEvent::Error { message: "Request aborted".into(), aborted: true }).await;
+                } else {
+                    let _ = tx.send(AssistantEvent::TextDelta { index: 0, delta: "shipping".into() }).await;
+                    let _ = tx.send(AssistantEvent::TextEnd { index: 0 }).await;
+                    let _ = tx.send(AssistantEvent::Done { stop_reason: StopReason::Stop, usage: Usage::default() }).await;
+                }
+            });
+            channel_stream(rx)
+        }
+    }
+
+    /// An interrupt in the middle of a reply keeps what it said so far, as said, and the next
+    /// request carries it before the user's message.
+    #[tokio::test]
+    async fn an_interrupted_reply_keeps_its_words() {
+        let queue = crate::AgentMessageQueue::new(crate::QueueMode::All);
+        let interrupt = StepInterrupt::new();
+        let config = AgentLoopConfig::new(Arc::new(Stalls(Mutex::new(0)))).with_hooks(Arc::new(Steering(queue.clone()))).with_interrupt(interrupt.clone());
+        let context = AgentContext { system_prompt: String::new(), messages: vec![], tools: vec![], cache_points: Vec::new() };
+        let (tx, mut rx) = mpsc::channel(256);
+        let run = tokio::spawn(async move { run_agent_loop(vec![AgentMessage::user("go")], context, &config, &tx, CancellationToken::new()).await });
+        let mut sent = false;
+        while let Some(event) = rx.recv().await {
+            if let AgentEvent::MessageUpdate { assistant_message_event: AssistantEvent::TextDelta { .. }, .. } = event {
+                if !sent {
+                    sent = true;
+                    queue.push(AgentMessage::user("skip that, ship it"));
+                    assert!(interrupt.interrupt());
+                }
+            }
+        }
+        let messages = run.await.unwrap();
+        let said: Vec<String> = messages
+            .iter()
+            .map(|message| match message {
+                AgentMessage::User(user) => format!("user: {}", user.content[0].as_text().unwrap_or("")),
+                AgentMessage::Assistant(assistant) => format!("bot: {} ({:?}, {} parts)", assistant.text(), assistant.stop_reason, assistant.content.len()),
+                other => format!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(said, ["user: go", "bot: First I will (Stop, 1 parts)", "user: skip that, ship it", "bot: shipping (Stop, 1 parts)"]);
     }
 
     #[tokio::test]

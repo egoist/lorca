@@ -36,7 +36,7 @@ pub use agent::{Agent, AgentError, AgentHandle, AgentMessageQueue, AgentOptions,
 pub use agent_loop::{
     agent_loop, run_agent_loop, run_agent_loop_continue, AfterToolCallContext, AfterToolCallResult,
     AgentContext, AgentLoopConfig, BeforeToolCallContext, BeforeToolCallResult, EventSink, LoopHooks, NoHooks,
-    PrepareNextTurnContext, ShouldStopAfterTurnContext, ToolExecutionMode, TurnUpdate,
+    PrepareNextTurnContext, ShouldStopAfterTurnContext, StepInterrupt, ToolExecutionMode, TurnUpdate,
 };
 pub use models::ModelInfo;
 pub use retry::{is_context_overflow, is_retryable_error, RetryPolicy};

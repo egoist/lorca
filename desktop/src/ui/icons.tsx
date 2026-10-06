@@ -127,6 +127,8 @@ import {
   Network,
   Pencil,
   Menu,
+  Reply,
+  CircleX,
   type IconNode,
 } from "lucide";
 import { createMemo } from "solid-js";
@@ -161,6 +163,9 @@ const symbols: Record<string, IconNode> = {
   "mic.fill": Mic,
   "stop.fill": Square,
   xmark: X,
+  "xmark.circle.fill": CircleX,
+  "arrowshape.turn.up.left": Reply,
+  "arrowshape.turn.up.left.fill": Reply,
   "doc.fill": File,
   "chevron.left": ChevronLeft,
   "chevron.right": ChevronRight,

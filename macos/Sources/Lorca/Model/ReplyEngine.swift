@@ -8,7 +8,9 @@ final class ReplyEngine {
     private var tasks: [Chat.ID: Task<Void, Never>] = [:]
     private var working: [Chat.ID: Bot.ID] = [:]
     /// Messages typed during a mock turn, promoted together at its next tool/answer boundary.
-    private var steering: [Chat.ID: [(prompt: String, chat: Chat)]] = [:]
+    private var steering: [Chat.ID: [(prompt: String, chat: Chat, messageID: Message.ID)]] = [:]
+    /// Which turn is the chat's latest, so a turn Send now replaced does not end the new one.
+    private var generations: [Chat.ID: Int] = [:]
     private var turnCount = 0
 
     init(store: AppStore) {
@@ -22,8 +24,19 @@ final class ReplyEngine {
     func cancel(chatID: Chat.ID) {
         tasks[chatID]?.cancel()
         tasks[chatID] = nil
-        steering[chatID] = nil
+        for held in steering.removeValue(forKey: chatID) ?? [] {
+            store.setMockQueued(held.messageID, in: chatID, false)
+        }
         setWorking(nil, in: chatID)
+    }
+
+    /// Send now: the mock turn drops its step and answers the messages it holds.
+    func sendNow(chatID: Chat.ID) {
+        guard tasks[chatID] != nil, let steered = takeSteering(in: chatID) else { return }
+        tasks[chatID]?.cancel()
+        tasks[chatID] = nil
+        turnCount += 1
+        start(prompt: steered.prompt, chat: steered.chat)
     }
 
     private func setWorking(_ botID: Bot.ID?, in chatID: Chat.ID) {
@@ -34,9 +47,10 @@ final class ReplyEngine {
         if let botID { store.setMockWorking(botID, in: chatID, true) }
     }
 
-    func respond(to prompt: String, in chat: Chat) {
+    func respond(to prompt: String, in chat: Chat, messageID: Message.ID) {
         if tasks[chat.id] != nil {
-            steering[chat.id, default: []].append((prompt, chat))
+            steering[chat.id, default: []].append((prompt, chat, messageID))
+            store.setMockQueued(messageID, in: chat.id, true)
             return
         }
         start(prompt: prompt, chat: chat)
@@ -48,6 +62,8 @@ final class ReplyEngine {
 
         turnCount += 1
         let chatID = chat.id
+        let generation = (generations[chatID] ?? 0) + 1
+        generations[chatID] = generation
         tasks[chatID] = Task { [weak self] in
             guard let self else { return }
             var steps = script
@@ -60,12 +76,14 @@ final class ReplyEngine {
                     steps = makeScript(prompt: steered.prompt, chat: steered.chat)
                 }
             }
+            guard generations[chatID] == generation else { return }
             finish(chatID: chatID)
         }
     }
 
     private func takeSteering(in chatID: Chat.ID) -> (prompt: String, chat: Chat)? {
         guard let queued = steering.removeValue(forKey: chatID), let last = queued.last else { return nil }
+        for held in queued { store.setMockQueued(held.messageID, in: chatID, false) }
         return (queued.map(\.prompt).joined(separator: "\n"), last.chat)
     }
 

@@ -43,6 +43,8 @@ futures.workspace = true
 hkdf.workspace = true
 libc.workspace = true
 open = { workspace = true, optional = true }
+# A reply's quote of a message reads as plain text.
+pulldown-cmark = { version = "0.13", default-features = false }
 rand.workspace = true
 regex.workspace = true
 reqwest.workspace = true

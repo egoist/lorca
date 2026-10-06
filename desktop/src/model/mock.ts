@@ -359,12 +359,22 @@ function launchRoomThread(): Message[] {
       minutesAgo(12),
     ),
     message(bot("bot-patch"), text("Updated the getting-started guide and checked every download link. The site builds cleanly. The changes are ready to review."), minutesAgo(9)),
-    message(
-      bot("bot-nova"),
-      text("The launch checklist is ready:\n\n- **Onboarding** — reviewed on Linux, Windows, and iPhone\n- **Website** — guide updated, links checked\n- **Launch copy** — Writer's draft is ready\n\nOnly your final review is left."),
-      minutesAgo(7),
-    ),
-    message(you, text("Great. Keep the announcement as a draft until I've reviewed it."), minutesAgo(5)),
+    {
+      ...message(
+        bot("bot-nova"),
+        text("The launch checklist is ready:\n\n- **Onboarding** — reviewed on Linux, Windows, and iPhone\n- **Website** — guide updated, links checked\n- **Launch copy** — Writer's draft is ready\n\nOnly your final review is left."),
+        minutesAgo(7),
+      ),
+      id: "msg-mock-checklist",
+    },
+    {
+      ...message(you, text("Great. Keep the announcement as a draft until I've reviewed it."), minutesAgo(5)),
+      replyTo: {
+        messageID: "msg-mock-checklist",
+        author: bot("bot-nova"),
+        text: "The launch checklist is ready: Onboarding — reviewed on Linux, Windows, and iPhone Website — guide updated, links checked Launch copy — Writer's draft is ready Only your final review is left.",
+      },
+    },
     message(bot("bot-nova"), text("Saved in `launch/announcement.md`. I'll include the checklist in your morning brief."), minutesAgo(4)),
   ];
 }

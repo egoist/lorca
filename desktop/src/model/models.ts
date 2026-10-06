@@ -4,6 +4,7 @@
 
 import { L, Lc } from "../l10n";
 import * as Format from "./format";
+import { markdownBlocks, plainText } from "./markdown";
 
 // MARK: - Providers
 
@@ -863,6 +864,9 @@ export interface CommandRun {
   /** The bot left the command to the user: its turn ended with the command still running, or it
    * waits on the command at a question. */
   handedOver: boolean;
+  /** It runs in the background: the bot started it there, or the user sent it. Stop in the chat
+   * leaves it running. */
+  background: boolean;
 }
 
 export const isLive = (run: CommandRun) => run.state === "waiting" || run.state === "running";
@@ -993,6 +997,33 @@ export interface Message {
   createdAt: number;
   /** Files sent with a text body; other bodies carry none. */
   attachments: Attachment[];
+  /** The message the user answers with this one, quoted. */
+  replyTo?: ReplyQuote;
+  /** A message of the user's the bot's turn holds for its next step; Send now has it read now. */
+  queued?: boolean;
+}
+
+/** A message quoted by the user's reply: who wrote it and how it opens, as the CLI keeps it with the
+ * reply, so the quote reads the same where the original has not loaded. */
+export interface ReplyQuote {
+  messageID: string;
+  author: Author;
+  text: string;
+}
+
+/** A finished text message, the user's or a bot's, which a reply can answer. */
+export function canBeQuoted(message: Message): boolean {
+  return message.body.kind === "text" && message.state.kind === "complete" && message.author.kind !== "system";
+}
+
+/** The quote of `message` the CLI makes, for a reply it has not confirmed yet: its words without the
+ * Markdown, on one line, or the names of its files. */
+export function quoteOf(message: Message): ReplyQuote | undefined {
+  if (!canBeQuoted(message) || message.body.kind !== "text") return undefined;
+  let line = plainText(markdownBlocks(message.body.text)).split(/\s+/).filter(Boolean).join(" ");
+  if (line === "") line = message.attachments.map((attachment) => attachment.name).join(", ");
+  if ([...line].length > 280) line = `${[...line].slice(0, 280).join("").trimEnd()}…`;
+  return { messageID: message.id, author: message.author, text: line };
 }
 
 export function newMessageID(): string {
@@ -1002,6 +1033,14 @@ export function newMessageID(): string {
 /** A `bash` row's command. */
 export function commandRunOf(message: Message): CommandRun | undefined {
   return message.body.kind === "tool" ? message.body.tool.run : undefined;
+}
+
+/** A command running in its terminal that the bot's call still waits on: Run in Background sends
+ * it there, and the call returns. */
+export function runsInForeground(message: Message): boolean {
+  if (message.body.kind !== "tool") return false;
+  const { isRunning, run } = message.body.tool;
+  return isRunning && !!run && takesInput(run) && !run.background;
 }
 
 export function messageText(message: Message): string {

@@ -356,6 +356,7 @@ impl Agent {
             sink: None,
             retry: self.retry.clone(),
             request: self.request.clone(),
+            interrupt: None,
         };
 
         let (tx, mut rx) = mpsc::channel::<AgentEvent>(256);

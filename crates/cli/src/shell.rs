@@ -6,9 +6,14 @@
 //! in a later turn and the user can answer it from any Device (`bash.stdin`). What the user types
 //! goes to the command and nowhere else: not the card, not a log, not the bot.
 //!
+//! A command the bot starts with `background` (a server, a watcher, a long build) is meant to
+//! outlive its turn: Stop in the chat leaves it running, the idle limit spares it unless it sits
+//! at a question, the count limit stops it after every other command, and its card shows only
+//! when it asks something.
+//!
 //! A pty that outlives its turn is a leak unless something ends it: the command exiting, Stop
-//! (in the chat or on the card), deleting the chat or its bot, Lorca quitting, the idle limit,
-//! and the count limit.
+//! (in the chat, on the card, or in Running tasks), deleting the chat or its bot, Lorca quitting,
+//! the idle limit, and the count limit.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -31,8 +36,12 @@ use crate::model::{Author, Body, CommandRun, Message};
 /// phone.
 pub const IDLE_LIMIT: Duration = Duration::from_secs(30 * 60);
 /// At most this many commands run in terminals at once on a Runner; the oldest one stops when
-/// another starts. Each holds a pty, a process group, and up to a few hundred KB of output.
+/// another starts, a background one only once no other is left. Each holds a pty, a process
+/// group, and up to a few hundred KB of output.
 pub const MAX_SESSIONS: usize = 8;
+/// How often a background command at a question looks again for a moment no turn runs in its
+/// chat, to show its card.
+const HAND_OVER_RETRY: Duration = Duration::from_secs(5);
 /// How long an ended session stays for the bot to read how it ended. Its card says so anyway.
 const ENDED_RETENTION: Duration = Duration::from_secs(30 * 60);
 /// A running command's card catches up with its output once the output pauses this long, and
@@ -115,8 +124,13 @@ impl Sessions {
                     left_running: false,
                 }),
             }
-            let live: Vec<Arc<BashSession>> = entries.iter().filter_map(|e| e.session.clone()).filter(|s| s.end().is_none()).collect();
-            live.len().checked_sub(max).map(|over| live[..over].to_vec()).unwrap_or_default()
+            let mut live: Vec<Arc<BashSession>> = entries.iter().filter_map(|e| e.session.clone()).filter(|s| s.end().is_none()).collect();
+            let over = live.len().saturating_sub(max);
+            // Oldest first, a background command after every other, and never the one starting.
+            live.retain(|s| s.id() != session.id());
+            live.sort_by_key(|s| s.background());
+            live.truncate(over);
+            live
         };
         for session in oldest {
             session.stop(format!("Stopped to make room for a newer command ({max} at most)"));
@@ -161,9 +175,23 @@ impl Sessions {
         self.entries.lock().unwrap().retain(|e| e.session.as_ref().is_none_or(|s| s.id() != id));
     }
 
-    /// Stop in the chat: every session there ends, and its card says so.
+    /// Send now in the chat: every command running there goes to the background and runs on,
+    /// so a call waiting on one returns and the turn reads the user's message at once.
+    pub fn background_chat(&self, app: &App, chat_id: &str) {
+        let sessions: Vec<Arc<BashSession>> =
+            self.entries.lock().unwrap().iter().filter(|e| e.chat_id == chat_id).filter_map(|e| e.session.clone()).filter(|s| !s.background()).collect();
+        for session in sessions {
+            if session.send_to_background() {
+                self.sync_row(app, session.id());
+            }
+        }
+    }
+
+    /// Stop in the chat: every session there ends, and its card says so, except a command
+    /// running in the background, which Running tasks stops.
     pub fn stop_chat(&self, chat_id: &str) {
-        let sessions: Vec<Arc<BashSession>> = self.entries.lock().unwrap().iter().filter(|e| e.chat_id == chat_id).filter_map(|e| e.session.clone()).collect();
+        let sessions: Vec<Arc<BashSession>> =
+            self.entries.lock().unwrap().iter().filter(|e| e.chat_id == chat_id).filter_map(|e| e.session.clone()).filter(|s| !s.background()).collect();
         for session in sessions {
             session.stop("Stopped");
         }
@@ -258,15 +286,18 @@ impl Sessions {
 
     /// The bot's turn in the chat ended: every command it left running there is the user's now,
     /// to answer or to stop, and its card shows until the command ends. Until then the bot was
-    /// the one dealing with it, and the working row said so.
+    /// the one dealing with it, and the working row said so. A command in the background, any
+    /// bot's, is handed over only while it sits at a question; Running tasks shows the rest.
     pub fn hand_over(&self, app: &App, chat_id: &str, bot_id: &str) {
         let live: Vec<(String, Arc<BashSession>)> = self
             .entries
             .lock()
             .unwrap()
             .iter()
-            .filter(|e| e.chat_id == chat_id && e.bot_id == bot_id)
-            .filter_map(|e| Some((e.message_id.clone()?, e.session.clone().filter(|s| s.end().is_none())?)))
+            .filter(|e| e.chat_id == chat_id)
+            .filter_map(|e| Some((e.bot_id.as_str(), e.message_id.clone()?, e.session.clone().filter(|s| s.end().is_none())?)))
+            .filter(|(bot, _, session)| if session.background() { live_state(session) == "waiting" } else { *bot == bot_id })
+            .map(|(_, message_id, session)| (message_id, session))
             .collect();
         for (message_id, session) in live {
             self.hand_over_card(app, chat_id, &message_id, &session);
@@ -284,6 +315,20 @@ impl Sessions {
         if session.end().is_none() && live_state(&session) == "waiting" {
             self.hand_over_card(app, chat_id, &message_id, &session);
         }
+    }
+
+    /// Background command `id` sits at a question: its card shows once no turn runs in its chat,
+    /// since a turn may still answer it. False while one does.
+    fn hand_over_asking(&self, app: &App, id: &str) -> bool {
+        let found = self.entries.lock().unwrap().iter().find(|e| e.session.as_ref().is_some_and(|s| s.id() == id)).and_then(|e| {
+            let message_id = e.message_id.clone()?;
+            Some((e.chat_id.clone(), message_id, e.session.clone()?))
+        });
+        let Some((chat_id, message_id, session)) = found else { return true };
+        let lock = app.chat_lock(&chat_id);
+        let Ok(_idle) = lock.try_lock() else { return false };
+        self.hand_over_card(app, &chat_id, &message_id, &session);
+        true
     }
 
     /// Hands call `message_id`'s command to the user, once: its card shows from now on, up to
@@ -364,6 +409,7 @@ fn follow(run: &mut CommandRun, summary: &mut String, session: &BashSession) {
     run.session_id = Some(session.id().to_string());
     run.command = session.command().chars().take(crate::model::APP_COMMAND_CHARS).collect();
     run.state = state.into();
+    run.background = session.background();
     run.prompt = if state == "waiting" { session.prompt() } else { None };
     run.output = (!lines.is_empty()).then(|| lines.join("\n"));
     run.outcome = end.map(|end| end.describe());
@@ -396,23 +442,28 @@ fn idle_reason(idle: Duration) -> String {
 }
 
 /// Follows one session for its whole life: stops it at the idle limit, keeps its card in step
-/// with its output, and lets it go some time after it ended.
+/// with its output, and lets it go some time after it ended. A background command meets the
+/// idle limit only at a question, and its card shows once it asks and no turn could answer.
 async fn watch(app: Arc<App>, session: Arc<BashSession>) {
     let sessions = &app.shell_sessions;
     let id = session.id().to_string();
     let mut changes = session.changes();
     let mut shown = (session.total(), live_state(&session));
     let mut last_sync = Instant::now();
+    let mut handed_over = false;
     while session.end().is_none() {
         let now = Instant::now();
+        let current = (session.total(), live_state(&session));
+        let asking = current.1 == "waiting";
         let idle = sessions.limits().idle;
-        let idle_until = session.last_activity() + idle;
-        if now >= idle_until {
+        let idle_until = (!session.background() || asking).then(|| session.last_activity() + idle);
+        if idle_until.is_some_and(|until| now >= until) {
             session.stop(idle_reason(idle));
             break;
         }
-        let current = (session.total(), live_state(&session));
-        let mut wake = idle_until;
+        // Nothing to wake for but output, a question settling, or the next look for a moment
+        // to hand one over.
+        let mut wake = idle_until.unwrap_or(now + IDLE_LIMIT);
         if current != shown {
             let due = (session.last_output() + ROW_SETTLE).min(last_sync + ROW_EVERY);
             if now >= due {
@@ -422,6 +473,12 @@ async fn watch(app: Arc<App>, session: Arc<BashSession>) {
                 continue;
             }
             wake = wake.min(due);
+        }
+        if session.background() && asking && !handed_over {
+            handed_over = sessions.hand_over_asking(&app, &id);
+            if !handed_over {
+                wake = wake.min(now + HAND_OVER_RETRY);
+            }
         }
         // A command that stopped on a question reads as waiting once it has been quiet there.
         if current.1 == "running" {
@@ -461,9 +518,9 @@ async fn watch(app: Arc<App>, session: Arc<BashSession>) {
     }
 }
 
-/// `bash.stdin` and `bash.stop` for a command's card on this Runner, from the local app or a
-/// sealed request: `{ chat_id, message_id, text?, enter? }`. The text is written to the command
-/// and dropped; nothing records it.
+/// `bash.stdin`, `bash.stop`, and `bash.background` for a command's card on this Runner, from the
+/// local app or a sealed request: `{ chat_id, message_id, text?, enter? }`. The text is written to
+/// the command and dropped; nothing records it.
 pub async fn serve(app: &Arc<App>, verb: &str, body: &Value) -> Result<Value, String> {
     let chat_id = body["chat_id"].as_str().ok_or("missing chat_id")?;
     let message_id = body["message_id"].as_str().ok_or("missing message_id")?;
@@ -486,6 +543,14 @@ pub async fn serve(app: &Arc<App>, verb: &str, body: &Value) -> Result<Value, St
         "bash.stop" => {
             session.stop("Stopped");
             Ok(json!({ "stopped": true }))
+        }
+        // The bot's call waiting on it returns, and the command runs on as if started there.
+        "bash.background" => {
+            if !session.send_to_background() {
+                return Err("The command has already ended".into());
+            }
+            app.shell_sessions.sync_row(app, session.id());
+            Ok(json!({ "background": true }))
         }
         other => Err(format!("Unknown request {other}")),
     }

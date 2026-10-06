@@ -1,6 +1,6 @@
 ---
 title: Chats
-description: Direct chats with one bot, attachments, dictation, mentions, and how bots message each other.
+description: Direct chats with one bot, attachments, dictation, mentions, replies, and how bots message each other.
 icon: MessageCircle
 ---
 
@@ -10,7 +10,7 @@ Every bot has one **direct chat** with you. It is always that bot that answers t
 
 Type and press Return. While a bot works, its avatar shows a breathing green dot in the sidebar and the chat shows what it is doing in a shimmering line: "Thinking…", "Running command: Install dependencies…", "Searching the web…", "Using GitHub…". Replies arrive a paragraph at a time.
 
-Send another message while the bot works to steer it. Its current model step and tools—including a running command—finish first; then the bot sees your new instruction before its next step. To interrupt immediately in the desktop app, press **Stop**.
+Send another message while the bot works to steer it. Its current model step and tools—including a running command—finish first; then the bot sees your new instruction before its next step. Until then your message waits, dimmed, with **Send now** under it: click it to have the bot read it right away. A command the bot is running moves to the background and keeps going, and the bot can check on it or stop it. To end the bot's work instead, press **Stop** in the desktop app.
 
 You do not see tool calls in the transcript. You see what the bot says before and after its work.
 
@@ -31,6 +31,10 @@ Lorca listens in the language of your current keyboard. Choose another in **Sett
 ## Mentions
 
 Type `@` and a bot's name. In a direct chat a mention is a reference the bot acts on: "Ask @Scout whether the leak is fixed" makes this bot message Scout.
+
+## Replies
+
+To answer a particular message, right-click its bubble and choose **Reply**, or swipe it to the left on your phone. The composer shows what you are replying to; press Escape or its × to drop it. Your message carries a quote of the original, and the bot reads it. In a group, the bot you reply to speaks first, after any bot you mention. Click a quote to jump back to the message it came from.
 
 ## Bots that message each other
 

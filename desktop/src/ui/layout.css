@@ -487,6 +487,64 @@ body.resizing * {
   font-size: var(--text-message);
 }
 
+/* Held for the bot's next step: the bubble waits, dimmed, over Send now. */
+.bubble.held {
+  opacity: 0.55;
+}
+
+.send-now {
+  margin-top: 3px;
+  padding: 0 2px;
+  border: 0;
+  background: none;
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 18px;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+/* A message a reply's quote brought into view pulses twice. */
+.bubble.flash {
+  animation: bubble-flash 1.1s ease-in-out;
+}
+
+@keyframes bubble-flash {
+  25%,
+  75% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* Above a reply's bubble: who wrote the message it answers and how that message opens. */
+.reply-quote {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  min-width: 0;
+  height: 18px;
+  margin-bottom: 2px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 11.5px;
+  color: var(--label-2);
+  cursor: pointer;
+}
+
+.reply-quote svg {
+  flex: none;
+  color: var(--label-3);
+}
+
+.reply-quote-name {
+  font-weight: 600;
+}
+
 .bubble.bot {
   background: var(--bot-bubble);
 }
@@ -1088,6 +1146,50 @@ body.resizing * {
   align-items: end;
   row-gap: 6px;
   padding: 12px 8px 8px;
+}
+
+.composer-field.expanded.replying {
+  grid-template-areas:
+    "reply reply reply"
+    "strip strip strip"
+    "text text text"
+    "attach . trailing";
+}
+
+/* Above the text while the draft answers a message; Escape or the button drops it. */
+.composer-reply {
+  grid-area: reply;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 0 4px 2px 6px;
+  font-size: 12px;
+  color: var(--label-2);
+}
+
+.composer-reply > svg {
+  flex: none;
+}
+
+.composer-reply-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.composer-reply-name {
+  font-weight: 600;
+  color: var(--label);
+}
+
+.composer-reply-cancel {
+  display: flex;
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--label-3);
+  cursor: pointer;
 }
 
 /* Chips 14 apart side by side (8, and the remove button's overhang), rows 8 apart, room for the
