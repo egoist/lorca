@@ -1026,6 +1026,22 @@ final class AppStore {
         _ = try await client.request("bash.stop", ["chat_id": chatID, "message_id": messageID])
     }
 
+    /// Sends a command the bot is waiting on to the background (`bash.background`): the bot's
+    /// call returns and the command runs on, out of the way of Stop in the chat.
+    func sendCommandToBackground(chatID: Chat.ID, messageID: Message.ID) async throws {
+        guard !isMock else {
+            update(messageID, in: chatID) { message in
+                guard case var .tool(tool) = message.body, var run = tool.run else { return }
+                run.background = true
+                tool.run = run
+                tool.isRunning = false
+                message.body = .tool(tool)
+            }
+            return
+        }
+        _ = try await client.request("bash.background", ["chat_id": chatID, "message_id": messageID])
+    }
+
     /// The demo has no Runner: an answer or a Stop ends the command at once.
     private func finishMockCommand(chatID: Chat.ID, messageID: Message.ID, state: CommandRun.State) {
         update(messageID, in: chatID) { message in
@@ -1303,7 +1319,7 @@ final class AppStore {
         append(message, to: chatID)
 
         if isMock {
-            replyEngine?.respond(to: trimmed, in: chat)
+            replyEngine?.respond(to: trimmed, in: chat, messageID: message.id)
             return chatID
         }
 
@@ -1419,6 +1435,12 @@ final class AppStore {
         } ?? []
     }
 
+    /// The commands in `chatID` that a bot's call still waits on, which Run in Background sends
+    /// there.
+    func foregroundCommands(in chatID: Chat.ID) -> [Message] {
+        chat(chatID)?.messages.filter(\.runsInForeground) ?? []
+    }
+
     /// Notes when a command starts running in its terminal, and tells the observers once it has
     /// run for `taskDelay`.
     private func noteCommand(_ message: Message, in chatID: Chat.ID) {
@@ -1454,6 +1476,21 @@ final class AppStore {
         if working { runningJobs.append((id, chatID, botID, nil)) }
         emit(.respondingChanged(chatID))
         emit(.chatsChanged)
+    }
+
+    /// Has the bot's turn read a message it holds for its next step now: a command it waits on
+    /// goes to the background, and a reply in progress stops where it got to.
+    func sendNow(_ messageID: Message.ID, in chatID: Chat.ID) {
+        if isMock {
+            replyEngine?.sendNow(chatID: chatID)
+            return
+        }
+        perform("chats.send_now", ["chat_id": chatID, "message_id": messageID])
+    }
+
+    /// Marks a message the mock turn holds, or no longer holds.
+    func setMockQueued(_ messageID: Message.ID, in chatID: Chat.ID, _ queued: Bool) {
+        update(messageID, in: chatID) { $0.queued = queued }
     }
 
     func stopResponding(in chatID: Chat.ID) {

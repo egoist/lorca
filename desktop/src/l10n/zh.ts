@@ -573,6 +573,8 @@ export const zh: Record<string, string> = {
   "Routines are recurring tasks this bot runs on a schedule. Ask it in chat to set one up.": "例行任务是此智能体按计划重复运行的任务。在聊天中让它设置一个。",
   "Rule": "规则",
   "rule allow automatically ask first always allow": "规则 自动允许 先询问 始终允许 rule allow automatically ask first always allow",
+  "Run Command in Background": "在后台运行命令",
+  "Run in Background": "在后台运行",
   "Run Now": "立即运行",
   "Runner": "Runner",
   "Runner · runs bots with its own credentials": "Runner · 用自己的凭证运行智能体",
@@ -790,4 +792,6 @@ export const zh: Record<string, string> = {
   "Your identity is restored": "你的身份已恢复",
   "Zoom": "缩放",
   "You": "你",
+  "Send now": "立即发送",
+  "Have the bot read this now. A command it is running moves to the background.": "让智能体现在就读到这条消息。它正在运行的命令会转到后台。",
 };

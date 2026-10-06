@@ -259,6 +259,7 @@ export const zh: Record<string, string> = {
   "Role": "角色",
   "Routines": "例行任务",
   "Routines are recurring tasks this bot runs on a schedule. Ask it in chat to set one up.": "例行任务是这个智能体按计划重复运行的任务。在聊天中让它帮你设置。",
+  "Run in Background": "在后台运行",
   "Run Now": "立即运行",
   "Runner": "Runner",
   "Running": "正在运行",
@@ -358,4 +359,7 @@ export const zh: Record<string, string> = {
   "Replying to {name}": "回复 {name}",
   "Cancel reply": "取消回复",
   "In reply to {name}: {text}": "回复 {name}：{text}",
+  "Send now": "立即发送",
+  "Could not send now": "无法立即发送",
+  "Have the bot read this now. A command it is running moves to the background.": "让智能体现在就读到这条消息。它正在运行的命令会转到后台。",
 };

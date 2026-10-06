@@ -830,6 +830,9 @@ struct CommandRun: Hashable {
     /// The bot left the command to the user: its turn ended with the command still running, or
     /// it waits on the command at a question.
     var handedOver = false
+    /// It runs in the background: the bot started it there, or the user sent it. Stop in the chat
+    /// leaves it running.
+    var background = false
 
     var isLive: Bool { state == .waiting || state == .running }
     /// The command runs in a session here or on its Runner: it takes answers and a Stop.
@@ -919,6 +922,8 @@ struct Message: Identifiable, Hashable {
     var attachments: [Attachment]
     /// The message the user answers with this one, quoted.
     var replyTo: ReplyQuote?
+    /// A message of the user's the bot's turn holds for its next step; Send now has it read now.
+    var queued = false
 
     init(
         id: String = "msg-\(UUID().uuidString.lowercased())",
@@ -948,6 +953,13 @@ struct Message: Identifiable, Hashable {
     var commandRun: CommandRun? {
         if case let .tool(tool) = body { return tool.run }
         return nil
+    }
+
+    /// A command running in its terminal that the bot's call still waits on: Run in Background
+    /// sends it there, and the call returns.
+    var runsInForeground: Bool {
+        guard case let .tool(tool) = body, let run = tool.run else { return false }
+        return tool.isRunning && run.takesInput && !run.background
     }
 
     var text: String {

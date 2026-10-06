@@ -15,6 +15,9 @@ enum ChatMetrics {
     /// The line above a reply's bubble that quotes the message it answers.
     static let quoteLineHeight: CGFloat = 18
     static let quoteGap: CGFloat = 2
+    /// Send now, under a message the bot's turn holds for its next step.
+    static let sendNowHeight: CGFloat = 18
+    static let sendNowGap: CGFloat = 3
     static let maxBubbleWidth: CGFloat = 580
     static let userLeftGutter: CGFloat = 72
     static let dayRowHeight: CGFloat = 42
@@ -103,6 +106,8 @@ struct BubbleMetrics {
     var textLayout = SegmentLayout()
     /// For a reply, the width its quote line may take above the bubble; zero for any other.
     var quoteWidth: CGFloat = 0
+    /// A message the bot's turn holds: Send now sits under the bubble.
+    var holdsSendNow = false
 
     var timeGutter: CGFloat {
         timeWidth > 0 ? ChatMetrics.timeGap + timeWidth : 0
@@ -116,6 +121,10 @@ struct BubbleMetrics {
         quoteWidth > 0 ? ChatMetrics.quoteLineHeight + ChatMetrics.quoteGap : 0
     }
 
+    var sendNowBlockHeight: CGFloat {
+        holdsSendNow ? ChatMetrics.sendNowGap + ChatMetrics.sendNowHeight : 0
+    }
+
     /// The attachments and the gap to whatever sits under them.
     var attachmentsBlockHeight: CGFloat {
         guard attachmentsSize.height > 0 else { return 0 }
@@ -127,7 +136,7 @@ struct BubbleMetrics {
     var bubbleHeight: CGFloat {
         ChatMetrics.bubblePadY + attachmentsBlockHeight + textHeight + ChatMetrics.bubblePadY
     }
-    var rowHeight: CGFloat { headerHeight + quoteBlockHeight + bubbleHeight }
+    var rowHeight: CGFloat { headerHeight + quoteBlockHeight + bubbleHeight + sendNowBlockHeight }
 }
 
 /// Notice box size, with icon and label frames in box coordinates (y grows downward).
@@ -281,7 +290,8 @@ final class ChatLayout {
             attachmentFrames: attachments.frames,
             hasText: hasText,
             textLayout: textLayout,
-            quoteWidth: message.replyTo == nil ? 0 : maxBubble
+            quoteWidth: message.replyTo == nil ? 0 : maxBubble,
+            holdsSendNow: message.queued
         )
         entry.bubbles = [(key, metrics)] + entry.bubbles.prefix(1)
         cache[message.id] = entry

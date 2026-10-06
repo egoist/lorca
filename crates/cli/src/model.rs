@@ -372,6 +372,10 @@ pub struct CommandRun {
     /// then until it ends; before, the bot is still dealing with it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub handed_over: bool,
+    /// It runs in the background: the bot started it there, or the user sent it from Running
+    /// tasks (`bash.background`). Stop in the chat leaves it running.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub background: bool,
     /// Its last lines, as the bottom of a terminal shows them: what it said after an answer
     /// ("Sorry, try again."). Never what was typed, which the terminal does not echo.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -435,6 +439,10 @@ pub struct Message {
     /// The apps keep showing when it was typed; transcript rebuilding uses this later time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub promoted_at: Option<f64>,
+    /// A user message the turn at work holds for its next step: the turn reads it once the
+    /// step's reply and tools are done, or at once when the user asks (`chats.send_now`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub queued: bool,
 }
 
 /// How much of a tool call's detail the apps get: enough for the "Messaged ◉ X" marker.
@@ -480,6 +488,7 @@ impl Message {
             state: MessageState::Complete,
             created_at: crate::config::now_secs(),
             promoted_at: None,
+            queued: false,
         }
     }
 

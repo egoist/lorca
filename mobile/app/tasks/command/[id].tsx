@@ -1,12 +1,13 @@
 // A running task's details, slid in from its row in the Running tasks sheet: which bot runs the
-// command and where it stands, Stop while it runs, the whole command, and its last lines. A
-// command that ends while this is open stays readable, saying how it ended.
+// command and where it stands, Run in Background while the bot's call waits on it, Stop while it
+// runs, the whole command, and its last lines. A command that ends while this is open stays
+// readable, saying how it ended.
 
 import { Stack, useLocalSearchParams } from "expo-router";
 import { useState } from "react";
 import { Platform, ScrollView, StyleSheet, Text } from "react-native";
 import { engine } from "../../../src/core/engine";
-import { isLive } from "../../../src/core/model";
+import { isLive, runsInForeground } from "../../../src/core/model";
 import { useBotMap, useChat } from "../../../src/core/store";
 import { t, useLanguage } from "../../../src/i18n";
 import { BotAvatar } from "../../../src/ui/Avatar";
@@ -22,7 +23,7 @@ export default function CommandScreen() {
   const chat = useChat(chatId);
   const bots = useBotMap();
   const now = useNow();
-  const [stopping, setStopping] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const message = chat?.messages.find((m) => m.id === id);
   const body = message?.body.kind === "tool" ? message.body : undefined;
@@ -38,24 +39,28 @@ export default function CommandScreen() {
   const bot = message.author.kind === "bot" ? bots.get(message.author.bot_id) : undefined;
   const live = isLive(run) && !!run.session_id;
   const output = (run.output ?? "").split("\n").filter(Boolean).join("\n");
-  const stop = async () => {
-    setStopping(true);
+  const perform = async (action: (chatId: string, messageId: string) => Promise<void>) => {
+    setBusy(true);
     setError(null);
     try {
-      await engine.stopCommand(message.chat_id, message.id);
+      await action(message.chat_id, message.id);
     } catch (e) {
       setError((e as Error).message);
     } finally {
-      setStopping(false);
+      setBusy(false);
     }
   };
+  const background = live && runsInForeground(message);
   return (
     <>
       <Stack.Screen options={{ title: body.description ?? firstLine(run.command) }} />
       <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.content}>
         <Section>
           <Row leading={<BotAvatar bot={bot} size={28} />} title={bot?.name ?? t("The bot")} detail={taskState(run, message.created_at, now)} />
-          {live ? <Row title={t("Stop Command")} icon="stop.fill" destructive onPress={stopping ? undefined : () => void stop()} /> : null}
+          {background ? (
+            <Row title={t("Run in Background")} icon="terminal.fill" onPress={busy ? undefined : () => void perform((chat, id) => engine.sendCommandToBackground(chat, id))} />
+          ) : null}
+          {live ? <Row title={t("Stop Command")} icon="stop.fill" destructive onPress={busy ? undefined : () => void perform((chat, id) => engine.stopCommand(chat, id))} /> : null}
         </Section>
         {error && live ? <Text style={[styles.error, { color: p.red }]}>{error}</Text> : null}
         <Section title={t("Command")}>

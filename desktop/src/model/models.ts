@@ -864,6 +864,9 @@ export interface CommandRun {
   /** The bot left the command to the user: its turn ended with the command still running, or it
    * waits on the command at a question. */
   handedOver: boolean;
+  /** It runs in the background: the bot started it there, or the user sent it. Stop in the chat
+   * leaves it running. */
+  background: boolean;
 }
 
 export const isLive = (run: CommandRun) => run.state === "waiting" || run.state === "running";
@@ -996,6 +999,8 @@ export interface Message {
   attachments: Attachment[];
   /** The message the user answers with this one, quoted. */
   replyTo?: ReplyQuote;
+  /** A message of the user's the bot's turn holds for its next step; Send now has it read now. */
+  queued?: boolean;
 }
 
 /** A message quoted by the user's reply: who wrote it and how it opens, as the CLI keeps it with the
@@ -1028,6 +1033,14 @@ export function newMessageID(): string {
 /** A `bash` row's command. */
 export function commandRunOf(message: Message): CommandRun | undefined {
   return message.body.kind === "tool" ? message.body.tool.run : undefined;
+}
+
+/** A command running in its terminal that the bot's call still waits on: Run in Background sends
+ * it there, and the call returns. */
+export function runsInForeground(message: Message): boolean {
+  if (message.body.kind !== "tool") return false;
+  const { isRunning, run } = message.body.tool;
+  return isRunning && !!run && takesInput(run) && !run.background;
 }
 
 export function messageText(message: Message): string {

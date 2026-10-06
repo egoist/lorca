@@ -1,12 +1,13 @@
 // A chat's running tasks, after the macOS app's RunningTasksViewController: the commands its bots
 // have running in their terminals, each with what it does in the bot's words, who runs it and for
-// how long, the command (a click shows all of it), its last lines, and Stop. One that ends while
-// the list is open stays, saying how it ended, until the list closes.
+// how long, the command (a click shows all of it), its last lines, and Stop, with Run in Background
+// while the bot's call still waits on it. One that ends while the list is open stays, saying how it
+// ended, until the list closes.
 
 import { createEffect, createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import { L } from "../../l10n";
 import * as Format from "../../model/format";
-import { firstLine, hasEnded, isGroup, type CommandState } from "../../model/models";
+import { firstLine, hasEnded, isGroup, runsInForeground, type CommandState } from "../../model/models";
 import { track } from "../../model/reactive";
 import { errorText, store } from "../../model/store";
 import { Button } from "../controls";
@@ -22,6 +23,8 @@ interface RunningTask {
   firstLine: string;
   output: string;
   state: CommandState;
+  /** The bot's call still waits on it: Run in Background sends it there. */
+  runsInForeground: boolean;
   startedAt: number;
 }
 
@@ -78,6 +81,7 @@ export function RunningTasks(props: { chatID: string; onEmpty: () => void; onClo
         firstLine: firstLine(run),
         output: run.output ?? "",
         state: run.state,
+        runsInForeground: runsInForeground(message),
         startedAt: message.createdAt,
       });
     }
@@ -97,11 +101,12 @@ export function RunningTasks(props: { chatID: string; onEmpty: () => void; onClo
     },
   );
 
-  const stop = async (task: RunningTask) => {
+  /** Stop, or Run in Background: a failure says why under the row while the command runs. */
+  const perform = async (task: RunningTask, action: (chatID: string, messageID: string) => Promise<void>) => {
     if (busy()[task.id]) return;
     setBusy({ ...busy(), [task.id]: true });
     try {
-      await store.stopCommand(props.chatID, task.id);
+      await action(props.chatID, task.id);
       const next = { ...errors() };
       delete next[task.id];
       setErrors(next);
@@ -126,8 +131,13 @@ export function RunningTasks(props: { chatID: string; onEmpty: () => void; onClo
                   <span class="running-task-title truncate" title={task().title}>
                     {task().title}
                   </span>
+                  <Show when={isLive(task()) && task().runsInForeground}>
+                    <Button small disabled={!!busy()[task().id]} onClick={() => void perform(task(), (chat, id) => store.sendCommandToBackground(chat, id))}>
+                      {L("Run in Background")}
+                    </Button>
+                  </Show>
                   <Show when={isLive(task())}>
-                    <Button small disabled={!!busy()[task().id]} onClick={() => void stop(task())}>
+                    <Button small disabled={!!busy()[task().id]} onClick={() => void perform(task(), (chat, id) => store.stopCommand(chat, id))}>
                       {L("Stop")}
                     </Button>
                   </Show>
@@ -144,7 +154,7 @@ export function RunningTasks(props: { chatID: string; onEmpty: () => void; onClo
                 <Show when={task().output !== ""}>
                   <CommandOutput text={task().output} lines={10} />
                 </Show>
-                {/* A failed Stop says so while the command runs; once it ends, its state says the rest. */}
+                {/* A failed Stop or Run in Background says so while the command runs; once it ends, its state says the rest. */}
                 <Show when={isLive(task()) && errors()[task().id]}>{(error) => <div class="running-task-error">{error()}</div>}</Show>
               </div>
             </div>

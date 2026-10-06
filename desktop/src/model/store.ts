@@ -49,6 +49,7 @@ import {
   type ProviderModel,
   type Routine,
   commandRunOf,
+  runsInForeground,
 } from "./models";
 import { parseLocally, type McpEntry, type McpFile, type McpServer, type ParsedServer } from "./mcp";
 import { ReplyEngine } from "./replies";
@@ -186,7 +187,7 @@ export class AppStore {
   /** The chat last reported to the CLI as on screen; `undefined` is none reported yet. */
   private reportedWatchedChat: string | null | undefined = undefined;
   private loadingOlder = new Set<string>();
-  replyEngine: { respond(prompt: string, chat: Chat): void; cancel(chatID: string): void } | null = null;
+  replyEngine: { respond(prompt: string, chat: Chat, messageID: string): void; cancel(chatID: string): void; sendNow(chatID: string): void } | null = null;
   private started = false;
   private startupTimer: ReturnType<typeof setTimeout> | null = null;
   private bootstrapGeneration = 0;
@@ -1130,6 +1131,26 @@ export class AppStore {
     await this.request("bash.stop", { chat_id: chatID, message_id: messageID });
   }
 
+  /** Sends a command the bot is waiting on to the background (`bash.background`): the bot's call
+   * returns and the command runs on, out of the way of Stop in the chat. */
+  async sendCommandToBackground(chatID: string, messageID: string): Promise<void> {
+    if (this.isMock) {
+      this.update(messageID, chatID, (message) => {
+        if (message.body.kind !== "tool" || !message.body.tool.run) return message;
+        const run = { ...message.body.tool.run, background: true };
+        return { ...message, body: { kind: "tool", tool: { ...message.body.tool, isRunning: false, run } } };
+      });
+      return;
+    }
+    await this.request("bash.background", { chat_id: chatID, message_id: messageID });
+  }
+
+  /** The commands in `chatID` that a bot's call still waits on, which Run in Background sends
+   * there. */
+  foregroundCommands(chatID: string): Message[] {
+    return this.chat(chatID)?.messages.filter(runsInForeground) ?? [];
+  }
+
   /** The demo has no Runner: an answer or a Stop ends the command at once. */
   private finishMockCommand(chatID: string, messageID: string, state: CommandState): void {
     this.update(messageID, chatID, (message) => {
@@ -1419,7 +1440,7 @@ export class AppStore {
     this.append(message, chatID);
 
     if (this.isMock) {
-      this.replyEngine?.respond(trimmed, chat);
+      this.replyEngine?.respond(trimmed, chat, message.id);
       return chatID;
     }
 
@@ -1555,6 +1576,21 @@ export class AppStore {
     if (working) this.runningJobs.push({ id, chatID, botID });
     this.emit({ kind: "respondingChanged", chatID });
     this.emit({ kind: "chatsChanged" });
+  }
+
+  /** Has the bot's turn read a message it holds for its next step now: a command it waits on goes
+   * to the background, and a reply in progress stops where it got to. */
+  sendNow(messageID: string, chatID: string): void {
+    if (this.isMock) {
+      this.replyEngine?.sendNow(chatID);
+      return;
+    }
+    this.perform("chats.send_now", { chat_id: chatID, message_id: messageID });
+  }
+
+  /** Marks a message the mock turn holds, or no longer holds. */
+  setMockQueued(messageID: string, chatID: string, queued: boolean): void {
+    this.update(messageID, chatID, (message) => ({ ...message, queued }));
   }
 
   stopResponding(chatID: string): void {

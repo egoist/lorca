@@ -615,6 +615,10 @@ async fn run_job_started(app: &Arc<App>, job: Job, cancel: CancellationToken) ->
     {
         TurnOutcome::Skipped
     } else {
+        // A message a turn held and never read: this turn reads it now.
+        if job.kind == "turn" {
+            app.set_queued(&job.chat_id, &job.trigger_message_id, false);
+        }
         crate::turns::run_job(app, &job, cancel).await
     };
     #[cfg(not(feature = "runner"))]

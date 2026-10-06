@@ -5,7 +5,7 @@
 // command, which shows as its card while it needs the user.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Alert, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
@@ -13,6 +13,7 @@ import Animated, { useAnimatedStyle, useSharedValue, withSequence, withSpring, w
 import { LinearGradient } from "expo-linear-gradient";
 import { ShimmerView } from "../../modules/lorca-core/ShimmerView";
 import { isLive, isSentMessage, showsCard, type Author, type Body, type Bot, type Chat, type CommandRun, type Message } from "../core/model";
+import { engine } from "../core/engine";
 import { useStore } from "../core/store";
 import { language, t, useLanguage } from "../i18n";
 import { AttachmentBlock } from "./attachments";
@@ -197,6 +198,7 @@ export function MessageRow({
   onQuotePress?: (messageID: string) => void;
   flashing?: boolean;
 }) {
+  const held = row.message.queued === true;
   useLanguage();
   const p = usePalette();
   const paneWidth = usePaneWidth();
@@ -248,6 +250,7 @@ export function MessageRow({
             styles.bubble,
             isYou ? { backgroundColor: p.userBubble, borderBottomRightRadius: groupEnd ? 6 : 18 } : { backgroundColor: failed ? "rgba(255,59,48,0.14)" : p.botBubble, borderBottomLeftRadius: groupEnd ? 6 : 18 },
             pulsing,
+            held && styles.held,
           ]}
         >
           {attachments.length > 0 && <AttachmentBlock attachments={attachments} onUserBubble={isYou} maxWidth={attachmentWidth} />}
@@ -258,6 +261,17 @@ export function MessageRow({
             </View>
           )}
         </Animated.View>
+        {held && (
+          <Pressable
+            onPress={() => engine.sendNow(message.chat_id, message.id).catch((error) => Alert.alert(t("Could not send now"), error instanceof Error ? error.message : String(error)))}
+            hitSlop={8}
+            style={styles.sendNow}
+            accessibilityRole="button"
+            accessibilityHint={t("Have the bot read this now. A command it is running moves to the background.")}
+          >
+            <Text style={[styles.sendNowText, { color: p.tint }]}>{t("Send now")}</Text>
+          </Pressable>
+        )}
       </View>
     </View>
     </SwipeToReply>
@@ -670,6 +684,10 @@ const styles = StyleSheet.create({
   quoteText: { flexShrink: 1, fontSize: 12 },
   quoteName: { fontWeight: "600" },
   replyArrow: { position: "absolute", right: 18, top: 0, bottom: 0, justifyContent: "center" },
+  // Held for the bot's next step: the bubble waits, dimmed, over Send now.
+  held: { opacity: 0.55 },
+  sendNow: { alignSelf: "flex-end", marginTop: 4, marginRight: 6 },
+  sendNowText: { fontSize: 13, fontWeight: "600" },
   bubble: { borderRadius: 18, paddingHorizontal: 13, paddingVertical: 9, gap: 2 },
   bubbleFooter: { flexDirection: "row", justifyContent: "flex-end", alignItems: "center" },
   centered: { alignItems: "center", paddingHorizontal: INSET },

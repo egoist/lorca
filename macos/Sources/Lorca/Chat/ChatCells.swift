@@ -114,6 +114,7 @@ final class MessageCellView: TranscriptCellView {
     private let content = SegmentedTextView()
     private let attachments = AttachmentsView()
     private let quote = ReplyQuoteView()
+    private let sendNowButton = NSButton()
 
     /// Offered on a right-click anywhere on the bubble, and on its text before the text's own
     /// items; nil for a message a reply cannot answer.
@@ -124,6 +125,8 @@ final class MessageCellView: TranscriptCellView {
     var onQuoteClick: (() -> Void)? {
         didSet { quote.onClick = onQuoteClick }
     }
+    /// Send now, under a message the bot's turn holds for its next step.
+    var onSendNow: (() -> Void)?
 
     private var isUser = false
     private var groupStart = true
@@ -140,6 +143,14 @@ final class MessageCellView: TranscriptCellView {
         addSubview(author.framePositioned())
         addSubview(quote.framePositioned())
         addSubview(bubble.framePositioned())
+        sendNowButton.title = L("Send now")
+        sendNowButton.isBordered = false
+        sendNowButton.font = .systemFont(ofSize: 11.5, weight: .medium)
+        sendNowButton.contentTintColor = .controlAccentColor
+        sendNowButton.toolTip = L("Have the bot read this now. A command it is running moves to the background.")
+        sendNowButton.target = self
+        sendNowButton.action = #selector(sendNow)
+        addSubview(sendNowButton.framePositioned())
         bubble.addSubview(stamp.framePositioned())
         bubble.addSubview(attachments.framePositioned())
         bubble.addSubview(content.framePositioned())
@@ -176,6 +187,9 @@ final class MessageCellView: TranscriptCellView {
         author.textColor = nameColor
         author.isHidden = !metrics.showsName
         quote.isHidden = quoted == nil || metrics.quoteWidth == 0
+        // Held for the bot's next step: the bubble waits, dimmed, over Send now.
+        sendNowButton.isHidden = !metrics.holdsSendNow
+        bubble.alphaValue = metrics.holdsSendNow ? 0.55 : 1
         if let quoted {
             quote.configure(name: quoted.name, text: quoted.text)
             quote.alignment = isUser ? .right : .left
@@ -212,6 +226,12 @@ final class MessageCellView: TranscriptCellView {
             let quoteX = isUser ? bounds.width - ChatMetrics.horizontalInset - metrics.quoteWidth : x
             quote.frame = NSRect(
                 x: quoteX, y: top + metrics.headerHeight, width: metrics.quoteWidth, height: ChatMetrics.quoteLineHeight)
+        }
+        if metrics.holdsSendNow {
+            let width = ceil(sendNowButton.intrinsicContentSize.width)
+            sendNowButton.frame = NSRect(
+                x: x + bubbleWidth - width - 2, y: bubbleY + bubbleHeight + ChatMetrics.sendNowGap,
+                width: width, height: ChatMetrics.sendNowHeight)
         }
         bubble.frame = NSRect(x: x, y: bubbleY, width: bubbleWidth, height: bubbleHeight)
         avatar.frame = NSRect(
@@ -253,6 +273,10 @@ final class MessageCellView: TranscriptCellView {
 
     @objc private func reply() {
         onReply?()
+    }
+
+    @objc private func sendNow() {
+        onSendNow?()
     }
 
     /// Pulses the bubble twice, for a message a quote just brought into view.

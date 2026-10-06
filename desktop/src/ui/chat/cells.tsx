@@ -123,6 +123,7 @@ export function MessageCell(props: {
   onReply?: () => void;
   onQuoteClick?: (messageID: string) => void;
 }) {
+  const held = () => props.message.queued === true;
   const isUser = () => props.message.author.kind === "you";
   const text = () => (props.message.body.kind === "text" ? props.message.body.text : "");
   // A bot's name and look follow a rename or a new image.
@@ -163,7 +164,7 @@ export function MessageCell(props: {
           )}
         </Show>
         <div
-          class={["bubble", isUser() ? "user" : "bot"]}
+          class={["bubble", isUser() ? "user" : "bot", { held: held() }]}
           data-bubble={props.message.id}
           onContextMenu={(event) => {
             if (!props.onReply) return;
@@ -196,6 +197,15 @@ export function MessageCell(props: {
             </div>
           </Show>
         </div>
+        <Show when={held()}>
+          <button
+            class="send-now"
+            title={L("Have the bot read this now. A command it is running moves to the background.")}
+            onClick={() => store.sendNow(props.message.id, props.chatID)}
+          >
+            {L("Send now")}
+          </button>
+        </Show>
       </div>
       <Show when={showsName()}>
         <span class="message-avatar">
