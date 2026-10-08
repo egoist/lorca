@@ -1,11 +1,8 @@
-node_modules/
-/dist/
 /build/
 /.mygo/
 mygo_windows_*.syso
 # `go build` in this folder.
 /desktop
 /desktop.exe
-# The CLI builds `bun run desktop:cli` puts beside the app, per platform.
+# The CLIs `bun run desktop:build` puts beside the app, per platform.
 /resources/*/bin/
-/src/mygo.ts

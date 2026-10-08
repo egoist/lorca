@@ -18,7 +18,7 @@ git tag desktop-v0.1.0 && git push origin desktop-v0.1.0
 - Updater: [`desktop/updater.go`](../desktop/updater.go). **Check for Updates…** in File and Help,
   and the Updates rows in Settings › General.
 - Configuration: `updates` in [`desktop/mygo.config.ts`](../desktop/mygo.config.ts).
-- Release: [`scripts/desktop.ts`](../scripts/desktop.ts), which runs `mygo build -upload`, and
+- Release: [`scripts/desktop.ts`](../scripts/desktop.ts), which runs `go tool mygo build -upload`, and
   [`.github/workflows/release-desktop.yml`](../.github/workflows/release-desktop.yml). MyGo's
   [auto-updates guide](https://github.com/egoist/mygo/blob/main/docs/updates.md) covers what it
   signs and uploads.
@@ -27,7 +27,7 @@ git tag desktop-v0.1.0 && git push origin desktop-v0.1.0
 
 ### 1. Update key
 
-`mygo keygen` (run in `desktop/`) writes the key pair to MyGo's folder in the user's configuration
+`go tool mygo keygen` (run in `desktop/`) writes the key pair to MyGo's folder in the user's configuration
 directory: `%APPDATA%\mygo\update-keys` on Windows, `~/Library/Application Support/mygo/update-keys`
 on macOS, `~/.config/mygo/update-keys` on Linux. `mygo-update.pub` is `updates.publicKey`;
 `mygo-update.key` is the secret. Keep a copy in a password manager, and put it in that folder on
@@ -44,7 +44,7 @@ MyGo's folder (or `MYGO_UPDATER_PRIVATE_KEY`). It stops before building when eit
 
 ## Cutting a release
 
-The version is `"version"` in [`desktop/package.json`](../desktop/package.json), apart from the
+The version is `version` in [`desktop/mygo.config.ts`](../desktop/mygo.config.ts), apart from the
 Mac app's in the root `package.json`.
 
 1. Set the version, and give it a `## [<version>]` section in
@@ -64,7 +64,7 @@ Mac app's in the root `package.json`.
    On the release's page, untick **Set as the latest release** before **Publish release**. The
    apps find it by its tag.
 
-The **Release desktop** workflow checks that the tag names the version in `desktop/package.json`,
+The **Release desktop** workflow checks that the tag names the version in `desktop/mygo.config.ts`,
 drafts the release with the changelog's section as its notes (not as the latest release), then
 builds `windows/amd64`, `linux/amd64`, and `linux/arm64` side by side on Ubuntu, one
 `bun run release-desktop <platform>` each: cargo-zigbuild builds the CLIs, and NSIS the Windows
@@ -79,7 +79,7 @@ Platforms are MyGo's, comma separated; the default is this computer's, or `linux
    files;
 2. builds the CLI for each platform into `desktop/resources/<goos>-<goarch>/bin`, as
    `bun run desktop:build` does;
-3. runs `mygo build -platform … -upload`, which builds the apps and installers into
+3. runs `go tool mygo build -platform … -upload`, which builds the apps and installers into
    `desktop/build`, reads the newest published release's manifests and archives to make delta
    updates, signs the archives and deltas, and uploads everything to the release
    `desktop-v<version>`, which it drafts, not as the latest release, when there is none.

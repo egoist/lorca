@@ -1,14 +1,16 @@
 // Release the iPhone app to TestFlight:
 //   Rust core → production prebuild in a copy of mobile/ → pods → archive → upload to App Store Connect.
 //
-//   bun run release-ios                    archive and upload; the build number is the local time
+//   bun run release-ios                    archive and upload; the build number is the time (UTC)
 //   bun run release-ios --local            archive only; upload nothing
 //   BUILD_NUMBER=42 bun run release-ios    upload under a chosen build number
 //
 // Signing and the upload go through the Apple account signed in to Xcode (team GJE9R5VE87), with
-// automatic provisioning. App Store Connect holds the app record "Lorca" for `app.lorca`. The
-// marketing version is `version` in mobile/app.config.ts. A build appears under TestFlight after
-// Apple finishes processing it, usually within half an hour.
+// automatic provisioning, or, where no account is signed in, an App Store Connect API key:
+// ASC_KEY_PATH (the .p8 file), ASC_KEY_ID, and ASC_ISSUER_ID, as the Release phone app workflow
+// (.github/workflows/release-mobile.yml) sets them. App Store Connect holds the app record "Lorca"
+// for `app.lorca`. The marketing version is `version` in mobile/app.config.ts. A build appears
+// under TestFlight after Apple finishes processing it, usually within half an hour.
 import { $ } from "bun"
 import { existsSync } from "node:fs"
 import { mkdir, readdir, rename, rm } from "node:fs/promises"
@@ -43,14 +45,25 @@ const KEPT = join(BUILD_DIR, "kept")
 const ARCHIVE = join(BUILD_DIR, "Lorca.xcarchive")
 const EXPORT = join(BUILD_DIR, "export")
 
-// App Store Connect wants every upload's build number above the last. Local time as YYYYMMDDHHmm
-// only grows, and it names when the build was made.
+// App Store Connect wants every upload's build number above the last. The time as YYYYMMDDHHmm
+// only grows, and it names when the build was made. UTC, so a build from a Mac and one from the
+// workflow's runner count on the same clock.
 const now = new Date()
 const pad = (n: number) => String(n).padStart(2, "0")
 const buildNumber =
   process.env.BUILD_NUMBER ??
-  `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}`
+  `${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}${pad(now.getUTCDate())}${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}`
 if (!/^\d+$/.test(buildNumber)) die(`BUILD_NUMBER must be digits, got "${buildNumber}"`)
+
+// Without an account in Xcode, an App Store Connect API key signs in for the provisioning and the
+// upload. It needs the Admin role, which lets the export sign with Apple's cloud-managed
+// distribution certificate.
+const apiKey = ["ASC_KEY_PATH", "ASC_KEY_ID", "ASC_ISSUER_ID"].map((name) => process.env[name])
+if (apiKey.some(Boolean) && !apiKey.every(Boolean)) die("set all of ASC_KEY_PATH, ASC_KEY_ID, and ASC_ISSUER_ID, or none")
+const [keyPath, keyID, issuerID] = apiKey
+const authentication = keyPath
+  ? ["-authenticationKeyPath", keyPath, "-authenticationKeyID", keyID!, "-authenticationKeyIssuerID", issuerID!]
+  : []
 
 // CocoaPods dies on a non-UTF-8 locale, and the CommandLineTools SDK breaks the pod install and
 // the build with "unknown architecture" from tapi. The variant variables would make a Lorca Dev build.
@@ -58,7 +71,7 @@ const env: Record<string, string> = {
   ...(process.env as Record<string, string>),
   LANG: "en_US.UTF-8",
   LC_ALL: "en_US.UTF-8",
-  DEVELOPER_DIR: "/Applications/Xcode.app/Contents/Developer",
+  DEVELOPER_DIR: process.env.DEVELOPER_DIR ?? "/Applications/Xcode.app/Contents/Developer",
   LORCA_IOS_BUILD_NUMBER: buildNumber,
 }
 delete env.LORCA_MOBILE_VARIANT
@@ -117,7 +130,7 @@ if (!bundleIds.has(BUNDLE_ID)) die(`the project builds ${[...bundleIds].join(", 
 log(`${color.bold("archiving")} ${color.dim(ARCHIVE)}`)
 await rm(ARCHIVE, { recursive: true, force: true })
 await rm(EXPORT, { recursive: true, force: true })
-await $`xcodebuild -workspace ${join(IOS, "Lorca.xcworkspace")} -scheme Lorca -configuration Release -destination generic/platform=iOS -archivePath ${ARCHIVE} -allowProvisioningUpdates CURRENT_PROJECT_VERSION=${buildNumber} COMPILATION_CACHE_ENABLE_CACHING=YES archive -quiet`.env(env)
+await $`xcodebuild -workspace ${join(IOS, "Lorca.xcworkspace")} -scheme Lorca -configuration Release -destination generic/platform=iOS -archivePath ${ARCHIVE} -allowProvisioningUpdates ${authentication} CURRENT_PROJECT_VERSION=${buildNumber} COMPILATION_CACHE_ENABLE_CACHING=YES archive -quiet`.env(env)
 if (!existsSync(ARCHIVE)) die("xcodebuild produced no archive")
 
 const plist = join(ARCHIVE, "Products", "Applications", "Lorca.app", "Info.plist")
@@ -132,6 +145,11 @@ if (local) {
 }
 
 // ---- 4. upload
+// With the account in Xcode, the export uploads the build itself. With an API key it writes the
+// signed .ipa, and altool uploads that: a connection that drops mid-upload, as one from a GitHub
+// runner did, costs another try of the upload alone. A failed export keeps the logs Xcode wrote in
+// LOGS, which the workflow keeps as an artifact.
+const LOGS = join(BUILD_DIR, "logs")
 const exportOptions = join(BUILD_DIR, "ExportOptions.plist")
 await Bun.write(
   exportOptions,
@@ -140,7 +158,7 @@ await Bun.write(
 <plist version="1.0">
 <dict>
   <key>method</key><string>app-store-connect</string>
-  <key>destination</key><string>upload</string>
+  <key>destination</key><string>${keyPath ? "export" : "upload"}</string>
   <key>teamID</key><string>${TEAM_ID}</string>
   <key>signingStyle</key><string>automatic</string>
   <key>uploadSymbols</key><true/>
@@ -149,8 +167,41 @@ await Bun.write(
 </plist>
 `,
 )
-log(`${color.bold("uploading")} ${color.dim("to App Store Connect")}`)
-await $`xcodebuild -exportArchive -archivePath ${ARCHIVE} -exportOptionsPlist ${exportOptions} -exportPath ${EXPORT} -allowProvisioningUpdates`.env(env)
+await rm(LOGS, { recursive: true, force: true })
+log(`${color.bold(keyPath ? "signing" : "uploading")} ${color.dim(keyPath ? EXPORT : "to App Store Connect")}`)
+const exported = await $`xcodebuild -exportArchive -archivePath ${ARCHIVE} -exportOptionsPlist ${exportOptions} -exportPath ${EXPORT} -allowProvisioningUpdates ${authentication}`
+  .env(env)
+  .nothrow()
+if (exported.exitCode !== 0) {
+  // Xcode names the bundle of logs it wrote in the temporary folder.
+  const bundle = exported.stderr.toString().match(/Created bundle at path "([^"]+\.xcdistributionlogs)"/)?.[1]
+  if (bundle && existsSync(bundle)) {
+    await mkdir(LOGS, { recursive: true })
+    await $`cp -R ${bundle} ${LOGS}/`
+  }
+  die(`the export failed${bundle ? `; Xcode's logs are in ${LOGS}` : ""}`)
+}
+
+if (keyPath) {
+  const ipa = (await readdir(EXPORT)).find((name) => name.endsWith(".ipa"))
+  if (!ipa) die(`the export wrote no .ipa to ${EXPORT}`)
+  log(`${color.bold("uploading")} ${color.dim(`${ipa} to App Store Connect`)}`)
+  for (let attempt = 1; ; attempt++) {
+    const upload = await $`xcrun altool --upload-app -f ${join(EXPORT, ipa)} -t ios --api-key ${keyID!} --api-issuer ${issuerID!} --p8-file-path ${keyPath}`
+      .env(env)
+      .nothrow()
+    if (upload.exitCode === 0) break
+    // A try that lost its connection after App Store Connect had the build leaves the next one a duplicate.
+    const said = `${upload.stdout}${upload.stderr}`
+    if (attempt > 1 && /Redundant Binary Upload|already been (used|uploaded)|bundle version must be higher/i.test(said)) {
+      log(color.yellow("App Store Connect already has this build from an earlier try"))
+      break
+    }
+    if (attempt === 3) die("the upload failed three times")
+    log(color.yellow(`the upload failed; trying again in ${attempt * 30} s`))
+    await Bun.sleep(attempt * 30_000)
+  }
+}
 
 log(`${color.green("uploaded")} Lorca ${version} (${buildNumber})`)
 console.log("  TestFlight lists it once App Store Connect finishes processing")

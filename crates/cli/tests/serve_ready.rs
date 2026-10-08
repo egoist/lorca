@@ -102,6 +102,26 @@ async fn readiness_is_flushed_with_logs_disabled_and_the_websocket_is_ready() {
 }
 
 #[tokio::test]
+async fn a_build_wrappers_message_format_is_ignored() {
+    // `cargo run` hands the tokens after the program's name to the program, and a build
+    // wrapper (mbx) adds its own `--message-format=…` at the end of that command line, so
+    // `cargo run -p lorca serve` reaches serve with the flag it never asked for.
+    let home = Home::new();
+    let mut command = home.serve(0);
+    command.arg("--message-format=json,json-diagnostic-rendered-ansi");
+    let mut child = command.spawn().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut line = String::new();
+    timeout(Duration::from_secs(5), stdout.read_line(&mut line))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!line.is_empty(), "lorca serve exited before it was ready: {:?}", child.wait().await);
+    assert_eq!(serde_json::from_str::<Value>(&line).unwrap()["event"], "ready");
+    child.kill().await.unwrap();
+}
+
+#[tokio::test]
 async fn a_failed_bind_exits_without_announcing_readiness() {
     let occupied = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let home = Home::new();
