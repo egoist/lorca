@@ -58,7 +58,7 @@ pub struct State {
     pub bots: Vec<Bot>,
     pub chats: Vec<Chat>,
     pub routines: Vec<Routine>,
-    pub workflows: Vec<crate::workflows::Envelope>,
+    pub workflows: Vec<crate::workflows::Setup>,
     pub auto_review: AutoReview,
     pub last_seq: i64,
     /// Chats deleted here whose blobs the relay still has to drop.

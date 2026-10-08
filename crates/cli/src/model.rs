@@ -706,9 +706,10 @@ pub struct CheckReport {
 /// `kind = roster`: bots, chat metadata, and routines. Latest wins.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct RosterBlob {
-    /// Encrypted workflow records; omitted by builds that do not know workflow packs.
+    /// Workflow setups, merged one by one (`workflows::merge`); a build that does not know
+    /// workflows leaves the field out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub workflows: Option<Vec<crate::workflows::Envelope>>,
+    pub workflows: Option<Vec<crate::workflows::Setup>>,
     pub bots: Vec<Bot>,
     pub chats: Vec<ChatMeta>,
     #[serde(default)]

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated": "2026-10-08T00:00:00Z",
+  "updated": "2026-10-08T21:00:00Z",
   "plugins": [
     {
       "id": "github",
@@ -879,7 +879,7 @@
       "name": "Meeting Preparer",
       "summary": "Prepares an agenda and briefing from the meetings and documents you choose",
       "description": "Prepare concise meeting briefs for the user. Read the chosen calendar and supporting documents, identify the meeting goal, participants, decisions and open questions, and draft an agenda with links. Work only with the accounts and scope the user selects. Present drafts in chat; change nothing in the calendar or documents unless explicitly requested.",
-      "symbol_name": "person.3.fill",
+      "symbol_name": "person.2.fill",
       "accent": "teal",
       "category": "productivity",
       "author": "Lorca"
@@ -911,12 +911,13 @@
       "name": "Meeting preparation",
       "outcome": "Arrive at your next meeting with a briefing and agenda.",
       "description": "Choose a calendar and document account, then review one meeting brief before enabling a weekday routine.",
+      "symbol_name": "calendar",
       "version": 1,
       "questions": [
         {
           "id": "meeting-scope",
-          "label": "Which meetings should the briefing cover?",
-          "placeholder": "Upcoming meetings today, with external attendees"
+          "label": "Meetings",
+          "placeholder": "Today’s meetings with people outside the team"
         }
       ],
       "connections": [
@@ -952,17 +953,18 @@
       "name": "Inbox triage",
       "outcome": "See the messages that need you and a draft of the next action.",
       "description": "Choose an inbox, define what matters, and review a small triage sample before enabling a weekday routine.",
+      "symbol_name": "envelope",
       "version": 1,
       "questions": [
         {
           "id": "inbox-scope",
-          "label": "Which messages should triage include?",
+          "label": "Messages",
           "placeholder": "Unread messages from the last day"
         },
         {
           "id": "priorities",
-          "label": "What needs your attention first?",
-          "placeholder": "Customer replies, deadlines and blocked teammates"
+          "label": "Priorities",
+          "placeholder": "Customer replies, deadlines, blocked teammates"
         }
       ],
       "connections": [
@@ -994,12 +996,13 @@
       "name": "Repository monitoring",
       "outcome": "Keep up with the issues, pull requests and releases that need you.",
       "description": "Select repositories and a GitHub connection, then review a summary before enabling a weekday routine.",
+      "symbol_name": "arrow.triangle.branch",
       "version": 1,
       "questions": [
         {
           "id": "repositories",
-          "label": "Which repositories should be monitored?",
-          "placeholder": "owner/repository, owner/another-repository"
+          "label": "Repositories",
+          "placeholder": "owner/repo, owner/another-repo"
         }
       ],
       "connections": [

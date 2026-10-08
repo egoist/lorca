@@ -1,10 +1,10 @@
-//! Guided marketplace workflows. Setup records are account-encrypted both in SQLite and
-//! inside the roster; integrations remain existing Runner-local plugins.
+//! Guided marketplace workflows: the index's packs, and a pack's setup on one Runner. A setup
+//! lives in local state and in the encrypted roster; its integrations stay the Runner's
+//! installed plugins.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -12,9 +12,7 @@ use sha2::{Digest, Sha256};
 use crate::app::App;
 use crate::config::now_secs;
 use crate::marketplace::{self, BotTemplate, Index};
-use crate::model::{
-    Author, Body, Bot, Job, JobCancel, Message, MessageState, PluginStatus, Routine,
-};
+use crate::model::{Author, Body, Bot, Job, JobCancel, Message, MessageState, PluginStatus, Routine};
 use crate::runtime::{self, TurnOutcome};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -46,14 +44,16 @@ pub struct PackRoutine {
     pub prompt: String,
 }
 
-/// Optional, additive entries in the v1 index. Service requirements may arrive in a later
-/// index; setup explains their absence and remains resumable.
+/// Optional, additive entries in the v1 index. A service a pack needs may arrive in a later
+/// index; until then its setup waits on that account.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Pack {
     pub id: String,
     pub name: String,
     pub outcome: String,
     pub description: String,
+    #[serde(default = "pack_symbol")]
+    pub symbol_name: String,
     #[serde(default = "pack_version")]
     pub version: u64,
     pub questions: Vec<Question>,
@@ -69,72 +69,45 @@ fn pack_version() -> u64 {
     1
 }
 
+fn pack_symbol() -> String {
+    "sparkles".into()
+}
+
 impl Pack {
     pub fn parse(value: &Value, index: &Index) -> Result<Self, String> {
-        let pack: Self = serde_json::from_value(value.clone())
-            .map_err(|e| format!("Not a workflow pack: {e}"))?;
+        let pack: Self = serde_json::from_value(value.clone()).map_err(|e| format!("Not a workflow pack: {e}"))?;
         if pack.version != 1
             || !crate::plugins::is_id(&pack.id)
-            || [
-                &pack.name,
-                &pack.outcome,
-                &pack.description,
-                &pack.sample_prompt,
-            ]
-            .iter()
-            .any(|s| s.trim().is_empty())
+            || [&pack.name, &pack.outcome, &pack.description, &pack.sample_prompt].iter().any(|s| s.trim().is_empty())
         {
             return Err("A workflow pack needs a supported version, id, name, outcome, description and sample.".into());
         }
-        if pack.specialists.is_empty()
-            || pack.specialists.len() > 6
-            || pack.questions.len() > 12
-            || pack.connections.len() > 12
-            || pack.routines.len() > 20
-        {
+        if pack.specialists.is_empty() || pack.specialists.len() > 6 || pack.questions.len() > 12 || pack.connections.len() > 12 || pack.routines.len() > 20 {
             return Err("A workflow pack exceeds its setup limits.".into());
         }
         unique_ids(pack.questions.iter().map(|q| q.id.as_str()))?;
         unique_ids(pack.specialists.iter().map(|s| s.id.as_str()))?;
         unique_ids(pack.connections.iter().map(|c| c.service_id.as_str()))?;
         unique_ids(pack.routines.iter().map(|r| r.id.as_str()))?;
-        for question in &pack.questions {
-            if question.label.trim().is_empty() {
-                return Err("A setup question needs a label.".into());
-            }
+        if pack.questions.iter().any(|q| q.label.trim().is_empty()) {
+            return Err("A setup question needs a label.".into());
         }
-        for connection in &pack.connections {
-            if connection.name.trim().is_empty() {
-                return Err("A connection requirement needs a name.".into());
-            }
+        if pack.connections.iter().any(|c| c.name.trim().is_empty()) {
+            return Err("A connection requirement needs a name.".into());
         }
         for specialist in &pack.specialists {
             if index.bot(&specialist.template_id).is_none() {
-                return Err(format!(
-                    "Unknown specialist template {}",
-                    specialist.template_id
-                ));
+                return Err(format!("Unknown specialist template {}", specialist.template_id));
             }
         }
-        if !pack
-            .specialists
-            .iter()
-            .any(|s| s.id == pack.sample_specialist)
-        {
+        if !pack.specialists.iter().any(|s| s.id == pack.sample_specialist) {
             return Err("Unknown sample specialist.".into());
         }
         for routine in &pack.routines {
-            if !pack
-                .specialists
-                .iter()
-                .any(|s| s.id == routine.specialist_id)
-            {
+            if !pack.specialists.iter().any(|s| s.id == routine.specialist_id) {
                 return Err("Unknown routine specialist.".into());
             }
-            if routine.name.trim().is_empty()
-                || routine.name.chars().count() > crate::routines::MAX_NAME_CHARS
-                || routine.prompt.trim().is_empty()
-            {
+            if routine.name.trim().is_empty() || routine.name.chars().count() > crate::routines::MAX_NAME_CHARS || routine.prompt.trim().is_empty() {
                 return Err("A workflow routine needs a name and prompt.".into());
             }
             crate::schedule::parse(&routine.schedule)?;
@@ -153,14 +126,6 @@ fn unique_ids<'a>(ids: impl Iterator<Item = &'a str>) -> Result<(), String> {
     Ok(())
 }
 
-/// Only ciphertext and merge metadata live in the local setup table and roster extension.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Envelope {
-    pub id: String,
-    pub updated_at: f64,
-    pub ciphertext: String,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Sample {
     pub job_id: String,
@@ -171,14 +136,15 @@ pub struct Sample {
     pub state: String,
     #[serde(default)]
     pub message_ids: Vec<String>,
-    #[serde(default)]
-    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Setup {
     pub id: String,
     pub runner_id: String,
+    /// When this Device last changed it; the newer copy wins a merge.
+    #[serde(default)]
+    pub updated_at: f64,
     /// The chosen pack and profiles are pinned so a marketplace update cannot change a
     /// partially completed setup's questions, instructions or schedules.
     pub pack: Pack,
@@ -187,7 +153,7 @@ pub struct Setup {
     pub bot_ids: BTreeMap<String, String>,
     pub routine_ids: BTreeMap<String, String>,
     pub owned_routine_ids: Vec<String>,
-    /// References to Installed only, with explicit selections for named accounts.
+    /// References to the Runner's installed plugins, by service.
     pub connection_ids: BTreeMap<String, String>,
     /// questions, connections, sample, reviewed, enabled, cancelled.
     pub phase: String,
@@ -196,88 +162,35 @@ pub struct Setup {
 
 fn stable_id(prefix: &str, parts: &[&str]) -> String {
     let hash = Sha256::digest(serde_json::to_vec(parts).unwrap());
-    format!(
-        "{prefix}-{}",
-        hash[..16]
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<String>()
-    )
-}
-
-fn decode(app: &App, envelope: &Envelope) -> Result<Setup, String> {
-    let dek = app.dek().ok_or("Create or pair an identity first.")?;
-    let bytes = URL_SAFE_NO_PAD
-        .decode(&envelope.ciphertext)
-        .map_err(|e| e.to_string())?;
-    let setup: Setup =
-        crate::crypto::decrypt_json(&dek, &format!("workflow:{}", envelope.id), &bytes)
-            .map_err(|e| e.to_string())?;
-    if setup.id != envelope.id {
-        return Err("Workflow setup identity does not match its envelope.".into());
-    }
-    Ok(setup)
+    format!("{prefix}-{}", hash[..16].iter().map(|b| format!("{b:02x}")).collect::<String>())
 }
 
 fn get(app: &App, id: &str) -> Result<Setup, String> {
-    let envelope = app
-        .state
-        .lock()
-        .unwrap()
-        .workflows
-        .iter()
-        .find(|w| w.id == id)
-        .cloned()
-        .ok_or("Unknown workflow setup.")?;
-    decode(app, &envelope)
+    app.state.lock().unwrap().workflows.iter().find(|w| w.id == id).cloned().ok_or_else(|| "Unknown workflow setup.".into())
 }
 
 /// Strict persistence: report a failed database write, leaving the previous record available
-/// for a retry. The outbox follows the encrypted roster path.
-fn save(app: &App, setup: &Setup) -> Result<(), String> {
+/// for a retry. The roster carries the change to the other Devices.
+fn save(app: &App, setup: &mut Setup) -> Result<(), String> {
     persist(app, setup, None)
 }
 
-fn persist(app: &App, setup: &Setup, sample_job: Option<&str>) -> Result<(), String> {
-    let dek = app.dek().ok_or("Create or pair an identity first.")?;
-    let ciphertext = crate::crypto::encrypt_json(&dek, &format!("workflow:{}", setup.id), setup)
-        .map_err(|e| e.to_string())?;
+/// With `sample_job`, writes only while that sample is still the setup's running one, so a late
+/// outcome cannot revive a cancelled or superseded generation.
+fn persist(app: &App, setup: &mut Setup, sample_job: Option<&str>) -> Result<(), String> {
     let mut state = app.state.lock().unwrap();
+    let held = state.workflows.iter().position(|w| w.id == setup.id);
     if let Some(job_id) = sample_job {
-        let Some(held) = state.workflows.iter().find(|e| e.id == setup.id) else {
-            return Ok(());
-        };
-        let bytes = URL_SAFE_NO_PAD
-            .decode(&held.ciphertext)
-            .map_err(|e| e.to_string())?;
-        let current: Setup =
-            crate::crypto::decrypt_json(&dek, &format!("workflow:{}", held.id), &bytes)
-                .map_err(|e| e.to_string())?;
-        if current.phase == "cancelled"
-            || current
-                .sample
-                .as_ref()
-                .is_none_or(|s| s.job_id != job_id || s.state != "running")
-        {
+        let Some(current) = held.map(|i| &state.workflows[i]) else { return Ok(()) };
+        if current.phase == "cancelled" || current.sample.as_ref().is_none_or(|s| s.job_id != job_id || s.state != "running") {
             return Ok(());
         }
     }
     let previous = state.workflows.clone();
-    let updated_at = now_secs().max(
-        previous
-            .iter()
-            .find(|e| e.id == setup.id)
-            .map_or(0.0, |e| e.updated_at + 0.000001),
-    );
-    let envelope = Envelope {
-        id: setup.id.clone(),
-        updated_at,
-        ciphertext: URL_SAFE_NO_PAD.encode(ciphertext),
-    };
-    if let Some(held) = state.workflows.iter_mut().find(|e| e.id == setup.id) {
-        *held = envelope;
-    } else {
-        state.workflows.push(envelope);
+    setup.updated_at = now_secs().max(held.map_or(0.0, |i| previous[i].updated_at + 0.000001));
+    match held {
+        Some(i) => state.workflows[i] = setup.clone(),
+        None => state.workflows.push(setup.clone()),
     }
     if let Err(error) = app.store.save_state(&state) {
         state.workflows = previous;
@@ -289,58 +202,59 @@ fn persist(app: &App, setup: &Setup, sample_job: Option<&str>) -> Result<(), Str
     Ok(())
 }
 
-/// Preserve records omitted by an older client; cancellations remain records, so sync cannot
-/// resurrect a cancelled setup. Different packs merge independently.
-pub fn merge(current: &mut Vec<Envelope>, incoming: Option<Vec<Envelope>>) -> bool {
+/// Keeps setups a roster leaves out, as one from a build that does not know workflows does;
+/// cancellations remain records, so sync cannot resurrect a cancelled setup. Each setup merges
+/// on its own, the newer copy winning. True when this Device's roster should go out again.
+pub fn merge(current: &mut Vec<Setup>, incoming: Option<Vec<Setup>>) -> bool {
     let Some(incoming) = incoming else {
         return !current.is_empty();
     };
     let mut republish = false;
-    for envelope in &incoming {
-        match current.iter_mut().find(|held| held.id == envelope.id) {
-            Some(held) if envelope.updated_at > held.updated_at => *held = envelope.clone(),
-            Some(held) if envelope.updated_at < held.updated_at => republish = true,
+    for setup in &incoming {
+        match current.iter_mut().find(|held| held.id == setup.id) {
+            Some(held) if setup.updated_at > held.updated_at => *held = setup.clone(),
+            Some(held) if setup.updated_at < held.updated_at => republish = true,
             Some(_) => {}
-            None => current.push(envelope.clone()),
+            None => current.push(setup.clone()),
         }
     }
-    republish
-        || current
-            .iter()
-            .any(|held| !incoming.iter().any(|e| e.id == held.id))
+    republish || current.iter().any(|held| !incoming.iter().any(|s| s.id == held.id))
 }
 
-fn all(app: &App) -> Result<Vec<Setup>, String> {
-    let envelopes = app.state.lock().unwrap().workflows.clone();
-    envelopes.iter().map(|e| decode(app, e)).collect()
+fn all(app: &App) -> Vec<Setup> {
+    app.state.lock().unwrap().workflows.clone()
 }
 
 fn str_param<'a>(params: &'a Value, key: &str) -> Result<&'a str, String> {
-    params[key]
-        .as_str()
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| format!("Missing {key}."))
+    params[key].as_str().filter(|s| !s.is_empty()).ok_or_else(|| format!("Missing {key}."))
 }
 
-fn running(app: &App, sample: &Sample) -> bool {
-    app.running_turns()
-        .iter()
-        .any(|turn| turn["job_id"].as_str() == Some(&sample.job_id))
+/// Whether the setup's sample is still going: a turn here, or on another Runner within its
+/// five-minute job-result window.
+fn is_running(app: &App, setup: &Setup) -> bool {
+    setup.sample.as_ref().is_some_and(|s| {
+        s.state == "running"
+            && (app.running_turns().iter().any(|turn| turn["job_id"].as_str() == Some(&s.job_id))
+                || (setup.runner_id != app.this_device_id().unwrap_or_default() && now_secs() - s.started_at < 300.0))
+    })
 }
 
 fn guard_edit(app: &App, setup: &Setup) -> Result<(), String> {
-    if setup.sample.as_ref().is_some_and(|s| {
-        s.state == "running"
-            && (running(app, s)
-                || (setup.runner_id != app.this_device_id().unwrap_or_default()
-                    && now_secs() - s.started_at < 300.0))
-    }) {
-        return Err(
-            "The sample is running. Cancel setup before changing its answers or accounts.".into(),
-        );
+    if is_running(app, setup) {
+        return Err("The sample is still running.".into());
     }
     if setup.phase == "enabled" {
-        return Err("Cancel setup to pause its schedules before changing it.".into());
+        return Err("Turn the workflow off before changing it.".into());
+    }
+    Ok(())
+}
+
+/// Pauses the routines this setup added; a reused routine of the user's keeps its state.
+fn pause_owned(app: &Arc<App>, setup: &Setup) -> Result<(), String> {
+    for id in &setup.owned_routine_ids {
+        if app.routine(id).is_some() {
+            crate::routines::set_enabled(app, id, false)?;
+        }
     }
     Ok(())
 }
@@ -350,48 +264,23 @@ pub async fn handle(app: &Arc<App>, method: &str, params: &Value) -> Result<Valu
     let _editing = app.workflow_editing.lock().await;
     if method == "workflows.start" {
         let runner_id = str_param(params, "runner_id")?;
-        let runner = app
-            .device(runner_id)
-            .filter(|d| d.is_runner())
-            .ok_or("Choose a Runner for this workflow.")?;
+        let runner = app.device(runner_id).filter(|d| d.is_runner()).ok_or("Choose a Runner for this workflow.")?;
         let pack_id = str_param(params, "pack_id")?;
         let id = stable_id("workflow", &[pack_id, runner_id]);
         if let Ok(mut setup) = get(app, &id) {
             if setup.phase == "cancelled" {
-                setup.phase = if setup.bot_ids.is_empty() {
-                    "questions"
-                } else {
-                    "connections"
-                }
-                .into();
-                save(app, &setup)?;
+                setup.phase = if setup.bot_ids.is_empty() { "questions" } else { "connections" }.into();
+                save(app, &mut setup)?;
             }
             return view(app, &setup);
         }
-        // Existing corrupt progress is an error, not permission to create resources again.
-        if app
-            .state
-            .lock()
-            .unwrap()
-            .workflows
-            .iter()
-            .any(|e| e.id == id)
-        {
-            return Err("Workflow progress could not be decrypted.".into());
-        }
         let index = marketplace::index(app).await;
-        let pack = index
-            .pack(pack_id)
-            .cloned()
-            .ok_or("This workflow is no longer in the marketplace.")?;
-        let templates = pack
-            .specialists
-            .iter()
-            .map(|s| (s.id.clone(), index.bot(&s.template_id).unwrap().clone()))
-            .collect();
-        let setup = Setup {
+        let pack = index.pack(pack_id).cloned().ok_or("This workflow is no longer in the marketplace.")?;
+        let templates = pack.specialists.iter().map(|s| (s.id.clone(), index.bot(&s.template_id).unwrap().clone())).collect();
+        let mut setup = Setup {
             id,
             runner_id: runner.id,
+            updated_at: 0.0,
             pack,
             templates,
             answers: BTreeMap::new(),
@@ -402,7 +291,7 @@ pub async fn handle(app: &Arc<App>, method: &str, params: &Value) -> Result<Valu
             phase: "questions".into(),
             sample: None,
         };
-        save(app, &setup)?;
+        save(app, &mut setup)?;
         return view(app, &setup);
     }
     let id = str_param(params, "id")?;
@@ -413,64 +302,49 @@ pub async fn handle(app: &Arc<App>, method: &str, params: &Value) -> Result<Valu
         "workflows.configure" => {
             guard_edit(app, &setup)?;
             let answers: BTreeMap<String, String> =
-                serde_json::from_value(params["answers"].clone())
-                    .map_err(|_| "Pass the workflow's answers as text fields.")?;
+                serde_json::from_value(params["answers"].clone()).map_err(|_| "Pass the workflow's answers as text fields.")?;
             validate_answers(&setup.pack, &answers)?;
-            let selected: BTreeMap<String, String> =
-                serde_json::from_value(params.get("bot_ids").cloned().unwrap_or_else(|| json!({})))
-                    .map_err(|_| "Pass selected bot IDs by specialist.")?;
+            let selected: BTreeMap<String, String> = serde_json::from_value(params.get("bot_ids").cloned().unwrap_or_else(|| json!({})))
+                .map_err(|_| "Pass selected bot IDs by specialist.")?;
             materialize(app, &mut setup, answers, selected)?;
-            save(app, &setup)?;
+            save(app, &mut setup)?;
         }
         "workflows.connection" => {
             guard_edit(app, &setup)?;
-            if setup.bot_ids.is_empty() {
-                return Err("Answer this workflow's questions first.".into());
-            }
             let service_id = str_param(params, "service_id")?;
-            if !setup
-                .pack
-                .connections
-                .iter()
-                .any(|c| c.service_id == service_id)
-            {
-                return Err("This workflow does not require that integration.".into());
-            }
+            let requirement = setup.pack.connections.iter().find(|c| c.service_id == service_id).cloned().ok_or("This workflow does not need that integration.")?;
             let choices = choices(app, &setup.runner_id, service_id);
-            let explicit = params["plugin_id"].as_str();
-            let plugin_id = if let Some(id) = explicit {
+            let plugin_id = if let Some(id) = params["plugin_id"].as_str() {
                 if !choices.iter().any(|p| p.id == id) {
-                    return Err(
-                        "Select an account for this service on the workflow's Runner.".into(),
-                    );
+                    return Err(format!("Choose a {} account on this Runner.", requirement.name));
                 }
                 id.to_string()
             } else if let Some(id) = setup.connection_ids.get(service_id) {
+                // A lost installation response is recovered by its recorded instance, even while
+                // the Runner's advertisement of it is still on its way.
                 id.clone()
             } else {
-                // A lost installation response or pre-existing account is recoverable by
-                // selecting its advertised instance; never infer a default named account.
+                // Never pick one of several named accounts for the user.
                 if !choices.is_empty() {
-                    return Err("Choose an existing account before adding another.".into());
+                    return Err(format!("Choose one of the {} accounts on this Runner.", requirement.name));
                 }
                 let index = marketplace::index(app).await;
-                let manifest = index.plugin(service_id).cloned().ok_or_else(|| format!("{} is not available in this marketplace yet. Your setup is saved; retry after updating the marketplace.", service_id))?;
-                let status = crate::plugins::on_runner(app, &setup.runner_id, "plugins.install", json!({ "manifest": manifest, "source": "marketplace", "account_name": params["account_name"].as_str().filter(|name| !name.trim().is_empty()).unwrap_or(&setup.pack.name) })).await?;
+                let manifest = index.plugin(service_id).cloned().ok_or_else(|| format!("{} isn't in the marketplace yet.", requirement.name))?;
+                let account_name = params["account_name"].as_str().filter(|name| !name.trim().is_empty()).unwrap_or(&setup.pack.name);
+                let status = crate::plugins::on_runner(app, &setup.runner_id, "plugins.install", json!({ "manifest": manifest, "source": "marketplace", "account_name": account_name })).await?;
                 let id = str_param(&status, "id")?.to_string();
                 installed_status = Some(status);
                 id
             };
             if setup.connection_ids.get(service_id) != Some(&plugin_id) {
-                for id in &setup.owned_routine_ids {
-                    if app.routine(id).is_some() {
-                        crate::routines::set_enabled(app, id, false)?;
-                    }
-                }
+                pause_owned(app, &setup)?;
                 setup.sample = None;
-                setup.phase = "connections".into();
+                if !setup.bot_ids.is_empty() {
+                    setup.phase = "connections".into();
+                }
             }
             setup.connection_ids.insert(service_id.into(), plugin_id);
-            save(app, &setup)?;
+            save(app, &mut setup)?;
         }
         "workflows.clear_connection" => {
             guard_edit(app, &setup)?;
@@ -478,39 +352,23 @@ pub async fn handle(app: &Arc<App>, method: &str, params: &Value) -> Result<Valu
             if setup.connection_ids.remove(service_id).is_none() {
                 return Err("No selected account to clear.".into());
             }
-            for id in &setup.owned_routine_ids {
-                if app.routine(id).is_some() {
-                    crate::routines::set_enabled(app, id, false)?;
-                }
-            }
+            pause_owned(app, &setup)?;
             setup.sample = None;
-            setup.phase = "connections".into();
-            save(app, &setup)?;
+            if !setup.bot_ids.is_empty() {
+                setup.phase = "connections".into();
+            }
+            save(app, &mut setup)?;
         }
         "workflows.sample" => {
             if setup.phase == "cancelled" {
                 return Err("Resume this workflow before running a sample.".into());
             }
-            if let Some(sample) = &setup.sample {
-                if sample.state == "running"
-                    && (running(app, sample)
-                        || (setup.runner_id != app.this_device_id().unwrap_or_default()
-                            && now_secs() - sample.started_at < 300.0))
-                {
-                    return view(app, &setup);
-                }
+            if is_running(app, &setup) {
+                return view(app, &setup);
             }
             ready(app, &setup)?;
-            for id in &setup.owned_routine_ids {
-                if app.routine(id).is_some() {
-                    crate::routines::set_enabled(app, id, false)?;
-                }
-            }
-            let bot_id = setup
-                .bot_ids
-                .get(&setup.pack.sample_specialist)
-                .ok_or("Set up the sample specialist first.")?
-                .clone();
+            pause_owned(app, &setup)?;
+            let bot_id = setup.bot_ids.get(&setup.pack.sample_specialist).ok_or("Set up the sample specialist first.")?.clone();
             let dm = app.dm_with(&bot_id, None).map_err(|e| e.to_string())?;
             let message = Message::new(&dm.meta.id, Author::You, Body::text(format!("Run a sample of {} for me to review. {}\nKeep its schedules paused. Present a draft in this chat; ask no question about enabling schedules.", setup.pack.name, setup.pack.sample_prompt)));
             let job = Job {
@@ -529,17 +387,9 @@ pub async fn handle(app: &Arc<App>, method: &str, params: &Value) -> Result<Valu
                 setup: None,
                 created_at: now_secs(),
             };
-            setup.sample = Some(Sample {
-                job_id: job.id.clone(),
-                chat_id: dm.meta.id,
-                bot_id,
-                started_at: job.created_at,
-                state: "running".into(),
-                message_ids: Vec::new(),
-                error: None,
-            });
+            setup.sample = Some(Sample { job_id: job.id.clone(), chat_id: dm.meta.id, bot_id, started_at: job.created_at, state: "running".into(), message_ids: Vec::new() });
             setup.phase = "sample".into();
-            save(app, &setup)?;
+            save(app, &mut setup)?;
             app.upsert_message(message, true);
             runtime::start_turn(app, job);
         }
@@ -550,176 +400,114 @@ pub async fn handle(app: &Arc<App>, method: &str, params: &Value) -> Result<Valu
             ready(app, &setup)?;
             let job_id = str_param(params, "job_id")?;
             let sample = setup.sample.as_mut().ok_or("Run a sample first.")?;
-            if sample.job_id != job_id
-                || !matches!(sample.state.as_str(), "ready" | "reviewed")
-                || sample.message_ids.is_empty()
-            {
+            if sample.job_id != job_id || !matches!(sample.state.as_str(), "ready" | "reviewed") || sample.message_ids.is_empty() {
                 return Err("Review the completed result of the current sample first.".into());
             }
-            if sample
-                .message_ids
-                .iter()
-                .any(|id| app.message(&sample.chat_id, id).is_none())
-            {
-                return Err(
-                    "The sample result has not reached this Device yet. Retry after sync.",
-                )?;
+            if sample.message_ids.iter().any(|id| app.message(&sample.chat_id, id).is_none()) {
+                return Err("The sample's result hasn't reached this Device yet. Try again in a moment.".into());
             }
             sample.state = "reviewed".into();
             setup.phase = "reviewed".into();
-            save(app, &setup)?;
+            save(app, &mut setup)?;
         }
         "workflows.enable" => {
             ready(app, &setup)?;
-            if setup.phase == "cancelled"
-                || setup.sample.as_ref().is_none_or(|s| s.state != "reviewed")
-            {
-                return Err("Run and review a sample before enabling schedules.".into());
+            if setup.phase == "cancelled" || setup.sample.as_ref().is_none_or(|s| s.state != "reviewed") {
+                return Err("Run and review a sample before turning on its schedule.".into());
             }
             for id in setup.routine_ids.values() {
                 crate::routines::set_enabled(app, id, true)?;
             }
             setup.phase = "enabled".into();
-            save(app, &setup)?;
+            save(app, &mut setup)?;
         }
         "workflows.cancel" => {
             if let Some(sample) = &setup.sample {
                 app.cancel_job(&sample.job_id);
                 if setup.runner_id != app.this_device_id().unwrap_or_default() {
                     if let Some(runner) = app.device(&setup.runner_id) {
-                        let ciphertext = crate::crypto::seal_json(
-                            &runner.box_pubkey,
-                            &JobCancel {
-                                job_id: sample.job_id.clone(),
-                            },
-                        )
-                        .map_err(|e| e.to_string())?;
+                        let ciphertext = crate::crypto::seal_json(&runner.box_pubkey, &JobCancel { job_id: sample.job_id.clone() }).map_err(|e| e.to_string())?;
                         app.push_blob("job_cancel", Some(runner.id), ciphertext);
                     }
                 }
             }
-            // Only pack-created routines are paused. A reused user's routine stays as it was.
-            for id in &setup.owned_routine_ids {
-                if app.routine(id).is_some() {
-                    crate::routines::set_enabled(app, id, false)?;
-                }
-            }
+            pause_owned(app, &setup)?;
             setup.phase = "cancelled".into();
             setup.sample = None;
-            save(app, &setup)?;
+            save(app, &mut setup)?;
         }
         _ => return Err(format!("Unknown workflow method {method}")),
     }
     let mut out = view(app, &setup)?;
     if let Some(status) = installed_status {
-        // Return the Runner's acknowledgment immediately. The authoritative machine
-        // advertisement can arrive later; this is a transient response, not another store.
-        if let Some(connection) = out["connections"]
-            .as_array_mut()
-            .and_then(|rows| rows.iter_mut().find(|c| c["selected_id"] == status["id"]))
-        {
-            connection["state"] = status["state"].clone();
-            connection["detail"] = status["detail"].clone();
-            connection["choices"].as_array_mut().unwrap().push(status);
+        // The Runner's answer, until its advertisement of the new plugin reaches this Device.
+        if let Some(connection) = out["connections"].as_array_mut().and_then(|rows| rows.iter_mut().find(|c| c["selected_id"] == status["id"])) {
+            let choices = connection["choices"].as_array_mut().unwrap();
+            if !choices.iter().any(|choice| choice["id"] == status["id"]) {
+                choices.push(status);
+            }
         }
     }
     Ok(out)
 }
 
 fn validate_answers(pack: &Pack, answers: &BTreeMap<String, String>) -> Result<(), String> {
-    if answers
-        .keys()
-        .any(|id| !pack.questions.iter().any(|q| &q.id == id))
-    {
+    if answers.keys().any(|id| !pack.questions.iter().any(|q| &q.id == id)) {
         return Err("Pass only answers this workflow asks for.".into());
     }
     for question in &pack.questions {
-        let answer = answers
-            .get(&question.id)
-            .map(String::as_str)
-            .unwrap_or("")
-            .trim();
+        let answer = answers.get(&question.id).map(String::as_str).unwrap_or("").trim();
         if answer.is_empty() {
-            return Err(format!("Answer {}.", question.label));
+            return Err(format!("Fill in {}.", question.label));
         }
         if answer.chars().count() > 2000 {
             return Err(format!("Keep {} under 2,000 characters.", question.label));
         }
         if crate::memory::scrub(answer) != answer {
-            return Err("Keep credentials in the integration's sign-in or setup fields.")?;
+            return Err("Keep keys and passwords in the integration's own sign-in.".into());
         }
     }
     Ok(())
 }
 
-fn materialize(
-    app: &Arc<App>,
-    setup: &mut Setup,
-    answers: BTreeMap<String, String>,
-    selected: BTreeMap<String, String>,
-) -> Result<(), String> {
-    if selected
-        .keys()
-        .any(|role| !setup.templates.contains_key(role))
-    {
+/// The bot setup uses for a specialist: the one picked, else the one it recorded, else the one it
+/// added before, else a bot on the Runner with the template's description.
+fn planned_bot(app: &App, setup: &Setup, role: &str, picked: Option<&String>) -> Option<Bot> {
+    let on_runner = |id: &String| app.bot(id).filter(|b| b.runner_id == setup.runner_id);
+    picked
+        .or_else(|| setup.bot_ids.get(role))
+        .and_then(on_runner)
+        .or_else(|| on_runner(&stable_id("bot-workflow", &[&setup.id, role])))
+        .or_else(|| {
+            let description = &setup.templates[role].description;
+            app.state.lock().unwrap().bots.iter().find(|b| b.runner_id == setup.runner_id && &b.description == description).cloned()
+        })
+}
+
+fn materialize(app: &Arc<App>, setup: &mut Setup, answers: BTreeMap<String, String>, selected: BTreeMap<String, String>) -> Result<(), String> {
+    if selected.keys().any(|role| !setup.templates.contains_key(role)) {
         return Err("Unknown workflow specialist.".into());
     }
     // Validate every explicit choice before creating resources.
-    for id in selected.values() {
-        if app.bot(id).is_none_or(|b| b.runner_id != setup.runner_id) {
-            return Err("Reuse a bot on the chosen Runner.")?;
-        }
+    if selected.values().any(|id| app.bot(id).is_none_or(|b| b.runner_id != setup.runner_id)) {
+        return Err("Choose a bot on this workflow's Runner.".into());
     }
-    let changed = setup.answers != answers
-        || selected
-            .iter()
-            .any(|(role, id)| setup.bot_ids.get(role) != Some(id));
-    if changed {
-        for id in &setup.owned_routine_ids {
-            if app.routine(id).is_some() {
-                crate::routines::set_enabled(app, id, false)?;
-            }
-        }
+    let answers: BTreeMap<String, String> = answers.into_iter().map(|(k, v)| (k, v.trim().to_string())).collect();
+    if setup.answers != answers || selected.iter().any(|(role, id)| setup.bot_ids.get(role) != Some(id)) {
+        pause_owned(app, setup)?;
         setup.sample = None;
     }
-    setup.answers = answers
-        .into_iter()
-        .map(|(k, v)| (k, v.trim().to_string()))
-        .collect();
+    setup.answers = answers;
     for specialist in &setup.pack.specialists {
         let template = &setup.templates[&specialist.id];
         let stable = stable_id("bot-workflow", &[&setup.id, &specialist.id]);
-        let held = selected
-            .get(&specialist.id)
-            .or_else(|| setup.bot_ids.get(&specialist.id))
-            .and_then(|id| app.bot(id))
-            .filter(|b| b.runner_id == setup.runner_id);
-        let suitable = app
-            .state
-            .lock()
-            .unwrap()
-            .bots
-            .iter()
-            .find(|b| b.runner_id == setup.runner_id && b.description == template.description)
-            .cloned();
-        let bot = if let Some(bot) = held
-            .or_else(|| app.bot(&stable).filter(|b| b.runner_id == setup.runner_id))
-            .or(suitable)
-        {
+        let bot = if let Some(bot) = planned_bot(app, setup, &specialist.id, selected.get(&specialist.id)) {
             bot
         } else {
             if app.bot(&stable).is_some() {
-                return Err("The imported specialist moved to another Runner. Select another bot for this workflow.".into());
+                return Err("The bot this workflow added moved to another Runner. Choose another bot.".into());
             }
-            let provider = app
-                .credentials
-                .lock()
-                .unwrap()
-                .statuses()
-                .iter()
-                .find(|p| p.is_connected)
-                .map(|p| p.kind.clone())
-                .unwrap_or_else(|| "deepseek".into());
+            let provider = app.credentials.lock().unwrap().statuses().iter().find(|p| p.is_connected).map(|p| p.kind.clone()).unwrap_or_else(|| "deepseek".into());
             let bot = Bot {
                 id: stable.clone(),
                 name: template.name.clone(),
@@ -735,9 +523,7 @@ fn materialize(
                 workdir: None,
                 created_at: 0.0,
             };
-            app.create_bot_with_dm(bot, Some(stable_id("chat-workflow", &[&stable])))
-                .map_err(|e| e.to_string())?
-                .0
+            app.create_bot_with_dm(bot, Some(stable_id("chat-workflow", &[&stable]))).map_err(|e| e.to_string())?.0
         };
         setup.bot_ids.insert(specialist.id.clone(), bot.id);
     }
@@ -745,20 +531,10 @@ fn materialize(
         let bot_id = &setup.bot_ids[&spec.specialist_id];
         let stable = stable_id("routine-workflow", &[&setup.id, &spec.id, bot_id]);
         let schedule = crate::schedule::parse(&spec.schedule)?.canonical();
-        let held = setup
-            .routine_ids
-            .get(&spec.id)
-            .and_then(|id| app.routine(id))
-            .filter(|r| &r.bot_id == bot_id && r.schedule == schedule && r.prompt == spec.prompt);
-        let suitable = app
-            .routines_of(bot_id)
-            .into_iter()
-            .find(|r| r.name == spec.name && r.schedule == schedule && r.prompt == spec.prompt);
-        let recovered = if let Some(routine) = app.routine(&stable) {
-            if routine.prompt != spec.prompt
-                || routine.schedule != schedule
-                || &routine.bot_id != bot_id
-            {
+        let held = setup.routine_ids.get(&spec.id).and_then(|id| app.routine(id)).filter(|r| &r.bot_id == bot_id && r.schedule == schedule && r.prompt == spec.prompt);
+        let suitable = app.routines_of(bot_id).into_iter().find(|r| r.name == spec.name && r.schedule == schedule && r.prompt == spec.prompt);
+        let recovered = match app.routine(&stable) {
+            Some(routine) if routine.prompt != spec.prompt || routine.schedule != schedule || &routine.bot_id != bot_id => {
                 setup.sample = None;
                 Some(
                     app.update_routine(&stable, |r| {
@@ -769,19 +545,14 @@ fn materialize(
                     })
                     .map_err(|e| e.to_string())?,
                 )
-            } else {
-                Some(routine)
             }
-        } else {
-            None
+            other => other,
         };
         let routine = if let Some(routine) = held.or(recovered).or(suitable) {
             routine
         } else {
             if app.routines_of(bot_id).len() >= crate::routines::MAX_PER_BOT {
-                return Err(
-                    "The selected bot has no room for another routine. Choose another specialist.",
-                )?;
+                return Err("The chosen bot has no room for another routine. Choose another bot.".into());
             }
             let now = now_secs();
             let routine = Routine {
@@ -798,84 +569,53 @@ fn materialize(
                 check: None,
                 created_at: now,
             };
-            let routine = app.insert_routine(routine).map_err(|e| e.to_string())?;
-            setup.owned_routine_ids.push(routine.id.clone());
-            routine
+            app.insert_routine(routine).map_err(|e| e.to_string())?
         };
-        // Recover a crash between the deterministic insert and the encrypted setup write.
+        // Also recovers a crash between the deterministic insert and the setup's own write.
         if routine.id == stable && !setup.owned_routine_ids.contains(&stable) {
             setup.owned_routine_ids.push(stable);
         }
         setup.routine_ids.insert(spec.id.clone(), routine.id);
     }
+    // The one account the Runner has for a service is the one to use; of several, the user picks.
+    for requirement in &setup.pack.connections {
+        if !setup.connection_ids.contains_key(&requirement.service_id) {
+            if let [only] = choices(app, &setup.runner_id, &requirement.service_id).as_slice() {
+                setup.connection_ids.insert(requirement.service_id.clone(), only.id.clone());
+            }
+        }
+    }
     setup.phase = "connections".into();
     Ok(())
 }
 
+/// The Runner's installed plugins for a service: its named accounts, or the singleton plugin of
+/// that id. Servers from its `mcp.json` stay out.
 fn choices(app: &App, runner_id: &str, service_id: &str) -> Vec<PluginStatus> {
     app.device(runner_id)
-        .map(|d| {
-            d.plugins
-                .into_iter()
-                .filter(|p| {
-                    p.source.is_none() && p.service_id.as_deref().unwrap_or(&p.id) == service_id
-                })
-                .collect()
-        })
+        .map(|d| d.plugins.into_iter().filter(|p| p.source.is_none() && p.service_id.as_deref().unwrap_or(&p.id) == service_id).collect())
         .unwrap_or_default()
 }
 
 fn ready(app: &App, setup: &Setup) -> Result<(), String> {
     validate_answers(&setup.pack, &setup.answers)?;
     for specialist in &setup.pack.specialists {
-        let bot = setup
-            .bot_ids
-            .get(&specialist.id)
-            .and_then(|id| app.bot(id))
-            .filter(|b| b.runner_id == setup.runner_id)
-            .ok_or("A specialist was removed or moved. Rerun setup to choose its replacement.")?;
-        if !app
-            .credentials
-            .lock()
-            .unwrap()
-            .statuses()
-            .iter()
-            .any(|p| p.kind == bot.provider && p.is_connected)
-        {
-            return Err(format!(
-                "Connect {} in Settings for {} before running a sample.",
-                bot.provider, bot.name
-            ));
+        let bot = setup.bot_ids.get(&specialist.id).and_then(|id| app.bot(id)).filter(|b| b.runner_id == setup.runner_id).ok_or("A bot of this workflow was removed or moved. Run the sample again to replace it.")?;
+        let credentials = app.credentials.lock().unwrap();
+        if !credentials.statuses().iter().any(|p| p.kind == bot.provider && p.is_connected) {
+            return Err(format!("Connect {} in Settings for {} first.", credentials.label(&bot.provider), bot.name));
         }
     }
     for spec in &setup.pack.routines {
-        let routine = setup
-            .routine_ids
-            .get(&spec.id)
-            .and_then(|id| app.routine(id))
-            .ok_or("A routine was removed. Rerun setup to restore it.")?;
-        if setup.bot_ids.get(&spec.specialist_id) != Some(&routine.bot_id)
-            || routine.prompt != spec.prompt
-            || routine.schedule != crate::schedule::parse(&spec.schedule)?.canonical()
-        {
-            return Err(
-                "A routine changed since setup. Rerun setup and review another sample.".into(),
-            );
+        let routine = setup.routine_ids.get(&spec.id).and_then(|id| app.routine(id)).ok_or("A routine of this workflow was removed. Run the sample again to restore it.")?;
+        if setup.bot_ids.get(&spec.specialist_id) != Some(&routine.bot_id) || routine.prompt != spec.prompt || routine.schedule != crate::schedule::parse(&spec.schedule)?.canonical() {
+            return Err("A routine of this workflow changed. Run the sample again.".into());
         }
     }
     for requirement in &setup.pack.connections {
-        let id = setup
-            .connection_ids
-            .get(&requirement.service_id)
-            .ok_or_else(|| format!("Choose a {} account.", requirement.name))?;
-        if !choices(app, &setup.runner_id, &requirement.service_id)
-            .iter()
-            .any(|p| &p.id == id && p.state == "ready")
-        {
-            return Err(format!(
-                "Finish connecting {} on the selected Runner.",
-                requirement.name
-            ));
+        let id = setup.connection_ids.get(&requirement.service_id).ok_or_else(|| format!("Choose a {} account.", requirement.name))?;
+        if !choices(app, &setup.runner_id, &requirement.service_id).iter().any(|p| &p.id == id && p.state == "ready") {
+            return Err(format!("Finish connecting {}.", requirement.name));
         }
     }
     Ok(())
@@ -883,153 +623,94 @@ fn ready(app: &App, setup: &Setup) -> Result<(), String> {
 
 fn view(app: &App, setup: &Setup) -> Result<Value, String> {
     let index = marketplace::current(app);
-    let connections: Vec<_> = setup.pack.connections.iter().map(|r| {
-        let choices = choices(app, &setup.runner_id, &r.service_id);
-        let selected_id = setup.connection_ids.get(&r.service_id);
-        let status = selected_id.and_then(|id| choices.iter().find(|p| &p.id == id));
-        json!({ "service_id": r.service_id, "name": r.name, "selected_id": selected_id, "choices": choices, "available": index.plugin(&r.service_id).is_some(), "state": status.map(|p| p.state.as_str()).unwrap_or("missing"), "detail": status.map(|p| p.detail.as_str()).unwrap_or("Choose or add an account on this Runner.") })
-    }).collect();
-    let specialists: Vec<_> = setup.pack.specialists.iter().map(|s| {
-        let candidates: Vec<Bot> = app.state.lock().unwrap().bots.iter().filter(|b| b.runner_id == setup.runner_id).cloned().collect();
-        json!({ "id": s.id, "name": setup.templates[&s.id].name, "selected_id": setup.bot_ids.get(&s.id), "choices": candidates })
-    }).collect();
-    let routines: Vec<_> = setup
-        .routine_ids
-        .values()
-        .filter_map(|id| app.routine(id))
-        .map(|r| app.routine_out(&r))
+    let connections: Vec<_> = setup
+        .pack
+        .connections
+        .iter()
+        .map(|r| json!({ "service_id": r.service_id, "name": r.name, "selected_id": setup.connection_ids.get(&r.service_id), "choices": choices(app, &setup.runner_id, &r.service_id), "available": index.plugin(&r.service_id).is_some() }))
         .collect();
-    let sample_messages: Vec<_> = setup
-        .sample
-        .as_ref()
-        .into_iter()
-        .flat_map(|s| {
-            s.message_ids
-                .iter()
-                .filter_map(|id| app.message(&s.chat_id, id))
-        })
-        .map(|m| m.for_app())
+    let candidates: Vec<Bot> = app.state.lock().unwrap().bots.iter().filter(|b| b.runner_id == setup.runner_id).cloned().collect();
+    let specialists: Vec<_> = setup
+        .pack
+        .specialists
+        .iter()
+        .map(|s| json!({ "id": s.id, "name": setup.templates[&s.id].name, "selected_id": planned_bot(app, setup, &s.id, None).map(|b| b.id), "choices": candidates }))
         .collect();
-    let blocked = ready(app, setup).err();
-    let is_running = setup.sample.as_ref().is_some_and(|s| {
-        s.state == "running"
-            && (running(app, s)
-                || (setup.runner_id != app.this_device_id().unwrap_or_default()
-                    && now_secs() - s.started_at < 300.0))
-    });
-    Ok(
-        json!({ "setup": setup, "connections": connections, "specialists": specialists, "routines": routines, "sample_messages": sample_messages, "is_running": is_running, "can_sample": blocked.is_none() && !is_running && setup.phase != "cancelled", "can_enable": blocked.is_none() && setup.phase != "cancelled" && setup.sample.as_ref().is_some_and(|s| s.state == "reviewed"), "blocked_reason": blocked }),
-    )
+    let routines: Vec<_> = setup.routine_ids.values().filter_map(|id| app.routine(id)).map(|r| app.routine_out(&r)).collect();
+    let sample_messages: Vec<_> =
+        setup.sample.as_ref().into_iter().flat_map(|s| s.message_ids.iter().filter_map(|id| app.message(&s.chat_id, id))).map(|m| m.for_app()).collect();
+    Ok(json!({ "setup": setup, "connections": connections, "specialists": specialists, "routines": routines, "sample_messages": sample_messages, "is_running": is_running(app, setup) }))
 }
 
-/// Set the result boundary only after obtaining the chat lock, so replies from a preceding
+/// Sets the result boundary only after obtaining the chat lock, so replies from a preceding
 /// queued turn cannot become part of this sample's result.
 pub fn sample_started(app: &App, job: &Job) {
     if job.kind != "workflow_sample" {
         return;
     }
-    let Ok(setups) = all(app) else { return };
-    if let Some(mut setup) = setups.into_iter().find(|s| {
-        s.sample
-            .as_ref()
-            .is_some_and(|sample| sample.job_id == job.id)
-    }) {
+    if let Some(mut setup) = all(app).into_iter().find(|s| s.sample.as_ref().is_some_and(|sample| sample.job_id == job.id)) {
         setup.sample.as_mut().unwrap().started_at = now_secs();
-        if let Err(error) = persist(app, &setup, Some(&job.id)) {
+        if let Err(error) = persist(app, &mut setup, Some(&job.id)) {
             tracing::error!(%error, "saving workflow sample boundary");
         }
     }
 }
 
-/// Called on the executing Runner while the chat's turn lock is still held. Read the current
+/// Called on the executing Runner while the chat's turn lock is still held. Reads the current
 /// generation before recording a result; a cancelled or retried generation cannot activate it.
 pub fn sample_finished(app: &App, job: &Job, outcome: TurnOutcome) {
     if job.kind != "workflow_sample" {
         return;
     }
-    let Ok(setups) = all(app) else { return };
-    let Some(mut setup) = setups.into_iter().find(|s| {
-        s.phase != "cancelled"
-            && s.sample
-                .as_ref()
-                .is_some_and(|sample| sample.job_id == job.id && sample.state == "running")
-    }) else {
+    let Some(mut setup) = all(app).into_iter().find(|s| s.phase != "cancelled" && s.sample.as_ref().is_some_and(|sample| sample.job_id == job.id && sample.state == "running")) else {
         return;
     };
     let sample = setup.sample.as_mut().unwrap();
-    let messages = app
-        .store
-        .page(&job.chat_id, None, 100)
-        .map(|p| p.0)
-        .unwrap_or_default();
+    let messages = app.store.page(&job.chat_id, None, 100).map(|p| p.0).unwrap_or_default();
     sample.message_ids = messages
         .iter()
         .filter(|m| {
             m.created_at >= sample.started_at
-                && m.author
-                    == Author::Bot {
-                        bot_id: job.bot_id.clone(),
-                    }
+                && m.author == Author::Bot { bot_id: job.bot_id.clone() }
                 && matches!(&m.body, Body::Text { text, .. } if !text.trim().is_empty())
                 && m.state == MessageState::Complete
         })
         .map(|m| m.id.clone())
         .collect();
-    sample.state = if outcome == TurnOutcome::Sent && !sample.message_ids.is_empty() {
-        "ready"
-    } else {
-        "failed"
-    }
-    .into();
-    if sample.state == "failed" {
-        sample.error = Some("The sample did not produce a completed result. Review its chat, fix the connection or provider, and try again.".into());
-    }
-    if let Err(error) = persist(app, &setup, Some(&job.id)) {
+    sample.state = if outcome == TurnOutcome::Sent && !sample.message_ids.is_empty() { "ready" } else { "failed" }.into();
+    if let Err(error) = persist(app, &mut setup, Some(&job.id)) {
         tracing::error!(%error, "saving workflow sample outcome");
     }
 }
 
-/// Enforce the review gate for newly imported routines even if a bot or another UI tries to
-/// resume them during setup. Existing user routines retain their own controls.
+/// Enforces the review gate for routines a workflow added, even if a bot or another UI tries to
+/// resume them during setup. The user's own routines keep their own controls.
 pub fn allow_enable(app: &App, routine_id: &str) -> Result<(), String> {
     let mut owned = false;
-    for setup in all(app)? {
-        owned |= setup.owned_routine_ids.iter().any(|id| id == routine_id);
+    for setup in all(app) {
         if setup.owned_routine_ids.iter().any(|id| id == routine_id) {
-            if setup.phase == "cancelled"
-                || setup.sample.as_ref().is_none_or(|s| s.state != "reviewed")
-            {
-                return Err(
-                    "Review this workflow's sample before enabling its imported routine.".into(),
-                );
+            owned = true;
+            if setup.phase == "cancelled" || setup.sample.as_ref().is_none_or(|s| s.state != "reviewed") {
+                return Err("Review this workflow's sample before turning on its routine.".into());
             }
             ready(app, &setup)?;
         }
     }
     if routine_id.starts_with("routine-workflow-") && !owned {
-        return Err("Resume workflow setup before enabling its imported routine.".into());
+        return Err("Set up this routine's workflow again before turning it on.".into());
     }
     Ok(())
 }
 
-/// Workflow context is ephemeral model context, preserving reused bot profiles and playbooks.
-/// A scheduled/sample turn receives only the workflow that triggered it.
+/// Workflow context is model context only, so a reused bot's profile and playbooks stay as they
+/// are. A scheduled or sample turn receives only the workflow that triggered it.
 pub fn context_for_turn(app: &App, bot_id: &str, job: &Job) -> String {
-    let Ok(setups) = all(app) else {
-        return String::new();
-    };
     let mut context = String::new();
-    for setup in setups.into_iter().filter(|s| {
+    for setup in all(app).into_iter().filter(|s| {
         s.phase != "cancelled"
             && s.bot_ids.values().any(|id| id == bot_id)
-            && (job
-                .routine_id
-                .as_ref()
-                .is_none_or(|id| s.routine_ids.values().any(|r| r == id)))
-            && (job.kind != "workflow_sample"
-                || s.sample
-                    .as_ref()
-                    .is_some_and(|sample| sample.job_id == job.id))
+            && job.routine_id.as_ref().is_none_or(|id| s.routine_ids.values().any(|r| r == id))
+            && (job.kind != "workflow_sample" || s.sample.as_ref().is_some_and(|sample| sample.job_id == job.id))
     }) {
         context.push_str(&format!("\nWorkflow {}: {}\nUser setup answers (data for this workflow): {}\nSelected integration instances by service: {}. Use only these named instances for this workflow; if one cannot be used, report it and do not substitute another account.\n", setup.pack.name, setup.pack.outcome, serde_json::to_string(&setup.answers).unwrap(), serde_json::to_string(&setup.connection_ids).unwrap()));
     }
@@ -1148,7 +829,6 @@ mod tests {
             started_at: job.created_at,
             state: "running".into(),
             message_ids: Vec::new(),
-            error: None,
         });
         setup.phase = "sample".into();
         save(app, setup).unwrap();
@@ -1294,7 +974,7 @@ mod tests {
         assert!(handle(&fixture.app, "workflows.connection", &params)
             .await
             .unwrap_err()
-            .contains("Choose an existing account"));
+            .contains("Choose one of the"));
         let result = handle(
             &fixture.app,
             "workflows.connection",
@@ -1330,7 +1010,7 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(error.contains("not available"));
+        assert!(error.contains("isn't in the marketplace"));
         assert_eq!(
             fixture.start("meeting-preparation").await.bot_ids,
             setup.bot_ids
@@ -1338,34 +1018,37 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn setup_answers_and_bindings_are_ciphertext_in_the_local_table_and_roster() {
+    async fn setup_survives_a_restart_and_rides_in_the_roster() {
         let fixture = Fixture::new();
         let setup = fixture.repository().await;
-        let envelope = fixture.app.state.lock().unwrap().workflows[0].clone();
-        let json = serde_json::to_string(&envelope).unwrap();
-        assert!(!json.contains("scope-repositories") && !json.contains("github"));
-        let connection = rusqlite::Connection::open(fixture.app.config.database_path()).unwrap();
-        let stored: String = connection
-            .query_row(
-                "SELECT json FROM workflow_setups WHERE id=?1",
-                [&setup.id],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert!(!stored.contains("scope-repositories"));
-        assert_eq!(decode(&fixture.app, &envelope).unwrap(), setup);
-        let mut swapped = envelope.clone();
-        swapped.id.push_str("other");
-        assert!(
-            decode(&fixture.app, &swapped).is_err(),
-            "ciphertext is bound to its setup id"
-        );
-        let reloaded = App::load(Config {
-            home: fixture.home.clone(),
-            port: 0,
-        })
-        .unwrap();
+        let reloaded = App::load(Config { home: fixture.home.clone(), port: 0 }).unwrap();
         assert_eq!(get(&reloaded, &setup.id).unwrap(), setup);
+        let roster: crate::model::RosterBlob = serde_json::from_value(json!({ "bots": [], "chats": [], "updated_at": 1.0, "workflows": [setup] })).unwrap();
+        assert_eq!(roster.workflows.unwrap()[0].connection_ids["github"], "github");
+    }
+
+    #[tokio::test]
+    async fn accounts_can_be_chosen_first_and_a_lone_account_is_used() {
+        let fixture = Fixture::new();
+        fixture.provider();
+        fixture.advertise("github", &["github"]);
+        let setup = fixture.start("repository-monitoring").await;
+        let progress = handle(&fixture.app, "workflows.get", &json!({"id":setup.id})).await.unwrap();
+        assert!(progress["specialists"][0]["selected_id"].is_null(), "nothing to reuse, so setup adds the bot");
+        let chosen = handle(&fixture.app, "workflows.connection", &json!({"id":setup.id,"service_id":"github","plugin_id":"github"})).await.unwrap();
+        assert_eq!(chosen["setup"]["connection_ids"]["github"], "github");
+        assert_eq!(chosen["setup"]["phase"], "questions");
+
+        fixture.advertise("gmail", &["gmail-work"]);
+        let inbox = fixture.configure(&fixture.start("inbox-triage").await).await;
+        assert_eq!(inbox.connection_ids["gmail"], "gmail-work");
+        let progress = handle(&fixture.app, "workflows.get", &json!({"id":inbox.id})).await.unwrap();
+        assert_eq!(progress["specialists"][0]["selected_id"], json!(inbox.bot_ids["triager"]));
+
+        let several = Fixture::new();
+        several.advertise("gmail", &["gmail-work", "gmail-personal"]);
+        let inbox = several.configure(&several.start("inbox-triage").await).await;
+        assert!(inbox.connection_ids.is_empty(), "one of several named accounts is the user's choice");
     }
 
     #[tokio::test]
@@ -1503,7 +1186,7 @@ mod tests {
         setup
             .connection_ids
             .insert("gmail".into(), "gmail-stable-instance".into());
-        save(&fixture.app, &setup).unwrap();
+        save(&fixture.app, &mut setup).unwrap();
         let response = handle(
             &fixture.app,
             "workflows.connection",
@@ -1569,7 +1252,7 @@ mod tests {
             .await
             .unwrap();
         // Simulates completion already read before cancellation persisted.
-        persist(&fixture.app, &stale_completion, Some(&stale_job.id)).unwrap();
+        persist(&fixture.app, &mut stale_completion, Some(&stale_job.id)).unwrap();
         assert_eq!(get(&fixture.app, &setup.id).unwrap().phase, "cancelled");
         assert!(get(&fixture.app, &setup.id).unwrap().sample.is_none());
     }
@@ -1647,7 +1330,6 @@ mod tests {
             completed["sample_messages"][0]["body"]["text"],
             "Sample: review the two open pull requests."
         );
-        assert!(!completed["can_enable"].as_bool().unwrap());
         let request = seen.lock().unwrap().take().unwrap();
         assert!(request["messages"]
             .to_string()
@@ -1677,27 +1359,18 @@ mod tests {
         server.abort();
     }
 
-    #[test]
-    fn rolling_upgrade_and_independent_pack_updates_preserve_progress() {
-        let first = Envelope {
-            id: "first".into(),
-            updated_at: 1.0,
-            ciphertext: "a".into(),
-        };
+    #[tokio::test]
+    async fn rolling_upgrade_and_independent_pack_updates_preserve_progress() {
+        let fixture = Fixture::new();
+        let mut first = fixture.start("repository-monitoring").await;
+        first.updated_at = 1.0;
         let mut current = vec![first.clone()];
         assert!(merge(&mut current, None));
         assert!(merge(&mut current, Some(vec![])));
-        let second = Envelope {
-            id: "second".into(),
-            updated_at: 1.0,
-            ciphertext: "b".into(),
-        };
+        let mut second = fixture.start("inbox-triage").await;
+        second.updated_at = 1.0;
         assert!(merge(&mut current, Some(vec![second.clone()])));
-        let newer = Envelope {
-            updated_at: 2.0,
-            ciphertext: "new".into(),
-            ..first
-        };
+        let newer = Setup { updated_at: 2.0, phase: "connections".into(), ..first };
         assert!(!merge(&mut current, Some(vec![newer.clone(), second])));
         assert_eq!(current[0], newer);
     }
