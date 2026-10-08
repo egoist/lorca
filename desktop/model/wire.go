@@ -175,14 +175,19 @@ type WireMessage struct {
 }
 
 type WireChatUsage struct {
-	ContextTokens   int     `json:"context_tokens"`
-	ContextWindow   int     `json:"context_window"`
-	InputTokens     int     `json:"input_tokens"`
-	OutputTokens    int     `json:"output_tokens"`
-	CacheReadTokens int     `json:"cache_read_tokens"`
-	CostUSD         float64 `json:"cost_usd"`
-	Turns           int     `json:"turns"`
-	Model           string  `json:"model"`
+	ContextTokens           int      `json:"context_tokens"`
+	ContextWindow           int      `json:"context_window"`
+	InputTokens             int      `json:"input_tokens"`
+	OutputTokens            int      `json:"output_tokens"`
+	CacheReadTokens         int      `json:"cache_read_tokens"`
+	CostUSD                 float64  `json:"cost_usd"`
+	Turns                   int      `json:"turns"`
+	Model                   string   `json:"model"`
+	APICostUSD              float64  `json:"api_cost_usd"`
+	SubscriptionEstimateUSD float64  `json:"subscription_estimate_usd"`
+	UnknownPriceCalls       uint64   `json:"unknown_price_calls"`
+	PricedCalls             uint64   `json:"priced_calls"`
+	PricingKinds            []string `json:"pricing_kinds"`
 }
 
 type WireChat struct {
@@ -272,6 +277,7 @@ type WireModel struct {
 }
 
 type WireSnapshot struct {
+	Budgets             []BudgetState     `json:"budgets"`
 	Version             string            `json:"version"`
 	HasIdentity         bool              `json:"has_identity"`
 	IsIdentityDevice    bool              `json:"is_identity_device"`
@@ -737,14 +743,19 @@ func ToMessage(wire WireMessage) *Message {
 
 func ToUsage(wire WireChatUsage) *ChatUsage {
 	return &ChatUsage{
-		ContextTokens:   wire.ContextTokens,
-		ContextWindow:   wire.ContextWindow,
-		InputTokens:     wire.InputTokens,
-		OutputTokens:    wire.OutputTokens,
-		CacheReadTokens: wire.CacheReadTokens,
-		CostUSD:         wire.CostUSD,
-		Turns:           wire.Turns,
-		Model:           wire.Model,
+		ContextTokens:           wire.ContextTokens,
+		ContextWindow:           wire.ContextWindow,
+		InputTokens:             wire.InputTokens,
+		OutputTokens:            wire.OutputTokens,
+		CacheReadTokens:         wire.CacheReadTokens,
+		CostUSD:                 wire.CostUSD,
+		Turns:                   wire.Turns,
+		Model:                   wire.Model,
+		APICostUSD:              wire.APICostUSD,
+		SubscriptionEstimateUSD: wire.SubscriptionEstimateUSD,
+		UnknownPriceCalls:       wire.UnknownPriceCalls,
+		PricedCalls:             wire.PricedCalls,
+		PricingKinds:            slices.Clone(wire.PricingKinds),
 	}
 }
 

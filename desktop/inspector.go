@@ -269,6 +269,14 @@ func (m *mainWindow) inspectorRuntime(c *ui.Context, bot *model.Bot, chat *model
 			}
 		}
 		// What the turns here have used, and a way to shorten the context by hand.
+		budget, blocked := budgetSummary(chat.ID, bot.RunnerID)
+		budgetTint := p.Label2
+		if blocked {
+			budgetTint = p.Orange
+		}
+		if _, result := actionRow(c, k, L("Budget"), actionRowOptions{Value: budget, Tint: &budgetTint, Action: L("Manage…")}); result.Action {
+			m.presentBudget(bot, chat.ID, "", "")
+		}
 		if usage := chat.Usage; usage != nil {
 			label := p.Label
 			if _, result := actionRow(c, k, L("Context"), actionRowOptions{Value: usage.ContextSummary(), Tint: &label, Action: L("Compact")}); result.Action {
@@ -338,7 +346,11 @@ func (m *mainWindow) inspectorRoutines(c *ui.Context, bot *model.Bot) {
 		}
 		for _, routine := range routines {
 			symbolName, tint := "pause.circle", p.Label3
+			detail := routine.Detail()
+			budget := budgetStateForRoutine(routine.ID, bot.RunnerID)
 			switch {
+			case budget != nil && budget.NeedsRecovery():
+				symbolName, tint, detail = "exclamationmark.circle", p.Orange, budget.StateLabel()
 			case routine.IsRunning:
 				symbolName, tint = "arrow.triangle.2.circlepath", p.Accent
 			case routine.IsEnabled:
@@ -351,7 +363,7 @@ func (m *mainWindow) inspectorRoutines(c *ui.Context, bot *model.Bot) {
 			on := routine.IsEnabled
 			id, botID := routine.ID, bot.ID
 			ui.Box(c.Key(routine.ID)).Children(func() {
-				if switchRow(c, k, symbolName, tint, routine.Name, routine.Detail(), &on, toggle, routine.Prompt,
+				if switchRow(c, k, symbolName, tint, routine.Name, detail, &on, toggle, routine.Prompt,
 					func(on bool) { store.SetRoutineEnabled(id, on) }) {
 					if current := store.Bot(botID); current != nil {
 						m.presentRoutine(id, current, m.prefill)

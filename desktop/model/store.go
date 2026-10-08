@@ -75,6 +75,7 @@ const (
 	EventRunningTasksChanged
 	EventConnectionChanged
 	EventIdentityChanged
+	EventBudgetsChanged
 )
 
 // Event says what in the store changed.
@@ -130,6 +131,8 @@ type Store struct {
 	Chats   []*Chat
 	// Routines are every bot's routines, from the roster.
 	Routines []*Routine
+	// Budgets mirror Runner-owned usage and recovery state; edits go through the local CLI.
+	Budgets []BudgetState
 	// AutoReview is shared through the roster.
 	AutoReview AutoReview
 	// Providers are the account's provider credentials, the same on every Device.
@@ -407,6 +410,7 @@ func (s *Store) apply(snapshot WireSnapshot) {
 		s.Routines = append(s.Routines, ToRoutine(routine))
 	}
 	s.AutoReview = ToAutoReview(snapshot.AutoReview)
+	s.Budgets = slices.Clone(snapshot.Budgets)
 	s.Providers = ToProviders(snapshot.Providers)
 	s.Models = ToModels(snapshot.Models)
 	s.runningJobs = nil
@@ -613,6 +617,13 @@ func (s *Store) handle(name string, data json.RawMessage) {
 		}
 		chat.Usage = ToUsage(payload.Usage)
 		s.emit(Event{Kind: EventChatChanged, ChatID: payload.ChatID})
+	case "budgets.changed":
+		if payload, ok := decode[struct {
+			Budgets []BudgetState `json:"budgets"`
+		}](data); ok {
+			s.Budgets = slices.Clone(payload.Budgets)
+			s.emit(Event{Kind: EventBudgetsChanged})
+		}
 
 	case "relay.status":
 		status, ok := decode[WireRelayStatus](data)
@@ -2476,6 +2487,7 @@ func (s *Store) ResetMockData() {
 	s.Bots = mockBots()
 	s.Chats = mockChats()
 	s.Routines = mockRoutines()
+	s.Budgets = nil
 	s.AutoReview = mockAutoReview()
 	s.Providers = mockProviders()
 	s.Models = mockModels()

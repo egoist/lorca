@@ -50,7 +50,11 @@ func (w *appWindow) routineView(c *ui.Context, s *sheet, title, routineID string
 			return
 		}
 		state, tint := L("Paused"), p.Label2
+		budget := budgetStateForRoutine(routine.ID, bot.RunnerID)
+		blocked := budget != nil && budget.NeedsRecovery()
 		switch {
+		case blocked:
+			state, tint = budget.StateLabel(), p.Orange
 		case routine.IsRunning:
 			state, tint = L("Running…"), p.Accent
 		case routine.IsEnabled:
@@ -71,6 +75,25 @@ func (w *appWindow) routineView(c *ui.Context, s *sheet, title, routineID string
 			keyValueRow(c, k, nextLabel, next, false, nil)
 			keyValueRow(c, k, L("Last run"), routine.LastRunSummary(), false, nil)
 		})
+		section(c, L("Budget"), sectionCaption, nil, func(k *card) {
+			value, tint := L("Unlimited"), p.Label2
+			if budget != nil {
+				value = budget.StateLabel()
+				if blocked {
+					tint = p.Orange
+				}
+			}
+			if _, result := actionRow(c, k, L("Allowance"), actionRowOptions{Value: value, Tint: &tint, Action: L("Manage…")}); result.Action {
+				chatID := ""
+				for _, chat := range store.Chats {
+					if !chat.IsGroup() && len(chat.BotIDs) == 1 && chat.BotIDs[0] == bot.ID {
+						chatID = chat.ID
+						break
+					}
+				}
+				w.presentBudget(bot, chatID, routine.ID, "")
+			}
+		})
 		section(c, L("Task"), sectionCaption, nil, func(k *card) {
 			k.row(ui.Scroll(c).Height(96).Padding(8, 12).Children(func() {
 				ui.Text(c, routine.Prompt).FontSize(12).LineHeight(1.4).Selectable()
@@ -88,7 +111,10 @@ func (w *appWindow) routineView(c *ui.Context, s *sheet, title, routineID string
 			if runner := store.Device(bot.RunnerID); runner != nil {
 				tooltip = L("Runs on %@ now", runner.Name)
 			}
-			if pushButton(c, L("Run Now"), pushOptions{Disabled: routine.IsRunning, Tooltip: tooltip}).Clicked() {
+			if blocked {
+				tooltip = budget.Reason
+			}
+			if pushButton(c, L("Run Now"), pushOptions{Disabled: routine.IsRunning || blocked, Tooltip: tooltip}).Clicked() {
 				store.RunRoutine(routineID)
 			}
 			toggle := L("Pause")

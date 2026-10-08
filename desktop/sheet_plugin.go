@@ -230,6 +230,11 @@ func (s *pluginSheet) view(c *ui.Context, sh *sheet) {
 	parts = append(parts, L("Installed on %@.", s.runner.Name))
 	result := sheetFrame(c, sheetOptions{Title: s.name(), Subtitle: strings.Join(parts, " "), Width: 520, Confirm: L("Done"), NoCancel: true}, func() {
 		s.statusSection(c)
+		section(c, L("Call limits"), sectionCaption, nil, func(k *card) {
+			if _, r := actionRow(c, k, L("Shared connector limits"), actionRowOptions{Value: L("Account and service"), Tint: &p.Label2, Action: L("Manage…")}); r.Action {
+				s.w.presentConnectorLimits(s.pluginID, s.runner)
+			}
+		})
 		s.signInSection(c)
 		if s.detail != nil && len(s.detail.Variables) > 0 {
 			s.setupSection(c)

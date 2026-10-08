@@ -1561,14 +1561,19 @@ func (c *Chat) Message(id string) *Message {
 // ChatUsage is the tokens and money the turns in a chat used. ContextTokens and ContextWindow are
 // the last turn's; the rest accumulate.
 type ChatUsage struct {
-	ContextTokens   int
-	ContextWindow   int
-	InputTokens     int
-	OutputTokens    int
-	CacheReadTokens int
-	CostUSD         float64
-	Turns           int
-	Model           string
+	ContextTokens           int
+	ContextWindow           int
+	InputTokens             int
+	OutputTokens            int
+	CacheReadTokens         int
+	CostUSD                 float64
+	Turns                   int
+	Model                   string
+	APICostUSD              float64
+	SubscriptionEstimateUSD float64
+	UnknownPriceCalls       uint64
+	PricedCalls             uint64
+	PricingKinds            []string
 }
 
 // ContextSummary is "128k of 1M · 13%", or "128k" when the window is unknown.
@@ -1580,16 +1585,32 @@ func (u ChatUsage) ContextSummary() string {
 	return L("%@ of %@ · %d%%", Tokens(u.ContextTokens), Tokens(u.ContextWindow), percent)
 }
 
-// SpendSummary is "$0.42 · 18 turns".
+// SpendSummary keeps API spending, subscription equivalence and unknown pricing distinct.
 func (u ChatUsage) SpendSummary() string {
-	dollars := fmt.Sprintf("$%.2f", u.CostUSD)
-	if u.CostUSD < 0.01 && u.CostUSD > 0 {
-		dollars = "<$0.01"
+	if u.PricedCalls == 0 {
+		return L("Pricing unknown · %d turns", u.Turns)
 	}
-	if u.Turns == 1 {
-		return L("%@ · %d turn", dollars, u.Turns)
+	dollars := func(value float64) string {
+		if value > 0 && value < 0.01 {
+			return "<$0.01"
+		}
+		return fmt.Sprintf("$%.2f", value)
 	}
-	return L("%@ · %d turns", dollars, u.Turns)
+	var parts []string
+	if slices.Contains(u.PricingKinds, "api") {
+		parts = append(parts, L("API %@", dollars(u.APICostUSD)))
+	}
+	if slices.Contains(u.PricingKinds, "subscription_estimate") {
+		parts = append(parts, L("API-equivalent estimate %@", dollars(u.SubscriptionEstimateUSD)))
+	}
+	if u.UnknownPriceCalls > 0 {
+		parts = append(parts, L("Pricing unknown"))
+	}
+	if len(parts) == 0 {
+		parts = append(parts, L("Pricing unknown"))
+	}
+	parts = append(parts, L("%d turns", u.Turns))
+	return strings.Join(parts, " · ")
 }
 
 // MARK: - Settings
