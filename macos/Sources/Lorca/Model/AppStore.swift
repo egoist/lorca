@@ -1508,8 +1508,15 @@ final class AppStore {
         perform("chats.stop", ["chat_id": chatID])
     }
 
+    /// The chat's tasks, what waits on the user first, then open work, each newest first.
     func tasks(in chatID: Chat.ID) -> [DurableTask] {
-        durableTasks.filter { $0.chatIds.contains(chatID) }.sorted { $0.updatedAt > $1.updatedAt }
+        durableTasks.filter { $0.chatIds.contains(chatID) }.sorted {
+            ($0.state.order, -$0.updatedAt) < ($1.state.order, -$1.updatedAt)
+        }
+    }
+
+    func durableTask(_ id: String) -> DurableTask? {
+        durableTasks.first { $0.id == id }
     }
 
     private func acceptDurableTask(_ task: DurableTask) {

@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 
 /// Durable work from the CLI, independent of a single running bot turn or terminal command.
 struct DurableTask: Codable, Hashable, Identifiable {
@@ -21,30 +21,55 @@ struct DurableTask: Codable, Hashable, Identifiable {
     var createdAt: Double
     var updatedAt: Double
 
-    enum State: String, Codable, CaseIterable {
+    enum State: String, Codable {
         case queued, working, blocked, awaitingReview = "awaiting_review", completed, cancelled
+
         var title: String {
             switch self {
-            case .queued: return L("Queued")
+            case .queued: return L("Not started")
             case .working: return L("Working")
             case .blocked: return L("Blocked")
-            case .awaitingReview: return L("Awaiting review")
+            case .awaitingReview: return L("Ready for review")
             case .completed: return L("Completed")
             case .cancelled: return L("Cancelled")
             }
         }
+
         var symbol: String {
             switch self {
-            case .queued: return "clock"
-            case .working: return "arrow.trianglehead.2.clockwise.rotate.90"
-            case .blocked: return "exclamationmark.circle"
-            case .awaitingReview: return "eye"
+            case .queued: return "circle"
+            case .working: return "arrow.triangle.2.circlepath"
+            case .blocked: return "exclamationmark.circle.fill"
+            case .awaitingReview: return "eye.circle"
             case .completed: return "checkmark.circle"
             case .cancelled: return "xmark.circle"
             }
         }
-        var canRun: Bool { self == .queued || self == .blocked || self == .working }
+
+        /// Color for the states that wait on the user; the rest stay quiet.
+        var tint: NSColor {
+            switch self {
+            case .blocked: return .systemOrange
+            case .awaitingReview: return .controlAccentColor
+            case .working, .queued: return .secondaryLabelColor
+            case .completed, .cancelled: return .tertiaryLabelColor
+            }
+        }
+
+        var isFinished: Bool { self == .completed || self == .cancelled }
+
+        /// Open work first, what waits on the user before the rest.
+        var order: Int {
+            switch self {
+            case .blocked: return 0
+            case .awaitingReview: return 1
+            case .working: return 2
+            case .queued: return 3
+            case .completed, .cancelled: return 4
+            }
+        }
     }
+
     struct Link: Codable, Hashable { var label: String; var url: String }
     struct Run: Codable, Hashable {
         var id: String; var botId: String; var runnerId: String; var chatId: String; var startedAt: Double
@@ -60,13 +85,21 @@ struct DurableTask: Codable, Hashable, Identifiable {
         var version: UInt64? = nil
         var reviewId: String? = nil
 
-        var params: [String: Any] {
-            var result: [String: Any] = ["kind": kind, "label": label]
-            for (key, value) in [("chat_id", chatId), ("message_id", messageId), ("attachment_id", attachmentId), ("url", url), ("output_id", outputId), ("review_id", reviewId)] {
-                if let value { result[key] = value }
+        var symbol: String {
+            switch kind {
+            case "url": return "link"
+            case "file": return "doc"
+            case "output": return "doc.richtext"
+            case "review": return "checkmark.seal"
+            default: return "text.bubble"
             }
-            if let version { result["version"] = version }
-            return result
         }
     }
+
+    /// Why a task the user cancelled in the app stopped, for its bot to read. The app shows the
+    /// state alone for it.
+    static let cancelledByUser = "Cancelled by the user."
+
+    /// Can start a run: queued or blocked, and not running.
+    var canStart: Bool { (state == .queued || state == .blocked) && activeRun == nil }
 }

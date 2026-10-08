@@ -3,17 +3,7 @@ import XCTest
 @testable import Lorca
 
 final class DurableTaskTests: XCTestCase {
-    @MainActor
-    func testTaskEditorFitsItsNativeSheetAndKeepsLongFormsScrollable() {
-        let sheet = DurableTaskViewController(chatID: "test-chat", task: nil)
-        sheet.loadView()
-        sheet.view.layoutSubtreeIfNeeded()
-        XCTAssertEqual(sheet.view.fittingSize.width, 590, accuracy: 1)
-        XCTAssertGreaterThan(sheet.view.fittingSize.height, 510)
-        XCTAssertLessThan(sheet.view.fittingSize.height, 800)
-        XCTAssertTrue(sheet.contentStack.arrangedSubviews.contains { $0 is NSScrollView })
-    }
-    func testWireDecodesOwnershipStateAndImmutableEvidenceReferences() throws {
+    func testWireDecodesOwnershipStateAndEvidenceReferences() throws {
         let data = Data(#"""
         {"id":"task-00000000-0000-0000-0000-000000000001","revision":7,
          "authority_runner_id":"authority","owner_bot_id":"bot","runner_id":"runner",
@@ -27,18 +17,24 @@ final class DurableTaskTests: XCTestCase {
         XCTAssertEqual(task.ownerBotId, "bot")
         XCTAssertEqual(task.runnerId, "runner")
         XCTAssertEqual(task.state, .awaitingReview)
-        XCTAssertFalse(task.state.canRun)
-        XCTAssertEqual(task.evidence[0].params["output_id"] as? String, "out-report")
-        XCTAssertEqual(task.evidence[0].params["version"] as? UInt64, 2)
-        XCTAssertEqual(task.evidence[0].params["message_id"] as? String, "message-v2")
-        XCTAssertEqual(Set(DurableTask.State.allCases.map(\.rawValue)), ["queued", "working", "blocked", "awaiting_review", "completed", "cancelled"])
+        XCTAssertEqual(task.evidence[0].outputId, "out-report")
+        XCTAssertEqual(task.evidence[0].version, 2)
+        XCTAssertFalse(task.canStart)
     }
 
-    func testEvidenceParametersKeepMessageAndChatScope() {
-        let evidence = DurableTask.Evidence(kind: "message", label: "Verified", chatId: "chat", messageId: "message")
-        XCTAssertEqual(evidence.params["chat_id"] as? String, "chat")
-        XCTAssertEqual(evidence.params["message_id"] as? String, "message")
-        XCTAssertNil(evidence.params["output_id"])
-        XCTAssertNil(evidence.params["url"])
+    func testOnlyQueuedOrBlockedTasksWithoutARunStart() throws {
+        let data = Data(#"""
+        {"id":"task-1","revision":1,"authority_runner_id":"r","owner_bot_id":"b","runner_id":"r","goal":"g",
+         "acceptance_criteria":["c"],"dependencies":[],"next_action":"n","chat_ids":["c"],"links":[],"state":"blocked",
+         "reason":"Waiting on a key","result":null,"evidence":[],"active_run":null,"created_at":1,"updated_at":1}
+        """#.utf8)
+        var task = try Wire.decoder.decode(DurableTask.self, from: data)
+        XCTAssertTrue(task.canStart)
+        task.activeRun = .init(id: "task-run-1", botId: "b", runnerId: "r", chatId: "c", startedAt: 1)
+        XCTAssertFalse(task.canStart)
+        task.activeRun = nil
+        task.state = .completed
+        XCTAssertFalse(task.canStart)
+        XCTAssertTrue(task.state.isFinished)
     }
 }

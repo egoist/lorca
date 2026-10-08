@@ -37,6 +37,8 @@ final class InspectorViewController: NSViewController {
     /// Rows kept for what they show (a bot, a Runner, a routine, a plugin), so a section that
     /// changed updates the rows it has instead of making new ones.
     private var keptRows: [String: NSView] = [:]
+    /// The chat whose Tasks section shows every task rather than the first few.
+    private var tasksShowingAll: Chat.ID?
     /// The usage rows under Runs with, which take new values after every turn.
     private var contextRow: ActionRow?
     private var spentRow: KeyValueRow?
@@ -83,6 +85,8 @@ final class InspectorViewController: NSViewController {
         groupNameRow.field.alignment = .right
         groupDescriptionRow.onAction = { [weak self] in self?.editGroupDescription() }
         group.setRows([groupNameRow, groupDescriptionRow])
+        tasks.setHeaderAccessory(HoverButton(symbol: "plus", pointSize: 11, tooltip: L("New Task"), target: self, action: #selector(newTask)))
+        tasks.isHidden = true
 
         column.addArrangedSubview(participants)
         column.addArrangedSubview(addButton)
@@ -245,20 +249,42 @@ final class InspectorViewController: NSViewController {
         showTasks(in: chat)
     }
 
+    /// The chat's durable tasks, open work first; hidden while it has none. A row opens the
+    /// task; the title's + starts a new one. Past five rows the rest wait behind Show All.
     private func showTasks(in chat: Chat) {
         let records = store.tasks(in: chat.id)
-        guard changed(tasks, to: [chat.id, records, store.bots, store.devices, store.isConnected]) else { return }
-        var rows: [NSView] = records.map { task in
-            let owner = store.bot(task.ownerBotId)?.name ?? task.ownerBotId
-            let row = ActionRow(key: task.goal, value: "\(task.state.title) · \(owner)", tint: task.state == .blocked ? .systemOrange : .secondaryLabelColor, actionTitle: L("Open…"))
-            row.toolTip = task.reason ?? task.nextAction
-            row.onAction = { [weak self] in self?.presentAsSheet(DurableTaskViewController(chatID: chat.id, task: task)) }
+        let showsAll = tasksShowingAll == chat.id
+        guard changed(tasks, to: [chat.id, chat.isGroup, records, showsAll, records.map { store.bot($0.ownerBotId)?.name }]) else { return }
+        if tasks.isHidden != records.isEmpty { tasks.isHidden = records.isEmpty }
+        let limit = 5
+        let shown = showsAll || records.count <= limit ? records : Array(records.prefix(limit - 1))
+        var rows: [NSView] = shown.map { task in
+            let row = keptRow("task:\(task.id)") { SwitchRow() }
+            var detail = task.state.title
+            if chat.isGroup, let owner = store.bot(task.ownerBotId) { detail += " · \(owner.name)" }
+            row.configure(symbol: task.state.symbol, tint: task.state.tint, title: task.goal, detail: detail, tooltip: task.goal)
+            row.onClick = { [weak self] in self?.openTask(task.id, in: chat.id) }
             return row
         }
-        let create = ActionRow(key: L("New task"), value: records.isEmpty ? L("Track work across turns") : "", tint: .secondaryLabelColor, actionTitle: L("Create…"))
-        create.onAction = { [weak self] in self?.presentAsSheet(DurableTaskViewController(chatID: chat.id, task: nil)) }
-        rows.append(create)
+        if shown.count < records.count {
+            let more = keptRow("tasks:all") { SwitchRow() }
+            more.configure(symbol: "ellipsis.circle", tint: .tertiaryLabelColor, title: L("Show %d More", records.count - shown.count), detail: "", tooltip: "")
+            more.onClick = { [weak self] in
+                self?.tasksShowingAll = chat.id
+                self?.reload()
+            }
+            rows.append(more)
+        }
         tasks.setRows(rows)
+    }
+
+    private func openTask(_ id: String, in chatID: Chat.ID) {
+        presentAsSheet(DurableTaskViewController(chatID: chatID, task: store.durableTask(id)))
+    }
+
+    @objc private func newTask() {
+        guard case let .chat(chatID) = selection else { return }
+        presentAsSheet(DurableTaskViewController(chatID: chatID, task: nil))
     }
 
     /// Whether `state` differs from what `section` last showed; records it when it does.
