@@ -1,5 +1,5 @@
-// Lorca for Windows and Linux: a MyGo app whose Go side launches and talks to the local CLI, and
-// whose pages (src/) are the chat UI. It follows the macOS app (macos/) screen for screen.
+// Lorca for Windows and Linux: a MyGo app of native UI whose Go code launches and talks to the
+// local CLI and draws the chat UI. It follows the macOS app (macos/) screen for screen.
 package main
 
 import (
@@ -15,12 +15,7 @@ func main() {
 	}
 	prefs.load()
 	applyAppearance(prefs.get().Appearance)
-
 	useUpdater()
-	mygo.Bind(CLI{}, Host{}, Files{}, Menus{}, &Notices{}, Prefs{})
-	if err := mygo.Protocol.HandleFunc(fileScheme, serveFile); err != nil {
-		log.Fatal(err)
-	}
 
 	mygo.App.OnSecondInstance(func(args []string, workingDir string) { app.reopen() })
 	mygo.App.OnActivate(func(hasVisibleWindows bool) {
