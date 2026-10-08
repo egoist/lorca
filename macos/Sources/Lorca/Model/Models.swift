@@ -714,7 +714,8 @@ struct Routine: Identifiable, Hashable {
     /// The schedule in words: "Weekdays at 9:00 AM".
     var scheduleText: String
     var isEnabled: Bool
-    /// Why Lorca paused it, when it did: "away".
+    /// Why Lorca paused it, when it did: "away", or "authentication" after three failed
+    /// sign-ins in a row.
     var pausedReason: String?
     var lastRunAt: Date?
     /// How the last run ended: "sent", "pass", or "error".
@@ -725,39 +726,64 @@ struct Routine: Identifiable, Hashable {
     /// The script the Runner runs at each due time before the bot does; the bot runs only when
     /// it finds something. `nextRunAt` is then the next check.
     var check: String? = nil
-    var timezone: String = "UTC"
-    var missedRunPolicy: String = "coalesce"
-    var nextRunText: String? = nil
-    var state: String = "ready"
-    var runnerAvailable: Bool = true
-    var lastCheckAt: Date? = nil
-    var lastSuccessfulCheckAt: Date? = nil
-    var retryAt: Date? = nil
-    var recoveryAction: String? = nil
+    /// The IANA timezone a cron schedule reads in.
+    var timezone = TimeZone.current.identifier
+    /// After due times its Runner missed: "coalesce" runs once when it is back, "skip" waits
+    /// for the next one.
+    var missedRunPolicy = "coalesce"
+    /// How it stands, from the CLI: "on", "running", "paused", "blocked", "failed", or
+    /// "waiting_for_runner".
+    var state = "on"
+    var health = RoutineHealth()
 
-    var stateText: String {
-        if isRunning { return L("Running…") }
+    /// What went wrong, while something did: the CLI's state with the kind of failure.
+    var problem: RoutineProblem? {
+        if isRunning { return nil }
+        let model = health.modelStatus != nil
         switch state {
-        case "waiting_for_runner": return L("Waiting for Runner")
-        case "quiet": return L("Quiet · nothing new")
-        case "failed": return L("Failed")
-        case "blocked": return L("Blocked")
-        case "paused": return pausedReason == "away" ? L("Paused while you were away") : L("Paused")
-        default: return isEnabled ? L("On") : L("Paused")
+        case "blocked" where pausedReason == "authentication":
+            return .signedOut(model: health.modelAuthenticationFailures >= 3)
+        case "waiting_for_runner": return .offline
+        case "blocked": return .checkBlocked
+        case "failed":
+            if model { return health.modelAuthenticationFailures > 0 ? .signInFailed(model: true) : .cantConnect(model: true) }
+            if health.authenticationFailures > 0 { return .signInFailed(model: false) }
+            if health.connectionFailures > 0 { return .cantConnect(model: false) }
+            return .checkFailed
+        default: return nil
         }
     }
 
-    var nextSummary: String {
-        nextRunText ?? nextRunAt.map { Format.upcoming($0) } ?? "—"
+    /// The schedule in words, with its timezone when this Mac keeps other hours, now or in half a
+    /// year: "Weekdays at 9:00 AM (New York time)". An interval counts time, whatever the zone.
+    var scheduleSummary: String {
+        guard !schedule.hasPrefix("every "), let zone = TimeZone(identifier: timezone) else { return scheduleText }
+        let now = Date()
+        let differs = [now, now.addingTimeInterval(182 * 86_400)].contains { zone.secondsFromGMT(for: $0) != TimeZone.current.secondsFromGMT(for: $0) }
+        guard differs else { return scheduleText }
+        let city = timezone.split(separator: "/").last.map { $0.replacingOccurrences(of: "_", with: " ") } ?? timezone
+        return L("%@ (%@ time)", scheduleText, city)
+    }
+
+    /// "Today 9:00 AM · nothing new", for a routine with a check that has run.
+    var lastCheckSummary: String? {
+        guard check != nil, let at = health.lastCheckAt else { return nil }
+        let when = Format.daySeparator(at)
+        switch health.status {
+        case "quiet": return L("%@ · nothing new", when)
+        case "ready": return L("%@ · found something", when)
+        case "failed", "blocked": return L("%@ · failed", when)
+        default: return when
+        }
     }
 
     /// The line under the name in the inspector: the schedule, then what is going on.
     var detail: String {
         if isRunning { return L("%@ · Running…", scheduleText) }
-        if ["waiting_for_runner", "failed", "blocked"].contains(state) { return "\(scheduleText) · \(stateText)" }
+        if let problem { return "\(problem.text) · \(scheduleText)" }
         guard isEnabled else { return pausedReason == "away" ? L("%@ · Paused while you were away", scheduleText) : L("%@ · Paused", scheduleText) }
-        if nextRunAt != nil {
-            return check == nil ? L("%@ · Next %@", scheduleText, nextSummary) : L("%@ · Next check %@", scheduleText, nextSummary)
+        if let nextRunAt {
+            return check == nil ? L("%@ · Next %@", scheduleText, Format.upcoming(nextRunAt)) : L("%@ · Next check %@", scheduleText, Format.upcoming(nextRunAt))
         }
         return scheduleText
     }
@@ -771,6 +797,72 @@ struct Routine: Identifiable, Hashable {
         case "pass": return L("%@ · nothing to report", when)
         case "error": return L("%@ · failed", when)
         default: return when
+        }
+    }
+}
+
+/// How a routine's checks and runs have gone, as its Runner records them.
+struct RoutineHealth: Hashable {
+    var lastCheckAt: Date?
+    var lastSuccessAt: Date?
+    /// How the last check went: "quiet", "ready", "failed", or "blocked".
+    var status: String?
+    var connectionFailures = 0
+    var authenticationFailures = 0
+    /// The runs' own streak with the model provider, which checks do not clear.
+    var modelStatus: String?
+    var modelAuthenticationFailures = 0
+}
+
+/// What went wrong with a routine, in the words the inspector row and the routine sheet use.
+enum RoutineProblem: Hashable {
+    /// Three failed sign-ins in a row paused it, of its runs (`model`) or its check.
+    case signedOut(model: Bool)
+    case offline
+    case cantConnect(model: Bool)
+    case signInFailed(model: Bool)
+    case checkFailed
+    /// The check called something that could change things.
+    case checkBlocked
+
+    /// One or two words for the row and the sheet's State.
+    var text: String {
+        switch self {
+        case .signedOut: return L("Needs sign-in")
+        case .offline: return L("Waiting for Runner")
+        case .cantConnect: return L("Can’t connect")
+        case .signInFailed: return L("Sign-in failed")
+        case .checkFailed, .checkBlocked: return L("Check failed")
+        }
+    }
+
+    /// Whether the user has to do something; a connection that fails is tried again on its own.
+    var needsUser: Bool {
+        if case .cantConnect = self { return false }
+        return true
+    }
+
+    /// What happened and how to fix it, for the routine sheet.
+    func explanation(bot: String, runner: String) -> String {
+        switch self {
+        case .signedOut(model: true):
+            return L("The model provider turned down three sign-ins in a row, so the routine is paused. Reconnect the provider in Settings, then resume it.")
+        case .signedOut(model: false):
+            return L("The check couldn’t sign in to a plugin three times in a row, so the routine is paused. Sign in to the plugin again on %@, then resume it.", runner)
+        case .offline:
+            return L("%@ is offline, so the routine waits for it. To keep it available while the app is closed, run lorca service install on it.", runner)
+        case .cantConnect(model: true):
+            return L("The last run couldn’t reach the model provider. It tries again at the next run, waiting longer after each failure.")
+        case .cantConnect(model: false):
+            return L("The last check couldn’t connect. It tries again at the next check, waiting longer after each failure.")
+        case .signInFailed(model: true):
+            return L("The last run couldn’t sign in to the model provider. Reconnect it in Settings; after three failures in a row the routine pauses.")
+        case .signInFailed(model: false):
+            return L("The last check couldn’t sign in to a plugin. Sign in to it again on %@; after three failures in a row the routine pauses.", runner)
+        case .checkFailed:
+            return L("The check stopped with an error. %@ got the error and can fix the check.", bot)
+        case .checkBlocked:
+            return L("The check tried to change something, and checks only read. Ask %@ to fix it.", bot)
         }
     }
 }

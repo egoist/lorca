@@ -249,8 +249,7 @@ final class AppStore {
         }
     }
 
-    /// The CLI snapshot mapper is also used by native fixtures with synthetic account data.
-    func apply(snapshot: Wire.Snapshot) {
+    private func apply(snapshot: Wire.Snapshot) {
         hasIdentity = snapshot.hasIdentity
         isIdentityDevice = snapshot.isIdentityDevice
         identityID = snapshot.identityId
@@ -1056,36 +1055,12 @@ final class AppStore {
 
     // MARK: - Routines
 
-    func setRoutinePolicy(_ id: Routine.ID, timezone: String? = nil, missedRunPolicy: String? = nil) async throws {
-        if isMock {
-            guard let index = routines.firstIndex(where: { $0.id == id }) else { return }
-            if let timezone { routines[index].timezone = timezone }
-            if let missedRunPolicy { routines[index].missedRunPolicy = missedRunPolicy }
-            emit(.rosterChanged)
-            return
-        }
-        var params: [String: Any] = ["id": id]
-        if let timezone { params["timezone"] = timezone }
-        if let missedRunPolicy { params["missed_run_policy"] = missedRunPolicy }
-        let reply = try await client.request("routines.update", params, as: Wire.RoutineChanged.self)
-        if let index = routines.firstIndex(where: { $0.id == id }) {
-            routines[index] = reply.routine.toModel()
-            emit(.rosterChanged)
-        }
-    }
-
-    func serviceStatus(_ id: Device.ID) async throws -> Wire.ServiceStatus {
-        if isMock {
-            return .init(installed: false, runningPid: nil, supervised: false, log: "—", installCommand: "lorca service install", statusCommand: "lorca service status", detail: "")
-        }
-        return try await client.request("device.service_status", ["id": id], as: Wire.ServiceStatus.self)
-    }
-
     /// Pauses or resumes a routine. A resumed schedule counts from now.
     func setRoutineEnabled(_ id: Routine.ID, _ enabled: Bool) {
         guard let index = routines.firstIndex(where: { $0.id == id }) else { return }
         routines[index].isEnabled = enabled
         routines[index].pausedReason = nil
+        routines[index].state = enabled ? "on" : "paused"
         if !enabled { routines[index].nextRunAt = nil }
         emit(.rosterChanged)
         perform("routines.update", ["id": id, "enabled": enabled])
@@ -1550,6 +1525,12 @@ final class AppStore {
             return
         }
         _ = try await client.request("device.update", ["id": id])
+    }
+
+    /// Whether `lorca service` keeps the CLI running on a Runner, asked of it through the CLI.
+    func serviceStatus(_ id: Device.ID) async throws -> Wire.ServiceStatus {
+        if isMock { return .init(installed: false, running: false) }
+        return try await client.request("device.service_status", ["id": id], as: Wire.ServiceStatus.self)
     }
 
     func unpairDevice(_ id: Device.ID) async throws {

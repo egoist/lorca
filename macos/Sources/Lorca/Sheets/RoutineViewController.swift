@@ -1,9 +1,11 @@
 import AppKit
 
-/// One routine's details, after Grok Bot's routine page: the schedule and its next and last
-/// runs, the task, the check when it has one, and the actions on it. Run Now starts it on the
-/// bot's Runner; Pause and Resume flip the switch the inspector shows; Edit in Chat hands the bot
-/// the change to make, since the bot owns its routines; Delete asks first.
+/// One routine's details, after Grok Bot's routine page: how it stands, with what happened and
+/// how to fix it when something went wrong; the schedule, its next run, what happens to runs its
+/// Runner missed, and its last check and run; the task, the check when it has one, and the
+/// actions on it. Run Now starts it on the bot's Runner; Pause and Resume flip the switch the
+/// inspector shows; Edit in Chat hands the bot the change to make, since the bot owns its
+/// routines (its timezone and missed-run policy too); Delete asks first.
 final class RoutineViewController: SheetViewController {
     private let store = AppStore.shared
     private let routineID: Routine.ID
@@ -14,7 +16,6 @@ final class RoutineViewController: SheetViewController {
     private let prompt = NSTextView()
     private let checkSection = SectionView(title: L("Check"))
     private let check = NSTextView()
-    private let healthSection = SectionView(title: L("Availability and checks"))
     private let runButton = NSButton()
     private let pauseButton = NSButton()
     private let editButton = NSButton()
@@ -61,32 +62,14 @@ final class RoutineViewController: SheetViewController {
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
         let actions = Build.stack([runButton, pauseButton, editButton, spacer, deleteButton], orientation: .horizontal, spacing: 8)
 
-        // Details grow with health/recovery notes; keep actions visible on smaller screens.
-        let details = Build.stack([schedule, healthSection, task, checkSection], spacing: 12)
-        details.alignment = .leading
-        let document = FlippedView()
-        document.translatesAutoresizingMaskIntoConstraints = false
-        document.addSubview(details)
-        let detailsScroll = NSScrollView()
-        detailsScroll.documentView = document
-        detailsScroll.drawsBackground = false
-        detailsScroll.hasVerticalScroller = true
-        detailsScroll.autohidesScrollers = true
-        detailsScroll.translatesAutoresizingMaskIntoConstraints = false
-        contentStack.addArrangedSubview(detailsScroll)
+        contentStack.addArrangedSubview(schedule)
+        contentStack.addArrangedSubview(task)
+        contentStack.addArrangedSubview(checkSection)
         contentStack.addArrangedSubview(actions)
         NSLayoutConstraint.activate([
-            detailsScroll.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
-            detailsScroll.heightAnchor.constraint(equalToConstant: max(240, min(480, (NSScreen.main?.visibleFrame.height ?? 800) - 260))),
-            document.widthAnchor.constraint(equalTo: detailsScroll.contentView.widthAnchor),
-            details.topAnchor.constraint(equalTo: document.topAnchor),
-            details.leadingAnchor.constraint(equalTo: document.leadingAnchor),
-            details.trailingAnchor.constraint(equalTo: document.trailingAnchor),
-            details.bottomAnchor.constraint(equalTo: document.bottomAnchor),
-            schedule.widthAnchor.constraint(equalTo: details.widthAnchor),
-            healthSection.widthAnchor.constraint(equalTo: details.widthAnchor),
-            task.widthAnchor.constraint(equalTo: details.widthAnchor),
-            checkSection.widthAnchor.constraint(equalTo: details.widthAnchor),
+            schedule.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
+            task.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
+            checkSection.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
             actions.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
             scroll.heightAnchor.constraint(equalToConstant: 96),
             checkScroll.heightAnchor.constraint(equalToConstant: 120),
@@ -136,73 +119,54 @@ final class RoutineViewController: SheetViewController {
             dismiss(nil)
             return
         }
-        let tint: NSColor = ["failed", "blocked"].contains(routine.state) ? .systemOrange : .secondaryLabelColor
-        let scheduleRow = KeyValueRow(key: L("Schedule"), value: routine.scheduleText)
-        scheduleRow.toolTip = routine.schedule
-        let timezoneRow = ActionRow(key: L("Timezone"), value: routine.timezone, tint: .labelColor, actionTitle: L("Change…"))
-        timezoneRow.onAction = { [weak self] in self?.changeTimezone() }
-        let policyRow = PopUpRow(key: L("Missed runs"), items: [L("Run once"), L("Skip")], selected: routine.missedRunPolicy == "skip" ? 1 : 0)
-        policyRow.onChange = { [weak self] index in
-            self?.savePolicy(missedRunPolicy: index == 1 ? "skip" : "coalesce")
-        }
-        schedule.setRows([
-            KeyValueRow(key: L("State"), value: routine.stateText, tint: tint),
-            scheduleRow,
-            timezoneRow,
-            policyRow,
-            NoteRow(text: routine.missedRunPolicy == "skip" ? L("Skip occurrences more than a minute late. The next occurrence keeps the chosen timezone.") : L("After an outage, run once with current data. Missed occurrences never queue a burst of runs.")),
-            KeyValueRow(key: routine.check == nil ? L("Next run") : L("Next check"), value: routine.nextSummary),
-            KeyValueRow(key: L("Last run"), value: routine.lastRunSummary),
-        ])
         let runner = store.device(bot.runnerID)
-        var healthRows: [NSView] = [KeyValueRow(key: L("Runner"), value: runner?.name ?? bot.runnerID),
-            KeyValueRow(key: L("Availability"), value: routine.runnerAvailable ? L("Available") : L("Waiting for Runner"))]
-        if routine.check != nil {
-            healthRows += [KeyValueRow(key: L("Last check"), value: routine.lastCheckAt.map { Format.daySeparator($0) } ?? L("Never")),
-                KeyValueRow(key: L("Last successful check"), value: routine.lastSuccessfulCheckAt.map { Format.daySeparator($0) } ?? L("Never"))]
+        let runnerName = runner?.name ?? L("its Runner")
+        let problem = routine.problem
+        let state: (String, NSColor) =
+            if routine.isRunning {
+                (L("Running…"), .controlAccentColor)
+            } else if let problem {
+                (problem.text, problem.needsUser ? .systemOrange : .secondaryLabelColor)
+            } else if routine.isEnabled {
+                (L("On"), .systemGreen)
+            } else {
+                (routine.pausedReason == "away" ? L("Paused while you were away") : L("Paused"), .secondaryLabelColor)
+            }
+        var rows: [NSView] = [KeyValueRow(key: L("State"), value: state.0, tint: state.1)]
+        if let problem {
+            rows.append(NoteRow(text: problem.explanation(bot: bot.name, runner: runnerName)))
         }
-        if let retry = routine.retryAt, routine.isEnabled {
-            healthRows.append(KeyValueRow(key: L("Retry after"), value: Format.daySeparator(retry)))
+        let scheduleRow = KeyValueRow(key: L("Schedule"), value: routine.scheduleSummary)
+        scheduleRow.toolTip = routine.schedule.hasPrefix("every ") ? routine.schedule : "\(routine.schedule) · \(routine.timezone)"
+        let skips = routine.missedRunPolicy == "skip"
+        let missedRow = KeyValueRow(key: L("Missed runs"), value: skips ? L("Skip") : L("Run once"))
+        missedRow.toolTip = skips
+            ? L("When %@ was off at a scheduled time, the routine waits for the next one.", runnerName)
+            : L("When %@ was off at a scheduled time, the routine runs once when it’s back.", runnerName)
+        // "Tomorrow 9:00 AM" on a line of its own, as the last check and run read.
+        let next = routine.nextRunAt.map { Format.upcoming($0) }.map { $0.prefix(1).uppercased() + $0.dropFirst() }
+        rows += [
+            scheduleRow,
+            KeyValueRow(key: routine.check == nil ? L("Next run") : L("Next check"), value: next ?? "—"),
+            missedRow,
+        ]
+        if let lastCheck = routine.lastCheckSummary {
+            rows.append(KeyValueRow(key: L("Last check"), value: lastCheck))
+            // Only a failing check has a success to tell apart from it.
+            if ["failed", "blocked"].contains(routine.health.status) {
+                rows.append(KeyValueRow(key: L("Last successful check"), value: routine.health.lastSuccessAt.map { Format.daySeparator($0) } ?? L("Never")))
+            }
         }
-        if let recovery = routine.recoveryAction { healthRows.append(NoteRow(text: recovery)) }
-        healthSection.setRows(healthRows)
+        rows.append(KeyValueRow(key: L("Last run"), value: routine.lastRunSummary))
+        schedule.setRows(rows)
         if prompt.string != routine.prompt { prompt.string = routine.prompt }
         checkSection.isHidden = routine.check == nil
         if check.string != (routine.check ?? "") { check.string = routine.check ?? "" }
         pauseButton.title = routine.isEnabled ? L("Pause") : L("Resume")
-        runButton.isEnabled = !routine.isRunning && routine.runnerAvailable && routine.pausedReason != "authentication"
+        // A run needs its Runner online, and a routine paused by failed sign-ins needs Resume.
+        runButton.isEnabled = !routine.isRunning && routine.state != "waiting_for_runner" && routine.pausedReason != "authentication"
         runButton.toolTip = runner.map { L("Runs on %@ now", $0.name) } ?? L("Runs on the bot's Runner now")
         fitSheetToContent()
-    }
-
-    private func changeTimezone() {
-        guard let routine = store.routine(routineID), let window = view.window else { return }
-        let alert = NSAlert()
-        alert.messageText = L("Routine timezone")
-        alert.informativeText = L("Use an IANA timezone such as America/New_York, Asia/Singapore, or UTC. Cron follows its daylight-saving changes; intervals count elapsed time.")
-        let field = NSTextField(string: routine.timezone)
-        field.frame = NSRect(x: 0, y: 0, width: 320, height: 24)
-        alert.accessoryView = field
-        alert.addButton(withTitle: L("Save"))
-        alert.addButton(withTitle: L("Cancel"))
-        alert.beginSheetModal(for: window) { [weak self] response in
-            if response == .alertFirstButtonReturn { self?.savePolicy(timezone: field.stringValue) }
-        }
-        alert.window.initialFirstResponder = field
-    }
-
-    private func savePolicy(timezone: String? = nil, missedRunPolicy: String? = nil) {
-        Task { @MainActor in
-            do {
-                try await store.setRoutinePolicy(routineID, timezone: timezone, missedRunPolicy: missedRunPolicy)
-            } catch {
-                let alert = NSAlert()
-                alert.messageText = L("Couldn’t update routine")
-                alert.informativeText = error.localizedDescription
-                if let window = view.window { alert.beginSheetModal(for: window) { _ in } }
-                refresh()
-            }
-        }
     }
 
     @objc private func runNow() {

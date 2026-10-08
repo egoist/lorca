@@ -386,22 +386,31 @@ final class PluginsSettingsViewController: DevicePaneViewController {
 
 // MARK: - Devices
 
-/// The picked Device itself: what it is, whether it is online, its machine key, and Unpair.
+/// The picked Device itself: what it is, whether it is online, its machine key, whether
+/// `lorca service` keeps a Runner's CLI running, and Unpair.
 final class AboutDeviceSettingsViewController: DevicePaneViewController {
     private let header = DeviceHeaderView()
     private let machineSection = SectionView(title: L("Machine"))
-    private let serviceSection = SectionView(title: L("Runner service"))
-    private var serviceDeviceID: Device.ID?
+    /// How to keep a Runner available without the app, under the card while it has no service.
+    private let serviceNote = Build.label("", font: Theme.Font.caption, color: .tertiaryLabelColor, lines: 0)
+    /// What the Runner shown said of its service; asked again each time the pane shows.
     private var service: Wire.ServiceStatus?
-    private var serviceError: String?
-    private var isCheckingService = false
+    private var serviceAsked: Device.ID?
+    private var isAskingService = false
 
     override func viewDidLoad() {
         title = L("Devices")
         add(header)
         addSection(machineSection)
-        addSection(serviceSection)
+        add(serviceNote)
         super.viewDidLoad()
+    }
+
+    override func viewWillAppear() {
+        super.viewWillAppear()
+        guard !isAskingService else { return }
+        serviceAsked = nil
+        reload()
     }
 
     override func reload() {
@@ -424,7 +433,17 @@ final class AboutDeviceSettingsViewController: DevicePaneViewController {
         rows.append(
             KeyValueRow(
                 key: L("Role"),
-                value: device.isRunner ? L("Runner · runs bots with the account’s credentials") : L("Device · never runs bots")))
+                value: device.isRunner ? L("Runner · runs bots with its own credentials") : L("Device · never runs bots")))
+        askService(device)
+        let service = device.isRunner && device.status == .online ? service : nil
+        if let service {
+            rows.append(
+                KeyValueRow(
+                    key: L("Background service"),
+                    value: service.running ? L("Running") : service.installed ? L("Installed, not running") : L("Not installed")))
+        }
+        serviceNote.stringValue = L("Run lorca service install in Terminal on %@ to keep its bots running while Lorca is closed.", device.name)
+        serviceNote.isHidden = service?.installed != false
         rows.append(
             KeyValueRow(
                 key: L("Last seen"),
@@ -445,52 +464,22 @@ final class AboutDeviceSettingsViewController: DevicePaneViewController {
         unpair.onAction = { [weak self] in UnpairDevice.confirm(device, in: self?.view.window) }
         rows.append(unpair)
         machineSection.setRows(rows)
-        showService(device)
     }
 
-    private func showService(_ device: Device) {
-        serviceSection.isHidden = !device.isRunner
-        guard device.isRunner else { return }
-        if serviceDeviceID != device.id {
-            serviceDeviceID = device.id
-            service = nil
-            serviceError = nil
-            isCheckingService = false
-        }
-        let state: String
-        if device.status != .online { state = L("Waiting for Runner") }
-        else if isCheckingService { state = L("Checking…") }
-        else if let service { state = service.installed ? (service.runningPid == nil ? L("Installed · stopped") : L("Installed · running")) : L("Not installed") }
-        else { state = L("Check service status on this Runner") }
-        let row = ActionRow(key: L("Service"), value: state, tint: .secondaryLabelColor, actionTitle: device.status == .online && !isCheckingService ? L("Check status") : nil)
-        row.onAction = { [weak self] in self?.checkService(device.id) }
-        var rows: [NSView] = [row,
-            NoteRow(text: L("For an owned computer that stays available, install the standalone CLI and run these commands on that Runner. Keep it powered on and awake. Quit the app or lorca serve before installing the service.")),
-            KeyValueRow(key: L("Install"), value: service?.installCommand ?? "lorca service install", monospaced: true),
-            KeyValueRow(key: L("Status"), value: service?.statusCommand ?? "lorca service status", monospaced: true)]
-        if let service {
-            rows.append(KeyValueRow(key: L("Log"), value: service.log, monospaced: true))
-        }
-        if let serviceError { rows.append(NoteRow(text: serviceError)) }
-        serviceSection.setRows(rows)
-    }
-
-    private func checkService(_ id: Device.ID) {
-        guard !isCheckingService else { return }
-        isCheckingService = true
-        reload()
-        Task { @MainActor in
-            do {
-                let result = try await store.serviceStatus(id)
-                guard serviceDeviceID == id else { return }
-                service = result
-                serviceError = nil
-            } catch {
-                guard serviceDeviceID == id else { return }
-                serviceError = error.localizedDescription
-            }
-            isCheckingService = false
-            reload()
+    /// Asks an online Runner whether `lorca service` keeps its CLI running, once per Device shown.
+    private func askService(_ device: Device) {
+        guard serviceAsked != device.id else { return }
+        service = nil
+        guard device.isRunner, device.status == .online else { return }
+        serviceAsked = device.id
+        isAskingService = true
+        Task { @MainActor [weak self] in
+            let status = try? await self?.store.serviceStatus(device.id)
+            guard let self else { return }
+            self.isAskingService = false
+            guard self.serviceAsked == device.id else { return }
+            self.service = status
+            self.reload()
         }
     }
 

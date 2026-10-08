@@ -873,6 +873,14 @@ final class SwitchRow: NSView {
             tint: routine.isRunning ? .controlAccentColor : (routine.isEnabled ? .secondaryLabelColor : .tertiaryLabelColor),
             title: routine.name, detail: routine.detail, isOn: routine.isEnabled,
             toggleTooltip: routine.isEnabled ? L("Pause %@", routine.name) : L("Resume %@", routine.name), tooltip: routine.prompt)
+        // What went wrong leads, in orange while the user has to do something about it.
+        if let problem = routine.problem, problem.needsUser {
+            let line = NSMutableAttributedString(string: problem.text, attributes: [.foregroundColor: NSColor.systemOrange, .font: Theme.Font.caption])
+            line.append(NSAttributedString(
+                string: " · \(routine.scheduleText)", attributes: [.foregroundColor: NSColor.secondaryLabelColor, .font: Theme.Font.caption]))
+            detail.attributedStringValue = line
+            detail.lineBreakMode = .byTruncatingTail
+        }
     }
 
     func configure(symbol: String, tint: NSColor, title: String, detail detailText: String, isOn: Bool, toggleTooltip: String, tooltip: String) {

@@ -82,9 +82,16 @@ enum Wire {
 
     struct Routine: Decodable {
         struct Health: Decodable {
+            struct Model: Decodable {
+                var status: String?
+                var authenticationFailures: Int?
+            }
             var lastCheckAt: Double?
             var lastSuccessAt: Double?
-            var retryAt: Double?
+            var status: String?
+            var connectionFailures: Int?
+            var authenticationFailures: Int?
+            var model: Model?
         }
         var id: String
         var botId: String
@@ -102,11 +109,7 @@ enum Wire {
         var createdAt: Double
         var timezone: String?
         var missedRunPolicy: String?
-        var nextRunText: String?
         var state: String?
-        var runnerAvailable: Bool?
-        var recoveryAction: String?
-        var retryAt: Double?
         var health: Health?
 
         func toModel() -> Lorca.Routine {
@@ -115,22 +118,21 @@ enum Wire {
                 isEnabled: isEnabled, pausedReason: pausedReason, lastRunAt: lastRunAt.map { Date(timeIntervalSince1970: $0) },
                 lastOutcome: lastOutcome, nextRunAt: nextRunAt.map { Date(timeIntervalSince1970: $0) }, isRunning: isRunning ?? false,
                 createdAt: Date(timeIntervalSince1970: createdAt), check: check,
-                timezone: timezone ?? "UTC", missedRunPolicy: missedRunPolicy ?? "coalesce", nextRunText: nextRunText,
-                state: state ?? (isEnabled ? "ready" : "paused"), runnerAvailable: runnerAvailable ?? true,
-                lastCheckAt: health?.lastCheckAt.map { Date(timeIntervalSince1970: $0) },
-                lastSuccessfulCheckAt: health?.lastSuccessAt.map { Date(timeIntervalSince1970: $0) },
-                retryAt: (retryAt ?? health?.retryAt).map { Date(timeIntervalSince1970: $0) }, recoveryAction: recoveryAction)
+                timezone: timezone ?? TimeZone.current.identifier, missedRunPolicy: missedRunPolicy ?? "coalesce",
+                state: state ?? (isEnabled ? "on" : "paused"),
+                health: RoutineHealth(
+                    lastCheckAt: health?.lastCheckAt.map { Date(timeIntervalSince1970: $0) },
+                    lastSuccessAt: health?.lastSuccessAt.map { Date(timeIntervalSince1970: $0) },
+                    status: health?.status, connectionFailures: health?.connectionFailures ?? 0,
+                    authenticationFailures: health?.authenticationFailures ?? 0, modelStatus: health?.model?.status,
+                    modelAuthenticationFailures: health?.model?.authenticationFailures ?? 0))
         }
     }
 
+    /// `device.service_status`: whether `lorca service` keeps the CLI running on that Device.
     struct ServiceStatus: Decodable {
         var installed: Bool
-        var runningPid: Int?
-        var supervised: Bool
-        var log: String
-        var installCommand: String
-        var statusCommand: String
-        var detail: String
+        var running: Bool
     }
 
     struct RoutineChanged: Decodable {

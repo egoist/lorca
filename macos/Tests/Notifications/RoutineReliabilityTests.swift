@@ -1,56 +1,56 @@
-import AppKit
 import XCTest
 @testable import Lorca
 
-@MainActor
+/// A routine as the CLI sends it: its timezone, its missed-run policy, how it stands, and its
+/// check health, in the words the inspector row and the routine sheet use.
 final class RoutineReliabilityTests: XCTestCase {
-    func testRoutineDetailsScrollWhileActionsStayVisible() throws {
-        // This UI check runs with LORCA_MOCK=1, so it never starts a real local CLI.
-        let store = AppStore.shared
-        guard store.isMock else { throw XCTSkip("Run with LORCA_MOCK=1 for the AppKit layout check") }
-        store.start()
-        let routine = try XCTUnwrap(store.routines.first)
-        let bot = try XCTUnwrap(store.bots.first { $0.id == routine.botID })
-        let controller = RoutineViewController(routineID: routine.id, bot: bot)
-        let view = controller.view
-        let window = NSWindow(contentRect: NSRect(origin: .zero, size: view.fittingSize), styleMask: .titled, backing: .buffered, defer: false)
-        window.setFrameOrigin(NSPoint(x: -4000, y: -4000))
-        window.contentViewController = controller
-        defer { window.orderOut(nil) }
-        view.layoutSubtreeIfNeeded()
-        window.displayIfNeeded()
-        let details = try XCTUnwrap(controller.contentStack.arrangedSubviews.first as? NSScrollView)
-        XCTAssertTrue(details.hasVerticalScroller)
-        XCTAssertLessThanOrEqual(details.frame.height, 480)
-        XCTAssertEqual(controller.contentStack.arrangedSubviews.count, 2, "actions remain outside the details scroll")
-        let actions = controller.contentStack.arrangedSubviews[1]
-        XCTAssertGreaterThan(actions.frame.height, 20)
-        XCTAssertTrue(view.bounds.contains(actions.convert(actions.bounds, to: view)))
-        XCTAssertLessThan(view.fittingSize.height, 800)
-    }
-    func testRoutineHealthAndTimezoneDecodeWithoutUsingDeviceTimezone() throws {
-        let data = Data(#"{"id":"rt-1","bot_id":"b1","name":"Brief","prompt":"Read the inbox","schedule":"0 9 * * *","schedule_text":"Every day at 9:00 AM","is_enabled":true,"created_at":0,"timezone":"America/New_York","missed_run_policy":"skip","next_run_at":1791464400,"next_run_text":"2026-10-08 09:00 -04:00 (America/New_York)","state":"quiet","runner_available":true,"health":{"last_check_at":100,"last_success_at":100},"check":"return null"}"#.utf8)
+    private func routine(_ json: String) throws -> Routine {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
-        let routine = try decoder.decode(Wire.Routine.self, from: data).toModel()
-        XCTAssertEqual(routine.timezone, "America/New_York")
-        XCTAssertEqual(routine.missedRunPolicy, "skip")
-        XCTAssertEqual(routine.nextSummary, "2026-10-08 09:00 -04:00 (America/New_York)")
-        XCTAssertEqual(routine.lastSuccessfulCheckAt, Date(timeIntervalSince1970: 100))
-        XCTAssertNil(routine.lastRunAt, "quiet checks are separate from model runs")
-        XCTAssertEqual(routine.state, "quiet")
+        let base = #""id":"rt-1","bot_id":"b1","name":"Brief","prompt":"Read the inbox","schedule":"0 9 * * 1-5","schedule_text":"Weekdays at 9:00 AM","created_at":0"#
+        return try decoder.decode(Wire.Routine.self, from: Data("{\(base),\(json)}".utf8)).toModel()
     }
 
-    func testOfflineAndAuthenticationRecoveryDecode() throws {
-        let data = Data(#"{"id":"rt-1","bot_id":"b1","name":"Watch","prompt":"Read the inbox","schedule":"every 1h","is_enabled":false,"created_at":0,"state":"blocked","paused_reason":"authentication","runner_available":false,"recovery_action":"Reconnect and resume","retry_at":900}"#.utf8)
-        let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-        let routine = try decoder.decode(Wire.Routine.self, from: data).toModel()
-        XCTAssertEqual(routine.timezone, "UTC")
-        XCTAssertEqual(routine.missedRunPolicy, "coalesce")
-        XCTAssertFalse(routine.runnerAvailable)
-        XCTAssertEqual(routine.recoveryAction, "Reconnect and resume")
-        XCTAssertEqual(routine.retryAt, Date(timeIntervalSince1970: 900))
-        XCTAssertEqual(routine.state, "blocked")
+    func testHealthAndPolicyDecode() throws {
+        let quiet = try routine(#""is_enabled":true,"timezone":"America/New_York","missed_run_policy":"skip","state":"on","check":"return null","health":{"last_check_at":100,"last_success_at":100,"status":"quiet"}"#)
+        XCTAssertEqual(quiet.timezone, "America/New_York")
+        XCTAssertEqual(quiet.missedRunPolicy, "skip")
+        XCTAssertEqual(quiet.health.lastSuccessAt, Date(timeIntervalSince1970: 100))
+        XCTAssertNil(quiet.lastRunAt, "a check is not a run")
+        XCTAssertNil(quiet.problem)
+        XCTAssertEqual(quiet.lastCheckSummary, L("%@ · nothing new", Format.daySeparator(Date(timeIntervalSince1970: 100))))
+
+        let plain = try routine(#""is_enabled":true"#)
+        XCTAssertEqual(plain.missedRunPolicy, "coalesce")
+        XCTAssertEqual(plain.timezone, TimeZone.current.identifier)
+        XCTAssertNil(plain.lastCheckSummary, "no check, no check line")
+    }
+
+    func testProblemsSayWhatWentWrong() throws {
+        let signedOut = try routine(#""is_enabled":false,"paused_reason":"authentication","state":"blocked","check":"x","health":{"status":"blocked","authentication_failures":3}"#)
+        XCTAssertEqual(signedOut.problem, .signedOut(model: false))
+        XCTAssertEqual(signedOut.problem?.text, L("Needs sign-in"))
+        let model = try routine(#""is_enabled":false,"paused_reason":"authentication","state":"blocked","health":{"model":{"status":"blocked","authentication_failures":3}}"#)
+        XCTAssertEqual(model.problem, .signedOut(model: true))
+        XCTAssertEqual(try routine(#""is_enabled":true,"state":"waiting_for_runner""#).problem, .offline)
+        let connection = try routine(#""is_enabled":true,"state":"failed","check":"x","health":{"status":"failed","connection_failures":2}"#)
+        XCTAssertEqual(connection.problem, .cantConnect(model: false))
+        XCTAssertFalse(connection.problem!.needsUser, "a failed connection is tried again on its own")
+        XCTAssertEqual(try routine(#""is_enabled":true,"state":"failed","check":"x","health":{"status":"failed"}"#).problem, .checkFailed)
+        XCTAssertEqual(try routine(#""is_enabled":true,"state":"blocked","check":"x","health":{"status":"blocked"}"#).problem, .checkBlocked)
+        XCTAssertNil(try routine(#""is_enabled":true,"state":"failed","is_running":true"#).problem, "a run going on says Running")
+        XCTAssertTrue(signedOut.detail.hasPrefix(L("Needs sign-in")))
+    }
+
+    func testScheduleNamesAnotherTimezoneOnly() throws {
+        let here = try routine(#""is_enabled":true,"timezone":"\#(TimeZone.current.identifier)""#)
+        XCTAssertEqual(here.scheduleSummary, "Weekdays at 9:00 AM")
+        let elsewhere = TimeZone.current.identifier == "Pacific/Kiritimati" ? "Europe/London" : "Pacific/Kiritimati"
+        let away = try routine(#""is_enabled":true,"timezone":"\#(elsewhere)""#)
+        XCTAssertNotEqual(away.scheduleSummary, "Weekdays at 9:00 AM")
+        XCTAssertTrue(away.scheduleSummary.hasPrefix("Weekdays at 9:00 AM ("))
+        var interval = away
+        interval.schedule = "every 2h"
+        XCTAssertEqual(interval.scheduleSummary, interval.scheduleText, "an interval counts time in any zone")
     }
 }
