@@ -1522,13 +1522,6 @@ func (s *Store) SetAutoReview(value AutoReview) {
 // AnswerPermission answers a question: a permission card's, or a command card's. `allow`,
 // `always`, or `deny`. The CLI confirms with the card's new state.
 func (s *Store) AnswerPermission(chatID, messageID, decision string) {
-	if chat := s.Chat(chatID); chat != nil && decision != "deny" {
-		for _, message := range chat.Messages {
-			if message.ID == messageID && message.Body.Request != nil && message.Body.Request.IsAccess() {
-				return
-			}
-		}
-	}
 	s.Update(messageID, chatID, func(message *Message) {
 		switch body := message.Body; {
 		case body.Kind == BodyPermission:
@@ -1537,7 +1530,11 @@ func (s *Store) AnswerPermission(chatID, messageID, decision string) {
 			case "always":
 				request.Decision = DecisionAlways
 			case "deny":
+				// An access request is only ever dismissed.
 				request.Decision = DecisionDenied
+				if request.IsAccess() {
+					request.Decision = DecisionDismissed
+				}
 			default:
 				request.Decision = DecisionAllowed
 			}

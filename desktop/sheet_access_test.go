@@ -3,189 +3,169 @@ package main
 import (
 	"slices"
 	"testing"
-	"time"
 
-	"github.com/egoist/lorca/desktop/l10n"
 	"github.com/egoist/lorca/desktop/model"
 	"github.com/egoist/mygo/ui"
 )
 
-func accessFixture(t *testing.T) (*mainWindow, *botAccessSheet, *ui.Tester) {
+func accessSheet(t *testing.T, botID string) (*mainWindow, *botAccessSheet, *ui.Tester) {
 	t.Helper()
 	m := demoWindow(t)
 	m.userWantsInspector = false
-	// Only synthetic named instances are advertised in this fixture.
-	store.Device("dev-workbench").Plugins = nil
-	st := m.presentBotAccess("bot-nova")
-	tt := ui.NewTester(m.frame(m.view), 1080, 880)
+	st := m.presentBotAccess(botID)
+	tt := ui.NewTester(m.frame(m.view), 1080, 900)
+	runPosts()
 	settleTransitions(tt)
 	return m, st, tt
 }
 
-func accessScroll(tt *ui.Tester, dy float32) { tt.Scroll(530, 400, 0, dy); settle(tt) }
+func click(t *testing.T, tt *ui.Tester, label string) {
+	t.Helper()
+	if err := tt.Click(label); err != nil {
+		t.Fatal(err)
+	}
+	settle(tt)
+}
 
-func TestNativeAccessChoicesPersistAndSave(t *testing.T) {
-	m, st, tt := accessFixture(t)
-	if err := tt.Click(L("All connections")); err != nil {
+func choose(t *testing.T, tt *ui.Tester, popUp, item string) {
+	t.Helper()
+	if err := tt.Click(popUp); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.ChooseMenuItem(item); err != nil {
 		t.Fatal(err)
 	}
 	settle(tt)
-	for _, capability := range []string{L("Read"), L("Draft"), L("Write")} {
-		if err := tt.Click(L("Allow %@ for %@", capability, "Gmail · Personal")); err != nil {
-			t.Fatal(err)
-		}
-		settle(tt)
+}
+
+func TestAccessSheetSavesLevelsToolsFilesAndShell(t *testing.T) {
+	m, _, tt := accessSheet(t, "bot-nova")
+	click(t, tt, L("%@ tools", "GitHub"))
+	if !tt.HasText("Merge a pull request") || !tt.HasText(L("All tools")) {
+		t.Fatal("GitHub's tools did not show")
 	}
-	if err := tt.Click(L("Allow %@ for %@", L("Write"), "Gmail · Work")); err != nil {
+	click(t, tt, "Merge a pull request")
+	if !tt.HasText(L("%d of %d tools", 4, 5)) {
+		t.Fatal("the tools summary did not follow the checkbox")
+	}
+	choose(t, tt, L("Access to %@", "Linear"), L("No access"))
+	choose(t, tt, L("Access to %@", "deepwiki"), L("Read only"))
+	// The Files and Shell commands rows share their controls' names: each control is at its
+	// row's end.
+	files, _ := tt.Find(L("Files"))
+	tt.ClickAt(files.X+files.W-40, files.Y+files.H/2)
+	if err := tt.ChooseMenuItem(L("Read only")); err != nil {
 		t.Fatal(err)
 	}
 	settle(tt)
-	if err := tt.Click(L("All tools for %@", "Gmail · Work")); err != nil {
-		t.Fatal(err)
-	}
+	shell, _ := tt.Find(L("Shell commands"))
+	tt.ClickAt(shell.X+shell.W-18, shell.Y+shell.H/2)
 	settle(tt)
-	if err := tt.Click(L("Allow %@ on %@", "send_message", "Gmail · Work")); err != nil {
-		t.Fatal(err)
+	click(t, tt, L("Save"))
+	if m.hasSheet() {
+		t.Fatal("Save did not close the sheet")
 	}
-	settle(tt)
-	for range 5 {
-		tt.Frame()
+	policy := store.Bot("bot-nova").Permissions
+	if policy == nil || policy.Connections == nil || policy.Shell || policy.Filesystem != model.AccessRead {
+		t.Fatalf("saved policy: %+v", policy)
 	}
-	work := st.draft.Connections["gmail-11111111111111111111111111111111"]
-	if !work.Read || !work.Draft || work.Write || work.AllTools || work.Tools["send_message"].Selected {
-		t.Fatalf("instance/tool/capability controls: all=%v work=%+v send=%+v", st.draft.AllConnections, work, work.Tools["send_message"])
+	grants := *policy.Connections
+	if _, ok := grants["linear"]; ok || policy.Level("deepwiki") != model.AccessRead || policy.Level("filesystem") != model.AccessWrite {
+		t.Fatalf("plugin levels: %+v", grants)
 	}
-	if err := tt.Click(L("All local tools")); err != nil {
-		t.Fatal(err)
-	}
-	settle(tt)
-	renderBoth(t, tt, "desktop-access-connections")
-	accessScroll(tt, 1600)
-	if err := tt.Click(L("Allow local tool %@", "write")); err != nil {
-		t.Fatal(err)
-	}
-	settle(tt)
-	if err := tt.Click(L("Allow shell commands")); err != nil {
-		t.Fatal(err)
-	}
-	settle(tt)
-	if err := tt.Click(L("Filesystem access")); err != nil {
-		t.Fatal(err)
-	}
-	settle(tt)
-	if err := tt.ChooseMenuItem(L("Read")); err != nil {
-		t.Fatal(err)
-	}
-	settle(tt)
-	if st.draft.Shell || st.draft.Filesystem != "read" {
-		t.Fatal("local controls did not change")
-	}
-	renderBoth(t, tt, "desktop-access-local-controls")
-	if err := tt.Click(L("Save")); err != nil {
-		t.Fatal(err)
-	}
-	settle(tt)
-	if m.hasSheet() || store.Bot("bot-nova").Permissions.Shell {
-		t.Fatal("save did not update profile and close")
-	}
-	if tools := store.Bot("bot-nova").Permissions.Tools; tools == nil || slices.Contains(*tools, "write") {
-		t.Fatal("local tool selection was not saved")
-	}
-	if grants := *store.Bot("bot-nova").Permissions.Connections; len(grants["gmail-22222222222222222222222222222222"].Capabilities) != 0 {
-		t.Fatal("Personal gained capabilities")
+	if tools := grants["github"].Tools; tools == nil || len(*tools) != 4 || slices.Contains(*tools, "merge_pull_request") {
+		t.Fatalf("GitHub's tools: %+v", grants["github"])
 	}
 }
 
-func TestAccessCardOpensEditorWithoutGrantingTheCall(t *testing.T) {
+func TestAccessSheetLeavesFullAccessOpenToNewPlugins(t *testing.T) {
+	_, st, tt := accessSheet(t, "bot-nova")
+	click(t, tt, L("%@ tools", "GitHub"))
+	click(t, tt, "Merge a pull request")
+	click(t, tt, "Merge a pull request")
+	if policy := st.policy(); policy.Connections != nil {
+		t.Fatalf("every plugin open should stay every plugin: %+v", policy)
+	}
+	click(t, tt, L("Save"))
+	if store.Bot("bot-nova").Permissions != nil {
+		t.Fatal("an unchanged sheet wrote a policy")
+	}
+}
+
+func TestAccessSheetKeepsChoicesWhenTheToolsArrive(t *testing.T) {
 	m := demoWindow(t)
-	m.userWantsInspector = false
-	m.selectChat("chat-nova")
-	store.Append(&model.Message{ID: "access-fixture", Author: model.BotAuthor("bot-nova"), Body: model.Body{Kind: model.BodyPermission,
-		Request: &model.PermissionRequest{PluginID: "computer", PluginName: "Bot access", Tool: "access", Summary: "Analyst needs access to send_message", Decision: model.DecisionPending,
-			Reason: "Write access is excluded. Edit this bot's Access settings in its profile."}}, State: model.MessageState{Kind: model.StateComplete}, CreatedAt: time.Now()}, "chat-nova")
-	tt := ui.NewTester(m.frame(m.view), 1080, 880)
-	settleTransitions(tt)
-	if tt.HasText(L("Always allow")) || tt.HasText(L("Allow once")) {
-		t.Fatal("refusal offers action approval")
+	st := m.presentBotAccess("bot-quill")
+	if len(st.plugins) == 0 || len(st.plugins[0].Tools) != 0 {
+		t.Fatal("the sheet opens on the Runner's own list")
 	}
-	renderBoth(t, tt, "desktop-access-refusal")
-	if err := tt.Click(L("Edit Access…")); err != nil {
-		t.Fatal(err)
+	st.levels["linear"] = model.AccessRead
+	runPosts()
+	if st.levels["linear"] != model.AccessRead || len(st.plugins[0].Tools) == 0 {
+		t.Fatal("the tools replaced what the user chose")
 	}
-	settleTransitions(tt)
-	if !m.hasSheet() || !tt.HasText(L("All connections")) {
-		t.Fatal("access request did not open editor")
-	}
-	if err := tt.Click(L("Cancel")); err != nil {
-		t.Fatal(err)
-	}
-	settleTransitions(tt)
-	if err := tt.Click(L("Dismiss")); err != nil {
-		t.Fatal(err)
-	}
-	settle(tt)
-	chat := store.Chat("chat-nova")
-	if chat.Messages[len(chat.Messages)-1].Body.Request.Decision != model.DecisionDenied {
-		t.Fatal("dismiss did not answer refusal")
-	}
-}
-
-func TestAccessEditorRetainsDraftOnSaveConflict(t *testing.T) {
-	_, st, tt := accessFixture(t)
-	st.draft.Shell = false
-	store.Bot("bot-nova").Permissions = &model.BotPermissions{Shell: true, Filesystem: "read"}
-	if err := tt.Click(L("Save")); err != nil {
-		t.Fatal(err)
-	}
-	settle(tt)
-	if st.closed || st.draft.Shell || st.problem == "" {
-		t.Fatal("conflict discarded draft or accepted stale settings")
-	}
-}
-
-func TestAccessDraftSurvivesCatalogReloadAndLanguageBuilds(t *testing.T) {
-	_, st, tt := accessFixture(t)
-	if err := tt.Click(L("All connections")); err != nil {
-		t.Fatal(err)
-	}
-	settle(tt)
-	work := st.draft.Connections["gmail-11111111111111111111111111111111"]
-	work.Write = false
-	st.load()
-	settle(tt)
-	l10n.Set("zh-Hans", "zh-CN")
-	settle(tt)
-	defer l10n.Set("en", "en-US")
-	if st.draft.AllConnections || work.Write || !work.Read || !tt.HasText(L("Access")) {
-		t.Fatal("rebuild/reload reset edited values")
-	}
-}
-
-func TestDismissedAccessSheetIgnoresPendingCatalogReply(t *testing.T) {
-	m := demoWindow(t)
-	st := m.presentBotAccess("bot-nova")
+	closed := m.presentBotAccess("bot-quill")
 	m.sheets[len(m.sheets)-1].dismiss()
 	runPosts()
-	if !st.closed || !st.loading || st.draft.Connections["gmail-11111111111111111111111111111111"] != nil {
-		t.Fatal("closed sheet applied catalog reply")
+	if !closed.closed || len(closed.plugins[0].Tools) != 0 {
+		t.Fatal("a closed sheet took the tools")
 	}
 }
 
-func TestRenderDesktopAccessProfile(t *testing.T) {
+func TestAccessRequestOpensTheSheetOrIsDismissed(t *testing.T) {
 	m := demoWindow(t)
-	tt := ui.NewTester(func(c *ui.Context) { applyTheme(c); m.inspectorProfile(c, store.Bot("bot-nova")) }, 380, 250)
-	settle(tt)
-	renderBoth(t, tt, "desktop-access-profile-before")
-	draft := model.NewAccessDraft(nil)
-	draft.AllConnections, draft.AllTools, draft.Shell, draft.Filesystem = false, false, false, "read"
-	store.SetBotPermissions("bot-nova", draft.Policy(), func(err error) {
-		if err != nil {
-			t.Fatal(err)
-		}
-	})
-	settle(tt)
-	if !tt.HasText(L("Shell denied")) && !tt.HasText(store.Bot("bot-nova").Permissions.Summary()) {
-		t.Fatal("profile summary missing")
+	m.userWantsInspector = false
+	m.selectChat("chat-quill")
+	tt := ui.NewTester(m.frame(m.view), 1080, 880)
+	settleTransitions(tt)
+	if tt.HasText(L("Always allow")) || tt.HasText(L("Allow once")) || !tt.HasText(L("Not allowed in this bot's Access settings.")) {
+		t.Fatal("the access request offers to allow the call")
 	}
-	renderBoth(t, tt, "desktop-access-profile-after")
+	click(t, tt, L("Edit Access…"))
+	settleTransitions(tt)
+	if !m.hasSheet() || !tt.HasText(L("Access for %@", "Writer")) {
+		t.Fatal("Edit Access did not open the sheet")
+	}
+	click(t, tt, L("Cancel"))
+	settleTransitions(tt)
+	click(t, tt, L("Dismiss"))
+	for _, message := range store.Chat("chat-quill").Messages {
+		if request := message.Body.Request; request != nil && request.IsAccess() && request.Decision != model.DecisionDismissed {
+			t.Fatal("Dismiss did not dismiss the request")
+		}
+	}
+}
+
+func TestRenderDesktopAccess(t *testing.T) {
+	m := demoWindow(t)
+	writer := store.Bot("bot-quill")
+	inspector := ui.NewTester(func(c *ui.Context) {
+		applyTheme(c)
+		ui.Column(c).Padding(16).Gap(20).Children(func() {
+			m.inspectorProfile(c, writer)
+			m.inspectorPlugins(c, writer)
+		})
+	}, 300, 520)
+	inspector.SetScale(2)
+	settle(inspector)
+	if !inspector.HasText(L("Limited")) || !inspector.HasText(L("No access")) {
+		t.Fatal("the inspector does not show the Writer's Access")
+	}
+	renderBoth(t, inspector, "access-inspector")
+
+	m.userWantsInspector = false
+	m.selectChat("chat-quill")
+	chat := ui.NewTester(m.frame(m.view), 1000, 620)
+	chat.SetScale(2)
+	settleTransitions(chat)
+	renderBoth(t, chat, "access-card")
+
+	m.presentBotAccess("bot-quill")
+	runPosts()
+	sheet := ui.NewTester(m.frame(m.view), 1000, 760)
+	sheet.SetScale(2)
+	settleTransitions(sheet)
+	renderBoth(t, sheet, "access-sheet")
+	click(t, sheet, L("%@ tools", "GitHub"))
+	sheet.Move(2, 2)
+	renderBoth(t, sheet, "access-sheet-tools")
 }

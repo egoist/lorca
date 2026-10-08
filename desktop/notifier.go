@@ -36,7 +36,8 @@ func notificationFor(message *model.Message) *chatNotification {
 	base := chatNotification{messageID: message.ID, botID: message.Author.BotID}
 	body := message.Body
 	switch {
-	case body.Kind == model.BodyPermission && body.Request.IsPending():
+	// An access request is the bot's to explain in its reply, which notifies on its own.
+	case body.Kind == model.BodyPermission && body.Request.IsPending() && !body.Request.IsAccess():
 		base.kind, base.body = notifyPermission, L("Confirmation needed: %@", body.Request.Summary)
 		return &base
 	case body.Kind == model.BodyTool && body.Tool.Run != nil && body.Tool.Run.State == model.CommandAsking:

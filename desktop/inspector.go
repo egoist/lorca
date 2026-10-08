@@ -188,7 +188,7 @@ func (m *mainWindow) inspectorProfile(c *ui.Context, bot *model.Bot) {
 		if summaryActionRow(c, k, L("Description"), bot.Description, L("Edit…")) {
 			m.presentBotDescription(bot.ID)
 		}
-		if summaryActionRow(c.Key("bot-access"), k, L("Access"), bot.Permissions.Summary(), L("Edit…")) {
+		if disclosureRow(c.Key("bot-access"), k, L("Access"), bot.Permissions.Summary()) {
 			m.presentBotAccess(bot.ID)
 		}
 	})
@@ -376,8 +376,8 @@ func (m *mainWindow) prefill(text string) {
 	m.invalidate()
 }
 
-// inspectorPlugins are the plugins the bot's Runner has, which every bot there may use, and a way to
-// the marketplace. A plugin that needs setup says so; clicking opens it.
+// inspectorPlugins are the plugins the bot's Runner has, and a way to the marketplace. A plugin that
+// needs setup says so, and one the bot's Access leaves out says it has none; clicking opens it.
 func (m *mainWindow) inspectorPlugins(c *ui.Context, bot *model.Bot) {
 	p := colors(c)
 	runner := store.Device(bot.RunnerID)
@@ -390,7 +390,13 @@ func (m *mainWindow) inspectorPlugins(c *ui.Context, bot *model.Bot) {
 			pluginID := plugin.ID
 			var row statusRowResult
 			ui.Box(c.Key(plugin.ID)).Children(func() {
-				_, row = pluginRow(c, k, plugin, true, L("Open %@", plugin.Name))
+				// A plugin the bot's Access leaves out says it has none.
+				if bot.Permissions.Level(plugin.ID) == model.AccessNone {
+					_, row = statusRow(c, k, statusRowOptions{Symbol: plugin.Symbol(), PluginID: plugin.ID, Title: plugin.Name, Subtitle: plugin.Description,
+						State: L("No access"), Clickable: true, Tooltip: L("Open %@", plugin.Name)})
+				} else {
+					_, row = pluginRow(c, k, plugin, true, L("Open %@", plugin.Name))
+				}
 			})
 			if row.Clicked && runner != nil {
 				m.presentPlugin(pluginID, runner)

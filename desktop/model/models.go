@@ -970,7 +970,35 @@ func (r *PermissionRequest) FullCommand() string {
 
 func (r *PermissionRequest) IsPending() bool { return r.Decision == DecisionPending }
 func (r *PermissionRequest) IsInstall() bool { return r.Tool == "install" }
-func (r *PermissionRequest) IsAccess() bool  { return r.Tool == "access" }
+
+// IsAccess is the bot's Access refusing a call: the card opens its Access sheet or is dismissed.
+func (r *PermissionRequest) IsAccess() bool { return r.Tool == "access" }
+
+// ShownSummary is the line under the title: an access request names a plugin's tool as it is,
+// or what the bot wanted to do on its Runner in the CLI's English, which reads here in the app's
+// language.
+func (r *PermissionRequest) ShownSummary() string {
+	if r.IsAccess() {
+		switch r.Summary {
+		case "Shell commands":
+			return L("Shell commands")
+		case "Changing files":
+			return L("Changing files")
+		case "Reading files":
+			return L("Reading files")
+		}
+	}
+	return r.Summary
+}
+
+// ShownReason is why the card asks: what Auto-review said, or for an access request, where it is
+// turned on.
+func (r *PermissionRequest) ShownReason() string {
+	if r.IsAccess() {
+		return L("Not allowed in this bot's Access settings.")
+	}
+	return r.Reason
+}
 
 // IsShell is a shell command on the bot's Runner.
 func (r *PermissionRequest) IsShell() bool { return r.PluginID == "computer" && !r.IsAccess() }
@@ -983,7 +1011,7 @@ func (r *PermissionRequest) IsConnect() bool { return r.Tool == "connect" }
 func (r *PermissionRequest) VerbPhrase() string {
 	switch {
 	case r.IsAccess():
-		return L("needs additional access")
+		return L("needs more access")
 	case r.IsConnect():
 		return L("needs a sign-in to %@", r.PluginName)
 	case r.IsShell():
