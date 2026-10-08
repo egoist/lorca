@@ -132,10 +132,6 @@ func (m *mainWindow) setSelection(next model.Selection) {
 	if old == next {
 		return
 	}
-	if m.chat != nil {
-		m.chat.linkGeneration++
-		m.chat.linkedMessageID, m.chat.linkedMessageLoading = "", false
-	}
 	m.selection = next
 	m.recordHistory(next)
 	if old.IsChat() {

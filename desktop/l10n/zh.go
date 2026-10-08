@@ -3,15 +3,6 @@
 package l10n
 
 var zh = map[string]string{
-	"Could not load older messages.":                       "无法加载更早的消息。",
-	"The linked chat is unavailable.":                      "关联的聊天不可用。",
-	"The linked message is unavailable.":                   "关联的消息不可用。",
-	"Could not load the linked message.":                   "无法加载关联的消息。",
-	"Loading linked message…":                              "正在加载关联的消息…",
-	"No older messages are available.":                     "没有更早的消息可用。",
-	"The transcript changed while loading older messages.": "加载更早的消息时，聊天记录发生了变化。",
-	"The transcript did not provide an older page.":        "聊天记录未提供更早的消息页。",
-
 	" · @ to mention":           " · 输入 @ 可提及智能体",
 	" · jobs wait on the relay": " · 任务在中继上等待",
 	", ":                        "、",

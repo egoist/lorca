@@ -165,8 +165,6 @@ type Store struct {
 	// reportedWatchedChat is the chat last reported to the CLI as on screen.
 	reportedWatchedChat *string
 	loadingOlder        map[string]bool
-	olderDone           map[string][]func(error)
-	olderFailed         map[string]string
 	replies             *replyEngine
 	started             bool
 	startupTimer        *time.Timer
@@ -369,9 +367,6 @@ func (s *Store) bootstrap(generation int) {
 }
 
 func (s *Store) apply(snapshot WireSnapshot) {
-	if s.IdentityID != str(snapshot.IdentityID) {
-		clear(s.olderFailed)
-	}
 	has := snapshot.HasIdentity
 	s.HasIdentity = &has
 	s.IsIdentityDevice = snapshot.IsIdentityDevice
@@ -1797,6 +1792,45 @@ func (s *Store) TogglePin(id string) {
 	s.emit(Event{Kind: EventChatsChanged})
 	s.perform("chats.pin", map[string]any{"chat_id": id, "pinned": chat.IsPinned})
 }
+
+// LoadOlderMessages asks the CLI for the page of messages before the chat's first one. The
+// transcript calls this as it nears the top; one request per chat at a time.
+func (s *Store) LoadOlderMessages(id string) {
+	chat := s.Chat(id)
+	if s.IsMock || s.loadingOlder[id] || chat == nil || !chat.HasMore || len(chat.Messages) == 0 {
+		return
+	}
+	first := chat.Messages[0].ID
+	s.loadingOlder[id] = true
+	Async(s, func() (WireMessagePage, error) {
+		return call[WireMessagePage](s, "chats.messages", map[string]any{"chat_id": id, "before": first})
+	}, func(page WireMessagePage, err error) {
+		delete(s.loadingOlder, id)
+		current := s.Chat(id)
+		if err != nil || current == nil || len(current.Messages) == 0 || current.Messages[0].ID != first {
+			return
+		}
+		known := map[string]bool{}
+		for _, message := range current.Messages {
+			known[message.ID] = true
+		}
+		var older []*Message
+		for _, wire := range page.Messages {
+			if message := ToMessage(wire); !known[message.ID] {
+				older = append(older, message)
+			}
+		}
+		current.Messages = append(older, current.Messages...)
+		current.HasMore = page.HasMore
+		for _, message := range older {
+			s.noteCommand(message, id)
+		}
+		s.emit(Event{Kind: EventOlderMessagesLoaded, ChatID: id})
+	})
+}
+
+// IsLoadingOlder is a page of older messages on its way for the chat.
+func (s *Store) IsLoadingOlder(id string) bool { return s.loadingOlder[id] }
 
 // SearchChats answers full-text chat and message matches from the local SQLite index.
 func (s *Store) SearchChats(query string, done func(WireSearchResults, error)) {

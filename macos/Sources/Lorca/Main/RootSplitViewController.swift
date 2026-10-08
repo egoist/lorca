@@ -228,11 +228,6 @@ final class RootSplitViewController: NSSplitViewController {
         syncSidebar()
     }
 
-    func openMessage(chatID: Chat.ID, messageID: Message.ID) {
-        select(.chat(chatID))
-        chatController?.revealLinkedMessage(messageID)
-    }
-
     /// Settings lives in this window: its panes take the content area, and the sidebar lists them
     /// in place of the chats.
     func showSettings() {

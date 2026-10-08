@@ -61,16 +61,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             self.showMainWindow()
             self.mainWindowController?.root.select(.chat(id))
         }
-        NotificationCenter.default.addObserver(forName: ChatMessageLink.didOpen, object: nil, queue: .main) { [weak self] notification in
-            guard let link = notification.object as? ChatMessageLink else { return }
-            Task { @MainActor in
-                guard let self, self.store.chat(link.chatID) != nil else { NSSound.beep(); return }
-                if self.onboardingOverIdentity { self.endOnboarding() }
-                guard self.onboardingWindowController == nil else { NSSound.beep(); return }
-                self.showMainWindow()
-                self.mainWindowController?.root.openMessage(chatID: link.chatID, messageID: link.messageID)
-            }
-        }
         store.start()
         if mainWindowIsDue {
             showMainWindow()

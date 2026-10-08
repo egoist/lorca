@@ -2,12 +2,12 @@ package main
 
 import (
 	"fmt"
+	"net/url"
 	"runtime"
 	"strconv"
 	"strings"
 	"unicode/utf16"
 
-	"github.com/egoist/lorca/desktop/model"
 	"github.com/egoist/mygo"
 )
 
@@ -31,7 +31,8 @@ func setBadge(count int) {
 // bots, plugins, and the marketplace, so any other scheme is refused: the system would start
 // whatever app handles it.
 func openExternal(link string) error {
-	if !model.IsExternalLink(link) {
+	u, err := url.Parse(link)
+	if err != nil || !(u.Scheme == "mailto" || (u.Scheme == "http" || u.Scheme == "https") && u.Host != "") {
 		return fmt.Errorf("not a web or mail link: %q", link)
 	}
 	go mygo.Shell.OpenExternal(link)

@@ -416,14 +416,9 @@ extension NSView {
 
 extension NSWorkspace {
     /// Opens a link from a message, a plugin, or the marketplace: a web link (http or https,
-    /// with a host) in the browser, a mail link in the mail app, and a message reference in
-    /// this app. Any other scheme beeps instead,
+    /// with a host) in the browser, a mail link in the mail app. Any other scheme beeps instead,
     /// since the system would start whatever app handles it.
     func openLink(_ url: URL) {
-        if let message = ChatMessageLink(url: url) {
-            NotificationCenter.default.post(name: ChatMessageLink.didOpen, object: message)
-            return
-        }
         let scheme = url.scheme?.lowercased()
         let isWeb = (scheme == "http" || scheme == "https") && url.host?.isEmpty == false
         guard isWeb || scheme == "mailto" else {

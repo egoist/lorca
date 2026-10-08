@@ -1,7 +1,6 @@
 import AppKit
 
 final class ChatViewController: NSViewController {
-    private var linkedMessageID: Message.ID?
     private let store = AppStore.shared
     private let layout = ChatLayout()
 
@@ -178,7 +177,6 @@ final class ChatViewController: NSViewController {
 
     func show(chatID newChatID: Chat.ID) {
         let isSameChat = chatID == newChatID
-        if !isSameChat { linkedMessageID = nil }
         chatID = newChatID
         guard let chat = store.chat(newChatID) else { return }
 
@@ -358,8 +356,6 @@ final class ChatViewController: NSViewController {
 
         case let .olderMessagesLoaded(id) where id == chatID:
             olderMessagesLoaded()
-            // The store releases its page request after emitting this event.
-            DispatchQueue.main.async { [weak self] in self?.revealLinkedMessageIfLoaded() }
 
         case .snapshotReplaced:
             show(chatID: chatID)
@@ -632,24 +628,6 @@ final class ChatViewController: NSViewController {
         scrollIntoView(row: row)
         isPinnedToBottom = false
         (tableView.view(atColumn: 0, row: row, makeIfNecessary: false) as? MessageCellView)?.flash()
-    }
-
-    func revealLinkedMessage(_ messageID: Message.ID) {
-        linkedMessageID = messageID
-        revealLinkedMessageIfLoaded()
-    }
-
-    private func revealLinkedMessageIfLoaded() {
-        guard let id = linkedMessageID, let chatID, let chat = store.chat(chatID) else { return }
-        if rows.contains(where: { $0.messageID == id }) {
-            linkedMessageID = nil
-            reveal(id)
-        } else if chat.hasMore {
-            store.loadOlderMessages(in: chatID)
-        } else {
-            linkedMessageID = nil
-            NSSound.beep()
-        }
     }
 
     @objc func stopResponding(_ sender: Any?) {

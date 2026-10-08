@@ -43,13 +43,9 @@ type chatState struct {
 	stopping       bool
 	scrollToLatest bool
 	// flashID is the message a reply's quote brought into view, which pulses from flashAt.
-	flashID string
-	flashAt time.Time
-	// A result link resolves by message id across history pages, never by a saved row index.
-	linkedMessageID      string
-	linkedMessageLoading bool
-	linkGeneration       uint64
-	composer             composerState
+	flashID  string
+	flashAt  time.Time
+	composer composerState
 	// composerHeight is the composer's as the last frame laid it out, which the transcript keeps
 	// clear at its end.
 	composerHeight float32
@@ -151,7 +147,6 @@ func (m *mainWindow) chatView(c *ui.Context, chatID string) {
 	}
 	s := m.chatStateFor(chatID)
 	s.rows = buildRows(chat, store.WorkingBots(chatID), s.stoppedNotice)
-	m.resolveLinkedMessage(s, chat)
 	rows := s.rows
 	members := store.BotsIn(chat)
 	if s.scrollToLatest {
@@ -171,22 +166,8 @@ func (m *mainWindow) chatView(c *ui.Context, chatID string) {
 		s.transcriptScroll = ui.Local(transcript, "scroll", func() ui.ScrollState { return ui.ScrollState{} })
 		transcript.TrackScroll(s.transcriptScroll)
 		// Nearing the first message: ask for the page before it.
-		if first, _ := s.list.Visible(); first < 8 && chat.HasMore && s.linkedMessageID == "" && s.flashID == "" && !m.hasSheet() {
+		if first, _ := s.list.Visible(); first < 8 && chat.HasMore {
 			store.LoadOlderMessages(chatID)
-		}
-		if s.linkedMessageLoading {
-			ui.Row(c.Key("linked-message-loading")).Absolute().Top(headerHeight+8).Left(horizontalInset).Padding(8, 10).Gap(8).Radius(8).Background(p.BotBubble).AlignItems(ui.Center).Children(func() {
-				spinner(c, 14)
-				ui.Text(c, L("Loading linked message…")).FontSize(textCaption).TextColor(p.Label)
-			})
-		}
-		if store.OlderMessagesFailed(chatID) && !store.IsLoadingOlder(chatID) {
-			ui.Row(c.Key("history-retry")).Absolute().Top(headerHeight+8).Left(horizontalInset).Padding(8, 10).Gap(8).Radius(8).Background(p.BotBubble).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, L("Could not load older messages.")).FontSize(textCaption).TextColor(p.Label)
-				if ui.Button(c.Key("retry-history"), L("Retry")).Clicked() {
-					store.LoadOlderMessagesThen(chatID, nil)
-				}
-			})
 		}
 		if len(chat.Messages) == 0 {
 			chatEmptyState(c, m, chat, members, s, bottom)
@@ -407,7 +388,7 @@ func (m *mainWindow) messageCell(c *ui.Context, chat *model.Chat, message *model
 				}
 				body.Children(func() {
 					if text != "" {
-						markdownView(c, text, markdownOptions{OnUserBubble: isUser, Menu: replyMenu, OpenLink: m.openTranscriptLink}).Grow(1).Shrink(1)
+						markdownView(c, text, markdownOptions{OnUserBubble: isUser, Menu: replyMenu}).Grow(1).Shrink(1)
 					}
 					if showTimestamps {
 						stamp := ui.Text(c, model.Clock(message.CreatedAt)).FontSize(textCaption).FixedLineHeight(15).TextColor(p.Label3).FontFeatures("tnum").NoWrap()
