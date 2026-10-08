@@ -568,21 +568,15 @@ final class InspectorViewController: NSViewController {
             let runnerName = runner?.name ?? L("its Runner")
             rows.append(NoteRow(text: L("No plugins on %@ yet. Add one from the marketplace, or ask %@ to find one.", runnerName, bot.name)))
         }
-        if let runner, runner.plugins.contains(where: { $0.id == "playwright" }) {
-            let browser = ActionRow(key: L("Browser Sessions"), value: runner.name, tint: .secondaryLabelColor, actionTitle: L("Manage…"))
-            browser.onAction = { [weak self] in
-                guard let self, case let .chat(chatID) = self.selection else { return }
-                self.presentAsSheet(BrowserSessionsViewController(bot: bot, chatID: chatID, runner: runner))
-            }
-            rows.append(browser)
-        }
         rows.append(marketplaceRow)
         plugins.setRows(rows)
     }
 
     @objc private func openPlugin(_ sender: NSClickGestureRecognizer) {
         guard let id = sender.view?.identifier?.rawValue, let bot = pluginBotID.flatMap(store.bot), let runner = store.device(bot.runnerID) else { return }
-        PluginViewController.present(pluginID: id, runner: runner, bot: bot, from: self)
+        var chatID: Chat.ID?
+        if case let .chat(chat) = selection { chatID = chat }
+        PluginViewController.present(pluginID: id, runner: runner, bot: bot, chatID: chatID, from: self)
     }
 
     @objc private func addBot() {

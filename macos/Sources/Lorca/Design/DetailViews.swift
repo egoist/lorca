@@ -449,6 +449,7 @@ final class StatusRow: NSView, NSGestureRecognizerDelegate {
         icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
         title.stringValue = titleText
         subtitle.stringValue = subtitleText
+        subtitle.isHidden = subtitleText.isEmpty
         // With a symbol, the state's words are its tooltip and what VoiceOver reads.
         let showsSymbol = stateText != nil && stateSymbol != nil
         state.stringValue = stateText ?? ""

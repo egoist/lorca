@@ -750,6 +750,10 @@ final class AppStore {
     }
 
     func pluginDetail(_ pluginID: String, on runnerID: Device.ID) async throws -> PluginDetail {
+        if isMock, pluginID == BrowserProfile.pluginID, let status = device(runnerID)?.plugins.first(where: { $0.id == pluginID }) {
+            // Browser runs on the Runner and signs in to nothing itself.
+            return PluginDetail(status: status, homepage: "https://github.com/microsoft/playwright-mcp", variables: [], servers: [], skills: [(name: "Reading a page", description: "How to read a page without filling the context.")])
+        }
         if isMock {
             let status = device(runnerID)?.plugins.first { $0.id == pluginID } ?? InstalledPlugin(id: pluginID, name: pluginID, description: "", version: "", icon: "", state: .ready, detail: "Ready")
             return PluginDetail(status: status, homepage: nil, variables: [.init(name: "GITHUB_TOKEN", description: "A personal access token, instead of signing in.", secret: true, required: false, isSet: false, value: nil)], servers: [.init(name: "github", kind: "http", url: "https://api.githubcopilot.com/mcp/", oauth: true, signedIn: status.state == .ready)], skills: [])

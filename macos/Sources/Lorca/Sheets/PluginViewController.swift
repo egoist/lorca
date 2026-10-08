@@ -2,12 +2,15 @@ import AppKit
 
 /// One installed plugin on a Runner: its state, the sign-in for a remote server, its
 /// variables (a secret is written, never read back), the skills it brought, and Remove. From a
-/// DM's inspector it also shows the Always allowed rules for its tools.
+/// DM's inspector it also shows the Always allowed rules for its tools, and for Browser the
+/// bot's profiles.
 final class PluginViewController: SheetViewController {
     private let store = AppStore.shared
     private let pluginID: String
     private let runner: Device
     private let bot: Bot?
+    private let chatID: Chat.ID?
+    private var browserProfiles: BrowserProfilesSection?
 
     private let status = SectionView(title: L("Status"))
     private let signIn = SectionView(title: L("Sign-in"))
@@ -24,10 +27,11 @@ final class PluginViewController: SheetViewController {
     /// another Runner) never covers a newer one, such as the detail with a sign-in code.
     private var loads = 0
 
-    init(pluginID: String, runner: Device, bot: Bot?) {
+    init(pluginID: String, runner: Device, bot: Bot?, chatID: Chat.ID? = nil) {
         self.pluginID = pluginID
         self.runner = runner
         self.bot = bot
+        self.chatID = chatID
         let plugin = runner.plugins.first { $0.id == pluginID }
         super.init(
             title: plugin?.name ?? pluginID,
@@ -56,7 +60,12 @@ final class PluginViewController: SheetViewController {
         let actions = Build.stack(
             [saveButton, spacer, removeButton], orientation: .horizontal, spacing: 8)
 
-        for section in [status, signIn, variables, skills] {
+        if pluginID == BrowserProfile.pluginID, let bot {
+            let profiles = BrowserProfilesSection(bot: bot, runner: runner, chatID: chatID, presenter: self)
+            profiles.onChange = { [weak self] in self?.fitSheetToContent() }
+            browserProfiles = profiles
+        }
+        for section in [status, browserProfiles?.section, signIn, variables, skills].compactMap({ $0 }) {
             contentStack.addArrangedSubview(section)
             section.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
         }
@@ -77,6 +86,16 @@ final class PluginViewController: SheetViewController {
             ? L("Keys and sign-ins stay on this device.")
             : L("Keys and sign-ins are sent sealed to %@ and stay there.", runner.name)
         load()
+    }
+
+    override func viewWillAppear() {
+        super.viewWillAppear()
+        browserProfiles?.start()
+    }
+
+    override func viewWillDisappear() {
+        super.viewWillDisappear()
+        browserProfiles?.stop()
     }
 
     override func viewDidLoad() {
