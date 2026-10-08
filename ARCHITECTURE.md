@@ -85,7 +85,7 @@ One doc per subject under `docs/architecture/`, each short enough to read in one
 | [CLI (runtime)](docs/architecture/runtime.md) | The `lorca` binary and its data directory, installing it, its signed self-updates and `lorca service`, the agent loop and a turn on a Runner, notifications |
 | [Tools](docs/architecture/tools.md) | Team, memory, and coding tools, Auto-review |
 | [Terminal sessions](docs/architecture/terminal-sessions.md) | A bot's commands in terminals of their own: when a call returns, background commands, the command's card, answering and stopping, Running tasks |
-| [Browser sessions](docs/architecture/browser-sessions.md) | Persistent profiles on an owned Runner, visible open, exclusive human takeover and return, stop, encrypted screenshot evidence, local and paired-Device capabilities |
+| [Browser sessions](docs/architecture/browser-sessions.md) | A bot's browser profiles on its Runner: their sign-ins, opening one in a window, taking the browser over and handing it back, screenshots in the chat, what works from another Device, the Profiles section |
 | [Codemode and Plugins](docs/architecture/plugins.md) | Scripts that call plugin tools, MCP plugins and their installs, sign-in, plugin calls at turn time |
 | [Marketplace](docs/architecture/marketplace.md) | The index of plugins and bot templates and how lorca.app keeps it current on every Device, bots added from a template, the marketplace sheet |
 | [MCP servers](docs/architecture/mcp-servers.md) | The user's own MCP servers in a Runner's `mcp.json`: the file and other apps' spellings, sign-in when a server asks, the `mcp.*` methods and `lorca mcp`, the apps' MCP Servers section and server sheet |
