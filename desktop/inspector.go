@@ -174,6 +174,9 @@ func (m *mainWindow) inspectorGroup(c *ui.Context, chat *model.Chat, members []*
 		if summaryActionRow(c, k, L("Description"), chat.GroupDescription, L("Edit…")) {
 			m.presentGroupDescription(chat.ID)
 		}
+		if summaryActionRow(c, k, L("Project context"), L("Brief, decisions, and references"), L("Edit…")) {
+			m.presentProjectContext(chat.ID)
+		}
 	})
 }
 

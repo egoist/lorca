@@ -75,6 +75,7 @@ const (
 	EventRunningTasksChanged
 	EventConnectionChanged
 	EventIdentityChanged
+	EventProjectContextChanged
 )
 
 // Event says what in the store changed.
@@ -452,6 +453,12 @@ func decode[T any](data json.RawMessage) (T, bool) {
 
 func (s *Store) handle(name string, data json.RawMessage) {
 	switch name {
+	case "projects.changed":
+		if payload, ok := decode[struct {
+			ChatID string `json:"chat_id"`
+		}](data); ok {
+			s.emit(Event{Kind: EventProjectContextChanged, ChatID: payload.ChatID})
+		}
 	case "snapshot":
 		if snapshot, ok := decode[WireSnapshot](data); ok {
 			s.apply(snapshot)
