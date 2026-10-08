@@ -3,6 +3,15 @@
 package l10n
 
 var zh = map[string]string{
+	"Account name": "账号名称",
+	"Accounts":     "账号",
+	"Accounts on %@. Choose a name such as Work or Personal.": "%@ 上的账号。请选择工作或个人等名称。",
+	"Add Account…":         "添加账号…",
+	"Add an account to %@": "为 %@ 添加账号",
+	"Manage Accounts…":     "管理账号…",
+	"Name this account so your bots can choose it explicitly.": "为此账号命名，让机器人能够明确选择它。",
+	"No accounts connected":     "尚未连接账号",
+	"Work or Personal":          "工作或个人",
 	" · @ to mention":           " · 输入 @ 可提及智能体",
 	" · jobs wait on the relay": " · 任务在中继上等待",
 	", ":                        "、",

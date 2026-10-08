@@ -88,12 +88,17 @@ type pluginSheet struct {
 	saving bool
 	closed bool
 	// values are what was typed into the variables' fields.
-	values map[string]string
+	values      map[string]string
+	accountName string
+	nameEdited  bool
 	// copiedAt is when a server's sign-in code was copied, which its row says for a moment.
 	copiedAt map[string]time.Time
 }
 
 func (s *pluginSheet) name() string {
+	if s.detail != nil && s.detail.Status.Name != "" {
+		return s.detail.Status.Name
+	}
 	if s.installed != nil {
 		return s.installed.Name
 	}
@@ -112,6 +117,9 @@ func (s *pluginSheet) load() {
 			return
 		}
 		s.detail, s.loadError = &detail, ""
+		if !s.nameEdited {
+			s.accountName = detail.Status.AccountName
+		}
 	})
 }
 
@@ -151,19 +159,25 @@ func (s *pluginSheet) value(variable model.PluginDetailVariable) string {
 }
 
 func (s *pluginSheet) save() {
-	if s.detail == nil {
+	if s.detail == nil || s.saving {
 		return
 	}
 	variables := s.detail.Variables
 	values := map[string]string{}
 	for _, variable := range variables {
-		value := s.value(variable)
+		value, edited := s.values[variable.Name]
+		if !edited {
+			continue
+		}
 		if value != "" || !variable.Secret {
 			values[variable.Name] = value
 		}
 	}
 	s.saving = true
-	store.SetPluginVariables(s.pluginID, s.runner.ID, values, func(_ model.InstalledPlugin, err error) {
+	complete := func(err error) {
+		if s.closed {
+			return
+		}
 		s.saving = false
 		if err != nil {
 			s.w.showAlert(alertOptions{Message: L("Couldn't save"), Informative: model.ErrorText(err)}, nil)
@@ -176,12 +190,65 @@ func (s *pluginSheet) save() {
 			}
 		}
 		s.load()
+	}
+	saveVariables := func() {
+		if len(values) == 0 {
+			complete(nil)
+			return
+		}
+		store.SetPluginVariables(s.pluginID, s.runner.ID, values, func(_ model.InstalledPlugin, err error) { complete(err) })
+	}
+	if s.detail.Status.ServiceID != "" && s.accountName != s.detail.Status.AccountName {
+		store.RenamePluginAccount(s.pluginID, s.runner.ID, s.accountName, func(_ model.InstalledPlugin, err error) {
+			if s.closed {
+				return
+			}
+			if err != nil {
+				complete(err)
+				return
+			}
+			s.nameEdited = false
+			saveVariables()
+		})
+	} else {
+		saveVariables()
+	}
+}
+
+// Account fields belong to this sheet, so a roster refresh cannot replace a name being typed.
+func (s *pluginSheet) accountSection(c *ui.Context) {
+	if s.detail == nil || s.detail.Status.ServiceID == "" {
+		return
+	}
+	p := colors(c)
+	section(c, L("Account"), sectionCaption, nil, func(k *card) {
+		row := k.row(ui.Row(c.Key("integration-name-row")).Gap(10).MinHeight(34).Padding(4, 10, 4, 12))
+		row.Children(func() {
+			ui.Text(c, L("Name")).Grow(1).FontSize(12).TextColor(p.Label2)
+			field := textField(c.Key("integration-account-name"), &s.accountName, fieldOptions{
+				Label: L("Account name"), Placeholder: L("Work or Personal")}).Width(230).Shrink(0).MinHeight(24)
+			if field.Changed() {
+				s.nameEdited = true
+			}
+		})
+		_, action := actionRow(c.Key("manage-integration-accounts"), k, L("Accounts"), actionRowOptions{Action: L("Manage Accounts…")})
+		if action.Action {
+			on := store.Device(s.runner.ID)
+			if on == nil {
+				on = s.runner
+			}
+			name := strings.SplitN(s.name(), " · ", 2)[0]
+			s.w.presentPluginAccounts(s.detail.Status.ServiceID, name, on)
+		}
 	})
 }
 
 func (s *pluginSheet) connect() {
 	// The Runner notes the sign-in on the plugin, so the State row reads it.
 	store.ConnectPlugin(s.pluginID, s.runner.ID, func(err error) {
+		if s.closed {
+			return
+		}
 		if err != nil {
 			s.w.showAlert(alertOptions{Message: L("Couldn't start the sign-in"), Informative: model.ErrorText(err)}, nil)
 			return
@@ -193,6 +260,9 @@ func (s *pluginSheet) connect() {
 // signOut forgets a server's sign-in on the Runner; the plugin's next use asks again.
 func (s *pluginSheet) signOut(server string) {
 	store.SignOutPlugin(s.pluginID, s.runner.ID, server, func(err error) {
+		if s.closed {
+			return
+		}
 		if err != nil {
 			s.w.showAlert(alertOptions{Message: L("Couldn't sign out of %@", s.name()), Informative: model.ErrorText(err)}, nil)
 			return
@@ -230,6 +300,7 @@ func (s *pluginSheet) view(c *ui.Context, sh *sheet) {
 	parts = append(parts, L("Installed on %@.", s.runner.Name))
 	result := sheetFrame(c, sheetOptions{Title: s.name(), Subtitle: strings.Join(parts, " "), Width: 520, Confirm: L("Done"), NoCancel: true}, func() {
 		s.statusSection(c)
+		s.accountSection(c)
 		s.signInSection(c)
 		if s.detail != nil && len(s.detail.Variables) > 0 {
 			s.setupSection(c)
@@ -247,7 +318,7 @@ func (s *pluginSheet) view(c *ui.Context, sh *sheet) {
 		}
 		providerNote(c, note, &p.Label2)
 		ui.Row(c).Gap(8).Children(func() {
-			if s.detail != nil && len(s.detail.Variables) > 0 {
+			if s.detail != nil && (len(s.detail.Variables) > 0 || s.detail.Status.ServiceID != "") {
 				if pushButton(c, L("Save"), pushOptions{Disabled: s.saving}).Clicked() {
 					s.save()
 				}

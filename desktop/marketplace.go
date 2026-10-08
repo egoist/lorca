@@ -323,12 +323,16 @@ func (mk *marketplace) installedPlugin(id string) (model.InstalledPlugin, bool) 
 	}
 	// A server of the Runner's mcp.json that shares the id is not this plugin.
 	for _, plugin := range on.Plugins {
-		if plugin.ID == id && !plugin.IsMcpServer() {
+		if plugin.MarketplaceID() == id && !plugin.IsMcpServer() {
 			return plugin, true
 		}
 	}
-	plugin, ok := mk.installed[on.ID][id]
-	return plugin, ok
+	for _, plugin := range mk.installed[on.ID] {
+		if plugin.MarketplaceID() == id {
+			return plugin, true
+		}
+	}
+	return model.InstalledPlugin{}, false
 }
 
 // installedPlugins is everything the picked Runner has, the marketplace's and the rest, in its own
@@ -369,7 +373,7 @@ func marketNextStep(plugin model.InstalledPlugin, on *model.Device) string {
 	switch plugin.State {
 	case model.PluginReady:
 		return L("Added %@. Every bot on %@ can use it.", plugin.Name, on.Name)
-	case model.PluginNeedsAuth:
+	case model.PluginNeedsAuth, model.PluginInsufficientAccess:
 		return L("Added %@. It needs a sign-in: click Connect.", plugin.Name)
 	case model.PluginNeedsSetup:
 		return L("Added %@. It needs setup: click Set Up.", plugin.Name)
@@ -381,6 +385,10 @@ func marketNextStep(plugin model.InstalledPlugin, on *model.Device) string {
 func (mk *marketplace) install(plugin *model.MarketplacePlugin) {
 	on := mk.runner()
 	if on == nil || mk.installing[plugin.ID] {
+		return
+	}
+	if plugin.NamedAccounts {
+		mk.m.presentPluginAccounts(plugin.ID, plugin.Name, on)
 		return
 	}
 	id, name := plugin.ID, plugin.Name
@@ -402,6 +410,10 @@ func (mk *marketplace) install(plugin *model.MarketplacePlugin) {
 // manage opens the plugin's own sheet on the picked Runner: its sign-in, its setup, and Remove.
 func (mk *marketplace) manage(pluginID string) {
 	if on := mk.runner(); on != nil {
+		if plugin := mk.plugin(pluginID); plugin != nil && plugin.NamedAccounts {
+			mk.m.presentPluginAccounts(plugin.ID, plugin.Name, on)
+			return
+		}
 		mk.m.presentPlugin(pluginID, on)
 	}
 }
@@ -610,7 +622,7 @@ func (mk *marketplace) installedAccessory(c *ui.Context, current model.Installed
 			symbol(c, "checkmark", 12, 2.6).TextColor(p.Green)
 			ui.Text(c, L("Added")).FontSize(12.5).TextColor(p.Label2).SingleLine()
 		})
-	case model.PluginNeedsAuth:
+	case model.PluginNeedsAuth, model.PluginInsufficientAccess:
 		if pushButton(c, L("Connect"), pushOptions{}).Clicked() {
 			mk.manage(pluginID)
 		}

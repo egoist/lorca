@@ -768,12 +768,13 @@ type AutoReview struct {
 type PluginState string
 
 const (
-	PluginReady      PluginState = "ready"
-	PluginNeedsSetup PluginState = "needs_setup"
-	PluginNeedsAuth  PluginState = "needs_auth"
-	PluginConnecting PluginState = "connecting"
-	PluginError      PluginState = "error"
-	PluginUnknown    PluginState = "unknown"
+	PluginReady              PluginState = "ready"
+	PluginNeedsSetup         PluginState = "needs_setup"
+	PluginNeedsAuth          PluginState = "needs_auth"
+	PluginInsufficientAccess PluginState = "insufficient_access"
+	PluginConnecting         PluginState = "connecting"
+	PluginError              PluginState = "error"
+	PluginUnknown            PluginState = "unknown"
 )
 
 // InstalledPlugin is a plugin as its Runner advertises it: installed, and in what state.
@@ -787,6 +788,16 @@ type InstalledPlugin struct {
 	Detail      string
 	// Source is `mcp.json` for one of the Runner's own MCP servers, which the server sheet edits.
 	Source string
+	// ServiceID identifies the marketplace entry; ID selects a named account instance.
+	ServiceID   string
+	AccountName string
+}
+
+func (p InstalledPlugin) MarketplaceID() string {
+	if p.ServiceID != "" {
+		return p.ServiceID
+	}
+	return p.ID
 }
 
 func (p InstalledPlugin) Symbol() string {
@@ -845,19 +856,20 @@ type PluginVariable struct {
 
 // MarketplacePlugin is a marketplace plugin, with the Runners that already have it.
 type MarketplacePlugin struct {
-	ID          string
-	Name        string
-	Description string
-	Icon        string
-	Homepage    string
-	Author      string
-	Category    string
-	IsFeatured  bool
-	Tags        []string
-	Servers     []MarketplaceServer
-	Skills      []NamedText
-	Variables   []PluginVariable
-	InstalledOn []string
+	ID            string
+	Name          string
+	Description   string
+	Icon          string
+	Homepage      string
+	Author        string
+	Category      string
+	IsFeatured    bool
+	Tags          []string
+	Servers       []MarketplaceServer
+	Skills        []NamedText
+	Variables     []PluginVariable
+	InstalledOn   []string
+	NamedAccounts bool
 }
 
 // SignsIn is whether at least one server signs in with OAuth on the Runner.

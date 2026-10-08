@@ -331,7 +331,7 @@ func (mk *marketplace) pluginPage(c *ui.Context, page *marketPage) {
 			marketCard(c, L("On %@", on.Name), -1, func(k *card) {
 				action := ""
 				switch installed.State {
-				case model.PluginNeedsAuth:
+				case model.PluginNeedsAuth, model.PluginInsufficientAccess:
 					action = L("Connect")
 				case model.PluginNeedsSetup:
 					action = L("Set Up")

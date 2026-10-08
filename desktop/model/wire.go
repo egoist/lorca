@@ -27,6 +27,8 @@ type WirePluginStatus struct {
 	State       string  `json:"state"`
 	Detail      string  `json:"detail"`
 	Source      *string `json:"source"`
+	ServiceID   *string `json:"service_id"`
+	AccountName *string `json:"account_name"`
 }
 
 type WireMcpTool struct {
@@ -353,7 +355,8 @@ type WireMarketplacePlugin struct {
 		Name        string  `json:"name"`
 		Description *string `json:"description"`
 	} `json:"skills"`
-	InstalledOn []string `json:"installed_on"`
+	InstalledOn   []string `json:"installed_on"`
+	NamedAccounts *bool    `json:"named_accounts"`
 }
 
 type WireTemplateRoutine struct {
@@ -503,7 +506,7 @@ func number(value *int) int {
 func ToPlugin(wire WirePluginStatus) InstalledPlugin {
 	state := PluginState(wire.State)
 	switch state {
-	case PluginReady, PluginNeedsSetup, PluginNeedsAuth, PluginConnecting, PluginError:
+	case PluginReady, PluginNeedsSetup, PluginNeedsAuth, PluginInsufficientAccess, PluginConnecting, PluginError:
 	default:
 		state = PluginUnknown
 	}
@@ -516,6 +519,8 @@ func ToPlugin(wire WirePluginStatus) InstalledPlugin {
 		State:       state,
 		Detail:      wire.Detail,
 		Source:      str(wire.Source),
+		ServiceID:   str(wire.ServiceID),
+		AccountName: str(wire.AccountName),
 	}
 }
 
@@ -877,16 +882,17 @@ func ToModels(wire []WireModel) []ProviderModel {
 
 func ToMarketplacePlugin(wire WireMarketplacePlugin) MarketplacePlugin {
 	plugin := MarketplacePlugin{
-		ID:          wire.ID,
-		Name:        wire.Name,
-		Description: str(wire.Description),
-		Icon:        str(wire.Icon),
-		Homepage:    str(wire.Homepage),
-		Author:      str(wire.Author),
-		Category:    str(wire.Category),
-		IsFeatured:  flag(wire.Featured),
-		Tags:        wire.Tags,
-		InstalledOn: wire.InstalledOn,
+		ID:            wire.ID,
+		Name:          wire.Name,
+		Description:   str(wire.Description),
+		Icon:          str(wire.Icon),
+		Homepage:      str(wire.Homepage),
+		Author:        str(wire.Author),
+		Category:      str(wire.Category),
+		IsFeatured:    flag(wire.Featured),
+		Tags:          wire.Tags,
+		InstalledOn:   wire.InstalledOn,
+		NamedAccounts: flag(wire.NamedAccounts),
 	}
 	names := make([]string, 0, len(wire.Servers))
 	for name := range wire.Servers {
