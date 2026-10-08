@@ -47,13 +47,14 @@ final class BudgetViewController: SheetViewController {
     private let cardDetail = Build.label("", font: .systemFont(ofSize: 12), color: .secondaryLabelColor, lines: 0)
     private let resumeButton = NSButton(title: L("Resume"), target: nil, action: nil)
     private let errorLabel = Build.label("", font: .systemFont(ofSize: 12), color: .systemRed, lines: 0)
+    private static let width: CGFloat = 460
 
     /// A DM's limits for each new turn, and its newest turn when that one stopped.
     init(bot: Bot, chatID: Chat.ID) {
         self.bot = bot
         self.chatID = chatID
         routineID = nil
-        super.init(title: L("Limits"), subtitle: L("Each turn with %@ stops when it reaches one of these.", bot.name), width: 460)
+        super.init(title: L("Limits"), subtitle: L("Each turn with %@ stops when it reaches one of these.", bot.name), width: Self.width)
     }
 
     /// A routine's limits, which all of its runs count toward.
@@ -61,7 +62,7 @@ final class BudgetViewController: SheetViewController {
         self.bot = bot
         self.chatID = chatID
         routineID = routine.id
-        super.init(title: L("Limits"), subtitle: L("All runs of %@ count toward these. When it reaches one, it waits until you resume it.", routine.name), width: 460)
+        super.init(title: L("Limits"), subtitle: L("All runs of %@ count toward these. When it reaches one, it waits until you resume it.", routine.name), width: Self.width)
     }
 
     @available(*, unavailable)
@@ -109,6 +110,9 @@ final class BudgetViewController: SheetViewController {
             grid.addRow(with: [label, entry, use])
         }
         grid.column(at: 0).width = 76
+        // The form is as tall as its rows: a sheet with room to spare keeps it below the form,
+        // never between two rows.
+        grid.heightAnchor.constraint(equalToConstant: grid.fittingSize.height).isActive = true
         grid.column(at: 2).xPlacement = .fill
         grid.translatesAutoresizingMaskIntoConstraints = false
         contentStack.addArrangedSubview(card)
@@ -137,10 +141,14 @@ final class BudgetViewController: SheetViewController {
         icon.translatesAutoresizingMaskIntoConstraints = false
         icon.setContentHuggingPriority(.required, for: .horizontal)
         resumeButton.bezelStyle = .rounded
+        resumeButton.setContentHuggingPriority(.required, for: .horizontal)
         resumeButton.target = self
         resumeButton.action = #selector(resume)
         resumeButton.translatesAutoresizingMaskIntoConstraints = false
         resumeButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+        // The detail wraps at the width the card leaves it, known before the sheet is laid out,
+        // so the sheet is sized for the lines it takes.
+        cardDetail.preferredMaxLayoutWidth = Self.width - 40 - 12 - icon.fittingSize.width - 10 - 12 - resumeButton.fittingSize.width - 12
         let text = Build.stack([cardTitle, cardDetail], spacing: 2)
         text.translatesAutoresizingMaskIntoConstraints = false
         for view in [icon, text, resumeButton] { card.addSubview(view) }
@@ -150,7 +158,8 @@ final class BudgetViewController: SheetViewController {
             text.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 10),
             text.topAnchor.constraint(equalTo: card.topAnchor, constant: 10),
             text.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -10),
-            resumeButton.leadingAnchor.constraint(greaterThanOrEqualTo: text.trailingAnchor, constant: 12),
+            // The text takes the card's width up to Resume, so it wraps where the card does.
+            resumeButton.leadingAnchor.constraint(equalTo: text.trailingAnchor, constant: 12),
             resumeButton.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -12),
             resumeButton.centerYAnchor.constraint(equalTo: card.centerYAnchor),
         ])
