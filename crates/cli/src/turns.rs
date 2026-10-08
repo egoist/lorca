@@ -572,7 +572,9 @@ impl LoopHooks for TurnHooks {
     async fn transform_context(&self, messages: Vec<AgentMessage>, _cancel: &CancellationToken) -> Vec<AgentMessage> {
         let mut messages = materialize_steering_messages(&self.app, &self.bot, &self.workdir, messages).await;
         messages.retain(|message| !matches!(message, AgentMessage::User(user) if user.content.iter().filter_map(ContentPart::as_text).any(crate::tasks::is_context)));
-        messages.push(AgentMessage::User(UserMessage::text(crate::tasks::context(&self.app, &self.bot.id, &self.chat_id))));
+        if let Some(note) = crate::tasks::context(&self.app, &self.bot.id, &self.chat_id) {
+            messages.push(AgentMessage::User(UserMessage::text(note)));
+        }
         messages
     }
 
@@ -1533,7 +1535,7 @@ fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job, store: &Memo
         bot.id
     ));
     prompt.push_str(&routines_prompt(app, bot));
-    prompt.push_str("\nDurable work: use tasks to track multi-turn goals, ownership, acceptance criteria, dependencies, next action, blockers, and result/evidence. The current records appear after the transcript on every request, even after compaction. A queued task only runs when explicitly started with tasks run. Read the latest revision before editing; a conflict means reload, never overwrite.\n");
+    prompt.push_str("\nDurable work: use tasks to track multi-turn goals, ownership, acceptance criteria, dependencies, next action, blockers, and result/evidence. Open records appear after the transcript on every request, even after compaction. A queued task only runs when explicitly started with tasks run. Read the latest revision before editing; a conflict means reload, never overwrite.\n");
     if let Some(id) = &job.task_id {
         prompt.push_str(&format!("\nThis turn references durable task {id}. {}\n", if job.kind == "task" { "The explicit task run starts your work regardless of new group messages. You own its active run: perform its next action, record progress, and complete only with a result and supporting evidence, or record the blocker. A reply alone awaits review." } else { "This turn supports that task; it does not claim or complete the task's active run." }));
     }

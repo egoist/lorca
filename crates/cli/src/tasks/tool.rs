@@ -70,6 +70,11 @@ impl Tool for TasksTool {
         if action == "get" {
             object.entry("refresh").or_insert(json!(true));
         }
+        // A task run that records its own outcome says so, and the authority leaves its turn
+        // to end on this result instead of cancelling it.
+        if action == "update" && self.job_id.starts_with("task-run-") {
+            object.insert("run_id".into(), json!(self.job_id));
+        }
         // Explicit caller keys remain stable for retries; loop call ids can change after an
         // ambiguous delivery, so models must supply request_id for every mutation.
         let result = super::dispatch(&self.app, &format!("tasks.{action}"), args)

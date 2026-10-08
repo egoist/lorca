@@ -189,7 +189,7 @@ fn update(app: &Arc<App>, task: &Task, fields: Value, request_id: &str) -> Resul
 fn launch(app: &Arc<App>, task: &Task) -> (Task, Job) {
     let _order = app.task_order.lock().unwrap();
     let mut next = task.clone();
-    validate(app, &next).unwrap();
+    validate(app, &next, Some(task)).unwrap();
     let mut job = run(app, &mut next, &json!({})).unwrap();
     next.revision += 1;
     next.record_change();
@@ -586,7 +586,7 @@ fn task_context_reloads_durable_records_independently_of_compacted_transcripts()
     let scratch = scratch_app();
     let app = &scratch.0;
     let task = make(app, "create");
-    let first = context(app, &task.owner_bot_id, &task.chat_ids[0]);
+    let first = context(app, &task.owner_bot_id, &task.chat_ids[0]).unwrap();
     assert!(first.contains("Inspect the failing case"));
     let updated=update(app,&task,json!({"next_action":"Verify final evidence","state":"blocked","reason":"Waiting for access"}),"progress").unwrap();
     let reloaded = App::load(Config {
@@ -594,7 +594,7 @@ fn task_context_reloads_durable_records_independently_of_compacted_transcripts()
         port: 0,
     })
     .unwrap();
-    let current = context(&reloaded, &updated.owner_bot_id, &updated.chat_ids[0]);
+    let current = context(&reloaded, &updated.owner_bot_id, &updated.chat_ids[0]).unwrap();
     assert!(current.contains("Verify final evidence") && current.contains("Waiting for access"));
     assert!(!current.contains("Inspect the failing case"));
     assert!(current.contains(&task.id));
@@ -603,4 +603,63 @@ fn task_context_reloads_durable_records_independently_of_compacted_transcripts()
         .unwrap()
         .iter()
         .any(|t| t["id"] == task.id));
+}
+
+#[test]
+fn only_open_tasks_reach_the_model_and_a_bot_without_any_gets_no_note() {
+    let scratch = scratch_app();
+    let app = &scratch.0;
+    let bot = app.state.lock().unwrap().bots[0].id.clone();
+    let chat = app.state.lock().unwrap().chats[0].meta.id.clone();
+    assert!(context(app, &bot, &chat).is_none());
+    let task = make(app, "create");
+    assert!(context(app, &bot, &chat).unwrap().contains(&task.id));
+    update(app, &task, json!({"state":"cancelled","reason":"No longer needed"}), "cancel").unwrap();
+    assert!(context(app, &bot, &chat).is_none());
+}
+
+#[test]
+fn working_starts_only_through_run() {
+    let scratch = scratch_app();
+    let app = &scratch.0;
+    let task = make(app, "create");
+    assert!(update(app, &task, json!({"state":"working"}), "by-hand")
+        .unwrap_err()
+        .contains("tasks run"));
+}
+
+#[test]
+fn a_run_recording_its_own_outcome_is_not_cancelled_but_another_edit_cancels_it() {
+    let scratch = scratch_app();
+    let app = &scratch.0;
+    let task = make(app, "create");
+    let (working, job) = launch(app, &task);
+    let token = tokio_util::sync::CancellationToken::new();
+    app.running_jobs.lock().unwrap().insert(
+        job.id.clone(),
+        crate::app::RunningJob { chat_id: job.chat_id.clone(), bot_id: job.bot_id.clone(), routine_id: None, runner_id: None, cancel: token.clone(), activity: None },
+    );
+    let blocked = update(app, &working, json!({"state":"blocked","reason":"Needs access","run_id":job.id}), "own").unwrap();
+    assert!(!token.is_cancelled());
+    update(app, &blocked, json!({"state":"queued"}), "user").unwrap();
+    assert!(token.is_cancelled());
+}
+
+#[test]
+fn unrelated_edits_keep_unresolved_run_evidence_and_completion_resolves_it() {
+    let scratch = scratch_app();
+    let app = &scratch.0;
+    let task = make(app, "create");
+    let (_, job) = launch(app, &task);
+    let mut evidence = message_evidence(app, &task);
+    // The run's reply that the authority has not synced yet.
+    evidence.message_id = Some("not-synced-yet".into());
+    let finish = Finish { task_id: task.id.clone(), run_id: job.id.clone(), result: Some("Fix ready".into()), evidence: vec![evidence], reason: None };
+    finish_here(app, finish, &task.runner_id).unwrap();
+    let review = get(app, &task.id).unwrap();
+    assert_eq!(review.state, TaskState::AwaitingReview);
+    let edited = update(app, &review, json!({"next_action":"Ask for review"}), "edit").unwrap();
+    assert!(update(app, &edited, json!({"state":"completed"}), "complete")
+        .unwrap_err()
+        .contains("synced"));
 }
