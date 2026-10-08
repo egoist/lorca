@@ -309,10 +309,42 @@ func managerThread() []*Message {
 		mockMessage(BotAuthor("bot-nova"), textBody("Your **Morning brief** runs weekdays at 9:00 AM on Workbench. I'll read our chats and the launch checklist, then post what changed and what needs you."), minutesAgo(191)),
 		mockMessage(System, Body{Kind: BodyNotice, Text: "Routine · Morning brief"}, minutesAgo(190)),
 		mockMessage(BotAuthor("bot-nova"), textBody("**Today's focus: the launch.**\n\n- Researcher is reviewing the setup guide.\n- Developer is checking the website and download links.\n- Writer has a first draft of the announcement.\n\nI'll bring their updates together in Launch room."), minutesAgo(190)),
+		mockMessage(System, Body{Kind: BodyNotice, Text: "Waiting for your review · $ git tag v1.4.0 && git push origin v1.4.0"}, minutesAgo(189)),
+		mockMessage(System, Body{Kind: BodyNotice, Text: "Waiting for your review · GitHub: add_issue_comment · owner: lorca-app, repo: relay, issue_number: 214"}, minutesAgo(188)),
 		mockMessage(You, textBody("Ask Writer to keep the announcement short and lead with what people can do."), minutesAgo(36)),
 		mockMessage(BotAuthor("bot-nova"), Body{Kind: BodyHandoff, Handoff: Handoff{From: "bot-nova", To: "bot-quill", Reason: "Draft a short launch announcement that leads with what people can do."}}, minutesAgo(35)),
 		mockMessage(BotAuthor("bot-nova"), textBody("Writer has the brief. I'll keep the final draft with the launch checklist for your review."), minutesAgo(34)),
+		mockMessage(System, Body{Kind: BodyNotice, Text: "Waiting for your review · Draft: Launch announcement"}, minutesAgo(33)),
 	}
+}
+
+// mockReviews is what the demo's bots left for review, as the CLI sends items: a command and a
+// GitHub call held while Project Manager's routine ran, and a draft it wants edited.
+func mockReviews() []*ReviewItem {
+	item := func(id string, minutes float64, payload, account, resource, rationale string) *ReviewItem {
+		target, _ := json.Marshal(ReviewTarget{Account: account, Resource: resource})
+		raw := `{"id":"` + id + `","runner_id":"dev-workbench","bot_id":"bot-nova","origin":{"chat_id":"chat-nova"},"target":` + string(target) +
+			`,"rationale":` + quoted(rationale) + `,"payload":` + payload + `,"version":1,"revision":1,"preconditions":{"workdir":"~/Projects/relay","files":[]},"state":"pending"}`
+		var review ReviewItem
+		if err := json.Unmarshal([]byte(raw), &review); err != nil {
+			panic(err)
+		}
+		review.CreatedAt = float64(minutesAgo(minutes).Unix())
+		return &review
+	}
+	return []*ReviewItem{
+		item("review-tag", 189, `{"kind":"shell","arguments":{"command":"git tag v1.4.0 && git push origin v1.4.0","description":"Tag the release"}}`,
+			"Workbench", "~/Projects/relay", "Pushes a release tag to the shared repository, which starts the release build."),
+		item("review-comment", 188, `{"kind":"plugin","plugin_id":"github","server_name":"github","tool":"add_issue_comment","arguments":{"owner":"lorca-app","repo":"relay","issue_number":214,"body":"Release notes are ready: the TLS rollout, the new pairing flow, and the relay quotas."}}`,
+			"GitHub", "add_issue_comment · owner: lorca-app, repo: relay, issue_number: 214", "Posts a public comment on a pull request."),
+		item("review-draft", 33, `{"kind":"draft","text":`+quoted("Lorca 1.4 is out. Pair your phone in one step, keep chats in sync across every Device, and run bots on the computers you already own.\n\nUpdate from the app, or download it from lorca.app.")+`}`,
+			"Launch room", "Launch announcement", "Writer's draft, shortened to lead with what people can do. Edit it before it goes to the team."),
+	}
+}
+
+func quoted(text string) string {
+	data, _ := json.Marshal(text)
+	return string(data)
 }
 
 func developerThread() []*Message {

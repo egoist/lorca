@@ -29,6 +29,14 @@ func TestReviewJSONKeepsKeysNumbersAndNewPayloadFields(t *testing.T) {
 			t.Errorf("accepted %s", invalid)
 		}
 	}
+	shell := decodeJSON[ReviewPayload](t, `{"kind":"shell","arguments":{"command":"git push","description":"Push","timeout_ms":120000}}`)
+	if shell.EditorText() != "git push" {
+		t.Fatalf("shell editor text: %q", shell.EditorText())
+	}
+	command, err := shell.EditedJSON("git push --tags")
+	if err != nil || !strings.Contains(string(command), `"command":"git push --tags"`) || !strings.Contains(string(command), `"description":"Push"`) || !strings.Contains(string(command), `"timeout_ms":120000`) {
+		t.Fatalf("shell edit: %s %v", command, err)
+	}
 	draft := decodeJSON[ReviewPayload](t, `{"kind":"draft","text":"original"}`)
 	text, err := draft.EditedJSON("new\ntext")
 	if err != nil || !strings.Contains(string(text), `"text":"new\ntext"`) {
@@ -54,8 +62,11 @@ func TestReviewSnapshotAndEventsKeepNewestProjection(t *testing.T) {
 	if s.Review(next.ID).State != "uncertain" || len(events) != 1 || events[0].Kind != EventReviewsChanged {
 		t.Fatalf("regressed projection or event: %+v", events)
 	}
-	cloned := s.ReviewsFor("chat-one")
-	cloned[0].Payload.Arguments[0] = '!'
+	if len(s.OpenReviewsFor("chat-one")) != 0 {
+		t.Fatal("a decided item is still open")
+	}
+	cloned := s.Review(next.ID).Clone()
+	cloned.Payload.Arguments[0] = '!'
 	if !json.Valid(s.Review(next.ID).Payload.Arguments) {
 		t.Fatal("view mutated the stored payload")
 	}
@@ -100,29 +111,62 @@ func waitReviewPost(t *testing.T, posts <-chan func()) func() {
 	}
 }
 
-func TestReviewRequestsUseDisplayedVersionAndOrderedReplies(t *testing.T) {
+func TestApprovingAnEditSavesItThenApprovesThatVersion(t *testing.T) {
+	transport := &reviewTransport{make(chan reviewRequest, 1), make(chan reviewAnswer, 1)}
+	posts := make(chan func(), 1)
+	s := NewStore(transport, func(fn func()) { posts <- fn }, false)
+	item := decodeJSON[ReviewItem](t, exactReview)
+	item.Version = 6
+	s.Reviews = []*ReviewItem{&item}
+	payload, _ := item.Payload.EditedJSON(strings.Replace(item.Payload.EditorText(), "Before", "Edited", 1))
+	var approved ReviewItem
+	s.ApproveReview(item.Clone(), payload, func(result ReviewItem, err error) {
+		if err != nil {
+			t.Error(err)
+		}
+		approved = result
+	})
+	req := <-transport.requests
+	if req.method != "reviews.edit" || !strings.Contains(string(req.params), `"expected_version":6`) || !strings.Contains(string(req.params), `"account_id":9223372036854775807`) || !strings.Contains(string(req.params), `"subject_line":"Edited"`) {
+		t.Fatalf("wrong edit: %s %s", req.method, req.params)
+	}
+	if strings.Contains(string(req.params), `"runner_id"`) || strings.Contains(string(req.params), `"target"`) {
+		t.Fatal("the edit carried more than the payload")
+	}
+	edited := item.Clone()
+	edited.Version, edited.Revision = 7, 10
+	encoded, _ := json.Marshal(edited)
+	transport.answers <- reviewAnswer{data: encoded}
+	waitReviewPost(t, posts)()
+	req = <-transport.requests
+	if req.method != "reviews.approve" || !strings.Contains(string(req.params), `"expected_version":7`) {
+		t.Fatalf("approved another version: %s %s", req.method, req.params)
+	}
+	done := edited.Clone()
+	done.State, done.Revision = "approved", 11
+	encoded, _ = json.Marshal(done)
+	transport.answers <- reviewAnswer{data: encoded}
+	waitReviewPost(t, posts)()
+	if approved.State != "approved" || s.Review(item.ID).Revision != 11 {
+		t.Fatalf("approval not applied: %+v", approved)
+	}
+}
+
+func TestReviewRepliesComeInOrderAndNeverRegress(t *testing.T) {
 	transport := &reviewTransport{make(chan reviewRequest, 1), make(chan reviewAnswer, 1)}
 	posts := make(chan func(), 1)
 	s := NewStore(transport, func(fn func()) { posts <- fn }, false)
 	item := decodeJSON[ReviewItem](t, exactReview)
 	s.Reviews = []*ReviewItem{&item}
-	payload, _ := item.Payload.EditedJSON(strings.Replace(item.Payload.EditorText(), "Before", "Edited", 1))
 	called := false
-	s.ChangeReview(item.Clone(), "edit", &ReviewEdits{payload, item.Target, item.Rationale}, func(result ReviewItem, err error) {
-		called = true
-		if err != nil {
-			t.Error(err)
-		}
-		if result.Revision != 12 {
-			t.Errorf("returned stale revision %d", result.Revision)
-		}
-	})
+	s.RejectReview(item.Clone(), func(_ ReviewItem, err error) { called = err == nil })
 	req := <-transport.requests
-	if req.method != "reviews.edit" || !strings.Contains(string(req.params), `"expected_version":18446744073709551615`) || !strings.Contains(string(req.params), `"account_id":9223372036854775807`) {
-		t.Fatalf("wrong request: %s %s", req.method, req.params)
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(req.params, &fields); err != nil {
+		t.Fatal(err)
 	}
-	if strings.Contains(string(req.params), `"runner_id"`) {
-		t.Fatal("desktop chose execution authority")
+	if req.method != "reviews.reject" || string(fields["expected_version"]) != "18446744073709551615" || len(fields) != 2 {
+		t.Fatalf("unexpected decision parameters: %s %s", req.method, req.params)
 	}
 	reply := item.Clone()
 	reply.Revision = 11
@@ -133,26 +177,11 @@ func TestReviewRequestsUseDisplayedVersionAndOrderedReplies(t *testing.T) {
 		t.Fatal("reply touched state before its main-thread post")
 	}
 	newer := item.Clone()
-	newer.Revision = 12
-	newer.State = "approved"
+	newer.Revision, newer.State = 12, "rejected"
 	s.upsertReview(newer)
 	fn()
 	if !called || s.Review(item.ID).Revision != 12 {
 		t.Fatal("late response overwrote newer state")
-	}
-
-	called = false
-	s.RefreshReview(item.ID, func(_ ReviewItem, err error) {
-		called = true
-		if err == nil {
-			t.Error("offline read succeeded")
-		}
-	})
-	<-transport.requests
-	transport.answers <- reviewAnswer{err: errors.New("Runner is offline")}
-	waitReviewPost(t, posts)()
-	if !called || s.Review(item.ID).Revision != 12 {
-		t.Fatal("error changed saved review")
 	}
 }
 
@@ -161,8 +190,9 @@ func TestReviewRepliesCannotLeakIntoAnotherIdentity(t *testing.T) {
 	posts := make(chan func(), 1)
 	s := NewStore(transport, func(fn func()) { posts <- fn }, false)
 	s.IdentityID = "first"
+	item := decodeJSON[ReviewItem](t, exactReview)
 	called := false
-	s.RefreshReview("review-exact", func(_ ReviewItem, err error) {
+	s.RejectReview(item, func(_ ReviewItem, err error) {
 		called = true
 		if err == nil {
 			t.Error("accepted a previous identity's reply")
@@ -177,30 +207,19 @@ func TestReviewRepliesCannotLeakIntoAnotherIdentity(t *testing.T) {
 	}
 }
 
-func TestReviewDecisionRequestsNeverChooseExecutionAuthority(t *testing.T) {
-	for _, action := range []string{"approve", "reject", "cancel"} {
-		t.Run(action, func(t *testing.T) {
-			transport := &reviewTransport{make(chan reviewRequest, 1), make(chan reviewAnswer, 1)}
-			posts := make(chan func(), 1)
-			s := NewStore(transport, func(fn func()) { posts <- fn }, false)
-			item := decodeJSON[ReviewItem](t, exactReview)
-			s.Reviews = []*ReviewItem{&item}
-			s.ChangeReview(item, action, nil, func(_ ReviewItem, err error) {
-				if err != nil {
-					t.Error(err)
-				}
-			})
-			req := <-transport.requests
-			var fields map[string]json.RawMessage
-			if err := json.Unmarshal(req.params, &fields); err != nil {
-				t.Fatal(err)
-			}
-			if req.method != "reviews."+action || string(fields["expected_version"]) != "18446744073709551615" || len(fields) != 2 {
-				t.Fatalf("unexpected decision parameters: %s %s", req.method, req.params)
-			}
-			transport.answers <- reviewAnswer{data: json.RawMessage(exactReview)}
-			waitReviewPost(t, posts)()
-		})
+func TestOfflineRunnerLeavesTheItemAsItWas(t *testing.T) {
+	transport := &reviewTransport{make(chan reviewRequest, 1), make(chan reviewAnswer, 1)}
+	posts := make(chan func(), 1)
+	s := NewStore(transport, func(fn func()) { posts <- fn }, false)
+	item := decodeJSON[ReviewItem](t, exactReview)
+	s.Reviews = []*ReviewItem{&item}
+	var failed error
+	s.ApproveReview(item.Clone(), nil, func(_ ReviewItem, err error) { failed = err })
+	<-transport.requests
+	transport.answers <- reviewAnswer{err: errors.New("Workbench is offline.")}
+	waitReviewPost(t, posts)()
+	if failed == nil || s.Review(item.ID).Revision != 9 || s.Review(item.ID).State != "pending" {
+		t.Fatal("an error changed the saved item")
 	}
 }
 

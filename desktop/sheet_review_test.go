@@ -2,208 +2,164 @@ package main
 
 import (
 	"encoding/json"
-	"strings"
 	"testing"
 
 	"github.com/egoist/lorca/desktop/model"
 	"github.com/egoist/mygo/ui"
 )
 
-func reviewFixture(t *testing.T, kind, state string) model.ReviewItem {
-	t.Helper()
-	payload := `{"kind":"draft","text":"Hi team,\n\nThe sandbox report is ready for review.\nPlease check the Friday rollout checklist."}`
-	if kind == "plugin" {
-		payload = `{"kind":"plugin","plugin_id":"mail-sandbox","server_name":"main","tool":"send_message","arguments":{"account_id":9223372036854775807,"draft_body":{"subject_line":"Weekly update"},"to":"team@example.test"}}`
-	}
-	raw := `{"id":"review-native-73","runner_id":"dev-workbench","bot_id":"bot-nova","origin":{"chat_id":"chat-nova"},"target":{"account":"Editorial sandbox","resource":"Weekly update draft"},"rationale":"Review before sending","payload":` + payload + `,"version":1,"revision":1,"preconditions":{"workdir":"/sandbox","files":[{"path":"/sandbox/weekly.md","hash":"fixture"}]},"state":"` + state + `"}`
-	var item model.ReviewItem
-	if err := json.Unmarshal([]byte(raw), &item); err != nil {
-		t.Fatal(err)
-	}
-	if state == "uncertain" {
-		item.Outcome = &model.ReviewOutcome{Summary: "Runner restarted during execution. The action may have completed; inspect the target before creating another proposal."}
-	}
-	return item
-}
-
-func reviewTester(t *testing.T, kind, state string) (*mainWindow, *reviewSheet, *ui.Tester) {
+// reviewWindow is the demo on Project Manager's chat, where its routine left a command, a GitHub
+// call, and a draft for review.
+func reviewWindow(t *testing.T) (*mainWindow, *ui.Tester) {
 	t.Helper()
 	m := demoWindow(t)
-	item := reviewFixture(t, kind, state)
-	store.Reviews = []*model.ReviewItem{&item}
-	m.selectChat(item.Origin.ChatID)
-	st := m.presentReview(item)
+	m.selectChat("chat-nova")
 	tt := ui.NewTester(m.frame(m.view), 1180, 820)
 	settleTransitions(tt)
-	return m, st, tt
+	return m, tt
 }
 
-func TestReviewDraftEditGuardAndSavedVersion(t *testing.T) {
-	_, st, tt := reviewTester(t, "draft", "pending")
-	if !tt.HasText("Version 1 · Needs review") {
+func TestReviewApprovesTheEditedCommand(t *testing.T) {
+	m, tt := reviewWindow(t)
+	renderBoth(t, tt, "review-inspector")
+	if err := tt.Click("git tag v1.4.0 && git push origin v1.4.0"); err != nil {
+		t.Fatal(err, tt.Texts())
+	}
+	settleTransitions(tt)
+	if !m.hasSheet() || !tt.HasText("Project Manager wants to run a command on Workbench") || tt.HasText("Save Changes") || tt.HasText("Reload") {
 		t.Fatal(tt.Texts())
 	}
-	renderBoth(t, tt, "review-draft")
-	if err := tt.Click("Draft"); err != nil {
+	renderBoth(t, tt, "review-command")
+	if err := tt.Click("Command"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Key(ui.Cmd, ui.KeyA)
-	tt.Type("Edited draft for Friday")
+	tt.Type("git tag v1.4.1 && git push origin v1.4.1")
 	if err := tt.Click("Approve"); err != nil {
 		t.Fatal(err)
 	}
 	settle(tt)
-	if !tt.HasText("Save your changes, then review and approve the new version.") || store.Review(st.item.ID).State != "pending" {
-		t.Fatal("unsaved edit was approved", tt.Texts())
+	item := store.Review("review-tag")
+	if item.State != "succeeded" || item.Version != 2 || item.Payload.EditorText() != "git tag v1.4.1 && git push origin v1.4.1" {
+		t.Fatalf("approved %+v", item)
 	}
-	for range 3 {
-		tt.Frame()
-	}
-	if st.payload != "Edited draft for Friday" {
-		t.Fatal("build passes replaced the draft")
-	}
-	renderBoth(t, tt, "review-unsaved-guard")
-	if err := tt.Click("Save Changes"); err != nil {
-		t.Fatal(err)
-	}
-	settle(tt)
-	if st.item.Version != 2 || st.payload != "Edited draft for Friday" || st.status != "" {
-		t.Fatalf("save: %+v", st)
-	}
-	if err := tt.Click("Approve"); err != nil {
-		t.Fatal(err)
-	}
-	settle(tt)
-	if store.Review(st.item.ID).State != "approved" || !tt.HasText("Version 2 · Approved") {
-		t.Fatal("approved wrong version", tt.Texts())
+	if m.hasSheet() {
+		t.Fatal("the sheet stayed up after the decision")
 	}
 }
 
-func TestReviewCallEditorKeepsNumericIDsAndKeys(t *testing.T) {
-	_, st, tt := reviewTester(t, "plugin", "pending")
-	if err := tt.Click("Proposed call arguments"); err != nil {
-		t.Fatal(err)
+func TestReviewRejectsACall(t *testing.T) {
+	m, tt := reviewWindow(t)
+	m.presentReview(*store.Review("review-comment"))
+	settleTransitions(tt)
+	if !tt.HasText("Project Manager wants to use GitHub") {
+		t.Fatal(tt.Texts())
 	}
-	tt.Key(ui.Cmd, ui.KeyA)
-	tt.Type(`{"account_id":9223372036854775807,"draft_body":{"subject_line":"Edited"},"unsigned_id":18446744073709551615}`)
-	if err := tt.Click("Save Changes"); err != nil {
+	renderBoth(t, tt, "review-call")
+	if err := tt.Click("Reject"); err != nil {
 		t.Fatal(err)
 	}
 	settle(tt)
-	for _, token := range []string{`"account_id": 9223372036854775807`, `"unsigned_id": 18446744073709551615`, `"subject_line": "Edited"`} {
-		if !strings.Contains(st.payload, token) {
-			t.Fatalf("lost %s: %s", token, st.payload)
-		}
+	if store.Review("review-comment").State != "rejected" || m.hasSheet() {
+		t.Fatal("reject not recorded")
 	}
-	renderBoth(t, tt, "review-proposed-call")
 }
 
-func TestReviewSyncRequiresReloadAndKeepsLocalText(t *testing.T) {
-	_, st, tt := reviewTester(t, "draft", "pending")
+func TestReviewEditedElsewhereOffersTheNewVersion(t *testing.T) {
+	m, tt := reviewWindow(t)
+	st := m.presentReview(*store.Review("review-draft"))
+	settleTransitions(tt)
 	if err := tt.Click("Draft"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Key(ui.Cmd, ui.KeyA)
-	tt.Type("Local unsaved draft")
+	tt.Type("My edit")
 	tt.Frame()
-	next := store.Review(st.item.ID).Clone()
+	// Another Device saves its own edit as version 2.
+	next := store.Review("review-draft").Clone()
 	next.Version, next.Revision = 2, 2
 	next.Payload = model.ReviewPayload{Kind: "draft", Text: "Edited on another Device"}
-	store.Reviews[0] = &next
+	store.Reviews[2] = &next
 	settle(tt)
-	if !tt.HasText("This review changed. Reload it before deciding.") || st.item.Version != 1 || st.payload != "Local unsaved draft" {
-		t.Fatal("sync replaced displayed edit", tt.Texts())
+	if st.item.Version != 1 || st.text != "My edit" {
+		t.Fatal("a sync replaced the edit in progress")
 	}
-	_ = tt.Click("Approve")
-	settle(tt)
-	if store.Review(st.item.ID).State != "pending" {
-		t.Fatal("stale approval ran")
-	}
-	renderBoth(t, tt, "review-sync-conflict")
-	if err := tt.Click("Reload"); err != nil {
+	if err := tt.Click("Approve"); err != nil {
 		t.Fatal(err)
 	}
 	settle(tt)
-	if st.item.Version != 2 || st.payload != "Edited on another Device" {
-		t.Fatal("reload did not load saved version")
+	if store.Review("review-draft").State != "pending" || !tt.HasText("This changed on another Device") {
+		t.Fatal("approved without showing the new version", tt.Texts())
 	}
-	// Input labels, rather than their content, appear in Tester.Texts. Copy from the
-	// actual editor buffer to prove the displayed value refreshed as well as the model.
+	renderBoth(t, tt, "review-changed-elsewhere")
+	if err := tt.Click("Show Latest"); err != nil {
+		t.Fatal(err)
+	}
+	settle(tt)
+	if st.item.Version != 2 || st.text != "Edited on another Device" {
+		t.Fatal("Show Latest kept the old version")
+	}
+	// The field shows the new text, not just the state behind it.
 	if err := tt.Click("Draft"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Key(ui.Cmd, ui.KeyA)
 	tt.Key(ui.Cmd, ui.KeyC)
 	if tt.Clipboard() != "Edited on another Device" {
-		t.Fatalf("reloaded editor buffer: %q", tt.Clipboard())
+		t.Fatalf("editor shows %q", tt.Clipboard())
 	}
-	renderBoth(t, tt, "review-reloaded")
 }
 
-func TestReviewRejectCancelAndUncertainStates(t *testing.T) {
-	for _, action := range []string{"Reject", "Cancel Item"} {
-		t.Run(action, func(t *testing.T) {
-			_, st, tt := reviewTester(t, "draft", "pending")
-			if err := tt.Click(action); err != nil {
-				t.Fatal(err)
-			}
-			settle(tt)
-			want := "rejected"
-			if action == "Cancel Item" {
-				want = "cancelled"
-			}
-			if st.item.State != want || st.item.Editable() {
-				t.Fatal("decision not recorded")
-			}
-		})
-	}
-	_, st, tt := reviewTester(t, "plugin", "uncertain")
-	if !tt.HasText("Check the outcome") && !tt.HasText("Version 1 · Check the outcome") {
+func TestReviewDecidedShowsHowItWent(t *testing.T) {
+	m, tt := reviewWindow(t)
+	done := store.Review("review-tag").Clone()
+	done.State, done.Revision = "succeeded", 3
+	result, _ := json.Marshal(map[string]string{"text": "To github.com:lorca-app/relay.git\n * [new tag]         v1.4.0 -> v1.4.0"})
+	done.Outcome = &model.ReviewOutcome{Summary: "Done", Result: result}
+	store.Reviews[0] = &done
+	m.presentReview(done)
+	settleTransitions(tt)
+	if !tt.HasText("Done") || !tt.HasText("Output") || tt.HasText("Approve") || tt.HasText("Reject") {
 		t.Fatal(tt.Texts())
 	}
-	_ = tt.Click("Approve")
+	renderBoth(t, tt, "review-done")
+	tt.Key(0, ui.KeyEnter)
 	settle(tt)
-	if st.item.State != "uncertain" {
-		t.Fatal("uncertain outcome replayed")
+	if m.hasSheet() {
+		t.Fatal("Done left the sheet up")
 	}
-	renderBoth(t, tt, "review-uncertain")
 }
 
-func TestInspectorReviewQueueOpensEditor(t *testing.T) {
-	m := demoWindow(t)
-	item := reviewFixture(t, "draft", "pending")
-	store.Reviews = []*model.ReviewItem{&item}
-	tt := ui.NewTester(func(c *ui.Context) { applyTheme(c); m.inspectorReviews(c, store.Chat(item.Origin.ChatID)) }, 360, 320)
-	settle(tt)
-	if !tt.HasText("Weekly update draft") || !tt.HasText("Needs review") {
+func TestReviewSectionShowsOnlyWhatIsOpen(t *testing.T) {
+	_, tt := reviewWindow(t)
+	if !tt.HasText(L("Waiting for review")) {
 		t.Fatal(tt.Texts())
 	}
-	renderBoth(t, tt, "review-inspector")
-	if err := tt.Click("Review…"); err != nil {
-		t.Fatal(err)
+	for _, item := range store.Reviews {
+		store.RejectReview(item.Clone(), func(model.ReviewItem, error) {})
 	}
 	settle(tt)
-	if !m.hasSheet() {
-		t.Fatal("inspector did not open the review editor")
+	if tt.HasText(L("Waiting for review")) {
+		t.Fatal("decided items stayed in the inspector", tt.Texts())
 	}
 }
 
-func TestReviewClosedSheetIgnoresAQueuedReply(t *testing.T) {
-	m, st, tt := reviewTester(t, "draft", "pending")
-	st.payload = "Save this exact local draft"
-	st.act("edit")
+func TestReviewClosedSheetIgnoresALateReply(t *testing.T) {
+	m, tt := reviewWindow(t)
+	st := m.presentReview(*store.Review("review-tag"))
+	settleTransitions(tt)
+	st.approve(&m.appWindow, m.sheets[len(m.sheets)-1])
 	if !st.busy {
-		t.Fatal("save did not enter request state")
+		t.Fatal("approve did not wait for the Runner")
 	}
-	// Build a busy frame without running the posted answer: the bound fields are disabled.
 	tt.Frame()
 	m.sheets[len(m.sheets)-1].dismiss()
 	runPosts()
 	tt.Frame()
-	if !st.closed || m.hasSheet() || st.item.Version != 1 {
-		t.Fatal("late reply revived or changed a closed editor")
+	if !st.closed || m.hasSheet() {
+		t.Fatal("a late reply revived a closed sheet")
 	}
-	if store.Review(st.item.ID).Version != 2 {
-		t.Fatal("acknowledged save was lost from the store")
+	if store.Review("review-tag").State != "succeeded" {
+		t.Fatal("the approval the Runner acknowledged was lost")
 	}
 }

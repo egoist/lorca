@@ -2,6 +2,7 @@ package model
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"slices"
@@ -51,17 +52,26 @@ func prettyReviewJSON(raw json.RawMessage) string {
 	return string(raw)
 }
 
+// EditorText is what the sheet edits: a draft's text, a shell command, or a call's arguments as
+// JSON.
 func (p ReviewPayload) EditorText() string {
-	if p.Kind == "draft" {
+	switch p.Kind {
+	case "draft":
 		return p.Text
+	case "shell":
+		var arguments struct {
+			Command string `json:"command"`
+		}
+		_ = json.Unmarshal(p.Arguments, &arguments)
+		return arguments.Command
+	case "plugin":
+		return prettyReviewJSON(p.Arguments)
 	}
-	if !p.Supported() {
-		return prettyReviewJSON(p.raw)
-	}
-	return prettyReviewJSON(p.Arguments)
+	return prettyReviewJSON(p.raw)
 }
 
-// EditedJSON replaces only the editable value, without a float64 or key-name conversion.
+// EditedJSON is the payload with `text` in place of what EditorText showed, without a float64 or
+// key-name conversion: a command's other arguments and a call's server and tool stay as they were.
 func (p ReviewPayload) EditedJSON(text string) (json.RawMessage, error) {
 	raw, err := p.MarshalJSON()
 	if err != nil {
@@ -69,19 +79,27 @@ func (p ReviewPayload) EditedJSON(text string) (json.RawMessage, error) {
 	}
 	var object map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &object); err != nil || object == nil {
-		return nil, errors.New(L("The proposed call needs a JSON object of arguments."))
+		return nil, errors.New(L("The arguments need to be a JSON object."))
 	}
 	switch p.Kind {
 	case "draft":
 		object["text"], err = json.Marshal(text)
-	case "shell", "plugin":
+	case "shell":
+		var arguments map[string]json.RawMessage
+		if json.Unmarshal(p.Arguments, &arguments) != nil || arguments == nil {
+			arguments = map[string]json.RawMessage{}
+		}
+		if arguments["command"], err = json.Marshal(text); err == nil {
+			object["arguments"], err = json.Marshal(arguments)
+		}
+	case "plugin":
 		var arguments map[string]json.RawMessage
 		if json.Unmarshal([]byte(text), &arguments) != nil || arguments == nil {
-			return nil, errors.New(L("The proposed call needs a JSON object of arguments."))
+			return nil, errors.New(L("The arguments need to be a JSON object."))
 		}
 		object["arguments"] = json.RawMessage(text)
 	default:
-		return nil, errors.New(L("This app cannot edit this review payload. Update Lorca to review it."))
+		return nil, errors.New(L("Update Lorca to review this."))
 	}
 	if err != nil {
 		return nil, err
@@ -129,20 +147,27 @@ type ReviewItem struct {
 	Preconditions ReviewPreconditions `json:"preconditions"`
 	State         string              `json:"state"`
 	Outcome       *ReviewOutcome      `json:"outcome"`
+	CreatedAt     float64             `json:"created_at"`
 }
 
-func (r ReviewItem) Editable() bool { return r.State == "pending" || r.State == "approved" }
+func (r ReviewItem) Pending() bool { return r.State == "pending" }
 
+// Open is waiting for the user, or approved and about to run.
+func (r ReviewItem) Open() bool {
+	return r.Pending() || r.State == "approved" || r.State == "executing"
+}
+
+// StateText is how it ended or where it stands, in a word or two; empty while it waits for the
+// user.
 func (r ReviewItem) StateText() string {
 	switch r.State {
-	case "pending":
-		return L("Needs review")
-	case "approved":
-		return L("Approved")
-	case "executing":
-		return L("Executing")
+	case "approved", "executing":
+		return L("Running…")
 	case "succeeded":
-		return L("Completed")
+		if r.Payload.Kind == "draft" {
+			return L("Accepted")
+		}
+		return L("Done")
 	case "failed":
 		return L("Failed")
 	case "rejected":
@@ -150,9 +175,35 @@ func (r ReviewItem) StateText() string {
 	case "cancelled":
 		return L("Cancelled")
 	case "uncertain":
-		return L("Check the outcome")
+		return L("Didn't finish")
 	}
-	return r.State
+	return ""
+}
+
+// Headline is the line the inspector shows: the command, the tool, or what the draft is for.
+func (r ReviewItem) Headline() string {
+	switch r.Payload.Kind {
+	case "shell":
+		return FirstLine(r.Payload.EditorText())
+	case "draft":
+		return r.Target.Resource
+	}
+	if r.Payload.Tool != "" {
+		return r.Payload.Tool
+	}
+	return r.Target.Resource
+}
+
+// Output is what the call printed or returned, or the accepted draft.
+func (r ReviewItem) Output() string {
+	if r.Outcome == nil {
+		return ""
+	}
+	var result struct {
+		Text string `json:"text"`
+	}
+	_ = json.Unmarshal(r.Outcome.Result, &result)
+	return result.Text
 }
 
 func (r ReviewItem) Clone() ReviewItem {
@@ -182,19 +233,18 @@ func (s *Store) Review(id string) *ReviewItem {
 	return nil
 }
 
-func (s *Store) ReviewsFor(chatID string) []ReviewItem {
+// OpenReviewsFor is what a chat's bots left for the user that waits or runs, oldest first. How
+// each ended stays in the chat.
+func (s *Store) OpenReviewsFor(chatID string) []ReviewItem {
 	var out []ReviewItem
 	for _, item := range s.Reviews {
-		if item.Origin.ChatID == chatID {
+		if item.Origin.ChatID == chatID && item.Open() {
 			out = append(out, item.Clone())
 		}
 	}
 	slices.SortFunc(out, func(a, b ReviewItem) int {
-		if a.Editable() != b.Editable() {
-			if a.Editable() {
-				return -1
-			}
-			return 1
+		if a.CreatedAt != b.CreatedAt {
+			return cmp.Compare(a.CreatedAt, b.CreatedAt)
 		}
 		return strings.Compare(a.ID, b.ID)
 	})
@@ -218,53 +268,34 @@ func (s *Store) upsertReview(item ReviewItem) ReviewItem {
 	return copy.Clone()
 }
 
-// RefreshReview reads through the local CLI. The reply cannot replace a newer synced revision.
-func (s *Store) RefreshReview(id string, done func(ReviewItem, error)) {
-	if s.IsMock {
-		s.post(func() {
-			if item := s.Review(id); item != nil {
-				done(item.Clone(), nil)
-			} else {
-				done(ReviewItem{}, ErrNotFound)
-			}
-		})
+// ApproveReview approves the version the user saw. An edit made in the sheet (`payload`, nil
+// without one) is saved first as the next version, and that is the one approved: what runs is
+// what the editor showed.
+func (s *Store) ApproveReview(item ReviewItem, payload json.RawMessage, done func(ReviewItem, error)) {
+	if payload == nil {
+		s.changeReview(item, "approve", nil, done)
 		return
 	}
-	identity := s.IdentityID
-	Async(s, func() (ReviewItem, error) { return call[ReviewItem](s, "reviews.get", map[string]any{"id": id}) }, func(item ReviewItem, err error) {
-		if s.IdentityID != identity {
-			done(ReviewItem{}, errors.New(L("The account changed while this review was loading.")))
+	s.changeReview(item, "edit", payload, func(edited ReviewItem, err error) {
+		if err != nil {
+			done(edited, err)
 			return
 		}
-		if err == nil && (item.ID != id || item.Version == 0) {
-			err = errors.New(L("The Runner returned a different review item."))
-		}
-		if err == nil {
-			item = s.upsertReview(item)
-		}
-		done(item, err)
+		s.changeReview(edited, "approve", nil, done)
 	})
 }
 
-type ReviewEdits struct {
-	Payload   json.RawMessage `json:"payload"`
-	Target    ReviewTarget    `json:"target"`
-	Rationale string          `json:"rationale"`
+func (s *Store) RejectReview(item ReviewItem, done func(ReviewItem, error)) {
+	s.changeReview(item, "reject", nil, done)
 }
 
-// ChangeReview names the version actually displayed. No optimistic decision grants authority.
-func (s *Store) ChangeReview(item ReviewItem, action string, edits *ReviewEdits, done func(ReviewItem, error)) {
-	if !slices.Contains([]string{"edit", "approve", "reject", "cancel"}, action) {
-		s.post(func() { done(ReviewItem{}, errors.New(L("Unknown review action"))) })
-		return
-	}
+// changeReview names the version the sheet displayed, so one changed on another Device meanwhile
+// is refused rather than decided blind. Replies come in order on the main thread; one that arrives
+// after the account changed, or that names another item, is an error.
+func (s *Store) changeReview(item ReviewItem, action string, payload json.RawMessage, done func(ReviewItem, error)) {
 	params := map[string]any{"id": item.ID, "expected_version": item.Version}
 	if action == "edit" {
-		if edits == nil {
-			s.post(func() { done(ReviewItem{}, errors.New(L("A review edit needs its saved payload."))) })
-			return
-		}
-		params["payload"], params["target"], params["rationale"] = json.RawMessage(bytes.Clone(edits.Payload)), edits.Target, edits.Rationale
+		params["payload"] = json.RawMessage(bytes.Clone(payload))
 	}
 	if s.IsMock {
 		s.post(func() {
@@ -274,11 +305,11 @@ func (s *Store) ChangeReview(item ReviewItem, action string, edits *ReviewEdits,
 				return
 			}
 			if current.Version != item.Version {
-				done(ReviewItem{}, errors.New(L("This review changed. Reload it before deciding.")))
+				done(ReviewItem{}, errors.New("This changed on another Device. Review it again."))
 				return
 			}
-			if !current.Editable() {
-				done(ReviewItem{}, errors.New(L("This review has already started or ended.")))
+			if !current.Pending() {
+				done(ReviewItem{}, errors.New("This already ran or was decided."))
 				return
 			}
 			next := current.Clone()
@@ -288,18 +319,19 @@ func (s *Store) ChangeReview(item ReviewItem, action string, edits *ReviewEdits,
 					done(ReviewItem{}, err)
 					return
 				}
-				next.Target, next.Rationale = params["target"].(ReviewTarget), params["rationale"].(string)
 				next.Version++
-				next.State = "pending"
 				next.Outcome = nil
 			case "approve":
-				next.State = "approved"
+				// The demo's Runner runs it at once.
+				next.State = "succeeded"
+				next.Outcome = &ReviewOutcome{Summary: "Done"}
+				if next.Payload.Kind == "draft" {
+					result, _ := json.Marshal(map[string]string{"text": next.Payload.Text})
+					next.Outcome = &ReviewOutcome{Summary: "Accepted", Result: result}
+				}
 			case "reject":
 				next.State = "rejected"
-				next.Outcome = &ReviewOutcome{Summary: L("Rejected")}
-			case "cancel":
-				next.State = "cancelled"
-				next.Outcome = &ReviewOutcome{Summary: L("Cancelled")}
+				next.Outcome = &ReviewOutcome{Summary: "Rejected"}
 			}
 			next.Revision++
 			done(s.upsertReview(next), nil)

@@ -2481,7 +2481,7 @@ func (s *Store) ResetMockData() {
 	if !s.IsMock {
 		return
 	}
-	s.Reviews = nil
+	s.Reviews = mockReviews()
 	if s.replies != nil {
 		for _, chat := range s.Chats {
 			s.replies.cancel(chat.ID)

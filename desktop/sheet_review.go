@@ -1,190 +1,237 @@
 package main
 
 import (
+	"encoding/json"
 	"strings"
 
 	"github.com/egoist/lorca/desktop/model"
 	"github.com/egoist/mygo/ui"
 )
 
-// reviewSheet retains the displayed version and editable strings across build passes.
-// Replies touch only persistent state, on the store's ordered main-thread post queue.
+// A draft or an exact call a bot left for the user, after the macOS app's ReviewViewController and
+// the permission card it would have asked with: who wants to do what and why, the command, call,
+// or draft, editable, and one decision. Approve runs what the editor shows on the bot's Runner,
+// saving an edit first as a new version; Reject drops it. A change from another Device shows here
+// as it lands, unless the user is editing, and then Approve offers the new version instead. Once
+// decided, the sheet shows how it went.
+
+// reviewSheet is what one review sheet keeps across build passes: the item as shown, the editor's
+// text, and whether a decision is on its way.
 type reviewSheet struct {
-	item                      model.ReviewItem
-	account, resource, reason string
-	payload                   string
-	status                    string
-	busy, closed              bool
-	requests                  uint64
-}
-
-func (st *reviewSheet) display(item model.ReviewItem) {
-	st.item = item.Clone()
-	st.account, st.resource, st.reason = item.Target.Account, item.Target.Resource, item.Rationale
-	st.payload, st.status = item.Payload.EditorText(), ""
-}
-
-func (st *reviewSheet) dirty() bool {
-	return st.account != st.item.Target.Account || st.resource != st.item.Target.Resource ||
-		st.reason != st.item.Rationale || st.payload != st.item.Payload.EditorText()
+	item   model.ReviewItem
+	text   string
+	busy   bool
+	closed bool
 }
 
 func (w *appWindow) presentReview(item model.ReviewItem) *reviewSheet {
 	st := &reviewSheet{}
-	st.display(item)
-	w.present(func(c *ui.Context, s *sheet) { st.view(c, s) }, func() { st.closed = true; st.requests++ })
+	st.display(item, false)
+	w.present(func(c *ui.Context, s *sheet) { st.view(w, c, s) }, func() { st.closed = true })
 	return st
 }
 
-func (st *reviewSheet) stale() bool {
-	latest := store.Review(st.item.ID)
-	return latest == nil || latest.Revision != st.item.Revision
+func (st *reviewSheet) display(item model.ReviewItem, keepingEdits bool) {
+	st.item = item.Clone()
+	if !keepingEdits {
+		st.text = item.Payload.EditorText()
+	}
 }
 
-func (st *reviewSheet) view(c *ui.Context, s *sheet) {
-	p := colors(c)
+// edited is whether the editor holds something other than the version on screen.
+func (st *reviewSheet) edited() bool { return st.text != st.item.Payload.EditorText() }
+
+// follow takes the item as another Device or the Runner left it. An edit in progress keeps its
+// version until Approve, which then offers the new one. It answers whether the item is gone.
+func (st *reviewSheet) follow() bool {
 	latest := store.Review(st.item.ID)
-	stale := st.stale()
-	editable := !st.busy && st.item.Editable() && latest != nil && latest.Editable()
-	result := sheetFrame(c, sheetOptions{
-		Title: L("Review item"), Subtitle: L("Approve the saved version to resume this proposal on its Runner."),
-		Width: 600, Confirm: L("Done"), NoCancel: true, ReturnInContent: true,
-	}, func() {
-		fieldRow := func(label, key string, value *string) {
-			ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, label).Width(68).FontSize(12).TextColor(p.Label2)
-				textField(c.Key(key), value, fieldOptions{Label: label, ReadOnly: !editable, Disabled: st.busy}).Grow(1).MinWidth(0)
-			})
+	if latest == nil {
+		return true
+	}
+	if st.busy || latest.Revision == st.item.Revision {
+		return false
+	}
+	sameVersion := latest.Pending() && latest.Version == st.item.Version
+	if sameVersion || !(latest.Pending() && st.edited()) {
+		st.display(*latest, sameVersion)
+	}
+	return false
+}
+
+// reviewTitle is "Chef wants to run a command on Workbench", as the permission card says it.
+func reviewTitle(item model.ReviewItem) string {
+	bot := L("The bot")
+	if b := store.Bot(item.BotID); b != nil {
+		bot = b.Name
+	}
+	runner := store.Device(item.RunnerID)
+	switch item.Payload.Kind {
+	case "draft":
+		return L("%@ wrote a draft", bot)
+	case "shell":
+		name := L("its Runner")
+		if runner != nil {
+			name = runner.Name
 		}
-		fieldRow(L("Account"), "review-account", &st.account)
-		fieldRow(L("Resource"), "review-resource", &st.resource)
-		fieldRow(L("Rationale"), "review-rationale", &st.reason)
-		bot, runner := st.item.BotID, st.item.RunnerID
-		if b := store.Bot(bot); b != nil {
-			bot = b.Name
-		}
-		if d := store.Device(runner); d != nil {
-			runner = d.Name
-		}
-		ui.Text(c, L("%@ on %@", bot, runner)).FontSize(12).TextColor(p.Label2)
-		if st.item.Payload.Kind == "plugin" {
-			ui.Text(c, st.item.Payload.PluginID+" / "+st.item.Payload.ServerName+" / "+st.item.Payload.Tool).FontSize(12).TextColor(p.Label2).Selectable()
-		}
-		if len(st.item.Preconditions.Files) > 0 {
-			paths := make([]string, 0, len(st.item.Preconditions.Files))
-			for _, file := range st.item.Preconditions.Files {
-				paths = append(paths, file.Path)
+		return bot + " " + L("wants to run a command on %@", name)
+	}
+	plugin := item.Target.Account
+	if runner != nil {
+		for _, installed := range runner.Plugins {
+			if installed.ID == item.Payload.PluginID {
+				plugin = installed.Name
 			}
-			ui.Text(c, L("Guarded files: %@", strings.Join(paths, ", "))).FontSize(12).TextColor(p.Label2).LineHeight(1.4).Selectable()
 		}
-		label := L("Draft")
-		if st.item.Payload.Kind != "draft" {
-			label = L("Proposed call arguments")
-		}
-		textArea(c.Key("review-payload"), &st.payload, 0, fieldOptions{
-			Label: label, Mono: st.item.Payload.Kind != "draft", ReadOnly: !editable || !st.item.Payload.Supported(), Disabled: st.busy,
-		}).Height(220)
-		ui.Text(c, L("Version %d · %@", st.item.Version, st.item.StateText())).FontSize(12).TextColor(p.Label2)
-		if st.item.Outcome != nil {
-			ui.Text(c, st.item.Outcome.Summary).FontSize(12).TextColor(p.Label2).LineHeight(1.4).Selectable()
-		}
-		if stale {
-			ui.Text(c, L("This review changed. Reload it before deciding.")).FontSize(12).TextColor(p.Orange).LineHeight(1.4)
-		}
-		if st.status != "" {
-			ui.Text(c, st.status).FontSize(12).TextColor(p.Orange).LineHeight(1.4)
-		}
-		// Click queries run after bound fields are constructed, so edits in the same frame
-		// reach the local guard before a version-bound request can be admitted.
-		ui.Row(c).Gap(8).Children(func() {
-			if pushButton(c.Key("review-save"), L("Save Changes"), pushOptions{Disabled: !editable || stale || !st.item.Payload.Supported()}).Clicked() {
-				st.act("edit")
+	}
+	return bot + " " + L("wants to use %@", plugin)
+}
+
+func (st *reviewSheet) view(w *appWindow, c *ui.Context, s *sheet) {
+	if st.follow() {
+		s.dismiss()
+		return
+	}
+	p := colors(c)
+	item := st.item
+	pending := item.Pending()
+	o := sheetOptions{Title: reviewTitle(item), Subtitle: item.Rationale, Width: 520, Confirm: L("Done"), NoCancel: true}
+	if pending {
+		o.Confirm, o.NoCancel, o.ConfirmDisabled, o.ReturnInContent = L("Approve"), false, st.busy, true
+		// Rejecting is the one way to say no, so it stands apart from Cancel, which only closes.
+		o.Leading = func() {
+			if pushButton(c, L("Reject"), pushOptions{Kind: buttonDestructive, Disabled: st.busy}).Clicked() {
+				st.decide(w, s, L("Couldn't reject"), func(done func(model.ReviewItem, error)) { store.RejectReview(st.item.Clone(), done) })
 			}
-			if pushButton(c.Key("review-approve"), L("Approve"), pushOptions{Disabled: !editable || stale || !st.item.Payload.Supported()}).Clicked() {
-				st.act("approve")
+		}
+	}
+	result := sheetFrame(c, o, func() {
+		// The editor is a field, as the memory sheet's is; what the bot said and what came of it
+		// are cards, as the routine sheet's are.
+		label, mono := L("Arguments"), true
+		switch item.Payload.Kind {
+		case "draft":
+			label, mono = L("Draft"), false
+		case "shell":
+			label = L("Command")
+		}
+		editor := textArea(c.Key("review-editor:"+item.ID), &st.text, 0, fieldOptions{Mono: mono, Label: label, ReadOnly: !pending || st.busy, AutoFocus: pending})
+		// A command is usually a line; a draft or a call's arguments get room to edit.
+		if item.Payload.Kind == "shell" {
+			lines := min(max(strings.Count(st.text, "\n")+1, 2), 6)
+			editor.Height(float32(lines)*12*1.4 + 12)
+		} else {
+			editor.Height(200)
+		}
+		section(c, L("Details"), sectionCaption, nil, func(k *card) {
+			if state := item.StateText(); state != "" {
+				tint := p.Label2
+				if item.State == "uncertain" || item.State == "failed" {
+					tint = p.Orange
+				}
+				keyValueRow(c, k, L("Status"), state, false, &tint)
 			}
-			if pushButton(c.Key("review-reject"), L("Reject"), pushOptions{Disabled: !editable || stale}).Clicked() {
-				st.act("reject")
+			keyValueRow(c, k, L("Account"), item.Target.Account, false, nil)
+			keyValueRow(c, k, L("Resource"), item.Target.Resource, false, nil)
+			if len(item.Preconditions.Files) > 0 {
+				paths := make([]string, 0, len(item.Preconditions.Files))
+				for _, file := range item.Preconditions.Files {
+					paths = append(paths, file.Path)
+				}
+				keyValueRow(c, k, L("Files"), strings.Join(paths, "\n"), true, nil).Tooltip(L("If these files change, this needs another review."))
 			}
-			if pushButton(c.Key("review-cancel"), L("Cancel Item"), pushOptions{Disabled: !editable || stale}).Clicked() {
-				st.act("cancel")
-			}
-			if pushButton(c.Key("review-reload"), L("Reload"), pushOptions{Disabled: st.busy}).Clicked() {
-				st.reload()
+			// Why it needs another look, or why it may have run without a result.
+			if item.Outcome != nil && (pending || item.State == "uncertain") {
+				noteRow(c, k, item.Outcome.Summary, nil)
 			}
 		})
+		if output := item.Output(); output != "" {
+			section(c, L("Output"), sectionCaption, nil, func(k *card) {
+				k.row(ui.Scroll(c).MaxHeight(160).Padding(8, 12).Children(func() {
+					ui.Text(c, output).Font(monoFont).FontSize(11).LineHeight(1.45).Selectable()
+				}))
+			})
+		}
 	})
-	if result.Confirmed || result.Cancelled {
+	switch {
+	case result.Confirmed && pending:
+		st.approve(w, s)
+	case result.Confirmed || result.Cancelled:
 		s.dismiss()
 	}
 }
 
-func (st *reviewSheet) act(action string) {
-	if st.busy || st.closed || st.stale() {
+func (st *reviewSheet) approve(w *appWindow, s *sheet) {
+	if st.busy {
 		return
 	}
-	if action == "approve" && st.dirty() {
-		st.status = L("Save your changes, then review and approve the new version.")
+	// Edited here while it changed elsewhere: approving would mean the wrong text.
+	if latest := store.Review(st.item.ID); latest != nil && latest.Version != st.item.Version && st.edited() {
+		w.showAlert(alertOptions{
+			Message:     L("This changed on another Device"),
+			Informative: L("Show Latest discards your changes and shows the current version to review."),
+			Buttons:     []alertButton{{Title: L("Show Latest")}, {Title: L("Cancel")}},
+		}, func(index int) {
+			if latest := store.Review(st.item.ID); index == 0 && latest != nil {
+				st.display(*latest, false)
+			}
+		})
 		return
 	}
-	var edits *model.ReviewEdits
-	if action == "edit" {
-		payload, err := st.item.Payload.EditedJSON(st.payload)
-		if err != nil {
-			st.status = model.ErrorText(err)
+	var payload json.RawMessage
+	if st.edited() {
+		var err error
+		if payload, err = st.item.Payload.EditedJSON(st.text); err != nil {
+			w.showAlert(alertOptions{Message: L("Couldn't approve"), Informative: model.ErrorText(err)}, nil)
 			return
 		}
-		edits = &model.ReviewEdits{Payload: payload, Target: model.ReviewTarget{Account: st.account, Resource: st.resource}, Rationale: st.reason}
 	}
+	st.decide(w, s, L("Couldn't approve"), func(done func(model.ReviewItem, error)) { store.ApproveReview(st.item.Clone(), payload, done) })
+}
+
+// decide sends a decision on the version shown. Done, the sheet closes; refused, it shows the item
+// as it now is and says why, keeping an edit when the version is the same.
+func (st *reviewSheet) decide(w *appWindow, s *sheet, failure string, request func(done func(model.ReviewItem, error))) {
+	if st.busy {
+		return
+	}
+	shown := st.item.Clone()
 	st.busy = true
-	st.requests++
-	request := st.requests
-	store.ChangeReview(st.item.Clone(), action, edits, func(item model.ReviewItem, err error) {
-		if st.closed || st.requests != request {
+	request(func(_ model.ReviewItem, err error) {
+		if st.closed {
 			return
 		}
 		st.busy = false
-		if err != nil {
-			st.status = model.ErrorText(err)
+		if err == nil {
+			s.dismiss()
 			return
 		}
-		st.display(item)
+		if latest := store.Review(shown.ID); latest != nil && latest.Revision != shown.Revision {
+			st.display(*latest, latest.Pending() && latest.Version == shown.Version)
+		}
+		w.showAlert(alertOptions{Message: failure, Informative: model.ErrorText(err)}, nil)
 	})
 }
 
-func (st *reviewSheet) reload() {
-	if st.busy || st.closed {
-		return
-	}
-	st.busy = true
-	st.requests++
-	request := st.requests
-	store.RefreshReview(st.item.ID, func(item model.ReviewItem, err error) {
-		if st.closed || st.requests != request {
-			return
-		}
-		st.busy = false
-		if err != nil {
-			st.status = model.ErrorText(err)
-			return
-		}
-		st.display(item)
-	})
-}
-
+// inspectorReviews is what the chat's bots left for the user to approve, oldest first, while any
+// waits or runs; a row opens it. How each ended stays in the chat, so the section goes once none
+// is open.
 func (m *mainWindow) inspectorReviews(c *ui.Context, chat *model.Chat) {
-	p := colors(c)
-	section(c.Key("review-queue:"+chat.ID), L("Review queue"), sectionCaption, nil, func(k *card) {
-		items := store.ReviewsFor(chat.ID)
-		if len(items) == 0 {
-			noteRow(c, k, L("Drafts and proposed actions wait here for your review."), nil)
-			return
-		}
+	items := store.OpenReviewsFor(chat.ID)
+	if len(items) == 0 {
+		return
+	}
+	section(c.Key("reviews:"+chat.ID), L("Waiting for review"), sectionCaption, nil, func(k *card) {
 		for _, item := range items {
-			_, result := actionRow(c.Key("review:"+item.ID), k, item.Target.Resource, actionRowOptions{
-				Value: item.StateText(), Tint: &p.Label2, Action: L("Review…"), Tooltip: item.Rationale,
-			})
-			if result.Action {
+			o := statusRowOptions{Title: item.Headline(), Subtitle: item.Rationale, SubtitleLines: 2, State: item.StateText(), Clickable: true, Tooltip: item.Rationale}
+			switch item.Payload.Kind {
+			case "draft":
+				o.Symbol = "doc.text"
+			case "shell":
+				o.Symbol = "terminal"
+			default:
+				o.Symbol, o.PluginID = "puzzlepiece.extension", item.Payload.PluginID
+			}
+			if _, row := statusRow(c.Key("review:"+item.ID), k, o); row.Clicked {
 				m.presentReview(item)
 			}
 		}

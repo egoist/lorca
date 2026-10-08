@@ -176,7 +176,9 @@ type statusRowOptions struct {
 	PluginID string
 	Title    string
 	Subtitle string
-	State    string
+	// SubtitleLines cuts the subtitle to that many lines; 0 lets it wrap.
+	SubtitleLines int
+	State         string
 	// StateSymbol shows the state as a symbol, whose words are its tooltip.
 	StateSymbol string
 	StateColor  *ui.Color
@@ -215,9 +217,12 @@ func statusRow(c *ui.Context, k *card, o statusRowOptions) (ui.Element, statusRo
 			}
 		})
 		ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(1).Children(func() {
-			ui.Text(c, o.Title).FontSize(12.5).FontWeight(500)
+			ui.Text(c, o.Title).FontSize(12.5).FontWeight(500).MaxLines(1)
 			if o.Subtitle != "" {
-				ui.Text(c, o.Subtitle).FontSize(textCaption).TextColor(p.Label2)
+				subtitle := ui.Text(c, o.Subtitle).FontSize(textCaption).TextColor(p.Label2)
+				if o.SubtitleLines > 0 {
+					subtitle.MaxLines(o.SubtitleLines)
+				}
 			}
 		})
 		switch {

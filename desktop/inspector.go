@@ -102,6 +102,7 @@ func (m *mainWindow) inspectorView(c *ui.Context, chatID string) {
 				}
 				m.inspectorGroup(c, chat, members)
 			}
+			m.inspectorReviews(c, chat)
 			if single != nil {
 				m.inspectorProfile(c, single)
 				m.inspectorRuntime(c, single, chat)
@@ -110,7 +111,6 @@ func (m *mainWindow) inspectorView(c *ui.Context, chatID string) {
 				m.inspectorPlugins(c, single)
 			}
 			m.inspectorRouting(c, members)
-			m.inspectorReviews(c, chat)
 		})
 	})
 }

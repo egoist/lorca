@@ -19,9 +19,9 @@ Who answers, after Grok Bot's rooms:
 
 ## Routines
 
-A routine stages editable drafts through `stage_review`. When Auto-review holds a new shell command or effectful plugin call, the Runner creates a persistent [review item](review-queue.md), releases the call, and records its id in the chat. Paired Devices edit, approve, reject, or cancel the saved version later. The assigned Runner executes an approved exact call separately from the routine's model turn and writes its outcome back to that chat.
-
 A routine is a task a bot runs on a schedule in its direct chat with the user, after Grok Bot's routines: a morning brief, an hourly check, a weekly report. The bot owns its routines: the user asks for one in chat and the bot sets it up with the `routines` tool (a name, a schedule, the prompt, written as an instruction to itself, and a check when the routine watches for something), and edits, pauses, resumes, runs, or deletes it the same way. The system prompt of every turn explains routines and lists the bot's own with each one's next run, or that it checks first.
+
+A routine has nobody to ask, so it leaves what needs the user for review: a draft or a proposed call through `stage_review`, and any new shell command or effectful plugin call Auto-review holds, staged as a persistent [review item](review-queue.md) while the call returns without running. A notice in the chat says it waits; the user edits and approves it, or rejects it, on any paired Device later. The Runner runs an approved call apart from the routine's turn and writes how it went back to that notice.
 
 The roster also carries Auto-review (see [Plugins](plugins.md#plugins)). Routines live in the roster (`Routine { id, bot_id, name, prompt, schedule, is_enabled, enabled_at, last_run_at?, last_outcome?, paused_reason?, check?, created_at }`), so every paired Device lists them and can pause, resume, run, or delete one (`routines.create` / `routines.update` / `routines.delete` / `routines.run`, and `routines.describe` to read a schedule back). The bot's Runner runs them (`crates/cli/src/routines.rs`): every half minute it starts the routines of its bots whose next run is due, or their checks, and starts none while a run or check of the routine is going on.
 
