@@ -10,7 +10,8 @@ import (
 
 // One installed plugin on a Runner, after the macOS app's PluginViewController: its state, the
 // sign-in for a remote server, its variables (a secret is written, never read back), the skills it
-// brought, and Remove. It also shows the Always allowed rules for its tools.
+// brought, and Remove. It also shows the Always allowed rules for its tools, and for Browser opened
+// from a bot's inspector, the bot's profiles.
 
 // pluginSheetWatch holds the sheets that follow the store while they are up.
 var pluginSheetWatch struct {
@@ -46,8 +47,9 @@ func pluginWatchStore(fn func(model.Event)) (stop func()) {
 }
 
 // presentPlugin is the sheet of a plugin installed on a Runner, or for one of the Runner's mcp.json
-// servers, the server's own.
-func (w *appWindow) presentPlugin(pluginID string, runner *model.Device) {
+// servers, the server's own. Opened for a bot (from its inspector), Browser's lists the bot's
+// profiles, and a screenshot goes to chatID.
+func (w *appWindow) presentPlugin(pluginID string, runner *model.Device, botID, chatID string) {
 	var installed *model.InstalledPlugin
 	for i := range runner.Plugins {
 		if runner.Plugins[i].ID == pluginID {
@@ -60,6 +62,9 @@ func (w *appWindow) presentPlugin(pluginID string, runner *model.Device) {
 		return
 	}
 	s := &pluginSheet{w: w, pluginID: pluginID, runner: runner, installed: installed, values: map[string]string{}, copiedAt: map[string]time.Time{}}
+	if bot := store.Bot(botID); bot != nil && pluginID == model.BrowserPluginID {
+		s.profiles = newBrowserProfiles(w, bot, runner, chatID)
+	}
 	s.load()
 	// The Runner's state moved: a sign-in finished, a connection failed.
 	stop := pluginWatchStore(func(event model.Event) {
@@ -70,6 +75,9 @@ func (w *appWindow) presentPlugin(pluginID string, runner *model.Device) {
 	w.present(s.view, func() {
 		s.closed = true
 		stop()
+		if s.profiles != nil {
+			s.profiles.close()
+		}
 	})
 }
 
@@ -79,6 +87,8 @@ type pluginSheet struct {
 	pluginID  string
 	runner    *model.Device
 	installed *model.InstalledPlugin
+	// profiles are Browser's for the bot the sheet was opened for.
+	profiles *browserProfiles
 
 	detail    *model.PluginDetail
 	loadError string
@@ -230,6 +240,9 @@ func (s *pluginSheet) view(c *ui.Context, sh *sheet) {
 	parts = append(parts, L("Installed on %@.", s.runner.Name))
 	result := sheetFrame(c, sheetOptions{Title: s.name(), Subtitle: strings.Join(parts, " "), Width: 520, Confirm: L("Done"), NoCancel: true}, func() {
 		s.statusSection(c)
+		if s.profiles != nil {
+			s.profiles.view(c)
+		}
 		s.signInSection(c)
 		if s.detail != nil && len(s.detail.Variables) > 0 {
 			s.setupSection(c)

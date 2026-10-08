@@ -10,7 +10,7 @@ import (
 func TestRenderPluginSheet(t *testing.T) {
 	m, tt := sheetATester(t, func(m *mainWindow) {
 		store.AutoReview.Rules = append(store.AutoReview.Rules, model.AutoReviewRule{ID: "rule-1", Text: "Create issues", Behavior: "allow", Tool: "github/create_issue"})
-		m.presentPlugin("github", sheetAWorkbench())
+		m.presentPlugin("github", sheetAWorkbench(), "", "")
 	})
 	for _, text := range []string{"GitHub", "Installed on Workbench.", "STATUS", "Ready", "Always allowed", "create_issue", "Reset", "SIGN-IN", "Signed in", "Sign in again", "Sign Out", "SETUP", "GITHUB_TOKEN", "Keys and sign-ins stay on this device.", "Save", "Remove…", "Done"} {
 		if !tt.HasText(text) {
@@ -64,7 +64,7 @@ func TestRenderPluginSheet(t *testing.T) {
 }
 
 func TestRenderPluginSheetSignIn(t *testing.T) {
-	_, tt := sheetATester(t, func(m *mainWindow) { m.presentPlugin("linear", sheetAWorkbench()) })
+	_, tt := sheetATester(t, func(m *mainWindow) { m.presentPlugin("linear", sheetAWorkbench(), "", "") })
 	for _, text := range []string{"Linear", "Sign in", "Not signed in"} {
 		if !tt.HasText(text) {
 			t.Errorf("no %q in %q", text, tt.Texts())
@@ -100,7 +100,7 @@ func TestRenderPluginSheetSignIn(t *testing.T) {
 }
 
 func TestPluginSheetOpensMcpServer(t *testing.T) {
-	_, tt := sheetATester(t, func(m *mainWindow) { m.presentPlugin("deepwiki", sheetAWorkbench()) })
+	_, tt := sheetATester(t, func(m *mainWindow) { m.presentPlugin("deepwiki", sheetAWorkbench(), "", "") })
 	if !tt.HasText("deepwiki") || !tt.HasText("read_wiki_structure") || !tt.HasText("Edit as") {
 		t.Errorf("deepwiki: %q", tt.Texts())
 	}

@@ -185,7 +185,7 @@ type Store struct {
 
 	mockMarketplace *Marketplace
 	mockMcp         map[string][]McpServer
-	mockBrowser     map[string][]BrowserSession
+	mockBrowser     map[string][]BrowserProfile
 }
 
 type pendingEvent struct {
@@ -1219,6 +1219,10 @@ func (s *Store) PluginDetail(pluginID, runnerID string, done func(PluginDetail, 
 			Status:    status,
 			Variables: []PluginDetailVariable{{Name: "GITHUB_TOKEN", Description: "A personal access token, instead of signing in.", Secret: true}},
 			Servers:   []PluginDetailServer{{Name: "github", Kind: "http", URL: "https://api.githubcopilot.com/mcp/", OAuth: true, SignedIn: status.State == PluginReady}},
+		}
+		if pluginID == BrowserPluginID {
+			// Browser runs on the Runner and signs in to nothing itself.
+			detail = PluginDetail{Status: status, Homepage: "https://github.com/microsoft/playwright-mcp", Skills: []NamedText{{Name: "Reading a page", Description: "How to read a page without filling the context."}}}
 		}
 		s.post(func() { done(detail, nil) })
 		return

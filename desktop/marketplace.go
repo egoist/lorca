@@ -402,7 +402,7 @@ func (mk *marketplace) install(plugin *model.MarketplacePlugin) {
 // manage opens the plugin's own sheet on the picked Runner: its sign-in, its setup, and Remove.
 func (mk *marketplace) manage(pluginID string) {
 	if on := mk.runner(); on != nil {
-		mk.m.presentPlugin(pluginID, on)
+		mk.m.presentPlugin(pluginID, on, "", "")
 	}
 }
 
