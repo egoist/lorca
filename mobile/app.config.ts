@@ -36,6 +36,13 @@ export default (): ExpoConfig => {
         NSSpeechRecognitionUsageDescription: "Lorca turns what you say into the message text.",
         NSPhotoLibraryUsageDescription: "Lorca attaches photos you pick to a message.",
         CFBundleAllowMixedLocalizations: true,
+        // Export compliance, answered here so App Store Connect asks nothing per build. The core
+        // encrypts with standard algorithms (X25519, Ed25519, ChaCha20-Poly1305, HKDF, SHA-2, and
+        // TLS through rustls), not the system's, and Apple asks documentation for those only of an
+        // app on the App Store in France: the French encryption declaration. With France in the
+        // App Store availability, this becomes true beside ITSEncryptionExportComplianceCode, the
+        // code Apple gives for the approved declaration. docs/releasing-mobile.md.
+        ITSAppUsesNonExemptEncryption: false,
       },
       // scripts/release-ios.ts sets a fresh one for every upload; the notify extension takes the
       // same number through CURRENT_PROJECT_VERSION.

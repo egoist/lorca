@@ -122,6 +122,22 @@ enforced in Brazil, Indonesia, Singapore, and Thailand from September 30, 2026, 
 2027. Register `app.lorca` in the [Android Developer Console](https://developer.android.com/developer-verification/guides/android-developer-console)
 with the certificate's SHA-256 above, once the developer account is verified.
 
+### 5. Export compliance
+
+The app answers App Store Connect's encryption questions itself, so a build needs no answers
+after its upload: `ITSAppUsesNonExemptEncryption` is false in `ios.infoPlist` of
+[`mobile/app.config.ts`](../mobile/app.config.ts). The core encrypts with standard algorithms
+(X25519, Ed25519, ChaCha20-Poly1305, HKDF, SHA-2, and TLS through rustls) in its own code rather
+than the system's, and for those Apple asks
+[documentation](https://developer.apple.com/help/app-store-connect/reference/app-information/export-compliance-documentation-for-encryption/)
+only of an app on the App Store in France: the French encryption declaration, filed with ANSSI.
+TestFlight is not the App Store. Before France joins the app's App Store availability, upload
+the declaration under App Information ▸ App Encryption Documentation; once Apple approves it, set
+the key to true and add `ITSEncryptionExportComplianceCode` with the code Apple shows beside the
+approved documentation. Apple's [overview](https://developer.apple.com/documentation/security/complying-with-encryption-export-regulations)
+notes that an app with exempt encryption may owe the U.S. government a year-end
+self-classification report.
+
 ## Cutting a release
 
 1. Set `version` in [`mobile/app.config.ts`](../mobile/app.config.ts), and give it a
