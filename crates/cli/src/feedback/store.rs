@@ -131,6 +131,35 @@ pub struct Store {
     pub settings: Settings,
 }
 
+/// The feedback a bot keeps, oldest first out; a pending proposal keeps the examples it cites.
+const MAX_FEEDBACK: usize = 300;
+/// Decided proposals kept so a review does not suggest a rejected change again.
+const MAX_DECIDED: usize = 100;
+
+impl Store {
+    pub fn prune(&mut self) {
+        let cited: Vec<String> = self.proposals.iter().filter(|p| p.state == "pending").flat_map(|p| p.evidence.clone()).collect();
+        let mut extra = self.feedback.len().saturating_sub(MAX_FEEDBACK);
+        self.feedback.retain(|f| {
+            let drop = extra > 0 && !cited.contains(&f.id);
+            if drop {
+                extra -= 1;
+            }
+            !drop
+        });
+        let mut extra = self.proposals.iter().filter(|p| p.state != "pending").count().saturating_sub(MAX_DECIDED);
+        self.proposals.retain(|p| {
+            let drop = extra > 0 && p.state != "pending";
+            if drop {
+                extra -= 1;
+            }
+            !drop
+        });
+        let kept: Vec<&String> = self.feedback.iter().map(|f| &f.id).collect();
+        self.reviewed_ids.retain(|id| kept.contains(&id));
+    }
+}
+
 pub fn path(app: &App, bot_id: &str) -> Result<PathBuf, String> {
     let machine = app
         .machine_file()
@@ -223,8 +252,8 @@ pub fn diff(before: &Value, after: &Value) -> String {
     out
 }
 
-/// Review payloads may include structured credential fields; redact before serializing examples.
-pub fn scrub_value(value: &Value) -> Value {
+/// JSON payloads may include structured credential fields; redact before serializing examples.
+fn scrub_value(value: &Value) -> Value {
     match value {
         Value::String(text) => Value::String(memory::scrub(text)),
         Value::Array(items) => Value::Array(items.iter().map(scrub_value).collect()),

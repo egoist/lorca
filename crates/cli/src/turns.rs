@@ -341,9 +341,6 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
     }
     let mut state = sink.0.lock().unwrap();
     state.finish();
-    if routine.is_some() && !cancel.is_cancelled() && (failed || state.failed) {
-        crate::feedback::routine_outcome(app, job, true);
-    }
     let outcome = if state.sent {
         TurnOutcome::Sent
     } else if failed || state.failed {

@@ -99,6 +99,10 @@ pub fn edit(app: &Arc<App>, id: &str, name: Option<&str>, schedule_text: Option<
             routine.enabled_at = now_secs();
         }
         if let Some(prompt) = prompt {
+            // A task written here is the task the user asked for, feedback revisions included.
+            if prompt != routine.prompt {
+                routine.feedback_authorization_prompt = None;
+            }
             routine.prompt = prompt;
         }
         if let Some(check) = check {
@@ -126,7 +130,8 @@ fn clean_check(code: &str) -> Result<Option<String>, String> {
 /// A routine's check is its Runner's to change, and a build that does not know checks writes
 /// the roster without them. When `incoming` leaves out the check that a routine of a bot on
 /// `this_device` has in `current`, the check stays. True when one did, so the roster goes up
-/// again with it. The same merge preserves a feedback revision's original task authority.
+/// again with it. The same merge keeps a feedback revision's original task authority while the
+/// task is still the revised one; a task edited on another Device is the user's own.
 pub fn keep_checks(current: &[Routine], incoming: &mut [Routine], bots: &[Bot], this_device: &str) -> bool {
     let mut kept = false;
     for routine in incoming.iter_mut() {
@@ -138,7 +143,7 @@ pub fn keep_checks(current: &[Routine], incoming: &mut [Routine], bots: &[Bot], 
                 routine.check = held.check.clone();
                 kept = true;
             }
-            if routine.feedback_authorization_prompt.is_none() && held.feedback_authorization_prompt.is_some() {
+            if routine.feedback_authorization_prompt.is_none() && held.feedback_authorization_prompt.is_some() && routine.prompt == held.prompt {
                 routine.feedback_authorization_prompt = held.feedback_authorization_prompt.clone();
                 kept = true;
             }

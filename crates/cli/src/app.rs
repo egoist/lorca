@@ -1167,6 +1167,7 @@ impl App {
         if let Err(error) = self.store.forget_codemode_values_of(id) {
             tracing::warn!(%error, "forgetting a deleted bot's script values");
         }
+        crate::feedback::forget_bot(self, id);
         #[cfg(feature = "runner")]
         self.shell_sessions.close_orphans(self);
         self.roster_changed(true);

@@ -185,7 +185,27 @@ async fn reviewed_apply_versions_and_guarded_rollback_preserve_authority_and_sch
     .await
     .unwrap();
     assert_eq!(s.app.routine(&r.id).unwrap().prompt, r.prompt);
+    assert_eq!(s.app.routine(&r.id).unwrap().feedback_authorization_prompt, None, "the user's own task again");
     assert_eq!(store::load(&s.app, &s.bot).unwrap().revisions[1].version, 2);
+}
+#[tokio::test]
+async fn a_users_own_edit_replaces_the_original_task_authority() {
+    let s = scratch();
+    let (r, p) = proposal(&s).await;
+    decide(&s.app, &s.bot, &p.id, &p.diff_hash, true, "device").await.unwrap();
+    let revised = s.app.routine(&r.id).unwrap();
+    crate::routines::edit(&s.app, &r.id, None, Some("every 2h"), Some(&revised.prompt), None).unwrap();
+    assert_eq!(s.app.routine(&r.id).unwrap().feedback_authorization_prompt, Some(r.prompt.clone()), "an unchanged task keeps it");
+    // Another Device's edit arrives without the field; the Runner keeps none for a new task.
+    let bots = s.app.state.lock().unwrap().bots.clone();
+    let held = vec![s.app.routine(&r.id).unwrap()];
+    let mut incoming = held.clone();
+    incoming[0].prompt = "Archive newsletters.".into();
+    incoming[0].feedback_authorization_prompt = None;
+    crate::routines::keep_checks(&held, &mut incoming, &bots, &s.app.this_device_id().unwrap());
+    assert_eq!(incoming[0].feedback_authorization_prompt, None);
+    crate::routines::edit(&s.app, &r.id, None, None, Some("Archive newsletters."), None).unwrap();
+    assert_eq!(s.app.routine(&r.id).unwrap().feedback_authorization_prompt, None);
 }
 #[tokio::test]
 async fn later_user_edits_refuse_stale_apply_and_rollback() {
@@ -340,6 +360,24 @@ async fn recovery_resolves_applied_write_ahead_revision_without_reapplying() {
     assert_eq!(data.revisions[0].state, "applied");
     assert_eq!(data.proposals[0].state, "accepted");
 }
+#[tokio::test]
+async fn the_list_stays_small_and_the_store_keeps_the_newest_feedback() {
+    let s = scratch();
+    let (_, p) = proposal(&s).await;
+    for n in 0..310 {
+        let mut r = input(&s, Kind::Accepted);
+        r.note = format!("Good brief {n}");
+        record(&s.app, &s.bot, r).await.unwrap();
+    }
+    let data = store::load(&s.app, &s.bot).unwrap();
+    assert_eq!(data.feedback.len(), 300);
+    assert!(data.feedback.iter().any(|f| f.id == p.evidence[0]), "a pending proposal keeps its evidence");
+    let list = serve(&s.app, "feedback.list", &json!({"bot_id":s.bot}), "device").await.unwrap();
+    assert_eq!(list["feedback_count"], 300);
+    assert_eq!(list["feedback"].as_array().unwrap().len(), 31);
+    assert_eq!(list["feedback"][0]["note"], "Good brief 309");
+    assert_eq!(list["proposals"][0]["id"], p.id.as_str());
+}
 #[test]
 fn diff_handles_unicode_empty_files_and_shared_suffix() {
     assert!(store::diff(&json!("hello\n尾巴"), &json!("changed\n尾巴")).contains("+changed"));
@@ -402,34 +440,6 @@ async fn installed_skills_apply_and_roll_back_without_refresh_overwriting_review
     )
     .await
     .is_err());
-}
-#[tokio::test]
-async fn review_hook_records_only_explicit_user_events_and_deduplicates_them() {
-    let s = scratch();
-    let actor = s.app.this_device_id().unwrap();
-    let item = json!({"id":"review-example","bot_id":s.bot,"origin":{"chat_id":s.origin.chat_id,"message_id":s.origin.message_id,"task_id":"canonical-task"},"payload":{"draft":"Brief","api_key":"do-not-store-this"}});
-    for change in ["created", "cancelled", "interrupted", "executed"] {
-        assert!(
-            record_review_change(&s.app, &item, &json!({"change":change}))
-                .await
-                .unwrap()
-                .is_none()
-        );
-    }
-    let edit = json!({"id":"edit-event","change":"edited","actor_device_id":actor,"previous_payload":{"draft":"Long draft","authorization":"secret-bearer"}});
-    let a = record_review_change(&s.app, &item, &edit)
-        .await
-        .unwrap()
-        .unwrap();
-    let b = record_review_change(&s.app, &item, &edit)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(a.id, b.id);
-    assert_eq!(a.kind, Kind::Edited);
-    assert!(!a.after.unwrap().contains("do-not-store-this"));
-    assert!(!a.before.unwrap().contains("secret-bearer"));
-    assert_eq!(a.origin.task_id.as_deref(), Some("canonical-task"));
 }
 #[tokio::test]
 async fn workflow_exclusion_blocks_proposals_and_future_recording() {
@@ -654,10 +664,7 @@ fn revised_unattended_guidance_cannot_enable_or_rewrite_another_routine() {
         "routines",
         &json!({"action":"create","enabled":true})
     ));
-    assert!(changes_controls(
-        "budgets",
-        &json!({"action":"set","max_usd":1000})
-    ));
+    assert!(changes_controls("edit_bot", &json!({"bot_id":"b","model":"bigger"})));
     assert!(!changes_controls("routines", &json!({"action":"list"})));
     assert!(!changes_controls("routines", &json!({"action":"pause"})));
 }

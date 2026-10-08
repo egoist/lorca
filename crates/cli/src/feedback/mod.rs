@@ -141,7 +141,9 @@ pub async fn record(app: &Arc<App>, bot_id: &str, input: Record) -> Result<Feedb
         return Err("Explicit feedback needs the user's words".into());
     }
     store.feedback.push(feedback.clone());
+    store.prune();
     store::save(app, bot_id, &store)?;
+    announce(app, bot_id, &store);
     Ok(feedback)
 }
 
@@ -325,6 +327,10 @@ async fn write_target(
                     r.feedback_authorization_prompt = Some(r.prompt.clone());
                 }
                 r.prompt = after.as_str().ok_or("A routine prompt is text")?.into();
+                // Back at the task the user wrote, the run needs no other authority.
+                if r.feedback_authorization_prompt.as_deref() == Some(r.prompt.as_str()) {
+                    r.feedback_authorization_prompt = None;
+                }
                 if let Err(error) = app.store.save_state(&state) {
                     *state.routines.iter_mut().find(|r| &r.id == id).unwrap() = prior;
                     return Err(error.to_string());
@@ -532,6 +538,7 @@ async fn rollback(
     .into();
     store::save(app, bot_id, &store)?;
     result?;
+    announce(app, bot_id, &store);
     Ok(json!({"revision":store.revisions.last()}))
 }
 
@@ -597,36 +604,42 @@ pub async fn serve(
         "feedback.rollback" => {
             rollback(app, bot_id, field("id")?, field("expected_hash")?, actor).await
         }
+        // What the apps show, bounded to stay well under the app socket's message size: the
+        // newest included feedback and every example a pending proposal cites, pending
+        // proposals, and the newest applied revisions with the change each one made.
         "feedback.list" => {
             let _guard = app.feedback_lock.lock().await;
             let mut store = store::load(app, bot_id)?;
             reconcile(app, bot_id, &mut store).await?;
+            let pending: Vec<&Proposal> = store.proposals.iter().filter(|p| p.state == "pending").collect();
+            let included: Vec<&Feedback> = store.feedback.iter().filter(|f| !f.excluded).collect();
+            let feedback: Vec<Value> = included
+                .iter()
+                .rev()
+                .enumerate()
+                .filter(|(index, f)| *index < 30 || pending.iter().any(|p| p.evidence.contains(&f.id)))
+                .map(|(_, f)| json!({"id":f.id,"kind":f.kind,"origin":f.origin,"note":store::clean(&f.note,300),"example":store::clean(&f.example,300),"target":f.target,"created_at":f.created_at}))
+                .collect();
+            let mut revisions = Vec::new();
+            for r in store.revisions.iter().rev().filter(|r| r.state == "applied").take(20) {
+                let current = read_target(app, bot_id, &r.target).await.ok();
+                revisions.push(json!({
+                    "id": r.id, "target": r.target, "created_at": r.created_at, "rollback_of": r.rollback_of,
+                    "diff": store::diff(&r.before.content, &r.after),
+                    "can_rollback": current.as_ref().is_some_and(|c| c.content == r.after),
+                    "current_hash": current.map(|c| c.hash),
+                }));
+            }
             let mut targets = Vec::new();
             for r in app.routines_of(bot_id) {
                 targets.push(json!({"target":Target::RoutinePrompt{id:r.id},"name":r.name}));
             }
             for p in app.plugins.lock().unwrap().installed() {
                 for s in &p.manifest.skills {
-                    targets.push(json!({"target":Target::PluginSkill{plugin_id:p.manifest.id.clone(),name:s.name.clone()},"name":format!("{} / {}",p.manifest.name,s.name)}));
+                    targets.push(json!({"target":Target::PluginSkill{plugin_id:p.manifest.id.clone(),name:s.name.clone()},"name":format!("{} · {}",p.manifest.name,s.name)}));
                 }
             }
-            let mut revisions = Vec::new();
-            for r in &store.revisions {
-                let mut out = serde_json::to_value(r).map_err(|e| e.to_string())?;
-                if r.state == "applied" {
-                    if let Ok(current) = read_target(app, bot_id, &r.target).await {
-                        out["current_hash"] = json!(current.hash);
-                        out["can_rollback"] = json!(current.content == r.after);
-                        if current.content == r.after {
-                            out["rollback_diff"] = json!(store::diff(&r.after, &r.before.content));
-                        }
-                    }
-                }
-                revisions.push(out);
-            }
-            Ok(
-                json!({"feedback":store.feedback,"proposals":store.proposals,"revisions":revisions,"settings":store.settings,"targets":targets}),
-            )
+            Ok(json!({"feedback":feedback,"feedback_count":included.len(),"proposals":pending,"revisions":revisions,"settings":{"review_every_secs":store.settings.review_every_secs},"targets":targets}))
         }
         "feedback.settings" => {
             #[cfg(feature = "runner")]
@@ -645,6 +658,7 @@ pub async fn serve(
             store.settings.review_every_secs = interval;
             store.settings.last_review_at = Some(now_secs());
             store::save(app, bot_id, &store)?;
+            announce(app, bot_id, &store);
             Ok(json!({"settings":store.settings}))
         }
         "feedback.exclude" => {
@@ -720,6 +734,20 @@ pub async fn serve(
     }
 }
 
+/// A deleted bot's feedback, proposals and revision history go with it.
+pub fn forget_bot(app: &App, bot_id: &str) {
+    #[cfg(feature = "runner")]
+    if let Some(review) = app.feedback_reviews.lock().unwrap().get(bot_id) {
+        review.cancel();
+    }
+    if let Ok(path) = store::path(app, bot_id) {
+        match std::fs::remove_file(path) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => tracing::warn!(%error, "forgetting a deleted bot's feedback"),
+            _ => {}
+        }
+    }
+}
+
 /// Record routine failures from the actual job outcome, with a stable source message.
 pub fn routine_outcome(app: &Arc<App>, job: &Job, failed: bool) {
     if !failed {
@@ -782,90 +810,13 @@ pub fn routine_outcome(app: &Arc<App>, job: &Job, failed: bool) {
 #[cfg(test)]
 mod tests;
 
-/// #73 supplies its existing ReviewItem and one explicit user history event as JSON.
-/// Stable history ids deduplicate delivery; cancellation, expiry and execution are not opinions.
-pub async fn record_review_change(
-    app: &Arc<App>,
-    item: &Value,
-    event: &Value,
-) -> Result<Option<Feedback>, String> {
-    let kind = match event["change"].as_str() {
-        Some("approved") => Kind::Accepted,
-        Some("rejected") => Kind::Rejected,
-        Some("edited") => Kind::Edited,
-        _ => return Ok(None),
-    };
-    let actor = event["actor_device_id"]
-        .as_str()
-        .filter(|s| !s.is_empty())
-        .ok_or("Explicit review feedback needs its user Device")?;
-    if app.device(actor).is_none() {
-        return Err("The review decision was not made by a paired Device".into());
-    }
-    let bot_id = item["bot_id"]
-        .as_str()
-        .ok_or("Review item omitted bot_id")?;
-    let review_id = item["id"].as_str().ok_or("Review item omitted id")?;
-    let chat_id = item["origin"]["chat_id"]
-        .as_str()
-        .ok_or("Review item omitted originating chat")?;
-    let message_id = item["origin"]["message_id"]
-        .as_str()
-        .map(str::to_string)
-        .unwrap_or_else(|| format!("review-status-{review_id}"));
-    let event_id = event["id"]
-        .as_str()
-        .ok_or("Review history omitted stable event id")?;
-    let edited = kind == Kind::Edited;
-    let before = if edited {
-        Some(store::text(&store::scrub_value(
-            event
-                .get("previous_payload")
-                .ok_or("Edited review omitted previous_payload")?,
-        )))
-    } else {
-        None
-    };
-    let after = if edited {
-        Some(store::text(&store::scrub_value(
-            item.get("payload").ok_or("Review item omitted payload")?,
-        )))
-    } else {
-        None
-    };
-    let input = Record {
-        kind,
-        origin: Origin {
-            chat_id: chat_id.into(),
-            message_id,
-            routine_id: item["origin"]["routine_id"].as_str().map(str::to_string),
-            review_id: Some(review_id.into()),
-            task_id: item["origin"]["task_id"].as_str().map(str::to_string),
-        },
-        note: format!(
-            "User {} review {}",
-            event["change"].as_str().unwrap(),
-            review_id
-        ),
-        before,
-        after,
-        target: item["origin"]["routine_id"]
-            .as_str()
-            .map(|id| Target::RoutinePrompt { id: id.into() }),
-        excluded: false,
-        event_id: Some(format!("review:{review_id}:{event_id}")),
-    };
-    record(app, bot_id, input).await.map(Some)
-}
-
 /// Feedback-authored guidance does not authorize unattended control-plane changes.
-/// Routine edits can authorize another task as well as change its schedule, so stage them
-/// as a new proposal or ask the user in chat instead of applying them during a revised run.
+/// Routine edits can authorize another task as well as change its schedule, and bot edits
+/// change what a bot runs with, so a revised run stages a proposal or asks the user in chat.
 pub fn changes_controls(tool: &str, args: &Value) -> bool {
     match tool {
         "routines" => !matches!(args["action"].as_str(), Some("list" | "pause")),
-        "edit_bot" | "create_bot" => args.get("permissions").is_some(),
-        "budgets" | "auto_review" => !matches!(args["action"].as_str(), Some("list" | "get")),
+        "edit_bot" | "create_bot" => true,
         _ => false,
     }
 }
