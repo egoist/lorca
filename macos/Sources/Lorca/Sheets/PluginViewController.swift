@@ -108,6 +108,7 @@ final class PluginViewController: SheetViewController {
                 self.render(detail)
             } catch {
                 guard load == self.loads else { return }
+                self.status.isHidden = false
                 self.status.setRows([
                     KeyValueRow(key: L("State"), value: error.localizedDescription, tint: .systemRed)
                 ])
@@ -118,12 +119,13 @@ final class PluginViewController: SheetViewController {
 
     private func render(_ detail: PluginDetail) {
         setSheetTitle(detail.status.name)
+        // A named account (Gmail · Work) has one card, Account: its name and its sign-in, which
+        // says how it stands. Its service's page has the site.
+        let accountName = detail.status.accountName
         var statusRows: [NSView] = []
-        if let accountName = detail.status.accountName {
-            nameRow.setValue(accountName)
-            statusRows.append(nameRow)
+        if accountName == nil {
+            statusRows.append(KeyValueRow(key: L("State"), value: detail.status.detail, tint: detail.status.stateColor))
         }
-        statusRows.append(KeyValueRow(key: L("State"), value: detail.status.detail, tint: detail.status.stateColor))
         let rules = store.autoReview.rules.filter { $0.tool?.hasPrefix("\(pluginID)/") == true }
         if !rules.isEmpty {
             let always = ActionRow(
@@ -139,51 +141,66 @@ final class PluginViewController: SheetViewController {
             }
             statusRows.append(always)
         }
-        if let homepage = detail.homepage, let url = URL(string: homepage) {
+        if accountName == nil, let homepage = detail.homepage, let url = URL(string: homepage) {
             let site = ActionRow(
                 key: L("Site"), value: url.host ?? homepage, tint: .secondaryLabelColor,
                 actionTitle: L("Open"))
             site.onAction = { NSWorkspace.shared.openLink(url) }
             statusRows.append(site)
         }
+        status.isHidden = statusRows.isEmpty
         status.setRows(statusRows)
 
         let oauthServers = detail.servers.filter(\.oauth)
-        signIn.isHidden = oauthServers.isEmpty
-        signIn.setRows(
-            oauthServers.map { server in
-                let key = oauthServers.count > 1 ? server.name : L("Account")
-                // A device-flow sign-in waits for its code: the code, and the chat card's
-                // button, which copies it and opens the page to enter it on.
-                if let code = server.code, let link = server.link.flatMap(URL.init(string:)) {
-                    let row = ActionRow(
-                        key: key, value: code, tint: .labelColor,
-                        actionTitle: L("Copy code and open %@", link.host ?? L("link")), monospaced: true)
-                    row.onAction = { [weak row] in
-                        NSPasteboard.general.clearContents()
-                        if NSPasteboard.general.setString(code, forType: .string) { row?.showCopied() }
-                        NSWorkspace.shared.openLink(link)
-                    }
-                    return row
-                }
+        var signInRows: [NSView] = []
+        if let accountName {
+            nameRow.setValue(accountName)
+            signInRows.append(nameRow)
+        }
+        signIn.title = accountName == nil ? L("Sign-in") : L("Account")
+        signInRows += oauthServers.map { server -> NSView in
+            let key = accountName != nil ? L("Sign-in") : oauthServers.count > 1 ? server.name : L("Account")
+            // A device-flow sign-in waits for its code: the code, and the chat card's
+            // button, which copies it and opens the page to enter it on.
+            if let code = server.code, let link = server.link.flatMap(URL.init(string:)) {
                 let row = ActionRow(
-                    key: key,
-                    value: server.signedIn ? L("Signed in") : L("Not signed in"),
-                    tint: server.signedIn ? .systemGreen : .secondaryLabelColor,
-                    actionTitle: server.signedIn ? L("Sign Out") : L("Sign in"),
-                    secondActionTitle: server.signedIn ? L("Sign in again") : nil)
-                let signedIn = server.signedIn
-                let serverName = server.name
-                row.onAction = { [weak self] in
-                    if signedIn {
-                        self?.signOut(server: serverName)
-                    } else {
-                        self?.connect()
-                    }
+                    key: key, value: code, tint: .labelColor,
+                    actionTitle: L("Copy code and open %@", link.host ?? L("link")), monospaced: true)
+                row.onAction = { [weak row] in
+                    NSPasteboard.general.clearContents()
+                    if NSPasteboard.general.setString(code, forType: .string) { row?.showCopied() }
+                    NSWorkspace.shared.openLink(link)
                 }
-                row.onSecondAction = { [weak self] in self?.connect() }
                 return row
-            })
+            }
+            var (value, tint) = server.signedIn ? (L("Signed in"), NSColor.systemGreen) : (L("Not signed in"), NSColor.secondaryLabelColor)
+            if accountName != nil, ![.ready, .needsAuth].contains(detail.status.state) {
+                (value, tint) = (detail.status.shortStatus, detail.status.shortStatusColor)
+            }
+            // Before its setup, an account has nothing to sign in with.
+            let setUp = accountName == nil || detail.status.state != .needsSetup
+            let row = ActionRow(
+                key: key, value: value, tint: tint,
+                actionTitle: !setUp ? nil : server.signedIn ? L("Sign Out") : L("Sign in"),
+                secondActionTitle: setUp && server.signedIn ? L("Sign in again") : nil)
+            let signedIn = server.signedIn
+            let serverName = server.name
+            row.onAction = { [weak self] in
+                if signedIn {
+                    self?.signOut(server: serverName)
+                } else {
+                    self?.connect()
+                }
+            }
+            row.onSecondAction = { [weak self] in self?.connect() }
+            return row
+        }
+        // Why an account can't connect, in the server's words.
+        if accountName != nil, detail.status.state == .error, !detail.status.detail.isEmpty {
+            signInRows.append(NoteRow(text: detail.status.detail))
+        }
+        signIn.isHidden = signInRows.isEmpty
+        signIn.setRows(signInRows)
 
         fields = []
         variables.isHidden = detail.variables.isEmpty

@@ -61,7 +61,6 @@ func TestIntegrationAccountsOnTheServicePage(t *testing.T) {
 	if tt.HasText(L("Manage Accounts…")) {
 		t.Error("the account sheet links to another list of accounts")
 	}
-	renderBoth(t, tt, "integration-account-work")
 }
 
 func TestIntegrationAddAccountAsksForItsName(t *testing.T) {
@@ -141,4 +140,36 @@ func TestIntegrationSettingsListsEachAccount(t *testing.T) {
 	settle(tt)
 	wantText(t, tt, "Gmail · Work", "Gmail · Personal")
 	renderBoth(t, tt, "integration-settings")
+}
+
+// A named account's sheet says how it stands once, in its sign-in row, and leaves the site to its
+// service's page.
+func TestIntegrationAccountSheetIsOneCard(t *testing.T) {
+	for _, c := range []struct {
+		id, title, render string
+		want              []string
+	}{
+		{"1", "Gmail · Work", "integration-account-work", []string{L("Signed in"), L("Sign in again"), L("Sign Out")}},
+		{"2", "Gmail · Personal", "integration-account-personal", []string{L("Not signed in"), L("Sign in")}},
+		{"3", "Gmail · Family", "", []string{L("Needs more access"), L("Sign in")}},
+		{"4", "Gmail · Old job", "", []string{L("Can't connect"), "gmailmcp.googleapis.com could not be reached. Check the connection and try again."}},
+	} {
+		t.Run(c.title, func(t *testing.T) {
+			_, tt := sheetTester(t, func(m *mainWindow) {
+				gmailAccounts(sheetAWorkbench())
+				m.presentPlugin("gmail-0000000000000000000000000000000"+c.id, sheetAWorkbench())
+			})
+			sheetASettle(tt)
+			settleTransitions(tt)
+			wantText(t, tt, append([]string{c.title, L("Account"), L("Name"), L("Sign-in")}, c.want...)...)
+			for _, gone := range []string{L("Status"), L("State"), L("Site"), "developers.google.com"} {
+				if tt.HasText(gone) {
+					t.Errorf("the sheet shows %q", gone)
+				}
+			}
+			if c.render != "" {
+				renderBoth(t, tt, c.render)
+			}
+		})
+	}
 }
