@@ -1,5 +1,10 @@
 import type { ExpoConfig } from "expo/config";
 
+// The phone app's version on both platforms. A release (`mobile-vX.Y.Z`) names it, and Android
+// orders its builds by a versionCode made from it: 1.2.3 is 1002003.
+const version = "1.0.0";
+const [major, minor, patch] = version.split(".").map(Number);
+
 export default (): ExpoConfig => {
   const development =
     process.env.LORCA_MOBILE_VARIANT === "development" ||
@@ -17,7 +22,7 @@ export default (): ExpoConfig => {
   return {
     name: appName,
     slug: "lorca",
-    version: "1.0.0",
+    version,
     scheme: development ? "lorca-dev" : "lorca",
     orientation: "portrait",
     icon,
@@ -31,6 +36,13 @@ export default (): ExpoConfig => {
         NSSpeechRecognitionUsageDescription: "Lorca turns what you say into the message text.",
         NSPhotoLibraryUsageDescription: "Lorca attaches photos you pick to a message.",
         CFBundleAllowMixedLocalizations: true,
+        // Export compliance, answered here so App Store Connect asks nothing per build. The core
+        // encrypts with standard algorithms (X25519, Ed25519, ChaCha20-Poly1305, HKDF, SHA-2, and
+        // TLS through rustls), not the system's, and Apple asks documentation for those only of an
+        // app on the App Store in France: the French encryption declaration. With France in the
+        // App Store availability, this becomes true beside ITSEncryptionExportComplianceCode, the
+        // code Apple gives for the approved declaration. docs/releasing-mobile.md.
+        ITSAppUsesNonExemptEncryption: false,
       },
       // scripts/release-ios.ts sets a fresh one for every upload; the notify extension takes the
       // same number through CURRENT_PROJECT_VERSION.
@@ -49,7 +61,7 @@ export default (): ExpoConfig => {
         foregroundImage: icon,
       },
       predictiveBackGestureEnabled: true,
-      versionCode: 1,
+      versionCode: major * 1_000_000 + minor * 1_000 + patch,
     },
     web: {
       favicon,
