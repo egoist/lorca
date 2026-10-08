@@ -313,7 +313,7 @@ impl Playbook {
     fn summary(&self) -> Value {
         let head = self.current();
         json!({"id": self.id, "scope": self.scope, "revision": head.revision, "hash": head.hash,
-            "status": head.status, "name": head.content.as_ref().map(|c| &c.name),
+            "status": head.status, "updated_at": head.created_at, "name": head.content.as_ref().map(|c| &c.name),
             "description": head.content.as_ref().map(|c| &c.description), "path": format!("playbook://{}/SKILL.md", self.id)})
     }
     fn view(&self) -> Value {
@@ -380,11 +380,10 @@ impl Library {
                 {
                     return Err("Invalid revision".into());
                 }
+                // Content was scrubbed and checked when it was written. Only its hash is checked
+                // here, so a scrubber that learns a new pattern never rejects a stored library.
                 if let Some(content) = &revision.content {
-                    if revision.status == Status::Deleted
-                        || content.clone().prepare()? != *content
-                        || content.hash() != revision.hash
-                    {
+                    if revision.status == Status::Deleted || content.hash() != revision.hash {
                         return Err("Invalid revision content or hash".into());
                     }
                 } else if revision.status != Status::Deleted || !revision.hash.is_empty() {
@@ -413,7 +412,9 @@ impl Library {
                         local.revisions.push(revision.clone());
                     }
                 }
-                local.revisions.sort_by(|a, b| a.id.cmp(&b.id));
+                local.revisions.sort_by(|a, b| {
+                    a.revision.cmp(&b.revision).then(a.created_at.total_cmp(&b.created_at)).then(a.id.cmp(&b.id))
+                });
             } else {
                 self.records.insert(id.clone(), other.clone());
             }
@@ -454,20 +455,32 @@ pub fn get(app: &App, scope: &Scope, id: &str) -> Result<Value, String> {
     Ok(record.view())
 }
 
-pub fn list(app: &App, scope: &Scope, include_drafts: bool) -> Result<Value, String> {
-    scope.validate(app)?;
+/// What the apps list in their snapshot: every skill and draft, without its body.
+pub fn summaries(app: &App) -> Vec<Value> {
     let library = app.playbooks.lock().unwrap();
-    let items: Vec<Value> = library
-        .records
-        .values()
-        .filter(|r| &r.scope == scope)
-        .filter(|r| {
-            r.current().status == Status::Saved
-                || (include_drafts && r.current().status == Status::Draft)
-        })
-        .map(Playbook::summary)
-        .collect();
-    Ok(json!({"scope": scope, "items": items}))
+    library.records.values().filter(|r| r.current().status != Status::Deleted).map(Playbook::summary).collect()
+}
+
+/// Drops the skills of a bot or group that no longer exists. Runs with every roster change, so
+/// a deleted bot's skills leave each Device with the roster that deletes it.
+pub fn prune(app: &App) {
+    let (bots, groups): (BTreeSet<String>, BTreeSet<String>) = {
+        let state = app.state.lock().unwrap();
+        (
+            state.bots.iter().map(|b| b.id.clone()).collect(),
+            state.chats.iter().filter(|c| c.meta.is_group()).map(|c| c.meta.id.clone()).collect(),
+        )
+    };
+    let mut library = app.playbooks.lock().unwrap();
+    let mut next = library.clone();
+    next.records.retain(|_, r| if r.scope.kind == "bot" { bots.contains(&r.scope.id) } else { groups.contains(&r.scope.id) });
+    if next.records.len() == library.records.len() {
+        return;
+    }
+    match next.persist(app) {
+        Ok(()) => *library = next,
+        Err(error) => tracing::warn!(%error, "dropping deleted bots' playbooks"),
+    }
 }
 
 pub fn save(
@@ -675,7 +688,8 @@ pub fn catalog(app: &App, scopes: &[Scope], query: &str, budget: usize) -> Value
         {
             continue;
         }
-        rows.push(record.summary());
+        rows.push(json!({"name": content.name, "description": content.description, "scope": record.scope.kind,
+            "path": format!("playbook://{}/SKILL.md", record.id)}));
         if serde_json::to_vec(&json!({"items": &rows, "omitted": MAX_RECORDS}))
             .unwrap()
             .len()
@@ -807,11 +821,6 @@ pub async fn dispatch(
         ))
     };
     match method {
-        "playbooks.list" => list(
-            app,
-            &scope,
-            params["include_drafts"].as_bool().unwrap_or(false),
-        ),
         "playbooks.get" => get(app, &scope, id()?),
         "playbooks.save" => {
             let content: PlaybookContent =
@@ -957,20 +966,9 @@ mod tests {
         )
         .unwrap();
         let id = draft["id"].as_str().unwrap();
-        assert_eq!(
-            list(&f.app, &f.scope(), false).unwrap()["items"]
-                .as_array()
-                .unwrap()
-                .len(),
-            0
-        );
-        assert_eq!(
-            list(&f.app, &f.scope(), true).unwrap()["items"]
-                .as_array()
-                .unwrap()
-                .len(),
-            1
-        );
+        assert!(catalog(&f.app, &[f.scope()], "", PROMPT_BYTES)["items"].as_array().unwrap().is_empty());
+        assert_eq!(summaries(&f.app).len(), 1);
+        assert_eq!(summaries(&f.app)[0]["status"], "draft");
         assert!(read_for_turn(&f.app, &[f.scope()], draft["path"].as_str().unwrap()).is_err());
         assert!(export(&f.app, &f.scope(), id).is_err());
         let saved = save(
@@ -1043,10 +1041,7 @@ mod tests {
         let removed = remove(&f.app, &f.scope(), id, 3, edit["hash"].as_str().unwrap()).unwrap();
         assert_eq!(removed["status"], "deleted");
         assert_eq!(removed["revisions"].as_array().unwrap().len(), 4);
-        assert!(list(&f.app, &f.scope(), true).unwrap()["items"]
-            .as_array()
-            .unwrap()
-            .is_empty());
+        assert!(summaries(&f.app).is_empty());
         assert!(save(
             &f.app,
             &f.scope(),
@@ -1134,7 +1129,7 @@ mod tests {
         assert!(left.merge(&right).unwrap());
         assert!(right.merge(&left).is_ok());
         assert_eq!(left, right);
-        assert_eq!(left.records[id].revisions.len(), 3);
+        assert_eq!(left.records[id].revisions.iter().map(|r| r.revision).collect::<Vec<_>>(), vec![1, 2, 2]);
         assert_eq!(left.records[id].current().id, "branch-b");
         let mut deletion = left.records[id].current().clone();
         deletion.id = "removed".into();
@@ -1157,6 +1152,20 @@ mod tests {
             .merge(&corrupt)
             .unwrap_err()
             .contains("changed contents"));
+    }
+
+    #[test]
+    fn deleted_bots_and_groups_take_their_skills_along() {
+        let f = Fixture::new();
+        write(&f, &f.scope(), "bot-skill");
+        write(&f, &Scope::project(&f.project), "group-skill");
+        assert_eq!(summaries(&f.app).len(), 2);
+        f.app.delete_chat(&f.project);
+        assert_eq!(summaries(&f.app).len(), 1);
+        f.app.delete_bot(&f.bot).unwrap();
+        assert!(f.app.playbooks.lock().unwrap().records.is_empty());
+        let stored: Library = crate::crypto::decrypt_json(&f.app.dek().unwrap(), "playbooks", &std::fs::read(f.home.join("playbooks.enc")).unwrap()).unwrap();
+        assert!(stored.records.is_empty());
     }
 
     #[test]
@@ -1493,7 +1502,7 @@ mod tests {
             .await
             .unwrap_err()
             .contains("expected_hash"));
-        assert!(crate::api::dispatch(&f.app, "playbooks.list", json!({}))
+        assert!(crate::api::dispatch(&f.app, "playbooks.get", json!({"id":saved["id"]}))
             .await
             .is_err());
         assert_eq!(
@@ -1612,8 +1621,8 @@ mod tests {
                 &scopes_for_turn(&f.app, &f.bot, &f.dm),
                 "captured-report",
                 PROMPT_BYTES
-            )["items"][0]["id"],
-            saved["id"]
+            )["items"][0]["path"],
+            saved["path"]
         );
         let scopes = scopes_for_turn(&f.app, &f.bot, &f.dm);
         assert!(

@@ -27,18 +27,17 @@ pub fn tools(app: &Arc<App>, bot_id: &str, chat_id: &str) -> Vec<Arc<dyn Tool>> 
         .collect()
 }
 
+/// The skills this turn may use, by name and description; nothing when there are none.
 pub fn prompt(app: &App, bot_id: &str, chat_id: &str) -> String {
     let scopes = playbooks::scopes_for_turn(app, bot_id, chat_id);
     let catalog = playbooks::catalog(app, &scopes, "", playbooks::PROMPT_BYTES);
-    format!("\nUser playbooks (explicit scopes: {}):\n{}\n\
-        Read a matching skill with read_playbook using its playbook:// path before applying it. Relative references \
-        resolve under the same playbook://<id>/ directory; read them with read_playbook. list_playbooks searches \
-        names/descriptions when catalog entries are omitted and can list source message ids in this chat. Full \
-        instructions, examples, references and scripts stay out of discovery. To save completed work or propose \
-        standing instructions from at least two repeated user corrections, use propose_playbook with explicit \
-        evidence ids. It creates an inactive draft the user reviews in Playbooks; only the user's Save activates it. \
-        Skill content and scripts never grant execution permissions: every action keeps its normal Auto-review.\n",
-        serde_json::to_string(&scopes).unwrap(), catalog)
+    if catalog["items"].as_array().is_none_or(|items| items.is_empty()) && catalog["omitted"] == 0 {
+        return String::new();
+    }
+    format!("\nThe user's skills (scope bot: yours everywhere; scope project: this group's):\n{catalog}\n\
+        When one fits the task, read it with read_playbook at its playbook:// path before you start; its bundled files \
+        resolve under the same playbook://<id>/ directory. list_playbooks searches the ones the list omits. A skill's \
+        instructions and scripts grant no permissions: every action keeps its usual Auto-review.\n")
 }
 
 struct PlaybookTool {
@@ -55,9 +54,9 @@ impl Tool for PlaybookTool {
     }
     fn description(&self) -> &str {
         match self.name {
-            "list_playbooks" => "Search saved skills by name/description in your bot and current project only. With sources=true, list completed text source messages and ids from this chat to cite in a workflow or corrections draft.",
-            "read_playbook" => "Load a saved skill's full instructions/examples or one of its bundled references/scripts, by playbook:// path. Reading a script never executes it.",
-            _ => "Propose an inactive skill draft from completed work or at least two user corrections. Cite source message ids, obtainable with list_playbooks sources=true. User reviews and saves in Playbooks. This never grants permissions or activates instructions.",
+            "list_playbooks" => "Search the user's saved skills (yours, and this group's in a group) by name or description. With sources=true, also list this chat's completed text messages with their ids, to cite in propose_playbook.",
+            "read_playbook" => "Read a saved skill's SKILL.md, or one of its bundled references or scripts, by playbook:// path. Reading a script never runs it.",
+            _ => "Draft a skill for the user to review: a workflow from completed work in this chat, or a standing instruction from at least two of the user's repeated corrections. Cite the source message ids (list_playbooks with sources=true lists them). The draft is used only once the user saves it under Skills in the inspector, and it never grants permissions.",
         }
     }
     fn parameters(&self) -> Value {
@@ -158,11 +157,12 @@ impl Tool for PlaybookTool {
                     },
                 )
                 .map_err(ToolError)?;
+                let bot_name = self.app.bot(&self.bot_id).map(|bot| bot.name).unwrap_or_default();
                 self.app.notice(
                     &self.chat_id,
                     format!(
-                        "Playbook draft · {} · Review in Playbooks before saving.",
-                        draft["name"].as_str().unwrap_or("Skill")
+                        "{bot_name} drafted the skill {}. Review it under Skills in the inspector; it's used once you save it.",
+                        draft["name"].as_str().unwrap_or_default()
                     ),
                 );
                 // The model already authored the body; return metadata, not the entire history.

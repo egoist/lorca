@@ -248,7 +248,12 @@ impl App {
         crate::catalog::load_cached(&config);
         let identity: Option<IdentityFile> = config::read_json(&config.identity_path());
         let machine: Option<MachineFile> = config::read_json(&config.machine_path());
-        let playbooks = crate::playbooks::Library::load(&config.home, machine.as_ref().and_then(|m| m.dek().ok()))?;
+        // The library also travels in the roster, so one that cannot be read comes back from
+        // the other Devices.
+        let playbooks = crate::playbooks::Library::load(&config.home, machine.as_ref().and_then(|m| m.dek().ok())).unwrap_or_else(|error| {
+            tracing::warn!(%error, "reading playbooks.enc");
+            crate::playbooks::Library::default()
+        });
         let credentials = Credentials::load(&config);
         let plugins = crate::plugins::Store::load(&config);
         let marketplace = crate::marketplace::Updates::load(&config);
@@ -1016,6 +1021,7 @@ impl App {
             auto_review: state.auto_review.clone(),
             providers: self.credentials.lock().unwrap().statuses(),
             models: models_out(),
+            playbooks: crate::playbooks::summaries(self),
         }
     }
 
@@ -1072,6 +1078,7 @@ impl App {
     }
 
     pub fn roster_changed(&self, upload: bool) {
+        crate::playbooks::prune(self);
         self.save_state();
         if upload {
             self.push_roster();
@@ -1797,6 +1804,7 @@ impl App {
             "auto_review": state.auto_review,
             "providers": self.credentials.lock().unwrap().statuses(),
             "models": models_out(),
+            "playbooks": crate::playbooks::summaries(self),
             "running_chat_ids": self.running_chat_ids(),
             "running_turns": self.running_turns(),
         })
