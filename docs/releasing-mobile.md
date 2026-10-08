@@ -132,7 +132,9 @@ with the certificate's SHA-256 above, once the developer account is verified.
    the tag. A run on a commit other than the one an existing `mobile-v<version>` tag names is
    refused, and so is a version whose release is already published.
 3. The iOS job uploads to App Store Connect, and TestFlight lists the build once Apple has
-   processed it. The Android job drafts `mobile-v<version>` with the APK, or adds it to the draft an
+   processed it. With the API key the export writes the signed `.ipa` and `altool` uploads it,
+   up to three tries a minute or so apart, so a dropped connection costs only the upload; a failed
+   export keeps Xcode's distribution logs as the run's `ios-distribution-logs` artifact. The Android job drafts `mobile-v<version>` with the APK, or adds it to the draft an
    earlier run left. Check the draft, then publish it without making it the latest release:
 
    ```sh

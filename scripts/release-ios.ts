@@ -145,6 +145,11 @@ if (local) {
 }
 
 // ---- 4. upload
+// With the account in Xcode, the export uploads the build itself. With an API key it writes the
+// signed .ipa, and altool uploads that: a connection that drops mid-upload, as one from a GitHub
+// runner did, costs another try of the upload alone. A failed export keeps the logs Xcode wrote in
+// LOGS, which the workflow keeps as an artifact.
+const LOGS = join(BUILD_DIR, "logs")
 const exportOptions = join(BUILD_DIR, "ExportOptions.plist")
 await Bun.write(
   exportOptions,
@@ -153,7 +158,7 @@ await Bun.write(
 <plist version="1.0">
 <dict>
   <key>method</key><string>app-store-connect</string>
-  <key>destination</key><string>upload</string>
+  <key>destination</key><string>${keyPath ? "export" : "upload"}</string>
   <key>teamID</key><string>${TEAM_ID}</string>
   <key>signingStyle</key><string>automatic</string>
   <key>uploadSymbols</key><true/>
@@ -162,8 +167,41 @@ await Bun.write(
 </plist>
 `,
 )
-log(`${color.bold("uploading")} ${color.dim("to App Store Connect")}`)
-await $`xcodebuild -exportArchive -archivePath ${ARCHIVE} -exportOptionsPlist ${exportOptions} -exportPath ${EXPORT} -allowProvisioningUpdates ${authentication}`.env(env)
+await rm(LOGS, { recursive: true, force: true })
+log(`${color.bold(keyPath ? "signing" : "uploading")} ${color.dim(keyPath ? EXPORT : "to App Store Connect")}`)
+const exported = await $`xcodebuild -exportArchive -archivePath ${ARCHIVE} -exportOptionsPlist ${exportOptions} -exportPath ${EXPORT} -allowProvisioningUpdates ${authentication}`
+  .env(env)
+  .nothrow()
+if (exported.exitCode !== 0) {
+  // Xcode names the bundle of logs it wrote in the temporary folder.
+  const bundle = exported.stderr.toString().match(/Created bundle at path "([^"]+\.xcdistributionlogs)"/)?.[1]
+  if (bundle && existsSync(bundle)) {
+    await mkdir(LOGS, { recursive: true })
+    await $`cp -R ${bundle} ${LOGS}/`
+  }
+  die(`the export failed${bundle ? `; Xcode's logs are in ${LOGS}` : ""}`)
+}
+
+if (keyPath) {
+  const ipa = (await readdir(EXPORT)).find((name) => name.endsWith(".ipa"))
+  if (!ipa) die(`the export wrote no .ipa to ${EXPORT}`)
+  log(`${color.bold("uploading")} ${color.dim(`${ipa} to App Store Connect`)}`)
+  for (let attempt = 1; ; attempt++) {
+    const upload = await $`xcrun altool --upload-app -f ${join(EXPORT, ipa)} -t ios --api-key ${keyID!} --api-issuer ${issuerID!} --p8-file-path ${keyPath}`
+      .env(env)
+      .nothrow()
+    if (upload.exitCode === 0) break
+    // A try that lost its connection after App Store Connect had the build leaves the next one a duplicate.
+    const said = `${upload.stdout}${upload.stderr}`
+    if (attempt > 1 && /Redundant Binary Upload|already been (used|uploaded)|bundle version must be higher/i.test(said)) {
+      log(color.yellow("App Store Connect already has this build from an earlier try"))
+      break
+    }
+    if (attempt === 3) die("the upload failed three times")
+    log(color.yellow(`the upload failed; trying again in ${attempt * 30} s`))
+    await Bun.sleep(attempt * 30_000)
+  }
+}
 
 log(`${color.green("uploaded")} Lorca ${version} (${buildNumber})`)
 console.log("  TestFlight lists it once App Store Connect finishes processing")

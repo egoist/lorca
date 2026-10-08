@@ -140,6 +140,14 @@ jobs:
           security find-identity -v -p codesigning "$keychain"
       - name: Build and upload
         run: bun run release-ios
+      # What Xcode wrote about a failed export: IDEDistribution.critical.log and the rest.
+      - name: Keep Xcode's distribution logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-distribution-logs
+          path: dist/ios/logs
+          if-no-files-found: ignore
       - name: Remove the key and the keychain
         if: always()
         run: |
