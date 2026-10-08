@@ -22,7 +22,7 @@ Transcript: a view-based `NSTableView` (`Chat/ChatViewController.swift`), which 
 
 Sidebar: an `NSOutlineView` (`Sidebar/SidebarViewController.swift`) with one item per chat, kept for as long as the chat is listed. Only the first rows come in with a reload. After that, a store event moves, inserts, or removes the rows whose place in the order changed (new activity moves a chat up in one move, without animation), and a cell is reconfigured only when what its row shows (`SidebarChatCell.Content`: avatars, working dot, title, preview, stamp, pin, unread count) changed. Cells come from `makeView(withIdentifier:)`, and a moved row keeps its row view, cell, and selection.
 
-Routine timezone, missed-run recovery, and check health controls are described in [Routines](routines.md#appkit-controls); Devices exposes the CLI service commands and status.
+The Routines section, the routine sheet, and the Devices pane's Background service row are described in [Routines](routines.md#the-apps).
 
 Inspector: `Inspector/InspectorViewController.swift` compares what each section would show with what it last showed on every store event and touches only a section that changed. A changed section reconfigures the rows it keeps for each bot, Runner, routine, and plugin; Runs with builds its pop-ups again only when the provider, model, thinking level, or the account's providers changed (custom providers follow the built-in ones in the Provider pop-up, and a custom provider's models fill Model), and the usage rows take each turn's values in place. Collapsed, or in a closed window, the inspector skips reloads and memory fetches and catches up in `viewWillAppear`.
 

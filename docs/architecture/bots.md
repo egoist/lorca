@@ -19,7 +19,7 @@ Who answers, after Grok Bot's rooms:
 
 ## Routines
 
-A routine is a task a bot runs on a schedule in its direct chat, on its assigned Runner. The roster carries its schedule, timezone, missed-run policy, and check health. See [Routines](routines.md) for scheduling, read-only checks, recovery, and the AppKit controls.
+A routine is a task a bot runs on a schedule in its direct chat, on its assigned Runner. The roster carries its schedule, timezone, missed-run policy, and check health. See [Routines](routines.md) for scheduling, read-only checks, recovery, and how the apps show them.
 
 ## Memory
 
