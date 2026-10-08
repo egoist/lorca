@@ -81,12 +81,6 @@ pub struct Requirement {
     pub service_id: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Warning {
-    pub path: String,
-    pub message: String,
-}
-
 impl Default for Template {
     fn default() -> Self {
         Self {
@@ -277,80 +271,33 @@ impl Template {
     }
 
     /// Export scrubs every text field before previewing it. Import refuses a file containing a
-    /// recognizable credential, so setup never silently differs from the reviewed file.
-    pub fn scrub(&mut self) -> Vec<Warning> {
-        let mut warnings = vec![];
-        self.each_text_mut(|path, text| {
+    /// recognizable credential, so setup never silently differs from the reviewed file. Both
+    /// answer whether anything was redacted.
+    pub fn scrub(&mut self) -> bool {
+        let mut changed = false;
+        self.each_text_mut(|text| {
             let clean = scrub_text(text);
-            if clean != *text {
-                warnings.push(Warning {
-                    path: path.into(),
-                    message: "Credential-like text is redacted. Review the remaining content."
-                        .into(),
-                });
-                *text = clean;
-            }
+            changed |= clean != *text;
+            *text = clean;
         });
-        warnings
+        changed
     }
 
-    pub fn scrub_known(&mut self, secrets: &[String]) -> Vec<Warning> {
-        let mut warnings = vec![];
-        self.each_text_mut(|path, text| {
+    pub fn scrub_known(&mut self, secrets: &[String]) -> bool {
+        let mut changed = false;
+        self.each_text_mut(|text| {
             let clean = super::secrets::redact(text, secrets);
-            if clean != *text {
-                warnings.push(Warning {
-                    path: path.into(),
-                    message: "A saved credential value is redacted. Review the remaining content."
-                        .into(),
-                });
-                *text = clean;
-            }
+            changed |= clean != *text;
+            *text = clean;
         });
-        warnings
-    }
-
-    pub fn warnings(&self) -> Vec<Warning> {
-        let mut copy = self.clone();
-        let mut warnings = vec![];
-        copy.each_text_mut(|path, text| {
-            let mut reasons = vec![];
-            if path.starts_with("memories.") {
-                reasons.push("Selected memory may contain personal or project information");
-            }
-            if EMAIL.is_match(text) {
-                reasons.push("Contains an email address");
-            }
-            if PATH.is_match(text) {
-                reasons.push("Contains a machine path");
-            }
-            if URL.is_match(text) {
-                reasons.push("Contains a URL; review private links and identifiers");
-            }
-            if PHONE.is_match(text) {
-                reasons.push("May contain a phone number");
-            }
-            if REDACTION.is_match(text) {
-                reasons.push("Contains redacted credential text");
-            }
-            if path.ends_with(".check") || path.contains(".scripts.") {
-                reasons.push("Contains a script; review its behavior before running");
-            }
-            if !reasons.is_empty() {
-                warnings.push(Warning {
-                    path: path.into(),
-                    message: reasons.join(". ") + ".",
-                });
-            }
-        });
-        warnings
+        changed
     }
 
     /// Normalizes source account namespaces to service namespaces on export, then maps those
     /// namespaces to recipient connections on import. Mapping is simultaneous, so one target
     /// cannot be rewritten as another source. Only explicit tool namespaces are replaced.
     pub fn map_namespaces(&mut self, mappings: &BTreeMap<String, String>) {
-        self.each_text_mut(|_, text| {
+        self.each_text_mut(|text| {
             *text = NAMESPACE
                 .replace_all(text, |caps: &regex::Captures| {
                     let namespace = &caps[1];
@@ -371,7 +318,7 @@ impl Template {
     pub fn namespaces(&self) -> HashSet<String> {
         let mut copy = self.clone();
         let mut names = HashSet::new();
-        copy.each_text_mut(|_, text| {
+        copy.each_text_mut(|text| {
             for caps in NAMESPACE.captures_iter(text) {
                 names.insert(caps[1].to_string());
             }
@@ -382,7 +329,7 @@ impl Template {
     pub fn contains_text(&self, needle: &str) -> bool {
         let mut copy = self.clone();
         let mut found = false;
-        copy.each_text_mut(|_, text| {
+        copy.each_text_mut(|text| {
             found |= text.contains(needle);
         });
         found
@@ -391,7 +338,7 @@ impl Template {
     pub fn connection_references(&self) -> HashSet<String> {
         let mut copy = self.clone();
         let mut names = HashSet::new();
-        copy.each_text_mut(|_, text| {
+        copy.each_text_mut(|text| {
             for caps in CONNECTION.captures_iter(text) {
                 names.insert(caps[1].to_string());
             }
@@ -400,7 +347,7 @@ impl Template {
     }
 
     pub fn resolve_connections(&mut self, mappings: &BTreeMap<String, String>) {
-        self.each_text_mut(|_, text| {
+        self.each_text_mut(|text| {
             *text = CONNECTION
                 .replace_all(text, |caps: &regex::Captures| {
                     mappings
@@ -422,45 +369,56 @@ impl Template {
             .collect::<Vec<_>>()
             .join("|");
         let pattern = Regex::new(&format!(r"\b(?:{pattern})\b")).expect("escaped connection ids");
-        self.each_text_mut(|_, text| {
+        self.each_text_mut(|text| {
             *text = pattern
                 .replace_all(text, |caps: &regex::Captures| mappings[&caps[0]].clone())
                 .into_owned();
         });
     }
 
-    fn each_text_mut(&mut self, mut apply: impl FnMut(&str, &mut String)) {
-        if let Some(profile) = &mut self.profile {
-            apply("profile.name", &mut profile.name);
-            apply("profile.description", &mut profile.description);
-            apply("profile.symbol_name", &mut profile.symbol_name);
-        }
-        for (i, skill) in self.skills.iter_mut().enumerate() {
-            apply(&format!("skills.{i}.name"), &mut skill.name);
-            apply(&format!("skills.{i}.description"), &mut skill.description);
-            apply(&format!("skills.{i}.instructions"), &mut skill.instructions);
-            apply(&format!("skills.{i}.examples"), &mut skill.examples);
-            for (kind, resources) in [
-                ("references", &mut skill.references),
-                ("scripts", &mut skill.scripts),
-            ] {
-                for (j, resource) in resources.iter_mut().enumerate() {
-                    apply(&format!("skills.{i}.{kind}.{j}.path"), &mut resource.path);
-                    apply(&format!("skills.{i}.{kind}.{j}.text"), &mut resource.text);
-                }
-            }
-        }
-        for (i, memory) in self.memories.iter_mut().enumerate() {
-            apply(&format!("memories.{i}"), memory);
-        }
-        for (i, routine) in self.routines.iter_mut().enumerate() {
-            apply(&format!("routines.{i}.name"), &mut routine.name);
-            apply(&format!("routines.{i}.prompt"), &mut routine.prompt);
-            if let Some(check) = &mut routine.check {
-                apply(&format!("routines.{i}.check"), check);
-            }
+    fn each_text_mut(&mut self, mut apply: impl FnMut(&mut String)) {
+        let profile = self.profile.iter_mut().flat_map(Profile::texts_mut);
+        let skills = self.skills.iter_mut().flat_map(Skill::texts_mut);
+        let routines = self.routines.iter_mut().flat_map(Routine::texts_mut);
+        for text in profile.chain(skills).chain(self.memories.iter_mut()).chain(routines) {
+            apply(text);
         }
     }
+}
+
+impl Profile {
+    pub fn texts_mut(&mut self) -> Vec<&mut String> {
+        vec![&mut self.name, &mut self.description, &mut self.symbol_name]
+    }
+}
+
+impl Skill {
+    pub fn texts_mut(&mut self) -> Vec<&mut String> {
+        let mut texts = vec![&mut self.name, &mut self.description, &mut self.instructions, &mut self.examples];
+        for resource in self.references.iter_mut().chain(self.scripts.iter_mut()) {
+            texts.push(&mut resource.path);
+            texts.push(&mut resource.text);
+        }
+        texts
+    }
+}
+
+impl Routine {
+    pub fn texts_mut(&mut self) -> Vec<&mut String> {
+        let mut texts = vec![&mut self.name, &mut self.prompt];
+        texts.extend(self.check.as_mut());
+        texts
+    }
+}
+
+/// What a reader should look at before sharing a text: personal details, and credentials the
+/// export already redacted. The apps word each kind.
+pub fn flags(texts: &[&str]) -> Vec<String> {
+    [("email", &*EMAIL), ("phone", &*PHONE), ("path", &*PATH), ("link", &*URL), ("credential", &*REDACTION)]
+        .into_iter()
+        .filter(|(_, pattern)| texts.iter().any(|text| pattern.is_match(text)))
+        .map(|(kind, _)| kind.to_string())
+        .collect()
 }
 
 pub fn namespace(id: &str) -> String {
@@ -520,7 +478,7 @@ static CONNECTION: LazyLock<Regex> =
 
 /// The memory scrubber sees an assignment's redaction marker as another value. Preserve its
 /// complete markers so an exported, scrubbed file remains importable without repeated edits.
-fn scrub_text(text: &str) -> String {
+pub fn scrub_text(text: &str) -> String {
     let mut out = String::new();
     let mut start = 0;
     for marker in REDACTION.find_iter(text) {
@@ -602,22 +560,14 @@ mod tests {
             ],
             ..Template::default()
         };
-        assert_eq!(t.scrub().len(), 1);
+        assert!(t.scrub());
         assert!(!t.memories[0].contains("abcdef1234567890"));
-        assert!(
-            t.scrub().is_empty(),
-            "a reviewed redaction is stable on import"
-        );
-        let warning = &t.warnings()[0];
-        assert_eq!(warning.path, "memories.0");
-        assert!(
-            warning.message.contains("email")
-                && warning.message.contains("path")
-                && warning.message.contains("personal")
-        );
+        assert!(!t.scrub(), "a reviewed redaction is stable on import");
+        assert_eq!(flags(&[t.memories[0].as_str()]), ["email", "path", "credential"]);
+        assert!(flags(&["Ship on Friday"]).is_empty());
         t.memories.push("API_KEY=«redacted credential»".into());
         assert!(
-            t.scrub().is_empty(),
+            !t.scrub(),
             "playbook redaction markers are stable too"
         );
     }

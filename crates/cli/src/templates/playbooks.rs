@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 use super::format::Skill;
 use crate::app::App;
 
-pub const UNAVAILABLE: &str = "Reusable skills need playbook support in this CLI. Update Lorca before exporting or importing skills.";
+pub const UNAVAILABLE: &str = "This template has skills. Update Lorca to import it.";
 
 pub async fn list(app: &Arc<App>, bot_id: &str) -> Result<Option<Vec<Value>>, String> {
     match call(

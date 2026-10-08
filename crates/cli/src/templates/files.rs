@@ -99,7 +99,7 @@ pub fn export(app: &App, path: &Path, text: &str, overwrite: bool) -> Result<(),
         .map_err(|e| format!("Choose an existing folder: {e}"))?;
     let home = app.config.home.canonicalize().map_err(|e| e.to_string())?;
     if parent.starts_with(&home) {
-        return Err("Save the portable file outside Lorca's runtime data directory.".into());
+        return Err("Save the template outside Lorca's data folder.".into());
     }
     let target = parent.join(path.file_name().ok_or("Choose a file name")?);
     match fs::symlink_metadata(&target) {

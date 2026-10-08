@@ -17,7 +17,7 @@ use serde_json::{json, Value};
 
 use crate::app::App;
 use crate::model::{Bot, PluginStatus};
-use format::{Profile, Requirement, Routine, Skill, Template, Warning};
+use format::{Profile, Requirement, Routine, Skill, Template};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -34,28 +34,36 @@ pub struct Selection {
     pub requirement_ids: Vec<String>,
 }
 
+/// A piece of content the export sheet offers, as it would go in the file, with what its reader
+/// should look at before sharing it (`format::flags`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Item<T> {
     pub id: String,
     pub content: T,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub flags: Vec<String>,
+}
+
+/// A plugin the bot's Runner has, offered as a requirement, with the name the apps show.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Service {
+    pub service_id: String,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Contents {
-    pub profile: Profile,
+    pub profile: Item<Profile>,
     pub skills: Vec<Item<Skill>>,
     pub memories: Vec<Item<String>>,
     pub routines: Vec<Item<Routine>>,
-    pub requirements: Vec<Requirement>,
-    pub notes: Vec<String>,
+    pub requirements: Vec<Service>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportPreview {
     pub template: Template,
     pub digest: String,
-    pub warnings: Vec<Warning>,
-    pub visibility: String,
 }
 
 /// #71 supplies optional service_id on PluginStatus. Reading the wire field lets the adapter
@@ -79,24 +87,17 @@ fn runner_plugins(app: &App, runner_id: &str) -> Result<Vec<PluginStatus>, Strin
     }
 }
 
+/// Everything the bot has that a template can carry, redacted as the file would be. Skills are
+/// listed when this CLI has the playbook store; without it there are none to offer.
 pub async fn contents(app: &Arc<App>, bot_id: &str) -> Result<Contents, String> {
     let mut bot = app.bot(bot_id).ok_or("Unknown bot")?;
     bot.normalize_description();
-    let mut notes = vec![];
     let mut skills = vec![];
-    match playbooks::list(app, bot_id).await? {
-        Some(items) => {
-            for item in items {
-                let id = item["id"].as_str().ok_or("Invalid playbook id")?;
-                skills.push(Item {
-                    id: id.into(),
-                    content: playbooks::export(app, bot_id, id).await?,
-                });
-            }
-        }
-        None => notes.push(playbooks::UNAVAILABLE.into()),
+    for item in playbooks::list(app, bot_id).await?.unwrap_or_default() {
+        let id = item["id"].as_str().ok_or("Invalid playbook id")?;
+        skills.push(item_of(id, playbooks::export(app, bot_id, id).await?));
     }
-    let memories = if app.this_device_id().as_deref() == Some(bot.runner_id.as_str()) {
+    let memories: Vec<Item<String>> = if app.this_device_id().as_deref() == Some(bot.runner_id.as_str()) {
         local_memories(app, bot_id)?
     } else {
         let value = crate::requests::ask(
@@ -112,33 +113,55 @@ pub async fn contents(app: &Arc<App>, bot_id: &str) -> Result<Contents, String> 
     let routines = app
         .routines_of(bot_id)
         .into_iter()
-        .map(|r| Item {
-            id: r.id.clone(),
-            content: routines::export(r),
-        })
+        .map(|r| item_of(&r.id.clone(), routines::export(r)))
         .collect();
     let mut ids = HashSet::new();
     let requirements = runner_plugins(app, &bot.runner_id)?
-        .iter()
+        .into_iter()
         .filter_map(|status| {
-            let id = service_id(status);
+            let id = service_id(&status);
             ids.insert(id.clone())
-                .then_some(Requirement { service_id: id })
+                .then_some(Service { service_id: id, name: status.name })
         })
         .collect();
-    Ok(Contents {
-        profile: Profile {
-            name: bot.name,
-            description: bot.description,
-            symbol_name: bot.symbol_name,
-            accent: bot.accent,
-        },
+    let profile = Profile {
+        name: bot.name,
+        description: bot.description,
+        symbol_name: bot.symbol_name,
+        accent: bot.accent,
+    };
+    let mut contents = Contents {
+        profile: item_of("profile", profile),
         skills,
         memories,
         routines,
         requirements,
-        notes,
-    })
+    };
+    let known = secrets::local(app);
+    let clean = |texts: Vec<&mut String>| {
+        for text in texts {
+            *text = format::scrub_text(&secrets::redact(text, &known));
+        }
+    };
+    clean(contents.profile.content.texts_mut());
+    contents.skills.iter_mut().for_each(|item| clean(item.content.texts_mut()));
+    contents.memories.iter_mut().for_each(|item| clean(vec![&mut item.content]));
+    contents.routines.iter_mut().for_each(|item| clean(item.content.texts_mut()));
+    flag(&mut contents.profile, Profile::texts_mut);
+    contents.skills.iter_mut().for_each(|item| flag(item, Skill::texts_mut));
+    contents.memories.iter_mut().for_each(|item| flag(item, |text| vec![text]));
+    contents.routines.iter_mut().for_each(|item| flag(item, Routine::texts_mut));
+    Ok(contents)
+}
+
+fn item_of<T>(id: &str, content: T) -> Item<T> {
+    Item { id: id.into(), content, flags: vec![] }
+}
+
+fn flag<T: Clone>(item: &mut Item<T>, texts: impl Fn(&mut T) -> Vec<&mut String>) {
+    let mut copy = item.content.clone();
+    let texts: Vec<&str> = texts(&mut copy).into_iter().map(|text| text.as_str()).collect();
+    item.flags = format::flags(&texts);
 }
 
 /// Only curated MEMORY.md lines and direct Markdown topics, bounded and regular. This does
@@ -158,10 +181,7 @@ pub fn local_memories(app: &Arc<App>, bot_id: &str) -> Result<Vec<Item<String>>,
         {
             let id = format!("memory-{}", crate::memory::hash_text(line));
             if seen.insert(id.clone()) {
-                items.push(Item {
-                    id,
-                    content: line.into(),
-                });
+                items.push(item_of(&id, line.to_string()));
             }
         }
     }
@@ -183,13 +203,8 @@ pub fn local_memories(app: &Arc<App>, bot_id: &str) -> Result<Vec<Item<String>>,
             }
             let text = files::read(&path, 64 * 1024)?;
             if !text.trim().is_empty() {
-                items.push(Item {
-                    id: format!(
-                        "topic-{}",
-                        crate::memory::hash_text(&format!("{name}\n{text}"))
-                    ),
-                    content: text,
-                });
+                let id = format!("topic-{}", crate::memory::hash_text(&format!("{name}\n{text}")));
+                items.push(item_of(&id, text));
             }
         }
     }
@@ -197,6 +212,7 @@ pub fn local_memories(app: &Arc<App>, bot_id: &str) -> Result<Vec<Item<String>>,
     for item in &mut items {
         item.content = secrets::redact(&item.content, &known);
     }
+    // Credentials the Runner holds are redacted here; patterns and flags are the asker's.
     Ok(items)
 }
 
@@ -236,19 +252,15 @@ pub async fn export_preview(
         if !selected.insert(id) {
             return Err(format!("Requirement {id} is selected twice."));
         }
-        requirements.push(
-            catalog
-                .requirements
-                .iter()
-                .find(|r| &r.service_id == id)
-                .cloned()
-                .ok_or_else(|| {
-                    format!("Requirement {id} changed or no longer exists. Reload the contents.")
-                })?,
-        );
+        let service = catalog
+            .requirements
+            .iter()
+            .find(|r| &r.service_id == id)
+            .ok_or_else(|| format!("{id} is no longer on this bot's Runner."))?;
+        requirements.push(Requirement { service_id: service.service_id.clone() });
     }
     let mut template = Template {
-        profile: selection.profile.then_some(catalog.profile),
+        profile: selection.profile.then_some(catalog.profile.content),
         skills,
         memories,
         routines,
@@ -280,7 +292,7 @@ pub async fn export_preview(
                 }
             }
             if !selected.iter().any(|id| **id == service) {
-                return Err(format!("Selected content references {service}. Select its integration requirement before exporting."));
+                return Err(format!("What you picked uses {}. Check it under Plugins too.", status.name));
             }
             mappings.insert(source, format::namespace(&service));
             if status.id != service {
@@ -291,17 +303,11 @@ pub async fn export_preview(
     template.map_namespaces(&mappings);
     template.map_connection_ids(&instance_ids);
     validate_namespaces(&template)?;
-    let mut warnings = template.scrub_known(&secrets::local(app));
-    warnings.extend(template.scrub());
-    warnings.extend(template.warnings());
+    template.scrub_known(&secrets::local(app));
+    template.scrub();
     template.validate()?;
     let digest = template_digest(&template)?;
-    Ok(ExportPreview {
-        template,
-        digest,
-        warnings,
-        visibility: "private_file".into(),
-    })
+    Ok(ExportPreview { template, digest })
 }
 
 fn select<T: Clone>(items: &[Item<T>], ids: &[String], kind: &str) -> Result<Vec<T>, String> {
@@ -321,9 +327,7 @@ fn select<T: Clone>(items: &[Item<T>], ids: &[String], kind: &str) -> Result<Vec
                 .iter()
                 .find(|item| &item.id == id)
                 .map(|item| item.content.clone())
-                .ok_or_else(|| {
-                    format!("The selected {kind} changed or no longer exists. Reload the contents.")
-                })
+                .ok_or_else(|| format!("The selected {kind} changed on its Runner. Open the export again."))
         })
         .collect()
 }
@@ -358,7 +362,7 @@ fn validate_namespaces(template: &Template) -> Result<(), String> {
         .collect();
     missing.sort();
     if !missing.is_empty() {
-        return Err(format!("Selected content uses plugin namespaces without selected requirements: {}. Select those requirements or edit the content.", missing.join(", ")));
+        return Err(format!("This uses tools from {}, which isn't a plugin listed in the template.", missing.join(", ")));
     }
     Ok(())
 }
@@ -387,7 +391,7 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: &Value) -> Result<Va
                 &serde_json::to_string_pretty(&preview.template).map_err(|e| e.to_string())?,
                 params["overwrite"].as_bool() == Some(true),
             )?;
-            Ok(json!({ "path": path, "digest": preview.digest, "visibility": "private_file" }))
+            Ok(json!({ "path": path }))
         }
         "templates.import.preview" | "templates.import" => {
             let text = files::read(Path::new(required(params, "path")?), format::MAX_BYTES)?;
@@ -417,25 +421,27 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: &Value) -> Result<Va
 }
 
 /// Import preview is structured even for a future/unsupported file: it explains the problem
-/// before any account mutation. Requirement candidates are recipient-local status records.
+/// before any account mutation. Each requirement lists the recipient Runner's own connections for
+/// its service and the one picked: the `mappings` choice, else the only ready one there. A
+/// requirement without a ready pick blocks the import without an issue of its own; the apps say
+/// what it needs on its row.
 pub async fn import_preview(app: &Arc<App>, text: &str, params: &Value) -> Value {
     let digest = crate::memory::hash_text(text);
     let mut template = match Template::parse(text) {
         Ok(template) => template,
         Err(error) => {
-            return json!({ "digest": digest, "can_import": false, "issues": [error], "warnings": [], "requirements": [] })
+            return json!({ "digest": digest, "can_import": false, "issues": [error], "requirements": [] })
         }
     };
     let mut issues = vec![];
-    let contained_saved_secret = !template.scrub_known(&secrets::local(app)).is_empty();
-    let contained_pattern_secret = !template.scrub().is_empty();
-    if contained_saved_secret || contained_pattern_secret {
-        issues.push("The file contains credential-like text. Remove it before importing.".into());
+    // The preview never shows the credential it found, and the import refuses the file.
+    if template.scrub_known(&secrets::local(app)) | template.scrub() {
+        issues.push("The file contains a password or key. Remove it before importing.".to_string());
     }
     if let Err(error) = validate_namespaces(&template) {
         issues.push(error);
     }
-    let mappings = mappings(params).unwrap_or_else(|error| {
+    let chosen = mappings(params).unwrap_or_else(|error| {
         issues.push(error);
         BTreeMap::new()
     });
@@ -446,46 +452,45 @@ pub async fn import_preview(app: &Arc<App>, text: &str, params: &Value) -> Value
             vec![]
         }
     };
+    let market = crate::marketplace::current(app);
+    let mut ready = true;
+    let mut resolved = BTreeMap::new();
     let mut requirements = vec![];
     for requirement in &template.requirements {
         let id = &requirement.service_id;
-        let candidates: Vec<_> = statuses
-            .iter()
-            .filter(|s| service_id(s) == *id)
-            .cloned()
-            .collect();
-        let picked = mappings.get(id);
-        if candidates.is_empty() {
-            let known = crate::marketplace::current(app).plugin(id).is_some();
-            issues.push(if known { format!("Missing plugin {id}. Add it to this Runner in Settings → Plugins, then preview again.") }
-                else { format!("Missing or unsupported plugin {id}. Install a compatible recipient connection on this Runner, then preview again.") });
-        } else if let Some(picked) = picked {
-            match candidates.iter().find(|s| &s.id == picked) {
-                Some(status) if status.state == "ready" => {}
-                Some(status) => issues.push(format!("{} needs setup or sign-in: {}", status.name, status.detail)),
-                None => issues.push(format!("The selected connection for {id} does not belong to this service on the recipient Runner.")),
+        let candidates: Vec<_> = statuses.iter().filter(|s| service_id(s) == *id).cloned().collect();
+        let mut ready_ones = candidates.iter().filter(|s| s.state == "ready");
+        let only_ready = match (ready_ones.next(), ready_ones.next()) {
+            (Some(status), None) => Some(status.id.clone()),
+            _ => None,
+        };
+        let selected = chosen.get(id).cloned().or(only_ready);
+        match selected.as_ref().and_then(|picked| candidates.iter().find(|s| &s.id == picked)) {
+            Some(status) if status.state == "ready" => {
+                resolved.insert(id.clone(), status.id.clone());
             }
-        } else {
-            issues.push(format!("Select your own connection for {id}."));
+            Some(_) => ready = false,
+            None if selected.is_some() => issues.push(format!("The connection picked for {id} is not one of this Runner's.")),
+            None => ready = false,
         }
-        requirements
-            .push(json!({ "service_id": id, "candidates": candidates, "selected": picked }));
+        let name = market.plugin(id).map(|m| m.name.clone()).or_else(|| candidates.first().map(|s| s.name.clone())).unwrap_or_else(|| id.clone());
+        requirements.push(json!({ "service_id": id, "name": name, "candidates": candidates, "selected": selected }));
     }
-    for key in mappings.keys() {
+    for key in chosen.keys() {
         if !template.requirements.iter().any(|r| &r.service_id == key) {
             issues.push(format!("Mapping {key} has no template requirement."));
         }
     }
     let mut mapped = template.clone();
     mapped.map_namespaces(
-        &mappings
+        &resolved
             .iter()
             .map(|(source, target)| (format::namespace(source), format::namespace(target)))
             .collect(),
     );
-    mapped.resolve_connections(&mappings);
+    mapped.resolve_connections(&resolved);
     if let Err(error) = mapped.validate() {
-        issues.push(format!("Mapped recipient content: {error}"));
+        issues.push(error);
     }
     for routine in &mapped.routines {
         if let Err(error) = routines::validate(app, routine).await {
@@ -500,16 +505,29 @@ pub async fn import_preview(app: &Arc<App>, text: &str, params: &Value) -> Value
                 Ok(None) => issues.push(playbooks::UNAVAILABLE.into()),
                 Err(error) => issues.push(error),
             },
-            None => issues.push("Create a bot before importing reusable skills.".into()),
+            None => issues.push(playbooks::UNAVAILABLE.into()),
         }
     }
-    let name = params["name"]
-        .as_str()
-        .or_else(|| template.profile.as_ref().map(|p| p.name.as_str()));
-    if name.is_none_or(|n| n.trim().is_empty() || n.len() > 200 || n.contains('\0')) {
-        issues.push("Give the new bot a name of at most 200 bytes.".into());
+    if let Some(name) = params["name"].as_str() {
+        if let Err(error) = bot_name(name) {
+            issues.push(error);
+        }
     }
-    json!({ "digest": digest, "can_import": issues.is_empty(), "issues": issues, "warnings": template.warnings(), "template": template, "requirements": requirements, "visibility": "private_file" })
+    // How each schedule reads, for the apps; it is not part of the file.
+    let mut shown = json!(template);
+    for routine in shown["routines"].as_array_mut().into_iter().flatten() {
+        let text = routine["schedule"].as_str().and_then(|s| crate::schedule::parse(s).ok()).map(|s| s.describe());
+        routine["schedule_text"] = json!(text);
+    }
+    json!({ "digest": digest, "can_import": issues.is_empty() && ready, "issues": issues, "template": shown, "requirements": requirements })
+}
+
+fn bot_name(name: &str) -> Result<String, String> {
+    let name = name.trim();
+    if name.is_empty() || name.len() > 200 || name.contains('\0') {
+        return Err("Give the new bot a name of at most 200 bytes.".into());
+    }
+    Ok(name.into())
 }
 
 /// Receives either the local file's bytes or the same reviewed bytes in a sealed request.
@@ -526,7 +544,13 @@ pub async fn import_text(app: &Arc<App>, text: &str, params: &Value) -> Result<V
         return Err(issues_text(&preview));
     }
     let mut template = Template::parse(text)?;
-    let mappings = mappings(params)?;
+    let mappings: BTreeMap<String, String> = preview["requirements"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|r| Some((r["service_id"].as_str()?.to_string(), r["selected"].as_str()?.to_string())))
+        .collect();
+    let name = bot_name(params["name"].as_str().or(template.profile.as_ref().map(|p| p.name.as_str())).unwrap_or(""))?;
     template.map_namespaces(
         &mappings
             .iter()
@@ -548,11 +572,7 @@ pub async fn import_text(app: &Arc<App>, text: &str, params: &Value) -> Result<V
         .unwrap_or("deepseek");
     let bot = Bot {
         id: format!("bot-{}", uuid::Uuid::new_v4().simple()),
-        name: params["name"]
-            .as_str()
-            .unwrap_or(&profile.name)
-            .trim()
-            .into(),
+        name,
         description: profile.description,
         symbol_name: profile.symbol_name,
         accent: profile.accent,
@@ -641,13 +661,11 @@ fn review(params: &Value, digest: &str) -> Result<(), String> {
 }
 
 fn issues_text(preview: &Value) -> String {
-    preview["issues"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .collect::<Vec<_>>()
-        .join("\n")
+    let issues: Vec<_> = preview["issues"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+    if issues.is_empty() {
+        return "Each plugin this bot uses needs a ready connection on its Runner.".into();
+    }
+    issues.join("\n")
 }
 
 #[cfg(test)]
@@ -712,7 +730,8 @@ mod tests {
         .unwrap();
         let catalog = contents(&source.app, &bot.id).await.unwrap();
         assert_eq!(catalog.memories.len(), 2);
-        assert!(catalog.notes.is_empty() || catalog.notes == [playbooks::UNAVAILABLE]);
+        assert!(!catalog.profile.content.description.contains("abcdefghijklmnop"));
+        assert!(catalog.profile.flags.contains(&"credential".to_string()));
         let selection = Selection {
             profile: true,
             memory_ids: vec![catalog.memories[0].id.clone()],
@@ -722,10 +741,7 @@ mod tests {
         let preview = export_preview(&source.app, &bot.id, &selection)
             .await
             .unwrap();
-        assert!(preview
-            .warnings
-            .iter()
-            .any(|w| w.message.contains("redacted")));
+        assert!(preview.template.profile.as_ref().unwrap().description.contains("«redacted"));
         let path = source.root.join("private.lorca-template");
         let mut params = json!({ "bot_id": bot.id, "selection": selection, "path": path, "reviewed": true, "expected_digest": "stale" });
         assert!(dispatch(&source.app, "templates.export", &params)
@@ -873,16 +889,12 @@ mod tests {
             memories: vec!["tools.test_service__read()".into()],
             ..Template::default()
         };
+        let text = serde_json::to_string(&template).unwrap();
         let mut params = json!({ "name": "New", "runner_id": account.app.this_device_id() });
-        assert!(issues_text(
-            &import_preview(
-                &account.app,
-                &serde_json::to_string(&template).unwrap(),
-                &params
-            )
-            .await
-        )
-        .contains("Missing"));
+        let missing = import_preview(&account.app, &text, &params).await;
+        assert_eq!(missing["can_import"], false);
+        assert_eq!(missing["requirements"][0]["candidates"], json!([]));
+        assert_eq!(missing["requirements"][0]["name"], "test-service");
         let manifest = crate::plugins::Manifest::parse(&json!({ "id": "test-service", "name": "Test service", "description": "Test", "servers": { "test": { "type": "stdio", "command": "true" } } })).unwrap();
         crate::plugins::install(&account.app, manifest, "inline").unwrap();
         // The test supplies a ready advertisement without invoking a server or provider.
@@ -893,48 +905,22 @@ mod tests {
             .unwrap()
             .notes
             .insert("test-service".into(), ("ready".into(), "Ready".into()));
-        assert!(issues_text(
-            &import_preview(
-                &account.app,
-                &serde_json::to_string(&template).unwrap(),
-                &params
-            )
-            .await
-        )
-        .contains("Select your own"));
+        // The only ready connection is picked, and shown as picked.
+        let picked = import_preview(&account.app, &text, &params).await;
+        assert_eq!(picked["can_import"], true, "{}", issues_text(&picked));
+        assert_eq!(picked["requirements"][0]["selected"], "test-service");
+        assert_eq!(picked["requirements"][0]["name"], "Test service");
         params["mappings"] = json!({ "test-service": "someone-elses-account" });
-        assert!(issues_text(
-            &import_preview(
-                &account.app,
-                &serde_json::to_string(&template).unwrap(),
-                &params
-            )
-            .await
-        )
-        .contains("does not belong"));
+        assert!(issues_text(&import_preview(&account.app, &text, &params).await).contains("not one of this Runner's"));
         params["mappings"] = json!({ "test-service": "test-service" });
-        assert_eq!(
-            import_preview(
-                &account.app,
-                &serde_json::to_string(&template).unwrap(),
-                &params
-            )
-            .await["can_import"],
-            true
-        );
+        assert_eq!(import_preview(&account.app, &text, &params).await["can_import"], true);
         account.app.plugins.lock().unwrap().notes.insert(
             "test-service".into(),
             ("needs_auth".into(), "Sign in".into()),
         );
-        assert!(issues_text(
-            &import_preview(
-                &account.app,
-                &serde_json::to_string(&template).unwrap(),
-                &params
-            )
-            .await
-        )
-        .contains("Sign in"));
+        let unready = import_preview(&account.app, &text, &params).await;
+        assert_eq!(unready["can_import"], false);
+        assert_eq!(unready["requirements"][0]["candidates"][0]["state"], "needs_auth");
         template.requirements.clear();
         assert!(validate_namespaces(&template)
             .unwrap_err()
@@ -964,7 +950,7 @@ mod tests {
             .is_none()
         {
             assert_eq!(preview["can_import"], false);
-            assert!(issues_text(&preview).contains("playbook support"));
+            assert!(issues_text(&preview).contains("has skills"));
         } else {
             assert_eq!(preview["can_import"], true, "{}", issues_text(&preview));
             params["expected_digest"] = preview["digest"].clone();
@@ -1088,6 +1074,8 @@ mod tests {
             .unwrap();
         let catalog = contents(&account.app, &bot.id).await.unwrap();
         assert!(!catalog.memories[0].content.contains(plugin_secret));
+        assert!(!catalog.profile.content.description.contains(provider_secret));
+        assert_eq!(catalog.memories[0].flags, ["credential"]);
         let selection = Selection {
             profile: true,
             memory_ids: vec![catalog.memories[0].id.clone()],
@@ -1098,10 +1086,6 @@ mod tests {
             .unwrap();
         let text = serde_json::to_string(&preview.template).unwrap();
         assert!(!text.contains(provider_secret) && !text.contains(plugin_secret));
-        assert!(preview
-            .warnings
-            .iter()
-            .any(|w| w.message.contains("saved credential")));
         let receiver = Account::new();
         let params = json!({ "runner_id": receiver.app.this_device_id(), "name": "New" });
         assert_eq!(
@@ -1119,7 +1103,7 @@ mod tests {
         let params = json!({ "runner_id": account.app.this_device_id(), "name": "New" });
         let blocked = import_preview(&account.app, &raw, &params).await;
         assert_eq!(blocked["can_import"], false);
-        assert!(issues_text(&blocked).contains("credential-like"));
+        assert!(issues_text(&blocked).contains("password or key"));
         assert!(!blocked["template"].to_string().contains(provider_secret));
         assert!(!blocked["template"]
             .to_string()
@@ -1154,6 +1138,6 @@ mod tests {
             false
         )
         .unwrap_err()
-        .contains("runtime"));
+        .contains("data folder"));
     }
 }
