@@ -80,6 +80,33 @@ class SheetViewController: NSViewController {
         dismissSheet()
     }
 
+    /// A form's line: the label in the labels' column, the control after it. A text field or a
+    /// pop-up fills the line.
+    func formRow(_ title: String, _ control: NSView, topAligned: Bool = false) -> NSView {
+        let container = NSView()
+        container.translatesAutoresizingMaskIntoConstraints = false
+        control.translatesAutoresizingMaskIntoConstraints = false
+        let label = Build.label(title, font: .systemFont(ofSize: 12), color: .secondaryLabelColor)
+        container.addSubview(label)
+        container.addSubview(control)
+        let labelAlignment = topAligned
+            ? label.topAnchor.constraint(equalTo: control.topAnchor, constant: 6)
+            : label.centerYAnchor.constraint(equalTo: control.centerYAnchor)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            labelAlignment,
+            label.widthAnchor.constraint(equalToConstant: 76),
+            control.leadingAnchor.constraint(equalTo: label.trailingAnchor, constant: 10),
+            control.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor),
+            control.topAnchor.constraint(equalTo: container.topAnchor),
+            control.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
+        if control is NSTextField || control is NSPopUpButton {
+            control.trailingAnchor.constraint(equalTo: container.trailingAnchor).isActive = true
+        }
+        return container
+    }
+
     /// A new title, for a sheet that now shows what it just added.
     func setSheetTitle(_ title: String) {
         titleLabel.stringValue = title
@@ -87,10 +114,16 @@ class SheetViewController: NSViewController {
 
     /// AppKit sizes a presented sheet once and afterwards only lets it grow with its content.
     /// Hiding content leaves slack that the row stacks pour into their first row, so shrink the
-    /// sheet explicitly after showing or hiding anything.
+    /// sheet explicitly after showing or hiding anything. While the sheet is up its window holds
+    /// the view's fitting size at the current one, so the content stack says how much is slack.
     func fitSheetToContent() {
         view.layoutSubtreeIfNeeded()
-        preferredContentSize = view.fittingSize
+        guard view.window != nil else {
+            preferredContentSize = view.fittingSize
+            return
+        }
+        let slack = contentStack.frame.height - contentStack.fittingSize.height
+        preferredContentSize = NSSize(width: view.frame.width, height: view.frame.height - slack)
     }
 
     @objc func dismissSheet() {

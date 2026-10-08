@@ -1,5 +1,4 @@
 import AppKit
-import UniformTypeIdentifiers
 
 final class RootSplitViewController: NSSplitViewController {
     private let store = AppStore.shared
@@ -494,10 +493,7 @@ final class RootSplitViewController: NSSplitViewController {
     func presentTemplateImport() {
         guard let window = view.window else { return }
         let panel = NSOpenPanel()
-        panel.title = L("Import Bot Template")
-        panel.allowedContentTypes = [UTType(filenameExtension: "lorca-template") ?? .json]
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
+        panel.allowedContentTypes = [.lorcaTemplate]
         panel.beginSheetModal(for: window) { [weak self] result in
             guard result == .OK, let self, let url = panel.url else { return }
             self.presentAsSheet(TemplateImportViewController(url: url) { [weak self] chatID in self?.open(chatID) })
@@ -586,6 +582,20 @@ final class RootSplitViewController: NSSplitViewController {
         sidebar.scrollSelectionToVisible()
     }
 
+    /// The bot of the direct chat that is showing, as a template file.
+    @objc func exportBotTemplate(_ sender: Any?) {
+        guard let bot = selectedDMBot else {
+            NSSound.beep()
+            return
+        }
+        presentAsSheet(TemplateExportViewController(bot: bot))
+    }
+
+    private var selectedDMBot: Bot? {
+        guard case let .chat(chatID) = selection, let chat = store.chat(chatID), chat.isDM else { return nil }
+        return store.bots(in: chat).first
+    }
+
     @objc func togglePinChat(_ sender: Any?) {
         guard case let .chat(chatID) = selection else { return }
         store.togglePin(chatID)
@@ -659,6 +669,9 @@ extension RootSplitViewController: NSMenuItemValidation {
         if menuItem.action == #selector(renameChat(_:)) {
             guard case let .chat(id) = selection, let chat = store.chat(id) else { return false }
             return chat.isGroup
+        }
+        if menuItem.action == #selector(exportBotTemplate(_:)) {
+            return selectedDMBot != nil
         }
         if menuItem.action == #selector(goToChat(_:)) {
             return sidebar.chatSelection(forShortcut: menuItem.tag) != nil

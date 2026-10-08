@@ -1,6 +1,8 @@
 import AppKit
-import UniformTypeIdentifiers
 
+/// Adds a bot from a template file: its name, the Runner it runs on, the provider, and for each
+/// plugin it uses one of that Runner's own connections. The new bot shares nothing with the one
+/// it was exported from, and its routines start paused.
 final class TemplateImportViewController: SheetViewController {
     private let store = AppStore.shared
     private let url: URL
@@ -9,24 +11,26 @@ final class TemplateImportViewController: SheetViewController {
     private let nameField = NSTextField()
     private let runnerPopup = NSPopUpButton()
     private let providerPopup = NSPopUpButton()
-    private let accounts = Build.stack([], spacing: 6)
-    private let previewText = TemplatePreviewText(height: 270)
-    private let status = Build.label("", font: Theme.Font.caption, color: .secondaryLabelColor, lines: 0)
-    private let reviewed = NSButton(checkboxWithTitle: L("I reviewed the contents and selected my own connections."), target: nil, action: nil)
-    private var runners: [Device] = []
-    private var providers: [ProviderCredential.Kind] = []
+    private let pluginRows = Build.stack([], spacing: 12)
+    private let list = TemplateItemList(maxHeight: 260)
+    private let note = Build.label("", font: .systemFont(ofSize: 11.5), color: .tertiaryLabelColor, lines: 0)
+    private lazy var runners = store.runners
+    private lazy var providerKinds = store.providerKinds
+    /// The connection each plugin uses, by plugin; the CLI's pick until the user makes one.
     private var mappings: [String: String] = [:]
-    private var preview: TemplatePreview?
+    private var preview: TemplateImportPreview?
     private var generation = 0
-    private var loadedName = false
-    private var importing = false
+    private var isImporting = false
+    /// The file's contents are listed once; another Runner or connection doesn't change them.
+    private var listsContents = false
+    /// The picked Runner's plugins as last previewed, so a change to them previews again.
+    private var previewedPlugins: [InstalledPlugin] = []
 
     init(url: URL, reply: TemplateReply? = nil, onCreate: @escaping (Chat.ID) -> Void) {
         self.url = url
         self.onCreate = onCreate
         self.reply = reply ?? { method, params in try await AppStore.shared.templateReply(method, params) }
-        super.init(title: L("Import Bot Template"),
-            subtitle: L("Review %@ and choose your own Runner and connections. Import creates an independent bot with its routines paused.", url.lastPathComponent), width: 640)
+        super.init(title: L("New Bot from Template"), subtitle: "", width: 480)
     }
 
     @available(*, unavailable)
@@ -34,139 +38,168 @@ final class TemplateImportViewController: SheetViewController {
 
     override func loadView() {
         super.loadView()
-        nameField.placeholderString = L("New bot name")
+        nameField.placeholderString = L("Name")
         nameField.delegate = self
-        runners = store.runners
-        for runner in runners { runnerPopup.addItem(withTitle: runner.name) }
-        if let local = runners.firstIndex(where: \.isThisDevice) { runnerPopup.selectItem(at: local) }
+        for runner in runners {
+            runnerPopup.addItem(withTitle: runner.isThisDevice ? L("%@ (this computer)", runner.name) : runner.name)
+        }
+        runnerPopup.selectItem(at: runners.firstIndex(where: \.isThisDevice) ?? 0)
+        runnerPopup.isEnabled = !runners.isEmpty
         runnerPopup.target = self
         runnerPopup.action = #selector(runnerChanged)
-        providers = store.providerKinds
-        for provider in providers { providerPopup.addItem(withTitle: provider.name) }
-        if let preferred = providers.firstIndex(of: store.preferredProvider) { providerPopup.selectItem(at: preferred) }
-        let nameRow = field(L("Name"), nameField)
-        let runnerRow = field(L("Runner"), runnerPopup)
-        let providerRow = field(L("Provider"), providerPopup)
-        let accountList = TemplateChoiceScroll(stack: accounts, height: 95)
-        for row in [nameRow, runnerRow, providerRow, accountList, previewText, status, reviewed] as [NSView] {
-            contentStack.addArrangedSubview(row)
-            row.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
+        for kind in providerKinds { providerPopup.addItem(withTitle: "\(kind.name) (\(kind.subtitle))") }
+        providerPopup.selectItem(at: providerKinds.firstIndex(of: store.preferredProvider) ?? 0)
+
+        let views = [formRow(L("Name"), nameField), formRow(L("Runner"), runnerPopup), formRow(L("Provider"), providerPopup), pluginRows, list, note]
+        for view in views {
+            contentStack.addArrangedSubview(view)
+            view.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
         }
-        reviewed.target = self
-        reviewed.action = #selector(reviewChanged)
-        let refresh = NSButton(title: L("Refresh Preview"), target: self, action: #selector(refreshTapped))
-        refresh.bezelStyle = .rounded
-        setButtons(confirm: L("Create Independent Bot"), leading: refresh)
+        contentStack.setCustomSpacing(16, after: pluginRows)
+        setButtons(confirm: L("Create Bot"))
         confirmButton.isEnabled = false
-        refreshPreview()
+        showNote(L("Loading…"))
+        refresh()
     }
 
-    private func field(_ title: String, _ control: NSView) -> NSView {
-        control.translatesAutoresizingMaskIntoConstraints = false
-        let label = Build.label(title, font: .systemFont(ofSize: 12), color: .secondaryLabelColor)
-        let row = Build.stack([label, control], orientation: .horizontal, spacing: 12)
-        label.widthAnchor.constraint(equalToConstant: 70).isActive = true
-        control.widthAnchor.constraint(equalToConstant: 470).isActive = true
-        return row
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        // A plugin added or signed in on the Runner meanwhile changes what the import needs.
+        store.observe(self) { [weak self] event in
+            guard let self, case .rosterChanged = event, !self.isImporting,
+                (self.runner.flatMap { self.store.device($0.id)?.plugins } ?? []) != self.previewedPlugins
+            else { return }
+            self.refresh()
+        }
     }
+
+    private var runner: Device? {
+        runners.indices.contains(runnerPopup.indexOfSelectedItem) ? runners[runnerPopup.indexOfSelectedItem] : nil
+    }
+
+    private var trimmedName: String { nameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines) }
 
     private var params: [String: Any] {
         var params: [String: Any] = ["path": url.path, "mappings": mappings]
-        let index = runnerPopup.indexOfSelectedItem
-        if runners.indices.contains(index) { params["runner_id"] = runners[index].id }
-        if loadedName { params["name"] = nameField.stringValue }
+        if let runner { params["runner_id"] = runner.id }
         return params
     }
 
     @objc private func runnerChanged() {
         mappings.removeAll()
-        refreshPreview()
+        refresh()
     }
 
-    @objc private func refreshTapped() { refreshPreview() }
+    @objc private func connectionChanged(_ popup: NSPopUpButton) {
+        guard let plugin = popup.identifier?.rawValue, let id = popup.selectedItem?.representedObject as? String else { return }
+        mappings[plugin] = id
+        refresh()
+    }
 
-    private func refreshPreview() {
-        guard !importing else { return }
+    private func refresh() {
         generation += 1
         let current = generation
-        reviewed.state = .off
-        reviewed.isEnabled = false
-        confirmButton.isEnabled = false
-        status.stringValue = L("Validating the private file and recipient connections…")
-        status.textColor = .secondaryLabelColor
         let request = params
+        previewedPlugins = runner.flatMap { store.device($0.id)?.plugins } ?? []
+        confirmButton.isEnabled = false
         Task { [weak self] in
             guard let self else { return }
             do {
-                let reply = try await self.reply("templates.import.preview", request)
-                guard self.generation == current else { return }
-                let preview = TemplatePreview(json: reply)
-                self.preview = preview
-                if !self.loadedName {
-                    self.nameField.stringValue = preview.name
-                    self.loadedName = true
-                }
-                self.previewText.text = preview.text
-                self.showAccounts(preview.requirements)
-                self.status.stringValue = preview.issues.isEmpty
-                    ? L("Routines stay paused. Review instructions and scripts before running the new bot.")
-                    : preview.issues.joined(separator: "\n")
-                self.status.textColor = preview.issues.isEmpty ? .secondaryLabelColor : .systemOrange
-                self.reviewed.isEnabled = preview.canImport
-                self.reviewChanged()
+                let json = try await self.reply("templates.import.preview", request)
+                guard current == self.generation else { return }
+                self.show(TemplateImportPreview(json: json))
             } catch {
-                guard self.generation == current else { return }
+                guard current == self.generation else { return }
                 self.preview = nil
-                self.status.stringValue = error.localizedDescription
-                self.status.textColor = .systemRed
+                self.showNote(error.localizedDescription, color: .systemRed)
             }
         }
     }
 
-    private func showAccounts(_ requirements: [TemplatePreview.Requirement]) {
-        accounts.arrangedSubviews.forEach { accounts.removeArrangedSubview($0); $0.removeFromSuperview() }
-        if requirements.isEmpty { accounts.addArrangedSubview(Build.label(L("No integration requirements"), font: Theme.Font.caption, color: .secondaryLabelColor)) }
-        for requirement in requirements {
-            let popup = NSPopUpButton()
-            popup.addItem(withTitle: L("Choose your connection…"))
-            popup.identifier = NSUserInterfaceItemIdentifier(requirement.serviceID)
-            for connection in requirement.candidates {
-                let title = connection.state == "ready" ? connection.name : connection.name + " · " + connection.detail
-                popup.addItem(withTitle: title)
-                popup.lastItem?.representedObject = connection.id
-            }
-            if let chosen = mappings[requirement.serviceID], let item = popup.itemArray.first(where: { $0.representedObject as? String == chosen }) {
-                popup.select(item)
-            }
-            popup.target = self
-            popup.action = #selector(accountChanged(_:))
-            popup.setAccessibilityLabel(L("Connection for %@", requirement.serviceID))
-            accounts.addArrangedSubview(field(requirement.serviceID, popup))
+    private func show(_ preview: TemplateImportPreview) {
+        self.preview = preview
+        if !listsContents, nameField.stringValue.isEmpty { nameField.stringValue = preview.profile?.title ?? "" }
+        for plugin in preview.plugins { mappings[plugin.id] = plugin.selected }
+        showPlugins(preview.plugins)
+        if !listsContents {
+            listsContents = true
+            list.setSections([
+                (L("Profile"), preview.profile.map { [TemplateItemRow.profile($0, isSelectable: false)] } ?? []),
+                (L("Skills"), preview.skills.map { TemplateItemRow(item: $0, isSelectable: false) }),
+                (L("Memories"), preview.memories.map { TemplateItemRow(item: $0, isSelectable: false, titleLines: 3) }),
+                (L("Routines"), preview.routines.map { TemplateItemRow(item: $0, isSelectable: false) }),
+            ])
         }
+        let runnerName = runner?.name ?? ""
+        if runners.isEmpty {
+            showNote(L("Pair a Runner first: a bot runs on a computer."), color: .systemOrange)
+        } else if !preview.issues.isEmpty {
+            showNote(preview.issues.joined(separator: "\n"), color: .systemOrange)
+        } else if let plugin = preview.plugins.first(where: { !$0.isReady }) {
+            let text = plugin.connections.isEmpty ? L("Add %@ to %@ from the Marketplace first.", plugin.name, runnerName)
+                : plugin.selected == nil ? L("Choose the %@ connection this bot uses.", plugin.name)
+                : L("Finish setting up %@ on %@ first.", plugin.name, runnerName)
+            showNote(text, color: .systemOrange)
+        } else {
+            showNote(preview.routines.isEmpty ? "" : L("Routines start paused."))
+        }
+        updateButton()
     }
 
-    @objc private func accountChanged(_ popup: NSPopUpButton) {
-        guard let service = popup.identifier?.rawValue else { return }
-        mappings[service] = popup.selectedItem?.representedObject as? String
-        refreshPreview()
+    /// A line per plugin: a pop-up of the Runner's connections for it, or that it has none.
+    private func showPlugins(_ plugins: [TemplateImportPreview.Plugin]) {
+        pluginRows.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        for plugin in plugins {
+            let control: NSView
+            if plugin.connections.isEmpty {
+                control = Build.label(L("Not on %@", runner?.name ?? ""), font: .systemFont(ofSize: 13), color: .systemOrange)
+            } else {
+                let popup = NSPopUpButton()
+                popup.identifier = NSUserInterfaceItemIdentifier(plugin.id)
+                if plugin.selected == nil {
+                    popup.addItem(withTitle: L("Choose…"))
+                    popup.lastItem?.isEnabled = false
+                }
+                for connection in plugin.connections {
+                    popup.addItem(withTitle: connection.isReady ? connection.name : L("%@ (needs setup)", connection.name))
+                    popup.lastItem?.representedObject = connection.id
+                    if connection.id == plugin.selected { popup.select(popup.lastItem) }
+                }
+                popup.autoenablesItems = false
+                popup.target = self
+                popup.action = #selector(connectionChanged(_:))
+                popup.setAccessibilityLabel(plugin.name)
+                control = popup
+            }
+            let row = formRow(plugin.name, control)
+            pluginRows.addArrangedSubview(row)
+            row.widthAnchor.constraint(equalTo: pluginRows.widthAnchor).isActive = true
+        }
+        pluginRows.isHidden = plugins.isEmpty
     }
 
-    @objc private func reviewChanged() {
-        confirmButton.isEnabled = preview?.canImport == true && reviewed.state == .on && !importing
+    private func showNote(_ text: String, color: NSColor = .tertiaryLabelColor) {
+        note.stringValue = text
+        note.textColor = color
+        note.isHidden = text.isEmpty
+        fitSheetToContent()
+    }
+
+    private func updateButton() {
+        confirmButton.isEnabled = preview?.canImport == true && !trimmedName.isEmpty && runner != nil && !isImporting
     }
 
     override func confirmTapped() {
-        guard let preview, preview.canImport, reviewed.state == .on, !importing else { return }
-        importing = true
-        confirmButton.isEnabled = false
-        nameField.isEnabled = false
-        runnerPopup.isEnabled = false
-        providerPopup.isEnabled = false
+        guard let preview, preview.canImport, let runner, !trimmedName.isEmpty, !isImporting else { return }
+        setImporting(true)
         var request = params
+        request["runner_id"] = runner.id
+        request["name"] = trimmedName
         request["expected_digest"] = preview.digest
         request["reviewed"] = true
-        let provider = providerPopup.indexOfSelectedItem
-        if providers.indices.contains(provider) { request["provider"] = providers[provider].wireValue }
+        if providerKinds.indices.contains(providerPopup.indexOfSelectedItem) {
+            request["provider"] = providerKinds[providerPopup.indexOfSelectedItem].wireValue
+        }
         Task { [weak self] in
             guard let self else { return }
             do {
@@ -174,22 +207,24 @@ final class TemplateImportViewController: SheetViewController {
                 self.dismiss(nil)
                 self.onCreate(chatID)
             } catch {
-                self.status.stringValue = error.localizedDescription
-                self.status.textColor = .systemRed
-                self.reviewed.state = .off
-                self.importing = false
-                self.nameField.isEnabled = true
-                self.runnerPopup.isEnabled = true
-                self.providerPopup.isEnabled = true
-                self.reviewChanged()
+                self.setImporting(false)
+                self.showNote(error.localizedDescription, color: .systemRed)
             }
         }
     }
 
-    override func cancelOperation(_ sender: Any?) { if !importing { super.cancelOperation(sender) } }
-    override func dismissSheet() { if !importing { super.dismissSheet() } }
+    private func setImporting(_ importing: Bool) {
+        isImporting = importing
+        for control in [nameField, runnerPopup, providerPopup] as [NSControl] { control.isEnabled = !importing }
+        for case let popup as NSPopUpButton in pluginRows.arrangedSubviews.flatMap(\.subviews) { popup.isEnabled = !importing }
+        runnerPopup.isEnabled = !importing && !runners.isEmpty
+        updateButton()
+    }
+
+    override func cancelOperation(_ sender: Any?) { if !isImporting { super.cancelOperation(sender) } }
+    override func dismissSheet() { if !isImporting { super.dismissSheet() } }
 }
 
 extension TemplateImportViewController: NSTextFieldDelegate {
-    func controlTextDidChange(_ obj: Notification) { refreshPreview() }
+    func controlTextDidChange(_ obj: Notification) { updateButton() }
 }

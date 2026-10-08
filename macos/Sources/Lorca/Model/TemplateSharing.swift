@@ -1,115 +1,144 @@
-import Foundation
+import AppKit
 
-/// The production sheets use the local CLI; native fixtures can supply deterministic replies.
+/// The sheets ask the local CLI; tests answer for it.
 typealias TemplateReply = @MainActor (String, [String: Any]) async throws -> [String: Any]
 
-/// The CLI owns validation and file access. The app displays its allowlisted preview and
-/// sends selection identifiers and recipient connection choices back to that same CLI.
-struct TemplateContents {
-    struct Item {
-        let id: String
-        let title: String
-    }
-    let profileName: String
-    let skills: [Item]
-    let memories: [Item]
-    let routines: [Item]
-    let requirements: [Item]
-    let notes: [String]
+/// A piece of a bot template as the export and import sheets list it: the CLI's text, already
+/// redacted as the file holds it, and what a reader should look at before sharing it.
+struct TemplateItem {
+    let id: String
+    let title: String
+    let detail: String
+    /// `email`, `phone`, `path`, `link`, `credential` (a key the export redacted).
+    let flags: [String]
+    var look: (symbolName: String, accent: Accent)?
 
-    init(json: [String: Any]) {
-        profileName = (json["profile"] as? [String: Any])?["name"] as? String ?? ""
-        skills = Self.items(json["skills"]) { ($0 as? [String: Any])?["name"] as? String ?? "" }
-        memories = Self.items(json["memories"]) { $0 as? String ?? "" }
-        routines = Self.items(json["routines"]) { ($0 as? [String: Any])?["name"] as? String ?? "" }
-        requirements = (json["requirements"] as? [[String: Any]] ?? []).compactMap {
-            guard let id = $0["service_id"] as? String else { return nil }
-            return Item(id: id, title: id)
+    /// A memory reads as its first line, without Markdown's list or heading marks, over the rest.
+    static func memory(id: String, text: String, flags: [String]) -> TemplateItem {
+        let lines = text.split(whereSeparator: \.isNewline).map { line in
+            line.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: #"^(#+|[-*+]|\d+\.)\s+"#, with: "", options: .regularExpression)
+        }.filter { !$0.isEmpty }
+        return TemplateItem(id: id, title: lines.first ?? text, detail: lines.dropFirst().joined(separator: " "), flags: flags)
+    }
+
+    static func profile(_ json: [String: Any], flags: [String]) -> TemplateItem {
+        TemplateItem(id: "profile", title: json["name"] as? String ?? "", detail: json["description"] as? String ?? "", flags: flags,
+            look: (json["symbol_name"] as? String ?? "sparkles", Accent(rawValue: json["accent"] as? String ?? "") ?? .indigo))
+    }
+
+    static func routine(id: String, _ json: [String: Any], scheduleText: String?, flags: [String]) -> TemplateItem {
+        let schedule = scheduleText.map(Format.schedule) ?? json["schedule"] as? String ?? ""
+        let prompt = json["prompt"] as? String ?? ""
+        return TemplateItem(id: id, title: json["name"] as? String ?? "", detail: prompt.isEmpty ? schedule : "\(schedule) · \(prompt)", flags: flags)
+    }
+
+    static func skill(id: String, _ json: [String: Any], flags: [String]) -> TemplateItem {
+        TemplateItem(id: id, title: json["name"] as? String ?? "", detail: json["description"] as? String ?? "", flags: flags)
+    }
+
+    /// The flags in a word or two, and whether one is personal, which the row tints.
+    var flagSummary: (text: String, personal: Bool)? {
+        let words: [String] = flags.compactMap {
+            switch $0 {
+            case "email": L("Email address")
+            case "phone": L("Phone number")
+            case "path": L("File path")
+            case "link": L("Link")
+            case "credential": L("Key removed")
+            default: nil
+            }
         }
-        notes = json["notes"] as? [String] ?? []
+        guard !words.isEmpty else { return nil }
+        return (words.prefix(2).joined(separator: ", "), flags.contains { $0 != "credential" })
+    }
+}
+
+/// What a bot has that a template can carry (`templates.contents`).
+struct TemplateContents {
+    struct Plugin {
+        let id: String
+        let name: String
     }
 
-    private static func items(_ value: Any?, title: (Any) -> String) -> [Item] {
-        (value as? [[String: Any]] ?? []).compactMap {
-            guard let id = $0["id"] as? String, let content = $0["content"] else { return nil }
-            return Item(id: id, title: title(content))
+    let profile: TemplateItem
+    let skills: [TemplateItem]
+    let memories: [TemplateItem]
+    let routines: [TemplateItem]
+    let plugins: [Plugin]
+
+    init(json: [String: Any], scheduleText: (String) -> String? = { _ in nil }) {
+        func items(_ key: String, _ make: (String, Any, [String]) -> TemplateItem) -> [TemplateItem] {
+            (json[key] as? [[String: Any]] ?? []).compactMap { item in
+                guard let id = item["id"] as? String, let content = item["content"] else { return nil }
+                return make(id, content, item["flags"] as? [String] ?? [])
+            }
+        }
+        let profile = json["profile"] as? [String: Any] ?? [:]
+        self.profile = .profile(profile["content"] as? [String: Any] ?? [:], flags: profile["flags"] as? [String] ?? [])
+        skills = items("skills") { .skill(id: $0, $1 as? [String: Any] ?? [:], flags: $2) }
+        memories = items("memories") { .memory(id: $0, text: $1 as? String ?? "", flags: $2) }
+        routines = items("routines") { .routine(id: $0, $1 as? [String: Any] ?? [:], scheduleText: scheduleText($0), flags: $2) }
+        plugins = (json["requirements"] as? [[String: Any]] ?? []).compactMap {
+            guard let id = $0["service_id"] as? String else { return nil }
+            return Plugin(id: id, name: $0["name"] as? String ?? id)
         }
     }
 }
 
-struct TemplatePreview {
+/// What `templates.import.preview` says about a file for the Runner picked.
+struct TemplateImportPreview {
     struct Connection {
         let id: String
         let name: String
-        let state: String
-        let detail: String
+        let isReady: Bool
     }
-    struct Requirement {
-        let serviceID: String
-        let candidates: [Connection]
+
+    struct Plugin {
+        let id: String
+        let name: String
+        let connections: [Connection]
+        let selected: String?
+
+        var isReady: Bool { connections.contains { $0.id == selected && $0.isReady } }
     }
+
     let digest: String
     let canImport: Bool
     let issues: [String]
-    let requirements: [Requirement]
-    let name: String
-    let text: String
+    let plugins: [Plugin]
+    let profile: TemplateItem?
+    let skills: [TemplateItem]
+    let memories: [TemplateItem]
+    let routines: [TemplateItem]
 
     init(json: [String: Any]) {
         digest = json["digest"] as? String ?? ""
         canImport = json["can_import"] as? Bool ?? false
         issues = json["issues"] as? [String] ?? []
-        requirements = (json["requirements"] as? [[String: Any]] ?? []).compactMap { requirement in
-            guard let serviceID = requirement["service_id"] as? String else { return nil }
-            let candidates = (requirement["candidates"] as? [[String: Any]] ?? []).compactMap { candidate -> Connection? in
+        plugins = (json["requirements"] as? [[String: Any]] ?? []).compactMap { requirement in
+            guard let id = requirement["service_id"] as? String else { return nil }
+            let connections = (requirement["candidates"] as? [[String: Any]] ?? []).compactMap { candidate -> Connection? in
                 guard let id = candidate["id"] as? String else { return nil }
-                return Connection(id: id, name: candidate["name"] as? String ?? id,
-                    state: candidate["state"] as? String ?? "", detail: candidate["detail"] as? String ?? "")
+                return Connection(id: id, name: candidate["name"] as? String ?? id, isReady: candidate["state"] as? String == "ready")
             }
-            return Requirement(serviceID: serviceID, candidates: candidates)
+            return Plugin(id: id, name: requirement["name"] as? String ?? id, connections: connections, selected: requirement["selected"] as? String)
         }
         let template = json["template"] as? [String: Any] ?? [:]
-        let profile = template["profile"] as? [String: Any]
-        name = profile?["name"] as? String ?? ""
-        var sections: [String] = []
-        if let profile {
-            sections.append(L("Profile") + "\n" + (profile["name"] as? String ?? "")
-                + "\n" + (profile["description"] as? String ?? "")
-                + "\n" + L("Look: %@ · %@", profile["symbol_name"] as? String ?? "", profile["accent"] as? String ?? ""))
+        profile = (template["profile"] as? [String: Any]).map { .profile($0, flags: []) }
+        skills = (template["skills"] as? [[String: Any]] ?? []).enumerated().map { .skill(id: "skill-\($0)", $1, flags: []) }
+        memories = (template["memories"] as? [String] ?? []).enumerated().map { .memory(id: "memory-\($0)", text: $1, flags: []) }
+        routines = (template["routines"] as? [[String: Any]] ?? []).enumerated().map {
+            .routine(id: "routine-\($0)", $1, scheduleText: $1["schedule_text"] as? String, flags: [])
         }
-        for skill in template["skills"] as? [[String: Any]] ?? [] {
-            var lines = [L("Skill: %@", skill["name"] as? String ?? ""), skill["description"] as? String ?? "", skill["instructions"] as? String ?? ""]
-            if let examples = skill["examples"] as? String, !examples.isEmpty { lines += [L("Examples"), examples] }
-            for kind in ["references", "scripts"] {
-                for resource in skill[kind] as? [[String: Any]] ?? [] {
-                    lines += [resource["path"] as? String ?? "", resource["text"] as? String ?? ""]
-                }
-            }
-            sections.append(lines.joined(separator: "\n"))
-        }
-        for memory in template["memories"] as? [String] ?? [] { sections.append(L("Memory") + "\n" + memory) }
-        for routine in template["routines"] as? [[String: Any]] ?? [] {
-            var lines = [L("Routine: %@", routine["name"] as? String ?? ""), routine["schedule"] as? String ?? "", routine["prompt"] as? String ?? ""]
-            if let timezone = routine["timezone"] as? String { lines.append(L("Time zone: %@", timezone)) }
-            if let policy = routine["missed_run_policy"] as? String { lines.append(L("Missed runs: %@", policy)) }
-            if let check = routine["check"] as? String, !check.isEmpty { lines += [L("Check script"), check] }
-            lines.append(L("Imported paused"))
-            sections.append(lines.joined(separator: "\n"))
-        }
-        let services = (template["requirements"] as? [[String: Any]] ?? []).compactMap { $0["service_id"] as? String }
-        if !services.isEmpty { sections.append(L("Integration requirements") + "\n" + services.joined(separator: "\n")) }
-        let warnings = (json["warnings"] as? [[String: Any]] ?? []).compactMap { $0["message"] as? String }
-        if !warnings.isEmpty { sections.insert(L("Review before sharing") + "\n" + warnings.map { "• " + $0 }.joined(separator: "\n"), at: 0) }
-        text = sections.joined(separator: "\n\n")
     }
 }
 
 extension AppStore {
     func templateReply(_ method: String, _ params: [String: Any]) async throws -> [String: Any] {
-        guard !isMock else { throw CLIClient.RequestError(message: L("Templates require a running Lorca CLI.")) }
+        guard !isMock else { throw CLIClient.RequestError(message: L("Templates need the Lorca CLI.")) }
         let data = try await client.request(method, params)
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw CLIClient.RequestError(message: L("Couldn't read the template response."))
+            throw CLIClient.RequestError(message: L("Couldn't read the CLI's answer."))
         }
         return json
     }
