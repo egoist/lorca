@@ -28,6 +28,7 @@ mock.module("@expo/ui/swift-ui/modifiers", () => ({
   truncationMode: () => ({}),
 }));
 mock.module("@expo/ui/community/menu", () => ({ MenuView: "MenuView" }));
+mock.module("@expo/ui/jetpack-compose", () => ({ Checkbox: "Checkbox", Host: "ComposeHost", RadioButton: "RadioButton", Switch: "ComposeSwitch" }));
 mock.module("./Symbol", () => ({ Symbol: "Symbol" }));
 mock.module("./theme", () => ({ Font: { body: 17, small: 15 }, withAlpha: (color: string) => color, usePalette: () => ({ cell: "cell", separator: "separator", secondaryLabel: "secondaryLabel" }) }));
 

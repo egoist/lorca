@@ -281,6 +281,7 @@ export default function ChatInfoScreen() {
               title={candidate.name}
               subtitle={providerLabel(candidate.provider, providers)}
               checked={false}
+              indicator={false}
               leading={<BotAvatar bot={candidate} size={36} />}
               onPress={() => {
                 engine.addBot(chat.id, candidate.id);
