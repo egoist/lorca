@@ -1,25 +1,33 @@
 package main
 
 import (
-	"path/filepath"
+	"fmt"
 	"strings"
 
 	"github.com/egoist/lorca/desktop/model"
 	"github.com/egoist/mygo/ui"
 )
 
+// Adding a bot from a template file, after the macOS app's TemplateImportViewController: its name,
+// the Runner it runs on, the provider, and for each plugin it uses one of that Runner's own
+// connections. The new bot shares nothing with the one it was exported from, and its routines
+// start paused.
+
 type templateImportState struct {
 	path, name, runnerID string
 	provider             model.ProviderKind
-	loadedName           bool
-	mappings             map[string]string
-	preview              *model.TemplatePreview
-	reviewed             bool
-	busy, importing      bool
-	generation           int
-	status               string
-	failed               bool
-	onCreate             func(string)
+	// mappings is the connection each plugin uses, by plugin: the CLI's pick until the user makes one.
+	mappings map[string]string
+	preview  *model.TemplatePreview
+	// named is whether the name field has taken the template's name.
+	named      bool
+	status     string
+	failed     bool
+	importing  bool
+	generation int
+	// previewed is the Runner's plugins as last previewed, so a change to them previews again.
+	previewed string
+	onCreate  func(string)
 }
 
 func (w *appWindow) presentTemplateImport(onCreate func(string)) {
@@ -28,7 +36,7 @@ func (w *appWindow) presentTemplateImport(onCreate func(string)) {
 			return
 		}
 		if err != nil {
-			w.showNote(L("Import Bot Template"), model.ErrorText(err))
+			w.showNote(L("New Bot from Template"), model.ErrorText(err))
 			return
 		}
 		if path != "" {
@@ -38,14 +46,12 @@ func (w *appWindow) presentTemplateImport(onCreate func(string)) {
 }
 
 func (w *appWindow) presentTemplateImportPath(path string, onCreate func(string)) {
-	st := &templateImportState{path: path, provider: store.PreferredProvider(), mappings: map[string]string{}, onCreate: onCreate}
-	runners := store.Runners()
-	if len(runners) > 0 {
-		st.runnerID = runners[0].ID
-	}
-	for _, runner := range runners {
-		if runner.IsThisDevice {
+	st := &templateImportState{path: path, provider: store.PreferredProvider(), mappings: map[string]string{}, status: L("Loading…"), onCreate: onCreate}
+	for i, runner := range store.Runners() {
+		if i == 0 || runner.IsThisDevice {
 			st.runnerID = runner.ID
+		}
+		if runner.IsThisDevice {
 			break
 		}
 	}
@@ -53,62 +59,99 @@ func (w *appWindow) presentTemplateImportPath(path string, onCreate func(string)
 	st.refresh(s)
 }
 
-func (st *templateImportState) options() model.TemplateImportOptions {
-	options := model.TemplateImportOptions{Path: st.path, RunnerID: st.runnerID, Provider: st.provider, Mappings: st.mappings}
-	if st.loadedName {
-		name := st.name
-		options.Name = &name
+func (st *templateImportState) runner() *model.Device { return store.Device(st.runnerID) }
+
+// runnerPlugins is the picked Runner's plugins and their states, to notice a change.
+func (st *templateImportState) runnerPlugins() string {
+	runner := st.runner()
+	if runner == nil {
+		return ""
 	}
-	return options
+	var parts []string
+	for _, plugin := range runner.Plugins {
+		parts = append(parts, fmt.Sprintf("%s=%v", plugin.ID, plugin.State))
+	}
+	return strings.Join(parts, ",")
 }
 
 func (st *templateImportState) refresh(s *sheet) {
-	if st.importing {
-		return
-	}
 	st.generation++
 	generation := st.generation
-	st.reviewed, st.busy, st.failed, st.preview = false, true, false, nil
-	st.status = L("Validating the private file and recipient connections…")
-	store.PreviewTemplateImport(st.options(), func(preview model.TemplatePreview, err error) {
+	st.previewed = st.runnerPlugins()
+	options := model.TemplateImportOptions{Path: st.path, RunnerID: st.runnerID, Mappings: st.mappings}
+	store.PreviewTemplateImport(options, func(preview model.TemplatePreview, err error) {
 		if s.window == nil || generation != st.generation {
 			return
 		}
-		st.busy = false
 		if err != nil {
-			st.status, st.failed = model.ErrorText(err), true
+			st.preview, st.status, st.failed = nil, model.ErrorText(err), true
 			return
 		}
-		st.preview = &preview
-		if !st.loadedName {
-			st.name, st.loadedName = preview.Name(), true
+		st.preview, st.status, st.failed = &preview, "", false
+		if !st.named && preview.Template != nil && preview.Template.Profile != nil {
+			st.name = preview.Template.Profile.Name
 		}
-		st.status = strings.Join(preview.Issues, "\n")
-		if st.status == "" {
-			st.status = L("Routines stay paused. Review instructions and scripts before running the new bot.")
+		st.named = true
+		for _, plugin := range preview.Requirements {
+			if plugin.Selected != "" {
+				st.mappings[plugin.ServiceID] = plugin.Selected
+			}
 		}
 	})
 }
 
+// note is the line under the contents: what keeps the import from going ahead, else that routines
+// start paused.
+func (st *templateImportState) note() (string, bool) {
+	if st.status != "" {
+		return st.status, st.failed
+	}
+	preview := st.preview
+	runner := st.runner()
+	switch {
+	case preview == nil:
+		return "", false
+	case len(store.Runners()) == 0 || runner == nil:
+		return L("Pair a Runner first: a bot runs on a computer."), true
+	case len(preview.Issues) > 0:
+		return strings.Join(preview.Issues, "\n"), true
+	}
+	for _, plugin := range preview.Requirements {
+		switch {
+		case plugin.Ready():
+			continue
+		case len(plugin.Candidates) == 0:
+			return L("Add %@ to %@ from the Marketplace first.", plugin.Name, runner.Name), true
+		case plugin.Selected == "":
+			return L("Choose the %@ connection this bot uses.", plugin.Name), true
+		default:
+			return L("Finish setting up %@ on %@ first.", plugin.Name, runner.Name), true
+		}
+	}
+	if preview.Template != nil && len(preview.Template.Routines) > 0 {
+		return L("Routines start paused."), false
+	}
+	return "", false
+}
+
 func (st *templateImportState) canCreate() bool {
-	return !st.busy && !st.importing && st.reviewed && strings.TrimSpace(st.name) != "" && st.runnerID != "" && st.preview != nil && st.preview.Template != nil && st.preview.CanImport && st.preview.Digest != "" && len(st.preview.Issues) == 0
+	return !st.importing && st.preview != nil && st.preview.CanImport && strings.TrimSpace(st.name) != "" && st.runner() != nil
 }
 
 func (st *templateImportState) create(s *sheet) {
 	if !st.canCreate() {
 		return
 	}
-	options := st.options()
-	options.Reviewed, options.ExpectedDigest = true, st.preview.Digest
-	st.importing, st.busy, st.failed = true, true, false
-	st.status = L("Creating independent bot…")
+	options := model.TemplateImportOptions{Path: st.path, RunnerID: st.runnerID, Name: strings.TrimSpace(st.name), Provider: st.provider,
+		Mappings: st.mappings, ExpectedDigest: st.preview.Digest, Reviewed: true}
+	st.importing = true
 	store.ImportTemplate(options, func(chatID string, err error) {
 		if s.window == nil {
 			return
 		}
-		st.importing, st.busy = false, false
+		st.importing = false
 		if err != nil {
-			st.reviewed, st.failed, st.status = false, true, model.ErrorText(err)
+			st.status, st.failed = model.ErrorText(err), true
 			return
 		}
 		s.dismiss()
@@ -118,84 +161,122 @@ func (st *templateImportState) create(s *sheet) {
 	})
 }
 
+// sections are the file's contents, read-only.
+func (st *templateImportState) sections() []templateSection {
+	doc := st.preview.Template
+	if doc == nil {
+		return nil
+	}
+	profile := templateSection{title: L("Profile")}
+	if doc.Profile != nil {
+		profile.items = []templateItem{templateProfile(*doc.Profile, nil)}
+	}
+	skills := templateSection{title: L("Skills")}
+	for i, skill := range doc.Skills {
+		skills.items = append(skills.items, templateItem{id: fmt.Sprint("skill-", i), title: skill.Name, detail: skill.Description, lines: 1})
+	}
+	memories := templateSection{title: L("Memories")}
+	for i, memory := range doc.Memories {
+		memories.items = append(memories.items, templateMemory(fmt.Sprint("memory-", i), memory, nil))
+	}
+	routines := templateSection{title: L("Routines")}
+	for i, routine := range doc.Routines {
+		routines.items = append(routines.items, templateRoutine(fmt.Sprint("routine-", i), routine, routine.ScheduleText, nil))
+	}
+	return []templateSection{profile, skills, routines, memories}
+}
+
 func (st *templateImportState) view(c *ui.Context, s *sheet) {
 	p := colors(c)
-	result := sheetFrame(c, sheetOptions{Title: L("Import Bot Template"), Subtitle: L("Review %@ and choose your own Runner and connections. Import creates an independent bot with its routines paused.", filepath.Base(st.path)), Width: 640, Confirm: L("Create Independent Bot"), ConfirmDisabled: !st.canCreate(), ReturnInContent: true, Leading: func() {
-		if pushButton(c, L("Refresh Preview"), pushOptions{Disabled: st.importing}).Clicked() {
-			st.refresh(s)
-		}
-	}}, func() {
+	const width = 480
+	// The pop-ups fill the row after the label, as wide as the sheet's content allows.
+	fill := float32(width - 40 - newBotLabelWidth - 10)
+	// A plugin added or signed in on the Runner meanwhile changes what the import needs.
+	if !st.importing && st.preview != nil && st.runnerPlugins() != st.previewed {
+		st.refresh(s)
+	}
+	text, warning := st.note()
+	result := sheetFrame(c, sheetOptions{
+		Title:           L("New Bot from Template"),
+		Width:           width,
+		Confirm:         L("Create Bot"),
+		ConfirmDisabled: !st.canCreate(),
+	}, func() {
 		newBotRow(c, L("Name"), false, func() {
-			textField(c.Key("template-name"), &st.name, fieldOptions{Label: L("New bot name"), Placeholder: L("New bot name"), Disabled: st.importing}).Grow(1).OnChange(func() { st.loadedName = true; st.refresh(s) })
+			textField(c.Key("template-name"), &st.name, fieldOptions{Placeholder: L("Name"), Label: L("Name"), Disabled: st.importing}).Grow(1).MinWidth(0)
 		})
 		newBotRow(c, L("Runner"), false, func() {
 			var options []popUpOption
-			for _, runner := range store.Runners() {
-				options = append(options, popUpOption{Value: runner.ID, Label: runner.Name})
+			for _, device := range store.Runners() {
+				label := device.Name
+				if device.IsThisDevice {
+					label = L("%@ (this computer)", device.Name)
+				}
+				options = append(options, popUpOption{Value: device.ID, Label: label})
 			}
-			if picked, changed, _ := popUpButton(c.Key("template-runner"), popUp{Options: options, Value: st.runnerID, Width: 514, Label: L("Runner"), Disabled: st.importing}); changed {
+			if picked, changed, _ := popUpButton(c.Key("template-runner"), popUp{Options: options, Value: st.runnerID, Width: fill, Label: L("Runner"), Disabled: st.importing || len(options) == 0}); changed {
 				st.runnerID = picked
 				st.mappings = map[string]string{}
 				st.refresh(s)
 			}
 		})
 		newBotRow(c, L("Provider"), false, func() {
-			var options []popUpOption
-			for _, kind := range store.ProviderKinds() {
-				options = append(options, popUpOption{Value: kind, Label: model.ProviderName(kind, store.Providers)})
+			kinds := store.ProviderKinds()
+			options := make([]popUpOption, 0, len(kinds))
+			for _, kind := range kinds {
+				options = append(options, popUpOption{Value: kind, Label: model.ProviderName(kind, store.Providers) + " (" + model.ProviderSubtitle(kind) + ")"})
 			}
-			if picked, changed, _ := popUpButton(c.Key("template-provider"), popUp{Options: options, Value: st.provider, Width: 514, Label: L("Provider"), Disabled: st.importing}); changed {
+			if picked, changed, _ := popUpButton(c.Key("template-provider"), popUp{Options: options, Value: st.provider, Width: fill, Label: L("Provider"), Disabled: st.importing}); changed {
 				st.provider = picked
-				st.reviewed = false
 			}
 		})
 		if st.preview != nil {
-			if len(st.preview.Requirements) == 0 {
-				ui.Text(c, L("No integration requirements")).FontSize(textCaption).TextColor(p.Label2)
-			}
-			for _, requirement := range st.preview.Requirements {
-				service := requirement.ServiceID
-				ui.Column(c.Key("requirement:" + service)).Gap(5).Children(func() {
-					ui.Text(c, L("Connection for %@", service)).FontSize(12).TextColor(p.Label2)
-					options := []popUpOption{{Value: "", Label: L("Choose your connection…")}}
-					for _, candidate := range requirement.Candidates {
-						label := firstNonEmpty(candidate.Name, candidate.ID)
+			// A line per plugin: a pop-up of the Runner's connections for it, or that it has none.
+			for _, plugin := range st.preview.Requirements {
+				newBotRow(c.Key("plugin:"+plugin.ServiceID), plugin.Name, false, func() {
+					if len(plugin.Candidates) == 0 {
+						name := ""
+						if runner := st.runner(); runner != nil {
+							name = runner.Name
+						}
+						ui.Text(c, L("Not on %@", name)).Padding(4, 0).FontSize(13).TextColor(p.Orange).SingleLine()
+						return
+					}
+					var options []popUpOption
+					if plugin.Selected == "" {
+						options = append(options, popUpOption{Value: "", Label: L("Choose…")})
+					}
+					for _, candidate := range plugin.Candidates {
+						label := candidate.Name
 						if candidate.State != "ready" {
-							label += " · " + candidate.Detail
+							label = L("%@ (needs setup)", candidate.Name)
 						}
 						options = append(options, popUpOption{Value: candidate.ID, Label: label})
 					}
-					if picked, changed, _ := popUpButton(c.Key("connection:"+service), popUp{Options: options, Value: st.mappings[service], Width: 600, Label: L("Connection for %@", service), Disabled: st.importing}); changed {
-						if picked == "" {
-							delete(st.mappings, service)
-						} else {
-							st.mappings[service] = picked
-						}
+					if picked, changed, _ := popUpButton(c.Key("connection:"+plugin.ServiceID), popUp{Options: options, Value: plugin.Selected, Width: fill, Label: plugin.Name, Disabled: st.importing}); changed && picked != "" {
+						st.mappings[plugin.ServiceID] = picked
 						st.refresh(s)
 					}
 				})
 			}
+			ui.Column(c).Margin(4, 0, 0, 0).Children(func() {
+				templateList(c.Key("template-contents"), 260, st.sections(), false, nil)
+			})
 		}
-		text := ""
-		if st.preview != nil {
-			text = st.preview.Text()
-		}
-		templatePreviewView(c.Key("template-import-preview"), text, 235)
-		if st.status != "" {
-			tint := p.Label2
+		if text != "" {
+			tint := p.Label3
 			if st.failed {
 				tint = p.Red
-			} else if st.preview != nil && len(st.preview.Issues) > 0 {
+			} else if warning {
 				tint = p.Orange
 			}
-			ui.Text(c, st.status).FontSize(textCaption).LineHeight(1.4).TextColor(tint)
+			ui.Text(c, text).FontSize(11.5).LineHeight(1.4).TextColor(tint)
 		}
-		ui.Checkbox(c.Key("template-import-review"), &st.reviewed, L("I reviewed the contents and selected my own connections.")).Disabled(st.busy || st.importing || st.preview == nil || !st.preview.CanImport || len(st.preview.Issues) > 0)
 	})
-	if result.Cancelled && !st.importing {
+	switch {
+	case result.Cancelled && !st.importing:
 		s.dismiss()
-	}
-	if result.Confirmed {
+	case result.Confirmed:
 		st.create(s)
 	}
 }

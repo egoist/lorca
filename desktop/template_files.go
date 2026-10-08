@@ -8,13 +8,13 @@ import (
 	"github.com/egoist/mygo"
 )
 
-// These feature-specific hooks use system dialogs in the app and deterministic choices in
-// native tester fixtures. They return paths only; the CLI reads/writes the private template.
+// The system's Open and Save dialogs for template files, which tests replace. They answer a path;
+// the CLI reads and writes the file.
 var chooseTemplateSource = openTemplateSource
 var chooseTemplateDestination = saveTemplateDestination
 
 func openTemplateSource(parent *mygo.Window, done func(string, error)) {
-	options := mygo.OpenDialogOptions{Parent: parent, Title: L("Import Bot Template"), Filters: []mygo.FileFilter{{Name: L("Bot templates"), Extensions: []string{"lorca-template"}}}}
+	options := mygo.OpenDialogOptions{Parent: parent, Filters: []mygo.FileFilter{{Name: L("Bot templates"), Extensions: []string{"lorca-template"}}}}
 	go func() {
 		paths, err := mygo.Dialog.Open(options)
 		path := ""
@@ -26,7 +26,7 @@ func openTemplateSource(parent *mygo.Window, done func(string, error)) {
 }
 
 func saveTemplateDestination(parent *mygo.Window, name string, done func(string, error)) {
-	options := mygo.SaveDialogOptions{Parent: parent, Title: L("Save Private Template"), DefaultPath: templateFilename(name), Filters: []mygo.FileFilter{{Name: L("Bot templates"), Extensions: []string{"lorca-template"}}}}
+	options := mygo.SaveDialogOptions{Parent: parent, DefaultPath: templateFilename(name), Filters: []mygo.FileFilter{{Name: L("Bot templates"), Extensions: []string{"lorca-template"}}}}
 	go func() {
 		path, err := mygo.Dialog.Save(options)
 		post(func() { done(path, err) })

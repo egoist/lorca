@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/egoist/lorca/desktop/model"
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 )
@@ -39,6 +40,18 @@ func chatSelected() bool {
 	return m != nil && m.selection.ChatID != "" && store.Chat(m.selection.ChatID) != nil
 }
 
+// selectedDMBot is the bot of the direct chat that is showing.
+func selectedDMBot() *model.Bot {
+	if !chatSelected() {
+		return nil
+	}
+	chat := store.Chat(app.main.selection.ChatID)
+	if !chat.IsDM() || len(chat.BotIDs) == 0 {
+		return nil
+	}
+	return store.Bot(chat.BotIDs[0])
+}
+
 func selectedChatIsGroup() bool {
 	if !chatSelected() {
 		return false
@@ -49,8 +62,9 @@ func selectedChatIsGroup() bool {
 // commandTable is every command, in menu order.
 var commandTable = []command{
 	{id: "newBot", title: func() string { return L("New Bot…") }, accelerator: "CmdOrCtrl+N", opensMain: true},
+	{id: "importBotTemplate", title: func() string { return L("New Bot from Template…") }, opensMain: true},
 	{id: "newGroupChat", title: func() string { return L("New Group Chat…") }, accelerator: "CmdOrCtrl+Shift+N", opensMain: true},
-	{id: "importBotTemplate", title: func() string { return L("Import Bot Template…") }, opensMain: true},
+	{id: "exportBotTemplate", title: func() string { return L("Export as Template…") }, enabled: func() bool { return selectedDMBot() != nil }},
 	{id: "marketplace", title: func() string { return L("Marketplace…") }, accelerator: "CmdOrCtrl+Shift+M", opensMain: true},
 	{id: "pairDevice", title: func() string { return L("Pair a Device…") }, accelerator: "CmdOrCtrl+Shift+P", opensMain: true},
 	{id: "settings", title: func() string { return L("Settings…") }, accelerator: "CmdOrCtrl+,"},
@@ -287,7 +301,7 @@ func windowMenuBar(kind windowKind) *mygo.Menu {
 	}
 	help = append(help, sep(), at("about"))
 	return mygo.NewMenu([]*mygo.MenuItem{
-		submenu(L("File"), at("newBot"), at("newGroupChat"), at("importBotTemplate"), sep(), at("marketplace"), sep(), at("pairDevice"), sep(), at("settings"), sep(), at("closeWindow"), at("quit")),
+		submenu(L("File"), at("newBot"), at("importBotTemplate"), at("newGroupChat"), sep(), at("exportBotTemplate"), sep(), at("marketplace"), sep(), at("pairDevice"), sep(), at("settings"), sep(), at("closeWindow"), at("quit")),
 		submenu(L("Edit"),
 			&mygo.MenuItem{Role: mygo.RoleUndo, Label: L("Undo")},
 			&mygo.MenuItem{Role: mygo.RoleRedo, Label: L("Redo")},

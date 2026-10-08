@@ -5,8 +5,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,10 +17,14 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
+// The template sheets against answers in the CLI's shape, over the demo roster. `LORCA_RENDER`
+// also saves each state at 2x in the light and dark appearances.
+
 type templateUICall struct {
 	method string
 	params map[string]any
 }
+
 type templateUITransport struct {
 	mu      sync.Mutex
 	calls   []templateUICall
@@ -36,13 +42,15 @@ func (transport *templateUITransport) Request(method string, params any) (json.R
 	call := templateUICall{method, payload}
 	transport.mu.Lock()
 	transport.calls = append(transport.calls, call)
+	handler := transport.handler
 	transport.mu.Unlock()
-	result, err := transport.handler(call)
+	result, err := handler(call)
 	if err != nil {
 		return nil, err
 	}
 	return json.Marshal(result)
 }
+
 func (transport *templateUITransport) methodCalls(method string) []templateUICall {
 	transport.mu.Lock()
 	defer transport.mu.Unlock()
@@ -55,45 +63,51 @@ func (transport *templateUITransport) methodCalls(method string) []templateUICal
 	return calls
 }
 
-func templateUIFixtureDocument() map[string]any {
-	return map[string]any{"format": "lorca.bot-template", "version": 1, "profile": map[string]any{"name": "Release Reviewer", "description": "Review pull requests and report risks and checks.", "symbol_name": "checklist", "accent": "blue"}, "memories": []string{"Use concise reviews; contact review@example.test."}, "routines": []any{map[string]any{"name": "Morning pull-request scan", "schedule": "every 2h", "prompt": "Summarize open pull requests and flag missing checks."}}, "requirements": []any{map[string]any{"service_id": "github"}}}
+var templateProfileFixture = map[string]any{
+	"name": "Project Manager", "symbol_name": "list.bullet.clipboard.fill", "accent": "indigo",
+	"description": "Plans the work and delegates it to the team. Breaks work down, hands it off with message_bot, and summarizes what came back.",
 }
 
-func templateUIFixtureReply(call templateUICall) (any, error) {
-	doc := templateUIFixtureDocument()
-	warnings := []any{map[string]any{"path": "memories.0", "message": "Selected memory may contain personal information. Contains an email address."}}
-	switch call.method {
-	case "templates.contents":
-		return map[string]any{"profile": doc["profile"], "skills": []any{}, "memories": []any{map[string]any{"id": "fixture-memory", "content": "Use concise reviews; contact review@example.test."}}, "routines": []any{map[string]any{"id": "fixture-routine", "content": doc["routines"].([]any)[0]}}, "requirements": doc["requirements"], "notes": []string{"Reusable skills need playbook support in this CLI. Update Lorca before exporting or importing skills."}}, nil
-	case "templates.export.preview":
-		return map[string]any{"template": doc, "digest": "fixture-export-digest", "visibility": "private_file", "warnings": warnings}, nil
-	case "templates.export":
-		return map[string]any{"path": call.params["path"], "digest": "fixture-export-digest", "visibility": "private_file"}, nil
-	case "templates.import.preview":
-		path, _ := call.params["path"].(string)
-		if strings.Contains(path, "future") {
-			return map[string]any{"digest": "future-file", "can_import": false, "issues": []string{"Unsupported template version 2; this Lorca reads version 1."}}, nil
-		}
-		if strings.Contains(path, "skills") {
-			doc["requirements"] = []any{}
-			doc["skills"] = []any{map[string]any{"name": "review-checklist", "description": "Review a proposed change", "instructions": "Read the diff, identify risks and report tests."}}
-			return map[string]any{"template": doc, "digest": "skill-file", "can_import": false, "warnings": warnings, "issues": []string{"Reusable skills need playbook support in this CLI. Update Lorca before exporting or importing skills."}}, nil
-		}
-		mappings, _ := call.params["mappings"].(map[string]any)
-		ready := mappings["github"] == "github"
-		issues := []string{}
-		if !ready {
-			issues = append(issues, "Select your own connection for github.")
-		}
-		return map[string]any{"template": doc, "digest": "fixture-import-digest", "can_import": ready, "issues": issues, "warnings": warnings, "requirements": []any{map[string]any{"service_id": "github", "selected": mappings["github"], "candidates": []any{map[string]any{"id": "github", "name": "GitHub · Demo workspace", "state": "ready", "detail": "Ready"}}}}}, nil
-	case "templates.import":
-		return map[string]any{"bot": map[string]any{"id": "bot-imported-fixture", "name": call.params["name"], "description": "Review pull requests.", "symbol_name": "checklist", "accent": "blue", "provider": call.params["provider"], "runner_id": call.params["runner_id"], "created_at": 1}, "chat_id": "dm-imported-fixture", "routines_paused": true}, nil
-	case "bots.memory":
-		return map[string]any{"bot_id": "bot-patch", "here": true, "runner": "Workbench", "path": "/fixture/workspace", "text": "Fixture memory", "hash": "fixture-hash", "max_lines": 200, "max_bytes": 24000}, nil
-	case "chats.mark_read":
-		return map[string]any{}, nil
-	default:
-		return nil, errors.New("Unexpected fixture method " + call.method)
+var templateBriefFixture = map[string]any{"name": "Morning brief", "schedule": "0 9 * * 1-5",
+	"prompt": "Read the recent messages in every chat you are in and post a short brief: what changed and what needs a decision."}
+
+func templateContentsFixture() map[string]any {
+	return map[string]any{
+		"profile": map[string]any{"id": "profile", "content": templateProfileFixture},
+		"memories": []any{
+			map[string]any{"id": "memory-launch", "content": "- The launch is on Friday; the go/no-go call is Thursday at 4 PM."},
+			map[string]any{"id": "memory-summary", "content": "- Send the weekly summary to team@example.com.", "flags": []string{"email"}},
+			map[string]any{"id": "memory-staging", "content": "- Staging deploys use API_KEY=«redacted credential».", "flags": []string{"credential"}},
+			map[string]any{"id": "topic-release", "content": "# Release process\nCut the release branch on Thursday. Tag it after the checklist passes and the notes are approved."},
+		},
+		"routines": []any{
+			map[string]any{"id": "rt-brief", "content": templateBriefFixture},
+			map[string]any{"id": "rt-checklist", "content": map[string]any{"name": "Launch checklist", "schedule": "every 2h", "prompt": "Review the launch checklist and report new blockers, or PASS when nothing changed."}},
+		},
+		"requirements": []any{map[string]any{"service_id": "github", "name": "GitHub"}, map[string]any{"service_id": "linear", "name": "Linear"}},
+	}
+}
+
+// templateImportFixture is a file that uses GitHub and Linear, read for a Runner whose Linear is
+// ready or not.
+func templateImportFixture(call templateUICall, linearReady bool) map[string]any {
+	path, _ := call.params["path"].(string)
+	if strings.Contains(path, "future") {
+		return map[string]any{"digest": "future", "can_import": false, "issues": []string{"Unsupported template version 2; this Lorca reads version 1."}, "requirements": []any{}}
+	}
+	linear := "needs_auth"
+	if linearReady {
+		linear = "ready"
+	}
+	return map[string]any{
+		"digest": "digest-1", "can_import": linearReady, "issues": []string{},
+		"template": map[string]any{"profile": templateProfileFixture,
+			"memories": []string{"- The launch is on Friday; the go/no-go call is Thursday at 4 PM."},
+			"routines": []any{map[string]any{"name": "Morning brief", "schedule": "0 9 * * 1-5", "schedule_text": "Weekdays at 9:00 AM", "prompt": templateBriefFixture["prompt"]}}},
+		"requirements": []any{
+			map[string]any{"service_id": "github", "name": "GitHub", "selected": "github", "candidates": []any{map[string]any{"id": "github", "name": "GitHub", "state": "ready"}}},
+			map[string]any{"service_id": "linear", "name": "Linear", "selected": "linear", "candidates": []any{map[string]any{"id": "linear", "name": "Linear", "state": linear}}},
+		},
 	}
 }
 
@@ -102,222 +116,270 @@ type templateUIFixture struct {
 	tt        *ui.Tester
 	transport *templateUITransport
 	queue     chan func()
+	// linearReady is the Runner's Linear sign-in, as the import preview reads it.
+	linearReady atomic.Bool
 }
 
 func newTemplateUIFixture(t *testing.T) *templateUIFixture {
 	t.Helper()
 	m := demoWindow(t)
 	previous := store
-	transport := &templateUITransport{handler: templateUIFixtureReply}
-	queue := make(chan func(), 128)
-	store = model.NewStore(transport, func(fn func()) { queue <- fn }, false)
+	f := &templateUIFixture{m: m, queue: make(chan func(), 128)}
+	f.transport = &templateUITransport{handler: func(call templateUICall) (any, error) {
+		switch call.method {
+		case "templates.contents":
+			return templateContentsFixture(), nil
+		case "templates.export.preview":
+			return map[string]any{"digest": "export-digest", "template": map[string]any{}}, nil
+		case "templates.export":
+			return map[string]any{"path": call.params["path"]}, nil
+		case "templates.import.preview":
+			return templateImportFixture(call, f.linearReady.Load()), nil
+		case "templates.import":
+			return map[string]any{"bot": map[string]any{"id": "bot-imported", "name": call.params["name"], "description": "Plans the work.", "symbol_name": "list.bullet.clipboard.fill", "accent": "indigo", "provider": call.params["provider"], "runner_id": call.params["runner_id"], "created_at": 1}, "chat_id": "dm-imported"}, nil
+		case "chats.mark_read", "bots.memory":
+			return map[string]any{}, nil
+		}
+		return nil, errors.New("unexpected " + call.method)
+	}}
+	store = model.NewStore(f.transport, func(fn func()) { f.queue <- fn }, false)
 	store.Devices, store.Bots, store.Chats, store.Routines = previous.Devices, previous.Bots, previous.Chats, previous.Routines
 	store.Providers, store.Models = previous.Providers, previous.Models
 	store.HasIdentity, store.IsConnected, store.IsStarting = previous.HasIdentity, true, false
-	if bot := store.Bot("bot-patch"); bot != nil {
-		bot.Name = "Release Reviewer"
-	}
-	f := &templateUIFixture{m: m, transport: transport, queue: queue}
 	f.tt = ui.NewTester(m.frame(m.view), 1180, 900)
+	if os.Getenv("LORCA_RENDER") != "" {
+		f.tt.SetScale(2)
+	}
 	f.step()
 	return f
 }
-func (fixture *templateUIFixture) step() {
+
+func (f *templateUIFixture) step() {
 	for {
 		select {
-		case fn := <-fixture.queue:
+		case fn := <-f.queue:
 			fn()
 		default:
 			runPosts()
-			fixture.tt.Frame()
+			f.tt.Frame()
 			return
 		}
 	}
 }
-func (fixture *templateUIFixture) wait(t *testing.T, condition func() bool) {
+
+func (f *templateUIFixture) wait(t *testing.T, condition func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for !condition() {
 		if time.Now().After(deadline) {
-			t.Fatalf("fixture timeout: %q", fixture.tt.Texts())
+			t.Fatalf("never got there: %q", f.tt.Texts())
 		}
-		fixture.step()
+		f.step()
 		time.Sleep(5 * time.Millisecond)
 	}
-	fixture.step()
-}
-func (fixture *templateUIFixture) click(t *testing.T, label string) {
-	t.Helper()
-	if err := fixture.tt.Click(label); err != nil {
-		t.Fatal(err)
-	}
-	fixture.step()
+	// A sheet slides in on the clock; clicks go where it comes to rest.
+	settleTransitions(f.tt)
+	f.step()
 }
 
-func TestTemplateDesktopExportSelectionReviewAndPrivateSave(t *testing.T) {
+func (f *templateUIFixture) click(t *testing.T, label string) {
+	t.Helper()
+	if err := f.tt.Click(label); err != nil {
+		t.Fatal(err)
+	}
+	f.step()
+}
+
+func (f *templateUIFixture) stubDestination(t *testing.T, path string) {
+	old := chooseTemplateDestination
+	t.Cleanup(func() { chooseTemplateDestination = old })
+	chooseTemplateDestination = func(_ *mygo.Window, _ string, done func(string, error)) { done(path, nil) }
+}
+
+func TestTemplateExportSendsThePickedContentInTheBotsOrder(t *testing.T) {
 	f := newTemplateUIFixture(t)
-	f.m.presentTemplateExport("bot-patch")
-	f.wait(t, func() bool { return f.tt.HasText("Profile and instructions: Release Reviewer") })
-	renderBoth(t, f.tt, "desktop-template-export-selection")
-	for _, label := range []string{"Profile and instructions: Release Reviewer", "Use concise reviews; contact review@example.test.", "Morning pull-request scan", "github"} {
+	f.m.presentTemplateExport("bot-nova")
+	f.wait(t, func() bool { return f.tt.HasText("Launch checklist") })
+	renderBoth(t, f.tt, "desktop-template-export")
+
+	// Every memory at once, and none.
+	// Memories come last, below the fold.
+	list, _ := f.tt.Find("Launch checklist")
+	for range 10 {
+		f.tt.Scroll(list.X, list.Y, 0, 40)
+		f.step()
+	}
+	f.click(t, "Select All")
+	if !f.tt.HasText("Deselect All") {
+		t.Fatal("Select All did not pick every memory")
+	}
+	f.click(t, "Deselect All")
+	// Picked out of order, listed in the bot's: routines, plugins, then memories.
+	for _, label := range []string{"Release process", "Morning brief", "GitHub", "The launch is on Friday; the go/no-go call is Thursday at 4 PM."} {
 		f.click(t, label)
 	}
-	f.click(t, "Preview Contents")
-	f.wait(t, func() bool { return f.tt.HasText("Save Private File…") })
-	if !f.tt.HasText("Review before sharing") {
-		t.Fatal("review warnings absent")
-	}
-	calls := f.transport.methodCalls("templates.export.preview")
-	if len(calls) != 1 {
-		t.Fatalf("preview calls %v", calls)
-	}
-	selection := calls[0].params["selection"].(map[string]any)
-	if selection["profile"] != true || selection["memory_ids"].([]any)[0] != "fixture-memory" || selection["routine_ids"].([]any)[0] != "fixture-routine" || selection["requirement_ids"].([]any)[0] != "github" {
-		t.Fatalf("wrong explicit selection: %v", selection)
-	}
-	oldChooser := chooseTemplateDestination
-	t.Cleanup(func() { chooseTemplateDestination = oldChooser })
-	chooseTemplateDestination = func(_ *mygo.Window, _ string, done func(string, error)) {
-		done(filepath.Join(t.TempDir(), "reviewer.lorca-template"), nil)
-	}
-	f.click(t, "Save Private File…")
-	if len(f.transport.methodCalls("templates.export")) > 0 {
-		t.Fatal("unreviewed save ran")
-	}
-	f.click(t, "I reviewed the selected content for personal information.")
-	renderBoth(t, f.tt, "desktop-template-export-review")
-	f.click(t, "Save Private File…")
+	path := filepath.Join(t.TempDir(), "Project Manager.lorca-template")
+	f.stubDestination(t, path)
+	f.click(t, "Export…")
 	f.wait(t, func() bool { return !f.m.hasSheet() })
-	saved := f.transport.methodCalls("templates.export")
-	if len(saved) != 1 || saved[0].params["reviewed"] != true || saved[0].params["expected_digest"] != "fixture-export-digest" || saved[0].params["overwrite"] != false {
-		t.Fatalf("save authority boundary %v", saved)
+	previews, saves := f.transport.methodCalls("templates.export.preview"), f.transport.methodCalls("templates.export")
+	if len(previews) != 1 || len(saves) != 1 {
+		t.Fatalf("calls: %d previews, %d saves", len(previews), len(saves))
+	}
+	selection, _ := json.Marshal(saves[0].params["selection"])
+	if string(selection) != `{"memory_ids":["memory-launch","topic-release"],"profile":true,"requirement_ids":["github"],"routine_ids":["rt-brief"],"skill_ids":null}` {
+		t.Fatalf("selection %s", selection)
+	}
+	if saves[0].params["path"] != path || saves[0].params["expected_digest"] != "export-digest" || saves[0].params["reviewed"] != true || saves[0].params["overwrite"] != false {
+		t.Fatalf("save %v", saves[0].params)
 	}
 }
 
-func TestTemplateDesktopChangingSelectionRequiresFreshReview(t *testing.T) {
+func TestTemplateExportShowsWhyItCannotSave(t *testing.T) {
 	f := newTemplateUIFixture(t)
-	f.m.presentTemplateExport("bot-patch")
-	f.wait(t, func() bool { return f.tt.HasText("Profile and instructions: Release Reviewer") })
-	f.click(t, "Profile and instructions: Release Reviewer")
-	f.click(t, "Preview Contents")
-	f.wait(t, func() bool { return f.tt.HasText("Save Private File…") })
-	f.click(t, "I reviewed the selected content for personal information.")
-	f.click(t, "Use concise reviews; contact review@example.test.")
-	if f.tt.HasText("Save Private File…") || !f.tt.HasText("Preview Contents") {
-		t.Fatal("selection change kept review")
+	f.transport.mu.Lock()
+	next := f.transport.handler
+	f.transport.handler = func(call templateUICall) (any, error) {
+		if call.method == "templates.export.preview" {
+			return nil, errors.New("What you picked uses GitHub. Check it under Plugins too.")
+		}
+		return next(call)
 	}
-	if len(f.transport.methodCalls("templates.export")) > 0 {
-		t.Fatal("selection edit saved automatically")
+	f.transport.mu.Unlock()
+	f.m.presentTemplateExport("bot-nova")
+	f.wait(t, func() bool { return f.tt.HasText("Launch checklist") })
+	f.click(t, "Morning brief")
+	f.stubDestination(t, filepath.Join(t.TempDir(), "never.lorca-template"))
+	f.click(t, "Export…")
+	f.wait(t, func() bool { return f.tt.HasText("What you picked uses GitHub. Check it under Plugins too.") })
+	renderBoth(t, f.tt, "desktop-template-export-error")
+	if !f.m.hasSheet() || len(f.transport.methodCalls("templates.export")) > 0 {
+		t.Fatal("a refused export saved or closed the sheet")
+	}
+	// Picking again clears the error.
+	f.click(t, "GitHub")
+	if f.tt.HasText("What you picked uses GitHub. Check it under Plugins too.") {
+		t.Fatal("the error outlived the change")
 	}
 }
 
-func TestTemplateDesktopImportTypingConnectionsAndIndependentDM(t *testing.T) {
+func TestTemplateImportUsesTheRunnersConnectionAndOpensTheNewChat(t *testing.T) {
 	f := newTemplateUIFixture(t)
 	var opened string
-	f.m.presentTemplateImportPath("/fixture/reviewer.lorca-template", func(id string) { opened = id; f.m.selectChat(id) })
-	f.wait(t, func() bool { return f.tt.HasText("Select your own connection for github.") })
-	renderBoth(t, f.tt, "desktop-template-import-needs-connection")
-	f.click(t, "New bot name")
-	f.tt.Key(ui.Cmd, ui.KeyA)
-	f.tt.Type("Independent Reviewer")
-	f.step()
-	f.wait(t, func() bool {
-		calls := f.transport.methodCalls("templates.import.preview")
-		return len(calls) > 1 && calls[len(calls)-1].params["name"] == "Independent Reviewer"
-	})
-	f.click(t, "Choose your connection…")
-	if err := f.tt.ChooseMenuItem("GitHub · Demo workspace"); err != nil {
-		t.Fatal(err)
+	f.m.presentTemplateImportPath("/fixture/Project Manager.lorca-template", func(id string) { opened = id; f.m.selectChat(id) })
+	f.wait(t, func() bool { return f.tt.HasText("Finish setting up Linear on Workbench first.") })
+	renderBoth(t, f.tt, "desktop-template-import-setup")
+	if calls := f.transport.methodCalls("templates.import.preview"); calls[0].params["runner_id"] != "dev-workbench" {
+		t.Fatalf("not this computer first: %v", calls[0].params)
 	}
-	f.step()
-	f.wait(t, func() bool {
-		return f.tt.HasText("Routines stay paused. Review instructions and scripts before running the new bot.")
-	})
-	f.click(t, "Create Independent Bot")
+	f.click(t, "Create Bot")
 	if len(f.transport.methodCalls("templates.import")) > 0 {
-		t.Fatal("connection choice bypassed review")
+		t.Fatal("imported with a plugin that isn't ready")
 	}
-	f.click(t, "I reviewed the contents and selected my own connections.")
-	renderBoth(t, f.tt, "desktop-template-import-reviewed")
-	f.click(t, "Create Independent Bot")
+
+	// Signing in to Linear on the Runner previews again by itself.
+	f.linearReady.Store(true)
+	for i := range store.Devices[0].Plugins {
+		if store.Devices[0].Plugins[i].ID == "linear" {
+			store.Devices[0].Plugins[i].State = model.PluginReady
+		}
+	}
+	f.wait(t, func() bool { return f.tt.HasText("Routines start paused.") })
+	renderBoth(t, f.tt, "desktop-template-import")
+	// The Name field is the line above Runner, as far as Provider is below it.
+	runner, _ := f.tt.Find("Runner")
+	provider, _ := f.tt.Find("Provider")
+	f.tt.ClickAt(runner.X+200, runner.Y+runner.H/2-(provider.Y-runner.Y))
+	f.step()
+	f.tt.Key(ui.Cmd, ui.KeyA)
+	f.tt.Type("Launch Manager")
+	f.step()
+	f.click(t, "Create Bot")
 	f.wait(t, func() bool { return opened != "" })
-	if opened != "dm-imported-fixture" || store.Chat(opened) == nil || len(store.Chat(opened).Messages) != 0 {
-		t.Fatal("independent DM not opened")
-	}
 	imports := f.transport.methodCalls("templates.import")
-	if len(imports) != 1 || imports[0].params["name"] != "Independent Reviewer" || imports[0].params["mappings"].(map[string]any)["github"] != "github" || imports[0].params["expected_digest"] != "fixture-import-digest" || imports[0].params["reviewed"] != true {
-		t.Fatalf("lost recipient choice/review: %v", imports)
+	mappings, _ := imports[0].params["mappings"].(map[string]any)
+	if len(imports) != 1 || imports[0].params["name"] != "Launch Manager" || mappings["github"] != "github" || mappings["linear"] != "linear" ||
+		imports[0].params["expected_digest"] != "digest-1" || imports[0].params["reviewed"] != true || imports[0].params["runner_id"] != "dev-workbench" {
+		t.Fatalf("import %v", imports)
+	}
+	if opened != "dm-imported" || store.Chat(opened) == nil || store.Bot("bot-imported") == nil {
+		t.Fatal("the new chat did not open")
 	}
 }
 
-func TestTemplateDesktopCapabilityBlockersAndMenuEntry(t *testing.T) {
+func TestTemplateImportExplainsAFileItCannotRead(t *testing.T) {
 	f := newTemplateUIFixture(t)
-	f.m.presentTemplateImportPath("/fixture/skills.lorca-template", nil)
-	f.wait(t, func() bool {
-		return f.tt.HasText("Reusable skills need playbook support in this CLI. Update Lorca before exporting or importing skills.")
-	})
-	renderBoth(t, f.tt, "desktop-template-import-missing-capability")
-	f.click(t, "Create Independent Bot")
-	if len(f.transport.methodCalls("templates.import")) > 0 {
-		t.Fatal("missing capability imported")
-	}
-	f.click(t, "Cancel")
 	f.m.presentTemplateImportPath("/fixture/future.lorca-template", nil)
 	f.wait(t, func() bool { return f.tt.HasText("Unsupported template version 2; this Lorca reads version 1.") })
-	f.click(t, "Create Independent Bot")
+	f.click(t, "Create Bot")
 	if len(f.transport.methodCalls("templates.import")) > 0 {
-		t.Fatal("future format imported")
+		t.Fatal("an unreadable file imported")
 	}
-	if commandByID("importBotTemplate") == nil || commandByID("importBotTemplate").title() != "Import Bot Template…" {
-		t.Fatal("menu/palette entry absent")
+	if title := commandByID("importBotTemplate").title(); title != "New Bot from Template…" {
+		t.Fatalf("menu says %q", title)
 	}
 }
 
-func TestTemplateDesktopSupersededRepliesAndDismissedSheets(t *testing.T) {
+func TestTemplateExportIsForTheDirectChatShowing(t *testing.T) {
+	f := newTemplateUIFixture(t)
+	export := commandByID("exportBotTemplate")
+	f.m.selectChat("chat-launch")
+	f.step()
+	if export.isEnabled() {
+		t.Fatal("a group chat exports")
+	}
+	for _, chat := range store.Chats {
+		if chat.IsDM() && slices.Contains(chat.BotIDs, "bot-nova") {
+			f.m.selectChat(chat.ID)
+		}
+	}
+	f.step()
+	if !export.isEnabled() {
+		t.Fatal("a direct chat doesn't export")
+	}
+	runCommand("exportBotTemplate")
+	f.wait(t, func() bool { return f.tt.HasText("Export “Project Manager”") })
+}
+
+func TestTemplateSupersededRepliesAndDismissedSheets(t *testing.T) {
 	f := newTemplateUIFixture(t)
 	entered, release, returned := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	f.transport.mu.Lock()
+	next := f.transport.handler
 	f.transport.handler = func(call templateUICall) (any, error) {
-		if call.method == "templates.import.preview" && call.params["name"] == nil {
+		if call.method == "templates.import.preview" && call.params["runner_id"] == "dev-workbench" {
 			close(entered)
 			<-release
 			defer close(returned)
-			return map[string]any{"digest": "old", "can_import": false, "issues": []string{"Stale response must not replace the new preview."}}, nil
+			return map[string]any{"digest": "old", "can_import": false, "issues": []string{"An old answer."}}, nil
 		}
-		return templateUIFixtureReply(call)
+		return next(call)
 	}
-	f.m.presentTemplateImportPath("/fixture/reviewer.lorca-template", nil)
+	f.transport.mu.Unlock()
+	f.m.presentTemplateImportPath("/fixture/Project Manager.lorca-template", nil)
 	f.step()
 	select {
 	case <-entered:
 	case <-time.After(time.Second):
-		t.Fatal("initial request missing")
+		t.Fatal("no first preview")
 	}
-	f.click(t, "New bot name")
-	f.tt.Type("Latest Reviewer")
+	f.click(t, "Workbench (this computer)")
+	if err := f.tt.ChooseMenuItem("Studio"); err != nil {
+		t.Fatal(err)
+	}
 	f.step()
-	f.wait(t, func() bool { return f.tt.HasText("Select your own connection for github.") })
+	f.wait(t, func() bool { return f.tt.HasText("Finish setting up Linear on Studio first.") })
 	close(release)
-	select {
-	case <-returned:
-	case <-time.After(time.Second):
-		t.Fatal("old reply stuck")
-	}
+	<-returned
 	for range 4 {
 		f.step()
 		time.Sleep(5 * time.Millisecond)
 	}
-	if f.tt.HasText("Stale response must not replace the new preview.") {
-		t.Fatal("old reply replaced new input")
-	}
-	calls := f.transport.methodCalls("templates.import.preview")
-	if calls[len(calls)-1].params["name"] != "Latest Reviewer" {
-		t.Fatal("latest field state lost")
+	if f.tt.HasText("An old answer.") {
+		t.Fatal("an old answer replaced the new one")
 	}
 	f.click(t, "Cancel")
-	if f.m.hasSheet() {
-		t.Fatal("sheet did not close")
-	}
-	f.m.presentTemplateExport("bot-patch")
+	f.m.presentTemplateExport("bot-nova")
 	f.step()
 	f.click(t, "Cancel")
 	for range 4 {
@@ -325,36 +387,31 @@ func TestTemplateDesktopSupersededRepliesAndDismissedSheets(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	if f.m.hasSheet() {
-		t.Fatal("late contents resurrected a dismissed sheet")
+		t.Fatal("late contents brought back a closed sheet")
 	}
 }
 
-func TestTemplateDesktopInspectorEntryAndReplacementConfirmation(t *testing.T) {
+func TestTemplateExportAsksBeforeTheExtensionReplacesAFile(t *testing.T) {
 	f := newTemplateUIFixture(t)
-	f.m.selectChat("chat-patch")
-	f.wait(t, func() bool { return f.tt.HasText("Template") })
-	f.click(t, "Export…")
-	f.wait(t, func() bool { return f.tt.HasText("Profile and instructions: Release Reviewer") })
-	f.click(t, "Profile and instructions: Release Reviewer")
-	f.click(t, "Preview Contents")
-	f.wait(t, func() bool { return f.tt.HasText("Save Private File…") })
-	f.click(t, "I reviewed the selected content for personal information.")
-	path := filepath.Join(t.TempDir(), "reviewer")
+	f.m.presentTemplateExport("bot-nova")
+	f.wait(t, func() bool { return f.tt.HasText("Launch checklist") })
+	path := filepath.Join(t.TempDir(), "brief")
 	if err := os.WriteFile(path+".lorca-template", []byte("original"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	old := chooseTemplateDestination
-	t.Cleanup(func() { chooseTemplateDestination = old })
-	chooseTemplateDestination = func(_ *mygo.Window, _ string, done func(string, error)) { done(path, nil) }
-	f.click(t, "Save Private File…")
-	if !f.tt.HasText("Replace the existing private template?") || len(f.transport.methodCalls("templates.export")) > 0 {
-		t.Fatal("extension changed an existing destination without review")
+	f.stubDestination(t, path)
+	f.click(t, "Export…")
+	f.wait(t, func() bool {
+		return f.tt.HasText("“brief.lorca-template” already exists. Do you want to replace it?")
+	})
+	if len(f.transport.methodCalls("templates.export")) > 0 {
+		t.Fatal("replaced without asking")
 	}
 	f.click(t, "Replace")
 	f.wait(t, func() bool { return !f.m.hasSheet() })
 	call := f.transport.methodCalls("templates.export")[0]
 	if call.params["path"] != path+".lorca-template" || call.params["overwrite"] != true {
-		t.Fatal("confirmed destination not used")
+		t.Fatalf("save %v", call.params)
 	}
 }
 
@@ -372,12 +429,10 @@ func TestTemplateFilenameAndExtensionSafety(t *testing.T) {
 	if err := os.WriteFile(path, []byte("existing"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, exists, extra := templateDestination(path)
-	if !exists || extra {
-		t.Fatal("already-confirmed native path asks again")
+	if _, exists, extra := templateDestination(path); !exists || extra {
+		t.Fatal("a path the dialog confirmed asks again")
 	}
-	actual, exists, extra := templateDestination(strings.TrimSuffix(path, ".lorca-template"))
-	if actual != path || !exists || !extra {
-		t.Fatal("extension-induced replacement needs explicit choice")
+	if actual, exists, extra := templateDestination(strings.TrimSuffix(path, ".lorca-template")); actual != path || !exists || !extra {
+		t.Fatal("a replacement the extension caused needs asking")
 	}
 }

@@ -217,6 +217,8 @@ func (m *mainWindow) chatRow(c *ui.Context, chat *model.Chat, selected, listFocu
 			if menu.Item(L("Add Bot…")).Disabled(len(botsAvailableToAdd(chatID)) == 0).Chosen() {
 				m.addBotToChat(chatID)
 			}
+		} else if menu.Item(L("Export as Template…")).Chosen() {
+			runCommand("exportBotTemplate")
 		}
 		menu.Separator()
 		remove := L("Delete Chat")

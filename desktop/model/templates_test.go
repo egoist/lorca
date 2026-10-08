@@ -28,15 +28,18 @@ func templatePosted(t *testing.T, queue <-chan func()) func() {
 	}
 }
 
-func TestTemplatePreviewKeepsAllSelectedContentAndCapabilityIssues(t *testing.T) {
-	preview := decodeJSON[TemplatePreview](t, `{"digest":"reviewed","can_import":false,"issues":["Missing plugin"],"warnings":[{"path":"memories.0","message":"May be personal"}],"template":{"format":"lorca.bot-template","version":1,"profile":{"name":"Reviewer","description":"Read carefully","symbol_name":"checklist","accent":"blue"},"skills":[{"name":"review","description":"Review code","instructions":"Check changes","examples":"Read diff","references":[{"path":"references/list.md","text":"Check errors"}],"scripts":[{"path":"scripts/check.sh","text":"echo check"}]}],"memories":["Short replies"],"routines":[{"name":"Morning","schedule":"every 2h","prompt":"Read inbox","check":"return null;","timezone":"America/New_York","missed_run_policy":"skip"}],"requirements":[{"service_id":"google-drive"}]},"requirements":[{"service_id":"google-drive","candidates":[{"id":"google-drive-0123456789abcdef0123456789abcdef","name":"Drive · Demo","state":"ready"}]}]}`)
-	for _, text := range []string{"Reviewer", "Read carefully", "Check changes", "Read diff", "references/list.md", "Check errors", "scripts/check.sh", "echo check", "Short replies", "Morning", "return null;", "America/New_York", "skip", "google-drive", "May be personal", "Imported paused"} {
-		if !strings.Contains(preview.Text(), text) {
-			t.Errorf("preview omits %q", text)
-		}
+func TestTemplateRepliesReadTheCLIsShape(t *testing.T) {
+	contents := decodeJSON[TemplateContents](t, `{"profile":{"id":"profile","content":{"name":"Reviewer","description":"Read carefully","symbol_name":"checklist","accent":"blue"},"flags":["credential"]},"memories":[{"id":"memory-1","content":"- Email ops@example.com","flags":["email"]}],"routines":[{"id":"rt-1","content":{"name":"Morning","schedule":"every 2h","prompt":"Read inbox"}}],"requirements":[{"service_id":"github","name":"GitHub"}]}`)
+	if contents.Profile.Content.Name != "Reviewer" || contents.Profile.Flags[0] != "credential" || contents.Memories[0].Flags[0] != "email" || contents.Routines[0].ID != "rt-1" || contents.Requirements[0].Name != "GitHub" {
+		t.Fatalf("contents lost a field: %+v", contents)
 	}
-	if preview.CanImport || preview.Digest != "reviewed" || preview.Requirements[0].Candidates[0].ID != "google-drive-0123456789abcdef0123456789abcdef" {
-		t.Fatalf("lost blocker/digest/recipient id: %+v", preview)
+	preview := decodeJSON[TemplatePreview](t, `{"digest":"reviewed","can_import":false,"issues":[],"template":{"profile":{"name":"Reviewer"},"routines":[{"name":"Morning","schedule":"every 2h","schedule_text":"Every 2 hours"}]},"requirements":[{"service_id":"google-drive","name":"Google Drive","selected":"google-drive-work","candidates":[{"id":"google-drive-work","name":"Drive · Work","state":"needs_auth"}]}]}`)
+	if preview.CanImport || preview.Digest != "reviewed" || preview.Template.Routines[0].ScheduleText != "Every 2 hours" || preview.Requirements[0].Ready() {
+		t.Fatalf("lost blocker/digest/schedule: %+v", preview)
+	}
+	preview.Requirements[0].Candidates[0].State = "ready"
+	if !preview.Requirements[0].Ready() {
+		t.Fatal("a ready pick is not ready")
 	}
 	unsupported := decodeJSON[TemplatePreview](t, `{"digest":"v2","can_import":false,"issues":["Unsupported template version 2"],"requirements":[]}`)
 	if unsupported.Template != nil || unsupported.CanImport || unsupported.Issues[0] != "Unsupported template version 2" {
@@ -56,16 +59,14 @@ func TestTemplateRequestsFreezeFieldsAndWaitForMainThread(t *testing.T) {
 		return json.RawMessage(`{"digest":"same","can_import":false,"issues":["Select your own connection"],"requirements":[]}`), nil
 	}}
 	store := NewStore(transport, func(fn func()) { posts <- fn }, false)
-	name := "Reviewed name"
 	mappings := map[string]string{"google-drive": "recipient-owned-instance"}
 	called := false
-	store.PreviewTemplateImport(TemplateImportOptions{Path: "C:\\Demo\\reviewer.lorca-template", RunnerID: "recipient-runner", Name: &name, Mappings: mappings}, func(preview TemplatePreview, err error) {
+	store.PreviewTemplateImport(TemplateImportOptions{Path: "C:\\Demo\\reviewer.lorca-template", RunnerID: "recipient-runner", Name: "Reviewed name", Mappings: mappings}, func(preview TemplatePreview, err error) {
 		called = true
 		if err != nil || preview.CanImport {
 			t.Fatal("incorrect preview reply")
 		}
 	})
-	name = "Edited while waiting"
 	mappings["google-drive"] = "other-instance"
 	fn := templatePosted(t, posts)
 	if called {
@@ -98,7 +99,7 @@ func TestTemplateImportReconcilesIndependentBotAfterOrderedReplyOnly(t *testing.
 		}
 		data, _ := json.Marshal(params)
 		_ = json.Unmarshal(data, &sent)
-		return json.RawMessage(`{"bot":{"id":"bot-recipient-new","name":"Independent","description":"Review","symbol_name":"checklist","accent":"blue","runner_id":"recipient-runner","provider":"deepseek","created_at":1},"chat_id":"dm-recipient-new","routines_paused":true}`), nil
+		return json.RawMessage(`{"bot":{"id":"bot-recipient-new","name":"Independent","description":"Review","symbol_name":"checklist","accent":"blue","runner_id":"recipient-runner","provider":"deepseek","created_at":1},"chat_id":"dm-recipient-new"}`), nil
 	}}
 	store := NewStore(transport, func(fn func()) { posts <- fn }, false)
 	store.Bots = []*Bot{{ID: "source-bot", Name: "Original", RunnerID: "source-runner"}}
