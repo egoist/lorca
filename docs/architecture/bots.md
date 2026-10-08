@@ -33,7 +33,7 @@ When the user has not written in any chat for seven days, due routines are pause
 
 The macOS app's DM inspector has a Routines section: a row per routine (clock, pause, or running icon; the schedule in words and the next run, or the next check; a switch that pauses or resumes) that opens a sheet with the state, schedule, next run or check and last run, the prompt, the check in a monospaced block when there is one, and Run Now, Pause/Resume, Edit in Chat (which puts `Edit my routine "Name": ` in the composer), and Delete. With none, the section says routines are set up by asking the bot. The Windows and Linux app's sheet is the same. The phone's chat details show the same list with a switch; a tap offers Run Now and Delete.
 
-Workflow packs add their missing routines paused and keep a review gate on the ones they create. `routines.set_enabled` requires the workflow's current completed sample to be reviewed before these routines resume. Reused routines retain their existing state. Setup answers and selected connection instances become scoped turn context: [Workflow onboarding](workflows.md).
+A workflow adds the routines it needs paused, and `routines.set_enabled` keeps one it added off until the user has read the workflow's sample; a routine of the user's that a workflow reuses keeps its own state: [Workflow onboarding](workflows.md).
 
 ## Memory
 

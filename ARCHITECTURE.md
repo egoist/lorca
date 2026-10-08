@@ -87,7 +87,7 @@ One doc per subject under `docs/architecture/`, each short enough to read in one
 | [Terminal sessions](docs/architecture/terminal-sessions.md) | A bot's commands in terminals of their own: when a call returns, background commands, the command's card, answering and stopping, Running tasks |
 | [Codemode and Plugins](docs/architecture/plugins.md) | Scripts that call plugin tools, MCP plugins and their installs, sign-in, plugin calls at turn time |
 | [Marketplace](docs/architecture/marketplace.md) | The index of plugins and bot templates and how lorca.app keeps it current on every Device, bots added from a template, the marketplace sheet |
-| [Workflow onboarding](docs/architecture/workflows.md) | Guided marketplace packs, required questions, explicit Runner account selection, encrypted resumable setup, sample review and paused schedule activation |
+| [Workflow onboarding](docs/architecture/workflows.md) | Workflows from the marketplace: packs, a setup on a Runner and its accounts, the sample before the schedule, how setups sync, the workflow page in both apps |
 | [MCP servers](docs/architecture/mcp-servers.md) | The user's own MCP servers in a Runner's `mcp.json`: the file and other apps' spellings, sign-in when a server asks, the `mcp.*` methods and `lorca mcp`, the apps' MCP Servers section and server sheet |
 | [Bots, Routines, and Memory](docs/architecture/bots.md) | The lead bot, DMs and groups, who answers, handoffs between bots, routines and their checks, a bot's memory |
 | [Providers](docs/architecture/providers.md) | Each model provider and its sign-in, custom providers, thinking levels, the model catalog and cost, compaction, retries |
