@@ -47,6 +47,13 @@ class GatewayContract(unittest.TestCase):
         expected = base64.urlsafe_b64encode(hmac.new(b"gateway-secret", signed, hashlib.sha256).digest()).decode().rstrip("=")
         self.assertEqual(event["signature"], expected)
 
+    def test_a_signed_ping_is_answered_without_an_event(self):
+        body = b'{"zen":"Keep it logically awesome.","hook_id":1}'
+        signature = "sha256=" + hmac.new(self.secret, body, hashlib.sha256).hexdigest()
+        self.assertIsNone(gateway.github_envelope(self.route, self.secret, body, signature, 1700000000))
+        with self.assertRaises(ValueError):
+            gateway.github_envelope(self.route, self.secret, body, "sha256=" + "0" * 64, 1700000000)
+
     def test_another_service_event_is_refused(self):
         body = b'{"message":"not a pull request"}'
         signature = "sha256=" + hmac.new(self.secret, body, hashlib.sha256).hexdigest()

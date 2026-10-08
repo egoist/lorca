@@ -26,6 +26,8 @@ def github_envelope(route, service_secret, body, signature, now):
     payload = json.loads(body)
     # GitHub signs the body, not X-GitHub-Event or X-GitHub-Delivery. Derive both
     # the event kind and replay key from signed content, never from those headers.
+    if isinstance(payload, dict) and "zen" in payload and "hook_id" in payload:
+        return None  # The ping GitHub sends when the webhook is created.
     if not isinstance(payload, dict) or not isinstance(payload.get("pull_request"), dict):
         raise ValueError("this gateway handles pull_request payloads")
     delivery_id = hashlib.sha256(body).hexdigest()
@@ -83,6 +85,9 @@ def main():
                 return
             except (OSError, TimeoutError):
                 self.respond(503)
+                return
+            if event is None:
+                self.respond(200)
                 return
             try:
                 result = subprocess.run(
