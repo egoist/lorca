@@ -10,7 +10,8 @@ final class PluginViewController: SheetViewController {
     private let bot: Bot?
 
     private let status = SectionView(title: L("Status"))
-    private let callLimits = SectionView(title: L("Call limits"))
+    /// How often all bots on the Runner may call this plugin; opens the Call Limit sheet.
+    private let callLimitRow = DisclosureRow(key: L("Call limit"))
     private let signIn = SectionView(title: L("Sign-in"))
     private let variables = SectionView(title: L("Setup", context: "plugin variables"))
     private let skills = SectionView(title: L("Skills"))
@@ -57,7 +58,7 @@ final class PluginViewController: SheetViewController {
         let actions = Build.stack(
             [saveButton, spacer, removeButton], orientation: .horizontal, spacing: 8)
 
-        for section in [status, callLimits, signIn, variables, skills] {
+        for section in [status, signIn, variables, skills] {
             contentStack.addArrangedSubview(section)
             section.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
         }
@@ -68,12 +69,13 @@ final class PluginViewController: SheetViewController {
             actions.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
         ])
         setButtons(confirm: L("Done"), cancel: nil)
-        let limits = ActionRow(key: L("Shared connector limits"), value: L("Account and service"), tint: .secondaryLabelColor, actionTitle: L("Manage…"))
-        limits.onAction = { [weak self] in
+        callLimitRow.onClick = { [weak self] in
             guard let self else { return }
-            self.presentAsSheet(ConnectorLimitsViewController(pluginID: self.pluginID, runner: self.runner))
+            let sheet = ConnectorLimitsViewController(
+                pluginID: self.pluginID, name: self.runner.plugins.first { $0.id == self.pluginID }?.name ?? self.pluginID, runner: self.runner)
+            sheet.onSaved = { [weak self] in self?.loadCallLimit() }
+            self.presentAsSheet(sheet)
         }
-        callLimits.setRows([limits])
         status.setRows([KeyValueRow(key: L("State"), value: L("Loading…"), tint: .secondaryLabelColor)])
         signIn.isHidden = true
         variables.isHidden = true
@@ -99,7 +101,19 @@ final class PluginViewController: SheetViewController {
         }
     }
 
+    private func loadCallLimit() {
+        Task { [weak self] in
+            guard let self, let limits = try? await self.store.callLimits(self.pluginID, on: self.runner.id) else { return }
+            if let retryAt = limits.retryAt, retryAt > Date() {
+                self.callLimitRow.setValue(L("Waiting until %@", Format.time(retryAt)), tint: .secondaryLabelColor)
+            } else {
+                self.callLimitRow.setValue(limits.summary, tint: .secondaryLabelColor)
+            }
+        }
+    }
+
     private func load() {
+        loadCallLimit()
         loads += 1
         let load = loads
         Task { [weak self] in
@@ -121,7 +135,8 @@ final class PluginViewController: SheetViewController {
 
     private func render(_ detail: PluginDetail) {
         var statusRows: [NSView] = [
-            KeyValueRow(key: L("State"), value: detail.status.detail, tint: detail.status.stateColor)
+            KeyValueRow(key: L("State"), value: detail.status.detail, tint: detail.status.stateColor),
+            callLimitRow,
         ]
         let rules = store.autoReview.rules.filter { $0.tool?.hasPrefix("\(pluginID)/") == true }
         if !rules.isEmpty {

@@ -1,241 +1,309 @@
 import AppKit
 
-/// User-owned allowances are changed through the local CLI and managed by the bot's Runner.
+/// What a DM's turns or a routine's runs may use on the bot's Runner: spending, tokens, run
+/// time, retries, and plugin calls. A turn or routine that stopped at a limit shows why on a
+/// card with Resume; raising the limit it reached and resuming goes on where it stopped.
 final class BudgetViewController: SheetViewController {
+    private enum Field: CaseIterable {
+        case usd, tokens, runtime, retries, connectorCalls
+
+        var title: String {
+            switch self {
+            case .usd: L("Spending")
+            case .tokens: L("Tokens")
+            case .runtime: L("Run time")
+            case .retries: L("Retries")
+            case .connectorCalls: L("Plugin calls")
+            }
+        }
+
+        var unit: String {
+            switch self {
+            case .usd: "USD"
+            case .runtime: L("minutes")
+            default: ""
+            }
+        }
+
+        var reached: String {
+            switch self {
+            case .usd: "usd"
+            case .tokens: "tokens"
+            case .runtime: "runtime"
+            case .retries: "retries"
+            case .connectorCalls: "connector_calls"
+            }
+        }
+    }
+
     private let store = AppStore.shared
     private let bot: Bot
     private let chatID: Chat.ID
     private let routineID: Routine.ID?
-    private let taskID: String?
-    private let scope = NSPopUpButton()
-    private var targets: [(kind: String, id: String)] = []
-    private var fields: [String: NSTextField] = [:]
-    private let stateSection = SectionView(title: L("Usage"))
-    private let note = Build.label("", font: .systemFont(ofSize: 12), color: .secondaryLabelColor, lines: 0)
-    private let resume = NSButton(title: L("Save and resume"), target: nil, action: nil)
-    private let renew = NSButton(title: L("Renew allowance and resume…"), target: nil, action: nil)
+    private var fields: [Field: NSTextField] = [:]
+    private var used: [Field: NSTextField] = [:]
+    private let card = BackgroundView()
+    private let cardTitle = Build.label("", font: .systemFont(ofSize: 13, weight: .semibold))
+    private let cardDetail = Build.label("", font: .systemFont(ofSize: 12), color: .secondaryLabelColor, lines: 0)
+    private let resumeButton = NSButton(title: L("Resume"), target: nil, action: nil)
     private let errorLabel = Build.label("", font: .systemFont(ofSize: 12), color: .systemRed, lines: 0)
-    private var loadedBudget: BudgetState?
-    private var loadGeneration = 0
-    private var canEdit = false
 
-    init(bot: Bot, chatID: Chat.ID, routineID: Routine.ID? = nil, taskID: String? = nil) {
+    /// A DM's limits for each new turn, and its newest turn when that one stopped.
+    init(bot: Bot, chatID: Chat.ID) {
         self.bot = bot
         self.chatID = chatID
-        self.routineID = routineID
-        self.taskID = taskID
-        super.init(title: L("Budget limits"), subtitle: L("Limits are enforced on %@'s Runner. Leave a field empty for unlimited. Runtime includes checks, retries, review, and waiting.", bot.name), width: 560)
+        routineID = nil
+        super.init(title: L("Limits"), subtitle: L("Each turn with %@ stops when it reaches one of these.", bot.name), width: 460)
+    }
+
+    /// A routine's limits, which all of its runs count toward.
+    init(bot: Bot, chatID: Chat.ID, routine: Routine) {
+        self.bot = bot
+        self.chatID = chatID
+        routineID = routine.id
+        super.init(title: L("Limits"), subtitle: L("All runs of %@ count toward these. When it reaches one, it waits until you resume it.", routine.name), width: 460)
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
+    /// The allowance the form edits: the routine's, or the DM's for new turns.
+    private var configured: BudgetState? {
+        routineID.map { store.budget("routine", $0, runnerID: bot.runnerID) } ?? store.budget("chat", chatID, runnerID: bot.runnerID)
+    }
+
+    /// What stopped and waits for Resume: the routine, or the DM's newest turn.
+    private var stopped: BudgetState? {
+        if routineID != nil { return configured?.isStopped == true ? configured : nil }
+        return store.stoppedTurn(in: chatID, runnerID: bot.runnerID)
+    }
+
+    /// Whose use the form shows beside the limits.
+    private var usage: BudgetState.Usage? { routineID != nil ? configured?.usage : stopped?.usage }
+
     override func loadView() {
         super.loadView()
-        if let routineID {
-            targets = [("routine", routineID)]
-            scope.addItem(withTitle: store.routine(routineID)?.name ?? L("Routine"))
-        } else if let taskID {
-            targets = [("task", taskID)]
-            scope.addItem(withTitle: L("Task allowance"))
-        } else {
-            targets = [("chat", chatID)]
-            scope.addItem(withTitle: L("Allowance for new tasks in this chat"))
-            let history = store.budgets(for: chatID, runnerID: bot.runnerID).filter { $0.kind == "job" || $0.kind == "task" }.prefix(12)
-            for budget in history {
-                targets.append((budget.kind, budget.id))
-                scope.addItem(withTitle: "\(budget.stateLabel) · \(String(budget.id.suffix(8)))")
-            }
-            if let recovery = history.firstIndex(where: { $0.needsRecovery }) { scope.selectItem(at: recovery + 1) }
+        buildCard()
+        let grid = NSGridView(numberOfColumns: 3, rows: 0)
+        grid.rowSpacing = 8
+        grid.columnSpacing = 8
+        grid.rowAlignment = .firstBaseline
+        for field in Field.allCases {
+            let label = Build.label(field.title, font: .systemFont(ofSize: 12), color: .secondaryLabelColor)
+            let input = NSTextField()
+            input.placeholderString = L("No limit")
+            input.alignment = .right
+            input.font = .systemFont(ofSize: 12)
+            input.setAccessibilityLabel(field.title)
+            input.translatesAutoresizingMaskIntoConstraints = false
+            input.widthAnchor.constraint(equalToConstant: 100).isActive = true
+            let unit = Build.label(field.unit, font: .systemFont(ofSize: 12), color: .secondaryLabelColor)
+            let use = Build.label("", font: .systemFont(ofSize: 12), color: .secondaryLabelColor, alignment: .right)
+            use.setContentHuggingPriority(.defaultLow, for: .horizontal)
+            fields[field] = input
+            used[field] = use
+            // The field and its unit keep their width; what it used takes the rest of the line.
+            let entry = Build.stack([input, unit], orientation: .horizontal, spacing: 6)
+            entry.setHuggingPriority(.required, for: .horizontal)
+            use.setContentCompressionResistancePriority(.required, for: .horizontal)
+            grid.addRow(with: [label, entry, use])
         }
-        scope.target = self
-        scope.action = #selector(scopeChanged)
-        contentStack.addArrangedSubview(scope)
-        contentStack.addArrangedSubview(stateSection)
-        let limits = SectionView(title: L("Allowance"))
-        let specs = [
-            ("max_usd", L("Spending (USD)")), ("max_tokens", L("Total tokens")),
-            ("max_runtime_secs", L("Runtime (seconds)")), ("max_retries", L("Retries")),
-            ("max_connector_calls", L("Connector calls")),
-        ]
-        limits.setRows(specs.map { key, title in
-            let label = Build.label(title, font: .systemFont(ofSize: 12))
-            let field = NSTextField()
-            field.placeholderString = L("Unlimited")
-            field.setAccessibilityLabel(title)
-            field.alignment = .right
-            field.translatesAutoresizingMaskIntoConstraints = false
-            field.widthAnchor.constraint(equalToConstant: 160).isActive = true
-            fields[key] = field
-            return Build.stack([label, NSView(), field], orientation: .horizontal, spacing: 10)
-        })
-        contentStack.addArrangedSubview(limits)
-        contentStack.addArrangedSubview(note)
-        for button in [resume, renew] {
-            button.bezelStyle = .rounded
-            button.target = self
-        }
-        resume.action = #selector(resumeWork)
-        renew.action = #selector(renewWork)
-        let actions = Build.stack([resume, renew], orientation: .horizontal, spacing: 8)
-        contentStack.addArrangedSubview(actions)
+        grid.column(at: 0).width = 76
+        grid.column(at: 2).xPlacement = .fill
+        grid.translatesAutoresizingMaskIntoConstraints = false
+        contentStack.addArrangedSubview(card)
+        contentStack.addArrangedSubview(grid)
         contentStack.addArrangedSubview(errorLabel)
-        for view in [stateSection, limits, note, actions, errorLabel] {
+        for view in [card, grid, errorLabel] {
             view.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
         }
         errorLabel.isHidden = true
         setButtons(confirm: L("Save"))
-        scopeChanged()
+        fill(configured?.limits ?? BudgetLimits())
+        refresh()
         store.observe(self) { [weak self] event in
-            switch event {
-            case .rosterChanged, .snapshotReplaced: self?.refreshUsage()
-            default: break
-            }
+            if case .budgetsChanged = event { self?.refresh() }
         }
     }
 
-    private var target: (kind: String, id: String) { targets[max(0, scope.indexOfSelectedItem)] }
-    private var budget: BudgetState? {
-        let stored = store.budgets.first { $0.kind == target.kind && $0.id == target.id && $0.runnerId == bot.runnerID }
-        if let loadedBudget, loadedBudget.kind == target.kind, loadedBudget.id == target.id,
-           stored == nil || loadedBudget.updatedAt >= (stored?.updatedAt ?? 0) { return loadedBudget }
-        return stored
+    private func buildCard() {
+        card.fillColor = Theme.botBubble
+        card.borderColor = Theme.botBubbleBorder
+        card.cornerRadius = 9
+        card.translatesAutoresizingMaskIntoConstraints = false
+        let icon = NSImageView(image: NSImage(systemSymbolName: "exclamationmark.circle.fill", accessibilityDescription: nil) ?? NSImage())
+        icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
+        icon.contentTintColor = .systemOrange
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        icon.setContentHuggingPriority(.required, for: .horizontal)
+        resumeButton.bezelStyle = .rounded
+        resumeButton.target = self
+        resumeButton.action = #selector(resume)
+        resumeButton.translatesAutoresizingMaskIntoConstraints = false
+        resumeButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+        let text = Build.stack([cardTitle, cardDetail], spacing: 2)
+        text.translatesAutoresizingMaskIntoConstraints = false
+        for view in [icon, text, resumeButton] { card.addSubview(view) }
+        NSLayoutConstraint.activate([
+            icon.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 12),
+            icon.centerYAnchor.constraint(equalTo: card.centerYAnchor),
+            text.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 10),
+            text.topAnchor.constraint(equalTo: card.topAnchor, constant: 10),
+            text.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -10),
+            resumeButton.leadingAnchor.constraint(greaterThanOrEqualTo: text.trailingAnchor, constant: 12),
+            resumeButton.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -12),
+            resumeButton.centerYAnchor.constraint(equalTo: card.centerYAnchor),
+        ])
     }
 
-    @objc private func scopeChanged() {
-        canEdit = false
-        loadedBudget = nil
-        showFields()
-        refreshUsage()
-        loadGeneration += 1
-        let generation = loadGeneration
-        let target = target
-        Task { [weak self] in
-            guard let self else { return }
-            struct Response: Decodable { var budgets: [BudgetState] }
-            do {
-                let response = try await store.client.request("budgets.list", ["runner_id": bot.runnerID], as: Response.self)
-                guard generation == loadGeneration else { return }
-                loadedBudget = response.budgets.first { $0.kind == target.kind && $0.id == target.id }
-                canEdit = true
-                showFields()
-                refreshUsage()
-            } catch {
-                guard generation == loadGeneration else { return }
-                errorLabel.stringValue = error.localizedDescription
-                errorLabel.isHidden = false
-                refreshUsage()
-            }
-        }
-    }
-
-    private func showFields() {
-        let limits = budget?.limits
-        fields["max_usd"]?.stringValue = limits?.maxUsd.map { String($0) } ?? ""
-        fields["max_tokens"]?.stringValue = limits?.maxTokens.map(String.init) ?? ""
-        fields["max_runtime_secs"]?.stringValue = limits?.maxRuntimeSecs.map(String.init) ?? ""
-        fields["max_retries"]?.stringValue = limits?.maxRetries.map(String.init) ?? ""
-        fields["max_connector_calls"]?.stringValue = limits?.maxConnectorCalls.map(String.init) ?? ""
-    }
-
-    private func refreshUsage() {
+    /// The card and the use beside each limit follow the Runner; what the user typed stays.
+    private func refresh() {
         guard isViewLoaded else { return }
-        if let budget {
-            let usage = budget.usage
-            stateSection.setRows([
-                KeyValueRow(key: L("State"), value: budget.stateLabel, tint: budget.needsRecovery ? .systemOrange : .labelColor),
-                KeyValueRow(key: L("API spending"), value: String(format: "$%.4f", usage.apiCostUsd)),
-                KeyValueRow(key: L("Subscription API-equivalent estimate"), value: String(format: "$%.4f", usage.subscriptionEstimateUsd)),
-                KeyValueRow(key: L("Unknown pricing"), value: L("%d calls", usage.unknownPriceCalls)),
-                KeyValueRow(key: L("Tokens / runtime"), value: "\(Format.tokens(usage.tokens)) · \(Int(usage.runtimeSecs)) s"),
-                KeyValueRow(key: L("Retries / connector calls"), value: "\(usage.retries) / \(usage.connectorCalls)"),
-            ])
-            note.stringValue = budget.reason ?? L("Requests without reported usage use token and cost estimates. Unknown prices need a token or runtime allowance; they are never treated as free.")
-            resume.isEnabled = canEdit && budget.state != "running" && target.kind != "chat"
-            renew.isEnabled = resume.isEnabled
+        if let stopped {
+            cardTitle.stringValue = stopped.stoppedTitle
+            cardDetail.stringValue = stopped.stoppedDetail
+            card.isHidden = false
         } else {
-            stateSection.setRows([KeyValueRow(key: L("State"), value: L("No limits configured"))])
-            note.stringValue = L("API spending and subscription API-equivalent estimates count toward the spending allowance. For unknown pricing, use a token or runtime allowance.")
-            resume.isEnabled = canEdit && (target.kind == "routine" || target.kind == "task")
-            renew.isEnabled = resume.isEnabled
+            card.isHidden = true
         }
-        confirmButton.isEnabled = canEdit
-        for field in fields.values { field.isEnabled = canEdit }
+        for field in Field.allCases {
+            let text = usage.map { used(field, $0) } ?? ""
+            used[field]?.stringValue = text
+            used[field]?.textColor = stopped?.reached == field.reached ? .systemOrange : .secondaryLabelColor
+        }
         fitSheetToContent()
     }
 
-    private func values() throws -> [String: Any] {
-        var values: [String: Any] = [:]
-        for (key, field) in fields {
-            let text = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func used(_ field: Field, _ usage: BudgetState.Usage) -> String {
+        switch field {
+        case .usd:
+            guard usage.apiCostUsd > 0 || usage.subscriptionEstimateUsd > 0 else { return usage.unknownPriceCalls > 0 ? L("Price unknown") : "" }
+            return L("%@ used", Format.spend(api: usage.apiCostUsd, estimate: usage.subscriptionEstimateUsd))
+        case .tokens: return usage.tokens > 0 ? L("%@ used", Format.count(usage.tokens)) : ""
+        case .runtime: return usage.runtimeSecs >= 1 ? L("%@ used", Format.minutes(Int(usage.runtimeSecs))) : ""
+        case .retries: return usage.retries > 0 ? L("%@ used", Format.count(usage.retries)) : ""
+        case .connectorCalls: return usage.connectorCalls > 0 ? L("%@ used", Format.count(usage.connectorCalls)) : ""
+        }
+    }
+
+    // MARK: - Fields
+
+    private static func number(fractionDigits: Int) -> NumberFormatter {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.maximumFractionDigits = fractionDigits
+        return formatter
+    }
+
+    private func fill(_ limits: BudgetLimits) {
+        let money = Self.number(fractionDigits: 2)
+        money.minimumFractionDigits = 2
+        let whole = Self.number(fractionDigits: 0)
+        let minutes = Self.number(fractionDigits: 1)
+        fields[.usd]?.stringValue = limits.maxUsd.flatMap { money.string(from: $0 as NSNumber) } ?? ""
+        fields[.tokens]?.stringValue = limits.maxTokens.flatMap { whole.string(from: $0 as NSNumber) } ?? ""
+        fields[.runtime]?.stringValue = limits.maxRuntimeSecs.flatMap { minutes.string(from: Double($0) / 60 as NSNumber) } ?? ""
+        fields[.retries]?.stringValue = limits.maxRetries.flatMap { whole.string(from: $0 as NSNumber) } ?? ""
+        fields[.connectorCalls]?.stringValue = limits.maxConnectorCalls.flatMap { whole.string(from: $0 as NSNumber) } ?? ""
+    }
+
+    /// The limits as typed; nil after pointing at the field that isn't a number.
+    private func limits() -> BudgetLimits? {
+        let parser = Self.number(fractionDigits: 6)
+        parser.isLenient = true
+        var limits = BudgetLimits()
+        for field in Field.allCases {
+            guard let input = fields[field] else { continue }
+            let text = input.stringValue.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "$", with: "")
             guard !text.isEmpty else { continue }
-            if key == "max_usd", let value = Double(text), value.isFinite, value >= 0 { values[key] = value }
-            else if key != "max_usd", let value = Int(text), value >= 0 { values[key] = value }
-            else { throw NSError(domain: "Budget", code: 1, userInfo: [NSLocalizedDescriptionKey: L("Use a nonnegative number for each limit, or leave it empty.")]) }
-        }
-        return values
-    }
-
-    override func confirmTapped() { save(resuming: false, renewing: false) }
-    @objc private func resumeWork() { save(resuming: true, renewing: false) }
-    @objc private func renewWork() {
-        guard let window = view.window else { return }
-        let alert = NSAlert()
-        alert.messageText = L("Renew this allowance?")
-        alert.informativeText = L("This grants the full configured allowance again and resumes from the existing transcript. Check completed effects before resuming interrupted work.")
-        alert.addButton(withTitle: L("Renew and resume"))
-        alert.addButton(withTitle: L("Cancel"))
-        alert.beginSheetModal(for: window) { [weak self] response in
-            if response == .alertFirstButtonReturn { self?.save(resuming: true, renewing: true) }
-        }
-    }
-
-    private func save(resuming: Bool, renewing: Bool) {
-        do {
-            let ownedAdmission = budget?.jobKind == "event" || budget?.taskId != nil || target.kind == "task"
-            let limits = try values()
-            let params: [String: Any] = ["kind": target.kind, "id": target.id, "bot_id": bot.id, "chat_id": chatID, "runner_id": bot.runnerID, "limits": limits]
-            canEdit = false
-            scope.isEnabled = false
-            confirmButton.isEnabled = false
-            resume.isEnabled = false
-            renew.isEnabled = false
-            Task { [weak self] in
-                guard let self else { return }
-                do {
-                    _ = try await store.client.request("budgets.set", params)
-                    if resuming {
-                        var recovery = params
-                        recovery["renew"] = renewing
-                        recovery["run"] = !ownedAdmission
-                        recovery["request_id"] = UUID().uuidString
-                        _ = try await store.client.request("budgets.resume", recovery)
-                    }
-                    if resuming && ownedAdmission {
-                        canEdit = true
-                        scope.isEnabled = true
-                        errorLabel.textColor = .secondaryLabelColor
-                        errorLabel.stringValue = L("Allowance recovered. Retry the delivery in Events or run the task again in Tasks so its ownership and inbox admission are checked.")
-                        errorLabel.isHidden = false
-                        confirmButton.isEnabled = true
-                        refreshUsage()
-                        return
-                    }
-                    dismiss(nil)
-                } catch {
-                    canEdit = true
-                    scope.isEnabled = true
-                    errorLabel.textColor = .systemRed
-                    errorLabel.stringValue = error.localizedDescription
-                    errorLabel.isHidden = false
-                    confirmButton.isEnabled = true
-                    refreshUsage()
-                }
+            guard let value = parser.number(from: text)?.doubleValue, value.isFinite, value >= 0,
+                field == .usd || field == .runtime || value == value.rounded()
+            else {
+                showError(L("Enter a number, or leave it empty for no limit."), focus: input)
+                return nil
             }
-        } catch {
-            errorLabel.stringValue = error.localizedDescription
-            errorLabel.isHidden = false
-            fitSheetToContent()
+            switch field {
+            case .usd: limits.maxUsd = value
+            case .tokens: limits.maxTokens = Int(value)
+            case .runtime:
+                guard value <= 525_600 else {
+                    showError(L("Run time can be at most a year, or leave it empty for no limit."), focus: input)
+                    return nil
+                }
+                limits.maxRuntimeSecs = Int((value * 60).rounded())
+            case .retries: limits.maxRetries = Int(value)
+            case .connectorCalls: limits.maxConnectorCalls = Int(value)
+            }
+        }
+        return limits
+    }
+
+    private func showError(_ text: String, focus: NSView? = nil) {
+        errorLabel.stringValue = text
+        errorLabel.isHidden = false
+        if let focus { view.window?.makeFirstResponder(focus) }
+        fitSheetToContent()
+    }
+
+    // MARK: - Actions
+
+    override func confirmTapped() {
+        guard let limits = limits() else { return }
+        run { [self] in try await save(limits) }
+    }
+
+    /// Resumes where it stopped. When the limit it reached didn't go up, resuming means using
+    /// the limits in full again, so that asks first.
+    @objc private func resume() {
+        guard let stopped, let limits = limits() else { return }
+        guard stopped.fits(limits) else {
+            guard let window = view.window else { return }
+            let alert = NSAlert()
+            alert.messageText = routineID == nil ? L("Resume this turn with fresh limits?") : L("Resume this routine with fresh limits?")
+            alert.informativeText = L("It already used its limits. Resuming lets it use them again in full.")
+            alert.addButton(withTitle: L("Resume"))
+            alert.addButton(withTitle: L("Cancel"))
+            alert.beginSheetModal(for: window) { [weak self] response in
+                guard response == .alertFirstButtonReturn, let self else { return }
+                self.run { [self] in try await self.resume(stopped, limits: limits, fresh: true) }
+            }
+            return
+        }
+        run { [self] in try await resume(stopped, limits: limits, fresh: false) }
+    }
+
+    private func save(_ limits: BudgetLimits) async throws {
+        if let routineID {
+            try await store.setBudget("routine", routineID, limits: limits, bot: bot, chatID: chatID)
+        } else {
+            try await store.setBudget("chat", chatID, limits: limits, bot: bot, chatID: chatID)
+        }
+    }
+
+    /// The stopped turn takes the limits in the form too, so raising one lets it go on.
+    private func resume(_ stopped: BudgetState, limits: BudgetLimits, fresh: Bool) async throws {
+        try await save(limits)
+        if stopped.kind == "job" {
+            try await store.setBudget("job", stopped.id, limits: limits, bot: bot, chatID: chatID)
+        }
+        try await store.resumeBudget(stopped.kind, stopped.id, bot: bot, fresh: fresh)
+    }
+
+    /// Runs a change on the Runner with the buttons off, and closes the sheet once it's done.
+    private func run(_ change: @escaping () async throws -> Void) {
+        errorLabel.isHidden = true
+        confirmButton.isEnabled = false
+        resumeButton.isEnabled = false
+        Task { [weak self] in
+            do {
+                try await change()
+                self?.dismiss(nil)
+            } catch {
+                guard let self else { return }
+                self.confirmButton.isEnabled = true
+                self.resumeButton.isEnabled = true
+                self.showError(error.localizedDescription)
+            }
         }
     }
 }

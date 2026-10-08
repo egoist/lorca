@@ -16,6 +16,8 @@ enum StoreEvent {
     case turnFinished(Chat.ID, Bot.ID, Date)
     /// A command in the chat has run long enough to count as a running task.
     case runningTasksChanged(Chat.ID)
+    /// A Runner's limits, or what its work used of them, changed.
+    case budgetsChanged
     case selectionChanged
     case connectionChanged
     case identityChanged
@@ -68,6 +70,7 @@ final class AppStore {
     private(set) var chats: [Chat] = []
     /// Every bot's routines, from the roster.
     private(set) var routines: [Routine] = []
+    /// Every Runner's limits and what its turns and routines used of them.
     private(set) var budgets: [BudgetState] = []
     /// Auto-review, shared through the roster.
     private(set) var autoReview = AutoReview()
@@ -391,7 +394,7 @@ final class AppStore {
         case "budgets.changed":
             guard let payload = decode(Wire.BudgetsChanged.self) else { return }
             budgets = payload.budgets
-            emit(.rosterChanged)
+            emit(.budgetsChanged)
 
         case "relay.status":
             guard let status = decode(Wire.RelayStatus.self) else { return }
@@ -781,6 +784,71 @@ final class AppStore {
     func signOutPlugin(_ pluginID: String, server: String, on runnerID: Device.ID) async throws {
         guard !isMock else { return }
         _ = try await client.request("plugins.sign_out", ["runner_id": runnerID, "plugin_id": pluginID, "server": server])
+    }
+
+    // MARK: - Limits
+
+    func budget(_ kind: String, _ id: String, runnerID: Device.ID) -> BudgetState? {
+        budgets.first { $0.kind == kind && $0.id == id && $0.runnerId == runnerID }
+    }
+
+    /// The DM's newest turn when it stopped at a limit or was interrupted: the one to resume.
+    func stoppedTurn(in chatID: Chat.ID, runnerID: Device.ID) -> BudgetState? {
+        let newest = budgets
+            .filter { $0.kind == "job" && $0.chatId == chatID && $0.runnerId == runnerID }
+            .max { $0.updatedAt < $1.updatedAt }
+        return newest?.isStopped == true ? newest : nil
+    }
+
+    /// Sets limits on the bot's Runner. What the work used stays.
+    func setBudget(_ kind: String, _ id: String, limits: BudgetLimits, bot: Bot, chatID: Chat.ID) async throws {
+        if isMock {
+            let index = budgets.firstIndex { $0.kind == kind && $0.id == id }
+            var state = index.map { budgets[$0] } ?? BudgetState(
+                kind: kind, id: id, runnerId: bot.runnerID, chatId: chatID, limits: BudgetLimits(),
+                usage: .init(tokens: 0, apiCostUsd: 0, subscriptionEstimateUsd: 0, unknownPriceCalls: 0, runtimeSecs: 0, retries: 0, connectorCalls: 0),
+                state: "ready", updatedAt: Date().timeIntervalSince1970)
+            state.limits = limits
+            if let index { budgets[index] = state } else { budgets.append(state) }
+            emit(.budgetsChanged)
+            return
+        }
+        let params: [String: Any] = ["kind": kind, "id": id, "bot_id": bot.id, "chat_id": chatID, "runner_id": bot.runnerID, "limits": limits.params]
+        _ = try await client.request("budgets.set", params)
+    }
+
+    /// Resumes a stopped turn or routine where it left off. `fresh` grants the whole allowance
+    /// again; otherwise it goes on with what it used counted against the limits.
+    func resumeBudget(_ kind: String, _ id: String, bot: Bot, fresh: Bool) async throws {
+        if isMock {
+            guard let index = budgets.firstIndex(where: { $0.kind == kind && $0.id == id }) else { return }
+            budgets[index].state = "ready"
+            budgets[index].reached = nil
+            if fresh { budgets[index].usage = .init(tokens: 0, apiCostUsd: 0, subscriptionEstimateUsd: 0, unknownPriceCalls: 0, runtimeSecs: 0, retries: 0, connectorCalls: 0) }
+            emit(.budgetsChanged)
+            return
+        }
+        // The request id makes a repeated delivery a no-op on the Runner.
+        let params: [String: Any] = ["kind": kind, "id": id, "runner_id": bot.runnerID, "renew": fresh, "run": true, "request_id": UUID().uuidString]
+        _ = try await client.request("budgets.resume", params)
+    }
+
+    /// A plugin account's call limit, or with `service` the one all of its service's accounts share.
+    func callLimits(_ pluginID: String, on runnerID: Device.ID, service: Bool = false) async throws -> CallLimits {
+        if isMock {
+            return CallLimits(maxCalls: 60, windowSecs: 60, maxConcurrency: 4, retryAt: pluginID == "github" ? Date().addingTimeInterval(4 * 60) : nil, sharesService: false)
+        }
+        let params: [String: Any] = ["runner_id": runnerID, "plugin_id": pluginID, "scope": service ? "service" : "account"]
+        return try await client.request("connector_limits.get", params, as: Wire.CallLimits.self).toModel()
+    }
+
+    func setCallLimits(_ pluginID: String, on runnerID: Device.ID, service: Bool, limits: CallLimits) async throws {
+        guard !isMock else { return }
+        let params: [String: Any] = [
+            "runner_id": runnerID, "plugin_id": pluginID, "scope": service ? "service" : "account",
+            "limits": ["max_calls": limits.maxCalls, "window_secs": limits.windowSecs, "max_concurrency": limits.maxConcurrency],
+        ]
+        _ = try await client.request("connector_limits.set", params)
     }
 
     // MARK: - MCP servers
@@ -1697,6 +1765,7 @@ final class AppStore {
         bots = MockData.bots()
         chats = MockData.chats()
         routines = MockData.routines()
+        budgets = MockData.budgets()
         autoReview = MockData.autoReview()
         providers = MockData.providers()
         catalog = MockData.models()

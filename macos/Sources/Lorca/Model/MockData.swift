@@ -644,6 +644,30 @@ enum MockData {
         ]
     }
 
+    /// Limits in the demo: Project Manager's turns and Researcher's each have some, Researcher's
+    /// newest turn stopped at its token limit, and Review requests used up its spending.
+    static func budgets() -> [BudgetState] {
+        let now = Date().timeIntervalSince1970
+        func usage(tokens: Int = 0, api: Double = 0, estimate: Double = 0, runtime: Double = 0, retries: Int = 0, calls: Int = 0) -> BudgetState.Usage {
+            .init(tokens: tokens, apiCostUsd: api, subscriptionEstimateUsd: estimate, unknownPriceCalls: 0, runtimeSecs: runtime, retries: retries, connectorCalls: calls)
+        }
+        return [
+            BudgetState(
+                kind: "chat", id: "chat-nova", runnerId: "dev-workbench", chatId: "chat-nova", limits: BudgetLimits(maxUsd: 2, maxTokens: 200_000),
+                usage: usage(), state: "ready", updatedAt: now - 60 * 60 * 24),
+            BudgetState(
+                kind: "chat", id: "chat-scout", runnerId: "dev-studio", chatId: "chat-scout", limits: BudgetLimits(maxTokens: 100_000, maxRuntimeSecs: 900),
+                usage: usage(), state: "ready", updatedAt: now - 60 * 60 * 24),
+            BudgetState(
+                kind: "job", id: "job-demo-research", runnerId: "dev-studio", chatId: "chat-scout",
+                limits: BudgetLimits(maxTokens: 100_000, maxRuntimeSecs: 900),
+                usage: usage(tokens: 100_412, api: 0.21, runtime: 384, retries: 1, calls: 9), state: "budget_exhausted", reached: "tokens", updatedAt: now - 60 * 28),
+            BudgetState(
+                kind: "routine", id: "rt-reviews", runnerId: "dev-workbench", chatId: "chat-nova", limits: BudgetLimits(maxUsd: 5, maxRuntimeSecs: 3600),
+                usage: usage(tokens: 1_840_000, estimate: 5.02, runtime: 2_760, calls: 64), state: "budget_exhausted", reached: "usd", updatedAt: now - 60 * 5),
+        ]
+    }
+
     static func bots() -> [Bot] {
         [
             Bot(
@@ -720,7 +744,10 @@ enum MockData {
                 messages: managerThread(),
                 unreadCount: 0,
                 isPinned: false,
-                createdAt: minutesAgo(60 * 30)
+                createdAt: minutesAgo(60 * 30),
+                usage: ChatUsage(
+                    contextTokens: 18_400, contextWindow: 400_000, inputTokens: 212_000, outputTokens: 31_000, cacheReadTokens: 160_000,
+                    costUSD: 0.86, turns: 14, model: "gpt-5.5", subscriptionEstimateUSD: 0.86, pricingKinds: ["subscription_estimate"])
             ),
             Chat(
                 id: "chat-patch",
@@ -750,7 +777,10 @@ enum MockData {
                 messages: researcherThread(),
                 unreadCount: 1,
                 isPinned: false,
-                createdAt: minutesAgo(60 * 24 * 12)
+                createdAt: minutesAgo(60 * 24 * 12),
+                usage: ChatUsage(
+                    contextTokens: 61_000, contextWindow: 128_000, inputTokens: 402_000, outputTokens: 22_000, cacheReadTokens: 290_000,
+                    costUSD: 0.34, turns: 9, model: "deepseek-chat", apiCostUSD: 0.34, pricingKinds: ["api"])
             ),
             Chat(
                 id: "chat-quill",
@@ -887,6 +917,16 @@ enum MockData {
                 author: .bot("bot-scout"),
                 body: .text("I'd explain the Device roles right after pairing: your Mac runs the bots, and your phone lets you chat with them. I added that note to `research/onboarding.md`."),
                 createdAt: minutesAgo(45)
+            ),
+            Message(
+                author: .you,
+                body: .text("Read the setup guides of five similar apps and compare what each explains first."),
+                createdAt: minutesAgo(34)
+            ),
+            Message(
+                author: .system,
+                body: .notice("Stopped at the token limit. Raise it in Limits to resume."),
+                createdAt: minutesAgo(28)
             ),
         ]
     }

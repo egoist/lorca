@@ -255,6 +255,87 @@ final class KeyValueRow: NSView {
     required init?(coder: NSCoder) { fatalError() }
 }
 
+/// A key and a short value that opens its details when clicked, as System Settings' rows with a
+/// chevron do: the whole row is the target.
+final class DisclosureRow: NSView {
+    private let key: NSTextField
+    private let value: NSTextField
+    private let chevron = NSImageView()
+    private var tracking: NSTrackingArea?
+    private var isHovered = false { didSet { needsDisplay = true } }
+    var onClick: (() -> Void)?
+
+    init(key keyText: String, value valueText: String = "", tint: NSColor = .secondaryLabelColor) {
+        key = Build.label(keyText, font: .systemFont(ofSize: 12), color: .secondaryLabelColor)
+        value = Build.label(valueText, font: .systemFont(ofSize: 12), color: tint, alignment: .right)
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        value.lineBreakMode = .byTruncatingTail
+        key.setContentCompressionResistancePriority(.required, for: .horizontal)
+        chevron.image = NSImage(systemSymbolName: "chevron.right", accessibilityDescription: nil)
+        chevron.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 10, weight: .semibold)
+        chevron.contentTintColor = .tertiaryLabelColor
+        chevron.translatesAutoresizingMaskIntoConstraints = false
+        chevron.setContentHuggingPriority(.required, for: .horizontal)
+        chevron.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        addSubview(key)
+        addSubview(value)
+        addSubview(chevron)
+        NSLayoutConstraint.activate([
+            heightAnchor.constraint(greaterThanOrEqualToConstant: 32),
+            key.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            key.centerYAnchor.constraint(equalTo: centerYAnchor),
+            value.leadingAnchor.constraint(greaterThanOrEqualTo: key.trailingAnchor, constant: 10),
+            value.centerYAnchor.constraint(equalTo: centerYAnchor),
+            chevron.leadingAnchor.constraint(equalTo: value.trailingAnchor, constant: 6),
+            chevron.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            chevron.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+        addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(clicked)))
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+        setAccessibilityLabel(keyText)
+        setAccessibilityValue(valueText)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    func setValue(_ text: String, tint: NSColor) {
+        value.textColor = tint
+        setAccessibilityValue(text)
+        guard value.stringValue != text else { return }
+        value.stringValue = text
+    }
+
+    @objc private func clicked() { onClick?() }
+
+    override func accessibilityPerformPress() -> Bool {
+        onClick?()
+        return onClick != nil
+    }
+
+    override var allowsVibrancy: Bool { false }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow], owner: self)
+        addTrackingArea(area)
+        tracking = area
+    }
+
+    override func mouseEntered(with event: NSEvent) { isHovered = onClick != nil }
+    override func mouseExited(with event: NSEvent) { isHovered = false }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard isHovered else { return }
+        NSColor.labelColor.withAlphaComponent(0.05).setFill()
+        bounds.fill()
+    }
+}
+
 /// Bot line used in the inspector, the Device pane and pickers.
 final class BotRow: NSView {
     private let avatar = AvatarView(diameter: 28)
@@ -636,12 +717,6 @@ final class ActionRow: NSView {
         value.stringValue = text
     }
 
-    /// Updates a live state without rebuilding the row or its buttons.
-    func setValue(_ text: String, tint: NSColor) {
-        value.textColor = tint
-        setValue(text)
-    }
-
     /// The action copied something: its title reads Copied for a moment.
     func showCopied() {
         button.showCopied()
@@ -872,12 +947,14 @@ final class SwitchRow: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(routine: Routine) {
-        let symbol = routine.isRunning ? "arrow.triangle.2.circlepath" : (routine.isEnabled ? "clock" : "pause.circle")
+    /// A routine stopped at its limits says so before anything else: it runs again only once
+    /// the user resumes it.
+    func configure(routine: Routine, stopped: String? = nil) {
+        let symbol = stopped != nil ? "exclamationmark.circle.fill" : routine.isRunning ? "arrow.triangle.2.circlepath" : (routine.isEnabled ? "clock" : "pause.circle")
         configure(
             symbol: symbol,
-            tint: routine.isRunning ? .controlAccentColor : (routine.isEnabled ? .secondaryLabelColor : .tertiaryLabelColor),
-            title: routine.name, detail: routine.detail, isOn: routine.isEnabled,
+            tint: stopped != nil ? .systemOrange : routine.isRunning ? .controlAccentColor : (routine.isEnabled ? .secondaryLabelColor : .tertiaryLabelColor),
+            title: routine.name, detail: stopped ?? routine.detail, isOn: routine.isEnabled,
             toggleTooltip: routine.isEnabled ? L("Pause %@", routine.name) : L("Resume %@", routine.name), tooltip: routine.prompt)
     }
 

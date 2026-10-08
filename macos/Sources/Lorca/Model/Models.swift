@@ -1091,7 +1091,6 @@ struct ChatUsage: Hashable {
     var apiCostUSD: Double = 0
     var subscriptionEstimateUSD: Double = 0
     var unknownPriceCalls: Int = 0
-    var pricedCalls: Int = 0
     var pricingKinds: [String] = []
 
     /// "128k of 1M · 13%", or "128k" when the window is unknown.
@@ -1101,20 +1100,24 @@ struct ChatUsage: Hashable {
         return L("%@ of %@ · %d%%", Format.tokens(contextTokens), Format.tokens(contextWindow), percent)
     }
 
-    /// "$0.42 · 18 turns"
+    /// "$0.42 · 18 turns". A subscription's turns cost what the plan costs, so their price at
+    /// API rates reads as an estimate ("$0.42 est."); a model without a known price reads
+    /// Price unknown, never $0.00.
     var spendSummary: String {
-        guard pricedCalls > 0 else { return L("Pricing unknown · %d turns", turns) }
+        let count = turns == 1 ? L("1 turn") : L("%d turns", turns)
         var parts: [String] = []
-        if pricingKinds.contains("api") { parts.append(L("API %@", Self.dollars(apiCostUSD))) }
-        if pricingKinds.contains("subscription_estimate") { parts.append(L("API-equivalent estimate %@", Self.dollars(subscriptionEstimateUSD))) }
-        if unknownPriceCalls > 0 { parts.append(L("Pricing unknown")) }
-        if parts.isEmpty { parts.append(L("API %@", Self.dollars(0))) }
-        parts.append(L("%d turns", turns))
-        return parts.joined(separator: " · ")
+        if pricingKinds.contains("api") { parts.append(Format.dollars(apiCostUSD)) }
+        if pricingKinds.contains("subscription_estimate") { parts.append(L("%@ est.", Format.dollars(subscriptionEstimateUSD))) }
+        if unknownPriceCalls > 0 || parts.isEmpty { parts.append(parts.isEmpty ? L("Price unknown") : L("unknown", context: "price")) }
+        return "\(parts.joined(separator: " + ")) · \(count)"
     }
 
-    private static func dollars(_ value: Double) -> String {
-        value > 0 && value < 0.01 ? "<$0.01" : String(format: "$%.2f", value)
+    /// What the Spent row's estimate or unknown price means, for its tooltip.
+    var spendNote: String? {
+        if pricingKinds.contains("subscription_estimate") {
+            return L("An estimate of what these turns would cost at API prices. Your subscription covers them.")
+        }
+        return unknownPriceCalls > 0 || pricingKinds.isEmpty ? L("This model has no known price.") : nil
     }
 }
 

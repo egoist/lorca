@@ -43,6 +43,20 @@ enum Wire {
 
     struct BudgetsChanged: Decodable { var budgets: [BudgetState] }
 
+    /// `connector_limits.get`: an installed plugin account's shared call limit on its Runner.
+    struct CallLimits: Decodable {
+        struct Limits: Decodable {
+            var maxCalls: Int
+            var windowSecs: Int
+            var maxConcurrency: Int
+        }
+        var limits: Limits
+        var retryAt: Double?
+        /// The service the account belongs to; another account of it shares the service's limit.
+        var serviceId: String
+        var pluginId: String
+    }
+
     /// A model the CLI's catalog offers, in the catalog's order.
     struct Model: Decodable {
         var provider: String
@@ -397,7 +411,6 @@ enum Wire {
         var apiCostUsd: Double?
         var subscriptionEstimateUsd: Double?
         var unknownPriceCalls: Int?
-        var pricedCalls: Int?
         var pricingKinds: [String]?
     }
 
@@ -752,12 +765,20 @@ extension Wire.Chat {
     }
 }
 
+extension Wire.CallLimits {
+    func toModel() -> CallLimits {
+        CallLimits(
+            maxCalls: limits.maxCalls, windowSecs: limits.windowSecs, maxConcurrency: limits.maxConcurrency,
+            retryAt: retryAt.map { Date(timeIntervalSince1970: $0) }, sharesService: serviceId != pluginId)
+    }
+}
+
 extension Wire.ChatUsage {
     func toModel() -> ChatUsage {
         ChatUsage(
             contextTokens: contextTokens, contextWindow: contextWindow, inputTokens: inputTokens, outputTokens: outputTokens,
             cacheReadTokens: cacheReadTokens, costUSD: costUsd, turns: turns, model: model,
             apiCostUSD: apiCostUsd ?? 0, subscriptionEstimateUSD: subscriptionEstimateUsd ?? 0,
-            unknownPriceCalls: unknownPriceCalls ?? 0, pricedCalls: pricedCalls ?? 0, pricingKinds: pricingKinds ?? [])
+            unknownPriceCalls: unknownPriceCalls ?? 0, pricingKinds: pricingKinds ?? [])
     }
 }
