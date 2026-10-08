@@ -2,10 +2,7 @@ package main
 
 import (
 	"bytes"
-	"context"
-	"crypto/rand"
 	"encoding/binary"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"image"
@@ -15,12 +12,9 @@ import (
 	"io"
 	"mime"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -29,90 +23,16 @@ import (
 	_ "golang.org/x/image/webp"
 )
 
-// fileScheme serves the files the pages show (attachments, bot images) by an opaque token, never
-// by path: only a file the app handed out a URL for can be read.
-const fileScheme = "lorca-file"
-
-// FileInfo is a file on this computer as the composer and the bubbles need it.
-type FileInfo struct {
-	Path   string `json:"path"`
-	Name   string `json:"name"`
-	Size   int64  `json:"size"`
-	Mime   string `json:"mime"`
-	IsFile bool   `json:"isFile"`
-	// Width and Height of an image as it shows upright, EXIF orientation applied.
-	Width  *int `json:"width,omitempty"`
-	Height *int `json:"height,omitempty"`
-	// URL shows the file in a page.
-	URL string `json:"url"`
-}
-
-// ChooseOptions configures Files.Choose.
-type ChooseOptions struct {
-	Title       string `json:"title,omitempty"`
-	Message     string `json:"message,omitempty"`
-	ButtonLabel string `json:"buttonLabel,omitempty"`
-	Multiple    bool   `json:"multiple,omitempty"`
-	// Images limits the choice to pictures.
-	Images bool `json:"images,omitempty"`
-}
-
-type fileTokens struct {
-	mu     sync.Mutex
-	byPath map[string]string
-	byID   map[string]string
-}
-
-var servedFiles = &fileTokens{byPath: map[string]string{}, byID: map[string]string{}}
-
-// url is the address a page loads `path` from. Windows serves custom schemes from
-// http://<scheme>.localhost, the others from <scheme>://localhost.
-func (t *fileTokens) url(path string) string {
-	t.mu.Lock()
-	token, ok := t.byPath[path]
-	if !ok {
-		var raw [12]byte
-		_, _ = rand.Read(raw[:])
-		token = hex.EncodeToString(raw[:])
-		t.byPath[path] = token
-		t.byID[token] = path
-	}
-	t.mu.Unlock()
-	name := url.PathEscape(filepath.Base(path))
-	if runtime.GOOS == "windows" {
-		return "http://" + fileScheme + ".localhost/" + token + "/" + name
-	}
-	return fileScheme + "://localhost/" + token + "/" + name
-}
-
-func (t *fileTokens) path(token string) (string, bool) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	path, ok := t.byID[token]
-	return path, ok
-}
-
-func serveFile(w http.ResponseWriter, r *http.Request) {
-	token, _, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/"), "/")
-	path, ok := servedFiles.path(token)
-	if !ok {
-		http.NotFound(w, r)
-		return
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	defer file.Close()
-	info, err := file.Stat()
-	if err != nil || info.IsDir() {
-		http.NotFound(w, r)
-		return
-	}
-	w.Header().Set("Content-Type", mimeType(path, file))
-	w.Header().Set("Cache-Control", "no-cache")
-	http.ServeContent(w, r, "", info.ModTime(), file)
+// fileInfo is a file on this computer as the composer and the bubbles need it.
+type fileInfo struct {
+	Path   string
+	Name   string
+	Size   int64
+	Mime   string
+	IsFile bool
+	// Width and Height of an image as it shows upright, EXIF orientation applied; 0 when unknown.
+	Width  int
+	Height int
 }
 
 // mimeType names a file's type by its extension, else by its first bytes.
@@ -136,8 +56,8 @@ func mimeType(path string, file io.ReadSeeker) string {
 }
 
 // inspect describes a file for an attachment: what it is, how big, and an image's size.
-func inspect(path string) FileInfo {
-	info := FileInfo{Path: path, Name: filepath.Base(path), Mime: "application/octet-stream"}
+func inspect(path string) fileInfo {
+	info := fileInfo{Path: path, Name: filepath.Base(path), Mime: "application/octet-stream"}
 	stat, err := os.Stat(path)
 	if err != nil {
 		return info
@@ -160,10 +80,9 @@ func inspect(path string) FileInfo {
 			if _, err := file.Seek(0, io.SeekStart); err == nil && exifOrientation(file) >= 5 {
 				width, height = height, width
 			}
-			info.Width, info.Height = &width, &height
+			info.Width, info.Height = width, height
 		}
 	}
-	info.URL = servedFiles.url(path)
 	return info
 }
 
@@ -227,54 +146,38 @@ func tiffOrientation(tiff []byte) int {
 	return 1
 }
 
-// Files reads and shows files on this computer for the pages.
-type Files struct{}
-
-// Choose asks for files, as the composer's + button and a bot's Look sheet do. It returns
-// nothing when the user cancels.
-func (Files) Choose(ctx context.Context, options ChooseOptions) ([]FileInfo, error) {
+// chooseFiles asks for files, as the composer's + button and a bot's Look sheet do, and answers
+// them on the main thread: none when the user cancels.
+func chooseFiles(parent *mygo.Window, title, message, button string, multiple, images bool, done func([]fileInfo)) {
 	var filters []mygo.FileFilter
-	if options.Images {
-		filters = []mygo.FileFilter{{Name: "Images", Extensions: []string{"png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff"}}}
+	if images {
+		filters = []mygo.FileFilter{{Name: L("Images"), Extensions: []string{"png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff"}}}
 	}
-	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
-		Parent:      mygo.CallerWindow(ctx),
-		Title:       options.Title,
-		Message:     options.Message,
-		ButtonLabel: options.ButtonLabel,
-		Multiple:    options.Multiple,
-		Filters:     filters,
-	})
-	if err != nil {
-		return nil, err
-	}
-	files := make([]FileInfo, 0, len(paths))
-	for _, path := range paths {
-		files = append(files, inspect(path))
-	}
-	return files, nil
+	go func() {
+		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
+			Parent:      parent,
+			Title:       title,
+			Message:     message,
+			ButtonLabel: button,
+			Multiple:    multiple,
+			Filters:     filters,
+		})
+		var files []fileInfo
+		if err == nil {
+			for _, path := range paths {
+				files = append(files, inspect(path))
+			}
+		}
+		post(func() { done(files) })
+	}()
 }
 
-// Inspect describes files dropped on a page.
-func (Files) Inspect(paths []string) []FileInfo {
-	files := make([]FileInfo, 0, len(paths))
-	for _, path := range paths {
-		files = append(files, inspect(path))
-	}
-	return files
-}
-
-// URL is where a page loads a file the CLI named, such as an attachment it fetched.
-func (Files) URL(path string) string {
-	return servedFiles.url(path)
-}
-
-// SavePasted writes what was pasted into the composer (a screenshot, a copied file) to a
-// temporary file the CLI can read. An image with no name becomes "Pasted image <date>.png".
-func (Files) SavePasted(name string, data []byte) (FileInfo, error) {
+// savePasted writes what was pasted into the composer (a screenshot, a copied file) to a temporary
+// file the CLI can read. An image with no name becomes "Pasted image <date>.png".
+func savePasted(name string, data []byte) (fileInfo, error) {
 	directory := filepath.Join(os.TempDir(), "lorca-paste")
 	if err := os.MkdirAll(directory, 0o700); err != nil {
-		return FileInfo{}, err
+		return fileInfo{}, err
 	}
 	name = filepath.Base(strings.TrimSpace(name))
 	if name == "" || name == "." || name == string(filepath.Separator) || name == "image.png" {
@@ -286,17 +189,17 @@ func (Files) SavePasted(name string, data []byte) (FileInfo, error) {
 		path = filepath.Join(directory, fmt.Sprintf("%s %d%s", strings.TrimSuffix(name, ext), time.Now().UnixNano(), ext))
 	}
 	if err := os.WriteFile(path, data, 0o600); err != nil {
-		return FileInfo{}, err
+		return fileInfo{}, err
 	}
 	info := inspect(path)
 	if !info.IsFile {
-		return FileInfo{}, errors.New("the pasted file could not be saved")
+		return fileInfo{}, errors.New("the pasted file could not be saved")
 	}
 	return info, nil
 }
 
-// Open opens a file with its default app.
-func (Files) Open(path string) error { return mygo.Shell.OpenPath(path) }
+// openFile opens a file with its default app.
+func openFile(path string) { go mygo.Shell.OpenPath(path) }
 
-// ShowInFolder shows a file in the file manager.
-func (Files) ShowInFolder(path string) { mygo.Shell.ShowItemInFolder(path) }
+// showInFolder shows a file in the file manager.
+func showInFolder(path string) { go mygo.Shell.ShowItemInFolder(path) }
