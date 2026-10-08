@@ -83,6 +83,9 @@ var symbolIcons = map[string]string{
 	"link":                          "Link",
 	"at":                            "AtSign",
 	"paperclip":                     "Paperclip",
+	"flag":                          "Flag",
+	"checkmark.seal":                "BadgeCheck",
+	"ellipsis.circle":               "CircleEllipsis",
 	"info.circle":                   "Info",
 	"exclamationmark.triangle":      "TriangleAlert",
 	"exclamationmark.triangle.fill": "TriangleAlert",
@@ -155,6 +158,9 @@ var symbolIcons = map[string]string{
 
 // lucideShapes are the shapes of each Lucide icon, inside a 24 by 24 view box, stroked in the text color.
 var lucideShapes = map[string]string{
+	"BadgeCheck":         "<path d=\"M3.85 8.62a4 4 0 0 1 4.78-4.77 4 4 0 0 1 6.74 0 4 4 0 0 1 4.78 4.78 4 4 0 0 1 0 6.74 4 4 0 0 1-4.77 4.78 4 4 0 0 1-6.75 0 4 4 0 0 1-4.78-4.77 4 4 0 0 1 0-6.76Z\"/><path d=\"m9 12 2 2 4-4\"/>",
+	"CircleEllipsis":     "<circle cx=\"12\" cy=\"12\" r=\"10\"/><path d=\"M17 12h.01\"/><path d=\"M12 12h.01\"/><path d=\"M7 12h.01\"/>",
+	"Flag":               "<path d=\"M4 22V4a1 1 0 0 1 .4-.8A6 6 0 0 1 8 2c3 0 5 2 7.333 2q2 0 3.067-.8A1 1 0 0 1 20 4v10a1 1 0 0 1-.4.8A6 6 0 0 1 16 16c-3 0-5-2-8-2a6 6 0 0 0-4 1.528\"/>",
 	"Activity":           "<path d=\"M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2\"/>",
 	"AppWindow":          "<rect x=\"2\" y=\"4\" width=\"20\" height=\"16\" rx=\"2\"/><path d=\"M10 4v4\"/><path d=\"M2 8h20\"/><path d=\"M6 4v4\"/>",
 	"ArrowDown":          "<path d=\"M12 5v14\"/><path d=\"m19 12-7 7-7-7\"/>",

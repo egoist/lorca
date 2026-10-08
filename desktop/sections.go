@@ -45,7 +45,8 @@ func (k *card) row(e ui.Element) ui.Element {
 	return e
 }
 
-// section is a title over a card of rows. `accessory` sits on the title's line.
+// section is a title over a card of rows. `accessory` sits on the title's line. With no rows, the
+// title (and its accessory) stands alone.
 func section(c *ui.Context, title string, style sectionStyle, accessory func(), rows func(k *card)) ui.Element {
 	p := colors(c)
 	s := ui.Column(c).MinWidth(0).Label(title)
@@ -66,6 +67,9 @@ func section(c *ui.Context, title string, style sectionStyle, accessory func(), 
 				ui.Row(c).Margin(-6, 0).Children(accessory)
 			}
 		})
+		if rows == nil {
+			return
+		}
 		k := &card{line: p.Separator}
 		body := ui.Column(c).Background(p.BotBubble).Clip()
 		if style == sectionCaption {
