@@ -4,13 +4,12 @@
 
 Commands:
 
-`lorca events list/add/edit/pause/resume/reconnect/route/remove/retry/discard/forward` configures Runner event subscriptions and inspects health or encrypted gateway delivery. [Event triggers](event-triggers.md) describes its configuration and gateway commands. Subscription and inbox state in `lorca.sqlite3` is account-key encrypted; service plaintext reaches only the gateway and assigned Runner.
-
 - `lorca serve` — the app connects here; `lorca` alone lists the commands and starts nothing, so a bot's `lorca` never starts a second service
 - `lorca identity new` / `identity restore <phrase>` / `identity show`
 - `lorca pair` — show a pairing string and wait; `lorca pair <string>` joins
 - `lorca provider set <kind> [api-key] [--base-url <url>]` — connect DeepSeek, Anthropic, OpenCode Zen (`opencode`), or OpenCode Go (`opencode-go`) with an API key, or open the browser sign-in for `chatgpt` and `grok`. The key is checked against the API first and read from stdin when omitted. `provider add <name> <base-url> [--api chat-completions|responses|messages] [--model <id>]… [--api-key-stdin]` adds a custom provider, its server checked first; `provider remove <kind>` (a custom provider's kind deletes it) / `provider list`. A running `lorca serve` carries out the change over the local websocket; with none, the command changes `credentials.json` itself and runs one sync pass
 - `lorca mcp list` / `get` / `add` / `add-json` / `remove` / `enable` / `disable` / `sign-in` / `sign-out` / `hide` / `show` / `reload` / `import` — the servers in `mcp.json`, through a running `lorca serve` or in that process ([MCP servers](mcp-servers.md#managing-it))
+- `lorca events list` / `add` / `edit` / `pause` / `resume` / `reconnect` / `route` / `remove` / `retry` / `discard` / `forward` — this Runner's event subscriptions, their health and deliveries, and a gateway's forwarding, through a running `lorca serve` or in that process ([Event triggers](event-triggers.md#configuration-and-health))
 - `lorca marketplace reload` — check lorca.app for a newer marketplace index now, through a running `lorca serve` or, with none, into `marketplace.json` for the next start
 - `lorca models reload` — check lorca.app for a newer model catalog now, through a running `lorca serve` or, with none, into `catalog.json` for the next start
 - `lorca chats list` / `chats set-owner <group> <bot>` — the chats with each group's owner, and a new owner for a group, the group named by its title or id and the bot by its name or id (`App::find_group`, `App::find_member`). A running `lorca serve` carries out the change over the local websocket; with none, the command changes the database itself and runs one sync pass

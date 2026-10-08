@@ -33,7 +33,7 @@ When the user has not written in any chat for seven days, due routines are pause
 
 The macOS app's DM inspector has a Routines section: a row per routine (clock, pause, or running icon; the schedule in words and the next run, or the next check; a switch that pauses or resumes) that opens a sheet with the state, schedule, next run or check and last run, the prompt, the check in a monospaced block when there is one, and Run Now, Pause/Resume, Edit in Chat (which puts `Edit my routine "Name": ` in the composer), and Delete. With none, the section says routines are set up by asking the bot. The Windows and Linux app's sheet is the same. The phone's chat details show the same list with a switch; a tap offers Run Now and Delete.
 
-Service events start unattended work in a bot's DM through [event subscriptions](event-triggers.md). A user-controlled gateway verifies a service and seals signed deliveries to the assigned Runner. The Runner's encrypted inbox deduplicates, orders or coalesces them, retains paused work, and admits an `event` Job through the same runtime and tool review paths. A subscription targets a bot or one of its routines and carries the owner's task prompt separately from untrusted service data. Scheduled routine checks continue alongside these deliveries.
+A service's events start work in a bot's DM too, through [event subscriptions](event-triggers.md) on its Runner: each runs the subscription's own task, unattended as a routine's run is, and one that targets a routine waits while the routine is paused.
 
 ## Memory
 

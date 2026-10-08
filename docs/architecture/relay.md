@@ -28,8 +28,6 @@ The image (`crates/relay/Dockerfile`) builds from the repo root, since the relay
 
 Auth is per machine:
 
-Protocol 3 includes addressed `event` blobs for [event subscriptions](event-triggers.md#relay-transport). The relay requires a recipient and no slot or group, stores the sealed ciphertext opaquely, and includes events in the seven-day sweep of unconsumed machine envelopes. The gateway verifies service authenticity before sealing, and the assigned Runner verifies the signed envelope after opening it.
-
 1. `POST /v1/auth/challenge { machine_pubkey }` → nonce.
 2. Client signs the nonce with the machine signing key: `POST /v1/auth/verify`.
 3. Relay issues a one-hour HMAC bearer bound to the identity and machine.
@@ -50,7 +48,7 @@ Tables:
 
 `kind` is `roster` | `chat` | `job` | `event` | `job_cancel` | `job_result` | `machine` | `credentials` | `key` | `file` | `request` | `response`. Ciphertext is bytes; the nonce sits inside it. `seq` increases per identity. A Device’s `name` and `os` are inside its `machine` blob, not columns. A `file` blob is an attachment's bytes under the attachment's id. A Device accepts files up to 100 MiB; the relay accepts 100 MiB plus the 40-byte encryption envelope (other kinds 4 MiB). Attachments travel as binary ciphertext with `Content-Type: application/octet-stream`: `PUT /v1/files/{id}?group=<chat id>` uploads one (the group is optional for avatars), and `GET /v1/files/{id}` downloads it when a transcript needs it. The upload answers with JSON containing the id and sequence. Names, MIME types, and dimensions stay in the encrypted message or roster. JSON blob routes carry non-file blobs and exclude attachments from their pages.
 
-Blob API: `PUT /v1/blobs` (client-chosen id of up to 64 characters in `[A-Za-z0-9._-]`, idempotent; 413 over quota), `GET /v1/blobs?since=<seq>&kinds=` (a page of the blobs for the identity that are unaddressed or addressed to the caller’s machine, filtered by kind in the query), `GET /v1/blobs/{id}` (one blob, same visibility), `DELETE /v1/blobs/{id}`, `GET /v1/machines` (each machine with `online` and `last_seen`), `POST /v1/machines` (attest one, above).
+Blob API: `PUT /v1/blobs` (client-chosen id of up to 64 characters in `[A-Za-z0-9._-]`, idempotent; 413 over quota; an `event`, a gateway's delivery for [event subscriptions](event-triggers.md#relay-transport), needs a recipient and takes no slot or group), `GET /v1/blobs?since=<seq>&kinds=` (a page of the blobs for the identity that are unaddressed or addressed to the caller’s machine, filtered by kind in the query), `GET /v1/blobs/{id}` (one blob, same visibility), `DELETE /v1/blobs/{id}`, `GET /v1/machines` (each machine with `online` and `last_seen`), `POST /v1/machines` (attest one, above).
 
 Sync socket: `GET /v1/sync` with the bearer token upgrades to a WebSocket. The relay sends `{"type":"blobs"}` when the identity has a blob this machine may read and `{"type":"machines"}` when a machine connects, disconnects, or is unpaired; the Device sends nothing but control frames. A machine is online while it has a socket open. The relay pings every 25 s and closes a socket silent for 50 s; the Device gives up on one silent for 70 s, or 10 s after a ping of its own, and connects again.
 
