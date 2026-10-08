@@ -9,7 +9,7 @@ import (
 )
 
 // The pane beside a chat, after the macOS app's InspectorViewController: the bots in the chat, a
-// group's name and description, and for a DM the bot's profile, what it runs with (provider,
+// group's name and description, what the chat's bots published, and for a DM the bot's profile, what it runs with (provider,
 // model, thinking, the credential, and what the turns used), its memory, its routines, the plugins
 // on its Runner, and where turns run.
 
@@ -102,6 +102,7 @@ func (m *mainWindow) inspectorView(c *ui.Context, chatID string) {
 				}
 				m.inspectorGroup(c, chat, members)
 			}
+			m.inspectorOutputs(c, chat)
 			if single != nil {
 				m.inspectorProfile(c, single)
 				m.inspectorRuntime(c, single, chat)

@@ -50,22 +50,25 @@ func section(c *ui.Context, title string, style sectionStyle, accessory func(), 
 	p := colors(c)
 	s := ui.Column(c).MinWidth(0).Label(title)
 	s.Children(func() {
-		header := ui.Row(c).Gap(8)
-		if style == sectionCaption {
-			header.MinHeight(14).Padding(0, 0, 0, 4).Margin(0, 0, 6, 0)
-		} else {
-			header.MinHeight(18).Padding(0, 12).Margin(0, 0, 9, 0)
-		}
-		header.Children(func() {
+		// Without a title the card starts at the top.
+		if title != "" || accessory != nil {
+			header := ui.Row(c).Gap(8)
 			if style == sectionCaption {
-				ui.Text(c, strings.ToUpper(title)).Grow(1).FontSize(10).FontWeight(600).TextColor(p.Label3).LetterSpacing(0.2).SingleLine()
+				header.MinHeight(14).Padding(0, 0, 0, 4).Margin(0, 0, 6, 0)
 			} else {
-				ui.Text(c, title).Grow(1).FontSize(13).FontWeight(700).TextColor(p.Label).SingleLine()
+				header.MinHeight(18).Padding(0, 12).Margin(0, 0, 9, 0)
 			}
-			if accessory != nil {
-				ui.Row(c).Margin(-6, 0).Children(accessory)
-			}
-		})
+			header.Children(func() {
+				if style == sectionCaption {
+					ui.Text(c, strings.ToUpper(title)).Grow(1).FontSize(10).FontWeight(600).TextColor(p.Label3).LetterSpacing(0.2).SingleLine()
+				} else {
+					ui.Text(c, title).Grow(1).FontSize(13).FontWeight(700).TextColor(p.Label).SingleLine()
+				}
+				if accessory != nil {
+					ui.Row(c).Margin(-6, 0).Children(accessory)
+				}
+			})
+		}
 		k := &card{line: p.Separator}
 		body := ui.Column(c).Background(p.BotBubble).Clip()
 		if style == sectionCaption {
@@ -210,7 +213,7 @@ func statusRow(c *ui.Context, k *card, o statusRowOptions) (ui.Element, statusRo
 		ui.Row(c).Width(18).Justify(ui.Center).TextColor(p.Label2).Children(func() {
 			if o.PluginID != "" {
 				pluginTile(c, o.PluginID, o.Symbol, 18)
-			} else {
+			} else if o.Symbol != "" {
 				symbol(c, o.Symbol, 16, 1.7)
 			}
 		})

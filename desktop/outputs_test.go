@@ -9,7 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"testing"
 	"time"
 
@@ -27,270 +27,298 @@ func (f outputTestTransport) Request(method string, params any) (json.RawMessage
 }
 func (outputTestTransport) Reconnect() {}
 
-func outputFixture(version uint32, mime string) *model.Message {
-	code := 0
-	return &model.Message{ID: "msg-fixture-v" + string(rune('0'+version)), Author: model.BotAuthor("bot-patch"), Body: model.Body{Kind: model.BodyText, Text: "Synthetic fixture output"},
-		CreatedAt: time.Date(2026, 10, 8, 9, int(version), 0, 0, time.UTC), Output: &model.Output{ID: "out-fixture", Name: "Verification report", Mime: mime, BotID: "bot-patch", ChatID: "chat-patch", TaskID: "task-3a249410-8034-4be2-bf42-9e68b4fe2c41", Version: version,
-			Evidence: &model.OutputEvidence{Kind: "test_result", Summary: "Synthetic focused checks pass", Status: "passed", Command: "sample-test --layout", ExitCode: &code}}}
+// outputFixture is a chat with outputs a fake CLI lists and serves: a link check in two versions,
+// an after screenshot, a document link, and a screenshot the relay no longer has.
+type outputFixture struct {
+	t        *testing.T
+	posts    chan func()
+	files    map[string]string
+	messages []map[string]any
+	mu       sync.Mutex
+	fetches  map[string]int
+	named    []string
 }
 
-func pumpOutputReply(t *testing.T, posts <-chan func(), tt *ui.Tester) {
-	t.Helper()
-	select {
-	case reply := <-posts:
-		reply()
-	case <-time.After(3 * time.Second):
-		t.Fatal("missing output reply")
-	}
-	settle(tt)
-}
-
-func TestOutputsHeaderVersionsAndPreviewNavigation(t *testing.T) {
-	m := demoWindow(t)
-	m.selectChat("chat-patch")
-	chat := store.Chat("chat-patch")
-	first, second := outputFixture(1, "text/html"), outputFixture(2, "text/html")
-	first.Output.URL, second.Output.URL = "https://docs.example.com/report", "https://docs.example.com/report"
-	first.Output.Evidence.Status = "failed"
-	first.Output.Evidence.Summary = "Synthetic layout check fails"
-	failed := 1
-	first.Output.Evidence.ExitCode = &failed
-	second.Output.PreviousMessageID = first.ID
-	chat.Messages = []*model.Message{first, second}
-	tt := ui.NewTester(m.frame(m.view), 1180, 760)
-	settle(tt)
-	renderTo(t, tt, "outputs-header")
-	if err := tt.Click(L("Outputs")); err != nil {
-		t.Fatal(err)
-	}
-	settleTransitions(tt)
-	if !tt.HasText("Verification report · v2") || !tt.HasText("Verification report · v1") || !tt.HasText(L("Exit code: %d", 1)) {
-		t.Fatalf("versions/evidence absent: %q", tt.Texts())
-	}
-	secondRect, _ := tt.Find("Verification report · v2")
-	firstRect, _ := tt.Find("Verification report · v1")
-	if secondRect.Y >= firstRect.Y {
-		t.Fatal("latest version is not first")
-	}
-	renderBoth(t, tt, "outputs-versions")
-	tt.Key(0, ui.KeyEscape)
-	settle(tt)
-	if m.hasSheet() {
-		t.Fatal("Escape did not close Outputs")
-	}
-}
-
-func TestOutputsRetrievalRetryPreviewOpenAndSave(t *testing.T) {
-	m := demoWindow(t)
-	m.selectChat("chat-patch")
-	m.userWantsInspector = false
-	source := filepath.Join(t.TempDir(), "Tests.txt")
-	if err := os.WriteFile(source, []byte("Synthetic checks passed\nNo private data\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	message := outputFixture(2, "text/plain")
-	message.Output.Name = "Tests.txt"
-	message.Attachments = []model.Attachment{{ID: "att-fixture", Name: "Tests.txt", Mime: "text/plain", Size: 40}}
-	posts := make(chan func(), 12)
-	var fetches atomic.Int32
-	transport := outputTestTransport{func(method string, params any) (json.RawMessage, error) {
-		switch method {
-		case "outputs.list":
-			data, _ := json.Marshal(map[string]any{"outputs": []any{map[string]any{"id": message.ID, "chat_id": "chat-patch", "author": map[string]any{"kind": "bot", "bot_id": "bot-patch"}, "body": map[string]any{"kind": "text", "text": "Synthetic report", "attachments": []any{map[string]any{"id": "att-fixture", "name": "Tests.txt", "mime": "text/plain", "size": 40}}}, "state": map[string]any{"kind": "complete"}, "created_at": 1728000000, "output": message.Output}}})
-			return data, nil
-		case "files.path":
-			if params.(map[string]any)["named"] != true {
-				return nil, errors.New("missing named retrieval")
-			}
-			if fetches.Add(1) == 1 {
-				return nil, errors.New("relay no longer has Tests.txt")
-			}
-			data, _ := json.Marshal(map[string]any{"path": source})
-			return data, nil
-		default:
-			return json.RawMessage(`null`), nil
+func newOutputFixture(t *testing.T) *outputFixture {
+	dir := t.TempDir()
+	write := func(name string, data []byte) string {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, data, 0600); err != nil {
+			t.Fatal(err)
 		}
-	}}
-	old := store
-	store = model.NewStore(transport, func(fn func()) { posts <- fn }, false)
-	store.Chats, store.Bots, store.Devices = old.Chats, old.Bots, old.Devices
-	store.Chats[0] = old.Chats[0]
-	store.IsStarting = false
-	store.HasIdentity = old.HasIdentity
-	store.IsConnected = true
-	store.Chat("chat-patch").Messages = []*model.Message{message}
-	tt := ui.NewTester(m.frame(m.view), 1180, 760)
-	m.presentOutputs("chat-patch")
-	pumpOutputReply(t, posts, tt)
-	pumpOutputReply(t, posts, tt)
-	settleTransitions(tt)
-	if !tt.HasText("File unavailable: relay no longer has Tests.txt") {
-		t.Fatalf("no unavailable reason: %q", tt.Texts())
+		return path
 	}
-	renderBoth(t, tt, "outputs-unavailable")
-	if err := tt.Click(L("Retry %@", "Tests.txt")); err != nil {
-		t.Fatal(err)
-	}
-	pumpOutputReply(t, posts, tt)
-	if fetches.Load() != 2 {
-		t.Fatal("Retry did not fetch once")
-	}
-	renderBoth(t, tt, "outputs-file-ready")
-	if err := tt.Click(L("Preview %@", "Tests.txt")); err != nil {
-		t.Fatal(err)
-	}
-	pumpOutputReply(t, posts, tt)
-	settleTransitions(tt)
-	if !tt.HasText("Synthetic checks passed") {
-		t.Fatalf("native text preview absent: %q", tt.Texts())
-	}
-	renderBoth(t, tt, "outputs-text-preview")
-	tt.Key(0, ui.KeyEscape)
-	settle(tt)
-	if len(m.sheets) != 1 {
-		t.Fatal("preview did not return to Outputs")
-	}
-	opened := make(chan string, 1)
-	originalOpen := outputOpenPath
-	outputOpenPath = func(path string) error { opened <- path; return nil }
-	t.Cleanup(func() { outputOpenPath = originalOpen })
-	if err := tt.Click(L("Open %@", "Tests.txt")); err != nil {
-		t.Fatal(err)
-	}
-	pumpOutputReply(t, posts, tt)
-	if got := <-opened; got != source {
-		t.Fatalf("opened runner path instead of local retrieval: %s", got)
-	}
-	destination := filepath.Join(t.TempDir(), "Saved Tests.txt")
-	originalSave := outputSaveDestination
-	outputSaveDestination = func(_ *mygo.Window, name string) (string, error) {
-		if name != "Tests.txt" {
-			return "", errors.New("wrong name")
-		}
-		return destination, nil
-	}
-	t.Cleanup(func() { outputSaveDestination = originalSave })
-	if err := tt.Click(L("Save %@", "Tests.txt")); err != nil {
-		t.Fatal(err)
-	}
-	pumpOutputReply(t, posts, tt)
-	saved, err := os.ReadFile(destination)
-	if err != nil || string(saved) != "Synthetic checks passed\nNo private data\n" {
-		t.Fatalf("bad saved bytes: %q %v", saved, err)
-	}
-}
-
-func TestOutputsStaleRepliesCannotReplaceNewerOrClosedSheet(t *testing.T) {
-	m := demoWindow(t)
-	m.selectChat("chat-patch")
-	old := store
-	posts := make(chan func(), 4)
-	requests := make(chan chan json.RawMessage, 4)
-	store = model.NewStore(outputTestTransport{func(method string, params any) (json.RawMessage, error) {
-		reply := make(chan json.RawMessage, 1)
-		requests <- reply
-		return <-reply, nil
-	}}, func(fn func()) { posts <- fn }, false)
-	store.Chats, store.Bots = old.Chats, old.Bots
-	state := &outputsState{chatID: "chat-patch", actions: map[string]*outputActionState{}}
-	state.sheet = m.present(func(c *ui.Context, s *sheet) { state.view(c) }, nil)
-	state.reload()
-	first := <-requests
-	state.reload()
-	second := <-requests
-	second <- json.RawMessage(`{"outputs":[],"has_more":true}`)
-	(<-posts)()
-	if !state.hasMore {
-		t.Fatal("new response not applied")
-	}
-	first <- json.RawMessage(`{"outputs":[],"has_more":false}`)
-	(<-posts)()
-	if !state.hasMore {
-		t.Fatal("stale response overwrote current state")
-	}
-	state.reload()
-	last := <-requests
-	state.sheet.dismiss()
-	last <- json.RawMessage(`{"outputs":[],"has_more":false}`)
-	(<-posts)()
-	if !state.hasMore {
-		t.Fatal("closed sheet callback mutated state")
-	}
-}
-
-func TestOutputImagePreview(t *testing.T) {
-	m := demoWindow(t)
-	file, err := os.Create(filepath.Join(t.TempDir(), "Synthetic chart.png"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	picture := image.NewRGBA(image.Rect(0, 0, 320, 180))
-	for y := range 180 {
-		for x := range 320 {
-			value := color.RGBA{240, 246, 255, 255}
-			if x > 30 && x < 80 && y > 90 || x > 120 && x < 170 && y > 60 || x > 210 && x < 260 && y > 30 {
-				value = color.RGBA{55, 120, 220, 255}
+	picture := image.NewRGBA(image.Rect(0, 0, 640, 360))
+	for y := range 360 {
+		for x := range 640 {
+			value := color.RGBA{247, 247, 247, 255}
+			if y < 60 {
+				value = color.RGBA{41, 92, 242, 255}
+			} else if y > 150 && y < 166 && x > 24 && x < 520 {
+				value = color.RGBA{217, 217, 217, 255}
 			}
 			picture.SetRGBA(x, y, value)
 		}
 	}
-	if err := png.Encode(file, picture); err != nil {
-		t.Fatal(err)
-	}
-	file.Close()
-	tt := ui.NewTester(m.frame(m.view), 1180, 760)
-	m.presentOutputPreview(model.Attachment{ID: "att-chart", Name: "Synthetic chart.png", Mime: "image/png", Size: 1000}, file.Name())
-	deadline := time.Now().Add(3 * time.Second)
-	for tt.HasText(L("Loading preview…")) || len(m.sheets) == 1 {
-		runPosts()
-		tt.Frame()
-		if !tt.HasText(L("Loading preview…")) {
-			break
+	var shot strings.Builder
+	png.Encode(&shot, picture)
+	f := &outputFixture{t: t, posts: make(chan func(), 64), fetches: map[string]int{}, files: map[string]string{
+		"att-links1":  write("Link check.txt", []byte("Checked 14 pages and 23 links.\n\nFAIL https://example.com/download/windows → 404\nFAIL https://example.com/download/linux-arm64 → 404\n")),
+		"att-links2":  write("Link check 2.txt", []byte("Checked 14 pages and 23 links.\n\nok  https://example.com/\nok  https://example.com/download\nok  https://example.com/download/windows\n…\n\nAll 23 links answer.\n")),
+		"att-header":  write("Header after.png", []byte(shot.String())),
+		"att-missing": write("Before.png", []byte(shot.String())),
+	}}
+	now := time.Now()
+	add := func(id, bot string, minutesAgo int, text string, attachment map[string]any, output map[string]any) {
+		body := map[string]any{"kind": "text", "text": text}
+		if attachment != nil {
+			body["attachments"] = []any{attachment}
 		}
-		if time.Now().After(deadline) {
-			t.Fatal("preview did not load")
-		}
-		time.Sleep(10 * time.Millisecond)
+		f.messages = append(f.messages, map[string]any{"id": id, "chat_id": "chat-relay", "author": map[string]any{"kind": "bot", "bot_id": bot}, "body": body,
+			"state": map[string]any{"kind": "complete"}, "created_at": float64(now.Add(-time.Duration(minutesAgo) * time.Minute).Unix()), "output": output})
 	}
-	settleTransitions(tt)
-	renderBoth(t, tt, "outputs-image-preview")
-	if strings.Contains(strings.Join(tt.Texts(), " "), "Preview unavailable:") {
-		t.Fatal("image preview failed")
+	check := func(kind, status, summary, command string) map[string]any {
+		return map[string]any{"kind": kind, "status": status, "summary": summary, "command": command}
+	}
+	add("msg-links1", "bot-patch", 50, "Test result · Failed: 2 of 23 download links return 404.\n`bun run check:links`",
+		map[string]any{"id": "att-links1", "name": "Link check.txt", "mime": "text/plain", "size": 140},
+		map[string]any{"id": "out-links", "name": "Link check.txt", "mime": "text/plain", "bot_id": "bot-patch", "chat_id": "chat-relay", "version": 1, "evidence": check("test_result", "failed", "2 of 23 download links return 404.", "bun run check:links")})
+	add("msg-header", "bot-patch", 20, "After screenshot · Passed: The header sits below the toolbar at every width.",
+		map[string]any{"id": "att-header", "name": "Header after.png", "mime": "image/png", "size": 4096, "width": 640, "height": 360},
+		map[string]any{"id": "out-header", "name": "Header after.png", "mime": "image/png", "bot_id": "bot-patch", "chat_id": "chat-relay", "version": 1, "evidence": check("after_screenshot", "passed", "The header sits below the toolbar at every width.", "")})
+	add("msg-links2", "bot-patch", 6, "Test result · Passed: All 23 links answer.\n`bun run check:links`",
+		map[string]any{"id": "att-links2", "name": "Link check.txt", "mime": "text/plain", "size": 160},
+		map[string]any{"id": "out-links", "name": "Link check.txt", "mime": "text/plain", "bot_id": "bot-patch", "chat_id": "chat-relay", "version": 2, "previous_message_id": "msg-links1", "evidence": check("test_result", "passed", "All 23 links answer.", "bun run check:links")})
+	add("msg-notes", "bot-nova", 3, "[Release notes](https://docs.example.com/lorca/release-notes)", nil,
+		map[string]any{"id": "out-notes", "name": "Release notes", "mime": "text/html", "bot_id": "bot-nova", "chat_id": "chat-relay", "version": 1, "url": "https://docs.example.com/lorca/release-notes"})
+	add("msg-missing", "bot-patch", 1, "",
+		map[string]any{"id": "att-missing", "name": "Before.png", "mime": "image/png", "size": 48000, "width": 640, "height": 360},
+		map[string]any{"id": "out-missing", "name": "Before.png", "mime": "image/png", "bot_id": "bot-patch", "chat_id": "chat-relay", "version": 1})
+	return f
+}
+
+// install puts a store over the fake CLI in place of the demo's, with the demo's roster.
+func (f *outputFixture) install(inTranscript bool) {
+	old := store
+	store = model.NewStore(outputTestTransport{f.request}, func(fn func()) { f.posts <- fn }, false)
+	store.Chats, store.Bots, store.Devices = old.Chats, old.Bots, old.Devices
+	store.IsStarting, store.HasIdentity, store.IsConnected = false, old.HasIdentity, true
+	if inTranscript {
+		chat := store.Chat("chat-relay")
+		for _, wire := range f.messages {
+			data, _ := json.Marshal(wire)
+			var message model.WireMessage
+			json.Unmarshal(data, &message)
+			chat.Messages = append(chat.Messages, model.ToMessage(message))
+		}
 	}
 }
 
-func TestCopyOutputPreservesDestinationOnFailure(t *testing.T) {
+func (f *outputFixture) request(method string, params any) (json.RawMessage, error) {
+	switch method {
+	case "outputs.list":
+		return json.Marshal(map[string]any{"outputs": f.messages})
+	case "files.path":
+		p := params.(map[string]any)
+		id := p["attachment"].(map[string]any)["id"].(string)
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.fetches[id]++
+		if id == "att-missing" && f.fetches[id] == 1 {
+			return nil, errors.New("the relay no longer has Before.png")
+		}
+		path, ok := f.files[id]
+		if !ok {
+			return nil, errors.New("the relay no longer has it")
+		}
+		if p["named"] == true {
+			f.named = append(f.named, id)
+		}
+		return json.Marshal(map[string]any{"path": path})
+	}
+	return json.RawMessage(`null`), nil
+}
+
+// pump runs what the fake CLI's replies posted, framing between them, until `done` or a timeout.
+func (f *outputFixture) pump(tt *ui.Tester, what string, done func() bool) {
+	f.t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		select {
+		case fn := <-f.posts:
+			fn()
+		case <-time.After(20 * time.Millisecond):
+		}
+		tt.Frame()
+		if done() {
+			settle(tt)
+			return
+		}
+		if time.Now().After(deadline) {
+			f.t.Fatalf("timed out waiting for %s; texts %q", what, tt.Texts())
+		}
+	}
+}
+
+func TestOutputsInTheInspectorAndTheirSheet(t *testing.T) {
+	m := demoWindow(t)
+	m.selectChat("chat-relay")
+	f := newOutputFixture(t)
+	f.install(false)
+	tt := ui.NewTester(m.frame(m.view), 1180, 760)
+	f.pump(tt, "the inspector's outputs", func() bool { return tt.HasText("Release notes") })
+	// The three latest, newest first, and View all for the fourth.
+	wantText(t, tt, L("Outputs"), "Before.png", "Release notes", "Link check.txt", L("Passed"), L("View all"))
+	if tt.HasText("Header after.png") {
+		t.Fatal("a fourth output took a row")
+	}
+	first, _ := tt.Find("Before.png")
+	last, _ := tt.Find("Link check.txt")
+	if first.Y >= last.Y {
+		t.Fatal("the latest output is not first")
+	}
+	renderBoth(t, tt, "outputs-inspector")
+
+	// A row opens the output: its preview, its check, and its versions.
+	if err := tt.Click("Link check.txt"); err != nil {
+		t.Fatal(err)
+	}
+	f.pump(tt, "the text preview", func() bool {
+		return tt.HasText("All 23 links answer.\n") || strings.Contains(strings.Join(tt.Texts(), "\n"), "ok  https://example.com/")
+	})
+	wantText(t, tt, L("Test result"), L("Result"), "All 23 links answer.", "bun run check:links", L("Version %d", 2), L("Version %d", 1), L("Save As…"), L("Open"), L("Done"))
+	renderBoth(t, tt, "output-sheet")
+
+	// An earlier version shows in its place.
+	if err := tt.Click(L("Version %d", 1)); err != nil {
+		t.Fatal(err)
+	}
+	f.pump(tt, "version 1", func() bool { return tt.HasText("2 of 23 download links return 404.") })
+	if !tt.HasText(L("Failed")) {
+		t.Fatalf("version 1's check absent: %q", tt.Texts())
+	}
+
+	// Save As… copies the shown version; Open hands its named copy to the system.
+	destination := filepath.Join(t.TempDir(), "Saved.txt")
+	saveDestination := outputSaveDestination
+	outputSaveDestination = func(_ *mygo.Window, name string) (string, error) {
+		if name != "Link check.txt" {
+			return "", errors.New("wrong name " + name)
+		}
+		return destination, nil
+	}
+	t.Cleanup(func() { outputSaveDestination = saveDestination })
+	if err := tt.Click(L("Save As…")); err != nil {
+		t.Fatal(err)
+	}
+	f.pump(tt, "the saved copy", func() bool { _, err := os.Stat(destination); return err == nil })
+	if saved, _ := os.ReadFile(destination); !strings.Contains(string(saved), "FAIL") {
+		t.Fatalf("saved %q, not version 1", saved)
+	}
+	opened := ""
+	openPath := outputOpenPath
+	outputOpenPath = func(path string) { opened = path }
+	t.Cleanup(func() { outputOpenPath = openPath })
+	if err := tt.Click(L("Open")); err != nil {
+		t.Fatal(err)
+	}
+	f.pump(tt, "Open", func() bool { return opened != "" })
+	if opened != f.files["att-links1"] || len(m.sheets) != 0 {
+		t.Fatalf("Open used %q and left %d sheets", opened, len(m.sheets))
+	}
+
+	// View all lists every output.
+	if err := tt.Click(L("View all")); err != nil {
+		t.Fatal(err)
+	}
+	settleTransitions(tt)
+	wantText(t, tt, "Header after.png")
+	renderBoth(t, tt, "outputs-all")
+	tt.Key(0, ui.KeyEscape)
+	settle(tt)
+	if m.hasSheet() {
+		t.Fatal("Escape left View all up")
+	}
+}
+
+func TestOutputLinkAndUnavailableFile(t *testing.T) {
+	m := demoWindow(t)
+	m.selectChat("chat-relay")
+	f := newOutputFixture(t)
+	f.install(false)
+	tt := ui.NewTester(m.frame(m.view), 1180, 760)
+	f.pump(tt, "the inspector's outputs", func() bool { return tt.HasText("Release notes") })
+
+	m.presentOutput("chat-relay", "out-notes")
+	settleTransitions(tt)
+	wantText(t, tt, L("Link"), "docs.example.com", "https://docs.example.com/lorca/release-notes")
+	renderBoth(t, tt, "output-link")
+	linked := ""
+	openURL := outputOpenURL
+	outputOpenURL = func(link string) { linked = link }
+	t.Cleanup(func() { outputOpenURL = openURL })
+	tt.Key(0, ui.KeyEnter)
+	settle(tt)
+	if linked != "https://docs.example.com/lorca/release-notes" || m.hasSheet() {
+		t.Fatalf("Open opened %q", linked)
+	}
+
+	m.presentOutput("chat-relay", "out-missing")
+	f.pump(tt, "the failed fetch", func() bool { return tt.HasText(L("This file couldn't be downloaded.")) })
+	wantText(t, tt, "The relay no longer has Before.png", L("Try Again"))
+	renderBoth(t, tt, "output-unavailable")
+	tt.Key(0, ui.KeyEnter)
+	f.pump(tt, "the retried fetch", func() bool { return !tt.HasText(L("This file couldn't be downloaded.")) })
+	if f.fetches["att-missing"] != 2 || !m.hasSheet() {
+		t.Fatalf("Try Again fetched %d times", f.fetches["att-missing"])
+	}
+}
+
+func TestOutputsInTheTranscript(t *testing.T) {
+	m := demoWindow(t)
+	m.selectChat("chat-relay")
+	f := newOutputFixture(t)
+	f.install(true)
+	tt := ui.NewTester(m.frame(m.view), 1180, 760)
+	f.pump(tt, "the transcript's files", func() bool { return tt.HasText(L("Couldn't download · Retry")) && tt.HasText(L("View all")) })
+	// The image's bytes land after the list.
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		select {
+		case fn := <-f.posts:
+			fn()
+		case <-time.After(20 * time.Millisecond):
+		}
+		tt.Frame()
+	}
+	settle(tt)
+	renderBoth(t, tt, "outputs-transcript")
+	// The tile of a file that could not be fetched retries on a click.
+	if err := tt.Click("Before.png"); err != nil {
+		t.Fatal(err)
+	}
+	f.pump(tt, "the retried tile", func() bool { return !tt.HasText(L("Couldn't download · Retry")) })
+	if f.fetches["att-missing"] != 2 {
+		t.Fatalf("the tile fetched %d times", f.fetches["att-missing"])
+	}
+}
+
+func TestCopyFileLeavesTheDestinationOnFailure(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(root, "saved.txt")
 	os.WriteFile(target, []byte("existing"), 0600)
-	if err := copyOutput(filepath.Join(root, "missing"), target); err == nil {
-		t.Fatal("missing source succeeded")
+	if err := copyFile(filepath.Join(root, "missing"), target); err == nil {
+		t.Fatal("a missing source copied")
 	}
-	data, _ := os.ReadFile(target)
-	if string(data) != "existing" {
-		t.Fatal("failed save damaged destination")
-	}
-	if err := copyOutput(target, target); err != nil {
-		t.Fatal(err)
+	if data, _ := os.ReadFile(target); string(data) != "existing" {
+		t.Fatal("a failed copy changed the destination")
 	}
 	source := filepath.Join(root, "source.txt")
 	os.WriteFile(source, []byte("new result"), 0600)
-	if err := copyOutput(source, target); err != nil {
+	if err := copyFile(source, target); err != nil {
 		t.Fatal(err)
 	}
-	data, _ = os.ReadFile(target)
-	if !strings.Contains(string(data), "new result") {
-		t.Fatal("save did not replace approved destination")
-	}
-}
-
-func TestOutputsDeletedChatLeavesNoLoadingOrCachedRecords(t *testing.T) {
-	m := demoWindow(t)
-	state := &outputsState{chatID: "chat-gone", loading: true, messages: []*model.Message{outputFixture(1, "text/plain")}, actions: map[string]*outputActionState{}}
-	state.sheet = m.present(func(c *ui.Context, s *sheet) { state.view(c) }, nil)
-	tt := ui.NewTester(m.frame(m.view), 1180, 760)
-	settle(tt)
-	if state.loading || len(state.messages) != 0 || !tt.HasText(L("Chat unavailable")) {
-		t.Fatal("removed chat retained loading or output records")
+	if data, _ := os.ReadFile(target); string(data) != "new result" {
+		t.Fatal("the copy did not replace the destination")
 	}
 }
