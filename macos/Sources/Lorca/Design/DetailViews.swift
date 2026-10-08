@@ -112,6 +112,8 @@ final class SectionView: NSView {
     private var shownRows: [NSView] = []
 
     func setRows(_ views: [NSView]) {
+        // With no rows, the title (and its accessory) stands alone.
+        card.isHidden = views.isEmpty
         // The rows it shows already, updated in place, keep their places and dividers.
         guard !views.elementsEqual(shownRows, by: ===) else { return }
         shownRows = views
@@ -449,6 +451,7 @@ final class StatusRow: NSView, NSGestureRecognizerDelegate {
         icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
         title.stringValue = titleText
         subtitle.stringValue = subtitleText
+        subtitle.isHidden = subtitleText.isEmpty
         // With a symbol, the state's words are its tooltip and what VoiceOver reads.
         let showsSymbol = stateText != nil && stateSymbol != nil
         state.stringValue = stateText ?? ""

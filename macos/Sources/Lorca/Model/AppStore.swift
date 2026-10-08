@@ -16,6 +16,8 @@ enum StoreEvent {
     case turnFinished(Chat.ID, Bot.ID, Date)
     /// A command in the chat has run long enough to count as a running task.
     case runningTasksChanged(Chat.ID)
+    /// A group's shared project context changed, here or on another Device.
+    case projectContextChanged(Chat.ID)
     case selectionChanged
     case connectionChanged
     case identityChanged
@@ -393,6 +395,11 @@ final class AppStore {
             relayError = status.error?.message
             relayURL = status.url ?? relayURL
             emit(.rosterChanged)
+
+        case "projects.changed":
+            struct ProjectChanged: Decodable { var chatId: String }
+            guard let payload = decode(ProjectChanged.self) else { return }
+            emit(.projectContextChanged(payload.chatId))
 
         case "identity.changed":
             guard let payload = decode(Wire.IdentityChanged.self) else { return }

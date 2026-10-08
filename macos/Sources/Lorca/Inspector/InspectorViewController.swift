@@ -9,7 +9,7 @@ final class InspectorViewController: NSViewController {
     private let group = SectionView(title: L("Group"))
     private let groupNameRow = EditableRow(key: L("Name"), placeholder: "")
     private let groupDescriptionRow = SummaryActionRow(key: L("Description"), value: "", actionTitle: L("Edit…"))
-    private let projectContextRow = SummaryActionRow(key: L("Project context"), value: L("Brief, decisions, and references"), actionTitle: L("Edit…"))
+    private let project = SectionView(title: L("Project"))
     private let profile = SectionView(title: L("Profile"))
     private let nameRow = EditableRow(key: L("Name"), placeholder: L("Name"))
     private let descriptionRow = SummaryActionRow(key: L("Description"), value: "", actionTitle: L("Edit…"))
@@ -29,6 +29,12 @@ final class InspectorViewController: NSViewController {
     private var memoryFetches: Set<Bot.ID> = []
     /// The bot whose plugin rows are showing, for a click on one.
     private var pluginBotID: Bot.ID?
+    /// Each group's project context as the CLI last listed it; fetched when the group shows and
+    /// again when it changes.
+    private var projectContexts: [Chat.ID: ProjectContext] = [:]
+    private var projectFetches: Set<Chat.ID> = []
+    /// The group whose Project section shows every entry rather than the first few.
+    private var projectShowingAll: Chat.ID?
 
     /// What each section last showed. The store sends events many times a turn, and a section
     /// they leave as it was keeps its rows: a new row brings new buttons, and each button sizes
@@ -82,15 +88,14 @@ final class InspectorViewController: NSViewController {
         profile.setRows([nameRow, descriptionRow])
         groupNameRow.field.alignment = .right
         groupDescriptionRow.onAction = { [weak self] in self?.editGroupDescription() }
-        projectContextRow.onAction = { [weak self] in
-            guard let self, case let .chat(chatID) = self.selection, self.store.chat(chatID)?.isGroup == true else { return }
-            self.presentAsSheet(ProjectContextViewController(chatID: chatID))
-        }
-        group.setRows([groupNameRow, groupDescriptionRow, projectContextRow])
+        group.setRows([groupNameRow, groupDescriptionRow])
+        project.setHeaderAccessory(
+            HoverButton(symbol: "plus", pointSize: 11, tooltip: L("Add to Project"), target: self, action: #selector(showProjectMenu(_:))))
 
         column.addArrangedSubview(participants)
         column.addArrangedSubview(addButton)
         column.addArrangedSubview(group)
+        column.addArrangedSubview(project)
         column.addArrangedSubview(profile)
         column.addArrangedSubview(runtime)
         column.addArrangedSubview(memory)
@@ -128,6 +133,7 @@ final class InspectorViewController: NSViewController {
             column.bottomAnchor.constraint(equalTo: documentView.bottomAnchor),
             participants.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             group.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
+            project.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             profile.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             runtime.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             memory.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
@@ -145,6 +151,9 @@ final class InspectorViewController: NSViewController {
             switch event {
             case .chatChanged, .chatsChanged, .snapshotReplaced, .rosterChanged:
                 self?.reload()
+            case let .projectContextChanged(chatID):
+                guard let self, case .chat(chatID) = self.selection else { return }
+                self.refreshProject(of: chatID)
             case let .respondingChanged(chatID):
                 // A turn ended (or started): what the bot remembers may have moved.
                 guard let self, case .chat(chatID) = self.selection, !self.store.isResponding(in: chatID) else { return }
@@ -164,6 +173,7 @@ final class InspectorViewController: NSViewController {
         isBehind = false
         reload()
         refreshShownMemory()
+        refreshShownProject()
     }
 
     override func viewDidDisappear() {
@@ -175,6 +185,7 @@ final class InspectorViewController: NSViewController {
         selection = newSelection
         reload()
         refreshShownMemory()
+        refreshShownProject()
     }
 
     /// Asks for the memory of the bot whose DM is showing.
@@ -183,6 +194,29 @@ final class InspectorViewController: NSViewController {
             let bot = store.bots(in: chat).first
         else { return }
         refreshMemory(of: bot.id)
+    }
+
+    /// Asks for the project context of the group that is showing.
+    private func refreshShownProject() {
+        guard case let .chat(chatID) = selection, store.chat(chatID)?.isGroup == true else { return }
+        refreshProject(of: chatID)
+    }
+
+    /// Asks the CLI for the group's project context and redraws the section when it answers. A
+    /// change while a fetch is on its way asks again once it lands.
+    private func refreshProject(of chatID: Chat.ID) {
+        guard isOnScreen else {
+            isBehind = true
+            return
+        }
+        guard projectFetches.insert(chatID).inserted else { return }
+        Task { [weak self] in
+            let context = try? await self?.store.projectContext(chatID)
+            guard let self else { return }
+            self.projectFetches.remove(chatID)
+            if let context { self.projectContexts[chatID] = context }
+            self.reload()
+        }
     }
 
     /// Asks the CLI for the bot's memory and redraws the section when it answers.
@@ -230,6 +264,8 @@ final class InspectorViewController: NSViewController {
         // A group's name and what it is for.
         if group.isHidden == chat.isGroup { group.isHidden = !chat.isGroup }
         if chat.isGroup { showGroup(chat, members: members) }
+        if project.isHidden == chat.isGroup { project.isHidden = !chat.isGroup }
+        if chat.isGroup { showProject(of: chat) }
 
         // A direct chat is one bot, so its profile, provider, and model are edited right here.
         let single = chat.isDM && members.count == 1
@@ -328,6 +364,105 @@ final class InspectorViewController: NSViewController {
         guard changed(group, to: [chat.id, chat.groupDescription]) else { return }
         groupDescriptionRow.setValue(chat.groupDescription)
         groupNameRow.onCommit = { [weak self] in self?.commitGroupName(of: chat.id) }
+    }
+
+    /// What every bot in the group can read: an entry a row, which opens it, the briefs and
+    /// decisions first. Past five rows the rest wait behind Show More. The title's + adds one;
+    /// with none yet, the title and its + are all the section shows.
+    private func showProject(of chat: Chat) {
+        let context = projectContexts[chat.id] ?? ProjectContext()
+        let showsAll = projectShowingAll == chat.id
+        guard changed(project, to: [chat.id, context.entries, context.conflicts, showsAll]) else { return }
+        let entries = context.entries
+        let shown = showsAll || entries.count <= 5 ? entries : Array(entries.prefix(4))
+        var rows: [NSView] = shown.map { entry in
+            // What needs the user is said after the kind, and marked in orange at the end; a
+            // title keeps the row's width.
+            let problem =
+                !context.otherVersions(of: entry.id).isEmpty ? L("Two versions")
+                : entry.freshness == "unavailable" ? L("Unavailable")
+                : nil
+            let detail = problem ?? (entry.isSuggestion ? L("Suggested by %@", entry.source.label) : entry.host)
+            // A label keeps the vibrancy it had when it went into the window, so a row that gains
+            // or loses its orange mark is a new row.
+            let row: StatusRow = keptRow("project:\(entry.id):\(problem != nil)") {
+                let row = StatusRow()
+                row.identifier = NSUserInterfaceItemIdentifier(entry.id)
+                row.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(openProjectEntry(_:))))
+                return row
+            }
+            row.configure(
+                symbol: entry.kind.symbol, title: entry.title,
+                subtitle: [entry.kind.title, detail].compactMap { $0 }.joined(separator: " · "),
+                state: problem, stateSymbol: problem == nil ? nil : "exclamationmark.circle.fill", stateColor: .systemOrange)
+            row.toolTip = entry.title
+            return row
+        }
+        if shown.count < entries.count {
+            let more: StatusRow = keptRow("project:more") {
+                let row = StatusRow()
+                row.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(showAllProject)))
+                return row
+            }
+            more.configure(symbol: "ellipsis.circle", title: L("Show %d More", entries.count - shown.count), subtitle: "", state: nil)
+            rows.append(more)
+        }
+        project.setRows(rows)
+    }
+
+    @objc private func openProjectEntry(_ sender: NSClickGestureRecognizer) {
+        guard let id = sender.view?.identifier?.rawValue, case let .chat(chatID) = selection,
+            let context = projectContexts[chatID], let entry = context.entries.first(where: { $0.id == id })
+        else { return }
+        presentAsSheet(ProjectEntryViewController(chatID: chatID, entry: entry, kind: entry.kind, otherVersions: context.otherVersions(of: id)))
+    }
+
+    @objc private func showAllProject() {
+        guard case let .chat(chatID) = selection else { return }
+        projectShowingAll = chatID
+        reload()
+    }
+
+    /// What can be added: a note of each kind, a link, or a file.
+    @objc private func showProjectMenu(_ sender: NSButton) {
+        let menu = NSMenu()
+        for kind in ProjectEntry.Kind.allCases {
+            let item = NSMenuItem(title: kind.title + "…", action: #selector(addProjectEntry(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = kind.rawValue
+            if kind == .document { menu.addItem(.separator()) }
+            menu.addItem(item)
+        }
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: sender.bounds.height + 4), in: sender)
+    }
+
+    @objc private func addProjectEntry(_ sender: NSMenuItem) {
+        guard case let .chat(chatID) = selection, let raw = sender.representedObject as? String,
+            let kind = ProjectEntry.Kind(rawValue: raw)
+        else { return }
+        guard kind == .asset else {
+            presentAsSheet(ProjectEntryViewController(chatID: chatID, entry: nil, kind: kind))
+            return
+        }
+        guard let window = view.window else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = L("Add")
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard response == .OK, let url = panel.url else { return }
+            Task { [weak self] in
+                do {
+                    try await self?.store.addProjectFile(url, to: chatID)
+                } catch {
+                    guard let window = self?.view.window else { return }
+                    let alert = NSAlert()
+                    alert.messageText = L("Couldn't add “%@”", url.lastPathComponent)
+                    alert.informativeText = error.localizedDescription
+                    alert.beginSheetModal(for: window, completionHandler: nil)
+                }
+            }
+        }
     }
 
     private func showProfile(of bot: Bot) {
