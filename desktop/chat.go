@@ -478,8 +478,11 @@ func attachmentTiles(c *ui.Context, chatID string, message *model.Message, onUse
 					// The bytes of a file sent from another Device land later; the message's
 					// change brings them in.
 					path := store.LocalFile(attachment, chatID, message.ID)
+					fileError := store.AttachmentError(attachment.ID)
 					tooltip := attachment.Name
-					if path == "" {
+					if fileError != "" {
+						tooltip = L("%@ · unavailable: %@", attachment.Name, fileError)
+					} else if path == "" {
 						tooltip = L("%@ · fetching…", attachment.Name)
 					}
 					var tile ui.Element
@@ -489,6 +492,11 @@ func attachmentTiles(c *ui.Context, chatID string, message *model.Message, onUse
 						tile.Children(func() {
 							if bitmap := loadBitmap(path); bitmap != nil {
 								ui.Image(c, bitmap).Size(w, h).Fit(ui.Cover)
+							} else if fileError != "" {
+								ui.Column(c).Padding(8).Gap(4).Children(func() {
+									ui.Text(c, attachment.Name).FontSize(11).SingleLine()
+									ui.Text(c, L("File unavailable · Retry")).FontSize(11)
+								})
 							}
 						})
 					} else {
@@ -500,13 +508,19 @@ func attachmentTiles(c *ui.Context, chatID string, message *model.Message, onUse
 							symbol(c, "doc.fill", 20, 1.8)
 							ui.Column(c).MinWidth(0).Shrink(1).Children(func() {
 								ui.Text(c, attachment.Name).FontSize(12.5).FontWeight(500).SingleLine()
-								ui.Text(c, model.SizeText(attachment.Size)).FontSize(11).Opacity(0.7)
+								text := model.SizeText(attachment.Size)
+								if fileError != "" {
+									text = L("File unavailable · Retry")
+								}
+								ui.Text(c, text).FontSize(11).Opacity(0.7)
 							})
 						})
 					}
 					tile.Label(attachment.Name).Tooltip(tooltip)
 					if tile.Clicked() && path != "" {
 						openFile(path)
+					} else if tile.Clicked() && fileError != "" {
+						store.RetryAttachment(attachment, chatID, message.ID)
 					}
 				}
 			})

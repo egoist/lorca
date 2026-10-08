@@ -1392,6 +1392,8 @@ type Message struct {
 	// Queued is a message of the user's the bot's turn holds for its next step; Send now has it
 	// read now.
 	Queued bool
+	// Output identifies an immutable published deliverable/evidence version.
+	Output *Output
 }
 
 // ReplyQuote is a message quoted by the user's reply: who wrote it and how it opens, as the CLI

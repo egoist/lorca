@@ -355,6 +355,8 @@ func (m *mainWindow) run(id string) {
 		if m.chat != nil && m.chat.chatID == m.selection.ChatID {
 			m.chat.scrollToLatest = true
 		}
+	case "outputs":
+		m.presentOutputs(m.selectedChatID())
 	case "addBot":
 		m.addBotToChat(m.selection.ChatID)
 	case "renameChat":
@@ -789,6 +791,7 @@ func (m *mainWindow) contentHeader(c *ui.Context, chatID, title, subtitle string
 			}
 			return
 		}
+		m.outputsButton(c, chatID)
 		m.runningTasksButton(c, chatID)
 		if rightmost {
 			m.inspectorToggle(c)

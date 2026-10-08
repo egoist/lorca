@@ -60,6 +60,7 @@ var commandTable = []command{
 	{id: "toggleSidebar", title: func() string { return L("Toggle Sidebar") }, accelerator: "CmdOrCtrl+B"},
 	{id: "toggleInspector", title: func() string { return L("Toggle Inspector") }, accelerator: "CmdOrCtrl+Shift+B"},
 	{id: "scrollToLatest", title: func() string { return L("Scroll to Latest") }, accelerator: "CmdOrCtrl+J", enabled: chatSelected},
+	{id: "outputs", title: func() string { return L("Outputs") }, enabled: chatSelected},
 	{id: "fullScreen", title: func() string {
 		if app.main != nil && app.main.win != nil && app.main.win.IsFullScreen() {
 			return L("Exit Full Screen")
@@ -300,7 +301,7 @@ func windowMenuBar(kind windowKind) *mygo.Menu {
 			at("find"),
 		),
 		submenu(L("View"), at("palette"), sep(), at("toggleSidebar"), at("toggleInspector"), sep(), at("scrollToLatest"), sep(), at("fullScreen")),
-		submenu(L("Chat"), at("addBot"), at("renameChat"), at("pinChat"), sep(), at("stopResponding"), at("runInBackground"), sep(), at("deleteChat")),
+		submenu(L("Chat"), at("addBot"), at("renameChat"), at("pinChat"), at("outputs"), sep(), at("stopResponding"), at("runInBackground"), sep(), at("deleteChat")),
 		submenu(L("Window"), &mygo.MenuItem{Role: mygo.RoleMinimize, Label: L("Minimize")}, &mygo.MenuItem{Role: mygo.RoleZoom, Label: L("Zoom")}),
 		submenu("Debug", at("simulateOffline"), at("replayMock"), sep(), at("showOnboarding")),
 		submenu(L("Help"), help...),

@@ -182,6 +182,7 @@ type Store struct {
 	// attachmentFiles is where each attachment's bytes are on this computer.
 	attachmentFiles    map[string]string
 	fetchingAttachment map[string]bool
+	attachmentErrors   map[string]string
 
 	mockMarketplace *Marketplace
 	mockMcp         map[string][]McpServer
@@ -208,6 +209,7 @@ func NewStore(transport Transport, post func(func()), mock bool) *Store {
 		thinkingBots:       map[string]string{},
 		attachmentFiles:    map[string]string{},
 		fetchingAttachment: map[string]bool{},
+		attachmentErrors:   map[string]string{},
 		mockMcp:            map[string][]McpServer{},
 		isBootstrapping:    true,
 	}
@@ -367,6 +369,11 @@ func (s *Store) bootstrap(generation int) {
 }
 
 func (s *Store) apply(snapshot WireSnapshot) {
+	if next := str(snapshot.IdentityID); next != s.IdentityID {
+		clear(s.attachmentFiles)
+		clear(s.fetchingAttachment)
+		clear(s.attachmentErrors)
+	}
 	has := snapshot.HasIdentity
 	s.HasIdentity = &has
 	s.IsIdentityDevice = snapshot.IsIdentityDevice
@@ -2071,20 +2078,28 @@ func (s *Store) LocalFile(attachment Attachment, chatID, messageID string) strin
 }
 
 func (s *Store) fetchAttachment(attachment Attachment, landed func()) {
-	if s.IsMock || s.fetchingAttachment[attachment.ID] {
+	if s.IsMock || s.fetchingAttachment[attachment.ID] || s.attachmentErrors[attachment.ID] != "" {
 		return
 	}
 	s.fetchingAttachment[attachment.ID] = true
+	identity := s.IdentityID
 	Async(s, func() (string, error) {
 		reply, err := call[struct {
 			Path string `json:"path"`
-		}](s, "files.path", map[string]any{"attachment": map[string]any{"id": attachment.ID, "name": attachment.Name, "mime": attachment.Mime, "size": attachment.Size}})
+		}](s, "files.path", map[string]any{"attachment": map[string]any{"id": attachment.ID, "name": attachment.Name, "mime": attachment.Mime, "size": attachment.Size}, "named": true})
+		if err == nil && reply.Path == "" {
+			err = &RequestError{L("File unavailable")}
+		}
 		return reply.Path, err
 	}, func(path string, err error) {
+		if identity != s.IdentityID {
+			return
+		}
+		delete(s.fetchingAttachment, attachment.ID)
 		if err != nil {
-			// Left in the fetching set: the relay does not have it, and every scroll would ask
-			// again. A relaunch retries.
+			s.attachmentErrors[attachment.ID] = ErrorText(err)
 			log.Printf("fetching %s failed: %s", attachment.Name, ErrorText(err))
+			landed()
 			return
 		}
 		s.attachmentFiles[attachment.ID] = path

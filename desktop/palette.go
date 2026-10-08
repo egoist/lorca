@@ -58,6 +58,7 @@ var paletteCommands = []struct{ id, symbol, keywords string }{
 	{"stopResponding", "stop.circle", "cancel interrupt"},
 	{"runInBackground", "terminal", "detach server task"},
 	{"scrollToLatest", "arrow.down.to.line", "bottom newest jump"},
+	{"outputs", "tray.full.fill", "files evidence versions results"},
 	{"toggleSidebar", "sidebar.leading", "show hide"},
 	{"toggleInspector", "sidebar.trailing", "show hide details"},
 	{"fullScreen", "arrow.up.left.and.arrow.down.right", "fullscreen"},

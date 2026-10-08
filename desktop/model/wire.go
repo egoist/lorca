@@ -172,6 +172,7 @@ type WireMessage struct {
 	} `json:"state"`
 	CreatedAt float64 `json:"created_at"`
 	Queued    *bool   `json:"queued"`
+	Output    *Output `json:"output"`
 }
 
 type WireChatUsage struct {
@@ -650,6 +651,7 @@ func ToMessage(wire WireMessage) *Message {
 		Author:    toAuthor(wire.Author),
 		CreatedAt: seconds(wire.CreatedAt),
 		Queued:    flag(wire.Queued),
+		Output:    wire.Output,
 	}
 	body := wire.Body
 	switch body.Kind {

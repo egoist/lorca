@@ -847,3 +847,5 @@
 "File unavailable: %@" = "文件不可用：%@";
 
 "%d output version" = "%d 个输出版本";
+
+"Refresh" = "刷新";
