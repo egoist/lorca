@@ -400,6 +400,11 @@ func (m *mainWindow) inspectorPlugins(c *ui.Context, bot *model.Bot) {
 			}
 			noteRow(c, k, L("No plugins on %@ yet. Add one from the marketplace, or ask %@ to find one.", name, bot.Name), nil)
 		}
+		if runner != nil && slices.ContainsFunc(plugins, func(plugin model.InstalledPlugin) bool { return plugin.ID == "playwright" }) {
+			if _, result := actionRow(c.Key("browser-sessions"), k, L("Browser Sessions"), actionRowOptions{Value: runner.Name, Tint: &p.Label2, Action: L("Manage…")}); result.Action {
+				m.presentBrowserSessions(bot.ID, m.selectedChatID())
+			}
+		}
 		if _, result := actionRow(c, k, L("Marketplace"), actionRowOptions{Tint: &p.Label2, Action: L("Add from Plugins…")}); result.Action {
 			m.presentMarketplace(bot.RunnerID)
 		}

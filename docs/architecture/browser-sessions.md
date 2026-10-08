@@ -1,6 +1,6 @@
 # Browser sessions
 
-`crates/cli/src/browser.rs` routes browser-session operations to the bot's assigned owned Runner. `browser/runner.rs` owns the persistent records, separate Playwright MCP processes, and exclusive input gates. The AppKit app sends these operations to its local CLI.
+`crates/cli/src/browser.rs` routes browser-session operations to the bot's assigned owned Runner. `browser/runner.rs` owns the persistent records, separate Playwright MCP processes, and exclusive input gates. The AppKit and native Go/MyGo desktop apps send these operations to their local CLI.
 
 ## Ownership and profiles
 
@@ -45,3 +45,5 @@ Paired control uses existing `request` and `response` sealed envelopes, checks t
 Attach Screenshot, and a successful bot `browser_take_screenshot`, create a new immutable `Body::Text` chat message with a PNG attachment and the session id. The outcome reads unverified: a screenshot captures the page and carries no automatic claim that a task passed. The CLI copies bytes into the existing private attachment store, queues the account-encrypted `file` blob before the encrypted chat message, and associates both with that chat. Paired Devices retrieve the evidence through `files.path`. Publishing introduces no task records or external uploads.
 
 The AppKit inspector's Browser Sessions sheet shows owner and Runner, account/profile choices, stable session id, control state, Open Browser, Take Over or Pause on Runner, Return to Bot, Stop Browser, and Attach Screenshot. A paired Mac states that sign-in and input happen on the assigned Runner. It refreshes while visible and does not advertise live viewing or native input.
+
+The Windows/Linux inspector opens the same controls in `desktop/sheet_browser.go`. `desktop/model/browser.go` reads the CLI's session, revision, and capability fields and sends the bound bot/chat and selected profile. Capability flags determine which actions are enabled; a missing flag grants no input. Account/profile drafts and the selected id persist across frames and refreshes with stable control keys. Replies and refresh timers use the store's ordered main-thread queue. Dismissal stops polling and ignores late replies; a later Stop invalidates older takeover/open callbacks, completed actions discard older polls, and a changed Runner assignment disables the sheet's actions. The in-process demo retains synthetic profiles in memory, opens no browser, and produces no screenshot evidence.

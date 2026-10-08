@@ -185,6 +185,7 @@ type Store struct {
 
 	mockMarketplace *Marketplace
 	mockMcp         map[string][]McpServer
+	mockBrowser     map[string][]BrowserSession
 }
 
 type pendingEvent struct {
@@ -2473,6 +2474,7 @@ func (s *Store) ResetMockData() {
 		}
 	}
 	s.Devices = mockDevices()
+	s.mockBrowser = nil
 	s.Bots = mockBots()
 	s.Chats = mockChats()
 	s.Routines = mockRoutines()
