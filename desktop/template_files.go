@@ -1,0 +1,69 @@
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/egoist/mygo"
+)
+
+// These feature-specific hooks use system dialogs in the app and deterministic choices in
+// native tester fixtures. They return paths only; the CLI reads/writes the private template.
+var chooseTemplateSource = openTemplateSource
+var chooseTemplateDestination = saveTemplateDestination
+
+func openTemplateSource(parent *mygo.Window, done func(string, error)) {
+	options := mygo.OpenDialogOptions{Parent: parent, Title: L("Import Bot Template"), Filters: []mygo.FileFilter{{Name: L("Bot templates"), Extensions: []string{"lorca-template"}}}}
+	go func() {
+		paths, err := mygo.Dialog.Open(options)
+		path := ""
+		if len(paths) > 0 {
+			path = paths[0]
+		}
+		post(func() { done(path, err) })
+	}()
+}
+
+func saveTemplateDestination(parent *mygo.Window, name string, done func(string, error)) {
+	options := mygo.SaveDialogOptions{Parent: parent, Title: L("Save Private Template"), DefaultPath: templateFilename(name), Filters: []mygo.FileFilter{{Name: L("Bot templates"), Extensions: []string{"lorca-template"}}}}
+	go func() {
+		path, err := mygo.Dialog.Save(options)
+		post(func() { done(path, err) })
+	}()
+}
+
+func templateFilename(name string) string {
+	name = strings.Map(func(r rune) rune {
+		if r < 32 || strings.ContainsRune(`<>:"/\|?*`, r) {
+			return '-'
+		}
+		return r
+	}, name)
+	name = strings.Trim(name, " .")
+	if name == "" {
+		name = "bot"
+	}
+	stem := strings.ToUpper(strings.SplitN(name, ".", 2)[0])
+	if stem == "CON" || stem == "PRN" || stem == "AUX" || stem == "NUL" ||
+		(len(stem) == 4 && (strings.HasPrefix(stem, "COM") || strings.HasPrefix(stem, "LPT")) && stem[3] >= '1' && stem[3] <= '9') {
+		name = "bot-" + name
+	}
+	return name + ".lorca-template"
+}
+
+// Native Save confirms an existing path. If adding the required extension selects a different
+// existing path, the sheet explicitly asks before replacing that file too.
+func templateDestination(path string) (normalized string, exists, needsConfirmation bool) {
+	normalized = path
+	if !strings.HasSuffix(path, ".lorca-template") {
+		if strings.EqualFold(filepath.Ext(path), ".lorca-template") {
+			normalized = strings.TrimSuffix(path, filepath.Ext(path)) + ".lorca-template"
+		} else {
+			normalized += ".lorca-template"
+		}
+	}
+	_, err := os.Lstat(normalized)
+	exists = err == nil
+	return normalized, exists, exists && normalized != path
+}

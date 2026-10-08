@@ -188,6 +188,9 @@ func (m *mainWindow) inspectorProfile(c *ui.Context, bot *model.Bot) {
 		if summaryActionRow(c, k, L("Description"), bot.Description, L("Edit…")) {
 			m.presentBotDescription(bot.ID)
 		}
+		if _, result := actionRow(c.Key("template-export"), k, L("Template"), actionRowOptions{Action: L("Export…")}); result.Action {
+			m.presentTemplateExport(bot.ID)
+		}
 	})
 }
 

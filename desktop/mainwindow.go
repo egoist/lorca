@@ -333,6 +333,8 @@ func (m *mainWindow) run(id string) {
 	switch id {
 	case "newBot":
 		m.newBot()
+	case "importBotTemplate":
+		m.presentTemplateImport(func(chatID string) { m.selectChat(chatID) })
 	case "newGroupChat":
 		m.newGroupChat()
 	case "marketplace":
