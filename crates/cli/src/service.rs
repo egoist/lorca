@@ -32,18 +32,11 @@ pub struct Status {
     pub log: String,
 }
 
-/// Read-only service discovery, here or in a sealed request to the assigned Runner.
+/// `device.service_status`: whether the service is installed and running here, for the apps'
+/// Device pane, on this Device or in a sealed request to a Runner.
 pub fn status_out(config: &Config) -> Result<serde_json::Value, String> {
     let status = status(config);
-    Ok(serde_json::json!({
-        "installed": status.installed,
-        "running_pid": status.running,
-        "supervised": supervised(),
-        "log": status.log,
-        "install_command": "lorca service install",
-        "status_command": "lorca service status",
-        "detail": "Install the standalone CLI service on an owned computer that stays powered on. Quit the app or lorca serve before installing. The bot stays assigned to this Runner.",
-    }))
+    Ok(serde_json::json!({ "installed": status.installed, "running": status.running.is_some() }))
 }
 
 /// The binary the service runs: this one, through any symlink to it.

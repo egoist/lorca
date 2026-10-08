@@ -251,7 +251,6 @@ impl App {
         let plugins = crate::plugins::Store::load(&config);
         let marketplace = crate::marketplace::Updates::load(&config);
         let store = LocalStore::open(&config.database_path())?;
-        store.set_routine_runtime_key(machine.as_ref().and_then(|machine| machine.dek().ok()));
         let mut state = store.load_state()?;
         for bot in &mut state.bots {
             bot.normalize_description();
@@ -337,7 +336,6 @@ impl App {
 
     pub fn save_machine(&self) -> anyhow::Result<()> {
         let machine = self.machine.lock().unwrap().clone();
-        self.store.set_routine_runtime_key(machine.as_ref().and_then(|machine| machine.dek().ok()));
         match machine {
             Some(machine) => config::write_json_private(&self.config.machine_path(), &machine),
             None => Ok(()),
@@ -1350,22 +1348,34 @@ impl App {
         Ok(routine)
     }
 
-    /// Changes a routine and publishes the roster.
+    /// Changes a routine, saves it, and publishes the roster.
     pub fn update_routine(&self, id: &str, update: impl FnOnce(&mut Routine)) -> anyhow::Result<Routine> {
+        self.change_routine(id, true, update)
+    }
+
+    /// Changes a routine and saves it without publishing: what only its Runner needs at once (a
+    /// due time it took, one more quiet check) goes up with the next roster change.
+    pub fn record_routine(&self, id: &str, update: impl FnOnce(&mut Routine)) -> anyhow::Result<Routine> {
+        self.change_routine(id, false, update)
+    }
+
+    /// The change is saved before anything acts on it, even during a relay bulk pull: one that
+    /// can't be saved is taken back, so the scheduler admits no work a restart would not know of.
+    fn change_routine(&self, id: &str, upload: bool, update: impl FnOnce(&mut Routine)) -> anyhow::Result<Routine> {
         let routine = {
             let mut state = self.state.lock().unwrap();
             let index = state.routines.iter().position(|routine| routine.id == id).ok_or_else(|| anyhow::anyhow!("Unknown routine"))?;
             let previous = state.routines[index].clone();
             update(&mut state.routines[index]);
-            // Admission checkpoints and health commit before publishing, even during a
-            // bulk relay pull. A failed write does not admit uncheckpointed work.
             if let Err(error) = self.store.save_state(&state) {
                 state.routines[index] = previous;
                 return Err(error);
             }
             state.routines[index].clone()
         };
-        self.push_roster();
+        if upload {
+            self.push_roster();
+        }
         self.emit(self.roster_summary());
         Ok(routine)
     }
@@ -1397,40 +1407,36 @@ impl App {
     fn routine_out_with_state(&self, routine: &Routine, state: &State) -> Value {
         let mut out = serde_json::to_value(routine).unwrap_or_default();
         out["schedule_text"] = json!(crate::schedule::parse(&routine.schedule).map(|s| s.describe()).unwrap_or_else(|_| routine.schedule.clone()));
-        out["next_run_at"] = json!(crate::routines::next_run_shown(self, routine).map(|t| t as f64));
-        out["next_run_text"] = json!(routine.next_run_at().and_then(|at| crate::schedule::when_in(at, &routine.timezone)));
+        out["next_run_at"] = json!(crate::routines::next_run_shown(routine).map(|t| t as f64));
         let running = self.is_routine_running(&routine.id);
-        let runner = state.bots.iter().find(|bot| bot.id == routine.bot_id).map(|bot| bot.runner_id.as_str());
-        let available = runner.is_some_and(|id| self.this_device_id().as_deref() == Some(id) || state.device_online.contains(id));
         out["is_running"] = json!(running);
-        out["runner_id"] = json!(runner);
-        out["runner_available"] = json!(available);
-        let health = routine.health.as_ref();
-        let status = if routine.paused_reason.as_deref() == Some("authentication") {
+        out["state"] = json!(self.routine_state(routine, state, running));
+        out
+    }
+
+    /// How a routine stands, for the apps: `running`; `blocked`, paused until a sign-in (with
+    /// `paused_reason: authentication`) or with a check that tried to change something;
+    /// `paused`; `waiting_for_runner`, while its Runner is offline, since no other Runner takes
+    /// it over; `failed`, while its checks or runs fail and it tries again; else `on`.
+    fn routine_state(&self, routine: &Routine, state: &State, running: bool) -> &'static str {
+        use crate::routine_health::CheckStatus;
+        let runner = state.bots.iter().find(|bot| bot.id == routine.bot_id).map(|bot| bot.runner_id.as_str());
+        let online = runner.is_some_and(|id| self.this_device_id().as_deref() == Some(id) || state.device_online.contains(id));
+        if running {
+            "running"
+        } else if routine.paused_reason.as_deref() == Some("authentication") {
             "blocked"
         } else if !routine.is_enabled {
             "paused"
-        } else if !available {
+        } else if !online {
             "waiting_for_runner"
-        } else if running {
-            "running"
         } else {
-            match health.and_then(|health| health.model.status.or(health.status)) {
-                Some(crate::routine_health::CheckStatus::Quiet) => "quiet",
-                Some(crate::routine_health::CheckStatus::Failed) => "failed",
-                Some(crate::routine_health::CheckStatus::Blocked) => "blocked",
-                _ if routine.last_outcome.as_deref() == Some("error") => "failed",
-                _ => "ready",
+            match routine.health.as_ref().and_then(|health| health.model.status.or(health.status)) {
+                Some(CheckStatus::Failed) => "failed",
+                Some(CheckStatus::Blocked) => "blocked",
+                _ => "on",
             }
-        };
-        out["state"] = json!(status);
-        out["recovery_action"] = if status == "waiting_for_runner" {
-            json!("Start Lorca or lorca serve on the assigned Runner. For an owned computer that stays available, install the CLI service with lorca service install.")
-        } else {
-            json!(health.and_then(|health| health.model.recovery_action.as_deref().or(health.recovery_action.as_deref())))
-        };
-        out["retry_at"] = json!(health.map(|health| health.retry_at.unwrap_or(0.0).max(health.model.retry_at.unwrap_or(0.0))).filter(|at| *at > 0.0));
-        out
+        }
     }
 
     /// The local app says which chat the user is looking at (`None` when it is not frontmost).

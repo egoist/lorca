@@ -1,5 +1,6 @@
-//! Durable routine check health and bounded recovery policy. Health contains safe categories,
-//! never tool output or credentials; the roster encrypts it for every paired Device.
+//! How a routine's checks and runs have gone, kept by its Runner: when a check last ran and last
+//! succeeded, failure streaks by kind, and when to try again. It holds categories, never what a
+//! tool said or a credential; the roster carries it, encrypted, to every paired Device.
 
 use serde::{Deserialize, Serialize};
 
@@ -46,8 +47,7 @@ pub struct CheckHealth {
     #[serde(default)]
     pub authentication_failures: u32,
     pub retry_at: Option<f64>,
-    pub recovery_action: Option<String>,
-    /// A successful quiet check does not clear a model provider's failure streak.
+    /// The runs' own streak with the model provider, which a quiet check does not clear.
     #[serde(default)]
     pub model: ModelHealth,
 }
@@ -55,14 +55,20 @@ pub struct CheckHealth {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct ModelHealth {
     pub status: Option<CheckStatus>,
+    #[serde(default)]
     pub connection_failures: u32,
+    #[serde(default)]
     pub authentication_failures: u32,
     pub retry_at: Option<f64>,
-    pub recovery_action: Option<String>,
 }
 
 impl ModelHealth {
+    /// A run failed to reach or sign in to its provider. Other failures (a refusal, a bad
+    /// answer) show as the run's outcome and leave the streak alone.
     pub fn record_failure(&mut self, at: f64, failure: Failure) {
+        if !matches!(failure, Failure::Connection | Failure::Authentication) {
+            return;
+        }
         let mut health = CheckHealth {
             connection_failures: self.connection_failures,
             authentication_failures: self.authentication_failures,
@@ -73,7 +79,6 @@ impl ModelHealth {
         self.connection_failures = health.connection_failures;
         self.authentication_failures = health.authentication_failures;
         self.retry_at = health.retry_at;
-        self.recovery_action = health.recovery_action;
     }
 }
 
@@ -139,11 +144,15 @@ pub fn classify(error: &str) -> Failure {
 }
 
 impl CheckHealth {
+    /// The later of the check's and the runs' retry times, while either backs off.
+    pub fn retry_at(&self) -> Option<f64> {
+        self.retry_at.into_iter().chain(self.model.retry_at).reduce(f64::max)
+    }
+
     pub fn record(&mut self, at: f64, found: bool, failure: Option<Failure>) {
         self.updated_at = at;
         self.last_check_at = Some(at);
         self.retry_at = None;
-        self.recovery_action = None;
         match failure {
             None => {
                 self.last_success_at = Some(at);
@@ -164,14 +173,12 @@ impl CheckHealth {
                     CheckStatus::Failed
                 });
                 self.retry_at = Some(at + backoff(self.authentication_failures) as f64);
-                self.recovery_action = Some("Reconnect the provider in Settings or sign in to the integration on the assigned Runner, then resume this routine.".into());
             }
             Some(Failure::Connection) => {
                 self.authentication_failures = 0;
                 self.connection_failures = self.connection_failures.saturating_add(1);
                 self.status = Some(CheckStatus::Failed);
                 self.retry_at = Some(at + backoff(self.connection_failures) as f64);
-                self.recovery_action = Some("Check the connection on the assigned Runner. The routine retries automatically after its backoff.".into());
             }
             Some(failure) => {
                 self.connection_failures = 0;
@@ -181,8 +188,6 @@ impl CheckHealth {
                 } else {
                     CheckStatus::Failed
                 });
-                self.recovery_action =
-                    Some("Ask the bot to fix its check; checks use read-only tools.".into());
             }
         }
     }
@@ -191,7 +196,6 @@ impl CheckHealth {
         self.connection_failures = 0;
         self.authentication_failures = 0;
         self.retry_at = None;
-        self.recovery_action = None;
         self.status = None;
         self.model = Default::default();
     }
@@ -238,11 +242,6 @@ mod tests {
             assert_eq!(health.authentication_failures, attempt);
         }
         assert_eq!(health.status, Some(CheckStatus::Blocked));
-        assert!(health
-            .recovery_action
-            .as_deref()
-            .unwrap()
-            .contains("resume"));
         health.resume();
         assert_eq!(
             (
@@ -278,5 +277,8 @@ mod tests {
         assert_eq!(health.status, Some(CheckStatus::Quiet));
         assert_eq!(health.model.status, Some(CheckStatus::Blocked));
         assert_eq!(health.model.authentication_failures, 3);
+        let before = health.model.clone();
+        health.model.record_failure(4.0, classify("The model refused the request"));
+        assert_eq!(health.model, before, "only connection and sign-in failures count for a run");
     }
 }

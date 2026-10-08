@@ -645,14 +645,17 @@ pub struct Routine {
     pub prompt: String,
     /// `every 30m`, `every 2h`, `every 1d`, or five cron fields in `timezone`.
     pub schedule: String,
-    #[serde(default = "crate::schedule::default_timezone")]
+    /// The IANA timezone a cron schedule reads in: the Runner's when the routine was made,
+    /// unless the bot named another.
+    #[serde(default = "crate::schedule::local_timezone")]
     pub timezone: String,
+    /// What a Runner that was off at a due time does when it is back: one run, or none.
     #[serde(default)]
     pub missed_run_policy: crate::routine_health::MissedRunPolicy,
-    /// The last scheduled occurrence admitted or skipped; independent of model runs.
+    /// The last due time the Runner took or skipped, so a restart neither repeats nor drops it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_scheduled_at: Option<f64>,
-    /// Check health written by the assigned Runner and persisted with the encrypted roster.
+    /// How the routine's checks and runs have gone, as its Runner records them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub health: Option<crate::routine_health::CheckHealth>,
     pub is_enabled: bool,
@@ -675,9 +678,11 @@ pub struct Routine {
 }
 
 impl Routine {
-    /// The time the next run counts from: the last run, else when the routine was armed.
+    /// The time the next run counts from: the last run, due time taken, or check, else when the
+    /// routine was armed.
     pub fn anchor(&self) -> i64 {
-        self.last_run_at.unwrap_or(0.0)
+        self.last_run_at
+            .unwrap_or(0.0)
             .max(self.last_scheduled_at.unwrap_or(0.0))
             .max(self.health.as_ref().and_then(|health| health.last_check_at).unwrap_or(0.0))
             .max(self.enabled_at) as i64
@@ -694,8 +699,9 @@ impl Routine {
         if !self.is_enabled {
             return None;
         }
-        let next = crate::schedule::parse(&self.schedule).ok()?.next_after_in(since.max(self.anchor()), &self.timezone)?;
-        let retry = self.health.as_ref().map(|health| health.retry_at.unwrap_or(0.0).max(health.model.retry_at.unwrap_or(0.0))).unwrap_or(0.0);
+        let next = crate::schedule::parse(&self.schedule).ok()?.next_after(since.max(self.anchor()), &self.timezone)?;
+        // After a failure that backs off, no sooner than the retry.
+        let retry = self.health.as_ref().and_then(|health| health.retry_at()).unwrap_or(0.0);
         Some(next.max(retry as i64))
     }
 }

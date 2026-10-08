@@ -545,7 +545,7 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             routines::run_now(app, &string(&params, "id")?)?;
             Ok(Value::Null)
         }
-        "routines.describe" => routines::describe_with_policy(&string(&params, "schedule")?, params["timezone"].as_str(), params["missed_run_policy"].as_str()),
+        "routines.describe" => routines::describe(&string(&params, "schedule")?, params["timezone"].as_str(), params["missed_run_policy"].as_str()),
         "device.service_status" => {
             let runner = opt_string(&params, "id").or_else(|| app.this_device_id()).ok_or("No identity on this Device")?;
             if app.this_device_id().as_deref() == Some(&runner) {

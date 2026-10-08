@@ -41,6 +41,8 @@ pub fn create(app: &Arc<App>, bot_id: &str, name: &str, schedule_text: &str, pro
     create_with_policy(app, bot_id, name, schedule_text, prompt, check, enabled, None, None)
 }
 
+/// `create` with a timezone (this Runner's when `None`) and a missed-run policy (one run when
+/// `None`).
 #[allow(clippy::too_many_arguments)]
 pub fn create_with_policy(app: &Arc<App>, bot_id: &str, name: &str, schedule_text: &str, prompt: &str, check: Option<&str>, enabled: bool, timezone: Option<&str>, missed_run_policy: Option<&str>) -> Result<Routine, String> {
     let name = clean_name(name)?;
@@ -50,7 +52,10 @@ pub fn create_with_policy(app: &Arc<App>, bot_id: &str, name: &str, schedule_tex
     }
     let check = check.map(clean_check).transpose()?.flatten();
     let schedule = schedule::parse(schedule_text)?;
-    let timezone = schedule::timezone(timezone.unwrap_or("UTC"))?.to_string();
+    let timezone = match timezone {
+        Some(zone) => schedule::timezone(zone)?.to_string(),
+        None => schedule::local_timezone(),
+    };
     let missed_run_policy = missed_run_policy.map(crate::routine_health::MissedRunPolicy::parse).transpose()?.unwrap_or_default();
     if app.bot(bot_id).is_none() {
         return Err("Unknown bot".into());
@@ -90,6 +95,7 @@ pub fn edit(app: &Arc<App>, id: &str, name: Option<&str>, schedule_text: Option<
     edit_with_policy(app, id, name, schedule_text, prompt, check, None, None)
 }
 
+/// `edit` with a new timezone or missed-run policy as well. A new zone counts from now.
 #[allow(clippy::too_many_arguments)]
 pub fn edit_with_policy(app: &Arc<App>, id: &str, name: Option<&str>, schedule_text: Option<&str>, prompt: Option<&str>, check: Option<&str>, timezone: Option<&str>, missed_run_policy: Option<&str>) -> Result<Routine, String> {
     let current = app.routine(id).ok_or("Unknown routine")?;
@@ -215,28 +221,21 @@ fn clean_name(name: &str) -> Result<String, String> {
     Ok(name)
 }
 
-/// The schedule in words and the next firing from now, for a caller that wants to check a
-/// schedule before saving it.
-pub fn describe(schedule_text: &str) -> Result<Value, String> {
-    describe_in(schedule_text, None)
-}
-
-pub fn describe_in(schedule_text: &str, timezone: Option<&str>) -> Result<Value, String> {
-    describe_with_policy(schedule_text, timezone, None)
-}
-
-pub fn describe_with_policy(schedule_text: &str, timezone: Option<&str>, missed_run_policy: Option<&str>) -> Result<Value, String> {
+/// The schedule in words and the next firing from now, in `timezone` (this Runner's when
+/// `None`), for a caller that wants to check a schedule and its policy before saving them.
+pub fn describe(schedule_text: &str, timezone: Option<&str>, missed_run_policy: Option<&str>) -> Result<Value, String> {
     let schedule = schedule::parse(schedule_text)?;
-    let timezone = schedule::timezone(timezone.unwrap_or("UTC"))?.to_string();
+    let timezone = match timezone {
+        Some(zone) => schedule::timezone(zone)?.to_string(),
+        None => schedule::local_timezone(),
+    };
     let missed_run_policy = missed_run_policy.map(crate::routine_health::MissedRunPolicy::parse).transpose()?.unwrap_or_default();
-    let next = schedule.next_after_in(now_unix(), &timezone);
     Ok(serde_json::json!({
         "schedule": schedule.canonical(),
         "text": schedule.describe(),
         "timezone": timezone,
         "missed_run_policy": missed_run_policy,
-        "next_run_at": next.map(|t| t as f64),
-        "next_run_text": next.and_then(|at| schedule::when_in(at, &timezone)),
+        "next_run_at": schedule.next_after(now_unix(), &timezone).map(|t| t as f64),
     }))
 }
 
@@ -247,7 +246,7 @@ pub fn describe_with_policy(schedule_text: &str, timezone: Option<&str>, missed_
 pub fn run_now(app: &Arc<App>, id: &str) -> Result<(), String> {
     let routine = app.routine(id).ok_or("Unknown routine")?;
     if routine.paused_reason.as_deref() == Some("authentication") {
-        return Err("Reconnect the provider or integration on the assigned Runner, then resume the routine.".into());
+        return Err(signed_out_text(&routine));
     }
     if app.is_routine_running(&routine.id) {
         return Err(format!("{} is running right now.", routine.name));
@@ -255,6 +254,11 @@ pub fn run_now(app: &Arc<App>, id: &str) -> Result<(), String> {
     let job = job_for(app, &routine)?;
     runtime::start_turn(app, job);
     Ok(())
+}
+
+/// Why a routine paused by failed sign-ins does not run, and what brings it back.
+pub fn signed_out_text(routine: &Routine) -> String {
+    format!("{} is paused after three failed sign-ins in a row. Reconnect, then resume it.", routine.name)
 }
 
 /// The job that runs a routine: a `routine` turn in the bot's direct chat.
@@ -294,21 +298,28 @@ pub fn finished(app: &Arc<App>, id: &str, outcome: TurnOutcome) {
     let _ = app.update_routine(id, |routine| routine.last_outcome = Some(outcome.into()));
 }
 
-/// Model transport health uses the same recovery guard without changing check timestamps.
-/// Called once after the provider's own request retries finish.
+/// A run ended, after the provider's own retries: a failure to reach or sign in to the provider
+/// counts in the runs' streak (never in the checks'), and three failed sign-ins in a row pause
+/// the routine until it is resumed. Anything else leaves the streak as it was.
 pub fn model_result(app: &App, id: &str, error: Option<&str>) {
+    let Some(routine) = app.routine(id) else { return };
+    let before = routine.health.as_ref().map(|health| health.model.clone()).unwrap_or_default();
+    let mut model = before.clone();
+    match error {
+        Some(error) => model.record_failure(now_secs(), crate::routine_health::classify(error)),
+        None => model = Default::default(),
+    }
+    if model == before {
+        return;
+    }
     let _ = app.update_routine(id, |routine| {
         let health = routine.health.get_or_insert_with(Default::default);
-        if let Some(error) = error {
-            health.model.record_failure(now_secs(), crate::routine_health::classify(error));
-            if health.model.authentication_failures >= 3 {
-                routine.is_enabled = false;
-                routine.paused_reason = Some("authentication".into());
-            }
-        } else {
-            health.model = Default::default();
-        }
+        health.model = model;
         health.updated_at = now_secs();
+        if health.model.authentication_failures >= 3 {
+            routine.is_enabled = false;
+            routine.paused_reason = Some("authentication".into());
+        }
     });
 }
 
@@ -330,7 +341,7 @@ pub fn tick(app: &Arc<App>) {
     let enabled: Vec<Routine> = app.state.lock().unwrap().routines.iter().filter(|r| r.is_enabled).cloned().collect();
     let due: Vec<Routine> = enabled
         .into_iter()
-        .filter(|r| due_at(app, r).is_some_and(|t| t <= now))
+        .filter(|r| r.next_run_at().is_some_and(|t| t <= now))
         .filter(|r| app.bot(&r.bot_id).is_some_and(|b| b.runner_id == this) && !app.is_routine_running(&r.id) && !app.routine_checks.is_running(&r.id))
         .collect();
     if due.is_empty() {
@@ -341,9 +352,11 @@ pub fn tick(app: &Arc<App>) {
         return;
     }
     for routine in due {
-        let due_at = due_at(app, &routine).unwrap_or(now);
-        if let Err(error) = app.update_routine(&routine.id, |routine| routine.last_scheduled_at = Some(now as f64)) {
-            tracing::error!(%error, routine = %routine.name, "persisting routine admission checkpoint");
+        // The due time is taken before any work starts, so a restart neither runs it again nor
+        // runs it late; with `skip`, one more than a minute late is only taken.
+        let due_at = routine.next_run_at().unwrap_or(now);
+        if let Err(error) = app.record_routine(&routine.id, |routine| routine.last_scheduled_at = Some(now as f64)) {
+            tracing::error!(%error, routine = %routine.name, "saving a routine's due time");
             continue;
         }
         if routine.missed_run_policy.should_skip(due_at, now) {
@@ -414,35 +427,43 @@ impl Checks {
     }
 }
 
-/// A check ended: persist its independent health and publish the next check to every Device.
+/// A check ended: its health is saved, so the schedule counts from it after a restart too. The
+/// roster goes up when the check changed how the routine stands (it failed, or passed after a
+/// failure); a quiet check after another changes nothing the other Devices show.
 #[cfg(feature = "runner")]
 fn checked(app: &App, routine: &Routine, run: &CheckRun) -> Result<(), String> {
     let failure = run.error.as_deref().map(crate::routine_health::classify);
-    let saved = app.update_routine(&routine.id, |current| {
+    let mut changed = false;
+    let saved = app.record_routine(&routine.id, |current| {
         if current.check != routine.check || current.enabled_at > routine.enabled_at {
             return;
         }
         let health = current.health.get_or_insert_with(Default::default);
+        let before = health.status;
         health.record(now_secs(), run.found.is_some(), failure);
+        changed = failure.is_some() || health.status != before;
         if health.authentication_failures >= 3 {
             current.is_enabled = false;
             current.paused_reason = Some("authentication".into());
         }
     });
     app.routine_checks.finish(&routine.id);
-    saved.map(|_| ()).map_err(|error| format!("Could not persist routine check health: {error}"))
+    if saved.is_ok() && changed {
+        app.push_roster();
+    }
+    saved.map(|_| ()).map_err(|error| format!("Could not save the routine's check: {error}"))
 }
 
-/// When this Runner runs the routine next: its schedule from the last run, or from the last
-/// check here, which counts as a run whether or not it started one.
-#[cfg(feature = "runner")]
-fn due_at(_app: &App, routine: &Routine) -> Option<i64> {
-    routine.next_run_at()
-}
-
-/// Every Device and bot reads the same next occurrence from the persisted checkpoint.
-pub fn next_run_shown(_app: &App, routine: &Routine) -> Option<i64> {
-    routine.next_run_at()
+/// When the routine runs next, as the apps and the bot say it. The Runner uploads a quiet check
+/// only when it changes how the routine stands, so elsewhere a routine with a check can look
+/// past due while its Runner has been checking: it is shown due at its next schedule time.
+pub fn next_run_shown(routine: &Routine) -> Option<i64> {
+    let next = routine.next_run_at()?;
+    let now = now_unix();
+    if routine.check.is_some() && next <= now {
+        return schedule::parse(&routine.schedule).ok().and_then(|schedule| schedule.next_after(now, &routine.timezone)).or(Some(next));
+    }
+    Some(next)
 }
 
 /// Runs a due routine's check, then the routine when the check found something or failed. A
@@ -855,16 +876,16 @@ mod tests {
         assert_eq!(incoming[0].check.as_deref(), Some("return 9"));
     }
 
-    /// Every Device shows the persisted due time, including a past-due occurrence.
+    /// A Device other than the Runner hears of a quiet check only when it changes how the
+    /// routine stands, so a routine with a check that is past due is shown due at its next
+    /// schedule time.
     #[test]
-    fn a_routine_with_a_check_shows_its_persisted_due_time() {
-        let scratch = scratch_app();
-        let app = &scratch.0;
+    fn a_routine_with_a_check_is_shown_due_from_now() {
         let mut routine = plain("r1", "b1", Some("return null"));
         routine.enabled_at = now_secs() - 7200.0;
-        assert!(next_run_shown(app, &routine).unwrap() <= now_unix(), "the persisted anchor is shown on every Device");
+        assert!(next_run_shown(&routine).unwrap() > now_unix());
         routine.check = None;
-        assert!(next_run_shown(app, &routine).unwrap() <= now_unix(), "a routine without one shows when it was due");
+        assert!(next_run_shown(&routine).unwrap() <= now_unix(), "a routine without one shows when it was due");
     }
 
     #[cfg(feature = "runner")]
@@ -925,8 +946,8 @@ mod tests {
         let checked_at = app.routine(&quiet.id).unwrap().health.unwrap().last_check_at.unwrap() as i64;
         let after = app.routine(&quiet.id).unwrap();
         assert_eq!((after.last_run_at, after.last_outcome.as_deref()), (None, None), "a check is not a run");
-        assert_eq!(due_at(app, &after), after.next_run_after(checked_at));
-        assert!(due_at(app, &after).unwrap() > now_unix() + 500);
+        assert_eq!(after.next_run_at(), after.next_run_after(checked_at));
+        assert!(after.next_run_at().unwrap() > now_unix() + 500);
         let dm = app.dm_with("b1", None).unwrap();
         assert!(app.messages(&dm.meta.id).is_empty(), "no marker, no turn");
         // The roster event carries the persisted next check to apps.
@@ -976,7 +997,7 @@ mod tests {
         let checked = waiting.await.unwrap();
         assert_eq!(checked.found.as_deref(), Some("new"), "{}", checked.result);
         assert!(!app.routine_checks.is_running(&watch.id));
-        assert!(due_at(app, &app.routine(&watch.id).unwrap()).unwrap() > now_unix() + 500, "the schedule counts from it");
+        assert!(app.routine(&watch.id).unwrap().next_run_at().unwrap() > now_unix() + 500, "the schedule counts from it");
     }
 
     #[cfg(feature = "runner")]
@@ -995,22 +1016,23 @@ mod tests {
         let runner = app.bot("b1").unwrap().runner_id;
         assert!(create_with_policy(app, "b1", "Bad", "0 9 * * *", "x", None, true, Some("Mars/Base"), None).is_err());
         assert!(create_with_policy(app, "b1", "Bad", "0 9 * * *", "x", None, true, None, Some("catch_up")).is_err());
+        let local = create(app, "b1", "Here", "0 9 * * *", "x", None, true).unwrap();
+        assert_eq!(local.timezone, schedule::local_timezone(), "a routine keeps the Runner's zone from its creation on");
         let routine = create_with_policy(app, "b1", "Brief", "0 9 * * *", "x", None, true, Some("America/New_York"), Some("skip")).unwrap();
         assert_eq!(routine.timezone, "America/New_York");
-        assert_eq!(app.routine_out(&routine)["runner_id"], runner);
+        assert_eq!(app.routine_out(&routine)["state"], "on");
         let edited = edit_with_policy(app, &routine.id, None, None, None, None, Some("Asia/Singapore"), Some("coalesce")).unwrap();
         assert_eq!(edited.timezone, "Asia/Singapore");
         assert_eq!(app.bot("b1").unwrap().runner_id, runner);
         app.state.lock().unwrap().bots[0].runner_id = "offline-runner".into();
-        let out = app.routine_out(&edited);
-        assert_eq!(out["state"], "waiting_for_runner");
-        assert_eq!(out["runner_available"], false);
-        assert!(out["recovery_action"].as_str().unwrap().contains("service install"));
+        assert_eq!(app.routine_out(&edited)["state"], "waiting_for_runner", "no other Runner takes it over");
     }
 
+    /// Check health survives a restart, and the roster carries it to the other Devices when it
+    /// changes how the routine stands; one more quiet check uploads nothing.
     #[cfg(feature = "runner")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn quiet_health_survives_restart_and_syncs_encrypted() {
+    async fn quiet_health_survives_restart_and_syncs_when_it_changes() {
         let scratch = scratch_app();
         let app = &scratch.0;
         let routine = create(app, "b1", "Quiet", "every 10m", "x", Some("return null"), true).unwrap();
@@ -1026,18 +1048,16 @@ mod tests {
         assert_eq!(restarted.routine(&routine.id).unwrap(), after);
         tick(&restarted);
         assert!(!restarted.routine_checks.is_running(&routine.id), "not checked again after restart");
-        assert_eq!(restarted.routine(&routine.id).unwrap().health, after.health);
-        let blob = app.store.outbox().unwrap().into_iter().find(|blob| blob.kind == "roster").unwrap();
-        let roster: RosterBlob = crate::crypto::decrypt_json(&app.dek().unwrap(), "roster", &blob.ciphertext).unwrap();
-        assert_eq!(roster.routines[0].health, after.health);
-        assert!(crate::crypto::decrypt_json::<RosterBlob>(&[0; 32], "roster", &blob.ciphertext).is_err());
-        let connection = rusqlite::Connection::open(app.config.database_path()).unwrap();
-        let definition: String = connection.query_row("SELECT json FROM routines WHERE id = ?1", [&routine.id], |row| row.get(0)).unwrap();
-        assert!(!definition.contains("last_success_at"), "runtime health is absent from plaintext definitions");
-        let ciphertext: Vec<u8> = connection.query_row("SELECT ciphertext FROM routine_runtime WHERE id = ?1", [&routine.id], |row| row.get(0)).unwrap();
-        assert!(!String::from_utf8_lossy(&ciphertext).contains("last_success_at"));
-        assert!(crate::crypto::decrypt(&app.dek().unwrap(), &format!("routine-runtime:{}", routine.id), &ciphertext).is_ok());
-        assert!(crate::crypto::decrypt(&app.dek().unwrap(), "routine-runtime:other", &ciphertext).is_err());
+        let roster = || app.store.outbox().unwrap().into_iter().find(|blob| blob.kind == "roster").unwrap().ciphertext;
+        let uploaded: RosterBlob = crate::crypto::decrypt_json(&app.dek().unwrap(), "roster", &roster()).unwrap();
+        assert_eq!(uploaded.routines[0].health, after.health, "the first quiet check goes up");
+        let before = roster();
+        check_now(app, &after, &CancellationToken::new()).await;
+        assert!(app.routine(&routine.id).unwrap().health.unwrap().last_check_at >= after.health.unwrap().last_check_at);
+        assert_eq!(roster(), before, "another quiet check uploads nothing");
+        let failing = edit(app, &routine.id, None, None, None, Some("throw new Error('connection refused')")).unwrap();
+        check_now(app, &failing, &CancellationToken::new()).await;
+        assert_ne!(roster(), before, "a failed check goes up");
     }
 
     #[cfg(feature = "runner")]
@@ -1077,7 +1097,7 @@ mod tests {
         let paused = app.routine(&watch.id).unwrap();
         assert_eq!(paused.paused_reason.as_deref(), Some("authentication"));
         assert!(!paused.is_enabled);
-        assert!(run_now(app, &watch.id).unwrap_err().contains("resume"));
+        assert!(run_now(app, &watch.id).unwrap_err().contains("resume it"));
         assert_eq!(app.routine_out(&paused)["state"], "blocked");
         let restarted = App::load(crate::config::Config { home: scratch.1.clone(), port: 0 }).unwrap();
         assert_eq!(restarted.routine(&watch.id).unwrap(), paused);
@@ -1121,13 +1141,13 @@ mod tests {
         let routine = create(app, "b1", "Watch", "every 10m", "x", Some("store('ran', true); return null"), true).unwrap();
         let due = app.update_routine(&routine.id, |routine| routine.enabled_at = now_secs() - 700.0).unwrap();
         let connection = rusqlite::Connection::open(app.config.database_path()).unwrap();
-        connection.execute_batch("CREATE TRIGGER reject_runtime BEFORE INSERT ON routine_runtime BEGIN SELECT RAISE(FAIL, 'runtime writes unavailable'); END;").unwrap();
+        connection.execute_batch("CREATE TRIGGER reject_routines BEFORE UPDATE ON routines BEGIN SELECT RAISE(FAIL, 'routine writes unavailable'); END;").unwrap();
         tick(app);
         assert_eq!(app.routine(&routine.id).unwrap(), due, "failed checkpoint rolls back in-memory admission");
         assert!(!app.routine_checks.is_running(&routine.id));
         let dm = app.dm_with("b1", None).unwrap();
         assert!(!app.store.codemode_values(&dm.meta.id, "b1").unwrap().contains_key("ran"));
-        connection.execute_batch("DROP TRIGGER reject_runtime").unwrap();
+        connection.execute_batch("DROP TRIGGER reject_routines").unwrap();
         tick(app);
         for _ in 0..200 {
             if app.routine(&routine.id).unwrap().health.is_some() { break; }
@@ -1150,6 +1170,6 @@ mod tests {
         assert_eq!(paused.last_run_at, None, "no model run started");
         assert_eq!(paused.health.as_ref().unwrap().last_check_at, None, "a provider failure is not a check");
         assert_eq!(paused.health.as_ref().unwrap().model.authentication_failures, 3);
-        assert!(app.messages(&queued.chat_id).iter().any(|message| matches!(&message.body, Body::Notice { text, .. } if text.contains("then resume"))));
+        assert!(app.messages(&queued.chat_id).iter().any(|message| matches!(&message.body, Body::Notice { text, .. } if text.contains("then resume it"))));
     }
 }

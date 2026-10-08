@@ -13,7 +13,6 @@ use crate::model::{Author, Body, LiveTurn, Message};
 
 pub struct LocalStore {
     connection: Mutex<Connection>,
-    routine_runtime_key: Mutex<Option<[u8; 32]>>,
 }
 
 pub struct Upsert {
@@ -68,10 +67,6 @@ impl LocalStore {
                  id       TEXT PRIMARY KEY NOT NULL,
                  position INTEGER NOT NULL,
                  json     TEXT NOT NULL
-             );
-             CREATE TABLE IF NOT EXISTS routine_runtime (
-                 id         TEXT PRIMARY KEY NOT NULL,
-                 ciphertext BLOB NOT NULL
              );
              CREATE TABLE IF NOT EXISTS group_deletes (
                  id       TEXT PRIMARY KEY NOT NULL,
@@ -149,28 +144,11 @@ impl LocalStore {
         crate::config::set_private(path)?;
         Ok(Self {
             connection: Mutex::new(connection),
-            routine_runtime_key: Mutex::new(None),
         })
     }
 
-    pub fn set_routine_runtime_key(&self, key: Option<[u8; 32]>) {
-        *self.routine_runtime_key.lock().unwrap() = key;
-    }
-
     pub fn load_state(&self) -> anyhow::Result<State> {
-        let key = *self.routine_runtime_key.lock().unwrap();
         let connection = self.connection.lock().unwrap();
-        let mut routines: Vec<crate::model::Routine> = load_json_table(&connection, "routines")?;
-        let mut statement = connection.prepare("SELECT id, ciphertext FROM routine_runtime")?;
-        for row in statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?)))? {
-            let (id, ciphertext) = row?;
-            if let Some(routine) = routines.iter_mut().find(|routine| routine.id == id) {
-                let key = key.as_ref().ok_or_else(|| anyhow::anyhow!("Account key required to read routine runtime state"))?;
-                let (cursor, health) = crate::crypto::decrypt_json(key, &format!("routine-runtime:{id}"), &ciphertext)?;
-                routine.last_scheduled_at = cursor;
-                routine.health = health;
-            }
-        }
         let metadata: Option<(String, i64, Option<String>, bool)> = connection
             .query_row(
                 "SELECT auto_review_json, last_seq, machine_blob_hash, credentials_uploaded
@@ -192,7 +170,7 @@ impl LocalStore {
             devices: load_json_table(&connection, "devices")?,
             bots: load_json_table(&connection, "bots")?,
             chats: load_json_table(&connection, "chats")?,
-            routines,
+            routines: load_json_table(&connection, "routines")?,
             auto_review,
             last_seq,
             group_deletes: load_ordered_ids(&connection, "group_deletes")?,
@@ -211,10 +189,9 @@ impl LocalStore {
     }
 
     pub fn save_state(&self, state: &State) -> anyhow::Result<()> {
-        let key = *self.routine_runtime_key.lock().unwrap();
         let mut connection = self.connection.lock().unwrap();
         let tx = connection.transaction()?;
-        save_state_tx(&tx, state, key.as_ref())?;
+        save_state_tx(&tx, state)?;
         tx.commit()?;
         Ok(())
     }
@@ -224,10 +201,9 @@ impl LocalStore {
         state: &State,
         chat_ids: &[String],
     ) -> anyhow::Result<()> {
-        let key = *self.routine_runtime_key.lock().unwrap();
         let mut connection = self.connection.lock().unwrap();
         let tx = connection.transaction()?;
-        save_state_tx(&tx, state, key.as_ref())?;
+        save_state_tx(&tx, state)?;
         for chat_id in chat_ids {
             tx.execute("DELETE FROM messages WHERE chat_id = ?1", [chat_id])?;
             tx.execute("DELETE FROM chat_history WHERE chat_id = ?1", [chat_id])?;
@@ -1101,7 +1077,7 @@ fn queue_outbox_tx(tx: &Transaction<'_>, item: &OutboxItem) -> anyhow::Result<()
     Ok(())
 }
 
-fn save_state_tx(tx: &Transaction<'_>, state: &State, runtime_key: Option<&[u8; 32]>) -> anyhow::Result<()> {
+fn save_state_tx(tx: &Transaction<'_>, state: &State) -> anyhow::Result<()> {
     save_metadata_tx(tx, state)?;
     sync_json_table(
         tx,
@@ -1128,24 +1104,9 @@ fn save_state_tx(tx: &Transaction<'_>, state: &State, runtime_key: Option<&[u8; 
         state
             .routines
             .iter()
-            .map(|routine| {
-                let mut definition = routine.clone();
-                definition.health = None;
-                definition.last_scheduled_at = None;
-                (routine.id.clone(), serde_json::to_string(&definition))
-            })
+            .map(|routine| (routine.id.clone(), serde_json::to_string(routine)))
             .collect::<Vec<_>>(),
     )?;
-    tx.execute("DELETE FROM routine_runtime WHERE id NOT IN (SELECT id FROM routines)", [])?;
-    for routine in &state.routines {
-        if routine.health.is_none() && routine.last_scheduled_at.is_none() {
-            tx.execute("DELETE FROM routine_runtime WHERE id = ?1", [&routine.id])?;
-            continue;
-        }
-        let key = runtime_key.ok_or_else(|| anyhow::anyhow!("Account key required to persist routine runtime state"))?;
-        let ciphertext = crate::crypto::encrypt_json(key, &format!("routine-runtime:{}", routine.id), &(routine.last_scheduled_at, &routine.health))?;
-        tx.execute("INSERT INTO routine_runtime (id, ciphertext) VALUES (?1, ?2) ON CONFLICT(id) DO UPDATE SET ciphertext = excluded.ciphertext", params![routine.id, ciphertext])?;
-    }
     sync_ordered_ids(tx, "group_deletes", &state.group_deletes)?;
     sync_ordered_ids(tx, "blob_deletes", &state.blob_deletes)?;
     sync_ordered_ids(tx, "applied_blobs", &state.applied_blob_ids)?;
