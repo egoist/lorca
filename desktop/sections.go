@@ -416,7 +416,7 @@ func editableRow(c *ui.Context, k *card, label, value, placeholder string, mono,
 // switchRow is a row with an icon for its state, a title over a detail line, and a switch: a
 // routine that pauses or resumes. It reports clicks outside the switch; change runs after the
 // view is built with the switch's new value.
-func switchRow(c *ui.Context, k *card, symbolName string, tint ui.Color, title, detail string, on *bool, toggleTooltip, tooltip string, change func(bool)) bool {
+func switchRow(c *ui.Context, k *card, symbolName string, tint ui.Color, title string, detail []ui.Span, on *bool, toggleTooltip, tooltip string, change func(bool)) bool {
 	p := colors(c)
 	r := k.row(rowBox(c).MinHeight(44).Label(title).Cursor(ui.CursorPointer))
 	if tooltip != "" {
@@ -427,7 +427,7 @@ func switchRow(c *ui.Context, k *card, symbolName string, tint ui.Color, title, 
 		ui.Row(c).Width(18).Justify(ui.Center).TextColor(tint).Children(func() { symbol(c, symbolName, 15, 1.8) })
 		ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(1).Children(func() {
 			ui.Text(c, title).FontSize(12.5).FontWeight(500).SingleLine()
-			ui.Text(c, detail).FontSize(textCaption).TextColor(p.Label2).SingleLine()
+			ui.RichText(c, detail...).FontSize(textCaption).TextColor(p.Label2).SingleLine()
 		})
 		toggle := toggleSwitch(c, on, true).Tooltip(toggleTooltip).Label(toggleTooltip).
 			OnChange(func() { change(*on) })

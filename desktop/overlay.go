@@ -109,7 +109,8 @@ type sheetOptions struct {
 	ConfirmDisabled bool
 	// Leading builds controls at the start of the buttons' row.
 	Leading func()
-	// Footer holds persistent actions outside the scrolling body, above the default buttons.
+	// Footer builds a row of actions under the content, outside its scroll, so a tall sheet in a
+	// short window keeps them in view.
 	Footer func()
 	// ReturnInContent leaves Return to the content, as a multi-line editor's.
 	ReturnInContent bool

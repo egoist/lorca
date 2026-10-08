@@ -348,10 +348,15 @@ func (m *mainWindow) inspectorRoutines(c *ui.Context, bot *model.Bot) {
 			if !routine.IsEnabled {
 				toggle = L("Resume %@", routine.Name)
 			}
+			// What went wrong leads, in orange while the user has to do something about it.
+			detail := []ui.Span{{Text: routine.Detail(), Color: p.Label2}}
+			if problem := routine.Problem(); problem.NeedsUser() {
+				detail = []ui.Span{{Text: problem.Text(), Color: p.Orange}, {Text: " · " + routine.ScheduleText, Color: p.Label2}}
+			}
 			on := routine.IsEnabled
 			id, botID := routine.ID, bot.ID
 			ui.Box(c.Key(routine.ID)).Children(func() {
-				if switchRow(c, k, symbolName, tint, routine.Name, routine.Detail(), &on, toggle, routine.Prompt,
+				if switchRow(c, k, symbolName, tint, routine.Name, detail, &on, toggle, routine.Prompt,
 					func(on bool) { store.SetRoutineEnabled(id, on) }) {
 					if current := store.Bot(botID); current != nil {
 						m.presentRoutine(id, current, m.prefill)
