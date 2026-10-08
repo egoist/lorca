@@ -185,7 +185,11 @@ func (m *mainWindow) permissionCard(c *ui.Context, chat *model.Chat, message *mo
 				ui.Row(c).Wrap().Gap(6).Margin(10, 0, 0, 0).Children(func() {
 					for _, choice := range request.Choices() {
 						if pushButton(c.Key(choice.Decision), choice.Title, pushOptions{Small: true}).Clicked() {
-							store.AnswerPermission(chatID, messageID, choice.Decision)
+							if choice.Decision == "access" && message.Author.Kind == model.AuthorBot {
+								m.presentBotAccess(message.Author.BotID)
+							} else {
+								store.AnswerPermission(chatID, messageID, choice.Decision)
+							}
 						}
 					}
 				})

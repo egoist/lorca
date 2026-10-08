@@ -188,6 +188,9 @@ func (m *mainWindow) inspectorProfile(c *ui.Context, bot *model.Bot) {
 		if summaryActionRow(c, k, L("Description"), bot.Description, L("Edit…")) {
 			m.presentBotDescription(bot.ID)
 		}
+		if summaryActionRow(c.Key("bot-access"), k, L("Access"), bot.Permissions.Summary(), L("Edit…")) {
+			m.presentBotAccess(bot.ID)
+		}
 	})
 }
 

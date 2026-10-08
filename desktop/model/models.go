@@ -733,8 +733,9 @@ type Bot struct {
 	Thinking string
 	// Avatar is a custom profile image, kept as a `file` blob like a message attachment. Shown in
 	// place of the symbol and accent once this computer has the bytes.
-	Avatar    *Attachment
-	CreatedAt time.Time
+	Avatar      *Attachment
+	Permissions *BotPermissions
+	CreatedAt   time.Time
 }
 
 // MARK: - Auto-review
@@ -969,9 +970,10 @@ func (r *PermissionRequest) FullCommand() string {
 
 func (r *PermissionRequest) IsPending() bool { return r.Decision == DecisionPending }
 func (r *PermissionRequest) IsInstall() bool { return r.Tool == "install" }
+func (r *PermissionRequest) IsAccess() bool  { return r.Tool == "access" }
 
 // IsShell is a shell command on the bot's Runner.
-func (r *PermissionRequest) IsShell() bool { return r.PluginID == "computer" }
+func (r *PermissionRequest) IsShell() bool { return r.PluginID == "computer" && !r.IsAccess() }
 
 // IsConnect is a sign-in card: Sign in starts the OAuth flow on the Runner.
 func (r *PermissionRequest) IsConnect() bool { return r.Tool == "connect" }
@@ -980,6 +982,8 @@ func (r *PermissionRequest) IsConnect() bool { return r.Tool == "connect" }
 // "wants to run a command on Workbench".
 func (r *PermissionRequest) VerbPhrase() string {
 	switch {
+	case r.IsAccess():
+		return L("needs additional access")
 	case r.IsConnect():
 		return L("needs a sign-in to %@", r.PluginName)
 	case r.IsShell():
@@ -1028,6 +1032,8 @@ type Answer struct {
 // rule to add.
 func (r *PermissionRequest) Choices() []Answer {
 	switch {
+	case r.IsAccess():
+		return []Answer{{L("Edit Access…"), "access"}, {L("Dismiss"), "deny"}}
 	case r.IsConnect():
 		return []Answer{{L("Sign in"), "allow"}, {L("Not now"), "deny"}}
 	case r.IsInstall():
