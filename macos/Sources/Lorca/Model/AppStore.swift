@@ -16,6 +16,8 @@ enum StoreEvent {
     case turnFinished(Chat.ID, Bot.ID, Date)
     /// A command in the chat has run long enough to count as a running task.
     case runningTasksChanged(Chat.ID)
+    /// The chat's published outputs, or whether one's file could be fetched, changed.
+    case outputsChanged(Chat.ID)
     case selectionChanged
     case connectionChanged
     case identityChanged
@@ -281,6 +283,8 @@ final class AppStore {
             runningJobs.append(("chat:\(id)", id, "", nil))
         }
         sortChats()
+        // A resync may bring outputs this app missed; they are asked for again when shown.
+        outputMessages = [:]
         emit(.snapshotReplaced)
     }
 
@@ -339,11 +343,13 @@ final class AppStore {
             chats[index].messages.removeAll { $0.id == payload.messageId }
             commandStarts[payload.messageId] = nil
             emit(.messageRemoved(payload.chatId, payload.messageId))
+            noteOutput(nil, removing: payload.messageId, in: payload.chatId)
 
         case "chat.removed":
             guard let payload = decode(Wire.ChatRemoved.self) else { return }
             chats.removeAll { $0.id == payload.chatId }
             runningJobs.removeAll { $0.chatID == payload.chatId }
+            outputMessages[payload.chatId] = nil
             emit(.chatsChanged)
 
         case "job.started":
@@ -407,6 +413,7 @@ final class AppStore {
     private func upsert(_ message: Message, in chatID: Chat.ID) {
         guard let chatIndex = chats.firstIndex(where: { $0.id == chatID }) else { return }
         noteCommand(message, in: chatID)
+        noteOutput(message, in: chatID)
         if let messageIndex = chats[chatIndex].index(of: message.id) {
             chats[chatIndex].messages[messageIndex] = message
             emit(.messageChanged(chatID, message.id))
@@ -1393,25 +1400,10 @@ final class AppStore {
 
     /// Where an attachment's bytes are on this computer. A file sent from here is known at once; one
     /// sent from another Device is fetched through the CLI, and the message reloads when it lands.
+    /// A fetch that failed keeps its reason until the user retries, so a scroll does not ask again.
     private var attachmentURLs: [Attachment.ID: URL] = [:]
     private var fetchingAttachments: Set<Attachment.ID> = []
     private var attachmentErrors: [Attachment.ID: String] = [:]
-
-    func attachmentError(for attachment: Attachment) -> String? { attachmentErrors[attachment.id] }
-
-    func retryAttachment(_ attachment: Attachment, in chatID: Chat.ID, messageID: Message.ID) {
-        guard !fetchingAttachments.contains(attachment.id) else { return }
-        attachmentErrors[attachment.id] = nil
-        attachmentURLs[attachment.id] = nil
-        _ = localURL(for: attachment, in: chatID, messageID: messageID)
-        emit(.messageChanged(chatID, messageID))
-    }
-
-    func outputMessages(in chatID: Chat.ID) async throws -> (messages: [Message], hasMore: Bool) {
-        if isMock { return (chat(chatID)?.messages.filter { $0.output != nil } ?? [], false) }
-        let reply = try await client.request("outputs.list", ["chat_id": chatID], as: Wire.OutputList.self)
-        return (reply.outputs.map { $0.toModel() }, reply.hasMore)
-    }
 
     func localURL(for attachment: Attachment, in chatID: Chat.ID, messageID: Message.ID) -> URL? {
         if let url = attachmentURLs[attachment.id], FileManager.default.fileExists(atPath: url.path) { return url }
@@ -1419,21 +1411,84 @@ final class AppStore {
         fetchingAttachments.insert(attachment.id)
         Task { [weak self] in
             let params: [String: Any] = [
-                "attachment": ["id": attachment.id, "name": attachment.name, "mime": attachment.mime, "size": attachment.size], "named": true
+                "attachment": ["id": attachment.id, "name": attachment.name, "mime": attachment.mime, "size": attachment.size]
             ]
             guard let self else { return }
             defer { fetchingAttachments.remove(attachment.id) }
             do {
                 let reply = try await client.request("files.path", params, as: Wire.FilePath.self)
                 attachmentURLs[attachment.id] = URL(fileURLWithPath: reply.path)
-                emit(.messageChanged(chatID, messageID))
             } catch {
                 attachmentErrors[attachment.id] = error.localizedDescription
-                emit(.messageChanged(chatID, messageID))
                 NSLog("fetching \(attachment.name) failed: \(error.localizedDescription)")
             }
+            emit(.messageChanged(chatID, messageID))
         }
         return nil
+    }
+
+    /// Why the attachment's bytes could not be fetched, until a retry.
+    func attachmentError(for attachment: Attachment) -> String? { attachmentErrors[attachment.id] }
+
+    func retryAttachment(_ attachment: Attachment, in chatID: Chat.ID, messageID: Message.ID) {
+        guard attachmentErrors.removeValue(forKey: attachment.id) != nil else { return }
+        _ = localURL(for: attachment, in: chatID, messageID: messageID)
+        emit(.messageChanged(chatID, messageID))
+    }
+
+    /// The attachment as a file named for what it is, for Quick Look, another app, or a copy:
+    /// the bytes under their attachment id carry no extension, so the CLI keeps a named copy.
+    func openableURL(for attachment: Attachment) async throws -> URL {
+        if let url = attachmentURLs[attachment.id], !url.pathExtension.isEmpty,
+            FileManager.default.fileExists(atPath: url.path)
+        { return url }
+        let params: [String: Any] = [
+            "attachment": ["id": attachment.id, "name": attachment.name, "mime": attachment.mime, "size": attachment.size],
+            "named": true,
+        ]
+        return URL(fileURLWithPath: try await client.request("files.path", params, as: Wire.FilePath.self).path)
+    }
+
+    // MARK: - Outputs
+
+    /// Every version of each chat's outputs, oldest first: what `outputs.list` answered, and
+    /// output messages that arrived since. A chat is asked for once, when something shows it.
+    private var outputMessages: [Chat.ID: [Message]] = [:]
+    private var outputRequests: Set<Chat.ID> = []
+
+    /// The chat's outputs, the latest published first; empty until the CLI answers.
+    func outputs(in chatID: Chat.ID) -> [OutputSeries] {
+        if isMock { return OutputSeries.group(chat(chatID)?.messages ?? []) }
+        if let messages = outputMessages[chatID] { return OutputSeries.group(messages) }
+        guard outputRequests.insert(chatID).inserted else { return [] }
+        Task { [weak self] in
+            guard let self else { return }
+            defer { outputRequests.remove(chatID) }
+            do {
+                let reply = try await client.request("outputs.list", ["chat_id": chatID], as: Wire.OutputList.self)
+                // Output messages that arrived while the list was on its way are in it too.
+                var messages = reply.outputs.map { $0.toModel() }
+                for message in outputMessages[chatID] ?? [] where !messages.contains(where: { $0.id == message.id }) {
+                    messages.append(message)
+                }
+                outputMessages[chatID] = messages
+                emit(.outputsChanged(chatID))
+            } catch {
+                NSLog("listing outputs failed: \(error.localizedDescription)")
+            }
+        }
+        return []
+    }
+
+    /// Keeps a chat's known outputs in step with a message that was added, changed, or removed.
+    private func noteOutput(_ message: Message?, removing id: Message.ID? = nil, in chatID: Chat.ID) {
+        guard var messages = outputMessages[chatID] else { return }
+        let before = messages
+        messages.removeAll { $0.id == (message?.id ?? id) }
+        if let message, message.output != nil { messages.append(message) }
+        guard messages != before else { return }
+        outputMessages[chatID] = messages
+        emit(.outputsChanged(chatID))
     }
 
     func isResponding(in chatID: Chat.ID) -> Bool {

@@ -463,7 +463,6 @@ enum Wire {
 
     struct OutputList: Decodable {
         var outputs: [Message]
-        var hasMore: Bool
     }
 
     struct Body: Decodable {
@@ -524,7 +523,7 @@ enum Wire {
         var state: State
         var createdAt: Double
         var queued: Bool?
-        var output: TaskOutput?
+        var output: Output?
     }
 
     struct RosterChanged: Decodable {

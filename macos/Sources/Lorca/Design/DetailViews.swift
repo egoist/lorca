@@ -19,6 +19,8 @@ final class SectionView: NSView {
 
     private var headerLeading: NSLayoutConstraint!
     private var cardTop: NSLayoutConstraint!
+    /// Without a title the card starts at the top.
+    private var untitledCardTop: NSLayoutConstraint!
     private var headerAccessory: NSView?
     private var headerAccessoryConstraints: [NSLayoutConstraint] = []
 
@@ -52,6 +54,9 @@ final class SectionView: NSView {
         for (index, end) in dividerEnds.enumerated() {
             end.constant = index.isMultiple(of: 2) ? dividerInset : -dividerInset
         }
+        header.isHidden = title.isEmpty
+        cardTop.isActive = !title.isEmpty
+        untitledCardTop.isActive = title.isEmpty
     }
     private let header: NSTextField
     private let card = BackgroundView()
@@ -85,12 +90,15 @@ final class SectionView: NSView {
 
         headerLeading = header.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4)
         cardTop = card.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 6)
+        untitledCardTop = card.topAnchor.constraint(equalTo: topAnchor)
+        cardTop.isActive = !title.isEmpty
+        untitledCardTop.isActive = title.isEmpty
+        header.isHidden = title.isEmpty
         NSLayoutConstraint.activate([
             header.topAnchor.constraint(equalTo: topAnchor),
             headerLeading,
             header.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
 
-            cardTop,
             card.leadingAnchor.constraint(equalTo: leadingAnchor),
             card.trailingAnchor.constraint(equalTo: trailingAnchor),
             card.bottomAnchor.constraint(equalTo: bottomAnchor),

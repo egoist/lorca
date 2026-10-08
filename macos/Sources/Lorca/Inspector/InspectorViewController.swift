@@ -17,6 +17,14 @@ final class InspectorViewController: NSViewController {
     private let routines = SectionView(title: L("Routines"))
     private let plugins = SectionView(title: L("Plugins"))
     private let routing = SectionView(title: L("Where turns run"))
+    private let outputs = SectionView(title: L("Outputs"))
+    private lazy var allOutputsButton: NSButton = {
+        let button = NSButton(title: "", target: self, action: #selector(showAllOutputs))
+        button.isBordered = false
+        button.attributedTitle = NSAttributedString(
+            string: L("View all"), attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor])
+        return button
+    }()
     private let addButton = NSButton()
 
     private var selection: Selection?
@@ -82,10 +90,12 @@ final class InspectorViewController: NSViewController {
         groupNameRow.field.alignment = .right
         groupDescriptionRow.onAction = { [weak self] in self?.editGroupDescription() }
         group.setRows([groupNameRow, groupDescriptionRow])
+        outputs.isHidden = true
 
         column.addArrangedSubview(participants)
         column.addArrangedSubview(addButton)
         column.addArrangedSubview(group)
+        column.addArrangedSubview(outputs)
         column.addArrangedSubview(profile)
         column.addArrangedSubview(runtime)
         column.addArrangedSubview(memory)
@@ -123,6 +133,7 @@ final class InspectorViewController: NSViewController {
             column.bottomAnchor.constraint(equalTo: documentView.bottomAnchor),
             participants.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             group.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
+            outputs.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             profile.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             runtime.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             memory.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
@@ -140,6 +151,9 @@ final class InspectorViewController: NSViewController {
             switch event {
             case .chatChanged, .chatsChanged, .snapshotReplaced, .rosterChanged:
                 self?.reload()
+            case let .outputsChanged(chatID):
+                guard let self, case .chat(chatID) = self.selection else { return }
+                self.reload()
             case let .respondingChanged(chatID):
                 // A turn ended (or started): what the bot remembers may have moved.
                 guard let self, case .chat(chatID) = self.selection, !self.store.isResponding(in: chatID) else { return }
@@ -220,11 +234,14 @@ final class InspectorViewController: NSViewController {
         // A DM never takes another bot; a group does until it is full or every bot is in it.
         let canAdd = chat.canAddBot && members.count < store.bots.count
         if addButton.isHidden != chat.isDM { addButton.isHidden = chat.isDM }
+        // Add Bot sits close under the bots; without it the next section keeps the usual gap.
+        column.setCustomSpacing(chat.isDM ? column.spacing : 10, after: participants)
         if addButton.isEnabled != canAdd { addButton.isEnabled = canAdd }
 
         // A group's name and what it is for.
         if group.isHidden == chat.isGroup { group.isHidden = !chat.isGroup }
         if chat.isGroup { showGroup(chat, members: members) }
+        showOutputs(in: chat)
 
         // A direct chat is one bot, so its profile, provider, and model are edited right here.
         let single = chat.isDM && members.count == 1
@@ -383,6 +400,38 @@ final class InspectorViewController: NSViewController {
                 )
                 return row
             })
+    }
+
+    /// What the chat's bots published, the latest first: a few rows, and View all for the rest.
+    /// Hidden while there is none.
+    private func showOutputs(in chat: Chat) {
+        let all = store.outputs(in: chat.id)
+        let shown = Array(all.prefix(3))
+        if outputs.isHidden != all.isEmpty { outputs.isHidden = all.isEmpty }
+        guard changed(outputs, to: [chat.id, chat.isGroup, shown, all.count > shown.count, store.bots.map(\.name)]) else { return }
+        outputs.setHeaderAccessory(all.count > shown.count ? allOutputsButton : nil)
+        outputs.setRows(
+            shown.map { series in
+                let row: StatusRow = keptRow("output:\(series.id)") {
+                    let row = StatusRow()
+                    row.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(openOutput(_:))))
+                    return row
+                }
+                row.configure(output: series, showsBot: chat.isGroup)
+                return row
+            })
+    }
+
+    @objc private func openOutput(_ sender: NSClickGestureRecognizer) {
+        guard let id = sender.view?.identifier?.rawValue, case let .chat(chatID) = selection,
+            let series = store.outputs(in: chatID).first(where: { $0.id == id })
+        else { return }
+        presentAsSheet(OutputViewController(chatID: chatID, series: series))
+    }
+
+    @objc private func showAllOutputs() {
+        guard case let .chat(chatID) = selection else { return }
+        presentAsSheet(OutputsViewController(chatID: chatID))
     }
 
     /// Saves the compact Name row when it finishes editing. An emptied value keeps the old one;

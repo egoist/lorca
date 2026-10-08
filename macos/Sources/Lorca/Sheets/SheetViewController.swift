@@ -85,6 +85,11 @@ class SheetViewController: NSViewController {
         titleLabel.stringValue = title
     }
 
+    func setSheetSubtitle(_ subtitle: String) {
+        subtitleLabel.stringValue = subtitle
+        subtitleLabel.isHidden = subtitle.isEmpty
+    }
+
     /// AppKit sizes a presented sheet once and afterwards only lets it grow with its content.
     /// Hiding content leaves slack that the row stacks pour into their first row, so shrink the
     /// sheet explicitly after showing or hiding anything.
