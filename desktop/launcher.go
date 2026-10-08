@@ -15,27 +15,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/egoist/lorca/desktop/model"
 	"github.com/egoist/mygo"
 )
 
-// LaunchFailure is why the CLI is not running, for the offline state to word.
-type LaunchFailure struct {
-	// Kind is "missing_binary", "launch", "exited", or "startup_closed".
-	Kind   string `json:"kind"`
-	Binary string `json:"binary,omitempty"`
-	Reason string `json:"reason,omitempty"`
-	Code   int    `json:"code,omitempty"`
-	Log    string `json:"log,omitempty"`
-}
-
-// LauncherStatus is where the CLI's lifecycle stands.
-type LauncherStatus struct {
-	// Kind is "idle", "probing", "starting", "running", or "failed".
-	Kind string `json:"kind"`
-	// External is a CLI that was already answering on the port: the app uses it and starts none.
-	External bool           `json:"external,omitempty"`
-	Failure  *LaunchFailure `json:"failure,omitempty"`
-}
+type (
+	LaunchFailure  = model.LaunchFailure
+	LauncherStatus = model.LauncherStatus
+)
 
 // launcher makes sure a CLI answers on the port: one already running on this computer, or one it
 // starts from the app's resources, logs, and restarts when it exits. The readiness line the CLI
