@@ -5,67 +5,87 @@ import XCTest
 @MainActor
 final class PlaybookTests: XCTestCase {
     private func descendants<T: NSView>(_ view: NSView, as type: T.Type) -> [T] {
-        ((view as? T).map { [$0] } ?? [])
-            + view.subviews.flatMap { descendants($0, as: type) }
+        ((view as? T).map { [$0] } ?? []) + view.subviews.flatMap { descendants($0, as: type) }
     }
 
-    func testBundledReferenceEditsStayWithTheSelectedFile() throws {
-        let files = PlaybookResourcesView(kind: "references", resources: [
-            PlaybookResource(path: "references/first.md", text: "First source"),
-            PlaybookResource(path: "references/second.md", text: "Second source")
-        ])
-        let picker = try XCTUnwrap(descendants(files, as: NSPopUpButton.self).first)
-        let editor = try XCTUnwrap(descendants(files, as: NSTextView.self).first)
-        editor.string = "Corrected first source"
-        picker.selectItem(at: 1)
-        _ = picker.sendAction(picker.action, to: picker.target)
-        XCTAssertEqual(editor.string, "Second source")
-        editor.string = "Corrected second source"
-        let value = files.value
-        XCTAssertEqual(value.map(\.text), ["Corrected first source", "Corrected second source"])
-        let remove = try XCTUnwrap(descendants(files, as: NSButton.self).first { $0.title == L("Remove File") })
-        remove.performClick(nil)
-        XCTAssertEqual(files.value.map(\.path), ["references/first.md"])
+    private func record(status: String = "saved") -> PlaybookRecord {
+        let content = PlaybookContent(name: "weekly-report", description: "Use for the Friday report", instructions: "Compare the numbers")
+        let step = { (revision: Int, status: String) in
+            PlaybookRevision(id: "r\(revision)", revision: revision, status: status, content: content,
+                             provenance: .init(kind: revision == 1 ? "workflow" : "edit", chatId: nil, messageIds: []), deviceId: "", createdAt: Double(revision))
+        }
+        let steps = status == "draft" ? [step(1, "draft")] : [step(1, "draft"), step(2, "saved")]
+        return PlaybookRecord(id: "playbook-test", scope: .bot("bot"), status: status, revision: steps.count, hash: "hash", content: content, revisions: steps)
     }
 
-    func testEditorOffersAllContentSectionsAndRetainedHistory() throws {
-        let content = PlaybookContent(name: "weekly-review", description: "Review a weekly report", instructions: "Compare evidence", examples: "A public example")
-        let provenance = PlaybookProvenance(kind: "corrections", chat_id: "chat", message_ids: ["one", "two"], note: "Repeated correction")
-        let record = PlaybookRecord(id: "playbook-test", scope: PlaybookScope(kind: "bot", id: "bot"), revision: 1, hash: "hash", status: "draft",
-                                    content: content, provenance: provenance, revisions: [PlaybookRevision(revision: 1, status: "draft", content: content, provenance: provenance, created_at: 100)])
-        let controller = PlaybookViewController(scope: record.scope, scopeName: "Test bot", record: record)
-        let tabs = try XCTUnwrap(descendants(controller.view, as: NSTabView.self).first)
-        XCTAssertEqual(tabs.tabViewItems.map(\.label), [L("Instructions"), L("Examples"), L("References"), L("Scripts"), L("History")])
-        let history = try XCTUnwrap(tabs.tabViewItems.last?.view)
-        let text = try XCTUnwrap(descendants(history, as: NSTextView.self).first)
-        XCTAssertFalse(text.isEditable)
-        XCTAssertTrue(text.string.contains("Repeated correction"))
-        XCTAssertTrue(text.string.contains("Compare evidence"))
-        XCTAssertEqual(controller.confirmButton.title, L("Save Skill"))
-        let window = NSWindow(contentRect: NSRect(x: -4000, y: -4000, width: 640, height: 700), styleMask: .borderless, backing: .buffered, defer: false)
-        window.contentViewController = controller
-        tabs.selectTabViewItem(at: 4)
-        window.layoutIfNeeded()
-        controller.view.layoutSubtreeIfNeeded()
-        XCTAssertGreaterThan(text.frame.height, 0, "Read-only history must have a visible document frame")
-        XCTAssertGreaterThan(controller.view.fittingSize.height, 400)
-        XCTAssertLessThan(controller.view.fittingSize.height, 800)
-        window.orderOut(nil)
+    func testFileEditsStayWithTheirFileAndUnsafeNamesAreRefused() throws {
+        let pane = PlaybookFilesPane(folder: "references")
+        pane.files = [PlaybookFile(path: "references/first.md", text: "First"), PlaybookFile(path: "references/second.md", text: "Second")]
+        pane.text.string = "First, corrected"
+        pane.table.selectRowIndexes([1], byExtendingSelection: false)
+        XCTAssertEqual(pane.text.string, "Second")
+        pane.text.string = "Second, corrected"
+        XCTAssertEqual(pane.files.map(\.text), ["First, corrected", "Second, corrected"])
+
+        let field = NSTextField(string: "../outside.md")
+        field.tag = 0
+        pane.controlTextDidEndEditing(Notification(name: NSControl.textDidEndEditingNotification, object: field))
+        XCTAssertEqual(pane.files[0].path, "references/first.md")
+        field.stringValue = "checklist.md"
+        pane.controlTextDidEndEditing(Notification(name: NSControl.textDidEndEditingNotification, object: field))
+        XCTAssertEqual(pane.files.map(\.path), ["references/checklist.md", "references/second.md"])
     }
 
-    func testCorrectionCaptureShowsExplicitScopesAndRequiresRepeatedEvidence() throws {
-        let one = Message(id: "one", author: .you, body: .text("Use public examples"))
-        let two = Message(id: "two", author: .you, body: .text("Again, use public examples"))
-        let failed = Message(id: "failed", author: .you, body: .text("Failed source"), state: .failed("error"))
-        let chat = Chat(id: "project", kind: .group, botIDs: ["chef"], messages: [one, two, failed], unreadCount: 0, isPinned: false, createdAt: Date())
-        let controller = CapturePlaybookViewController(chat: chat, message: two)
-        let picker = try XCTUnwrap(descendants(controller.view, as: NSPopUpButton.self).first)
-        XCTAssertEqual(picker.numberOfItems, 2)
-        let checkboxes = descendants(controller.view, as: NSButton.self).filter { $0.title.hasPrefix(L("You") + ": ") }
-        XCTAssertEqual(checkboxes.count, 2)
-        XCTAssertEqual(checkboxes.filter { $0.state == .on }.count, 1)
-        controller.confirmTapped()
-        XCTAssertTrue(controller.confirmButton.isEnabled, "One correction must fail before starting inference")
-        XCTAssertTrue(descendants(controller.view, as: NSTextField.self).contains { $0.stringValue == L("Select 2–20 related user corrections") })
+    func testEditorSavesOnlyACompleteSkillAndShowsHistoryOnceSaved() throws {
+        let new = PlaybookViewController(scope: .bot("bot"))
+        _ = new.view
+        let tabs = try XCTUnwrap(descendants(new.view, as: NSTabView.self).first)
+        XCTAssertEqual(tabs.tabViewItems.map(\.label), [L("Instructions"), L("Examples"), L("References"), L("Scripts")])
+        XCTAssertFalse(new.confirmButton.isEnabled)
+
+        let saved = PlaybookViewController(scope: .bot("bot"), record: record())
+        _ = saved.view
+        XCTAssertTrue(saved.confirmButton.isEnabled)
+        let savedTabs = try XCTUnwrap(descendants(saved.view, as: NSTabView.self).first)
+        XCTAssertEqual(savedTabs.tabViewItems.last?.label, L("History"))
+        let history = try XCTUnwrap(savedTabs.tabViewItems.last?.view as? PlaybookHistoryPane)
+        XCTAssertEqual(history.table.numberOfRows, 2)
+        XCTAssertFalse(history.text.isEditable)
+
+        // A name typed the way people write it goes to the CLI as a slug; one it would refuse
+        // keeps Save off.
+        let name = try XCTUnwrap(descendants(saved.view, as: NSTextField.self).first { $0.isEditable && $0.stringValue == "weekly-report" })
+        name.stringValue = "Weekly Report"
+        saved.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: name))
+        XCTAssertTrue(saved.confirmButton.isEnabled)
+        name.stringValue = "weekly/report"
+        saved.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: name))
+        XCTAssertFalse(saved.confirmButton.isEnabled)
+    }
+
+    func testCapturePicksTheRequestWithTheReplyAndNeedsTwoCorrections() throws {
+        let ask = Message(id: "ask", author: .you, body: .text("Compare this week's numbers"))
+        let other = Message(id: "other", author: .bot("writer"), body: .text("Another bot's work"))
+        let reply = Message(id: "reply", author: .bot("chef"), body: .text("Revenue is up 4%"))
+        let fix = Message(id: "fix", author: .you, body: .text("Use metric units"))
+        let again = Message(id: "again", author: .you, body: .text("Again: metric units"))
+        let group = Chat(id: "room", kind: .group, botIDs: ["chef", "writer"], messages: [ask, other, reply, fix, again], unreadCount: 0, isPinned: false, createdAt: Date())
+
+        let workflow = PlaybookCaptureViewController(chat: group, message: reply)
+        _ = workflow.view
+        let rows = descendants(workflow.view, as: SelectableMessageRow.self)
+        XCTAssertEqual(rows.count, 2, "Another bot's messages and later ones stay out")
+        XCTAssertTrue(rows.allSatisfy(\.isSelected), "The reply and the request before it start picked")
+        XCTAssertTrue(workflow.confirmButton.isEnabled)
+        XCTAssertEqual(descendants(workflow.view, as: NSPopUpButton.self).first?.numberOfItems, 2, "A group chooses whose skill it is")
+
+        let corrections = PlaybookCaptureViewController(chat: group, message: again)
+        _ = corrections.view
+        let picks = descendants(corrections.view, as: SelectableMessageRow.self)
+        XCTAssertEqual(picks.count, 3)
+        XCTAssertEqual(picks.filter(\.isSelected).count, 1)
+        XCTAssertFalse(corrections.confirmButton.isEnabled, "One correction is not a pattern")
+        picks[1].onToggle?()
+        XCTAssertTrue(corrections.confirmButton.isEnabled)
     }
 }

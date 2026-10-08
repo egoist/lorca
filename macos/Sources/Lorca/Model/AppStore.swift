@@ -74,6 +74,15 @@ final class AppStore {
     private(set) var providers: [ProviderCredential] = []
     /// The models the CLI's catalog offers, for the Model and Thinking pickers.
     private(set) var catalog: [ProviderModel] = []
+    /// Every bot's and group's skills and drafts, from the roster; a body is fetched when one opens.
+    private(set) var playbooks: [PlaybookSummary] = []
+    /// The demo's skills, bodies and all.
+    var mockPlaybooks: [PlaybookRecord] = [] {
+        didSet {
+            playbooks = mockPlaybooks.map(\.summary)
+            emit(.rosterChanged)
+        }
+    }
 
     /// True when the CLI answers on localhost (mock: toggled from the Debug menu).
     private(set) var isConnected = false
@@ -273,6 +282,7 @@ final class AppStore {
             return chat
         }
         routines = (snapshot.routines ?? []).map { $0.toModel() }
+        playbooks = snapshot.playbooks ?? []
         autoReview = snapshot.autoReview?.toModel() ?? AutoReview()
         providers = (snapshot.providers ?? []).compactMap { $0.toModel() }
         catalog = (snapshot.models ?? []).compactMap { $0.toModel() }
@@ -300,6 +310,7 @@ final class AppStore {
             devices = roster.devices.map { $0.toModel() }
             bots = roster.bots.map { $0.toModel() }
             if let incoming = roster.routines { routines = incoming.map { $0.toModel() } }
+            if let incoming = roster.playbooks { playbooks = incoming }
             if let incoming = roster.autoReview { autoReview = incoming.toModel() }
             if let incoming = roster.providers { providers = incoming.compactMap { $0.toModel() } }
             if let incoming = roster.models { catalog = incoming.compactMap { $0.toModel() } }
@@ -1690,6 +1701,7 @@ final class AppStore {
         bots = MockData.bots()
         chats = MockData.chats()
         routines = MockData.routines()
+        mockPlaybooks = MockData.playbooks()
         autoReview = MockData.autoReview()
         providers = MockData.providers()
         catalog = MockData.models()

@@ -613,6 +613,54 @@ enum MockData {
         ])
     }
 
+    /// The demo's skills: two of the Developer's and a draft it proposed, and one for the Launch
+    /// room.
+    static func playbooks() -> [PlaybookRecord] {
+        func record(_ id: String, _ scope: PlaybookScope, _ status: String, _ content: PlaybookContent, hoursAgo: [Double]) -> PlaybookRecord {
+            let steps = hoursAgo.enumerated().map { index, hours in
+                PlaybookRevision(
+                    id: "\(id)-\(index + 1)", revision: index + 1, status: index == hoursAgo.count - 1 ? status : "saved",
+                    content: content,
+                    provenance: .init(kind: index == 0 ? (status == "draft" ? "workflow" : "manual") : "edit", chatId: index == 0 && status == "draft" ? "chat-patch" : nil, messageIds: index == 0 && status == "draft" ? ["m1", "m2"] : []),
+                    deviceId: index.isMultiple(of: 2) ? "dev-studio" : "dev-workbench", createdAt: minutesAgo(hours * 60).timeIntervalSince1970)
+            }
+            return PlaybookRecord(id: id, scope: scope, status: status, revision: steps.count, hash: "\(id)-hash", content: content, revisions: steps)
+        }
+        return [
+            record("playbook-release-notes", .bot("bot-patch"), "saved", PlaybookContent(
+                name: "release-notes", description: "Turn the merged pull requests since the last tag into release notes.",
+                instructions: "1. List the pull requests merged since the last release tag.\n2. Group them under Added, Changed, and Fixed.\n3. Write one plain line per change, in the user's words where the PR has them.\n4. Leave out internal refactors and dependency bumps.\n5. Show the draft before posting it anywhere.",
+                examples: "Fixed: The composer keeps your draft when you switch chats.",
+                references: [PlaybookFile(path: "references/style.md", text: "Short lines. No ticket numbers. Present tense.")],
+                scripts: [PlaybookFile(path: "scripts/merged-since-tag.sh", text: "git log --merges --oneline \"$(git describe --tags --abbrev=0)\"..HEAD")]),
+                hoursAgo: [80, 26, 3]),
+            record("playbook-flaky-tests", .bot("bot-patch"), "draft", PlaybookContent(
+                name: "flaky-tests", description: "Rerun a failing test in isolation before calling it a real failure.",
+                instructions: "When a test fails in CI, rerun it alone three times. If it passes every time, report it as flaky with the failing seed; otherwise look for the bug."),
+                hoursAgo: [1]),
+            record("playbook-ship-checklist", .bot("bot-patch"), "saved", PlaybookContent(
+                name: "ship-checklist", description: "Check the build, the changelog, and the version before a release.",
+                instructions: "Run the full test suite, confirm the changelog has a section for the new version, and bump the version in one commit."),
+                hoursAgo: [200]),
+            record("playbook-launch-post", .group("chat-relay"), "saved", PlaybookContent(
+                name: "launch-post", description: "Write the launch announcement from the checklist and the release notes.",
+                instructions: "Open with what the user can do now. Keep it under 150 words. Link the release notes last."),
+                hoursAgo: [50, 5]),
+        ]
+    }
+
+    /// What the demo's drafting model writes for a capture.
+    static func draftedSkill(kind: String) -> PlaybookContent {
+        kind == "corrections"
+            ? PlaybookContent(
+                name: "plain-replies", description: "How the user wants replies written.",
+                instructions: "Answer in two or three sentences. Use metric units. Don't add a summary at the end.")
+            : PlaybookContent(
+                name: "relay-deploy", description: "Deploy the relay to Railway and check it came up.",
+                instructions: "1. Build the relay image from the Dockerfile.\n2. Deploy it to the staging service.\n3. Check /health answers within a minute.\n4. Tell the user the version that is live.",
+                examples: "\"Relay 0.4.2 is live on staging; /health answered in 3 s.\"")
+    }
+
     static func routines() -> [Routine] {
         [
             Routine(

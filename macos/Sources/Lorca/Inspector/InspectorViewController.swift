@@ -1,4 +1,5 @@
 import AppKit
+import UniformTypeIdentifiers
 
 final class InspectorViewController: NSViewController {
     private let store = AppStore.shared
@@ -14,7 +15,7 @@ final class InspectorViewController: NSViewController {
     private let descriptionRow = SummaryActionRow(key: L("Description"), value: "", actionTitle: L("Edit…"))
     private let runtime = SectionView(title: L("Runs with"))
     private let memory = SectionView(title: L("Memory"))
-    private let playbooks = SectionView(title: L("Playbooks"))
+    private let skills = SectionView(title: L("Skills"))
     private let routines = SectionView(title: L("Routines"))
     private let plugins = SectionView(title: L("Plugins"))
     private let routing = SectionView(title: L("Where turns run"))
@@ -29,6 +30,9 @@ final class InspectorViewController: NSViewController {
     private var memoryFetches: Set<Bot.ID> = []
     /// The bot whose plugin rows are showing, for a click on one.
     private var pluginBotID: Bot.ID?
+    /// Whose skills are showing, for + and a click on one, and the lists showing all their rows.
+    private var skillScope: PlaybookScope?
+    private var expandedSkills: Set<PlaybookScope> = []
 
     /// What each section last showed. The store sends events many times a turn, and a section
     /// they leave as it was keeps its rows: a new row brings new buttons, and each button sizes
@@ -80,6 +84,8 @@ final class InspectorViewController: NSViewController {
         nameRow.field.alignment = .right
         descriptionRow.onAction = { [weak self] in self?.editDescription() }
         profile.setRows([nameRow, descriptionRow])
+        skills.setHeaderAccessory(HoverButton(symbol: "plus", pointSize: 11, tooltip: L("New Skill"), target: self, action: #selector(newSkill)))
+        skills.isHidden = true
         groupNameRow.field.alignment = .right
         groupDescriptionRow.onAction = { [weak self] in self?.editGroupDescription() }
         group.setRows([groupNameRow, groupDescriptionRow])
@@ -90,7 +96,7 @@ final class InspectorViewController: NSViewController {
         column.addArrangedSubview(profile)
         column.addArrangedSubview(runtime)
         column.addArrangedSubview(memory)
-        column.addArrangedSubview(playbooks)
+        column.addArrangedSubview(skills)
         column.addArrangedSubview(routines)
         column.addArrangedSubview(plugins)
         column.addArrangedSubview(routing)
@@ -128,7 +134,7 @@ final class InspectorViewController: NSViewController {
             profile.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             runtime.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             memory.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
-            playbooks.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
+            skills.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             routines.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             plugins.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             routing.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
@@ -219,14 +225,6 @@ final class InspectorViewController: NSViewController {
 
         let members = store.bots(in: chat)
         showParticipants(members, in: chat)
-        if changed(playbooks, to: [chat.id, chat.isGroup]) {
-            let row = ActionRow(key: L("Skills"), value: chat.isGroup ? L("Project and bots") : L("This bot"), tint: .secondaryLabelColor, actionTitle: L("Manage…"))
-            row.onAction = { [weak self] in
-                guard let self, let current = self.store.chat(chat.id) else { return }
-                self.presentAsSheet(PlaybooksViewController(chat: current))
-            }
-            playbooks.setRows([row])
-        }
 
         // A DM never takes another bot; a group does until it is full or every bot is in it.
         let canAdd = chat.canAddBot && members.count < store.bots.count
@@ -249,7 +247,131 @@ final class InspectorViewController: NSViewController {
             showRoutines(of: bot)
             showPlugins(of: bot)
         }
+        if let scope = Self.skillScope(of: chat, members: members) {
+            showSkills(of: scope)
+        } else if !skills.isHidden {
+            skills.isHidden = true
+        }
         showRouting(members)
+    }
+
+    /// Whose skills a chat shows: the bot's in a DM, the group's in a group.
+    static func skillScope(of chat: Chat, members: [Bot]) -> PlaybookScope? {
+        if chat.isGroup { return .group(chat.id) }
+        return members.first.map { .bot($0.id) }
+    }
+
+    /// The skills, hidden while there are none: the first five, then the rest a click away. A row
+    /// opens its skill, and its menu exports or deletes it; + adds one.
+    private func showSkills(of scope: PlaybookScope) {
+        let list = store.skills(in: scope)
+        let expanded = expandedSkills.contains(scope)
+        guard changed(skills, to: [scope, list, expanded]) else { return }
+        skillScope = scope
+        if skills.isHidden != list.isEmpty { skills.isHidden = list.isEmpty }
+        let collapses = list.count > 6
+        var rows: [NSView] = (collapses && !expanded ? Array(list.prefix(5)) : list).map { skill in
+            let row: StatusRow = keptRow("skill:\(skill.id)") {
+                let row = StatusRow()
+                row.identifier = NSUserInterfaceItemIdentifier(skill.id)
+                row.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(openSkill(_:))))
+                return row
+            }
+            row.configure(skill: skill)
+            row.menu = skillMenu(for: skill)
+            return row
+        }
+        if collapses {
+            let more = keptRow("skills:more") { ShowMoreRow(target: self, action: #selector(toggleAllSkills)) }
+            more.title = expanded ? L("Show Less") : L("Show All %d", list.count)
+            rows.append(more)
+        }
+        skills.setRows(rows)
+    }
+
+    private func skillMenu(for skill: PlaybookSummary) -> NSMenu {
+        let menu = NSMenu()
+        let open = NSMenuItem(title: L("Open"), action: #selector(openSkillItem(_:)), keyEquivalent: "")
+        let export = NSMenuItem(title: L("Export…"), action: #selector(exportSkill(_:)), keyEquivalent: "")
+        export.isEnabled = !skill.isDraft
+        let delete = NSMenuItem(title: L("Delete…"), action: #selector(deleteSkill(_:)), keyEquivalent: "")
+        for item in [open, export, delete] {
+            item.target = self
+            item.representedObject = skill
+        }
+        menu.autoenablesItems = false
+        menu.items = [open, export, .separator(), delete]
+        return menu
+    }
+
+    @objc private func newSkill() {
+        guard let skillScope else { return }
+        presentAsSheet(PlaybookViewController(scope: skillScope))
+    }
+
+    @objc private func toggleAllSkills() {
+        guard let skillScope else { return }
+        if !expandedSkills.insert(skillScope).inserted { expandedSkills.remove(skillScope) }
+        reload()
+    }
+
+    @objc private func openSkill(_ sender: NSClickGestureRecognizer) {
+        guard let id = sender.view?.identifier?.rawValue, let skill = store.playbooks.first(where: { $0.id == id }) else { return }
+        PlaybookViewController.open(skill, from: self)
+    }
+
+    @objc private func openSkillItem(_ sender: NSMenuItem) {
+        guard let skill = sender.representedObject as? PlaybookSummary else { return }
+        PlaybookViewController.open(skill, from: self)
+    }
+
+    @objc private func exportSkill(_ sender: NSMenuItem) {
+        guard let skill = sender.representedObject as? PlaybookSummary, let window = view.window else { return }
+        Task { [weak self] in
+            do {
+                let data = try await AppStore.shared.exportPlaybook(skill.id, in: skill.scope)
+                let panel = NSSavePanel()
+                panel.nameFieldStringValue = skill.name + ".json"
+                panel.allowedContentTypes = [.json]
+                guard await panel.beginSheetModal(for: window) == .OK, let url = panel.url else { return }
+                try data.write(to: url, options: .atomic)
+            } catch {
+                self?.showSkillError(L("Couldn't export the skill"), error)
+            }
+        }
+    }
+
+    @objc private func deleteSkill(_ sender: NSMenuItem) {
+        guard let skill = sender.representedObject as? PlaybookSummary, let window = view.window else { return }
+        let alert = NSAlert()
+        alert.messageText = L("Delete “%@”?", skill.name)
+        alert.informativeText = skill.isDraft ? L("The draft is deleted.") : L("Your bots stop using this skill. This can't be undone.")
+        alert.addButton(withTitle: L("Delete"))
+        alert.addButton(withTitle: L("Cancel"))
+        alert.alertStyle = .warning
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn else { return }
+            Task { [weak self] in
+                do {
+                    // The version the row shows: a skill edited elsewhere since is not deleted.
+                    let record = try await AppStore.shared.playbook(skill.id, in: skill.scope)
+                    guard record.revision == skill.revision else {
+                        throw CLIClient.RequestError(message: L("This skill changed on another Device. Open it to see what changed."))
+                    }
+                    try await AppStore.shared.removePlaybook(record)
+                } catch {
+                    self?.showSkillError(L("Couldn't delete the skill"), error)
+                }
+            }
+        }
+    }
+
+    private func showSkillError(_ message: String, _ error: Error) {
+        guard let window = view.window else { return }
+        let alert = NSAlert()
+        alert.messageText = message
+        alert.informativeText = error.localizedDescription
+        alert.beginSheetModal(for: window, completionHandler: nil)
     }
 
     /// Whether `state` differs from what `section` last showed; records it when it does.

@@ -33,6 +33,7 @@ enum Wire {
         var bots: [Bot]
         var chats: [Chat]
         var routines: [Routine]?
+        var playbooks: [PlaybookSummary]?
         var autoReview: AutoReview?
         var providers: [Provider]?
         var models: [Model]?
@@ -526,6 +527,7 @@ enum Wire {
         var bots: [Bot]
         var chats: [Chat]
         var routines: [Routine]?
+        var playbooks: [PlaybookSummary]?
         var autoReview: AutoReview?
         var providers: [Provider]?
         /// The catalog's models again, so a newer catalog the CLI installs reaches the pickers.

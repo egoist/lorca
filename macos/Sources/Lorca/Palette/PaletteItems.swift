@@ -38,6 +38,7 @@ enum PaletteIndex {
         (#selector(RootSplitViewController.addBotToChat(_:)), "person.badge.plus", "invite member group"),
         (#selector(RootSplitViewController.renameChat(_:)), "pencil", "title name"),
         (#selector(RootSplitViewController.togglePinChat(_:)), "pin", "unpin favorite"),
+        (#selector(RootSplitViewController.newSkill(_:)), "book.closed", "playbook instructions workflow"),
         (#selector(ChatViewController.stopResponding(_:)), "stop.circle", "cancel interrupt"),
         (#selector(ChatViewController.runCommandsInBackground(_:)), "terminal", "detach server task"),
         (#selector(ChatViewController.scrollToLatest(_:)), "arrow.down.to.line", "bottom newest jump"),

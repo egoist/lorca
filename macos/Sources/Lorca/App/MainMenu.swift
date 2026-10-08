@@ -137,6 +137,7 @@ enum MainMenu {
         add(menu, L("Add Bot…"), #selector(RootSplitViewController.addBotToChat(_:)), "b", modifiers: [.command, .option])
         add(menu, L("Rename Chat…"), #selector(RootSplitViewController.renameChat(_:)), "r")
         add(menu, L("Pin Chat"), #selector(RootSplitViewController.togglePinChat(_:)), "p")
+        add(menu, L("New Skill…"), #selector(RootSplitViewController.newSkill(_:)))
         menu.addItem(.separator())
         add(menu, L("Stop Responding"), #selector(ChatViewController.stopResponding(_:)), ".")
         add(menu, L("Run Command in Background"), #selector(ChatViewController.runCommandsInBackground(_:)), "b", modifiers: .control)
