@@ -454,13 +454,13 @@ fn checked(app: &App, routine: &Routine, run: &CheckRun) -> Result<(), String> {
     saved.map(|_| ()).map_err(|error| format!("Could not save the routine's check: {error}"))
 }
 
-/// When the routine runs next, as the apps and the bot say it. The Runner uploads a quiet check
-/// only when it changes how the routine stands, so elsewhere a routine with a check can look
-/// past due while its Runner has been checking: it is shown due at its next schedule time.
+/// When the routine runs next, as the apps and the bot say it. Its Runner takes a due time
+/// within half a minute, so one past for longer is a Runner that is offline or, elsewhere, one
+/// whose quiet checks went unannounced: the routine is shown due at its next time from now.
 pub fn next_run_shown(routine: &Routine) -> Option<i64> {
     let next = routine.next_run_at()?;
     let now = now_unix();
-    if routine.check.is_some() && next <= now {
+    if next < now - 60 {
         return schedule::parse(&routine.schedule).ok().and_then(|schedule| schedule.next_after(now, &routine.timezone)).or(Some(next));
     }
     Some(next)
@@ -876,16 +876,17 @@ mod tests {
         assert_eq!(incoming[0].check.as_deref(), Some("return 9"));
     }
 
-    /// A Device other than the Runner hears of a quiet check only when it changes how the
-    /// routine stands, so a routine with a check that is past due is shown due at its next
-    /// schedule time.
+    /// A due time past for more than a minute (an offline Runner, or quiet checks the Runner did
+    /// not announce) is shown as the next time from now; one just due is shown as it is.
     #[test]
-    fn a_routine_with_a_check_is_shown_due_from_now() {
+    fn a_routine_past_due_is_shown_due_from_now() {
         let mut routine = plain("r1", "b1", Some("return null"));
         routine.enabled_at = now_secs() - 7200.0;
         assert!(next_run_shown(&routine).unwrap() > now_unix());
         routine.check = None;
-        assert!(next_run_shown(&routine).unwrap() <= now_unix(), "a routine without one shows when it was due");
+        assert!(next_run_shown(&routine).unwrap() > now_unix(), "with or without a check");
+        routine.enabled_at = now_secs() - 3610.0;
+        assert!(next_run_shown(&routine).unwrap() <= now_unix(), "one just due is about to run");
     }
 
     #[cfg(feature = "runner")]
