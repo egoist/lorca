@@ -6,7 +6,7 @@ import AppKit
 final class TemplateItemRow: NSView {
     private let check = NSImageView()
     private let title: NSTextField
-    private let detail = Build.label("", font: Theme.Font.caption, color: .secondaryLabelColor, lines: 2)
+    private let detail = Build.label("", font: Theme.Font.caption, color: .secondaryLabelColor)
     private let flag = Build.label("", font: .systemFont(ofSize: 10, weight: .medium), alignment: .right)
     private let isSelectable: Bool
     private var tracking: NSTrackingArea?
@@ -28,13 +28,13 @@ final class TemplateItemRow: NSView {
     init(item: TemplateItem, isSelectable: Bool, titleLines: Int = 1, media: NSView? = nil) {
         self.isSelectable = isSelectable
         title = Build.label(item.title, font: .systemFont(ofSize: 13, weight: titleLines == 1 ? .medium : .regular), lines: titleLines)
-        if titleLines > 1 { title.lineBreakMode = .byTruncatingTail }
+        // A truncating line break would hold it to one line; wrap, and end the last one with "…".
+        title.cell?.truncatesLastVisibleLine = true
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
 
         detail.stringValue = item.detail
-        detail.lineBreakMode = .byTruncatingTail
         detail.isHidden = item.detail.isEmpty
         let summary = item.flagSummary
         flag.stringValue = summary?.text ?? ""

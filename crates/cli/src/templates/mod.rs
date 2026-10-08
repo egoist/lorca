@@ -609,7 +609,7 @@ pub async fn import_text(app: &Arc<App>, text: &str, params: &Value) -> Result<V
         for routine in &template.routines {
             routines::create_paused(app, &bot.id, routine).await?;
         }
-        Ok::<_, String>(json!({ "bot": bot, "chat_id": chat.meta.id, "routines_paused": true }))
+        Ok::<_, String>(json!({ "bot": bot, "chat_id": chat.meta.id }))
     }
     .await;
     if result.is_err() {

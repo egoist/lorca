@@ -126,8 +126,8 @@ final class TemplateImportViewController: SheetViewController {
             list.setSections([
                 (L("Profile"), preview.profile.map { [TemplateItemRow.profile($0, isSelectable: false)] } ?? []),
                 (L("Skills"), preview.skills.map { TemplateItemRow(item: $0, isSelectable: false) }),
-                (L("Memories"), preview.memories.map { TemplateItemRow(item: $0, isSelectable: false, titleLines: 3) }),
                 (L("Routines"), preview.routines.map { TemplateItemRow(item: $0, isSelectable: false) }),
+                (L("Memories"), preview.memories.map { TemplateItemRow(item: $0, isSelectable: false, titleLines: 3) }),
             ])
         }
         let runnerName = runner?.name ?? ""
