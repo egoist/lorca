@@ -1071,20 +1071,30 @@ final class AppStore {
         emit(.reviewsChanged)
     }
 
-    func refreshReview(_ id: String) async throws -> ReviewItem {
-        let data = try await client.request("reviews.get", ["id": id])
-        let item = try Wire.decoder.decode(ReviewItem.self, from: data)
-        upsertReview(item)
-        return item
+    /// Approves the version the user saw. An edit made in the sheet is saved first, as the next
+    /// version, and that is the one approved: what runs is what the editor showed.
+    func approveReview(_ item: ReviewItem, payload: [String: Any]?) async throws -> ReviewItem {
+        var shown = item
+        if let payload { shown = try await changeReview(shown, action: "edit", fields: ["payload": payload]) }
+        return try await changeReview(shown, action: "approve")
     }
 
-    /// A decision always names the version the sheet actually displayed. Errors leave the
-    /// editor intact; refreshing makes a conflict visible instead of silently approving it.
-    func changeReview(_ item: ReviewItem, action: String, fields: [String: Any] = [:]) async throws -> ReviewItem {
+    func rejectReview(_ item: ReviewItem) async throws -> ReviewItem {
+        try await changeReview(item, action: "reject")
+    }
+
+    /// A change names the version the sheet displayed, so one made on another Device meanwhile is
+    /// refused rather than decided blind.
+    private func changeReview(_ item: ReviewItem, action: String, fields: [String: Any] = [:]) async throws -> ReviewItem {
         var params = fields
         params["id"] = item.id
         params["expected_version"] = item.version
-        let data = try await client.request("reviews.\(action)", params)
+        let data: Data
+        if isMock {
+            data = try MockData.changedReview(item, action: action, fields: fields)
+        } else {
+            data = try await client.request("reviews.\(action)", params)
+        }
         let updated = try Wire.decoder.decode(ReviewItem.self, from: data)
         upsertReview(updated)
         return review(updated.id) ?? updated
@@ -1725,6 +1735,7 @@ final class AppStore {
         bots = MockData.bots()
         chats = MockData.chats()
         routines = MockData.routines()
+        reviews = MockData.reviews()
         autoReview = MockData.autoReview()
         providers = MockData.providers()
         catalog = MockData.models()

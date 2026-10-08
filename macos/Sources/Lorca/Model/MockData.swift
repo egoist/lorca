@@ -644,6 +644,69 @@ enum MockData {
         ]
     }
 
+    /// What the demo's bots left for review, as the CLI sends items: a command and a GitHub call
+    /// held while Project Manager's routine ran, and a draft it wants edited.
+    static func reviews() -> [ReviewItem] {
+        reviewRecords = [
+            reviewRecord(
+                id: "review-tag", minutesAgo: 189,
+                payload: ["kind": "shell", "arguments": ["command": "git tag v1.4.0 && git push origin v1.4.0", "description": "Tag the release"]],
+                account: "Workbench", resource: "~/Projects/relay",
+                rationale: "Pushes a release tag to the shared repository, which starts the release build."),
+            reviewRecord(
+                id: "review-comment", minutesAgo: 188,
+                payload: ["kind": "plugin", "plugin_id": "github", "server_name": "github", "tool": "add_issue_comment",
+                          "arguments": ["owner": "lorca-app", "repo": "relay", "issue_number": 214, "body": "Release notes are ready: the TLS rollout, the new pairing flow, and the relay quotas."]],
+                account: "GitHub", resource: "add_issue_comment · owner: lorca-app, repo: relay, issue_number: 214",
+                rationale: "Posts a public comment on a pull request."),
+            reviewRecord(
+                id: "review-draft", minutesAgo: 33,
+                payload: ["kind": "draft", "text": "Lorca 1.4 is out. Pair your phone in one step, keep chats in sync across every Device, and run bots on the computers you already own.\n\nUpdate from the app, or download it from lorca.app."],
+                account: "Launch room", resource: "Launch announcement",
+                rationale: "Writer's draft, shortened to lead with what people can do. Edit it before it goes to the team."),
+        ]
+        return reviewRecords.compactMap { try? Wire.decoder.decode(ReviewItem.self, from: JSONSerialization.data(withJSONObject: $0)) }
+    }
+
+    private static var reviewRecords: [[String: Any]] = []
+
+    private static func reviewRecord(id: String, minutesAgo minutes: Double, payload: [String: Any], account: String, resource: String, rationale: String) -> [String: Any] {
+        [
+            "id": id, "runner_id": "dev-workbench", "bot_id": "bot-nova", "origin": ["chat_id": "chat-nova"],
+            "target": ["account": account, "resource": resource], "rationale": rationale, "payload": payload,
+            "version": 1, "revision": 1, "preconditions": ["workdir": "~/Projects/relay", "files": [] as [Any]], "state": "pending",
+            "created_at": minutesAgo(minutes).timeIntervalSince1970,
+        ]
+    }
+
+    struct ReviewChanged: LocalizedError {
+        var errorDescription: String? { "This changed on another Device. Review it again." }
+    }
+
+    /// The demo's Runner deciding: an edit makes the next version, and an approval runs at once.
+    static func changedReview(_ item: ReviewItem, action: String, fields: [String: Any]) throws -> Data {
+        guard let index = reviewRecords.firstIndex(where: { $0["id"] as? String == item.id }),
+            reviewRecords[index]["version"] as? Int == Int(item.version)
+        else { throw ReviewChanged() }
+        var record = reviewRecords[index]
+        record["revision"] = (record["revision"] as? Int ?? 1) + 1
+        let status = "review-status-\(item.id)"
+        switch action {
+        case "edit":
+            record["payload"] = fields["payload"]
+            record["version"] = Int(item.version) + 1
+        case "approve":
+            record["state"] = "succeeded"
+            let text = item.payload.isDraft ? item.payload.editorText : ""
+            record["outcome"] = ["summary": item.payload.isDraft ? "Accepted" : "Done", "message_id": status, "result": ["text": text]]
+        default:
+            record["state"] = "rejected"
+            record["outcome"] = ["summary": "Rejected", "message_id": status]
+        }
+        reviewRecords[index] = record
+        return try JSONSerialization.data(withJSONObject: record)
+    }
+
     static func bots() -> [Bot] {
         [
             Bot(
@@ -839,6 +902,16 @@ enum MockData {
                 createdAt: minutesAgo(190)
             ),
             Message(
+                author: .system,
+                body: .notice("Waiting for your review · $ git tag v1.4.0 && git push origin v1.4.0"),
+                createdAt: minutesAgo(189)
+            ),
+            Message(
+                author: .system,
+                body: .notice("Waiting for your review · GitHub: add_issue_comment · owner: lorca-app, repo: relay, issue_number: 214"),
+                createdAt: minutesAgo(188)
+            ),
+            Message(
                 author: .you,
                 body: .text("Ask Writer to keep the announcement short and lead with what people can do."),
                 createdAt: minutesAgo(36)
@@ -852,6 +925,11 @@ enum MockData {
                 author: .bot("bot-nova"),
                 body: .text("Writer has the brief. I'll keep the final draft with the launch checklist for your review."),
                 createdAt: minutesAgo(34)
+            ),
+            Message(
+                author: .system,
+                body: .notice("Waiting for your review · Draft: Launch announcement"),
+                createdAt: minutesAgo(33)
             ),
         ]
     }

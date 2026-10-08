@@ -51,6 +51,8 @@ enum ReviewJSON: Codable, Equatable {
     }
 }
 
+/// A draft or an exact call a bot left for the user to approve, as its Runner keeps it. Only that
+/// Runner changes it; a decision names the version the user saw.
 struct ReviewItem: Decodable, Identifiable {
     struct Origin: Decodable {
         var chatId: String
@@ -67,14 +69,34 @@ struct ReviewItem: Decodable, Identifiable {
         var tool: String?
         var arguments: ReviewJSON?
 
-        var editorText: String { kind == "draft" ? text ?? "" : arguments?.pretty ?? "{}" }
+        var isDraft: Bool { kind == "draft" }
+        var isShell: Bool { kind == "shell" }
 
+        /// What the sheet edits: a draft's text, a shell command, or a call's arguments as JSON.
+        var editorText: String {
+            switch kind {
+            case "draft": text ?? ""
+            case "shell": if case let .object(fields) = arguments, case let .string(command) = fields["command"] { command } else { "" }
+            default: arguments?.pretty ?? "{}"
+            }
+        }
+
+        /// The payload with `editedText` in place of what `editorText` showed; a command's other
+        /// arguments and a call's server and tool stay as they were.
         func parameters(editedText: String) throws -> [String: Any] {
-            if kind == "draft" { return ["kind": kind, "text": editedText] }
-            let arguments = try JSONSerialization.jsonObject(with: Data(editedText.utf8))
-            guard arguments is [String: Any] else { throw ReviewEditError.argumentsObject }
-            if kind == "shell" { return ["kind": kind, "arguments": arguments] }
-            return ["kind": kind, "plugin_id": pluginId ?? "", "server_name": serverName ?? "", "tool": tool ?? "", "arguments": arguments]
+            switch kind {
+            case "draft":
+                return ["kind": kind, "text": editedText]
+            case "shell":
+                var fields = arguments?.object as? [String: Any] ?? [:]
+                fields["command"] = editedText
+                return ["kind": kind, "arguments": fields]
+            default:
+                guard let arguments = try? JSONSerialization.jsonObject(with: Data(editedText.utf8)), arguments is [String: Any] else {
+                    throw ReviewEditError.argumentsObject
+                }
+                return ["kind": kind, "plugin_id": pluginId ?? "", "server_name": serverName ?? "", "tool": tool ?? "", "arguments": arguments]
+            }
         }
     }
     struct Outcome: Decodable { var summary: String; var result: ReviewJSON?; var messageId: String }
@@ -96,24 +118,42 @@ struct ReviewItem: Decodable, Identifiable {
     var preconditions: Preconditions
     var state: String
     var outcome: Outcome?
+    var createdAt: Double
 
-    var isEditable: Bool { state == "pending" || state == "approved" }
-    var stateText: String {
+    var isPending: Bool { state == "pending" }
+    /// Waiting for the user, or approved and about to run.
+    var isOpen: Bool { isPending || state == "approved" || state == "executing" }
+
+    /// How it ended or where it stands, in a word or two; nil while it waits for the user.
+    var stateText: String? {
         switch state {
-        case "pending": L("Needs review")
-        case "approved": L("Approved")
-        case "executing": L("Executing")
-        case "succeeded": L("Completed")
+        case "approved", "executing": L("Running…")
+        case "succeeded": payload.isDraft ? L("Accepted") : L("Done")
         case "failed": L("Failed")
         case "rejected": L("Rejected")
         case "cancelled": L("Cancelled")
-        case "uncertain": L("Check the outcome")
-        default: state
+        case "uncertain": L("Didn't finish")
+        default: nil
         }
+    }
+
+    /// The line the inspector shows: the command, the tool, or what the draft is for.
+    var headline: String {
+        switch payload.kind {
+        case "shell": payload.editorText.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.first { !$0.isEmpty } ?? ""
+        case "draft": target.resource
+        default: payload.tool ?? target.resource
+        }
+    }
+
+    /// What the call printed or returned, or the accepted draft.
+    var output: String? {
+        guard case let .object(fields) = outcome?.result, case let .string(text) = fields["text"], !text.isEmpty else { return nil }
+        return text
     }
 }
 
 enum ReviewEditError: LocalizedError {
     case argumentsObject
-    var errorDescription: String? { L("The proposed call needs a JSON object of arguments.") }
+    var errorDescription: String? { L("The arguments need to be a JSON object.") }
 }

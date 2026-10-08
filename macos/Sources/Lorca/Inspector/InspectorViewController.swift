@@ -15,7 +15,7 @@ final class InspectorViewController: NSViewController {
     private let runtime = SectionView(title: L("Runs with"))
     private let memory = SectionView(title: L("Memory"))
     private let routines = SectionView(title: L("Routines"))
-    private let reviews = SectionView(title: L("Review queue"))
+    private let reviews = SectionView(title: L("Waiting for review"))
     private let plugins = SectionView(title: L("Plugins"))
     private let routing = SectionView(title: L("Where turns run"))
     private let addButton = NSButton()
@@ -87,11 +87,11 @@ final class InspectorViewController: NSViewController {
         column.addArrangedSubview(participants)
         column.addArrangedSubview(addButton)
         column.addArrangedSubview(group)
+        column.addArrangedSubview(reviews)
         column.addArrangedSubview(profile)
         column.addArrangedSubview(runtime)
         column.addArrangedSubview(memory)
         column.addArrangedSubview(routines)
-        column.addArrangedSubview(reviews)
         column.addArrangedSubview(plugins)
         column.addArrangedSubview(routing)
         column.setCustomSpacing(10, after: participants)
@@ -245,16 +245,37 @@ final class InspectorViewController: NSViewController {
         showReviews(in: chat)
     }
 
+    /// What the chat's bots left for the user to approve, oldest first, while any waits or runs;
+    /// a row opens it. How each ended stays in the chat, so the section goes once none is open.
     private func showReviews(in chat: Chat) {
-        let items = store.reviews.filter { $0.origin.chatId == chat.id }
-            .sorted { $0.isEditable != $1.isEditable ? $0.isEditable : $0.id < $1.id }
-        guard changed(reviews, to: [chat.id, items.map { "\($0.id):\($0.revision)" }]) else { return }
-        reviews.setRows(items.isEmpty ? [NoteRow(text: L("Drafts and proposed actions wait here for your review."))] : items.map { item in
-            let row = ActionRow(key: item.target.resource, value: item.stateText, tint: .secondaryLabelColor, actionTitle: L("Review…"))
-            row.toolTip = item.rationale
-            row.onAction = { [weak self] in self?.presentAsSheet(ReviewViewController(item: item)) }
-            return row
-        })
+        let items = store.reviews.filter { $0.origin.chatId == chat.id && $0.isOpen }.sorted { $0.createdAt < $1.createdAt }
+        let runner = items.first.flatMap { store.device($0.runnerId) }
+        guard changed(reviews, to: [chat.id, items.map { "\($0.id):\($0.revision)" }, runner?.plugins]) else { return }
+        if reviews.isHidden != items.isEmpty { reviews.isHidden = items.isEmpty }
+        reviews.setRows(
+            items.map { item in
+                let row: StatusRow = keptRow("review:\(item.id)") {
+                    let row = StatusRow()
+                    row.identifier = NSUserInterfaceItemIdentifier(item.id)
+                    row.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(openReview(_:))))
+                    return row
+                }
+                let plugin = item.payload.pluginId.flatMap { id in store.device(item.runnerId)?.plugins.first { $0.id == id } }
+                row.configure(
+                    symbol: item.payload.isDraft ? "doc.text" : (item.payload.isShell ? "terminal" : plugin?.symbolName ?? "puzzlepiece.extension"),
+                    image: plugin.flatMap { PluginLogo.tile(for: $0.id, size: 18) },
+                    title: item.headline,
+                    subtitle: item.rationale,
+                    state: item.stateText,
+                    subtitleLines: 2)
+                row.toolTip = item.rationale
+                return row
+            })
+    }
+
+    @objc private func openReview(_ sender: NSClickGestureRecognizer) {
+        guard let id = sender.view?.identifier?.rawValue, let item = store.review(id) else { return }
+        presentAsSheet(ReviewViewController(item: item))
     }
 
     /// Whether `state` differs from what `section` last showed; records it when it does.
