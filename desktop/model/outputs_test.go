@@ -73,7 +73,7 @@ func TestOutputsListOnceThenFollowMessages(t *testing.T) {
 	}}
 	s := NewStore(transport, func(run func()) { posts <- run }, false)
 	s.Chats = []*Chat{{ID: "chat-1"}}
-	if s.Outputs("chat-1") != nil || s.Outputs("chat-1") != nil {
+	if len(s.Outputs("chat-1")) != 0 || len(s.Outputs("chat-1")) != 0 {
 		t.Fatal("outputs before the CLI answered")
 	}
 	nextOutputPost(t, posts)
@@ -87,6 +87,15 @@ func TestOutputsListOnceThenFollowMessages(t *testing.T) {
 	s.upsert(next, "chat-1")
 	if got := s.Outputs("chat-1"); len(got) != 1 || got[0].Output().Version != 3 || len(got[0].Versions) != 2 || calls.Load() != 1 {
 		t.Fatalf("new version not followed: %+v", got)
+	}
+	// A resync lists the chat again, and what it had stays meanwhile.
+	s.apply(WireSnapshot{Chats: []WireChat{{ID: "chat-1"}}})
+	if got := s.Outputs("chat-1"); len(got) != 1 {
+		t.Fatal("a resync emptied the outputs")
+	}
+	nextOutputPost(t, posts)
+	if calls.Load() != 2 {
+		t.Fatalf("a resync listed %d times", calls.Load())
 	}
 }
 

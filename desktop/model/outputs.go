@@ -118,8 +118,8 @@ func GroupOutputs(messages []*Message) []OutputSeries {
 }
 
 // Outputs are the chat's outputs, the latest published first: what `outputs.list` answered and
-// output messages that arrived since. A chat is asked for once, when something shows it; until the
-// CLI answers there are none.
+// output messages that arrived since. A chat is asked for when something first shows it, and again
+// after a resync while what it had stays on screen; until the CLI answers there are none.
 func (s *Store) Outputs(chatID string) []OutputSeries {
 	if s.IsMock {
 		if chat := s.Chat(chatID); chat != nil {
@@ -127,13 +127,19 @@ func (s *Store) Outputs(chatID string) []OutputSeries {
 		}
 		return nil
 	}
-	if messages, ok := s.outputMessages[chatID]; ok {
-		return GroupOutputs(messages)
+	known, ok := s.outputMessages[chatID]
+	if !ok || s.staleOutputs[chatID] {
+		s.listOutputs(chatID)
 	}
+	return GroupOutputs(known)
+}
+
+func (s *Store) listOutputs(chatID string) {
 	if s.outputRequests[chatID] {
-		return nil
+		return
 	}
 	s.outputRequests[chatID] = true
+	delete(s.staleOutputs, chatID)
 	identity := s.IdentityID
 	Async(s, func() ([]WireMessage, error) {
 		reply, err := call[struct {
@@ -162,7 +168,6 @@ func (s *Store) Outputs(chatID string) []OutputSeries {
 		s.outputMessages[chatID] = messages
 		s.emit(Event{Kind: EventOutputsChanged, ChatID: chatID})
 	})
-	return nil
 }
 
 // noteOutput keeps a chat's known outputs in step with a message that was added, changed, or (nil,

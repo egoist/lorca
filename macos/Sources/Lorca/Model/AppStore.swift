@@ -283,8 +283,8 @@ final class AppStore {
             runningJobs.append(("chat:\(id)", id, "", nil))
         }
         sortChats()
-        // A resync may bring outputs this app missed; they are asked for again when shown.
-        outputMessages = [:]
+        // A resync may bring outputs this app missed; they are asked for again when next shown.
+        staleOutputs = Set(outputMessages.keys)
         emit(.snapshotReplaced)
     }
 
@@ -350,6 +350,7 @@ final class AppStore {
             chats.removeAll { $0.id == payload.chatId }
             runningJobs.removeAll { $0.chatID == payload.chatId }
             outputMessages[payload.chatId] = nil
+            staleOutputs.remove(payload.chatId)
             emit(.chatsChanged)
 
         case "job.started":
@@ -1452,15 +1453,23 @@ final class AppStore {
     // MARK: - Outputs
 
     /// Every version of each chat's outputs, oldest first: what `outputs.list` answered, and
-    /// output messages that arrived since. A chat is asked for once, when something shows it.
+    /// output messages that arrived since. A chat is asked for when something first shows it, and
+    /// again after a resync, while what it had stays on screen.
     private var outputMessages: [Chat.ID: [Message]] = [:]
     private var outputRequests: Set<Chat.ID> = []
+    private var staleOutputs: Set<Chat.ID> = []
 
     /// The chat's outputs, the latest published first; empty until the CLI answers.
     func outputs(in chatID: Chat.ID) -> [OutputSeries] {
         if isMock { return OutputSeries.group(chat(chatID)?.messages ?? []) }
-        if let messages = outputMessages[chatID] { return OutputSeries.group(messages) }
-        guard outputRequests.insert(chatID).inserted else { return [] }
+        let known = outputMessages[chatID]
+        if known == nil || staleOutputs.contains(chatID) { listOutputs(in: chatID) }
+        return OutputSeries.group(known ?? [])
+    }
+
+    private func listOutputs(in chatID: Chat.ID) {
+        guard outputRequests.insert(chatID).inserted else { return }
+        staleOutputs.remove(chatID)
         Task { [weak self] in
             guard let self else { return }
             defer { outputRequests.remove(chatID) }
@@ -1477,7 +1486,6 @@ final class AppStore {
                 NSLog("listing outputs failed: \(error.localizedDescription)")
             }
         }
-        return []
     }
 
     /// Keeps a chat's known outputs in step with a message that was added, changed, or removed.

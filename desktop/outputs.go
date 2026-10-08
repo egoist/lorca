@@ -184,11 +184,13 @@ type outputPreview struct {
 	loading bool
 }
 
-// outputSheet is one output's sheet; picked is the version on screen, empty for the latest.
+// outputSheet is one output's sheet; picked is the version on screen, empty for the latest. shown
+// is the output as last listed, kept while a resync lists the chat again.
 type outputSheet struct {
 	chatID, outputID string
 	picked           string
 	previews         map[string]*outputPreview
+	shown            model.OutputSeries
 }
 
 // presentOutput puts up one output's sheet.
@@ -200,10 +202,10 @@ func (w *appWindow) presentOutput(chatID, outputID string) {
 func (o *outputSheet) series() (model.OutputSeries, bool) {
 	for _, series := range store.Outputs(o.chatID) {
 		if series.ID() == o.outputID {
-			return series, true
+			o.shown = series
 		}
 	}
-	return model.OutputSeries{}, false
+	return o.shown, len(o.shown.Versions) > 0
 }
 
 func (o *outputSheet) view(c *ui.Context, s *sheet) {

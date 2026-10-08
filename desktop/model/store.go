@@ -190,6 +190,7 @@ type Store struct {
 	// are the chats whose list is on its way.
 	outputMessages map[string][]*Message
 	outputRequests map[string]bool
+	staleOutputs   map[string]bool
 
 	mockMarketplace *Marketplace
 	mockMcp         map[string][]McpServer
@@ -219,6 +220,7 @@ func NewStore(transport Transport, post func(func()), mock bool) *Store {
 		attachmentErrors:   map[string]string{},
 		outputMessages:     map[string][]*Message{},
 		outputRequests:     map[string]bool{},
+		staleOutputs:       map[string]bool{},
 		mockMcp:            map[string][]McpServer{},
 		isBootstrapping:    true,
 	}
@@ -383,8 +385,10 @@ func (s *Store) apply(snapshot WireSnapshot) {
 		clear(s.fetchingAttachment)
 		clear(s.attachmentErrors)
 	}
-	// A resync may bring outputs this app missed; they are asked for again when shown.
-	clear(s.outputMessages)
+	// A resync may bring outputs this app missed; they are asked for again when next shown.
+	for chatID := range s.outputMessages {
+		s.staleOutputs[chatID] = true
+	}
 	has := snapshot.HasIdentity
 	s.HasIdentity = &has
 	s.IsIdentityDevice = snapshot.IsIdentityDevice
@@ -566,6 +570,7 @@ func (s *Store) handle(name string, data json.RawMessage) {
 		s.Chats = slices.DeleteFunc(slices.Clone(s.Chats), func(c *Chat) bool { return c.ID == payload.ChatID })
 		s.runningJobs = slices.DeleteFunc(s.runningJobs, func(job runningJob) bool { return job.chatID == payload.ChatID })
 		delete(s.outputMessages, payload.ChatID)
+		delete(s.staleOutputs, payload.ChatID)
 		s.emit(Event{Kind: EventChatsChanged})
 
 	case "job.started":
