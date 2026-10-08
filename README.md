@@ -11,7 +11,7 @@ Identity is a local key pair. Devices pair to each other. Traffic to the network
 ## Stack
 
 - macOS app: AppKit, SPM (`macos/`)
-- Windows and Linux app: MyGo (Go and the system webview) with a Solid page (`desktop/`), after the macOS app
+- Windows and Linux app: Go on MyGo's native UI (`desktop/`), after the macOS app
 - CLI: Rust websocket service (`crates/cli`)
   - agent loop after pi-agent-core (`crates/agent`), with Grok-style bot orchestration
   - identity, pairing, E2E (X25519/Ed25519 key pairs + XChaCha20-Poly1305 DEK); signed requests and opaque blobs to the relay

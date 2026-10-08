@@ -19,6 +19,13 @@ struct Cli {
     #[usage(long, env = "LORCA_PORT", global)]
     port: Option<u16>,
 
+    /// Accepted and ignored. A cargo wrapper (mbx) adds its own `--message-format=…` to the
+    /// command line, and Cargo hands everything after the program's name to the program, so
+    /// `cargo run -p lorca serve` would fail before the server started. Lorca has no message
+    /// format of its own.
+    #[usage(long, global, hide)]
+    message_format: Option<String>,
+
     #[usage(subcommand)]
     command: Option<Command>,
 }
