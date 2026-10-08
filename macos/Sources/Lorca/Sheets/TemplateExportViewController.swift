@@ -14,16 +14,14 @@ final class TemplateExportViewController: SheetViewController {
     private let list = TemplateItemList(maxHeight: 380)
     private let status = Build.label("", font: .systemFont(ofSize: 11.5), color: .secondaryLabelColor, lines: 0)
     private var rows: [String: TemplateItemRow] = [:]
-    /// What is picked, by kind: `profile`, `skill_ids`, `memory_ids`, `routine_ids`, `requirement_ids`.
+    /// What is picked, by kind: `skill_ids`, `memory_ids`, `routine_ids`, `requirement_ids`. The
+    /// profile is what makes a template a bot, so it is always in the file.
     private var picked: [String: [String]] = [:]
     private var order: [String: [String]] = [:]
     private var isBusy = false
-    /// Picks every memory, or none once all are picked: a bot's memory runs to dozens of lines.
-    private lazy var allMemories: NSButton = {
-        let button = NSButton(title: "", target: self, action: #selector(toggleAllMemories))
-        button.isBordered = false
-        return button
-    }()
+    private var isLoaded = false
+    /// Select All in the header of each long list, by kind.
+    private var selectAll: [String: NSButton] = [:]
 
     init(bot: Bot, reply: TemplateReply? = nil) {
         self.bot = bot
@@ -68,17 +66,30 @@ final class TemplateExportViewController: SheetViewController {
         }
         let plugins = contents.plugins.map { TemplateItem(id: $0.id, title: $0.name, detail: "", flags: []) }
         // Memories come last: they are the longest list, and the most personal.
-        list.setSections([
-            (L("Profile"), rows("profile", [contents.profile]) { .profile($0, isSelectable: true) }),
-            (L("Skills"), rows("skill_ids", contents.skills) { TemplateItemRow(item: $0, isSelectable: true) }),
-            (L("Routines"), rows("routine_ids", contents.routines) { TemplateItemRow(item: $0, isSelectable: true) }),
-            (L("Plugins"), rows("requirement_ids", plugins) { .plugin(id: $0.id, name: $0.title, isSelectable: true) }),
-            (L("Memories"), rows("memory_ids", contents.memories) { TemplateItemRow(item: $0, isSelectable: true, titleLines: 3) }),
-        ], accessories: contents.memories.count >= 3 ? [L("Memories"): allMemories] : [:])
-        // The profile is what makes a template a bot; the rest waits to be picked.
-        toggle("profile", in: "profile")
+        let sections: [(key: String, title: String, rows: [NSView])] = [
+            ("profile", L("Profile"), [TemplateItemRow.profile(contents.profile, isSelectable: false)]),
+            ("skill_ids", L("Skills"), rows("skill_ids", contents.skills) { TemplateItemRow(item: $0, isSelectable: true) }),
+            ("routine_ids", L("Routines"), rows("routine_ids", contents.routines) { TemplateItemRow(item: $0, isSelectable: true) }),
+            ("requirement_ids", L("Plugins"), rows("requirement_ids", plugins) { .plugin(id: $0.id, name: $0.title, isSelectable: true) }),
+            ("memory_ids", L("Memories"), rows("memory_ids", contents.memories) { TemplateItemRow(item: $0, isSelectable: true, titleLines: 3) }),
+        ]
+        // A long list picks all at once, whichever kind it is.
+        var accessories: [String: NSView] = [:]
+        for section in sections where section.key != "profile" && section.rows.count >= Self.longList {
+            let button = NSButton(title: "", target: self, action: #selector(toggleAll(_:)))
+            button.isBordered = false
+            button.identifier = NSUserInterfaceItemIdentifier(section.key)
+            selectAll[section.key] = button
+            accessories[section.title] = button
+        }
+        list.setSections(sections.map { ($0.title, $0.rows) }, accessories: accessories)
+        isLoaded = true
+        showPicked()
         show(status: "")
     }
+
+    /// How many items a list has before its header offers Select All.
+    static let longList = 6
 
     private func toggle(_ id: String, in key: String) {
         guard !isBusy else { return }
@@ -90,24 +101,26 @@ final class TemplateExportViewController: SheetViewController {
         showPicked()
     }
 
-    @objc private func toggleAllMemories() {
-        guard !isBusy else { return }
-        let all = order["memory_ids"] ?? []
-        picked["memory_ids"] = picked["memory_ids"] == all ? [] : all
-        for id in all { rows["memory_ids:" + id]?.isSelected = picked["memory_ids"] == all }
+    @objc private func toggleAll(_ sender: NSButton) {
+        guard !isBusy, let key = sender.identifier?.rawValue else { return }
+        let all = order[key] ?? []
+        picked[key] = picked[key] == all ? [] : all
+        for id in all { rows[key + ":" + id]?.isSelected = picked[key] == all }
         showPicked()
     }
 
     private func showPicked() {
-        allMemories.attributedTitle = NSAttributedString(
-            string: picked["memory_ids"] == order["memory_ids"] ? L("Deselect All") : L("Select All"),
-            attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor])
-        confirmButton.isEnabled = picked.values.contains { !$0.isEmpty }
+        for (key, button) in selectAll {
+            button.attributedTitle = NSAttributedString(
+                string: picked[key] == order[key] ? L("Deselect All") : L("Select All"),
+                attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor])
+        }
+        confirmButton.isEnabled = isLoaded && !isBusy
         if status.textColor == .systemRed { show(status: "") }
     }
 
     private var selection: [String: Any] {
-        var selection: [String: Any] = ["profile": picked["profile"]?.isEmpty == false]
+        var selection: [String: Any] = ["profile": true]
         for key in ["skill_ids", "memory_ids", "routine_ids", "requirement_ids"] { selection[key] = picked[key] ?? [] }
         return selection
     }
@@ -149,6 +162,6 @@ final class TemplateExportViewController: SheetViewController {
 
     private func setBusy(_ busy: Bool) {
         isBusy = busy
-        confirmButton.isEnabled = !busy && picked.values.contains { !$0.isEmpty }
+        confirmButton.isEnabled = !busy && isLoaded
     }
 }

@@ -89,7 +89,7 @@ func templateFlags(flags []string) (string, bool) {
 // templateItemRow is a piece of a template, after pickerBotRow: a check when it can be picked, the
 // bot's avatar or a plugin's logo, its text, and what to look at before sharing it at the end. It
 // reports a click while it can be picked.
-func templateItemRow(c *ui.Context, k *card, item templateItem, selectable, selected bool) bool {
+func templateItemRow(c *ui.Context, k *card, item templateItem, selectable, selected bool) (ui.Element, bool) {
 	p := colors(c)
 	label := strings.TrimSpace(item.title + "\n" + item.detail)
 	r := k.row(rowBox(c.Key(item.id)).MinHeight(36).Padding(9, 12).AlignItems(ui.Start).Label(label).Tooltip(label))
@@ -145,36 +145,96 @@ func templateItemRow(c *ui.Context, k *card, item templateItem, selectable, sele
 			ui.Text(c, text).Margin(2, 0, 0, 0).FontSize(10).FontWeight(500).TextColor(tint).SingleLine()
 		}
 	})
-	return clicked
+	return r, clicked
 }
 
 type templateSection struct {
-	title     string
-	items     []templateItem
+	title string
+	items []templateItem
+	// fixed is a section that is always in the file, so its rows have no check.
+	fixed     bool
 	accessory func()
 }
 
+// templateLongList is how many items a section has before its header offers Select All.
+const templateLongList = 6
+
 // templateList is a card per kind that has items, scrolling past `height`. It reports the item
-// clicked, as "<section>:<id>".
+// clicked, as "<section>:<id>". Taller than `height`, it ends where a row or a card ends rather than
+// through one, and a hairline marks the edge while there is more below.
 func templateList(c *ui.Context, height float32, sections []templateSection, selectable bool, selected func(section, id string) bool) string {
+	p := colors(c)
 	clicked := ""
-	ui.Scroll(c).MaxHeight(height).Children(func() {
-		ui.Column(c).Gap(16).Children(func() {
+	box := ui.Scroll(c)
+	scroll := ui.Local(box, "scroll", func() ui.ScrollState { return ui.ScrollState{} })
+	box.TrackScroll(scroll)
+	// The previous frame's boxes: where each row and card ends below the cards' top.
+	var top, full float32
+	var ends []float32
+	box.Children(func() {
+		cards := ui.Column(c.Key("cards")).Gap(16)
+		top, full = cards.Bounds().Y, cards.Bounds().H
+		cards.Children(func() {
 			for _, sec := range sections {
 				if len(sec.items) == 0 {
 					continue
 				}
-				section(c.Key(sec.title), sec.title, sectionCaption, sec.accessory, func(k *card) {
+				var last ui.Element
+				el := section(c.Key(sec.title), sec.title, sectionCaption, sec.accessory, func(k *card) {
 					for _, item := range sec.items {
-						if templateItemRow(c, k, item, selectable, selectable && selected(sec.title, item.id)) {
+						can := selectable && !sec.fixed
+						row, picked := templateItemRow(c, k, item, can, can && selected(sec.title, item.id))
+						if picked {
 							clicked = sec.title + ":" + item.id
 						}
+						if last.Bounds().H > 0 {
+							ends = append(ends, last.Bounds().Y+last.Bounds().H-top)
+						}
+						last = row
 					}
 				})
+				// A card's end leaves half the gap to the next, so the edge clears its corners.
+				ends = append(ends, el.Bounds().Y+el.Bounds().H-top+8)
 			}
 		})
 	})
+	end := float32(0)
+	for _, bottom := range ends {
+		if bottom <= height && bottom > end {
+			end = bottom
+		}
+	}
+	if full > height && end > 0 {
+		box.Height(end)
+	} else {
+		box.MaxHeight(height)
+	}
+	box.DrawOver(func(painter *ui.Painter, r ui.Rect) {
+		if scroll.Y < scroll.MaxY-0.5 {
+			painter.Fill(ui.Rect{X: r.X, Y: r.Y + r.H - 1, W: r.W, H: 1}, p.Separator, 0)
+		}
+	})
 	return clicked
+}
+
+// selectAll is a section header's Select All, or Deselect All once every item is picked.
+func selectAll(c *ui.Context, items []templateItem, picked *[]string, disabled bool) {
+	p := colors(c)
+	all := len(*picked) == len(items)
+	title := L("Select All")
+	if all {
+		title = L("Deselect All")
+	}
+	b := ui.ButtonBase(c).Shrink(0).Padding(0, 6).FontSize(11).TextColor(p.Label2).Label(title).Cursor(ui.CursorPointer)
+	b.Children(func() { ui.Text(c, title).SingleLine() })
+	if b.Clicked() && !disabled {
+		*picked = nil
+		if !all {
+			for _, item := range items {
+				*picked = append(*picked, item.id)
+			}
+		}
+	}
 }
 
 type templateExportState struct {
@@ -203,15 +263,14 @@ func (w *appWindow) presentTemplateExport(botID string) {
 			return
 		}
 		st.contents, st.status = &contents, ""
-		// The profile is what makes a template a bot; the rest waits to be picked.
-		st.picked[L("Profile")] = []string{"profile"}
 	})
 }
 
 // sections are the bot's pieces by kind; memories come last, the longest list and most personal.
 func (st *templateExportState) sections() []templateSection {
 	contents := st.contents
-	profile := templateSection{title: L("Profile"), items: []templateItem{templateProfile(contents.Profile.Content, contents.Profile.Flags)}}
+	// The profile is what makes a template a bot, so it is always in the file.
+	profile := templateSection{title: L("Profile"), items: []templateItem{templateProfile(contents.Profile.Content, contents.Profile.Flags)}, fixed: true}
 	skills := templateSection{title: L("Skills")}
 	for _, item := range contents.Skills {
 		skills.items = append(skills.items, templateItem{id: item.ID, title: item.Content.Name, detail: item.Content.Description, flags: item.Flags, lines: 1})
@@ -261,7 +320,7 @@ func (st *templateExportState) toggle(sections []templateSection, title, id stri
 
 func (st *templateExportState) selection() model.TemplateSelection {
 	return model.TemplateSelection{
-		Profile:        len(st.picked[L("Profile")]) > 0,
+		Profile:        true,
 		SkillIDs:       st.picked[L("Skills")],
 		MemoryIDs:      st.picked[L("Memories")],
 		RoutineIDs:     st.picked[L("Routines")],
@@ -276,27 +335,18 @@ func (st *templateExportState) view(c *ui.Context, w *appWindow, s *sheet) {
 		Subtitle:        L("Pick what goes in the template. Keys, sign-ins, and chats never do."),
 		Width:           480,
 		Confirm:         L("Export…"),
-		ConfirmDisabled: st.busy || st.contents == nil || st.selection().Empty(),
+		ConfirmDisabled: st.busy || st.contents == nil,
 	}, func() {
 		if st.contents != nil {
 			sections := st.sections()
-			// Every memory at once, or none once all are picked: a bot's memory runs to dozens of lines.
-			if memories := sections[4].items; len(memories) >= 3 {
-				sections[4].accessory = func() {
-					all := len(st.picked[L("Memories")]) == len(memories)
-					title := L("Select All")
-					if all {
-						title = L("Deselect All")
-					}
-					b := ui.ButtonBase(c.Key("all-memories")).Shrink(0).Padding(0, 6).FontSize(11).TextColor(p.Label2).Label(title).Cursor(ui.CursorPointer)
-					b.Children(func() { ui.Text(c, title).SingleLine() })
-					if b.Clicked() && !st.busy {
-						st.picked[L("Memories")] = nil
-						if !all {
-							for _, item := range memories {
-								st.picked[L("Memories")] = append(st.picked[L("Memories")], item.id)
-							}
-						}
+			// A long list picks all at once, whichever kind it is.
+			for i := range sections {
+				sec := sections[i]
+				if len(sec.items) >= templateLongList && !sec.fixed {
+					sections[i].accessory = func() {
+						picked := st.picked[sec.title]
+						selectAll(c.Key("all:"+sec.title), sec.items, &picked, st.busy)
+						st.picked[sec.title] = picked
 					}
 				}
 			}
@@ -316,7 +366,7 @@ func (st *templateExportState) view(c *ui.Context, w *appWindow, s *sheet) {
 	switch {
 	case result.Cancelled && !st.busy:
 		s.dismiss()
-	case result.Confirmed && !st.busy && st.contents != nil && !st.selection().Empty():
+	case result.Confirmed && !st.busy && st.contents != nil:
 		st.export(w, s)
 	}
 }

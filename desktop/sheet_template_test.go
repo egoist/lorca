@@ -190,6 +190,19 @@ func (f *templateUIFixture) click(t *testing.T, label string) {
 	f.step()
 }
 
+// scrollList scrolls the export's cards to their end, where the memories are.
+func (f *templateUIFixture) scrollList(t *testing.T) {
+	t.Helper()
+	list, ok := f.tt.Find("Launch checklist")
+	if !ok {
+		t.Fatal("no list to scroll")
+	}
+	for range 12 {
+		f.tt.Scroll(list.X, list.Y, 0, 40)
+		f.step()
+	}
+}
+
 func (f *templateUIFixture) stubDestination(t *testing.T, path string) {
 	old := chooseTemplateDestination
 	t.Cleanup(func() { chooseTemplateDestination = old })
@@ -202,22 +215,15 @@ func TestTemplateExportSendsThePickedContentInTheBotsOrder(t *testing.T) {
 	f.wait(t, func() bool { return f.tt.HasText("Launch checklist") })
 	renderBoth(t, f.tt, "desktop-template-export")
 
-	// Every memory at once, and none.
-	// Memories come last, below the fold.
-	list, _ := f.tt.Find("Launch checklist")
-	for range 10 {
-		f.tt.Scroll(list.X, list.Y, 0, 40)
-		f.step()
+	if f.tt.HasText("Select All") {
+		t.Fatal("a short list offers Select All")
 	}
-	f.click(t, "Select All")
-	if !f.tt.HasText("Deselect All") {
-		t.Fatal("Select All did not pick every memory")
-	}
-	f.click(t, "Deselect All")
 	// Picked out of order, listed in the bot's: routines, plugins, then memories.
-	for _, label := range []string{"Release process", "Morning brief", "GitHub", "The launch is on Friday; the go/no-go call is Thursday at 4 PM."} {
-		f.click(t, label)
-	}
+	f.click(t, "GitHub")
+	f.click(t, "Morning brief")
+	f.scrollList(t)
+	f.click(t, "Release process")
+	f.click(t, "The launch is on Friday; the go/no-go call is Thursday at 4 PM.")
 	path := filepath.Join(t.TempDir(), "Project Manager.lorca-template")
 	f.stubDestination(t, path)
 	f.click(t, "Export…")
@@ -232,6 +238,35 @@ func TestTemplateExportSendsThePickedContentInTheBotsOrder(t *testing.T) {
 	}
 	if saves[0].params["path"] != path || saves[0].params["expected_digest"] != "export-digest" || saves[0].params["reviewed"] != true || saves[0].params["overwrite"] != false {
 		t.Fatalf("save %v", saves[0].params)
+	}
+}
+
+func TestTemplateExportOffersSelectAllOnALongList(t *testing.T) {
+	f := newTemplateUIFixture(t)
+	f.transport.mu.Lock()
+	next := f.transport.handler
+	f.transport.handler = func(call templateUICall) (any, error) {
+		if call.method != "templates.contents" {
+			return next(call)
+		}
+		contents := templateContentsFixture()
+		memories := contents["memories"].([]any)
+		for _, text := range []string{"- Release notes go out on Monday.", "- The design review is on Tuesdays."} {
+			memories = append(memories, map[string]any{"id": "memory-" + text[2:9], "content": text})
+		}
+		contents["memories"] = memories
+		return contents, nil
+	}
+	f.transport.mu.Unlock()
+	f.m.presentTemplateExport("bot-nova")
+	f.wait(t, func() bool { return f.tt.HasText("Launch checklist") })
+	f.scrollList(t)
+	f.click(t, "Select All")
+	f.click(t, "Export…")
+	f.wait(t, func() bool { return len(f.transport.methodCalls("templates.export.preview")) == 1 })
+	selection := f.transport.methodCalls("templates.export.preview")[0].params["selection"].(map[string]any)
+	if ids, _ := selection["memory_ids"].([]any); len(ids) != 6 {
+		t.Fatalf("Select All picked %v", selection["memory_ids"])
 	}
 }
 

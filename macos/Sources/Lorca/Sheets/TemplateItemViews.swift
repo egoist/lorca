@@ -160,27 +160,45 @@ extension TemplateItemRow {
     }
 }
 
-/// The cards of a template's contents, scrolling past `maxHeight`.
-final class TemplateItemList: NSScrollView {
+/// The cards of a template's contents, scrolling past `maxHeight`. Taller than that, the list ends
+/// where a row or a card ends rather than through one, and a hairline marks the edge while there
+/// is more below.
+final class TemplateItemList: NSView {
+    private let scroll = NSScrollView()
     private let column = Build.stack([], spacing: 16)
     private let document = FlippedView()
+    private let edge = HairlineView()
     private var height: NSLayoutConstraint!
     private let maxHeight: CGFloat
+    private var cards: [(section: SectionView, rows: [NSView])] = []
 
     init(maxHeight: CGFloat) {
         self.maxHeight = maxHeight
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
-        drawsBackground = false
-        hasVerticalScroller = true
-        autohidesScrollers = true
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        scroll.drawsBackground = false
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
         document.translatesAutoresizingMaskIntoConstraints = false
         document.addSubview(column)
-        documentView = document
+        scroll.documentView = document
+        addSubview(scroll)
+        addSubview(edge)
+        edge.isHidden = true
+        scroll.contentView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(self, selector: #selector(showEdge), name: NSView.boundsDidChangeNotification, object: scroll.contentView)
         height = heightAnchor.constraint(equalToConstant: 0)
         NSLayoutConstraint.activate([
             height,
-            document.widthAnchor.constraint(equalTo: contentView.widthAnchor),
+            scroll.topAnchor.constraint(equalTo: topAnchor),
+            scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
+            scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
+            edge.leadingAnchor.constraint(equalTo: leadingAnchor),
+            edge.trailingAnchor.constraint(equalTo: trailingAnchor),
+            edge.bottomAnchor.constraint(equalTo: bottomAnchor),
+            document.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
             column.topAnchor.constraint(equalTo: document.topAnchor),
             column.leadingAnchor.constraint(equalTo: document.leadingAnchor),
             column.trailingAnchor.constraint(equalTo: document.trailingAnchor),
@@ -195,27 +213,40 @@ final class TemplateItemList: NSScrollView {
     /// the titles they are keyed by.
     func setSections(_ sections: [(title: String, rows: [NSView])], accessories: [String: NSView] = [:]) {
         column.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        cards = []
         for (title, rows) in sections where !rows.isEmpty {
             let section = SectionView(title: title)
             section.setRows(rows)
             section.setHeaderAccessory(accessories[title])
             column.addArrangedSubview(section)
             section.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
+            cards.append((section, rows))
         }
-        fitHeight()
+        needsLayout = true
     }
 
-    /// As tall as the cards, up to `maxHeight`.
-    func fitHeight() {
-        guard bounds.width > 0 else { return }
-        document.layoutSubtreeIfNeeded()
-        let wanted = min(maxHeight, ceil(column.fittingSize.height))
-        if height.constant != wanted { height.constant = wanted }
+    /// Where the list can end, from the cards' top: under each row, and under each card with half
+    /// the gap to the next, so the edge clears its corners.
+    private var ends: [CGFloat] {
+        cards.flatMap { section, rows in
+            rows.dropLast().map { $0.convert($0.bounds, to: document).maxY }
+                + [section.convert(section.bounds, to: document).maxY + 8]
+        }
     }
 
     override func layout() {
         super.layout()
-        let wanted = min(maxHeight, ceil(column.frame.height))
-        if column.frame.height > 0, height.constant != wanted { height.constant = wanted }
+        // The cards lay out under the scroll view, after this view; measure them laid out.
+        document.layoutSubtreeIfNeeded()
+        let full = ceil(column.frame.height)
+        guard full > 0 else { return }
+        let wanted = full <= maxHeight ? full : ceil(ends.filter { $0 <= maxHeight }.max() ?? maxHeight)
+        if height.constant != wanted { height.constant = wanted }
+        showEdge()
+    }
+
+    @objc private func showEdge() {
+        let hidden = scroll.contentView.bounds.maxY >= document.frame.height - 0.5
+        if edge.isHidden != hidden { edge.isHidden = hidden }
     }
 }

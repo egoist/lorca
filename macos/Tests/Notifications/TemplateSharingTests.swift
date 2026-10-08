@@ -63,18 +63,21 @@ final class TemplateSharingTests: XCTestCase {
         }
         try await wait { self.rows(in: controller.view).count == 9 }
         let rows = rows(in: controller.view)
-        // The profile starts picked; nothing else does.
-        XCTAssertEqual(rows.map(\.isSelected), [true] + Array(repeating: false, count: 8))
+        // The profile is always in the file, so it has no check; nothing else starts picked.
+        XCTAssertEqual(rows[0].accessibilityRole(), .staticText)
+        XCTAssertEqual(rows.map(\.isSelected), Array(repeating: false, count: 9))
         XCTAssertTrue(controller.confirmButton.isEnabled)
+        XCTAssertFalse(descendants(controller.view).contains { ($0 as? NSButton)?.title == "Select All" }, "a short list has no Select All")
+        // Taller than its room, the list ends between rows, never through one.
+        let list = try XCTUnwrap(descendants(controller.view).compactMap { $0 as? TemplateItemList }.first)
+        controller.view.layoutSubtreeIfNeeded()
+        XCTAssertLessThanOrEqual(list.frame.height, 380)
+        XCTAssertGreaterThan(list.frame.height, 300, "the list shows what fits")
+        for row in rows {
+            let frame = row.convert(row.bounds, to: list)
+            XCTAssertFalse(frame.minY < -0.5 && frame.maxY > 0.5, "the list's edge cuts through \(row.toolTip ?? "")")
+        }
         try capture(controller, window: window, name: "export")
-
-        // Every memory at once, and none.
-        let all = try XCTUnwrap(descendants(controller.view).compactMap { $0 as? NSButton }.first { $0.title == "Select All" })
-        all.performClick(nil)
-        XCTAssertEqual(rows[5...].map(\.isSelected), [true, true, true, true])
-        XCTAssertEqual(all.title, "Deselect All")
-        all.performClick(nil)
-        XCTAssertEqual(rows[5...].map(\.isSelected), [false, false, false, false])
 
         // Picked out of order, listed in the bot's: routines, plugins, then memories.
         _ = rows[8].accessibilityPerformPress()
@@ -89,6 +92,34 @@ final class TemplateSharingTests: XCTestCase {
         try await wait { self.labels(in: controller.view).contains("What you picked uses GitHub. Check it under Plugins too.") }
         XCTAssertTrue(controller.confirmButton.isEnabled, "the user fixes the selection and tries again")
         try capture(controller, window: window, name: "export-error")
+    }
+
+    func testLongListsOfferSelectAll() async throws {
+        try prepare()
+        let bot = try XCTUnwrap(AppStore.shared.bot("bot-nova"))
+        var contents = contents
+        var memories = contents["memories"] as! [[String: Any]]
+        memories += [["id": "memory-notes", "content": "- Release notes go out on Monday."], ["id": "memory-design", "content": "- The design review is on Tuesdays."]]
+        contents["memories"] = memories
+        var preview: [String: Any]?
+        let controller = TemplateExportViewController(bot: bot) { method, params in
+            if method == "templates.contents" { return contents }
+            preview = params["selection"] as? [String: Any]
+            throw CLIClient.RequestError(message: "stop")
+        }
+        let window = host(controller)
+        defer {
+            controller.dismiss(nil)
+            window.close()
+        }
+        try await wait { self.rows(in: controller.view).count == 11 }
+        let buttons = descendants(controller.view).compactMap { $0 as? NSButton }.filter { $0.title == "Select All" }
+        XCTAssertEqual(buttons.count, 1, "only the list of six memories is long")
+        buttons[0].performClick(nil)
+        XCTAssertEqual(buttons[0].title, "Deselect All")
+        controller.confirmButton.performClick(nil)
+        try await wait { preview != nil }
+        XCTAssertEqual((preview?["memory_ids"] as? [String])?.count, 6)
     }
 
     func testImportUsesTheRunnersConnectionAndSaysWhatIsMissing() async throws {
