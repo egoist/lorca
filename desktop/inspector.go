@@ -106,6 +106,9 @@ func (m *mainWindow) inspectorView(c *ui.Context, chatID string) {
 				m.inspectorProfile(c, single)
 				m.inspectorRuntime(c, single, chat)
 				m.inspectorMemory(c, single)
+			}
+			m.inspectorPlaybooks(c, chat)
+			if single != nil {
 				m.inspectorRoutines(c, single)
 				m.inspectorPlugins(c, single)
 			}
