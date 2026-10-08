@@ -75,7 +75,8 @@ const (
 	EventRunningTasksChanged
 	EventConnectionChanged
 	EventIdentityChanged
-	EventWorkflowFeedbackChanged
+	// EventFeedbackChanged is a bot's workflow feedback changing on its Runner (BotID).
+	EventFeedbackChanged
 )
 
 // Event says what in the store changed.
@@ -136,9 +137,7 @@ type Store struct {
 	// Providers are the account's provider credentials, the same on every Device.
 	Providers []ProviderCredential
 	// Models are what the CLI's catalog offers, for the Model and Thinking pickers.
-	Models                   []ProviderModel
-	WorkflowProposalCounts   map[string]int
-	WorkflowFeedbackVersions map[string]uint64
+	Models []ProviderModel
 
 	// IsConnected is the CLI answering on localhost (mock: toggled from the Debug menu).
 	IsConnected bool
@@ -188,6 +187,8 @@ type Store struct {
 
 	mockMarketplace *Marketplace
 	mockMcp         map[string][]McpServer
+	// mockFeedback is the demo's workflow feedback, changed in place by the same calls.
+	mockFeedback map[string]BotFeedback
 }
 
 type pendingEvent struct {
@@ -198,23 +199,22 @@ type pendingEvent struct {
 // NewStore makes the store. `post` runs a function on the main thread.
 func NewStore(transport Transport, post func(func()), mock bool) *Store {
 	return &Store{
-		IsMock:                   mock,
-		WorkflowProposalCounts:   map[string]int{},
-		WorkflowFeedbackVersions: map[string]uint64{},
-		transport:                transport,
-		post:                     post,
-		IsStarting:               true,
-		AutoReview:               AutoReview{IsEnabled: true},
-		CLI:                      CLIState{Connection: "disconnected", Launcher: LauncherStatus{Kind: "idle"}, Starting: true},
-		jobStarts:                map[string]time.Time{},
-		commandStarts:            map[string]time.Time{},
-		loadingOlder:             map[string]bool{},
-		retryNotes:               map[string]string{},
-		thinkingBots:             map[string]string{},
-		attachmentFiles:          map[string]string{},
-		fetchingAttachment:       map[string]bool{},
-		mockMcp:                  map[string][]McpServer{},
-		isBootstrapping:          true,
+		IsMock:             mock,
+		transport:          transport,
+		post:               post,
+		IsStarting:         true,
+		AutoReview:         AutoReview{IsEnabled: true},
+		CLI:                CLIState{Connection: "disconnected", Launcher: LauncherStatus{Kind: "idle"}, Starting: true},
+		jobStarts:          map[string]time.Time{},
+		commandStarts:      map[string]time.Time{},
+		loadingOlder:       map[string]bool{},
+		retryNotes:         map[string]string{},
+		thinkingBots:       map[string]string{},
+		attachmentFiles:    map[string]string{},
+		fetchingAttachment: map[string]bool{},
+		mockMcp:            map[string][]McpServer{},
+		mockFeedback:       map[string]BotFeedback{},
+		isBootstrapping:    true,
 	}
 }
 
@@ -375,10 +375,6 @@ func (s *Store) apply(snapshot WireSnapshot) {
 	has := snapshot.HasIdentity
 	s.HasIdentity = &has
 	s.IsIdentityDevice = snapshot.IsIdentityDevice
-	if !has || s.IdentityID != str(snapshot.IdentityID) {
-		s.WorkflowProposalCounts = map[string]int{}
-		s.WorkflowFeedbackVersions = map[string]uint64{}
-	}
 	s.IdentityID = str(snapshot.IdentityID)
 	s.RelayURL = str(snapshot.RelayURL)
 	s.RelayConnected = snapshot.RelayConnected
@@ -468,12 +464,9 @@ func (s *Store) handle(name string, data json.RawMessage) {
 
 	case "feedback.changed":
 		if payload, ok := decode[struct {
-			BotID        string `json:"bot_id"`
-			PendingCount int    `json:"pending_count"`
+			BotID string `json:"bot_id"`
 		}](data); ok {
-			s.WorkflowProposalCounts[payload.BotID] = payload.PendingCount
-			s.WorkflowFeedbackVersions[payload.BotID]++
-			s.emit(Event{Kind: EventWorkflowFeedbackChanged, BotID: payload.BotID})
+			s.emit(Event{Kind: EventFeedbackChanged, BotID: payload.BotID})
 		}
 
 	case "roster.changed":
@@ -657,10 +650,6 @@ func (s *Store) handle(name string, data json.RawMessage) {
 			return
 		}
 		s.HasIdentity = &payload.HasIdentity
-		if !payload.HasIdentity {
-			s.WorkflowProposalCounts = map[string]int{}
-			s.WorkflowFeedbackVersions = map[string]uint64{}
-		}
 		s.emit(Event{Kind: EventIdentityChanged})
 	}
 }
@@ -2495,6 +2484,7 @@ func (s *Store) ResetMockData() {
 			s.replies.cancel(chat.ID)
 		}
 	}
+	s.mockFeedback = map[string]BotFeedback{}
 	s.Devices = mockDevices()
 	s.Bots = mockBots()
 	s.Chats = mockChats()

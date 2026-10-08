@@ -21,6 +21,10 @@ type inspectorState struct {
 	memory   map[string]model.BotMemory
 	errors   map[string]string
 	fetching map[string]bool
+	// feedback is what each bot's Runner last said about its workflow feedback, refreshed with
+	// its memory and when the Runner says it changed; the feedback sheets show it too.
+	feedback         map[string]model.BotFeedback
+	fetchingFeedback map[string]bool
 	// shownChat is the chat the pane last opened on.
 	shownChat string
 	scroll    ui.ScrollState
@@ -46,7 +50,25 @@ func (s *inspectorState) refreshMemory(botID string) {
 	})
 }
 
-// refreshShownMemory asks for the memory of the bot whose DM is showing.
+// refreshFeedback asks the bot's Runner for its feedback. The section stays out while there is
+// none, or while the Runner cannot be asked.
+func (s *inspectorState) refreshFeedback(botID string) {
+	if s.feedback == nil {
+		s.feedback, s.fetchingFeedback = map[string]model.BotFeedback{}, map[string]bool{}
+	}
+	if s.fetchingFeedback[botID] {
+		return
+	}
+	s.fetchingFeedback[botID] = true
+	store.Feedback(botID, func(f model.BotFeedback, err error) {
+		delete(s.fetchingFeedback, botID)
+		if err == nil {
+			s.feedback[botID] = f
+		}
+	})
+}
+
+// refreshShownMemory asks for the memory and the feedback of the bot whose DM is showing.
 func (s *inspectorState) refreshShownMemory(chatID string) {
 	chat := store.Chat(chatID)
 	if chat == nil || !chat.IsDM() {
@@ -54,13 +76,20 @@ func (s *inspectorState) refreshShownMemory(chatID string) {
 	}
 	if bots := store.BotsIn(chat); len(bots) > 0 {
 		s.refreshMemory(bots[0].ID)
+		s.refreshFeedback(bots[0].ID)
 	}
 }
 
 // inspectorStoreChanged follows the turns: one that ended may have moved what the bot remembers.
+// A bot's feedback is asked for again when its Runner says it changed.
 func (m *mainWindow) inspectorStoreChanged(event model.Event) {
 	if event.Kind == model.EventRespondingChanged && event.ChatID == m.inspector.shownChat && !store.IsResponding(event.ChatID) {
 		m.inspector.refreshShownMemory(event.ChatID)
+	}
+	if event.Kind == model.EventFeedbackChanged {
+		if _, known := m.inspector.feedback[event.BotID]; known {
+			m.inspector.refreshFeedback(event.BotID)
+		}
 	}
 }
 
@@ -105,9 +134,9 @@ func (m *mainWindow) inspectorView(c *ui.Context, chatID string) {
 			if single != nil {
 				m.inspectorProfile(c, single)
 				m.inspectorRuntime(c, single, chat)
-				m.inspectorWorkflowFeedback(c, single, chat.ID)
 				m.inspectorMemory(c, single)
 				m.inspectorRoutines(c, single)
+				m.inspectorFeedback(c, single)
 				m.inspectorPlugins(c, single)
 			}
 			m.inspectorRouting(c, members)
@@ -327,6 +356,39 @@ func (m *mainWindow) inspectorMemory(c *ui.Context, bot *model.Bot) {
 	})
 }
 
+// inspectorFeedback is what the user's feedback led to: the changes the bot suggests, each a click
+// away from its diff, and the rest of its feedback. It is left out until there is any.
+func (m *mainWindow) inspectorFeedback(c *ui.Context, bot *model.Bot) {
+	f, known := m.inspector.feedback[bot.ID]
+	if !known || f.IsEmpty() {
+		return
+	}
+	section(c, L("Feedback"), sectionCaption, nil, func(k *card) {
+		for i, suggestion := range f.Suggestions {
+			if i == 3 {
+				break
+			}
+			if feedbackSuggestionRow(c, k, f, suggestion).Clicked() {
+				m.presentFeedbackSuggestion(bot.ID, f, suggestion, nil)
+			}
+		}
+		counts := L("%d notes", f.NoteCount)
+		if f.NoteCount == 1 {
+			counts = L("1 note")
+		}
+		switch len(f.Changes) {
+		case 0:
+		case 1:
+			counts += " · " + L("1 change")
+		default:
+			counts += " · " + L("%d changes", len(f.Changes))
+		}
+		if feedbackRow(c.Key("all"), k, "bubble.left.and.bubble.right", L("All feedback"), counts, "").Clicked() {
+			m.presentFeedbackList(bot.ID)
+		}
+	})
+}
+
 // inspectorRoutines are the bot's routines: a row per routine with a pause switch, and the details
 // in a sheet. With none, the sentence that says how to get one.
 func (m *mainWindow) inspectorRoutines(c *ui.Context, bot *model.Bot) {
@@ -440,18 +502,6 @@ func (m *mainWindow) inspectorRouting(c *ui.Context, members []*model.Bot) {
 			if row.Clicked {
 				m.openDevice(id)
 			}
-		}
-	})
-}
-
-func (m *mainWindow) inspectorWorkflowFeedback(c *ui.Context, bot *model.Bot, chatID string) {
-	section(c, L("Workflow feedback"), sectionCaption, nil, func(k *card) {
-		value := L("Evidence and revisions")
-		if count := store.WorkflowProposalCounts[bot.ID]; count > 0 {
-			value = L("%d waiting for review", count)
-		}
-		if _, row := actionRow(c, k, L("Improvements"), actionRowOptions{Value: value, Action: L("Review…")}); row.Action {
-			m.presentWorkflowFeedback(bot.ID, chatID)
 		}
 	})
 }

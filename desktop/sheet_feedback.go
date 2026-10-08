@@ -1,8 +1,6 @@
 package main
 
 import (
-	"encoding/json"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -10,380 +8,531 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// Field state belongs to the modal, while elements and contexts belong to one build pass.
-// Callbacks receive ordered main-thread replies from model.Store and ignore closed sheets.
-type feedbackCaptureState struct {
-	lastPayload                                                                string
-	botID, chatID, messageID, original, edited, note, kind, targetKey, eventID string
-	excluded, loading, saving, closed                                          bool
-	targets                                                                    []model.FeedbackTargetChoice
-	err                                                                        string
+// Workflow feedback, after the macOS app's FeedbackViewController: what the user says about a
+// bot's messages, the changes to its routines and skills the bot suggests from it, and the changes
+// the user accepted. The bot's Runner keeps all of it and applies every decision; these sheets
+// only ask. A sheet's fields live in its state, which a closed sheet keeps from late replies.
+
+func feedbackKindSymbol(kind string) string {
+	switch kind {
+	case model.FeedbackAccepted:
+		return "checkmark.circle"
+	case model.FeedbackRejected:
+		return "xmark.circle"
+	case model.FeedbackEdited:
+		return "pencil"
+	case model.FeedbackRoutineFailure:
+		return "exclamationmark.triangle"
+	case model.FeedbackIgnoredAlert:
+		return "eye.slash"
+	default:
+		return "bubble.left"
+	}
 }
 
-func (m *mainWindow) presentFeedbackCapture(chatID string, message *model.Message) {
-	chat := store.Chat(chatID)
-	if chat == nil || message == nil || !message.CanBeQuoted() {
-		return
-	}
-	botID := message.Author.BotID
-	if botID == "" {
-		botID = chat.OwnerBotID
-		if botID == "" && len(chat.BotIDs) > 0 {
-			botID = chat.BotIDs[0]
-		}
-	}
-	if store.Bot(botID) == nil {
-		return
-	}
-	st := &feedbackCaptureState{botID: botID, chatID: chatID, messageID: message.ID, original: model.MessageText(message), edited: model.MessageText(message), kind: "accepted", eventID: model.NewMessageID(), loading: true}
-	m.present(func(c *ui.Context, s *sheet) { st.view(c, s) }, func() { st.closed = true })
-	store.WorkflowFeedback(botID, func(data model.WorkflowFeedback, err error) {
-		if st.closed {
-			return
-		}
-		st.loading = false
-		if err != nil {
-			st.err = model.ErrorText(err)
-			return
-		}
-		st.targets = data.Targets
-	})
-}
 func feedbackKindTitle(kind string) string {
 	switch kind {
-	case "accepted":
-		return L("Accepted")
-	case "rejected":
-		return L("Rejected")
-	case "edited":
-		return L("User edited")
-	case "routine_failure":
-		return L("Routine failure")
-	case "ignored_alert":
-		return L("Ignored alert · neutral")
+	case model.FeedbackAccepted:
+		return L("Good")
+	case model.FeedbackRejected:
+		return L("Not right")
+	case model.FeedbackEdited:
+		return L("Corrected")
+	case model.FeedbackRoutineFailure:
+		return L("Run failed")
+	case model.FeedbackIgnoredAlert:
+		return L("Ignored")
 	default:
-		return L("Explicit feedback")
+		return L("Note")
 	}
 }
-func (st *feedbackCaptureState) view(c *ui.Context, s *sheet) {
-	result := sheetFrame(c, sheetOptions{Title: L("Record workflow feedback"), Subtitle: L("Record your decision or correction with a link to this work. Ignored alerts stay neutral."), Width: 580, Confirm: L("Record"), ConfirmDisabled: st.saving, ReturnInContent: true}, func() {
-		p := colors(c)
-		ui.Row(c).Gap(12).Children(func() {
-			ui.Text(c, L("Feedback kind")).FontSize(12).Width(110)
-			var options []popUpOption
-			for _, kind := range []string{"accepted", "rejected", "edited", "explicit", "ignored_alert"} {
-				options = append(options, popUpOption{Value: kind, Label: feedbackKindTitle(kind)})
-			}
-			if picked, changed, _ := popUpButton(c.Key("feedback-kind"), popUp{Value: st.kind, Options: options, Style: popUpBordered, Disabled: st.saving, Label: L("Feedback kind"), Width: 310}); changed {
-				st.kind = picked
+
+// feedbackProblem is what the Runner refused, in the app's terms.
+func feedbackProblem(err error, name string) string {
+	message := model.ErrorText(err)
+	switch {
+	case strings.Contains(message, "review a fresh proposal"), strings.Contains(message, "cannot overwrite later edits"):
+		return L("“%@” changed after this, so the change can't be made.", name)
+	case strings.Contains(message, "displayed diff changed"), strings.Contains(message, "no longer pending"):
+		return L("This suggestion changed on another Device.")
+	case strings.Contains(message, "no longer included"):
+		return L("This suggestion is based on feedback you excluded.")
+	}
+	return message
+}
+
+func (m *mainWindow) feedbackAlert(title, text string) {
+	m.showAlert(alertOptions{Message: title, Informative: text, Style: alertWarning}, nil)
+}
+
+// feedbackRow is a note, a suggestion, or a change as a row: a symbol, a title over a detail line.
+// It answers a click, which opens what it is about, and fills on hover, as a routine's row does.
+func feedbackRow(c *ui.Context, k *card, symbolName, title, detail, tooltip string) ui.Element {
+	p := colors(c)
+	r := k.row(rowBox(c).MinHeight(44).Label(title).Cursor(ui.CursorPointer))
+	if tooltip != "" {
+		r.Tooltip(tooltip)
+	}
+	if r.Hovered() {
+		r.Background(p.RowHover)
+	}
+	r.Children(func() {
+		ui.Row(c).Width(18).Justify(ui.Center).TextColor(p.Label2).Children(func() { symbol(c, symbolName, 15, 1.7) })
+		ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(1).Children(func() {
+			ui.Text(c, title).FontSize(12.5).FontWeight(500).SingleLine()
+			ui.Text(c, detail).FontSize(textCaption).TextColor(p.Label2).SingleLine()
+		})
+	})
+	return r
+}
+
+// feedbackNoteRow is a note: its words, or the routine a failed run belongs to, over its kind
+// and when.
+func feedbackNoteRow(c *ui.Context, k *card, f model.BotFeedback, note model.FeedbackNote) ui.Element {
+	title := note.Text
+	if note.Kind == model.FeedbackRoutineFailure && note.Target != nil {
+		title = store.FeedbackTargetName(f, *note.Target)
+	}
+	if title == "" {
+		title = feedbackKindTitle(note.Kind)
+	}
+	return feedbackRow(c.Key(note.ID), k, feedbackKindSymbol(note.Kind), title, feedbackKindTitle(note.Kind)+" · "+model.Stamp(note.CreatedAt), note.Text)
+}
+
+// feedbackSuggestionRow is a suggestion: what it changes; why is its tooltip and in its sheet.
+func feedbackSuggestionRow(c *ui.Context, k *card, f model.BotFeedback, suggestion model.FeedbackSuggestion) ui.Element {
+	return feedbackRow(c.Key(suggestion.ID), k, "sparkles", store.FeedbackTargetName(f, suggestion.Target), L("Suggested change"), suggestion.Explanation)
+}
+
+// feedbackDiff is the changed lines of a suggestion or a change: what goes on red, what comes in
+// on green, as a document's tracked changes read. Long changes scroll.
+func feedbackDiff(c *ui.Context, k *card, diff string) {
+	p := colors(c)
+	k.row(ui.Scroll(c).MaxHeight(240).Children(func() {
+		ui.Column(c).Children(func() {
+			for i, line := range model.DiffLines(diff) {
+				mark, tint := "+", p.Green
+				if line.Removed {
+					mark, tint = "−", p.Red
+				}
+				text := line.Text
+				if text == "" {
+					text = " "
+				}
+				ui.Row(c.Key(i)).Gap(8).Padding(5, 12).AlignItems(ui.Start).Background(tint.Alpha(0.13)).Children(func() {
+					ui.Text(c, mark).Width(12).Shrink(0).Font(monoFont).FontSize(11).FontWeight(500).TextColor(tint).LineHeight(1.45)
+					ui.Text(c, text).Grow(1).Shrink(1).MinWidth(0).FontSize(12).LineHeight(1.4).Selectable()
+				})
 			}
 		})
-		ui.Row(c).Gap(12).Children(func() {
-			ui.Text(c, L("Workflow")).FontSize(12).Width(110)
-			options := []popUpOption{{Value: "", Label: L("This work")}}
-			for i, target := range st.targets {
-				options = append(options, popUpOption{Value: strconv.Itoa(i + 1), Label: target.Name})
+	}))
+}
+
+// showFeedbackMessage opens a chat on the message a note is about, loading older pages until it
+// is there. One that is gone beeps, as a quote's does.
+func (m *mainWindow) showFeedbackMessage(chatID, messageID string) {
+	store.LoadMessage(chatID, messageID, func(err error) {
+		if err != nil {
+			beep()
+			return
+		}
+		m.open(chatID)
+		chat := m.chatStateFor(chatID)
+		chat.rows = buildRows(store.Chat(chatID), store.WorkingBots(chatID), chat.stoppedNotice)
+		m.revealMessage(chat, messageID)
+	})
+}
+
+// MARK: - Giving feedback
+
+type feedbackFormState struct {
+	botID, chatID, messageID, original string
+	kind                               string
+	corrected, note, target            string
+	targets                            []model.FeedbackTargetName
+	saving, closed                     bool
+}
+
+var feedbackKinds = []string{model.FeedbackAccepted, model.FeedbackRejected, model.FeedbackEdited, model.FeedbackExplicit}
+
+func feedbackKindChoice(kind string) string {
+	switch kind {
+	case model.FeedbackAccepted:
+		return L("Looks good")
+	case model.FeedbackRejected:
+		return L("Not what I wanted")
+	case model.FeedbackEdited:
+		return L("I corrected it")
+	default:
+		return L("A note for next time")
+	}
+}
+
+// presentFeedback is feedback on one of a bot's messages: whether it was right, a corrected
+// version, or a note for next time, and optionally which routine or skill it is about. Opened
+// from the message's menu.
+func (m *mainWindow) presentFeedback(chatID string, message *model.Message) {
+	if message == nil || message.Author.BotID == "" || store.Bot(message.Author.BotID) == nil {
+		return
+	}
+	text := model.MessageText(message)
+	st := &feedbackFormState{botID: message.Author.BotID, chatID: chatID, messageID: message.ID, original: text, corrected: text, kind: model.FeedbackAccepted}
+	m.present(func(c *ui.Context, s *sheet) { m.feedbackFormView(c, s, st) }, func() { st.closed = true })
+	// The routines and skills the note can be about, as the Runner names them.
+	store.Feedback(st.botID, func(f model.BotFeedback, err error) {
+		if err == nil && !st.closed {
+			st.targets = f.Targets
+		}
+	})
+}
+
+func (st *feedbackFormState) canSave() bool {
+	switch st.kind {
+	case model.FeedbackExplicit:
+		return strings.TrimSpace(st.note) != ""
+	case model.FeedbackEdited:
+		return st.corrected != st.original
+	}
+	return true
+}
+
+func (m *mainWindow) feedbackFormView(c *ui.Context, s *sheet, st *feedbackFormState) {
+	name := ""
+	if bot := store.Bot(st.botID); bot != nil {
+		name = bot.Name
+	}
+	result := sheetFrame(c, sheetOptions{
+		Title:           L("Feedback"),
+		Subtitle:        L("%@ uses it to suggest changes to its routines and skills.", name),
+		Width:           460,
+		Confirm:         L("Save"),
+		ConfirmDisabled: st.saving || !st.canSave(),
+		ReturnInContent: st.kind == model.FeedbackEdited,
+	}, func() {
+		labelWidth := mcpFormLabelWidth(c, L("Response"), L("Your version"), L("Note"), L("Applies to"))
+		ui.Column(c).Gap(10).Children(func() {
+			providerFormRow(c, labelWidth, L("Response"), func() {
+				options := make([]popUpOption, 0, len(feedbackKinds))
+				for _, kind := range feedbackKinds {
+					options = append(options, popUpOption{Value: kind, Label: feedbackKindChoice(kind)})
+				}
+				ui.Row(c).Children(func() {
+					if picked, changed, _ := popUpButton(c.Key("response"), popUp{Value: st.kind, Options: options, Disabled: st.saving, Label: L("Response")}); changed {
+						st.kind = picked
+					}
+				})
+			})
+			if st.kind == model.FeedbackEdited {
+				providerFormRow(c, labelWidth, L("Your version"), func() {
+					textArea(c.Key("version"), &st.corrected, 6, fieldOptions{Label: L("Your version"), Disabled: st.saving})
+				}).AlignItems(ui.Start)
 			}
-			if picked, changed, _ := popUpButton(c.Key("feedback-target"), popUp{Value: st.targetKey, Options: options, Style: popUpBordered, Disabled: st.saving || st.loading, Label: L("Workflow"), Width: 310}); changed {
-				st.targetKey = picked
-			}
+			providerFormRow(c, labelWidth, L("Note"), func() {
+				placeholder := L("What should it do next time?")
+				switch st.kind {
+				case model.FeedbackAccepted:
+					placeholder = L("What worked? (optional)")
+				case model.FeedbackRejected:
+					placeholder = L("What was wrong? (optional)")
+				case model.FeedbackEdited:
+					placeholder = L("What did you change? (optional)")
+				}
+				submits(textField(c.Key("note"), &st.note, fieldOptions{Placeholder: placeholder, Label: L("Note"), Disabled: st.saving, AutoFocus: true}))
+			})
+			providerFormRow(c, labelWidth, L("Applies to"), func() {
+				options := []popUpOption{{Value: "", Label: L("Any")}}
+				for i, target := range st.targets {
+					options = append(options, popUpOption{Value: strconv.Itoa(i), Label: target.Name})
+				}
+				ui.Row(c).Children(func() {
+					if picked, changed, _ := popUpButton(c.Key("applies"), popUp{Value: st.target, Options: options, Disabled: st.saving || len(st.targets) == 0, Label: L("Applies to")}); changed {
+						st.target = picked
+					}
+				})
+			})
 		})
-		textArea(c.Key("feedback-note"), &st.note, 3, fieldOptions{Label: L("Your feedback or explanation"), Placeholder: L("Your feedback or explanation"), Disabled: st.saving})
-		if st.kind == "edited" {
-			ui.Text(c, L("For user edits, put the corrected draft below:")).FontSize(12).TextColor(p.Label2)
-			textArea(c.Key("feedback-edit"), &st.edited, 0, fieldOptions{Mono: true, Label: L("Corrected draft"), Disabled: st.saving}).Height(160)
-		}
-		ui.Checkbox(c.Key("feedback-excluded"), &st.excluded, L("Exclude this material from feedback processing")).Disabled(st.saving)
-		if st.loading {
-			ui.Text(c, L("Loading…")).FontSize(textCaption).TextColor(p.Label2)
-		}
-		if st.err != "" {
-			ui.Text(c, st.err).FontSize(12).TextColor(p.Red).LineHeight(1.4)
-		}
 	})
 	if result.Cancelled {
 		s.dismiss()
 		return
 	}
-	if result.Confirmed && !st.saving {
-		if st.kind == "explicit" && strings.TrimSpace(st.note) == "" && !st.excluded {
-			st.err = L("Write your feedback before recording it.")
-			return
-		}
-		input := model.FeedbackInput{Kind: st.kind, Origin: model.FeedbackOrigin{ChatID: st.chatID, MessageID: st.messageID}, Note: st.note, Excluded: st.excluded, EventID: st.eventID}
-		if index, err := strconv.Atoi(st.targetKey); err == nil && index > 0 && index <= len(st.targets) {
-			target := st.targets[index-1].Target
-			input.Target = &target
-		}
-		if st.kind == "edited" {
-			before, after := st.original, st.edited
-			input.Before = &before
-			input.After = &after
-		}
-		input.EventID = ""
-		encoded, _ := json.Marshal(input)
-		if st.lastPayload != "" && st.lastPayload != string(encoded) {
-			st.eventID = model.NewMessageID()
-		}
-		st.lastPayload = string(encoded)
-		input.EventID = st.eventID
-		st.saving = true
-		st.err = ""
-		store.RecordFeedback(st.botID, input, func(err error) {
-			if st.closed {
-				return
-			}
-			st.saving = false
-			if err != nil {
-				st.err = model.ErrorText(err)
-				return
-			}
-			s.dismiss()
-		})
-	}
-}
-
-type feedbackReviewState struct {
-	m                     *mainWindow
-	botID, chatID         string
-	data                  model.WorkflowFeedback
-	loading, busy, closed bool
-	err                   string
-	version               uint64
-}
-
-func (m *mainWindow) presentWorkflowFeedback(botID, chatID string) {
-	if store.Bot(botID) == nil {
+	if !result.Confirmed || st.saving || !st.canSave() {
 		return
 	}
-	st := &feedbackReviewState{m: m, botID: botID, chatID: chatID}
-	m.present(func(c *ui.Context, s *sheet) { st.view(c, s) }, func() { st.closed = true })
-	st.refresh()
-}
-func (st *feedbackReviewState) refresh() {
-	if st.closed || st.loading || st.busy {
-		return
+	// What is sent is copied now; the fields may change while the Runner answers.
+	input := model.FeedbackInput{Kind: st.kind, ChatID: st.chatID, MessageID: st.messageID, Note: strings.TrimSpace(st.note), Before: st.original, After: st.corrected}
+	if index, err := strconv.Atoi(st.target); err == nil && index < len(st.targets) {
+		target := st.targets[index].Target
+		input.Target = &target
 	}
-	st.loading = true
-	st.err = ""
-	st.version = store.WorkflowFeedbackVersions[st.botID]
-	store.WorkflowFeedback(st.botID, func(data model.WorkflowFeedback, err error) {
+	st.saving = true
+	store.RecordFeedback(st.botID, input, func(err error) {
 		if st.closed {
 			return
 		}
-		st.loading = false
+		st.saving = false
 		if err != nil {
-			st.err = model.ErrorText(err)
+			m.feedbackAlert(L("Couldn't save your feedback"), model.ErrorText(err))
 			return
 		}
-		st.data = data
+		s.dismiss()
 	})
 }
-func (st *feedbackReviewState) changed(err error) {
-	if st.closed {
-		return
-	}
-	st.busy = false
-	if err != nil {
-		st.err = model.ErrorText(err)
-		return
-	}
-	st.refresh()
+
+// MARK: - A bot's feedback
+
+type feedbackListState struct {
+	botID                 string
+	looking, foundNothing bool
+	closed                bool
 }
-func (st *feedbackReviewState) view(c *ui.Context, s *sheet) {
-	if st.version != store.WorkflowFeedbackVersions[st.botID] && !st.busy && !st.loading {
-		st.refresh()
+
+// presentFeedbackList is everything a bot keeps from the user's feedback: the changes it suggests,
+// how often it looks for them, the changes accepted, and the notes. Opened from the inspector; it
+// shows what the inspector last heard from the Runner.
+func (m *mainWindow) presentFeedbackList(botID string) {
+	st := &feedbackListState{botID: botID}
+	m.present(func(c *ui.Context, s *sheet) { m.feedbackListView(c, s, st) }, func() { st.closed = true })
+}
+
+func (m *mainWindow) feedbackListView(c *ui.Context, s *sheet, st *feedbackListState) {
+	bot := store.Bot(st.botID)
+	if bot == nil {
+		s.dismiss()
+		return
 	}
-	name := st.botID
-	if bot := store.Bot(st.botID); bot != nil {
-		name = bot.Name
-	}
-	result := sheetFrame(c, sheetOptions{Title: L("Workflow feedback"), Subtitle: L("Review specific improvements to %@'s routines and skills. Every change shows its evidence and diff before you accept it.", name), Width: 720, Confirm: L("Done"), NoCancel: true}, func() {
-		p := colors(c)
-		disabled := st.busy || st.loading
-		ui.Row(c).Gap(12).Children(func() {
-			ui.Text(c, L("Periodic review")).FontSize(12).FontWeight(600)
-			current := "off"
-			options := []popUpOption{{Value: "off", Label: L("Off")}, {Value: "86400", Label: L("Daily")}, {Value: "604800", Label: L("Weekly")}}
-			if interval := st.data.Settings.ReviewEverySecs; interval != nil {
-				current = strconv.FormatInt(*interval, 10)
-				if *interval != 86400 && *interval != 604800 {
-					options = append(options, popUpOption{Value: current, Label: L("Every %d days", *interval/86400)})
-				}
+	f := m.inspector.feedback[st.botID]
+	result := sheetFrame(c, sheetOptions{
+		Title:    L("Feedback"),
+		Subtitle: L("%@ suggests changes to its routines and skills from your feedback. Nothing changes until you accept one.", bot.Name),
+		Width:    480,
+		Confirm:  L("Done"),
+		NoCancel: true,
+		Leading: func() {
+			title := L("Look Now")
+			if st.looking {
+				title = L("Looking…")
 			}
-			if picked, changed, _ := popUpButton(c.Key("feedback-periodic"), popUp{Value: current, Options: options, Style: popUpBordered, Disabled: disabled, Label: L("Periodic review")}); changed {
-				var interval *int64
-				if picked != "off" {
-					value, _ := strconv.ParseInt(picked, 10, 64)
-					interval = &value
+			if pushButton(c.Key("look"), title, pushOptions{Disabled: st.looking, Tooltip: L("Look through new feedback for changes to suggest")}).Clicked() {
+				st.looking, st.foundNothing = true, false
+				store.SuggestChanges(st.botID, func(found int, err error) {
+					if st.closed {
+						return
+					}
+					st.looking = false
+					if err != nil {
+						m.feedbackAlert(L("Couldn't look for changes"), model.ErrorText(err))
+						return
+					}
+					st.foundNothing = found == 0
+				})
+			}
+		},
+	}, func() {
+		ui.Column(c).Gap(18).Children(func() {
+			section(c, L("Suggestions"), sectionCaption, nil, func(k *card) {
+				for _, suggestion := range f.Suggestions {
+					if feedbackSuggestionRow(c, k, f, suggestion).Clicked() {
+						m.presentFeedbackSuggestion(st.botID, f, suggestion, s)
+					}
 				}
-				st.busy = true
-				store.SetFeedbackReview(st.botID, interval, st.changed)
+				if st.foundNothing && len(f.Suggestions) == 0 {
+					noteRow(c, k, L("Nothing to change right now."), nil)
+				}
+				current := ""
+				if f.ReviewEvery != nil {
+					current = strconv.FormatInt(*f.ReviewEvery, 10)
+				}
+				options := []popUpOption{{Value: "", Label: L("When asked")}, {Value: "86400", Label: L("Daily")}, {Value: "604800", Label: L("Weekly")}}
+				if picked, changed := popUpRow(c.Key("interval"), k, L("Look for changes"), popUp{Value: current, Options: options, Label: L("Look for changes")}); changed {
+					var every *int64
+					if seconds, err := strconv.ParseInt(picked, 10, 64); err == nil {
+						every = &seconds
+					}
+					store.SetFeedbackReview(st.botID, every, func(err error) {
+						if err != nil && !st.closed {
+							m.feedbackAlert(L("Couldn't change it"), model.ErrorText(err))
+						}
+					})
+				}
+			})
+			if len(f.Changes) > 0 {
+				section(c, L("Changes"), sectionCaption, nil, func(k *card) {
+					for _, change := range f.Changes {
+						symbolName, state := "pencil.line", L("Changed")
+						if change.IsUndo {
+							symbolName, state = "arrow.uturn.backward", L("Undone")
+						}
+						if feedbackRow(c.Key(change.ID), k, symbolName, store.FeedbackTargetName(f, change.Target), state+" · "+model.Stamp(change.CreatedAt), "").Clicked() {
+							m.presentFeedbackChange(st.botID, f, change)
+						}
+					}
+				})
+			}
+			if len(f.Notes) > 0 {
+				section(c, Lc("Notes", "feedback"), sectionCaption, nil, func(k *card) {
+					for _, note := range f.Notes {
+						row := feedbackNoteRow(c, k, f, note)
+						if row.Clicked() {
+							s.dismiss()
+							m.showFeedbackMessage(note.ChatID, note.MessageID)
+						}
+						row.ContextMenu(func(menu *ui.Menu) {
+							if menu.Item(L("Show in Chat")).Chosen() {
+								s.dismiss()
+								m.showFeedbackMessage(note.ChatID, note.MessageID)
+							}
+							menu.Separator()
+							wholeChat := false
+							chosen := menu.Item(L("Exclude")).Chosen()
+							if menu.Item(L("Exclude Everything from “%@”", chatTitle(note.ChatID))).Chosen() {
+								chosen, wholeChat = true, true
+							}
+							if chosen {
+								store.ExcludeFeedback(st.botID, note, wholeChat, func(err error) {
+									if err != nil && !st.closed {
+										m.feedbackAlert(L("Couldn't exclude it"), model.ErrorText(err))
+									}
+								})
+							}
+						})
+					}
+				})
 			}
 		})
-		ui.Text(c, L("Reviews stay quiet when there is no useful proposal. Ignored alerts are neutral; silence does not imply a preference.")).FontSize(12).TextColor(p.Label2).LineHeight(1.4)
-		ui.Row(c).Gap(8).Children(func() {
-			if pushButton(c.Key("feedback-review-now"), L("Review now"), pushOptions{Disabled: disabled}).Clicked() {
-				st.busy = true
-				st.err = ""
-				store.ReviewFeedback(st.botID, st.changed)
-			}
-			if pushButton(c.Key("feedback-refresh"), L("Refresh"), pushOptions{Disabled: disabled}).Clicked() {
-				st.refresh()
-			}
-			excluded := slices.Contains(st.data.Settings.ExcludedChats, st.chatID)
-			title := L("Exclude this chat")
-			if excluded {
-				title = L("This chat is excluded")
-			}
-			if pushButton(c.Key("feedback-exclude-chat"), title, pushOptions{Disabled: disabled || excluded}).Clicked() {
-				st.busy = true
-				store.ExcludeFeedback(st.botID, model.FeedbackExclusion{ChatID: st.chatID}, st.changed)
-			}
-		})
-		if st.loading {
-			ui.Text(c, L("Loading…")).FontSize(12).TextColor(p.Label2)
-		}
-		if st.busy {
-			ui.Text(c, L("Working…")).FontSize(12).TextColor(p.Label2)
-		}
-		if st.err != "" {
-			ui.Text(c, st.err).FontSize(12).TextColor(p.Red).LineHeight(1.4)
-		}
-		st.proposals(c, s)
-		st.examples(c, s)
-		st.revisions(c)
 	})
 	if result.Confirmed || result.Cancelled {
 		s.dismiss()
 	}
 }
-func feedbackCode(c *ui.Context, text string, height float32) {
-	p := colors(c)
-	ui.ScrollBoth(c).Height(height).Padding(10).Background(p.Code).Radius(6).Children(func() { ui.Text(c, text).Font(monoFont).FontSize(12).LineHeight(1.45).NoWrap().Selectable() })
+
+func chatTitle(chatID string) string {
+	if chat := store.Chat(chatID); chat != nil {
+		return store.Title(chat)
+	}
+	return ""
 }
-func (st *feedbackReviewState) targetName(target model.FeedbackTarget) string {
-	switch target.Kind {
+
+// MARK: - A suggestion or a change
+
+type feedbackItemState struct {
+	busy, closed bool
+}
+
+func feedbackTargetKind(kind string) string {
+	switch kind {
 	case "plugin_skill":
-		return L("Skill · %@ / %@", target.PluginID, target.Name)
+		return L("Skill")
 	case "playbook":
-		return L("Playbook · %@", target.ID)
-	default:
-		name := target.ID
-		if routine := store.Routine(target.ID); routine != nil {
-			name = routine.Name
-		}
-		return L("Routine · %@", name)
+		return L("Playbook")
 	}
+	return L("Task")
 }
-func (st *feedbackReviewState) origin(c *ui.Context, s *sheet, origin model.FeedbackOrigin) {
-	if pushButton(c.Key(origin.ChatID+":"+origin.MessageID), L("Open originating work"), pushOptions{Small: true, Disabled: st.busy || st.loading, Tooltip: origin.ChatID + " / " + origin.MessageID}).Clicked() {
-		st.busy = true
-		st.err = ""
-		store.LoadFeedbackOrigin(origin, func(err error) {
-			if st.closed {
-				return
+
+// presentFeedbackSuggestion is one suggestion, with why and the notes it is based on, to accept
+// or reject. `under` is the sheet it opened from, which Show in Chat closes too.
+func (m *mainWindow) presentFeedbackSuggestion(botID string, f model.BotFeedback, suggestion model.FeedbackSuggestion, under *sheet) {
+	st := &feedbackItemState{}
+	name := store.FeedbackTargetName(f, suggestion.Target)
+	m.present(func(c *ui.Context, s *sheet) {
+		decide := func(accept bool) {
+			st.busy = true
+			store.DecideSuggestion(botID, suggestion, accept, func(err error) {
+				if st.closed {
+					return
+				}
+				st.busy = false
+				if err != nil {
+					title := L("Couldn't reject it")
+					if accept {
+						title = L("Couldn't make the change")
+					}
+					m.feedbackAlert(title, feedbackProblem(err, name))
+					return
+				}
+				s.dismiss()
+			})
+		}
+		result := sheetFrame(c, sheetOptions{
+			Title:           name,
+			Subtitle:        L("Suggested change"),
+			Width:           480,
+			Confirm:         L("Accept"),
+			ConfirmDisabled: st.busy,
+			Leading: func() {
+				if pushButton(c.Key("reject"), L("Reject"), pushOptions{Disabled: st.busy}).Clicked() {
+					decide(false)
+				}
+			},
+		}, func() {
+			ui.Text(c, suggestion.Explanation).FontSize(13).LineHeight(1.4).Selectable()
+			section(c, feedbackTargetKind(suggestion.Target.Kind), sectionCaption, nil, func(k *card) { feedbackDiff(c, k, suggestion.Diff) })
+			var notes []model.FeedbackNote
+			for _, id := range suggestion.Evidence {
+				if note := f.Note(id); note != nil {
+					notes = append(notes, *note)
+				}
 			}
-			st.busy = false
-			if err != nil {
-				st.err = model.ErrorText(err)
-				return
+			if len(notes) > 0 {
+				section(c, L("Based on"), sectionCaption, nil, func(k *card) {
+					for _, note := range notes {
+						if feedbackNoteRow(c, k, f, note).Clicked() {
+							s.dismiss()
+							if under != nil {
+								under.dismiss()
+							}
+							m.showFeedbackMessage(note.ChatID, note.MessageID)
+						}
+					}
+				})
 			}
+		})
+		if result.Cancelled {
 			s.dismiss()
-			st.m.open(origin.ChatID)
-			source := st.m.chatStateFor(origin.ChatID)
-			source.rows = buildRows(store.Chat(origin.ChatID), store.WorkingBots(origin.ChatID), source.stoppedNotice)
-			st.m.revealMessage(st.m.chat, origin.MessageID)
-		})
-	}
-}
-func (st *feedbackReviewState) proposals(c *ui.Context, s *sheet) {
-	p := colors(c)
-	ui.Text(c, L("Proposed improvements")).FontSize(13).FontWeight(600)
-	pending := 0
-	for _, proposal := range st.data.Proposals {
-		if proposal.State != "pending" {
-			continue
+		} else if result.Confirmed && !st.busy {
+			decide(true)
 		}
-		pending++
-		ui.Column(c.Key("proposal:"+proposal.ID)).Gap(10).Padding(12).Radius(8).Border(1, p.FieldBorder).Children(func() {
-			ui.Text(c, st.targetName(proposal.Target)).FontSize(13).FontWeight(600)
-			ui.Text(c, proposal.Explanation).FontSize(12).LineHeight(1.4)
-			for _, origin := range proposal.Origins {
-				st.origin(c, s, origin)
-			}
-			feedbackCode(c.Key("proposal-diff"), proposal.Diff, 145)
-			ui.Row(c).Gap(8).Children(func() {
-				disabled := st.busy || st.loading || proposal.Diff == "" || proposal.DiffHash == ""
-				if pushButton(c.Key("accept"), L("Accept revision"), pushOptions{Disabled: disabled}).Clicked() {
-					st.busy = true
-					st.err = ""
-					store.DecideFeedback(st.botID, proposal, true, st.changed)
-				}
-				if pushButton(c.Key("reject"), L("Reject"), pushOptions{Disabled: disabled}).Clicked() {
-					st.busy = true
-					st.err = ""
-					store.DecideFeedback(st.botID, proposal, false, st.changed)
-				}
-				if pushButton(c.Key("exclude-workflow"), L("Exclude this workflow"), pushOptions{Disabled: st.busy || st.loading}).Clicked() {
-					st.busy = true
-					target := proposal.Target
-					store.ExcludeFeedback(st.botID, model.FeedbackExclusion{Target: &target}, st.changed)
-				}
-			})
-		})
-	}
-	if pending == 0 {
-		ui.Text(c, L("No improvements waiting for review.")).FontSize(12).TextColor(p.Label2)
-	}
+	}, func() { st.closed = true })
 }
-func (st *feedbackReviewState) examples(c *ui.Context, s *sheet) {
-	p := colors(c)
-	ui.Text(c, L("Feedback examples")).FontSize(13).FontWeight(600)
-	if len(st.data.Feedback) == 0 {
-		ui.Text(c, L("Use Record workflow feedback… on a message to record acceptance, rejection, edits, or an explicit request.")).FontSize(12).TextColor(p.Label2).LineHeight(1.4)
+
+// presentFeedbackChange is one change accepted before, to undo while the routine or skill still
+// reads as the change left it.
+func (m *mainWindow) presentFeedbackChange(botID string, f model.BotFeedback, change model.FeedbackChange) {
+	st := &feedbackItemState{}
+	name := store.FeedbackTargetName(f, change.Target)
+	subtitle := L("Changed %@", model.DaySeparator(change.CreatedAt))
+	if change.IsUndo {
+		subtitle = L("Undone %@", model.DaySeparator(change.CreatedAt))
 	}
-	for i := len(st.data.Feedback) - 1; i >= max(0, len(st.data.Feedback)-20); i-- {
-		f := st.data.Feedback[i]
-		ui.Column(c.Key("example:" + f.ID)).Gap(8).Children(func() {
-			title := feedbackKindTitle(f.Kind)
-			if f.Excluded {
-				title = L("%@ · excluded", title)
+	m.present(func(c *ui.Context, s *sheet) {
+		o := sheetOptions{Title: name, Subtitle: subtitle, Width: 480, Confirm: L("Done"), NoCancel: true}
+		if change.CanUndo {
+			o.Leading = func() {
+				if !pushButton(c.Key("undo"), L("Undo Change"), pushOptions{Disabled: st.busy}).Clicked() {
+					return
+				}
+				st.busy = true
+				store.UndoChange(botID, change, func(err error) {
+					if st.closed {
+						return
+					}
+					st.busy = false
+					if err != nil {
+						m.feedbackAlert(L("Couldn't undo the change"), feedbackProblem(err, name))
+						return
+					}
+					s.dismiss()
+				})
 			}
-			ui.Text(c, title).FontSize(12).FontWeight(600)
-			if !f.Excluded {
-				ui.Text(c, f.Note+"\n"+f.Example).FontSize(12).LineHeight(1.4).Selectable()
-				if f.Before != nil && f.After != nil {
-					feedbackCode(c.Key("edit-comparison"), L("Original: %@\nEdited: %@", *f.Before, *f.After), 100)
-				}
-			}
-			ui.Row(c).Gap(8).Children(func() {
-				st.origin(c, s, f.Origin)
-				if !f.Excluded && pushButton(c.Key("exclude-example"), L("Exclude"), pushOptions{Small: true, Disabled: st.busy || st.loading}).Clicked() {
-					st.busy = true
-					store.ExcludeFeedback(st.botID, model.FeedbackExclusion{ID: f.ID}, st.changed)
-				}
-			})
-		})
-	}
-}
-func (st *feedbackReviewState) revisions(c *ui.Context) {
-	p := colors(c)
-	ui.Text(c, L("Revision history")).FontSize(13).FontWeight(600)
-	for i := len(st.data.Revisions) - 1; i >= max(0, len(st.data.Revisions)-10); i-- {
-		r := st.data.Revisions[i]
-		ui.Column(c.Key("revision:" + r.ID)).Gap(8).Children(func() {
-			ui.Text(c, L("Version %d · %@", r.Version, r.State)).FontSize(12).FontWeight(600)
-			if r.State == "applied" && r.CanRollback && r.CurrentHash != "" && r.RollbackDiff != "" {
-				feedbackCode(c.Key("rollback-diff"), r.RollbackDiff, 120)
-				if pushButton(c.Key("rollback"), L("Roll back this revision"), pushOptions{Disabled: st.busy || st.loading}).Clicked() {
-					st.busy = true
-					st.err = ""
-					store.RollbackFeedback(st.botID, r, st.changed)
-				}
-			} else if r.State == "applied" {
-				ui.Text(c, L("Later changes prevent this rollback. Refresh to review the current version.")).FontSize(12).TextColor(p.Label2).LineHeight(1.4)
+		}
+		result := sheetFrame(c, o, func() {
+			section(c, feedbackTargetKind(change.Target.Kind), sectionCaption, nil, func(k *card) { feedbackDiff(c, k, change.Diff) })
+			if !change.CanUndo {
+				caption(c, L("“%@” has changed since, so this can't be undone.", name))
 			}
 		})
-	}
+		if result.Confirmed || result.Cancelled {
+			s.dismiss()
+		}
+	}, func() { st.closed = true })
 }
