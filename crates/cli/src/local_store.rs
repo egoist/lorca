@@ -133,9 +133,6 @@ impl LocalStore {
                  ciphertext BLOB NOT NULL,
                  PRIMARY KEY (chat_id, id)
              );
-             CREATE TABLE IF NOT EXISTS project_sync (
-                 machine_pubkey TEXT PRIMARY KEY NOT NULL
-             );
              CREATE TABLE IF NOT EXISTS device_turns (
                  id   TEXT PRIMARY KEY NOT NULL,
                  json TEXT NOT NULL
@@ -955,17 +952,6 @@ impl LocalStore {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    /// A Device upgrading from a build that did not poll project blobs needs one full pull.
-    pub fn project_context_ready(&self, machine_pubkey: &str) -> anyhow::Result<bool> {
-        let connection = self.connection.lock().unwrap();
-        Ok(connection.query_row("SELECT EXISTS(SELECT 1 FROM project_sync WHERE machine_pubkey = ?1)", [machine_pubkey], |row| row.get(0))?)
-    }
-
-    pub fn mark_project_context_ready(&self, machine_pubkey: &str) -> anyhow::Result<()> {
-        self.connection.lock().unwrap().execute("INSERT OR IGNORE INTO project_sync (machine_pubkey) VALUES (?1)", [machine_pubkey])?;
-        Ok(())
-    }
-
     pub fn remove_outbox_with_state(&self, id: &str, state: &State) -> anyhow::Result<()> {
         let mut connection = self.connection.lock().unwrap();
         let tx = connection.transaction()?;
@@ -1084,7 +1070,6 @@ impl LocalStore {
             "sent_jobs",
             "device_turns",
             "project_entries",
-            "project_sync",
         ] {
             tx.execute(&format!("DELETE FROM {table}"), [])?;
         }
