@@ -28,8 +28,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private var tasksPopover: NSPopover?
     /// When the popover last closed. A click on the button closes it before the button acts.
     private var tasksClosedAt = Date.distantPast
-    private lazy var outputsButton = HoverButton(
-        symbol: "tray.full", tooltip: L("Outputs"), target: self, action: #selector(showOutputs))
 
     init() {
         StartupTrace.mark("window objects initialized")
@@ -96,9 +94,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         installTitlebarButtons()
         tasksPopover?.close()
         tasksButton.toolTip = L("Running tasks")
-        outputsButton.toolTip = L("Outputs")
         if let toolbar = window?.toolbar {
-            let worded: Set<NSToolbarItem.Identifier> = [.settingsNavigation, .devicePicker, .inspectorToggle, .runningTasks, .outputs]
+            let worded: Set<NSToolbarItem.Identifier> = [.settingsNavigation, .devicePicker, .inspectorToggle, .runningTasks]
             for (index, item) in toolbar.items.enumerated() where worded.contains(item.itemIdentifier) {
                 toolbar.removeItem(at: index)
                 toolbar.insertItem(withItemIdentifier: item.itemIdentifier, at: index)
@@ -161,14 +158,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             toolbar.insertItem(withItemIdentifier: .runningTasks, at: at)
         }
         updateRunningTasks()
-        let outputs = toolbar.items.firstIndex { $0.itemIdentifier == .outputs }
-        if isSettings, let outputs {
-            toolbar.removeItem(at: outputs)
-        } else if !isSettings, outputs == nil {
-            let at = toolbar.items.firstIndex { $0.itemIdentifier == .runningTasks } ?? toolbar.items.count
-            toolbar.insertItem(withItemIdentifier: .outputs, at: at)
-        }
-        outputsButton.isEnabled = selectedChatID != nil
 
         // The picker joins the toolbar with Settings. An item entering, leaving, or hiding makes
         // the toolbar lay its glass out again, which blinks the back and forward buttons.
@@ -298,11 +287,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         popover.show(relativeTo: tasksButton.bounds, of: tasksButton, preferredEdge: .maxY)
     }
 
-    @objc private func showOutputs() {
-        guard let chatID = selectedChatID else { return }
-        root.presentAsSheet(OutputsViewController(chatID: chatID))
-    }
-
     /// Lays square plain buttons out as a leading titlebar accessory, just past the traffic lights.
     private static func leadingAccessory(_ buttons: [HoverButton]) -> NSTitlebarAccessoryViewController {
         let inset: CGFloat = 8
@@ -404,7 +388,6 @@ extension NSToolbarItem.Identifier {
     static let devicePicker = NSToolbarItem.Identifier("lorca.devicePicker")
     static let settingsNavigation = NSToolbarItem.Identifier("lorca.settingsNavigation")
     static let runningTasks = NSToolbarItem.Identifier("lorca.runningTasks")
-    static let outputs = NSToolbarItem.Identifier("lorca.outputs")
 }
 
 // Standard toolbar items sit on glass platters; a borderless custom-view item doesn't. AppKit moves
@@ -422,7 +405,7 @@ extension MainWindowController: NSToolbarDelegate {
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        toolbarDefaultItemIdentifiers(toolbar) + [.devicePicker, .settingsNavigation, .runningTasks, .outputs]
+        toolbarDefaultItemIdentifiers(toolbar) + [.devicePicker, .settingsNavigation, .runningTasks]
     }
 
     func toolbar(
@@ -487,13 +470,6 @@ extension MainWindowController: NSToolbarDelegate {
             } else {
                 item.view = devicePicker
             }
-            return item
-        }
-        if identifier == .outputs {
-            let item = NSToolbarItem(itemIdentifier: identifier)
-            item.label = L("Outputs")
-            item.view = outputsButton
-            item.isBordered = false
             return item
         }
         if identifier == .runningTasks {

@@ -186,33 +186,7 @@ pub fn publish(app: &App, chat_id: &str, bot_id: &str, workdir: &Path, request: 
         url,
         evidence: request.evidence,
     };
-    let mut text = format!("Output: {} · v{}\nProduced by {}", markdown_words(&output.name), output.version, markdown_words(&bot.name));
-    if let Some(task) = &output.task_id {
-        text.push_str(&format!("\nTask: {}", markdown_words(task)));
-    }
-    if let Some(evidence) = &output.evidence {
-        let kind = match evidence.kind {
-            EvidenceKind::TestResult => "Test result",
-            EvidenceKind::BeforeScreenshot => "Before screenshot",
-            EvidenceKind::AfterScreenshot => "After screenshot",
-            EvidenceKind::Verification => "Verification",
-        };
-        let status = match evidence.status {
-            EvidenceStatus::Passed => "Passed",
-            EvidenceStatus::Failed => "Failed",
-            EvidenceStatus::Unverified => "Unverified",
-        };
-        text.push_str(&format!("\n{kind} · {status}: {}", markdown_words(&evidence.summary)));
-        if let Some(command) = &evidence.command {
-            text.push_str(&format!("\nCommand: {}", markdown_words(command)));
-        }
-        if let Some(code) = evidence.exit_code {
-            text.push_str(&format!("\nExit code: {code}"));
-        }
-    }
-    if let Some(url) = &output.url {
-        text.push_str(&format!("\n[Open document]({})", url.replace('(', "%28").replace(')', "%29")));
-    }
+    let text = message_text(&output);
     let mut message = Message::new(chat_id, Author::Bot { bot_id: bot_id.into() }, Body::Text { text, attachments, mentions: Vec::new(), reply_to: None });
     message.output = Some(output);
     app.upsert_message(message.clone(), true);
@@ -220,6 +194,42 @@ pub fn publish(app: &App, chat_id: &str, bot_id: &str, workdir: &Path, request: 
         return Err("Output could not be stored; the chat may have been deleted".into());
     }
     Ok(message)
+}
+
+/// What every app shows for the output in the transcript: the link, and what the bot checked. A
+/// file is its attachment; the bot and the version are the message's own.
+fn message_text(output: &Output) -> String {
+    let mut lines = Vec::new();
+    if let Some(url) = &output.url {
+        lines.push(format!("[{}]({})", markdown_words(&output.name), url.replace('(', "%28").replace(')', "%29")));
+    }
+    if let Some(evidence) = &output.evidence {
+        let kind = match evidence.kind {
+            EvidenceKind::TestResult => "Test result",
+            EvidenceKind::BeforeScreenshot => "Before screenshot",
+            EvidenceKind::AfterScreenshot => "After screenshot",
+            EvidenceKind::Verification => "Check",
+        };
+        let status = match evidence.status {
+            EvidenceStatus::Passed => "Passed",
+            EvidenceStatus::Failed => "Failed",
+            EvidenceStatus::Unverified => "Not verified",
+        };
+        lines.push(format!("{kind} · {status}: {}", markdown_words(&evidence.summary)));
+        if let Some(command) = &evidence.command {
+            lines.push(code_span(command));
+        }
+    }
+    lines.join("\n")
+}
+
+/// `text` as inline code, fenced by more backticks than it holds in a row.
+fn code_span(text: &str) -> String {
+    let text = text.replace(['\n', '\r'], " ");
+    let longest = text.split(|c| c != '`').map(str::len).max().unwrap_or(0);
+    let fence = "`".repeat(longest + 1);
+    let pad = if text.starts_with('`') || text.ends_with('`') { " " } else { "" };
+    format!("{fence}{pad}{text}{pad}{fence}")
 }
 
 fn bounded(value: &str, field: &str, max: usize) -> Result<String, String> {
@@ -390,6 +400,8 @@ mod tests {
         });
         let first = f.publish(request).unwrap();
         let first_attachment = attachment(&first);
+        let Body::Text { text, .. } = &first.body else { panic!() };
+        assert_eq!(text, "Test result · Passed: All checks pass\n`cargo test`", "the transcript says what was checked, in plain words");
         let outbox = f.app.store.outbox().unwrap();
         let file_index = outbox.iter().position(|blob| blob.id == first_attachment.id).unwrap();
         let file_blob = &outbox[file_index];
@@ -413,6 +425,7 @@ mod tests {
         let second = f.publish(second_request).unwrap();
         assert_eq!(first.output.as_ref().unwrap().id, second.output.as_ref().unwrap().id);
         assert_eq!(second.output.as_ref().unwrap().version, 2);
+        assert!(matches!(&second.body, Body::Text { text, .. } if text.is_empty()), "a file alone is its attachment");
         assert_eq!(second.output.as_ref().unwrap().previous_message_id.as_deref(), Some(first.id.as_str()));
         assert_ne!(first_attachment.id, attachment(&second).id);
         std::fs::remove_file(f.workdir.join("report.txt")).unwrap();
@@ -429,6 +442,13 @@ mod tests {
                 "kind":"output", "label":"Report.txt", "chat_id":f.chat, "message_id":first.id, "output_id":first.output.as_ref().unwrap().id, "version":1
             })
         );
+    }
+
+    #[test]
+    fn commands_stay_inline_code() {
+        assert_eq!(code_span("cargo test"), "`cargo test`");
+        assert_eq!(code_span("echo `date`\nls"), "``echo `date` ls``");
+        assert_eq!(code_span("`x`"), "`` `x` ``");
     }
 
     #[test]
@@ -507,7 +527,7 @@ mod tests {
         let link = f.publish(PublishOutput { name: "Shared report".into(), url: Some("https://docs.example.invalid/a?version=1".into()), ..Default::default() }).unwrap();
         assert_eq!(link.output.as_ref().unwrap().url.as_deref(), Some("https://docs.example.invalid/a?version=1"));
         let Body::Text { text, attachments, .. } = &link.body else { panic!() };
-        assert!(text.contains("Open document"));
+        assert_eq!(text, "[Shared report](https://docs.example.invalid/a?version=1)");
         assert!(attachments.is_empty());
         assert_eq!(f.app.store.outbox().unwrap().iter().filter(|blob| blob.kind == "file").count(), files_before);
     }

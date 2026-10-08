@@ -1816,7 +1816,14 @@ fn transcript_bounded(app: &App, chat: &Chat, bot: &Bot, workdir: &std::path::Pa
         match (&message.author, &message.body) {
             (Author::Bot { bot_id }, Body::Text { text, attachments, .. }) if message.output.is_some() => {
                 let output = message.output.as_ref().unwrap();
-                let mut content = vec![ContentPart::text(format!("[Published output {} v{} by {}; message_id: {}]\n{text}", output.id, output.version, name_of(app, bot_id), message.id))];
+                let mut words = format!(
+                    "[{} published \"{}\": output {}, version {}, message_id {}]",
+                    name_of(app, bot_id), output.name, output.id, output.version, message.id
+                );
+                if !text.is_empty() {
+                    words.push_str(&format!("\n{text}"));
+                }
+                let mut content = vec![ContentPart::text(words)];
                 for attachment in attachments {
                     content.extend(crate::files::content_parts(app, attachment, workdir, pixels));
                 }

@@ -315,7 +315,7 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             let chat_id = string(&params, "chat_id")?;
             let task_id = opt_string(&params, "task_id");
             let messages = crate::outputs::list(app, &chat_id, task_id.as_deref())?;
-            Ok(json!({ "outputs": messages.into_iter().map(|message| message.for_app()).collect::<Vec<_>>(), "has_more": app.history_is_partial(&chat_id) }))
+            Ok(json!({ "outputs": messages.into_iter().map(|message| message.for_app()).collect::<Vec<_>>() }))
         }
         #[cfg(feature = "runner")]
         "outputs.publish" => {
