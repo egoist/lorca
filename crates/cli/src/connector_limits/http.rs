@@ -1,5 +1,6 @@
-//! MCP's HTTP client with a response-header observer. OAuth remains in rmcp's AuthClient;
-//! rate guidance affects subsequent calls and never causes this client to replay a POST.
+//! MCP's HTTP client with a response-header observer: rmcp's reqwest client, with the service's
+//! rate guidance read off every response. OAuth remains in rmcp's AuthClient; the guidance
+//! delays subsequent calls and never causes this client to replay a POST.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
@@ -55,12 +56,10 @@ impl LimitedHttpClient {
                 })
             })
             .or_else(|| {
-                (number("x-ratelimit-remaining") == Some(0.0))
-                    .then(|| {
-                        number("x-ratelimit-reset")
-                            .map(|reset| (reset - crate::config::now_secs()).max(0.0))
-                    })
-                    .flatten()
+                // Services send the reset as a Unix time or as seconds from now.
+                let reset = number("x-ratelimit-reset").filter(|_| number("x-ratelimit-remaining") == Some(0.0))?;
+                let now = crate::config::now_secs();
+                Some(if reset > now { reset - now } else { reset })
             });
         if let Some(seconds) = seconds.filter(|seconds| seconds.is_finite() && *seconds >= 0.0) {
             app.connector_limits
@@ -122,6 +121,7 @@ impl StreamableHttpClient for LimitedHttpClient {
             }
             request = request.header(name, value);
         }
+        let session_was_attached = session_id.is_some();
         if let Some(session_id) = &session_id {
             request = request.header("mcp-session-id", session_id.as_ref());
         }
@@ -171,13 +171,21 @@ impl StreamableHttpClient for LimitedHttpClient {
         if status.as_u16() == 202 || status.as_u16() == 204 {
             return Ok(StreamableHttpPostResponse::Accepted);
         }
+        // The server ended the session and did not run the request; rmcp starts a new session
+        // and sends it again.
+        if status.as_u16() == 404 && session_was_attached {
+            return Err(StreamableHttpError::SessionExpired);
+        }
+        // Some servers answer a notification or response with an empty 200 instead of 202.
+        let awaits_reply = matches!(message, ClientJsonRpcMessage::Request(_));
+        if status.is_success() && response.content_length() == Some(0) && !awaits_reply {
+            return Ok(StreamableHttpPostResponse::Accepted);
+        }
         if !status.is_success() {
             let body = response.text().await.map_err(StreamableHttpError::Client)?;
             if let Ok(parsed @ ServerJsonRpcMessage::Error(_)) = serde_json::from_str(&body) {
                 return Ok(StreamableHttpPostResponse::Json(parsed, session));
             }
-            // A failed effectful POST is never transparently recovered/replayed. The next
-            // explicit call may reconnect; the failed call is reported to its caller.
             return Err(StreamableHttpError::UnexpectedServerResponse(
                 format!(
                     "HTTP {status}: {}",
@@ -229,7 +237,7 @@ impl StreamableHttpClient for LimitedHttpClient {
                     .map_err(StreamableHttpError::Client)?;
                 match serde_json::from_slice::<ServerJsonRpcMessage>(&body) {
                     Ok(parsed) => Ok(StreamableHttpPostResponse::Json(parsed, session)),
-                    Err(_) if !matches!(message, ClientJsonRpcMessage::Request(_)) => {
+                    Err(_) if !awaits_reply => {
                         Ok(StreamableHttpPostResponse::Accepted)
                     }
                     Err(error) => Err(StreamableHttpError::UnexpectedServerResponse(

@@ -198,7 +198,6 @@ pub fn run_now(app: &Arc<App>, id: &str) -> Result<(), String> {
 fn job_for(app: &Arc<App>, routine: &Routine) -> Result<Job, String> {
     let dm = app.dm_with(&routine.bot_id, None).map_err(|e| e.to_string())?;
     Ok(Job {
-        task_id: None,
         id: format!("job-{}", uuid::Uuid::new_v4()),
         chat_id: dm.meta.id,
         bot_id: routine.bot_id.clone(),
@@ -441,10 +440,8 @@ pub async fn check_now(app: &Arc<App>, routine: &Routine, cancel: &CancellationT
 /// asked anything: a call that could change something ends the check.
 #[cfg(feature = "runner")]
 pub async fn run_check(app: &Arc<App>, routine: &Routine, cancel: &CancellationToken) -> CheckRun {
-    if routine.check.is_none() { return CheckRun { found: None, error: None, result: String::new() }; }
     let failed = |error: String| CheckRun { found: None, error: Some(error.clone()), result: error };
-    let dm = match app.dm_with(&routine.bot_id, None) { Ok(dm) => dm, Err(error) => return failed(error.to_string()) };
-    let budget = match crate::budgets::for_routine(app, routine, &dm.meta.id) { Ok(budget) => budget, Err(error) => return failed(error) };
+    let budget = match crate::budgets::for_routine(app, routine) { Ok(budget) => budget, Err(error) => return failed(error) };
     match budget.run(cancel, run_budgeted_check(app, routine, cancel)).await {
         Ok(run) => run,
         Err(error) => failed(error),

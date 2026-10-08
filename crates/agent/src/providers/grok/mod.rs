@@ -15,7 +15,7 @@ use tokio_util::sync::CancellationToken;
 use super::responses::{self, ToolImages};
 use crate::models::{self, ModelInfo};
 use crate::provider::{channel_stream, AssistantEvent, AssistantEventStream, ModelRequest, Provider};
-use crate::retry::{send_with_retry_options, RequestFailure, DEFAULT_MAX_RETRY_DELAY_MS};
+use crate::retry::{send_with_retry, RequestFailure, DEFAULT_MAX_RETRY_DELAY_MS};
 use crate::transform::{transform_messages, TransformOptions};
 use crate::types::ThinkingLevel;
 
@@ -183,7 +183,7 @@ impl Provider for GrokProvider {
                 let request = client.post(&url).bearer_auth(&tokens.access_token).header("Accept", "text/event-stream");
                 options.apply_to(request).json(&body)
             };
-            let response = match send_with_retry_options(build, 2, DEFAULT_MAX_RETRY_DELAY_MS, &cancel, &options).await {
+            let response = match send_with_retry(build, 2, DEFAULT_MAX_RETRY_DELAY_MS, &cancel, &options).await {
                 Ok(response) => {
                     response
                 }

@@ -1562,7 +1562,6 @@ impl App {
                 crate::budgets::Pricing::SubscriptionEstimate => entry.subscription_estimate_usd += usd,
                 crate::budgets::Pricing::Unknown => entry.unknown_price_calls += 1,
             }
-            entry.priced_calls += 1;
             entry.clone()
         };
         self.save_state();

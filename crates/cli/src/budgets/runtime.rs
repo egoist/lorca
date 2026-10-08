@@ -13,7 +13,8 @@ use super::*;
 tokio::task_local! { static CURRENT: BudgetContext; }
 
 /// Shared across inference, review, script host functions, plugin calls, and housekeeping.
-/// Constructors that escape the current task capture this handle explicitly.
+/// Constructors that escape the current task capture this handle explicitly. With no limits
+/// in force it holds no scopes and costs nothing.
 #[derive(Clone)]
 pub struct BudgetContext {
     app: Arc<App>,
@@ -24,106 +25,73 @@ pub fn current() -> Option<BudgetContext> {
     CURRENT.try_with(Clone::clone).ok()
 }
 
+/// A turn counts toward its own limits, copied from its chat's when it starts, and a routine's
+/// run toward the routine's. A new turn replaces a stopped one in the same chat: the user
+/// moved on.
 pub fn for_job(app: &Arc<App>, job: &Job) -> Result<BudgetContext, String> {
     let bot = app.bot(&job.bot_id).ok_or("Unknown bot")?;
     if app.this_device_id().as_deref() != Some(bot.runner_id.as_str()) {
         return Err("Work is admitted only on its assigned Runner.".into());
     }
-    let mut scopes = vec![("job", job.id.as_str())];
-    if let Some(task) = &job.task_id {
-        scopes.push(("task", task));
-    }
-    if let Some(routine) = &job.routine_id {
-        scopes.push(("routine", routine));
-    }
+    let live = live(app);
     let keys = app.budgets.change(app, |ledger| {
-        let default = ledger
-            .records
-            .get(&key("chat", &job.chat_id))
-            .map(|r| r.view.limits.clone())
-            .unwrap_or_default();
-        let mut keys = Vec::new();
-        for (kind, id) in &scopes {
-            let k = key(kind, id);
-            let limits = if (*kind == "job" && job.task_id.is_none() && job.routine_id.is_none())
-                || *kind == "task"
-            {
-                default.clone()
-            } else {
-                BudgetLimits::default()
-            };
-            let record = ledger
-                .records
-                .entry(k.clone())
-                .or_insert_with(|| new_record(app, kind, id, &job.bot_id, &job.chat_id, limits));
-            if record.view.kind == "job" || record.view.chat_id.is_empty() {
-                record.view.chat_id = job.chat_id.clone();
+        let job_key = key("job", &job.id);
+        if job.routine_id.is_none() && !ledger.records.contains_key(&job_key) {
+            ledger.records.retain(|_, r| r.view.kind != "job" || r.view.chat_id != job.chat_id || r.is_active());
+            let limits = ledger.records.get(&key("chat", &job.chat_id)).map(|r| r.view.limits.clone()).filter(|l| !l.is_empty());
+            if let Some(limits) = limits {
+                let mut record = new_record(app, "job", &job.id, &job.bot_id, &job.chat_id, limits);
+                record.view.job_kind = Some(job.kind.clone());
+                record.job = Some(job.clone());
+                ledger.records.insert(job_key.clone(), record);
             }
-            record.view.job_kind = Some(job.kind.clone());
-            record.view.task_id = job.task_id.clone();
-            record.job = Some(job.clone());
-            keys.push(k);
         }
+        prune(ledger, &live);
+        let routine_key = job.routine_id.as_ref().map(|id| key("routine", id));
+        let keys: Vec<String> = [Some(job_key), routine_key].into_iter().flatten().filter(|k| ledger.records.contains_key(k)).collect();
         check_scopes(ledger, &keys)?;
         Ok(keys)
     });
-    app.budgets.publish(app);
-    Ok(BudgetContext {
-        app: app.clone(),
-        keys: keys?,
-    })
+    // Starting the run publishes the scopes; a refusal publishes the stop.
+    if keys.is_err() {
+        app.budgets.publish(app);
+    }
+    Ok(BudgetContext { app: app.clone(), keys: keys? })
 }
 
-/// A check has the same routine allowance as the model run it may start. When saved/run
-/// inside a turn it also retains the task/Job scopes already in force.
-pub fn for_routine(
-    app: &Arc<App>,
-    routine: &crate::model::Routine,
-    chat_id: &str,
-) -> Result<BudgetContext, String> {
+/// A routine's check counts toward the routine's limits, inside whatever turn runs it.
+pub fn for_routine(app: &Arc<App>, routine: &crate::model::Routine) -> Result<BudgetContext, String> {
     let bot = app.bot(&routine.bot_id).ok_or("Unknown bot")?;
     if app.this_device_id().as_deref() != Some(bot.runner_id.as_str()) {
         return Err("Checks are admitted only on their assigned Runner.".into());
     }
-    let k = key("routine", &routine.id);
+    let routine_key = key("routine", &routine.id);
     let mut keys = current().map(|c| c.keys).unwrap_or_default();
-    if !keys.contains(&k) {
-        keys.push(k.clone());
+    let keys = app.budgets.change(app, |ledger| {
+        if ledger.records.contains_key(&routine_key) && !keys.contains(&routine_key) {
+            keys.push(routine_key);
+        }
+        check_scopes(ledger, &keys)?;
+        Ok(keys)
+    });
+    if keys.is_err() {
+        app.budgets.publish(app);
     }
-    app.budgets.change(app, |ledger| {
-        ledger.records.entry(k).or_insert_with(|| {
-            new_record(
-                app,
-                "routine",
-                &routine.id,
-                &routine.bot_id,
-                chat_id,
-                BudgetLimits::default(),
-            )
-        });
-        check_scopes(ledger, &keys)
-    })?;
-    Ok(BudgetContext {
-        app: app.clone(),
-        keys,
-    })
+    Ok(BudgetContext { app: app.clone(), keys: keys? })
 }
 
+/// A stop in one scope stops every scope the work counts toward.
 fn propagate_exhaustion(ledger: &mut Ledger, keys: &[String], reason: &str) {
-    let state = keys
+    let stopped = keys
         .iter()
         .filter_map(|key| ledger.records.get(key))
-        .find(|record| {
-            matches!(
-                record.view.state.as_str(),
-                "budget_exhausted" | "interrupted"
-            ) && record.view.reason.as_deref() == Some(reason)
-        })
-        .map(|record| record.view.state.clone());
-    if let Some(state) = state {
+        .find(|record| record.is_stopped() && record.view.reason.as_deref() == Some(reason))
+        .map(|record| (record.view.state.clone(), record.view.reached.clone()));
+    if let Some((state, reached)) = stopped {
         for key in keys {
             if let Some(record) = ledger.records.get_mut(key) {
                 record.view.state = state.clone();
+                record.view.reached = reached.clone();
                 record.view.reason = Some(reason.into());
                 record.view.updated_at = now_secs();
             }
@@ -143,6 +111,9 @@ fn check_scopes(ledger: &mut Ledger, keys: &[String]) -> Result<(), String> {
 
 impl BudgetContext {
     fn change<T>(&self, f: impl FnOnce(&mut Ledger) -> Result<T, String>) -> Result<T, String> {
+        if self.keys.is_empty() {
+            return f(&mut Ledger::default());
+        }
         self.app.budgets.change(&self.app, |ledger| {
             let result = f(ledger);
             if let Err(reason) = &result {
@@ -151,6 +122,13 @@ impl BudgetContext {
             result
         })
     }
+
+    fn publish(&self) {
+        if !self.keys.is_empty() {
+            self.app.budgets.publish(&self.app);
+        }
+    }
+
     pub async fn scope<T>(&self, future: impl Future<Output = T>) -> T {
         CURRENT.scope(self.clone(), future).await
     }
@@ -165,7 +143,7 @@ impl BudgetContext {
     }
 
     fn start_runtime(&self) -> Result<Option<Duration>, String> {
-        self.change(|ledger| {
+        let remaining = self.change(|ledger| {
             let now = now_secs();
             let mut remaining: Option<f64> = None;
             for k in &self.keys {
@@ -175,7 +153,7 @@ impl BudgetContext {
                     let elapsed = record.started_at.map(|t| (now - t).max(0.0)).unwrap_or(0.0);
                     let left = limit as f64 - record.view.usage.runtime_secs - elapsed;
                     if left <= 0.0 {
-                        return Err(exhaust(record, "the runtime allowance is used."));
+                        return Err(exhaust(record, Limit::Runtime));
                     }
                     remaining = Some(remaining.map(|v| v.min(left)).unwrap_or(left));
                 }
@@ -188,9 +166,13 @@ impl BudgetContext {
                 record.view.updated_at = now;
             }
             Ok(remaining.map(Duration::from_secs_f64))
-        })
+        });
+        self.publish();
+        remaining
     }
 
+    /// Records the run time. A turn that ended on its own is finished and its record goes; one
+    /// that stopped at a limit stays for Resume.
     fn end_runtime(&self, deadline: bool) {
         let result = self.change(|ledger| {
             let now = now_secs();
@@ -202,41 +184,29 @@ impl BudgetContext {
                         record.view.usage.runtime_secs += (now - started).max(0.0);
                     }
                 }
-                if deadline
-                    && record
-                        .view
-                        .limits
-                        .max_runtime_secs
-                        .is_some_and(|v| record.view.usage.runtime_secs >= v as f64)
-                {
-                    exhaust(record, "the runtime allowance is used.");
+                if deadline && record.view.limits.max_runtime_secs.is_some_and(|v| record.view.usage.runtime_secs >= v as f64) {
+                    exhaust(record, Limit::Runtime);
                 } else if record.view.state == "running" && record.active_runs == 0 {
-                    record.view.state = if record.view.kind == "job" {
-                        "complete"
-                    } else {
-                        "ready"
-                    }
-                    .into();
-                    let _ = check(record);
+                    record.view.state = if record.view.kind == "job" { "complete" } else { "ready" }.into();
                 }
                 record.view.updated_at = now;
             }
-            let _ = check_scopes(ledger, &self.keys);
+            if deadline {
+                let reason = Limit::Runtime.reason();
+                propagate_exhaustion(ledger, &self.keys, &reason);
+            }
+            ledger.records.retain(|_, r| !(r.view.kind == "job" && r.view.state == "complete" && !r.is_active()));
             Ok(())
         });
         if let Err(error) = result {
             tracing::error!(%error, "recording runtime consumption");
         }
-        self.app.budgets.publish(&self.app);
+        self.publish();
     }
 
     /// Runtime includes checks, connection waits, retries, review, and user questions. The
     /// same cancellation token reaches provider streams, tools, and MCP cancellation.
-    pub async fn run<T>(
-        &self,
-        cancel: &CancellationToken,
-        future: impl Future<Output = T>,
-    ) -> Result<T, String> {
+    pub async fn run<T>(&self, cancel: &CancellationToken, future: impl Future<Output = T>) -> Result<T, String> {
         let deadline = self.start_runtime()?;
         let future = self.scope(future);
         tokio::pin!(future);
@@ -253,7 +223,7 @@ impl BudgetContext {
         };
         self.end_runtime(timed_out);
         if timed_out {
-            Err("Budget exhausted: the runtime allowance is used. Increase or renew the allowance, then resume.".into())
+            Err(Limit::Runtime.reason())
         } else {
             Ok(answer)
         }
@@ -264,13 +234,8 @@ impl BudgetContext {
             for k in &self.keys {
                 let record = ledger.records.get_mut(k).ok_or("Unknown allowance")?;
                 check(record)?;
-                if record
-                    .view
-                    .limits
-                    .max_connector_calls
-                    .is_some_and(|v| record.view.usage.connector_calls >= v)
-                {
-                    return Err(exhaust(record, "the connector-call allowance is used."));
+                if record.view.limits.max_connector_calls.is_some_and(|v| record.view.usage.connector_calls >= v) {
+                    return Err(exhaust(record, Limit::ConnectorCalls));
                 }
             }
             for k in &self.keys {
@@ -287,13 +252,8 @@ impl BudgetContext {
             for k in &self.keys {
                 let record = ledger.records.get_mut(k).ok_or("Unknown allowance")?;
                 check(record)?;
-                if record
-                    .view
-                    .limits
-                    .max_retries
-                    .is_some_and(|v| record.view.usage.retries >= v)
-                {
-                    return Err(exhaust(record, "the retry allowance is used."));
+                if record.view.limits.max_retries.is_some_and(|v| record.view.usage.retries >= v) {
+                    return Err(exhaust(record, Limit::Retries));
                 }
             }
             for k in &self.keys {
@@ -303,13 +263,7 @@ impl BudgetContext {
         })
     }
 
-    fn reserve(
-        &self,
-        input: u64,
-        requested_output: u64,
-        rates: Option<(f64, f64)>,
-        pricing: Pricing,
-    ) -> Result<(String, u64, Charge), String> {
+    fn reserve(&self, input: u64, requested_output: u64, rates: Option<(f64, f64)>, pricing: Pricing) -> Result<(String, u64, Charge), String> {
         let result = self.change(|ledger| {
             let mut output = requested_output;
             for k in &self.keys {
@@ -318,61 +272,36 @@ impl BudgetContext {
                 let pending_tokens: u64 = record.pending.values().map(|c| c.tokens).sum();
                 let pending_usd: f64 = record.pending.values().map(|c| c.usd).sum();
                 if let Some(limit) = record.view.limits.max_tokens {
-                    let remaining = limit
-                        .saturating_sub(record.view.usage.tokens.saturating_add(pending_tokens));
+                    let remaining = limit.saturating_sub(record.view.usage.tokens.saturating_add(pending_tokens));
                     if remaining <= input {
-                        return Err(exhaust(
-                            record,
-                            "the next request does not fit the remaining token allowance.",
-                        ));
+                        return Err(exhaust(record, Limit::Tokens));
                     }
                     output = output.min(remaining - input);
                 }
                 if let Some(limit) = record.view.limits.max_usd {
                     let Some((input_rate, output_rate)) = rates else {
-                        // Monetary caps cannot admit unpriced work as free. Supply another
-                        // measurable bound and use it for this model instead.
-                        if record.view.limits.max_tokens.is_some()
-                            || record.view.limits.max_runtime_secs.is_some()
-                        {
+                        // A spending limit can't admit unpriced work as free. A token or run
+                        // time limit bounds it instead.
+                        if record.view.limits.max_tokens.is_some() || record.view.limits.max_runtime_secs.is_some() {
                             continue;
                         }
-                        return Err(exhaust(
-                            record,
-                            "this provider has unknown pricing; set a token or runtime limit.",
-                        ));
+                        return Err(exhaust(record, Limit::UnknownPrice));
                     };
-                    let left = limit
-                        - record.view.usage.usd()
-                        - pending_usd
-                        - input_rate * input as f64 / 1_000_000.0;
+                    let left = limit - record.view.usage.usd() - pending_usd - input_rate * input as f64 / 1_000_000.0;
                     if left < 0.0 {
-                        return Err(exhaust(
-                            record,
-                            "the next request does not fit the remaining spending allowance.",
-                        ));
+                        return Err(exhaust(record, Limit::Usd));
                     }
                     if output_rate > 0.0 {
-                        output =
-                            output.min((left * 1_000_000.0 / output_rate).floor().max(0.0) as u64);
+                        output = output.min((left * 1_000_000.0 / output_rate).floor().max(0.0) as u64);
                     }
                     if output == 0 {
-                        return Err(exhaust(
-                            record,
-                            "the next reply does not fit the remaining spending allowance.",
-                        ));
+                        return Err(exhaust(record, Limit::Usd));
                     }
                 }
             }
             let id = uuid::Uuid::new_v4().to_string();
-            let usd = rates
-                .map(|(i, o)| (i * input as f64 + o * output as f64) / 1_000_000.0)
-                .unwrap_or(0.0);
-            let charge = Charge {
-                tokens: input.saturating_add(output),
-                usd,
-                pricing: Some(pricing),
-            };
+            let usd = rates.map(|(i, o)| (i * input as f64 + o * output as f64) / 1_000_000.0).unwrap_or(0.0);
+            let charge = Charge { tokens: input.saturating_add(output), usd, pricing: Some(pricing) };
             for k in &self.keys {
                 let record = ledger.records.get_mut(k).unwrap();
                 record.pending.insert(id.clone(), charge.clone());
@@ -381,7 +310,7 @@ impl BudgetContext {
             Ok((id, output, charge))
         });
         if result.is_err() {
-            self.app.budgets.publish(&self.app);
+            self.publish();
         }
         result
     }
@@ -390,12 +319,9 @@ impl BudgetContext {
         self.settle_usage(id, usage, usage.is_none())
     }
 
-    fn settle_usage(
-        &self,
-        id: &str,
-        usage: Option<&lorca_agent::Usage>,
-        estimated: bool,
-    ) -> Result<(), String> {
+    /// Records what a model call used. A call that went past a limit is not stopped here: it
+    /// already ran, and the next one is refused.
+    fn settle_usage(&self, id: &str, usage: Option<&lorca_agent::Usage>, estimated: bool) -> Result<(), String> {
         self.change(|ledger| {
             for k in &self.keys {
                 let record = ledger.records.get_mut(k).ok_or("Unknown allowance")?;
@@ -409,10 +335,11 @@ impl BudgetContext {
                 apply_charge(&mut record.view.usage, &charge, estimated);
                 record.view.updated_at = now_secs();
             }
-            let _ = check_scopes(ledger, &self.keys);
             Ok(())
         })?;
-        self.app.budgets.publish(&self.app);
+        if !self.keys.is_empty() {
+            self.app.budgets.notify(&self.app);
+        }
         Ok(())
     }
 }
@@ -592,11 +519,13 @@ impl Provider for BudgetProvider {
                             *failed.lock().unwrap() = false;
                             done = true;
                         }
-                        AssistantEvent::Error { .. } if !done => {
+                        AssistantEvent::Error { message, aborted } if !done => {
                             if let Some(permit) = &permit {
                                 permit.finish(None);
                             }
-                            *failed.lock().unwrap() = true;
+                            // The loop asks again only after an error it retries; Send now's
+                            // stop and an overflow's compaction are not retries.
+                            *failed.lock().unwrap() = !*aborted && lorca_agent::retry::is_retryable_error(message);
                             done = true;
                         }
                         _ => {}
@@ -694,9 +623,7 @@ impl RequestHooks for ModelPermit {
             if output != self.output {
                 self.context
                     .settle(&id, Some(&lorca_agent::Usage::default()))?;
-                return Err(
-                    "Budget exhausted: the retry no longer fits the remaining allowance.".into(),
-                );
+                return Err("Stopped: the retry no longer fits within the limits.".into());
             }
             *self.id.lock().unwrap() = Some(id);
         }
@@ -746,137 +673,84 @@ mod tests {
             .unwrap()
     }
 
-    #[tokio::test]
-    async fn event_recovery_rearms_its_allowance_without_bypassing_the_inbox() {
-        let (scratch, mut job) = app();
-        let app = &scratch.0;
-        job.kind = "event".into();
-        configure(app, &job, json!({"max_tokens":0}));
-        assert!(for_job(app, &job).is_err());
-        serve(
-            app,
-            "budgets.set",
-            &json!({"kind":"job", "id":job.id, "bot_id":job.bot_id, "limits":{"max_tokens":100}}),
-        )
-        .unwrap();
-        let blocked = json!({"kind":"job", "id":job.id, "request_id":"event-recovery", "run":true});
-        assert!(serve(app, "budgets.resume", &blocked)
-            .unwrap_err()
-            .contains("run:false"));
-        assert_eq!(view(app, "job", &job.id).state, "budget_exhausted");
-        let resumed =
-            json!({"kind":"job", "id":job.id, "request_id":"event-recovery", "run":false});
-        serve(app, "budgets.resume", &resumed).unwrap();
-        let snapshot = view(app, "job", &job.id);
-        assert_eq!(snapshot.state, "ready");
-        assert_eq!(snapshot.job_kind.as_deref(), Some("event"));
-        assert!(app.running_jobs.lock().unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn a_lower_run_limit_exposes_task_exhaustion_and_new_runs_keep_the_task_allowance() {
-        let (scratch, mut job) = app();
-        let app = &scratch.0;
-        job.kind = "task".into();
-        job.task_id = Some(format!("task-{}", uuid::Uuid::new_v4()));
-        configure(app, &job, json!({"max_tokens":100}));
-        let context = for_job(app, &job).unwrap();
-        assert_eq!(
-            view(app, "task", job.task_id.as_deref().unwrap())
-                .limits
-                .max_tokens,
-            Some(100)
-        );
-        assert_eq!(view(app, "job", &job.id).limits.max_tokens, None);
-        serve(
-            app,
-            "budgets.set",
-            &json!({"kind":"job","id":job.id,"bot_id":job.bot_id,"limits":{"max_tokens":20}}),
-        )
-        .unwrap();
-        let (id, _, _) = context.reserve(10, 10, None, Pricing::Unknown).unwrap();
-        context.settle(&id, None).unwrap();
-        let task = view(app, "task", job.task_id.as_deref().unwrap());
-        assert_eq!(
-            task.state, "budget_exhausted",
-            "a partial reply cannot hide a lower run cap from the task lifecycle"
-        );
-        assert_eq!(task.usage.tokens, 20);
-        serve(
-            app,
-            "budgets.resume",
-            &json!({"kind":"task","id":task.id,"request_id":"task-recovery","run":false}),
-        )
-        .unwrap();
-        job.id = format!("job-{}", uuid::Uuid::new_v4());
-        assert!(for_job(app, &job).is_ok());
-        assert_eq!(
-            view(app, "task", &task.id).usage.tokens,
-            20,
-            "a fresh tasks.run does not replenish the task's counters"
-        );
-    }
-
-    #[tokio::test]
-    async fn routine_recovery_clears_its_run_projection_but_never_replenishes_another_scope() {
-        let (scratch, mut job) = app();
-        let app = &scratch.0;
-        let routine = crate::routines::create(
-            app,
-            &job.bot_id,
-            "Brief",
-            "every 1h",
-            "Summarize",
-            None,
-            true,
-        )
-        .unwrap();
+    fn routine(app: &Arc<App>, job: &mut Job, check: Option<&str>) -> crate::model::Routine {
+        let routine = crate::routines::create(app, &job.bot_id, "Brief", "every 1h", "Summarize", check, true).unwrap();
         job.routine_id = Some(routine.id.clone());
-        serve(
-            app,
-            "budgets.set",
-            &json!({"kind":"routine","id":routine.id,"limits":{"max_tokens":20}}),
-        )
-        .unwrap();
+        routine
+    }
+
+    #[tokio::test]
+    async fn unlimited_work_keeps_no_records_and_a_finished_turn_is_dropped() {
+        let (scratch, mut job) = app();
+        let app = &scratch.0;
+        let cancel = CancellationToken::new();
+        for_job(app, &job).unwrap().run(&cancel, async {}).await.unwrap();
+        let routine = routine(app, &mut job.clone(), None);
+        let check = for_routine(app, &routine).unwrap();
+        check.connector_call().unwrap();
+        assert!(app.budgets.snapshots(app).is_empty(), "no limits, nothing to keep or sync");
+
+        configure(app, &job, json!({"max_tokens":100}));
+        for_job(app, &job).unwrap().run(&cancel, async {}).await.unwrap();
+        let kinds: Vec<_> = app.budgets.snapshots(app).into_iter().map(|s| s.kind).collect();
+        assert_eq!(kinds, ["chat"], "a turn that finished leaves only its chat's limits");
+
         let context = for_job(app, &job).unwrap();
+        assert!(context.reserve(200, 10, None, Pricing::Unknown).is_err());
+        assert_eq!(view(app, "job", &job.id).reached.as_deref(), Some("tokens"));
+        job.id = "job-next".into();
+        for_job(app, &job).unwrap();
+        assert!(
+            app.budgets.snapshots(app).iter().all(|s| s.id != "job"),
+            "a new turn in the chat replaces the one that stopped"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_routine_stops_at_its_limit_and_resumes_without_losing_what_it_used() {
+        let (scratch, mut job) = app();
+        let app = &scratch.0;
+        let routine = routine(app, &mut job, Some("return false"));
+        serve(app, "budgets.set", &json!({"kind":"routine","id":routine.id,"limits":{"max_tokens":20}})).unwrap();
+        let context = for_job(app, &job).unwrap();
+        context
+            .scope(async {
+                let check = for_routine(app, &routine).unwrap();
+                assert_eq!(check.keys, context.keys, "a check inside the run counts once");
+                check.connector_call().unwrap();
+            })
+            .await;
         let (id, _, _) = context.reserve(10, 10, None, Pricing::Unknown).unwrap();
         context.settle(&id, None).unwrap();
-        assert_eq!(view(app, "job", &job.id).state, "budget_exhausted");
-        serve(
-            app,
-            "budgets.set",
-            &json!({"kind":"routine","id":routine.id,"limits":{"max_tokens":100}}),
-        )
-        .unwrap();
-        serve(
-            app,
-            "budgets.resume",
-            &json!({"kind":"routine","id":routine.id,"request_id":"resume-brief","run":false}),
-        )
-        .unwrap();
-        assert!(
-            for_job(app, &job).is_ok(),
-            "the held routine can continue with its same Job id after explicit recovery"
-        );
-        assert_eq!(view(app, "job", &job.id).usage.tokens, 20);
+        assert_eq!(view(app, "routine", &routine.id).state, "ready", "a call that already ran isn't a stop");
+        assert!(context.check().is_err(), "the next call is refused");
+        assert!(crate::routines::run_now(app, &routine.id).is_err());
+        let stopped = view(app, "routine", &routine.id);
+        assert_eq!((stopped.state.as_str(), stopped.reached.as_deref()), ("budget_exhausted", Some("tokens")));
+        assert_eq!(stopped.usage.connector_calls, 1);
+
+        serve(app, "budgets.set", &json!({"kind":"routine","id":routine.id,"limits":{"max_tokens":100}})).unwrap();
+        assert!(context.check().is_err(), "a higher limit alone doesn't resume it");
+        serve(app, "budgets.resume", &json!({"kind":"routine","id":routine.id,"request_id":"resume-brief"})).unwrap();
+        assert!(for_job(app, &job).is_ok());
         assert_eq!(view(app, "routine", &routine.id).usage.tokens, 20);
-        serve(
-            app,
-            "budgets.set",
-            &json!({"kind":"job","id":job.id,"bot_id":job.bot_id,"limits":{"max_tokens":20}}),
-        )
-        .unwrap();
-        assert!(context.check().is_err());
-        serve(
-            app,
-            "budgets.resume",
-            &json!({"kind":"routine","id":routine.id,"request_id":"still-spent","run":false}),
-        )
-        .unwrap();
-        assert!(
-            for_job(app, &job).is_err(),
-            "recovering one scope never grants credit in another exhausted allowance"
-        );
+    }
+
+    #[tokio::test]
+    async fn a_restart_interrupts_a_turn_but_not_a_routine() {
+        let (scratch, job) = app();
+        let app = &scratch.0;
+        configure(app, &job, json!({"max_tokens":100}));
+        for_job(app, &job).unwrap().start_runtime().unwrap();
+        let mut run = job.clone();
+        run.id = "job-routine".into();
+        let routine = routine(app, &mut run, None);
+        serve(app, "budgets.set", &json!({"kind":"routine","id":routine.id,"limits":{"max_tokens":100}})).unwrap();
+        for_job(app, &run).unwrap().start_runtime().unwrap();
+        app.budgets.clear();
+        assert_eq!(view(app, "job", &job.id).state, "interrupted");
+        assert_eq!(view(app, "routine", &routine.id).state, "ready");
+        assert!(crate::routines::run_now(app, &routine.id).is_ok());
     }
 
     #[tokio::test]
@@ -893,7 +767,7 @@ mod tests {
         assert!(context
             .reserve(10, 50, None, Pricing::Unknown)
             .unwrap_err()
-            .contains("Budget exhausted"));
+            .contains("Stopped at the token limit"));
         let mut used = lorca_agent::Usage::default();
         used.input = 10;
         used.output = 10;
@@ -924,42 +798,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn checks_and_turns_share_the_routine_and_canonical_task_scope() {
-        let (scratch, mut job) = app();
-        let app = &scratch.0;
-        let routine = crate::routines::create(
-            app,
-            &job.bot_id,
-            "Check",
-            "every 1h",
-            "Look",
-            Some("return false"),
-            true,
-        )
-        .unwrap();
-        job.routine_id = Some(routine.id.clone());
-        job.task_id = Some(format!("task-{}", uuid::Uuid::new_v4()));
-        let context = for_job(app, &job).unwrap();
-        context
-            .scope(async {
-                let check = for_routine(app, &routine, &job.chat_id).unwrap();
-                assert_eq!(
-                    check.keys, context.keys,
-                    "the nested check retains its parent's scopes without duplicating them"
-                );
-                check.connector_call().unwrap();
-            })
-            .await;
-        for (kind, id) in [
-            ("job", job.id.as_str()),
-            ("task", job.task_id.as_deref().unwrap()),
-            ("routine", routine.id.as_str()),
-        ] {
-            assert_eq!(view(app, kind, id).usage.connector_calls, 1);
-        }
-    }
-
-    #[tokio::test]
     async fn runtime_cancels_work_and_zero_retry_limit_refuses_before_another_request() {
         let (scratch, job) = app();
         let app = &scratch.0;
@@ -986,7 +824,7 @@ mod tests {
             .before_request(true, &cancel)
             .await
             .unwrap_err()
-            .contains("retry allowance"));
+            .contains("retry limit"));
         assert_eq!(view(app, "job", &job.id).usage.model_calls, 1);
         assert_eq!(view(app, "job", &job.id).usage.estimated_calls, 1);
         serve(app, "budgets.resume", &json!({"request_id": uuid::Uuid::new_v4().to_string(), "kind":"job", "id":job.id, "renew":true})).unwrap();
@@ -995,7 +833,7 @@ mod tests {
                 cancel.cancelled().await;
             })
             .await;
-        assert!(result.unwrap_err().contains("runtime allowance"));
+        assert!(result.unwrap_err().contains("run time limit"));
         assert!(cancel.is_cancelled());
         assert_eq!(view(app, "job", &job.id).state, "budget_exhausted");
     }
@@ -1009,7 +847,7 @@ mod tests {
         assert!(context
             .reserve(10, 20, None, Pricing::Unknown)
             .unwrap_err()
-            .contains("unknown pricing"));
+            .contains("no known price"));
         serve(app, "budgets.set", &json!({"kind":"job", "id":job.id, "bot_id":job.bot_id, "limits":{"max_usd":5.0,"max_tokens":100}})).unwrap();
         serve(
             app,
@@ -1225,7 +1063,8 @@ mod tests {
         let held = view(app, "job", &job.id);
         assert!(held.usage.tokens >= 400);
         assert_eq!(held.usage.estimated_calls, 1);
-        assert_eq!(held.state, "budget_exhausted");
+        assert!(context.check().is_err());
+        assert_eq!(view(app, "job", &job.id).state, "budget_exhausted");
         assert!(events.iter().any(
             |event| matches!(event, AssistantEvent::Done { usage, .. } if usage.output == 400)
         ));

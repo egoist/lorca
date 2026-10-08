@@ -100,7 +100,6 @@ impl Default for Pool {
 impl Pool {
     pub fn new() -> Self {
         let http = mcp_http::Client::builder()
-            .retry(mcp_http::retry::never())
             .tls_backend_preconfigured(lorca_tls::client_config(&["h2", "http/1.1"]))
             .timeout(std::time::Duration::from_secs(600))
             .build()
@@ -262,7 +261,6 @@ async fn connect(app: &Arc<App>, plugin: &Installed, name: &str, spec: &ServerSp
             // `${VAR}` in an mcp.json server's URL is the environment's.
             let url = &fill(url, values);
             let mut config = StreamableHttpClientTransportConfig::with_uri(url.as_str());
-            config.reinit_on_expired_session = false;
             let mut custom = HashMap::new();
             // A header naming an optional key the user left unset is left out: Context7 without its
             // key works on the free limits, and with the placeholder refuses every call.
@@ -2103,8 +2101,7 @@ impl Tool for PluginTool {
             _ = cancel.cancelled() => return Err(ToolError("Stopped".into())),
         };
         let mut params = CallToolRequestParams::default();
-        let _permit = crate::connector_limits::ConnectorLimits::acquire(&self.app, &self.plugin_id, &cancel).await.map_err(ToolError)?;
-        if let Some(budget) = &self.budget { budget.connector_call().map_err(ToolError)?; }
+        let _permit = self.admit(&cancel).await?;
         params.name = tool.clone().into();
         params.arguments = args.as_object().cloned();
         // A call the user stops, or one that runs out of time, is called off at the server too
@@ -2148,7 +2145,9 @@ impl Tool for PluginTool {
             }
         };
         let is_error = result.is_error.unwrap_or(false);
-        self.app.connector_limits.observe_result(&self.app, &self.plugin_id, &serde_json::to_value(&result).unwrap_or_default());
+        if is_error {
+            self.app.connector_limits.observe_result(&self.app, &self.plugin_id, &serde_json::to_value(&result).unwrap_or_default());
+        }
         // Off the async threads: making a large image one a model takes takes a moment.
         let (result, mut content) = tokio::task::spawn_blocking(move || {
             let content = model_content(&result);
@@ -2169,6 +2168,15 @@ impl Tool for PluginTool {
 }
 
 impl PluginTool {
+    /// A call waits for the account's shared capacity, then counts toward the turn's limits.
+    /// A turn out of plugin calls doesn't take a slot from the other bots.
+    async fn admit(&self, cancel: &CancellationToken) -> Result<crate::connector_limits::CallPermit, ToolError> {
+        if let Some(budget) = &self.budget { budget.check().map_err(ToolError)?; }
+        let permit = crate::connector_limits::ConnectorLimits::acquire(&self.app, &self.plugin_id, cancel).await.map_err(ToolError)?;
+        if let Some(budget) = &self.budget { budget.connector_call().map_err(ToolError)?; }
+        Ok(permit)
+    }
+
     fn describe_call_error(&self, error: &rmcp::ServiceError) -> String {
         if let rmcp::ServiceError::McpError(data) = error {
             self.app.connector_limits.observe_result(&self.app, &self.plugin_id, &serde_json::to_value(data).unwrap_or_default());
@@ -2185,8 +2193,7 @@ impl PluginTool {
             _ = cancel.cancelled() => return Err(ToolError("Stopped".into())),
         };
         let peer = server.service.peer();
-        let _permit = crate::connector_limits::ConnectorLimits::acquire(&self.app, &self.plugin_id, &cancel).await.map_err(ToolError)?;
-        if let Some(budget) = &self.budget { budget.connector_call().map_err(ToolError)?; }
+        let _permit = self.admit(&cancel).await?;
         let page = args["cursor"].as_str().and_then(|cursor| serde_json::from_value::<rmcp::model::PaginatedRequestParams>(json!({ "cursor": cursor })).ok());
         let asked = async {
             Ok::<Value, String>(match self.kind {

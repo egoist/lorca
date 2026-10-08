@@ -38,7 +38,7 @@ impl CallLimits {
         if self.window_secs == 0 || self.window_secs > 86_400 {
             return Err("The rate window must be between 1 second and 24 hours.".into());
         }
-        if self.max_concurrency > 256 || self.max_calls > 1_000_000 {
+        if self.max_concurrency > 256 || self.max_calls > 10_000 {
             return Err("The connector limit is too large.".into());
         }
         Ok(())
@@ -215,10 +215,12 @@ impl ConnectorLimits {
         }
     }
 
+    /// Holds the account's calls for what the service asked, at most a day.
     pub fn cooldown(&self, app: &App, plugin_id: &str, seconds: f64) {
         if !seconds.is_finite() || seconds < 0.0 {
             return;
         }
+        let seconds = seconds.min(86_400.0);
         let mut held = self.state.lock().unwrap();
         let result = self.load(app, &mut held).and_then(|state| {
             let bucket = state.buckets.entry(account_key(plugin_id)).or_default();
@@ -302,6 +304,10 @@ pub fn serve(app: &Arc<App>, method: &str, params: &Value) -> Result<Value, Stri
         limits.validate()?;
         let mut changed = state.clone();
         changed.limits.insert(key.clone(), limits);
+        // A new limit is the user's call; it ends a wait the service asked for.
+        if let Some(bucket) = changed.buckets.get_mut(&account_key(plugin_id)) {
+            bucket.cooldown_until = 0.0;
+        }
         app.connector_limits.save(app, &changed)?;
         *state = changed;
         app.connector_limits.changed.notify_waiters();
@@ -311,7 +317,7 @@ pub fn serve(app: &Arc<App>, method: &str, params: &Value) -> Result<Value, Stri
     let limits = state.limits.get(&key).cloned().unwrap_or_default();
     let bucket = state.buckets.get(&key).cloned().unwrap_or_default();
     Ok(
-        json!({ "plugin_id": plugin_id, "limits": limits, "active_calls": bucket.active, "retry_at": (bucket.cooldown_until > now_secs()).then_some(bucket.cooldown_until) }),
+        json!({ "plugin_id": plugin_id, "service_id": service_id(plugin_id), "limits": limits, "retry_at": (bucket.cooldown_until > now_secs()).then_some(bucket.cooldown_until) }),
     )
 }
 

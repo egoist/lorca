@@ -231,15 +231,6 @@ pub async fn send_with_retry(
     max_retries: u32,
     max_delay_ms: u64,
     cancel: &CancellationToken,
-) -> Result<reqwest::Response, RequestFailure> {
-    send_with_retry_options(build, max_retries, max_delay_ms, cancel, &crate::request::RequestOptions::default()).await
-}
-
-pub async fn send_with_retry_options(
-    build: impl Fn() -> reqwest::RequestBuilder,
-    max_retries: u32,
-    max_delay_ms: u64,
-    cancel: &CancellationToken,
     options: &crate::request::RequestOptions,
 ) -> Result<reqwest::Response, RequestFailure> {
     let mut retries_left = max_retries;
@@ -316,7 +307,7 @@ mod tests {
         let guard = std::sync::Arc::new(Guard(std::sync::atomic::AtomicUsize::new(0)));
         let options = crate::request::RequestOptions::default().with_hooks(guard.clone());
         let client = lorca_tls::client();
-        let error = send_with_retry_options(|| client.post(&url), 2, 5000, &CancellationToken::new(), &options).await.unwrap_err();
+        let error = send_with_retry(|| client.post(&url), 2, 5000, &CancellationToken::new(), &options).await.unwrap_err();
         assert!(matches!(error, RequestFailure::Refused(_)));
         assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
         assert_eq!(guard.0.load(std::sync::atomic::Ordering::SeqCst), 2);
@@ -378,12 +369,12 @@ mod tests {
         });
         let client = reqwest::Client::new();
         let url = format!("http://{address}/");
-        let response = send_with_retry(|| client.get(&url), 3, DEFAULT_MAX_RETRY_DELAY_MS, &CancellationToken::new()).await.unwrap();
+        let response = send_with_retry(|| client.get(&url), 3, DEFAULT_MAX_RETRY_DELAY_MS, &CancellationToken::new(), &crate::request::RequestOptions::default()).await.unwrap();
         assert_eq!(response.status(), 200);
         assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 3);
 
         // Out of retries: the failure carries the server's message.
-        let failing = send_with_retry(|| client.get(&url), 0, DEFAULT_MAX_RETRY_DELAY_MS, &CancellationToken::new()).await;
+        let failing = send_with_retry(|| client.get(&url), 0, DEFAULT_MAX_RETRY_DELAY_MS, &CancellationToken::new(), &crate::request::RequestOptions::default()).await;
         match failing {
             Ok(response) => assert_eq!(response.status(), 200, "the fourth hit succeeds"),
             Err(failure) => panic!("unexpected {}", failure.message()),

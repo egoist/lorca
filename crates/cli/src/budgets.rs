@@ -1,7 +1,7 @@
-//! Runner-owned allowances. Jobs and canonical tasks keep their existing identities; this
-//! module owns only accounting, reservations, exhaustion, and explicit recovery.
+//! Runner-owned limits. A DM's turns, and a routine's runs, keep their existing identities;
+//! this module owns only what they used, reservations, a stop at a limit, and resuming.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
@@ -12,6 +12,9 @@ use crate::config::now_secs;
 use crate::model::Job;
 
 const PURPOSE: &str = "runner_budgets_v1";
+
+/// How long a resume's receipt answers a repeated delivery of the same request.
+const RECEIPT_SECS: f64 = 7.0 * 24.0 * 3600.0;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
@@ -25,21 +28,17 @@ pub struct BudgetLimits {
 
 impl BudgetLimits {
     pub fn validate(&self) -> Result<(), String> {
-        if self
-            .max_usd
-            .is_some_and(|usd| !usd.is_finite() || usd < 0.0)
-        {
+        if self.max_usd.is_some_and(|usd| !usd.is_finite() || usd < 0.0) {
             return Err("The spending limit must be a finite, nonnegative dollar amount.".into());
         }
-        if self
-            .max_runtime_secs
-            .is_some_and(|seconds| seconds > 31_536_000)
-        {
-            return Err(
-                "A runtime allowance is at most one year; leave it unset for unlimited.".into(),
-            );
+        if self.max_runtime_secs.is_some_and(|seconds| seconds > 31_536_000) {
+            return Err("A run time limit is at most one year; leave it empty for no limit.".into());
         }
         Ok(())
+    }
+
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
     }
 }
 
@@ -50,6 +49,47 @@ pub enum Pricing {
     SubscriptionEstimate,
     Unknown,
 }
+
+/// The limit work stopped at. Its wire name lets the apps say which in their own words; the
+/// reason is the chat notice and what a refused model or tool call reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Limit {
+    Usd,
+    Tokens,
+    Runtime,
+    Retries,
+    ConnectorCalls,
+    UnknownPrice,
+}
+
+impl Limit {
+    fn name(self) -> &'static str {
+        match self {
+            Limit::Usd => "usd",
+            Limit::Tokens => "tokens",
+            Limit::Runtime => "runtime",
+            Limit::Retries => "retries",
+            Limit::ConnectorCalls => "connector_calls",
+            Limit::UnknownPrice => "unknown_price",
+        }
+    }
+
+    fn reason(self) -> String {
+        let what = match self {
+            Limit::Usd => "spending",
+            Limit::Tokens => "token",
+            Limit::Runtime => "run time",
+            Limit::Retries => "retry",
+            Limit::ConnectorCalls => "plugin call",
+            Limit::UnknownPrice => {
+                return "Stopped: this model has no known price, so a spending limit can't cover it. Add a token or run time limit in Limits.".into()
+            }
+        };
+        format!("Stopped at the {what} limit. Raise it in Limits to resume.")
+    }
+}
+
+const INTERRUPTED: &str = "Interrupted when the Runner restarted. Check what it already did, then resume it in Limits.";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -75,7 +115,8 @@ impl BudgetUsage {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct BudgetSnapshot {
-    /// `chat` is a default allowance for new ad-hoc Jobs. Other kinds carry consumption.
+    /// `chat` holds the limits each new turn in that chat starts with; `job` is one turn,
+    /// `routine` all runs of a routine.
     pub kind: String,
     pub id: String,
     pub runner_id: String,
@@ -83,12 +124,14 @@ pub struct BudgetSnapshot {
     pub chat_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub job_kind: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub task_id: Option<String>,
     pub limits: BudgetLimits,
     pub usage: BudgetUsage,
     /// `ready`, `running`, `complete`, `budget_exhausted`, or `interrupted`.
     pub state: String,
+    /// The limit a `budget_exhausted` scope stopped at: `usd`, `tokens`, `runtime`, `retries`,
+    /// `connector_calls`, or `unknown_price`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reached: Option<String>,
     pub reason: Option<String>,
     pub updated_at: f64,
 }
@@ -105,10 +148,21 @@ struct Record {
     view: BudgetSnapshot,
     #[serde(default)]
     pending: BTreeMap<String, Charge>,
+    /// A turn's Job, so Resume can go on with it.
     job: Option<Job>,
     started_at: Option<f64>,
     #[serde(default)]
     active_runs: u64,
+}
+
+impl Record {
+    fn is_stopped(&self) -> bool {
+        matches!(self.view.state.as_str(), "budget_exhausted" | "interrupted")
+    }
+
+    fn is_active(&self) -> bool {
+        self.started_at.is_some() || !self.pending.is_empty()
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -128,6 +182,46 @@ fn key(kind: &str, id: &str) -> String {
     format!("{kind}:{id}")
 }
 
+/// What still exists, read before the ledger's lock is taken.
+struct Live {
+    chats: HashSet<String>,
+    routines: HashSet<String>,
+    devices: HashSet<String>,
+}
+
+fn live(app: &App) -> Live {
+    let state = app.state.lock().unwrap();
+    Live {
+        chats: state.chats.iter().map(|c| c.meta.id.clone()).collect(),
+        routines: state.routines.iter().map(|r| r.id.clone()).collect(),
+        devices: state.devices.iter().map(|d| d.id.clone()).collect(),
+    }
+}
+
+/// Keeps only what someone may still look at or resume: limits the user set, a turn that
+/// stopped or waits to go on, and work in flight. A finished turn, a chat or routine that is
+/// gone, an unpaired Runner's projection, and old receipts go.
+fn prune(ledger: &mut Ledger, live: &Live) {
+    ledger.records.retain(|_, record| {
+        if record.is_active() {
+            return true;
+        }
+        let exists = match record.view.kind.as_str() {
+            "routine" => live.routines.contains(&record.view.id),
+            _ => live.chats.contains(&record.view.chat_id),
+        };
+        exists
+            && match record.view.kind.as_str() {
+                // A resumed turn waits here for its run; a newer turn in the chat replaces it.
+                "job" => record.view.state != "complete",
+                _ => record.is_stopped() || !record.view.limits.is_empty(),
+            }
+    });
+    ledger.remote.retain(|runner, _| live.devices.contains(runner));
+    let cutoff = now_secs() - RECEIPT_SECS;
+    ledger.receipts.retain(|_, receipt| receipt["updated_at"].as_f64().is_some_and(|at| at > cutoff));
+}
+
 impl BudgetStore {
     pub fn clear(&self) {
         *self.0.lock().unwrap() = None;
@@ -136,17 +230,14 @@ impl BudgetStore {
     fn load<'a>(&self, app: &App, held: &'a mut Option<Ledger>) -> Result<&'a mut Ledger, String> {
         if held.is_none() {
             let dek = app.dek().ok_or("Create or pair an identity first.")?;
-            let mut ledger: Ledger = match app
-                .store
-                .runner_limits(PURPOSE)
-                .map_err(|e| e.to_string())?
-            {
+            let mut ledger: Ledger = match app.store.runner_limits(PURPOSE).map_err(|e| e.to_string())? {
                 Some(bytes) => crate::crypto::decrypt_json(&dek, PURPOSE, &bytes)
                     .map_err(|e| format!("Cannot read Runner budgets: {e}"))?,
                 None => Ledger::default(),
             };
-            // A restart never replenishes an allowance or replays an uncertain effect. Keep
-            // reservations as estimated consumption and require explicit recovery.
+            // A restart never replenishes a limit: open reservations count as used. A turn that
+            // was running may have done part of its work, so it waits for the user to resume
+            // it; a routine runs again on its schedule.
             for record in ledger.records.values_mut() {
                 for (_, charge) in std::mem::take(&mut record.pending) {
                     apply_charge(&mut record.view.usage, &charge, true);
@@ -154,8 +245,12 @@ impl BudgetStore {
                 if let Some(started) = record.started_at.take() {
                     record.active_runs = 0;
                     record.view.usage.runtime_secs += (now_secs() - started).max(0.0);
-                    record.view.state = "interrupted".into();
-                    record.view.reason = Some("The Runner restarted during work. Check its completed effects, then explicitly resume.".into());
+                    if record.view.kind == "job" {
+                        record.view.state = "interrupted".into();
+                        record.view.reason = Some(INTERRUPTED.into());
+                    } else if record.view.state == "running" {
+                        record.view.state = "ready".into();
+                    }
                 }
             }
             self.save(app, &ledger)?;
@@ -166,24 +261,19 @@ impl BudgetStore {
 
     fn save(&self, app: &App, ledger: &Ledger) -> Result<(), String> {
         let dek = app.dek().ok_or("The account is no longer available.")?;
-        let ciphertext =
-            crate::crypto::encrypt_json(&dek, PURPOSE, ledger).map_err(|e| e.to_string())?;
+        let ciphertext = crate::crypto::encrypt_json(&dek, PURPOSE, ledger).map_err(|e| e.to_string())?;
         app.store
             .set_runner_limits(PURPOSE, &ciphertext)
             .map_err(|e| format!("Cannot persist Runner accounting: {e}"))
     }
 
-    fn change<T>(
-        &self,
-        app: &App,
-        f: impl FnOnce(&mut Ledger) -> Result<T, String>,
-    ) -> Result<T, String> {
+    fn change<T>(&self, app: &App, f: impl FnOnce(&mut Ledger) -> Result<T, String>) -> Result<T, String> {
         let mut held = self.0.lock().unwrap();
         let current = self.load(app, &mut held)?;
         let mut changed = current.clone();
         let result = f(&mut changed);
-        // Persist an exhausted state even when admission failed. A storage failure prevents
-        // starting work, and no in-memory grant becomes visible without its durable write.
+        // Persist a stop even when admission failed. A storage failure prevents starting work,
+        // and no in-memory grant becomes visible without its durable write.
         if changed != *current {
             self.save(app, &changed)?;
         }
@@ -191,6 +281,7 @@ impl BudgetStore {
         result
     }
 
+    /// This Runner's limits and every paired Runner's, for the apps.
     pub fn snapshots(&self, app: &App) -> Vec<BudgetSnapshot> {
         if !app.has_identity() {
             return Vec::new();
@@ -210,51 +301,61 @@ impl BudgetStore {
         }
     }
 
+    /// This Runner's own, for its `machine` blob.
     pub fn local_snapshots(&self, app: &App) -> Vec<BudgetSnapshot> {
         let this = app.this_device_id().unwrap_or_default();
-        let mut snapshots: Vec<_> = self
-            .snapshots(app)
-            .into_iter()
-            .filter(|s| s.runner_id == this)
-            .collect();
-        snapshots.sort_by(|a, b| b.updated_at.total_cmp(&a.updated_at));
-        let mut finished = 0;
-        snapshots.retain(|s| {
-            if s.kind != "job" || s.state != "complete" {
-                return true;
-            }
-            finished += 1;
-            finished <= 100
-        });
-        snapshots
+        self.snapshots(app).into_iter().filter(|s| s.runner_id == this).collect()
     }
 
     pub fn merge_remote(&self, app: &App, runner: &str, mut snapshots: Vec<BudgetSnapshot>) {
         snapshots.retain(|s| s.runner_id == runner);
+        let mut changed = false;
         let result = self.change(app, |ledger| {
-            ledger.remote.insert(runner.into(), snapshots);
+            if ledger.remote.get(runner).map(Vec::as_slice).unwrap_or_default() != snapshots.as_slice() {
+                changed = true;
+                if snapshots.is_empty() {
+                    ledger.remote.remove(runner);
+                } else {
+                    ledger.remote.insert(runner.into(), snapshots);
+                }
+            }
             Ok(())
         });
         if let Err(error) = result {
             tracing::error!(%error, "keeping encrypted remote budget state");
         }
-        app.emit(crate::events::Event::BudgetsChanged {
-            budgets: self.snapshots(app),
-        });
+        if changed {
+            self.notify(app);
+        }
     }
 
+    /// Tells this Device's app; other Devices hear it through [`Self::publish`].
+    fn notify(&self, app: &App) {
+        app.emit(crate::events::Event::BudgetsChanged { budgets: self.snapshots(app) });
+    }
+
+    /// Tells this Device's app and every paired Device: a limit, a stop, a start, or an end.
     fn publish(&self, app: &App) {
-        app.emit(crate::events::Event::BudgetsChanged {
-            budgets: self.snapshots(app),
-        });
+        self.notify(app);
         app.push_machine_blob_if_changed();
     }
 
+    /// Whether the scope may start work. A scope this stops is published once.
     pub fn admit(&self, app: &App, kind: &str, id: &str) -> Result<(), String> {
-        self.change(app, |ledger| match ledger.records.get_mut(&key(kind, id)) {
-            Some(record) => check(record),
+        let mut stopped_now = false;
+        let result = self.change(app, |ledger| match ledger.records.get_mut(&key(kind, id)) {
+            Some(record) => {
+                let was_stopped = record.is_stopped();
+                let result = check(record);
+                stopped_now = !was_stopped && result.is_err();
+                result
+            }
             None => Ok(()),
-        })
+        });
+        if stopped_now {
+            self.publish(app);
+        }
+        result
     }
 }
 
@@ -268,65 +369,42 @@ fn apply_charge(usage: &mut BudgetUsage, charge: &Charge, estimated: bool) {
     usage.estimated_calls += u64::from(estimated);
 }
 
-fn exhaust(record: &mut Record, reason: impl Into<String>) -> String {
-    let reason = format!(
-        "Budget exhausted: {} Increase the allowance or explicitly renew it to resume.",
-        reason.into()
-    );
+/// Stops the scope at a limit. It refuses work until the user resumes it.
+fn exhaust(record: &mut Record, limit: Limit) -> String {
+    let reason = limit.reason();
     record.view.state = "budget_exhausted".into();
+    record.view.reached = Some(limit.name().into());
     record.view.reason = Some(reason.clone());
     record.view.updated_at = now_secs();
     reason
 }
 
+/// Refuses work for a stopped scope, and stops one that has used up a limit.
 fn check(record: &mut Record) -> Result<(), String> {
-    if matches!(
-        record.view.state.as_str(),
-        "budget_exhausted" | "interrupted"
-    ) {
-        return Err(record
-            .view
-            .reason
-            .clone()
-            .unwrap_or_else(|| "Explicit budget recovery is required.".into()));
+    if record.is_stopped() {
+        return Err(record.view.reason.clone().unwrap_or_else(|| Limit::Tokens.reason()));
     }
     let limits = &record.view.limits;
     let used = &record.view.usage;
-    let reason = if limits.max_tokens.is_some_and(|v| used.tokens >= v) {
-        Some("the token allowance is used.")
+    let running = record.started_at.map(|at| (now_secs() - at).max(0.0)).unwrap_or(0.0);
+    let limit = if limits.max_tokens.is_some_and(|v| used.tokens >= v) {
+        Some(Limit::Tokens)
     } else if limits.max_usd.is_some_and(|v| used.usd() >= v) {
-        Some("the spending allowance is used.")
-    } else if limits.max_runtime_secs.is_some_and(|v| {
-        used.runtime_secs
-            + record
-                .started_at
-                .map(|at| (now_secs() - at).max(0.0))
-                .unwrap_or(0.0)
-            >= v as f64
-    }) {
-        Some("the runtime allowance is used.")
-    } else if limits
-        .max_connector_calls
-        .is_some_and(|v| v > 0 && used.connector_calls >= v)
-    {
-        Some("the connector-call allowance is used.")
+        Some(Limit::Usd)
+    } else if limits.max_runtime_secs.is_some_and(|v| used.runtime_secs + running >= v as f64) {
+        Some(Limit::Runtime)
+    } else if limits.max_connector_calls.is_some_and(|v| v > 0 && used.connector_calls >= v) {
+        Some(Limit::ConnectorCalls)
     } else {
         None
     };
-    if let Some(reason) = reason {
-        return Err(exhaust(record, reason));
+    match limit {
+        Some(limit) => Err(exhaust(record, limit)),
+        None => Ok(()),
     }
-    Ok(())
 }
 
-fn new_record(
-    app: &App,
-    kind: &str,
-    id: &str,
-    bot_id: &str,
-    chat_id: &str,
-    limits: BudgetLimits,
-) -> Record {
+fn new_record(app: &App, kind: &str, id: &str, bot_id: &str, chat_id: &str, limits: BudgetLimits) -> Record {
     Record {
         view: BudgetSnapshot {
             kind: kind.into(),
@@ -335,10 +413,10 @@ fn new_record(
             bot_id: bot_id.into(),
             chat_id: chat_id.into(),
             job_kind: None,
-            task_id: None,
             limits,
             usage: BudgetUsage::default(),
             state: "ready".into(),
+            reached: None,
             reason: None,
             updated_at: now_secs(),
         },
@@ -349,18 +427,13 @@ fn new_record(
     }
 }
 
-/// All budget management is routed to the assigned Runner through the existing request
-/// transport. A chat allowance is a template for new Jobs, never an accounting reset.
+/// Every budget change goes to the bot's Runner through the existing request transport. A
+/// chat's limits are what new turns start with, never a reset of what a turn used.
 pub async fn dispatch(app: &Arc<App>, method: &str, params: &Value) -> Result<Value, String> {
     let runner = params["runner_id"]
         .as_str()
         .map(str::to_string)
-        .or_else(|| {
-            params["bot_id"]
-                .as_str()
-                .and_then(|id| app.bot(id))
-                .map(|b| b.runner_id)
-        })
+        .or_else(|| params["bot_id"].as_str().and_then(|id| app.bot(id)).map(|b| b.runner_id))
         .or_else(|| app.this_device_id())
         .ok_or("missing runner_id")?;
     if app.this_device_id().as_deref() != Some(runner.as_str()) {
@@ -370,150 +443,86 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: &Value) -> Result<Va
 }
 
 pub fn serve(app: &Arc<App>, method: &str, params: &Value) -> Result<Value, String> {
-    if method == "budgets.list" {
-        let chat = params["chat_id"].as_str();
-        return Ok(
-            json!({ "budgets": app.budgets.local_snapshots(app).into_iter().filter(|v| chat.is_none_or(|c| c == v.chat_id)).collect::<Vec<_>>() }),
-        );
-    }
     let kind = params["kind"]
         .as_str()
-        .filter(|kind| matches!(*kind, "job" | "task" | "routine" | "chat"))
-        .ok_or("kind must be job, task, routine, or chat")?;
-    let id = params["id"]
-        .as_str()
-        .filter(|id| !id.is_empty())
-        .ok_or("missing id")?;
+        .filter(|kind| matches!(*kind, "job" | "routine" | "chat"))
+        .ok_or("kind must be job, routine, or chat")?;
+    let id = params["id"].as_str().filter(|id| !id.is_empty()).ok_or("missing id")?;
     let record_key = key(kind, id);
-    if method == "budgets.get" {
-        return app.budgets.change(app, |ledger| {
-            ledger
-                .records
-                .get(&record_key)
-                .map(|r| json!(r.view))
-                .ok_or("No allowance is recorded for this work yet.".into())
-        });
-    }
     if method == "budgets.set" {
-        let limits: BudgetLimits =
-            serde_json::from_value(params["limits"].clone()).map_err(|e| e.to_string())?;
+        let limits: BudgetLimits = serde_json::from_value(params["limits"].clone()).map_err(|e| e.to_string())?;
         limits.validate()?;
-        let bot_id = if kind == "routine" {
-            app.routine(id).ok_or("Unknown routine")?.bot_id
-        } else if kind == "chat" {
-            app.chat(id)
-                .and_then(|c| c.meta.bot_ids.first().cloned())
-                .ok_or("Unknown chat")?
-        } else {
-            params["bot_id"]
-                .as_str()
-                .ok_or("missing bot_id")?
-                .to_string()
+        let bot_id = match kind {
+            "routine" => app.routine(id).ok_or("Unknown routine")?.bot_id,
+            "chat" => app.chat(id).and_then(|c| c.meta.bot_ids.first().cloned()).ok_or("Unknown chat")?,
+            _ => params["bot_id"].as_str().ok_or("missing bot_id")?.to_string(),
         };
         let bot = app.bot(&bot_id).ok_or("Unknown bot")?;
         if app.this_device_id().as_deref() != Some(bot.runner_id.as_str()) {
             return Err("Budgets are managed on the bot's assigned Runner.".into());
         }
-        if kind == "task"
-            && !id
-                .strip_prefix("task-")
-                .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
-        {
-            return Err("Use the canonical task-UUID from tasks.get.".into());
-        }
-        let chat_id = if kind == "chat" {
-            id.to_string()
-        } else {
-            params["chat_id"].as_str().unwrap_or_default().to_string()
-        };
+        let chat_id = if kind == "chat" { id.to_string() } else { params["chat_id"].as_str().unwrap_or_default().to_string() };
+        let live = live(app);
         let snapshot = app.budgets.change(app, |ledger| {
+            if kind == "job" && !ledger.records.contains_key(&record_key) {
+                return Err("This turn has no limits to change.".into());
+            }
             let record = ledger
                 .records
-                .entry(record_key)
+                .entry(record_key.clone())
                 .or_insert_with(|| new_record(app, kind, id, &bot_id, &chat_id, limits.clone()));
             record.view.limits = limits;
             record.view.updated_at = now_secs();
-            Ok(record.view.clone())
+            let snapshot = record.view.clone();
+            prune(ledger, &live);
+            Ok(snapshot)
         })?;
         app.budgets.publish(app);
         return Ok(json!(snapshot));
     }
     if method == "budgets.resume" {
-        let receipt = params["request_id"].as_str().filter(|id| !id.is_empty() && id.len() <= 128)
-            .ok_or("Resume requires a unique request_id so duplicate delivery cannot replenish the allowance twice.")?;
+        let receipt = params["request_id"]
+            .as_str()
+            .filter(|id| !id.is_empty() && id.len() <= 128)
+            .ok_or("Resume requires a unique request_id so a repeated delivery can't grant the limits twice.")?;
         let renew = params["renew"].as_bool().unwrap_or(false);
         let (snapshot, job, replay) = app.budgets.change(app, |ledger| {
             if let Some(saved) = ledger.receipts.get(receipt) {
                 if saved["kind"] != kind || saved["id"] != id {
-                    return Err(
-                        "This request_id already belongs to another budget recovery.".into(),
-                    );
+                    return Err("This request_id already belongs to another resume.".into());
                 }
-                return Ok((
-                    serde_json::from_value(saved.clone()).map_err(|e| e.to_string())?,
-                    None,
-                    true,
-                ));
+                return Ok((serde_json::from_value(saved.clone()).map_err(|e| e.to_string())?, None, true));
             }
-            let related = ledger.records.get(&record_key).and_then(|record| record.job.as_ref()).map(|job| {
-                let mut keys = vec![key("job", &job.id)];
-                if let Some(task) = &job.task_id { keys.push(key("task", task)); }
-                if let Some(routine) = &job.routine_id { keys.push(key("routine", routine)); }
-                keys
-            }).unwrap_or_default();
-            if related.iter().filter_map(|key| ledger.records.get(key)).any(|record| record.started_at.is_some() || !record.pending.is_empty()) {
-                return Err("Wait for the current work to stop before resuming its budget.".into());
-            }
-            let record = ledger
-                .records
-                .get_mut(&record_key)
-                .ok_or("Unknown budget")?;
-            if params["run"].as_bool().unwrap_or(false) && (kind == "task" || record.job.as_ref().is_some_and(|job| job.kind == "event" || job.task_id.is_some())) {
-                return Err("Recover the allowance with run:false, then Retry the delivery in Events or run the canonical task through tasks.run. Its inbox/ownership admission must be re-armed before work starts.".into());
-            }
-            if record.started_at.is_some() || !record.pending.is_empty() {
-                return Err("Wait for the current work to stop before resuming its budget.".into());
+            let record = ledger.records.get_mut(&record_key).ok_or("There is nothing to resume.")?;
+            if record.is_active() {
+                return Err("It's still running. Try again once it stops.".into());
             }
             if renew {
                 record.view.usage = BudgetUsage::default();
             }
             record.view.state = "ready".into();
+            record.view.reached = None;
             record.view.reason = None;
             check(record)?;
             record.view.updated_at = now_secs();
             let snapshot = record.view.clone();
             let job = record.job.clone();
-            // Exhaustion is projected to every scope of a run. Explicit recovery clears
-            // those projections too, while retaining all other scopes' consumption and
-            // refusing a scope whose own allowance is still spent.
-            for key in related.iter().filter(|key| **key != record_key) {
-                if let Some(record) = ledger.records.get_mut(key) {
-                    if matches!(record.view.state.as_str(), "budget_exhausted" | "interrupted") {
-                        record.view.state = "ready".into();
-                        record.view.reason = None;
-                        record.view.updated_at = now_secs();
-                        let _ = check(record);
-                    }
-                }
-            }
             ledger.receipts.insert(receipt.into(), json!(snapshot));
             Ok((snapshot, job, false))
         })?;
         app.budgets.publish(app);
         #[cfg(feature = "runner")]
         if !replay && params["run"].as_bool().unwrap_or(false) {
-            if let Some(mut job) = job {
-                // Continue from the durable transcript; completed/uncertain connector requests
-                // are never stored as instructions to retry.
-                job.check = job.check.or_else(|| {
-                    Some(crate::model::CheckReport {
-                        found: String::new(),
-                        error: None,
-                    })
-                });
-                crate::runtime::start_turn(app, job);
-            } else if kind == "routine" {
-                crate::routines::run_now(app, id)?;
+            match (kind, job) {
+                // A routine goes on with a new run, which checks it isn't running already.
+                ("routine", _) => crate::routines::run_now(app, id)?,
+                // A turn goes on from the transcript as it stands; a plugin call it made is
+                // never sent again from here.
+                (_, Some(mut job)) => {
+                    job.check = job.check.or_else(|| Some(crate::model::CheckReport { found: String::new(), error: None }));
+                    crate::runtime::start_turn(app, job);
+                }
+                _ => {}
             }
         }
         #[cfg(not(feature = "runner"))]

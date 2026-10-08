@@ -58,6 +58,13 @@ fn memory_flush_enabled() -> bool {
 
 // MARK: - The turn
 
+/// Refuses a tool call once the turn's limits are used up. Checked before review and again
+/// after it, so a review that spends the rest can't let one more call through.
+fn over_limits() -> Option<BeforeToolCallResult> {
+    let reason = crate::budgets::current()?.check().err()?;
+    Some(BeforeToolCallResult { block: true, reason: Some(reason), args: None, terminate: true })
+}
+
 pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken) -> TurnOutcome {
     let budget = match crate::budgets::for_job(app, job) {
         Ok(context) => context,
@@ -146,10 +153,10 @@ async fn run_budgeted_job(app: &Arc<App>, job: &Job, cancel: CancellationToken) 
     let plugin_briefs = crate::plugins::mcp::plugin_briefs(app);
     let system_prompt = system_prompt(app, &chat, &bot, job, &store, routine.as_ref(), &plugin_briefs);
 
-    let unattended = routine.is_some() || job.kind == "event";
+    let unattended = routine.is_some();
     let mut tools: Vec<Arc<dyn Tool>> = vec![
         Arc::new(ListTeammates { app: app.clone(), chat_id: chat.meta.id.clone() }),
-        Arc::new(MessageBot { app: app.clone(), chat_id: chat.meta.id.clone(), bot: bot.clone(), hops: job.hops, task_id: job.task_id.clone() }),
+        Arc::new(MessageBot { app: app.clone(), chat_id: chat.meta.id.clone(), bot: bot.clone(), hops: job.hops }),
         Arc::new(CreateBot { app: app.clone(), chat_id: chat.meta.id.clone(), bot: bot.clone() }),
         Arc::new(EditBot { app: app.clone(), bot: bot.clone() }),
         Arc::new(Routines { app: app.clone(), bot: bot.clone() }),
@@ -573,8 +580,8 @@ impl LoopHooks for QuietHooks {
     }
 
     async fn before_tool_call(&self, ctx: BeforeToolCallContext<'_>) -> Option<BeforeToolCallResult> {
-        if let Some(reason) = crate::budgets::current().and_then(|budget| budget.check().err()) {
-            return Some(BeforeToolCallResult { block: true, reason: Some(reason), args: None, terminate: true });
+        if let Some(refused) = over_limits() {
+            return Some(refused);
         }
         (!MEMORY_TOOLS.contains(&ctx.tool_call.name.as_str())).then(|| BeforeToolCallResult {
             block: true,
@@ -600,14 +607,14 @@ impl LoopHooks for TurnHooks {
     }
 
     async fn before_tool_call(&self, ctx: BeforeToolCallContext<'_>) -> Option<BeforeToolCallResult> {
-        if let Some(reason) = crate::budgets::current().and_then(|budget| budget.check().err()) {
-            return Some(BeforeToolCallResult { block: true, reason: Some(reason), args: None, terminate: true });
+        if let Some(refused) = over_limits() {
+            return Some(refused);
         }
         if let Some(refused) = crate::plugins::mcp::review_call(&self.app, &self.plugin_tools, &self.chat_id, &self.trigger, &self.bot, self.unattended, &ctx).await {
             return Some(refused);
         }
-        if let Some(reason) = crate::budgets::current().and_then(|budget| budget.check().err()) {
-            return Some(BeforeToolCallResult { block: true, reason: Some(reason), args: None, terminate: true });
+        if let Some(refused) = over_limits() {
+            return Some(refused);
         }
         let decision = crate::local_review::before_tool_call(
             &self.app,
@@ -619,8 +626,8 @@ impl LoopHooks for TurnHooks {
             ctx,
         )
         .await;
-        if let Some(reason) = crate::budgets::current().and_then(|budget| budget.check().err()) {
-            return Some(BeforeToolCallResult { block: true, reason: Some(reason), args: None, terminate: true });
+        if let Some(refused) = over_limits() {
+            return Some(refused);
         }
         decision
     }
@@ -2021,7 +2028,6 @@ struct MessageBot {
     chat_id: String,
     bot: Bot,
     hops: u32,
-    task_id: Option<String>,
 }
 
 #[async_trait]
@@ -2078,7 +2084,6 @@ impl Tool for MessageBot {
         self.app.upsert_message(incoming.clone(), true);
 
         let job = Job {
-            task_id: self.task_id.clone(),
             id: format!("job-{}", uuid::Uuid::new_v4()),
             chat_id: dm.meta.id.clone(),
             bot_id: target.id.clone(),
@@ -3260,7 +3265,6 @@ mod tests {
 
     fn room_job(chat_id: &str, bot_id: &str) -> Job {
         Job {
-            task_id: None,
             id: "job".into(),
             chat_id: chat_id.into(),
             bot_id: bot_id.into(),
@@ -3635,7 +3639,6 @@ mod tests {
         TurnState {
             app: app.clone(),
             job: Job {
-                task_id: None,
                 id: "job-1".into(),
                 chat_id: "chat".into(),
                 bot_id: bot.id.clone(),
@@ -4459,7 +4462,7 @@ mod tests {
         let error = edit.execute("call", json!({ "bot_id": "Chef", "description": "Cooks" }), CancellationToken::new(), no_updates.clone()).await.unwrap_err();
         assert_eq!(error.0, "No bot with id Chef. Bots: Chef (b1), Chef (b2)");
 
-        let message = MessageBot { app: app.clone(), chat_id: "chat".into(), bot: chef.clone(), hops: 0, task_id: None };
+        let message = MessageBot { app: app.clone(), chat_id: "chat".into(), bot: chef.clone(), hops: 0 };
         let error = message.execute("call", json!({ "bot_id": "Chef", "message": "hi" }), CancellationToken::new(), no_updates).await.unwrap_err();
         assert_eq!(error.0, "No bot with id Chef. Bots: Chef (b1), Chef (b2)");
 

@@ -622,8 +622,6 @@ pub struct ChatUsage {
     #[serde(default)]
     pub unknown_price_calls: u64,
     #[serde(default)]
-    pub priced_calls: u64,
-    #[serde(default)]
     pub pricing_kinds: Vec<crate::budgets::Pricing>,
     pub turns: u64,
     /// The model of the last turn.
@@ -786,9 +784,6 @@ pub struct Job {
     pub id: String,
     pub chat_id: String,
     pub bot_id: String,
-    /// A canonical durable task (#72); the budget module owns only its Runner accounting.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub task_id: Option<String>,
     /// `turn` for a user message in a DM, `room_turn` for one member's turn in a group,
     /// `message` for a teammate's message_bot, `routine` for a run of a routine, `command` for
     /// a command the bot left running that ended.

@@ -14,7 +14,7 @@ use crate::models::{self, ModelInfo, ThinkingMode};
 use crate::provider::{
     channel_stream, AssistantEvent, AssistantEventStream, ModelRequest, Provider, WEB_FETCH_TOOL, WEB_SEARCH_TOOL,
 };
-use crate::retry::{send_with_retry_options, RequestFailure, DEFAULT_MAX_RETRY_DELAY_MS};
+use crate::retry::{send_with_retry, RequestFailure, DEFAULT_MAX_RETRY_DELAY_MS};
 use crate::sse::SseParser;
 use crate::transform::{transform_messages_with_origins, TransformOptions};
 use crate::types::{AgentMessage, AssistantPart, ContentPart, LlmMessage, StopReason, ThinkingLevel, Usage};
@@ -666,7 +666,7 @@ impl Provider for AnthropicProvider {
                     .header("User-Agent", USER_AGENT);
                 options.apply_to(request).json(&body)
             };
-            let response = match send_with_retry_options(build, max_retries, max_retry_delay_ms, &cancel, &options).await {
+            let response = match send_with_retry(build, max_retries, max_retry_delay_ms, &cancel, &options).await {
                 Ok(response) => {
                     response
                 }

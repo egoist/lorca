@@ -112,7 +112,6 @@ pub fn cancel_chat(app: &Arc<App>, chat_id: &str) {
 
 fn user_turn_job(app: &Arc<App>, chat_id: &str, bot_id: &str, trigger_message_id: &str) -> Job {
     Job {
-        task_id: None,
         id: format!("job-{}", uuid::Uuid::new_v4()),
         chat_id: chat_id.to_string(),
         bot_id: bot_id.to_string(),
@@ -134,7 +133,6 @@ fn user_turn_job(app: &Arc<App>, chat_id: &str, bot_id: &str, trigger_message_id
 /// `trigger_message_id` is the command's card.
 pub fn command_job(app: &App, chat_id: &str, bot_id: &str, card_id: &str) -> Job {
     Job {
-        task_id: None,
         id: format!("job-{}", uuid::Uuid::new_v4()),
         chat_id: chat_id.to_string(),
         bot_id: bot_id.to_string(),
@@ -333,7 +331,6 @@ async fn run_room(
                 continue;
             }
             let job = Job {
-                task_id: None,
                 id: format!("job-{}", uuid::Uuid::new_v4()),
                 chat_id: chat_id.clone(),
                 bot_id: bot.id.clone(),
@@ -1010,7 +1007,6 @@ mod tests {
         app.upsert_message(message, false);
         assert!(app.claim_steering_message("chat", "message"));
         let job = Job {
-            task_id: None,
             id: "replacement".into(),
             chat_id: "chat".into(),
             bot_id: "bot".into(),
