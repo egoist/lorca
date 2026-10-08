@@ -1,6 +1,6 @@
 # Workflow onboarding
 
-Guided workflows are optional marketplace packs. The bundled index offers meeting preparation, inbox triage and repository monitoring. Each pack names the outcome, its required questions, specialist bot templates, integration service requirements, routine tasks and schedules, and the specialist and task for a sample. The CLI (`crates/cli/src/workflows.rs`) owns progress; the AppKit app calls its local websocket API.
+Guided workflows are optional marketplace packs. The bundled index offers meeting preparation, inbox triage and repository monitoring. Each pack names the outcome, its required questions, specialist bot templates, integration service requirements, routine tasks and schedules, and the specialist and task for a sample. The CLI (`crates/cli/src/workflows.rs`) owns progress; the AppKit and native Go/MyGo desktop apps call their local websocket API.
 
 ## Packs and setup
 
@@ -30,7 +30,7 @@ An offline Runner, unavailable service, failed sign-in or missing provider leave
 
 The Runner records the result boundary after acquiring the chat lock. Completed text replies from that sample become its review result. A failed turn or one with no completed reply is retryable and cannot be reviewed. A sample's direct tools omit bot, routine and integration management; imported routines also enforce their review gate through `routines.set_enabled`. The model receives a request to present a draft in the chat and leave scheduling to the setup page.
 
-`workflows.review { id, job_id }` acknowledges the current completed sample; it requires the result messages to have reached the reviewing Device. Only then does AppKit show the schedule choice. `workflows.enable { id }` checks the ready connections and unchanged routine tasks again and enables the pack's schedules. The user can instead finish with imported schedules paused. Starting another sample pauses the routines setup owns and requires another review.
+`workflows.review { id, job_id }` acknowledges the current completed sample; it requires the result messages to have reached the reviewing Device. Only then do the desktop apps show the schedule choice. `workflows.enable { id }` checks the ready connections and unchanged routine tasks again and enables the pack's schedules. The user can instead finish with imported schedules paused. Starting another sample pauses the routines setup owns and requires another review.
 
 `workflows.cancel { id }` cancels only its sample job, forwards that cancellation sealed to a remote Runner, pauses owned routines and records cancelled progress. The Runner checks the current sample generation and cancellation state again while persisting its outcome, so a late completion cannot revive cancelled or superseded setup.
 
@@ -41,3 +41,13 @@ SQLite's `workflow_setups` table holds only setup IDs, update times and account-
 ## AppKit flow
 
 The final onboarding page offers Choose a Workflow… beside Open Lorca. Its marketplace sheet starts with outcome choices. The same Guided Workflows section leads the normal marketplace and appears in search. A workflow page names its fixed Runner, asks only its setup questions, offers existing specialists and explicit integration account choices, opens the existing plugin sheet for sign-in and setup, and shows connection progress and recovery errors. It renders the sample replies inline and shows schedules only after I Have Reviewed This Result. Finish with Schedules Paused and Enable Schedules are separate actions. Closing the page keeps CLI progress; Cancel Setup pauses its imported routines and Resume Setup reuses its resources: [Workflow onboarding](workflows.md).
+
+## Windows and Linux flow
+
+The native Go/MyGo app adds Choose a Workflow… to the final onboarding page. The marketplace leads with Guided Workflows and includes packs in search; choosing a pack opens the native workflow sheet on the selected Runner. The outcome chooser also offers the paired Runner choices. The sheet names its fixed Runner throughout setup and opens the existing plugin sheet with the selected instance ID for sign-in and variables.
+
+`desktop/model/workflows.go` decodes the additive pack/progress contract, including explicit service/instance IDs, specialists, sample replies and the CLI's ready/activation flags. It snapshots request parameters before leaving the main thread and uses `model.Async` and the ordered post queue for replies. The native view (`desktop/workflows.go`) keeps answers and specialist choices in persistent fields with stable question/role keys, so edits survive frames, roster updates and language changes. Replies after a sheet closes or after a newer request are ignored. Connection, roster and turn events refresh progress; editing keeps unsaved fields until Continue submits them.
+
+The sheet presents only the required questions, explicit specialist/account menus and connection status. Missing or failed setup keeps its progress and offers refresh, retry, sign-in or clearing a removed account selection. A sample runs through `workflows.sample` and renders its replies before I Have Reviewed This Result. The reviewed result reveals Enable Schedules and Finish with Schedules Paused while imported routines remain paused. Cancel Setup pauses the owned routines and shows Resume Setup; closing the sheet retains CLI state for the next opening. The native app requests resource creation and activation through the CLI's existing grants, budget and admission checks.
+
+`LORCA_MOCK=1` supplies synthetic pack/progress examples through the model's existing demo mechanism. The demo's transient presentation records contain no secrets and are separate from CLI execution. Native `ui.NewTester` tests click/type through the implemented sheets and can write offscreen MyGo frames with `LORCA_RENDER`; the captures use synthetic accounts and replies.

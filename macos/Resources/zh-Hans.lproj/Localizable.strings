@@ -27,6 +27,7 @@
 "%@ · update Lorca to sync" = "%@ · 更新 Lorca 后才能同步";
 "%@ (this computer)" = "%@（这台电脑）";
 "%@ (This computer)" = "%@（这台电脑）";
+"%@ account" = "%@ 账号";
 "%@ and %@ are working…" = "%1$@ 和 %2$@ 正在工作…";
 "%@ asks before it installs one on %@." = "%1$@ 在 %2$@ 上安装插件前会先问你。";
 "%@ changed this file while you were editing" = "在你编辑期间，%@ 修改了这个文件";
@@ -67,8 +68,12 @@
 "%d topic" = "%d 个主题";
 "%d topics" = "%d 个主题";
 "%d unread" = "%d 条未读";
+"1 · Answer the questions for this workflow" = "1 · 回答此工作流所需的问题";
 "1 bot" = "1 个智能体";
 "1 tool" = "1 个工具";
+"2 · Connections · %d of %d ready" = "2 · 连接 · %d / %d 已就绪";
+"3 · Run a sample and review the result" = "3 · 运行示例并查看结果";
+"4 · Choose whether to enable the schedule" = "4 · 选择是否启用定时任务";
 "A bot" = "智能体";
 "A bot runs on one Runner and uses that machine's credentials. Phones and tablets are not Runners." = "智能体运行在一个 Runner 上，并使用那台机器的凭证。手机和平板电脑不是 Runner。";
 "A bot runs on the Runner it is assigned to, with your account's credentials and that Runner's plugins." = "智能体在分配给它的 Runner 上运行，使用你账户的凭证和该 Runner 的插件。";
@@ -161,6 +166,9 @@
 "By %@" = "来自 %@";
 "Can’t connect to the relay: %@" = "无法连接中继：%@";
 "Cancel" = "取消";
+"Cancel reply" = "取消回复";
+"Cancel Setup" = "取消设置";
+"Cancel Setup and Pause Imported Routines" = "取消设置并暂停导入的例程";
 "Category" = "类别";
 "Change" = "更改";
 "Change look" = "更改外观";
@@ -178,8 +186,12 @@
 "Checking the team" = "正在查看团队";
 "Chef|first bot name" = "幕僚长";
 "Chief of staff. Plans the work and delegates each task to the right teammate, proposing a new one when none fits. Does hands-on work when necessary." = "统筹规划工作，把每项任务交给合适的队友，没有合适的就提议新建一个。必要时亲自动手。";
+"Choose a workflow, connect its tools, and review a sample before enabling a schedule." = "选择工作流，连接所需工具，查看示例结果后再启用定时任务。";
+"Choose a Workflow…" = "选择工作流…";
+"Choose an account…" = "选择账号…";
 "Choose an image for this bot." = "为这个智能体选取一张图像。";
 "Choose Image…" = "选取图像…";
+"Clear Removed Account Selection" = "清除已移除的账号选择";
 "CLI not running · start it with: lorca serve" = "CLI 未运行 · 用此命令启动：lorca serve";
 "CLI on 127.0.0.1:%@" = "CLI 位于 127.0.0.1:%@";
 "CLI port" = "CLI 端口";
@@ -285,8 +297,11 @@
 "Edit in Chat…" = "在聊天中编辑…";
 "Edit my routine \"%@\": " = "修改我的例行任务“%@”：";
 "Edit rule" = "编辑规则";
+"Edit Setup" = "编辑设置";
 "Edit…" = "编辑…";
 "Empty" = "空";
+"Enable Schedules" = "启用定时任务";
+"Enabled" = "已启用";
 "Encrypted and shared with your paired Devices." = "加密共享给你已配对的设备。";
 "Enter Full Screen" = "进入全屏幕";
 "enter send newline keyboard chats" = "回车 发送 换行 键盘 聊天 enter send newline keyboard chats";
@@ -309,6 +324,7 @@
 "Finance" = "财务";
 "Find the prior art and cite it" = "找出已有的先例并注明出处";
 "Find…" = "查找…";
+"Finish with Schedules Paused" = "完成设置并保持定时任务暂停";
 "Finished" = "已完成";
 "Folder" = "文件夹";
 "Form" = "表单";
@@ -324,7 +340,9 @@
 "Group · %@ · %@" = "群聊 · %1$@ · %2$@";
 "Group name (optional)" = "群聊名称（可选）";
 "gsk_… from console.groq.com" = "gsk_…，来自 console.groq.com";
+"Guided Workflows" = "引导式工作流";
 "Handed off to %@" = "已转交给 %@";
+"Have the bot read this now. A command it is running moves to the background." = "让智能体现在就读到这条消息。它正在运行的命令会转到后台。";
 "Headers" = "请求头";
 "Help" = "帮助";
 "Hi %@, introduce yourself." = "你好 %@，介绍一下你自己。";
@@ -334,9 +352,12 @@
 "Hide Others" = "隐藏其他";
 "High" = "高";
 "How this bot should work" = "这个智能体的工作方式";
+"I Have Reviewed This Result" = "我已查看此结果";
 "I wrote this phrase down somewhere safe" = "我已将这组短语抄写在安全的地方";
 "Image" = "图像";
 "Images are resized to %d px and shared encrypted, like an attachment." = "图像会被缩放到 %d px，并像附件一样加密共享。";
+"Imported routines stay paused until you review a sample and enable them." = "导入的例程保持暂停，直到你查看示例并选择启用。";
+"In reply to %@: %@" = "回复 %1$@：%2$@";
 "Indigo" = "靛蓝色";
 "Information" = "信息";
 "Inspector" = "检查器";
@@ -373,7 +394,9 @@
 "Light" = "浅色";
 "link" = "链接";
 "Loading models…" = "正在加载模型…";
+"Loading setup…" = "正在加载设置…";
 "Loading the marketplace…" = "正在载入市场…";
+"Loading workflows…" = "正在加载工作流…";
 "Loading…" = "正在载入…";
 "localhost 127.0.0.1 serve connection" = "本机 端口 连接 localhost 127.0.0.1 serve connection";
 "Login and Credential Management" = "登录与凭据管理";
@@ -483,6 +506,7 @@
 "Open chat" = "打开聊天";
 "Open Lorca" = "打开 Lorca";
 "Open System Settings" = "打开系统设置";
+"Open Workflow Chat" = "打开工作流聊天";
 "Optional" = "可选";
 "Optional for a server on your network" = "你网络中的服务器可不填";
 "Orange" = "橙色";
@@ -546,6 +570,7 @@
 "Reconnect" = "重新连接";
 "Red" = "红色";
 "Redo" = "重做";
+"Refresh Progress" = "刷新进度";
 "Relay" = "中继";
 "Relay URL" = "中继 URL";
 "Reload" = "重新载入";
@@ -561,7 +586,10 @@
 "Rename Chat" = "重命名聊天";
 "Rename Chat…" = "重命名聊天…";
 "Rename…" = "重命名…";
+"Reply" = "回复";
 "Reply failed: %@" = "回复失败：%@";
+"Reply…" = "回复…";
+"Replying to %@" = "回复 %@";
 "Request failed" = "请求失败";
 "Requests go to %@." = "请求发往 %@。";
 "Required" = "必填";
@@ -575,10 +603,12 @@
 "Results" = "结果";
 "Resume" = "恢复";
 "Resume %@" = "恢复 %@";
+"Resume Setup" = "继续设置";
 "Retry" = "重试";
 "Retry Connection" = "重试连接";
 "Retrying (%d of %d) in %d s" = "%3$d 秒后重试（第 %1$d 次，共 %2$d 次）";
 "Return sends the message" = "按 Return 键发送消息";
+"Reuse a suitable bot or add %@" = "复用合适的智能体，或添加 %@";
 "Rewrite this without adjectives" = "不用形容词重写这段话";
 "Role" = "角色";
 "Routine" = "例行任务";
@@ -586,9 +616,11 @@
 "Routines are recurring tasks this bot runs on a schedule. Ask it in chat to set one up." = "例行任务是此智能体按计划重复运行的任务。在聊天中让它设置一个。";
 "Rule" = "规则";
 "rule allow automatically ask first always allow" = "规则 自动允许 先询问 始终允许 rule allow automatically ask first always allow";
+"Run Another Sample" = "再运行一个示例";
 "Run Command in Background" = "在后台运行命令";
 "Run in Background" = "在后台运行";
 "Run Now" = "立即运行";
+"Run Sample" = "运行示例";
 "Runner" = "Runner";
 "Runner · runs bots with its own credentials" = "Runner · 用自己的凭证运行智能体";
 "Running" = "正在运行";
@@ -596,9 +628,11 @@
 "Running commands" = "正在运行命令";
 "Running tasks" = "正在运行的任务";
 "Running tasks (%d)" = "正在运行的任务（%d）";
+"Running the sample…" = "正在运行示例…";
 "Running…" = "正在运行…";
 "Runs on %@ now" = "立即在 %@ 上运行";
 "Runs on %@ with %@" = "运行于 %1$@，使用 %2$@";
+"Runs on %@. Closing this page saves your progress." = "在 %@ 上运行。关闭此页面会保存设置进度。";
 "Runs on the bot's Runner now" = "立即在智能体的 Runner 上运行";
 "Runs on the Runner: %@" = "在 Runner 上运行：%@";
 "Runs with" = "运行方式";
@@ -623,6 +657,7 @@
 "Send" = "发送";
 "Send (⌘Return)" = "发送 (⌘Return)";
 "Send (Return) · Shift-Return for a new line" = "发送 (Return) · Shift-Return 换行";
+"Send now" = "立即发送";
 "Server" = "服务器";
 "server self-host sync pairing connection" = "中继 地址 服务器 自建 自托管 同步 配对 连接 server self-host sync pairing connection";
 "Servers" = "服务器";
@@ -636,6 +671,8 @@
 "Settings (⌘,)" = "设置 (⌘,)";
 "Settings…" = "设置…";
 "Setup" = "初始设置";
+"Setup is cancelled. Its specialists and connections are kept for reuse, and its imported routines are paused." = "设置已取消。专用智能体和连接会保留以便复用，导入的例程已暂停。";
+"Setup is unavailable right now." = "设置目前不可用。";
 "Setup|plugin variables" = "设置项";
 "Show" = "显示";
 "Show All" = "全部显示";
@@ -648,6 +685,7 @@
 "Sign in again" = "重新登录";
 "Sign in with %@" = "使用 %@ 登录";
 "Sign in with %@…" = "使用 %@ 登录…";
+"Sign In…" = "登录…";
 "Sign Out" = "退出登录";
 "Sign-in" = "登录";
 "Sign-in failed" = "登录失败";
@@ -664,6 +702,7 @@
 "Skills" = "技能";
 "Skip for Now" = "暂时跳过";
 "Some files were not attached" = "部分文件未能添加";
+"Specialists · reuse a bot on this Runner or add a suitable one." = "专用智能体 · 复用此 Runner 上的智能体，或添加合适的智能体。";
 "Speech" = "语音";
 "Speech recognition is not available for this language right now." = "此语言的语音识别目前不可用。";
 "Speech recognition is turned off for Lorca." = "Lorca 的语音识别权限已关闭。";
@@ -715,6 +754,7 @@
 "the other Device" = "另一台设备";
 "The relay deletes everything it holds for the account, and every paired Device, this one included, forgets its keys and chats. This can’t be undone." = "中继会删除它为此账户保存的全部内容，每台已配对设备（包括这一台）都会清除密钥和聊天。此操作无法撤销。";
 "The relay no longer works with this version. Chats on this Mac stay as they are, and nothing syncs with your other Devices until you update." = "中继已不再支持此版本。这台 Mac 上的聊天保持原样，但在更新之前不会与你的其他设备同步。";
+"The sample was interrupted. Run it again to produce a result." = "示例运行已中断。重新运行以生成结果。";
 "The server's JSON" = "服务器的 JSON";
 "The transcript is removed from this Device and from paired Devices." = "聊天记录将从这台设备和已配对的设备上移除。";
 "The two Devices run a handshake; the relay only carries the ciphertext. This computer joins as a Runner." = "两台设备之间进行握手，中继只传递密文。这台电脑将作为 Runner 加入。";
@@ -724,6 +764,7 @@
 "Thinking" = "思考";
 "Thinking|status" = "正在思考";
 "This bot is no longer in the marketplace." = "这个智能体已不在市场中。";
+"This CLI has no guided workflows. Update Lorca to add them." = "此 CLI 尚无引导式工作流。更新 Lorca 后即可使用。";
 "This computer" = "这台电脑";
 "This computer · CLI running" = "这台电脑 · CLI 运行中";
 "This computer forgets its keys, credentials, and synced chats, and bots assigned to it stop running until you assign them to another Runner. Your other paired Devices keep everything, and you can pair again any time." = "这台电脑会清除密钥、凭证和已同步的聊天；分配给它的智能体也会停止运行，直到你把它们分配给其他 Runner。其他已配对设备会保留全部内容，你可以随时重新配对。";
@@ -731,10 +772,12 @@
 "This computer is paired" = "这台电脑已配对";
 "This computer is your first Device" = "这台电脑是你的第一台设备";
 "This deletes the routine and stops its future runs. This can't be undone." = "这会删除该例行任务并停止它今后的运行。此操作无法撤销。";
+"This integration is unavailable in the current marketplace. Update Lorca or the marketplace, then resume this saved setup." = "当前市场中尚无此集成。更新 Lorca 或市场后，可继续已保存的设置。";
 "This machine is paired to your account but has not sent its name or system. If you don't recognize it, unpair it." = "这台机器已配对到你的账户，但尚未发送它的名称和系统。如果你不认识它，请取消配对。";
 "This phrase is your master secret. It re-derives every key and unwraps everything on the relay. Write it down — nobody can reset it for you." = "这组短语是你的主密钥。它能重新派生所有密钥，并解开中继上的全部内容。请把它抄写下来——没有人能替你重置。";
 "This plugin is no longer in the marketplace." = "这个插件已不在市场中。";
 "This server doesn’t list its models. Add model IDs above." = "这个服务器不提供模型列表。请在上方添加模型 ID。";
+"This workflow's schedules are enabled." = "此工作流的定时任务已启用。";
 "Three processes" = "三个进程";
 "time date messages chats" = "时间 日期 消息 聊天 time date messages chats";
 "today %@" = "今天 %@";
@@ -775,6 +818,7 @@
 "View" = "显示";
 "View all" = "查看全部";
 "Waiting for input" = "正在等待输入";
+"Waiting for the bot to finish its step." = "正在等智能体完成当前这一步。";
 "Waiting for the browser…" = "正在等待浏览器…";
 "Waiting for the CLI" = "正在等待 CLI";
 "Waiting for the other Device to wrap the account key…" = "正在等待另一台设备封装账户密钥…";
@@ -789,11 +833,12 @@
 "What do we not know yet?" = "我们还有哪些不知道的？";
 "What is the blast radius?" = "影响范围有多大？";
 "What it does and how it should work" = "它做什么以及应该如何工作";
-"What this group is for. Every bot in it reads this." = "这个群聊是做什么的。群里的每个智能体都会读到。";
 "What it is for, which bots read (optional)" = "用途说明，智能体会读到（可选）";
 "What it works with" = "它配合使用的插件";
 "What should I work on next?" = "我接下来该做什么？";
+"What this group is for. Every bot in it reads this." = "这个群聊是做什么的。群里的每个智能体都会读到。";
 "What would you delete first?" = "你会先删掉什么？";
+"What would you like to accomplish?" = "你希望完成什么？";
 "What you type goes straight to the command, not into the chat." = "你输入的内容直接发送给命令，不会进入聊天。";
 "Where turns run" = "运行位置";
 "Window" = "窗口";
@@ -811,11 +856,3 @@
 "Your first bot" = "你的第一个智能体";
 "Your identity is restored" = "你的身份已恢复";
 "Zoom" = "缩放";
-"Reply" = "回复";
-"Reply…" = "回复…";
-"Replying to %@" = "回复 %@";
-"Cancel reply" = "取消回复";
-"In reply to %@: %@" = "回复 %1$@：%2$@";
-"Send now" = "立即发送";
-"Have the bot read this now. A command it is running moves to the background." = "让智能体现在就读到这条消息。它正在运行的命令会转到后台。";
-"Waiting for the bot to finish its step." = "正在等智能体完成当前这一步。";

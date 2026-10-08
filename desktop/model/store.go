@@ -183,6 +183,7 @@ type Store struct {
 	attachmentFiles    map[string]string
 	fetchingAttachment map[string]bool
 
+	mockWorkflows   map[string]WireWorkflowProgress
 	mockMarketplace *Marketplace
 	mockMcp         map[string][]McpServer
 }
@@ -1151,6 +1152,7 @@ func (s *Store) Marketplace(done func(Marketplace, error)) {
 	if s.IsMock {
 		if s.mockMarketplace == nil {
 			market := mockMarketplace()
+			market.Packs = demoWorkflowPacks()
 			s.mockMarketplace = &market
 		}
 		market := *s.mockMarketplace

@@ -30,6 +30,16 @@ func marketplaceTester(t *testing.T, loaded bool) (*mainWindow, *ui.Tester) {
 // marketClick clicks the element with `text`, runs what the store posted, and settles.
 func marketClick(t *testing.T, tt *ui.Tester, text string) {
 	t.Helper()
+	// New leading sections can put a catalog entry below the viewport. Scroll the
+	// actual native sheet before clicking, as a user does.
+	for range 16 {
+		rect, found := tt.Find(text)
+		if !found || (rect.Y >= 100 && rect.Y+rect.H <= 700) {
+			break
+		}
+		tt.Scroll(590, 380, 0, rect.Y-340)
+		tt.Frame()
+	}
 	if err := tt.Click(text); err != nil {
 		t.Fatalf("click %q: %v; texts %q", text, err, tt.Texts())
 	}

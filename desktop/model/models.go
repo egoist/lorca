@@ -891,6 +891,7 @@ type BotTemplate struct {
 
 // Marketplace is what the marketplace offers, in the index's order.
 type Marketplace struct {
+	Packs   []WorkflowPack
 	Plugins []MarketplacePlugin
 	Bots    []BotTemplate
 }

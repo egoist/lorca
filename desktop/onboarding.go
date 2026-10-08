@@ -768,6 +768,17 @@ func (o *onboardingWindow) doneStep(c *ui.Context) *onboardingButton {
 		ui.Row(c).Margin(0, 0, 6, 0).TextColor(p.Green).Children(func() { symbol(c, "checkmark.circle.fill", 56, 1.6) })
 		ui.Text(c, title).FontSize(22).FontWeight(600).TextAlign(ui.Center)
 		onboardingLede(c, lede)
+		if pushButton(c.Key("choose-workflow"), L("Choose a Workflow…"), pushOptions{Large: true}).Margin(12, 0, 0, 0).Clicked() {
+			o.presentWorkflows(nil, "", func(chatID string) {
+				if o.win == nil {
+					return
+				}
+				app.endOnboarding()
+				if app.main != nil && chatID != "" {
+					app.main.open(chatID)
+				}
+			})
+		}
 		if pushButton(c, open.title, pushOptions{Kind: buttonPrimary, Large: true}).Width(200).Margin(12, 0, 0, 0).AutoFocus().Clicked() {
 			open.run()
 		}

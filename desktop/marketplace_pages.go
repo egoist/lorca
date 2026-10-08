@@ -116,7 +116,7 @@ func (mk *marketplace) homePage(c *ui.Context, page *marketPage) {
 	}
 
 	ui.Column(c).Gap(24).Margin(2, 0, 0, 0).Children(func() {
-		if len(mk.catalog.Plugins)+len(mk.catalog.Bots) == 0 && mk.loading != marketLoaded {
+		if len(mk.catalog.Plugins)+len(mk.catalog.Bots)+len(mk.catalog.Packs) == 0 && mk.loading != marketLoaded {
 			if mk.loading != marketFailed {
 				marketStatusLine(c, L("Loading the marketplace…"))
 				return
@@ -132,9 +132,20 @@ func (mk *marketplace) homePage(c *ui.Context, page *marketPage) {
 			return
 		}
 		query := strings.TrimSpace(page.query)
+		packs := workflowMatchingPacks(mk.catalog.Packs, query)
+		if len(packs) > 0 {
+			workflowPackRows(c, packs, func(pack model.WorkflowPack) {
+				mk.m.appWindow.presentWorkflows(&pack, mk.runnerID, func(chatID string) {
+					mk.sheet.dismiss()
+					if chatID != "" {
+						mk.m.open(chatID)
+					}
+				})
+			}, on == nil)
+		}
 		if query == "" {
 			sections := mk.homeSections()
-			if len(sections) == 0 {
+			if len(sections) == 0 && len(packs) == 0 {
 				marketStatusLine(c, L("Nothing in the marketplace yet."))
 			}
 			for _, each := range sections {
@@ -149,8 +160,11 @@ func (mk *marketplace) homePage(c *ui.Context, page *marketPage) {
 				results = append(results, item)
 			}
 		}
-		if len(results) == 0 {
+		if len(results) == 0 && len(packs) == 0 {
 			marketStatusLine(c, L("No results match “%@”", query))
+			return
+		}
+		if len(results) == 0 {
 			return
 		}
 		shown, mixed := marketFiltered(results, page.filter)
