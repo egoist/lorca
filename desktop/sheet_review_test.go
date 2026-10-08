@@ -124,9 +124,20 @@ func TestReviewSyncRequiresReloadAndKeepsLocalText(t *testing.T) {
 		t.Fatal(err)
 	}
 	settle(tt)
-	if st.item.Version != 2 || st.payload != "Edited on another Device" || !tt.HasText("Edited on another Device") {
+	if st.item.Version != 2 || st.payload != "Edited on another Device" {
 		t.Fatal("reload did not load saved version")
 	}
+	// Input labels, rather than their content, appear in Tester.Texts. Copy from the
+	// actual editor buffer to prove the displayed value refreshed as well as the model.
+	if err := tt.Click("Draft"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Key(ui.Cmd, ui.KeyA)
+	tt.Key(ui.Cmd, ui.KeyC)
+	if tt.Clipboard() != "Edited on another Device" {
+		t.Fatalf("reloaded editor buffer: %q", tt.Clipboard())
+	}
+	renderBoth(t, tt, "review-reloaded")
 }
 
 func TestReviewRejectCancelAndUncertainStates(t *testing.T) {

@@ -11,6 +11,7 @@ The focused native action tests actually type/edit, save, approve, reject, cance
 | `review-unsaved-guard-light.png`, `review-unsaved-guard-dark.png` | After editing and attempting Approve: Save Changes is required first. |
 | `review-proposed-call-light.png`, `review-proposed-call-dark.png` | Edited/saved version 2 call; integer tokens and nested keys remain exact. |
 | `review-sync-conflict-light.png`, `review-sync-conflict-dark.png` | A simulated paired projection changes: local text/version remain until Reload. |
+| `review-reloaded-light.png`, `review-reloaded-dark.png` | After Reload: version 2's actual field buffer is selected/copied and checked by the test. |
 | `review-uncertain-light.png`, `review-uncertain-dark.png` | Fixture-supplied uncertain outcome with disabled mutations and available Reload. |
 
 Regenerate from the worktree:
