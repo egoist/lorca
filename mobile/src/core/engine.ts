@@ -70,12 +70,20 @@ class Engine {
     const active = AppState.currentState === "active";
     useStore.setState({ dictation_lang: loadPrefs().dictation_lang, appActive: active, activeSince: active ? Date.now() : 0 });
     core.onEvent((frame) => this.receive(frame));
-    core.start(coreHome(), hostFacts());
-    AppState.addEventListener("change", (status) => this.onAppState(status));
-    // Read after every store update, including the roster's unread count that follows a
-    // message event, a backlog snapshot, and returning to a chat already mounted on screen.
-    useStore.subscribe(() => this.readVisibleChat());
-    await this.bootstrap();
+    // The core starts off the JS thread and emits as soon as it runs: what it says before the
+    // first snapshot waits for it, as during any snapshot.
+    this.bootstraps += 1;
+    try {
+      await core.start(coreHome(), hostFacts());
+      AppState.addEventListener("change", (status) => this.onAppState(status));
+      // Read after every store update, including the roster's unread count that follows a
+      // message event, a backlog snapshot, and returning to a chat already mounted on screen.
+      useStore.subscribe(() => this.readVisibleChat());
+      await this.bootstrap();
+    } finally {
+      this.bootstraps -= 1;
+      if (!this.bootstraps) this.applyHeld();
+    }
     installPushHandlers();
     if (useStore.getState().paired) void registerForPushes();
   }
