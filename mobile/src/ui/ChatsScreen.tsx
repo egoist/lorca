@@ -30,7 +30,8 @@ export function ChatsScreen({ sidebar = false }: { sidebar?: boolean }) {
   const { language } = useLanguage();
   const p = usePalette();
   const router = useRouter();
-  const openChatId = useStore((s) => s.openChatId);
+  // Only the sidebar lights the open chat; a phone's list would re-render under the chat it pushes.
+  const openChatId = useStore((s) => (sidebar ? s.openChatId : null));
   const sidebarWidth = useSidebarWidth();
   // The search field sits at the foot of the list. An iPhone's native bar puts it there; the
   // sidebar and Android have their own (see SidebarSearch).

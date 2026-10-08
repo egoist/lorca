@@ -25,8 +25,15 @@ export async function supportedLanguages(): Promise<string[]> {
   return offered();
 }
 
+/// The last sorted list and what it was sorted from: `localeCompare` with a locale is slow on
+/// Android, and every composer asks for the list as it mounts.
+let sorted: { from: string[] | null; language: string; list: string[] } | null = null;
+
 function offered(): string[] {
-  return (all ?? []).filter((tag) => tag in COMMON).sort((a, b) => languageName(a).localeCompare(languageName(b), appLanguage));
+  if (sorted?.from === all && sorted.language === appLanguage) return sorted.list;
+  const list = (all ?? []).filter((tag) => tag in COMMON).sort((a, b) => languageName(a).localeCompare(languageName(b), appLanguage));
+  sorted = { from: all, language: appLanguage, list };
+  return list;
 }
 
 function normalize(tag: string): string {

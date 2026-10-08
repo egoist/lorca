@@ -21,12 +21,12 @@ export interface MarkdownViewProps {
   style?: StyleProp<ViewStyle>;
 }
 
-const native = requireNativeModule<{ measure?(markdown: string, maxWidth: number, fontSize: number, codeFontSize: number): { width: number; height: number } }>("MarkdownView");
+const native = requireNativeModule<{ measure(markdown: string, maxWidth: number, fontSize: number, codeFontSize: number): { width: number; height: number } }>("MarkdownView");
 
-/// The size the text takes within `maxWidth`, measured natively before the view renders. iOS
-/// sizes the view from this; on Android the view claims its own size.
+/// The size the text takes within `maxWidth`, measured natively before the view renders. The
+/// view is sized from this, so a transcript's rows have their heights in their first layout.
 export function measureMarkdown(markdown: string, maxWidth: number, fontSize: number, codeFontSize: number) {
-  return native.measure?.(markdown, maxWidth, fontSize, codeFontSize);
+  return native.measure(markdown, maxWidth, fontSize, codeFontSize);
 }
 
 export const MarkdownView = requireNativeViewManager<MarkdownViewProps>("MarkdownView");
