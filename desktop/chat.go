@@ -254,7 +254,8 @@ func (m *mainWindow) chatRowView(c *ui.Context, chat *model.Chat, row chatRow, s
 		case model.BodyHandoff:
 			h := body.Handoff
 			mode := handoffMode{kind: handoffBetween, from: store.Bot(h.From), to: store.Bot(h.To)}
-			if !chat.IsGroup() && slices.Contains(chat.BotIDs, h.To) {
+			// From a bot outside the chat, as a DM's request or a handoff's report: a message.
+			if slices.Contains(chat.BotIDs, h.To) && !slices.Contains(chat.BotIDs, h.From) {
 				mode = handoffMode{kind: handoffIncoming, from: store.Bot(h.From)}
 			}
 			handoffCell(c, mode, h.Reason, row.groupStart)

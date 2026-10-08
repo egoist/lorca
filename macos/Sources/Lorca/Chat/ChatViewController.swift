@@ -792,7 +792,8 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
         case let .tool(invocation):
             return (.outgoing(to: invocation.targetBotID.flatMap(store.bot)), invocation.detail)
         case let .handoff(from, to, reason):
-            let incoming = !chat.isGroup && chat.botIDs.contains(to)
+            // From a bot outside the chat, as a DM's request or a handoff's report: a message.
+            let incoming = chat.botIDs.contains(to) && !chat.botIDs.contains(from)
             let mode: HandoffCellView.Mode = incoming
                 ? .incoming(from: store.bot(from)) : .handoff(from: store.bot(from), to: store.bot(to))
             return (mode, reason)

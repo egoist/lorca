@@ -86,7 +86,8 @@ export function buildRows(chat: Chat, bots: Map<string, Bot>, workingBotIds: str
         previousAuthorKey = null;
         break;
       case "handoff": {
-        const incoming = chat.kind !== "group" && chat.bot_ids.includes(message.body.to);
+        // From a bot outside the chat, as a DM's request or a handoff's report: a message.
+        const incoming = chat.bot_ids.includes(message.body.to) && !chat.bot_ids.includes(message.body.from);
         rows.push({
           key: message.id,
           type: "marker",
