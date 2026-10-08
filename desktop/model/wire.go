@@ -288,6 +288,7 @@ type WireSnapshot struct {
 	AutoReview          *WireAutoReview   `json:"auto_review"`
 	Providers           []WireProvider    `json:"providers"`
 	Models              []WireModel       `json:"models"`
+	Playbooks           []PlaybookSummary `json:"playbooks"`
 	RunningChatIDs      []string          `json:"running_chat_ids"`
 	RunningTurns        []WireRunningTurn `json:"running_turns"`
 }
@@ -300,7 +301,8 @@ type WireRosterChanged struct {
 	AutoReview *WireAutoReview `json:"auto_review"`
 	Providers  []WireProvider  `json:"providers"`
 	// Models are the catalog's models again, so a newer catalog the CLI installs reaches the pickers.
-	Models []WireModel `json:"models"`
+	Models    []WireModel        `json:"models"`
+	Playbooks *[]PlaybookSummary `json:"playbooks"`
 }
 
 type WireMessagePage struct {

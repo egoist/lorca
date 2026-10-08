@@ -363,6 +363,8 @@ func (m *mainWindow) run(id string) {
 		if id := m.selection.ChatID; id != "" {
 			store.TogglePin(id)
 		}
+	case "newSkill":
+		m.newSkill()
 	case "stopResponding":
 		if id := m.selection.ChatID; id != "" {
 			store.StopResponding(id)

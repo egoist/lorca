@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/egoist/lorca/desktop/model"
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 )
@@ -71,6 +72,14 @@ var commandTable = []command{
 	}},
 	{id: "renameChat", title: func() string { return L("Rename Chat…") }, accelerator: "CmdOrCtrl+R", enabled: selectedChatIsGroup},
 	{id: "pinChat", title: func() string { return L("Pin Chat") }, accelerator: "CmdOrCtrl+P", enabled: chatSelected},
+	{id: "newSkill", title: func() string { return L("New Skill…") }, enabled: func() bool {
+		if !chatSelected() {
+			return false
+		}
+		chat := store.Chat(app.main.selection.ChatID)
+		_, ok := model.SkillScope(chat, store.BotsIn(chat))
+		return ok
+	}},
 	{id: "stopResponding", title: func() string { return L("Stop Responding") }, accelerator: "CmdOrCtrl+.", enabled: chatSelected},
 	{
 		// The Mac's ⌃B has no counterpart here: Ctrl+B toggles the sidebar.
@@ -300,7 +309,7 @@ func windowMenuBar(kind windowKind) *mygo.Menu {
 			at("find"),
 		),
 		submenu(L("View"), at("palette"), sep(), at("toggleSidebar"), at("toggleInspector"), sep(), at("scrollToLatest"), sep(), at("fullScreen")),
-		submenu(L("Chat"), at("addBot"), at("renameChat"), at("pinChat"), sep(), at("stopResponding"), at("runInBackground"), sep(), at("deleteChat")),
+		submenu(L("Chat"), at("addBot"), at("renameChat"), at("pinChat"), at("newSkill"), sep(), at("stopResponding"), at("runInBackground"), sep(), at("deleteChat")),
 		submenu(L("Window"), &mygo.MenuItem{Role: mygo.RoleMinimize, Label: L("Minimize")}, &mygo.MenuItem{Role: mygo.RoleZoom, Label: L("Zoom")}),
 		submenu("Debug", at("simulateOffline"), at("replayMock"), sep(), at("showOnboarding")),
 		submenu(L("Help"), help...),

@@ -55,6 +55,7 @@ var paletteCommands = []struct{ id, symbol, keywords string }{
 	{"addBot", "person.badge.plus", "invite member group"},
 	{"renameChat", "pencil", "title name"},
 	{"pinChat", "pin", "unpin favorite"},
+	{"newSkill", "book.closed", "playbook instructions workflow"},
 	{"stopResponding", "stop.circle", "cancel interrupt"},
 	{"runInBackground", "terminal", "detach server task"},
 	{"scrollToLatest", "arrow.down.to.line", "bottom newest jump"},

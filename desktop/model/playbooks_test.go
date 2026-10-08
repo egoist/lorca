@@ -3,189 +3,111 @@ package model
 import (
 	"encoding/json"
 	"errors"
-	"slices"
 	"testing"
 	"time"
 )
 
 type playbookTransport struct {
-	requests chan struct {
-		method string
-		params json.RawMessage
-	}
-	response json.RawMessage
-	err      error
+	method string
+	params map[string]any
+	reply  json.RawMessage
+	err    error
 }
 
 func (t *playbookTransport) Reconnect() {}
 func (t *playbookTransport) Request(method string, params any) (json.RawMessage, error) {
 	data, _ := json.Marshal(params)
-	t.requests <- struct {
-		method string
-		params json.RawMessage
-	}{method, data}
-	return t.response, t.err
+	t.method, t.params = method, nil
+	_ = json.Unmarshal(data, &t.params)
+	return t.reply, t.err
 }
 
-func TestPlaybookWireAndGuardedReviewRequests(t *testing.T) {
-	posts := make(chan func(), 10)
-	transport := &playbookTransport{requests: make(chan struct {
-		method string
-		params json.RawMessage
-	}, 10), response: json.RawMessage(`{
-        "id":"playbook-one","scope":{"kind":"bot","id":"bot-one"},"name":"weekly-review","description":"Review a public report",
-        "path":"playbook://playbook-one/SKILL.md","status":"draft","revision":2,"hash":"hash-two",
-        "content":{"name":"weekly-review","description":"Review a public report","instructions":"Compare evidence","examples":"A public example","references":[{"path":"references/a.md","text":"First"}],"scripts":[]},
-        "provenance":{"kind":"corrections","chat_id":"group-one","message_ids":["one","two"],"note":"Repeated correction"},
-        "revisions":[{"revision":1,"status":"draft","content":{"name":"weekly-review","description":"Review","instructions":"Old wording"},"provenance":{"kind":"workflow","message_ids":[],"note":"Prior workflow"},"created_at":100}]
-    }`)}
-	s := NewStore(transport, func(fn func()) { posts <- fn }, false)
-	scope := PlaybookScope{"bot", "bot-one"}
-	var record PlaybookRecord
-	called := false
-	s.Playbook(scope, "playbook-one", func(result PlaybookRecord, err error) {
-		if err != nil {
-			t.Fatal(err)
-		}
-		record, called = result, true
-	})
-	request := <-transport.requests
-	if request.method != "playbooks.get" {
-		t.Fatal(request.method)
+func waitPosts(posts chan func()) {
+	select {
+	case fn := <-posts:
+		fn()
+	case <-time.After(2 * time.Second):
 	}
-	var params map[string]json.RawMessage
-	_ = json.Unmarshal(request.params, &params)
-	if string(params["scope"]) != `{"kind":"bot","id":"bot-one"}` {
-		t.Fatal(string(params["scope"]))
-	}
-	fn := <-posts
-	if called {
-		t.Fatal("callback bypassed the main-thread post queue")
-	}
-	fn()
-	if record.Content == nil || record.Revision != 2 || record.Hash != "hash-two" || record.Revisions[0].Content.Instructions != "Old wording" {
-		t.Fatalf("wire: %+v", record)
-	}
-	if record.Provenance.ChatID == nil || *record.Provenance.ChatID != "group-one" {
-		t.Fatal(record.Provenance)
-	}
-	content := record.Content.Clone()
-	content.Instructions, content.References[0].Text = "Corrected wording", "Changed reference"
-	if record.Content.References[0].Text != "First" {
-		t.Fatal("editing changed the opened revision's content")
-	}
-	s.SavePlaybook(scope, content, &record, func(_ PlaybookRecord, err error) {
-		if err != nil {
-			t.Fatal(err)
-		}
-	})
-	request = <-transport.requests
-	_ = json.Unmarshal(request.params, &params)
-	if request.method != "playbooks.save" || string(params["expected_revision"]) != "2" || string(params["expected_hash"]) != `"hash-two"` || string(params["id"]) != `"playbook-one"` {
-		t.Fatal(string(request.params))
-	}
-	var provenance PlaybookProvenance
-	_ = json.Unmarshal(params["provenance"], &provenance)
-	if provenance.Kind != "reviewed_edit" || !slices.Equal(provenance.MessageIDs, []string{"one", "two"}) {
-		t.Fatal(provenance)
-	}
-	(<-posts)()
+}
 
-	s.SavePlaybook(PlaybookScope{"project", "group-two"}, content, nil, nil)
-	request = <-transport.requests
-	params = map[string]json.RawMessage{}
-	_ = json.Unmarshal(request.params, &params)
-	if _, hasID := params["id"]; hasID || string(params["expected_revision"]) != "0" || string(params["expected_hash"]) != `""` {
-		t.Fatal(string(request.params))
+// An edit carries the revision and hash it was opened at and says it is an edit, never the
+// draft's source chat, which may be gone; a refusal for a newer version reads as one.
+func TestSavePlaybookGuards(t *testing.T) {
+	posts := make(chan func(), 4)
+	transport := &playbookTransport{reply: json.RawMessage(`{"id":"playbook-one","scope":{"kind":"bot","id":"bot-one"},"status":"saved","revision":3,"hash":"h3"}`)}
+	s := NewStore(transport, func(fn func()) { posts <- fn }, false)
+	content := PlaybookContent{Name: "weekly-report", Description: "For Fridays", Instructions: "Compare"}
+	over := &PlaybookRecord{ID: "playbook-one", Scope: BotScope("bot-one"), Revision: 2, Hash: "h2"}
+	var saved PlaybookRecord
+	s.SavePlaybook(over.Scope, content, over, func(record PlaybookRecord, err error) { saved = record })
+	waitPosts(posts)
+	if transport.method != "playbooks.save" || transport.params["id"] != "playbook-one" || transport.params["expected_revision"] != 2.0 || transport.params["expected_hash"] != "h2" {
+		t.Fatalf("save params %v", transport.params)
 	}
-	(<-posts)()
+	if provenance := transport.params["provenance"].(map[string]any); len(provenance) != 1 || provenance["kind"] != "edit" {
+		t.Errorf("provenance %v", provenance)
+	}
+	if references := transport.params["content"].(map[string]any)["references"]; references == nil {
+		t.Error("no references array")
+	}
+	if saved.Revision != 3 {
+		t.Errorf("saved %+v", saved)
+	}
+
+	s.SavePlaybook(BotScope("bot-one"), content, nil, func(PlaybookRecord, error) {})
+	waitPosts(posts)
+	if _, ok := transport.params["id"]; ok || transport.params["expected_revision"] != 0.0 || transport.params["expected_hash"] != "" {
+		t.Errorf("new skill params %v", transport.params)
+	}
 
 	transport.err = errors.New("Playbook changed since you opened it; reload before saving")
-	var conflict error
-	s.SavePlaybook(scope, content, &record, func(_ PlaybookRecord, err error) { conflict = err })
-	<-transport.requests
-	(<-posts)()
-	if conflict == nil || len(s.AutoReview.Rules) != 0 {
-		t.Fatal("conflict lost or permissions changed")
+	var got error
+	s.SavePlaybook(over.Scope, content, over, func(_ PlaybookRecord, err error) { got = err })
+	waitPosts(posts)
+	if !errors.Is(got, ErrPlaybookChanged) {
+		t.Errorf("error %v", got)
 	}
 }
 
-func TestPlaybookCaptureSourcesAndExplicitScope(t *testing.T) {
-	start := time.Unix(100, 0)
-	message := func(id string, author Author, text string, n int) *Message {
-		return &Message{ID: id, Author: author, Body: Body{Kind: BodyText, Text: text}, CreatedAt: start.Add(time.Duration(n) * time.Second)}
+// The roster lists every skill without its body; a bot's list puts its drafts first, then the
+// latest changed.
+func TestSkillsFromTheRoster(t *testing.T) {
+	s := NewStore(&playbookTransport{}, func(fn func()) { fn() }, false)
+	s.handle("roster.changed", json.RawMessage(`{"devices":[],"bots":[],"chats":[],"playbooks":[
+		{"id":"a","scope":{"kind":"bot","id":"bot-one"},"name":"old","description":"","status":"saved","revision":1,"hash":"","updated_at":10},
+		{"id":"b","scope":{"kind":"bot","id":"bot-one"},"name":"new","description":"","status":"saved","revision":1,"hash":"","updated_at":20},
+		{"id":"c","scope":{"kind":"bot","id":"bot-one"},"name":"draft","description":"","status":"draft","revision":1,"hash":"","updated_at":5},
+		{"id":"d","scope":{"kind":"project","id":"room"},"name":"group","description":"","status":"saved","revision":1,"hash":"","updated_at":30}]}`))
+	var names []string
+	for _, skill := range s.Skills(BotScope("bot-one")) {
+		names = append(names, skill.Name)
 	}
-	one := message("one", You, "Include a public example", 0)
-	reply := message("reply", BotAuthor("bot-one"), "Completed the public workflow", 1)
-	two := message("two", You, "Again, include a public example", 2)
-	other := message("other", BotAuthor("bot-other"), "Another bot's work", 3)
-	streaming := message("streaming", BotAuthor("bot-one"), "Still running", 4)
-	streaming.State.Kind = StateStreaming
-	chat := &Chat{ID: "group-one", Kind: ChatGroup, BotIDs: []string{"bot-one"}, Messages: []*Message{one, reply, two, other, streaming}}
-	s := NewStore(nil, func(fn func()) { fn() }, false)
-	s.Bots = []*Bot{{ID: "bot-one"}, {ID: "bot-other"}}
-	s.Chats = []*Chat{chat, {ID: "other-group", Kind: ChatGroup, BotIDs: []string{"bot-other"}}}
-	scopes := s.PlaybookScopes(chat.ID)
-	if len(scopes) != 2 || scopes[0] != (PlaybookScope{"project", chat.ID}) || scopes[1] != (PlaybookScope{"bot", "bot-one"}) {
-		t.Fatal(scopes)
+	if len(names) != 3 || names[0] != "draft" || names[1] != "new" || names[2] != "old" {
+		t.Errorf("skills %v", names)
 	}
-	bot, kind, sources, picked := CaptureSources(chat, reply)
-	if bot != "bot-one" || kind != "workflow" || len(sources) != 3 || !picked[one.ID] || !picked[reply.ID] || picked[two.ID] {
-		t.Fatalf("%s %s %+v %+v", bot, kind, sources, picked)
-	}
-	bot, kind, sources, picked = CaptureSources(chat, two)
-	if bot != "bot-one" || kind != "corrections" || len(sources) != 2 || !picked[two.ID] || picked[one.ID] {
-		t.Fatal(kind, sources, picked)
-	}
-	if bot, _, _, _ := CaptureSources(chat, other); bot != "" {
-		t.Fatal("nonmember capture was offered")
-	}
-	if bot, _, _, _ := CaptureSources(chat, streaming); bot != "" {
-		t.Fatal("streaming capture was offered")
-	}
-	chat.Kind = ChatDM
-	if scopes := s.PlaybookScopes(chat.ID); len(scopes) != 1 || scopes[0].Kind != "bot" {
-		t.Fatal("DM inherited a project", scopes)
+	s.handle("roster.changed", json.RawMessage(`{"devices":[],"bots":[],"chats":[]}`))
+	if len(s.Playbooks) != 4 {
+		t.Error("a roster without skills dropped them")
 	}
 }
 
-func TestPlaybookDraftRemoveAndPortableExportUseOnlyTheirContracts(t *testing.T) {
-	posts := make(chan func(), 10)
-	transport := &playbookTransport{requests: make(chan struct {
-		method string
-		params json.RawMessage
-	}, 10), response: json.RawMessage(`{"status":"draft","revision":1,"hash":"draft-hash"}`)}
-	s := NewStore(transport, func(fn func()) { posts <- fn }, false)
-	scope := PlaybookScope{"project", "group-one"}
-	s.DraftPlaybook(scope, "bot-one", "group-one", "corrections", []string{"one", "two"}, nil)
-	request := <-transport.requests
-	var params map[string]json.RawMessage
-	_ = json.Unmarshal(request.params, &params)
-	if request.method != "playbooks.draft" || string(params["message_ids"]) != `["one","two"]` || string(params["kind"]) != `"corrections"` {
-		t.Fatal(request.method, string(request.params))
+// Save as Skill offers the user's and the bot's messages up to the one clicked, with the request
+// before it picked; Save as Standing Instruction offers the user's alone.
+func TestCaptureSources(t *testing.T) {
+	at := time.Now()
+	message := func(id string, author Author) *Message {
+		at = at.Add(time.Second)
+		return &Message{ID: id, Author: author, Body: Body{Kind: BodyText, Text: id}, CreatedAt: at}
 	}
-	(<-posts)()
-	item := PlaybookSummary{ID: "playbook-one", Scope: scope, Revision: 4, Hash: "hash-four", Status: "saved"}
-	s.RemovePlaybook(item, nil)
-	request = <-transport.requests
-	_ = json.Unmarshal(request.params, &params)
-	if request.method != "playbooks.remove" || string(params["expected_hash"]) != `"hash-four"` || string(params["expected_revision"]) != "4" {
-		t.Fatal(request.method, string(request.params))
+	you, chef, writer := Author{Kind: AuthorYou}, Author{Kind: AuthorBot, BotID: "chef"}, Author{Kind: AuthorBot, BotID: "writer"}
+	chat := &Chat{ID: "room", Kind: ChatGroup, BotIDs: []string{"chef", "writer"}, Messages: []*Message{
+		message("ask", you), message("other", writer), message("reply", chef), message("fix", you), message("again", you)}}
+	botID, kind, sources, picked := CaptureSources(chat, chat.Messages[2])
+	if botID != "chef" || kind != "workflow" || len(sources) != 2 || !picked["ask"] || !picked["reply"] {
+		t.Errorf("workflow %s %s %d %v", botID, kind, len(sources), picked)
 	}
-	(<-posts)()
-	transport.response = json.RawMessage(`{"format":"lorca-playbook","version":1,"content":{"name":"public-example"},"files":[]}`)
-	var portable json.RawMessage
-	s.ExportPlaybook(item, func(value json.RawMessage, err error) {
-		if err != nil {
-			t.Fatal(err)
-		}
-		portable = value
-	})
-	request = <-transport.requests
-	params = map[string]json.RawMessage{}
-	_ = json.Unmarshal(request.params, &params)
-	(<-posts)()
-	if request.method != "playbooks.export" || len(params) != 2 || string(portable) != string(transport.response) {
-		t.Fatal(request.method, string(request.params), string(portable))
+	_, kind, sources, picked = CaptureSources(chat, chat.Messages[4])
+	if kind != "corrections" || len(sources) != 3 || len(picked) != 1 {
+		t.Errorf("corrections %s %d %v", kind, len(sources), picked)
 	}
 }

@@ -23,7 +23,9 @@ type inspectorState struct {
 	fetching map[string]bool
 	// shownChat is the chat the pane last opened on.
 	shownChat string
-	scroll    ui.ScrollState
+	// expandedSkills are the skill lists showing all their rows.
+	expandedSkills map[model.PlaybookScope]bool
+	scroll         ui.ScrollState
 }
 
 // refreshMemory asks the CLI for the bot's memory; the section redraws when it answers.
@@ -107,7 +109,7 @@ func (m *mainWindow) inspectorView(c *ui.Context, chatID string) {
 				m.inspectorRuntime(c, single, chat)
 				m.inspectorMemory(c, single)
 			}
-			m.inspectorPlaybooks(c, chat)
+			m.inspectorSkills(c, chat, members)
 			if single != nil {
 				m.inspectorRoutines(c, single)
 				m.inspectorPlugins(c, single)

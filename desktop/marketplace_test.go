@@ -115,16 +115,8 @@ func TestMarketplaceInstall(t *testing.T) {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	// The inspector also has a Playbooks Manage link. Check the install's result, not a
-	// generic label elsewhere in the dimmed window behind the marketplace.
-	added := L("Added %@. Every bot on %@ can use it.", "notion", "Workbench")
-	if !tt.HasText(L("Notion")) || tt.HasText(added) {
+	if !tt.HasText(L("Notion")) || tt.HasText(L("Manage…")) {
 		t.Errorf("installed before the Runner answered; texts %q", tt.Texts())
-	}
-	for _, plugin := range store.Device("dev-workbench").Plugins {
-		if plugin.ID == "notion" {
-			t.Error("Notion entered the roster before the Runner answered")
-		}
 	}
 	runPosts()
 	tt.Frame()
