@@ -1,14 +1,16 @@
 // Release the iPhone app to TestFlight:
 //   Rust core → production prebuild in a copy of mobile/ → pods → archive → upload to App Store Connect.
 //
-//   bun run release-ios                    archive and upload; the build number is the local time
+//   bun run release-ios                    archive and upload; the build number is the time (UTC)
 //   bun run release-ios --local            archive only; upload nothing
 //   BUILD_NUMBER=42 bun run release-ios    upload under a chosen build number
 //
 // Signing and the upload go through the Apple account signed in to Xcode (team GJE9R5VE87), with
-// automatic provisioning. App Store Connect holds the app record "Lorca" for `app.lorca`. The
-// marketing version is `version` in mobile/app.config.ts. A build appears under TestFlight after
-// Apple finishes processing it, usually within half an hour.
+// automatic provisioning, or, where no account is signed in, an App Store Connect API key:
+// ASC_KEY_PATH (the .p8 file), ASC_KEY_ID, and ASC_ISSUER_ID, as the Release phone app workflow
+// (.github/workflows/release-mobile.yml) sets them. App Store Connect holds the app record "Lorca"
+// for `app.lorca`. The marketing version is `version` in mobile/app.config.ts. A build appears
+// under TestFlight after Apple finishes processing it, usually within half an hour.
 import { $ } from "bun"
 import { existsSync } from "node:fs"
 import { mkdir, readdir, rename, rm } from "node:fs/promises"
@@ -43,14 +45,25 @@ const KEPT = join(BUILD_DIR, "kept")
 const ARCHIVE = join(BUILD_DIR, "Lorca.xcarchive")
 const EXPORT = join(BUILD_DIR, "export")
 
-// App Store Connect wants every upload's build number above the last. Local time as YYYYMMDDHHmm
-// only grows, and it names when the build was made.
+// App Store Connect wants every upload's build number above the last. The time as YYYYMMDDHHmm
+// only grows, and it names when the build was made. UTC, so a build from a Mac and one from the
+// workflow's runner count on the same clock.
 const now = new Date()
 const pad = (n: number) => String(n).padStart(2, "0")
 const buildNumber =
   process.env.BUILD_NUMBER ??
-  `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}`
+  `${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}${pad(now.getUTCDate())}${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}`
 if (!/^\d+$/.test(buildNumber)) die(`BUILD_NUMBER must be digits, got "${buildNumber}"`)
+
+// Without an account in Xcode, an App Store Connect API key signs in for the provisioning and the
+// upload. It needs the Admin role, which lets the export sign with Apple's cloud-managed
+// distribution certificate.
+const apiKey = ["ASC_KEY_PATH", "ASC_KEY_ID", "ASC_ISSUER_ID"].map((name) => process.env[name])
+if (apiKey.some(Boolean) && !apiKey.every(Boolean)) die("set all of ASC_KEY_PATH, ASC_KEY_ID, and ASC_ISSUER_ID, or none")
+const [keyPath, keyID, issuerID] = apiKey
+const authentication = keyPath
+  ? ["-authenticationKeyPath", keyPath, "-authenticationKeyID", keyID!, "-authenticationKeyIssuerID", issuerID!]
+  : []
 
 // CocoaPods dies on a non-UTF-8 locale, and the CommandLineTools SDK breaks the pod install and
 // the build with "unknown architecture" from tapi. The variant variables would make a Lorca Dev build.
@@ -58,7 +71,7 @@ const env: Record<string, string> = {
   ...(process.env as Record<string, string>),
   LANG: "en_US.UTF-8",
   LC_ALL: "en_US.UTF-8",
-  DEVELOPER_DIR: "/Applications/Xcode.app/Contents/Developer",
+  DEVELOPER_DIR: process.env.DEVELOPER_DIR ?? "/Applications/Xcode.app/Contents/Developer",
   LORCA_IOS_BUILD_NUMBER: buildNumber,
 }
 delete env.LORCA_MOBILE_VARIANT
@@ -117,7 +130,7 @@ if (!bundleIds.has(BUNDLE_ID)) die(`the project builds ${[...bundleIds].join(", 
 log(`${color.bold("archiving")} ${color.dim(ARCHIVE)}`)
 await rm(ARCHIVE, { recursive: true, force: true })
 await rm(EXPORT, { recursive: true, force: true })
-await $`xcodebuild -workspace ${join(IOS, "Lorca.xcworkspace")} -scheme Lorca -configuration Release -destination generic/platform=iOS -archivePath ${ARCHIVE} -allowProvisioningUpdates CURRENT_PROJECT_VERSION=${buildNumber} COMPILATION_CACHE_ENABLE_CACHING=YES archive -quiet`.env(env)
+await $`xcodebuild -workspace ${join(IOS, "Lorca.xcworkspace")} -scheme Lorca -configuration Release -destination generic/platform=iOS -archivePath ${ARCHIVE} -allowProvisioningUpdates ${authentication} CURRENT_PROJECT_VERSION=${buildNumber} COMPILATION_CACHE_ENABLE_CACHING=YES archive -quiet`.env(env)
 if (!existsSync(ARCHIVE)) die("xcodebuild produced no archive")
 
 const plist = join(ARCHIVE, "Products", "Applications", "Lorca.app", "Info.plist")
@@ -150,7 +163,7 @@ await Bun.write(
 `,
 )
 log(`${color.bold("uploading")} ${color.dim("to App Store Connect")}`)
-await $`xcodebuild -exportArchive -archivePath ${ARCHIVE} -exportOptionsPlist ${exportOptions} -exportPath ${EXPORT} -allowProvisioningUpdates`.env(env)
+await $`xcodebuild -exportArchive -archivePath ${ARCHIVE} -exportOptionsPlist ${exportOptions} -exportPath ${EXPORT} -allowProvisioningUpdates ${authentication}`.env(env)
 
 log(`${color.green("uploaded")} Lorca ${version} (${buildNumber})`)
 console.log("  TestFlight lists it once App Store Connect finishes processing")

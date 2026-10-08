@@ -1,0 +1,218 @@
+# Releases the phone app (mobile/). A tag mobile-vX.Y.Z, naming the version in mobile/app.config.ts,
+# uploads an iPhone build of it to TestFlight and drafts the release mobile-vX.Y.Z of this
+# repository with the Android APK, the version's section of mobile/CHANGELOG.md as its notes. A run
+# by hand does the same on the commit it runs on, for both platforms or one: TestFlight takes any
+# number of builds of a version, while an Android release is drafted on that commit, whose tag
+# appears when the draft is published. The iPhone build runs `bun run release-ios` signed in with an
+# App Store Connect API key; the Android one runs `bun run release-android` with the release
+# keystore. Publishing the draft, without making it the latest release, which stays the CLI's,
+# makes it the update Android apps install. docs/releasing-mobile.md has the steps.
+name: Release phone app
+
+on:
+  push:
+    tags: ["mobile-v*"]
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: What to release
+        type: choice
+        options: [iOS and Android, iOS, Android]
+        default: iOS and Android
+
+permissions:
+  contents: read
+
+# One run at a time, so two runs never upload to the same release.
+concurrency:
+  group: release-mobile
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.app.outputs.version }}
+      tag: ${{ steps.app.outputs.tag }}
+      ios: ${{ steps.app.outputs.ios }}
+      android: ${{ steps.app.outputs.android }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+      - id: app
+        name: Name the release after mobile/app.config.ts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Empty for a pushed tag, which releases both.
+          PLATFORMS: ${{ inputs.platforms }}
+        run: |
+          version=$(bun -e 'console.log((await import("./mobile/app.config.ts")).default().version)')
+          tag=mobile-v$version
+          # A pushed tag, or a run by hand on one, has to name the version the app says it is.
+          if [[ $GITHUB_REF_TYPE == tag && $GITHUB_REF_NAME != "$tag" ]]; then
+            echo "::error::$GITHUB_REF_NAME does not match version $version in mobile/app.config.ts: set version there to ${GITHUB_REF_NAME#mobile-v} and tag that commit"
+            exit 1
+          fi
+          ios=true
+          android=true
+          case $PLATFORMS in
+            iOS) android=false ;;
+            Android) ios=false ;;
+          esac
+          if [[ $android == true ]]; then
+            # A release takes the tag that exists, so the build has to come from its commit.
+            if tagged=$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq .sha 2>/dev/null) && [[ $tagged != "$GITHUB_SHA" ]]; then
+              echo "::error::$tag already tags $tagged: run this on that commit, or bump version in mobile/app.config.ts"
+              exit 1
+            fi
+            # This job's token cannot see drafts; the Android job takes an earlier run's draft.
+            if [[ $(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null) == false ]]; then
+              echo "::error::$tag is already published: bump version in mobile/app.config.ts"
+              exit 1
+            fi
+            bun -e '
+              import { extractReleaseNotes } from "./scripts/changelog.ts"
+              if (!extractReleaseNotes(await Bun.file("mobile/CHANGELOG.md").text(), process.argv[1])) {
+                console.error(`::error::mobile/CHANGELOG.md has no "## [${process.argv[1]}]" section`)
+                process.exit(1)
+              }
+            ' "$version"
+          fi
+          {
+            echo "version=$version"
+            echo "tag=$tag"
+            echo "ios=$ios"
+            echo "android=$android"
+          } >> "$GITHUB_OUTPUT"
+
+  ios:
+    name: iOS to TestFlight
+    needs: version
+    if: needs.version.outputs.ios == 'true'
+    # Xcode 27, which the builds from a Mac use too. The image is a preview.
+    runs-on: xcode-27
+    env:
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ios
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+        working-directory: mobile
+      - name: Sign in to App Store Connect and add the signing identity
+        env:
+          ASC_KEY: ${{ secrets.ASC_KEY }}
+          IDENTITY: ${{ secrets.IOS_SIGNING_IDENTITY }}
+          IDENTITY_PASSWORD: ${{ secrets.IOS_SIGNING_IDENTITY_PASSWORD }}
+        run: |
+          for name in ASC_KEY ASC_KEY_ID ASC_ISSUER_ID IDENTITY IDENTITY_PASSWORD; do
+            if [[ -z ${!name} ]]; then
+              echo "::error::a secret for $name is missing: docs/releasing-mobile.md"
+              exit 1
+            fi
+          done
+          umask 077
+          # The API key signs xcodebuild in for provisioning, the export's cloud signing, and the upload.
+          key=$RUNNER_TEMP/AuthKey_$ASC_KEY_ID.p8
+          printf '%s\n' "$ASC_KEY" > "$key"
+          echo "ASC_KEY_PATH=$key" >> "$GITHUB_ENV"
+          # The archive signs with an Apple Development identity of the team. Imported, it is the same
+          # certificate every run, where Xcode would otherwise make a new one each time.
+          keychain=$RUNNER_TEMP/signing.keychain-db
+          password=$(openssl rand -hex 16)
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          base64 --decode <<<"$IDENTITY" > "$RUNNER_TEMP/identity.p12"
+          security import "$RUNNER_TEMP/identity.p12" -k "$keychain" -P "$IDENTITY_PASSWORD" -f pkcs12 -T /usr/bin/codesign -T /usr/bin/security
+          rm "$RUNNER_TEMP/identity.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain" > /dev/null
+          # Codesign searches the user's keychains, and the runner has nothing else to sign with.
+          security list-keychains -d user -s "$keychain"
+          security find-identity -v -p codesigning "$keychain"
+      - name: Build and upload
+        run: bun run release-ios
+      - name: Remove the key and the keychain
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/signing.keychain-db" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP"/AuthKey_*.p8
+
+  android:
+    name: Android to GitHub
+    needs: version
+    if: needs.version.outputs.android == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-ndk
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 17
+      # Gradle's caches between runs; the project itself is generated by each build.
+      - uses: gradle/actions/setup-gradle@v6
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+        working-directory: mobile
+      - name: Build
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          if [[ -z $KEYSTORE || -z $ANDROID_KEYSTORE_PASSWORD ]]; then
+            echo "::error::the ANDROID_KEYSTORE and ANDROID_KEYSTORE_PASSWORD secrets are missing: docs/releasing-mobile.md"
+            exit 1
+          fi
+          umask 077
+          export ANDROID_KEYSTORE=$RUNNER_TEMP/release.keystore
+          base64 --decode <<<"$KEYSTORE" > "$ANDROID_KEYSTORE"
+          trap 'rm -f "$ANDROID_KEYSTORE"' EXIT
+          bun run release-android
+      - name: Draft ${{ needs.version.outputs.tag }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.version.outputs.tag }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          apk=dist/android/lorca-$VERSION-android.apk
+          if ! state=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq 'if .isDraft then "draft" else "published" end' 2>/dev/null); then
+            state=none
+          fi
+          case $state in
+            published)
+              echo "::error::$TAG was published while this ran, so it stays as it is"
+              exit 1
+              ;;
+            draft)
+              # An earlier run's draft takes this build, from this commit, and keeps its notes.
+              gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA"
+              gh release upload "$TAG" "$apk" --repo "$GITHUB_REPOSITORY" --clobber
+              ;;
+            none)
+              bun -e '
+                import { extractReleaseNotes } from "./scripts/changelog.ts"
+                await Bun.write("notes.md", extractReleaseNotes(await Bun.file("mobile/CHANGELOG.md").text(), process.env.VERSION) + "\n")
+              '
+              # Not the latest release, which stays the CLI's that install-cli.sh downloads.
+              gh release create "$TAG" "$apk" --repo "$GITHUB_REPOSITORY" --draft --latest=false --target "$GITHUB_SHA" --title "Lorca for Android $VERSION" --notes-file notes.md
+              ;;
+          esac
