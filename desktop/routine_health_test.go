@@ -15,10 +15,23 @@ import (
 func routineStates(t *testing.T) {
 	t.Helper()
 	now := float64(time.Now().Unix())
+	// The next time the clock in a zone reads hour:00, on a weekday when weekdays is set.
+	next := func(zone string, hour int, weekdays bool) float64 {
+		location, err := time.LoadLocation(zone)
+		if err != nil {
+			t.Fatal(err)
+		}
+		at := time.Now().In(location)
+		at = time.Date(at.Year(), at.Month(), at.Day(), hour, 0, 0, 0, location)
+		for !at.After(time.Now()) || weekdays && (at.Weekday() == time.Saturday || at.Weekday() == time.Sunday) {
+			at = at.AddDate(0, 0, 1)
+		}
+		return float64(at.Unix())
+	}
 	routines := []map[string]any{
 		{"id": "rt-brief", "bot_id": "bot-nova", "name": "Morning brief", "prompt": "Post a short brief of what changed.",
 			"schedule": "0 9 * * 1-5", "schedule_text": "Weekdays at 9:00 AM", "timezone": "Pacific/Kiritimati", "is_enabled": true, "state": "on",
-			"last_run_at": now - 3*3600, "last_outcome": "sent", "next_run_at": now + 9*3600, "created_at": now - 86400*12},
+			"last_run_at": now - 3*3600, "last_outcome": "sent", "next_run_at": next("Pacific/Kiritimati", 9, true), "created_at": now - 86400*12},
 		{"id": "rt-reviews", "bot_id": "bot-nova", "name": "Review requests", "prompt": "Tell me which pull requests need my review first.",
 			"schedule": "every 10m", "schedule_text": "Every 10 minutes", "is_enabled": true, "state": "on", "check": "return null;",
 			"next_run_at": now + 7*60, "created_at": now - 86400*2,
@@ -33,7 +46,7 @@ func routineStates(t *testing.T) {
 			"health": map[string]any{"last_check_at": now - 1320, "last_success_at": now - 8520, "status": "failed", "connection_failures": 2}},
 		{"id": "rt-backup", "bot_id": "bot-ember", "name": "Backup report", "prompt": "Tell me if last night's backups failed.",
 			"schedule": "0 7 * * *", "schedule_text": "Every day at 7:00 AM", "is_enabled": true, "state": "waiting_for_runner", "missed_run_policy": "skip",
-			"next_run_at": now + 5*3600, "created_at": now - 86400*20},
+			"last_run_at": next("Local", 7, false) - 2*86400, "last_outcome": "pass", "next_run_at": next("Local", 7, false), "created_at": now - 86400*20},
 	}
 	store.Routines = nil
 	for _, data := range routines {
