@@ -211,7 +211,7 @@ func (m *mainWindow) inspectorRuntime(c *ui.Context, bot *model.Bot, chat *model
 			providers = append(providers, popUpOption{Value: kind, Label: model.ProviderName(kind, store.Providers)})
 		}
 		// A new provider starts on its default model and thinking level.
-		if kind, ok := popUpRow(c, k, L("Provider"), popUp{Options: providers, Value: bot.Provider}); ok {
+		if kind, ok := popUpRow(c, k, L("Provider"), popUp{Options: providers, Value: bot.Provider}, false); ok {
 			store.SetBotRuntime(bot.ID, kind, "", "")
 		}
 		defaultLabel := ""
@@ -226,7 +226,7 @@ func (m *mainWindow) inspectorRuntime(c *ui.Context, bot *model.Bot, chat *model
 				current = each.ID
 			}
 		}
-		if id, ok := popUpRow(c, k, L("Model"), popUp{Options: modelOptions, Value: current}); ok && id != bot.Model {
+		if id, ok := popUpRow(c, k, L("Model"), popUp{Options: modelOptions, Value: current}, false); ok && id != bot.Model {
 			// A level the new model does not take goes back to the default.
 			thinking := ""
 			for _, level := range model.ThinkingLevels(catalog, bot.Provider, id) {
@@ -246,7 +246,7 @@ func (m *mainWindow) inspectorRuntime(c *ui.Context, bot *model.Bot, chat *model
 					current = level.ID
 				}
 			}
-			if id, ok := popUpRow(c, k, L("Thinking"), popUp{Options: options, Value: current}); ok && id != bot.Thinking {
+			if id, ok := popUpRow(c, k, L("Thinking"), popUp{Options: options, Value: current}, false); ok && id != bot.Thinking {
 				store.SetBotRuntime(bot.ID, bot.Provider, bot.Model, id)
 			}
 		}

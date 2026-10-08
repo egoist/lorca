@@ -7,15 +7,24 @@ import (
 	"time"
 )
 
-func TestWorkflowWireKeepsExplicitAccountAndSampleStates(t *testing.T) {
-	wire := decodeJSON[WireWorkflowProgress](t, `{"setup":{"id":"w1","runner_id":"r1","pack":{"id":"inbox","name":"Inbox","questions":[],"connections":[]},"answers":{"inbox-scope":"Unread today"},"bot_ids":{"triager":"b1"},"connection_ids":{"gmail":"gmail-personal"},"phase":"reviewed","sample":{"job_id":"j1","chat_id":"c1","bot_id":"b1","state":"reviewed","message_ids":["m1"]}},"connections":[{"service_id":"gmail","name":"Gmail","selected_id":"gmail-personal","choices":[{"id":"gmail-work","name":"Gmail","service_id":"gmail","account_name":"Work","state":"ready","detail":"Connected"},{"id":"gmail-personal","name":"Gmail","service_id":"gmail","account_name":"Personal","state":"ready","detail":"Connected"}],"available":true,"state":"ready","detail":"Connected"}],"specialists":[],"routines":[{"id":"routine","name":"Check inbox","schedule_text":"Weekdays at 9:00 AM","is_enabled":false,"timezone":"UTC","health":{},"missed_run_policy":"coalesce"}],"sample_messages":[{"id":"m1","chat_id":"c1","author":{"kind":"bot","bot_id":"b1"},"body":{"kind":"text","text":"One urgent item."},"state":{"kind":"complete"},"created_at":1}],"can_enable":true,"can_sample":true,"blocked_reason":null}`)
-	p := ToWorkflowProgress(wire)
-	expect(t, p.Setup.ConnectionIDs["gmail"], "gmail-personal")
-	expect(t, p.Connections[0].Choices[0].Label(), "Gmail · Work")
+func TestWorkflowWireAndTheAccountInUse(t *testing.T) {
+	p := decodeJSON[WorkflowProgress](t, `{"setup":{"id":"w1","runner_id":"r1","updated_at":1,"pack":{"id":"inbox","name":"Inbox","symbol_name":"envelope","questions":[],"connections":[]},"answers":{"inbox-scope":"Unread today"},"bot_ids":{"triager":"b1"},"connection_ids":{"gmail":"gmail-personal"},"phase":"reviewed","sample":{"job_id":"j1","chat_id":"c1","bot_id":"b1","started_at":1,"state":"reviewed","message_ids":["m1"]}},
+		"connections":[
+			{"service_id":"gmail","name":"Gmail","selected_id":"gmail-personal","available":true,"choices":[{"id":"gmail-work","name":"Gmail","service_id":"gmail","account_name":"Work","state":"ready","detail":"Ready"},{"id":"gmail-personal","name":"Gmail","service_id":"gmail","account_name":"Personal","state":"needs_auth","detail":"Sign in"}]},
+			{"service_id":"github","name":"GitHub","selected_id":null,"available":true,"choices":[{"id":"github","name":"GitHub","state":"ready","detail":"Ready"}]},
+			{"service_id":"slack","name":"Slack","selected_id":null,"available":false,"choices":[{"id":"slack-a","name":"Slack","account_name":"A","state":"ready"},{"id":"slack-b","name":"Slack","account_name":"B","state":"ready"}]}],
+		"specialists":[],"routines":[{"id":"routine","name":"Check inbox","schedule_text":"Weekdays at 9:00 AM","is_enabled":false}],
+		"sample_messages":[{"id":"m1","chat_id":"c1","author":{"kind":"bot","bot_id":"b1"},"body":{"kind":"text","text":"One urgent item."},"state":{"kind":"complete"},"created_at":1}],"is_running":false}`)
+	expect(t, p.Setup.Pack.SymbolName, "envelope")
 	expect(t, p.Setup.Sample.JobID, "j1")
 	expect(t, p.SampleMessages[0].Body.Text, "One urgent item.")
 	expect(t, p.Routines[0].IsEnabled, false)
-	// Older CLI catalogues remain readable and expose no invented pack entries.
+	// The chosen account with its own state, the Runner's only one, and none of several unchosen.
+	expect(t, p.Connections[0].Account().AccountName, "Personal")
+	expect(t, p.Connections[0].Account().State, PluginNeedsAuth)
+	expect(t, p.Connections[1].Account().ID, "github")
+	expect(t, p.Connections[2].Account() == nil, true)
+	// An older CLI's marketplace has no packs.
 	old := ToMarketplace(decodeJSON[WireMarketplace](t, `{"plugins":[],"bots":[]}`))
 	expect(t, len(old.Packs), 0)
 }

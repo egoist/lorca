@@ -272,8 +272,9 @@ func pluginRow(c *ui.Context, k *card, plugin model.InstalledPlugin, clickable b
 	return statusRow(c, k, o)
 }
 
-// popUpRow is a label on the left and a pop-up on the right.
-func popUpRow(c *ui.Context, k *card, label string, o popUp) (string, bool) {
+// popUpRow is a label on the left and a pop-up on the right, 150 wide, or as wide as its choice
+// with `fitsTitles`.
+func popUpRow(c *ui.Context, k *card, label string, o popUp, fitsTitles bool) (string, bool) {
 	var picked string
 	var changed bool
 	r := k.row(rowBox(c).MinHeight(34).Padding(4, 8, 4, 12).Label(label))
@@ -281,6 +282,9 @@ func popUpRow(c *ui.Context, k *card, label string, o popUp) (string, bool) {
 		rowKey(c, label)
 		ui.Spacer(c)
 		o.Style, o.Width = popUpBordered, 150
+		if fitsTitles {
+			o.Width = 0
+		}
 		picked, changed, _ = popUpButton(c, o)
 	})
 	return picked, changed

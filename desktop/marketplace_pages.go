@@ -134,14 +134,7 @@ func (mk *marketplace) homePage(c *ui.Context, page *marketPage) {
 		query := strings.TrimSpace(page.query)
 		packs := workflowMatchingPacks(mk.catalog.Packs, query)
 		if len(packs) > 0 {
-			workflowPackRows(c, packs, func(pack model.WorkflowPack) {
-				mk.m.appWindow.presentWorkflows(&pack, mk.runnerID, func(chatID string) {
-					mk.sheet.dismiss()
-					if chatID != "" {
-						mk.m.open(chatID)
-					}
-				})
-			}, on == nil)
+			mk.workflowSection(c, packs)
 		}
 		if query == "" {
 			sections := mk.homeSections()

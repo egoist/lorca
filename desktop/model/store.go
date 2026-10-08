@@ -183,7 +183,7 @@ type Store struct {
 	attachmentFiles    map[string]string
 	fetchingAttachment map[string]bool
 
-	mockWorkflows   map[string]WireWorkflowProgress
+	mockWorkflows   map[string]*demoSetup
 	mockMarketplace *Marketplace
 	mockMcp         map[string][]McpServer
 }

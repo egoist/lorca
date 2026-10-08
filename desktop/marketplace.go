@@ -10,8 +10,9 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// The marketplace, after the macOS app's MarketplaceViewController and its pages: featured plugins
-// and bots, everything else by category, one search over both, and a page for each plugin and bot.
+// The marketplace, after the macOS app's MarketplaceViewController and its pages: workflows,
+// featured plugins and bots, everything else by category, one search over all of them, and a page
+// for each workflow, plugin, and bot.
 // A sheet with a way back: the home page leads to a plugin, a bot, a full list, or the plugins the
 // Runner has. Plugins install on the Runner picked in the top bar, for every bot there; a bot is
 // added to that Runner, and the sheet closes on the new bot's chat, where the bot sets itself up.
@@ -192,6 +193,8 @@ const (
 	marketBotPage
 	marketListPage
 	marketInstalledPage
+	marketWorkflowListPage
+	marketWorkflowPage
 )
 
 // marketPage is one page of the sheet and what it keeps while pages above it come and go: its
@@ -211,6 +214,8 @@ type marketPage struct {
 	scroll ui.ScrollState
 	// focusSearch puts the keyboard in the home page's search as the sheet opens.
 	focusSearch bool
+	// workflow is a workflow page's setup.
+	workflow *workflowPage
 }
 
 // marketNotice is the line at the foot of the sheet for what an install did, gone after a few
@@ -223,8 +228,10 @@ type marketNotice struct {
 }
 
 type marketplace struct {
-	m       *mainWindow
-	sheet   *sheet
+	w *appWindow
+	// openChat takes the window to a chat once the sheet closes on one.
+	openChat func(chatID string)
+	sheet    *sheet
 	catalog model.Marketplace
 	loading marketLoading
 	// installing are the plugins being installed, by id.
@@ -239,6 +246,8 @@ type marketplace struct {
 	notice   marketNotice
 	// width and height are the sheet's, sized to the window as it opens.
 	width, height float32
+	// stopWatch ends the workflow pages' following of the store.
+	stopWatch func()
 }
 
 // marketplaceSheet is the marketplace up over the main window, which opens one at a time.
@@ -248,11 +257,22 @@ var marketplaceSheet *sheet
 // it opens on that bot's Runner, from Settings on the picked Device; a bot added there lands in its
 // chat.
 func (m *mainWindow) presentMarketplace(runnerID string) {
-	if marketplaceSheet != nil && marketplaceSheet.window == &m.appWindow {
-		return
+	m.appWindow.presentMarketplace(runnerID, &marketPage{kind: marketHomePage, focusSearch: true}, m.open)
+}
+
+// presentWorkflowChooser opens the marketplace on its workflows alone, for onboarding's Choose a
+// Workflow. Setting one up closes the sheet on its chat.
+func (w *appWindow) presentWorkflowChooser(runnerID string, openChat func(chatID string)) *marketplace {
+	return w.presentMarketplace(runnerID, &marketPage{kind: marketWorkflowListPage}, openChat)
+}
+
+func (w *appWindow) presentMarketplace(runnerID string, first *marketPage, openChat func(chatID string)) *marketplace {
+	if marketplaceSheet != nil && marketplaceSheet.window == w {
+		return nil
 	}
 	mk := &marketplace{
-		m:          m,
+		w:          w,
+		openChat:   openChat,
 		installing: map[string]bool{},
 		installed:  map[string]map[string]model.InstalledPlugin{},
 	}
@@ -264,10 +284,21 @@ func (m *mainWindow) presentMarketplace(runnerID string) {
 	if picked < len(runners) {
 		mk.runnerID = runners[picked].ID
 	}
-	mk.show(&marketPage{kind: marketHomePage, focusSearch: true})
-	mk.sheet = m.present(mk.view, func() { marketplaceSheet = nil })
+	mk.show(first)
+	mk.sheet = w.present(mk.view, func() {
+		marketplaceSheet = nil
+		if mk.stopWatch != nil {
+			mk.stopWatch()
+		}
+		for _, page := range mk.pages {
+			if page.workflow != nil {
+				page.workflow.closed = true
+			}
+		}
+	})
 	marketplaceSheet = mk.sheet
 	mk.load()
+	return mk
 }
 
 func (mk *marketplace) load() {
@@ -402,7 +433,7 @@ func (mk *marketplace) install(plugin *model.MarketplacePlugin) {
 // manage opens the plugin's own sheet on the picked Runner: its sign-in, its setup, and Remove.
 func (mk *marketplace) manage(pluginID string) {
 	if on := mk.runner(); on != nil {
-		mk.m.presentPlugin(pluginID, on)
+		mk.w.presentPlugin(pluginID, on)
 	}
 }
 
@@ -412,9 +443,15 @@ func (mk *marketplace) add(template *model.BotTemplate) {
 	if on == nil {
 		return
 	}
-	chatID := store.AddBotFromTemplate(*template, on.ID)
+	mk.finish(store.AddBotFromTemplate(*template, on.ID))
+}
+
+// finish closes the sheet on a chat: a new bot's, or a workflow's, where its sample is.
+func (mk *marketplace) finish(chatID string) {
 	mk.sheet.dismiss()
-	mk.m.open(chatID)
+	if chatID != "" && mk.openChat != nil {
+		mk.openChat(chatID)
+	}
 }
 
 func (mk *marketplace) view(c *ui.Context, s *sheet) {
@@ -515,6 +552,10 @@ func (mk *marketplace) pageView(c *ui.Context, page *marketPage) {
 		mk.listPage(c, page)
 	case marketInstalledPage:
 		mk.installedPage(c)
+	case marketWorkflowListPage:
+		mk.workflowListPage(c)
+	case marketWorkflowPage:
+		mk.workflowPage(c, page)
 	}
 }
 

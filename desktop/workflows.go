@@ -1,472 +1,551 @@
 package main
 
 import (
-	"github.com/egoist/lorca/desktop/model"
-	"github.com/egoist/mygo/ui"
 	"slices"
 	"strings"
+
+	"github.com/egoist/lorca/desktop/model"
+	"github.com/egoist/mygo/ui"
 )
 
-// Presentation-only state. The CLI owns reuse, encrypted recovery, permissions and scheduling.
-type workflowSheet struct {
-	w                     *appWindow
-	sheet                 *sheet
-	openChat              func(string)
-	packs                 []model.WorkflowPack
-	pack                  *model.WorkflowPack
-	runnerID              string
-	progress              *model.WorkflowProgress
-	answers               map[string]*string
-	bots                  map[string]*string
-	editing, busy, closed bool
-	error                 string
-	generation            int
-	refreshAgain          bool
-	stop                  func()
+// The marketplace's workflows, after the macOS app's MarketplaceWorkflowPage: a section of them on
+// the home page, the list onboarding opens, and a workflow's setup on the picked Runner, with its
+// questions and its bot, the accounts it needs, a sample run to read, and its schedule, which stays
+// off until the user turns it on. The CLI keeps the setup, so leaving the page keeps it too.
+
+// workflowMatchingPacks is the workflows whose name, outcome, or description has every word of the
+// query; all of them for none.
+func workflowMatchingPacks(packs []model.WorkflowPack, query string) []model.WorkflowPack {
+	words := strings.Fields(strings.ToLower(query))
+	var found []model.WorkflowPack
+	for _, pack := range packs {
+		text := strings.ToLower(pack.Name + " " + pack.Outcome + " " + pack.Description)
+		if !slices.ContainsFunc(words, func(word string) bool { return !strings.Contains(text, word) }) {
+			found = append(found, pack)
+		}
+	}
+	return found
 }
 
-func (w *appWindow) presentWorkflows(pack *model.WorkflowPack, runnerID string, openChat func(string)) *workflowSheet {
-	if runnerID == "" {
-		if d := store.ThisDevice(); d != nil && d.IsRunner() {
-			runnerID = d.ID
-		} else if runners := store.Runners(); len(runners) > 0 {
-			runnerID = runners[0].ID
-		}
-	}
-	s := &workflowSheet{w: w, openChat: openChat, runnerID: runnerID, answers: map[string]*string{}, bots: map[string]*string{}}
-	s.sheet = w.present(s.view, func() {
-		s.closed = true
-		if s.stop != nil {
-			s.stop()
-		}
-	})
-	s.stop = pluginWatchStore(func(e model.Event) {
-		switch e.Kind {
-		case model.EventRosterChanged, model.EventSnapshotReplaced, model.EventTurnFinished, model.EventConnectionChanged:
-			s.refresh()
-		}
-	})
-	if pack != nil {
-		s.start(*pack)
-	} else {
-		s.loadCatalog()
-	}
-	return s
-}
-
-func (s *workflowSheet) loadCatalog() {
-	if s.closed || s.busy {
-		return
-	}
-	s.busy = true
-	s.error = ""
-	s.generation++
-	generation := s.generation
-	store.Marketplace(func(catalog model.Marketplace, err error) {
-		if s.closed || generation != s.generation {
-			return
-		}
-		s.busy = false
-		if err != nil {
-			s.error = model.ErrorText(err)
-			return
-		}
-		s.packs = catalog.Packs
-	})
-}
-
-func (s *workflowSheet) start(pack model.WorkflowPack) {
-	if s.closed || s.busy {
-		return
-	}
-	s.pack = &pack
-	s.perform("start", map[string]any{"pack_id": pack.ID, "runner_id": s.runnerID})
-}
-
-func (s *workflowSheet) perform(method string, params map[string]any) {
-	if s.closed || s.busy {
-		return
-	}
-	s.busy = true
-	s.error = ""
-	s.generation++
-	generation := s.generation
-	store.Workflow(method, params, func(progress model.WorkflowProgress, err error) {
-		if s.closed || generation != s.generation {
-			return
-		}
-		s.busy = false
-		if err != nil {
-			s.error = model.ErrorText(err)
-		} else {
-			s.progress = &progress
-			s.runnerID = progress.Setup.RunnerID
-			s.pack = &progress.Setup.Pack
-			if method != "get" {
-				s.editing = progress.Setup.Phase == "questions"
-				s.answers = map[string]*string{}
-				s.bots = map[string]*string{}
-			}
-			s.seedFields()
-		}
-		if err == nil && !s.editing && (s.refreshAgain || method == "sample") {
-			s.refreshAgain = false
-			s.refresh()
-		}
-	})
-}
-
-func (s *workflowSheet) seedFields() {
-	if s.progress == nil {
-		return
-	}
-	for _, q := range s.progress.Setup.Pack.Questions {
-		if s.answers[q.ID] == nil {
-			v := s.progress.Setup.Answers[q.ID]
-			s.answers[q.ID] = &v
-		}
-	}
-	for _, b := range s.progress.Specialists {
-		if s.bots[b.ID] == nil {
-			v := b.SelectedID
-			s.bots[b.ID] = &v
-		}
-	}
-}
-func (s *workflowSheet) refresh() {
-	if s.closed || s.progress == nil || s.editing {
-		return
-	}
-	if s.busy {
-		s.refreshAgain = true
-		return
-	}
-	s.perform("get", map[string]any{"id": s.progress.Setup.ID})
-}
-func (s *workflowSheet) configure() {
-	if s.progress == nil {
-		return
-	}
-	answers, bots := map[string]string{}, map[string]string{}
-	for id, v := range s.answers {
-		answers[id] = *v
-	}
-	for id, v := range s.bots {
-		if *v != "" {
-			bots[id] = *v
-		}
-	}
-	s.perform("configure", map[string]any{"id": s.progress.Setup.ID, "answers": answers, "bot_ids": bots})
-}
-func (s *workflowSheet) action(method string) {
-	if s.progress == nil {
-		return
-	}
-	params := map[string]any{"id": s.progress.Setup.ID}
-	if method == "review" && s.progress.Setup.Sample != nil {
-		params["job_id"] = s.progress.Setup.Sample.JobID
-	}
-	s.perform(method, params)
-}
-func (s *workflowSheet) connect(serviceID, instanceID string) {
-	if s.progress == nil {
-		return
-	}
-	params := map[string]any{"id": s.progress.Setup.ID, "service_id": serviceID}
-	if instanceID != "" {
-		params["plugin_id"] = instanceID
-	} else {
-		params["account_name"] = s.progress.Setup.Pack.Name
-	}
-	s.perform("connection", params)
-}
-func (s *workflowSheet) finish() {
-	chatID := ""
-	if s.progress != nil && s.progress.Setup.Sample != nil {
-		chatID = s.progress.Setup.Sample.ChatID
-	}
-	s.sheet.dismiss()
-	if s.openChat != nil {
-		s.openChat(chatID)
-	}
-}
-
-func (s *workflowSheet) view(c *ui.Context, sh *sheet) {
-	p := colors(c)
-	title, subtitle := L("What would you like to accomplish?"), L("Choose a workflow, connect its tools, and review a sample before enabling a schedule.")
-	if s.pack != nil {
-		title, subtitle = s.pack.Name, s.pack.Outcome
-	}
-	var leading func()
-	if s.pack != nil {
-		leading = func() {
-			if pushButton(c.Key("workflow-back"), L("Back"), pushOptions{Disabled: s.busy}).Clicked() {
-				s.pack = nil
-				s.progress = nil
-				s.editing = false
-				s.answers = map[string]*string{}
-				s.bots = map[string]*string{}
-				s.loadCatalog()
-			}
-		}
-	}
-	result := sheetFrame(c, sheetOptions{Title: title, Subtitle: subtitle, Width: 720, Confirm: L("Close"), NoCancel: true, ReturnInContent: true, Leading: leading}, func() {
-		if s.error != "" {
-			ui.Text(c, s.error).FontSize(13).TextColor(p.Red).Role(ui.RoleStatus)
-		}
-		if s.pack == nil {
-			s.catalogView(c)
-			return
-		}
-		runnerName := s.runnerID
-		if runner := store.Device(s.runnerID); runner != nil {
-			runnerName = runner.Name
-		}
-		ui.Text(c, L("Runs on %@. Closing this page saves your progress.", runnerName)).FontSize(12).TextColor(p.Label2)
-		if s.progress == nil {
-			if s.busy {
-				workflowLoading(c, L("Loading setup…"))
-			} else if pushButton(c, L("Try Again"), pushOptions{}).Clicked() {
-				s.start(*s.pack)
-			}
-			return
-		}
-		if s.busy {
-			workflowLoading(c, L("Updating setup…"))
-		}
-		setup := s.progress.Setup
-		if setup.Phase == "cancelled" {
-			ui.Text(c, L("Setup is cancelled. Its specialists and connections are kept for reuse, and its imported routines are paused.")).FontSize(13).LineHeight(1.4).TextColor(p.Label2)
-			if pushButton(c, L("Resume Setup"), pushOptions{Disabled: s.busy}).Clicked() {
-				s.start(setup.Pack)
-			}
-			return
-		}
-		if s.editing || setup.Phase == "questions" {
-			s.questionsView(c)
-		} else {
-			s.progressView(c)
-		}
-		cancel := L("Cancel Setup")
-		if setup.Phase == "enabled" {
-			cancel = L("Cancel Setup and Pause Imported Routines")
-		}
-		if pushButton(c.Key("cancel-setup"), cancel, pushOptions{Disabled: s.busy}).Clicked() {
-			s.action("cancel")
-		}
-	})
-	if result.Confirmed || result.Cancelled {
-		sh.dismiss()
-	}
-}
-func workflowLoading(c *ui.Context, text string) {
-	ui.Row(c).Gap(8).Children(func() { spinner(c, 14); ui.Text(c, text).FontSize(12).TextColor(colors(c).Label2) })
-}
-
-func (s *workflowSheet) catalogView(c *ui.Context) {
-	p := colors(c)
-	runners := store.Runners()
-	options := make([]popUpOption, 0, len(runners))
-	for _, runner := range runners {
-		options = append(options, popUpOption{Value: runner.ID, Label: runner.Name})
-	}
-	if len(options) > 0 {
-		if v, changed, _ := popUpButton(c.Key("runner"), popUp{Options: options, Value: s.runnerID, Label: L("Runner"), Style: popUpBordered, Disabled: s.busy}); changed {
-			s.runnerID = v
-		}
-	}
-	if s.busy {
-		workflowLoading(c, L("Loading workflows…"))
-		return
-	}
-	if len(s.packs) == 0 {
-		ui.Text(c, L("This CLI has no guided workflows. Update Lorca to add them.")).FontSize(13).TextColor(p.Label2)
-		if pushButton(c, L("Try Again"), pushOptions{}).Clicked() {
-			s.loadCatalog()
-		}
-		return
-	}
-	workflowPackRows(c, s.packs, func(pack model.WorkflowPack) { s.start(pack) }, s.runnerID == "")
-}
-
-func workflowPackRows(c *ui.Context, packs []model.WorkflowPack, open func(model.WorkflowPack), disabled bool) {
-	p := colors(c)
-	ui.Column(c.Key("workflow-packs")).Gap(10).Children(func() {
-		ui.Text(c, L("Guided Workflows")).FontSize(14).FontWeight(600)
+// workflowGrid lays the workflows' rows two to a line: their symbol on a tile, their name, and
+// their outcome. A click opens one.
+func (mk *marketplace) workflowGrid(c *ui.Context, packs []model.WorkflowPack) {
+	ui.Grid(c).Columns(2).GapX(8).GapY(2).Children(func() {
 		for _, pack := range packs {
-			ui.Row(c.Key(pack.ID)).Gap(12).Padding(10).Radius(10).Background(p.Card).Children(func() {
-				symbol(c, "sparkles", 24, 1.8).TextColor(p.Accent)
-				ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(4).Children(func() {
-					ui.Text(c, pack.Name).FontSize(13).FontWeight(600)
-					ui.Text(c, pack.Outcome).FontSize(12).TextColor(p.Label2).LineHeight(1.35)
+			media := func() { marketPluginIcon(c, pack.ID, firstNonEmpty(pack.SymbolName, "sparkles"), 40) }
+			if marketRow(c, "workflow:"+pack.ID, marketRowOptions{Title: pack.Name, Subtitle: pack.Outcome}, media, nil) {
+				mk.openWorkflow(pack)
+			}
+		}
+	})
+}
+
+// workflowSection is the home page's Workflows, ahead of the featured plugins.
+func (mk *marketplace) workflowSection(c *ui.Context, packs []model.WorkflowPack) {
+	ui.Column(c.Key("workflows")).Gap(6).Children(func() {
+		ui.Row(c).Height(28).Padding(0, 12).Children(func() {
+			ui.Text(c, L("Workflows")).FontSize(14).FontWeight(600).SingleLine()
+		})
+		mk.workflowGrid(c, packs)
+	})
+}
+
+// workflowListPage is the workflows alone: the first page of the sheet onboarding's Choose a
+// Workflow opens.
+func (mk *marketplace) workflowListPage(c *ui.Context) {
+	ui.Column(c).Gap(12).Children(func() {
+		marketPageTitle(c, L("Choose a Workflow"), nil)
+		switch {
+		case len(mk.catalog.Packs) > 0:
+			mk.workflowGrid(c, mk.catalog.Packs)
+		case mk.loading == marketFailed:
+			ui.Column(c).Gap(10).Children(func() {
+				marketStatusLine(c, L("The marketplace isn't available right now."))
+				ui.Row(c).Padding(0, 12).Children(func() {
+					if pushButton(c, L("Try Again"), pushOptions{}).Clicked() {
+						mk.load()
+					}
 				})
-				if pushButton(c, L("Set Up…"), pushOptions{Disabled: disabled, Tooltip: pack.Name}).Clicked() {
-					open(pack)
+			})
+		case mk.loading == marketLoaded:
+			marketStatusLine(c, L("Nothing here yet."))
+		default:
+			marketStatusLine(c, L("Loading…"))
+		}
+	})
+}
+
+// workflowPage is a workflow page's setup, and what the page shows of it while it is not saved:
+// the answers as typed and the bots as picked, a bot being its id, or empty for the new one setup
+// adds.
+type workflowPage struct {
+	pack       model.WorkflowPack
+	progress   *model.WorkflowProgress
+	answers    map[string]*string
+	bots       map[string]string
+	busy       bool
+	fetching   bool
+	fetchAgain bool
+	closed     bool
+}
+
+func (mk *marketplace) openWorkflow(pack model.WorkflowPack) {
+	wp := &workflowPage{pack: pack, answers: map[string]*string{}, bots: map[string]string{}}
+	mk.show(&marketPage{kind: marketWorkflowPage, id: pack.ID, workflow: wp})
+	if mk.stopWatch == nil {
+		// Sign-ins, a sample's end, and the roster all move what a setup shows.
+		mk.stopWatch = pluginWatchStore(func(e model.Event) {
+			switch e.Kind {
+			case model.EventRosterChanged, model.EventSnapshotReplaced, model.EventTurnFinished, model.EventConnectionChanged:
+				for _, page := range mk.pages {
+					if page.workflow != nil {
+						mk.refreshWorkflow(page.workflow)
+					}
+				}
+			}
+		})
+	}
+	mk.startWorkflow(wp)
+}
+
+func (mk *marketplace) startWorkflow(wp *workflowPage) {
+	on := mk.runner()
+	if on == nil {
+		return
+	}
+	mk.performWorkflow(wp, []workflowStep{{"start", func(*model.WorkflowProgress) map[string]any {
+		return map[string]any{"pack_id": wp.pack.ID, "runner_id": on.ID}
+	}}}, nil)
+}
+
+// workflowStep is one request of a few in a row: its method, and its parameters from the answer
+// before it.
+type workflowStep struct {
+	method string
+	params func(previous *model.WorkflowProgress) map[string]any
+}
+
+// performWorkflow runs requests one after another while the page's actions wait, then shows the
+// last answer. A failure stops the run, and its reason shows at the foot of the sheet.
+func (mk *marketplace) performWorkflow(wp *workflowPage, steps []workflowStep, then func(model.WorkflowProgress)) {
+	if wp.busy || wp.closed {
+		return
+	}
+	wp.busy = true
+	var run func(i int, previous *model.WorkflowProgress)
+	run = func(i int, previous *model.WorkflowProgress) {
+		store.Workflow(steps[i].method, steps[i].params(previous), func(progress model.WorkflowProgress, err error) {
+			if wp.closed {
+				return
+			}
+			if err != nil {
+				wp.busy = false
+				mk.showNotice(model.ErrorText(err), true)
+				mk.afterWorkflowRequest(wp)
+				return
+			}
+			if i+1 < len(steps) {
+				run(i+1, &progress)
+				return
+			}
+			wp.busy = false
+			wp.apply(progress)
+			if then != nil {
+				then(progress)
+			}
+			mk.afterWorkflowRequest(wp)
+		})
+	}
+	run(0, wp.progress)
+}
+
+func (mk *marketplace) afterWorkflowRequest(wp *workflowPage) {
+	if wp.fetchAgain {
+		wp.fetchAgain = false
+		mk.refreshWorkflow(wp)
+	}
+}
+
+// refreshWorkflow reads the setup again after something it shows changed.
+func (mk *marketplace) refreshWorkflow(wp *workflowPage) {
+	if wp.progress == nil || wp.closed {
+		return
+	}
+	if wp.busy || wp.fetching {
+		wp.fetchAgain = true
+		return
+	}
+	wp.fetching = true
+	id := wp.progress.Setup.ID
+	store.Workflow("get", map[string]any{"id": id}, func(progress model.WorkflowProgress, err error) {
+		wp.fetching = false
+		if err == nil && !wp.closed && wp.progress != nil && progress.Setup.ID == wp.progress.Setup.ID {
+			wp.apply(progress)
+		}
+		mk.afterWorkflowRequest(wp)
+	})
+}
+
+func (wp *workflowPage) apply(progress model.WorkflowProgress) {
+	wp.progress = &progress
+	for _, q := range progress.Setup.Pack.Questions {
+		if wp.answers[q.ID] == nil {
+			answer := progress.Setup.Answers[q.ID]
+			wp.answers[q.ID] = &answer
+		}
+	}
+	for _, specialist := range progress.Specialists {
+		if _, ok := wp.bots[specialist.ID]; !ok {
+			wp.bots[specialist.ID] = specialist.SelectedID
+		}
+	}
+}
+
+func (wp *workflowPage) answer(id string) string {
+	if v := wp.answers[id]; v != nil {
+		return strings.TrimSpace(*v)
+	}
+	return ""
+}
+
+// edited is the page showing answers or bots that running the sample has not saved yet.
+func (wp *workflowPage) edited() bool {
+	if wp.progress == nil {
+		return false
+	}
+	for _, q := range wp.progress.Setup.Pack.Questions {
+		if wp.answer(q.ID) != wp.progress.Setup.Answers[q.ID] {
+			return true
+		}
+	}
+	for _, specialist := range wp.progress.Specialists {
+		if wp.bots[specialist.ID] != specialist.SelectedID {
+			return true
+		}
+	}
+	return false
+}
+
+func (mk *marketplace) runWorkflowSample(wp *workflowPage) {
+	id := wp.progress.Setup.ID
+	answers, bots := map[string]string{}, map[string]string{}
+	for _, q := range wp.progress.Setup.Pack.Questions {
+		answers[q.ID] = wp.answer(q.ID)
+	}
+	for role, bot := range wp.bots {
+		if bot != "" {
+			bots[role] = bot
+		}
+	}
+	mk.performWorkflow(wp, []workflowStep{
+		{"configure", func(*model.WorkflowProgress) map[string]any { return map[string]any{"id": id, "answers": answers, "bot_ids": bots} }},
+		{"sample", func(*model.WorkflowProgress) map[string]any { return map[string]any{"id": id} }},
+	}, func(saved model.WorkflowProgress) {
+		// Saved now: a new bot is a bot of its own, and the menus show what setup holds.
+		wp.bots = map[string]string{}
+		wp.apply(saved)
+	})
+}
+
+func (mk *marketplace) turnOnWorkflow(wp *workflowPage) {
+	setup := wp.progress.Setup
+	sample := *setup.Sample
+	var steps []workflowStep
+	if sample.State != "reviewed" {
+		steps = append(steps, workflowStep{"review", func(*model.WorkflowProgress) map[string]any {
+			return map[string]any{"id": setup.ID, "job_id": sample.JobID}
+		}})
+	}
+	steps = append(steps, workflowStep{"enable", func(*model.WorkflowProgress) map[string]any { return map[string]any{"id": setup.ID} }})
+	mk.performWorkflow(wp, steps, func(done model.WorkflowProgress) {
+		chatID := ""
+		if done.Setup.Sample != nil {
+			chatID = done.Setup.Sample.ChatID
+		}
+		mk.finish(chatID)
+	})
+}
+
+func (mk *marketplace) cancelWorkflow(wp *workflowPage) {
+	setup := wp.progress.Setup
+	wasOn := setup.Phase == "enabled"
+	mk.performWorkflow(wp, []workflowStep{{"cancel", func(*model.WorkflowProgress) map[string]any { return map[string]any{"id": setup.ID} }}},
+		func(model.WorkflowProgress) {
+			if wasOn {
+				mk.showNotice(L("%@ is off.", wp.pack.Name), false)
+			} else {
+				mk.showNotice(L("Setup cancelled. Your answers are kept for next time."), false)
+			}
+			wp.closed = true
+			mk.goBack()
+		})
+}
+
+func (mk *marketplace) chooseWorkflowAccount(wp *workflowPage, connection model.WorkflowConnection, accountID string) {
+	id := wp.progress.Setup.ID
+	mk.performWorkflow(wp, []workflowStep{{"connection", func(*model.WorkflowProgress) map[string]any {
+		return map[string]any{"id": id, "service_id": connection.ServiceID, "plugin_id": accountID}
+	}}}, nil)
+}
+
+// addWorkflowAccount installs the service's plugin on the Runner for this workflow, dropping a
+// choice of an account the Runner no longer has.
+func (mk *marketplace) addWorkflowAccount(wp *workflowPage, connection model.WorkflowConnection) {
+	id := wp.progress.Setup.ID
+	var steps []workflowStep
+	if connection.SelectedID != "" {
+		steps = append(steps, workflowStep{"clear_connection", func(*model.WorkflowProgress) map[string]any {
+			return map[string]any{"id": id, "service_id": connection.ServiceID}
+		}})
+	}
+	steps = append(steps, workflowStep{"connection", func(*model.WorkflowProgress) map[string]any {
+		return map[string]any{"id": id, "service_id": connection.ServiceID}
+	}})
+	mk.performWorkflow(wp, steps, nil)
+}
+
+func (mk *marketplace) workflowPage(c *ui.Context, page *marketPage) {
+	p := colors(c)
+	wp := page.workflow
+	on := mk.runner()
+	// The page follows the Runner picked in the top bar; each Runner has its own setup.
+	if wp.progress != nil && on != nil && wp.progress.Setup.RunnerID != on.ID && !wp.busy {
+		wp.bots = map[string]string{}
+		mk.startWorkflow(wp)
+	}
+	byline := L("Pair a Runner first.")
+	if on != nil {
+		byline = L("Runs on %@", on.Name)
+	}
+	ui.Column(c).Gap(22).Children(func() {
+		ui.Column(c).Gap(14).Children(func() {
+			ui.Row(c).Gap(14).Padding(0, 12).Children(func() {
+				marketPluginIcon(c, wp.pack.ID, firstNonEmpty(wp.pack.SymbolName, "sparkles"), 56)
+				ui.Column(c).Gap(3).Grow(1).Shrink(1).MinWidth(0).Children(func() {
+					ui.Text(c, wp.pack.Name).FontSize(20).FontWeight(600)
+					ui.Text(c, byline).FontSize(12.5).TextColor(p.Label2)
+				})
+				ui.Row(c.Key("workflow-actions")).Gap(8).Children(func() { mk.workflowActions(c, wp) })
+			})
+			ui.Text(c, wp.pack.Outcome).Padding(0, 12).FontSize(13).LineHeight(1.4).TextColor(p.Label2).Selectable()
+		})
+		if wp.progress == nil {
+			return
+		}
+		progress := wp.progress
+		setup := progress.Setup
+		locked := setup.Phase == "enabled" || progress.IsRunning || wp.busy
+		mk.workflowSetupCard(c, wp, locked)
+		if len(progress.Connections) > 0 {
+			section(c, L("Accounts"), sectionHeading, nil, func(k *card) {
+				for _, connection := range progress.Connections {
+					ui.Box(c.Key("account:" + connection.ServiceID)).Children(func() { mk.workflowAccountRow(c, k, wp, connection, locked) })
+				}
+			})
+		}
+		if sample := setup.Sample; sample != nil {
+			mk.workflowSampleCard(c, wp, sample)
+		}
+		if len(progress.Routines) > 0 {
+			section(c, L("Schedule"), sectionHeading, nil, func(k *card) {
+				for _, routine := range progress.Routines {
+					o := statusRowOptions{Symbol: "pause.circle", Title: routine.Name, Subtitle: model.Schedule(routine.ScheduleText), State: L("Off")}
+					if routine.IsEnabled {
+						o.Symbol, o.State = "clock", L("On")
+					}
+					ui.Box(c.Key("routine:" + routine.ID)).Children(func() { statusRow(c, k, o) })
+				}
+			})
+		}
+		// The page's one button apart from the rest: Cancel Setup, or Turn Off once it is on.
+		if len(setup.BotIDs) > 0 || setup.Sample != nil {
+			title := L("Cancel Setup")
+			if setup.Phase == "enabled" {
+				title = L("Turn Off Workflow")
+			}
+			ui.Row(c).Padding(0, 12).Children(func() {
+				if pushButton(c.Key("workflow-cancel"), title, pushOptions{Kind: buttonDestructive, Disabled: wp.busy}).Clicked() {
+					mk.cancelWorkflow(wp)
 				}
 			})
 		}
 	})
 }
 
-func (s *workflowSheet) questionsView(c *ui.Context) {
-	p := colors(c)
-	ui.Text(c, L("1 · Answer the questions for this workflow")).FontSize(13).FontWeight(600)
-	for _, q := range s.progress.Setup.Pack.Questions {
-		ui.Column(c.Key("answer:" + q.ID)).Gap(5).Children(func() {
-			ui.Text(c, q.Label).FontSize(13)
-			textField(c, s.answers[q.ID], fieldOptions{Label: L("Answer for %@", q.Label), Placeholder: q.Placeholder, Disabled: s.busy})
-		})
+// workflowActions is what can be done next, at the header's trailing end: run the sample, then turn
+// its schedule on or leave it off.
+func (mk *marketplace) workflowActions(c *ui.Context, wp *workflowPage) {
+	if wp.busy {
+		spinner(c, 16).Label(L("Loading…"))
 	}
-	if len(s.progress.Specialists) > 0 {
-		ui.Text(c, L("Specialists · reuse a bot on this Runner or add a suitable one.")).FontSize(12).TextColor(p.Label2)
-	}
-	for _, b := range s.progress.Specialists {
-		state := s.bots[b.ID]
-		options := []popUpOption{{Value: "", Label: L("Reuse a suitable bot or add %@", b.Name)}}
-		for _, choice := range b.Choices {
-			options = append(options, popUpOption{Value: choice.ID, Label: choice.Name})
+	if wp.progress == nil {
+		if !wp.busy && mk.runner() != nil && pushButton(c, L("Try Again"), pushOptions{Large: true}).Clicked() {
+			mk.startWorkflow(wp)
 		}
-		if v, changed, _ := popUpButton(c.Key("specialist:"+b.ID), popUp{Options: options, Value: *state, Label: L("Specialist: %@", b.Name), Style: popUpBordered, Disabled: s.busy}); changed {
-			*state = v
-		}
+		return
 	}
-	if pushButton(c.Key("continue-setup"), L("Continue"), pushOptions{Kind: buttonPrimary, Disabled: s.busy}).Clicked() {
-		s.configure()
+	progress := wp.progress
+	setup := progress.Setup
+	if setup.Phase == "enabled" {
+		return
+	}
+	hasResult := setup.Sample != nil && (setup.Sample.State == "ready" || setup.Sample.State == "reviewed") && len(progress.SampleMessages) > 0 && !progress.IsRunning
+	if hasResult && !wp.edited() {
+		if pushButton(c.Key("not-now"), L("Not Now"), pushOptions{Large: true, Disabled: wp.busy}).Clicked() {
+			mk.finish(setup.Sample.ChatID)
+		}
+		if pushButton(c.Key("turn-on"), L("Turn On Schedule"), pushOptions{Kind: buttonPrimary, Large: true, Disabled: wp.busy}).Clicked() {
+			mk.turnOnWorkflow(wp)
+		}
+		return
+	}
+	filled := !slices.ContainsFunc(setup.Pack.Questions, func(q model.WorkflowQuestion) bool { return wp.answer(q.ID) == "" })
+	connected := !slices.ContainsFunc(progress.Connections, func(connection model.WorkflowConnection) bool {
+		account := connection.Account()
+		return account == nil || account.State != model.PluginReady
+	})
+	tip := ""
+	if !filled {
+		tip = L("Fill in the setup first.")
+	} else if !connected {
+		tip = L("Connect the accounts first.")
+	}
+	if pushButton(c.Key("run-sample"), L("Run Sample"), pushOptions{Kind: buttonPrimary, Large: true, Disabled: wp.busy || progress.IsRunning || !filled || !connected, Tooltip: tip}).Clicked() {
+		mk.runWorkflowSample(wp)
 	}
 }
 
-func (s *workflowSheet) progressView(c *ui.Context) {
+// workflowSetupCard holds the questions, the bot, and the account to use of several.
+func (mk *marketplace) workflowSetupCard(c *ui.Context, wp *workflowPage, locked bool) {
 	p := colors(c)
-	progress := s.progress
-	connected := 0
-	for _, connection := range progress.Connections {
-		if connection.State == model.PluginReady {
-			connected++
-		}
-	}
-	ui.Text(c, L("2 · Connections · %d of %d ready", connected, len(progress.Connections))).FontSize(13).FontWeight(600)
-	for _, connection := range progress.Connections {
-		ui.Column(c.Key("connection:" + connection.ServiceID)).Gap(7).Children(func() { s.connectionView(c, connection) })
-	}
-	if progress.BlockedReason != "" {
-		ui.Text(c, progress.BlockedReason).FontSize(12).TextColor(p.Orange).Role(ui.RoleStatus)
-	}
-	ui.Text(c, L("3 · Run a sample and review the result")).FontSize(13).FontWeight(600)
-	if progress.IsRunning {
-		workflowLoading(c, L("Running the sample…"))
-	} else {
-		if sample := progress.Setup.Sample; sample != nil {
-			if sample.Error != "" {
-				ui.Text(c, sample.Error).FontSize(12).TextColor(p.Red)
-			}
-			if sample.State == "running" {
-				ui.Text(c, L("The sample was interrupted. Run it again to produce a result.")).FontSize(12).TextColor(p.Label2)
-			}
-			for _, message := range progress.SampleMessages {
-				if message.Body.Kind == model.BodyText {
-					ui.Box(c.Key(message.ID)).Padding(10).Radius(8).Background(p.Card).Children(func() { ui.Text(c, message.Body.Text).FontSize(13).LineHeight(1.4).Selectable() })
+	progress := wp.progress
+	section(c, Lc("Setup", "workflow questions"), sectionHeading, nil, func(k *card) {
+		for _, q := range progress.Setup.Pack.Questions {
+			value := wp.answers[q.ID]
+			r := k.row(rowBox(c.Key("answer:" + q.ID)))
+			r.Children(func() {
+				rowKey(c, q.Label).Width(76)
+				field := ui.TextInputBase(c, value).Grow(1).Shrink(1).MinWidth(0).FontSize(12).TextColor(p.Label).FocusRing(false).Label(q.Label)
+				if q.Placeholder != "" {
+					field.Placeholder(q.Placeholder)
 				}
-			}
-			if sample.State == "ready" && len(progress.SampleMessages) > 0 {
-				if pushButton(c.Key("review-result"), L("I Have Reviewed This Result"), pushOptions{Kind: buttonPrimary, Disabled: s.busy}).Clicked() {
-					s.action("review")
+				if locked {
+					field.ReadOnly(true).TextColor(p.Label2)
 				}
+			})
+		}
+		for _, specialist := range progress.Specialists {
+			label := specialist.Name
+			if len(progress.Specialists) == 1 {
+				label = L("Bot")
 			}
-		}
-		run := L("Run Sample")
-		if progress.Setup.Sample != nil {
-			run = L("Run Another Sample")
-		}
-		if pushButton(c.Key("run-sample"), run, pushOptions{Disabled: s.busy || !progress.CanSample}).Clicked() {
-			s.action("sample")
-		}
-	}
-	if progress.CanEnable && progress.Setup.Sample != nil && progress.Setup.Sample.State == "reviewed" {
-		ui.Text(c, L("4 · Choose whether to enable the schedule")).FontSize(13).FontWeight(600)
-		for _, routine := range progress.Routines {
-			state := L("Paused")
-			if routine.IsEnabled {
-				state = L("Enabled")
+			var options []popUpOption
+			// The new bot is a choice only while setup would add one; once it has, it is a bot.
+			if specialist.SelectedID == "" {
+				options = append(options, popUpOption{Value: "", Label: L("%@ (new)", specialist.Name)})
 			}
-			ui.Text(c, routine.Name+" · "+routine.ScheduleText+" · "+state).FontSize(12).TextColor(p.Label2)
-		}
-		if progress.Setup.Phase == "enabled" {
-			ui.Text(c, L("This workflow's schedules are enabled.")).FontSize(13).TextColor(p.Green)
-			if pushButton(c, L("Open Workflow Chat"), pushOptions{Disabled: s.busy}).Clicked() {
-				s.finish()
+			for i, bot := range specialist.Choices {
+				options = append(options, popUpOption{Value: bot.ID, Label: bot.Name, Separated: i == 0 && specialist.SelectedID == ""})
 			}
-		} else {
-			if pushButton(c.Key("enable-schedules"), L("Enable Schedules"), pushOptions{Kind: buttonPrimary, Disabled: s.busy}).Clicked() {
-				s.action("enable")
-			}
-			if pushButton(c.Key("finish-paused"), L("Finish with Schedules Paused"), pushOptions{Disabled: s.busy}).Clicked() {
-				s.finish()
-			}
+			ui.Box(c.Key("bot:" + specialist.ID)).Children(func() {
+				if picked, changed := popUpRow(c, k, label, popUp{Options: options, Value: wp.bots[specialist.ID], Disabled: locked}, true); changed {
+					wp.bots[specialist.ID] = picked
+				}
+			})
 		}
-	} else {
-		ui.Text(c, L("Imported routines stay paused until you review a sample and enable them.")).FontSize(12).TextColor(p.Label2)
-	}
-	ui.Row(c).Gap(8).Children(func() {
-		if progress.Setup.Phase != "enabled" && pushButton(c.Key("edit-setup"), L("Edit Setup"), pushOptions{Disabled: s.busy || progress.IsRunning}).Clicked() {
-			s.editing = true
-		}
-		if pushButton(c.Key("refresh-progress"), L("Refresh Progress"), pushOptions{Disabled: s.busy}).Clicked() {
-			s.refresh()
+		// An account of several is the user's to pick; one is simply used.
+		for _, connection := range progress.Connections {
+			if len(connection.Choices) < 2 {
+				continue
+			}
+			var options []popUpOption
+			current := ""
+			if account := connection.Account(); account != nil {
+				current = account.ID
+			} else {
+				options = append(options, popUpOption{Value: "", Label: L("Choose…")})
+			}
+			for _, account := range connection.Choices {
+				options = append(options, popUpOption{Value: account.ID, Label: firstNonEmpty(account.AccountName, account.Name)})
+			}
+			ui.Box(c.Key("pick:" + connection.ServiceID)).Children(func() {
+				if picked, changed := popUpRow(c, k, connection.Name, popUp{Options: options, Value: current, Disabled: locked}, true); changed && picked != "" {
+					mk.chooseWorkflowAccount(wp, connection, picked)
+				}
+			})
 		}
 	})
 }
 
-func (s *workflowSheet) connectionView(c *ui.Context, connection model.WorkflowConnection) {
+// workflowAccountRow is an account the workflow needs: its short state, or the one thing to do
+// about it. A click on it opens the plugin's own sheet.
+func (mk *marketplace) workflowAccountRow(c *ui.Context, k *card, wp *workflowPage, connection model.WorkflowConnection, locked bool) {
 	p := colors(c)
-	ui.Text(c, connection.Name).FontSize(13).FontWeight(600)
-	tint := p.Label2
-	if connection.State == model.PluginReady {
-		tint = p.Green
+	account := connection.Account()
+	o := statusRowOptions{Symbol: "puzzlepiece.extension", PluginID: connection.ServiceID, Title: connection.Name}
+	switch {
+	case account == nil && len(connection.Choices) > 1:
+		o.State = L("Not chosen")
+	case account == nil && connection.Available:
+		if !locked {
+			o.ActionTitle = L("Add")
+		}
+	case account == nil:
+		o.State = L("Not available")
+		o.StateDetail = L("%@ isn't in the marketplace yet. This setup waits for it.", connection.Name)
+	default:
+		o.Subtitle, o.Clickable, o.Tooltip = account.AccountName, true, L("Open %@", account.Name)
+		switch account.State {
+		case model.PluginReady:
+			o.State = L("Connected")
+		case model.PluginNeedsAuth:
+			o.ActionTitle = L("Sign In")
+		case model.PluginNeedsSetup:
+			o.ActionTitle = L("Set Up")
+		case model.PluginConnecting:
+			o.State = L("Connecting…")
+		default:
+			o.State, o.StateColor, o.StateDetail = L("Can't connect"), &p.Red, account.Detail
+		}
 	}
-	ui.Text(c, connection.Detail).FontSize(12).TextColor(tint)
-	disabled := s.busy || s.progress.IsRunning || s.progress.Setup.Phase == "enabled"
-	if len(connection.Choices) > 0 {
-		options := []popUpOption{{Value: "", Label: L("Choose an account…")}}
-		for _, choice := range connection.Choices {
-			options = append(options, popUpOption{Value: choice.ID, Label: choice.Label()})
+	_, result := statusRow(c, k, o)
+	switch {
+	case (result.Clicked || result.Action) && account != nil:
+		if on := mk.runner(); on != nil {
+			mk.w.presentPlugin(account.ID, on)
 		}
-		if v, changed, _ := popUpButton(c.Key("account"), popUp{Options: options, Value: connection.SelectedID, Label: L("%@ account", connection.Name), Style: popUpBordered, Disabled: disabled}); changed && v != "" {
-			s.connect(connection.ServiceID, v)
-		}
-	} else if connection.Available && connection.SelectedID == "" {
-		if pushButton(c, L("Add %@", connection.Name), pushOptions{Disabled: disabled}).Clicked() {
-			s.connect(connection.ServiceID, "")
-		}
-	} else if !connection.Available {
-		ui.Text(c, L("This integration is unavailable in the current marketplace. Update Lorca or the marketplace, then resume this saved setup.")).FontSize(12).LineHeight(1.4).TextColor(p.Orange)
-	}
-	if connection.SelectedID != "" && !slices.ContainsFunc(connection.Choices, func(a model.WorkflowAccount) bool { return a.ID == connection.SelectedID }) {
-		if pushButton(c, L("Clear Removed Account Selection"), pushOptions{Disabled: disabled}).Clicked() {
-			s.perform("clear_connection", map[string]any{"id": s.progress.Setup.ID, "service_id": connection.ServiceID})
-		}
-	}
-	if connection.SelectedID != "" && connection.State != model.PluginReady {
-		label := L("Sign In…")
-		if connection.State == model.PluginNeedsSetup {
-			label = L("Set Up…")
-		}
-		if pushButton(c, label, pushOptions{Disabled: s.busy}).Clicked() {
-			if runner := store.Device(s.runnerID); runner != nil {
-				s.w.presentPlugin(connection.SelectedID, runner)
-			}
-		}
+	case result.Action:
+		mk.addWorkflowAccount(wp, connection)
 	}
 }
 
-func workflowMatchingPacks(packs []model.WorkflowPack, query string) []model.WorkflowPack {
-	words := strings.Fields(strings.ToLower(query))
-	var found []model.WorkflowPack
-	for _, pack := range packs {
-		text := strings.ToLower(pack.Name + " " + pack.Outcome + " " + pack.Description)
-		if slices.ContainsFunc(words, func(word string) bool { return !strings.Contains(text, word) }) {
-			continue
+// workflowSampleCard is the sample: its replies as the chat shows them, or how it is going.
+func (mk *marketplace) workflowSampleCard(c *ui.Context, wp *workflowPage, sample *model.WorkflowSample) {
+	p := colors(c)
+	progress := wp.progress
+	bot := ""
+	for _, specialist := range progress.Specialists {
+		for _, choice := range specialist.Choices {
+			if choice.ID == sample.BotID {
+				bot = choice.Name
+			}
 		}
-		found = append(found, pack)
 	}
-	return found
+	section(c, L("Sample"), sectionHeading, nil, func(k *card) {
+		switch {
+		case progress.IsRunning:
+			k.row(ui.Row(c).Gap(8).Padding(12, 12)).Children(func() {
+				spinner(c, 14)
+				ui.Text(c, L("%@ is working on it…", bot)).FontSize(textCaption).TextColor(p.Label2)
+			})
+		case (sample.State == "ready" || sample.State == "reviewed") && len(progress.SampleMessages) > 0:
+			k.row(ui.Column(c).Gap(16).Padding(12, 12)).Children(func() {
+				for _, message := range progress.SampleMessages {
+					ui.Box(c.Key(message.ID)).Children(func() { markdownView(c, message.Body.Text, markdownOptions{}) })
+				}
+			})
+		default:
+			noteRow(c, k, L("The sample didn't finish. %@'s chat says what happened.", bot), nil)
+		}
+	})
 }
