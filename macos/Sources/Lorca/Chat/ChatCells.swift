@@ -121,7 +121,8 @@ final class MessageCellView: TranscriptCellView {
     var onReply: (() -> Void)? {
         didSet { content.contextItems = onReply == nil ? nil : { [weak self] in self?.replyItems() ?? [] } }
     }
-    var onWorkflowFeedback: (() -> Void)?
+    /// Feedback on a bot's message, for the bot to suggest changes to its routines and skills.
+    var onFeedback: (() -> Void)?
     /// A click on a reply's quote line: bring the original into view.
     var onQuoteClick: (() -> Void)? {
         didSet { quote.onClick = onQuoteClick }
@@ -269,13 +270,14 @@ final class MessageCellView: TranscriptCellView {
         let item = NSMenuItem(title: L("Reply"), action: #selector(reply), keyEquivalent: "")
         item.target = self
         item.image = NSImage(systemSymbolName: "arrowshape.turn.up.left", accessibilityDescription: nil)
-        guard onWorkflowFeedback != nil else { return [item] }
-        let feedback = NSMenuItem(title: L("Record workflow feedback…"), action: #selector(recordWorkflowFeedback), keyEquivalent: "")
+        guard onFeedback != nil else { return [item] }
+        let feedback = NSMenuItem(title: L("Give Feedback…"), action: #selector(giveFeedback), keyEquivalent: "")
         feedback.target = self
+        feedback.image = NSImage(systemSymbolName: "hand.thumbsup", accessibilityDescription: nil)
         return [item, feedback]
     }
 
-    @objc private func recordWorkflowFeedback() { onWorkflowFeedback?() }
+    @objc private func giveFeedback() { onFeedback?() }
 
     @objc private func reply() {
         onReply?()

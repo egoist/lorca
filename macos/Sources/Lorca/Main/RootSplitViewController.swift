@@ -193,9 +193,9 @@ final class RootSplitViewController: NSSplitViewController {
     private func makeInspector() -> InspectorViewController {
         let controller = InspectorViewController()
         controller.onOpenDevice = { [weak self] id in self?.openDevice(id) }
-        controller.onOpenFeedbackOrigin = { [weak self] chatID, messageID in
+        controller.onShowMessage = { [weak self] chatID, messageID in
             self?.open(chatID)
-            self?.chatController?.revealFeedbackOrigin(messageID)
+            self?.chatController?.reveal(loading: messageID)
         }
         controller.onRemoveBot = { [weak self] botID in
             guard case let .chat(chatID) = self?.selection else { return }

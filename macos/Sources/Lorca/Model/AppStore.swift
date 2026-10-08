@@ -16,7 +16,8 @@ enum StoreEvent {
     case turnFinished(Chat.ID, Bot.ID, Date)
     /// A command in the chat has run long enough to count as a running task.
     case runningTasksChanged(Chat.ID)
-    case workflowFeedbackChanged(Bot.ID)
+    /// A bot's workflow feedback changed on its Runner: notes, suggestions, or changes.
+    case feedbackChanged(Bot.ID)
     case selectionChanged
     case connectionChanged
     case identityChanged
@@ -67,7 +68,6 @@ final class AppStore {
     private(set) var devices: [Device] = []
     private(set) var bots: [Bot] = []
     private(set) var chats: [Chat] = []
-    private(set) var workflowProposalCounts: [Bot.ID: Int] = [:]
     /// Every bot's routines, from the roster.
     private(set) var routines: [Routine] = []
     /// Auto-review, shared through the roster.
@@ -300,8 +300,7 @@ final class AppStore {
         case "feedback.changed":
             if let envelope = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                 let body = envelope["data"] as? [String: Any], let botID = body["bot_id"] as? String {
-                workflowProposalCounts[botID] = body["pending_count"] as? Int ?? 0
-                emit(.workflowFeedbackChanged(botID))
+                emit(.feedbackChanged(botID))
             }
 
         case "roster.changed":
@@ -1088,19 +1087,97 @@ final class AppStore {
         perform("routines.delete", ["id": id])
     }
 
-    /// Workflow feedback and revisions stay on the assigned Runner; this app uses only its CLI.
-    func workflowFeedback(botID: Bot.ID, method: String = "feedback.list", params: [String: Any] = [:]) async throws -> [String: Any] {
+    // MARK: - Workflow feedback
+
+    /// A bot's notes, suggestions, and changes, from its Runner, through the relay when that is
+    /// another Device. Every decision is the Runner's to apply.
+    func feedback(of botID: Bot.ID) async throws -> BotFeedback {
+        if isMock { return mockFeedback[botID] ?? MockData.feedback(for: botID) }
+        return try await client.request("feedback.list", ["bot_id": botID], as: Wire.Feedback.self).toModel()
+    }
+
+    /// Records what the user said about a message of the bot's.
+    func recordFeedback(
+        botID: Bot.ID, kind: FeedbackNote.Kind, chatID: Chat.ID, messageID: Message.ID, note: String,
+        before: String?, after: String?, target: FeedbackTarget?
+    ) async throws {
+        var feedback: [String: Any] = ["kind": kind.rawValue, "origin": ["chat_id": chatID, "message_id": messageID], "note": note]
+        if let before, let after {
+            feedback["before"] = before
+            feedback["after"] = after
+        }
+        if let target { feedback["target"] = target.params }
+        try await feedbackRequest("feedback.record", botID: botID, ["feedback": feedback]) { mock in
+            let text = note.isEmpty ? (self.chat(chatID)?.messages.first { $0.id == messageID }?.text ?? "") : note
+            mock.notes.insert(FeedbackNote(id: UUID().uuidString, kind: kind, chatID: chatID, messageID: messageID, text: text, target: target, createdAt: Date()), at: 0)
+            mock.noteCount += 1
+        }
+    }
+
+    func decide(_ suggestion: FeedbackSuggestion, accept: Bool, botID: Bot.ID) async throws {
+        try await feedbackRequest(accept ? "feedback.accept" : "feedback.reject", botID: botID, ["id": suggestion.id, "diff_hash": suggestion.diffHash]) { mock in
+            mock.suggestions.removeAll { $0.id == suggestion.id }
+            if accept {
+                mock.changes.insert(FeedbackChange(id: UUID().uuidString, target: suggestion.target, diff: suggestion.diff, isUndo: false, canUndo: true, currentHash: "mock", createdAt: Date()), at: 0)
+            }
+        }
+    }
+
+    func undo(_ change: FeedbackChange, botID: Bot.ID) async throws {
+        try await feedbackRequest("feedback.rollback", botID: botID, ["id": change.id, "expected_hash": change.currentHash ?? ""]) { mock in
+            let reversed = DiffLine.lines(of: change.diff).map { line -> String in
+                switch line {
+                case let .removed(text): "+" + text
+                case let .added(text): "-" + text
+                }
+            }
+            mock.changes = mock.changes.map { FeedbackChange(id: $0.id, target: $0.target, diff: $0.diff, isUndo: $0.isUndo, canUndo: false, currentHash: $0.currentHash, createdAt: $0.createdAt) }
+            mock.changes.insert(FeedbackChange(id: UUID().uuidString, target: change.target, diff: reversed.joined(separator: "\n"), isUndo: true, canUndo: true, currentHash: "mock", createdAt: Date()), at: 0)
+        }
+    }
+
+    /// How often the bot looks through new feedback for changes to suggest; nil turns it off.
+    func setFeedbackReview(every seconds: Int?, botID: Bot.ID) async throws {
+        try await feedbackRequest("feedback.settings", botID: botID, ["review_every_secs": seconds.map { $0 as Any } ?? NSNull()]) { mock in
+            mock.reviewEvery = seconds
+        }
+    }
+
+    /// Takes a note's words out of the bot's feedback, or every note from a chat, now and later.
+    func exclude(note: FeedbackNote, wholeChat: Bool, botID: Bot.ID) async throws {
+        try await feedbackRequest("feedback.exclude", botID: botID, wholeChat ? ["chat_id": note.chatID] : ["id": note.id]) { mock in
+            mock.notes.removeAll { wholeChat ? $0.chatID == note.chatID : $0.id == note.id }
+            mock.noteCount = mock.notes.count
+        }
+    }
+
+    /// Has the bot look through its new feedback now; answers how many changes it suggests.
+    func suggestChanges(botID: Bot.ID) async throws -> Int {
         if isMock {
-            if method == "feedback.list" { return ["feedback": [], "proposals": [], "revisions": [], "targets": [], "settings": [:]] }
-            throw CLIClient.RequestError(message: L("Feedback requires a connected Runner."))
+            try await Task.sleep(for: .seconds(1))
+            return 0
         }
-        var body = params
-        body["bot_id"] = botID
-        let data = try await client.request(method, body)
-        guard let result = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw CLIClient.RequestError(message: L("Could not read workflow feedback."))
+        let review = try await client.request("feedback.review", ["bot_id": botID], as: Wire.FeedbackReview.self)
+        emit(.feedbackChanged(botID))
+        return review.proposals.count
+    }
+
+    /// The demo's feedback, changed in place by the same calls.
+    private var mockFeedback: [Bot.ID: BotFeedback] = [:]
+
+    /// A CLI call that changes a bot's feedback. The Runner announces its own bots' changes; a bot
+    /// on another Device answers only the call, so the change is announced here too.
+    private func feedbackRequest(_ method: String, botID: Bot.ID, _ params: [String: Any], mock: (inout BotFeedback) -> Void) async throws {
+        if isMock {
+            var feedback = mockFeedback[botID] ?? MockData.feedback(for: botID)
+            mock(&feedback)
+            mockFeedback[botID] = feedback
+        } else {
+            var params = params
+            params["bot_id"] = botID
+            _ = try await client.request(method, params)
         }
-        return result
+        emit(.feedbackChanged(botID))
     }
 
     /// A bot's memory, read from its Runner. Answers with `here == false` when the bot runs on
@@ -1220,8 +1297,9 @@ final class AppStore {
         }
     }
 
-    /// Loads older pages for a feedback source, preserving the same page merge as the transcript.
-    func loadWorkflowOrigin(_ messageID: Message.ID, in id: Chat.ID) async throws -> Bool {
+    /// Loads older pages of a chat until `messageID` is in it, so a note can show the message it
+    /// is about. False when the chat has no such message.
+    func loadMessage(_ messageID: Message.ID, in id: Chat.ID) async throws -> Bool {
         for _ in 0..<100 {
             guard let chat = chat(id) else { return false }
             if chat.messages.contains(where: { $0.id == messageID }) { return true }

@@ -13,9 +13,9 @@ final class InspectorViewController: NSViewController {
     private let nameRow = EditableRow(key: L("Name"), placeholder: L("Name"))
     private let descriptionRow = SummaryActionRow(key: L("Description"), value: "", actionTitle: L("Edit…"))
     private let runtime = SectionView(title: L("Runs with"))
-    private let feedback = SectionView(title: L("Workflow feedback"))
     private let memory = SectionView(title: L("Memory"))
     private let routines = SectionView(title: L("Routines"))
+    private let feedback = SectionView(title: L("Feedback"))
     private let plugins = SectionView(title: L("Plugins"))
     private let routing = SectionView(title: L("Where turns run"))
     private let addButton = NSButton()
@@ -27,6 +27,10 @@ final class InspectorViewController: NSViewController {
     /// Why the last fetch failed: the Runner is offline, or did not answer.
     private var memoryErrors: [Bot.ID: String] = [:]
     private var memoryFetches: Set<Bot.ID> = []
+    /// What each bot's Runner last said about its feedback; refreshed with its memory and when
+    /// the Runner says it changed.
+    private var feedbackByBot: [Bot.ID: BotFeedback] = [:]
+    private var feedbackFetches: Set<Bot.ID> = []
     /// The bot whose plugin rows are showing, for a click on one.
     private var pluginBotID: Bot.ID?
 
@@ -55,7 +59,8 @@ final class InspectorViewController: NSViewController {
     private var isOnScreen = false
     private var isBehind = false
 
-    var onOpenFeedbackOrigin: ((Chat.ID, Message.ID) -> Void)?
+    /// Opens a chat on one of its messages, for feedback's Show in Chat.
+    var onShowMessage: ((Chat.ID, Message.ID) -> Void)?
     var onOpenDevice: ((Device.ID) -> Void)?
     var onRemoveBot: ((Bot.ID) -> Void)?
     var onAddBot: (() -> Void)?
@@ -90,9 +95,9 @@ final class InspectorViewController: NSViewController {
         column.addArrangedSubview(group)
         column.addArrangedSubview(profile)
         column.addArrangedSubview(runtime)
-        column.addArrangedSubview(feedback)
         column.addArrangedSubview(memory)
         column.addArrangedSubview(routines)
+        column.addArrangedSubview(feedback)
         column.addArrangedSubview(plugins)
         column.addArrangedSubview(routing)
         column.setCustomSpacing(10, after: participants)
@@ -128,9 +133,9 @@ final class InspectorViewController: NSViewController {
             group.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             profile.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             runtime.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
-            feedback.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             memory.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             routines.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
+            feedback.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             plugins.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             routing.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
         ])
@@ -142,8 +147,11 @@ final class InspectorViewController: NSViewController {
         super.viewDidLoad()
         store.observe(self) { [weak self] event in
             switch event {
-            case .chatChanged, .chatsChanged, .snapshotReplaced, .rosterChanged, .workflowFeedbackChanged:
+            case .chatChanged, .chatsChanged, .snapshotReplaced, .rosterChanged:
                 self?.reload()
+            case let .feedbackChanged(botID):
+                guard let self else { return }
+                if self.shownBot?.id == botID { self.refreshFeedback(of: botID) } else { self.feedbackByBot[botID] = nil }
             case let .respondingChanged(chatID):
                 // A turn ended (or started): what the bot remembers may have moved.
                 guard let self, case .chat(chatID) = self.selection, !self.store.isResponding(in: chatID) else { return }
@@ -176,12 +184,33 @@ final class InspectorViewController: NSViewController {
         refreshShownMemory()
     }
 
-    /// Asks for the memory of the bot whose DM is showing.
+    /// The bot whose DM is showing.
+    private var shownBot: Bot? {
+        guard case let .chat(chatID) = selection, let chat = store.chat(chatID), chat.isDM else { return nil }
+        return store.bots(in: chat).first
+    }
+
+    /// Asks for the memory and the feedback of the bot whose DM is showing.
     private func refreshShownMemory() {
-        guard case let .chat(chatID) = selection, let chat = store.chat(chatID), chat.isDM,
-            let bot = store.bots(in: chat).first
-        else { return }
+        guard let bot = shownBot else { return }
         refreshMemory(of: bot.id)
+        refreshFeedback(of: bot.id)
+    }
+
+    /// Asks the bot's Runner for its feedback. The section stays out while there is none, or
+    /// while the Runner cannot be asked.
+    private func refreshFeedback(of botID: Bot.ID) {
+        guard isOnScreen else {
+            isBehind = true
+            return
+        }
+        guard feedbackFetches.insert(botID).inserted else { return }
+        Task { [weak self] in
+            defer { self?.feedbackFetches.remove(botID) }
+            guard let feedback = try? await self?.store.feedback(of: botID), let self else { return }
+            self.feedbackByBot[botID] = feedback
+            self.reload()
+        }
     }
 
     /// Asks the CLI for the bot's memory and redraws the section when it answers.
@@ -232,16 +261,18 @@ final class InspectorViewController: NSViewController {
 
         // A direct chat is one bot, so its profile, provider, and model are edited right here.
         let single = chat.isDM && members.count == 1
-        for section in [profile, runtime, feedback, memory, routines, plugins] where section.isHidden == single {
+        for section in [profile, runtime, memory, routines, plugins] where section.isHidden == single {
             section.isHidden = !single
         }
         if single, let bot = members.first {
             showProfile(of: bot)
             showRuntime(of: bot, in: chat)
-            showFeedback(of: bot)
             showMemory(of: bot)
             showRoutines(of: bot)
+            showFeedback(of: bot)
             showPlugins(of: bot)
+        } else if !feedback.isHidden {
+            feedback.isHidden = true
         }
         showRouting(members)
     }
@@ -489,18 +520,6 @@ final class InspectorViewController: NSViewController {
     /// What the bot remembers, as its Runner reports it: the index against its load budget with
     /// an editor, and the folder of topic files and daily logs. A bot on another Runner is
     /// read and edited through the relay; only the folder cannot be opened from here.
-    private func showFeedback(of bot: Bot) {
-        guard changed(feedback, to: [bot.id, store.workflowProposalCounts[bot.id] ?? 0]) else { return }
-        let row = ActionRow(key: L("Improvements"), value: (store.workflowProposalCounts[bot.id] ?? 0) > 0 ? L("%d waiting for review", store.workflowProposalCounts[bot.id] ?? 0) : L("Evidence and revisions"), tint: .secondaryLabelColor, actionTitle: L("Review…"))
-        row.onAction = { [weak self] in
-            guard let self, case let .chat(chatID) = self.selection else { return }
-            let sheet = WorkflowFeedbackViewController(bot: bot, chatID: chatID)
-            sheet.onOpenOrigin = self.onOpenFeedbackOrigin
-            self.presentAsSheet(sheet)
-        }
-        feedback.setRows([row])
-    }
-
     private func memoryRows(for bot: Bot) -> [NSView] {
         guard let memory = memoryByBot[bot.id] else {
             if let error = memoryErrors[bot.id] {
@@ -562,6 +581,36 @@ final class InspectorViewController: NSViewController {
                 }
                 return row
             })
+    }
+
+    /// What the user's feedback led to: the changes the bot suggests, each a click away from its
+    /// diff, and the rest of its feedback. Left out until there is any.
+    private func showFeedback(of bot: Bot) {
+        let known = feedbackByBot[bot.id]
+        let hidden = known?.isEmpty ?? true
+        if feedback.isHidden != hidden { feedback.isHidden = hidden }
+        guard let known, !hidden, changed(feedback, to: [bot.id, known]) else { return }
+        var rows: [NSView] = known.suggestions.prefix(3).map { suggestion in
+            let row = FeedbackRow(suggestion: suggestion, in: known)
+            row.onClick = { [weak self] in
+                guard let self, let bot = self.store.bot(bot.id) else { return }
+                let sheet = FeedbackChangeViewController(bot: bot, feedback: known, item: .suggestion(suggestion))
+                sheet.onShowMessage = self.onShowMessage
+                self.presentAsSheet(sheet)
+            }
+            return row
+        }
+        var counts = [known.noteCount == 1 ? L("1 note") : L("%d notes", known.noteCount)]
+        if !known.changes.isEmpty { counts.append(known.changes.count == 1 ? L("1 change") : L("%d changes", known.changes.count)) }
+        let all = FeedbackRow(symbol: "bubble.left.and.bubble.right", title: L("All feedback"), detail: counts.joined(separator: " · "))
+        all.onClick = { [weak self] in
+            guard let self, let bot = self.store.bot(bot.id) else { return }
+            let sheet = FeedbackListViewController(bot: bot, feedback: self.feedbackByBot[bot.id] ?? known)
+            sheet.onShowMessage = self.onShowMessage
+            self.presentAsSheet(sheet)
+        }
+        rows.append(all)
+        feedback.setRows(rows)
     }
 
     /// The plugins the bot's Runner has, which every bot there may use, and a way to the

@@ -644,6 +644,47 @@ enum MockData {
         ]
     }
 
+    /// Project Manager's feedback on its briefs, with one change suggested and one applied.
+    @MainActor static func feedback(for botID: Bot.ID) -> BotFeedback {
+        guard botID == "bot-nova", let messages = AppStore.shared.chat("chat-nova")?.messages, messages.count >= 7 else { return .empty }
+        let brief = FeedbackTarget(kind: "routine_prompt", id: "rt-brief")
+        let checklist = FeedbackTarget(kind: "routine_prompt", id: "rt-checklist")
+        let notes = [
+            FeedbackNote(id: "fb-good", kind: .accepted, chatID: "chat-nova", messageID: messages[6].id, text: "Writer has the brief. I'll keep the final draft with the launch checklist for your review.", target: nil, createdAt: minutesAgo(30)),
+            FeedbackNote(id: "fb-edit", kind: .edited, chatID: "chat-nova", messageID: messages[3].id, text: "Lead with what needs my decision, then blockers.", target: brief, createdAt: minutesAgo(150)),
+            FeedbackNote(id: "fb-short", kind: .explicit, chatID: "chat-nova", messageID: messages[3].id, text: "Keep the brief to five bullets or fewer.", target: brief, createdAt: minutesAgo(60 * 26)),
+            FeedbackNote(id: "fb-failed", kind: .routineFailure, chatID: "chat-nova", messageID: messages[2].id, text: "The launch checklist was not in the workspace.", target: checklist, createdAt: minutesAgo(60 * 50)),
+        ]
+        let suggestion = FeedbackSuggestion(
+            id: "sg-brief", target: brief,
+            explanation: "You moved decisions to the top of two briefs and asked for five bullets at most. Each brief would open with what needs you, then blockers.",
+            diff: """
+                --- current
+                +++ proposed
+                @@ -1,1 +1,1 @@
+                -Read the recent messages in every chat you are in and the launch checklist in the workspace. Post a short brief: what changed, what needs a decision, and what the team will do first.
+                +Read the recent messages in every chat you are in and the launch checklist in the workspace. Post a brief of five bullets at most: what needs my decision first, then blockers, then what changed.
+                """,
+            diffHash: "mock", evidence: ["fb-edit", "fb-short"], createdAt: minutesAgo(20))
+        let change = FeedbackChange(
+            id: "ch-checklist", target: checklist,
+            diff: """
+                --- current
+                +++ proposed
+                @@ -1,1 +1,1 @@
+                -Review the launch checklist and the team's replies. Report anything new.
+                +Review the launch checklist in the workspace and the latest team replies. Report new blockers or completed milestones, or PASS when nothing changed.
+                """,
+            isUndo: false, canUndo: true, currentHash: "mock", createdAt: minutesAgo(60 * 24 * 4))
+        return BotFeedback(
+            notes: notes, noteCount: notes.count, suggestions: [suggestion], changes: [change], reviewEvery: 7 * 86_400,
+            targets: [
+                .init(name: "Morning brief", target: brief), .init(name: "Launch checklist", target: checklist),
+                .init(name: "Review requests", target: FeedbackTarget(kind: "routine_prompt", id: "rt-reviews")),
+                .init(name: "GitHub · Pull request review", target: FeedbackTarget(kind: "plugin_skill", pluginId: "github", name: "Pull request review")),
+            ])
+    }
+
     static func bots() -> [Bot] {
         [
             Bot(
