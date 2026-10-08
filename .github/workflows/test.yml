@@ -98,16 +98,19 @@ jobs:
         working-directory: desktop
     steps:
       - uses: actions/checkout@v7
-      - uses: oven-sh/setup-bun@v2
       - uses: actions/setup-go@v6
         with:
           go-version-file: desktop/go.mod
           cache-dependency-path: desktop/go.sum
-      - run: bun install --frozen-lockfile
-      # src/mygo.ts, the page's bindings to the Go side, is generated and never committed.
-      - run: bun run generate
-      - run: bun run typecheck
-      - run: bun run test
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [[ -n $unformatted ]]; then
+            echo "::error::not gofmt-formatted: $unformatted"
+            exit 1
+          fi
+      - run: go vet ./...
+      # The views' tests draw the windows offscreen with MyGo's tester and drive them.
       - run: go test ./...
 
   mobile:

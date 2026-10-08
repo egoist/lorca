@@ -1,22 +1,11 @@
 package main
 
 import (
+	"time"
+
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/plugins/updater"
 )
-
-// UpdaterState is what Settings › General shows about updates.
-type UpdaterState struct {
-	Version string `json:"version"`
-	// LastCheck is when the app last looked, in Unix seconds; 0 is never.
-	LastCheck          int64 `json:"lastCheck"`
-	AutomaticChecks    bool  `json:"automaticChecks"`
-	AutomaticDownloads bool  `json:"automaticDownloads"`
-}
-
-// UpdaterChanged tells Settings that a check went through, the update window's checkbox moved, or
-// a switch did.
-var UpdaterChanged = mygo.NewEvent[UpdaterState]("updater:changed")
 
 // useUpdater gives the app MyGo's update window, as Sparkle gives the macOS app its own: a daily
 // check in the background, the release notes of a new version with Install Update, Remind Me
@@ -26,28 +15,34 @@ var UpdaterChanged = mygo.NewEvent[UpdaterState]("updater:changed")
 // the system's.
 func useUpdater() {
 	mygo.Use(updater.New(updater.Options{Language: prefs.get().AppLanguage}))
-	updater.OnChange(func() { UpdaterChanged.Broadcast(Host{}.UpdaterState()) })
+	// A check that went through, the update window's checkbox, or a switch: General shows it.
+	updater.OnChange(invalidateWindows)
 }
 
-// UpdaterState returns what Settings shows about updates.
-func (Host) UpdaterState() UpdaterState {
-	state := UpdaterState{
-		Version:            mygo.App.Version(),
+// updatesEnabled is whether this build updates itself: not one that cannot write where it is
+// installed, as `mygo dev`'s or the Debian package's in /opt.
+func updatesEnabled() bool { return mygo.Updater.Enabled() }
+
+// checkForUpdates opens the update window, which says what the check finds.
+func checkForUpdates() { updater.CheckForUpdates() }
+
+// updaterState is what Settings › General shows about updates.
+type updaterState struct {
+	LastCheck          time.Time
+	AutomaticChecks    bool
+	AutomaticDownloads bool
+}
+
+func currentUpdaterState() updaterState {
+	return updaterState{
+		LastCheck:          updater.LastCheck(),
 		AutomaticChecks:    updater.AutomaticChecks(),
 		AutomaticDownloads: updater.AutomaticDownloads(),
 	}
-	if last := updater.LastCheck(); !last.IsZero() {
-		state.LastCheck = last.Unix()
-	}
-	return state
 }
 
-// CheckForUpdates opens the update window, which says what the check finds.
-func (Host) CheckForUpdates() { updater.CheckForUpdates() }
-
-// SetAutomaticUpdates turns the daily check and the automatic install on or off.
-func (Host) SetAutomaticUpdates(checks, downloads bool) UpdaterState {
+// setAutomaticUpdates turns the daily check and the automatic install on or off.
+func setAutomaticUpdates(checks, downloads bool) {
 	updater.SetAutomaticChecks(checks)
 	updater.SetAutomaticDownloads(downloads)
-	return Host{}.UpdaterState()
 }
