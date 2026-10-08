@@ -26,53 +26,59 @@ fn bot(app: &App) -> Bot {
 }
 
 async fn opened(app: &Arc<App>, owner: &Bot) -> (Session, Arc<Mutex<Vec<String>>>) {
-    let session = app
-        .browser_sessions
-        .create(app, &owner.id, "Work account", "Separate profile")
-        .unwrap();
-    let runtime = app
-        .browser_sessions
-        .owned(app, &owner.id, &session.id)
-        .unwrap();
+    let session = app.browser_sessions.create(app, &owner.id, "Work").unwrap();
+    let runtime = app.browser_sessions.owned(app, &owner.id, &session.id).unwrap();
     let (server, calls) = crate::plugins::mcp::tests::fake_browser(app).await;
     *runtime.server.lock().unwrap() = Some(server);
-    runtime.meta.lock().unwrap().state = Control::Bot;
+    {
+        let mut meta = runtime.meta.lock().unwrap();
+        meta.state = Control::Bot;
+        meta.revision += 1;
+    }
+    app.browser_sessions.select(&runtime);
     app.browser_sessions.save(app).unwrap();
+    let session = runtime.meta.lock().unwrap().clone();
     (session, calls)
 }
 
+fn state(app: &Arc<App>, bot: &Bot) -> Control {
+    app.browser_sessions.list(app, &bot.id).unwrap()[0].state
+}
+
 #[tokio::test]
-async fn ownership_and_encrypted_persistence_survive_restart_without_auto_open() {
+async fn records_are_encrypted_owned_and_closed_after_a_restart() {
     let scratch = setup();
     let app = &scratch.0;
     let owner = bot(app);
     let (session, _) = opened(app, &owner).await;
     let bytes = std::fs::read(scratch.1.join("browser/sessions.enc")).unwrap();
-    assert!(!bytes
-        .windows(owner.id.len())
-        .any(|part| part == owner.id.as_bytes()));
-    assert!(!bytes.windows(12).any(|part| part == b"Work account"));
+    assert!(!bytes.windows(owner.id.len()).any(|part| part == owner.id.as_bytes()));
     let mut other = owner.clone();
     other.id = "another-bot".into();
     app.state.lock().unwrap().bots.push(other.clone());
-    assert!(app
-        .browser_sessions
-        .owned(app, &other.id, &session.id)
-        .err()
-        .unwrap()
-        .contains("another bot"));
+    assert!(app.browser_sessions.owned(app, &other.id, &session.id).err().unwrap().contains("another bot"));
     app.browser_sessions.reset();
     let restored = app.browser_sessions.list(app, &owner.id).unwrap();
-    assert_eq!(restored[0].id, session.id);
-    assert_eq!(restored[0].account, "Work account");
+    assert_eq!((restored[0].id.as_str(), restored[0].name.as_str()), (session.id.as_str(), "Work"));
     assert_eq!(restored[0].state, Control::Stopped);
-    assert!(app.browser_sessions.bot_ready(app, &owner.id).is_err());
+    // Closed, the profile hands the bot nothing: its calls go to the shared headless browser.
+    assert!(app.browser_sessions.input(app, &owner.id, &CancellationToken::new()).await.unwrap().is_none());
     app.state.lock().unwrap().bots[0].runner_id = "another-runner".into();
-    assert!(app
-        .browser_sessions
-        .list(app, &owner.id)
-        .unwrap_err()
-        .contains("assigned"));
+    assert!(app.browser_sessions.list(app, &owner.id).unwrap_err().contains("Runner"));
+}
+
+#[tokio::test]
+async fn a_bot_without_an_open_profile_uses_the_shared_browser() {
+    let scratch = setup();
+    let app = &scratch.0;
+    let owner = bot(app);
+    let cancel = CancellationToken::new();
+    assert!(app.browser_sessions.input(app, &owner.id, &cancel).await.unwrap().is_none());
+    let first = app.browser_sessions.create(app, &owner.id, "Work").unwrap();
+    let second = app.browser_sessions.create(app, &owner.id, "Personal").unwrap();
+    assert!(first.selected && !second.selected, "the first profile is the one the bot opens");
+    assert!(app.browser_sessions.input(app, &owner.id, &cancel).await.unwrap().is_none());
+    assert!(app.browser_sessions.create(app, &owner.id, "  ").is_err());
 }
 
 #[tokio::test]
@@ -81,75 +87,41 @@ async fn takeover_drains_active_input_and_parks_next_call_until_explicit_resume(
     let app = &scratch.0;
     let owner = bot(app);
     let (session, calls) = opened(app, &owner).await;
-    let cancel = CancellationToken::new();
-    let active = app
-        .browser_sessions
-        .input(app, &owner.id, &cancel)
-        .await
-        .unwrap();
+    let active = app.browser_sessions.input(app, &owner.id, &CancellationToken::new()).await.unwrap().unwrap();
     let takeover = {
         let (app, bot_id, id) = (app.clone(), owner.id.clone(), session.id.clone());
-        tokio::spawn(async move { app.browser_sessions.takeover(&app, &bot_id, &id).await })
+        tokio::spawn(async move { app.browser_sessions.takeover(&app, &bot_id, &id, false).await })
     };
-    // Observe the revocation before releasing the active call's guard.
+    // The takeover shows before the call in flight lets go of the gate.
     for _ in 0..100 {
-        if app.browser_sessions.list(app, &owner.id).unwrap()[0].state == Control::TakingOver {
+        if state(app, &owner) == Control::TakingOver {
             break;
         }
         tokio::task::yield_now().await;
     }
-    assert_eq!(
-        app.browser_sessions.list(app, &owner.id).unwrap()[0].state,
-        Control::TakingOver
-    );
+    assert_eq!(state(app, &owner), Control::TakingOver);
     assert!(!takeover.is_finished());
     let next = {
         let (app, bot_id) = (app.clone(), owner.id.clone());
         tokio::spawn(async move {
-            let input = app
-                .browser_sessions
-                .input(&app, &bot_id, &CancellationToken::new())
-                .await?;
-            input
-                .server
-                .browser_call("browser_snapshot", json!({}))
-                .await
-                .map(|_| ())
+            let input = app.browser_sessions.input(&app, &bot_id, &CancellationToken::new()).await?.ok_or("no profile")?;
+            input.server.browser_call("browser_snapshot", json!({})).await.map(|_| ())
         })
     };
-    active
-        .server
-        .browser_call("browser_snapshot", json!({}))
-        .await
-        .unwrap();
+    active.server.browser_call("browser_snapshot", json!({})).await.unwrap();
     drop(active);
     let human = takeover.await.unwrap().unwrap();
     assert_eq!(human.state, Control::Human);
-    assert_eq!(
-        calls.lock().unwrap().len(),
-        1,
-        "only the active call executed"
-    );
-    assert!(
-        !next.is_finished(),
-        "the next call keeps its task state parked"
-    );
-    assert!(app
-        .browser_sessions
-        .resume(app, &owner.id, &session.id, human.revision - 1)
-        .await
-        .unwrap_err()
-        .contains("changed"));
-    app.browser_sessions
-        .resume(app, &owner.id, &session.id, human.revision)
-        .await
-        .unwrap();
+    assert_eq!(calls.lock().unwrap().len(), 1, "only the active call ran");
+    assert!(!next.is_finished(), "the next call waits with its task state");
+    assert!(app.browser_sessions.resume(app, &owner.id, &session.id, human.revision - 1).await.unwrap_err().contains("changed"));
+    app.browser_sessions.resume(app, &owner.id, &session.id, human.revision).await.unwrap();
     next.await.unwrap().unwrap();
     assert_eq!(calls.lock().unwrap().len(), 2);
 }
 
 #[tokio::test]
-async fn stop_during_takeover_wakes_waiters_and_closes_only_that_session() {
+async fn stop_during_takeover_wakes_waiters_and_closes_only_that_browser() {
     let scratch = setup();
     let app = &scratch.0;
     let owner = bot(app);
@@ -158,49 +130,49 @@ async fn stop_during_takeover_wakes_waiters_and_closes_only_that_session() {
     other.id = "other-browser-bot".into();
     app.state.lock().unwrap().bots.push(other.clone());
     let (other_session, _) = opened(app, &other).await;
-    let other_runtime = app
-        .browser_sessions
-        .owned(app, &other.id, &other_session.id)
-        .unwrap();
-    app.browser_sessions
-        .takeover(app, &owner.id, &session.id)
-        .await
-        .unwrap();
+    let other_runtime = app.browser_sessions.owned(app, &other.id, &other_session.id).unwrap();
+    app.browser_sessions.takeover(app, &owner.id, &session.id, false).await.unwrap();
     let pending = {
         let (app, bot_id) = (app.clone(), owner.id.clone());
-        tokio::spawn(async move {
-            app.browser_sessions
-                .input(&app, &bot_id, &CancellationToken::new())
-                .await
-                .map(|_| ())
-        })
+        tokio::spawn(async move { app.browser_sessions.input(&app, &bot_id, &CancellationToken::new()).await.map(|input| input.is_some()) })
     };
     tokio::task::yield_now().await;
     assert!(!pending.is_finished());
-    let stopped = app
-        .browser_sessions
-        .stop(app, &owner.id, &session.id)
-        .await
-        .unwrap();
+    let stopped = app.browser_sessions.stop(app, &owner.id, &session.id).await.unwrap();
     assert_eq!(stopped.state, Control::Stopped);
-    assert!(pending.await.unwrap().unwrap_err().contains("stopped"));
-    assert!(app
-        .browser_sessions
-        .resume(app, &owner.id, &session.id, stopped.revision)
-        .await
-        .is_err());
-    assert!(!other_runtime
-        .server
-        .lock()
-        .unwrap()
-        .as_ref()
-        .unwrap()
-        .is_closed());
-    assert!(app
-        .browser_sessions
-        .input(app, &other.id, &CancellationToken::new())
-        .await
-        .is_ok());
+    assert_eq!(pending.await.unwrap(), Ok(false), "the call goes on without the closed profile");
+    assert!(app.browser_sessions.resume(app, &owner.id, &session.id, stopped.revision).await.is_err());
+    assert!(!other_runtime.server.lock().unwrap().as_ref().unwrap().is_closed());
+    assert!(app.browser_sessions.input(app, &other.id, &CancellationToken::new()).await.unwrap().is_some());
+}
+
+#[tokio::test]
+async fn a_stopped_call_keeps_the_browser_and_holds_a_takeover_until_it_answers() {
+    let scratch = setup();
+    let app = &scratch.0;
+    let owner = bot(app);
+    let (session, calls) = opened(app, &owner).await;
+    let chat_id = app.state.lock().unwrap().chats[0].meta.id.clone();
+    let tool = crate::plugins::mcp::tests::browser_tool(app, &owner.id, &chat_id, "browser_wait_for");
+    let cancel = CancellationToken::new();
+    let call = {
+        let cancel = cancel.clone();
+        tokio::spawn(async move { tool.execute("call-1", json!({}), cancel, Arc::new(|_| {})).await.map(|_| ()) })
+    };
+    while !calls.lock().unwrap().contains(&"browser_wait_for".to_string()) {
+        tokio::task::yield_now().await;
+    }
+    cancel.cancel();
+    assert!(call.await.unwrap().is_err(), "the chat's Stop ends the call at once");
+    let takeover = {
+        let (app, bot_id, id) = (app.clone(), owner.id.clone(), session.id.clone());
+        tokio::spawn(async move { app.browser_sessions.takeover(&app, &bot_id, &id, false).await })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert!(!takeover.is_finished(), "the server hasn't said the stopped call is over");
+    assert_eq!(takeover.await.unwrap().unwrap().state, Control::Human);
+    let runtime = app.browser_sessions.owned(app, &owner.id, &session.id).unwrap();
+    assert!(runtime.open_server().is_some(), "the browser stays open");
 }
 
 #[tokio::test]
@@ -210,98 +182,68 @@ async fn screenshot_evidence_uses_encrypted_file_and_chat_blobs() {
     let owner = bot(app);
     let (session, _) = opened(app, &owner).await;
     let chat_id = app.state.lock().unwrap().chats[0].meta.id.clone();
-    let message = app
-        .browser_sessions
-        .screenshot(app, &owner.id, &session.id, &chat_id, "After sign-in")
-        .await
-        .unwrap();
-    let Body::Text {
-        attachments, text, ..
-    } = &message.body
-    else {
-        panic!("evidence is visible on existing clients")
-    };
-    assert!(text.contains("outcome unverified"));
+    let message = app.browser_sessions.screenshot(app, &owner.id, &session.id, &chat_id).await.unwrap();
+    let Body::Text { attachments, text, .. } = &message.body else { panic!("a text message with the image") };
+    assert_eq!(text, "Browser screenshot · Work");
     assert_eq!(attachments.len(), 1);
     let pending = app.store.outbox().unwrap();
-    let file = pending
-        .iter()
-        .find(|item| item.id == attachments[0].id)
-        .unwrap();
+    let file = pending.iter().find(|item| item.id == attachments[0].id).unwrap();
     assert_eq!(file.kind, "file");
     assert_eq!(file.group.as_deref(), Some(chat_id.as_str()));
     let decrypted = crate::crypto::decrypt(&app.dek().unwrap(), "file", &file.ciphertext).unwrap();
     assert_eq!(&decrypted[..8], b"\x89PNG\r\n\x1a\n");
     assert_eq!(app.message(&chat_id, &message.id).unwrap().id, message.id);
-    assert!(app
-        .browser_sessions
-        .screenshot(app, &owner.id, &session.id, "wrong-chat", "Before")
-        .await
-        .is_err());
-    let remote = crate::browser::serve(
-        app,
-        "browser.sessions",
-        &json!({ "bot_id": owner.id }),
-        true,
-    )
-    .await
-    .unwrap();
-    assert_eq!(remote["capabilities"]["remote_input"], false);
-    assert_eq!(remote["capabilities"]["visible_open"], false);
-    assert!(crate::browser::serve(
-        app,
-        "browser.open",
-        &json!({ "bot_id": owner.id, "session_id": session.id }),
-        true
-    )
-    .await
-    .is_err());
+    assert!(app.browser_sessions.screenshot(app, &owner.id, &session.id, "wrong-chat").await.is_err());
+    // Another Device lists and controls the profile, but no window opens for it here.
+    let remote = crate::browser::serve(app, "browser.sessions", &json!({ "bot_id": owner.id }), true).await.unwrap();
+    assert_eq!(remote["sessions"][0]["id"], session.id.as_str());
+    assert!(crate::browser::serve(app, "browser.open", &json!({ "bot_id": owner.id, "session_id": session.id }), true).await.is_err());
 }
 
 #[tokio::test]
-async fn cancellation_releases_a_parked_turn_and_bot_cannot_override_human_control() {
+async fn cancellation_releases_a_parked_call_and_the_bot_cannot_override_the_user() {
     let scratch = setup();
     let app = &scratch.0;
     let owner = bot(app);
     let (session, _) = opened(app, &owner).await;
-    app.browser_sessions
-        .takeover(app, &owner.id, &session.id)
-        .await
-        .unwrap();
+    app.browser_sessions.takeover(app, &owner.id, &session.id, false).await.unwrap();
     let cancel = CancellationToken::new();
     cancel.cancel();
-    assert_eq!(
-        app.browser_sessions
-            .wait_if_taken_over(app, &owner.id, &cancel)
-            .await
-            .unwrap_err(),
-        "Stopped"
-    );
-    assert!(app
-        .browser_sessions
-        .open(app, &owner.id, &session.id, false)
-        .await
-        .unwrap_err()
-        .contains("Only the user"));
-    assert_eq!(
-        app.browser_sessions.list(app, &owner.id).unwrap()[0].state,
-        Control::Human
-    );
+    assert_eq!(app.browser_sessions.wait_if_taken_over(&owner.id, &cancel).await.unwrap_err(), "Stopped");
+    assert!(app.browser_sessions.open(app, &owner.id, &session.id, false).await.unwrap_err().contains("hand it back"));
+    assert_eq!(state(app, &owner), Control::Human);
 }
 
 #[tokio::test]
-async fn forgetting_identity_revokes_processes_and_removes_browser_state() {
+async fn deleting_a_profile_closes_it_and_forgets_its_folder() {
     let scratch = setup();
     let app = &scratch.0;
     let owner = bot(app);
     let (session, _) = opened(app, &owner).await;
-    let runtime = app
-        .browser_sessions
-        .owned(app, &owner.id, &session.id)
-        .unwrap();
-    let server = runtime.server.lock().unwrap().clone().unwrap();
-    app.forget_identity().unwrap();
+    let later = app.browser_sessions.create(app, &owner.id, "Personal").unwrap();
+    let folder = scratch.1.join("browser/profiles").join(&session.id);
+    std::fs::create_dir_all(folder.join("Default")).unwrap();
+    let server = app.browser_sessions.owned(app, &owner.id, &session.id).unwrap().server.lock().unwrap().clone().unwrap();
+    app.browser_sessions.delete(app, &owner.id, &session.id).await.unwrap();
     assert!(server.is_closed());
+    assert!(!folder.exists());
+    let left = app.browser_sessions.list(app, &owner.id).unwrap();
+    assert_eq!(left.len(), 1);
+    assert!(left[0].id == later.id && left[0].selected, "the profile left is the one the bot opens");
+}
+
+#[tokio::test]
+async fn removing_the_plugin_and_forgetting_the_identity_close_every_browser() {
+    let scratch = setup();
+    let app = &scratch.0;
+    let owner = bot(app);
+    let (session, _) = opened(app, &owner).await;
+    let runtime = app.browser_sessions.owned(app, &owner.id, &session.id).unwrap();
+    let server = runtime.server.lock().unwrap().clone().unwrap();
+    crate::plugins::uninstall(app, super::super::PLUGIN_ID).unwrap();
+    assert!(server.is_closed());
+    assert_eq!(state(app, &owner), Control::Stopped);
+    app.forget_identity().unwrap();
     assert!(!scratch.1.join("browser").exists());
     assert!(app.browser_sessions.list(app, &owner.id).is_err());
 }
@@ -312,11 +254,7 @@ async fn stop_invalidates_an_open_that_queued_behind_active_input() {
     let app = &scratch.0;
     let owner = bot(app);
     let (session, _) = opened(app, &owner).await;
-    let active = app
-        .browser_sessions
-        .input(app, &owner.id, &CancellationToken::new())
-        .await
-        .unwrap();
+    let active = app.browser_sessions.input(app, &owner.id, &CancellationToken::new()).await.unwrap().unwrap();
     let pending_open = {
         let (app, bot_id, id) = (app.clone(), owner.id.clone(), session.id.clone());
         tokio::spawn(async move { app.browser_sessions.open(&app, &bot_id, &id, true).await })
@@ -328,25 +266,18 @@ async fn stop_invalidates_an_open_that_queued_behind_active_input() {
     };
     tokio::task::yield_now().await;
     drop(active);
-    assert!(pending_open
-        .await
-        .unwrap()
-        .unwrap_err()
-        .contains("control changed"));
+    assert!(pending_open.await.unwrap().unwrap_err().contains("changed"));
     stop.await.unwrap().unwrap();
-    let runtime = app
-        .browser_sessions
-        .owned(app, &owner.id, &session.id)
-        .unwrap();
+    let runtime = app.browser_sessions.owned(app, &owner.id, &session.id).unwrap();
     assert!(runtime.server.lock().unwrap().is_none());
     assert_eq!(runtime.meta.lock().unwrap().state, Control::Stopped);
 }
 
-/// Manual integration verification: opens a real headed browser on the host
-/// using a fresh profile and a loopback-only demo sign-in page.
+/// Opens a real headed browser on this computer with a fresh profile and a loopback-only sign-in
+/// page, and checks that the sign-in outlives Return to Bot and a close and reopen.
 #[tokio::test]
-#[ignore = "requires Node/npx, Chrome, and an interactive desktop; opens a fresh visible browser"]
-async fn live_visible_browser_retains_sign_in_and_captures_evidence() {
+#[ignore = "requires Node/npx, Chrome, and a desktop; opens a visible browser"]
+async fn live_visible_browser_keeps_its_sign_in() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let scratch = setup();
     let app = &scratch.0;
@@ -360,121 +291,31 @@ async fn live_visible_browser_retains_sign_in_and_captures_evidence() {
             let (mut socket, _) = listener.accept().await.unwrap();
             let mut request = [0u8; 4096];
             let _ = socket.read(&mut request).await;
-            let page = r#"<!doctype html><html><head><title>Lorca browser session verification</title><style>body{font:18px system-ui;background:#f6f8fa;color:#1f2937;padding:72px}main{background:white;border:1px solid #dde3e9;border-radius:18px;padding:40px;max-width:620px}h1{margin-top:0}input,button{font:inherit;padding:10px;margin:10px 0;border:1px solid #ccd2db;border-radius:8px}button{background:#3665e8;color:white}small{color:#64748b}#result{color:#17834e;font-weight:600}</style></head><body><main><small>ISSUE #85 · OWNED RUNNER · ISOLATED DEMO PROFILE</small><h1>Visible browser session</h1><p>A user signs in while the bot waits for explicit return of control.</p><form><label>Demo account<br><input name=email value=demo@example.test></label><br><button type=submit>Sign in to demo account</button></form><p id=result></p><small>This page runs on localhost and uses no real credentials.</small></main><script>const update=()=>{const signed=document.cookie.includes('lorca-demo=signed-in');document.querySelector('#result').textContent=signed?'Signed in · profile state preserved':'Awaiting human sign-in';document.querySelector('form').style.display=signed?'none':'block'};document.querySelector('form').onsubmit=e=>{e.preventDefault();document.cookie='lorca-demo=signed-in; Max-Age=86400; Path=/';update()};update();</script></body></html>"#;
+            let page = r#"<!doctype html><title>Sign in</title><form><input name=email value=demo@example.test><button type=submit>Sign in</button></form><p id=result></p><script>const update=()=>{const signed=document.cookie.includes('demo=signed-in');document.querySelector('#result').textContent=signed?'Signed in':'Signed out';document.querySelector('form').style.display=signed?'none':'block'};document.querySelector('form').onsubmit=e=>{e.preventDefault();document.cookie='demo=signed-in; Max-Age=86400; Path=/';update()};update();</script>"#;
             let response = format!("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", page.len(), page);
             let _ = socket.write_all(response.as_bytes()).await;
         }
     });
-    let session = app
-        .browser_sessions
-        .create(app, &owner.id, "Demo account", "Issue 85 verification")
-        .unwrap();
-    let human = app
-        .browser_sessions
-        .open(app, &owner.id, &session.id, true)
-        .await
-        .unwrap();
-    let runtime = app
-        .browser_sessions
-        .owned(app, &owner.id, &session.id)
-        .unwrap();
+    let session = app.browser_sessions.create(app, &owner.id, "Demo").unwrap();
+    let human = app.browser_sessions.open(app, &owner.id, &session.id, true).await.unwrap();
+    let runtime = app.browser_sessions.owned(app, &owner.id, &session.id).unwrap();
     let server = runtime.server.lock().unwrap().clone().unwrap();
-    server
-        .browser_call("browser_navigate", json!({ "url": url }))
-        .await
-        .unwrap();
-    let chat_id = app.state.lock().unwrap().chats[0].meta.id.clone();
-    let evidence_dir =
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/issue85-evidence");
-    std::fs::create_dir_all(&evidence_dir).unwrap();
-    let before = app
-        .browser_sessions
-        .screenshot(app, &owner.id, &session.id, &chat_id, "Before demo sign-in")
-        .await
-        .unwrap();
-    copy_evidence(app, &before, &evidence_dir.join("browser-before.png"));
-    // This call represents the local human's fixture interaction, rather
-    // than a bot input call, which remains parked under human control.
-    server.browser_call("browser_click", json!({ "element": "Demo sign-in button", "target": "button[type=submit]" })).await.unwrap();
-    app.browser_sessions
-        .resume(app, &owner.id, &session.id, human.revision)
-        .await
-        .unwrap();
-    let input = app
-        .browser_sessions
-        .input(app, &owner.id, &CancellationToken::new())
-        .await
-        .unwrap();
-    let snapshot = input
-        .server
-        .browser_call("browser_snapshot", json!({}))
-        .await
-        .unwrap();
-    assert!(serde_json::to_string(&snapshot)
-        .unwrap()
-        .contains("profile state preserved"));
+    server.browser_call("browser_navigate", json!({ "url": url })).await.unwrap();
+    // The person at the Runner signs in; this call stands in for their click.
+    server.browser_call("browser_click", json!({ "element": "Sign in button", "target": "button[type=submit]" })).await.unwrap();
+    app.browser_sessions.resume(app, &owner.id, &session.id, human.revision).await.unwrap();
+    let input = app.browser_sessions.input(app, &owner.id, &CancellationToken::new()).await.unwrap().unwrap();
+    let snapshot = input.server.browser_call("browser_snapshot", json!({})).await.unwrap();
+    assert!(serde_json::to_string(&snapshot).unwrap().contains("Signed in"));
     drop(input);
-    app.browser_sessions
-        .takeover(app, &owner.id, &session.id)
-        .await
-        .unwrap();
-    app.browser_sessions
-        .stop(app, &owner.id, &session.id)
-        .await
-        .unwrap();
-    assert!(!scratch
-        .1
-        .join("browser/profiles")
-        .join(&session.id)
-        .exists());
-    assert!(scratch
-        .1
-        .join("browser/profiles")
-        .join(&session.id)
-        .with_extension("enc")
-        .is_file());
-    app.browser_sessions
-        .open(app, &owner.id, &session.id, true)
-        .await
-        .unwrap();
+    app.browser_sessions.stop(app, &owner.id, &session.id).await.unwrap();
+    app.browser_sessions.open(app, &owner.id, &session.id, true).await.unwrap();
     let server = runtime.server.lock().unwrap().clone().unwrap();
-    server
-        .browser_call("browser_navigate", json!({ "url": url }))
-        .await
-        .unwrap();
-    let snapshot = server
-        .browser_call("browser_snapshot", json!({}))
-        .await
-        .unwrap();
-    assert!(
-        serde_json::to_string(&snapshot)
-            .unwrap()
-            .contains("profile state preserved"),
-        "sign-in survives encrypted Stop and reopen"
-    );
-    let after = app
-        .browser_sessions
-        .screenshot(
-            app,
-            &owner.id,
-            &session.id,
-            &chat_id,
-            "After encrypted profile reopen",
-        )
-        .await
-        .unwrap();
-    copy_evidence(app, &after, &evidence_dir.join("browser-after.png"));
-    app.browser_sessions
-        .stop(app, &owner.id, &session.id)
-        .await
-        .unwrap();
+    server.browser_call("browser_navigate", json!({ "url": url })).await.unwrap();
+    let snapshot = server.browser_call("browser_snapshot", json!({})).await.unwrap();
+    assert!(serde_json::to_string(&snapshot).unwrap().contains("Signed in"), "the sign-in outlives a close and reopen");
+    let chat_id = app.state.lock().unwrap().chats[0].meta.id.clone();
+    app.browser_sessions.screenshot(app, &owner.id, &session.id, &chat_id).await.unwrap();
+    app.browser_sessions.stop(app, &owner.id, &session.id).await.unwrap();
     fixture.abort();
-    println!("Visible browser evidence: {}", evidence_dir.display());
-}
-
-fn copy_evidence(app: &App, message: &Message, target: &std::path::Path) {
-    let Body::Text { attachments, .. } = &message.body else {
-        panic!("screenshot attachment")
-    };
-    std::fs::copy(crate::files::local_path(app, &attachments[0].id), target).unwrap();
 }

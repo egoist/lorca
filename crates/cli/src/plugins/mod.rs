@@ -617,7 +617,13 @@ pub fn uninstall(app: &Arc<App>, id: &str) -> Result<(), String> {
         store.save(&app.config).map_err(|e| e.to_string())?;
     }
     #[cfg(feature = "runner")]
-    app.mcp.forget(id);
+    {
+        app.mcp.forget(id);
+        // The bots' browser profiles stay, closed, for when Browser is back.
+        if id == crate::browser::PLUGIN_ID {
+            app.browser_sessions.close_all(app);
+        }
+    }
     let dir = app.config.plugins_dir().join(id);
     if dir.is_dir() {
         let _ = std::fs::remove_dir_all(&dir);

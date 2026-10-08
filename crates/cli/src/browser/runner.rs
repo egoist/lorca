@@ -3,9 +3,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use lorca_agent::{
-    BeforeToolCallContext, BeforeToolCallResult, Tool, ToolError, ToolResult, ToolUpdateFn,
-};
+use lorca_agent::{BeforeToolCallContext, BeforeToolCallResult, Tool, ToolError, ToolResult, ToolUpdateFn};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
@@ -14,9 +12,6 @@ use tokio_util::sync::CancellationToken;
 use crate::app::App;
 use crate::model::{Author, Body, Bot, Message};
 use crate::plugins::mcp::Server;
-
-#[path = "profile.rs"]
-mod profile;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -27,13 +22,14 @@ pub enum Control {
     Human,
 }
 
+/// One browser profile of a bot. `revision` goes up with every change of control, so a Return
+/// to Bot made from an old view cannot hand back a newer takeover.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     pub id: String,
     pub bot_id: String,
     pub runner_id: String,
-    pub account: String,
-    pub profile: String,
+    pub name: String,
     pub state: Control,
     pub selected: bool,
     pub revision: u64,
@@ -42,11 +38,31 @@ pub struct Session {
 
 struct Runtime {
     meta: Mutex<Session>,
-    /// Held until the MCP call finishes, even when the user is waiting for takeover.
+    /// Held by a Browser call until its server answers, and by a takeover while it waits.
     input: Arc<AsyncMutex<()>>,
     server: Mutex<Option<Arc<Server>>>,
     opening: Mutex<CancellationToken>,
     stopping: AtomicUsize,
+}
+
+impl Runtime {
+    fn new(meta: Session) -> Arc<Self> {
+        Arc::new(Runtime { meta: Mutex::new(meta), input: Arc::new(AsyncMutex::new(())), server: Mutex::new(None), opening: Mutex::new(CancellationToken::new()), stopping: AtomicUsize::new(0) })
+    }
+
+    fn open_server(&self) -> Option<Arc<Server>> {
+        self.server.lock().unwrap().clone().filter(|server| !server.is_closed())
+    }
+
+    /// The browser went away under the record: it reads as stopped.
+    fn mark_stopped(&self) {
+        if let Some(server) = self.server.lock().unwrap().take() {
+            server.stop();
+        }
+        let mut meta = self.meta.lock().unwrap();
+        meta.state = Control::Stopped;
+        meta.revision += 1;
+    }
 }
 
 struct Stopping<'a>(&'a AtomicUsize);
@@ -66,31 +82,27 @@ impl Drop for Runtime {
 
 #[derive(Default)]
 pub struct Sessions {
+    /// The account whose records are loaded.
     account: Mutex<Option<String>>,
     items: Mutex<BTreeMap<String, Arc<Runtime>>>,
     persistence: Mutex<()>,
     changed: tokio::sync::Notify,
 }
 
-/// Holding this value owns the input gate. A new takeover blocks later callers
-/// before waiting for this call to drain, preserving the page and model context.
+/// A Browser call's hold on the bot's open profile: no takeover completes while it lives.
 pub struct Input {
     _guard: OwnedMutexGuard<()>,
     runtime: Arc<Runtime>,
     pub server: Arc<Server>,
-    pub id: String,
+    pub name: String,
 }
 
 impl Input {
-    /// A cancelled/timed-out MCP call has no completion acknowledgement. Close
-    /// its process so it cannot deliver late input after the gate is released.
+    /// A call that ran out of time never said it finished. Closing its browser keeps it from
+    /// acting after the gate opens to the user.
     pub fn interrupted(&self, app: &Arc<App>) {
         self.server.stop();
-        self.runtime.server.lock().unwrap().take();
-        let mut meta = self.runtime.meta.lock().unwrap();
-        meta.state = Control::Stopped;
-        meta.revision += 1;
-        drop(meta);
+        self.runtime.mark_stopped();
         let _ = app.browser_sessions.save(app);
     }
 }
@@ -99,21 +111,16 @@ impl Sessions {
     pub fn local_bot(&self, app: &App, id: &str) -> Result<Bot, String> {
         let bot = app.bot(id).ok_or("Unknown bot")?;
         if app.this_device_id().as_deref() != Some(bot.runner_id.as_str()) {
-            return Err("Browser sessions run only on the bot's assigned owned Runner.".into());
+            return Err("Browser profiles live on the bot's Runner.".into());
         }
-        if !app
-            .device(&bot.runner_id)
-            .is_some_and(|device| device.is_runner())
-        {
-            return Err("Browser sessions require an owned Runner.".into());
+        if !app.device(&bot.runner_id).is_some_and(|device| device.is_runner()) {
+            return Err("Browser profiles need a Runner.".into());
         }
         Ok(bot)
     }
 
     fn load(&self, app: &Arc<App>) -> Result<(), String> {
-        let account_key = app
-            .this_device_id()
-            .ok_or("Pair or create an identity first.")?;
+        let account_key = app.this_device_id().ok_or("Pair or create an identity first.")?;
         let dek = app.dek().ok_or("The account key is unavailable.")?;
         let mut loaded = self.account.lock().unwrap();
         if loaded.as_deref() == Some(&account_key) {
@@ -124,12 +131,7 @@ impl Sessions {
         crate::config::set_private(&dir).map_err(|e| e.to_string())?;
         let path = dir.join("sessions.enc");
         let saved: Vec<Session> = if path.is_file() {
-            crate::crypto::decrypt_json(
-                &dek,
-                "browser-sessions",
-                &std::fs::read(path).map_err(|e| e.to_string())?,
-            )
-            .map_err(|e| e.to_string())?
+            crate::crypto::decrypt_json(&dek, "browser-sessions", &std::fs::read(path).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?
         } else {
             Vec::new()
         };
@@ -137,21 +139,12 @@ impl Sessions {
         items.clear();
         for mut meta in saved {
             if !valid_id(&meta.id) {
-                return Err("Invalid browser session id in the encrypted store.".into());
+                continue;
             }
-            // A service restart never grants bot input or reopens a screen.
+            // A restart never hands the bot a browser or opens a window.
             meta.state = Control::Stopped;
             meta.revision += 1;
-            items.insert(
-                meta.id.clone(),
-                Arc::new(Runtime {
-                    meta: Mutex::new(meta),
-                    input: Arc::new(AsyncMutex::new(())),
-                    server: Mutex::new(None),
-                    opening: Mutex::new(CancellationToken::new()),
-                    stopping: AtomicUsize::new(0),
-                }),
-            );
+            items.insert(meta.id.clone(), Runtime::new(meta));
         }
         *loaded = Some(account_key);
         Ok(())
@@ -161,98 +154,62 @@ impl Sessions {
         self.changed.notify_waiters();
         let _guard = self.persistence.lock().unwrap();
         let dek = app.dek().ok_or("The account key is unavailable.")?;
-        let items: Vec<Session> = self
-            .items
-            .lock()
-            .unwrap()
-            .values()
-            .map(|runtime| runtime.meta.lock().unwrap().clone())
-            .collect();
-        let bytes = crate::crypto::encrypt_json(&dek, "browser-sessions", &items)
-            .map_err(|e| e.to_string())?;
+        let items: Vec<Session> = self.items.lock().unwrap().values().map(|runtime| runtime.meta.lock().unwrap().clone()).collect();
+        let bytes = crate::crypto::encrypt_json(&dek, "browser-sessions", &items).map_err(|e| e.to_string())?;
         let path = app.config.home.join("browser/sessions.enc");
         let pending = path.with_extension("enc.pending");
         crate::config::write_private(&pending, &bytes).map_err(|e| e.to_string())?;
         std::fs::rename(pending, path).map_err(|e| e.to_string())
     }
 
+    /// The bot's profiles, oldest first.
     pub fn list(&self, app: &Arc<App>, bot_id: &str) -> Result<Vec<Session>, String> {
         self.local_bot(app, bot_id)?;
         self.load(app)?;
-        Ok(self
-            .items
-            .lock()
-            .unwrap()
-            .values()
-            .map(|item| item.meta.lock().unwrap().clone())
-            .filter(|s| s.bot_id == bot_id)
-            .collect())
+        let mut sessions: Vec<Session> = self.items.lock().unwrap().values().map(|item| item.meta.lock().unwrap().clone()).filter(|s| s.bot_id == bot_id).collect();
+        sessions.sort_by(|a, b| a.created_at.total_cmp(&b.created_at));
+        Ok(sessions)
     }
 
     fn owned(&self, app: &Arc<App>, bot_id: &str, id: &str) -> Result<Arc<Runtime>, String> {
         let bot = self.local_bot(app, bot_id)?;
         self.load(app)?;
-        let runtime = self
-            .items
-            .lock()
-            .unwrap()
-            .get(id)
-            .cloned()
-            .ok_or("Unknown browser session")?;
+        let runtime = self.items.lock().unwrap().get(id).cloned().ok_or("This browser profile no longer exists.")?;
         let meta = runtime.meta.lock().unwrap();
         if meta.bot_id != bot.id || meta.runner_id != bot.runner_id {
-            return Err("This browser session belongs to another bot or Runner.".into());
+            return Err("This browser profile belongs to another bot or Runner.".into());
         }
         drop(meta);
         Ok(runtime)
     }
 
-    pub fn create(
-        &self,
-        app: &Arc<App>,
-        bot_id: &str,
-        account: &str,
-        name: &str,
-    ) -> Result<Session, String> {
+    pub fn create(&self, app: &Arc<App>, bot_id: &str, name: &str) -> Result<Session, String> {
         let bot = self.local_bot(app, bot_id)?;
         self.load(app)?;
         if app.plugins.lock().unwrap().get(super::PLUGIN_ID).is_none() {
             return Err("Install the Browser plugin on this Runner first.".into());
         }
-        let account = label(account)?;
-        let name = label(name)?;
         let meta = Session {
             id: format!("browser-{}", uuid::Uuid::new_v4()),
             bot_id: bot.id.clone(),
             runner_id: bot.runner_id,
-            account,
-            profile: name,
+            name: label(name)?,
             state: Control::Stopped,
-            selected: true,
+            selected: false,
             revision: 1,
             created_at: crate::config::now_secs(),
         };
-        {
-            let mut items = self.items.lock().unwrap();
-            for item in items.values() {
-                let mut old = item.meta.lock().unwrap();
-                if old.bot_id == bot.id && old.selected {
-                    old.selected = false;
-                    old.revision += 1;
-                }
-            }
-            items.insert(
-                meta.id.clone(),
-                Arc::new(Runtime {
-                    meta: Mutex::new(meta.clone()),
-                    input: Arc::new(AsyncMutex::new(())),
-                    server: Mutex::new(None),
-                    opening: Mutex::new(CancellationToken::new()),
-                    stopping: AtomicUsize::new(0),
-                }),
-            );
+        let runtime = Runtime::new(meta);
+        self.items.lock().unwrap().insert(runtime.meta.lock().unwrap().id.clone(), runtime.clone());
+        // The first profile is the one the bot opens; another becomes it once opened.
+        if !self.items.lock().unwrap().values().any(|item| {
+            let item = item.meta.lock().unwrap();
+            item.bot_id == bot.id && item.selected
+        }) {
+            runtime.meta.lock().unwrap().selected = true;
         }
         self.save(app)?;
+        let meta = runtime.meta.lock().unwrap().clone();
         Ok(meta)
     }
 
@@ -267,43 +224,21 @@ impl Sessions {
         }
     }
 
-    pub fn bot_ready(&self, app: &Arc<App>, bot_id: &str) -> Result<(), String> {
-        let sessions = self.list(app, bot_id)?;
-        if sessions
-            .iter()
-            .any(|s| matches!(s.state, Control::TakingOver | Control::Human))
-        {
-            return Err("The user controls this bot's browser. Wait for an explicit Return to Bot; do not use another session or input route.".into());
-        }
-        let meta = sessions
-            .into_iter()
-            .find(|s| s.selected)
-            .ok_or("Create and open a browser session with browser_session first.")?;
-        if meta.state != Control::Bot {
-            return Err(
-                "The selected browser session is stopped. Open it with browser_session first."
-                    .into(),
-            );
-        }
-        Ok(())
+    /// Whether the user has, or is taking, one of the bot's browsers. Only what is loaded counts:
+    /// a takeover needs the records loaded first.
+    fn taken_over(&self, bot_id: &str) -> bool {
+        self.items.lock().unwrap().values().any(|item| {
+            let meta = item.meta.lock().unwrap();
+            meta.bot_id == bot_id && matches!(meta.state, Control::Human | Control::TakingOver)
+        })
     }
 
-    /// Park the current call/turn in place while the user owns input. Stop and
-    /// chat cancellation wake it too. This also fences shell/codemode calls at
-    /// the execution boundary, so another input route cannot compete.
-    pub async fn wait_if_taken_over(
-        &self,
-        app: &Arc<App>,
-        bot_id: &str,
-        cancel: &CancellationToken,
-    ) -> Result<(), String> {
+    /// Parks a Browser call while the user has the bot's browser, with its turn and script state
+    /// intact. Return to Bot, Stop, and the chat's Stop wake it.
+    pub async fn wait_if_taken_over(&self, bot_id: &str, cancel: &CancellationToken) -> Result<(), String> {
         loop {
             let changed = self.changed.notified();
-            let sessions = self.list(app, bot_id)?;
-            if !sessions
-                .iter()
-                .any(|s| matches!(s.state, Control::Human | Control::TakingOver))
-            {
+            if !self.taken_over(bot_id) {
                 return Ok(());
             }
             tokio::select! {
@@ -313,70 +248,41 @@ impl Sessions {
         }
     }
 
-    pub async fn wait_for_bot(
-        &self,
-        app: &Arc<App>,
-        bot_id: &str,
-        cancel: &CancellationToken,
-    ) -> Result<(), String> {
-        self.wait_if_taken_over(app, bot_id, cancel).await?;
-        self.bot_ready(app, bot_id)
-    }
-
-    pub async fn input(
-        &self,
-        app: &Arc<App>,
-        bot_id: &str,
-        cancel: &CancellationToken,
-    ) -> Result<Input, String> {
-        self.wait_for_bot(app, bot_id, cancel).await?;
-        let meta = self
-            .list(app, bot_id)?
-            .into_iter()
-            .find(|s| s.selected)
-            .unwrap();
-        let runtime = self.owned(app, bot_id, &meta.id)?;
+    /// The bot's open profile for a Browser call, holding its input gate, or `None` when the bot
+    /// has none open and the call goes to the Runner's shared headless browser.
+    pub async fn input(&self, app: &Arc<App>, bot_id: &str, cancel: &CancellationToken) -> Result<Option<Input>, String> {
         loop {
-            self.wait_for_bot(app, bot_id, cancel).await?;
+            self.wait_if_taken_over(bot_id, cancel).await?;
+            let open = self.items.lock().unwrap().values().find(|item| {
+                let meta = item.meta.lock().unwrap();
+                meta.bot_id == bot_id && meta.selected && meta.state == Control::Bot
+            }).cloned();
+            let Some(runtime) = open else { return Ok(None) };
             let guard = tokio::select! {
                 guard = runtime.input.clone().lock_owned() => guard,
                 _ = cancel.cancelled() => return Err("Stopped".into()),
             };
-            self.owned(app, bot_id, &meta.id)?;
-            let latest = runtime.meta.lock().unwrap().clone();
-            if matches!(latest.state, Control::Human | Control::TakingOver) {
-                drop(guard);
+            // A takeover, Stop, or another profile opening can land while the call waits.
+            let meta = runtime.meta.lock().unwrap().clone();
+            if meta.state != Control::Bot || !meta.selected {
                 continue;
             }
-            if !latest.selected || latest.state != Control::Bot {
-                return Err("Browser selection or control changed before this call ran.".into());
-            }
-            let server = runtime
-                .server
-                .lock()
-                .unwrap()
-                .clone()
-                .filter(|s| !s.is_closed())
-                .ok_or("The browser closed. Explicitly open its session again.")?;
-            if !server.is_current(app) {
-                return Err("The Browser plugin changed or was removed. Stop and reopen its session before using it.".into());
-            }
-            return Ok(Input {
-                _guard: guard,
-                runtime,
-                server,
-                id: meta.id,
-            });
+            self.owned(app, bot_id, &meta.id)?;
+            let server = match runtime.open_server() {
+                Some(server) if server.is_current(app) => server,
+                _ => {
+                    runtime.mark_stopped();
+                    let _ = self.save(app);
+                    return Err(format!("The {} browser closed. Open it again with browser_session.", meta.name));
+                }
+            };
+            return Ok(Some(Input { _guard: guard, runtime, server, name: meta.name }));
         }
     }
 
-    pub async fn open(
-        &self,
-        app: &Arc<App>,
-        bot_id: &str,
-        id: &str,
-        human: bool,
-    ) -> Result<Session, String> {
+    /// Opens a profile's browser in a window on this Runner, or brings it forward. The user's
+    /// open gives the user control; the bot's gives the bot control.
+    pub async fn open(&self, app: &Arc<App>, bot_id: &str, id: &str, human: bool) -> Result<Session, String> {
         let runtime = self.owned(app, bot_id, id)?;
         let requested_revision = runtime.meta.lock().unwrap().revision;
         let _guard = runtime.input.lock().await;
@@ -384,11 +290,8 @@ impl Sessions {
         let opening = CancellationToken::new();
         let opening_revision = {
             let meta = runtime.meta.lock().unwrap();
-            if meta.revision != requested_revision || runtime.stopping.load(Ordering::Acquire) != 0
-            {
-                return Err(
-                    "Session control changed while Open waited. Refresh and open it again.".into(),
-                );
+            if meta.revision != requested_revision || runtime.stopping.load(Ordering::Acquire) != 0 {
+                return Err("The browser changed while it waited to open. Try again.".into());
             }
             *runtime.opening.lock().unwrap() = opening.clone();
             meta.revision
@@ -396,15 +299,8 @@ impl Sessions {
         if app.plugins.lock().unwrap().get(super::PLUGIN_ID).is_none() {
             return Err("Install the Browser plugin on this Runner first.".into());
         }
-        if !human
-            && self
-                .list(app, bot_id)?
-                .iter()
-                .any(|s| matches!(s.state, Control::Human | Control::TakingOver))
-        {
-            return Err(
-                "The user has browser control. Only the user can return control to the bot.".into(),
-            );
+        if !human && self.taken_over(bot_id) {
+            return Err("The user has the browser. Wait until they hand it back.".into());
         }
         let existing = runtime.server.lock().unwrap().clone();
         let existing = match existing {
@@ -419,18 +315,13 @@ impl Sessions {
         let server = match existing {
             Some(server) => server,
             None => {
-                let dek = app.dek().ok_or("The account key is unavailable.")?;
-                let dir = profile::directory(&app.config.home.join("browser/profiles"), id);
-                let root = dir.parent().unwrap();
-                std::fs::create_dir_all(root).map_err(|e| e.to_string())?;
-                crate::config::set_private(root).map_err(|e| e.to_string())?;
-                let owned_id = id.to_string();
-                tokio::task::spawn_blocking(move || profile::restore(&dir, &dek, &owned_id))
-                    .await
-                    .map_err(|e| e.to_string())??;
+                let dir = app.config.home.join("browser/profiles");
+                std::fs::create_dir_all(dir.join(id)).map_err(|e| e.to_string())?;
+                crate::config::set_private(&dir).map_err(|e| e.to_string())?;
+                crate::config::set_private(&dir.join(id)).map_err(|e| e.to_string())?;
                 let server = tokio::select! {
                     server = crate::plugins::mcp::visible_browser(app, id) => server?,
-                    _ = opening.cancelled() => return Err("The session was stopped while it opened.".into()),
+                    _ = opening.cancelled() => return Err("The browser was closed while it opened.".into()),
                 };
                 *runtime.server.lock().unwrap() = Some(server.clone());
                 server
@@ -438,7 +329,7 @@ impl Sessions {
         };
         let opened = tokio::select! {
             opened = server.open_visible() => opened,
-            _ = opening.cancelled() => { server.stop(); return Err("The session was stopped while it opened.".into()); },
+            _ = opening.cancelled() => { server.stop(); return Err("The browser was closed while it opened.".into()); },
         };
         if let Err(error) = opened {
             server.stop();
@@ -447,90 +338,74 @@ impl Sessions {
         }
         // Stop can run while a browser opens. It revokes input immediately.
         if server.is_closed() {
-            return Err("The session was stopped while it opened.".into());
+            return Err("The browser was closed while it opened.".into());
         }
         self.owned(app, bot_id, id)?;
         {
             let mut meta = runtime.meta.lock().unwrap();
             if meta.revision != opening_revision {
                 server.stop();
-                return Err("Session control changed while it opened. Refresh the session.".into());
+                return Err("The browser changed while it opened. Try again.".into());
             }
             meta.state = if human { Control::Human } else { Control::Bot };
             meta.revision += 1;
         }
         self.select(&runtime);
         if let Err(error) = self.save(app) {
-            server.stop();
-            runtime.meta.lock().unwrap().state = Control::Stopped;
+            runtime.mark_stopped();
             return Err(error);
         }
         let meta = runtime.meta.lock().unwrap().clone();
         Ok(meta)
     }
 
-    pub async fn takeover(
-        &self,
-        app: &Arc<App>,
-        bot_id: &str,
-        id: &str,
-    ) -> Result<Session, String> {
+    /// Takes the browser from the bot: new Browser calls wait at once, and control passes once
+    /// the call in flight has answered. On the Runner itself the window comes forward.
+    pub async fn takeover(&self, app: &Arc<App>, bot_id: &str, id: &str, local: bool) -> Result<Session, String> {
         let runtime = self.owned(app, bot_id, id)?;
         {
             let mut meta = runtime.meta.lock().unwrap();
             if meta.state == Control::Stopped {
-                return Err("Open the session on its Runner before taking over.".into());
+                return Err("This browser isn't open.".into());
             }
-            if meta.state == Control::Human {
-                return Ok(meta.clone());
+            if meta.state != Control::Human {
+                meta.state = Control::TakingOver;
+                meta.revision += 1;
             }
-            meta.state = Control::TakingOver;
-            meta.revision += 1;
         }
         self.save(app)?;
-        // No bot call passes its second state check now. The active call keeps
-        // this gate until completion; we never claim human control prematurely.
         let _guard = runtime.input.lock().await;
         self.owned(app, bot_id, id)?;
         let meta = {
             let mut meta = runtime.meta.lock().unwrap();
-            if meta.state != Control::TakingOver {
-                return Err("The session stopped or control changed while takeover waited.".into());
+            if meta.state == Control::TakingOver {
+                meta.state = Control::Human;
+                meta.revision += 1;
+            } else if meta.state != Control::Human {
+                return Err("The browser was closed while you took it over.".into());
             }
-            meta.state = Control::Human;
-            meta.revision += 1;
             meta.clone()
         };
         self.save(app)?;
+        if local {
+            if let Some(server) = runtime.open_server() {
+                let _ = server.open_visible().await;
+            }
+        }
         Ok(meta)
     }
 
-    pub async fn resume(
-        &self,
-        app: &Arc<App>,
-        bot_id: &str,
-        id: &str,
-        revision: u64,
-    ) -> Result<Session, String> {
+    pub async fn resume(&self, app: &Arc<App>, bot_id: &str, id: &str, revision: u64) -> Result<Session, String> {
         let runtime = self.owned(app, bot_id, id)?;
         let _guard = runtime.input.lock().await;
         self.owned(app, bot_id, id)?;
         {
             let mut meta = runtime.meta.lock().unwrap();
-            if meta.revision != revision {
-                return Err("Browser control changed. Refresh before returning control.".into());
+            if meta.revision != revision || meta.state != Control::Human {
+                return Err("The browser changed on its Runner. Look again before handing it back.".into());
             }
-            if meta.state != Control::Human {
-                return Err("Only a session under human control can return to the bot.".into());
-            }
-            if !runtime
-                .server
-                .lock()
-                .unwrap()
-                .as_ref()
-                .is_some_and(|s| !s.is_closed())
-            {
-                return Err("The browser closed. Open it again on its Runner.".into());
+            if runtime.open_server().is_none() {
+                return Err("The browser was closed. Open it again.".into());
             }
             meta.state = Control::Bot;
             meta.revision += 1;
@@ -541,6 +416,7 @@ impl Sessions {
         Ok(meta)
     }
 
+    /// Closes the profile's browser. The profile keeps its sign-ins for the next open.
     pub async fn stop(&self, app: &Arc<App>, bot_id: &str, id: &str) -> Result<Session, String> {
         let runtime = self.owned(app, bot_id, id)?;
         runtime.stopping.fetch_add(1, Ordering::AcqRel);
@@ -551,19 +427,14 @@ impl Sessions {
             meta.revision += 1;
             meta.clone()
         };
-        // Stop is available even while takeover or launch holds the input gate.
+        // Stop works while a takeover or an open waits for the gate.
         runtime.opening.lock().unwrap().cancel();
         let server = runtime.server.lock().unwrap().take();
         let immediate = runtime.input.clone().try_lock_owned().ok();
         if let Some(server) = &server {
             if immediate.is_some() {
-                // With no active input, close Chromium gracefully so recent
-                // cookies and storage are flushed before checkpointing.
-                let _ = tokio::time::timeout(
-                    std::time::Duration::from_secs(3),
-                    server.browser_call("browser_close", json!({})),
-                )
-                .await;
+                // With no call in flight, Chromium closes on its own and writes out its cookies.
+                let _ = tokio::time::timeout(std::time::Duration::from_secs(3), server.browser_call("browser_close", json!({}))).await;
             }
             server.stop();
         }
@@ -575,54 +446,74 @@ impl Sessions {
         if let Some(server) = server {
             server.wait_stopped().await?;
         }
-        let dek = app.dek().ok_or("The account key is unavailable.")?;
-        let dir = profile::directory(&app.config.home.join("browser/profiles"), id);
-        let owned_id = id.to_string();
-        tokio::task::spawn_blocking(move || profile::seal(&dir, &dek, &owned_id))
-            .await
-            .map_err(|e| e.to_string())??;
-        let output = app.config.home.join("browser/evidence").join(id);
+        let output = app.config.home.join("browser/output").join(id);
         if output.is_dir() {
-            std::fs::remove_dir_all(output).map_err(|e| e.to_string())?;
+            let _ = std::fs::remove_dir_all(output);
         }
         Ok(meta)
     }
 
-    pub async fn screenshot(
-        &self,
-        app: &Arc<App>,
-        bot_id: &str,
-        id: &str,
-        chat_id: &str,
-        summary: &str,
-    ) -> Result<Message, String> {
+    /// Closes the profile's browser and forgets the profile with its sign-ins.
+    pub async fn delete(&self, app: &Arc<App>, bot_id: &str, id: &str) -> Result<(), String> {
+        let runtime = self.owned(app, bot_id, id)?;
+        if runtime.meta.lock().unwrap().state != Control::Stopped || runtime.open_server().is_some() {
+            self.stop(app, bot_id, id).await?;
+        }
+        let selected = runtime.meta.lock().unwrap().selected;
+        let mut items = self.items.lock().unwrap();
+        items.remove(id);
+        if selected {
+            // The oldest profile left is the one the bot opens next.
+            let next = items
+                .values()
+                .filter_map(|item| {
+                    let meta = item.meta.lock().unwrap();
+                    (meta.bot_id == bot_id).then(|| (meta.created_at, item.clone()))
+                })
+                .min_by(|a, b| a.0.total_cmp(&b.0));
+            if let Some((_, next)) = next {
+                let mut meta = next.meta.lock().unwrap();
+                meta.selected = true;
+                meta.revision += 1;
+            }
+        }
+        drop(items);
+        self.save(app)?;
+        let profile = app.config.home.join("browser/profiles").join(id);
+        if profile.is_dir() {
+            std::fs::remove_dir_all(profile).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    pub async fn screenshot(&self, app: &Arc<App>, bot_id: &str, id: &str, chat_id: &str) -> Result<Message, String> {
         let runtime = self.owned(app, bot_id, id)?;
         require_chat(app, chat_id, bot_id)?;
         let _guard = runtime.input.lock().await;
         self.owned(app, bot_id, id)?;
-        let server = runtime
-            .server
-            .lock()
-            .unwrap()
-            .clone()
-            .filter(|s| !s.is_closed())
-            .ok_or("Open the browser before taking a screenshot.")?;
-        let result = server
-            .browser_call("browser_take_screenshot", json!({ "type": "png" }))
-            .await?;
-        publish_image(app, bot_id, chat_id, id, summary, &result)
+        let server = runtime.open_server().ok_or("Open the browser to take a screenshot.")?;
+        let result = server.browser_call("browser_take_screenshot", json!({ "type": "png" })).await?;
+        let name = runtime.meta.lock().unwrap().name.clone();
+        publish_image(app, bot_id, chat_id, &name, &result)
+    }
+
+    /// Closes every open browser at once, as when the Browser plugin is removed.
+    pub fn close_all(&self, app: &Arc<App>) {
+        let sessions: Vec<_> = self.items.lock().unwrap().values().cloned().collect();
+        for runtime in &sessions {
+            runtime.opening.lock().unwrap().cancel();
+            if runtime.meta.lock().unwrap().state != Control::Stopped {
+                runtime.mark_stopped();
+            }
+        }
+        let _ = self.save(app);
     }
 
     pub fn reset(&self) {
         let mut items = self.items.lock().unwrap();
         for runtime in items.values() {
             runtime.opening.lock().unwrap().cancel();
-            if let Some(server) = runtime.server.lock().unwrap().as_ref() {
-                server.stop();
-            }
-            let mut meta = runtime.meta.lock().unwrap();
-            meta.state = Control::Stopped;
-            meta.revision += 1;
+            runtime.mark_stopped();
         }
         items.clear();
         drop(items);
@@ -630,56 +521,31 @@ impl Sessions {
         self.changed.notify_waiters();
     }
 
+    /// The CLI is quitting: every browser closes and its waiting calls end.
     pub async fn shutdown(&self, app: &Arc<App>) {
-        for job in app.running_jobs.lock().unwrap().values() {
-            job.cancel.cancel();
-        }
         let sessions: Vec<_> = self.items.lock().unwrap().values().cloned().collect();
-        // Revoke and stop every process before waiting on any of its gates.
         for runtime in &sessions {
-            let mut meta = runtime.meta.lock().unwrap();
-            meta.state = Control::Stopped;
-            meta.revision += 1;
             runtime.opening.lock().unwrap().cancel();
-            if let Some(server) = runtime.server.lock().unwrap().as_ref() {
-                server.stop();
+            if let Some(server) = runtime.open_server() {
+                let _ = tokio::time::timeout(std::time::Duration::from_secs(3), server.browser_call("browser_close", json!({}))).await;
             }
+            runtime.mark_stopped();
         }
         self.changed.notify_waiters();
-        for runtime in sessions {
-            let meta = runtime.meta.lock().unwrap().clone();
-            let _guard = runtime.input.lock().await;
-            let server = runtime.server.lock().unwrap().take();
-            if let Some(server) = server {
-                if let Err(error) = server.wait_stopped().await {
-                    tracing::warn!(%error, "closing browser session");
-                    continue;
-                }
-            }
-            if let Some(dek) = app.dek() {
-                let dir = profile::directory(&app.config.home.join("browser/profiles"), &meta.id);
-                let sealed =
-                    tokio::task::spawn_blocking(move || profile::seal(&dir, &dek, &meta.id)).await;
-                if let Err(error) = sealed.unwrap_or_else(|e| Err(e.to_string())) {
-                    tracing::warn!(%error, "sealing browser profile");
-                }
-            }
-        }
-        if !self.items.lock().unwrap().is_empty() {
+        if !sessions.is_empty() {
             let _ = self.save(app);
         }
     }
 }
 
 fn valid_id(id: &str) -> bool {
-    id.strip_prefix("browser-")
-        .is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
+    id.strip_prefix("browser-").is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
 }
 
 fn label(text: &str) -> Result<String, String> {
     let text = text.trim();
     if text.is_empty() || text.chars().count() > 100 || text.chars().any(char::is_control) {
-        return Err("Account and profile labels require 1–100 printable characters.".into());
+        return Err("Name the profile in 1 to 100 characters.".into());
     }
     Ok(text.to_string())
 }
@@ -687,21 +553,14 @@ fn label(text: &str) -> Result<String, String> {
 fn require_chat(app: &App, chat_id: &str, bot_id: &str) -> Result<(), String> {
     let chat = app.chat(chat_id).ok_or("Unknown chat")?;
     if !chat.meta.bot_ids.iter().any(|id| id == bot_id) {
-        return Err("The evidence chat does not contain this session's bot.".into());
+        return Err("The bot isn't in this chat.".into());
     }
     Ok(())
 }
 
-/// The screenshot is an immutable chat message with an existing encrypted file
-/// blob. #80's outputs::publish adds output metadata at this one publication point.
-pub fn publish_image(
-    app: &Arc<App>,
-    bot_id: &str,
-    chat_id: &str,
-    session_id: &str,
-    summary: &str,
-    result: &rmcp::model::CallToolResult,
-) -> Result<Message, String> {
+/// A screenshot of a profile's browser as the bot's message in the chat: the PNG travels as an
+/// encrypted `file` blob, as any attachment does.
+pub fn publish_image(app: &Arc<App>, bot_id: &str, chat_id: &str, name: &str, result: &rmcp::model::CallToolResult) -> Result<Message, String> {
     use base64::Engine;
     require_chat(app, chat_id, bot_id)?;
     let image = result
@@ -711,46 +570,21 @@ pub fn publish_image(
             rmcp::model::ContentBlock::Image(image) => Some(image),
             _ => None,
         })
-        .ok_or("The Browser server returned no screenshot image.")?;
-    if image.mime_type != "image/png" {
-        return Err("Verification requires a PNG screenshot.".into());
+        .ok_or("The Browser server returned no screenshot.")?;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(&image.data).map_err(|e| e.to_string())?;
+    if image.mime_type != "image/png" || !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Err("The Browser server returned a screenshot that isn't a PNG.".into());
     }
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(&image.data)
-        .map_err(|e| e.to_string())?;
-    if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
-        return Err("The Browser server returned invalid PNG evidence.".into());
-    }
-    let path = app
-        .config
-        .home
-        .join("browser")
-        .join(format!("{}.png", uuid::Uuid::new_v4()));
+    let path = app.config.home.join("browser").join(format!("{}.png", uuid::Uuid::new_v4()));
     crate::config::write_private(&path, &bytes).map_err(|e| e.to_string())?;
     let attachment = crate::files::store(
         app,
-        &crate::files::OutgoingFile {
-            id: None,
-            path: path.display().to_string(),
-            name: Some(format!("{session_id}.png")),
-            mime: Some("image/png".into()),
-            width: None,
-            height: None,
-        },
+        &crate::files::OutgoingFile { id: None, path: path.display().to_string(), name: Some("Screenshot.png".into()), mime: Some("image/png".into()), width: None, height: None },
     );
     let _ = std::fs::remove_file(path);
     let attachment = attachment.map_err(|e| e.to_string())?;
     crate::files::push_blob(app, Some(chat_id), &attachment).map_err(|e| e.to_string())?;
-    let mut message = Message::new(
-        chat_id,
-        Author::Bot {
-            bot_id: bot_id.to_string(),
-        },
-        Body::text(format!(
-            "{}\nBrowser session: {session_id}. Verification screenshot; outcome unverified.",
-            label(summary)?
-        )),
-    );
+    let mut message = Message::new(chat_id, Author::Bot { bot_id: bot_id.to_string() }, Body::text(format!("Browser screenshot · {name}")));
     if let Body::Text { attachments, .. } = &mut message.body {
         attachments.push(attachment);
     }
@@ -761,7 +595,6 @@ pub fn publish_image(
 pub struct SessionTool {
     pub app: Arc<App>,
     pub bot: Bot,
-    pub chat_id: String,
 }
 
 #[async_trait]
@@ -770,128 +603,60 @@ impl Tool for SessionTool {
         "browser_session"
     }
     fn description(&self) -> &str {
-        "Create, list, or explicitly open a persistent visible Browser session on your assigned Runner. Select an account label and a separate profile label when creating one; its profile belongs only to you. The user can Take Over, Return to Bot, or Stop in the Browser Sessions sheet. Never compete for input during takeover. After opening, use the Browser plugin through codemode; browser_take_screenshot attaches encrypted verification evidence to this chat. Stronger isolation uses a dedicated Runner."
+        "Your browser profiles on your Runner; each keeps its own sign-ins. `list` shows them, `create` adds one with a `name`, and `open` opens one (`session_id`) in a window on the Runner. While a profile is open, your Browser plugin calls use it; without one they use the Runner's shared headless browser. Open a profile when a site needs the user's sign-in, and ask the user to sign in there. While the user has taken over the browser, your Browser calls wait until they hand it back."
     }
     fn parameters(&self) -> Value {
-        json!({ "type": "object", "properties": { "action": { "type": "string", "enum": ["list", "create", "open"] }, "session_id": { "type": "string" }, "account": { "type": "string" }, "profile": { "type": "string" } }, "required": ["action"] })
+        json!({ "type": "object", "properties": { "action": { "type": "string", "enum": ["list", "create", "open"] }, "session_id": { "type": "string" }, "name": { "type": "string" } }, "required": ["action"] })
     }
-    async fn execute(
-        &self,
-        _id: &str,
-        args: Value,
-        cancel: CancellationToken,
-        _on_update: ToolUpdateFn,
-    ) -> Result<ToolResult, ToolError> {
+    async fn execute(&self, _id: &str, args: Value, cancel: CancellationToken, _on_update: ToolUpdateFn) -> Result<ToolResult, ToolError> {
         if cancel.is_cancelled() {
             return Err(ToolError("Stopped".into()));
         }
-        self.app
-            .browser_sessions
-            .local_bot(&self.app, &self.bot.id)
-            .map_err(ToolError)?;
+        let sessions = &self.app.browser_sessions;
         let result = match args["action"].as_str() {
-            Some("list") => json!(self
-                .app
-                .browser_sessions
-                .list(&self.app, &self.bot.id)
-                .map_err(ToolError)?),
-            Some("create") => {
-                if self
-                    .app
-                    .browser_sessions
-                    .list(&self.app, &self.bot.id)
-                    .map_err(ToolError)?
-                    .iter()
-                    .any(|s| matches!(s.state, Control::Human | Control::TakingOver))
-                {
-                    return Err(ToolError("The user controls this bot's browser.".into()));
-                }
-                json!(self
-                    .app
-                    .browser_sessions
-                    .create(
-                        &self.app,
-                        &self.bot.id,
-                        args["account"].as_str().unwrap_or("Default"),
-                        args["profile"].as_str().unwrap_or("Browser")
-                    )
-                    .map_err(ToolError)?)
-            }
+            Some("list") => json!(sessions.list(&self.app, &self.bot.id).map_err(ToolError)?),
+            Some("create") => json!(sessions.create(&self.app, &self.bot.id, args["name"].as_str().unwrap_or("Default")).map_err(ToolError)?),
             Some("open") => {
-                let id = args["session_id"]
-                    .as_str()
-                    .ok_or_else(|| ToolError("missing session_id".into()))?;
+                let id = args["session_id"].as_str().ok_or_else(|| ToolError("missing session_id".into()))?;
                 let opened = tokio::select! {
-                    opened = self.app.browser_sessions.open(&self.app, &self.bot.id, id, false) => opened.map_err(ToolError)?,
+                    opened = sessions.open(&self.app, &self.bot.id, id, false) => opened.map_err(ToolError)?,
                     _ = cancel.cancelled() => {
-                        let _ = self.app.browser_sessions.stop(&self.app, &self.bot.id, id).await;
+                        let _ = sessions.stop(&self.app, &self.bot.id, id).await;
                         return Err(ToolError("Stopped".into()));
                     }
                 };
                 json!(opened)
             }
-            _ => return Err(ToolError("Unknown browser session action".into())),
+            _ => return Err(ToolError("Unknown browser_session action".into())),
         };
         Ok(ToolResult::text(serde_json::to_string(&result).unwrap()))
     }
 }
 
-pub async fn review_call(
-    app: &Arc<App>,
-    bot: &Bot,
-    chat_id: &str,
-    trigger: &crate::plugins::review::Trigger,
-    unattended: bool,
-    ctx: &BeforeToolCallContext<'_>,
-) -> Option<BeforeToolCallResult> {
-    if ctx.tool_call.name != "browser_session" || ctx.args["action"] == "list" {
+/// `browser_session` waits out a takeover, and opening a window on the Runner passes
+/// Auto-review as a plugin action does.
+pub async fn review_call(app: &Arc<App>, bot: &Bot, chat_id: &str, trigger: &crate::plugins::review::Trigger, unattended: bool, ctx: &BeforeToolCallContext<'_>) -> Option<BeforeToolCallResult> {
+    if ctx.tool_call.name != "browser_session" {
         return None;
     }
-    let description =
-        "Create or open this bot's visible, persistent browser profile on its assigned Runner.";
-    let outcome = crate::plugins::review::decide(
-        app,
-        bot,
-        chat_id,
-        trigger,
-        "browser-session",
-        "Browser",
-        "browser_session",
-        description,
-        ctx.args,
-        None,
-        ctx.cancel,
-    )
-    .await;
+    if let Err(error) = app.browser_sessions.wait_if_taken_over(&bot.id, ctx.cancel).await {
+        return Some(crate::local_review::blocked(error));
+    }
+    if ctx.args["action"] != "open" {
+        return None;
+    }
+    let description = "Open one of this bot's browser profiles in a window on its Runner.";
+    let outcome = crate::plugins::review::decide(app, bot, chat_id, trigger, "browser-session", "Browser", "browser_session", description, ctx.args, None, ctx.cancel).await;
     let crate::plugins::review::Outcome::Ask { reason, .. } = outcome else {
         return None;
     };
     if unattended {
-        return Some(crate::local_review::blocked(
-            "Opening a visible browser needs approval; nobody is here to approve it.".into(),
-        ));
+        return Some(crate::local_review::blocked("Opening a browser window needs approval; nobody is here to approve it.".into()));
     }
-    match crate::plugins::mcp::ask(
-        app,
-        chat_id,
-        &bot.id,
-        "browser-session",
-        "Browser",
-        "browser_session",
-        description,
-        ctx.args.clone(),
-        reason,
-        ctx.cancel,
-    )
-    .await
-    {
+    match crate::plugins::mcp::ask(app, chat_id, &bot.id, "browser-session", "Browser", "browser_session", description, ctx.args.clone(), reason, ctx.cancel).await {
         crate::plugins::mcp::Decision::Allowed | crate::plugins::mcp::Decision::Always => None,
-        crate::plugins::mcp::Decision::Dismissed => Some(crate::local_review::dismissed(
-            "The user wrote instead of approving the browser session.",
-        )),
-        _ => Some(crate::local_review::blocked(
-            "The browser session was not approved.".into(),
-        )),
+        crate::plugins::mcp::Decision::Dismissed => Some(crate::local_review::dismissed("The user wrote instead of approving the browser.")),
+        _ => Some(crate::local_review::blocked("The user didn't approve opening the browser.".into())),
     }
 }
 

@@ -226,6 +226,7 @@ pub struct App {
     /// Connected MCP servers.
     #[cfg(feature = "runner")]
     pub mcp: crate::plugins::mcp::Pool,
+    /// The bots' browser profiles on this Runner and their open browsers.
     #[cfg(feature = "runner")]
     pub browser_sessions: crate::browser::Sessions,
     /// The checks of this Runner's routines.

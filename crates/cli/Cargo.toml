@@ -21,7 +21,7 @@ cli = ["runner", "server", "dep:usage", "dep:tracing-subscriber", "dep:flate2", 
 # Connecting and disconnecting account providers. Devices use this without the agent loop.
 provider-auth = ["dep:lorca-provider-auth"]
 # Running bots: the agent loop, providers, tools. Off for a Device that only takes part.
-runner = ["provider-auth", "dep:lorca-agent", "dep:open", "dep:rmcp", "dep:mcp_http", "dep:process-wrap", "dep:tar"]
+runner = ["provider-auth", "dep:lorca-agent", "dep:open", "dep:rmcp", "dep:mcp_http", "dep:process-wrap"]
 # The local websocket the desktop app connects to.
 server = ["dep:axum"]
 

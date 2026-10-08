@@ -73,27 +73,31 @@ impl Server {
         self.service.is_closed() || self.service.peer().is_transport_closed()
     }
 
+    /// Ends the connection, and with a stdio server its process.
     pub fn stop(&self) { self.service.cancellation_token().cancel(); }
 
+    /// Whether this is still the installed plugin's server: not one from before an update or a removal.
     pub fn is_current(&self, app: &App) -> bool {
         app.plugins.lock().unwrap().get(&self.plugin_id).is_some()
             && self.service.service().generation == app.mcp.generation(&self.plugin_id)
     }
 
+    /// Waits up to ten seconds for a stopped server's transport to close.
     pub async fn wait_stopped(&self) -> Result<(), String> {
         tokio::time::timeout(std::time::Duration::from_secs(10), async {
             while !self.service.peer().is_transport_closed() {
                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;
             }
-        }).await.map_err(|_| "The browser process did not close; its private working profile is retained.".to_string())
+        }).await.map_err(|_| "The browser didn't close.".to_string())
     }
 
+    /// A call Lorca makes itself (opening, closing, a screenshot), its error result as an error.
     pub async fn browser_call(&self, name: &str, args: Value) -> Result<rmcp::model::CallToolResult, String> {
         let mut params = CallToolRequestParams::default();
         params.name = name.to_string().into();
         params.arguments = args.as_object().cloned();
         let result = tokio::time::timeout(std::time::Duration::from_secs(120), self.service.peer().call_tool(params)).await
-            .map_err(|_| { self.stop(); "The browser call timed out; the session has stopped.".to_string() })?
+            .map_err(|_| { self.stop(); "The browser didn't answer in time and was closed.".to_string() })?
             .map_err(|e| e.to_string())?;
         if result.is_error == Some(true) {
             return Err(result.content.iter().filter_map(|block| match block { ContentBlock::Text(text) => Some(text.text.as_str()), _ => None }).collect::<Vec<_>>().join("\n"));
@@ -101,36 +105,39 @@ impl Server {
         Ok(result)
     }
 
+    /// Starts the browser if it isn't running yet and brings its current tab forward.
     pub async fn open_visible(&self) -> Result<(), String> {
         let tabs = self.browser_call("browser_tabs", json!({ "action": "list" })).await?;
+        // Playwright lists tabs as `- 0: (current) [title] (url)`; selecting one fronts it.
         let current = tabs.content.iter().filter_map(|block| match block { ContentBlock::Text(text) => Some(text.text.as_str()), _ => None })
-            .flat_map(str::lines).find_map(|line| line.trim().strip_prefix("- ")?.split_once(": (current)")?.0.parse::<usize>().ok())
-            .ok_or("The Browser server did not identify its current tab.")?;
-        self.browser_call("browser_tabs", json!({ "action": "select", "index": current })).await?;
+            .flat_map(str::lines).find_map(|line| line.trim().strip_prefix("- ")?.split_once(": (current)")?.0.parse::<usize>().ok());
+        if let Some(current) = current {
+            self.browser_call("browser_tabs", json!({ "action": "select", "index": current })).await?;
+        }
         Ok(())
     }
 }
 
-/// A separate stdio process per persistent session. Catalog discovery continues
-/// to use the dormant marketplace server; actual browser input uses this one.
+/// A headed Browser server for one of a bot's profiles, a process of its own with the profile's
+/// folder. The plugin's shared headless server still answers what the catalog lists.
 pub async fn visible_browser(app: &Arc<App>, session_id: &str) -> Result<Arc<Server>, String> {
     let (plugin, values) = {
         let store = app.plugins.lock().unwrap();
         (store.get(crate::browser::PLUGIN_ID).cloned().ok_or("Install the Browser plugin on this Runner first.")?, store.values(crate::browser::PLUGIN_ID))
     };
     let Some(ServerSpec::Stdio { command, args, env, cwd, timeout }) = plugin.manifest.servers.get("browser") else {
-        return Err("Visible sessions require the Browser plugin's stdio Playwright server.".into());
+        return Err("This Browser plugin doesn't run Playwright on the Runner, so its profiles can't open.".into());
     };
-    // A managed session always chooses its own profile. Config/CDP/extension
-    // overrides can attach to someone else's browser and require another backend.
+    // The profile's folder is the one Lorca gives it: a config, CDP, or extension override could
+    // attach it to another browser.
     if args.iter().any(|arg| ["--config", "--cdp-endpoint", "--endpoint", "--extension", "--isolated", "--storage-state", "--user-data-dir", "--port"].iter().any(|flag| arg == flag || arg.starts_with(&format!("{flag}=")))) {
-        return Err("The Browser server overrides its profile or transport. Managed visible sessions require the curated stdio configuration.".into());
+        return Err("This Browser plugin sets its own profile or connection, so its profiles can't open.".into());
     }
     if env.keys().any(|key| matches!(key.as_str(), "PLAYWRIGHT_MCP_CONFIG" | "PLAYWRIGHT_MCP_CDP_ENDPOINT" | "PLAYWRIGHT_MCP_ENDPOINT" | "PLAYWRIGHT_MCP_CDP_HEADERS" | "PLAYWRIGHT_MCP_EXTENSION" | "PLAYWRIGHT_MCP_ISOLATED" | "PLAYWRIGHT_MCP_STORAGE_STATE" | "PLAYWRIGHT_MCP_PORT")) {
-        return Err("Managed Browser sessions require Lorca's own profile and transport settings.".into());
+        return Err("This Browser plugin sets its own profile or connection, so its profiles can't open.".into());
     }
     let dir = app.config.home.join("browser/profiles").join(session_id);
-    let output = app.config.home.join("browser/evidence").join(session_id);
+    let output = app.config.home.join("browser/output").join(session_id);
     std::fs::create_dir_all(&output).map_err(|e| e.to_string())?;
     crate::config::set_private(output.parent().unwrap()).map_err(|e| e.to_string())?;
     crate::config::set_private(&output).map_err(|e| e.to_string())?;
@@ -287,8 +294,7 @@ async fn connect(app: &Arc<App>, plugin: &Installed, name: &str, spec: &ServerSp
             // Windows as files the way a terminal finds them (`npx` is npm's `npx.cmd`).
             let mut cmd = lorca_agent::login_shell::command(&command).await;
             if plugin.manifest.id == crate::browser::PLUGIN_ID && args.iter().any(|arg| arg == "--user-data-dir") {
-                // A login-shell setting must not attach a managed owned session
-                // to another browser or override its persistence/isolation mode.
+                // Nor may the login shell's environment attach a profile to another browser.
                 for key in ["PLAYWRIGHT_MCP_CONFIG", "PLAYWRIGHT_MCP_CDP_ENDPOINT", "PLAYWRIGHT_MCP_ENDPOINT", "PLAYWRIGHT_MCP_CDP_HEADERS", "PLAYWRIGHT_MCP_EXTENSION", "PLAYWRIGHT_MCP_ISOLATED", "PLAYWRIGHT_MCP_STORAGE_STATE", "PLAYWRIGHT_MCP_PORT"] {
                     cmd.env_remove(key);
                 }
@@ -1966,8 +1972,9 @@ pub async fn review_call(
     ctx: &BeforeToolCallContext<'_>,
 ) -> Option<BeforeToolCallResult> {
     let tool = catalog.plugin_tool(&ctx.tool_call.name)?;
+    // Nothing to ask about while the user has the bot's browser.
     if tool.plugin_id == crate::browser::PLUGIN_ID {
-        if let Err(error) = app.browser_sessions.wait_for_bot(app, &bot.id, ctx.cancel).await {
+        if let Err(error) = app.browser_sessions.wait_if_taken_over(&bot.id, ctx.cancel).await {
             return Some(crate::local_review::blocked(error));
         }
     }
@@ -2184,18 +2191,26 @@ impl Tool for PluginTool {
             return self.resources(args, cancel).await;
         }
         let tool = self.tool.name.to_string();
-        let browser_input = if self.plugin_id == crate::browser::PLUGIN_ID {
-            let (bot_id, _) = self.browser_owner.as_ref().ok_or_else(|| ToolError("Browser tools require a bound bot and chat.".into()))?;
-            Some(self.app.browser_sessions.input(&self.app, bot_id, &cancel).await.map_err(ToolError)?)
-        } else { None };
+        // A bot's Browser calls go to its open profile, and wait while the user has it.
+        let mut browser_input = None;
+        if self.plugin_id == crate::browser::PLUGIN_ID {
+            if let Some((bot_id, _)) = &self.browser_owner {
+                browser_input = self.app.browser_sessions.input(&self.app, bot_id, &cancel).await.map_err(ToolError)?;
+            }
+        }
         if browser_input.is_some() && tool == "browser_take_screenshot" {
             args["type"] = json!("png");
-            if let Some(args) = args.as_object_mut() { args.remove("filename"); }
+            if let Some(args) = args.as_object_mut() {
+                args.remove("filename");
+            }
         }
-        let server = if let Some(input) = &browser_input { input.server.clone() } else { tokio::select! {
-            server = self.app.mcp.server(&self.app, &self.plugin_id, &self.server_name) => server.map_err(ToolError)?,
-            _ = cancel.cancelled() => return Err(ToolError("Stopped".into())),
-        }};
+        let server = match &browser_input {
+            Some(input) => input.server.clone(),
+            None => tokio::select! {
+                server = self.app.mcp.server(&self.app, &self.plugin_id, &self.server_name) => server.map_err(ToolError)?,
+                _ = cancel.cancelled() => return Err(ToolError("Stopped".into())),
+            },
+        };
         let mut params = CallToolRequestParams::default();
         params.name = tool.clone().into();
         params.arguments = args.as_object().cloned();
@@ -2206,16 +2221,26 @@ impl Tool for PluginTool {
         let call = server.service.send_cancellable_request(request, options);
         let handle = tokio::select! {
             handle = call => handle.map_err(|e| ToolError(format!("{tool} failed: {e}")))?,
-            _ = cancel.cancelled() => {
-                if let Some(input) = &browser_input { input.interrupted(&self.app); }
-                return Err(ToolError("Stopped".into()));
-            },
+            _ = cancel.cancelled() => return Err(ToolError("Stopped".into())),
         };
         let (peer, id) = (handle.peer.clone(), handle.id.clone());
+        let mut answer = Box::pin(handle.await_response());
         let response = tokio::select! {
-            response = handle.await_response() => response,
+            response = &mut answer => response,
             _ = cancel.cancelled() => {
-                if let Some(input) = &browser_input { input.interrupted(&self.app); }
+                // A profile's browser stays the bot's until the server has answered, so a takeover
+                // never meets a click still on its way. Called off, the call would be forgotten here
+                // while the server went on, so it finishes; one that takes over ten seconds closes
+                // its browser instead.
+                if let Some(input) = browser_input {
+                    let app = self.app.clone();
+                    tokio::spawn(async move {
+                        if tokio::time::timeout(std::time::Duration::from_secs(10), answer).await.is_err() {
+                            input.interrupted(&app);
+                        }
+                    });
+                    return Err(ToolError("Stopped".into()));
+                }
                 let cancelled = rmcp::model::CancelledNotification::new(rmcp::model::CancelledNotificationParam::new(Some(id), Some("Stopped".into())));
                 let _ = peer.send_notification(cancelled.into()).await;
                 return Err(ToolError("Stopped".into()));
@@ -2244,9 +2269,10 @@ impl Tool for PluginTool {
             }
         };
         let is_error = result.is_error.unwrap_or(false);
+        // A screenshot of the bot's profile shows in the chat too.
         if !is_error && tool == "browser_take_screenshot" {
             if let (Some(input), Some((bot_id, chat_id))) = (&browser_input, &self.browser_owner) {
-                crate::browser::publish_image(&self.app, bot_id, chat_id, &input.id, "Browser verification screenshot", &result).map_err(ToolError)?;
+                crate::browser::publish_image(&self.app, bot_id, chat_id, &input.name, &result).map_err(ToolError)?;
             }
         }
         // Off the async threads: making a large image one a model takes takes a moment.
@@ -2272,9 +2298,6 @@ impl PluginTool {
     /// A resource tool's call: a page of the server's resources or templates, or one resource's
     /// contents, shaped as a tool's result, so a script reads `structuredContent` either way.
     async fn resources(&self, args: Value, cancel: CancellationToken) -> Result<ToolResult, ToolError> {
-        if self.plugin_id == crate::browser::PLUGIN_ID {
-            return Err(ToolError("Browser session resources require an explicit session backend.".into()));
-        }
         let tool = self.tool.name.to_string();
         let server = tokio::select! {
             server = self.app.mcp.server(&self.app, &self.plugin_id, &self.server_name) => server.map_err(ToolError)?,
@@ -2785,32 +2808,49 @@ pub(crate) mod tests {
     const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
     const NOT_AN_IMAGE: &str = "bm90IGFuIGltYWdl";
 
-    /// A real MCP handshake/transport with deterministic browser results. No
-    /// package download or desktop browser is needed for input-boundary tests.
+    /// A Browser server over an in-memory MCP transport: every call answers at once with text, a
+    /// screenshot with a PNG, and `browser_wait_for` only after 300 ms. It records the calls.
     pub(crate) async fn fake_browser(app: &Arc<App>) -> (Arc<Server>, Arc<Mutex<Vec<String>>>) {
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
         let (client_io, server_io) = tokio::io::duplex(16384);
         let calls = Arc::new(Mutex::new(Vec::new()));
         let recorded = calls.clone();
+        let (read, mut write) = tokio::io::split(server_io);
+        let (answers, mut outgoing) = tokio::sync::mpsc::unbounded_channel::<String>();
         tokio::spawn(async move {
-            let (read, mut write) = tokio::io::split(server_io);
+            while let Some(line) = outgoing.recv().await {
+                if write.write_all(line.as_bytes()).await.is_err() {
+                    break;
+                }
+            }
+        });
+        tokio::spawn(async move {
             let mut lines = tokio::io::BufReader::new(read).lines();
             while let Ok(Some(line)) = lines.next_line().await {
                 let request: Value = serde_json::from_str(&line).unwrap();
-                let Some(id) = request.get("id") else { continue };
+                let Some(id) = request.get("id").cloned() else { continue };
+                let name = request["params"]["name"].as_str().unwrap_or_default().to_string();
                 let result = match request["method"].as_str() {
                     Some("initialize") => json!({ "protocolVersion": request["params"]["protocolVersion"], "capabilities": { "tools": {} }, "serverInfo": { "name": "fake-browser", "version": "1" } }),
                     Some("tools/list") => json!({ "tools": [] }),
                     Some("tools/call") => {
-                        let name = request["params"]["name"].as_str().unwrap().to_string();
                         recorded.lock().unwrap().push(name.clone());
-                        if name == "browser_take_screenshot" { json!({ "content": [{ "type": "image", "data": PNG, "mimeType": "image/png" }] }) }
-                        else { json!({ "content": [{ "type": "text", "text": "ok" }] }) }
+                        if name == "browser_take_screenshot" {
+                            json!({ "content": [{ "type": "image", "data": PNG, "mimeType": "image/png" }] })
+                        } else {
+                            json!({ "content": [{ "type": "text", "text": "ok" }] })
+                        }
                     }
                     _ => json!({}),
                 };
-                let response = format!("{}\n", json!({ "jsonrpc": "2.0", "id": id, "result": result }));
-                if write.write_all(response.as_bytes()).await.is_err() { break; }
+                let line = format!("{}\n", json!({ "jsonrpc": "2.0", "id": id, "result": result }));
+                let answers = answers.clone();
+                tokio::spawn(async move {
+                    if name == "browser_wait_for" {
+                        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                    }
+                    let _ = answers.send(line);
+                });
             }
         });
         let service = Client { info: ClientConfig::default(), app: Arc::downgrade(app), plugin_id: crate::browser::PLUGIN_ID.into(), server: "browser".into(), generation: app.mcp.generation(crate::browser::PLUGIN_ID) }.serve(client_io).await.unwrap();
@@ -2818,6 +2858,23 @@ pub(crate) mod tests {
             plugin_id: crate::browser::PLUGIN_ID.into(), name: "browser".into(), service,
             tools: std::sync::RwLock::new(Vec::new()), instructions: None, resources: false, auth: None, bearer_expires_at: None,
         }), calls)
+    }
+
+    /// One of the Browser plugin's tools as a bot's turn has it.
+    pub(crate) fn browser_tool(app: &Arc<App>, bot_id: &str, chat_id: &str, name: &str) -> PluginTool {
+        PluginTool {
+            app: app.clone(),
+            plugin_id: crate::browser::PLUGIN_ID.into(),
+            plugin_name: "Browser".into(),
+            server_name: "browser".into(),
+            tool: mcp_tool(name, "", r#"{"type":"object"}"#),
+            name: tool_name(crate::browser::PLUGIN_ID, name),
+            description: String::new(),
+            read_only: false,
+            kind: ToolKind::Call,
+            timeout: super::super::CALL_TIMEOUT,
+            browser_owner: Some((bot_id.into(), chat_id.into())),
+        }
     }
 
     /// A small JPEG, in base64.
