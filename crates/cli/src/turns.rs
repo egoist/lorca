@@ -1551,7 +1551,7 @@ fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job, store: &Memo
         bot.id
     ));
     prompt.push_str(&routines_prompt(app, bot));
-    prompt.push_str(&crate::attention::prompt(app, &bot.id, &chat.meta.id));
+    prompt.push_str(&crate::attention::prompt(app, &bot.id, &chat.meta.id, job.kind == "attention_report"));
     prompt.push_str(&plugins_prompt(app, bot, plugins));
     prompt.push_str(&memory_prompt(store));
 

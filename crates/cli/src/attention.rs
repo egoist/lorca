@@ -29,8 +29,6 @@ pub struct Preferences {
     pub urgent_direct: bool,
     #[serde(default)]
     pub default_coordinator_bot_id: Option<String>,
-    #[serde(default)]
-    pub coordinators: BTreeMap<String, String>,
 }
 impl Default for Preferences {
     fn default() -> Self {
@@ -38,7 +36,6 @@ impl Default for Preferences {
             summaries: true,
             urgent_direct: true,
             default_coordinator_bot_id: None,
-            coordinators: BTreeMap::new(),
         }
     }
 }
@@ -68,6 +65,17 @@ pub enum Category {
     Blocker,
     Commitment,
     Change,
+}
+
+impl Category {
+    fn word(self) -> &'static str {
+        match self {
+            Category::Review => "Review",
+            Category::Blocker => "Blocker",
+            Category::Commitment => "Commitment",
+            Category::Change => "Change",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -194,9 +202,6 @@ fn preferences_of(records: &[Record]) -> Preferences {
 
 fn current_preferences(app: &App, records: &[Record]) -> Preferences {
     let mut preferences = preferences_of(records);
-    preferences
-        .coordinators
-        .retain(|chat, bot| app.chat(chat).is_some() && app.bot(bot).is_some());
     preferences.default_coordinator_bot_id = preferences
         .default_coordinator_bot_id
         .filter(|bot| app.bot(bot).is_some());
@@ -337,7 +342,6 @@ pub fn coordinator(app: &App, chat_id: &str) -> Option<String> {
     let chat = app.chat(chat_id)?;
     let preferences = preferences(app);
     [
-        preferences.coordinators.get(chat_id).cloned(),
         chat.meta.owner().map(str::to_string),
         preferences.default_coordinator_bot_id,
         chat.meta.bot_ids.first().cloned(),
@@ -463,7 +467,7 @@ pub fn resolve(
         return Ok(item);
     }
     if expected.is_some_and(|expected| *expected != item.revision) {
-        return Err("Attention item changed; refresh before resolving".into());
+        return Err("This item changed on another Device. Look at it again before resolving it.".into());
     }
     item.resolved = true;
     item.revision = next_revision(app, &known)?;
@@ -524,7 +528,9 @@ fn wake_coordinator(app: &Arc<App>, item: &Item, reporter: &str, hops: u32) {
     };
     let mut incoming = Message::new(&dm.meta.id, Author::Bot { bot_id: reporter.into() }, Body::Handoff {
         from: reporter.into(), to: item.coordinator_bot_id.clone(),
-        reason: format!("Attention item {} ({:?}): {}. {} Next: {}. Source chat {}. Inspect attention.list and maintain one brief with decisions and changes; PASS when nothing needs attention.", item.id, item.category, item.title, item.summary, item.next_action, item.sources[0].chat_id),
+        // The transcript's "Message from" marker shows these words; the job's system prompt
+        // says what the coordinator does with them.
+        reason: format!("{}: {}\n{}\nNext: {}", item.category.word(), item.title, item.summary, item.next_action),
     });
     incoming.notification = Some(Notification::Quiet);
     app.upsert_message(incoming.clone(), true);
@@ -710,22 +716,9 @@ pub fn dispatch(
                     Some(value.as_str().ok_or("Invalid coordinator")?.into())
                 };
             }
-            if let Some(value) = params.get("coordinators") {
-                preferences.coordinators =
-                    serde_json::from_value(value.clone()).map_err(|e| e.to_string())?
-            }
-            for id in preferences
-                .coordinators
-                .values()
-                .chain(preferences.default_coordinator_bot_id.iter())
-            {
+            if let Some(id) = &preferences.default_coordinator_bot_id {
                 if app.bot(id).is_none() {
                     return Err("Unknown coordinator bot".into());
-                }
-            }
-            for id in preferences.coordinators.keys() {
-                if app.chat(id).is_none() {
-                    return Err("Unknown coordinator chat".into());
                 }
             }
             if preferences == preferences_of(&known) {
@@ -803,6 +796,10 @@ impl lorca_agent::Tool for AttentionTool {
         if action == "brief" {
             args["coordinator_bot_id"] = json!(self.bot_id)
         }
+        let quiet = args["quiet"].as_bool().unwrap_or(false);
+        // Whether the call speaks for this turn: then the turn's own words alert nobody, so the
+        // user hears the news once. A report the bot keeps for itself leaves its reply alone.
+        let mut speaks = action == "brief";
         let result = if action == "report" {
             report(
                 &self.app,
@@ -810,7 +807,10 @@ impl lorca_agent::Tool for AttentionTool {
                 Some(&self.bot_id),
                 self.hops,
             )
-            .map(|item| json!(item))
+            .map(|item| {
+                speaks = quiet || item.urgent || item.coordinator_bot_id != self.bot_id;
+                json!(item)
+            })
         } else {
             dispatch(
                 &self.app,
@@ -820,7 +820,7 @@ impl lorca_agent::Tool for AttentionTool {
             )
         }
         .map_err(lorca_agent::ToolError)?;
-        if action != "list" {
+        if speaks {
             self.handled
                 .store(true, std::sync::atomic::Ordering::Relaxed);
         }
@@ -830,8 +830,13 @@ impl lorca_agent::Tool for AttentionTool {
     }
 }
 
-pub fn prompt(app: &App, bot_id: &str, chat_id: &str) -> String {
-    let mut prompt = format!("\nAttention: use attention.report for pending reviews, blockers, commitments and important changes, each with a stable topic key and next action. Source chat id is {chat_id}. Ordinary specialist reports go to their owning coordinator; mark only time-critical items urgent for a direct alert. Quiet checks return PASS and publish no brief. Coordinators use attention.brief for one concise account of decisions and changes, without repeating specialist transcripts; resolve items when finished. Chef is an ordinary bot and any bot can coordinate.\n");
+/// The attention part of a turn's system prompt. `reported` is a coordinator's turn that an
+/// attention report started.
+pub fn prompt(app: &App, bot_id: &str, chat_id: &str, reported: bool) -> String {
+    let mut prompt = format!("\nAttention: when work needs the user (a review, a blocker, a commitment, or an important change), record it with the attention tool's report under a stable topic key, with the next action. This chat's id is {chat_id}. A report goes to the coordinating bot, which tells the user; mark it urgent only when it cannot wait, which also alerts the user directly, and quiet for a check that found nothing new. A coordinating bot keeps one brief of decisions and changes, without repeating transcripts, and resolves items once they are done.\n");
+    if reported {
+        prompt.push_str("This turn was started by an attention report. Read the attention list, publish a brief when the user needs to know something, resolve what is finished, and answer with exactly PASS when nothing needs the user.\n");
+    }
     if let Ok(view) = view(app) {
         for item in view
             .items
@@ -840,8 +845,8 @@ pub fn prompt(app: &App, bot_id: &str, chat_id: &str) -> String {
             .take(20)
         {
             prompt.push_str(&format!(
-                "- Attention {} ({:?}): {} · next: {} · source chat {}\n",
-                item.id, item.category, item.title, item.next_action, item.sources[0].chat_id
+                "- Attention {} ({}): {} · next: {} · source chat {}\n",
+                item.id, item.category.word(), item.title, item.next_action, item.sources[0].chat_id
             ));
         }
     }
@@ -1101,7 +1106,7 @@ mod tests {
         ordinary.quiet = false;
         report(&account.app, ordinary.clone(), Some(&account.scout.id), 0).unwrap();
         let routed = account.app.messages(&account.chef_chat);
-        assert_eq!(routed.iter().filter(|message| matches!(&message.body, Body::Handoff { from, to, .. } if from == &account.scout.id && to == &account.chef.id)).count(), 1);
+        assert_eq!(routed.iter().filter(|message| matches!(&message.body, Body::Handoff { from, to, reason } if from == &account.scout.id && to == &account.chef.id && reason.starts_with("Review: Decide the contract terms\n"))).count(), 1, "the marker reads as words, not ids");
         assert!(
             account.app.messages(&account.scout_chat).is_empty(),
             "ordinary reports do not alert from the specialist chat"
