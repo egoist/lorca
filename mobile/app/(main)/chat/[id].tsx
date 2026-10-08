@@ -37,7 +37,7 @@ import Animated, {
 } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { SoftScrollEdgeView } from "../../../modules/lorca-core/SoftScrollEdgeView";
-import { chatTitle, engine } from "../../../src/core/engine";
+import { chatTitle, engine, type PickedFile } from "../../../src/core/engine";
 import { isLive, type Bot, type Message } from "../../../src/core/model";
 import {
   useBotMap,
@@ -666,12 +666,14 @@ export default function ChatScreen() {
     [chat, bots, workingBotIds, isWorking, status, language],
   );
   rowsRef.current = rows;
+  // Keyed on the member list, not the chat, which changes with every streamed piece of a reply.
+  const botIds = chat?.bot_ids;
   const members = useMemo(
     () =>
-      (chat?.bot_ids ?? [])
+      (botIds ?? [])
         .map((b) => bots.get(b))
         .filter((b): b is Bot => !!b),
-    [chat, bots],
+    [botIds, bots],
   );
   const isGroup = chat?.kind === "group";
   const title = chat ? chatTitle(chat) : t("Chat");
@@ -699,6 +701,39 @@ export default function ChatScreen() {
       setReplying({ messageID: message.id, name: quoteAuthorName(message.author, bots), text: words });
     },
     [bots],
+  );
+  const cancelReply = useCallback(() => setReplying(null), []);
+  // Stable while the reply target is, so the memoized composer skips the renders a streaming
+  // reply causes.
+  const send = useCallback(
+    (text: string, files: PickedFile[], mentions: string[]) => {
+      // The anchor is measured against the screen without the keyboard.
+      void KeyboardController.dismiss();
+      // Before the message reaches the list: FlashList notes "near the end" on a commit
+      // made while its catch-up is on, and scrolls to the end on the change after it.
+      setAnchored(true);
+      const replyTo = replying?.messageID;
+      setReplying(null);
+      const sent = engine
+        .sendMessage(id, text, files, mentions, replyTo)
+        .then((message) => {
+          stopSettling();
+          anchorKey.current = message.id;
+          anchorTarget.current = null;
+          anchorTouched.current = false;
+          anchorLifted.current = false;
+          anchorSpaced.current = false;
+          syncInsetTop();
+        });
+      sent.catch((error) => {
+        if (!anchorKey.current) releaseAnchor();
+        Alert.alert(
+          t("Could not send"),
+          error instanceof Error ? error.message : String(error),
+        );
+      });
+    },
+    [id, replying, releaseAnchor, stopSettling, syncInsetTop],
   );
   /// The message a reply's quote names, brought into view with its bubble pulsing. One on a page
   /// not loaded yet stays where it is.
@@ -973,34 +1008,8 @@ export default function ChatScreen() {
             isGroup={isGroup}
             placeholder={placeholder}
             reply={replying}
-            onCancelReply={() => setReplying(null)}
-            onSend={(text, files, mentions) => {
-              // The anchor is measured against the screen without the keyboard.
-              void KeyboardController.dismiss();
-              // Before the message reaches the list: FlashList notes "near the end" on a commit
-              // made while its catch-up is on, and scrolls to the end on the change after it.
-              setAnchored(true);
-              const replyTo = replying?.messageID;
-              setReplying(null);
-              const sent = engine
-                .sendMessage(id, text, files, mentions, replyTo)
-                .then((message) => {
-                  stopSettling();
-                  anchorKey.current = message.id;
-                  anchorTarget.current = null;
-                  anchorTouched.current = false;
-                  anchorLifted.current = false;
-                  anchorSpaced.current = false;
-                  syncInsetTop();
-                });
-              sent.catch((error) => {
-                if (!anchorKey.current) releaseAnchor();
-                Alert.alert(
-                  t("Could not send"),
-                  error instanceof Error ? error.message : String(error),
-                );
-              });
-            }}
+            onCancelReply={cancelReply}
+            onSend={send}
           />
         </KeyboardFoot>
       </View>

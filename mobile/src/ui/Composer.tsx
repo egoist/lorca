@@ -18,7 +18,7 @@ import * as Haptics from "expo-haptics";
 import { Image } from "expo-image";
 import * as ImagePicker from "expo-image-picker";
 import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from "expo-speech-recognition";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View, type ColorValue, type ImageSourcePropType, type StyleProp, type ViewStyle } from "react-native";
 import type { PickedFile } from "../core/engine";
 import { fileSize, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS, type Bot } from "../core/model";
@@ -95,7 +95,9 @@ function AttachMenu({ sources, tint, label }: { sources: AttachSource[]; tint: C
   );
 }
 
-export function Composer({
+/// Memoized: the chat renders again with every streamed piece of a reply, the composer only when
+/// its own inputs change.
+export const Composer = memo(function Composer({
   members,
   isGroup,
   placeholder,
@@ -531,7 +533,7 @@ export function Composer({
       ) : null}
     </View>
   );
-}
+});
 
 function imageAsset(asset: ImagePicker.ImagePickerAsset): PickedFile {
   const name = asset.fileName ?? `Photo ${new Date().toISOString().slice(0, 19).replace("T", " ").replace(/:/g, ".")}.jpg`;

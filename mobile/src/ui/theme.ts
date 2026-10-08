@@ -2,7 +2,7 @@
 // Material 3 dynamic colors on Android, including the user's wallpaper palette on Android 12+.
 
 import { Color } from "expo-router";
-import { Platform, PlatformColor, useColorScheme, type ColorValue } from "react-native";
+import { AppState, Platform, PlatformColor, useColorScheme, type ColorValue } from "react-native";
 import type { Accent } from "../core/model";
 
 export interface Palette {
@@ -32,9 +32,25 @@ export interface Palette {
 
 const ios = (name: string) => (Platform.OS === "ios" ? PlatformColor(name) : undefined);
 
+/// One palette per appearance, built on first use. Every component asks for it as it renders, and
+/// each Material dynamic color is a synchronous call into the native side; the same object each
+/// time also keeps memoized work that depends on it from running again.
+const palettes: { light?: Palette; dark?: Palette } = {};
+// The wallpaper, and with it the dynamic colors, can change while the app is in the background.
+if (Platform.OS === "android")
+  AppState.addEventListener("change", (state) => {
+    if (state === "active") {
+      palettes.light = undefined;
+      palettes.dark = undefined;
+    }
+  });
+
 export function usePalette(): Palette {
-  const scheme = useColorScheme();
-  const dark = scheme === "dark";
+  const dark = useColorScheme() === "dark";
+  return (palettes[dark ? "dark" : "light"] ??= makePalette(dark));
+}
+
+function makePalette(dark: boolean): Palette {
   if (Platform.OS === "ios") {
     return {
       label: ios("label")!,
