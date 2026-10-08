@@ -497,16 +497,8 @@ pub async fn import_preview(app: &Arc<App>, text: &str, params: &Value) -> Value
             issues.push(error);
         }
     }
-    if !template.skills.is_empty() {
-        let bot_id = app.state.lock().unwrap().bots.first().map(|b| b.id.clone());
-        match bot_id {
-            Some(bot_id) => match playbooks::list(app, &bot_id).await {
-                Ok(Some(_)) => {}
-                Ok(None) => issues.push(playbooks::UNAVAILABLE.into()),
-                Err(error) => issues.push(error),
-            },
-            None => issues.push(playbooks::UNAVAILABLE.into()),
-        }
+    if !template.skills.is_empty() && !playbooks::available(app).await {
+        issues.push(playbooks::UNAVAILABLE.into());
     }
     if let Some(name) = params["name"].as_str() {
         if let Err(error) = bot_name(name) {

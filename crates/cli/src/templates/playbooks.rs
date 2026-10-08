@@ -35,6 +35,11 @@ pub async fn list(app: &Arc<App>, bot_id: &str) -> Result<Option<Vec<Value>>, St
     }
 }
 
+/// Whether this CLI has the playbook store, whatever a bot has in it.
+pub async fn available(app: &Arc<App>) -> bool {
+    !matches!(call(app, "playbooks.list", json!({ "scope": scope(""), "include_drafts": false })).await, Err(error) if error == "unknown method playbooks.list")
+}
+
 pub async fn export(app: &Arc<App>, bot_id: &str, id: &str) -> Result<Skill, String> {
     let value = call(
         app,
