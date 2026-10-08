@@ -89,22 +89,16 @@ pub fn serve(app: Arc<App>, request: Request, blob_id: String) {
 
 /// What this Runner can be asked. The memory verbs check that the bot runs here: a request
 /// that reached the wrong machine is refused, not forwarded. The plugin verbs act on this
-/// Runner's own installs, and the `mcp.*` verbs on its mcp.json; the permission verb answers a
-/// card a bot here is waiting on; the bash verbs type into, stop, or background a command here;
+/// Runner's own installs, the `mcp.*` verbs on its mcp.json, and the `events.*` verbs on its
+/// event subscriptions; the permission verb answers a card a bot here is waiting on; the bash
+/// verbs type into, stop, or background a command here;
 /// Send now has a turn here read a message it holds. The update verbs install the latest release
 /// of this CLI, or turn its automatic updates on or off. A request names no release and no
 /// download: the Runner installs only what its own signed manifest offers.
 async fn answer(app: &Arc<App>, request: &Request) -> Result<Value, String> {
     let body = &request.body;
     match request.verb.as_str() {
-        verb if verb.starts_with("events.") => {
-            if verb == "events.ingest" {
-                let event = serde_json::from_value(body["envelope"].clone()).map_err(|e| e.to_string())?;
-                crate::event_triggers::receive(app, event).map_err(|e| e.to_string())
-            } else {
-                crate::event_triggers::serve(app, verb, body).map_err(|e| e.to_string())
-            }
-        }
+        verb if verb.starts_with("events.") => crate::event_triggers::serve(app, verb, body).map_err(|e| e.to_string()),
         "memory.read" => memory_read(app, body["bot_id"].as_str().ok_or("missing bot_id")?),
         "memory.write" => {
             let text = body["text"].as_str().ok_or("missing text")?;

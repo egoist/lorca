@@ -748,11 +748,6 @@ fn apply_blob_contents(app: &Arc<App>, machine_file: &crate::keys::MachineFile, 
     let Ok(dek) = machine_file.dek() else { return };
 
     match blob.kind.as_str() {
-        "event" => {
-            if let Err(error) = crate::event_triggers::receive_blob(app, machine_file, blob) {
-                tracing::error!(%error, "event envelope");
-            }
-        }
         "roster" => match crate::crypto::decrypt_json::<RosterBlob>(&dek, "roster", &ciphertext) {
             Ok(roster) => apply_roster(app, roster),
             Err(error) => tracing::warn!(%error, "roster blob"),

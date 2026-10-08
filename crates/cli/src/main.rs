@@ -125,15 +125,19 @@ enum EventsCommand {
     Add { file: PathBuf },
     /// Replace configuration from a JSON file; target stays fixed.
     Edit { id: String, file: PathBuf },
+    /// Hold a subscription's work; deliveries still queue.
     Pause { id: String },
+    /// Run held work again.
     Resume { id: String },
     /// Rotate the gateway signing key; export a new route afterwards.
     Reconnect { id: String, #[usage(long)] expires_at: Option<i64> },
     /// Export the signing secret and Runner public keys to a private file.
     Route { id: String, file: PathBuf },
+    /// Delete a subscription and its queue.
     Remove { id: String },
     /// Explicitly retry a delivery after reviewing failed or interrupted work.
     Retry { id: String },
+    /// Drop a pending, failed, or interrupted delivery; a redelivery of it stays ignored.
     Discard { id: String },
     /// Verify a signed envelope from stdin and durably queue encrypted delivery.
     Forward { file: PathBuf },

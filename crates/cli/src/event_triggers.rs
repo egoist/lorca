@@ -22,6 +22,14 @@ const DEDUP_RETENTION_SECS: i64 = 30 * 86_400;
 const SUB_KIND: &str = "event_subscription";
 const INBOX_KIND: &str = "event_inbox";
 
+// Why a subscription's work is held, in its health. Each clears when its cause does.
+const AUTH_PROBLEM: &str = "Gateway authentication failed; reconnect and export a fresh route";
+const FAILED_PROBLEM: &str = "Event turn stopped or failed; inspect the chat before retrying";
+#[cfg(feature = "runner")]
+const AWAY_PROBLEM: &str = "Waiting for the user: nobody has written in seven days";
+#[cfg(feature = "runner")]
+const TARGET_PROBLEM: &str = "Target bot or routine is unavailable on this Runner";
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum QueuePolicy {
@@ -406,7 +414,7 @@ pub fn serve(app: &Arc<App>, method: &str, body: &Value) -> anyhow::Result<Value
                     .checked_add(1)
                     .context("Gateway generation exhausted")?;
                 sub.config.expires_at = body["expires_at"].as_i64();
-                sub.health.problem = None;
+                clear_problem(&mut sub, AUTH_PROBLEM);
                 sub.health.authentication_failures = 0;
             } else {
                 sub.config.is_enabled = method == "events.resume";
@@ -455,15 +463,17 @@ pub fn serve(app: &Arc<App>, method: &str, body: &Value) -> anyhow::Result<Value
             ) {
                 bail!("Only pending, failed, or uncertain events can be retried or discarded");
             }
-            item.state = if method == "events.retry" {
-                DeliveryState::Pending
+            if method == "events.retry" {
+                item.state = DeliveryState::Pending;
             } else {
-                DeliveryState::Done
-            };
+                // A discarded delivery keeps only its deduplication mark.
+                item.state = DeliveryState::Done;
+                item.envelope.payload.clear();
+            }
             item.task = None;
             save_delivery(&tx, &key, &item)?;
             let mut sub = subscription(&tx, &key, &item.envelope.subscription_id)?;
-            sub.health.problem = None;
+            clear_problem(&mut sub, FAILED_PROBLEM);
             save_subscription(&tx, &key, &sub)?;
             json!({"id": item.id, "state": item.state})
         }
@@ -471,6 +481,12 @@ pub fn serve(app: &Arc<App>, method: &str, body: &Value) -> anyhow::Result<Value
     };
     tx.commit()?;
     Ok(reply)
+}
+
+fn clear_problem(sub: &mut Subscription, problem: &str) {
+    if sub.health.problem.as_deref() == Some(problem) {
+        sub.health.problem = None;
+    }
 }
 
 /// Manage another Runner through the existing encrypted request/response path.
@@ -488,12 +504,7 @@ pub async fn dispatch(app: &Arc<App>, method: &str, body: Value) -> Result<Value
     {
         return crate::requests::ask(app, runner, method, body.clone()).await;
     }
-    if method == "events.ingest" {
-        let event = serde_json::from_value(body["envelope"].clone()).map_err(|e| e.to_string())?;
-        receive(app, event).map_err(|e| e.to_string())
-    } else {
-        serve(app, method, &body).map_err(|e| e.to_string())
-    }
+    serve(app, method, &body).map_err(|e| e.to_string())
 }
 
 /// Verify and durably queue ciphertext on the gateway; no plaintext enters its relay outbox.
@@ -561,8 +572,7 @@ pub fn receive(app: &App, event: Envelope) -> anyhow::Result<Value> {
     let verified = validate_envelope(&sub.secret, &event, now);
     if verified.is_err() || sub.generation != event.generation {
         sub.health.authentication_failures += 1;
-        sub.health.problem =
-            Some("Gateway authentication failed; reconnect and export a fresh route".into());
+        sub.health.problem = Some(AUTH_PROBLEM.into());
         save_subscription(&tx, &key, &sub)?;
         tx.commit()?;
         return Ok(json!({"status": "rejected", "reason": "authentication"}));
@@ -610,7 +620,7 @@ pub fn receive(app: &App, event: Envelope) -> anyhow::Result<Value> {
     }
     save_delivery(&tx, &key, &item)?;
     sub.health.last_received_at = Some(now);
-    sub.health.problem = None;
+    clear_problem(&mut sub, AUTH_PROBLEM);
     save_subscription(&tx, &key, &sub)?;
     tx.commit()?;
     Ok(json!({"status": if matched { "queued" } else { "filtered" }, "id": id}))
@@ -676,18 +686,20 @@ pub fn task_for_job(app: &App, job: &crate::model::Job) -> anyhow::Result<EventT
     item.task.context("Event task was not admitted")
 }
 
+/// Settles the delivery behind a finished event turn. A turn held behind the chat lock put its
+/// delivery back to pending, and only the Job the inbox admitted settles its delivery.
 #[cfg(feature = "runner")]
 pub fn finished(
     app: &App,
     job: &crate::model::Job,
     outcome: crate::runtime::TurnOutcome,
-) -> anyhow::Result<bool> {
+) -> anyhow::Result<()> {
     let key = dek(app)?;
     let mut db = app.store.connection.lock().unwrap();
     let tx = db.transaction()?;
     let mut item = delivery(&tx, &key, &job.trigger_message_id)?;
-    if item.state != DeliveryState::Running {
-        return Ok(false);
+    if item.state != DeliveryState::Running || job.id != format!("event-{}", item.id) {
+        return Ok(());
     }
     let mut sub = subscription(&tx, &key, &item.envelope.subscription_id)?;
     let success = outcome != crate::runtime::TurnOutcome::Skipped;
@@ -709,13 +721,12 @@ pub fn finished(
         item.envelope.payload.clear();
         item.task = None;
     } else {
-        sub.health.problem =
-            Some("Event turn stopped or failed; inspect the chat before retrying".into());
+        sub.health.problem = Some(FAILED_PROBLEM.into());
     }
     save_delivery(&tx, &key, &item)?;
     save_subscription(&tx, &key, &sub)?;
     tx.commit()?;
-    Ok(true)
+    Ok(())
 }
 
 /// Restart never repeats a possibly-effectful turn automatically.
@@ -735,52 +746,70 @@ pub fn recover(app: &App) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Retains dedup tombstones beyond the relay's delivery window; active work never ages out.
+#[cfg(feature = "runner")]
+fn purge(app: &App) -> anyhow::Result<()> {
+    let Some(key) = app.dek() else { return Ok(()) };
+    let now = now_unix();
+    let mut db = app.store.connection.lock().unwrap();
+    let tx = db.transaction()?;
+    for item in deliveries(&tx, &key)? {
+        if item.received_at < now - DEDUP_RETENTION_SECS
+            && matches!(
+                item.state,
+                DeliveryState::Done | DeliveryState::Filtered | DeliveryState::Coalesced
+            )
+        {
+            tx.execute("DELETE FROM event_inbox WHERE id=?1", [item.id])?;
+        }
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+/// Records why a subscription's work is held, on the stored subscription, so a receipt or an
+/// edit that landed since this tick read it is kept.
+#[cfg(feature = "runner")]
+fn hold(app: &App, key: &[u8; 32], id: &str, problem: Option<&str>) -> anyhow::Result<()> {
+    let db = app.store.connection.lock().unwrap();
+    let mut sub = subscription(&db, key, id)?;
+    if sub.health.problem.as_deref() != problem {
+        sub.health.problem = problem.map(str::to_string);
+        save_subscription(&db, key, &sub)?;
+    }
+    Ok(())
+}
+
 /// One delivery per subscription at a time; the existing runtime owns turn/tool accounting.
 #[cfg(feature = "runner")]
 pub fn tick(app: &Arc<App>) -> anyhow::Result<()> {
     let Some(key) = app.dek() else { return Ok(()) };
     let now = now_unix();
     let last_user = app.store.last_user_at()?;
-    // Retain dedup tombstones beyond the relay's delivery window; active work never ages out.
-    {
-        let mut db = app.store.connection.lock().unwrap();
-        let tx = db.transaction()?;
-        for item in deliveries(&tx, &key)? {
-            if item.received_at < now - DEDUP_RETENTION_SECS
-                && matches!(
-                    item.state,
-                    DeliveryState::Done | DeliveryState::Filtered | DeliveryState::Coalesced
-                )
-            {
-                tx.execute("DELETE FROM event_inbox WHERE id=?1", [item.id])?;
-            }
-        }
-        tx.commit()?;
-    }
     let subs = {
         let db = app.store.connection.lock().unwrap();
         subscriptions(&db, &key)?
     };
-    for mut sub in subs {
+    for sub in subs {
         if !sub.config.is_enabled || sub.config.expires_at.is_some_and(|e| e <= now) {
             continue;
         }
+        // A week without a message from the user holds the work, as it pauses due routines,
+        // until the user writes again.
         let away = now - last_user.unwrap_or(sub.enabled_at).max(sub.enabled_at)
             > crate::routines::AWAY_AFTER_SECS;
-        let problem = if away {
-            Some("Paused after seven days without a user message")
+        let held = if away {
+            Some(AWAY_PROBLEM)
         } else if local_target(app, &sub.config).is_err() {
-            Some("Target bot or routine is unavailable on this Runner")
+            Some(TARGET_PROBLEM)
         } else {
             None
         };
-        if let Some(problem) = problem {
-            if away {
-                sub.config.is_enabled = false;
-            }
-            sub.health.problem = Some(problem.into());
-            let db = app.store.connection.lock().unwrap();
-            save_subscription(&db, &key, &sub)?;
+        let problem = sub.health.problem.as_deref();
+        if held != problem && (held.is_some() || matches!(problem, Some(AWAY_PROBLEM | TARGET_PROBLEM))) {
+            hold(app, &key, &sub.id, held)?;
+        }
+        if held.is_some() {
             continue;
         }
         if let Some(id) = &sub.config.routine_id {
@@ -855,11 +884,18 @@ pub fn event_cue(event: &Envelope) -> String {
 
 #[cfg(feature = "runner")]
 pub async fn run(app: Arc<App>) {
+    // A delivery left running stays running, and holds its subscription, when this fails.
     if let Err(error) = recover(&app) {
         tracing::error!(%error, "recovering the event inbox");
-        return;
     }
+    let mut purged_at = 0;
     loop {
+        if now_unix() - purged_at >= 3600 {
+            purged_at = now_unix();
+            if let Err(error) = purge(&app) {
+                tracing::error!(%error, "purging the event inbox");
+            }
+        }
         if let Err(error) = tick(&app) {
             tracing::error!(%error, "draining the event inbox");
         }
@@ -1230,6 +1266,12 @@ mod tests {
             "event data cannot replace its routine budget scope"
         );
         forged.id = "forged-event-job".into();
+        finished(&scratch.0, &forged, crate::runtime::TurnOutcome::Skipped).unwrap();
+        assert_eq!(
+            items(&scratch.0)[0].state,
+            DeliveryState::Running,
+            "only the admitted Job settles its delivery"
+        );
         let machine = scratch.0.machine_file().unwrap();
         crate::sync::apply_blob(
             &scratch.0,
@@ -1283,6 +1325,68 @@ mod tests {
             listed["subscriptions"][0]["health"]["last_outcome"],
             "error"
         );
+    }
+
+    #[test]
+    fn discard_keeps_only_the_dedup_mark() {
+        let scratch = scratch();
+        let (_, route) = create(&scratch.0, QueuePolicy::Fifo);
+        let id = receive(&scratch.0, event(&route, "1")).unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        serve(&scratch.0, "events.discard", &json!({"id": id})).unwrap();
+        let item = items(&scratch.0).remove(0);
+        assert_eq!(item.state, DeliveryState::Done);
+        assert!(item.envelope.payload.is_empty());
+        assert_eq!(
+            receive(&scratch.0, event(&route, "1")).unwrap()["status"],
+            "duplicate"
+        );
+    }
+
+    #[cfg(feature = "runner")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_week_away_holds_work_until_the_user_writes() {
+        let scratch = scratch();
+        let (id, route) = create(&scratch.0, QueuePolicy::Fifo);
+        let key = scratch.0.dek().unwrap();
+        {
+            let db = scratch.0.store.connection.lock().unwrap();
+            let mut sub = subscription(&db, &key, &id).unwrap();
+            sub.enabled_at -= crate::routines::AWAY_AFTER_SECS + 60;
+            save_subscription(&db, &key, &sub).unwrap();
+        }
+        receive(&scratch.0, event(&route, "1")).unwrap();
+        tick(&scratch.0).unwrap();
+        let listed = &serve(&scratch.0, "events.list", &json!({})).unwrap()["subscriptions"][0];
+        assert_eq!(listed["state"], "blocked");
+        assert_eq!(listed["health"]["problem"], AWAY_PROBLEM);
+        assert_eq!(listed["config"]["is_enabled"], true, "held, not paused");
+        assert_eq!(items(&scratch.0)[0].state, DeliveryState::Pending);
+
+        let dm = scratch
+            .0
+            .dm_with(&config(&scratch.0, QueuePolicy::Fifo).bot_id, None)
+            .unwrap();
+        scratch.0.upsert_message(
+            crate::model::Message::new(
+                &dm.meta.id,
+                crate::model::Author::You,
+                crate::model::Body::text("I'm back"),
+            ),
+            false,
+        );
+        tick(&scratch.0).unwrap();
+        assert_ne!(items(&scratch.0)[0].state, DeliveryState::Pending);
+        for _ in 0..100 {
+            if items(&scratch.0)[0].state == DeliveryState::Failed {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+        let listed = &serve(&scratch.0, "events.list", &json!({})).unwrap()["subscriptions"][0];
+        assert_ne!(listed["health"]["problem"], AWAY_PROBLEM);
     }
 
     #[test]

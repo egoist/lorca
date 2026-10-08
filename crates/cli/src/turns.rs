@@ -76,7 +76,9 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
     // A routine's run opens with its marker, "Routine · Name", so the chat shows what started
     // the turn (even one that cannot run) and later turns rebuild the task from it. A routine
     // deleted meanwhile does not run. Auto-review reads the request behind the turn's actions
-    // from the message that started it, and a run's task as it stood when the run began.
+    // from the message that started it, and a run's task as it stood when the run began. An
+    // event's turn opens with "Event · Name"; its task is the one its inbox admitted, and a
+    // routine it targets is not run.
     let event = if job.kind == "event" {
         match crate::event_triggers::task_for_job(app, job) {
             Ok(event) => Some(event),
@@ -85,7 +87,7 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
     } else { None };
     let mut trigger = Trigger { message_id: job.trigger_message_id.clone(), routine: None, event: event.clone() };
     if let Some(event) = &event {
-        let marker = Message::new(&job.chat_id, Author::System, Body::Notice { text: format!("Event · {}\nTask: {}", event.name, event.prompt), routine_id: None });
+        let marker = Message::new(&job.chat_id, Author::System, Body::Notice { text: format!("Event · {}", event.name), routine_id: None });
         trigger.message_id = marker.id.clone();
         app.upsert_message(marker, true);
     }
