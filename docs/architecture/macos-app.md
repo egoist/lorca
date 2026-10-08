@@ -26,6 +26,6 @@ Inspector: `Inspector/InspectorViewController.swift` compares what each section 
 
 The composer accepts files, pasted images, replies, mentions and dictation. Its attachment previews and draft lifecycle are in [macOS chat](macos-chat.md#composer).
 
-The chat toolbar’s Outputs button opens immutable deliverables and verification evidence with native previews and file actions. See [macOS chat](macos-chat.md#outputs).
+The inspector's Outputs section lists what the chat's bots published and opens each output's preview, check, and versions. See [macOS chat](macos-chat.md#outputs).
 
 The chat renders the CLI’s cross-Device turns, commands, pending confirmations and read state. See [macOS chat](macos-chat.md#working-state).
