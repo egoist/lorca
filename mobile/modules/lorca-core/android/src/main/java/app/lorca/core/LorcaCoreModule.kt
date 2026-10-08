@@ -16,7 +16,11 @@ class LorcaCoreModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("LorcaCore")
 
-    Events("event")
+    Events("event", "update")
+
+    OnCreate {
+      Updater.onStatus = { status -> sendEvent("update", status) }
+    }
 
     Function("start") { home: String, name: String, os: String, osVersion: String, model: String ->
       if (core == null) {
@@ -47,9 +51,24 @@ class LorcaCoreModule : Module() {
       if (chatId != null && PushService.inFront) clearPosted(chatId)
     }
 
+    // A release's APK: downloaded, checked, and handed to the package installer. Resolves once
+    // the installer has it; how that ends arrives as "update" events.
+    AsyncFunction("installUpdate").Coroutine { url: String, sha256: String, size: Double ->
+      val context = appContext.reactContext ?: throw IllegalStateException("The app has no Android context")
+      val total = size.toLong()
+      withContext(Dispatchers.IO) {
+        val apk = Updater.download(context, url, sha256, total) { received ->
+          sendEvent("update", mapOf("state" to "downloading", "received" to received.toDouble(), "total" to total.toDouble()))
+        }
+        sendEvent("update", mapOf("state" to "installing"))
+        Updater.install(context, apk)
+      }
+    }
+
     OnActivityEntersForeground {
       PushService.inFront = true
       PushService.openChat?.let { clearPosted(it) }
+      appContext.currentActivity?.let { Updater.showConfirmation(it) }
     }
 
     OnActivityEntersBackground {
