@@ -18,13 +18,7 @@ final class InspectorViewController: NSViewController {
     private let plugins = SectionView(title: L("Plugins"))
     private let routing = SectionView(title: L("Where turns run"))
     private let outputs = SectionView(title: L("Outputs"))
-    private lazy var allOutputsButton: NSButton = {
-        let button = NSButton(title: "", target: self, action: #selector(showAllOutputs))
-        button.isBordered = false
-        button.attributedTitle = NSAttributedString(
-            string: L("View all"), attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor])
-        return button
-    }()
+    private lazy var allOutputsButton = ViewAllLabel(L("View all")) { [weak self] in self?.showAllOutputs() }
     private let addButton = NSButton()
 
     private var selection: Selection?
@@ -429,7 +423,7 @@ final class InspectorViewController: NSViewController {
         presentAsSheet(OutputViewController(chatID: chatID, series: series))
     }
 
-    @objc private func showAllOutputs() {
+    private func showAllOutputs() {
         guard case let .chat(chatID) = selection else { return }
         presentAsSheet(OutputsViewController(chatID: chatID))
     }
@@ -633,5 +627,26 @@ final class InspectorViewController: NSViewController {
     @objc private func openDevice(_ sender: NSClickGestureRecognizer) {
         guard let id = sender.view?.identifier?.rawValue else { return }
         onOpenDevice?(id)
+    }
+}
+
+/// A word that opens the rest of a section. A label, so its text ends on the rows' trailing text
+/// edge as a row's state does; a button's cell pads its title differently.
+private final class ViewAllLabel: NSTextField {
+    private var onPress: (() -> Void)?
+
+    convenience init(_ title: String, onPress: @escaping () -> Void) {
+        self.init(labelWithString: title)
+        self.onPress = onPress
+        font = .systemFont(ofSize: 11)
+        textColor = .secondaryLabelColor
+        setContentCompressionResistancePriority(.required, for: .horizontal)
+    }
+
+    override func mouseDown(with event: NSEvent) { onPress?() }
+    override func accessibilityRole() -> NSAccessibility.Role? { .button }
+    override func accessibilityPerformPress() -> Bool {
+        onPress?()
+        return true
     }
 }

@@ -36,7 +36,8 @@ func (m *mainWindow) inspectorOutputs(c *ui.Context, chat *model.Chat) {
 	var accessory func()
 	if len(all) > len(shown) {
 		accessory = func() {
-			b := ui.ButtonBase(c.Key("outputs-all")).Label(L("View all")).Cursor(ui.CursorPointer)
+			// On the rows' trailing text edge, as a row's state is.
+			b := ui.ButtonBase(c.Key("outputs-all")).Margin(0, 12, 0, 0).Label(L("View all")).Cursor(ui.CursorPointer)
 			b.Children(func() { ui.Text(c, L("View all")).FontSize(11).TextColor(colors(c).Label2) })
 			if b.Clicked() {
 				m.presentAllOutputs(chat.ID)
