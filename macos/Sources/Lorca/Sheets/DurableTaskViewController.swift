@@ -68,12 +68,12 @@ final class DurableTaskViewController: SheetViewController {
             errorLabel.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
         ])
         func add(_ title: String, _ control: NSView) {
-            let label = Build.label(L(title), font: .systemFont(ofSize: 12, weight: .semibold))
+            let label = Build.label(title, font: .systemFont(ofSize: 12, weight: .semibold))
             let row = Build.stack([label, control], spacing: 4)
             form.addArrangedSubview(row)
             row.widthAnchor.constraint(equalTo: form.widthAnchor, constant: -8).isActive = true
             control.widthAnchor.constraint(equalTo: row.widthAnchor).isActive = true
-            control.setAccessibilityLabel(L(title))
+            control.setAccessibilityLabel(title)
         }
         func editor(_ view: NSTextView, height: CGFloat) -> NSView {
             view.isRichText = false; view.font = .systemFont(ofSize: 12)
@@ -87,22 +87,22 @@ final class DurableTaskViewController: SheetViewController {
             return scroll
         }
         goal.placeholderString = L("What should be achieved?")
-        add("Goal", goal); add("Owning bot", owner); add("State", state)
-        add("Linked chats", chatRows); add("Add linked chat", chatMenu)
+        add(L("Goal"), goal); add(L("Owning bot"), owner); add(L("State"), state)
+        add(L("Linked chats"), chatRows); add(L("Add linked chat"), chatMenu)
         chatMenu.target = self; chatMenu.action = #selector(addLinkedChat)
-        add("Acceptance criteria · one per line", editor(criteria, height: 70))
-        add("Next action", editor(nextAction, height: 55))
-        add("Reason · required when blocked or cancelled", editor(reason, height: 55))
-        add("Result · required for completion", editor(result, height: 90))
-        add("Dependencies", dependencyRows); add("Add dependency", dependencyMenu)
+        add(L("Acceptance criteria · one per line"), editor(criteria, height: 70))
+        add(L("Next action"), editor(nextAction, height: 55))
+        add(L("Reason · required when blocked or cancelled"), editor(reason, height: 55))
+        add(L("Result · required for completion"), editor(result, height: 90))
+        add(L("Dependencies"), dependencyRows); add(L("Add dependency"), dependencyMenu)
         dependencyMenu.target = self; dependencyMenu.action = #selector(addDependency)
-        add("External links · one HTTPS URL per line", editor(links, height: 55))
-        add("Supporting evidence", evidenceRows); add("Add a chat message as evidence", evidenceMenu)
+        add(L("External links · one HTTPS URL per line"), editor(links, height: 55))
+        add(L("Supporting evidence"), evidenceRows); add(L("Add a chat message as evidence"), evidenceMenu)
         evidenceMenu.target = self; evidenceMenu.action = #selector(addMessageEvidence)
         evidenceURL.placeholderString = L("HTTPS link to supporting evidence")
         let addLink = NSButton(title: L("Add link"), target: self, action: #selector(addLinkEvidence))
         addLink.bezelStyle = .rounded
-        add("Add link evidence", Build.stack([evidenceURL, addLink], orientation: .horizontal, spacing: 8))
+        add(L("Add link evidence"), Build.stack([evidenceURL, addLink], orientation: .horizontal, spacing: 8))
         form.addArrangedSubview(metadata)
         metadata.widthAnchor.constraint(equalTo: form.widthAnchor, constant: -8).isActive = true
         state.addItems(withTitles: DurableTask.State.allCases.map(\.title))

@@ -1,5 +1,7 @@
 # PR #102 native AppKit evidence
 
+The native Go/MyGo parity follow-up has separate [Windows/Linux task UI captures and reproduction notes](desktop/README.md).
+
 These PNGs capture the existing AppKit controllers from the #72 implementation (`724b769`) with synthetic fixtures. They are offscreen `NSView` bitmap captures at 2× scale in Aqua appearance, with transparent view gaps composited over AppKit's standard window background. They show application content rather than desktop/window-manager chrome. The chat comes from the repository's `MockData`; tasks and the revision conflict come from the test fixture. No real credentials, private chats, provider calls, or relay traffic participate.
 
 | Image | Captured state |

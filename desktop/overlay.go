@@ -107,6 +107,8 @@ type sheetOptions struct {
 	NoCancel        bool
 	ConfirmKind     buttonKind
 	ConfirmDisabled bool
+	// Status remains visible above the actions while the long form scrolls.
+	Status string
 	// Leading builds controls at the start of the buttons' row.
 	Leading func()
 	// ReturnInContent leaves Return to the content, as a multi-line editor's.
@@ -156,6 +158,9 @@ func sheetFrame(c *ui.Context, o sheetOptions, content func()) sheetResult {
 				result.Confirmed = true
 			}
 			fieldSubmitted = false
+		}
+		if o.Status != "" {
+			ui.Text(c, o.Status).Label("sheet-status").FontSize(12).TextColor(p.Red).LineHeight(1.4).Selectable().Margin(12, 0, 0, 0)
 		}
 		if o.Confirm != "" || o.Leading != nil {
 			ui.Row(c).Gap(10).Margin(20, 0, 0, 0).Children(func() {

@@ -857,3 +857,7 @@
 "Assigned Runner: %@" = "执行设备：%@";
 
 "The task owner needs a linked chat to run in." = "任务负责人需要一个关联聊天来执行任务。";
+
+"Open…" = "打开…";
+"Create…" = "创建…";
+"Attachment" = "附件";
