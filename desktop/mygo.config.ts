@@ -1,19 +1,13 @@
-import { defineConfig } from "mygo-cli";
-import pkg from "./package.json" with { type: "json" };
-
-// Lorca for Windows and Linux. `mygo dev` builds Lorca Dev (app.lorca.dev), which keeps its
-// account in ~/.lorca-dev and its CLI on port 4863, apart from an installed Lorca.
-export default defineConfig(({ command }) => ({
+// Lorca for Windows and Linux, an app of native UI. `go tool mygo dev` builds Lorca Dev
+// (app.lorca.dev), which keeps its account in ~/.lorca-dev and its CLI on port 4863, apart from an
+// installed Lorca.
+export default ({ command }: { command: string }) => ({
   name: "Lorca",
   identifier: "app.lorca",
-  // The app's own version, apart from the Mac app's (the root package.json's).
-  version: pkg.version,
+  // The app's own version, apart from the Mac app's (the root package.json's). `bun run
+  // release-desktop` and the Release desktop workflow read it here.
+  version: "0.1.3",
   icon: command === "dev" ? "assets/icon-dev.png" : "assets/icon.png",
-  devUrl: "http://localhost:5178",
-  devCommand: "bun run dev:web",
-  buildCommand: "bun run build:web",
-  frontendDist: "dist",
-  bindings: "src/mygo.ts",
   out: "build",
   // Release builds update themselves from this repository's newest release tagged
   // desktop-v<version>, which MyGo finds through the GitHub API since the latest release is the
@@ -29,4 +23,4 @@ export default defineConfig(({ command }) => ({
     comment: "Chat with your bots, which run on computers you own",
     categories: ["Network", "Chat"],
   },
-}));
+});
