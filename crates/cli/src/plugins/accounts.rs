@@ -9,17 +9,21 @@ use crate::{app::App, model::PluginStatus};
 
 fn name(value: &str) -> Result<String, String> {
     let value = value.trim();
-    if value.is_empty() || value.chars().count() > 80 || value.chars().any(char::is_control) {
-        return Err("An account name needs 1–80 characters without control characters.".into());
+    if value.is_empty() {
+        return Err("Give the account a name.".into());
+    }
+    if value.chars().count() > 80 || value.chars().any(char::is_control) {
+        return Err("Use a name of up to 80 characters, on one line.".into());
     }
     Ok(value.to_string())
 }
 
-pub(crate) fn check_unique(store: &Store, service: &str, account: &str, except: Option<&str>) -> Result<(), String> {
+/// `service_name` is the service as the user reads it, such as Gmail.
+pub(crate) fn check_unique(store: &Store, service: &str, service_name: &str, account: &str, except: Option<&str>) -> Result<(), String> {
     if store.instances(service).any(|plugin| {
         Some(plugin.manifest.id.as_str()) != except && plugin.account_name.as_ref().is_some_and(|label| label.to_lowercase() == account.to_lowercase())
     }) {
-        return Err(format!("An account named {account:?} already exists for {service} on this Runner. Choose another name."));
+        return Err(format!("There is already a {service_name} account named {account}."));
     }
     Ok(())
 }
@@ -30,14 +34,15 @@ pub fn install(app: &Arc<App>, mut manifest: Manifest, source: &str, account_nam
         return Err("This plugin does not support named accounts.".into());
     }
     let service = manifest.id.clone();
-    let account = match account_name {
+    // A blank name becomes the next free `Account N`.
+    let account = match account_name.filter(|value| !value.trim().is_empty()) {
         Some(value) => name(value)?,
         None => {
             let store = app.plugins.lock().unwrap();
-            (1..).map(|n| format!("Account {n}")).find(|label| check_unique(&store, &service, label, None).is_ok()).expect("a free account name")
+            (1..).map(|n| format!("Account {n}")).find(|label| check_unique(&store, &service, &manifest.name, label, None).is_ok()).expect("a free account name")
         }
     };
-    check_unique(&app.plugins.lock().unwrap(), &service, &account, None)?;
+    check_unique(&app.plugins.lock().unwrap(), &service, &manifest.name, &account, None)?;
     manifest.id = format!("{service}-{}", uuid::Uuid::new_v4().simple());
     install_instance(app, manifest, source, Some(service), Some(account))
 }
@@ -47,8 +52,9 @@ pub fn rename(app: &Arc<App>, id: &str, account_name: &str) -> Result<PluginStat
     let account = name(account_name)?;
     let status = {
         let mut store = app.plugins.lock().unwrap();
-        let service = store.get(id).and_then(|plugin| plugin.service_id.clone()).ok_or("This is not a named account.")?;
-        check_unique(&store, &service, &account, Some(id))?;
+        let plugin = store.get(id).ok_or("Unknown plugin")?;
+        let (service, service_name) = (plugin.service_id.clone().ok_or("This is not a named account.")?, plugin.manifest.name.clone());
+        check_unique(&store, &service, &service_name, &account, Some(id))?;
         let plugin = store.installed.iter_mut().find(|plugin| plugin.manifest.id == id).ok_or("Unknown plugin")?;
         plugin.account_name = Some(account);
         store.save(&app.config).map_err(|error| error.to_string())?;
@@ -76,7 +82,10 @@ mod tests {
         assert_ne!(work.id, personal.id);
         assert!(work.id.starts_with("gmail-") && work.id.len() == 38);
         assert_eq!(work.service_id.as_deref(), Some("gmail"));
-        assert!(install(&app, manifest.clone(), "marketplace", Some("work")).unwrap_err().contains("already exists"));
+        assert_eq!(install(&app, manifest.clone(), "marketplace", Some("work")).unwrap_err(), "There is already a Gmail account named work.");
+        let unnamed = install(&app, manifest.clone(), "marketplace", Some(" ")).unwrap();
+        assert_eq!(unnamed.account_name.as_deref(), Some("Account 1"), "a blank name is the next free one");
+        plugins::uninstall(&app, &unnamed.id).unwrap();
         assert!(rename(&app, &work.id, " ").is_err());
         assert!(rename(&app, &work.id, "Personal").is_err());
         plugins::set_oauth(&app, &work.id, "api", Some(json!({ "client_id": "c", "tokens": { "access_token": "work-secret" } }))).unwrap();

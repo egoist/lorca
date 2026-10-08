@@ -644,7 +644,7 @@ pub(crate) fn install_instance(app: &Arc<App>, manifest: Manifest, source: &str,
     let status = {
         let mut store = app.plugins.lock().unwrap();
         if let (Some(service), Some(account)) = (&service_id, &account_name) {
-            accounts::check_unique(&store, service, account, None)?;
+            accounts::check_unique(&store, service, &manifest.name, account, None)?;
         }
         #[cfg(feature = "runner")]
         app.mcp.forget(&manifest.id);

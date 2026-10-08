@@ -171,10 +171,11 @@ impl Pool {
                 if self.generation(plugin_id) != generation { return Err("The account's settings changed while connecting. Try again.".into()); }
                 if let Some((scope, challenge)) = insufficient_scope(&std::io::Error::other(error.clone())) {
                     needs_more_access(app, plugin_id, name, &scope, &challenge);
-                } else if error.contains("sign-in needs more access") || (plugin.service_id.is_some() && error.contains("403")) {
+                } else if error.contains("sign-in needs more access") {
                     needs_more_access(app, plugin_id, name, "", "");
                 }
-                if authorization_expired(&error) {
+                // A named account whose authorization expired or was revoked reads Sign in.
+                if plugin.service_id.is_some() && authorization_expired(&error) {
                     let _ = super::set_oauth(app, plugin_id, name, None);
                 }
                 // A server that answered that it needs a sign-in reads Sign in, not an error.
@@ -2209,7 +2210,7 @@ impl Tool for PluginTool {
                     needs_more_access(&self.app, &self.plugin_id, &self.server_name, &scope, &challenge);
                     return Err(ToolError(format!("{} needs more access for {tool}. The user signs in to it again to grant it.", self.plugin_name)));
                 }
-                if authorization_expired(&error.to_string()) {
+                if self.is_named_account() && authorization_expired(&error.to_string()) {
                     let _ = super::set_oauth(&self.app, &self.plugin_id, &self.server_name, None);
                     self.app.mcp.forget(&self.plugin_id);
                     super::announce(&self.app);
@@ -2223,7 +2224,8 @@ impl Tool for PluginTool {
             }
         };
         let is_error = result.is_error.unwrap_or(false);
-        if is_error {
+        // Slack and Google answer a revoked or narrowed authorization with an error result.
+        if is_error && self.is_named_account() {
             let failure = serde_json::to_string(&result).unwrap_or_default();
             if let Some((scope, challenge)) = insufficient_scope(&std::io::Error::other(failure.clone())) {
                 needs_more_access(&self.app, &self.plugin_id, &self.server_name, &scope, &challenge);
@@ -2253,6 +2255,10 @@ impl Tool for PluginTool {
 }
 
 impl PluginTool {
+    fn is_named_account(&self) -> bool {
+        self.app.plugins.lock().unwrap().get(&self.plugin_id).is_some_and(|plugin| plugin.service_id.is_some())
+    }
+
     /// A resource tool's call: a page of the server's resources or templates, or one resource's
     /// contents, shaped as a tool's result, so a script reads `structuredContent` either way.
     async fn resources(&self, args: Value, cancel: CancellationToken) -> Result<ToolResult, ToolError> {
