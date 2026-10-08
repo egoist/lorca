@@ -108,6 +108,7 @@ export default (): ExpoConfig => {
       "expo-notifications",
       "@bacons/apple-targets",
       "./plugins/with-scene-lifecycle",
+      "./plugins/with-material-theme",
       "expo-web-browser",
     ],
     experiments: {

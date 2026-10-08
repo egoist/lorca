@@ -5,11 +5,12 @@
 // command, which shows as its card while it needs the user.
 
 import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Linking, Modal, Platform, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Pressable } from "./Pressable";
 import * as Clipboard from "expo-clipboard";
-import * as Haptics from "expo-haptics";
+import { haptic } from "./haptics";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
-import Animated, { useAnimatedStyle, useSharedValue, withSequence, withSpring, withTiming } from "react-native-reanimated";
+import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withSequence, withSpring, withTiming } from "react-native-reanimated";
 import { LinearGradient } from "expo-linear-gradient";
 import { ShimmerView } from "../../modules/lorca-core/ShimmerView";
 import { canBeQuoted, isLive, isSentMessage, showsCard, type Author, type Body, type Bot, type Chat, type CommandRun, type Message } from "../core/model";
@@ -23,6 +24,7 @@ import { Markdown } from "./Markdown";
 import { Symbol } from "./Symbol";
 import { usePaneWidth } from "./layout";
 import { Font, usePalette } from "./theme";
+import { alert } from "./alert";
 
 export const SEPARATOR_GAP_SECS = 15 * 60;
 const AVATAR = 28;
@@ -154,7 +156,7 @@ export const DayRow = memo(function DayRow({ at }: { at: number }) {
   );
 });
 
-/// Swiping a bubble this far to the left makes the draft a reply to it.
+/// Swiping a bubble this far to the right makes the draft a reply to it.
 const REPLY_SWIPE = 56;
 
 /// Who wrote a quoted message, as a reply's quote names them.
@@ -164,39 +166,41 @@ export function quoteAuthorName(author: Author, bots: Map<string, Bot>): string 
   return "Lorca";
 }
 
-/// A message that follows a leftward swipe, with a reply arrow fading in behind it; let go past
-/// `REPLY_SWIPE` and the draft answers it. Vertical drags stay with the transcript.
+/// A message that follows a swipe to the right, as in Messages and Google Messages, with a reply
+/// arrow fading in behind it; let go past `REPLY_SWIPE` and the draft answers it. Vertical drags
+/// stay with the transcript, and a leftward one with the system (Android's back gesture). The drag
+/// runs on the UI thread, so the bubble follows the finger while JS is busy with a streaming reply.
 function SwipeToReply({ onReply, children }: { onReply?: () => void; children: React.ReactNode }) {
   const p = usePalette();
   const offset = useSharedValue(0);
-  const armed = useRef(false);
-  const pan = useMemo(
-    () =>
-      Gesture.Pan()
-        .runOnJS(true)
-        .enabled(!!onReply)
-        .activeOffsetX([-14, 14])
-        .failOffsetY([-10, 10])
-        .onUpdate((event) => {
-          offset.value = Math.min(0, Math.max(-REPLY_SWIPE * 1.4, event.translationX));
-          const past = offset.value <= -REPLY_SWIPE;
-          if (past !== armed.current) {
-            armed.current = past;
-            if (past) void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-          }
-        })
-        .onEnd(() => {
-          if (armed.current) onReply?.();
-        })
-        .onFinalize(() => {
-          armed.current = false;
-          offset.value = withSpring(0, { damping: 22, stiffness: 260 });
-        }),
-    [onReply, offset],
-  );
+  const armed = useSharedValue(false);
+  const pan = useMemo(() => {
+    const reply = () => onReply?.();
+    const tick = haptic.threshold;
+    return Gesture.Pan()
+      .enabled(!!onReply)
+      .activeOffsetX(14)
+      .failOffsetX(-10)
+      .failOffsetY([-10, 10])
+      .onUpdate((event) => {
+        offset.value = Math.max(0, Math.min(REPLY_SWIPE * 1.4, event.translationX));
+        const past = offset.value >= REPLY_SWIPE;
+        if (past !== armed.value) {
+          armed.value = past;
+          if (past) runOnJS(tick)();
+        }
+      })
+      .onEnd(() => {
+        if (armed.value) runOnJS(reply)();
+      })
+      .onFinalize(() => {
+        armed.value = false;
+        offset.value = withSpring(0, { damping: 22, stiffness: 260 });
+      });
+  }, [onReply, offset, armed]);
   const follow = useAnimatedStyle(() => ({ transform: [{ translateX: offset.value }] }));
   const arrow = useAnimatedStyle(() => {
-    const progress = Math.min(1, -offset.value / REPLY_SWIPE);
+    const progress = Math.min(1, offset.value / REPLY_SWIPE);
     return { opacity: progress, transform: [{ scale: 0.6 + 0.4 * progress }] };
   });
   return (
@@ -297,7 +301,7 @@ export const MessageRow = memo(function MessageRow({
         </Animated.View>
         {held && (
           <Pressable
-            onPress={() => engine.sendNow(message.chat_id, message.id).catch((error) => Alert.alert(t("Could not send now"), error instanceof Error ? error.message : String(error)))}
+            onPress={() => engine.sendNow(message.chat_id, message.id).catch((error) => alert(t("Could not send now"), error instanceof Error ? error.message : String(error)))}
             hitSlop={8}
             style={styles.sendNow}
             accessibilityRole="button"
@@ -727,7 +731,7 @@ const styles = StyleSheet.create({
   quoteYou: { alignSelf: "flex-end" },
   quoteText: { flexShrink: 1, fontSize: 12 },
   quoteName: { fontWeight: "600" },
-  replyArrow: { position: "absolute", right: 18, top: 0, bottom: 0, justifyContent: "center" },
+  replyArrow: { position: "absolute", left: 18, top: 0, bottom: 0, justifyContent: "center" },
   // Held for the bot's next step: the bubble waits, dimmed, over Send now.
   held: { opacity: 0.55 },
   sendNow: { alignSelf: "flex-end", marginTop: 4, marginRight: 6 },

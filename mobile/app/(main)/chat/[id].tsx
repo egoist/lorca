@@ -11,18 +11,8 @@ import {
   useRef,
   useState,
 } from "react";
-import {
-  Alert,
-  type NativeScrollEvent,
-  type NativeSyntheticEvent,
-  PixelRatio,
-  Platform,
-  Pressable,
-  type ScrollViewProps,
-  StyleSheet,
-  Text,
-  View,
-} from "react-native";
+import { type NativeScrollEvent, type NativeSyntheticEvent, PixelRatio, Platform, type ScrollViewProps, StyleSheet, Text, View } from "react-native";
+import { Pressable } from "../../../src/ui/Pressable";
 import {
   KeyboardChatScrollView,
   KeyboardController,
@@ -54,9 +44,10 @@ import { Composer, Surface } from "../../../src/ui/Composer";
 import { KeyboardFoot } from "../../../src/ui/KeyboardFoot";
 import { useWide } from "../../../src/ui/layout";
 import { Symbol } from "../../../src/ui/Symbol";
-import { usePalette } from "../../../src/ui/theme";
+import { usePalette, withAlpha } from "../../../src/ui/theme";
 import { quoteText } from "../../../src/ui/format";
 import { AnswerSheet } from "../../../src/ui/AnswerSheet";
+import { alert } from "../../../src/ui/alert";
 import {
   buildRows,
   shareRows,
@@ -730,7 +721,7 @@ export default function ChatScreen() {
         });
       sent.catch((error) => {
         if (!anchorKey.current) releaseAnchor();
-        Alert.alert(
+        alert(
           t("Could not send"),
           error instanceof Error ? error.message : String(error),
         );
@@ -764,7 +755,7 @@ export default function ChatScreen() {
   /// Answers a card. One whose answer cannot reach the bot's Runner asks again, and says why.
   const answerCard = useCallback((message: Message, decision: "allow" | "always" | "deny") => {
     engine.answerPermission(message.chat_id, message.id, decision).catch((error) => {
-      Alert.alert(t("Could not answer"), error instanceof Error ? error.message : String(error));
+      alert(t("Could not answer"), error instanceof Error ? error.message : String(error));
     });
   }, []);
 
@@ -979,6 +970,11 @@ const ChatHeader = memo(function ChatHeader({ id, title, members, working, hasTa
   const router = useRouter();
   const p = usePalette();
   const options = useMemo(() => ({ title }), [title]);
+  // The bar is the surface color fading out over the transcript, the wallpaper's tint included.
+  const veil = useMemo(() => {
+    const surface = typeof p.background === "string" && p.background.startsWith("#") ? p.background : p.dark ? "#0a0a0c" : "#ffffff";
+    return [withAlpha(surface, 0.97), withAlpha(surface, 0.86), withAlpha(surface, 0.68), withAlpha(surface, 0)] as const;
+  }, [p]);
   const visibleHeaderHeight = top + ANDROID_BAR_HEIGHT;
   const androidHeaderHeight = visibleHeaderHeight + ANDROID_FADE_HEIGHT;
   const androidHeaderStop = visibleHeaderHeight / androidHeaderHeight;
@@ -1009,27 +1005,20 @@ const ChatHeader = memo(function ChatHeader({ id, title, members, working, hasTa
         <View pointerEvents="box-none" style={[styles.androidHeader, { height: androidHeaderHeight }]}>
           <LinearGradient
             pointerEvents="none"
-            colors={
-              p.dark
-                ? ["rgba(10,10,12,0.97)", "rgba(10,10,12,0.86)", "rgba(10,10,12,0.68)", "rgba(10,10,12,0)"]
-                : ["rgba(255,255,255,0.97)", "rgba(255,255,255,0.86)", "rgba(255,255,255,0.68)", "rgba(255,255,255,0)"]
-            }
+            colors={veil}
             locations={[0, androidHeaderStop * 0.55, androidHeaderStop, 1]}
             start={{ x: 0.5, y: 0 }}
             end={{ x: 0.5, y: 1 }}
             style={StyleSheet.absoluteFill}
           />
           <View style={[styles.androidHeaderControls, { height: visibleHeaderHeight, paddingTop: top }]}>
-            {wide ? (
-              // Beside the sidebar there is nothing to go back to; the title stays centered.
-              <View style={styles.androidHeaderButton} />
-            ) : (
-              <Pressable onPress={() => router.back()} style={styles.androidHeaderButton} accessibilityRole="button" accessibilityLabel={t("Back")}>
-                <Symbol name="arrow.left" size={26} color={p.label} />
+            {/* A Material top bar: Back, then the title at the start. Beside the sidebar there is
+                nothing to go back to. */}
+            {wide ? null : (
+              <Pressable onPress={() => router.back()} style={styles.androidHeaderButton} ripple="borderless" accessibilityRole="button" accessibilityLabel={t("Back")}>
+                <Symbol name="arrow.left" size={24} color={p.label} />
               </Pressable>
             )}
-            {/* Room to match Running tasks on the other side, so the title stays centered. */}
-            {hasTasks ? <View style={styles.androidHeaderButton} /> : null}
             <Pressable
               onPress={() => router.push(`/chat-info/${id}`)}
               style={styles.androidHeaderTitle}
@@ -1042,11 +1031,11 @@ const ChatHeader = memo(function ChatHeader({ id, title, members, working, hasTa
               </Text>
             </Pressable>
             {hasTasks ? (
-              <Pressable onPress={() => router.push(`/tasks/${id}`)} style={styles.androidHeaderButton} accessibilityRole="button" accessibilityLabel={t("Running tasks")}>
+              <Pressable onPress={() => router.push(`/tasks/${id}`)} style={styles.androidHeaderButton} ripple="borderless" accessibilityRole="button" accessibilityLabel={t("Running tasks")}>
                 <Symbol name="terminal" size={24} color={p.label} />
               </Pressable>
             ) : null}
-            <Pressable onPress={() => router.push(`/chat-info/${id}`)} style={styles.androidHeaderButton} accessibilityRole="button" accessibilityLabel={t("Chat info")}>
+            <Pressable onPress={() => router.push(`/chat-info/${id}`)} style={styles.androidHeaderButton} ripple="borderless" accessibilityRole="button" accessibilityLabel={t("Chat info")}>
               <Symbol name="ellipsis" size={24} color={p.label} />
             </Pressable>
           </View>
@@ -1063,7 +1052,7 @@ const styles = StyleSheet.create({
   androidHeader: { position: "absolute", top: 0, left: 0, right: 0, zIndex: 100 },
   androidHeaderControls: { flexDirection: "row", alignItems: "center", paddingHorizontal: 12 },
   androidHeaderButton: { width: 48, height: ANDROID_BAR_HEIGHT, alignItems: "center", justifyContent: "center" },
-  androidHeaderTitle: { flex: 1, height: ANDROID_BAR_HEIGHT, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingHorizontal: 8 },
+  androidHeaderTitle: { flex: 1, height: ANDROID_BAR_HEIGHT, flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 8 },
   composer: { position: "absolute", left: 0, right: 0, bottom: 0 },
   jump: { position: "absolute", right: 12 },
   jumpDisc: {
@@ -1079,5 +1068,6 @@ const styles = StyleSheet.create({
     gap: 8,
     maxWidth: 240,
   },
-  titleText: { fontSize: 17, fontWeight: "600", flexShrink: 1 },
+  // A Material top bar's title is larger and lighter than iOS's.
+  titleText: Platform.select({ android: { fontSize: 20, fontWeight: "500", flexShrink: 1 }, default: { fontSize: 17, fontWeight: "600", flexShrink: 1 } }),
 });

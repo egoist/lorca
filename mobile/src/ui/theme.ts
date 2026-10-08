@@ -113,6 +113,12 @@ function makePalette(dark: boolean): Palette {
   };
 }
 
+/// A `#rrggbb` color (what Android's Material colors are) at an opacity.
+export function withAlpha(hex: string, alpha: number): string {
+  const value = parseInt(hex.slice(1, 7), 16);
+  return `rgba(${(value >> 16) & 255},${(value >> 8) & 255},${value & 255},${alpha})`;
+}
+
 /// The eight bot accents, as the Mac app's system colors, with a lifted twin for gradients.
 export const ACCENTS: Record<Accent, { light: [string, string]; dark: [string, string] }> = {
   indigo: { light: ["#8583F5", "#5856D6"], dark: ["#8B89F7", "#5E5CE6"] },

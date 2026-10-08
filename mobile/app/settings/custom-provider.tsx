@@ -7,7 +7,7 @@
 
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from "react-native";
 import { engine } from "../../src/core/engine";
 import {
   CUSTOM_APIS,
@@ -32,6 +32,7 @@ import { t, useLanguage } from "../../src/i18n";
 import { FieldRow, Row, Section } from "../../src/ui/forms";
 import { chooseDefaultModel, setModelListing, startModelDraft, takeModelListing, useModelDraft } from "../../src/ui/modelDraft";
 import { usePalette } from "../../src/ui/theme";
+import { alert } from "../../src/ui/alert";
 
 /// How long the form waits after the URL, protocol, or key last changed before it asks the server.
 const LISTING_DELAY_MS = 500;
@@ -168,7 +169,7 @@ export default function CustomProviderScreen() {
 
   function confirmDelete() {
     if (!kind) return;
-    Alert.alert(t("Delete {name}?", { name: saved?.name || providerName }), t("This removes the provider from every paired Device."), [
+    alert(t("Delete {name}?", { name: saved?.name || providerName }), t("This removes the provider from every paired Device."), [
       { text: t("Cancel"), style: "cancel" },
       {
         text: t("Delete"),

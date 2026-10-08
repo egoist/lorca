@@ -29,7 +29,7 @@ mock.module("@expo/ui/swift-ui/modifiers", () => ({
 }));
 mock.module("@expo/ui/community/menu", () => ({ MenuView: "MenuView" }));
 mock.module("./Symbol", () => ({ Symbol: "Symbol" }));
-mock.module("./theme", () => ({ Font: { body: 17, small: 15 }, usePalette: () => ({ cell: "cell", separator: "separator", secondaryLabel: "secondaryLabel" }) }));
+mock.module("./theme", () => ({ Font: { body: 17, small: 15 }, withAlpha: (color: string) => color, usePalette: () => ({ cell: "cell", separator: "separator", secondaryLabel: "secondaryLabel" }) }));
 
 const { Section } = await import("./forms");
 

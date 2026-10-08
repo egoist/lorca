@@ -1,6 +1,7 @@
 import { Stack, useRouter } from "expo-router";
 import { useMemo, useState } from "react";
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ScrollView, StyleSheet, Text, View } from "react-native";
+import { Pressable } from "../src/ui/Pressable";
 import { LinearGradient } from "expo-linear-gradient";
 import { engine } from "../src/core/engine";
 import { connectedProviders, isRunner, providerLabel, providerModels, PROVIDER_KINDS, thinkingLabel, thinkingLevels, withCustomModels } from "../src/core/model";
@@ -11,6 +12,7 @@ import { BOT_SYMBOLS, Symbol } from "../src/ui/Symbol";
 import { ACCENTS, accentColors, usePalette } from "../src/ui/theme";
 import { deviceSymbol } from "../src/ui/devices";
 import { FormToolbar } from "../src/ui/navigation";
+import { alert } from "../src/ui/alert";
 
 export default function NewBotScreen() {
   useLanguage();
@@ -48,7 +50,7 @@ export default function NewBotScreen() {
       router.dismiss();
       router.push(`/chat/${chatId}`);
     } catch (error) {
-      Alert.alert(t("Could not create the bot"), error instanceof Error ? error.message : String(error));
+      alert(t("Could not create the bot"), error instanceof Error ? error.message : String(error));
     }
   }
 

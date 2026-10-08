@@ -5,7 +5,8 @@ import { Button as MenuButton, Divider, HStack, Host, Image as MenuImage, Menu, 
 import { contentShape, font, foregroundStyle, frame, lineLimit, menuOrder, padding, shapes, tint, truncationMode } from "@expo/ui/swift-ui/modifiers";
 import { MenuView, type MenuAction, type MenuComponentRef } from "@expo/ui/community/menu";
 import { Children, isValidElement, useRef, type ReactNode } from "react";
-import { Platform, Pressable, StyleSheet, Switch, Text, TextInput, useWindowDimensions, View, type StyleProp, type TextInputProps, type ViewStyle } from "react-native";
+import { Platform, StyleSheet, Switch, Text, TextInput, useWindowDimensions, View, type StyleProp, type TextInputProps, type ViewStyle } from "react-native";
+import { Pressable } from "./Pressable";
 import { Symbol } from "./Symbol";
 import { Font, usePalette } from "./theme";
 

@@ -9,6 +9,7 @@ import { useStore } from "../src/core/store";
 import { startUpdateChecks } from "../src/core/updates";
 import { useStackScreenOptions } from "../src/ui/navigation";
 import { HostPaletteContext } from "@expo/ui/jetpack-compose";
+import { AlertHost } from "../src/ui/alert";
 import { useMaterialPalette, usePalette } from "../src/ui/theme";
 
 export default function RootLayout() {
@@ -84,13 +85,14 @@ export default function RootLayout() {
               <Stack.Screen name="settings" options={nestedSheet} />
               <Stack.Screen
                 name="attachment/[id]"
-                options={{ presentation: "fullScreenModal", headerShown: true, headerStyle: { backgroundColor: "#000000" }, headerTintColor: "#FFFFFF", headerTitleStyle: { color: "#FFFFFF" }, contentStyle: { backgroundColor: "#000000" } }}
+                options={{ presentation: "fullScreenModal", headerShown: true, headerStyle: { backgroundColor: "#000000" }, headerTintColor: "#FFFFFF", headerTitleStyle: { color: "#FFFFFF" }, contentStyle: { backgroundColor: "#000000" }, statusBarStyle: "light" }}
               />
             </Stack.Protected>
             <Stack.Protected guard={!paired}>
               <Stack.Screen name="pair" options={{ headerShown: false, gestureEnabled: false }} />
             </Stack.Protected>
           </Stack>
+          <AlertHost />
         </ThemeProvider>
       </KeyboardProvider>
       </HostPaletteContext.Provider>

@@ -1,6 +1,7 @@
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
-import { Alert, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
+import { Platform, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
+import { Pressable } from "../../src/ui/Pressable";
 import { chatTitle, engine } from "../../src/core/engine";
 import { providerKinds, providerLabel, providerModels, PROVIDER_KINDS, thinkingLabel, thinkingLevels, withCustomModels, type Bot, type Routine } from "../../src/core/model";
 import { deviceIsOnline, useBotMap, useChat, useRoutines, useStore, useWorkingBotIds } from "../../src/core/store";
@@ -12,6 +13,7 @@ import { Symbol } from "../../src/ui/Symbol";
 import { usePalette } from "../../src/ui/theme";
 import { deviceSymbol } from "../../src/ui/devices";
 import { CloseToolbar } from "../../src/ui/navigation";
+import { alert } from "../../src/ui/alert";
 
 export default function ChatInfoScreen() {
   useLanguage();
@@ -41,13 +43,13 @@ export default function ChatInfoScreen() {
 
   /// A routine's actions, as a sheet: run it now, or delete it. The bot edits it on request.
   function showRoutine(routine: Routine) {
-    Alert.alert(routine.name, `${routineDetail(routine)}\n${t("Last run: {summary}", { summary: lastRunSummary(routine) })}\n\n${routine.prompt}`, [
+    alert(routine.name, `${routineDetail(routine)}\n${t("Last run: {summary}", { summary: lastRunSummary(routine) })}\n\n${routine.prompt}`, [
       { text: t("Run Now"), onPress: () => engine.runRoutine(routine.id) },
       {
         text: t("Delete"),
         style: "destructive",
         onPress: () =>
-          Alert.alert(t("Delete “{name}”?", { name: routine.name }), t("This deletes the routine and stops its future runs. This can't be undone."), [
+          alert(t("Delete “{name}”?", { name: routine.name }), t("This deletes the routine and stops its future runs. This can't be undone."), [
             { text: t("Cancel"), style: "cancel" },
             { text: t("Delete routine"), style: "destructive", onPress: () => engine.deleteRoutine(routine.id) },
           ]),
@@ -85,12 +87,12 @@ export default function ChatInfoScreen() {
       setBotName(updated.name);
     } catch (error) {
       setBotName(bot.name);
-      Alert.alert(t("Could not update the bot"), error instanceof Error ? error.message : String(error));
+      alert(t("Could not update the bot"), error instanceof Error ? error.message : String(error));
     }
   }
 
   function confirmDelete() {
-    Alert.alert(t("Delete “{name}”?", { name: chatTitle(chat!) }), t("The chat and its messages are removed from every paired Device."), [
+    alert(t("Delete “{name}”?", { name: chatTitle(chat!) }), t("The chat and its messages are removed from every paired Device."), [
       { text: t("Cancel"), style: "cancel" },
       {
         text: t("Delete"),
@@ -110,7 +112,7 @@ export default function ChatInfoScreen() {
     <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={{ paddingBottom: 40 }} keyboardDismissMode="on-drag">
       <View style={styles.hero}>
         {bot ? (
-          <Pressable onPress={() => router.push(`/chat-info/look/${bot.id}`)} accessibilityLabel={t("Change {name}'s look", { name: bot.name })} accessibilityRole="button" hitSlop={8}>
+          <Pressable onPress={() => router.push(`/chat-info/look/${bot.id}`)} accessibilityLabel={t("Change {name}'s look", { name: bot.name })} accessibilityRole="button" hitSlop={8} ripple="borderless" rippleRadius={44}>
             <BotAvatar bot={bot} size={72} working={working.has(bot.id)} />
           </Pressable>
         ) : (
@@ -259,7 +261,7 @@ export default function ChatInfoScreen() {
                 chat.owner_bot_id === member.id ? (
                   <Text style={{ color: p.secondaryLabel, fontSize: 13 }}>{t("Owner")}</Text>
                 ) : members.length > 1 ? (
-                  <Pressable hitSlop={8} onPress={() => engine.removeBot(chat.id, member.id)} accessibilityLabel={t("Remove {name}", { name: member.name })}>
+                  <Pressable hitSlop={14} ripple="borderless" rippleRadius={18} onPress={() => engine.removeBot(chat.id, member.id)} accessibilityLabel={t("Remove {name}", { name: member.name })}>
                     <Symbol name="xmark" size={14} color={p.tertiaryLabel} weight="semibold" />
                   </Pressable>
                 ) : null

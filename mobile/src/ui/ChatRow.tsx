@@ -3,7 +3,8 @@
 // in flight), and the unread count pill beside it.
 
 import { memo, useEffect, useMemo } from "react";
-import { Pressable, StyleSheet, Text, View, type ColorValue } from "react-native";
+import { StyleSheet, Text, View, type ColorValue } from "react-native";
+import { Pressable } from "./Pressable";
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withRepeat, withTiming, type SharedValue } from "react-native-reanimated";
 import type { Bot, Chat } from "../core/model";
 import { t, useLanguage } from "../i18n";

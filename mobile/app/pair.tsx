@@ -1,11 +1,12 @@
 import { CameraView, useCameraPermissions } from "expo-camera";
 import * as Clipboard from "expo-clipboard";
-import * as Haptics from "expo-haptics";
+import { haptic } from "../src/ui/haptics";
 import * as Application from "expo-application";
 import { LinearGradient } from "expo-linear-gradient";
 import { useEffect, useRef, useState } from "react";
 import { useLocalSearchParams } from "expo-router";
-import { ActivityIndicator, Alert, Image, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Image, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Pressable } from "../src/ui/Pressable";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { engine } from "../src/core/engine";
 import { hostFacts } from "../src/core/host";
@@ -13,6 +14,7 @@ import { parsePairingString } from "../src/core/pairing";
 import { t, useLanguage } from "../src/i18n";
 import { Symbol } from "../src/ui/Symbol";
 import { Font, usePalette } from "../src/ui/theme";
+import { alert } from "../src/ui/alert";
 
 type Phase = "idle" | "posting" | "waiting";
 const appIcon = Application.applicationId === "app.lorca.dev" ? require("../assets/icon-dev.png") : require("../assets/icon.png");
@@ -52,11 +54,11 @@ export default function PairScreen() {
     try {
       parsePairingString(text);
     } catch (error) {
-      Alert.alert(t("Not a pairing code"), error instanceof Error ? error.message : String(error));
+      alert(t("Not a pairing code"), error instanceof Error ? error.message : String(error));
       return;
     }
     if (lastFailed.current === text.trim()) {
-      Alert.alert(t("Code already used"), t("Each code pairs one Device. Get a fresh code from Lorca on the other computer."));
+      alert(t("Code already used"), t("Each code pairs one Device. Get a fresh code from Lorca on the other computer."));
       return;
     }
     inFlight.current = true;
@@ -64,14 +66,14 @@ export default function PairScreen() {
     setPhase("posting");
     try {
       await engine.pair(text, name, (progress) => setPhase(progress.phase === "done" ? "idle" : progress.phase), cancel.current.signal);
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      haptic.success();
     } catch (error) {
       setPhase("idle");
       // Cancel was tapped here: the core's "Pairing cancelled" is not news.
       if (cancel.current?.signal.aborted) return;
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      haptic.error();
       lastFailed.current = text.trim();
-      Alert.alert(t("Pairing failed"), error instanceof Error ? error.message : String(error));
+      alert(t("Pairing failed"), error instanceof Error ? error.message : String(error));
     } finally {
       inFlight.current = false;
     }
@@ -81,7 +83,7 @@ export default function PairScreen() {
     if (!permission?.granted) {
       const result = await requestPermission();
       if (!result.granted) {
-        Alert.alert(t("Camera access needed"), t("Allow the camera to scan the pairing code, or paste the code instead."));
+        alert(t("Camera access needed"), t("Allow the camera to scan the pairing code, or paste the code instead."));
         return;
       }
     }
@@ -95,7 +97,7 @@ export default function PairScreen() {
       setCode(text);
       void pair(text);
     } else {
-      Alert.alert(t("Nothing to paste"), t("Copy a pairing code from Lorca on another computer first."));
+      alert(t("Nothing to paste"), t("Copy a pairing code from Lorca on another computer first."));
     }
   }
 
@@ -166,13 +168,13 @@ export default function PairScreen() {
               if (!data.includes("pair?") || inFlight.current || scanned.current) return;
               scanned.current = true;
               setScanning(false);
-              void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+              haptic.scanned();
               setCode(data);
               void pair(data);
             }}
           />
           <View style={[styles.scanOverlay, { paddingTop: insets.top + 12 }]}>
-            <Pressable onPress={() => setScanning(false)} style={styles.close} hitSlop={10} accessibilityLabel={t("Close")}>
+            <Pressable onPress={() => setScanning(false)} style={styles.close} hitSlop={10} ripple="borderless" accessibilityLabel={t("Close")}>
               <Symbol name="xmark" size={16} color="#FFFFFF" weight="bold" />
             </Pressable>
             <Text style={styles.scanHint}>{t("Point at the pairing QR code")}</Text>

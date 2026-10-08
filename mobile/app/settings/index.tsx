@@ -16,6 +16,7 @@ import { Symbol } from "../../src/ui/Symbol";
 import { usePalette } from "../../src/ui/theme";
 import { deviceSymbol } from "../../src/ui/devices";
 import { CloseToolbar } from "../../src/ui/navigation";
+import { alert } from "../../src/ui/alert";
 import {
   automaticLanguage,
   languageName,
@@ -134,7 +135,7 @@ export default function SettingsScreen() {
     if (!rule) return;
     const flipped: "allow" | "ask" =
       rule.behavior === "allow" ? "ask" : "allow";
-    Alert.alert(
+    alert(
       rule.text,
       rule.behavior === "allow" ? t("Allow automatically") : t("Ask first"),
       [
@@ -163,7 +164,7 @@ export default function SettingsScreen() {
   }
 
   function confirmUnpair() {
-    Alert.alert(
+    alert(
       t("Unpair this phone?"),
       t("Its keys and the synced chats are removed from this phone. Your other paired Devices keep everything, and you can pair again any time."),
       [

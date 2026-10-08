@@ -3,12 +3,13 @@
 
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useState } from "react";
-import { Alert, ScrollView, StyleSheet } from "react-native";
+import { ScrollView, StyleSheet } from "react-native";
 import { engine } from "../../../src/core/engine";
 import { useBotMap } from "../../../src/core/store";
 import { t, useLanguage } from "../../../src/i18n";
 import { FieldRow, Section } from "../../../src/ui/forms";
 import { SaveToolbar } from "../../../src/ui/navigation";
+import { alert } from "../../../src/ui/alert";
 
 export default function BotDescriptionScreen() {
   useLanguage();
@@ -34,7 +35,7 @@ export default function BotDescriptionScreen() {
       router.back();
     } catch (error) {
       setSaving(false);
-      Alert.alert(t("Could not update the bot"), error instanceof Error ? error.message : String(error));
+      alert(t("Could not update the bot"), error instanceof Error ? error.message : String(error));
     }
   }
 
