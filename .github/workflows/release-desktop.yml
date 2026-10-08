@@ -1,11 +1,11 @@
 # Releases the Windows and Linux app (desktop/) as a release of this repository tagged
 # desktop-vX.Y.Z. The repository's latest release stays the CLI's, which install-cli.sh and
 # install-cli.ps1 download, and the apps find the newest desktop-v release through the GitHub API.
-# A tag desktop-vX.Y.Z, naming the version in desktop/package.json, drafts the release with the
+# A tag desktop-vX.Y.Z, naming the version in desktop/mygo.config.ts, drafts the release with the
 # version's section of desktop/CHANGELOG.md as its notes, then builds Windows x64, Linux x64 and
 # Linux arm64 side by side. A run by hand does the same for the commit it runs on, naming the
-# release after desktop/package.json; the tag appears when the draft is published. Each build runs
-# `bun run release-desktop <platform>`: the CLI with cargo-zigbuild, then `mygo build -upload`,
+# release after desktop/mygo.config.ts; the tag appears when the draft is published. Each build runs
+# `bun run release-desktop <platform>`: the CLI with cargo-zigbuild, then `go tool mygo build -upload`,
 # which builds the app and its installer, signs the update archive and deltas, and uploads them to
 # the draft. Publishing the draft, without making it the latest release, once every platform is
 # there makes it the update apps see. docs/releasing-desktop.md has the steps.
@@ -34,21 +34,22 @@ jobs:
       tag: ${{ steps.package.outputs.tag }}
     steps:
       - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
       - id: package
-        name: Name the release after desktop/package.json
+        name: Name the release after desktop/mygo.config.ts
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          version=$(jq -r .version desktop/package.json)
+          version=$(bun -e 'console.log((await import("./desktop/mygo.config.ts")).default({ command: "build" }).version)')
           tag=desktop-v$version
           # A pushed tag, or a run by hand on one, has to name the version the app says it is.
           if [[ $GITHUB_REF_TYPE == tag && $GITHUB_REF_NAME != "$tag" ]]; then
-            echo "::error::$GITHUB_REF_NAME does not match version $version in desktop/package.json: set \"version\" there to ${GITHUB_REF_NAME#desktop-v} and tag that commit"
+            echo "::error::$GITHUB_REF_NAME does not match version $version in desktop/mygo.config.ts: set \"version\" there to ${GITHUB_REF_NAME#desktop-v} and tag that commit"
             exit 1
           fi
           # A release takes the tag that exists, so the builds have to come from its commit.
           if tagged=$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq .sha 2>/dev/null) && [[ $tagged != "$GITHUB_SHA" ]]; then
-            echo "::error::$tag already tags $tagged: run this on that commit, or bump \"version\" in desktop/package.json"
+            echo "::error::$tag already tags $tagged: run this on that commit, or bump \"version\" in desktop/mygo.config.ts"
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -74,7 +75,7 @@ jobs:
           fi
           case $state in
             published)
-              echo "::error::$TAG is already published: bump \"version\" in desktop/package.json"
+              echo "::error::$TAG is already published: bump \"version\" in desktop/mygo.config.ts"
               exit 1
               ;;
             draft)
@@ -139,7 +140,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends nsis
-      - run: bun install --frozen-lockfile
       - name: Build and upload
         env:
           PLATFORM: ${{ matrix.platform }}

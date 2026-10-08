@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"sync"
 
+	"github.com/egoist/lorca/desktop/l10n"
 	"github.com/egoist/mygo"
 )
 
@@ -54,10 +55,6 @@ type PreferencesPatch struct {
 	SidebarCollapsed *bool   `json:"sidebarCollapsed,omitempty"`
 }
 
-// PreferencesChanged tells every window what the preferences are now, after any window changed
-// them: a new language or appearance shows everywhere at once.
-var PreferencesChanged = mygo.NewEvent[Preferences]("prefs:changed")
-
 type prefsStore struct {
 	mu    sync.Mutex
 	path  string
@@ -66,16 +63,22 @@ type prefsStore struct {
 
 var prefs = &prefsStore{}
 
+// load reads preferences.json in the app's data directory.
 func (s *prefsStore) load() {
+	path := ""
+	if dir, err := mygo.App.Path(mygo.PathUserData); err == nil {
+		path = filepath.Join(dir, "preferences.json")
+	}
+	s.loadFrom(path)
+}
+
+// loadFrom reads the preferences at `path`, which later changes are saved to; none is the defaults.
+func (s *prefsStore) loadFrom(path string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.value = Preferences{ShowsInspector: true, SendOnReturn: true, ShowTimestamps: true}
-	dir, err := mygo.App.Path(mygo.PathUserData)
-	if err != nil {
-		return
-	}
-	s.path = filepath.Join(dir, "preferences.json")
-	if data, err := os.ReadFile(s.path); err == nil {
+	s.path = path
+	if data, err := os.ReadFile(path); path != "" && err == nil {
 		_ = json.Unmarshal(data, &s.value)
 	}
 }
@@ -158,28 +161,27 @@ func (s *prefsStore) update(patch PreferencesPatch) Preferences {
 	return s.get()
 }
 
-// Prefs is this computer's settings, for the pages.
-type Prefs struct{}
-
-// All returns the preferences as they are now.
-func (Prefs) All() Preferences { return prefs.get() }
-
-// Set changes the preferences the patch names and tells every window. A new CLI port makes the
-// app look for the CLI there; a new appearance applies to every window.
-func (Prefs) Set(patch PreferencesPatch) Preferences {
+// setPrefs changes the preferences the patch names and applies them: a new appearance or
+// language to every window, a new CLI port by looking for the CLI there.
+func setPrefs(patch PreferencesPatch) Preferences {
 	before := prefs.get()
 	after := prefs.update(patch)
 	if after.Appearance != before.Appearance {
 		applyAppearance(after.Appearance)
 	}
-	PreferencesChanged.Broadcast(after)
-	if after.CLIPort != before.CLIPort {
+	if after.AppLanguage != before.AppLanguage {
+		if l10n.Set(after.AppLanguage, mygo.App.Locale()) {
+			app.languageChanged()
+		}
+	}
+	if after.CLIPort != before.CLIPort && app.cli != nil {
 		go app.cli.reconnect()
 	}
+	invalidateWindows()
 	return after
 }
 
-// applyAppearance forces light or dark for the windows and pages, or follows the system.
+// applyAppearance forces light or dark for the windows, or follows the system.
 func applyAppearance(appearance string) {
 	switch appearance {
 	case "light":

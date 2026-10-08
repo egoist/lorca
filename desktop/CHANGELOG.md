@@ -1,6 +1,6 @@
 # Changelog
 
-The Windows and Linux app's release notes, by the version in `desktop/package.json`. A release
+The Windows and Linux app's release notes, by the version in `mygo.config.ts`. A release
 (`bun run release-desktop`, or a `desktop-vX.Y.Z` tag) attaches a version's section to its update,
 and the update window shows it.
 
