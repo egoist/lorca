@@ -285,6 +285,7 @@ type WireSnapshot struct {
 	Bots                []WireBot         `json:"bots"`
 	Chats               []WireChat        `json:"chats"`
 	Routines            []WireRoutine     `json:"routines"`
+	Reviews             []ReviewItem      `json:"reviews"`
 	AutoReview          *WireAutoReview   `json:"auto_review"`
 	Providers           []WireProvider    `json:"providers"`
 	Models              []WireModel       `json:"models"`

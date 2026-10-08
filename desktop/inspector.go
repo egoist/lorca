@@ -110,6 +110,7 @@ func (m *mainWindow) inspectorView(c *ui.Context, chatID string) {
 				m.inspectorPlugins(c, single)
 			}
 			m.inspectorRouting(c, members)
+			m.inspectorReviews(c, chat)
 		})
 	})
 }

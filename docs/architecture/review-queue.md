@@ -1,6 +1,6 @@
 # Review queue
 
-`crates/cli/src/review_queue.rs` owns durable review records; `review_execution.rs` resumes their approved calls on the assigned Runner. A proposal has no permission waiter and keeps no model turn alive. The macOS AppKit app reads and edits it through the local CLI.
+`crates/cli/src/review_queue.rs` owns durable review records; `review_execution.rs` resumes their approved calls on the assigned Runner. A proposal has no permission waiter and keeps no model turn alive. The AppKit and native Go/MyGo desktop apps read and edit it through their local CLI.
 
 ## Proposal and ownership
 
@@ -42,6 +42,10 @@ The Runner maintains one status/outcome notice in the originating chat, `review-
 
 The optional `feedback.record` adapter forwards actual user approvals, rejections, and edits with their immutable history id as `event_id`, originating source references, and edit before/after payloads. It records no preference from cancellation, interruption, or silence. The item keeps those events and outcomes while a sibling recorder or task authority is unavailable, and the Runner retries forwarding. The feedback subject owns exclusions and the task subject owns evidence and completion.
 
-## AppKit
+## Desktop apps
 
 Every chat inspector has a Review queue section. A row opens a sheet with the Runner, target account/resource, rationale, payload, guarded files, version, state, and outcome. Draft text is editable as text; shell/plugin arguments are editable as JSON. Save Changes creates a fresh version; Approve requires that the editor match the saved version the sheet displayed. Reject and Cancel Item decide without reviving the original turn. A synced change asks the user to Reload, and failed/offline requests leave their edit intact. The app receives no account key or integration credentials.
+
+The Windows/Linux app uses `desktop/model/reviews.go` for typed bootstrap/event projections and `reviews.get`/version-bound mutation calls, and `desktop/sheet_review.go` for the native inspector and sheet. Payloads and arguments retain raw JSON, preserving nested key spelling, 64-bit integer ids, decimal tokens and unknown payload fields. Version/revision counters are `uint64`. Async replies enter the store's ordered main-thread queue; an older response cannot replace a newer revision or populate a changed identity.
+
+The Go sheet keeps its displayed item and editable strings outside the build pass and gives each field/row a stable key. Bound edits are read before a button's action, so an unsaved draft or call cannot be approved in the same frame. Sync changes keep the local draft and disable decisions until Reload; completed/executing/uncertain states keep their outcome visible and disable mutations. Save/reload errors preserve text, fields are disabled during requests, and a dismissed sheet ignores later UI callbacks. The native UI sends the saved version and payload to the local CLI; the CLI retains execution, permission and budget authority.
