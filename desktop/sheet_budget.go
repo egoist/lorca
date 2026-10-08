@@ -1,305 +1,234 @@
 package main
 
 import (
-	"encoding/json"
-	"fmt"
+	"errors"
 
 	"github.com/egoist/lorca/desktop/model"
 	"github.com/egoist/mygo/ui"
 )
 
-type budgetChoice struct {
-	target model.BudgetTarget
-	label  string
+// budgetSheet is what a DM's turns or a routine's runs may use on the bot's Runner, after the
+// macOS app's BudgetViewController: a form of limits with what the work used beside each, and a
+// card with Resume when the work stopped. The fields are the user's until the sheet closes.
+type budgetSheet struct {
+	w         *appWindow
+	bot       *model.Bot
+	chatID    string
+	routineID string
+	fields    model.BudgetFields
+	// invalid is the field that isn't a number.
+	invalid   string
+	errorText string
+	busy      bool
+	closed    bool
 }
 
-// presentTaskBudget is the canonical task-card integration hook. The task module supplies
-// its existing ID/owner; this sheet owns no task records or execution claims.
-func (w *appWindow) presentTaskBudget(bot *model.Bot, chatID, taskID string) {
-	w.presentBudget(bot, chatID, "", taskID)
-}
-
-func (w *appWindow) presentBudget(bot *model.Bot, chatID, routineID, taskID string) {
+// presentBudget opens a DM's limits for each new turn, with its newest turn when that one
+// stopped; with a routine, the routine's limits, which all of its runs count toward.
+func (w *appWindow) presentBudget(bot *model.Bot, chatID, routineID string) {
 	if bot == nil {
 		return
 	}
-	s := &budgetSheet{w: w, botName: bot.Name, drafts: map[string]model.BudgetFields{}}
-	target := model.BudgetTarget{RunnerID: bot.RunnerID, BotID: bot.ID, ChatID: chatID}
-	switch {
-	case routineID != "":
-		target.Kind, target.ID = "routine", routineID
-		name := L("Routine")
-		if routine := store.Routine(routineID); routine != nil {
-			name = routine.Name
-		}
-		s.choices = []budgetChoice{{target, name}}
-	case taskID != "":
-		target.Kind, target.ID = "task", taskID
-		s.choices = []budgetChoice{{target, L("Task allowance")}}
-	default:
-		target.Kind, target.ID = "chat", chatID
-		s.choices = []budgetChoice{{target, L("Allowance for new tasks in this chat")}}
-		for _, budget := range store.BudgetsFor(chatID, bot.RunnerID) {
-			if budget.Kind != "job" && budget.Kind != "task" {
-				continue
-			}
-			item := target
-			item.Kind, item.ID = budget.Kind, budget.ID
-			id := budget.ID
-			if len(id) > 8 {
-				id = id[len(id)-8:]
-			}
-			s.choices = append(s.choices, budgetChoice{item, budget.StateLabel() + " · " + id})
-			if s.selected == "" && budget.NeedsRecovery() {
-				s.selected = budget.Key()
-			}
-			if len(s.choices) >= 13 {
-				break
-			}
-		}
+	s := &budgetSheet{w: w, bot: bot, chatID: chatID, routineID: routineID}
+	if configured := s.configured(); configured != nil {
+		s.fields = model.BudgetFieldsFor(configured.Limits)
 	}
-	if s.selected == "" {
-		s.selected = s.choices[0].target.Kind + ":" + s.choices[0].target.ID
-	}
-	s.load()
 	w.present(s.view, func() { s.closed = true })
 }
 
-// All persistent sheet state is data. MyGo contexts/elements remain in the build pass.
-type budgetSheet struct {
-	w                                 *appWindow
-	botName                           string
-	choices                           []budgetChoice
-	selected                          string
-	fields                            model.BudgetFields
-	loaded                            *model.BudgetState
-	loading, readable, saving, closed bool
-	loads                             int
-	errorText, recoveryNote           string
-	requestID, attempt                string
-	drafts                            map[string]model.BudgetFields
-}
-
-func (s *budgetSheet) target() model.BudgetTarget {
-	for _, item := range s.choices {
-		if item.target.Kind+":"+item.target.ID == s.selected {
-			return item.target
-		}
+// configured is the allowance the form edits: the routine's, or the DM's for new turns.
+func (s *budgetSheet) configured() *model.BudgetState {
+	if s.routineID != "" {
+		return store.Budget("routine", s.routineID, s.bot.RunnerID)
 	}
-	return s.choices[0].target
+	return store.Budget("chat", s.chatID, s.bot.RunnerID)
 }
 
-func (s *budgetSheet) current() *model.BudgetState {
-	if s.loaded == nil {
+// stopped is what stopped and waits for Resume: the routine, or the DM's newest turn.
+func (s *budgetSheet) stopped() *model.BudgetState {
+	if s.routineID != "" {
+		if b := s.configured(); b != nil && b.IsStopped() {
+			return b
+		}
 		return nil
 	}
-	target := s.target()
-	if live := store.Budget(target.Kind, target.ID, target.RunnerID); live != nil && live.UpdatedAt > s.loaded.UpdatedAt {
-		return live
-	}
-	return s.loaded
+	return store.StoppedTurn(s.chatID, s.bot.RunnerID)
 }
 
-func (s *budgetSheet) selectScope(value string) {
-	if s.saving || value == s.selected {
-		return
+// usage is whose use the form shows beside the limits.
+func (s *budgetSheet) usage() *model.BudgetUsage {
+	b := s.stopped()
+	if s.routineID != "" {
+		b = s.configured()
 	}
-	if s.readable {
-		s.drafts[s.selected] = s.fields
+	if b == nil {
+		return nil
 	}
-	s.selected = value
-	s.fields = model.BudgetFields{}
-	s.loaded = nil
-	s.requestID, s.attempt, s.recoveryNote = "", "", ""
-	s.load()
+	return &b.Usage
 }
 
-func (s *budgetSheet) load() {
-	s.loads++
-	load := s.loads
-	target := s.target()
-	s.loading, s.readable, s.errorText = true, false, ""
-	store.ListBudgets(target.RunnerID, func(values []model.BudgetState, err error) {
-		if s.closed || load != s.loads {
-			return
-		}
-		s.loading = false
-		if err != nil {
-			s.errorText = model.ErrorText(err)
-			return
-		}
-		s.loaded = nil
-		for _, budget := range values {
-			if budget.Kind == target.Kind && budget.ID == target.ID && budget.RunnerID == target.RunnerID {
-				value := budget
-				s.loaded = &value
-				break
-			}
-		}
-		limits := model.BudgetLimits{}
-		if s.loaded != nil {
-			limits = s.loaded.Limits
-		}
-		s.fields = model.BudgetFieldsFor(limits)
-		if draft, ok := s.drafts[s.selected]; ok {
-			s.fields = draft
-		}
-		s.readable = true
-	})
-}
-
-func (s *budgetSheet) change(sh *sheet, resume, renew bool) {
-	if s.loading || !s.readable || s.saving {
-		return
-	}
+func (s *budgetSheet) limits() (model.BudgetLimits, bool) {
 	limits, err := s.fields.Limits()
 	if err != nil {
+		var field model.BudgetFieldError
+		if errors.As(err, &field) {
+			s.invalid = field.Field
+		}
 		s.errorText = model.ErrorText(err)
-		return
+		return limits, false
 	}
-	target := s.target()
-	owned := target.Kind == "task"
-	if current := s.current(); current != nil {
-		owned = owned || current.OwnedAdmission()
+	s.invalid = ""
+	return limits, true
+}
+
+func (s *budgetSheet) scope() model.BudgetTarget {
+	if s.routineID != "" {
+		return model.BudgetTarget{Kind: "routine", ID: s.routineID}
 	}
-	encoded, _ := json.Marshal(limits)
-	attempt := s.selected + string(encoded) + fmt.Sprint(resume, renew, owned)
-	if s.requestID == "" || s.attempt != attempt {
-		s.requestID, s.attempt = model.NewBudgetRequestID(), attempt
-	}
-	s.saving, s.errorText, s.recoveryNote = true, "", ""
-	store.ChangeBudget(target, limits, resume, renew, owned, s.requestID, func(value model.BudgetState, err error) {
+	return model.BudgetTarget{Kind: "chat", ID: s.chatID}
+}
+
+// change sends a change to the Runner with the buttons off, and closes the sheet once it's done.
+func (s *budgetSheet) change(sh *sheet, change model.BudgetChange) {
+	s.busy, s.errorText = true, ""
+	store.ChangeBudget(s.bot, s.chatID, change, func(err error) {
 		if s.closed {
 			return
 		}
-		s.saving = false
+		s.busy = false
 		if err != nil {
 			s.errorText = model.ErrorText(err)
-			return
-		}
-		s.loaded = &value
-		s.requestID, s.attempt = "", ""
-		if resume && owned {
-			s.recoveryNote = L("Allowance recovered. Retry the delivery in Events or run the task again in Tasks so its ownership and inbox admission are checked.")
 			return
 		}
 		sh.dismiss()
 	})
 }
 
-func (s *budgetSheet) confirmRenew(sh *sheet) {
-	s.w.showAlert(alertOptions{Message: L("Renew this allowance?"),
-		Informative: L("This grants the full configured allowance again and resumes from the existing transcript. Check completed effects before resuming interrupted work."),
-		Buttons:     []alertButton{{Title: L("Renew and resume")}, {Title: L("Cancel")}},
+// resume goes on where the work stopped. The stopped turn takes the limits in the form too, so
+// raising one lets it go on. When the limit it reached didn't go up, resuming means using the
+// limits in full again, so that asks first.
+func (s *budgetSheet) resume(sh *sheet, stopped model.BudgetState) {
+	limits, ok := s.limits()
+	if !ok {
+		return
+	}
+	change := model.BudgetChange{Saves: []model.BudgetTarget{s.scope()}, Limits: limits, Resume: &model.BudgetTarget{Kind: stopped.Kind, ID: stopped.ID}}
+	if stopped.Kind == "job" {
+		change.Saves = append(change.Saves, model.BudgetTarget{Kind: "job", ID: stopped.ID})
+	}
+	if stopped.Fits(limits) {
+		s.change(sh, change)
+		return
+	}
+	message := L("Resume this turn with fresh limits?")
+	if s.routineID != "" {
+		message = L("Resume this routine with fresh limits?")
+	}
+	s.w.showAlert(alertOptions{Message: message,
+		Informative: L("It already used its limits. Resuming lets it use them again in full."),
+		Buttons:     []alertButton{{Title: L("Resume")}, {Title: L("Cancel")}},
 	}, func(index int) {
 		if index == 0 && !s.closed {
-			s.change(sh, true, true)
+			change.Fresh = true
+			s.change(sh, change)
 		}
 	})
 }
 
 func (s *budgetSheet) view(c *ui.Context, sh *sheet) {
 	p := colors(c)
-	current := s.current()
-	var nextScope string
-	disabled := s.loading || !s.readable || s.saving
-	canResume := !disabled && s.target().Kind != "chat" && (current == nil || current.State != "running")
-	result := sheetFrame(c, sheetOptions{Title: L("Budget limits"),
-		Subtitle: L("Limits are enforced on %@'s Runner. Leave a field empty for unlimited. Runtime includes checks, retries, review, and waiting.", s.botName),
-		Width:    560, Confirm: L("Save"), ConfirmDisabled: disabled}, func() {
-		options := make([]popUpOption, 0, len(s.choices))
-		for _, item := range s.choices {
-			options = append(options, popUpOption{Value: item.target.Kind + ":" + item.target.ID, Label: item.label})
+	subtitle := L("Each turn with %@ stops when it reaches one of these.", s.bot.Name)
+	if s.routineID != "" {
+		name := L("Routine")
+		if routine := store.Routine(s.routineID); routine != nil {
+			name = routine.Name
 		}
-		if value, changed, _ := popUpButton(c.Key("budget-scope"), popUp{Options: options, Value: s.selected, Label: L("Allowance"), Disabled: s.saving}); changed {
-			nextScope = value
-		}
-		section(c, L("Usage"), sectionCaption, nil, func(k *card) {
-			if current == nil {
-				state := L("No limits configured")
-				if s.loading {
-					state = L("Loading…")
+		subtitle = L("All runs of %@ count toward these. When it reaches one, it waits until you resume it.", name)
+	}
+	stopped := s.stopped()
+	usage := s.usage()
+	result := sheetFrame(c, sheetOptions{Title: L("Limits"), Subtitle: subtitle, Width: 460, Confirm: L("Save"), ConfirmDisabled: s.busy}, func() {
+		if stopped != nil {
+			ui.Row(c.Key("stopped")).Gap(10).Padding(10, 12).AlignItems(ui.Center).Background(p.BotBubble).Radius(9).Border(1, p.BotBubbleBorder).Children(func() {
+				ui.Row(c).TextColor(p.Orange).Children(func() { symbol(c, "exclamationmark.circle.fill", 17, 2) })
+				ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(2).Children(func() {
+					ui.Text(c, stopped.StoppedTitle()).FontSize(13).FontWeight(600)
+					ui.Text(c, stopped.StoppedDetail()).FontSize(12).TextColor(p.Label2).LineHeight(1.35)
+				})
+				if pushButton(c, L("Resume"), pushOptions{Disabled: s.busy}).Clicked() {
+					s.resume(sh, *stopped)
 				}
-				keyValueRow(c, k, L("State"), state, false, &p.Label2)
-				return
-			}
-			u := current.Usage
-			tint := p.Label
-			if current.NeedsRecovery() {
-				tint = p.Orange
-			}
-			keyValueRow(c, k, L("State"), current.StateLabel(), false, &tint)
-			keyValueRow(c, k, L("API spending"), fmt.Sprintf("$%.4f", u.APICostUSD), false, nil)
-			keyValueRow(c, k, L("Subscription API-equivalent estimate"), fmt.Sprintf("$%.4f", u.SubscriptionEstimateUSD), false, nil)
-			keyValueRow(c, k, L("Unknown pricing"), L("%d calls", u.UnknownPriceCalls), false, nil)
-			keyValueRow(c, k, L("Tokens / runtime"), model.BudgetTokenSummary(u.Tokens)+fmt.Sprintf(" · %.0f s", u.RuntimeSecs), false, nil)
-			keyValueRow(c, k, L("Retries / connector calls"), fmt.Sprintf("%d / %d", u.Retries, u.ConnectorCalls), false, nil)
-		})
-		section(c, L("Allowance"), sectionCaption, nil, func(k *card) {
+			})
+		}
+		ui.Column(c.Key("limits")).Gap(8).Children(func() {
 			for _, field := range []struct {
-				key, label string
-				value      *string
+				key, label, unit string
+				value            *string
 			}{
-				{"usd", L("Spending (USD)"), &s.fields.USD}, {"tokens", L("Total tokens"), &s.fields.Tokens},
-				{"runtime", L("Runtime (seconds)"), &s.fields.Runtime}, {"retries", L("Retries"), &s.fields.Retries},
-				{"calls", L("Connector calls"), &s.fields.ConnectorCalls},
+				{"usd", L("Spending"), "USD", &s.fields.USD},
+				{"tokens", L("Tokens"), "", &s.fields.Tokens},
+				{"runtime", L("Run time"), L("minutes"), &s.fields.Minutes},
+				{"retries", L("Retries"), "", &s.fields.Retries},
+				{"connector_calls", L("Plugin calls"), "", &s.fields.ConnectorCalls},
 			} {
-				k.row(rowBox(c.Key(s.selected + "/" + field.key))).Children(func() {
-					rowKey(c, field.label)
-					ui.Spacer(c)
-					textField(c.Key(s.selected+"/input/"+field.key), field.value, fieldOptions{Label: field.label, Placeholder: L("Unlimited"), Disabled: disabled}).Width(160).Shrink(0)
+				ui.Row(c.Key(field.key)).Gap(10).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, field.label).Width(newBotLabelWidth).FontSize(12).TextColor(p.Label2).SingleLine()
+					input := textField(c.Key("field"), field.value, fieldOptions{Label: field.label, Placeholder: L("No limit"), Disabled: s.busy}).Width(100).Shrink(0).TextAlign(ui.End)
+					if s.invalid == field.key && input.Changed() {
+						s.invalid, s.errorText = "", ""
+					}
+					ui.Text(c, field.unit).FontSize(12).TextColor(p.Label2).SingleLine()
+					used, tint := "", p.Label2
+					if usage != nil {
+						used = budgetUsed(field.key, *usage)
+					}
+					if stopped != nil && stopped.Reached == field.key {
+						tint = p.Orange
+					}
+					ui.Text(c, used).Grow(1).MinWidth(0).TextAlign(ui.End).FontSize(12).TextColor(tint).SingleLine()
 				})
 			}
 		})
-		note := L("API spending and subscription API-equivalent estimates count toward the spending allowance. For unknown pricing, use a token or runtime allowance.")
-		if current != nil {
-			note = firstNonEmpty(current.Reason, L("Requests without reported usage use token and cost estimates. Unknown prices need a token or runtime allowance; they are never treated as free."))
-		}
-		providerNote(c, note, &p.Label2)
-		ui.Row(c).Gap(8).Children(func() {
-			if pushButton(c, L("Save and resume"), pushOptions{Disabled: !canResume}).Clicked() {
-				s.change(sh, true, false)
-			}
-			if pushButton(c, L("Renew allowance and resume…"), pushOptions{Disabled: !canResume}).Clicked() {
-				s.confirmRenew(sh)
-			}
-		})
-		if s.loading || s.saving {
-			providerStatusLine(c, &providerStatus{text: L("Loading…"), tone: model.ToneSecondary, spinning: true})
-		}
 		if s.errorText != "" {
-			providerNote(c, s.errorText, &p.Red)
-			if !s.readable && !s.loading && pushButton(c, L("Retry"), pushOptions{}).Clicked() {
-				s.load()
-			}
-		}
-		if s.recoveryNote != "" {
-			providerNote(c, s.recoveryNote, &p.Green)
+			ui.Text(c.Key("error"), s.errorText).FontSize(12).TextColor(p.Red).LineHeight(1.35)
 		}
 	})
-	// Build the existing bound fields before switching, so the last edit belongs
-	// to its original scope. The menu choice causes MyGo to rebuild the new scope.
-	if nextScope != "" {
-		s.selectScope(nextScope)
-	}
 	if result.Cancelled {
 		sh.dismiss()
 	}
-	if result.Confirmed {
-		s.change(sh, false, false)
-	}
-}
-
-func budgetStateForRoutine(routineID, runnerID string) *model.BudgetState {
-	return store.Budget("routine", routineID, runnerID)
-}
-
-// A short recovery line for inspectors. Fields remain local to their editing sheet.
-func budgetSummary(chatID, runnerID string) (string, bool) {
-	for _, value := range store.BudgetsFor(chatID, runnerID) {
-		if (value.Kind == "job" || value.Kind == "task") && value.NeedsRecovery() {
-			return value.StateLabel(), true
+	if result.Confirmed && !s.busy {
+		if limits, ok := s.limits(); ok {
+			s.change(sh, model.BudgetChange{Saves: []model.BudgetTarget{s.scope()}, Limits: limits})
 		}
 	}
-	return L("Task limits"), false
+}
+
+// budgetUsed is what the work used of one limit: "$0.21 used", "100,412 used", or nothing.
+func budgetUsed(field string, u model.BudgetUsage) string {
+	switch field {
+	case "usd":
+		if u.APICostUSD > 0 || u.SubscriptionEstimateUSD > 0 {
+			return L("%@ used", model.Spend(u.APICostUSD, u.SubscriptionEstimateUSD))
+		}
+		if u.UnknownPriceCalls > 0 {
+			return L("Price unknown")
+		}
+	case "tokens":
+		if u.Tokens > 0 {
+			return L("%@ used", model.Count(u.Tokens))
+		}
+	case "runtime":
+		if u.RuntimeSecs >= 1 {
+			return L("%@ used", model.Minutes(int(u.RuntimeSecs)))
+		}
+	case "retries":
+		if u.Retries > 0 {
+			return L("%@ used", model.Count(u.Retries))
+		}
+	case "connector_calls":
+		if u.ConnectorCalls > 0 {
+			return L("%@ used", model.Count(u.ConnectorCalls))
+		}
+	}
+	return ""
 }

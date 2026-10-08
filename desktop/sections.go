@@ -104,6 +104,25 @@ func keyValueRow(c *ui.Context, k *card, label, value string, mono bool, tint *u
 	return r
 }
 
+// disclosureRow is a key and a short value that opens its details when clicked, as System
+// Settings' rows with a chevron do: the whole row is the target. It reports the click.
+func disclosureRow(c *ui.Context, k *card, label, value string, tint *ui.Color) bool {
+	p := colors(c)
+	r := k.row(rowBox(c).Label(label).Cursor(ui.CursorPointer))
+	if r.Hovered() {
+		r.Background(p.RowHover)
+	}
+	r.Children(func() {
+		rowKey(c, label)
+		v := ui.Text(c, value).Grow(1).Shrink(1).MinWidth(0).TextAlign(ui.End).FontSize(12).TextColor(p.Label2).SingleLine()
+		if tint != nil {
+			v.TextColor(*tint)
+		}
+		ui.Row(c).TextColor(p.Label3).Children(func() { symbol(c, "chevron.right", 10, 2.4) })
+	})
+	return r.Clicked()
+}
+
 type botRowOptions struct {
 	Detail           string
 	AccessorySymbol  string

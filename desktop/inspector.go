@@ -269,20 +269,27 @@ func (m *mainWindow) inspectorRuntime(c *ui.Context, bot *model.Bot, chat *model
 			}
 		}
 		// What the turns here have used, and a way to shorten the context by hand.
-		budget, blocked := budgetSummary(chat.ID, bot.RunnerID)
-		budgetTint := p.Label2
-		if blocked {
-			budgetTint = p.Orange
-		}
-		if _, result := actionRow(c, k, L("Budget"), actionRowOptions{Value: budget, Tint: &budgetTint, Action: L("Manage…")}); result.Action {
-			m.presentBudget(bot, chat.ID, "", "")
-		}
 		if usage := chat.Usage; usage != nil {
 			label := p.Label
 			if _, result := actionRow(c, k, L("Context"), actionRowOptions{Value: usage.ContextSummary(), Tint: &label, Action: L("Compact")}); result.Action {
 				store.CompactChat(chat.ID)
 			}
-			keyValueRow(c, k, L("Spent"), usage.SpendSummary(), false, nil)
+			if note := usage.SpendNote(); note != "" {
+				keyValueRow(c, k, L("Spent"), usage.SpendSummary(), false, nil).Tooltip(note)
+			} else {
+				keyValueRow(c, k, L("Spent"), usage.SpendSummary(), false, nil)
+			}
+		}
+		// What each turn may use, or the turn that stopped at a limit.
+		limits, tint := Lc("None", "limits"), p.Label2
+		if b := store.Budget("chat", chat.ID, bot.RunnerID); b != nil {
+			limits = b.Limits.Summary()
+		}
+		if stopped := store.StoppedTurn(chat.ID, bot.RunnerID); stopped != nil {
+			limits, tint = stopped.StoppedLabel(), p.Orange
+		}
+		if disclosureRow(c, k, L("Limits"), limits, &tint) {
+			m.presentBudget(bot, chat.ID, "")
 		}
 	})
 }
@@ -347,10 +354,11 @@ func (m *mainWindow) inspectorRoutines(c *ui.Context, bot *model.Bot) {
 		for _, routine := range routines {
 			symbolName, tint := "pause.circle", p.Label3
 			detail := routine.Detail()
-			budget := budgetStateForRoutine(routine.ID, bot.RunnerID)
+			budget := store.Budget("routine", routine.ID, bot.RunnerID)
 			switch {
-			case budget != nil && budget.NeedsRecovery():
-				symbolName, tint, detail = "exclamationmark.circle", p.Orange, budget.StateLabel()
+			// A routine stopped at its limits runs again only once the user resumes it.
+			case budget != nil && budget.IsStopped():
+				symbolName, tint, detail = "exclamationmark.circle.fill", p.Orange, budget.StoppedLabel()
 			case routine.IsRunning:
 				symbolName, tint = "arrow.triangle.2.circlepath", p.Accent
 			case routine.IsEnabled:

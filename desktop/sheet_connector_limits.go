@@ -3,130 +3,118 @@ package main
 import (
 	"github.com/egoist/lorca/desktop/model"
 	"github.com/egoist/mygo/ui"
-	"time"
 )
 
-type connectorLimitSheet struct {
-	w                                     *appWindow
-	pluginID, runnerID, runnerName, scope string
-	fields                                model.ConnectorFields
-	state                                 model.ConnectorState
-	loading, readable, saving, closed     bool
-	loads                                 int
-	errorText                             string
-	drafts                                map[string]model.ConnectorFields
+// callLimitSheet is how often, and how many at once, all bots on a Runner may call one plugin
+// account, after the macOS app's ConnectorLimitsViewController. An account of a service with
+// several accounts can also set the limit they share.
+type callLimitSheet struct {
+	w         *appWindow
+	pluginID  string
+	name      string
+	runner    *model.Device
+	service   bool
+	fields    model.CallLimitFields
+	limits    *model.CallLimits
+	errorText string
+	loads     int
+	busy      bool
+	closed    bool
+	onSaved   func()
 }
 
-func (w *appWindow) presentConnectorLimits(pluginID string, runner *model.Device) {
+func (w *appWindow) presentCallLimit(pluginID, name string, runner *model.Device, onSaved func()) {
 	if runner == nil {
 		return
 	}
-	s := &connectorLimitSheet{w: w, pluginID: pluginID, runnerID: runner.ID, runnerName: runner.Name, scope: "account", drafts: map[string]model.ConnectorFields{}}
+	s := &callLimitSheet{w: w, pluginID: pluginID, name: name, runner: runner, onSaved: onSaved}
 	s.load()
 	w.present(s.view, func() { s.closed = true })
 }
 
-func (s *connectorLimitSheet) selectScope(scope string) {
-	if s.saving || scope == s.scope {
-		return
-	}
-	if s.readable {
-		s.drafts[s.scope] = s.fields
-	}
-	s.scope = scope
-	s.fields = model.ConnectorFields{}
-	s.load()
-}
-func (s *connectorLimitSheet) load() {
+// load reads the selected limit from the Runner; Save waits for it. Only the newest answer
+// counts, so a late one for the other scope never fills the fields.
+func (s *callLimitSheet) load() {
 	s.loads++
-	generation := s.loads
-	scope := s.scope
-	s.loading, s.readable, s.errorText = true, false, ""
-	store.GetConnectorLimits(s.pluginID, s.runnerID, scope, func(value model.ConnectorState, err error) {
-		if s.closed || generation != s.loads {
+	load := s.loads
+	s.limits, s.errorText = nil, ""
+	store.CallLimits(s.pluginID, s.runner.ID, s.service, func(limits model.CallLimits, err error) {
+		if s.closed || load != s.loads {
 			return
 		}
-		s.loading = false
 		if err != nil {
 			s.errorText = model.ErrorText(err)
 			return
 		}
-		s.state = value
-		s.readable = true
-		s.fields = model.ConnectorFieldsFor(value.Limits)
-		if draft, ok := s.drafts[scope]; ok {
-			s.fields = draft
-		}
+		s.limits, s.fields = &limits, model.CallLimitFieldsFor(limits)
 	})
 }
-func (s *connectorLimitSheet) save(sh *sheet) {
-	if !s.readable || s.loading || s.saving {
-		return
-	}
-	limits, err := s.fields.Limits()
-	if err != nil {
-		s.errorText = model.ErrorText(err)
-		return
-	}
-	s.saving, s.errorText = true, ""
-	store.SetConnectorLimits(s.pluginID, s.runnerID, s.scope, limits, func(_ model.ConnectorState, err error) {
+
+func (s *callLimitSheet) save(sh *sheet) {
+	s.busy, s.errorText = true, ""
+	store.SetCallLimits(s.pluginID, s.runner.ID, s.service, s.fields, func(err error) {
 		if s.closed {
 			return
 		}
-		s.saving = false
+		s.busy = false
 		if err != nil {
 			s.errorText = model.ErrorText(err)
 			return
 		}
+		if s.onSaved != nil {
+			s.onSaved()
+		}
 		sh.dismiss()
 	})
 }
-func (s *connectorLimitSheet) view(c *ui.Context, sh *sheet) {
+
+func (s *callLimitSheet) view(c *ui.Context, sh *sheet) {
 	p := colors(c)
-	disabled := s.loading || !s.readable || s.saving
-	var nextScope string
-	result := sheetFrame(c, sheetOptions{Title: L("Shared connector limits"),
-		Subtitle: L("All bots on %@ share these call rates and concurrency limits. Service limits apply across its accounts. Service retry guidance still applies.", s.runnerName),
-		Width:    520, Confirm: L("Save"), ConfirmDisabled: disabled}, func() {
-		if scope, changed, _ := popUpButton(c.Key("connector-scope"), popUp{Value: s.scope, Options: []popUpOption{{Value: "account", Label: L("This account")}, {Value: "service", Label: L("All accounts for this service")}}, Label: L("Account and service"), Disabled: s.saving}); changed {
-			nextScope = scope
+	disabled := s.busy || s.limits == nil
+	result := sheetFrame(c, sheetOptions{Title: L("Call Limit"), Subtitle: L("All bots on %@ share this limit when they use %@.", s.runner.Name, s.name),
+		Confirm: L("Save"), ConfirmDisabled: disabled}, func() {
+		label := func(text string) ui.Element {
+			return ui.Text(c, text).FontSize(12).TextColor(p.Label2).SingleLine()
 		}
-		section(c, L("Call limits"), sectionCaption, nil, func(k *card) {
-			for _, field := range []struct {
-				key, label string
-				value      *string
-			}{{"rate", L("Calls per window"), &s.fields.Calls}, {"window", L("Window (seconds)"), &s.fields.Window}, {"concurrency", L("Concurrent calls"), &s.fields.Concurrency}} {
-				k.row(rowBox(c.Key(s.scope + "/" + field.key))).Children(func() {
-					rowKey(c, field.label)
-					ui.Spacer(c)
-					textField(c.Key(s.scope+"/input/"+field.key), field.value, fieldOptions{Label: field.label, Disabled: disabled}).Width(130).Shrink(0)
+		ui.Column(c.Key("form")).Gap(8).Children(func() {
+			if s.limits != nil && s.limits.SharesService() {
+				newBotRow(c.Key("scope"), L("Applies to"), false, func() {
+					current := "account"
+					if s.service {
+						current = "service"
+					}
+					options := []popUpOption{{Value: "account", Label: L("This account")}, {Value: "service", Label: L("All %@ accounts", s.name)}}
+					if value, changed, _ := popUpButton(c, popUp{Options: options, Value: current, Label: L("Applies to"), Disabled: s.busy}); changed {
+						s.service = value == "service"
+						s.load()
+					}
 				})
 			}
+			newBotRow(c.Key("calls"), L("Calls"), false, func() {
+				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+					textField(c.Key("calls-field"), &s.fields.Calls, fieldOptions{Label: L("Calls"), Disabled: disabled}).Width(64).TextAlign(ui.End)
+					label(Lc("every", "calls every n seconds"))
+					textField(c.Key("window-field"), &s.fields.Window, fieldOptions{Label: L("Seconds"), Disabled: disabled}).Width(64).TextAlign(ui.End)
+					label(L("seconds"))
+				})
+			})
+			newBotRow(c.Key("concurrency"), L("At once"), false, func() {
+				textField(c.Key("concurrency-field"), &s.fields.Concurrency, fieldOptions{Label: L("At once"), Disabled: disabled}).Width(64).TextAlign(ui.End)
+			})
 		})
-		if s.loading || s.saving {
-			providerStatusLine(c, &providerStatus{text: L("Loading…"), tone: model.ToneSecondary, spinning: true})
-		} else if s.readable {
-			text := L("%d calls active. Zero call or concurrency capacity pauses calls.", s.state.ActiveCalls)
-			if s.state.RetryAt != nil {
-				text = L("Service cooldown until %@", model.Upcoming(time.UnixMilli(int64(*s.state.RetryAt*1000))))
+		if s.limits != nil {
+			if until, waiting := s.limits.Waiting(); waiting {
+				ui.Text(c.Key("waiting"), L("%@ asked Lorca to slow down. Calls wait until %@.", s.name, model.Clock(until))).FontSize(12).TextColor(p.Label2).LineHeight(1.35)
 			}
-			providerNote(c, text, &p.Label2)
 		}
 		if s.errorText != "" {
-			providerNote(c, s.errorText, &p.Red)
-			if !s.readable && !s.loading && pushButton(c, L("Retry"), pushOptions{}).Clicked() {
-				s.load()
-			}
+			ui.Text(c.Key("error"), s.errorText).FontSize(12).TextColor(p.Red).LineHeight(1.35)
 		}
 	})
-	// Keep pending bound edits in the scope whose controls built this frame.
-	if nextScope != "" {
-		s.selectScope(nextScope)
-	}
 	if result.Cancelled {
 		sh.dismiss()
 	}
-	if result.Confirmed {
+	if result.Confirmed && !disabled {
 		s.save(sh)
 	}
 }

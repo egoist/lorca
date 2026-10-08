@@ -1572,7 +1572,6 @@ type ChatUsage struct {
 	APICostUSD              float64
 	SubscriptionEstimateUSD float64
 	UnknownPriceCalls       uint64
-	PricedCalls             uint64
 	PricingKinds            []string
 }
 
@@ -1585,32 +1584,39 @@ func (u ChatUsage) ContextSummary() string {
 	return L("%@ of %@ · %d%%", Tokens(u.ContextTokens), Tokens(u.ContextWindow), percent)
 }
 
-// SpendSummary keeps API spending, subscription equivalence and unknown pricing distinct.
+// SpendSummary is "$0.42 · 18 turns". A subscription's turns cost what the plan costs, so their
+// price at API rates reads as an estimate ("$0.42 est."); a model without a known price reads
+// Price unknown, never $0.00.
 func (u ChatUsage) SpendSummary() string {
-	if u.PricedCalls == 0 {
-		return L("Pricing unknown · %d turns", u.Turns)
-	}
-	dollars := func(value float64) string {
-		if value > 0 && value < 0.01 {
-			return "<$0.01"
-		}
-		return fmt.Sprintf("$%.2f", value)
+	count := L("%d turns", u.Turns)
+	if u.Turns == 1 {
+		count = L("1 turn")
 	}
 	var parts []string
 	if slices.Contains(u.PricingKinds, "api") {
-		parts = append(parts, L("API %@", dollars(u.APICostUSD)))
+		parts = append(parts, Dollars(u.APICostUSD))
 	}
 	if slices.Contains(u.PricingKinds, "subscription_estimate") {
-		parts = append(parts, L("API-equivalent estimate %@", dollars(u.SubscriptionEstimateUSD)))
+		parts = append(parts, L("%@ est.", Dollars(u.SubscriptionEstimateUSD)))
 	}
-	if u.UnknownPriceCalls > 0 {
-		parts = append(parts, L("Pricing unknown"))
+	switch {
+	case len(parts) == 0:
+		parts = append(parts, L("Price unknown"))
+	case u.UnknownPriceCalls > 0:
+		parts = append(parts, Lc("unknown", "price"))
 	}
-	if len(parts) == 0 {
-		parts = append(parts, L("Pricing unknown"))
+	return strings.Join(parts, " + ") + " · " + count
+}
+
+// SpendNote is what the Spent row's estimate or unknown price means, for its tooltip.
+func (u ChatUsage) SpendNote() string {
+	if slices.Contains(u.PricingKinds, "subscription_estimate") {
+		return L("An estimate of what these turns would cost at API prices. Your subscription covers them.")
 	}
-	parts = append(parts, L("%d turns", u.Turns))
-	return strings.Join(parts, " · ")
+	if u.UnknownPriceCalls > 0 || len(u.PricingKinds) == 0 {
+		return L("This model has no known price.")
+	}
+	return ""
 }
 
 // MARK: - Settings

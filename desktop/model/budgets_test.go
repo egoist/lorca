@@ -3,132 +3,101 @@ package model
 import (
 	"encoding/json"
 	"errors"
-	"slices"
 	"strings"
-	"sync"
 	"testing"
+
+	"github.com/egoist/lorca/desktop/l10n"
 )
 
-func TestBudgetFieldsPreserveZeroUnlimitedAndRejectInvalidLimits(t *testing.T) {
-	limits, err := (BudgetFields{USD: "0", Tokens: "0", Runtime: "", Retries: "3", ConnectorCalls: ""}).Limits()
+func TestBudgetFieldsKeepZeroApartFromNoLimit(t *testing.T) {
+	l10n.Set("en", "en-US")
+	limits, err := (BudgetFields{USD: "0", Tokens: "100,000", Minutes: "15", Retries: "3"}).Limits()
 	if err != nil {
 		t.Fatal(err)
 	}
 	raw, _ := json.Marshal(limits)
-	if !strings.Contains(string(raw), `"max_usd":0`) || !strings.Contains(string(raw), `"max_tokens":0`) || strings.Contains(string(raw), "max_runtime_secs") {
-		t.Fatalf("zero/unlimited lost: %s", raw)
+	if got := string(raw); got != `{"max_usd":0,"max_tokens":100000,"max_runtime_secs":900,"max_retries":3}` {
+		t.Fatalf("limits %s", got)
 	}
-	for _, fields := range []BudgetFields{{USD: "NaN"}, {USD: "Inf"}, {USD: "-0.1"}, {Tokens: "-1"}, {Tokens: "1.5"}, {Runtime: "31536001"}} {
-		if _, err := fields.Limits(); err == nil {
-			t.Fatalf("accepted %+v", fields)
+	if got := BudgetFieldsFor(limits); got != (BudgetFields{USD: "0.00", Tokens: "100,000", Minutes: "15", Retries: "3"}) {
+		t.Fatalf("fields %+v", got)
+	}
+	for _, fields := range []BudgetFields{{USD: "NaN"}, {USD: "-0.1"}, {Tokens: "1.5"}, {Retries: "soon"}, {Minutes: "525601"}} {
+		var field BudgetFieldError
+		if _, err := fields.Limits(); !errors.As(err, &field) {
+			t.Errorf("accepted %+v", fields)
 		}
-	}
-	if got := BudgetFieldsFor(limits); got.USD != "0" || got.Tokens != "0" || got.Runtime != "" {
-		t.Fatalf("round trip %+v", got)
-	}
-	for _, fields := range []ConnectorFields{{"20", "0", "2"}, {"20", "86401", "2"}, {"1000001", "60", "2"}, {"20", "60", "257"}, {"NaN", "60", "2"}} {
-		if _, err := fields.Limits(); err == nil {
-			t.Fatalf("accepted connector %+v", fields)
-		}
-	}
-	if got, err := (ConnectorFields{"0", "60", "0"}).Limits(); err != nil || got.MaxConcurrency != 0 {
-		t.Fatalf("cannot pause: %+v %v", got, err)
 	}
 }
 
-func TestBudgetProjectionAndPriceLabelsFromWire(t *testing.T) {
+func TestAStoppedTurnSaysWhichLimitAndResumesOnlyWhenThatLimitWentUp(t *testing.T) {
+	l10n.Set("en", "en-US")
+	var state BudgetState
+	data := `{"kind":"job","id":"job-1","runner_id":"r","chat_id":"c","limits":{"max_tokens":100,"max_runtime_secs":600},"usage":{"tokens":100,"runtime_secs":20},"state":"budget_exhausted","reached":"tokens","updated_at":1}`
+	if err := json.Unmarshal([]byte(data), &state); err != nil {
+		t.Fatal(err)
+	}
+	if !state.IsStopped() || state.StoppedTitle() != "Token limit reached" || state.StoppedDetail() != "Used 100 of 100 tokens." {
+		t.Fatalf("%q %q", state.StoppedTitle(), state.StoppedDetail())
+	}
+	n := func(v uint64) *uint64 { return &v }
+	for _, c := range []struct {
+		limits BudgetLimits
+		fits   bool
+	}{
+		{state.Limits, false},
+		{BudgetLimits{MaxTokens: n(100), MaxRuntimeSecs: n(1200)}, false},
+		{BudgetLimits{MaxTokens: n(200), MaxRuntimeSecs: n(600)}, true},
+		{BudgetLimits{MaxRuntimeSecs: n(600)}, true},
+		{BudgetLimits{MaxTokens: n(200), MaxRuntimeSecs: n(10)}, false},
+	} {
+		if got := state.Fits(c.limits); got != c.fits {
+			t.Errorf("Fits(%s) = %v", c.limits.Summary(), got)
+		}
+	}
+}
+
+func TestSpentKeepsAPISpendingEstimatesAndUnknownPricesApart(t *testing.T) {
+	l10n.Set("en", "en-US")
+	usd := 2.0
+	tokens := uint64(200_000)
+	for _, c := range []struct{ got, want string }{
+		{ChatUsage{Turns: 3, APICostUSD: 0.42, PricingKinds: []string{"api"}}.SpendSummary(), "$0.42 · 3 turns"},
+		{ChatUsage{Turns: 3, PricingKinds: []string{"subscription_estimate"}}.SpendSummary(), "$0.00 est. · 3 turns"},
+		{ChatUsage{Turns: 3, APICostUSD: 0.03, SubscriptionEstimateUSD: 0.4, PricingKinds: []string{"api", "subscription_estimate"}}.SpendSummary(), "$0.03 + $0.40 est. · 3 turns"},
+		{ChatUsage{Turns: 1, UnknownPriceCalls: 2, PricingKinds: []string{"unknown"}}.SpendSummary(), "Price unknown · 1 turn"},
+		{ChatUsage{Turns: 3}.SpendSummary(), "Price unknown · 3 turns"},
+		{ChatUsage{Turns: 3, APICostUSD: 0.1, UnknownPriceCalls: 1, PricingKinds: []string{"api", "unknown"}}.SpendSummary(), "$0.10 + unknown · 3 turns"},
+		{BudgetLimits{}.Summary(), "None"},
+		{BudgetLimits{MaxUSD: &usd, MaxTokens: &tokens}.Summary(), "$2.00 · 200k tokens"},
+	} {
+		if c.got != c.want {
+			t.Errorf("%q, want %q", c.got, c.want)
+		}
+	}
+	var limits CallLimits
+	limits.Limits.MaxCalls, limits.Limits.WindowSecs = 10, 30
+	if got := limits.Summary(); got != "10 every 30 s" {
+		t.Errorf("%q", got)
+	}
+	for _, fields := range []CallLimitFields{{"20", "0", "2"}, {"10001", "60", "2"}, {"20", "60", "257"}, {"x", "60", "2"}} {
+		if _, _, _, err := fields.values(); err == nil || !strings.Contains(err.Error(), "10,000") {
+			t.Errorf("accepted %+v", fields)
+		}
+	}
+}
+
+func TestStoppedTurnIsTheChatsNewestTurn(t *testing.T) {
 	s := NewStore(nil, func(fn func()) { fn() }, false)
-	snapshot := decodeJSON[WireSnapshot](t, `{"budgets":[{"kind":"task","id":"task-1","runner_id":"runner","chat_id":"chat","job_kind":"event","limits":{"max_tokens":0},"usage":{"tokens":15,"unknown_price_calls":2},"state":"budget_exhausted","reason":"Increase the allowance"}]}`)
-	s.apply(snapshot)
-	b := s.Budget("task", "task-1", "runner")
-	if b == nil || !b.NeedsRecovery() || !b.OwnedAdmission() || b.Limits.MaxTokens == nil || *b.Limits.MaxTokens != 0 {
-		t.Fatalf("projection %+v", b)
+	s.Budgets = []BudgetState{
+		{Kind: "job", ID: "old", RunnerID: "r", ChatID: "c", State: "budget_exhausted", UpdatedAt: 1},
+		{Kind: "job", ID: "new", RunnerID: "r", ChatID: "c", State: "running", UpdatedAt: 2},
 	}
-	s.handle("budgets.changed", json.RawMessage(`{"budgets":[{"kind":"routine","id":"rt-1","runner_id":"runner","limits":{},"usage":{},"state":"interrupted"}]}`))
-	if s.Budget("task", "task-1", "runner") != nil || !s.Budget("routine", "rt-1", "runner").NeedsRecovery() {
-		t.Fatalf("event did not replace projection: %+v", s.Budgets)
+	if got := s.StoppedTurn("c", "r"); got != nil {
+		t.Errorf("a newer turn replaces the stopped one: %+v", got)
 	}
-	s.handle("budgets.changed", json.RawMessage(`{"budgets":[]}`))
-	if len(s.Budgets) != 0 {
-		t.Fatal("clear projection ignored")
-	}
-	unknown := ToUsage(decodeJSON[WireChatUsage](t, `{"cost_usd":0,"turns":1,"priced_calls":1,"pricing_kinds":["unknown"],"unknown_price_calls":1}`))
-	if !strings.Contains(unknown.SpendSummary(), "Pricing unknown") || strings.Contains(unknown.SpendSummary(), "$0") {
-		t.Fatal(unknown.SpendSummary())
-	}
-	legacy := ToUsage(WireChatUsage{CostUSD: 1, Turns: 3})
-	if !strings.Contains(legacy.SpendSummary(), "Pricing unknown") {
-		t.Fatal(legacy.SpendSummary())
-	}
-	sub := ToUsage(decodeJSON[WireChatUsage](t, `{"turns":1,"priced_calls":1,"pricing_kinds":["subscription_estimate"],"subscription_estimate_usd":0}`))
-	if !strings.Contains(sub.SpendSummary(), "API-equivalent estimate $0.00") {
-		t.Fatal(sub.SpendSummary())
-	}
-	api := ToUsage(decodeJSON[WireChatUsage](t, `{"turns":2,"priced_calls":1,"pricing_kinds":["api"],"api_cost_usd":0.004}`))
-	if !strings.Contains(api.SpendSummary(), "API <$0.01") {
-		t.Fatal(api.SpendSummary())
-	}
-}
-
-type budgetModelTransport struct {
-	mu      sync.Mutex
-	methods []string
-	params  []map[string]any
-	fail    string
-}
-
-func (t *budgetModelTransport) Reconnect() {}
-func (t *budgetModelTransport) Request(method string, params any) (json.RawMessage, error) {
-	raw, _ := json.Marshal(params)
-	var value map[string]any
-	_ = json.Unmarshal(raw, &value)
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.methods = append(t.methods, method)
-	t.params = append(t.params, value)
-	if method == t.fail {
-		return nil, errors.New("Runner is offline")
-	}
-	return json.RawMessage(`{"kind":"task","id":"task-1","runner_id":"runner","limits":{},"usage":{"tokens":20},"state":"ready"}`), nil
-}
-
-func TestBudgetMutationUsesOrderedMainThreadReplyAndOwnedAdmission(t *testing.T) {
-	transport := &budgetModelTransport{}
-	posted := make(chan func(), 1)
-	s := NewStore(transport, func(fn func()) { posted <- fn }, false)
-	called := false
-	s.ChangeBudget(BudgetTarget{Kind: "task", ID: "task-1", RunnerID: "runner", BotID: "bot", ChatID: "chat"}, BudgetLimits{}, true, true, true, "stable-request", func(value BudgetState, err error) {
-		called = true
-		if err != nil || value.Usage.Tokens != 20 {
-			t.Errorf("reply %+v %v", value, err)
-		}
-	})
-	fn := <-posted
-	if called || len(s.Budgets) != 0 {
-		t.Fatal("worker touched main-thread state")
-	}
-	transport.mu.Lock()
-	if !slices.Equal(transport.methods, []string{"budgets.set", "budgets.resume"}) {
-		t.Errorf("methods %v", transport.methods)
-	}
-	if transport.params[1]["run"] != false || transport.params[1]["request_id"] != "stable-request" || transport.params[1]["runner_id"] != "runner" {
-		t.Errorf("ownership or routing bypass: %+v", transport.params[1])
-	}
-	transport.mu.Unlock()
-	fn()
-	if !called || len(s.Budgets) != 1 {
-		t.Fatal("reply not applied on main queue")
-	}
-	transport.fail = "budgets.set"
-	s.ChangeBudget(BudgetTarget{Kind: "task", ID: "task-1", RunnerID: "runner"}, BudgetLimits{}, true, false, true, "retry", func(_ BudgetState, err error) {
-		if err == nil {
-			t.Error("error swallowed")
-		}
-	})
-	(<-posted)()
-	transport.mu.Lock()
-	defer transport.mu.Unlock()
-	if len(transport.methods) != 3 {
-		t.Errorf("started recovery after failed save: %v", transport.methods)
+	s.Budgets[1].State = "interrupted"
+	if got := s.StoppedTurn("c", "r"); got == nil || got.ID != "new" {
+		t.Errorf("%+v", got)
 	}
 }

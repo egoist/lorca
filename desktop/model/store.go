@@ -2487,7 +2487,7 @@ func (s *Store) ResetMockData() {
 	s.Bots = mockBots()
 	s.Chats = mockChats()
 	s.Routines = mockRoutines()
-	s.Budgets = nil
+	s.Budgets = mockBudgets()
 	s.AutoReview = mockAutoReview()
 	s.Providers = mockProviders()
 	s.Models = mockModels()

@@ -90,7 +90,7 @@ One doc per subject under `docs/architecture/`, each short enough to read in one
 | [MCP servers](docs/architecture/mcp-servers.md) | The user's own MCP servers in a Runner's `mcp.json`: the file and other apps' spellings, sign-in when a server asks, the `mcp.*` methods and `lorca mcp`, the apps' MCP Servers section and server sheet |
 | [Bots, Routines, and Memory](docs/architecture/bots.md) | The lead bot, DMs and groups, who answers, handoffs between bots, routines and their checks, a bot's memory |
 | [Providers](docs/architecture/providers.md) | Each model provider and its sign-in, custom providers, thinking levels, the model catalog and cost, compaction, retries |
-| [Budgets and connector limits](docs/architecture/budgets.md) | Runner task/routine allowances, model and retry accounting, encrypted recovery, price labels, shared service/account call rates and concurrency |
+| [Budgets and connector limits](docs/architecture/budgets.md) | Limits on a DM's turns and a routine's runs and how they are counted, stopping and resuming, price labels, shared call limits for plugins, and the apps' Limits and Call Limit sheets |
 | [macOS app](docs/architecture/macos-app.md) | The AppKit app: launching the CLI, windows and onboarding, settings, updates, the command palette, transcript, sidebar, inspector, composer, working state |
 | [Windows and Linux app](docs/architecture/desktop-app.md) | The MyGo app: its model, host, and native views, title bar, commands, updates, development and builds |
 | [Phone app](docs/architecture/phone-app.md) | The Expo app over the Rust core: the native module, pairing, relay status, attachments, dictation, notifications, turns |
@@ -128,7 +128,7 @@ lorca/
 
 ## Status
 
-Done: crypto and blob protocol, relay, CLI (identity, pairing, restore, local WS, API-key and subscription providers, server-side web search, agent loop, encrypt-before-upload, group chats, cross-Runner jobs and handoffs, steering and stop, routines, Runner spending/token/runtime/retry/call allowances with explicit recovery, shared connector limits, plugins over MCP with a marketplace, the user's own servers in `mcp.json`, and permission cards, encrypted pushes for replies, failures, and pending confirmations, signed self-updates of a CLI without an app, updated from any Device, and `lorca service`), app wiring and the bundled CLI launcher.
+Done: crypto and blob protocol, relay, CLI (identity, pairing, restore, local WS, API-key and subscription providers, server-side web search, agent loop, encrypt-before-upload, group chats, cross-Runner jobs and handoffs, steering and stop, routines, limits on turns and routines with resuming, shared plugin call limits, plugins over MCP with a marketplace, the user's own servers in `mcp.json`, and permission cards, encrypted pushes for replies, failures, and pending confirmations, signed self-updates of a CLI without an app, updated from any Device, and `lorca service`), app wiring and the bundled CLI launcher.
 
 Next: keychain storage.
 

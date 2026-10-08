@@ -81,6 +81,7 @@ type pluginSheet struct {
 	installed *model.InstalledPlugin
 
 	detail    *model.PluginDetail
+	callLimit *model.CallLimits
 	loadError string
 	// loads is the newest load: only it renders, so an older answer arriving late (a sealed request
 	// to another Runner) never covers a newer one, such as the detail with a sign-in code.
@@ -100,7 +101,16 @@ func (s *pluginSheet) name() string {
 	return s.pluginID
 }
 
+func (s *pluginSheet) loadCallLimit() {
+	store.CallLimits(s.pluginID, s.runner.ID, false, func(limits model.CallLimits, err error) {
+		if !s.closed && err == nil {
+			s.callLimit = &limits
+		}
+	})
+}
+
 func (s *pluginSheet) load() {
+	s.loadCallLimit()
 	s.loads++
 	load := s.loads
 	store.PluginDetail(s.pluginID, s.runner.ID, func(detail model.PluginDetail, err error) {
@@ -230,11 +240,6 @@ func (s *pluginSheet) view(c *ui.Context, sh *sheet) {
 	parts = append(parts, L("Installed on %@.", s.runner.Name))
 	result := sheetFrame(c, sheetOptions{Title: s.name(), Subtitle: strings.Join(parts, " "), Width: 520, Confirm: L("Done"), NoCancel: true}, func() {
 		s.statusSection(c)
-		section(c, L("Call limits"), sectionCaption, nil, func(k *card) {
-			if _, r := actionRow(c, k, L("Shared connector limits"), actionRowOptions{Value: L("Account and service"), Tint: &p.Label2, Action: L("Manage…")}); r.Action {
-				s.w.presentConnectorLimits(s.pluginID, s.runner)
-			}
-		})
 		s.signInSection(c)
 		if s.detail != nil && len(s.detail.Variables) > 0 {
 			s.setupSection(c)
@@ -284,6 +289,18 @@ func (s *pluginSheet) statusSection(c *ui.Context) {
 		detail := s.detail
 		tint := p.tone(detail.Status.State.Tone())
 		keyValueRow(c, k, L("State"), detail.Status.Detail, false, &tint)
+		// How often all bots on the Runner may call this plugin, or how long the service asked
+		// them to wait.
+		limit := ""
+		if s.callLimit != nil {
+			limit = s.callLimit.Summary()
+			if until, waiting := s.callLimit.Waiting(); waiting {
+				limit = L("Waiting until %@", model.Clock(until))
+			}
+		}
+		if disclosureRow(c, k, L("Call limit"), limit, nil) {
+			s.w.presentCallLimit(s.pluginID, s.name(), s.runner, s.loadCallLimit)
+		}
 		if rules := s.rules(); len(rules) > 0 {
 			prefix := s.pluginID + "/"
 			tools := make([]string, 0, len(rules))

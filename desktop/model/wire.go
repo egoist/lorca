@@ -186,7 +186,6 @@ type WireChatUsage struct {
 	APICostUSD              float64  `json:"api_cost_usd"`
 	SubscriptionEstimateUSD float64  `json:"subscription_estimate_usd"`
 	UnknownPriceCalls       uint64   `json:"unknown_price_calls"`
-	PricedCalls             uint64   `json:"priced_calls"`
 	PricingKinds            []string `json:"pricing_kinds"`
 }
 
@@ -754,7 +753,6 @@ func ToUsage(wire WireChatUsage) *ChatUsage {
 		APICostUSD:              wire.APICostUSD,
 		SubscriptionEstimateUSD: wire.SubscriptionEstimateUSD,
 		UnknownPriceCalls:       wire.UnknownPriceCalls,
-		PricedCalls:             wire.PricedCalls,
 		PricingKinds:            slices.Clone(wire.PricingKinds),
 	}
 }

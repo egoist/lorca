@@ -261,6 +261,22 @@ func mockBots() []*Bot {
 	}
 }
 
+// mockBudgets are the demo's limits: Project Manager's turns and Researcher's each have some,
+// Researcher's newest turn stopped at its token limit, and Review requests used up its spending.
+func mockBudgets() []BudgetState {
+	now := float64(time.Now().Unix())
+	usd := func(v float64) *float64 { return &v }
+	n := func(v uint64) *uint64 { return &v }
+	return []BudgetState{
+		{Kind: "chat", ID: "chat-nova", RunnerID: "dev-workbench", ChatID: "chat-nova", Limits: BudgetLimits{MaxUSD: usd(2), MaxTokens: n(200_000)}, State: "ready", UpdatedAt: now - 60*60*24},
+		{Kind: "chat", ID: "chat-scout", RunnerID: "dev-studio", ChatID: "chat-scout", Limits: BudgetLimits{MaxTokens: n(100_000), MaxRuntimeSecs: n(900)}, State: "ready", UpdatedAt: now - 60*60*24},
+		{Kind: "job", ID: "job-demo-research", RunnerID: "dev-studio", ChatID: "chat-scout", Limits: BudgetLimits{MaxTokens: n(100_000), MaxRuntimeSecs: n(900)},
+			Usage: BudgetUsage{Tokens: 100_412, APICostUSD: 0.21, RuntimeSecs: 384, Retries: 1, ConnectorCalls: 9}, State: "budget_exhausted", Reached: "tokens", UpdatedAt: now - 60*28},
+		{Kind: "routine", ID: "rt-reviews", RunnerID: "dev-workbench", ChatID: "chat-nova", Limits: BudgetLimits{MaxUSD: usd(5), MaxRuntimeSecs: n(3600)},
+			Usage: BudgetUsage{Tokens: 1_840_000, SubscriptionEstimateUSD: 5.02, RuntimeSecs: 2_760, ConnectorCalls: 64}, State: "budget_exhausted", Reached: "usd", UpdatedAt: now - 60*5},
+	}
+}
+
 func mockChat(id string, kind ChatKind, botIDs []string, messages []*Message, extra func(*Chat)) *Chat {
 	chat := &Chat{ID: id, Kind: kind, BotIDs: botIDs, Messages: messages, CreatedAt: time.Now()}
 	extra(chat)
@@ -275,10 +291,19 @@ func mockChats() []*Chat {
 			c.IsPinned = true
 			c.CreatedAt = minutesAgo(400)
 		}),
-		mockChat("chat-nova", ChatDM, []string{"bot-nova"}, managerThread(), func(c *Chat) { c.CreatedAt = minutesAgo(60 * 30) }),
+		mockChat("chat-nova", ChatDM, []string{"bot-nova"}, managerThread(), func(c *Chat) {
+			c.CreatedAt = minutesAgo(60 * 30)
+			c.Usage = &ChatUsage{ContextTokens: 18_400, ContextWindow: 400_000, InputTokens: 212_000, OutputTokens: 31_000, CacheReadTokens: 160_000,
+				CostUSD: 0.86, Turns: 14, Model: "gpt-5.5", SubscriptionEstimateUSD: 0.86, PricingKinds: []string{"subscription_estimate"}}
+		}),
 		mockChat("chat-patch", ChatDM, []string{"bot-patch"}, developerThread(), func(c *Chat) { c.UnreadCount = 2; c.CreatedAt = minutesAgo(60 * 26) }),
 		mockChat("chat-launch", ChatGroup, []string{"bot-quill", "bot-nova"}, launchThread(), func(c *Chat) { c.CustomTitle = "Launch copy"; c.CreatedAt = minutesAgo(60 * 52) }),
-		mockChat("chat-scout", ChatDM, []string{"bot-scout"}, researcherThread(), func(c *Chat) { c.UnreadCount = 1; c.CreatedAt = minutesAgo(60 * 24 * 12) }),
+		mockChat("chat-scout", ChatDM, []string{"bot-scout"}, researcherThread(), func(c *Chat) {
+			c.UnreadCount = 1
+			c.CreatedAt = minutesAgo(60 * 24 * 12)
+			c.Usage = &ChatUsage{ContextTokens: 61_000, ContextWindow: 128_000, InputTokens: 402_000, OutputTokens: 22_000, CacheReadTokens: 290_000,
+				CostUSD: 0.34, Turns: 9, Model: "deepseek-chat", APICostUSD: 0.34, PricingKinds: []string{"api"}}
+		}),
 		mockChat("chat-quill", ChatDM, []string{"bot-quill"}, writerThread(), func(c *Chat) { c.CreatedAt = minutesAgo(60 * 24 * 9) }),
 		mockChat("chat-ember", ChatDM, []string{"bot-ember"}, devopsThread(), func(c *Chat) { c.CreatedAt = minutesAgo(60 * 72) }),
 	}
@@ -327,6 +352,8 @@ func researcherThread() []*Message {
 	return []*Message{
 		mockMessage(You, textBody("Read the setup guide as a new user. What would you want explained sooner?"), minutesAgo(80)),
 		mockMessage(BotAuthor("bot-scout"), textBody("I'd explain the Device roles right after pairing: your computer runs the bots, and your phone lets you chat with them. I added that note to `research/onboarding.md`."), minutesAgo(45)),
+		mockMessage(You, textBody("Read the setup guides of five similar apps and compare what each explains first."), minutesAgo(34)),
+		mockMessage(System, Body{Kind: BodyNotice, Text: "Stopped at the token limit. Raise it in Limits to resume."}, minutesAgo(28)),
 	}
 }
 

@@ -50,11 +50,12 @@ func (w *appWindow) routineView(c *ui.Context, s *sheet, title, routineID string
 			return
 		}
 		state, tint := L("Paused"), p.Label2
-		budget := budgetStateForRoutine(routine.ID, bot.RunnerID)
-		blocked := budget != nil && budget.NeedsRecovery()
+		// A routine stopped at its limits runs again only once the user resumes it in Limits.
+		budget := store.Budget("routine", routine.ID, bot.RunnerID)
+		stopped := budget != nil && budget.IsStopped()
 		switch {
-		case blocked:
-			state, tint = budget.StateLabel(), p.Orange
+		case stopped:
+			state, tint = budget.StoppedLabel(), p.Orange
 		case routine.IsRunning:
 			state, tint = L("Running…"), p.Accent
 		case routine.IsEnabled:
@@ -74,24 +75,13 @@ func (w *appWindow) routineView(c *ui.Context, s *sheet, title, routineID string
 			}
 			keyValueRow(c, k, nextLabel, next, false, nil)
 			keyValueRow(c, k, L("Last run"), routine.LastRunSummary(), false, nil)
-		})
-		section(c, L("Budget"), sectionCaption, nil, func(k *card) {
-			value, tint := L("Unlimited"), p.Label2
+			// What its runs may use; the Limits sheet is where a stopped routine resumes.
+			limits := Lc("None", "limits")
 			if budget != nil {
-				value = budget.StateLabel()
-				if blocked {
-					tint = p.Orange
-				}
+				limits = budget.Limits.Summary()
 			}
-			if _, result := actionRow(c, k, L("Allowance"), actionRowOptions{Value: value, Tint: &tint, Action: L("Manage…")}); result.Action {
-				chatID := ""
-				for _, chat := range store.Chats {
-					if !chat.IsGroup() && len(chat.BotIDs) == 1 && chat.BotIDs[0] == bot.ID {
-						chatID = chat.ID
-						break
-					}
-				}
-				w.presentBudget(bot, chatID, routine.ID, "")
+			if disclosureRow(c, k, L("Limits"), limits, nil) {
+				w.presentBudget(bot, store.DM(bot.ID), routine.ID)
 			}
 		})
 		section(c, L("Task"), sectionCaption, nil, func(k *card) {
@@ -111,10 +101,7 @@ func (w *appWindow) routineView(c *ui.Context, s *sheet, title, routineID string
 			if runner := store.Device(bot.RunnerID); runner != nil {
 				tooltip = L("Runs on %@ now", runner.Name)
 			}
-			if blocked {
-				tooltip = budget.Reason
-			}
-			if pushButton(c, L("Run Now"), pushOptions{Disabled: routine.IsRunning || blocked, Tooltip: tooltip}).Clicked() {
+			if pushButton(c, L("Run Now"), pushOptions{Disabled: routine.IsRunning || stopped, Tooltip: tooltip}).Clicked() {
 				store.RunRoutine(routineID)
 			}
 			toggle := L("Pause")
