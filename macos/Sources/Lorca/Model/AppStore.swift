@@ -425,6 +425,11 @@ final class AppStore {
         subscriptions.append(Subscription(owner: owner, handler: handler))
     }
 
+    /// A mock workflow's sample finished; open pages read its setup again.
+    func mockWorkflowChanged() {
+        emit(.rosterChanged)
+    }
+
     private func emit(_ event: StoreEvent) {
         guard !isApplyingBootstrap else { return }
         subscriptions.removeAll { $0.owner == nil }

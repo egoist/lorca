@@ -161,7 +161,7 @@ enum MockData {
 
     /// The bundled index's plugins and bots, as the CLI serves them.
     static func marketplace() -> Marketplace {
-        Marketplace(plugins: marketplacePlugins(), bots: marketplaceBots())
+        Marketplace(packs: MockWorkflows.packs(), plugins: marketplacePlugins(), bots: marketplaceBots())
     }
 
     private static func marketplacePlugins() -> [MarketplacePlugin] {

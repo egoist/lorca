@@ -449,6 +449,8 @@ final class StatusRow: NSView, NSGestureRecognizerDelegate {
         icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
         title.stringValue = titleText
         subtitle.stringValue = subtitleText
+        // An empty subtitle would still hold a line and lift the title off center.
+        subtitle.isHidden = subtitleText.isEmpty
         // With a symbol, the state's words are its tooltip and what VoiceOver reads.
         let showsSymbol = stateText != nil && stateSymbol != nil
         state.stringValue = stateText ?? ""
@@ -517,13 +519,14 @@ final class StatusRow: NSView, NSGestureRecognizerDelegate {
 }
 
 
-/// Label on the left, a pop-up on the right. Used for settings inside a section card.
+/// Label on the left, a pop-up on the right. Used for settings inside a section card. The
+/// pop-up is 150 wide, or as wide as its titles with `fitsTitles`.
 final class PopUpRow: NSView {
     private let key: NSTextField
     let popUp = NSPopUpButton()
     var onChange: ((Int) -> Void)?
 
-    init(key keyText: String, items: [String], selected: Int) {
+    init(key keyText: String, items: [String], selected: Int, fitsTitles: Bool = false) {
         key = Build.label(keyText, font: .systemFont(ofSize: 12), color: .secondaryLabelColor)
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
@@ -548,8 +551,8 @@ final class PopUpRow: NSView {
             popUp.leadingAnchor.constraint(greaterThanOrEqualTo: key.trailingAnchor, constant: 10),
             popUp.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
             popUp.centerYAnchor.constraint(equalTo: centerYAnchor),
-            popUp.widthAnchor.constraint(equalToConstant: 150),
         ])
+        if !fitsTitles { popUp.widthAnchor.constraint(equalToConstant: 150).isActive = true }
     }
 
     @available(*, unavailable)

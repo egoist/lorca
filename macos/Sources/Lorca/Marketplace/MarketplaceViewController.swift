@@ -1,7 +1,7 @@
 import AppKit
 
-/// The marketplace, after Grok Bot's: featured plugins and bots, everything else by category,
-/// one search over both, and a page for each plugin and bot. A sheet with a way back: the home
+/// The marketplace, after Grok Bot's: workflows, featured plugins and bots, everything else by
+/// category, one search over all of them, and a page for each workflow, plugin, and bot. A sheet with a way back: the home
 /// page leads to a plugin, a bot, a full list, or the plugins the Runner has. Plugins install
 /// on the Runner picked in the top bar, for every bot there; a bot is added to that Runner, and
 /// the sheet closes on the new bot's chat, where the bot sets itself up.
@@ -30,19 +30,8 @@ final class MarketplaceViewController: NSViewController {
     private let notice = BackgroundView()
     private let noticeLabel = Build.label("", font: .systemFont(ofSize: 12.5), lines: 2)
     private var noticeTask: Task<Void, Never>?
-    #if DEBUG
-    private var isCaptureFixture = false
 
-    /// Reuses the live page layout with supplied catalog data, without a CLI request.
-    convenience init(captureCatalog: Marketplace, size: NSSize, workflowsOnly: Bool = true) {
-        self.init(runnerID: "dev-workbench", size: size, workflowsOnly: workflowsOnly, onOpenChat: { _ in })
-        precondition(store.isMock, "UI captures require LORCA_MOCK=1")
-        catalog = captureCatalog
-        loading = .loaded
-        isCaptureFixture = true
-    }
-    #endif
-
+    /// `workflowsOnly` opens on the workflows alone, for onboarding.
     init(runnerID: Device.ID?, size: NSSize, workflowsOnly: Bool = false, onOpenChat: @escaping (Chat.ID) -> Void) {
         self.workflowsOnly = workflowsOnly
         self.size = size
@@ -115,15 +104,12 @@ final class MarketplaceViewController: NSViewController {
         ])
         view = container
         updateRunnerPopup()
-        show(workflowsOnly ? MarketplaceWorkflowCatalogPage(market: self) : MarketplaceHomePage(market: self), animated: false)
+        show(workflowsOnly ? MarketplaceWorkflowListPage(market: self) : MarketplaceHomePage(market: self), animated: false)
         load()
     }
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        #if DEBUG
-        if isCaptureFixture { return }
-        #endif
         store.observe(self) { [weak self] event in
             guard let self else { return }
             if case .rosterChanged = event {
@@ -136,9 +122,6 @@ final class MarketplaceViewController: NSViewController {
     // MARK: - Loading
 
     func load() {
-        #if DEBUG
-        if isCaptureFixture { return }
-        #endif
         loading = .loading
         reloadPages()
         Task { [weak self] in
@@ -250,10 +233,10 @@ final class MarketplaceViewController: NSViewController {
     }
 
     func openWorkflow(_ pack: WorkflowPack) {
-        guard let runnerID else { return }
-        show(MarketplaceWorkflowPage(market: self, pack: pack, runnerID: runnerID))
+        show(MarketplaceWorkflowPage(market: self, pack: pack))
     }
 
+    /// Closes the sheet on the workflow's chat, where its sample is and its runs will be.
     func finishWorkflow(chatID: Chat.ID?) {
         dismiss(nil)
         if let chatID { onOpenChat(chatID) }

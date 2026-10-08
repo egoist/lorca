@@ -89,16 +89,6 @@ final class OnboardingViewController: NSViewController {
         super.init(nibName: nil, bundle: nil)
     }
 
-    #if DEBUG
-    /// Captures the real closing page over a synthetic account, without identity operations.
-    func showCompletionCaptureFixture() {
-        precondition(store.isMock, "UI captures require LORCA_MOCK=1")
-        _ = view
-        origin = .created
-        transition(to: .done)
-    }
-    #endif
-
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
@@ -558,9 +548,11 @@ final class OnboardingViewController: NSViewController {
         subtitle.identifier = NSUserInterfaceItemIdentifier("doneSubtitle")
 
         let open = primaryButton(L("Open Lorca"), action: #selector(finish))
+        let workflows = secondaryButton(L("Choose a Workflow…"), action: #selector(chooseWorkflow))
+        let buttons = Build.stack([open, workflows], spacing: 10)
+        buttons.alignment = .centerX
 
-        let workflows = primaryButton(L("Choose a Workflow…"), action: #selector(chooseWorkflow))
-        let column = Build.stack([icon, title, subtitle, workflows, open], spacing: 14)
+        let column = Build.stack([icon, title, subtitle, buttons], spacing: 14)
         column.alignment = .centerX
         column.setCustomSpacing(20, after: icon)
         column.setCustomSpacing(26, after: subtitle)
@@ -571,6 +563,7 @@ final class OnboardingViewController: NSViewController {
         NSLayoutConstraint.activate([
             subtitle.widthAnchor.constraint(equalToConstant: 420),
             open.widthAnchor.constraint(equalToConstant: 200),
+            workflows.widthAnchor.constraint(equalToConstant: 200),
             column.centerXAnchor.constraint(equalTo: host.centerXAnchor),
             column.centerYAnchor.constraint(equalTo: host.centerYAnchor),
         ])
@@ -895,10 +888,12 @@ final class OnboardingViewController: NSViewController {
         }
     }
 
+    /// The marketplace's workflows, as a sheet sized like the main window's marketplace. Setting
+    /// one up ends onboarding on its chat.
     @objc private func chooseWorkflow() {
-        let controller = MarketplaceViewController(
-            runnerID: firstBot?.runnerID, size: NSSize(width: 760, height: 650), workflowsOnly: true
-        ) { [weak self] chatID in
+        let room = view.window?.contentLayoutRect.size ?? view.bounds.size
+        let size = NSSize(width: min(800, max(640, room.width - 60)), height: min(700, max(460, room.height - 60)))
+        let controller = MarketplaceViewController(runnerID: firstBot?.runnerID, size: size, workflowsOnly: true) { [weak self] chatID in
             guard let self else { return }
             Preferences.selection = "chat:\(chatID)"
             self.finish()
