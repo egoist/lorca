@@ -1128,7 +1128,7 @@ mod tests {
         }).unwrap();
         stale.name = "Renamed elsewhere".into();
         let mut incoming = vec![stale];
-        assert!(keep_checks(&[held.clone()], &mut incoming, &app.state.lock().unwrap().bots, &app.this_device_id().unwrap()));
+        assert!(keep_checks(std::slice::from_ref(&held), &mut incoming, &app.state.lock().unwrap().bots, &app.this_device_id().unwrap()));
         assert_eq!(incoming[0].health, held.health);
         assert_eq!(incoming[0].last_scheduled_at, held.last_scheduled_at);
         assert_eq!(incoming[0].name, "Renamed elsewhere");

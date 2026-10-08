@@ -342,10 +342,11 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
     }
     let mut state = sink.0.lock().unwrap();
     state.finish();
-    if !cancel.is_cancelled() {
-        if let Some(id) = job.routine_id.as_deref() {
-            crate::routines::model_result(app, id, state.last_error.as_deref().filter(|_| state.failed));
-        }
+    // A routine's run counts in its streak with the provider; one that failed without the
+    // provider's error to say why, or that was stopped, leaves the streak as it was.
+    let error = state.last_error.as_deref().filter(|_| state.failed);
+    if let Some(id) = job.routine_id.as_deref().filter(|_| !cancel.is_cancelled() && (error.is_some() || !failed)) {
+        crate::routines::model_result(app, id, error);
     }
     let outcome = if state.sent {
         TurnOutcome::Sent
