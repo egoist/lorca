@@ -4,7 +4,7 @@
 // centered "Message from ◉ Name" / "Messaged ◉ Name" markers. Tool calls never render, except a
 // command, which shows as its card while it needs the user.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
@@ -12,7 +12,7 @@ import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, { useAnimatedStyle, useSharedValue, withSequence, withSpring, withTiming } from "react-native-reanimated";
 import { LinearGradient } from "expo-linear-gradient";
 import { ShimmerView } from "../../modules/lorca-core/ShimmerView";
-import { isLive, isSentMessage, showsCard, type Author, type Body, type Bot, type Chat, type CommandRun, type Message } from "../core/model";
+import { canBeQuoted, isLive, isSentMessage, showsCard, type Author, type Body, type Bot, type Chat, type CommandRun, type Message } from "../core/model";
 import { engine } from "../core/engine";
 import { useStore } from "../core/store";
 import { language, t, useLanguage } from "../i18n";
@@ -181,9 +181,12 @@ function SwipeToReply({ onReply, children }: { onReply?: () => void; children: R
   );
 }
 
-/// `onReply` makes the draft a reply to this message (a swipe to the left); `onQuotePress` brings
-/// the message a reply answers into view; `flashing` pulses the bubble once it is there.
-export function MessageRow({
+/// `onReply` makes the draft a reply to this message (a swipe to the left), when it can be quoted;
+/// `onQuotePress` brings the message a reply answers into view; `flashing` pulses the bubble once
+/// it is there. Rows are built anew on every change to the chat, but their messages keep their
+/// identity until they change, so a bubble renders again only when its own message or place
+/// in the run does: a streaming reply re-renders its own bubble, not the screenful above it.
+export const MessageRow = memo(function MessageRow({
   row,
   bots,
   isGroup,
@@ -194,11 +197,12 @@ export function MessageRow({
   row: Extract<Row, { type: "message" }>;
   bots: Map<string, Bot>;
   isGroup: boolean;
-  onReply?: () => void;
+  onReply?: (message: Message) => void;
   onQuotePress?: (messageID: string) => void;
   flashing?: boolean;
 }) {
   const held = row.message.queued === true;
+  const reply = useMemo(() => (onReply && canBeQuoted(row.message) ? () => onReply(row.message) : undefined), [onReply, row.message]);
   useLanguage();
   const p = usePalette();
   const paneWidth = usePaneWidth();
@@ -222,7 +226,7 @@ export function MessageRow({
   const attachmentWidth = columnWidth - 26 - (showsAvatar ? AVATAR + GUTTER : 0);
   const quoteName = quote ? quoteAuthorName(quote.author, bots) : "";
   return (
-    <SwipeToReply onReply={onReply}>
+    <SwipeToReply onReply={reply}>
     <View style={[styles.messageRow, { paddingTop: groupStart ? 14 : 3 }, isYou ? styles.messageRowYou : styles.messageRowBot]}>
       {showsAvatar && <View style={{ width: AVATAR + GUTTER, alignSelf: "flex-end" }}>{groupEnd && <BotAvatar bot={bot} size={AVATAR} />}</View>}
       <View style={[styles.bubbleColumn, { maxWidth: columnWidth }, isYou && styles.bubbleColumnYou]}>
@@ -276,7 +280,17 @@ export function MessageRow({
     </View>
     </SwipeToReply>
   );
-}
+}, (a, b) =>
+  a.row.message === b.row.message &&
+  a.row.groupStart === b.row.groupStart &&
+  a.row.groupEnd === b.row.groupEnd &&
+  a.row.showsName === b.row.showsName &&
+  a.bots === b.bots &&
+  a.isGroup === b.isGroup &&
+  a.onReply === b.onReply &&
+  a.onQuotePress === b.onQuotePress &&
+  a.flashing === b.flashing,
+);
 
 /// "Messaged ◉ Name" with the message's first line under it; a tap opens the whole message
 /// in a sheet.

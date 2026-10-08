@@ -38,7 +38,7 @@ import Animated, {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { SoftScrollEdgeView } from "../../../modules/lorca-core/SoftScrollEdgeView";
 import { chatTitle, engine } from "../../../src/core/engine";
-import { canBeQuoted, isLive, type Bot, type Message } from "../../../src/core/model";
+import { isLive, type Bot, type Message } from "../../../src/core/model";
 import {
   useBotMap,
   useChat,
@@ -741,7 +741,7 @@ export default function ChatScreen() {
               row={item}
               bots={bots}
               isGroup={isGroup}
-              onReply={canBeQuoted(item.message) ? () => startReply(item.message) : undefined}
+              onReply={startReply}
               onQuotePress={revealQuoted}
               flashing={flashId === item.message.id}
             />
