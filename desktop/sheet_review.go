@@ -58,32 +58,36 @@ func (st *reviewSheet) follow() bool {
 	return false
 }
 
+// reviewPluginName is the plugin a call goes to, as its Runner lists it and the permission card
+// names it: "GitHub".
+func reviewPluginName(item model.ReviewItem) string {
+	if runner := store.Device(item.RunnerID); runner != nil {
+		for _, installed := range runner.Plugins {
+			if installed.ID == item.Payload.PluginID {
+				return installed.Name
+			}
+		}
+	}
+	return item.Target.Account
+}
+
 // reviewTitle is "Chef wants to run a command on Workbench", as the permission card says it.
 func reviewTitle(item model.ReviewItem) string {
 	bot := L("The bot")
 	if b := store.Bot(item.BotID); b != nil {
 		bot = b.Name
 	}
-	runner := store.Device(item.RunnerID)
 	switch item.Payload.Kind {
 	case "draft":
 		return L("%@ wrote a draft", bot)
 	case "shell":
 		name := L("its Runner")
-		if runner != nil {
+		if runner := store.Device(item.RunnerID); runner != nil {
 			name = runner.Name
 		}
 		return bot + " " + L("wants to run a command on %@", name)
 	}
-	plugin := item.Target.Account
-	if runner != nil {
-		for _, installed := range runner.Plugins {
-			if installed.ID == item.Payload.PluginID {
-				plugin = installed.Name
-			}
-		}
-	}
-	return bot + " " + L("wants to use %@", plugin)
+	return bot + " " + L("wants to use %@", reviewPluginName(item))
 }
 
 func (st *reviewSheet) view(w *appWindow, c *ui.Context, s *sheet) {
@@ -229,7 +233,7 @@ func (m *mainWindow) inspectorReviews(c *ui.Context, chat *model.Chat) {
 			case "shell":
 				o.Symbol = "terminal"
 			default:
-				o.Symbol, o.PluginID = "puzzlepiece.extension", item.Payload.PluginID
+				o.Title, o.Symbol, o.PluginID = reviewPluginName(item), "puzzlepiece.extension", item.Payload.PluginID
 			}
 			if _, row := statusRow(c.Key("review:"+item.ID), k, o); row.Clicked {
 				m.presentReview(item)

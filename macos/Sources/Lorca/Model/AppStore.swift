@@ -1071,6 +1071,11 @@ final class AppStore {
         emit(.reviewsChanged)
     }
 
+    /// The plugin a call goes to, as its Runner lists it and the permission card names it: "GitHub".
+    func pluginName(of item: ReviewItem) -> String {
+        device(item.runnerId)?.plugins.first { $0.id == item.payload.pluginId }?.name ?? item.target.account
+    }
+
     /// Approves the version the user saw. An edit made in the sheet is saved first, as the next
     /// version, and that is the one approved: what runs is what the editor showed.
     func approveReview(_ item: ReviewItem, payload: [String: Any]?) async throws -> ReviewItem {

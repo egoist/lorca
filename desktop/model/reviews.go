@@ -180,16 +180,11 @@ func (r ReviewItem) StateText() string {
 	return ""
 }
 
-// Headline is the line the inspector shows: the command, the tool, or what the draft is for.
+// Headline is the command, or what a draft is for; the inspector names a call by its plugin
+// instead.
 func (r ReviewItem) Headline() string {
-	switch r.Payload.Kind {
-	case "shell":
+	if r.Payload.Kind == "shell" {
 		return FirstLine(r.Payload.EditorText())
-	case "draft":
-		return r.Target.Resource
-	}
-	if r.Payload.Tool != "" {
-		return r.Payload.Tool
 	}
 	return r.Target.Resource
 }

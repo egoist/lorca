@@ -137,13 +137,9 @@ struct ReviewItem: Decodable, Identifiable {
         }
     }
 
-    /// The line the inspector shows: the command, the tool, or what the draft is for.
+    /// The command, or what a draft is for; the inspector names a call by its plugin instead.
     var headline: String {
-        switch payload.kind {
-        case "shell": payload.editorText.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.first { !$0.isEmpty } ?? ""
-        case "draft": target.resource
-        default: payload.tool ?? target.resource
-        }
+        payload.isShell ? payload.editorText.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.first { !$0.isEmpty } ?? "" : target.resource
     }
 
     /// What the call printed or returned, or the accepted draft.

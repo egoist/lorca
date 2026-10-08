@@ -50,9 +50,12 @@ func TestReviewApprovesTheEditedCommand(t *testing.T) {
 
 func TestReviewRejectsACall(t *testing.T) {
 	m, tt := reviewWindow(t)
-	m.presentReview(*store.Review("review-comment"))
+	// The row names the call by its plugin, as the permission card does, not by the tool's id.
+	if err := tt.Click("GitHub"); err != nil {
+		t.Fatal(err)
+	}
 	settleTransitions(tt)
-	if !tt.HasText("Project Manager wants to use GitHub") {
+	if !m.hasSheet() || !tt.HasText("Project Manager wants to use GitHub") {
 		t.Fatal(tt.Texts())
 	}
 	renderBoth(t, tt, "review-call")

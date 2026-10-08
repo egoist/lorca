@@ -38,8 +38,7 @@ final class ReviewViewController: SheetViewController {
         case "shell":
             return "\(bot) \(L("wants to run a command on %@", runner?.name ?? L("its Runner")))"
         default:
-            let plugin = runner?.plugins.first { $0.id == item.payload.pluginId }?.name ?? item.target.account
-            return "\(bot) \(L("wants to use %@", plugin))"
+            return "\(bot) \(L("wants to use %@", store.pluginName(of: item)))"
         }
     }
 

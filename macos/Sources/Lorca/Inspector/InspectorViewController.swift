@@ -264,7 +264,7 @@ final class InspectorViewController: NSViewController {
                 row.configure(
                     symbol: item.payload.isDraft ? "doc.text" : (item.payload.isShell ? "terminal" : plugin?.symbolName ?? "puzzlepiece.extension"),
                     image: plugin.flatMap { PluginLogo.tile(for: $0.id, size: 18) },
-                    title: item.headline,
+                    title: item.payload.kind == "plugin" ? store.pluginName(of: item) : item.headline,
                     subtitle: item.rationale,
                     state: item.stateText,
                     subtitleLines: 2)
