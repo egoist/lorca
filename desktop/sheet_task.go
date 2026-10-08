@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"net/url"
-	"reflect"
 	"slices"
 	"strings"
 
@@ -11,94 +10,68 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// A task sheet owns plain persistent draft values. No element/context survives a build pass.
-// Its opened revision stays fixed until Reload; newer events never overwrite typing.
+// taskSheet is one durable task, after the Mac's task sheet. A card on top says where it stands,
+// why when it is blocked or cancelled, its result and what supports it, and offers the one step
+// that fits: Start, Resume, Mark Complete, or Reopen. Below it the goal, owner, next step, and
+// what done looks like are a form that Save writes back, then the tasks it waits for and its
+// links, when it has them.
+//
+// Edits start from the version the sheet showed. A change from elsewhere replaces the form while
+// the user has not touched it. When Save finds the task changed underneath, the sheet takes the
+// newer version under the user's edits and says so; the next Save writes them. A new task is the
+// same form, and once created the sheet shows it.
 type taskSheet struct {
-	w                                                               *appWindow
-	opened                                                          *model.DurableTask
-	creationID, chatID, runIn                                       string
-	goal, criteria, next, reason, result, owner, links, evidenceURL string
-	state                                                           model.TaskState
-	chats, dependencies                                             []string
-	evidence                                                        []model.TaskEvidence
-	error                                                           string
-	busy, closed                                                    bool
-	requestID, requestBody, runID, runBody                          string
+	w      *appWindow
+	chatID string
+	// base is the version the form's edits start from; nil until a new task is created.
+	base       *model.DurableTask
+	creationID string
+	goal, next string
+	criteria   string
+	owner      string
+	// message says what went wrong, in red when failed.
+	message string
+	failed  bool
+	busy    bool
+	closed  bool
+	// sent is the last request and its id: a retry after an unclear failure sends the same id, so
+	// the CLI answers it once.
+	sentBody, sentID string
 }
 
 func (w *appWindow) presentDurableTask(chatID string, task *model.DurableTask) *taskSheet {
 	st := &taskSheet{w: w, chatID: chatID, creationID: model.TaskID("task-")}
-	st.load(task)
+	if task != nil {
+		st.populate(task)
+	} else if chat := store.Chat(chatID); chat != nil {
+		st.owner = chat.Owner()
+		if owners := st.owners(); st.owner == "" && len(owners) > 0 {
+			st.owner = owners[0].ID
+		}
+	}
 	w.present(st.view, func() { st.closed = true })
 	return st
 }
 
-func (st *taskSheet) load(task *model.DurableTask) {
-	st.opened = nil
-	st.chats = []string{st.chatID}
-	st.state = model.TaskQueued
-	st.goal, st.criteria, st.next, st.reason, st.result, st.owner, st.links = "", "", "", "", "", "", ""
-	st.dependencies = nil
-	st.evidence = nil
-	st.error = ""
-	st.runID, st.runBody = "", ""
-	st.runIn = ""
-	if task != nil {
-		copy := task.Clone()
-		st.opened = &copy
-		st.goal, st.criteria, st.next = copy.Goal, strings.Join(copy.AcceptanceCriteria, "\n"), copy.NextAction
-		st.reason, st.result, st.owner = copy.ReasonText(), copy.ResultText(), copy.OwnerBotID
-		st.chats, st.dependencies = slices.Clone(copy.ChatIDs), slices.Clone(copy.Dependencies)
-		st.evidence = copy.Clone().Evidence
-		st.state = copy.State
-		var links []string
-		for _, link := range copy.Links {
-			links = append(links, link.URL)
-		}
-		st.links = strings.Join(links, "\n")
-		for _, id := range st.runChats() {
-			if st.runIn == "" || id == st.chatID {
-				st.runIn = id
-			}
-		}
-	} else if bots := st.owners(); len(bots) > 0 {
-		st.owner = bots[0].ID
-	}
+// taskForm is what the form holds, trimmed, for comparing with a version of the task.
+type taskForm struct {
+	goal, next string
+	criteria   []string
+	owner      string
 }
 
-func (st *taskSheet) active() bool { return st.opened != nil && st.opened.ActiveRun != nil }
+func (f taskForm) equal(g taskForm) bool {
+	return f.goal == g.goal && f.next == g.next && slices.Equal(f.criteria, g.criteria) && f.owner == g.owner
+}
 
-func (st *taskSheet) savedOwner() *model.Bot {
-	if st.opened == nil {
-		return nil
-	}
-	if current := store.DurableTask(st.opened.ID); current != nil && (current.OwnerBotID != st.opened.OwnerBotID || current.RunnerID != st.opened.RunnerID) {
-		return nil
-	}
-	bot := store.Bot(st.opened.OwnerBotID)
-	if bot == nil || bot.RunnerID != st.opened.RunnerID {
-		return nil
-	}
-	return bot
+func (st *taskSheet) form() taskForm {
+	return taskForm{goal: strings.TrimSpace(st.goal), next: strings.TrimSpace(st.next), criteria: taskLines(st.criteria), owner: st.owner}
 }
-func (st *taskSheet) owners() []*model.Bot {
-	var bots []*model.Bot
-	for _, bot := range store.Bots {
-		if slices.ContainsFunc(st.chats, func(id string) bool {
-			chat := store.Chat(id)
-			return chat != nil && slices.Contains(chat.BotIDs, bot.ID)
-		}) {
-			bots = append(bots, bot)
-		}
-	}
-	return bots
+
+func formOf(task *model.DurableTask) taskForm {
+	return taskForm{goal: strings.TrimSpace(task.Goal), next: strings.TrimSpace(task.NextAction), criteria: task.AcceptanceCriteria, owner: task.OwnerBotID}
 }
-func taskChatTitle(id string) string {
-	if chat := store.Chat(id); chat != nil {
-		return store.Title(chat)
-	}
-	return id
-}
+
 func taskLines(text string) []string {
 	out := []string{}
 	for _, line := range strings.Split(text, "\n") {
@@ -108,399 +81,419 @@ func taskLines(text string) []string {
 	}
 	return out
 }
-func taskNullable(value string) any {
-	if strings.TrimSpace(value) == "" {
-		return nil
-	}
-	return value
-}
-func taskHTTPS(value string) bool {
-	u, err := url.Parse(value)
-	return err == nil && u.Scheme == "https" && u.Hostname() != "" && u.User == nil
+
+func (st *taskSheet) populate(task *model.DurableTask) {
+	copy := task.Clone()
+	st.base = &copy
+	st.goal, st.next, st.criteria, st.owner = task.Goal, task.NextAction, strings.Join(task.AcceptanceCriteria, "\n"), task.OwnerBotID
 }
 
-func taskField(c *ui.Context, label string, content func()) {
-	ui.Column(c).Gap(5).Children(func() { ui.Text(c, label).FontSize(12).FontWeight(600); content() })
+func (st *taskSheet) hasEdits() bool { return st.base != nil && !st.form().equal(formOf(st.base)) }
+
+func (st *taskSheet) canSave() bool {
+	f := st.form()
+	return !st.busy && f.owner != "" && f.goal != "" && f.next != "" && len(f.criteria) > 0
+}
+
+// rebase takes `latest` under the user's edits: a field they changed keeps their words, the
+// others take the newer version's.
+func (st *taskSheet) rebase(latest *model.DurableTask) {
+	if st.base == nil {
+		return
+	}
+	before, now := formOf(st.base), st.form()
+	if now.goal == before.goal {
+		st.goal = latest.Goal
+	}
+	if now.next == before.next {
+		st.next = latest.NextAction
+	}
+	if slices.Equal(now.criteria, before.criteria) {
+		st.criteria = strings.Join(latest.AcceptanceCriteria, "\n")
+	}
+	if now.owner == before.owner {
+		st.owner = latest.OwnerBotID
+	}
+	copy := latest.Clone()
+	st.base = &copy
+}
+
+// latest is the newest version the store has, which the status and the sections show.
+func (st *taskSheet) latest() *model.DurableTask {
+	if st.base == nil {
+		return nil
+	}
+	if task := store.DurableTask(st.base.ID); task != nil {
+		return task
+	}
+	return st.base
+}
+
+// owners are the bots of the task's chats, which the owner is one of.
+func (st *taskSheet) owners() []*model.Bot {
+	chats := []string{st.chatID}
+	if st.base != nil {
+		chats = st.base.ChatIDs
+	}
+	var bots []*model.Bot
+	for _, bot := range store.Bots {
+		if slices.ContainsFunc(chats, func(id string) bool {
+			chat := store.Chat(id)
+			return chat != nil && slices.Contains(chat.BotIDs, bot.ID)
+		}) {
+			bots = append(bots, bot)
+		}
+	}
+	return bots
 }
 
 func (st *taskSheet) view(c *ui.Context, s *sheet) {
-	confirm := L("Save")
-	title := L("Task")
-	if st.opened == nil {
-		title = L("New task")
+	p := colors(c)
+	// A change from elsewhere replaces an untouched form.
+	if st.base != nil && !st.busy {
+		if newer := store.DurableTask(st.base.ID); newer != nil && newer.Revision > st.base.Revision && !st.hasEdits() {
+			st.populate(newer)
+		}
 	}
-	result := sheetFrame(c, sheetOptions{Title: title, Subtitle: L("Keep ownership, progress, and evidence across turns."), Width: 590, Confirm: confirm, ConfirmDisabled: st.busy || len(st.owners()) == 0, ReturnInContent: true, Status: st.error,
+	task := st.latest()
+	title, subtitle, confirm := L("Task"), "", L("Save")
+	if task == nil {
+		title, subtitle, confirm = L("New Task"), L("A task stays with its bot across turns, until it’s done."), L("Create Task")
+	}
+	// A running task keeps its owner and its definition of done until the run ends.
+	running := task != nil && task.ActiveRun != nil
+	const width = 520
+	fill := float32(width - 40 - formLabelWidth - 10)
+	result := sheetFrame(c, sheetOptions{
+		Title: title, Subtitle: subtitle, Width: width, Confirm: confirm, ConfirmDisabled: !st.canSave(),
 		Leading: func() {
-			if taskBudgetOpener != nil && st.opened != nil {
-				bot := st.savedOwner()
-				if pushButton(c.Key("budget"), L("Budget…"), pushOptions{Disabled: st.busy || bot == nil || st.runChatID() == ""}).Clicked() {
-					taskBudgetOpener(st.w, bot, st.runChatID(), st.opened.ID)
+			if task != nil && !task.State.Finished() {
+				if pushButton(c.Key("cancel-task"), L("Cancel Task…"), pushOptions{Kind: buttonDestructive, Disabled: st.busy}).Clicked() {
+					st.confirmCancel(s)
 				}
-			}
-			if pushButton(c.Key("reload"), L("Reload"), pushOptions{Disabled: st.opened == nil || st.busy}).Clicked() {
-				st.reload()
-			}
-			canRun := st.opened != nil && st.opened.State.CanRun() && st.opened.ActiveRun == nil && st.savedOwner() != nil && st.runChatID() != ""
-			if pushButton(c.Key("run"), L("Start saved task"), pushOptions{Disabled: st.busy || !canRun}).Clicked() {
-				st.run(s)
 			}
 		},
 	}, func() {
-		if st.opened != nil {
-			ui.Text(c, st.opened.ID).FontSize(10).TextColor(colors(c).Label3).Selectable()
+		if task != nil {
+			st.statusCard(c.Key("status"), s, task).Margin(0, 0, 4, 0)
 		}
-		taskField(c.Key("goal"), L("Goal"), func() { textField(c, &st.goal, fieldOptions{Label: L("Task goal"), Disabled: st.busy}) })
-		taskField(c.Key("owner"), L("Owning bot"), func() {
-			var options []popUpOption
-			for _, bot := range st.owners() {
-				runner := bot.RunnerID
-				if device := store.Device(runner); device != nil {
-					runner = device.Name
-				}
-				options = append(options, popUpOption{Value: bot.ID, Label: bot.Name + " · " + runner})
-			}
-			if selected, ok, _ := popUpButton(c, popUp{Value: st.owner, Options: options, Width: 540, Label: L("Task owner"), Disabled: st.busy || st.active()}); ok {
-				st.owner = selected
-			}
+		formRow(c.Key("goal"), L("Goal"), false, func() {
+			textField(c, &st.goal, fieldOptions{Placeholder: L("What should get done"), Label: L("Goal")}).Grow(1).MinWidth(0)
 		})
-		if bot := store.Bot(st.owner); bot != nil {
-			runner := bot.RunnerID
-			if st.opened != nil && st.owner == st.opened.OwnerBotID {
-				runner = st.opened.RunnerID
-			}
-			if device := store.Device(runner); device != nil {
-				runner = device.Name
-			}
-			ui.Text(c, L("Assigned Runner: %@", runner)).FontSize(11).TextColor(colors(c).Label2)
-		}
-		if st.opened != nil && st.savedOwner() == nil {
-			ui.Text(c, L("Resolve the owner's Runner assignment before running or changing the task budget.")).FontSize(11).TextColor(colors(c).Orange)
-		}
-		taskField(c.Key("state"), L("State"), func() {
-			var options []popUpOption
-			for _, state := range model.TaskStates() {
-				options = append(options, popUpOption{Value: string(state), Label: state.Title()})
-			}
-			if selected, ok, _ := popUpButton(c, popUp{Value: string(st.state), Options: options, Width: 540, Label: L("Task state"), Disabled: st.opened == nil || st.busy}); ok {
-				st.state = model.TaskState(selected)
-			}
-		})
-		st.chatFields(c.Key("chats"))
-		if st.opened != nil {
-			taskField(c.Key("run-in"), L("Saved task runs in"), func() {
-				options := []popUpOption{{Value: "", Label: L("Choose a chat…")}}
-				for _, id := range st.runChats() {
-					options = append(options, popUpOption{Value: id, Label: taskChatTitle(id)})
+		if owners := st.owners(); len(owners) > 1 {
+			formRow(c.Key("owner"), L("Owner"), false, func() {
+				var options []popUpOption
+				for _, bot := range owners {
+					options = append(options, popUpOption{Value: bot.ID, Label: bot.Name})
 				}
-				if id, ok, _ := popUpButton(c, popUp{Options: options, Value: st.runChatID(), Width: 540, Label: L("Primary run chat"), Disabled: st.busy || st.active()}); ok {
-					st.runIn = id
+				if picked, changed, _ := popUpButton(c, popUp{Options: options, Value: st.owner, Width: fill, Label: L("Owner"), Disabled: running || st.busy}); changed {
+					st.owner = picked
 				}
 			})
 		}
-		taskField(c.Key("criteria"), L("Acceptance criteria · one per line"), func() {
-			textArea(c, &st.criteria, 0, fieldOptions{Label: L("Acceptance criteria"), Disabled: st.busy || st.active()}).Height(66)
+		formRow(c.Key("next"), L("Next step"), false, func() {
+			textField(c, &st.next, fieldOptions{Placeholder: L("What the bot does first"), Label: L("Next step")}).Grow(1).MinWidth(0)
 		})
-		taskField(c.Key("next"), L("Next action"), func() {
-			textArea(c, &st.next, 0, fieldOptions{Label: L("Task next action"), Disabled: st.busy}).Height(52)
+		// Return starts a new line here, one check per line.
+		formRow(c.Key("criteria"), L("Done when"), true, func() {
+			textArea(c, &st.criteria, 0, fieldOptions{Placeholder: L("One check per line"), Label: L("Done when"), Disabled: running}).
+				Lines(3, 10).Grow(1).MinWidth(0).MinHeight(54)
 		})
-		if st.opened != nil {
-			taskField(c.Key("reason"), L("Reason · required when blocked or cancelled"), func() {
-				textArea(c, &st.reason, 0, fieldOptions{Label: L("Task reason"), Disabled: st.busy}).Height(52)
-			})
-			taskField(c.Key("result"), L("Result · required for completion"), func() {
-				textArea(c, &st.result, 0, fieldOptions{Label: L("Task result"), Disabled: st.busy}).Height(80)
-			})
+		if task != nil && len(task.Dependencies) > 0 {
+			section(c.Key("waits-for"), L("Waits For"), sectionCaption, nil, func(k *card) {
+				for _, id := range task.Dependencies {
+					o := statusRowOptions{Symbol: "circle", Title: L("A task on another Device")}
+					tint := p.Label3
+					if dependency := store.DurableTask(id); dependency != nil {
+						o.Symbol, o.Title, o.Subtitle = dependency.State.Symbol(), dependency.Goal, dependency.State.Title()
+						tint = taskTint(p, dependency.State)
+					}
+					o.SymbolColor = &tint
+					ui.Box(c.Key(id)).Children(func() { statusRow(c, k, o) })
+				}
+			}).Margin(4, 0, 0, 0)
 		}
-		st.dependencyFields(c.Key("dependencies"))
-		taskField(c.Key("links"), L("External links · one HTTPS URL per line"), func() {
-			textArea(c, &st.links, 0, fieldOptions{Label: L("External links"), Disabled: st.busy}).Height(52)
-		})
-		if st.opened != nil {
-			st.evidenceFields(c.Key("evidence"))
-		} else {
-			ui.Text(c, L("Save the task to record progress and supporting evidence.")).FontSize(11).TextColor(colors(c).Label2)
+		if task != nil && len(task.Links) > 0 {
+			section(c.Key("links"), L("Links"), sectionCaption, nil, func(k *card) {
+				for i, link := range task.Links {
+					o := statusRowOptions{Symbol: "link", Title: link.Label, Tooltip: link.URL, Clickable: true}
+					if u, err := url.Parse(link.URL); err == nil && link.Label != link.URL {
+						o.Subtitle = u.Hostname()
+					}
+					href := link.URL
+					ui.Box(c.Key(i)).Children(func() {
+						if _, row := statusRow(c, k, o); row.Clicked {
+							openLink(href)
+						}
+					})
+				}
+			}).Margin(4, 0, 0, 0)
+		}
+		if st.message != "" {
+			tint := p.Label2
+			if st.failed {
+				tint = p.Red
+			}
+			ui.Text(c.Key("message"), st.message).FontSize(12).TextColor(tint).LineHeight(1.4).Selectable()
 		}
 	})
-	if result.Cancelled {
+	switch {
+	case result.Cancelled:
 		s.dismiss()
-	} else if result.Confirmed {
+	case result.Confirmed:
 		st.save(s)
 	}
 }
 
-func (st *taskSheet) chatFields(c *ui.Context) {
-	taskField(c, L("Linked chats"), func() {
-		for _, id := range slices.Clone(st.chats) {
-			ui.Row(c.Key(id)).Gap(8).Children(func() {
-				ui.Text(c, taskChatTitle(id)).Grow(1).FontSize(12)
-				if linkButton(c, L("Remove"), st.busy || st.active()).Label(L("Remove chat %@", taskChatTitle(id))).Clicked() {
-					st.chats = slices.DeleteFunc(st.chats, func(value string) bool { return value == id })
-				}
+// statusCard is the state, why, the result and what supports it, and the step the state allows.
+func (st *taskSheet) statusCard(c *ui.Context, s *sheet, task *model.DurableTask) ui.Element {
+	p := colors(c)
+	detail, action := "", ""
+	switch task.State {
+	case model.TaskQueued:
+		action = L("Start")
+	case model.TaskBlocked:
+		detail, action = task.ReasonText(), L("Resume")
+	case model.TaskWorking:
+		if bot := store.Bot(task.OwnerBotID); task.ActiveRun != nil && bot != nil {
+			detail = L("%@ is working on it.", bot.Name)
+		}
+	case model.TaskAwaitingReview:
+		if task.ResultText() != "" && len(task.Evidence) > 0 {
+			action = L("Mark Complete")
+		}
+	case model.TaskCompleted:
+		action = L("Reopen")
+	case model.TaskCancelled:
+		if task.ReasonText() != model.CancelledByUser {
+			detail = task.ReasonText()
+		}
+		action = L("Reopen")
+	}
+	if task.CanStart() && slices.ContainsFunc(task.Dependencies, func(id string) bool {
+		dependency := store.DurableTask(id)
+		return dependency == nil || dependency.State != model.TaskCompleted
+	}) {
+		detail, action = L("It starts once the tasks it waits for are completed."), ""
+	}
+	if st.busy {
+		action = ""
+	}
+	tint := taskTint(p, task.State)
+	return section(c, "", sectionCaption, nil, func(k *card) {
+		if _, row := statusRow(c.Key("state"), k, statusRowOptions{Symbol: task.State.Symbol(), SymbolColor: &tint, Title: task.State.Title(), Subtitle: detail, ActionTitle: action}); row.Action {
+			st.statusAction(s, task)
+		}
+		if result := task.ResultText(); result != "" {
+			k.row(ui.Row(c.Key("result")).Padding(10, 12, 10, 40)).Children(func() {
+				ui.Text(c, result).FontSize(12).LineHeight(1.4).MaxLines(8).Selectable().Grow(1).Shrink(1).MinWidth(0)
 			})
 		}
-		options := []popUpOption{{Value: "", Label: L("Choose a chat…")}}
-		for _, chat := range store.Chats {
-			if !slices.Contains(st.chats, chat.ID) {
-				options = append(options, popUpOption{Value: chat.ID, Label: store.Title(chat)})
-			}
+		const limit = 5
+		evidence := task.Evidence
+		if len(evidence) > limit {
+			evidence = evidence[:limit-1]
 		}
-		if id, ok, _ := popUpButton(c.Key("add"), popUp{Options: options, Value: "", Width: 540, Label: L("Add linked chat"), Disabled: st.busy || st.active()}); ok {
-			st.chats = append(st.chats, id)
+		for i, item := range evidence {
+			ui.Box(c.Key(i)).Children(func() { evidenceRow(c, k, item) })
 		}
-	})
-}
-func (st *taskSheet) dependencyFields(c *ui.Context) {
-	taskField(c, L("Dependencies"), func() {
-		for _, id := range append([]string{}, st.dependencies...) {
-			goal := id
-			if task := store.DurableTask(id); task != nil {
-				goal = task.Goal
-			}
-			ui.Row(c.Key(id)).Gap(8).Children(func() {
-				ui.Text(c, goal).Grow(1).FontSize(12)
-				if linkButton(c, L("Remove"), st.busy || st.active()).Label(L("Remove dependency %@", goal)).Clicked() {
-					st.dependencies = slices.DeleteFunc(st.dependencies, func(value string) bool { return value == id })
-				}
-			})
+		if len(task.Evidence) > limit {
+			noteRow(c.Key("more"), k, L("%d more", len(task.Evidence)-(limit-1)), nil)
 		}
-		options := []popUpOption{{Value: "", Label: L("Choose a task…")}}
-		for _, task := range store.DurableTasks {
-			if (st.opened == nil || task.ID != st.opened.ID) && !slices.Contains(st.dependencies, task.ID) {
-				options = append(options, popUpOption{Value: task.ID, Label: task.Goal})
-			}
-		}
-		if id, ok, _ := popUpButton(c.Key("add"), popUp{Options: options, Value: "", Width: 540, Label: L("Add dependency"), Disabled: st.busy || st.active()}); ok {
-			st.dependencies = append(st.dependencies, id)
-		}
-	})
-}
-func (st *taskSheet) evidenceFields(c *ui.Context) {
-	taskField(c, L("Supporting evidence"), func() {
-		for i, evidence := range append([]model.TaskEvidence{}, st.evidence...) {
-			ui.Row(c.Key(i)).Gap(8).Children(func() {
-				ui.Column(c).Grow(1).MinWidth(0).Children(func() {
-					ui.Text(c, evidence.Label).FontSize(12)
-					if evidence.URL != nil {
-						ui.Text(c, *evidence.URL).FontSize(11).TextColor(colors(c).Label2).Selectable()
-					} else {
-						var details []string
-						if evidence.ChatID != nil {
-							details = append(details, taskChatTitle(*evidence.ChatID))
-						}
-						if evidence.OutputID != nil && evidence.Version != nil {
-							details = append(details, L("Output version %d", *evidence.Version))
-						}
-						if evidence.MessageID != nil {
-							details = append(details, *evidence.MessageID)
-						}
-						if len(details) > 0 {
-							ui.Text(c, strings.Join(details, " · ")).FontSize(11).TextColor(colors(c).Label2).Selectable()
-						}
-					}
-				})
-				if linkButton(c, L("Remove"), st.busy).Label(L("Remove evidence %@", evidence.Label)).Clicked() {
-					st.evidence = slices.Delete(st.evidence, i, i+1)
-				}
-			})
-		}
-		options := []popUpOption{{Value: "", Label: L("Choose a message…")}}
-		references := map[string]model.TaskEvidence{}
-		for _, chatID := range st.chats {
-			if chat := store.Chat(chatID); chat != nil {
-				for _, message := range chat.Messages {
-					if message.CanBeQuoted() {
-						label := model.MessageText(message)
-						if len(label) > 100 {
-							label = string([]rune(label)[:min(100, len([]rune(label)))])
-						}
-						id := message.ID
-						scope := chatID
-						key := chatID + ":" + id
-						options = append(options, popUpOption{Value: key, Label: label})
-						references[key] = model.TaskEvidence{Kind: "message", Label: label, ChatID: &scope, MessageID: &id}
-					}
-				}
-			}
-		}
-		if id, ok, _ := popUpButton(c.Key("message"), popUp{Options: options, Value: "", Width: 540, Label: L("Add a chat message as evidence"), Disabled: st.busy}); ok {
-			st.evidence = append(st.evidence, references[id])
-		}
-		ui.Row(c.Key("url")).Gap(8).Children(func() {
-			textField(c, &st.evidenceURL, fieldOptions{Label: L("Evidence URL"), Placeholder: L("HTTPS link to supporting evidence"), Disabled: st.busy}).Grow(1)
-			if pushButton(c, L("Add link"), pushOptions{Disabled: st.busy}).Clicked() {
-				value := strings.TrimSpace(st.evidenceURL)
-				if !taskHTTPS(value) {
-					st.error = L("Enter an HTTPS link.")
-				} else {
-					st.evidence = append(st.evidence, model.TaskEvidence{Kind: "url", Label: value, URL: &value})
-					st.evidenceURL = ""
-					st.error = ""
-				}
-			}
-		})
 	})
 }
 
-func (st *taskSheet) parameters() map[string]any {
-	p := map[string]any{}
-	if st.opened == nil {
-		p["id"] = st.creationID
-		p["owner_bot_id"] = st.owner
-		p["goal"] = st.goal
-		p["acceptance_criteria"] = taskLines(st.criteria)
-		p["next_action"] = st.next
-		p["chat_ids"] = slices.Clone(st.chats)
-		p["dependencies"] = append([]string{}, st.dependencies...)
-		p["links"] = st.linkValues()
-		return p
-	}
-	old := st.opened
-	p["id"], p["expected_revision"] = old.ID, old.Revision
-	if st.goal != old.Goal {
-		p["goal"] = st.goal
-	}
-	if st.next != old.NextAction {
-		p["next_action"] = st.next
-	}
-	if st.owner != old.OwnerBotID {
-		p["owner_bot_id"] = st.owner
-		if bot := store.Bot(st.owner); bot != nil && bot.RunnerID != old.RunnerID {
-			p["runner_id"] = bot.RunnerID
+// evidenceRow is a message by who wrote it and when, a link by where it goes, or the CLI's label.
+func evidenceRow(c *ui.Context, k *card, item model.TaskEvidence) {
+	o := statusRowOptions{Symbol: "bubble.left", Title: item.Label}
+	switch item.Kind {
+	case "url":
+		o.Symbol = "link"
+	case "file":
+		o.Symbol = "doc.text"
+	case "output":
+		o.Symbol = "doc.richtext"
+	case "review":
+		o.Symbol = "checkmark.circle"
+	case "message":
+		o.Title = L("Message")
+		if item.ChatID != nil && item.MessageID != nil {
+			if chat := store.Chat(*item.ChatID); chat != nil {
+				for _, message := range chat.Messages {
+					if message.ID != *item.MessageID {
+						continue
+					}
+					switch message.Author.Kind {
+					case model.AuthorYou:
+						o.Title = L("Your message")
+					case model.AuthorBot:
+						name := L("a bot")
+						if bot := store.Bot(message.Author.BotID); bot != nil {
+							name = bot.Name
+						}
+						o.Title = L("Message from %@", name)
+					}
+					o.Subtitle = model.DaySeparator(message.CreatedAt)
+				}
+			}
 		}
 	}
-	if !slices.Equal(taskLines(st.criteria), old.AcceptanceCriteria) {
-		p["acceptance_criteria"] = taskLines(st.criteria)
+	if item.URL != nil {
+		if u, err := url.Parse(*item.URL); err == nil {
+			o.Subtitle = u.Hostname()
+		}
+		o.Tooltip, o.Clickable = *item.URL, true
 	}
-	if !slices.Equal(st.dependencies, old.Dependencies) {
-		p["dependencies"] = append([]string{}, st.dependencies...)
+	if _, row := statusRow(c, k, o); row.Clicked && item.URL != nil {
+		openLink(*item.URL)
 	}
-	if !slices.Equal(st.chats, old.ChatIDs) {
-		p["chat_ids"] = slices.Clone(st.chats)
-	}
-	if st.state != old.State {
-		p["state"] = st.state
-	}
-	if st.reason != old.ReasonText() {
-		p["reason"] = taskNullable(st.reason)
-	}
-	if st.result != old.ResultText() {
-		p["result"] = taskNullable(st.result)
-	}
-	if !reflect.DeepEqual(st.evidence, old.Evidence) {
-		p["evidence"] = append([]model.TaskEvidence{}, st.evidence...)
-	}
-	var oldURLs []string
-	for _, link := range old.Links {
-		oldURLs = append(oldURLs, link.URL)
-	}
-	if !slices.Equal(taskLines(st.links), oldURLs) {
-		p["links"] = st.linkValues()
-	}
-	return p
 }
-func (st *taskSheet) linkValues() []model.TaskLink {
-	out := []model.TaskLink{}
-	for _, value := range taskLines(st.links) {
-		out = append(out, model.TaskLink{Label: value, URL: value})
+
+// changes are the fields the user changed from `task`.
+func (st *taskSheet) changes(task *model.DurableTask) map[string]any {
+	before, now := formOf(task), st.form()
+	params := map[string]any{}
+	if now.goal != before.goal {
+		params["goal"] = now.goal
 	}
-	return out
-}
-func taskRequestKey(params map[string]any, id, body *string) {
-	bytes, _ := json.Marshal(params)
-	if *body != string(bytes) {
-		*body = string(bytes)
-		*id = model.TaskID("task-request-")
+	if now.next != before.next {
+		params["next_action"] = now.next
 	}
-	params["request_id"] = *id
+	if !slices.Equal(now.criteria, before.criteria) {
+		params["acceptance_criteria"] = now.criteria
+	}
+	if now.owner != "" && now.owner != before.owner {
+		params["owner_bot_id"] = now.owner
+	}
+	return params
 }
 
 func (st *taskSheet) save(s *sheet) {
+	if !st.canSave() {
+		return
+	}
+	if st.base == nil {
+		f := st.form()
+		st.send("tasks.create", map[string]any{
+			"id": st.creationID, "owner_bot_id": f.owner, "goal": f.goal, "next_action": f.next,
+			"acceptance_criteria": f.criteria, "chat_ids": []string{st.chatID},
+		}, func(task model.DurableTask) { st.populate(&task) })
+		return
+	}
+	if len(st.changes(st.base)) == 0 {
+		s.dismiss()
+		return
+	}
+	st.update(nil, func(model.DurableTask) { s.dismiss() })
+}
+
+// update writes the form's edits, and `params` with them, over the version they start from.
+func (st *taskSheet) update(params map[string]any, done func(model.DurableTask)) {
+	if st.base == nil {
+		return
+	}
+	edits := st.changes(st.base)
+	for key, value := range params {
+		edits[key] = value
+	}
+	edits["id"], edits["expected_revision"] = st.base.ID, st.base.Revision
+	st.send("tasks.update", edits, done)
+}
+
+func (st *taskSheet) statusAction(s *sheet, task *model.DurableTask) {
+	switch task.State {
+	case model.TaskQueued, model.TaskBlocked, model.TaskWorking:
+		st.start(s)
+	case model.TaskAwaitingReview:
+		st.update(map[string]any{"state": string(model.TaskCompleted)}, func(model.DurableTask) { s.dismiss() })
+	case model.TaskCompleted, model.TaskCancelled:
+		st.update(map[string]any{"state": string(model.TaskQueued)}, nil)
+	}
+}
+
+// start saves what the user changed, then starts a run in this chat when the owner is in it, or
+// in the first of the task's chats it is in, and closes on the chat where it works.
+func (st *taskSheet) start(s *sheet) {
+	run := func(task model.DurableTask) {
+		params := map[string]any{"id": task.ID, "expected_revision": task.Revision}
+		if chat := store.Chat(st.chatID); chat != nil && slices.Contains(chat.BotIDs, task.OwnerBotID) {
+			params["chat_id"] = st.chatID
+		}
+		st.send("tasks.run", params, func(model.DurableTask) { s.dismiss() })
+	}
+	if st.base == nil {
+		return
+	}
+	if len(st.changes(st.base)) == 0 {
+		run(*st.base)
+	} else {
+		st.update(nil, run)
+	}
+}
+
+func (st *taskSheet) confirmCancel(s *sheet) {
+	task := st.latest()
+	if task == nil {
+		return
+	}
+	informative := L("You can reopen it later.")
+	if bot := store.Bot(task.OwnerBotID); task.ActiveRun != nil && bot != nil {
+		informative = L("%@ stops working on it. You can reopen it later.", bot.Name)
+	}
+	st.w.showAlert(alertOptions{
+		Message:     L("Cancel this task?"),
+		Informative: informative,
+		Buttons:     []alertButton{{Title: L("Cancel Task"), Destructive: true}, {Title: L("Keep Task")}},
+		Escape:      1,
+	}, func(answer int) {
+		if answer == 0 {
+			st.update(map[string]any{"state": string(model.TaskCancelled), "reason": model.CancelledByUser}, func(model.DurableTask) { s.dismiss() })
+		}
+	})
+}
+
+func (st *taskSheet) send(method string, params map[string]any, done func(model.DurableTask)) {
 	if st.busy {
 		return
 	}
-	params := st.parameters()
-	taskRequestKey(params, &st.requestID, &st.requestBody)
-	method := "tasks.update"
-	if st.opened == nil {
-		method = "tasks.create"
+	body, _ := json.Marshal(map[string]any{"method": method, "params": params})
+	if string(body) != st.sentBody {
+		st.sentBody, st.sentID = string(body), model.TaskID("")
 	}
-	st.busy = true
-	st.error = ""
-	store.TaskRequest(method, params, func(_ model.DurableTask, err error) {
+	params["request_id"] = st.sentID
+	st.busy, st.message = true, ""
+	store.TaskRequest(method, params, func(task model.DurableTask, err error) {
 		if st.closed {
 			return
 		}
 		st.busy = false
 		if err != nil {
-			st.error = model.ErrorText(err)
-		} else {
-			s.dismiss()
-		}
-	})
-}
-func (st *taskSheet) reload() {
-	if st.busy || st.opened == nil {
-		return
-	}
-	st.busy = true
-	store.TaskRequest("tasks.get", map[string]any{"id": st.opened.ID, "refresh": true}, func(task model.DurableTask, err error) {
-		if st.closed {
+			st.fail(err)
 			return
 		}
-		st.busy = false
-		if err != nil {
-			st.error = model.ErrorText(err)
-		} else {
-			st.load(&task)
-		}
-	})
-}
-func (st *taskSheet) run(s *sheet) {
-	if st.busy || st.opened == nil {
-		return
-	}
-	if st.savedOwner() == nil {
-		st.error = L("Resolve the owner's Runner assignment before running or changing the task budget.")
-		return
-	}
-	chatID := st.runChatID()
-	if chatID == "" {
-		st.error = L("The task owner needs a linked chat to run in.")
-		return
-	}
-	params := map[string]any{"id": st.opened.ID, "expected_revision": st.opened.Revision, "chat_id": chatID}
-	taskRequestKey(params, &st.runID, &st.runBody)
-	st.busy = true
-	st.error = ""
-	store.TaskRequest("tasks.run", params, func(_ model.DurableTask, err error) {
-		if st.closed {
-			return
-		}
-		st.busy = false
-		if err != nil {
-			st.error = model.ErrorText(err)
-		} else {
-			s.dismiss()
+		st.sentBody, st.sentID = "", ""
+		if done != nil {
+			done(task)
 		}
 	})
 }
 
-func (st *taskSheet) runChatID() string {
-	if slices.Contains(st.runChats(), st.runIn) {
-		return st.runIn
+// fail takes the newer version under the user's edits when theirs was stale, and says what the
+// CLI said otherwise.
+func (st *taskSheet) fail(err error) {
+	if !strings.HasPrefix(err.Error(), "Task revision conflict") || st.base == nil {
+		st.message, st.failed = model.ErrorText(err), true
+		return
 	}
-	return ""
-}
-
-func (st *taskSheet) runChats() []string {
-	if st.opened == nil {
-		return nil
-	}
-	var selected []string
-	for _, id := range st.opened.ChatIDs {
-		if chat := store.Chat(id); chat != nil && slices.Contains(chat.BotIDs, st.opened.OwnerBotID) {
-			selected = append(selected, id)
+	st.message, st.failed = L("This task changed since you opened it. Your edits are still here; save again to keep them."), false
+	st.busy = true
+	store.TaskRequest("tasks.get", map[string]any{"id": st.base.ID, "refresh": true}, func(task model.DurableTask, err error) {
+		if st.closed {
+			return
 		}
-	}
-	return selected
+		st.busy = false
+		if err == nil {
+			st.rebase(&task)
+		}
+	})
 }

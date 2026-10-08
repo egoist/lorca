@@ -268,7 +268,7 @@ final class InspectorViewController: NSViewController {
         }
         if shown.count < records.count {
             let more = keptRow("tasks:all") { SwitchRow() }
-            more.configure(symbol: "ellipsis.circle", tint: .tertiaryLabelColor, title: L("Show %d More", records.count - shown.count), detail: "", tooltip: "")
+            more.configure(symbol: "ellipsis", tint: .tertiaryLabelColor, title: L("Show %d More", records.count - shown.count), detail: "", tooltip: "")
             more.onClick = { [weak self] in
                 self?.tasksShowingAll = chat.id
                 self?.reload()

@@ -335,6 +335,8 @@ func (m *mainWindow) run(id string) {
 		m.newBot()
 	case "newGroupChat":
 		m.newGroupChat()
+	case "newTask":
+		m.presentDurableTask(m.selection.ChatID, nil)
 	case "marketplace":
 		m.presentMarketplace("")
 	case "pairDevice":

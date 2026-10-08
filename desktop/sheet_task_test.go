@@ -1,374 +1,241 @@
 package main
 
 import (
-	"encoding/json"
-	"reflect"
-	"strings"
+	"slices"
 	"testing"
 
 	"github.com/egoist/lorca/desktop/model"
 	"github.com/egoist/mygo/ui"
 )
 
-func desktopTaskFixture(state model.TaskState) model.DurableTask {
-	reason, result := "Runner restarted during this run. Inspect its effects before requeueing.", "Demo smoke checks passed; review the linked summary."
-	url := "https://example.invalid/evidence/smoke-checks"
-	task := model.DurableTask{ID: "task-00000000-0000-0000-0000-000000000001", Revision: 7, AuthorityRunnerID: "dev-workbench", OwnerBotID: "bot-nova", RunnerID: "dev-workbench", Goal: "Check durable work", AcceptanceCriteria: []string{"Ownership persists", "Evidence is recorded"}, NextAction: "Review the result", ChatIDs: []string{"chat-relay", "chat-patch"}, State: state, Dependencies: []string{}, Links: []model.TaskLink{}, Evidence: []model.TaskEvidence{}, CreatedAt: 100, UpdatedAt: 107}
-	if state == model.TaskBlocked {
-		task.Reason = &reason
+func taskFixture(id string, state model.TaskState, owner, goal string, updated float64) model.DurableTask {
+	runner := store.Bot(owner).RunnerID
+	return model.DurableTask{
+		ID: id, Revision: 3, AuthorityRunnerID: runner, OwnerBotID: owner, RunnerID: runner, Goal: goal,
+		AcceptanceCriteria: []string{"Every download link returns 200", "The guide names the right file"},
+		NextAction:         "Ask DevOps to upload the arm64 tarball again", ChatIDs: []string{"chat-relay"}, State: state,
+		Dependencies: []string{}, Links: []model.TaskLink{}, Evidence: []model.TaskEvidence{}, CreatedAt: 1, UpdatedAt: updated,
 	}
-	if state == model.TaskAwaitingReview || state == model.TaskCompleted {
-		task.Result = &result
-		task.Evidence = []model.TaskEvidence{{Kind: "url", Label: "Demo smoke-check summary", URL: &url}}
-	}
-	return task
 }
 
-func taskSheetTester(t *testing.T, state model.TaskState) (*mainWindow, *taskSheet, *ui.Tester) {
+// launchTasks are the Launch room's tasks in every state, as the inspector and the sheet show them.
+func launchTasks() []model.DurableTask {
+	blocked := taskFixture("task-1", model.TaskBlocked, "bot-patch", "Fix the Linux download link", 90)
+	reason := "The Linux download returns 404: the release bucket has no arm64 tarball."
+	blocked.Reason = &reason
+	blocked.Links = []model.TaskLink{{Label: "Linux download 404", URL: "https://github.com/example/site/issues/412"}}
+	review := taskFixture("task-2", model.TaskAwaitingReview, "bot-scout", "Review onboarding on Mac and iPhone", 80)
+	result := "Setup and pairing are clear on both. One gap: the guide should say that your Mac runs the bots while you chat from your phone."
+	review.Result = &result
+	notes, chat := "https://docs.example.com/launch/onboarding-notes", "chat-relay"
+	var message string
+	for _, m := range store.Chat("chat-relay").Messages {
+		if m.Author.Kind == model.AuthorBot && m.Author.BotID == "bot-scout" {
+			message = m.ID
+			break
+		}
+	}
+	review.Evidence = []model.TaskEvidence{{Kind: "message", Label: "Bot run result", ChatID: &chat, MessageID: &message}, {Kind: "url", Label: "Onboarding notes", URL: &notes}}
+	working := taskFixture("task-3", model.TaskWorking, "bot-nova", "Write the launch announcement", 70)
+	working.ActiveRun = &model.TaskRun{ID: "task-run-1", BotID: "bot-nova", RunnerID: working.RunnerID, ChatID: "chat-relay", StartedAt: 1}
+	queued := taskFixture("task-4", model.TaskQueued, "bot-nova", "Send the go/no-go summary on Friday", 60)
+	queued.Dependencies = []string{"task-1", "task-2"}
+	done := taskFixture("task-5", model.TaskCompleted, "bot-patch", "Update the getting-started guide", 50)
+	done.Result, done.Evidence = &result, []model.TaskEvidence{{Kind: "url", Label: "Guide", URL: &notes}}
+	cancelled := taskFixture("task-6", model.TaskCancelled, "bot-nova", "Draft a press kit", 40)
+	why := model.CancelledByUser
+	cancelled.Reason = &why
+	return []model.DurableTask{blocked, review, working, queued, done, cancelled}
+}
+
+func taskSheetTester(t *testing.T, id string) (*mainWindow, *taskSheet, *ui.Tester) {
 	t.Helper()
 	m := demoWindow(t)
-	task := desktopTaskFixture(state)
-	store.AcceptDurableTask(task)
-	st := m.presentDurableTask("chat-relay", &task)
-	tt := ui.NewTester(m.frame(m.view), 1180, 850)
+	for _, task := range launchTasks() {
+		store.AcceptDurableTask(task)
+	}
+	m.open("chat-relay")
+	st := m.presentDurableTask("chat-relay", store.DurableTask(id))
+	tt := ui.NewTester(m.frame(m.view), 1180, 900)
 	settle(tt)
 	return m, st, tt
 }
 
+// focusField clicks the field beside a form row's label.
+func focusField(t *testing.T, tt *ui.Tester, label string) {
+	t.Helper()
+	r, ok := tt.Find(label)
+	if !ok {
+		t.Fatalf("no %s: %q", label, tt.Texts())
+	}
+	tt.ClickAt(r.X+formLabelWidth+60, r.Y+r.H/2)
+}
+
 func taskInput(t *testing.T, tt *ui.Tester, label, value string) {
 	t.Helper()
-	if err := tt.Click(label); err != nil {
-		t.Fatal(err)
-	}
+	focusField(t, tt, label)
 	tt.Key(ui.Cmd, ui.KeyA)
 	tt.Type(value)
 	settle(tt)
 }
 
-func TestTaskEditorKeepsDraftAcrossFramesAndOwnerChatSelection(t *testing.T) {
-	_, st, tt := taskSheetTester(t, model.TaskQueued)
-	taskInput(t, tt, "Task goal", "Edited persistent goal")
-	for range 15 {
-		tt.Frame()
-	}
-	if st.goal != "Edited persistent goal" {
-		t.Fatalf("draft lost: %q", st.goal)
-	}
-	if err := tt.Click("Task owner"); err != nil {
-		t.Fatal(err)
-	}
-	if err := tt.ChooseMenuItem("Developer · Studio"); err != nil {
-		t.Fatalf("owner menu %q: %v", tt.Menu(), err)
+func click(t *testing.T, tt *ui.Tester, label string) {
+	t.Helper()
+	if err := tt.Click(label); err != nil {
+		t.Fatalf("%s: %v (%q)", label, err, tt.Texts())
 	}
 	settle(tt)
-	if st.owner != "bot-patch" || st.goal != "Edited persistent goal" {
-		t.Fatalf("owner change lost draft: %+v", st)
-	}
-	if !tt.HasText(L("Assigned Runner: %@", "Studio")) {
-		t.Fatal("Runner did not follow owner")
-	}
-	if err := tt.Click("Remove chat Launch room"); err != nil {
-		t.Fatal(err)
-	}
-	settle(tt)
-	if len(st.chats) != 1 || st.chats[0] != "chat-patch" {
-		t.Fatalf("chats: %q", st.chats)
-	}
-	if err := tt.Click("Add linked chat"); err != nil {
-		t.Fatal(err)
-	}
-	if err := tt.ChooseMenuItem("Launch room"); err != nil {
-		t.Fatal(err)
-	}
-	settle(tt)
-	if len(st.chats) != 2 || st.goal != "Edited persistent goal" {
-		t.Fatal("linked chat change lost fields")
-	}
-	params := st.parameters()
-	if params["owner_bot_id"] != "bot-patch" || params["runner_id"] != "dev-studio" || params["expected_revision"] != uint64(7) {
-		t.Fatalf("ownership params: %#v", params)
-	}
-	if !reflect.DeepEqual(params["chat_ids"], []string{"chat-patch", "chat-relay"}) || !reflect.DeepEqual(st.opened.ChatIDs, []string{"chat-relay", "chat-patch"}) {
-		t.Fatalf("chat draft changed the opened scope or lost the edit: %#v", params)
-	}
 }
 
-func TestTaskEditorStaleRevisionKeepsFormAndReloadsAuthority(t *testing.T) {
-	m, st, tt := taskSheetTester(t, model.TaskQueued)
-	taskInput(t, tt, "Task goal", "My unsaved goal")
-	fresh := desktopTaskFixture(model.TaskQueued)
-	fresh.Revision = 8
-	fresh.Goal = "New authoritative goal"
-	fresh.OwnerBotID = "bot-patch"
-	fresh.RunnerID = "dev-studio"
-	store.AcceptDurableTask(fresh)
-	if st.opened.Revision != 7 || st.goal != "My unsaved goal" {
-		t.Fatal("event clobbered draft")
-	}
-	if err := tt.Click("Save"); err != nil {
-		t.Fatal(err)
-	}
-	settle(tt)
-	if !m.hasSheet() || !strings.Contains(st.error, "revision conflict") || st.goal != "My unsaved goal" {
-		t.Fatalf("stale edit: %+v", st)
-	}
-	renderBoth(t, tt, "desktop-task-stale")
-	if err := tt.Click("Reload"); err != nil {
-		t.Fatal(err)
-	}
-	settle(tt)
-	if st.opened.Revision != 8 || st.goal != fresh.Goal || st.owner != "bot-patch" {
-		t.Fatalf("reload: %+v", st)
-	}
-	if !tt.HasText("Developer · Studio") {
-		t.Fatal("stale owner after Reload")
-	}
-	renderBoth(t, tt, "desktop-task-reloaded")
-}
-
-func TestTaskRequestsRetainNonceAndDoNotClearUntouchedReferences(t *testing.T) {
-	_, st, _ := taskSheetTester(t, model.TaskQueued)
-	output, chat, msg := "out-series", "chat-relay", "message-version"
-	version := uint64(2)
-	st.opened.Evidence = []model.TaskEvidence{{Kind: "output", Label: "Result", ChatID: &chat, MessageID: &msg, OutputID: &output, Version: &version}}
-	st.evidence = st.opened.Clone().Evidence
-	params := st.parameters()
-	if _, ok := params["evidence"]; ok {
-		t.Fatal("unchanged output evidence rewritten")
-	}
-	taskRequestKey(params, &st.requestID, &st.requestBody)
-	first := st.requestID
-	params = st.parameters()
-	taskRequestKey(params, &st.requestID, &st.requestBody)
-	if first != st.requestID {
-		t.Fatal("retry changed request id")
-	}
-	st.next = "Another step"
-	params = st.parameters()
-	taskRequestKey(params, &st.requestID, &st.requestBody)
-	if first == st.requestID {
-		t.Fatal("different edit reused request id")
-	}
-	st.evidence = nil
-	params = st.parameters()
-	encoded, _ := json.Marshal(params)
-	if !strings.Contains(string(encoded), `"evidence":[]`) {
-		t.Fatalf("clearing evidence must be an array: %s", encoded)
-	}
-	st.dependencies = nil
-	st.opened.Dependencies = []string{"dependency"}
-	params = st.parameters()
-	encoded, _ = json.Marshal(params)
-	if !strings.Contains(string(encoded), `"dependencies":[]`) {
-		t.Fatalf("clearing dependencies must be an array: %s", encoded)
-	}
-}
-
-func TestTaskRunUsesSavedOwnerMemberChatAndClosedRepliesDoNotReopen(t *testing.T) {
-	m, st, tt := taskSheetTester(t, model.TaskBlocked)
-	task := st.opened.Clone()
-	task.Revision++
-	task.OwnerBotID = "bot-patch"
-	task.RunnerID = "dev-studio"
-	st.chatID = "chat-nova"
-	task.ChatIDs = []string{"chat-nova", "chat-patch"}
-	store.AcceptDurableTask(task)
-	st.load(&task)
-	if st.runChatID() != "chat-patch" {
-		t.Fatal("evidence-only chat chosen for run")
-	}
-	st.goal = "unsaved goal"
-	st.run(m.sheets[0])
-	settle(tt)
-	if m.hasSheet() {
-		t.Fatal("successful run did not close sheet")
-	}
-	if got := store.DurableTask(st.opened.ID); got.Goal == "unsaved goal" || got.State != model.TaskWorking {
-		t.Fatalf("run used draft: %+v", got)
-	}
-	m, st, tt = taskSheetTester(t, model.TaskQueued)
-	st.reload()
-	m.sheets = nil
-	st.closed = true
-	settle(tt)
-	if !st.closed {
-		t.Fatal("late reply reopened dismissed sheet")
-	}
-}
-
-func TestTaskPrimaryChatSelectionKeepsEvidenceChatOutOfAdmission(t *testing.T) {
-	_, st, _ := taskSheetTester(t, model.TaskQueued)
-	st.opened.ChatIDs = []string{"chat-relay", "chat-nova", "chat-patch"}
-	tt := ui.NewTester(st.w.frame(func(c *ui.Context) { ui.Box(c).Size(1, 1) }), 1000, 1450)
-	settle(tt)
-	if err := tt.Click("Primary run chat"); err != nil {
-		t.Fatal(err)
-	}
-	if err := tt.ChooseMenuItem(taskChatTitle("chat-nova")); err != nil {
-		t.Fatalf("primary chats %q: %v", tt.Menu(), err)
-	}
-	settle(tt)
-	if st.runChatID() != "chat-nova" {
-		t.Fatalf("primary chat: %q", st.runChatID())
-	}
-	st.runIn = "chat-patch"
-	if st.runChatID() != "" {
-		t.Fatal("evidence-only teammate DM admitted as the owner's primary chat")
-	}
-}
-
-func TestTaskEditorEvidencePickerAndValidation(t *testing.T) {
-	_, st, tt := taskSheetTester(t, model.TaskAwaitingReview)
-	// Use a tall native test frame so evidence controls are visible without platform scrolling.
-	tt = ui.NewTester(st.w.frame(func(c *ui.Context) { ui.Box(c).Size(1, 1) }), 1000, 1450)
-	settle(tt)
-	if err := tt.Click("Remove evidence Demo smoke-check summary"); err != nil {
-		t.Fatal(err)
-	}
-	settle(tt)
-	if len(st.evidence) != 0 {
-		t.Fatal("existing evidence not removed from the draft")
-	}
-	taskInput(t, tt, "Evidence URL", "https://example.invalid/new-proof")
-	if err := tt.Click("Add link"); err != nil {
-		t.Fatal(err)
-	}
-	settle(tt)
-	if len(st.evidence) != 1 || st.evidenceURL != "" {
-		t.Fatal("link evidence not added")
-	}
-	taskInput(t, tt, "Evidence URL", "http://example.invalid/insecure")
-	if err := tt.Click("Add link"); err != nil {
-		t.Fatal(err)
-	}
-	settle(tt)
-	if len(st.evidence) != 1 || st.error == "" {
-		t.Fatal("invalid link accepted")
-	}
-	if !reflect.DeepEqual(st.opened.Evidence, desktopTaskFixture(model.TaskAwaitingReview).Evidence) {
-		t.Fatal("draft evidence mutated opened record")
-	}
-	renderBoth(t, tt, "desktop-task-evidence")
-}
-
-func TestTaskCreateUsesCanonicalAPIFieldsAndCompletionNeedsEvidence(t *testing.T) {
+func TestTaskSectionHidesWhileEmptyAndShowsOpenWorkFirst(t *testing.T) {
 	m := demoWindow(t)
-	st := m.presentDurableTask("chat-relay", nil)
-	tt := ui.NewTester(m.frame(m.view), 1180, 1450)
+	view := func(c *ui.Context) { applyTheme(c); m.inspectorDurableTasks(c, store.Chat("chat-relay")) }
+	tt := ui.NewTester(view, 300, 600)
 	settle(tt)
-	taskInput(t, tt, "Task goal", "A new durable goal")
-	taskInput(t, tt, "Acceptance criteria", "A verified result")
-	taskInput(t, tt, "Task next action", "Perform the smoke check")
-	createdID := st.creationID
-	if err := tt.Click("Save"); err != nil {
-		t.Fatal(err)
+	if tt.HasText("TASKS") {
+		t.Fatal("an empty Tasks section shows")
 	}
-	settle(tt)
-	created := store.DurableTask(createdID)
-	if created == nil || created.State != model.TaskQueued || created.Goal != "A new durable goal" || created.RunnerID != "dev-workbench" || m.hasSheet() {
-		t.Fatalf("create: %+v, error: %q, next action: %q", created, st.error, st.next)
-	}
-	st = m.presentDurableTask("chat-relay", created)
-	settle(tt)
-	if err := tt.Click("Task state"); err != nil {
-		t.Fatal(err)
-	}
-	if err := tt.ChooseMenuItem("Completed"); err != nil {
-		t.Fatal(err)
-	}
-	settle(tt)
-	taskInput(t, tt, "Task result", "Verified result")
-	if err := tt.Click("Save"); err != nil {
-		t.Fatal(err)
-	}
-	settle(tt)
-	if !m.hasSheet() || !strings.Contains(st.error, "evidence") {
-		t.Fatal("completion without evidence accepted")
-	}
-	taskInput(t, tt, "Evidence URL", "https://example.invalid/proof")
-	if err := tt.Click("Add link"); err != nil {
-		t.Fatal(err)
-	}
-	settle(tt)
-	if err := tt.Click("Save"); err != nil {
-		t.Fatal(err)
-	}
-	settle(tt)
-	if store.DurableTask(createdID).State != model.TaskCompleted || m.hasSheet() {
-		t.Fatal("completion with evidence not saved")
-	}
-}
-
-func TestTaskBudgetAdapterUsesCanonicalOwnerRunnerAndPrimaryChat(t *testing.T) {
-	_, st, tt := taskSheetTester(t, model.TaskQueued)
-	prior := taskBudgetOpener
-	defer func() { taskBudgetOpener = prior }()
-	var owner, runner, chat, taskID string
-	taskBudgetOpener = func(_ *appWindow, bot *model.Bot, scope, id string) {
-		owner, runner, chat, taskID = bot.ID, bot.RunnerID, scope, id
-	}
-	settle(tt)
-	if err := tt.Click("Budget…"); err != nil {
-		t.Fatal(err)
-	}
-	settle(tt)
-	if owner != st.opened.OwnerBotID || runner != st.opened.RunnerID || chat != "chat-relay" || taskID != st.opened.ID {
-		t.Fatalf("budget scope: %q %q %q %q", owner, runner, chat, taskID)
-	}
-}
-
-func TestTaskRunnerMismatchDoesNotRetargetBudgetOrUnrelatedEdits(t *testing.T) {
-	m, st, tt := taskSheetTester(t, model.TaskQueued)
-	store.Bot(st.opened.OwnerBotID).RunnerID = "another-runner"
-	st.goal = "A progress edit"
-	if _, changed := st.parameters()["runner_id"]; changed {
-		t.Fatal("unrelated edit silently moved the task Runner")
-	}
-	if st.savedOwner() != nil {
-		t.Fatal("mismatched task admitted to the new Runner's budget")
-	}
-	prior := taskBudgetOpener
-	defer func() { taskBudgetOpener = prior }()
-	called := false
-	taskBudgetOpener = func(*appWindow, *model.Bot, string, string) { called = true }
-	settle(tt)
-	_ = tt.Click("Budget…")
-	settle(tt)
-	st.run(m.sheets[0])
-	if called || st.busy || !strings.Contains(st.error, "Runner assignment") {
-		t.Fatalf("mismatch dispatched work or accounting: %+v", st)
-	}
-	store.Bot(st.opened.OwnerBotID).RunnerID = st.opened.RunnerID
-	newer := st.opened.Clone()
-	newer.Revision++
-	newer.OwnerBotID, newer.RunnerID = "bot-patch", "dev-studio"
-	store.AcceptDurableTask(newer)
-	if st.savedOwner() != nil {
-		t.Fatal("stale editor retargeted an allowance after task ownership changed")
-	}
-}
-
-func TestRenderDurableTaskDesktopStates(t *testing.T) {
-	m := demoWindow(t)
-	for i, state := range model.TaskStates() {
-		task := desktopTaskFixture(state)
-		task.ID = model.TaskID("task-")
-		task.Goal = state.Title()
-		task.UpdatedAt = float64(100 + i)
+	tasks := launchTasks()
+	for _, task := range slices.Backward(tasks) {
 		store.AcceptDurableTask(task)
 	}
-	tt := ui.NewTester(func(c *ui.Context) { applyTheme(c); m.inspectorDurableTasks(c, store.Chat("chat-relay")) }, 360, 600)
 	settle(tt)
-	for _, state := range model.TaskStates() {
-		if !tt.HasText(state.Title()) {
-			t.Errorf("missing state %s: %q", state, tt.Texts())
-		}
+	var goals []string
+	for _, task := range store.TasksIn("chat-relay") {
+		goals = append(goals, task.Goal)
+	}
+	if goals[0] != tasks[0].Goal || goals[1] != tasks[1].Goal || goals[5] != tasks[5].Goal {
+		t.Fatalf("order: %q", goals)
+	}
+	if !tt.HasText("Show 2 More") || tt.HasText("Draft a press kit") || !tt.HasText("Blocked · Developer") {
+		t.Fatalf("rows: %q", tt.Texts())
+	}
+	click(t, tt, "Show 2 More")
+	if !tt.HasText("Draft a press kit") || tt.HasText("Show 2 More") {
+		t.Fatalf("Show More: %q", tt.Texts())
 	}
 	renderBoth(t, tt, "desktop-task-list")
-	for _, state := range []model.TaskState{model.TaskBlocked, model.TaskAwaitingReview} {
-		m, _, tt = taskSheetTester(t, state)
-		tt = ui.NewTester(m.frame(m.view), 1180, 1450)
-		settle(tt)
-		renderBoth(t, tt, "desktop-task-"+string(state))
+}
+
+func TestTaskSheetSavesTheChangedFieldsOverTheOpenedRevision(t *testing.T) {
+	m, st, tt := taskSheetTester(t, "task-1")
+	taskInput(t, tt, "Next step", "Ask DevOps to upload it, then check the link")
+	click(t, tt, "Save")
+	task := store.DurableTask("task-1")
+	if m.hasSheet() || task.Revision != 4 || task.NextAction != "Ask DevOps to upload it, then check the link" || task.Goal != "Fix the Linux download link" {
+		t.Fatalf("save: sheet %v, %+v", m.hasSheet(), task)
+	}
+	if st.sentID != "" {
+		t.Fatal("a finished request keeps its id")
+	}
+}
+
+func TestTaskSheetStaleSaveKeepsTheUsersEditsOverTheNewerVersion(t *testing.T) {
+	m, st, tt := taskSheetTester(t, "task-1")
+	taskInput(t, tt, "Next step", "My next step")
+	newer := store.DurableTask("task-1").Clone()
+	newer.Revision, newer.Goal = 4, "Fix every download link"
+	store.AcceptDurableTask(newer)
+	settle(tt)
+	if st.base.Revision != 3 || st.next != "My next step" {
+		t.Fatal("a change from elsewhere replaced an edited form")
+	}
+	click(t, tt, "Save")
+	if !m.hasSheet() || st.base.Revision != 4 || st.goal != "Fix every download link" || st.next != "My next step" || st.failed {
+		t.Fatalf("stale save: %+v", st)
+	}
+	if !tt.HasText(L("This task changed since you opened it. Your edits are still here; save again to keep them.")) {
+		t.Fatalf("no conflict note: %q", tt.Texts())
+	}
+	renderBoth(t, tt, "desktop-task-conflict")
+	click(t, tt, "Save")
+	if task := store.DurableTask("task-1"); m.hasSheet() || task.NextAction != "My next step" || task.Goal != "Fix every download link" {
+		t.Fatalf("second save: %+v", task)
+	}
+}
+
+func TestTaskSheetUntouchedFormFollowsChanges(t *testing.T) {
+	_, st, tt := taskSheetTester(t, "task-1")
+	newer := store.DurableTask("task-1").Clone()
+	newer.Revision, newer.Goal = 4, "Fix every download link"
+	store.AcceptDurableTask(newer)
+	settle(tt)
+	if st.base.Revision != 4 || st.goal != "Fix every download link" {
+		t.Fatalf("untouched form kept the old version: %+v", st)
+	}
+}
+
+func TestTaskSheetStepsFollowTheState(t *testing.T) {
+	m, _, tt := taskSheetTester(t, "task-4")
+	if tt.HasText("Start") || !tt.HasText(L("It starts once the tasks it waits for are completed.")) || !tt.HasText("Fix the Linux download link") {
+		t.Fatalf("a task waiting on others offers Start: %q", tt.Texts())
+	}
+	renderBoth(t, tt, "desktop-task-queued")
+	m.sheets[0].dismiss()
+
+	m, _, tt = taskSheetTester(t, "task-1")
+	renderBoth(t, tt, "desktop-task-blocked")
+	click(t, tt, "Resume")
+	if task := store.DurableTask("task-1"); m.hasSheet() || task.State != model.TaskWorking || task.ActiveRun == nil || task.ActiveRun.ChatID != "chat-relay" {
+		t.Fatalf("Resume: %+v", task)
+	}
+
+	m, _, tt = taskSheetTester(t, "task-2")
+	renderBoth(t, tt, "desktop-task-review")
+	if !tt.HasText("Message from Researcher") || !tt.HasText("docs.example.com") {
+		t.Fatalf("evidence: %q", tt.Texts())
+	}
+	click(t, tt, "Mark Complete")
+	if task := store.DurableTask("task-2"); m.hasSheet() || task.State != model.TaskCompleted {
+		t.Fatalf("Mark Complete: %+v", task)
+	}
+
+	m, _, tt = taskSheetTester(t, "task-6")
+	if tt.HasText(model.CancelledByUser) || tt.HasText("Cancel Task…") {
+		t.Fatalf("cancelled task: %q", tt.Texts())
+	}
+	click(t, tt, "Reopen")
+	if task := store.DurableTask("task-6"); !m.hasSheet() || task.State != model.TaskQueued || task.Reason != nil || !tt.HasText("Start") {
+		t.Fatalf("Reopen: %+v", task)
+	}
+
+	m, _, tt = taskSheetTester(t, "task-3")
+	if tt.HasText("Start") || !tt.HasText("Project Manager is working on it.") {
+		t.Fatalf("working: %q", tt.Texts())
+	}
+	click(t, tt, "Cancel Task…")
+	click(t, tt, "Cancel Task")
+	if task := store.DurableTask("task-3"); m.hasSheet() || task.State != model.TaskCancelled || task.ReasonText() != model.CancelledByUser {
+		t.Fatalf("Cancel Task: %+v", task)
+	}
+}
+
+func TestNewTaskCreatesItForTheChatAndShowsIt(t *testing.T) {
+	m := demoWindow(t)
+	m.open("chat-relay")
+	st := m.presentDurableTask("chat-relay", nil)
+	tt := ui.NewTester(m.frame(m.view), 1180, 900)
+	settle(tt)
+	if st.owner != "bot-nova" || !tt.HasText("Owner") {
+		t.Fatalf("owner: %q", st.owner)
+	}
+	renderBoth(t, tt, "desktop-task-new")
+	taskInput(t, tt, "Goal", "Write the release notes")
+	taskInput(t, tt, "Next step", "List what changed since 0.3")
+	focusField(t, tt, "Done when")
+	tt.Type("Every change is listed")
+	tt.Key(0, ui.KeyEnter)
+	tt.Type("Links the download page")
+	settle(tt)
+	if st.base != nil || st.criteria != "Every change is listed\nLinks the download page" {
+		t.Fatalf("Return in Done when: %q", st.criteria)
+	}
+	click(t, tt, "Create Task")
+	if !m.hasSheet() || st.base == nil || !tt.HasText("Not started") || !tt.HasText("Start") {
+		t.Fatalf("create: %+v %q", st.base, tt.Texts())
+	}
+	task := store.DurableTask(st.base.ID)
+	if task.OwnerBotID != "bot-nova" || !slices.Equal(task.ChatIDs, []string{"chat-relay"}) || len(task.AcceptanceCriteria) != 2 {
+		t.Fatalf("created: %+v", task)
 	}
 }

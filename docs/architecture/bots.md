@@ -23,7 +23,7 @@ Who answers, after Grok Bot's rooms:
 
 ## Durable work
 
-[Durable tasks](tasks.md) retain goals, ownership, dependencies, next actions, blockers, and completion evidence across turns and chats. The `tasks` tool and AppKit inspector read and edit them. Every provider request reloads current records, including after compaction. A Job references its canonical task id; a group's chat owner and a task's owner remain independent.
+[Durable tasks](tasks.md) retain goals, ownership, dependencies, next actions, blockers, and completion evidence across turns and chats. The `tasks` tool and the apps' inspector read and edit them. Every provider request reloads current records, including after compaction. A Job references its canonical task id; a group's chat owner and a task's owner remain independent.
 
 ## Routines
 

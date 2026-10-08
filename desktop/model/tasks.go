@@ -43,19 +43,18 @@ const (
 	TaskCancelled      TaskState = "cancelled"
 )
 
-func TaskStates() []TaskState {
-	return []TaskState{TaskQueued, TaskWorking, TaskBlocked, TaskAwaitingReview, TaskCompleted, TaskCancelled}
-}
+// Title is the state in the app's words.
+// Title is the state in the app's words.
 func (state TaskState) Title() string {
 	switch state {
 	case TaskQueued:
-		return L("Queued")
+		return L("Not started")
 	case TaskWorking:
 		return L("Working")
 	case TaskBlocked:
 		return L("Blocked")
 	case TaskAwaitingReview:
-		return L("Awaiting review")
+		return L("Ready for review")
 	case TaskCompleted:
 		return L("Completed")
 	case TaskCancelled:
@@ -64,8 +63,50 @@ func (state TaskState) Title() string {
 		return string(state)
 	}
 }
-func (state TaskState) CanRun() bool {
-	return state == TaskQueued || state == TaskWorking || state == TaskBlocked
+
+// Symbol is the state's SF Symbol name.
+func (state TaskState) Symbol() string {
+	switch state {
+	case TaskWorking:
+		return "arrow.triangle.2.circlepath"
+	case TaskBlocked:
+		return "exclamationmark.circle.fill"
+	case TaskAwaitingReview:
+		return "eye"
+	case TaskCompleted:
+		return "checkmark.circle"
+	case TaskCancelled:
+		return "xmark.circle"
+	default:
+		return "circle"
+	}
+}
+
+func (state TaskState) Finished() bool { return state == TaskCompleted || state == TaskCancelled }
+
+// order puts what waits on the user first, then open work, then finished tasks.
+func (state TaskState) order() int {
+	switch state {
+	case TaskBlocked:
+		return 0
+	case TaskAwaitingReview:
+		return 1
+	case TaskWorking:
+		return 2
+	case TaskQueued:
+		return 3
+	default:
+		return 4
+	}
+}
+
+// CancelledByUser is why a task the user cancelled in the app stopped, for its bot to read. The
+// app shows the state alone for it.
+const CancelledByUser = "Cancelled by the user."
+
+// CanStart is whether a run can start: queued or blocked, and not running.
+func (task DurableTask) CanStart() bool {
+	return (task.State == TaskQueued || task.State == TaskBlocked) && task.ActiveRun == nil
 }
 
 type TaskLink struct {
@@ -128,7 +169,11 @@ func (s *Store) TasksIn(chatID string) []*DurableTask {
 			tasks = append(tasks, task)
 		}
 	}
+	// What waits on the user first, then open work, each newest first.
 	slices.SortStableFunc(tasks, func(a, b *DurableTask) int {
+		if a.State.order() != b.State.order() {
+			return a.State.order() - b.State.order()
+		}
 		if a.UpdatedAt > b.UpdatedAt {
 			return -1
 		}
@@ -164,7 +209,7 @@ func (s *Store) TaskRequest(method string, params map[string]any, done func(Dura
 	identity := s.IdentityID
 	finish := func(task DurableTask, err error) {
 		if identity != s.IdentityID {
-			task, err = DurableTask{}, &RequestError{L("Identity changed while loading this task. Reload.")}
+			task, err = DurableTask{}, &RequestError{L("The account changed. Open the task again.")}
 		}
 		if err == nil {
 			s.AcceptDurableTask(task)
@@ -246,13 +291,17 @@ func (s *Store) mockTaskRequest(method string, payload []byte) (DurableTask, err
 		}
 		data, _ = json.Marshal(merged)
 		_ = json.Unmarshal(data, &next)
+		// A new state without a reason clears the old one, as the CLI does.
+		if _, ok := p["reason"]; !ok && next.State != old.State {
+			next.Reason = nil
+		}
 		if next.OwnerBotID != old.OwnerBotID {
 			if bot := s.Bot(next.OwnerBotID); bot != nil {
 				next.RunnerID = bot.RunnerID
 			}
 		}
 		if method == "tasks.run" {
-			if !next.State.CanRun() || next.ActiveRun != nil {
+			if !next.CanStart() {
 				return next, &RequestError{"Task already has a run or awaits review"}
 			}
 			var chatID string

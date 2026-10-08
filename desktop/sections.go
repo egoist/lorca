@@ -45,11 +45,16 @@ func (k *card) row(e ui.Element) ui.Element {
 	return e
 }
 
-// section is a title over a card of rows. `accessory` sits on the title's line.
+// section is a title over a card of rows. `accessory` sits on the title's line. A section without
+// a title is its card alone.
 func section(c *ui.Context, title string, style sectionStyle, accessory func(), rows func(k *card)) ui.Element {
 	p := colors(c)
 	s := ui.Column(c).MinWidth(0).Label(title)
 	s.Children(func() {
+		if title == "" {
+			sectionCard(c, p, style, rows)
+			return
+		}
 		header := ui.Row(c).Gap(8)
 		if style == sectionCaption {
 			header.MinHeight(14).Padding(0, 0, 0, 4).Margin(0, 0, 6, 0)
@@ -66,17 +71,21 @@ func section(c *ui.Context, title string, style sectionStyle, accessory func(), 
 				ui.Row(c).Margin(-6, 0).Children(accessory)
 			}
 		})
-		k := &card{line: p.Separator}
-		body := ui.Column(c).Background(p.BotBubble).Clip()
-		if style == sectionCaption {
-			body.Radius(9).Border(1, p.BotBubbleBorder)
-		} else {
-			body.Radius(12)
-			k.inset = 12
-		}
-		body.Children(func() { rows(k) })
+		sectionCard(c, p, style, rows)
 	})
 	return s
+}
+
+func sectionCard(c *ui.Context, p *palette, style sectionStyle, rows func(k *card)) {
+	k := &card{line: p.Separator}
+	body := ui.Column(c).Background(p.BotBubble).Clip()
+	if style == sectionCaption {
+		body.Radius(9).Border(1, p.BotBubbleBorder)
+	} else {
+		body.Radius(12)
+		k.inset = 12
+	}
+	body.Children(func() { rows(k) })
 }
 
 // rowBox is a row's box: its children in a line, 32 tall at least.
@@ -172,11 +181,13 @@ func pluginTile(c *ui.Context, pluginID, symbolName string, size float32) ui.Ele
 }
 
 type statusRowOptions struct {
-	Symbol   string
-	PluginID string
-	Title    string
-	Subtitle string
-	State    string
+	Symbol string
+	// SymbolColor tints the symbol; secondary text by default.
+	SymbolColor *ui.Color
+	PluginID    string
+	Title       string
+	Subtitle    string
+	State       string
 	// StateSymbol shows the state as a symbol, whose words are its tooltip.
 	StateSymbol string
 	StateColor  *ui.Color
@@ -207,7 +218,11 @@ func statusRow(c *ui.Context, k *card, o statusRowOptions) (ui.Element, statusRo
 		result.Clicked = r.Clicked()
 	}
 	r.Children(func() {
-		ui.Row(c).Width(18).Justify(ui.Center).TextColor(p.Label2).Children(func() {
+		tint := p.Label2
+		if o.SymbolColor != nil {
+			tint = *o.SymbolColor
+		}
+		ui.Row(c).Width(18).Justify(ui.Center).TextColor(tint).Children(func() {
 			if o.PluginID != "" {
 				pluginTile(c, o.PluginID, o.Symbol, 18)
 			} else {

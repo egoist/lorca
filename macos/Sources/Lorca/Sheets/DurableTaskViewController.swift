@@ -292,7 +292,7 @@ final class DurableTaskViewController: SheetViewController, NSTextFieldDelegate 
             let row = StatusRow()
             let dependency = store.durableTask(id)
             row.configure(
-                symbol: dependency?.state.symbol ?? "circle.dashed", title: dependency?.goal ?? L("A task on another Device"),
+                symbol: dependency?.state.symbol ?? "circle", title: dependency?.goal ?? L("A task on another Device"),
                 subtitle: dependency?.state.title ?? "", state: nil, symbolTint: dependency?.state.tint ?? .tertiaryLabelColor)
             return row
         })

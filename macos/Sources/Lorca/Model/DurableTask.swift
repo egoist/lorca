@@ -40,7 +40,7 @@ struct DurableTask: Codable, Hashable, Identifiable {
             case .queued: return "circle"
             case .working: return "arrow.triangle.2.circlepath"
             case .blocked: return "exclamationmark.circle.fill"
-            case .awaitingReview: return "eye.circle"
+            case .awaitingReview: return "eye"
             case .completed: return "checkmark.circle"
             case .cancelled: return "xmark.circle"
             }
@@ -88,10 +88,10 @@ struct DurableTask: Codable, Hashable, Identifiable {
         var symbol: String {
             switch kind {
             case "url": return "link"
-            case "file": return "doc"
+            case "file": return "doc.text"
             case "output": return "doc.richtext"
-            case "review": return "checkmark.seal"
-            default: return "text.bubble"
+            case "review": return "checkmark.circle"
+            default: return "bubble.left"
             }
         }
     }
