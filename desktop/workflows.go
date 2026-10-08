@@ -288,20 +288,12 @@ func (mk *marketplace) chooseWorkflowAccount(wp *workflowPage, connection model.
 	}}}, nil)
 }
 
-// addWorkflowAccount installs the service's plugin on the Runner for this workflow, dropping a
-// choice of an account the Runner no longer has.
+// addWorkflowAccount installs the service's plugin on the Runner for this workflow.
 func (mk *marketplace) addWorkflowAccount(wp *workflowPage, connection model.WorkflowConnection) {
 	id := wp.progress.Setup.ID
-	var steps []workflowStep
-	if connection.SelectedID != "" {
-		steps = append(steps, workflowStep{"clear_connection", func(*model.WorkflowProgress) map[string]any {
-			return map[string]any{"id": id, "service_id": connection.ServiceID}
-		}})
-	}
-	steps = append(steps, workflowStep{"connection", func(*model.WorkflowProgress) map[string]any {
+	mk.performWorkflow(wp, []workflowStep{{"connection", func(*model.WorkflowProgress) map[string]any {
 		return map[string]any{"id": id, "service_id": connection.ServiceID}
-	}})
-	mk.performWorkflow(wp, steps, nil)
+	}}}, nil)
 }
 
 func (mk *marketplace) workflowPage(c *ui.Context, page *marketPage) {
@@ -484,6 +476,9 @@ func (mk *marketplace) workflowAccountRow(c *ui.Context, k *card, wp *workflowPa
 	account := connection.Account()
 	o := statusRowOptions{Symbol: "puzzlepiece.extension", PluginID: connection.ServiceID, Title: connection.Name}
 	switch {
+	case account == nil && connection.SelectedID != "":
+		// Just added: the Runner has yet to report it.
+		o.State = L("Connecting…")
 	case account == nil && len(connection.Choices) > 1:
 		o.State = L("Not chosen")
 	case account == nil && connection.Available:

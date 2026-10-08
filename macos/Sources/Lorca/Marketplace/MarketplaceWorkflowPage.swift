@@ -237,15 +237,10 @@ final class MarketplaceWorkflowPage: MarketplacePage {
         }
     }
 
-    /// Installs the service's plugin on the Runner for this workflow, dropping a choice of an
-    /// account the Runner no longer has.
+    /// Installs the service's plugin on the Runner for this workflow.
     private func add(_ connection: WorkflowProgress.Connection) {
         guard let id = progress?.setup.id else { return }
-        let stale = connection.selectedId != nil
-        perform { store in
-            if stale { _ = try await store.workflow("clear_connection", ["id": id, "service_id": connection.serviceId]) }
-            return try await store.workflow("connection", ["id": id, "service_id": connection.serviceId])
-        }
+        perform { store in try await store.workflow("connection", ["id": id, "service_id": connection.serviceId]) }
     }
 
     private func manage(_ account: WorkflowProgress.Account) {
@@ -405,6 +400,8 @@ final class MarketplaceWorkflowPage: MarketplacePage {
             var detail: String?
             var action: String?
             switch account?.plugin.state {
+            // Just added: the Runner has yet to report it.
+            case nil where connection.selectedId != nil: state = L("Connecting…")
             case nil where connection.choices.count > 1: state = L("Not chosen")
             case nil where connection.available: action = locked ? nil : L("Add")
             case nil:

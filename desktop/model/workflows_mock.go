@@ -99,8 +99,6 @@ func (s *Store) demoWorkflow(method string, data json.RawMessage) (WorkflowProgr
 		if params.PluginID == "" {
 			setup.connections[params.ServiceID] = params.ServiceID
 		}
-	case "clear_connection":
-		delete(setup.connections, params.ServiceID)
 	case "sample":
 		setup.sample, setup.phase = "running", "sample"
 		id := setup.id

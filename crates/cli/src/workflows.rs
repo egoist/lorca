@@ -346,19 +346,6 @@ pub async fn handle(app: &Arc<App>, method: &str, params: &Value) -> Result<Valu
             setup.connection_ids.insert(service_id.into(), plugin_id);
             save(app, &mut setup)?;
         }
-        "workflows.clear_connection" => {
-            guard_edit(app, &setup)?;
-            let service_id = str_param(params, "service_id")?;
-            if setup.connection_ids.remove(service_id).is_none() {
-                return Err("No selected account to clear.".into());
-            }
-            pause_owned(app, &setup)?;
-            setup.sample = None;
-            if !setup.bot_ids.is_empty() {
-                setup.phase = "connections".into();
-            }
-            save(app, &mut setup)?;
-        }
         "workflows.sample" => {
             if setup.phase == "cancelled" {
                 return Err("Resume this workflow before running a sample.".into());
@@ -700,6 +687,18 @@ pub fn allow_enable(app: &App, routine_id: &str) -> Result<(), String> {
         return Err("Set up this routine's workflow again before turning it on.".into());
     }
     Ok(())
+}
+
+/// A plugin removed from this Runner is no longer an account of the workflows set up here, so
+/// their pages offer to add or pick another rather than wait for it.
+pub fn plugin_removed(app: &App, plugin_id: &str) {
+    let Some(this) = app.this_device_id() else { return };
+    for mut setup in all(app).into_iter().filter(|s| s.runner_id == this && s.connection_ids.values().any(|id| id == plugin_id)) {
+        setup.connection_ids.retain(|_, id| id != plugin_id);
+        if let Err(error) = save(app, &mut setup) {
+            tracing::error!(%error, "dropping a removed workflow account");
+        }
+    }
 }
 
 /// Workflow context is model context only, so a reused bot's profile and playbooks stay as they
@@ -1045,6 +1044,9 @@ mod tests {
         let progress = handle(&fixture.app, "workflows.get", &json!({"id":inbox.id})).await.unwrap();
         assert_eq!(progress["specialists"][0]["selected_id"], json!(inbox.bot_ids["triager"]));
 
+        plugin_removed(&fixture.app, "gmail-work");
+        assert!(get(&fixture.app, &inbox.id).unwrap().connection_ids.is_empty(), "a removed plugin is no account");
+
         let several = Fixture::new();
         several.advertise("gmail", &["gmail-work", "gmail-personal"]);
         let inbox = several.configure(&several.start("inbox-triage").await).await;
@@ -1199,17 +1201,6 @@ mod tests {
             "gmail-stable-instance"
         );
         assert!(choices(&fixture.app, &setup.runner_id, "gmail").is_empty());
-        handle(
-            &fixture.app,
-            "workflows.clear_connection",
-            &json!({"id":setup.id,"service_id":"gmail"}),
-        )
-        .await
-        .unwrap();
-        assert!(get(&fixture.app, &setup.id)
-            .unwrap()
-            .connection_ids
-            .is_empty());
     }
 
     #[tokio::test]

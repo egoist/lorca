@@ -119,7 +119,7 @@ type WorkflowProgress struct {
 // thread; the answer, or the error, comes back in order with the store's other posts.
 func (s *Store) Workflow(method string, params map[string]any, done func(WorkflowProgress, error)) {
 	switch method {
-	case "start", "get", "configure", "connection", "clear_connection", "sample", "review", "enable", "cancel":
+	case "start", "get", "configure", "connection", "sample", "review", "enable", "cancel":
 	default:
 		s.post(func() { done(WorkflowProgress{}, fmt.Errorf("unknown workflow method %q", method)) })
 		return

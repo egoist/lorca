@@ -201,10 +201,6 @@ final class MockWorkflows {
             var connections = setup["connections"] as? [String: String] ?? [:]
             connections[params["service_id"] as? String ?? ""] = params["plugin_id"] as? String ?? "github"
             setup["connections"] = connections
-        case "clear_connection":
-            var connections = setup["connections"] as? [String: String] ?? [:]
-            connections[params["service_id"] as? String ?? ""] = nil
-            setup["connections"] = connections
         case "sample":
             setup["sample"] = "running"
             setup["phase"] = "sample"

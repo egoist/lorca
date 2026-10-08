@@ -630,6 +630,7 @@ pub fn uninstall(app: &Arc<App>, id: &str) -> Result<(), String> {
         auto_review.rules.retain(|r| !r.tool.as_deref().is_some_and(|t| t.starts_with(&prefix)));
         app.set_auto_review(auto_review);
     }
+    crate::workflows::plugin_removed(app, id);
     announce(app);
     Ok(())
 }
