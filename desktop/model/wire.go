@@ -201,20 +201,29 @@ type WireChat struct {
 }
 
 type WireRoutine struct {
-	ID           string   `json:"id"`
-	BotID        string   `json:"bot_id"`
-	Name         string   `json:"name"`
-	Prompt       string   `json:"prompt"`
-	Schedule     string   `json:"schedule"`
-	ScheduleText *string  `json:"schedule_text"`
-	IsEnabled    bool     `json:"is_enabled"`
-	PausedReason *string  `json:"paused_reason"`
-	LastRunAt    *float64 `json:"last_run_at"`
-	LastOutcome  *string  `json:"last_outcome"`
-	NextRunAt    *float64 `json:"next_run_at"`
-	IsRunning    *bool    `json:"is_running"`
-	Check        *string  `json:"check"`
-	CreatedAt    float64  `json:"created_at"`
+	ID              string             `json:"id"`
+	BotID           string             `json:"bot_id"`
+	Name            string             `json:"name"`
+	Prompt          string             `json:"prompt"`
+	Schedule        string             `json:"schedule"`
+	Timezone        *string            `json:"timezone"`
+	MissedRunPolicy *string            `json:"missed_run_policy"`
+	NextRunText     *string            `json:"next_run_text"`
+	State           *string            `json:"state"`
+	RunnerID        *string            `json:"runner_id"`
+	RunnerAvailable *bool              `json:"runner_available"`
+	RecoveryAction  *string            `json:"recovery_action"`
+	RetryAt         *float64           `json:"retry_at"`
+	Health          *WireRoutineHealth `json:"health"`
+	ScheduleText    *string            `json:"schedule_text"`
+	IsEnabled       bool               `json:"is_enabled"`
+	PausedReason    *string            `json:"paused_reason"`
+	LastRunAt       *float64           `json:"last_run_at"`
+	LastOutcome     *string            `json:"last_outcome"`
+	NextRunAt       *float64           `json:"next_run_at"`
+	IsRunning       *bool              `json:"is_running"`
+	Check           *string            `json:"check"`
+	CreatedAt       float64            `json:"created_at"`
 }
 
 type WireAutoReview struct {
@@ -794,25 +803,47 @@ func ToChat(wire WireChat, existing *Chat) *Chat {
 
 func ToRoutine(wire WireRoutine) *Routine {
 	routine := &Routine{
-		ID:           wire.ID,
-		BotID:        wire.BotID,
-		Name:         wire.Name,
-		Prompt:       wire.Prompt,
-		Schedule:     wire.Schedule,
-		ScheduleText: Schedule(cmp.Or(str(wire.ScheduleText), wire.Schedule)),
-		IsEnabled:    wire.IsEnabled,
-		PausedReason: str(wire.PausedReason),
-		LastOutcome:  str(wire.LastOutcome),
-		IsRunning:    flag(wire.IsRunning),
-		Check:        str(wire.Check),
-		HasCheck:     wire.Check != nil,
-		CreatedAt:    seconds(wire.CreatedAt),
+		ID:                    wire.ID,
+		BotID:                 wire.BotID,
+		Name:                  wire.Name,
+		Prompt:                wire.Prompt,
+		Schedule:              wire.Schedule,
+		Timezone:              cmp.Or(str(wire.Timezone), "UTC"),
+		MissedRunPolicy:       cmp.Or(str(wire.MissedRunPolicy), "coalesce"),
+		NextRunText:           str(wire.NextRunText),
+		State:                 str(wire.State),
+		RunnerID:              str(wire.RunnerID),
+		RunnerAvailable:       wire.RunnerAvailable == nil || *wire.RunnerAvailable,
+		HasRunnerAvailability: wire.RunnerAvailable != nil,
+		RecoveryAction:        str(wire.RecoveryAction),
+		ScheduleText:          Schedule(cmp.Or(str(wire.ScheduleText), wire.Schedule)),
+		IsEnabled:             wire.IsEnabled,
+		PausedReason:          str(wire.PausedReason),
+		LastOutcome:           str(wire.LastOutcome),
+		IsRunning:             flag(wire.IsRunning),
+		Check:                 str(wire.Check),
+		HasCheck:              wire.Check != nil,
+		CreatedAt:             seconds(wire.CreatedAt),
 	}
 	if wire.LastRunAt != nil {
 		routine.LastRunAt = seconds(*wire.LastRunAt)
 	}
 	if wire.NextRunAt != nil {
 		routine.NextRunAt = seconds(*wire.NextRunAt)
+	}
+	if wire.Health != nil {
+		if wire.Health.LastCheckAt != nil {
+			routine.LastCheckAt = seconds(*wire.Health.LastCheckAt)
+		}
+		if wire.Health.LastSuccessAt != nil {
+			routine.LastSuccessfulCheckAt = seconds(*wire.Health.LastSuccessAt)
+		}
+		if wire.Health.RetryAt != nil {
+			routine.RetryAt = seconds(*wire.Health.RetryAt)
+		}
+	}
+	if wire.RetryAt != nil {
+		routine.RetryAt = seconds(*wire.RetryAt)
 	}
 	return routine
 }

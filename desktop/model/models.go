@@ -1102,8 +1102,19 @@ type Routine struct {
 	Name  string
 	// Prompt is the task, written to the bot, handed to it on every run.
 	Prompt string
-	// Schedule is `every 30m`, `every 2h`, `every 1d`, or five cron fields in the Runner's time.
-	Schedule string
+	// Schedule is an elapsed interval or five cron fields in Timezone.
+	Schedule              string
+	Timezone              string
+	MissedRunPolicy       string
+	NextRunText           string
+	State                 string
+	RunnerID              string
+	RunnerAvailable       bool
+	HasRunnerAvailability bool
+	LastCheckAt           time.Time
+	LastSuccessfulCheckAt time.Time
+	RetryAt               time.Time
+	RecoveryAction        string
 	// ScheduleText is the schedule in words: "Weekdays at 9:00 AM".
 	ScheduleText string
 	IsEnabled    bool
@@ -1125,6 +1136,9 @@ func (r Routine) Detail() string {
 	if r.IsRunning {
 		return L("%@ · Running…", r.ScheduleText)
 	}
+	if r.State == "waiting_for_runner" || r.State == "failed" || r.State == "blocked" {
+		return r.ScheduleText + " · " + r.StateText()
+	}
 	if !r.IsEnabled {
 		if r.PausedReason == "away" {
 			return L("%@ · Paused while you were away", r.ScheduleText)
@@ -1132,7 +1146,7 @@ func (r Routine) Detail() string {
 		return L("%@ · Paused", r.ScheduleText)
 	}
 	if !r.NextRunAt.IsZero() {
-		next := Upcoming(r.NextRunAt)
+		next := r.NextSummary()
 		if !r.HasCheck {
 			return L("%@ · Next %@", r.ScheduleText, next)
 		}

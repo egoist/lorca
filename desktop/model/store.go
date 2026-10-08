@@ -130,6 +130,8 @@ type Store struct {
 	Chats   []*Chat
 	// Routines are every bot's routines, from the roster.
 	Routines []*Routine
+	// Tracks in-flight policy replies, so an older edit cannot replace a newer one.
+	routinePolicyRequests map[string]uint64
 	// AutoReview is shared through the roster.
 	AutoReview AutoReview
 	// Providers are the account's provider credentials, the same on every Device.
@@ -759,6 +761,17 @@ func (s *Store) RoutinesFor(botID string) []Routine {
 			continue
 		}
 		copy := *routine
+		if !copy.HasRunnerAvailability {
+			if bot := s.Bot(copy.BotID); bot != nil {
+				copy.RunnerID = bot.RunnerID
+				if runner := s.Device(bot.RunnerID); runner != nil {
+					copy.HasRunnerAvailability, copy.RunnerAvailable = true, runner.Status == StatusOnline
+					if copy.IsEnabled && !copy.RunnerAvailable {
+						copy.State = "waiting_for_runner"
+					}
+				}
+			}
+		}
 		if !copy.IsRunning {
 			copy.IsRunning = slices.ContainsFunc(s.runningJobs, func(job runningJob) bool { return job.routineID == routine.ID })
 		}
@@ -1639,6 +1652,11 @@ func (s *Store) SetRoutineEnabled(id string, enabled bool) {
 		return
 	}
 	routine.IsEnabled, routine.PausedReason = enabled, ""
+	if enabled {
+		routine.State, routine.RecoveryAction, routine.RetryAt = "ready", "", time.Time{}
+	} else {
+		routine.State, routine.NextRunText = "paused", ""
+	}
 	if !enabled {
 		routine.NextRunAt = time.Time{}
 	}
@@ -1649,7 +1667,7 @@ func (s *Store) SetRoutineEnabled(id string, enabled bool) {
 // RunRoutine runs the routine now, on its bot's Runner.
 func (s *Store) RunRoutine(id string) {
 	routine := s.Routine(id)
-	if routine == nil {
+	if routine == nil || !routine.CanRunNow() {
 		return
 	}
 	routine.IsRunning = true

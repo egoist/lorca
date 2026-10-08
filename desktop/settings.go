@@ -27,7 +27,8 @@ type settingsPageState struct {
 	// claimed is an element of this build having taken the reveal, so one element has it.
 	claimed bool
 
-	mcp settingsMcpState
+	mcp     settingsMcpState
+	service runnerServiceState
 }
 
 const (

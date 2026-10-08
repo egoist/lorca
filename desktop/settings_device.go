@@ -70,7 +70,7 @@ func (s settingsPane) device(c *ui.Context, m *mainWindow) {
 			}
 			role := L("Device · never runs bots")
 			if device.IsRunner() {
-				role = L("Runner · runs bots with its own credentials")
+				role = L("Runner · runs bots with the account’s credentials")
 			}
 			s.mark(c, keyValueRow(c, k, L("Role"), role, false, nil), L("Role"))
 			lastSeen := model.LastSeen(device.LastSeen)
@@ -86,6 +86,9 @@ func (s settingsPane) device(c *ui.Context, m *mainWindow) {
 				s.w.confirmUnpair(device)
 			}
 		})
+		if device.IsRunner() {
+			s.runnerService(c, m, device)
+		}
 	})
 }
 
