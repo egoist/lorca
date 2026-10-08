@@ -35,7 +35,7 @@ The macOS app's DM inspector has a Routines section: a row per routine (clock, p
 
 ## Memory
 
-Reusable procedures live in [Playbooks](playbooks.md), with explicit bot or group-project scope, reviewed workflow capture and standing-instruction proposals, and encrypted revision history. The inspector offers Playbooks beside the bot's memory; saved skills are discovered on later turns and read on demand.
+Reusable procedures live in [Playbooks](playbooks.md), with explicit bot or group-project scope, reviewed workflow capture and standing-instruction proposals, and encrypted revision history. The inspector lists a bot's skills under its memory; saved skills are discovered on later turns and read on demand.
 
 Every bot keeps its own long-term memory on its Runner, in Grok Bot's shape of a curated profile over append-only logs, as plain markdown under `~/.lorca/workspaces/<bot id>/` (keyed by id, so a rename or a changed working directory never moves it; `crates/cli/src/memory.rs`):
 
