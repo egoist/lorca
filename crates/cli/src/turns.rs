@@ -127,9 +127,12 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
     let window = provider.model_info().map(|i| i.context_window).unwrap_or(0);
     let settings = compaction_settings(window);
     let store = MemoryStore::for_bot(&app.config.home, &bot);
-    // The prompt names the installed plugins; their tools are in the codemode tool's description,
-    // and their servers stay dormant until a script calls them.
-    let plugin_briefs = crate::plugins::mcp::plugin_briefs(app);
+    // The prompt names the installed plugins the bot's Access lets it use; their tools are in the
+    // codemode tool's description, and their servers stay dormant until a script calls them.
+    let plugin_briefs: Vec<_> = crate::plugins::mcp::plugin_briefs(app)
+        .into_iter()
+        .filter(|brief| bot.permissions.as_ref().is_none_or(|policy| policy.allows_connection(&brief.id)))
+        .collect();
     let system_prompt = system_prompt(app, &chat, &bot, job, &store, routine.as_ref(), &plugin_briefs);
 
     let unattended = routine.is_some();
@@ -798,7 +801,7 @@ async fn memory_flush(
             // The turn's thinking is bound to the turn's system prompt and tools, not this run's.
             drop_bound_thinking(provider.model_id(), &mut context_messages);
             context_messages.push(AgentMessage::User(UserMessage::text(memory_flush_prompt(None))));
-            AgentContext { system_prompt: system, messages: context_messages, tools: crate::permissions::guarded::tools(app, bot, &chat.meta.id, memory_tools(app, &store, chat)), cache_points: Vec::new() }
+            AgentContext { system_prompt: system, messages: context_messages, tools: memory_tools(app, &store, chat), cache_points: Vec::new() }
         }
     };
     let config = AgentLoopConfig {
@@ -2897,10 +2900,6 @@ impl Tool for InstallPlugin {
                 )))
             }
         }
-        if let Err(denied) = crate::permissions::check_tool(&self.app, &self.bot, "install_plugin") {
-            let result = crate::permissions::refuse(&self.app, &self.chat_id, &self.bot, denied);
-            return Err(ToolError(result.reason.unwrap_or_default()));
-        }
         let status = crate::plugins::install(&self.app, manifest.clone(), "marketplace").map_err(ToolError)?;
         let next = match status.state.as_str() {
             "ready" => "It is ready; call its tools from a codemode script when you need them.".to_string(),
@@ -2960,6 +2959,9 @@ impl Tool for ConnectPlugin {
             .find(|p| p.id.to_lowercase() == wanted || p.name.to_lowercase() == wanted)
             .map(|p| p.id)
             .ok_or_else(|| ToolError(format!("No plugin {wanted:?} is installed here. Use search_plugins and install_plugin first.")))?;
+        if !self.app.bot(&self.bot.id).and_then(|bot| bot.permissions).is_none_or(|policy| policy.allows_connection(&id)) {
+            return Err(ToolError(format!("{wanted} is off for this bot in its Access settings, which only the user changes.")));
+        }
         let message = crate::plugins::mcp::post_sign_in_card(&self.app, &self.chat_id, &self.bot.id, &id).map_err(ToolError)?;
         let Body::Permission { plugin_name, .. } = &message.body else { unreachable!() };
         Ok(ToolResult::text(format!("A sign-in card for {plugin_name} is in the chat. Ask the user to tap Sign in on it, then to tell you when it is done."))
@@ -3189,7 +3191,7 @@ mod tests {
         let caller = app.state.lock().unwrap().bots[0].clone();
         let chat_id = app.dm_with(&caller.id, None).unwrap().meta.id;
         let create = CreateBot { app: app.clone(), bot: caller.clone(), chat_id };
-        let policy = serde_json::from_value(json!({"connections":{},"tools":["create_bot","edit_bot"],"shell":false,"filesystem":"none"})).unwrap();
+        let policy = serde_json::from_value(json!({"connections":{},"shell":false,"filesystem":"none"})).unwrap();
         app.update_bot(&caller.id, |bot| bot.permissions = Some(policy)).unwrap();
         let update: ToolUpdateFn = Arc::new(|_| {});
         create.execute("new", json!({"name":"Inbox", "description":"Read selected inbox"}), CancellationToken::new(), update.clone()).await.unwrap();

@@ -445,13 +445,8 @@ pub async fn run_check(app: &Arc<App>, routine: &Routine, cancel: &CancellationT
         Ok(dm) => dm,
         Err(error) => return failed(error.to_string()),
     };
-    if let Err(denied) = crate::permissions::check_tool(app, &bot, "codemode") {
-        let refusal = crate::permissions::refuse(app, &dm.meta.id, &bot, denied);
-        return failed(refusal.reason.unwrap_or_default());
-    }
     let files: Vec<Arc<dyn Tool>> =
         lorca_agent::tools::coding_tools(bot.working_directory(&app.config.home)).into_iter().filter(|tool| CHECK_FILE_TOOLS.contains(&tool.name())).collect();
-    let files = crate::permissions::guarded::tools(app, &bot, &dm.meta.id, files);
     let catalog = crate::plugins::mcp::bot_catalog(app, &bot, &dm.meta.id, files);
     let store = Arc::new(crate::scripts::ScriptStore { app: app.clone(), chat_id: dm.meta.id.clone(), bot_id: bot.id.clone() });
     let functions: Vec<Arc<dyn HostFunction>> =
@@ -495,7 +490,8 @@ fn clipped(text: &str, max: usize) -> String {
     }
 }
 
-/// Runs a check's calls: the read-only ones, and no other. A refused call ends the check.
+/// Runs a check's calls: the read-only ones the bot's Access allows, and no other. A refused
+/// call ends the check.
 #[cfg(feature = "runner")]
 struct CheckRunner {
     app: Arc<App>,
@@ -611,10 +607,7 @@ mod tests {
         let policy = serde_json::from_value(serde_json::json!({"filesystem":"none","shell":false})).unwrap();
         app.update_bot("b1", |bot| bot.permissions = Some(policy)).unwrap();
         let result = run_check(app, &routine, &CancellationToken::new()).await;
-        assert!(result.error.as_deref().is_some_and(|error| error.contains("filesystem access is disabled")), "{:?}", result.error);
-        app.update_bot("b1", |bot| bot.permissions.as_mut().unwrap().tools = Some(std::collections::BTreeSet::new())).unwrap();
-        let result = run_check(app, &routine, &CancellationToken::new()).await;
-        assert!(result.error.as_deref().is_some_and(|error| error.contains("codemode")), "{:?}", result.error);
+        assert!(result.error.as_deref().is_some_and(|error| error.contains("reading files is off")), "{:?}", result.error);
     }
 
     #[test]

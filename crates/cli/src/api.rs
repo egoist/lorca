@@ -273,10 +273,11 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             if access_changed { crate::permissions::dismiss_requests(app, &id); }
             Ok(json!({ "bot": bot }))
         }
+        // The plugins the bot's Runner has and their tools, for its Access sheet.
         "bots.permissions" => {
             let bot = app.bot(&string(&params, "id")?).ok_or("Unknown bot")?;
             let catalog = crate::plugins::on_runner(app, &bot.runner_id, "permissions.catalog", json!({})).await?;
-            Ok(json!({ "bot": bot, "local_tools": crate::permissions::LOCAL_TOOLS, "connections": catalog }))
+            Ok(json!({ "connections": catalog }))
         }
         "bots.delete" => {
             app.delete_bot(&string(&params, "id")?).map_err(|e| e.to_string())?;

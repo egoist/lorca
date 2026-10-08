@@ -1,4 +1,5 @@
-//! User-owned capability policies, checked before review and again at execution.
+//! A bot's Access: the plugins it may use and how, and whether it reads or changes files and
+//! runs shell commands. Checked before Auto-review and again when a call runs.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -37,7 +38,6 @@ pub enum FilesystemAccess {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct ConnectionPermissions {
     /// Independent grants. An empty set denies the connection entirely.
     #[serde(default)]
@@ -47,16 +47,12 @@ pub struct ConnectionPermissions {
     pub tools: Option<BTreeSet<String>>,
 }
 
-/// None on a Bot means it has the account's existing access. Explicit empty allowlists deny
-/// everything in their scope; unknown tools never inherit a listed tool's grant.
+/// None on a Bot means it has the Runner's every plugin, files, and shell. An explicit
+/// `connections` map denies every plugin it does not list, a plugin installed later included.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct BotPermissions {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub connections: Option<BTreeMap<String, ConnectionPermissions>>,
-    /// Local CLI tool names. Plugin names are selected under their connection instead.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tools: Option<BTreeSet<String>>,
     #[serde(default)]
     pub filesystem: FilesystemAccess,
     #[serde(default = "enabled")]
@@ -69,16 +65,13 @@ fn enabled() -> bool {
 
 impl Default for BotPermissions {
     fn default() -> Self {
-        Self { connections: None, tools: None, filesystem: FilesystemAccess::Write, shell: true }
+        Self { connections: None, filesystem: FilesystemAccess::Write, shell: true }
     }
 }
 
 impl BotPermissions {
     pub fn validate(&self) -> Result<(), String> {
         let valid = |name: &str| !name.trim().is_empty() && name.len() <= 256 && name == name.trim();
-        if self.tools.as_ref().is_some_and(|tools| tools.len() > 1000 || tools.iter().any(|name| !valid(name))) {
-            return Err("Tool allowlists need at most 1000 non-empty exact names, each under 256 bytes.".into());
-        }
         if let Some(connections) = &self.connections {
             if connections.len() > 1000 || connections.keys().any(|id| !valid(id)) {
                 return Err("Connection allowlists need at most 1000 non-empty instance IDs.".into());
@@ -90,32 +83,35 @@ impl BotPermissions {
         Ok(())
     }
 
+    /// Whether the bot may use the plugin at all: its catalog and system prompt leave out one
+    /// it may not.
+    pub fn allows_connection(&self, connection: &str) -> bool {
+        self.connections.as_ref().is_none_or(|connections| connections.get(connection).is_some_and(|grant| !grant.capabilities.is_empty()))
+    }
+
     fn local_denial(&self, tool: &str) -> Option<String> {
-        if self.tools.as_ref().is_some_and(|tools| !tools.contains(tool)) {
-            return Some(format!("the local tool {tool} is excluded from its tool allowlist"));
-        }
         if matches!(tool, "bash" | "bash_input" | "bash_output") && !self.shell {
-            return Some("shell access is disabled".into());
+            return Some("shell commands are off for this bot".into());
         }
         if matches!(tool, "read" | "grep" | "find" | "ls") && self.filesystem == FilesystemAccess::None {
-            return Some("filesystem access is disabled".into());
+            return Some("reading files is off for this bot".into());
         }
         if matches!(tool, "write" | "edit") && self.filesystem != FilesystemAccess::Write {
-            return Some("filesystem writes are disabled".into());
+            return Some("changing files is off for this bot".into());
         }
         None
     }
 
-    fn connection_denial(&self, connection: &str, tool: &str, capability: Option<Capability>) -> Option<String> {
+    fn connection_denial(&self, connection: &str, name: &str, tool: &str, capability: Option<Capability>) -> Option<String> {
         let connections = self.connections.as_ref()?;
-        let Some(grant) = connections.get(connection) else {
-            return Some(format!("connection {connection} is excluded from its connection allowlist"));
+        let Some(grant) = connections.get(connection).filter(|grant| !grant.capabilities.is_empty()) else {
+            return Some(format!("{name} is off for this bot"));
         };
         if grant.tools.as_ref().is_some_and(|tools| !tools.contains(tool)) {
-            return Some(format!("tool {tool} is excluded from the allowlist for connection {connection}"));
+            return Some(format!("{tool} is not among the {name} tools this bot may use"));
         }
-        if grant.capabilities.is_empty() || capability.is_some_and(|capability| !grant.capabilities.contains(&capability)) {
-            return Some(format!("{} access to connection {connection} is disabled", capability.map(|c| c.to_string()).unwrap_or_else(|| "all".into())));
+        if let Some(capability) = capability.filter(|capability| !grant.capabilities.contains(capability)) {
+            return Some(format!("{capability} access to {name} is off for this bot"));
         }
         None
     }
@@ -127,65 +123,57 @@ pub struct AccessDenied {
     pub connection_id: Option<String>,
     pub capability: Option<Capability>,
     pub reason: String,
+    /// The bot's Access refused it, so the user can grant it. A bot deleted or moved to another
+    /// Runner mid-turn is refused without asking anyone.
+    pub grantable: bool,
 }
 
 impl fmt::Display for AccessDenied {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if !self.grantable {
+            return write!(f, "{} cannot run: {}.", self.tool, self.reason);
+        }
         write!(f, "Access refused for {}: {}. The user can change this bot's Access settings in its profile. Auto-review and Always allow cannot override this restriction.", self.tool, self.reason)
     }
 }
 
-/// Every call reads the current profile, so a restriction takes effect during an active turn.
+/// The bot as it is stored now, or why it may do nothing: every call reads the current
+/// profile, so a change takes effect during an active turn.
+fn current(app: &Arc<App>, bot: &Bot, tool: &str, connection_id: Option<&str>) -> Result<Bot, AccessDenied> {
+    let gone = |reason: &str| AccessDenied { tool: tool.into(), connection_id: connection_id.map(str::to_string), capability: None, reason: reason.into(), grantable: false };
+    match app.bot(&bot.id) {
+        Some(current) if current.runner_id != bot.runner_id => Err(gone("the bot was moved to another Runner")),
+        Some(current) => Ok(current),
+        None => Err(gone("the bot no longer exists")),
+    }
+}
+
 pub fn check_tool(app: &Arc<App>, bot: &Bot, tool: &str) -> Result<(), AccessDenied> {
-    let current = app.bot(&bot.id);
-    let reason = match current {
-        Some(current) if current.runner_id != bot.runner_id => Some("the bot was reassigned to another Runner".into()),
-        Some(bot) => bot.permissions.as_ref().and_then(|policy| policy.local_denial(tool)),
-        None => Some("the bot no longer exists".into()),
-    };
-    match reason {
-        Some(reason) => Err(AccessDenied { tool: tool.into(), connection_id: None, capability: None, reason }),
+    let current = current(app, bot, tool, None)?;
+    match current.permissions.as_ref().and_then(|policy| policy.local_denial(tool)) {
+        Some(reason) => Err(AccessDenied { tool: tool.into(), connection_id: None, capability: None, reason, grantable: true }),
         None => Ok(()),
     }
 }
 
-pub fn check_connection(app: &Arc<App>, bot: &Bot, connection: &str, tool: &str, capability: Capability) -> Result<(), AccessDenied> {
-    check_connection_inner(app, bot, connection, tool, Some(capability))
-}
-
-/// Checks instance and tool selection before starting a server to inspect its annotations.
-pub fn check_connection_tool(app: &Arc<App>, bot: &Bot, connection: &str, tool: &str) -> Result<(), AccessDenied> {
-    check_connection_inner(app, bot, connection, tool, None)
-}
-
-/// A stable hash of the effective policy and Runner assignment for staged execution. It does
-/// not replace a fresh authorization check, nor include unrelated name/look/model changes.
-pub fn policy_fingerprint(app: &Arc<App>, bot: &Bot) -> Result<String, AccessDenied> {
-    use sha2::{Digest, Sha256};
-    let bot = app.bot(&bot.id).ok_or_else(|| AccessDenied {
-        tool: "policy".into(),
-        connection_id: None,
-        capability: None,
-        reason: "the bot no longer exists".into(),
-    })?;
-    let value = serde_json::json!({ "v": 1, "bot_id": bot.id, "runner_id": bot.runner_id, "permissions": bot.permissions.unwrap_or_default() });
-    let digest = Sha256::digest(serde_json::to_vec(&value).expect("a permission policy serializes"));
-    Ok(data_encoding::HEXLOWER.encode(&digest))
-}
-
-fn check_connection_inner(app: &Arc<App>, bot: &Bot, connection: &str, tool: &str, capability: Option<Capability>) -> Result<(), AccessDenied> {
-    let reason = match app.bot(&bot.id) {
-        Some(current) if current.runner_id != bot.runner_id => Some("the bot was reassigned to another Runner".into()),
-        Some(bot) => bot.permissions.as_ref().and_then(|policy| policy.connection_denial(connection, tool, capability)),
-        None => Some("the bot no longer exists".into()),
-    };
-    match reason {
-        Some(reason) => Err(AccessDenied { tool: tool.into(), connection_id: Some(connection.into()), capability, reason }),
+/// The instance and tool selection with no capability, before a server starts to say what a
+/// tool does; with one, the whole grant.
+pub fn check_connection(app: &Arc<App>, bot: &Bot, connection: &str, tool: &str, capability: Option<Capability>) -> Result<(), AccessDenied> {
+    let current = current(app, bot, tool, Some(connection))?;
+    let name = connection_name(app, connection);
+    match current.permissions.as_ref().and_then(|policy| policy.connection_denial(connection, &name, tool, capability)) {
+        Some(reason) => Err(AccessDenied { tool: tool.into(), connection_id: Some(connection.into()), capability, reason, grantable: true }),
         None => Ok(()),
     }
 }
 
-/// A rolling-upgrade roster that omits policies cannot silently remove restrictions. Users
+/// What the user calls an installed plugin: its status name, which tells two accounts of one
+/// service apart.
+fn connection_name(app: &App, connection: &str) -> String {
+    app.plugins.lock().unwrap().status(connection).map(|status| status.name).unwrap_or_else(|| connection.to_string())
+}
+
+/// A roster from a Device that predates policies cannot silently remove restrictions. Users
 /// restore full access by writing an explicit default policy, never by dropping the field.
 pub fn keep_policies(current: &[Bot], incoming: &mut [Bot]) -> bool {
     let mut kept = false;
@@ -200,7 +188,7 @@ pub fn keep_policies(current: &[Bot], incoming: &mut [Bot]) -> bool {
     kept
 }
 
-/// Editing access acknowledges the outstanding requests; it never resumes refused calls.
+/// Editing access answers the outstanding requests; it never resumes refused calls.
 pub fn dismiss_requests(app: &Arc<App>, bot_id: &str) {
     use crate::model::{Author, Body};
     let chats: Vec<String> =
@@ -220,10 +208,15 @@ pub fn dismiss_requests(app: &Arc<App>, bot_id: &str) {
     }
 }
 
+/// Refuses the call and, when the user could grant it, asks them in the chat: a card that
+/// opens the bot's Access settings or is dismissed, and never allows the call itself.
 #[cfg(feature = "runner")]
 pub fn refuse(app: &Arc<App>, chat_id: &str, bot: &Bot, denied: AccessDenied) -> lorca_agent::BeforeToolCallResult {
     use crate::model::{Author, Body, Message};
     let reason = denied.to_string();
+    if !denied.grantable {
+        return crate::local_review::blocked(reason);
+    }
     // One waiting request per missing grant; repeated calls never flood the user's chat.
     let arguments = serde_json::json!({ "connection_id": denied.connection_id, "requested_tool": denied.tool, "capability": denied.capability });
     let recent = app.store.page(chat_id, None, 200).map(|(messages, _)| messages).unwrap_or_default();
@@ -232,55 +225,42 @@ pub fn refuse(app: &Arc<App>, chat_id: &str, bot: &Bot, denied: AccessDenied) ->
             && matches!(&message.body, Body::Permission { tool, decision, arguments: existing, .. } if tool == "access" && decision == "pending" && *existing == arguments)
     });
     if !duplicate {
+        // The apps word the card: a plugin and its tool, or what the bot wanted to do here.
+        let (plugin_id, plugin_name, summary) = match &denied.connection_id {
+            Some(connection) => {
+                let name = connection_name(app, connection);
+                (connection.clone(), name.clone(), format!("{name} · {}", denied.tool))
+            }
+            None => {
+                let what = match denied.tool.as_str() {
+                    "bash" | "bash_input" | "bash_output" => "Shell commands",
+                    "write" | "edit" => "Changing files",
+                    _ => "Reading files",
+                };
+                ("computer".into(), String::new(), what.into())
+            }
+        };
         let message = Message::new(
             chat_id,
             Author::Bot { bot_id: bot.id.clone() },
             Body::Permission {
-                plugin_id: denied.connection_id.unwrap_or_else(|| "computer".into()),
-                plugin_name: "Bot access".into(),
+                plugin_id,
+                plugin_name,
                 tool: "access".into(),
-                summary: format!("{} needs access to {}", bot.name, denied.tool),
+                summary,
                 arguments,
                 decision: "pending".into(),
-                reason: Some(reason.clone()),
+                reason: None,
                 command: None,
                 rule: None,
                 code: None,
                 link: None,
             },
         );
-        app.upsert_message(message.clone(), true);
-        crate::push::permission(app, &message);
+        app.upsert_message(message, true);
     }
     crate::local_review::blocked(reason)
 }
-
-/// The available local names shown by the profile editor. Extensions can supply other exact
-/// names through the same allowlist and check_tool entry point.
-pub const LOCAL_TOOLS: &[&str] = &[
-    "codemode",
-    "read",
-    "write",
-    "edit",
-    "grep",
-    "find",
-    "ls",
-    "bash",
-    "bash_input",
-    "bash_output",
-    "memory_update",
-    "memory_log",
-    "recall",
-    "list_teammates",
-    "message_bot",
-    "create_bot",
-    "edit_bot",
-    "routines",
-    "stage_review",
-    "search_plugins",
-    "install_plugin",
-    "connect_plugin",
-];
 
 #[cfg(feature = "runner")]
 pub(crate) mod guarded {
@@ -290,6 +270,7 @@ pub(crate) mod guarded {
     use serde_json::Value;
     use tokio_util::sync::CancellationToken;
 
+    /// A local tool that checks the bot's Access again when it starts, after any review.
     struct GuardedTool {
         app: Arc<App>,
         bot: Bot,
@@ -382,14 +363,19 @@ mod tests {
     #[test]
     fn connection_instances_tools_and_capabilities_are_independent_grants() {
         let policy = inbox_policy();
-        assert_eq!(policy.connection_denial("gmail-work", "list_messages", Some(Capability::Read)), None);
-        assert_eq!(policy.connection_denial("gmail-work", "create_draft", Some(Capability::Draft)), None);
-        assert!(policy.connection_denial("gmail-work", "create_draft", Some(Capability::Write)).is_some());
-        assert!(policy.connection_denial("gmail-personal", "list_messages", Some(Capability::Read)).is_some());
-        assert!(policy.connection_denial("gmail-work", "send_message", Some(Capability::Draft)).is_some());
+        let denial = |connection: &str, tool: &str, capability| policy.connection_denial(connection, connection, tool, Some(capability));
+        assert_eq!(denial("gmail-work", "list_messages", Capability::Read), None);
+        assert_eq!(denial("gmail-work", "create_draft", Capability::Draft), None);
+        assert!(denial("gmail-work", "create_draft", Capability::Write).is_some());
+        assert!(denial("gmail-personal", "list_messages", Capability::Read).is_some());
+        assert!(denial("gmail-work", "send_message", Capability::Draft).is_some());
+        assert!(policy.allows_connection("gmail-work") && !policy.allows_connection("gmail-personal"));
         let mut only_write = inbox_policy();
         only_write.connections.as_mut().unwrap().get_mut("gmail-work").unwrap().capabilities = BTreeSet::from([Capability::Write]);
-        assert!(only_write.connection_denial("gmail-work", "list_messages", Some(Capability::Read)).is_some(), "write does not imply read");
+        assert!(only_write.connection_denial("gmail-work", "Work", "list_messages", Some(Capability::Read)).is_some(), "write does not imply read");
+        only_write.connections.as_mut().unwrap().get_mut("gmail-work").unwrap().capabilities.clear();
+        assert!(!only_write.allows_connection("gmail-work"), "no capability is no access");
+        assert!(BotPermissions::default().allows_connection("anything"));
     }
 
     #[test]
@@ -398,46 +384,34 @@ mod tests {
         for tool in ["bash", "bash_input", "bash_output", "write", "edit"] {
             assert!(policy.local_denial(tool).is_some(), "{tool}");
         }
-        for tool in ["read", "grep", "find", "ls"] {
+        for tool in ["read", "grep", "find", "ls", "codemode", "memory_update", "message_bot"] {
             assert_eq!(policy.local_denial(tool), None, "{tool}");
         }
-        let none = BotPermissions { filesystem: FilesystemAccess::None, tools: Some(BTreeSet::new()), ..Default::default() };
-        assert!(none.local_denial("codemode").is_some());
+        let none = BotPermissions { filesystem: FilesystemAccess::None, ..Default::default() };
         assert!(none.local_denial("read").is_some());
-        let staging = BotPermissions {
-            tools: Some(BTreeSet::from(["stage_review".into()])),
-            connections: Some(BTreeMap::new()),
-            filesystem: FilesystemAccess::None,
-            shell: false,
-        };
-        assert_eq!(staging.local_denial("stage_review"), None);
-        assert!(staging.local_denial("bash").is_some(), "permission to stage a review does not authorize execution");
-        assert!(staging.connection_denial("mail-work", "send_message", Some(Capability::Write)).is_some());
         assert!(serde_json::from_value::<BotPermissions>(json!({"filesystem": "sandbox"})).is_err());
-        assert!(serde_json::from_value::<BotPermissions>(json!({"shelll": true})).is_err());
         assert!(serde_json::from_value::<BotPermissions>(json!({"connections": {"mail": {"capabilities": ["admin"]}}})).is_err());
     }
 
     #[test]
-    fn a_running_turn_reads_revocation_and_fingerprints_effective_access() {
-        let (scratch, snapshot, _) = scratch();
+    fn a_running_turn_reads_revocation_and_a_moved_bot_is_refused_without_a_request() {
+        let (scratch, snapshot, chat_id) = scratch();
         let app = &scratch.0;
         assert!(check_tool(app, &snapshot, "bash").is_ok());
-        let initial = policy_fingerprint(app, &snapshot).unwrap();
-        app.update_bot(&snapshot.id, |bot| {
-            bot.permissions = Some(BotPermissions::default());
-            bot.name = "Renamed".into();
-        })
-        .unwrap();
-        assert_eq!(policy_fingerprint(app, &snapshot).unwrap(), initial);
         app.update_bot(&snapshot.id, |bot| bot.permissions = Some(inbox_policy())).unwrap();
-        assert!(check_tool(app, &snapshot, "bash").is_err());
-        assert!(check_connection(app, &snapshot, "gmail-personal", "list_messages", Capability::Read).is_err());
-        assert_ne!(policy_fingerprint(app, &snapshot).unwrap(), initial);
+        assert!(check_tool(app, &snapshot, "bash").unwrap_err().grantable);
+        assert!(check_connection(app, &snapshot, "gmail-personal", "list_messages", Some(Capability::Read)).is_err());
         let reopened = App::load(crate::config::Config { home: scratch.1.clone(), port: 0 }).unwrap();
         assert_eq!(reopened.bot(&snapshot.id).unwrap().permissions, Some(inbox_policy()), "the persisted profile retains policy");
         app.state.lock().unwrap().bots.iter_mut().find(|bot| bot.id == snapshot.id).unwrap().runner_id = "another-runner".into();
-        assert!(check_tool(app, &snapshot, "read").unwrap_err().reason.contains("reassigned"));
+        let moved = check_tool(app, &snapshot, "read").unwrap_err();
+        assert!(!moved.grantable && moved.reason.contains("moved"));
+        #[cfg(feature = "runner")]
+        {
+            assert!(refuse(app, &chat_id, &snapshot, moved).block);
+            assert!(app.store.page(&chat_id, None, 200).unwrap().0.is_empty(), "nobody is asked about a moved bot");
+        }
+        let _ = chat_id;
     }
 
     #[test]
@@ -457,7 +431,7 @@ mod tests {
         let (scratch, bot, _) = scratch();
         let app = &scratch.0;
         crate::api::dispatch(app, "bots.update", json!({"id": bot.id, "permissions": inbox_policy()})).await.unwrap();
-        for invalid in [json!(null), json!({"connections": []}), json!({"shell": "false"}), json!({"tools": [""]}), json!({"unexpected": true})] {
+        for invalid in [json!(null), json!({"connections": []}), json!({"shell": "false"}), json!({"connections": {"": {"capabilities": []}}})] {
             assert!(crate::api::dispatch(app, "bots.update", json!({"id": bot.id, "permissions": invalid})).await.is_err());
             assert_eq!(app.bot(&bot.id).unwrap().permissions, Some(inbox_policy()));
         }
@@ -482,7 +456,7 @@ mod tests {
         let codemode = CodemodeTool::new(catalog, CodemodeOptions::default());
         let run = codemode.run_script("nested", script, CancellationToken::new(), &DirectRunner).await.unwrap();
         assert!(run.result.is_error, "{}", run.result.text_content());
-        assert!(run.result.text_content().contains("filesystem writes are disabled"));
+        assert!(run.result.text_content().contains("changing files is off"));
         assert!(!scratch.1.join("forbidden.txt").exists());
         assert!(!scratch.1.join("forbidden-shell").exists());
         let tools = guarded::tools(app, &bot, &chat_id, lorca_agent::tools::coding_tools(scratch.1.clone()));
@@ -490,7 +464,7 @@ mod tests {
         let update: ToolUpdateFn = Arc::new(|_| {});
         let refused =
             bash.execute("direct", json!({"command": "touch forbidden-shell", "description": "Touch"}), CancellationToken::new(), update).await.unwrap_err();
-        assert!(refused.0.contains("shell access is disabled"));
+        assert!(refused.0.contains("shell commands are off"));
         assert!(!scratch.1.join("forbidden-shell").exists());
     }
 
@@ -507,20 +481,27 @@ mod tests {
             behavior: "allow".into(),
             tool: Some("gmail-personal/send_message".into()),
         });
-        let denied = check_connection(app, &bot, "gmail-personal", "send_message", Capability::Write).unwrap_err();
+        let denied = check_connection(app, &bot, "gmail-personal", "send_message", Some(Capability::Write)).unwrap_err();
         assert!(refuse(app, &chat_id, &bot, denied.clone()).block);
         refuse(app, &chat_id, &bot, denied);
         let requests = app.store.page(&chat_id, None, 200).unwrap().0;
         assert_eq!(requests.len(), 1, "repeated missing grant makes one request");
         let card = &requests[0];
-        assert!(matches!(&card.body, Body::Permission { tool, decision, rule: None, .. } if tool == "access" && decision == "pending"));
+        assert!(matches!(&card.body, Body::Permission { tool, decision, summary, rule: None, reason: None, .. }
+            if tool == "access" && decision == "pending" && summary == "gmail-personal · send_message"));
         for decision in ["allow", "always"] {
             let response = crate::api::dispatch(app, "chats.permission", json!({"chat_id": chat_id, "message_id": card.id, "decision": decision})).await;
             assert!(response.unwrap_err().contains("cannot grant permissions"));
         }
         assert_eq!(app.auto_review().rules.len(), 1);
-        assert!(check_connection(app, &bot, "gmail-personal", "send_message", Capability::Write).is_err());
+        assert!(check_connection(app, &bot, "gmail-personal", "send_message", Some(Capability::Write)).is_err());
         crate::api::dispatch(app, "chats.permission", json!({"chat_id": chat_id, "message_id": card.id, "decision": "deny"})).await.unwrap();
-        assert!(matches!(app.message(&chat_id, &card.id).unwrap().body, Body::Permission { decision, .. } if decision == "denied"));
+        assert!(matches!(app.message(&chat_id, &card.id).unwrap().body, Body::Permission { decision, .. } if decision == "dismissed"));
+        // A shell refusal is worded for the apps, and saving Access answers what is still open.
+        refuse(app, &chat_id, &bot, check_tool(app, &bot, "bash").unwrap_err());
+        let shell = app.store.page(&chat_id, None, 200).unwrap().0.into_iter().find(|message| message.id != card.id).unwrap();
+        assert!(matches!(&shell.body, Body::Permission { plugin_id, summary, .. } if plugin_id == "computer" && summary == "Shell commands"));
+        crate::api::dispatch(app, "bots.update", json!({"id": bot.id, "permissions": {"shell": true}})).await.unwrap();
+        assert!(matches!(app.message(&chat_id, &shell.id).unwrap().body, Body::Permission { decision, .. } if decision == "dismissed"));
     }
 }

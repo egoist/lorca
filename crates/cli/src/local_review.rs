@@ -32,11 +32,6 @@ pub async fn before_tool_call(
     unattended: bool,
     ctx: BeforeToolCallContext<'_>,
 ) -> Option<BeforeToolCallResult> {
-    if matches!(ctx.tool_call.name.as_str(), "bash" | "bash_input") {
-        if let Err(denied) = crate::permissions::check_tool(app, bot, &ctx.tool_call.name) {
-            return Some(crate::permissions::refuse(app, chat_id, bot, denied));
-        }
-    }
     if ctx.tool_call.name == "bash_input" {
         return review_input(app, chat_id, trigger, bot, unattended, ctx).await;
     }
@@ -944,7 +939,6 @@ mod tests {
             id: "bot".into(), name: "Bot".into(), description: String::new(), symbol_name: String::new(), accent: String::new(), avatar: None,
             runner_id: "runner".into(), provider: "deepseek".into(), model: None, thinking: None, legacy_instructions: String::new(), workdir: Some(work.display().to_string()), permissions: None, created_at: 0.0,
         };
-        app.state.lock().unwrap().bots.push(bot.clone());
         let assistant = AssistantMessage::empty("test", "test");
         let context = AgentContext { system_prompt: String::new(), messages: Vec::new(), tools: Vec::new(), cache_points: Vec::new() };
         let cancel = CancellationToken::new();
@@ -992,7 +986,6 @@ mod tests {
             "id": "bot", "name": "Bot", "description": "", "symbol_name": "", "accent": "", "runner_id": "runner", "provider": "deepseek", "created_at": 0.0
         }))
         .unwrap();
-        app.state.lock().unwrap().bots.push(bot.clone());
         app.state.lock().unwrap().chats.push(serde_json::from_value(serde_json::json!({ "id": "chat", "kind": "dm", "bot_ids": ["bot"], "created_at": 0.0 })).unwrap());
         let mut review = app.auto_review();
         review.is_enabled = false;
