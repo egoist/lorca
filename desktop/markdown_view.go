@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/egoist/lorca/desktop/model"
-	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -29,24 +28,16 @@ type markdownOptions struct {
 	Size float32
 	// Menu adds items above Copy and Select All in the text's context menu, as a message's Reply.
 	Menu func(m *ui.Menu)
+	// OpenLink is a persistent window action for internal message navigation.
+	OpenLink func(string)
 }
 
 // openLink opens a link from a message: a web or mail link in the browser, anything else not at all.
 func openLink(href string) {
 	u, err := url.Parse(href)
-	if err != nil {
-		return
+	if err == nil {
+		_ = openExternal(u.String())
 	}
-	switch u.Scheme {
-	case "http", "https":
-		if u.Host == "" {
-			return
-		}
-	case "mailto":
-	default:
-		return
-	}
-	go mygo.Shell.OpenExternal(u.String())
 }
 
 // markdownView builds a message body.
@@ -110,7 +101,11 @@ func spansView(c *ui.Context, spans []model.Span, o markdownOptions, bold bool) 
 					t.TextColor(p.Link)
 				}
 				if t.Clicked() {
-					openLink(href)
+					if o.OpenLink != nil {
+						o.OpenLink(href)
+					} else {
+						openLink(href)
+					}
 				}
 			}
 		}
