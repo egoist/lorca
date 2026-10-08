@@ -365,6 +365,9 @@ func (m *mainWindow) messageCell(c *ui.Context, chat *model.Chat, message *model
 					if menu.Item(L("Reply")).Chosen() {
 						m.startReply(s, message)
 					}
+					if menu.Item(L("Record workflow feedback…")).Chosen() {
+						m.presentFeedbackCapture(chat.ID, message)
+					}
 				}
 				bubble.ContextMenu(replyMenu)
 			}

@@ -75,6 +75,7 @@ const (
 	EventRunningTasksChanged
 	EventConnectionChanged
 	EventIdentityChanged
+	EventWorkflowFeedbackChanged
 )
 
 // Event says what in the store changed.
@@ -135,7 +136,9 @@ type Store struct {
 	// Providers are the account's provider credentials, the same on every Device.
 	Providers []ProviderCredential
 	// Models are what the CLI's catalog offers, for the Model and Thinking pickers.
-	Models []ProviderModel
+	Models                   []ProviderModel
+	WorkflowProposalCounts   map[string]int
+	WorkflowFeedbackVersions map[string]uint64
 
 	// IsConnected is the CLI answering on localhost (mock: toggled from the Debug menu).
 	IsConnected bool
@@ -195,21 +198,23 @@ type pendingEvent struct {
 // NewStore makes the store. `post` runs a function on the main thread.
 func NewStore(transport Transport, post func(func()), mock bool) *Store {
 	return &Store{
-		IsMock:             mock,
-		transport:          transport,
-		post:               post,
-		IsStarting:         true,
-		AutoReview:         AutoReview{IsEnabled: true},
-		CLI:                CLIState{Connection: "disconnected", Launcher: LauncherStatus{Kind: "idle"}, Starting: true},
-		jobStarts:          map[string]time.Time{},
-		commandStarts:      map[string]time.Time{},
-		loadingOlder:       map[string]bool{},
-		retryNotes:         map[string]string{},
-		thinkingBots:       map[string]string{},
-		attachmentFiles:    map[string]string{},
-		fetchingAttachment: map[string]bool{},
-		mockMcp:            map[string][]McpServer{},
-		isBootstrapping:    true,
+		IsMock:                   mock,
+		WorkflowProposalCounts:   map[string]int{},
+		WorkflowFeedbackVersions: map[string]uint64{},
+		transport:                transport,
+		post:                     post,
+		IsStarting:               true,
+		AutoReview:               AutoReview{IsEnabled: true},
+		CLI:                      CLIState{Connection: "disconnected", Launcher: LauncherStatus{Kind: "idle"}, Starting: true},
+		jobStarts:                map[string]time.Time{},
+		commandStarts:            map[string]time.Time{},
+		loadingOlder:             map[string]bool{},
+		retryNotes:               map[string]string{},
+		thinkingBots:             map[string]string{},
+		attachmentFiles:          map[string]string{},
+		fetchingAttachment:       map[string]bool{},
+		mockMcp:                  map[string][]McpServer{},
+		isBootstrapping:          true,
 	}
 }
 
@@ -370,6 +375,10 @@ func (s *Store) apply(snapshot WireSnapshot) {
 	has := snapshot.HasIdentity
 	s.HasIdentity = &has
 	s.IsIdentityDevice = snapshot.IsIdentityDevice
+	if !has || s.IdentityID != str(snapshot.IdentityID) {
+		s.WorkflowProposalCounts = map[string]int{}
+		s.WorkflowFeedbackVersions = map[string]uint64{}
+	}
 	s.IdentityID = str(snapshot.IdentityID)
 	s.RelayURL = str(snapshot.RelayURL)
 	s.RelayConnected = snapshot.RelayConnected
@@ -455,6 +464,16 @@ func (s *Store) handle(name string, data json.RawMessage) {
 	case "snapshot":
 		if snapshot, ok := decode[WireSnapshot](data); ok {
 			s.apply(snapshot)
+		}
+
+	case "feedback.changed":
+		if payload, ok := decode[struct {
+			BotID        string `json:"bot_id"`
+			PendingCount int    `json:"pending_count"`
+		}](data); ok {
+			s.WorkflowProposalCounts[payload.BotID] = payload.PendingCount
+			s.WorkflowFeedbackVersions[payload.BotID]++
+			s.emit(Event{Kind: EventWorkflowFeedbackChanged, BotID: payload.BotID})
 		}
 
 	case "roster.changed":
@@ -638,6 +657,10 @@ func (s *Store) handle(name string, data json.RawMessage) {
 			return
 		}
 		s.HasIdentity = &payload.HasIdentity
+		if !payload.HasIdentity {
+			s.WorkflowProposalCounts = map[string]int{}
+			s.WorkflowFeedbackVersions = map[string]uint64{}
+		}
 		s.emit(Event{Kind: EventIdentityChanged})
 	}
 }

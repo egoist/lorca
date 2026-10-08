@@ -105,6 +105,7 @@ func (m *mainWindow) inspectorView(c *ui.Context, chatID string) {
 			if single != nil {
 				m.inspectorProfile(c, single)
 				m.inspectorRuntime(c, single, chat)
+				m.inspectorWorkflowFeedback(c, single, chat.ID)
 				m.inspectorMemory(c, single)
 				m.inspectorRoutines(c, single)
 				m.inspectorPlugins(c, single)
@@ -439,6 +440,18 @@ func (m *mainWindow) inspectorRouting(c *ui.Context, members []*model.Bot) {
 			if row.Clicked {
 				m.openDevice(id)
 			}
+		}
+	})
+}
+
+func (m *mainWindow) inspectorWorkflowFeedback(c *ui.Context, bot *model.Bot, chatID string) {
+	section(c, L("Workflow feedback"), sectionCaption, nil, func(k *card) {
+		value := L("Evidence and revisions")
+		if count := store.WorkflowProposalCounts[bot.ID]; count > 0 {
+			value = L("%d waiting for review", count)
+		}
+		if _, row := actionRow(c, k, L("Improvements"), actionRowOptions{Value: value, Action: L("Review…")}); row.Action {
+			m.presentWorkflowFeedback(bot.ID, chatID)
 		}
 	})
 }
