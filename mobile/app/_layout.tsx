@@ -8,7 +8,8 @@ import { engine } from "../src/core/engine";
 import { useStore } from "../src/core/store";
 import { startUpdateChecks } from "../src/core/updates";
 import { useStackScreenOptions } from "../src/ui/navigation";
-import { usePalette } from "../src/ui/theme";
+import { HostPaletteContext } from "@expo/ui/jetpack-compose";
+import { useMaterialPalette, usePalette } from "../src/ui/theme";
 
 export default function RootLayout() {
   const ready = useStore((s) => s.ready);
@@ -16,6 +17,7 @@ export default function RootLayout() {
   const p = usePalette();
   const scheme = useColorScheme();
   const screenOptions = useStackScreenOptions();
+  const material = useMaterialPalette();
 
   useEffect(() => {
     void engine.start();
@@ -66,6 +68,7 @@ export default function RootLayout() {
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
+      <HostPaletteContext.Provider value={material}>
       <KeyboardProvider>
         <StatusBar style={scheme === "dark" ? "light" : "dark"} />
         {/* The native bar takes its light/dark appearance from the navigation theme, not the OS. */}
@@ -90,6 +93,7 @@ export default function RootLayout() {
           </Stack>
         </ThemeProvider>
       </KeyboardProvider>
+      </HostPaletteContext.Provider>
     </GestureHandlerRootView>
   );
 }

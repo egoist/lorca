@@ -192,6 +192,25 @@ export function replaceSnapshot(snapshot: {
   });
 }
 
+/// The value held, when the incoming one says the same: a roster's lists are small, and a new
+/// identity re-renders everything built from them.
+function same<T>(held: T, incoming: T): T {
+  return held === incoming || JSON.stringify(held) === JSON.stringify(incoming) ? held : incoming;
+}
+
+/// Two chats whose fields hold the same values, compared one level deep (`messages` by identity).
+function sameFields(a: Chat, b: Chat): boolean {
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]) as Set<keyof Chat>;
+  for (const key of keys) {
+    const x = a[key];
+    const y = b[key];
+    if (x === y || key === "messages") continue;
+    if (x && y && typeof x === "object" && JSON.stringify(x) === JSON.stringify(y)) continue;
+    return false;
+  }
+  return a.messages === b.messages;
+}
+
 function seenOf(devices: Device[]): Record<string, number> {
   const seen: Record<string, number> = {};
   for (const device of devices) seen[device.id] = device.last_seen;
@@ -206,11 +225,24 @@ export function applyRoster(roster: { devices: Device[]; bots: Bot[]; chats: (Ch
     const incoming = new Set(roster.chats.map((c) => c.id));
     for (const chat of s.chats) if (!incoming.has(chat.id)) removed.push(chat.id);
     const existing = new Map(s.chats.map((c) => [c.id, c]));
-    const chats: Chat[] = roster.chats.map((meta) => {
+    // The core sends the whole roster after every turn, read and pin. What did not change keeps
+    // its identity, so the screens' memoized rows and lists built from it stay as they are.
+    const next: Chat[] = roster.chats.map((meta) => {
       const old = existing.get(meta.id);
-      return { ...meta, is_pinned: meta.is_pinned ?? false, messages: old?.messages ?? [], has_more: old?.has_more, unread_count: meta.unread_count ?? old?.unread_count ?? 0, usage: meta.usage ?? old?.usage };
+      const chat = { ...meta, is_pinned: meta.is_pinned ?? false, messages: old?.messages ?? [], has_more: old?.has_more, unread_count: meta.unread_count ?? old?.unread_count ?? 0, usage: meta.usage ?? old?.usage };
+      return old && sameFields(old, chat) ? old : chat;
     });
-    return { devices: roster.devices, device_seen: seenOf(roster.devices), bots: roster.bots, chats, routines: roster.routines ?? s.routines, auto_review: roster.auto_review ?? s.auto_review, providers: roster.providers ?? s.providers, models: roster.models ?? s.models };
+    const chats = next.length === s.chats.length && next.every((chat, i) => chat === s.chats[i]) ? s.chats : next;
+    return {
+      devices: same(s.devices, roster.devices),
+      device_seen: same(s.device_seen, seenOf(roster.devices)),
+      bots: same(s.bots, roster.bots),
+      chats,
+      routines: same(s.routines, roster.routines ?? s.routines),
+      auto_review: same(s.auto_review, roster.auto_review ?? s.auto_review),
+      providers: same(s.providers, roster.providers ?? s.providers),
+      models: same(s.models, roster.models ?? s.models),
+    };
   });
   return { removed };
 }

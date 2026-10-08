@@ -4,6 +4,7 @@ import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from "expo-rou
 import { useHeaderHeight } from "expo-router/react-navigation";
 import {
   forwardRef,
+  memo,
   useCallback,
   useEffect,
   useMemo,
@@ -58,6 +59,7 @@ import { quoteText } from "../../../src/ui/format";
 import { AnswerSheet } from "../../../src/ui/AnswerSheet";
 import {
   buildRows,
+  shareRows,
   DayRow,
   MarkerRow,
   MessageRow,
@@ -92,8 +94,6 @@ export default function ChatScreen() {
   const insets = useSafeAreaInsets();
   const headerHeight = useHeaderHeight();
   const visibleHeaderHeight = Platform.OS === "android" ? insets.top + ANDROID_BAR_HEIGHT : headerHeight;
-  const androidHeaderHeight = visibleHeaderHeight + ANDROID_FADE_HEIGHT;
-  const androidHeaderStop = visibleHeaderHeight / androidHeaderHeight;
   const chat = useChat(id);
   const bots = useBotMap();
   const workingBotIds = useWorkingBots(id);
@@ -661,10 +661,13 @@ export default function ChatScreen() {
   }, [id]));
 
   // The rows carry words, so a new language builds them again.
-  const rows = useMemo(
-    () => (chat ? buildRows(chat, bots, workingBotIds, isWorking, status) : []),
-    [chat, bots, workingBotIds, isWorking, status, language],
-  );
+  // Rows that did not change keep their identity, and so does the list when none did: FlashList
+  // diffs its data on every new array, and scrolls to the end on one near the bottom.
+  const sharedRows = useRef<Row[]>([]);
+  const rows = useMemo(() => {
+    const next = chat ? buildRows(chat, bots, workingBotIds, isWorking, status) : [];
+    return (sharedRows.current = shareRows(sharedRows.current, next));
+  }, [chat, bots, workingBotIds, isWorking, status, language]);
   rowsRef.current = rows;
   // Keyed on the member list, not the chat, which changes with every streamed piece of a reply.
   const botIds = chat?.bot_ids;
@@ -765,6 +768,9 @@ export default function ChatScreen() {
     });
   }, []);
 
+  const answerCommand = useCallback((message: Message) => setAnsweringId(message.id), []);
+  const stopCommand = useCallback((message: Message) => engine.stopCommand(message.chat_id, message.id), []);
+
   const renderItem = useCallback(
     ({ item }: { item: Row }) => {
       switch (item.type) {
@@ -790,7 +796,7 @@ export default function ChatScreen() {
             <PermissionRow
               row={item}
               isGroup={isGroup}
-              onDecide={(decision) => answerCard(item.message, decision)}
+              onDecide={answerCard}
             />
           );
         case "command":
@@ -798,9 +804,9 @@ export default function ChatScreen() {
             <CommandRow
               row={item}
               isGroup={isGroup}
-              onDecide={(decision) => answerCard(item.message, decision)}
-              onAnswer={() => setAnsweringId(item.message.id)}
-              onStop={() => engine.stopCommand(item.message.chat_id, item.message.id)}
+              onDecide={answerCard}
+              onAnswer={answerCommand}
+              onStop={stopCommand}
             />
           );
         case "working":
@@ -809,7 +815,7 @@ export default function ChatScreen() {
           return <StatusRow text={item.text} />;
       }
     },
-    [answerCard, bots, id, isGroup, openMarker, startReply, revealQuoted, flashId],
+    [answerCard, answerCommand, bots, id, isGroup, openMarker, startReply, revealQuoted, flashId, stopCommand],
   );
 
   if (!chat) {
@@ -825,74 +831,15 @@ export default function ChatScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: p.background }}>
-      <Stack.Screen options={{ title }} />
-      {Platform.OS === "ios" ? (
-        <>
-          <Stack.Title asChild>
-            <Pressable
-              onPress={() => router.push(`/chat-info/${id}`)}
-              style={styles.titleView}
-              accessibilityLabel={t("{title}, info", { title })}
-            >
-              <AvatarCluster bots={members} size={30} working={isWorking} />
-              <Text style={[styles.titleText, { color: p.label }]} numberOfLines={1}>
-                {title}
-              </Text>
-            </Pressable>
-          </Stack.Title>
-          <Stack.Toolbar placement="right">
-            {/* The commands the chat's bots are running, while there are any. */}
-            <Stack.Toolbar.Button hidden={!hasTasks} icon="terminal" accessibilityLabel={t("Running tasks")} onPress={() => router.push(`/tasks/${id}`)} />
-            <Stack.Toolbar.Button icon="ellipsis" accessibilityLabel={t("Chat info")} onPress={() => router.push(`/chat-info/${id}`)} />
-          </Stack.Toolbar>
-        </>
-      ) : (
-        <View pointerEvents="box-none" style={[styles.androidHeader, { height: androidHeaderHeight }]}>
-          <LinearGradient
-            pointerEvents="none"
-            colors={
-              p.dark
-                ? ["rgba(10,10,12,0.97)", "rgba(10,10,12,0.86)", "rgba(10,10,12,0.68)", "rgba(10,10,12,0)"]
-                : ["rgba(255,255,255,0.97)", "rgba(255,255,255,0.86)", "rgba(255,255,255,0.68)", "rgba(255,255,255,0)"]
-            }
-            locations={[0, androidHeaderStop * 0.55, androidHeaderStop, 1]}
-            start={{ x: 0.5, y: 0 }}
-            end={{ x: 0.5, y: 1 }}
-            style={StyleSheet.absoluteFill}
-          />
-          <View style={[styles.androidHeaderControls, { height: visibleHeaderHeight, paddingTop: insets.top }]}>
-            {wide ? (
-              // Beside the sidebar there is nothing to go back to; the title stays centered.
-              <View style={styles.androidHeaderButton} />
-            ) : (
-              <Pressable onPress={() => router.back()} style={styles.androidHeaderButton} accessibilityRole="button" accessibilityLabel={t("Back")}>
-                <Symbol name="arrow.left" size={26} color={p.label} />
-              </Pressable>
-            )}
-            {/* Room to match Running tasks on the other side, so the title stays centered. */}
-            {hasTasks ? <View style={styles.androidHeaderButton} /> : null}
-            <Pressable
-              onPress={() => router.push(`/chat-info/${id}`)}
-              style={styles.androidHeaderTitle}
-              accessibilityRole="button"
-              accessibilityLabel={t("{title}, info", { title })}
-            >
-              <AvatarCluster bots={members} size={30} working={isWorking} />
-              <Text style={[styles.titleText, { color: p.label }]} numberOfLines={1}>
-                {title}
-              </Text>
-            </Pressable>
-            {hasTasks ? (
-              <Pressable onPress={() => router.push(`/tasks/${id}`)} style={styles.androidHeaderButton} accessibilityRole="button" accessibilityLabel={t("Running tasks")}>
-                <Symbol name="terminal" size={24} color={p.label} />
-              </Pressable>
-            ) : null}
-            <Pressable onPress={() => router.push(`/chat-info/${id}`)} style={styles.androidHeaderButton} accessibilityRole="button" accessibilityLabel={t("Chat info")}>
-              <Symbol name="ellipsis" size={24} color={p.label} />
-            </Pressable>
-          </View>
-        </View>
-      )}
+      <ChatHeader
+        id={id}
+        title={title}
+        members={members}
+        working={isWorking}
+        hasTasks={hasTasks}
+        wide={wide}
+        top={insets.top}
+      />
       <View style={{ flex: 1 }}>
         <Animated.View ref={transcriptRef} style={[styles.transcript, revealStyle]}>
         <SoftScrollEdgeView
@@ -1023,6 +970,91 @@ export default function ChatScreen() {
     </View>
   );
 }
+
+/// The chat's bar: the members and title (a tap opens Details), Running tasks while there are any,
+/// and the menu. Memoized, and its options held: the screen renders again with every event in the
+/// chat, and new header options re-apply the native bar.
+const ChatHeader = memo(function ChatHeader({ id, title, members, working, hasTasks, wide, top }: { id: string; title: string; members: Bot[]; working: boolean; hasTasks: boolean; wide: boolean; top: number }) {
+  useLanguage();
+  const router = useRouter();
+  const p = usePalette();
+  const options = useMemo(() => ({ title }), [title]);
+  const visibleHeaderHeight = top + ANDROID_BAR_HEIGHT;
+  const androidHeaderHeight = visibleHeaderHeight + ANDROID_FADE_HEIGHT;
+  const androidHeaderStop = visibleHeaderHeight / androidHeaderHeight;
+  return (
+    <>
+      <Stack.Screen options={options} />
+      {Platform.OS === "ios" ? (
+        <>
+          <Stack.Title asChild>
+            <Pressable
+              onPress={() => router.push(`/chat-info/${id}`)}
+              style={styles.titleView}
+              accessibilityLabel={t("{title}, info", { title })}
+            >
+              <AvatarCluster bots={members} size={30} working={working} />
+              <Text style={[styles.titleText, { color: p.label }]} numberOfLines={1}>
+                {title}
+              </Text>
+            </Pressable>
+          </Stack.Title>
+          <Stack.Toolbar placement="right">
+            {/* The commands the chat's bots are running, while there are any. */}
+            <Stack.Toolbar.Button hidden={!hasTasks} icon="terminal" accessibilityLabel={t("Running tasks")} onPress={() => router.push(`/tasks/${id}`)} />
+            <Stack.Toolbar.Button icon="ellipsis" accessibilityLabel={t("Chat info")} onPress={() => router.push(`/chat-info/${id}`)} />
+          </Stack.Toolbar>
+        </>
+      ) : (
+        <View pointerEvents="box-none" style={[styles.androidHeader, { height: androidHeaderHeight }]}>
+          <LinearGradient
+            pointerEvents="none"
+            colors={
+              p.dark
+                ? ["rgba(10,10,12,0.97)", "rgba(10,10,12,0.86)", "rgba(10,10,12,0.68)", "rgba(10,10,12,0)"]
+                : ["rgba(255,255,255,0.97)", "rgba(255,255,255,0.86)", "rgba(255,255,255,0.68)", "rgba(255,255,255,0)"]
+            }
+            locations={[0, androidHeaderStop * 0.55, androidHeaderStop, 1]}
+            start={{ x: 0.5, y: 0 }}
+            end={{ x: 0.5, y: 1 }}
+            style={StyleSheet.absoluteFill}
+          />
+          <View style={[styles.androidHeaderControls, { height: visibleHeaderHeight, paddingTop: top }]}>
+            {wide ? (
+              // Beside the sidebar there is nothing to go back to; the title stays centered.
+              <View style={styles.androidHeaderButton} />
+            ) : (
+              <Pressable onPress={() => router.back()} style={styles.androidHeaderButton} accessibilityRole="button" accessibilityLabel={t("Back")}>
+                <Symbol name="arrow.left" size={26} color={p.label} />
+              </Pressable>
+            )}
+            {/* Room to match Running tasks on the other side, so the title stays centered. */}
+            {hasTasks ? <View style={styles.androidHeaderButton} /> : null}
+            <Pressable
+              onPress={() => router.push(`/chat-info/${id}`)}
+              style={styles.androidHeaderTitle}
+              accessibilityRole="button"
+              accessibilityLabel={t("{title}, info", { title })}
+            >
+              <AvatarCluster bots={members} size={30} working={working} />
+              <Text style={[styles.titleText, { color: p.label }]} numberOfLines={1}>
+                {title}
+              </Text>
+            </Pressable>
+            {hasTasks ? (
+              <Pressable onPress={() => router.push(`/tasks/${id}`)} style={styles.androidHeaderButton} accessibilityRole="button" accessibilityLabel={t("Running tasks")}>
+                <Symbol name="terminal" size={24} color={p.label} />
+              </Pressable>
+            ) : null}
+            <Pressable onPress={() => router.push(`/chat-info/${id}`)} style={styles.androidHeaderButton} accessibilityRole="button" accessibilityLabel={t("Chat info")}>
+              <Symbol name="ellipsis" size={24} color={p.label} />
+            </Pressable>
+          </View>
+        </View>
+      )}
+    </>
+  );
+});
 
 const styles = StyleSheet.create({
   transcript: { flex: 1 },

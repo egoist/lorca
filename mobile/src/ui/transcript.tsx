@@ -114,7 +114,37 @@ export function buildRows(chat: Chat, bots: Map<string, Bot>, workingBotIds: str
   return rows;
 }
 
-export function DayRow({ at }: { at: number }) {
+/// `next` with every row that says what its predecessor of the same key said replaced by that
+/// predecessor, and `previous` itself when nothing changed. Rows are rebuilt on every event in
+/// the chat, most of which change one row or none (a tool call the transcript does not show).
+export function shareRows(previous: Row[], next: Row[]): Row[] {
+  if (previous.length === 0) return next;
+  const byKey = new Map(previous.map((row) => [row.key, row]));
+  let changed = next.length !== previous.length;
+  const shared = next.map((row, index) => {
+    const old = byKey.get(row.key);
+    const kept = old && sameRow(old, row) ? old : row;
+    if (kept !== previous[index]) changed = true;
+    return kept;
+  });
+  return changed ? shared : previous;
+}
+
+function sameRow(a: Row, b: Row): boolean {
+  const x = a as Record<string, unknown>;
+  const y = b as Record<string, unknown>;
+  for (const key in y) {
+    if (x[key] === y[key]) continue;
+    const left = x[key];
+    const right = y[key];
+    // The working row's bots: the same bots in a new list.
+    if (Array.isArray(left) && Array.isArray(right) && left.length === right.length && left.every((item, i) => item === right[i])) continue;
+    return false;
+  }
+  return Object.keys(x).length === Object.keys(y).length;
+}
+
+export const DayRow = memo(function DayRow({ at }: { at: number }) {
   useLanguage();
   const p = usePalette();
   return (
@@ -122,7 +152,7 @@ export function DayRow({ at }: { at: number }) {
       <Text style={[styles.caption, { color: p.secondaryLabel }]}>{daySeparator(new Date(at * 1000))}</Text>
     </View>
   );
-}
+});
 
 /// Swiping a bubble this far to the left makes the draft a reply to it.
 const REPLY_SWIPE = 56;
@@ -294,7 +324,7 @@ export const MessageRow = memo(function MessageRow({
 
 /// "Messaged ◉ Name" with the message's first line under it; a tap opens the whole message
 /// in a sheet.
-export function MarkerRow({ row, onPress }: { row: Extract<Row, { type: "marker" }>; onPress?: (row: Extract<Row, { type: "marker" }>) => void }) {
+export const MarkerRow = memo(function MarkerRow({ row, onPress }: { row: Extract<Row, { type: "marker" }>; onPress?: (row: Extract<Row, { type: "marker" }>) => void }) {
   useLanguage();
   const p = usePalette();
   const preview = row.tooltip ? firstLine(row.tooltip) : "";
@@ -318,9 +348,9 @@ export function MarkerRow({ row, onPress }: { row: Extract<Row, { type: "marker"
       ) : null}
     </Pressable>
   );
-}
+});
 
-export function NoticeRow({ row }: { row: Extract<Row, { type: "notice" }> }) {
+export const NoticeRow = memo(function NoticeRow({ row }: { row: Extract<Row, { type: "notice" }> }) {
   const p = usePalette();
   return (
     <View style={[styles.centered, { paddingTop: row.groupStart ? 14 : 6 }]}>
@@ -330,7 +360,7 @@ export function NoticeRow({ row }: { row: Extract<Row, { type: "notice" }> }) {
       </View>
     </View>
   );
-}
+});
 
 /// A bot asking before a plugin tool runs, a shell command runs, or a plugin is installed. While
 /// it waits: the question, the call (a shell command in a code block that opens the whole
@@ -338,7 +368,7 @@ export function NoticeRow({ row }: { row: Extract<Row, { type: "notice" }> }) {
 /// adds. A shell command offers Always allow only with a rule. Once answered, the answer and the
 /// call; an Always allow keeps its rule. In a group the card sits in the bubbles' column, the bot's
 /// avatar beside its bottom edge.
-export function PermissionRow({ row, isGroup, onDecide }: { row: Extract<Row, { type: "permission" }>; isGroup: boolean; onDecide: (decision: "allow" | "always" | "deny") => void }) {
+export const PermissionRow = memo(function PermissionRow({ row, isGroup, onDecide }: { row: Extract<Row, { type: "permission" }>; isGroup: boolean; onDecide: (message: Message, decision: "allow" | "always" | "deny") => void }) {
   useLanguage();
   const p = usePalette();
   const [copied, setCopied] = useState(false);
@@ -439,7 +469,7 @@ export function PermissionRow({ row, isGroup, onDecide }: { row: Extract<Row, { 
         {pending ? (
           <View style={{ flexDirection: "row", gap: 8, marginTop: 4 }}>
             {choices.map(([label, decision]) => (
-              <Pressable key={decision} onPress={() => onDecide(decision)} style={({ pressed }) => [styles.permissionButton, { backgroundColor: pressed ? p.separator : p.fill }]}>
+              <Pressable key={decision} onPress={() => onDecide(row.message, decision)} style={({ pressed }) => [styles.permissionButton, { backgroundColor: pressed ? p.separator : p.fill }]}>
                 <Text style={{ color: decision === "deny" ? p.label : p.tint, fontSize: 13, fontWeight: "600" }}>
                   {label}
                 </Text>
@@ -452,7 +482,7 @@ export function PermissionRow({ row, isGroup, onDecide }: { row: Extract<Row, { 
       {shell ? <CommandSheet visible={showCommand} title={title} command={command} onClose={() => setShowCommand(false)} /> : null}
     </View>
   );
-}
+});
 
 /// A command's card, while the command needs the user (`showsCard`). While Auto-review asks to run
 /// it: who wants to, the command on one line in a code block that opens the whole command on tap,
@@ -460,7 +490,7 @@ export function PermissionRow({ row, isGroup, onDecide }: { row: Extract<Row, { 
 /// Stop on the title's line, the command, and its last lines in a code block of their own that
 /// scrolls; at a question, Answer, which opens `AnswerSheet`. In a group the card sits in the
 /// bubbles' column, the bot's avatar beside its bottom edge.
-export function CommandRow({
+export const CommandRow = memo(function CommandRow({
   row,
   isGroup,
   onDecide,
@@ -469,9 +499,9 @@ export function CommandRow({
 }: {
   row: Extract<Row, { type: "command" }>;
   isGroup: boolean;
-  onDecide: (decision: "allow" | "always" | "deny") => void;
-  onAnswer: () => void;
-  onStop: () => Promise<void>;
+  onDecide: (message: Message, decision: "allow" | "always" | "deny") => void;
+  onAnswer: (message: Message) => void;
+  onStop: (message: Message) => Promise<void>;
 }) {
   useLanguage();
   const p = usePalette();
@@ -502,7 +532,7 @@ export function CommandRow({
     setStopping(true);
     setError(null);
     try {
-      await onStop();
+      await onStop(row.message);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -550,7 +580,7 @@ export function CommandRow({
         {run.state === "asking" ? (
           <View style={{ flexDirection: "row", gap: 8, marginTop: 4 }}>
             {choices.map(([label, decision]) => (
-              <Pressable key={decision} onPress={() => onDecide(decision)} style={({ pressed }) => [styles.permissionButton, { backgroundColor: pressed ? p.separator : p.fill }]}>
+              <Pressable key={decision} onPress={() => onDecide(row.message, decision)} style={({ pressed }) => [styles.permissionButton, { backgroundColor: pressed ? p.separator : p.fill }]}>
                 <Text style={{ color: decision === "deny" ? p.label : p.tint, fontSize: 13, fontWeight: "600" }}>{label}</Text>
               </Pressable>
             ))}
@@ -559,7 +589,7 @@ export function CommandRow({
         {run.state === "asking" && run.rule ? <Text style={[styles.ruleNote, { color: p.secondaryLabel }]}>{t("Always allow adds the rule “{rule}”.", { rule: run.rule })}</Text> : null}
         {run.state === "waiting" && takesInput ? (
           <View style={{ flexDirection: "row", marginTop: 4 }}>
-            <Pressable onPress={onAnswer} style={({ pressed }) => [styles.permissionButton, { backgroundColor: pressed ? p.separator : p.fill }]} accessibilityRole="button">
+            <Pressable onPress={() => onAnswer(row.message)} style={({ pressed }) => [styles.permissionButton, { backgroundColor: pressed ? p.separator : p.fill }]} accessibilityRole="button">
               <Text style={{ color: p.tint, fontSize: 13, fontWeight: "600" }}>{t("Answer")}</Text>
             </Pressable>
           </View>
@@ -568,7 +598,7 @@ export function CommandRow({
       <CommandSheet visible={showCommand} title={t("{who}'s command", { who })} command={run.command} onClose={() => setShowCommand(false)} />
     </View>
   );
-}
+});
 
 /// A running command's last lines: a code block like the command's that grows to six lines and
 /// then scrolls, the newest line in view. An edge with more lines past it fades out: Android
@@ -652,18 +682,18 @@ function CommandSheet({ visible, title, command, onClose }: { visible: boolean; 
   );
 }
 
-export function StatusRow({ text }: { text: string }) {
+export const StatusRow = memo(function StatusRow({ text }: { text: string }) {
   const p = usePalette();
   return (
     <View style={[styles.centered, { paddingTop: 10, paddingBottom: 4 }]}>
       <Text style={[styles.caption, { color: p.tertiaryLabel }]}>{text}</Text>
     </View>
   );
-}
+});
 
 /// "Working…" in a DM and "Chef is working…" in a group, or what the one bot at work is doing,
 /// the words shimmering while a turn runs.
-export function WorkingRow({ chatId, bots, isGroup }: { chatId: string; bots: Bot[]; isGroup: boolean }) {
+export const WorkingRow = memo(function WorkingRow({ chatId, bots, isGroup }: { chatId: string; bots: Bot[]; isGroup: boolean }) {
   useLanguage();
   const p = usePalette();
   const activity = useStore((s) => workingActivity(s, chatId));
@@ -682,7 +712,7 @@ export function WorkingRow({ chatId, bots, isGroup }: { chatId: string; bots: Bo
       </ShimmerView>
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   dayRow: { alignItems: "center", paddingTop: 18, paddingBottom: 2 },

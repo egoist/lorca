@@ -1,6 +1,7 @@
 // Colors and type. Each platform uses its own semantic system colors: UIKit colors on iOS and
 // Material 3 dynamic colors on Android, including the user's wallpaper palette on Android 12+.
 
+import { getMaterialColors, type MaterialColors } from "@expo/ui/jetpack-compose";
 import { Color } from "expo-router";
 import { AppState, Platform, PlatformColor, useColorScheme, type ColorValue } from "react-native";
 import type { Accent } from "../core/model";
@@ -36,18 +37,30 @@ const ios = (name: string) => (Platform.OS === "ios" ? PlatformColor(name) : und
 /// each Material dynamic color is a synchronous call into the native side; the same object each
 /// time also keeps memoized work that depends on it from running again.
 const palettes: { light?: Palette; dark?: Palette } = {};
+const materials: { light?: MaterialColors; dark?: MaterialColors } = {};
 // The wallpaper, and with it the dynamic colors, can change while the app is in the background.
 if (Platform.OS === "android")
   AppState.addEventListener("change", (state) => {
     if (state === "active") {
       palettes.light = undefined;
       palettes.dark = undefined;
+      materials.light = undefined;
+      materials.dark = undefined;
     }
   });
 
 export function usePalette(): Palette {
   const dark = useColorScheme() === "dark";
   return (palettes[dark ? "dark" : "light"] ??= makePalette(dark));
+}
+
+/// Android's Material 3 palette for the Compose views (`@expo/ui`), given to them once from the
+/// root: without it each menu asks the native side for the whole palette as it renders.
+export function useMaterialPalette(): MaterialColors | null {
+  const dark = useColorScheme() === "dark";
+  if (Platform.OS !== "android") return null;
+  const scheme = dark ? "dark" : "light";
+  return (materials[scheme] ??= getMaterialColors({ scheme }));
 }
 
 function makePalette(dark: boolean): Palette {
