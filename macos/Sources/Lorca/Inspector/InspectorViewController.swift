@@ -33,6 +33,8 @@ final class InspectorViewController: NSViewController {
     /// again when it changes.
     private var projectContexts: [Chat.ID: ProjectContext] = [:]
     private var projectFetches: Set<Chat.ID> = []
+    /// Groups whose context changed while a fetch was on its way, to ask again once it lands.
+    private var projectChangedMeanwhile: Set<Chat.ID> = []
     /// The group whose Project section shows every entry rather than the first few.
     private var projectShowingAll: Chat.ID?
 
@@ -209,13 +211,17 @@ final class InspectorViewController: NSViewController {
             isBehind = true
             return
         }
-        guard projectFetches.insert(chatID).inserted else { return }
+        guard projectFetches.insert(chatID).inserted else {
+            projectChangedMeanwhile.insert(chatID)
+            return
+        }
         Task { [weak self] in
             let context = try? await self?.store.projectContext(chatID)
             guard let self else { return }
             self.projectFetches.remove(chatID)
             if let context { self.projectContexts[chatID] = context }
             self.reload()
+            if self.projectChangedMeanwhile.remove(chatID) != nil { self.refreshProject(of: chatID) }
         }
     }
 
