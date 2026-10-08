@@ -1380,12 +1380,11 @@ type MessageState struct {
 }
 
 type Message struct {
-	Notification NotificationTag
-	ID           string
-	Author       Author
-	Body         Body
-	State        MessageState
-	CreatedAt    time.Time
+	ID        string
+	Author    Author
+	Body      Body
+	State     MessageState
+	CreatedAt time.Time
 	// Attachments are the files sent with a text body; other bodies carry none.
 	Attachments []Attachment
 	// ReplyTo is the message the user answers with this one, quoted.
@@ -1393,6 +1392,8 @@ type Message struct {
 	// Queued is a message of the user's the bot's turn holds for its next step; Send now has it
 	// read now.
 	Queued bool
+	// Notification is how a coordinator's brief, an urgent report, or a quiet check alerts.
+	Notification NotificationTag
 }
 
 // ReplyQuote is a message quoted by the user's reply: who wrote it and how it opens, as the CLI

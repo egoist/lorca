@@ -57,7 +57,7 @@ var commandTable = []command{
 	{id: "quit", title: func() string { return L("Quit %@", appName()) }, accelerator: "CmdOrCtrl+Q", role: mygo.RoleQuit},
 	{id: "find", title: func() string { return L("Find…") }, accelerator: "CmdOrCtrl+F", opensMain: true},
 	{id: "palette", title: func() string { return L("Command Palette…") }, accelerator: "CmdOrCtrl+K", opensMain: true},
-	{id: "attention", title: func() string { return L("Attention…") }, accelerator: "CmdOrCtrl+Shift+A", opensMain: true, enabled: func() bool { return store.HasIdentity != nil && *store.HasIdentity }},
+	{id: "attention", title: func() string { return L("Attention") }, accelerator: "CmdOrCtrl+Shift+A", opensMain: true, enabled: func() bool { return app.main == nil || !app.main.isSettings() }},
 	{id: "toggleSidebar", title: func() string { return L("Toggle Sidebar") }, accelerator: "CmdOrCtrl+B"},
 	{id: "toggleInspector", title: func() string { return L("Toggle Inspector") }, accelerator: "CmdOrCtrl+Shift+B"},
 	{id: "scrollToLatest", title: func() string { return L("Scroll to Latest") }, accelerator: "CmdOrCtrl+J", enabled: chatSelected},

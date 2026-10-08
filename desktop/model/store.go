@@ -132,9 +132,9 @@ type Store struct {
 	// Routines are every bot's routines, from the roster.
 	Routines []*Routine
 	// AutoReview is shared through the roster.
-	AutoReview          AutoReview
-	Attention           AttentionView
-	attentionGeneration uint64
+	AutoReview AutoReview
+	// Attention is what waits on the user across chats, kept by the bots (attention.changed).
+	Attention AttentionView
 	// Providers are the account's provider credentials, the same on every Device.
 	Providers []ProviderCredential
 	// Models are what the CLI's catalog offers, for the Model and Thinking pickers.
@@ -415,7 +415,6 @@ func (s *Store) apply(snapshot WireSnapshot) {
 	if snapshot.Attention != nil {
 		s.Attention = *snapshot.Attention
 	}
-	s.attentionGeneration++
 	s.Providers = ToProviders(snapshot.Providers)
 	s.Models = ToModels(snapshot.Models)
 	s.runningJobs = nil
@@ -2494,7 +2493,6 @@ func (s *Store) ResetMockData() {
 	s.Routines = mockRoutines()
 	s.AutoReview = mockAutoReview()
 	s.Attention = DefaultAttention()
-	s.attentionGeneration++
 	s.Providers = mockProviders()
 	s.Models = mockModels()
 	s.sortChats()

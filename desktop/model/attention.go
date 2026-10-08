@@ -16,35 +16,27 @@ type AttentionSource struct {
 }
 type AttentionItem struct {
 	ID               string            `json:"id"`
-	Key              string            `json:"key"`
 	Category         string            `json:"category"`
 	Title            string            `json:"title"`
 	Summary          string            `json:"summary"`
 	NextAction       string            `json:"next_action"`
 	CoordinatorBotID string            `json:"coordinator_bot_id"`
 	Sources          []AttentionSource `json:"sources"`
-	Reporters        []string          `json:"reporters"`
 	Urgent           bool              `json:"urgent"`
-	Resolved         bool              `json:"resolved"`
 	Revision         AttentionRevision `json:"revision"`
-	UpdatedAt        float64           `json:"updated_at"`
 }
 type AttentionBrief struct {
-	CoordinatorBotID string            `json:"coordinator_bot_id"`
-	ChatID           string            `json:"chat_id"`
-	Decisions        []string          `json:"decisions"`
-	Changes          []string          `json:"changes"`
-	NextAction       string            `json:"next_action"`
-	ItemIDs          []string          `json:"item_ids"`
-	MessageID        string            `json:"message_id"`
-	Revision         AttentionRevision `json:"revision"`
-	UpdatedAt        float64           `json:"updated_at"`
+	CoordinatorBotID string   `json:"coordinator_bot_id"`
+	ChatID           string   `json:"chat_id"`
+	Decisions        []string `json:"decisions"`
+	Changes          []string `json:"changes"`
+	NextAction       string   `json:"next_action"`
+	UpdatedAt        float64  `json:"updated_at"`
 }
 type AttentionPreferences struct {
-	Summaries               bool              `json:"summaries"`
-	UrgentDirect            bool              `json:"urgent_direct"`
-	DefaultCoordinatorBotID *string           `json:"default_coordinator_bot_id"`
-	Coordinators            map[string]string `json:"coordinators"`
+	Summaries               bool    `json:"summaries"`
+	UrgentDirect            bool    `json:"urgent_direct"`
+	DefaultCoordinatorBotID *string `json:"default_coordinator_bot_id"`
 }
 type AttentionView struct {
 	Items       []AttentionItem      `json:"items"`
@@ -53,36 +45,16 @@ type AttentionView struct {
 }
 
 func DefaultAttention() AttentionView {
-	return AttentionView{Preferences: AttentionPreferences{Summaries: true, UrgentDirect: true, Coordinators: map[string]string{}}}
+	return AttentionView{Preferences: AttentionPreferences{Summaries: true, UrgentDirect: true}}
 }
 func (s *Store) applyAttention(view AttentionView) {
 	s.Attention = view
-	s.attentionGeneration++
 	s.emit(Event{Kind: EventAttentionChanged})
 }
 
-// RefreshAttention ignores a read that became stale while a newer projection or account
-// arrived. Both the CLI event and reply use the store's ordered main-thread queue.
-func (s *Store) RefreshAttention(done func(error)) {
-	if s.IsMock {
-		if done != nil {
-			done(nil)
-		}
-		return
-	}
-	generation, identity := s.attentionGeneration, s.IdentityID
-	Async(s, func() (AttentionView, error) { return call[AttentionView](s, "attention.list", nil) }, func(view AttentionView, err error) {
-		if err == nil && identity == s.IdentityID && generation == s.attentionGeneration {
-			s.applyAttention(view)
-		}
-		if done != nil {
-			done(err)
-		}
-	})
-}
-
-// ResolveAttention changes only the projection; it does not approve a review or complete
-// a task. The expected revision binds the user's action to the item they inspected.
+// ResolveAttention takes an item off the list. A coordinator resolves its items itself; this is
+// the user saying it is done, and leaves the task or review it links to as it is. The revision
+// binds the action to the item the user saw.
 func (s *Store) ResolveAttention(id string, revision AttentionRevision, done func(error)) {
 	if s.IsMock {
 		s.Attention.Items = slices.DeleteFunc(slices.Clone(s.Attention.Items), func(item AttentionItem) bool { return item.ID == id })
@@ -100,24 +72,28 @@ func (s *Store) ResolveAttention(id string, revision AttentionRevision, done fun
 	})
 }
 
-// SetAttentionPreferences writes the three visible preferences. Per-chat coordinator
-// bindings remain with the CLI; this form does not replace that map.
-func (s *Store) SetAttentionPreferences(summaries, urgent bool, coordinatorID string, done func(error)) {
-	var coordinator *string
-	if coordinatorID != "" {
-		coordinator = &coordinatorID
-	}
+// SetAttentionPreference writes one of the account's preferences: "summaries", "urgent_direct",
+// or "default_coordinator_bot_id" (a bot's id, or nil for each chat's own coordinator).
+func (s *Store) SetAttentionPreference(key string, value any, done func(error)) {
 	if s.IsMock {
-		s.Attention.Preferences.Summaries = summaries
-		s.Attention.Preferences.UrgentDirect = urgent
-		s.Attention.Preferences.DefaultCoordinatorBotID = coordinator
+		switch key {
+		case "summaries":
+			s.Attention.Preferences.Summaries, _ = value.(bool)
+		case "urgent_direct":
+			s.Attention.Preferences.UrgentDirect, _ = value.(bool)
+		default:
+			s.Attention.Preferences.DefaultCoordinatorBotID = nil
+			if id, ok := value.(string); ok {
+				s.Attention.Preferences.DefaultCoordinatorBotID = &id
+			}
+		}
 		s.applyAttention(s.Attention)
 		if done != nil {
 			done(nil)
 		}
 		return
 	}
-	params := map[string]any{"summaries": summaries, "urgent_direct": urgent, "default_coordinator_bot_id": coordinator}
+	params := map[string]any{key: value}
 	Async(s, func() (struct{}, error) { return struct{}{}, s.request("attention.preferences", params, nil) }, func(_ struct{}, err error) {
 		if done != nil {
 			done(err)

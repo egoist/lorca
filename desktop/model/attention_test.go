@@ -17,7 +17,7 @@ func (t attentionTransport) Request(method string, params any) (json.RawMessage,
 }
 func (t attentionTransport) Reconnect() {}
 func attentionProjectionJSON(title string) json.RawMessage {
-	return json.RawMessage(`{"items":[{"id":"item","category":"review","title":"` + title + `","summary":"Decide scope","next_action":"Review the draft","coordinator_bot_id":"bot","sources":[{"chat_id":"chat","task_id":"task-00000076-0000-4000-8000-000000000001","review_id":"review-1"}],"revision":{"counter":18446744073709551615,"device_id":"runner"}}],"briefs":[],"preferences":{"summaries":false,"urgent_direct":true,"default_coordinator_bot_id":"bot","coordinators":{}}}`)
+	return json.RawMessage(`{"items":[{"id":"item","category":"review","title":"` + title + `","summary":"Decide scope","next_action":"Review the draft","coordinator_bot_id":"bot","sources":[{"chat_id":"chat","task_id":"task-00000076-0000-4000-8000-000000000001","review_id":"review-1"}],"revision":{"counter":18446744073709551615,"device_id":"runner"}}],"briefs":[],"preferences":{"summaries":false,"urgent_direct":true,"default_coordinator_bot_id":"bot"}}`)
 }
 func TestAttentionWireSnapshotEventsAndIdentity(t *testing.T) {
 	s := NewStore(nil, func(fn func()) { fn() }, false)
@@ -76,31 +76,10 @@ func TestAttentionActionsUseCLIRevisionsAndOrderedMainReplies(t *testing.T) {
 	if !completed {
 		t.Fatal("queued callback missing")
 	}
-	s.SetAttentionPreferences(false, true, "", nil)
-	call := <-calls
-	if !strings.Contains(call, `"default_coordinator_bot_id":null`) || strings.Contains(call, `"coordinators"`) {
-		t.Fatalf("prefs replace chat bindings: %s", call)
+	// One preference at a time, so a change on another Device to another one stays.
+	s.SetAttentionPreference("default_coordinator_bot_id", nil, nil)
+	if call := <-calls; call != `attention.preferences {"default_coordinator_bot_id":null}` {
+		t.Fatal(call)
 	}
 	(<-posted)()
-}
-func TestAttentionRefreshDoesNotOverwriteNewerEventOrAccount(t *testing.T) {
-	posted := make(chan func(), 4)
-	s := NewStore(attentionTransport{func(string, any) (json.RawMessage, error) { return attentionProjectionJSON("Old read"), nil }}, func(fn func()) { posted <- fn }, false)
-	s.isBootstrapping = false
-	s.IdentityID = "account-a"
-	s.RefreshAttention(nil)
-	fn := <-posted
-	s.HandleEvent("attention.changed", attentionProjectionJSON("New event"))
-	fn()
-	if s.Attention.Items[0].Title != "New event" {
-		t.Fatal("stale read replaced newer event")
-	}
-	s.RefreshAttention(nil)
-	fn = <-posted
-	s.IdentityID = "account-b"
-	s.applyAttention(DefaultAttention())
-	fn()
-	if len(s.Attention.Items) != 0 {
-		t.Fatal("old account read restored attention")
-	}
 }

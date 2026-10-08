@@ -162,17 +162,17 @@ type WireBody struct {
 }
 
 type WireMessage struct {
-	Notification NotificationTag `json:"notification"`
-	ID           string          `json:"id"`
-	ChatID       string          `json:"chat_id"`
-	Author       WireAuthor      `json:"author"`
-	Body         WireBody        `json:"body"`
-	State        struct {
+	ID     string     `json:"id"`
+	ChatID string     `json:"chat_id"`
+	Author WireAuthor `json:"author"`
+	Body   WireBody   `json:"body"`
+	State  struct {
 		Kind  string  `json:"kind"`
 		Error *string `json:"error"`
 	} `json:"state"`
-	CreatedAt float64 `json:"created_at"`
-	Queued    *bool   `json:"queued"`
+	CreatedAt    float64         `json:"created_at"`
+	Queued       *bool           `json:"queued"`
+	Notification NotificationTag `json:"notification"`
 }
 
 type WireChatUsage struct {
@@ -648,11 +648,11 @@ func toAuthor(wire WireAuthor) Author {
 
 func ToMessage(wire WireMessage) *Message {
 	message := &Message{
-		Notification: wire.Notification,
 		ID:           wire.ID,
 		Author:       toAuthor(wire.Author),
 		CreatedAt:    seconds(wire.CreatedAt),
 		Queued:       flag(wire.Queued),
+		Notification: wire.Notification,
 	}
 	body := wire.Body
 	switch body.Kind {
