@@ -162,11 +162,12 @@ type WireBody struct {
 }
 
 type WireMessage struct {
-	ID     string     `json:"id"`
-	ChatID string     `json:"chat_id"`
-	Author WireAuthor `json:"author"`
-	Body   WireBody   `json:"body"`
-	State  struct {
+	Notification NotificationTag `json:"notification"`
+	ID           string          `json:"id"`
+	ChatID       string          `json:"chat_id"`
+	Author       WireAuthor      `json:"author"`
+	Body         WireBody        `json:"body"`
+	State        struct {
 		Kind  string  `json:"kind"`
 		Error *string `json:"error"`
 	} `json:"state"`
@@ -272,6 +273,7 @@ type WireModel struct {
 }
 
 type WireSnapshot struct {
+	Attention           *AttentionView    `json:"attention"`
 	Version             string            `json:"version"`
 	HasIdentity         bool              `json:"has_identity"`
 	IsIdentityDevice    bool              `json:"is_identity_device"`
@@ -646,10 +648,11 @@ func toAuthor(wire WireAuthor) Author {
 
 func ToMessage(wire WireMessage) *Message {
 	message := &Message{
-		ID:        wire.ID,
-		Author:    toAuthor(wire.Author),
-		CreatedAt: seconds(wire.CreatedAt),
-		Queued:    flag(wire.Queued),
+		Notification: wire.Notification,
+		ID:           wire.ID,
+		Author:       toAuthor(wire.Author),
+		CreatedAt:    seconds(wire.CreatedAt),
+		Queued:       flag(wire.Queued),
 	}
 	body := wire.Body
 	switch body.Kind {

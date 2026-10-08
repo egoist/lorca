@@ -347,6 +347,8 @@ func (m *mainWindow) run(id string) {
 		}
 	case "palette":
 		m.palette.toggle()
+	case "attention":
+		m.presentAttention()
 	case "toggleSidebar":
 		m.toggleSidebar()
 	case "toggleInspector":
@@ -790,6 +792,9 @@ func (m *mainWindow) contentHeader(c *ui.Context, chatID, title, subtitle string
 			return
 		}
 		m.runningTasksButton(c, chatID)
+		if hoverButton(c.Key("attention-button"), hoverButtonOptions{Symbol: "tray.full.fill", Tooltip: L("Attention")}).Clicked() {
+			m.presentAttention()
+		}
 		if rightmost {
 			m.inspectorToggle(c)
 		}

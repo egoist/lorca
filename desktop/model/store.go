@@ -75,6 +75,7 @@ const (
 	EventRunningTasksChanged
 	EventConnectionChanged
 	EventIdentityChanged
+	EventAttentionChanged
 )
 
 // Event says what in the store changed.
@@ -131,7 +132,9 @@ type Store struct {
 	// Routines are every bot's routines, from the roster.
 	Routines []*Routine
 	// AutoReview is shared through the roster.
-	AutoReview AutoReview
+	AutoReview          AutoReview
+	Attention           AttentionView
+	attentionGeneration uint64
 	// Providers are the account's provider credentials, the same on every Device.
 	Providers []ProviderCredential
 	// Models are what the CLI's catalog offers, for the Model and Thinking pickers.
@@ -200,6 +203,7 @@ func NewStore(transport Transport, post func(func()), mock bool) *Store {
 		post:               post,
 		IsStarting:         true,
 		AutoReview:         AutoReview{IsEnabled: true},
+		Attention:          DefaultAttention(),
 		CLI:                CLIState{Connection: "disconnected", Launcher: LauncherStatus{Kind: "idle"}, Starting: true},
 		jobStarts:          map[string]time.Time{},
 		commandStarts:      map[string]time.Time{},
@@ -407,6 +411,11 @@ func (s *Store) apply(snapshot WireSnapshot) {
 		s.Routines = append(s.Routines, ToRoutine(routine))
 	}
 	s.AutoReview = ToAutoReview(snapshot.AutoReview)
+	s.Attention = DefaultAttention()
+	if snapshot.Attention != nil {
+		s.Attention = *snapshot.Attention
+	}
+	s.attentionGeneration++
 	s.Providers = ToProviders(snapshot.Providers)
 	s.Models = ToModels(snapshot.Models)
 	s.runningJobs = nil
@@ -452,6 +461,10 @@ func decode[T any](data json.RawMessage) (T, bool) {
 
 func (s *Store) handle(name string, data json.RawMessage) {
 	switch name {
+	case "attention.changed":
+		if view, ok := decode[AttentionView](data); ok {
+			s.applyAttention(view)
+		}
 	case "snapshot":
 		if snapshot, ok := decode[WireSnapshot](data); ok {
 			s.apply(snapshot)
@@ -638,6 +651,9 @@ func (s *Store) handle(name string, data json.RawMessage) {
 			return
 		}
 		s.HasIdentity = &payload.HasIdentity
+		if !payload.HasIdentity {
+			s.applyAttention(DefaultAttention())
+		}
 		s.emit(Event{Kind: EventIdentityChanged})
 	}
 }
@@ -2477,6 +2493,8 @@ func (s *Store) ResetMockData() {
 	s.Chats = mockChats()
 	s.Routines = mockRoutines()
 	s.AutoReview = mockAutoReview()
+	s.Attention = DefaultAttention()
+	s.attentionGeneration++
 	s.Providers = mockProviders()
 	s.Models = mockModels()
 	s.sortChats()
