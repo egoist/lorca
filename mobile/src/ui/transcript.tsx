@@ -5,13 +5,14 @@
 // command, which shows as its card while it needs the user.
 
 import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { Linking, Modal, Platform, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Linking, Platform, ScrollView, StyleSheet, Text, View } from "react-native";
 import { Pressable } from "./Pressable";
 import * as Clipboard from "expo-clipboard";
 import { haptic } from "./haptics";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withSequence, withSpring, withTiming } from "react-native-reanimated";
 import { LinearGradient } from "expo-linear-gradient";
+import { useRouter } from "expo-router";
 import { ShimmerView } from "../../modules/lorca-core/ShimmerView";
 import { canBeQuoted, isLive, isSentMessage, showsCard, type Author, type Body, type Bot, type Chat, type CommandRun, type Message } from "../core/model";
 import { engine } from "../core/engine";
@@ -376,7 +377,7 @@ export const PermissionRow = memo(function PermissionRow({ row, isGroup, onDecid
   useLanguage();
   const p = usePalette();
   const [copied, setCopied] = useState(false);
-  const [showCommand, setShowCommand] = useState(false);
+  const router = useRouter();
   const showsAvatar = isGroup && row.message.author.kind === "bot";
   const pending = row.body.decision === "pending";
   const connect = row.body.tool === "connect";
@@ -429,7 +430,7 @@ export const PermissionRow = memo(function PermissionRow({ row, isGroup, onDecid
         </View>
         {pending && shell ? (
           <Pressable
-            onPress={() => setShowCommand(true)}
+            onPress={() => router.push({ pathname: "/command/[id]", params: { id: row.message.id, chat: row.message.chat_id, title } })}
             style={({ pressed }) => [styles.command, { backgroundColor: p.code, opacity: pressed ? 0.6 : 1 }]}
             accessibilityRole="button"
             accessibilityLabel={t("Show the full command")}
@@ -483,7 +484,6 @@ export const PermissionRow = memo(function PermissionRow({ row, isGroup, onDecid
         ) : null}
         {ruleNote ? <Text style={[styles.ruleNote, { color: p.secondaryLabel }]}>{ruleNote}</Text> : null}
       </View>
-      {shell ? <CommandSheet visible={showCommand} title={title} command={command} onClose={() => setShowCommand(false)} /> : null}
     </View>
   );
 });
@@ -511,7 +511,7 @@ export const CommandRow = memo(function CommandRow({
   const p = usePalette();
   const [stopping, setStopping] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [showCommand, setShowCommand] = useState(false);
+  const router = useRouter();
   const { run } = row;
   const showsAvatar = isGroup && row.message.author.kind === "bot";
   const who = row.bot?.name ?? t("The bot");
@@ -569,7 +569,7 @@ export const CommandRow = memo(function CommandRow({
           ) : null}
         </View>
         <Pressable
-          onPress={() => setShowCommand(true)}
+          onPress={() => router.push({ pathname: "/command/[id]", params: { id: row.message.id, chat: row.message.chat_id, title: t("{who}'s command", { who }) } })}
           style={({ pressed }) => [styles.command, { backgroundColor: p.code, opacity: pressed ? 0.6 : 1 }]}
           accessibilityRole="button"
           accessibilityLabel={t("Show the full command")}
@@ -599,7 +599,6 @@ export const CommandRow = memo(function CommandRow({
           </View>
         ) : null}
       </View>
-      <CommandSheet visible={showCommand} title={t("{who}'s command", { who })} command={run.command} onClose={() => setShowCommand(false)} />
     </View>
   );
 });
@@ -651,41 +650,6 @@ function OutputBlock({ text }: { text: string }) {
 }
 
 /// The whole command a permission card asks about or a command's card runs, to read or copy.
-function CommandSheet({ visible, title, command, onClose }: { visible: boolean; title: string; command: string; onClose: () => void }) {
-  useLanguage();
-  const p = usePalette();
-  const [copied, setCopied] = useState(false);
-  useEffect(() => {
-    if (!copied) return;
-    const timer = setTimeout(() => setCopied(false), 1500);
-    return () => clearTimeout(timer);
-  }, [copied]);
-  return (
-    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      <View style={[styles.sheet, { backgroundColor: p.groupedBackground }]}>
-        <Text style={[styles.sheetTitle, { color: p.label }]}>{title}</Text>
-        <ScrollView style={{ flex: 1 }} contentContainerStyle={[styles.sheetCommand, { backgroundColor: p.code }]}>
-          <Text selectable style={[styles.commandText, { color: p.label }]}>{command}</Text>
-        </ScrollView>
-        <View style={styles.sheetButtons}>
-          <Pressable
-            onPress={async () => {
-              await Clipboard.setStringAsync(command);
-              setCopied(true);
-            }}
-            style={({ pressed }) => [styles.permissionButton, { backgroundColor: pressed ? p.separator : p.fill }]}
-          >
-            <Text style={{ color: copied ? p.green : p.tint, fontSize: 15, fontWeight: "600" }}>{copied ? t("Copied") : t("Copy")}</Text>
-          </Pressable>
-          <Pressable onPress={onClose} style={({ pressed }) => [styles.permissionButton, { backgroundColor: pressed ? p.separator : p.fill }]}>
-            <Text style={{ color: p.tint, fontSize: 15, fontWeight: "600" }}>{t("Done")}</Text>
-          </Pressable>
-        </View>
-      </View>
-    </Modal>
-  );
-}
-
 export const StatusRow = memo(function StatusRow({ text }: { text: string }) {
   const p = usePalette();
   return (
@@ -755,10 +719,6 @@ const styles = StyleSheet.create({
   outputFade: { position: "absolute", left: 0, right: 0, height: 16 },
   reasonText: { fontSize: 13, lineHeight: 18 },
   ruleNote: { fontSize: 12, lineHeight: 16 },
-  sheet: { flex: 1, paddingHorizontal: 20, paddingTop: 20, gap: 14 },
-  sheetTitle: { fontSize: 17, fontWeight: "600" },
-  sheetCommand: { borderRadius: 10, padding: 12 },
-  sheetButtons: { flexDirection: "row", justifyContent: "space-between", paddingBottom: 12 },
   noticeIcon: { marginTop: (NOTICE_LINE - NOTICE_ICON) / 2 },
   noticeText: { fontSize: 12.5, lineHeight: NOTICE_LINE, flexShrink: 1 },
   working: { flexShrink: 1 },
