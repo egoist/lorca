@@ -35,7 +35,7 @@ The macOS app's DM inspector has a Routines section: a row per routine (clock, p
 
 ## Memory
 
-A [private bot template import](templates.md#recipient-setup) creates an independent bot and DM, seeds only the selected curated memory, and creates routines paused. Import runs no model turn or routine check; the user reviews and resumes routines from the inspector.
+A bot made from a [template](templates.md#import) gets a DM, the template's memories as its `MEMORY.md`, and its routines paused, and runs no turn or routine check; the user turns routines on from the inspector.
 
 Every bot keeps its own long-term memory on its Runner, in Grok Bot's shape of a curated profile over append-only logs, as plain markdown under `~/.lorca/workspaces/<bot id>/` (keyed by id, so a rename or a changed working directory never moves it; `crates/cli/src/memory.rs`):
 
