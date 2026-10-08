@@ -590,7 +590,7 @@ impl LoopHooks for TurnHooks {
     async fn before_tool_call(&self, ctx: BeforeToolCallContext<'_>) -> Option<BeforeToolCallResult> {
         if self.unattended && self.trigger.routine.as_ref().is_some_and(|r| r.feedback_authorization_prompt.is_some())
             && crate::feedback::changes_controls(&ctx.tool_call.name, &ctx.tool_call.arguments) {
-            return Some(BeforeToolCallResult { block: true, reason: Some("Workflow feedback cannot authorize routine, permission or budget changes. Stage a proposal or ask the user in chat.".into()), args: None, terminate: false });
+            return Some(BeforeToolCallResult { block: true, reason: Some("Workflow feedback cannot authorize routine or bot changes. Stage a proposal or ask the user in chat.".into()), args: None, terminate: false });
         }
         if let Some(refused) = crate::plugins::mcp::review_call(&self.app, &self.plugin_tools, &self.chat_id, &self.trigger, &self.bot, self.unattended, &ctx).await {
             return Some(refused);
