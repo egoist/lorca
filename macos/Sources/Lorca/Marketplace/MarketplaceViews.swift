@@ -342,11 +342,13 @@ extension MarketplaceViewController {
             label.setContentCompressionResistancePriority(.required, for: .horizontal)
             return Build.stack([check, label], orientation: .horizontal, spacing: 5)
         case .needsAuth, .insufficientAccess:
-            return ActionButton(title: L("Connect")) { [weak self] in self?.manage(plugin.id) }
+            return ActionButton(title: L("Connect")) { [weak self] in self?.manage(installed.id) }
         case .needsSetup:
-            return ActionButton(title: L("Set Up")) { [weak self] in self?.manage(plugin.id) }
+            return ActionButton(title: L("Set Up")) { [weak self] in self?.manage(installed.id) }
         case .connecting, .error, .unknown:
-            let label = Build.label(installed.detail, font: .systemFont(ofSize: 12), color: installed.stateColor)
+            // What went wrong, in full, is the tooltip and in the plugin's sheet.
+            let label = Build.label(installed.shortStatus, font: .systemFont(ofSize: 12.5), color: installed.shortStatusColor)
+            label.toolTip = installed.detail
             label.setContentCompressionResistancePriority(.required, for: .horizontal)
             return label
         }

@@ -820,13 +820,12 @@
 "Have the bot read this now. A command it is running moves to the background." = "让智能体现在就读到这条消息。它正在运行的命令会转到后台。";
 "Waiting for the bot to finish its step." = "正在等智能体完成当前这一步。";
 
-"Account name" = "账号名称";
-"Accounts" = "账号";
-"Accounts on %@. Choose a name such as Work or Personal." = "%@ 上的账号。请选择工作或个人等名称。";
+"Accounts on %@" = "%@ 上的账号";
 "Add Account…" = "添加账号…";
-"Add an account to %@" = "为 %@ 添加账号";
-"Couldn't add the account" = "无法添加账号";
-"Manage Accounts…" = "管理账号…";
-"Name this account so your bots can choose it explicitly." = "为此账号命名，让机器人能够明确选择它。";
-"No accounts connected" = "尚未连接账号";
-"Work or Personal" = "工作或个人";
+"New %@ Account" = "添加 %@ 账号";
+"A name such as Work or Personal tells your bots which account to use." = "起个名字，比如“工作”或“个人”，智能体就知道该用哪个账号。";
+"Work" = "工作";
+"Couldn't rename it" = "无法重命名";
+"Needs more access" = "需要更多权限";
+"Needs setup" = "需要设置";
+"Can't connect" = "无法连接";

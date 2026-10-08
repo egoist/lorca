@@ -29,8 +29,8 @@ func (s *Store) mockIntegrationState(pluginID, runnerID string, state PluginStat
 	return false
 }
 
-// PluginAccounts lists only the selected service's installed instances on this Runner.
-func (s *Store) PluginAccounts(serviceID, runnerID string) []InstalledPlugin {
+// accounts are a service's named accounts on a Runner.
+func (s *Store) accounts(serviceID, runnerID string) []InstalledPlugin {
 	var accounts []InstalledPlugin
 	if runner := s.Device(runnerID); runner != nil {
 		for _, plugin := range runner.Plugins {
@@ -55,22 +55,24 @@ func (s *Store) rememberPlugin(runnerID string, plugin InstalledPlugin) {
 	}
 }
 
-// InstallPluginAccount creates a named account through the existing Runner plugin API.
-// Tokens and client settings are held by the CLI, never by this UI model.
+// InstallPluginAccount adds a named account of a marketplace service on a Runner. A blank name
+// becomes the next free "Account 1". Tokens and client settings stay with the Runner's CLI.
 func (s *Store) InstallPluginAccount(serviceID, runnerID, accountName string, done func(InstalledPlugin, error)) {
 	params := map[string]any{"runner_id": runnerID, "plugin_id": serviceID, "account_name": accountName}
 	if s.IsMock {
 		s.post(func() {
-			name := strings.TrimSpace(accountName)
-			if name == "" {
-				done(InstalledPlugin{}, fmt.Errorf("Give the account a name."))
-				return
+			taken := func(name string) bool {
+				return slices.ContainsFunc(s.accounts(serviceID, runnerID), func(account InstalledPlugin) bool { return strings.EqualFold(account.AccountName, name) })
 			}
-			for _, account := range s.PluginAccounts(serviceID, runnerID) {
-				if strings.EqualFold(account.AccountName, name) {
-					done(InstalledPlugin{}, fmt.Errorf("An account with that name already exists."))
-					return
+			name := strings.TrimSpace(accountName)
+			for n := 1; name == ""; n++ {
+				if candidate := fmt.Sprintf("Account %d", n); !taken(candidate) {
+					name = candidate
 				}
+			}
+			if taken(name) {
+				done(InstalledPlugin{}, fmt.Errorf("There is already an account named %s.", name))
+				return
 			}
 			var id [16]byte
 			if _, err := rand.Read(id[:]); err != nil {
@@ -101,7 +103,7 @@ func (s *Store) InstallPluginAccount(serviceID, runnerID, accountName string, do
 	})
 }
 
-// RenamePluginAccount retains the instance id used by tools, permissions, and quotas.
+// RenamePluginAccount renames a named account; its id, which tools and rules use, stays.
 func (s *Store) RenamePluginAccount(pluginID, runnerID, accountName string, done func(InstalledPlugin, error)) {
 	params := map[string]any{"runner_id": runnerID, "plugin_id": pluginID, "account_name": accountName}
 	if s.IsMock {
@@ -114,9 +116,9 @@ func (s *Store) RenamePluginAccount(pluginID, runnerID, accountName string, done
 			}
 			for _, plugin := range runner.Plugins {
 				if plugin.ID == pluginID && plugin.ServiceID != "" {
-					for _, other := range s.PluginAccounts(plugin.ServiceID, runnerID) {
+					for _, other := range s.accounts(plugin.ServiceID, runnerID) {
 						if other.ID != pluginID && strings.EqualFold(other.AccountName, name) {
-							done(InstalledPlugin{}, fmt.Errorf("An account with that name already exists."))
+							done(InstalledPlugin{}, fmt.Errorf("There is already an account named %s.", name))
 							return
 						}
 					}

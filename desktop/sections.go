@@ -258,11 +258,15 @@ func pluginRow(c *ui.Context, k *card, plugin model.InstalledPlugin, clickable b
 	ready := plugin.State == model.PluginReady
 	o := statusRowOptions{
 		Symbol:    plugin.Symbol(),
-		PluginID:  plugin.ID,
+		PluginID:  plugin.MarketplaceID(),
 		Title:     plugin.Name,
 		Subtitle:  plugin.Description,
 		Clickable: clickable,
 		Tooltip:   tooltip,
+	}
+	if plugin.AccountName != "" {
+		// A service's accounts would each repeat its description; their names tell them apart.
+		o.Subtitle = ""
 	}
 	if ready {
 		o.State, o.StateSymbol, o.StateColor = L("Ready"), "checkmark", &p.Green

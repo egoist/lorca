@@ -788,7 +788,8 @@ type InstalledPlugin struct {
 	Detail      string
 	// Source is `mcp.json` for one of the Runner's own MCP servers, which the server sheet edits.
 	Source string
-	// ServiceID identifies the marketplace entry; ID selects a named account instance.
+	// ServiceID and AccountName are a named account's marketplace service (gmail) and the user's
+	// name for it (Work). Its ID is the account's own.
 	ServiceID   string
 	AccountName string
 }
@@ -821,6 +822,26 @@ const (
 	ToneRed
 	ToneOrange
 )
+
+// ShortStatus is the state in a word or two, for a row in a list; what it needs, in full, is in its
+// sheet. It is colored only when the user has something to do.
+func (p InstalledPlugin) ShortStatus() (string, Tone) {
+	switch p.State {
+	case PluginReady:
+		return L("Connected"), ToneSecondary
+	case PluginConnecting:
+		return L("Connecting…"), ToneSecondary
+	case PluginNeedsAuth:
+		return L("Needs a sign-in"), ToneOrange
+	case PluginInsufficientAccess:
+		return L("Needs more access"), ToneOrange
+	case PluginNeedsSetup:
+		return L("Needs setup"), ToneOrange
+	case PluginError:
+		return L("Can't connect"), ToneRed
+	}
+	return p.Detail, ToneSecondary
+}
 
 func (s PluginState) Tone() Tone {
 	switch s {

@@ -10,8 +10,8 @@ final class PluginViewController: SheetViewController {
     private let bot: Bot?
 
     private let status = SectionView(title: L("Status"))
-    private let account = SectionView(title: L("Account"))
-    private let accountName = NSTextField()
+    /// A named account's name, such as Work, which its bots know it by.
+    private let nameRow = EditableRow(key: L("Name"), placeholder: L("Work"))
     private let signIn = SectionView(title: L("Sign-in"))
     private let variables = SectionView(title: L("Setup", context: "plugin variables"))
     private let skills = SectionView(title: L("Skills"))
@@ -58,7 +58,7 @@ final class PluginViewController: SheetViewController {
         let actions = Build.stack(
             [saveButton, spacer, removeButton], orientation: .horizontal, spacing: 8)
 
-        for section in [status, account, signIn, variables, skills] {
+        for section in [status, signIn, variables, skills] {
             contentStack.addArrangedSubview(section)
             section.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
         }
@@ -73,8 +73,9 @@ final class PluginViewController: SheetViewController {
         signIn.isHidden = true
         variables.isHidden = true
         skills.isHidden = true
-        account.isHidden = true
         saveButton.isHidden = true
+        nameRow.field.alignment = .right
+        nameRow.onCommit = { [weak self] in self?.rename() }
         note.stringValue =
             runner.isThisDevice
             ? L("Keys and sign-ins stay on this device.")
@@ -117,22 +118,12 @@ final class PluginViewController: SheetViewController {
 
     private func render(_ detail: PluginDetail) {
         setSheetTitle(detail.status.name)
-        account.isHidden = detail.status.serviceID == nil
-        if let serviceID = detail.status.serviceID {
-            if accountName.currentEditor() == nil { accountName.stringValue = detail.status.accountName ?? "" }
-            accountName.placeholderString = L("Work or Personal")
-            accountName.setAccessibilityLabel(L("Account name"))
-            let another = ActionRow(key: L("Accounts"), value: "", tint: .secondaryLabelColor, actionTitle: L("Manage Accounts…"))
-            another.onAction = { [weak self] in
-                guard let self else { return }
-                let name = detail.status.name.components(separatedBy: " · ").first ?? serviceID
-                self.presentAsSheet(PluginAccountsViewController(serviceID: serviceID, name: name, runner: self.store.device(self.runner.id) ?? self.runner))
-            }
-            account.setRows([FieldRow(key: L("Name"), field: accountName), another])
+        var statusRows: [NSView] = []
+        if let accountName = detail.status.accountName {
+            nameRow.setValue(accountName)
+            statusRows.append(nameRow)
         }
-        var statusRows: [NSView] = [
-            KeyValueRow(key: L("State"), value: detail.status.detail, tint: detail.status.stateColor)
-        ]
+        statusRows.append(KeyValueRow(key: L("State"), value: detail.status.detail, tint: detail.status.stateColor))
         let rules = store.autoReview.rules.filter { $0.tool?.hasPrefix("\(pluginID)/") == true }
         if !rules.isEmpty {
             let always = ActionRow(
@@ -196,7 +187,7 @@ final class PluginViewController: SheetViewController {
 
         fields = []
         variables.isHidden = detail.variables.isEmpty
-        saveButton.isHidden = detail.variables.isEmpty && detail.status.serviceID == nil
+        saveButton.isHidden = detail.variables.isEmpty
         variables.setRows(
             detail.variables.map { variable in
                 let field: NSTextField = variable.secret ? NSSecureTextField() : NSTextField()
@@ -230,17 +221,39 @@ final class PluginViewController: SheetViewController {
             guard let self else { return }
             defer { self.saveButton.isEnabled = true }
             do {
-                if self.detail?.status.serviceID != nil && self.accountName.stringValue != self.detail?.status.accountName {
-                    _ = try await self.store.renamePluginAccount(self.pluginID, on: self.runner.id, accountName: self.accountName.stringValue)
-                }
-                if !values.isEmpty {
-                    _ = try await self.store.setPluginVariables(self.pluginID, on: self.runner.id, variables: values)
-                }
+                _ = try await self.store.setPluginVariables(
+                    self.pluginID, on: self.runner.id, variables: values)
                 self.load()
             } catch {
                 self.alert(L("Couldn't save"), error.localizedDescription)
             }
         }
+    }
+
+    /// A new name for a named account, kept when editing ends. Its id, sign-in, and tools stay.
+    private func rename() {
+        let name = nameRow.value
+        guard let current = detail?.status.accountName, !name.isEmpty, name != current else {
+            nameRow.setValue(detail?.status.accountName ?? "")
+            return
+        }
+        // Done ends the editing and closes the sheet; the rename still goes through.
+        let (store, pluginID, runnerID) = (store, pluginID, runner.id)
+        Task { [weak self] in
+            do {
+                _ = try await store.renamePluginAccount(pluginID, on: runnerID, accountName: name)
+                self?.load()
+            } catch {
+                self?.nameRow.setValue(current)
+                self?.alert(L("Couldn't rename it"), error.localizedDescription)
+            }
+        }
+    }
+
+    override func confirmTapped() {
+        // A name being typed is kept, as Return would.
+        view.window?.makeFirstResponder(nil)
+        super.confirmTapped()
     }
 
     private func connect() {
@@ -312,6 +325,10 @@ final class FieldRow: NSView {
             color: .secondaryLabelColor)
         key.setContentCompressionResistancePriority(.required, for: .horizontal)
         field.translatesAutoresizingMaskIntoConstraints = false
+        // One line that scrolls, so a value with a hyphen (a Google client ID) is not cut at it.
+        field.usesSingleLineMode = true
+        field.cell?.wraps = false
+        field.cell?.isScrollable = true
         addSubview(key)
         addSubview(field)
         NSLayoutConstraint.activate([

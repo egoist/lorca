@@ -476,6 +476,8 @@ struct InstalledPlugin: Identifiable, Hashable {
     var detail: String
     /// `mcp.json` for one of the Runner's own MCP servers, which the server sheet edits.
     var source: String? = nil
+    /// A named account's marketplace service (gmail) and the user's name for it (Work). Its `id`
+    /// is the account's own.
     var serviceID: String? = nil
     var accountName: String? = nil
 
@@ -490,6 +492,28 @@ struct InstalledPlugin: Identifiable, Hashable {
         case .connecting: .controlAccentColor
         case .error: .systemRed
         case .needsSetup, .needsAuth, .insufficientAccess, .unknown: .systemOrange
+        }
+    }
+
+    /// The state in a word or two, for a row in a list. What it needs, in full, is in its sheet.
+    var shortStatus: String {
+        switch state {
+        case .ready: L("Connected")
+        case .connecting: L("Connecting…")
+        case .needsAuth: L("Needs a sign-in")
+        case .insufficientAccess: L("Needs more access")
+        case .needsSetup: L("Needs setup")
+        case .error: L("Can't connect")
+        case .unknown: detail
+        }
+    }
+
+    /// Colored only when the user has something to do.
+    var shortStatusColor: NSColor {
+        switch state {
+        case .needsSetup, .needsAuth, .insufficientAccess: .systemOrange
+        case .error: .systemRed
+        case .ready, .connecting, .unknown: .secondaryLabelColor
         }
     }
 }

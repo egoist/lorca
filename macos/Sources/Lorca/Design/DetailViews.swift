@@ -449,6 +449,7 @@ final class StatusRow: NSView, NSGestureRecognizerDelegate {
         icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
         title.stringValue = titleText
         subtitle.stringValue = subtitleText
+        subtitle.isHidden = subtitleText.isEmpty
         // With a symbol, the state's words are its tooltip and what VoiceOver reads.
         let showsSymbol = stateText != nil && stateSymbol != nil
         state.stringValue = stateText ?? ""
@@ -489,9 +490,10 @@ final class StatusRow: NSView, NSGestureRecognizerDelegate {
         let ready = plugin.state == .ready
         configure(
             symbol: plugin.symbolName,
-            image: PluginLogo.tile(for: plugin.id, size: 18),
+            image: PluginLogo.tile(for: plugin.marketplaceID, size: 18),
             title: plugin.name,
-            subtitle: plugin.description,
+            // A service's accounts would each repeat its description; their names tell them apart.
+            subtitle: plugin.accountName == nil ? plugin.description : "",
             state: ready ? L("Ready") : plugin.detail,
             stateSymbol: ready ? "checkmark" : "exclamationmark.circle.fill",
             stateColor: ready ? .systemGreen : .systemOrange,

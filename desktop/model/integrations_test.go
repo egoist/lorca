@@ -70,11 +70,11 @@ func TestAccountRequestsSelectRunnerAndInstanceAndPublishOnReplyQueue(t *testing
 	case <-time.After(3 * time.Second):
 		t.Fatal("no posted reply")
 	}
-	if called || len(s.PluginAccounts("gmail", "runner")) != 0 {
+	if called || len(s.accounts("gmail", "runner")) != 0 {
 		t.Fatal("worker mutated model before the posted reply")
 	}
 	reply()
-	if !called || len(s.PluginAccounts("gmail", "runner")) != 1 {
+	if !called || len(s.accounts("gmail", "runner")) != 1 {
 		t.Fatal("reply did not publish the instance")
 	}
 
@@ -89,7 +89,7 @@ func TestAccountRequestsSelectRunnerAndInstanceAndPublishOnReplyQueue(t *testing
 		t.Fatal(request)
 	}
 	(<-posts)()
-	if s.PluginAccounts("gmail", "runner")[0].AccountName != "Office" {
+	if s.accounts("gmail", "runner")[0].AccountName != "Office" {
 		t.Fatal("renamed status not retained")
 	}
 	rpc.err = errors.New("denied by runner")
@@ -100,7 +100,7 @@ func TestAccountRequestsSelectRunnerAndInstanceAndPublishOnReplyQueue(t *testing
 	})
 	<-rpc.calls
 	(<-posts)()
-	if s.PluginAccounts("gmail", "runner")[0].AccountName != "Office" {
+	if s.accounts("gmail", "runner")[0].AccountName != "Office" {
 		t.Fatal("failed rename replaced the account")
 	}
 	rpc.err = nil
