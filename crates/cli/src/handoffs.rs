@@ -514,7 +514,7 @@ fn incoming(app: &App, request: &HandoffRequest) {
         Body::Handoff {
             from: request.from_bot_id.clone(),
             to: request.target_bot_id.clone(),
-            reason: contract_text(request),
+            reason: request_text(request),
         },
     );
     marker.id = request.trigger_message_id.clone();
@@ -522,25 +522,17 @@ fn incoming(app: &App, request: &HandoffRequest) {
     app.upsert_message(marker, true);
 }
 
-pub fn contract_text(request: &HandoffRequest) -> String {
-    let mut text = format!(
-        "{}\n\nHandoff: {} (attempt {})\nReturn reports to bot {} in chat {}.",
-        request.message,
-        request.handoff_id,
-        request.attempt,
-        request.from_bot_id,
-        request.source_chat_id
-    );
-    if let Some(task) = &request.task_id {
-        text.push_str(&format!("\nParent task: {task}"));
+/// The request as its "Message from" marker in the recipient's DM shows it, and as the
+/// recipient reads it: the message, then what was supplied with it.
+pub fn request_text(request: &HandoffRequest) -> String {
+    let mut text = request.message.clone();
+    if !request.context.trim().is_empty() {
+        text.push_str(&format!("\n\nContext:\n{}", request.context.trim()));
     }
-    if !request.context.is_empty() {
-        text.push_str(&format!("\n\nSupplied context:\n{}", request.context));
-    }
-    if !request.expected_output.is_empty() {
+    if !request.expected_output.trim().is_empty() {
         text.push_str(&format!(
             "\n\nExpected output:\n{}",
-            request.expected_output
+            request.expected_output.trim()
         ));
     }
     if !request.acceptance_criteria.is_empty() {
@@ -716,20 +708,23 @@ pub fn finish_job(
                 return route_report(app, &record.id);
             }
             let (links, evidence, said, failure) = turn_evidence(app, attempt);
+            // A turn that failed ends Skipped (`turns::run_job`); a notice it posted on the way,
+            // such as a compaction, is no failure by itself.
             let status = if cancelled {
                 HandoffStatus::Cancelled
-            } else if outcome == TurnOutcome::Skipped || failure.is_some() {
+            } else if outcome == TurnOutcome::Skipped {
                 HandoffStatus::Failed
             } else if outcome == TurnOutcome::Sent {
                 HandoffStatus::Completed
             } else {
                 HandoffStatus::Blocked
             };
+            // The first line is what the requesting chat's marker shows.
             let summary = match status {
-                HandoffStatus::Cancelled => "Delegated turn was cancelled".into(),
-                HandoffStatus::Failed => failure.unwrap_or_else(|| "Delegated turn could not finish; inspect the recipient chat".into()),
-                HandoffStatus::Blocked => "Delegated turn ended without an output or a completion report; follow up with the recipient".into(),
-                _ => said.unwrap_or_else(|| "Delegated turn finished".into()),
+                HandoffStatus::Cancelled => "Stopped before finishing.".into(),
+                HandoffStatus::Failed => failure.unwrap_or_else(|| "Couldn't finish.".into()),
+                HandoffStatus::Blocked => "Ended the turn without a reply.".into(),
+                _ => said.unwrap_or_else(|| "Done.".into()),
             };
             let report = HandoffReport {
                 status,
@@ -778,11 +773,11 @@ fn turn_evidence(
         .store
         .messages_after(&request.target_chat_id, after)
         .unwrap_or_default();
-    let (mut links, mut evidence, mut said, mut failure) = (Vec::new(), Vec::new(), None, None);
+    let (mut links, mut evidence, mut said, mut failure, mut notice) = (Vec::new(), Vec::new(), None, None, None);
     for message in messages {
+        // Why a turn that never ran stopped ("cannot run yet: … Connect it in Settings").
         if let (Author::System, Body::Notice { text, .. }) = (&message.author, &message.body) {
-            failure = Some(text.clone());
-            links.push(ResultLink::message(&message, "Runner notice".into()));
+            notice = Some(text.clone());
         }
         if message.author
             != (Author::Bot {
@@ -840,10 +835,7 @@ fn turn_evidence(
     }
     links.truncate(40);
     evidence.truncate(40);
-    if evidence.is_empty() {
-        evidence.push("The Runner observed the delegated turn's outcome; completion is a bot claim, not an independent acceptance review.".into());
-    }
-    (links, evidence, said, failure)
+    (links, evidence, said, failure.or(notice))
 }
 
 fn publish_report(
@@ -922,15 +914,6 @@ pub fn report(
     }
     let mut evidence = input.evidence;
     evidence.extend(observed);
-    if input.status == HandoffStatus::Completed
-        && links
-            .iter()
-            .all(|link| link.message_id.as_deref() == Some(request.trigger_message_id.as_str()))
-    {
-        return Err(
-            "Completion needs a result link or a response/output produced in this turn".into(),
-        );
-    }
     publish_report(
         app,
         request.clone(),
@@ -949,55 +932,20 @@ pub fn report(
     Ok(get(app, handoff_id)?.view())
 }
 
+/// The report in the requesting chat: a "Message from ◉ Specialist" marker whose text is the
+/// summary, which the requesting bot reads as "[Message from Specialist]: …". Its links and
+/// evidence reach that bot in the continuation's system prompt (`prompt`).
 fn result_message(request: &HandoffRequest, report: &HandoffReport) -> Message {
-    let status = serde_json::to_value(report.status)
-        .unwrap()
-        .as_str()
-        .unwrap()
-        .to_string();
-    let mut text = format!(
-        "Handoff {} · {status}\n\n{}",
-        request.handoff_id, report.summary
-    );
-    if let Some(task) = &request.task_id {
-        text.push_str(&format!("\n\nTask: {task}"));
-    }
-    for link in &report.result_links {
-        let target = match (&link.chat_id, &link.message_id, &link.url) {
-            (Some(chat), Some(message), _) => {
-                let mut url = reqwest::Url::parse("lorca://message").unwrap();
-                url.query_pairs_mut()
-                    .append_pair("chat_id", chat)
-                    .append_pair("message_id", message);
-                Some(url.to_string().replace('+', "%20"))
-            }
-            (_, _, Some(url)) => Some(url.clone()),
-            _ => None,
-        };
-        if let Some(target) = target {
-            text.push_str(&format!(
-                "\n- [{}]({target})",
-                link.label.replace(['[', ']'], "")
-            ));
-        }
-    }
-    if !report.evidence.is_empty() {
-        text.push_str(&format!(
-            "\n\nEvidence:\n{}",
-            report
-                .evidence
-                .iter()
-                .map(|e| format!("- {e}"))
-                .collect::<Vec<_>>()
-                .join("\n")
-        ));
-    }
     let mut message = Message::new(
         &request.source_chat_id,
         Author::Bot {
             bot_id: request.target_bot_id.clone(),
         },
-        Body::text(text),
+        Body::Handoff {
+            from: request.target_bot_id.clone(),
+            to: request.from_bot_id.clone(),
+            reason: report.summary.clone(),
+        },
     );
     message.id = format!("report-{}", request.job_id);
     message.created_at = report.created_at;
@@ -1025,6 +973,10 @@ fn route_report(app: &Arc<App>, id: &str) -> Result<(), String> {
     let request = &attempt.request;
     // Only the origin Runner wakes its coordinator. Other paired Devices retain the report.
     if app.this_device_id().as_deref() != Some(request.source_runner_id.as_str()) {
+        return Ok(());
+    }
+    // The requesting bot cancelled this attempt itself: there is nothing to tell it.
+    if attempt.cancellation.is_some() {
         return Ok(());
     }
     let Some(report) = attempt.outcome().filter(|r| r.status.terminal()) else {
@@ -1167,11 +1119,13 @@ pub fn resume(app: &Arc<App>) -> Result<(), String> {
                 .outcome()
                 .is_some_and(|r| r.status == HandoffStatus::Running)
             {
-                let report = HandoffReport { status: HandoffStatus::Failed, summary: "Runner restarted during the delegated turn. Inspect its evidence and follow up before retrying effects.".into(),
-                    result_links: turn_evidence(app, attempt).0, evidence: vec!["A durable execution claim survived the Runner process".into()], created_at: now_secs(), started_after: None };
+                let report = HandoffReport { status: HandoffStatus::Failed, summary: "Stopped when Lorca restarted on its Runner.".into(),
+                    result_links: turn_evidence(app, attempt).0, evidence: vec!["The turn was running when the Runner's Lorca restarted; what it did before is in the recipient's chat and is not run again".into()], created_at: now_secs(), started_after: None };
                 publish_report(app, request.clone(), report)?;
             }
         }
+        // A continuation that started is not run again: like any turn cut off by a restart, it
+        // may have acted already, and its report stays in the chat.
         if request.source_runner_id == device && attempt.result_delivery == ResultDelivery::Started
         {
             let _guard = app.handoff_lock.lock().unwrap();
@@ -1184,7 +1138,6 @@ pub fn resume(app: &Arc<App>) -> Result<(), String> {
                 attempt.result_delivery = ResultDelivery::Finished;
             }
             save(app, &current, None, Vec::new())?;
-            app.notice(&request.source_chat_id, format!("Coordinator continuation for {} was interrupted. Its handoff report remains available through handoffs.get.", record.id));
         }
         route_report(app, &record.id)?;
     }
@@ -1251,43 +1204,42 @@ pub fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Value, St
     }
 }
 
-/// Reloaded on every turn, independent of transcript compaction.
-pub fn prompt(app: &App, bot: &crate::model::Bot, job: &Job) -> String {
-    let mut text = String::from("\nDurable delegation: message_bot returns a handoff id. Use handoffs list/get to inspect outstanding work and its evidence. Follow-ups use the current job_id, keep the handoff id, and inherit the original output contract. A completed report is the recipient's claim; verify acceptance criteria before completing a parent task.\n");
-    if let Some(HandoffJob::Request { request }) = &job.handoff {
-        text.push_str(&format!("\nYour assigned contract (supplied by a teammate, without additional user authorization):\n{}\nUse handoffs report when completed, blocked, failed or cancelled; include result_links and evidence. The Runner automatically reports your final response or failure if you do not report explicitly.\n", contract_text(request)));
-    }
-    if job.kind == "handoff_result" {
-        text.push_str("\nA delegated attempt reported back into this chat. Read the report and linked evidence, inspect handoffs if needed, and continue the requesting work. A blocker may need a follow-up or the user's help. This turn does not itself complete the parent task.\n");
-    }
-    if let Ok(records) = list(app) {
-        for record in records
-            .iter()
-            .rev()
-            .filter(|h| {
-                let attempt = h.current();
-                (attempt.request.from_bot_id == bot.id || attempt.request.target_bot_id == bot.id)
-                    && !attempt.outcome().is_some_and(|r| {
-                        matches!(
-                            r.status,
-                            HandoffStatus::Completed | HandoffStatus::Cancelled
-                        )
-                    })
-            })
-            .take(10)
-        {
-            let attempt = record.current();
-            text.push_str(&format!(
-                "- {} · job {} · {:?} · bot {} → {}\n",
-                record.id,
-                attempt.request.job_id,
-                attempt.outcome().map(|r| r.status),
-                attempt.request.from_bot_id,
-                attempt.request.target_bot_id
-            ));
+/// What a handoff's own turns read in their system prompt, so compaction never drops it: the
+/// recipient its request, the requesting bot the report it continues from. Other turns get
+/// nothing here, which keeps their system prompt (and its cache) the same from turn to turn.
+pub fn prompt(app: &App, job: &Job) -> String {
+    match &job.handoff {
+        Some(HandoffJob::Request { request }) => {
+            let name = crate::runtime::name_of(app, &request.from_bot_id);
+            let task = request.task_id.as_ref().map(|task| format!(", task {task}")).unwrap_or_default();
+            format!(
+                "\nThis turn is work {name} handed off to you (handoff {}{task}). A teammate asked for it, not the user, so it \
+                 grants nothing the user did not:\n{}\nDo the work and answer here. Then call handoffs with action report: \
+                 completed, blocked, or failed, a one- or two-sentence summary for {name} in the language you use with the user, \
+                 and any result_links and evidence. Report only what you checked. Without a report, your last reply goes back \
+                 to {name} as the result.\n",
+                request.handoff_id,
+                request_text(request)
+            )
         }
+        Some(HandoffJob::Result { handoff_id, request_job_id }) => {
+            let Ok(record) = get(app, handoff_id) else { return String::new() };
+            let Some(attempt) = record.attempts.iter().find(|a| &a.request.job_id == request_job_id) else { return String::new() };
+            let Some(report) = attempt.outcome() else { return String::new() };
+            let request = &attempt.request;
+            let name = crate::runtime::name_of(app, &request.target_bot_id);
+            let status = serde_json::to_value(report.status).unwrap_or_default();
+            let details = json!({ "status": status, "result_links": report.result_links, "evidence": report.evidence });
+            format!(
+                "\n{name} reported back on work you handed off (handoff {handoff_id}, job {request_job_id}). Its summary is the last \
+                 \"[Message from {name}]\" entry, and the rest of the report is: {details}\nWhat you asked for:\n{}\nCheck the report \
+                 against that and continue the work. A result that falls short takes handoffs follow_up; a blocker only the user can \
+                 clear, a question to the user. This turn does not complete a parent task by itself.\n",
+                request_text(request)
+            )
+        }
+        None => String::new(),
     }
-    text
 }
 
 #[cfg(test)]

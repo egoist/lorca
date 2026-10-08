@@ -250,11 +250,11 @@ async fn same_runner_and_cross_runner_failures_return_to_the_requesting_chat() {
         assert_eq!(report.status, HandoffStatus::Failed);
         assert!(report.summary.contains("Connect") || report.summary.contains("provider"));
         assert!(!report.result_links.is_empty());
-        assert!(!report.evidence.is_empty());
-        assert!(f
+        let marker = f
             .source
             .message(&f.source_chat, &format!("report-{}", request.job_id))
-            .is_some());
+            .unwrap();
+        assert!(matches!(marker.body, Body::Handoff { ref from, ref to, ref reason } if from == &f.specialist.id && to == &f.chef.id && reason == &report.summary));
         assert_eq!(record.current().result_delivery, ResultDelivery::Finished);
     }
 }
@@ -372,6 +372,8 @@ async fn automatic_completion_links_the_final_response() {
         Body::text("Found two issues; both fixed."),
     );
     f.target.upsert_message(output.clone(), true);
+    // A notice the turn posted on the way, as a compaction does, is no failure.
+    f.target.notice(&request.target_chat_id, "Compacted Specialist's context: 12k tokens summarized.");
     finish_job(&f.target, &job, TurnOutcome::Sent, false).unwrap();
     let record = get(&f.target, &request.handoff_id).unwrap();
     let report = record.current().outcome().unwrap();
@@ -657,20 +659,6 @@ async fn contracts_and_reports_enforce_participant_and_reference_rules() {
         }
     )
     .is_err());
-    assert!(report(
-        &f.target,
-        &f.specialist.id,
-        &request.handoff_id,
-        &request.job_id,
-        ReportInput {
-            status: HandoffStatus::Completed,
-            summary: "Done".into(),
-            result_links: Vec::new(),
-            evidence: Vec::new()
-        }
-    )
-    .unwrap_err()
-    .contains("result link"));
     let bad = ResultLink {
         kind: "url".into(),
         url: Some("file:///tmp/secret".into()),
@@ -771,7 +759,8 @@ async fn queued_local_requests_resume_and_interrupted_result_delivery_does_not_r
         ResultDelivery::Finished
     );
     assert!(restarted.running_jobs.lock().unwrap().is_empty());
-    assert!(restarted.store.all(&g.source_chat).unwrap().iter().any(|m| matches!(&m.body, Body::Notice { text, .. } if text.contains("continuation") && text.contains("interrupted"))));
+    assert!(restarted.store.all(&g.source_chat).unwrap().iter().all(|m| !matches!(m.body, Body::Notice { .. })));
+    assert!(restarted.message(&g.source_chat, &format!("report-{}", request.job_id)).is_some());
     drop(guard);
     settle(&g.source).await;
 }
@@ -803,30 +792,34 @@ async fn duplicate_job_envelopes_do_not_replace_the_active_cancellation_token() 
 }
 
 #[tokio::test]
-async fn contracts_reload_into_turn_prompts_and_result_links_encode_ids() {
+async fn contracts_and_reports_reload_into_their_turns_prompts() {
     let f = fixture(true);
-    let mut request = delegate_work(&f);
+    let request = delegate_work(&f);
     let job = request_job(&request);
-    let prompt = prompt(&f.target, &f.specialist, &job);
+    let prompt = prompt(&f.target, &job);
     assert!(prompt.contains(&request.expected_output));
     assert!(prompt.contains("Include a failing input"));
     assert!(prompt.contains(request.task_id.as_deref().unwrap()));
-    request.target_chat_id = "chat with spaces & values".into();
-    request.trigger_message_id = "message/with+characters".into();
-    let message = result_message(
-        &request,
-        &HandoffReport {
-            status: HandoffStatus::Blocked,
-            summary: "Need context".into(),
-            result_links: vec![request_link(&request)],
-            evidence: Vec::new(),
-            created_at: now_secs(),
-            started_after: None,
+    assert!(super::prompt(&f.source, &crate::runtime::command_job(&f.source, &f.source_chat, &f.chef.id, "card")).is_empty());
+    apply_update(
+        &f.source,
+        HandoffUpdate::Report {
+            request: request.clone(),
+            report: HandoffReport {
+                status: HandoffStatus::Blocked,
+                summary: "Need the schema version".into(),
+                result_links: vec![request_link(&request)],
+                evidence: vec!["The export has no version field".into()],
+                created_at: now_secs(),
+                started_after: None,
+            },
         },
-    );
-    let Body::Text { text, .. } = message.body else {
-        panic!("result text")
-    };
-    assert!(text.contains("chat%20with%20spaces%20%26%20values"));
-    assert!(text.contains("message%2Fwith%2Bcharacters"));
+    )
+    .unwrap();
+    let continuation = super::prompt(&f.source, &result_job(&request));
+    assert!(continuation.contains("\"blocked\""));
+    assert!(continuation.contains("The export has no version field"));
+    assert!(continuation.contains(&request.trigger_message_id));
+    assert!(continuation.contains("An annotated report"));
+    settle(&f.source).await;
 }

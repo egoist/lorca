@@ -1506,7 +1506,7 @@ fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job, store: &Memo
     if let Some(from) = job.from_bot_id.as_ref().and_then(|id| app.bot(id)) {
         prompt.push_str(&format!(
             "\nThis turn was started by a message from {name} (the last \"[Message from {name}]\" entry). Handle their request \
-             for the user. For a durable handoff, use handoffs report to supply completion or blocker evidence; results return automatically to {name} (id {id}).\n",
+             for the user. What you report or reply goes back to {name} on its own; use message_bot to {name} (id {id}) only for something else.\n",
             name = from.name,
             id = from.id
         ));
@@ -1531,7 +1531,7 @@ fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job, store: &Memo
          including you (your id is {}), to behave differently, change its profile with edit_bot.\n",
         bot.id
     ));
-    prompt.push_str(&crate::handoffs::prompt(app, bot, job));
+    prompt.push_str(&crate::handoffs::prompt(app, job));
     prompt.push_str(&routines_prompt(app, bot));
     prompt.push_str(&plugins_prompt(app, bot, plugins));
     prompt.push_str(&memory_prompt(store));
@@ -2003,7 +2003,10 @@ struct MessageBot {
 impl Tool for MessageBot {
     fn name(&self) -> &str { "message_bot" }
     fn description(&self) -> &str {
-        "Delegate work to a bot outside this chat. Supply context, expected output and acceptance criteria. Returns a durable handoff id and the target Runner's queue state. Completion, failure, blocking and cancellation report back here automatically."
+        "Hand work to a bot outside this chat. It lands in that bot's own chat with the user, and they do not see this \
+         conversation, so give them the context they need. Say what you need back in expected_output and acceptance_criteria. \
+         Their result, or why they could not finish, comes back to this chat on its own and starts your next turn. Returns \
+         the handoff's id and job_id, and whether their Runner has it yet."
     }
     fn parameters(&self) -> Value {
         json!({ "type": "object", "properties": {
@@ -2025,11 +2028,9 @@ impl Tool for MessageBot {
         let message = input.message.clone();
         let value = crate::handoffs::delegate(&self.app, &self.bot.id, &self.chat_id, self.hops, input).map_err(ToolError)?;
         let name = name_of(&self.app, &target);
-        let mut details = value.clone();
-        details["summary"] = json!(format!("Messaged {name}"));
-        details["bot_id"] = json!(target);
-        details["message"] = json!(message);
-        Ok(ToolResult::text(value.to_string()).with_details(details))
+        let result = json!({ "handoff_id": value["handoff_id"], "job_id": value["job_id"], "target_runner_id": value["target_runner_id"], "delivery": value["delivery"] });
+        Ok(ToolResult::text(result.to_string())
+            .with_details(json!({ "summary": format!("Messaged {name}"), "bot_id": target, "message": message })))
     }
 }
 
@@ -2043,7 +2044,10 @@ struct Handoffs {
 impl Tool for Handoffs {
     fn name(&self) -> &str { "handoffs" }
     fn description(&self) -> &str {
-        "Inspect durable delegated work after any restart, follow up with the same handoff id, or cancel it. A recipient reports completed/failed/blocked/cancelled with summary, result links and evidence; reporting ends its delegated turn and automatically wakes the requesting bot. Completion is your claim; do not claim acceptance criteria you have not verified."
+        "Work you handed off with message_bot, and work handed to you. list and get show each handoff and its report, also \
+         after a restart. follow_up sends a finished handoff again with more instructions; cancel stops one still going; both \
+         take its current job_id. On a turn that is a handoff, report ends the turn and sends the result back: a status, a \
+         one- or two-sentence summary, and any result_links and evidence. Report only what you checked."
     }
     fn parameters(&self) -> Value {
         json!({ "type": "object", "properties": {
@@ -2074,7 +2078,13 @@ impl Tool for Handoffs {
             if record.current().request.from_bot_id != self.bot_id && record.current().request.target_bot_id != self.bot_id { return Err("This handoff belongs to other bots".into()); }
         }
         let value = crate::handoffs::dispatch(&self.app, &format!("handoffs.{action}"), args).map_err(ToolError)?;
-        let result = ToolResult::text(value.to_string()).with_details(value);
+        let summary = match action.as_str() {
+            "report" => "Reported back",
+            "follow_up" => "Followed up",
+            "cancel" => "Cancelled a handoff",
+            _ => "Checked handoffs",
+        };
+        let result = ToolResult::text(value.to_string()).with_details(json!({ "summary": summary }));
         Ok(if action == "report" { result.terminating() } else { result })
     }
 }
