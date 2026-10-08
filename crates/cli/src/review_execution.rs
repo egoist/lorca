@@ -15,6 +15,9 @@ use crate::review_queue::{self as queue, *};
 #[cfg(test)]
 mod tests;
 
+/// Why an approved or proposed call needs another look.
+const STALE: &str = "Something this depends on changed since it was proposed. Review it again.";
+
 struct Prepared {
     tool: Option<Arc<dyn Tool>>,
     preconditions: ReviewPreconditions,
@@ -178,7 +181,7 @@ async fn prepare(
 
 fn editable(item: &ReviewItem) -> Result<(), String> {
     if !matches!(item.state, ReviewState::Pending | ReviewState::Approved) {
-        return Err("This review has already started or ended.".into());
+        return Err("This already ran or was decided.".into());
     }
     Ok(())
 }
@@ -322,9 +325,7 @@ pub async fn mutate(
         let _lock = app.review_lock.lock().unwrap();
         let (_, current) = queue::load(app, id)?;
         if current != original {
-            return Err(
-                "This review changed while its preconditions were checked. Reload it.".into(),
-            );
+            return Err("This changed on another Device. Review it again.".into());
         }
         authorize_execution(app, &candidate)?;
         if method == "reviews.edit" || stale {
@@ -364,9 +365,11 @@ pub async fn mutate(
         candidate
     };
     queue::publish_origin(app, id);
-    let _ = queue::forward_feedback(app, &item).await;
     if stale && method == "reviews.approve" {
-        return Err("Execution preconditions changed. The item has a new version; reload it and review again.".into());
+        return Err(STALE.into());
+    }
+    if method == "reviews.approve" {
+        app.review_wake.notify_one();
     }
     Ok(item)
 }
@@ -386,10 +389,7 @@ fn invalidate(
         next.preconditions = preconditions;
     }
     next.outcome = Some(ReviewOutcome {
-        summary: format!(
-            "Fresh review required: {}",
-            why.chars().take(512).collect::<String>()
-        ),
+        summary: why.chars().take(512).collect(),
         result: None,
         message_id: next.message_id(),
         at: now_secs(),
@@ -424,10 +424,8 @@ pub async fn execute_approved(app: &Arc<App>, id: &str) -> Result<(), String> {
         });
         let why = match &prepared {
             Err(error) => Some(error.as_str()),
-            Ok(prepared) if prepared.preconditions != item.preconditions => {
-                Some("The execution preconditions changed.")
-            }
-            _ if !approval_valid => Some("Approval does not match this exact version."),
+            Ok(prepared) if prepared.preconditions != item.preconditions => Some(STALE),
+            _ if !approval_valid => Some(STALE),
             _ => None,
         };
         if let Some(why) = why {
@@ -464,9 +462,7 @@ pub async fn execute_approved(app: &Arc<App>, id: &str) -> Result<(), String> {
         }
         let why = match &verified {
             Err(error) => Some(error.as_str()),
-            Ok(verified) if verified.preconditions != item.preconditions => {
-                Some("Execution preconditions changed before the call started.")
-            }
+            Ok(verified) if verified.preconditions != item.preconditions => Some(STALE),
             _ => None,
         };
         if let Some(why) = why {
@@ -488,7 +484,11 @@ pub async fn execute_approved(app: &Arc<App>, id: &str) -> Result<(), String> {
     }
     let prepared = verified?;
     let result = match prepared.tool {
-        None => Ok(ToolResult::text("Draft accepted")),
+        // The accepted text goes back to the chat, where the bot's later turns read it.
+        None => Ok(ToolResult::text(match &item.payload {
+            ReviewPayload::Draft { text } => text.clone(),
+            _ => String::new(),
+        })),
         Some(tool) => {
             let arguments = match &item.payload {
                 ReviewPayload::Shell { arguments } | ReviewPayload::Plugin { arguments, .. } => {
@@ -503,9 +503,7 @@ pub async fn execute_approved(app: &Arc<App>, id: &str) -> Result<(), String> {
             .await
             .unwrap_or_else(|_| {
                 cancel.cancel();
-                Err(ToolError(
-                    "Execution timed out; inspect the target before proposing it again.".into(),
-                ))
+                Err(ToolError("timed out after 10 minutes".into()))
             })
         }
     };
@@ -530,11 +528,11 @@ pub async fn execute_approved(app: &Arc<App>, id: &str) -> Result<(), String> {
                     ReviewState::Succeeded
                 },
                 if failed {
-                    "Execution reported a failure".into()
+                    "Failed".into()
                 } else if matches!(item.payload, ReviewPayload::Draft { .. }) {
-                    "Draft accepted".into()
+                    "Accepted".into()
                 } else {
-                    "Approved version executed".into()
+                    "Done".into()
                 },
                 Some(output),
             )
@@ -542,7 +540,7 @@ pub async fn execute_approved(app: &Arc<App>, id: &str) -> Result<(), String> {
         Err(error) => (
             ReviewState::Uncertain,
             format!(
-                "Execution ended without a confirmed result: {}. Inspect the target before creating another proposal.",
+                "It may have run, but it ended without a result ({}). Check before trying again.",
                 error.0.chars().take(512).collect::<String>()
             ),
             None,
@@ -565,9 +563,6 @@ pub async fn execute_approved(app: &Arc<App>, id: &str) -> Result<(), String> {
         queue::save(app, &finished, Some(&previous), ReviewChange::Executed)?;
     }
     queue::publish_origin(app, id);
-    if let Ok(finished) = queue::get(app, id) {
-        let _ = queue::forward_task_outcome(app, &finished).await;
-    }
     Ok(())
 }
 
@@ -585,7 +580,7 @@ pub fn recover_interrupted(app: &App) -> Result<(), String> {
                 continue;
             }
             current.state = ReviewState::Uncertain;
-            current.outcome = Some(ReviewOutcome { summary: "Runner restarted during execution. The action may have completed; inspect the target before creating another proposal.".into(),
+            current.outcome = Some(ReviewOutcome { summary: "The Runner restarted while this was running. Check whether it finished before trying again.".into(),
                 result: None, message_id: current.message_id(), at: now_secs() });
             current.record(ReviewChange::Interrupted, &item.runner_id, None);
             queue::save(app, &current, Some(&previous), ReviewChange::Interrupted)?;
@@ -601,40 +596,31 @@ pub fn recover_interrupted(app: &App) -> Result<(), String> {
     Ok(())
 }
 
+/// Resumes approved calls at startup and after each approval, one task per item.
 pub async fn run(app: Arc<App>) {
     if let Err(error) = recover_interrupted(&app) {
         tracing::error!(%error, "recovering reviews");
         return;
     }
-    let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
-    let mut forward_at = std::time::Instant::now();
+    let running: Arc<std::sync::Mutex<std::collections::HashSet<String>>> = Default::default();
     loop {
-        interval.tick().await;
-        let Ok(items) = queue::list(&app) else {
-            continue;
-        };
-        for item in items.iter().filter(|item| {
-            item.state == ReviewState::Approved
-                && app.this_device_id().as_deref() == Some(item.runner_id.as_str())
-        }) {
-            let app = app.clone();
-            let item = item.clone();
+        let approved = queue::list(&app).unwrap_or_default().into_iter().filter(|item| {
+            item.state == ReviewState::Approved && app.this_device_id().as_deref() == Some(item.runner_id.as_str())
+        });
+        for item in approved {
+            if !running.lock().unwrap().insert(item.id.clone()) {
+                continue;
+            }
+            let (app, running) = (app.clone(), running.clone());
             tokio::spawn(async move {
                 if let Err(error) = execute_approved(&app, &item.id).await {
                     tracing::warn!(%error, review_id = %item.id, "executing review");
                 }
+                running.lock().unwrap().remove(&item.id);
             });
         }
-        if std::time::Instant::now() >= forward_at {
-            forward_at = std::time::Instant::now() + std::time::Duration::from_secs(30);
-            for item in items
-                .iter()
-                .filter(|item| app.this_device_id().as_deref() == Some(item.runner_id.as_str()))
-            {
-                let _ = queue::forward_feedback(&app, item).await;
-                let _ = queue::forward_task_outcome(&app, item).await;
-            }
-        }
+        // An approval saved since the list was read left a permit, so it is not missed.
+        app.review_wake.notified().await;
     }
 }
 

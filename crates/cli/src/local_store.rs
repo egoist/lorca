@@ -1022,7 +1022,7 @@ impl LocalStore {
             Some(previous) => tx.execute("UPDATE review_items SET ciphertext = ?1 WHERE id = ?2 AND ciphertext = ?3", params![ciphertext, id, previous])?,
             None => tx.execute("INSERT OR IGNORE INTO review_items (id, ciphertext) VALUES (?1, ?2)", params![id, ciphertext])?,
         };
-        anyhow::ensure!(changed == 1, "This review changed. Reload it before deciding.");
+        anyhow::ensure!(changed == 1, "This changed on another Device. Review it again.");
         if let Some(item) = upload {
             queue_outbox_tx(&tx, item)?;
         }

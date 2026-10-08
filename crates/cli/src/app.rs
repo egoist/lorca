@@ -155,6 +155,8 @@ pub struct App {
     pub store: LocalStore,
     /// Serializes review decisions, encrypted persistence, and their relay publication.
     pub review_lock: Mutex<()>,
+    /// An approval wakes the Runner's review executor.
+    pub review_wake: Notify,
     pub events: broadcast::Sender<Event>,
     pub relay: RelayClient,
     pub outbox_notify: Notify,
@@ -274,6 +276,7 @@ impl App {
             state: Mutex::new(state),
             store,
             review_lock: Mutex::new(()),
+            review_wake: Notify::new(),
             events,
             relay: RelayClient::new()?,
             outbox_notify: Notify::new(),

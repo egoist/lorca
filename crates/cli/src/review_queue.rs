@@ -151,6 +151,39 @@ impl ReviewItem {
             "review_id": self.id, "chat_id": self.origin.chat_id, "message_id": self.message_id() })
     }
 
+    /// What it does, in a line: the command, the call, or the draft's subject.
+    pub fn summary(&self) -> String {
+        match &self.payload {
+            ReviewPayload::Shell { arguments } => {
+                let command = arguments["command"].as_str().unwrap_or("");
+                format!("$ {}", command.lines().map(str::trim).find(|line| !line.is_empty()).unwrap_or(command))
+            }
+            ReviewPayload::Plugin { .. } => format!("{}: {}", self.target.account, self.target.resource),
+            ReviewPayload::Draft { .. } => format!("Draft: {}", self.target.resource),
+        }
+    }
+
+    /// "Waiting for your review · $ git push", then what came of it: the output, the accepted
+    /// draft, or why it needs another look.
+    pub fn notice(&self) -> String {
+        let outcome = self.outcome.as_ref();
+        let result = outcome.and_then(|outcome| outcome.result.as_ref()).and_then(|result| result["text"].as_str()).unwrap_or("");
+        let (state, detail) = match self.state {
+            ReviewState::Pending if outcome.is_some() => ("Needs your review again", outcome.map(|outcome| outcome.summary.as_str()).unwrap_or("")),
+            ReviewState::Pending => ("Waiting for your review", ""),
+            ReviewState::Approved => ("Approved", ""),
+            ReviewState::Executing => ("Running", ""),
+            ReviewState::Succeeded if matches!(self.payload, ReviewPayload::Draft { .. }) => ("Accepted", result),
+            ReviewState::Succeeded => ("Done", result),
+            ReviewState::Failed => ("Failed", result),
+            ReviewState::Rejected => ("Rejected", ""),
+            ReviewState::Cancelled => ("Cancelled", ""),
+            ReviewState::Uncertain => ("Didn't finish", outcome.map(|outcome| outcome.summary.as_str()).unwrap_or("")),
+        };
+        let detail: String = detail.trim().chars().take(2000).collect();
+        if detail.is_empty() { format!("{state} · {}", self.summary()) } else { format!("{state} · {}\n{detail}", self.summary()) }
+    }
+
     pub fn reviewed_digest(&self) -> String {
         fingerprint(
             &json!({ "id": self.id, "runner_id": self.runner_id, "bot_id": self.bot_id, "origin": self.origin,
@@ -271,43 +304,18 @@ pub(crate) fn save(
     Ok(())
 }
 
-/// Projects the newest status into the originating work using a stable message id. The
-/// encrypted review remains authoritative if writing the chat row is interrupted.
+/// Projects the newest status into the originating chat under a stable message id, where the
+/// bot's later turns read it. The encrypted review stays authoritative if writing it is cut short.
 pub(crate) fn publish_origin(app: &App, id: &str) {
     let Ok(item) = get(app, id) else { return };
     if app.chat(&item.origin.chat_id).is_none() {
         return;
     }
-    let text = match &item.outcome {
-        Some(outcome) => {
-            let detail = outcome
-                .result
-                .as_ref()
-                .and_then(|result| result["text"].as_str())
-                .unwrap_or("");
-            let shown: String = detail.chars().take(2000).collect();
-            format!(
-                "Review {} · {}{}",
-                item.id,
-                outcome.summary,
-                if shown.is_empty() {
-                    String::new()
-                } else {
-                    format!("\n{shown}")
-                }
-            )
-        }
-        None => format!(
-            "Review {} · {:?} · {} → {}. {}",
-            item.id, item.state, item.target.account, item.target.resource, item.rationale
-        ),
-    };
-    // routine_id on a Notice means a routine's run marker to the transcript builder.
     let mut message = Message::new(
         &item.origin.chat_id,
         Author::System,
         Body::Notice {
-            text,
+            text: item.notice(),
             routine_id: None,
         },
     );
@@ -347,7 +355,7 @@ pub fn apply(app: &App, ciphertext: &[u8]) -> Result<(), String> {
         ) {
             restored.state = ReviewState::Uncertain;
             restored.approval = None;
-            restored.outcome = Some(ReviewOutcome { summary: "Recovered from sync; execution cannot be confirmed. Inspect the target before creating another proposal.".into(),
+            restored.outcome = Some(ReviewOutcome { summary: "This Runner was restored while this was approved. Check whether it ran before trying again.".into(),
                 result: None, message_id: restored.message_id(), at: now_secs() });
             restored.record(ReviewChange::Interrupted, &item.runner_id, None);
             return save(app, &restored, None, ReviewChange::Interrupted);
@@ -384,76 +392,6 @@ pub fn enqueue_owned(app: &App) {
     }
 }
 
-/// Stable JSON adapter for the feedback subject. Its recorder owns deduplication by event
-/// id and exclusions. User edits/approvals/rejections are evidence; silence and interruption
-/// generate none. Boxing keeps the optional API integration independent of sibling modules.
-pub async fn forward_feedback(app: &Arc<App>, item: &ReviewItem) -> Result<(), String> {
-    for event in &item.history {
-        let kind = match event.change {
-            ReviewChange::Approved => "accepted",
-            ReviewChange::Rejected => "rejected",
-            ReviewChange::Edited => "edited",
-            _ => continue,
-        };
-        let before = event
-            .previous_payload
-            .as_ref()
-            .map(|payload| serde_json::to_string_pretty(payload).unwrap_or_default());
-        let after = (event.change == ReviewChange::Edited)
-            .then(|| serde_json::to_string_pretty(&event.payload).unwrap_or_default());
-        let feedback = json!({ "kind": kind, "event_id": event.id, "origin": { "chat_id": item.origin.chat_id,
-            "message_id": item.origin.message_id.as_ref().cloned().unwrap_or_else(|| item.message_id()), "routine_id": item.origin.routine_id,
-            "review_id": item.id, "task_id": item.origin.task_id }, "note": format!("User {kind} review {} version {}", item.id, event.version),
-            "before": before, "after": after, "excluded": false });
-        Box::pin(crate::api::dispatch(
-            app,
-            "feedback.record",
-            json!({ "bot_id": item.bot_id, "feedback": feedback }),
-        ))
-        .await?;
-    }
-    Ok(())
-}
-
-/// The task subject is authoritative for evidence and completion. A queue outcome appends a
-/// reference through its CAS API and never infers a completed task. The persisted item/chat
-/// reference remains available while its task authority is offline or the adapter is absent.
-pub async fn forward_task_outcome(app: &Arc<App>, item: &ReviewItem) -> Result<(), String> {
-    let Some(task_id) = &item.origin.task_id else {
-        return Ok(());
-    };
-    if item.outcome.is_none()
-        || matches!(
-            item.state,
-            ReviewState::Pending | ReviewState::Approved | ReviewState::Executing
-        )
-    {
-        return Ok(());
-    }
-    let task = Box::pin(crate::api::dispatch(
-        app,
-        "tasks.get",
-        json!({ "id": task_id }),
-    ))
-    .await?;
-    let mut evidence = task["evidence"].as_array().cloned().unwrap_or_default();
-    if evidence
-        .iter()
-        .any(|entry| entry["review_id"].as_str() == Some(item.id.as_str()))
-    {
-        return Ok(());
-    }
-    evidence.push(item.outcome_evidence());
-    Box::pin(crate::api::dispatch(
-        app,
-        "tasks.update",
-        json!({ "id": task_id, "expected_revision": task["revision"],
-        "request_id": format!("review-{}-outcome", item.id), "evidence": evidence }),
-    ))
-    .await?;
-    Ok(())
-}
-
 #[cfg(feature = "runner")]
 pub(crate) fn local_bot(app: &App, item: &ReviewItem) -> Result<crate::model::Bot, String> {
     if app.this_device_id().as_deref() != Some(item.runner_id.as_str()) {
@@ -487,7 +425,7 @@ pub(crate) fn local_bot(app: &App, item: &ReviewItem) -> Result<crate::model::Bo
 
 pub(crate) fn require_version(item: &ReviewItem, params: &Value) -> Result<(), String> {
     if params["expected_version"].as_u64() != Some(item.version) {
-        return Err("This review version changed. Reload and review it again.".into());
+        return Err("This changed on another Device. Review it again.".into());
     }
     Ok(())
 }
@@ -574,7 +512,7 @@ pub async fn serve(
             return Ok(json!(item));
         }
         if !matches!(item.state, ReviewState::Pending | ReviewState::Approved) {
-            return Err("This review has already started or ended.".into());
+            return Err("This already ran or was decided.".into());
         }
         item.state = state;
         item.approval = None;
@@ -585,9 +523,9 @@ pub async fn serve(
                 .map(str::to_string)
                 .unwrap_or_else(|| {
                     if state == ReviewState::Rejected {
-                        "Rejected by the user".into()
+                        "Rejected".into()
                     } else {
-                        "Cancelled by the user".into()
+                        "Cancelled".into()
                     }
                 }),
             result: None,
@@ -599,6 +537,5 @@ pub async fn serve(
         item
     };
     publish_origin(app, id);
-    let _ = forward_feedback(app, &item).await;
     Ok(json!(item))
 }

@@ -133,7 +133,7 @@ async fn editing_an_approved_payload_requires_approval_of_the_new_version() {
         .message(&first.origin.chat_id, &finished.message_id())
         .unwrap();
     assert!(
-        matches!(&status.body, crate::model::Body::Notice { text, routine_id: None } if text.contains("Draft accepted"))
+        matches!(&status.body, crate::model::Body::Notice { text, routine_id: None } if text.starts_with("Accepted · Draft: ") && text.ends_with(&format!("\n{}", match &finished.payload { ReviewPayload::Draft { text } => text.as_str(), _ => "" })))
     );
 }
 
@@ -159,7 +159,7 @@ async fn a_changed_guarded_file_requires_review_again_before_approval() {
     )
     .await
     .unwrap_err();
-    assert!(error.contains("preconditions changed"));
+    assert!(error.contains("depends on changed"));
     let refreshed = queue::get(&scratch.app, &item.id).unwrap();
     assert_eq!(refreshed.version, 2);
     assert_eq!(refreshed.state, ReviewState::Pending);
@@ -242,7 +242,7 @@ async fn restart_retains_approval_but_never_replays_an_interrupted_claim() {
         .outcome
         .unwrap()
         .summary
-        .contains("may have completed"));
+        .contains("Check whether it finished"));
 }
 
 #[tokio::test]
