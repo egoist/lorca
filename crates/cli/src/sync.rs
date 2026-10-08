@@ -488,9 +488,6 @@ async fn drain_outbox(app: &Arc<App>, url: &str, token: &str) -> Result<(), Rela
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                 continue;
             }
-            // A relay that has not upgraded to protocol 3 refuses the new kind. Durable
-            // handoff state waits for that upgrade, with its job still behind it in the queue.
-            Err(error) if kind == "handoff" => return Err(error),
             Err(error) if error.is_client_error() && !error.is_unauthorized() => {
                 tracing::warn!(%error, %kind, "relay rejected blob; dropping");
                 if kind == "credentials" {
@@ -1015,24 +1012,4 @@ mod tests {
         app.state.lock().unwrap().listed_machines.remove(&fresh);
         assert!(unknown().is_empty(), "unpaired from another Device");
     }
-
-    #[cfg(feature = "server")]
-    #[tokio::test]
-    async fn an_older_relay_refusal_preserves_the_handoff_and_its_queued_job() {
-        let scratch = scratch_app();
-        let app = &scratch.0;
-        let handoff_id = app.push_blob("handoff", None, vec![1, 2, 3]);
-        let job_id = app.push_blob("job", Some("runner".into()), vec![4, 5, 6]);
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = format!("http://{}", listener.local_addr().unwrap());
-        let router = axum::Router::new().route("/v1/blobs", axum::routing::put(|| async {
-            (axum::http::StatusCode::BAD_REQUEST, axum::Json(serde_json::json!({"error": "Unknown blob kind"})))
-        }));
-        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-        let result = drain_outbox(app, &url, "test-token").await;
-        server.abort();
-        assert_eq!(result.unwrap_err().status, Some(400));
-        assert_eq!(app.store.outbox().unwrap().iter().map(|item| item.id.as_str()).collect::<Vec<_>>(), [handoff_id.as_str(), job_id.as_str()]);
-    }
-
 }
