@@ -8,7 +8,10 @@ interface Native {
   wake(): void;
   /// Android only.
   setOpenChat?(chatId: string | null): void;
+  /// Android only.
+  installUpdate?(url: string, sha256: string, size: number): Promise<void>;
   addListener(event: "event", listener: (payload: { json: string }) => void): EventSubscription;
+  addListener(event: "update", listener: (status: InstallStatus) => void): EventSubscription;
 }
 
 const native = requireNativeModule<Native>("LorcaCore");
@@ -52,4 +55,25 @@ export function wake() {
 /// posts nothing for it and clears what it posted for it. iOS asks the notification handler.
 export function setOpenChat(chatId: string | null) {
   native.setOpenChat?.(chatId);
+}
+
+/// Where installing a release stands, as the Android module reports it.
+export type InstallStatus =
+  | { state: "downloading"; received: number; total: number }
+  | { state: "installing" }
+  | { state: "confirming" }
+  | { state: "cancelled" }
+  | { state: "failed"; message: string };
+
+/// Android: downloads a release's APK, checks its size and SHA-256, and hands it to the package
+/// installer, which replaces the running app with it. Resolves once the installer has it; the
+/// download's progress and how the install ends come to `onInstallStatus`.
+export function installUpdate(url: string, sha256: string, size: number): Promise<void> {
+  if (!native.installUpdate) return Promise.reject(new Error("This build cannot install updates"));
+  return native.installUpdate(url, sha256, size);
+}
+
+export function onInstallStatus(listener: (status: InstallStatus) => void): () => void {
+  const subscription = native.addListener("update", listener);
+  return () => subscription.remove();
 }

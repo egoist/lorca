@@ -3,8 +3,10 @@ import { AlertDialog, Column, Host, OutlinedTextField, RadioButton, Row as Compo
 import { clickable, fillMaxWidth, padding } from "@expo/ui/jetpack-compose/modifiers";
 import { Stack, useRouter } from "expo-router";
 import { useState } from "react";
-import { Alert, Platform, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Alert, Platform, ScrollView, StyleSheet, Text, View } from "react-native";
 import { engine } from "../../src/core/engine";
+import { loadPrefs } from "../../src/core/prefs";
+import { checkForUpdates, installedVersion, installUpdate, setDailyChecks, updatesSupported, useUpdates, type Updates } from "../../src/core/updates";
 import { CUSTOM_PRESETS, customProviderNamed, deviceName, isCustomProvider, isRunner, providerLabel } from "../../src/core/model";
 import { deviceIsOnline, useStore } from "../../src/core/store";
 import { deviceLanguage, languageNames, languages, setAppLanguage, t, useLanguage } from "../../src/i18n";
@@ -21,6 +23,23 @@ import {
   useDictationLanguage,
   useSupportedLanguages,
 } from "../../src/ui/dictation";
+
+/// This build's version, then where its updates stand.
+function updateStatus(updates: Updates): string {
+  const version = installedVersion;
+  const latest = updates.latest?.version ?? "";
+  switch (updates.phase) {
+    case "checking":
+      return t("{version} · Checking…", { version });
+    case "downloading":
+      return t("{version} · Downloading {latest}… {percent}%", { version, latest, percent: Math.round(updates.progress * 100) });
+    case "installing":
+      return t("{version} · Installing {latest}…", { version, latest });
+  }
+  if (updates.latest) return t("{version} · {latest} is available", { version, latest });
+  if (updates.error) return `${version} · ${updates.error}`;
+  return updates.checked ? t("{version} · Up to date", { version }) : version;
+}
 
 export default function SettingsScreen() {
   const router = useRouter();
@@ -41,6 +60,8 @@ export default function SettingsScreen() {
   const [ruleBehavior, setRuleBehavior] = useState<"allow" | "ask">("allow");
   const dictation = useDictationLanguage();
   const appLanguage = useLanguage();
+  const updates = useUpdates();
+  const [dailyChecks, setDailyChecksShown] = useState(() => loadPrefs().update_checks !== false);
 
   // The Mac app's pop-up: Automatic with the language it resolves to, a separator, then every
   // language the recognizer knows, by name.
@@ -312,6 +333,33 @@ export default function SettingsScreen() {
             );
           })}
         </Section>
+
+        {updatesSupported && (
+          <Section title={t("Updates")}>
+            {/* The row is the action: Install Update while a newer release is out, else Check for Updates. */}
+            <Row
+              title={updates.latest ? t("Install Update") : t("Check for Updates")}
+              subtitle={updateStatus(updates)}
+              subtitleLines={3}
+              onPress={
+                updates.phase !== "idle"
+                  ? undefined
+                  : updates.latest
+                    ? () => void installUpdate(updates.latest!)
+                    : () => void checkForUpdates()
+              }
+              accessory={updates.phase !== "idle" ? <ActivityIndicator /> : undefined}
+            />
+            <ToggleRow
+              title={t("Check for updates automatically")}
+              value={dailyChecks}
+              onValueChange={(on) => {
+                setDailyChecksShown(on);
+                setDailyChecks(on);
+              }}
+            />
+          </Section>
+        )}
 
         <Section>
           <Row

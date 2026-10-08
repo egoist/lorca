@@ -1,7 +1,8 @@
 // Checks the apps' string tables against the sources: every `L("…")` in the Mac app, every
-// `t("…")` in the phone app, and every `L("…")` and `Lc("…", "…")` in the desktop app should have a
-// Chinese entry, and a format key and its translation should take the same values. `bun run l10n` lists what is missing, unused, or mismatched;
-// `--merge <fragment.json>…` adds `{ "English": "中文" }` files to the tables first.
+// `t("…")` in the phone app, and every `L("…")` and `Lc("…", "…")` in the desktop app's Go should
+// have a Chinese entry, and a format key and its translation should take the same values. `bun run
+// l10n` lists what is missing, unused, or mismatched; `--merge <fragment.json>…` adds
+// `{ "English": "中文" }` files to the tables first.
 
 import { Glob } from "bun"
 import { join } from "node:path"
@@ -9,11 +10,11 @@ import { join } from "node:path"
 const ROOT = join(import.meta.dir, "..")
 const MAC_TABLE = join(ROOT, "macos/Resources/zh-Hans.lproj/Localizable.strings")
 const PHONE_TABLE = join(ROOT, "mobile/src/i18n/zh.ts")
-const DESKTOP_TABLE = join(ROOT, "desktop/src/l10n/zh.ts")
+const DESKTOP_TABLE = join(ROOT, "desktop/l10n/zh.go")
 
 type Table = Map<string, string>
 
-/// A Swift or TypeScript string literal's text, for the escapes the sources use.
+/// A Swift, TypeScript, or Go string literal's text, for the escapes the sources use.
 function unescape(literal: string) {
   return literal.replace(/\\(u\{([0-9a-fA-F]+)\}|u([0-9a-fA-F]{4})|.)/g, (_, all, braced, plain) => {
     if (braced ?? plain) return String.fromCodePoint(parseInt(braced ?? plain, 16))
@@ -55,15 +56,13 @@ async function readMacTable(): Promise<Table> {
   return table
 }
 
-/// The desktop app's keys: `L("…")` or `L('…')`, and `Lc("…", "…")` as the key `…|…`.
+/// The desktop app's keys: `L("…")`, and `Lc("…", "…")` as the key `…|…`.
 async function desktopKeysIn(dir: string) {
   const keys = new Map<string, string>()
-  for await (const path of scan(dir, "src/**/*.{ts,tsx}")) {
-    if (path.includes("l10n/") || path.endsWith("mygo.ts") || path.endsWith(".test.ts")) continue
+  for await (const path of scan(dir, "**/*.go")) {
+    if (path.startsWith("l10n/") || path.endsWith("_test.go")) continue
     const source = await Bun.file(join(dir, path)).text()
-    for (const match of source.matchAll(/\bL\(\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)')/g)) {
-      keys.set(unescape(match[1] ?? match[2]), path)
-    }
+    for (const match of source.matchAll(/\bL\(\s*"((?:[^"\\]|\\.)*)"/g)) keys.set(unescape(match[1]), path)
     for (const match of source.matchAll(/\bLc\(\s*"((?:[^"\\]|\\.)*)",\s*"((?:[^"\\]|\\.)*)"/g)) {
       keys.set(`${unescape(match[1])}|${unescape(match[2])}`, path)
     }
@@ -95,9 +94,12 @@ async function writePhoneTable(table: Table) {
   await Bun.write(PHONE_TABLE, `// Simplified Chinese. The key is the English text passed to t(); \`bun run l10n\` checks this table.\n\nexport const zh: Record<string, string> = {\n${lines.join("\n")}\n};\n`)
 }
 
+/// The desktop table as a Go map, laid out by gofmt.
 async function writeDesktopTable(table: Table) {
-  const lines = sorted(table).map(([key, value]) => `  "${escapeFor(key)}": "${escapeFor(value)}",`)
-  await Bun.write(DESKTOP_TABLE, `// Simplified Chinese. The key is the English text passed to L(); \`bun run l10n\` checks this table.\n\nexport const zh: Record<string, string> = {\n${lines.join("\n")}\n};\n`)
+  const lines = sorted(table).map(([key, value]) => `\t"${escapeFor(key)}": "${escapeFor(value)}",`)
+  await Bun.write(DESKTOP_TABLE, `// Simplified Chinese. The key is the English text passed to L(); \`bun run l10n\` checks this table.\n\npackage l10n\n\nvar zh = map[string]string{\n${lines.join("\n")}\n}\n`)
+  const gofmt = Bun.spawnSync(["gofmt", "-w", DESKTOP_TABLE], { stderr: "inherit" })
+  if (gofmt.exitCode !== 0) throw new Error("gofmt failed on the desktop table")
 }
 
 /// The values a sentence takes: `%@`/`%d` (positions ignored) or `{name}`.

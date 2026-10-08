@@ -1,11 +1,11 @@
 // The Windows and Linux app in desktop/, built with MyGo.
 //
 //   bun run desktop                       Lorca Dev with live reload: builds the CLI for this
-//                                         computer and runs `mygo dev`, whose app launches it
+//                                         computer and runs `go tool mygo dev`, whose app launches it
 //                                         (LORCA_CLI) with LORCA_DEV=1, as the Mac dev loop does.
 //   bun run desktop:build [platforms]     The release apps: the CLI for each platform into
 //                                         desktop/resources/<goos>-<goarch>/bin, then
-//                                         `mygo build -platform`. Platforms are MyGo's, comma
+//                                         `go tool mygo build -platform`. Platforms are MyGo's, comma
 //                                         separated (linux/amd64,windows/amd64); the default is
 //                                         this computer's, or Linux and Windows on x86-64 from a
 //                                         Mac. The Linux CLIs are static (musl) and, like other
@@ -22,7 +22,8 @@ import { CLI_NAME, ROOT, buildCLI, color, log } from "./app.ts"
 import { extractReleaseNotes } from "./changelog.ts"
 
 const DESKTOP = join(ROOT, "desktop")
-const MYGO = join(DESKTOP, "node_modules", ".bin", process.platform === "win32" ? "mygo.exe" : "mygo")
+/** MyGo's command, the version desktop/go.mod pins as a tool. */
+const MYGO = ["go", "tool", "mygo"]
 /** `updates.github` and `updates.tagPrefix` of desktop/mygo.config.ts: the newest release with the
  * prefix is where installed apps look. */
 const RELEASES_REPO = "egoist/lorca"
@@ -61,7 +62,7 @@ async function dev(): Promise<number> {
   }
   const binary = process.platform === "win32" ? `${cli.path}.exe` : cli.path
   log(`${color.bold("running")} ${color.dim("mygo dev")}`)
-  return await run([MYGO, "dev"], { cwd: DESKTOP, env: { LORCA_CLI: binary, LORCA_DEV: "1" } })
+  return await run([...MYGO, "dev"], { cwd: DESKTOP, env: { LORCA_CLI: binary, LORCA_DEV: "1" } })
 }
 
 /** The CLI for `platform`, built for its Rust target and placed where the app finds it. */
@@ -132,10 +133,16 @@ function releaseState(tag: string): "draft" | "published" | "none" {
   return view.stdout.toString().trim() === "true" ? "draft" : "published"
 }
 
+/** `version` in desktop/mygo.config.ts. */
+async function desktopVersion(): Promise<string> {
+  const config = (await import(join(DESKTOP, "mygo.config.ts"))).default as (env: { command: string }) => { version: string }
+  return config({ command: "build" }).version
+}
+
 async function build(platforms: string[], options: { upload?: boolean } = {}): Promise<number> {
   let env: Record<string, string> = {}
   // The desktop app's own version, apart from the Mac app's.
-  const version = (await Bun.file(join(DESKTOP, "package.json")).json()).version as string
+  const version = await desktopVersion()
   if (options.upload) {
     const release = releaseEnv()
     if (!release) return 1
@@ -146,7 +153,7 @@ async function build(platforms: string[], options: { upload?: boolean } = {}): P
       return 1
     }
     if (releaseState(TAG_PREFIX + version) === "published" && process.env.FORCE !== "1") {
-      log(color.red(`${TAG_PREFIX}${version} is already published: bump "version" in desktop/package.json, or FORCE=1 to replace its files`))
+      log(color.red(`${TAG_PREFIX}${version} is already published: bump "version" in desktop/mygo.config.ts, or FORCE=1 to replace its files`))
       return 1
     }
   }
@@ -157,7 +164,7 @@ async function build(platforms: string[], options: { upload?: boolean } = {}): P
     }
   }
   log(`${color.bold("building")} ${color.dim(`the app for ${platforms.join(", ")}`)}`)
-  const command = [MYGO, "build", "-platform", platforms.join(","), ...(options.upload ? ["-upload"] : [])]
+  const command = [...MYGO, "build", "-platform", platforms.join(","), ...(options.upload ? ["-upload"] : [])]
   const status = await run(command, { cwd: DESKTOP, env })
   if (status === 0 && options.upload) log(`${color.green("uploaded")} ${color.dim(`to the release ${TAG_PREFIX}${version} of ${RELEASES_REPO}`)}`)
   else if (status === 0) log(`${color.green("built")} ${color.dim(join(DESKTOP, "build"))}`)
