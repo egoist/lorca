@@ -681,15 +681,18 @@ final class AppStore {
         perform("bots.update", params)
     }
 
-    func botPermissionCatalog(_ id: Bot.ID) async throws -> BotPermissionCatalog {
-        try await client.request("bots.permissions", ["id": id], as: BotPermissionCatalog.self)
+    /// The plugins on the bot's Runner and their tools, asked of that Runner.
+    func botAccessCatalog(_ id: Bot.ID) async throws -> BotAccessCatalog {
+        if isMock { return MockData.accessCatalog() }
+        return try await client.request("bots.permissions", ["id": id], as: BotAccessCatalog.self)
     }
 
-    /// Only the user's profile editor writes access. A failed save stays in the sheet.
-    func setBotPermissions(_ id: Bot.ID, policy: BotPermissions) async throws {
-        if !isMock { _ = try await client.request("bots.update", ["id": id, "permissions": policy.json]) }
-        if let index = bots.firstIndex(where: { $0.id == id }) { bots[index].permissions = policy }
+    /// Only the user changes a bot's Access; the CLI also dismisses the access requests it left.
+    func setBotPermissions(_ id: Bot.ID, _ policy: BotPermissions) {
+        guard let index = bots.firstIndex(where: { $0.id == id }) else { return }
+        bots[index].permissions = policy
         emit(.rosterChanged)
+        perform("bots.update", ["id": id, "permissions": policy.json])
     }
 
     /// The bot's symbol and accent, the look under and behind its image.
@@ -1001,6 +1004,8 @@ final class AppStore {
             switch message.body {
             case var .permission(request):
                 request.decision = decision == "always" ? .always : (decision == "deny" ? .denied : .allowed)
+                // An access request is only ever dismissed.
+                if request.isAccess, request.decision == .denied { request.decision = .dismissed }
                 if request.isConnect, request.decision == .allowed { request.summary = L("Starting the sign-in…") }
                 message.body = .permission(request)
             case var .tool(tool):

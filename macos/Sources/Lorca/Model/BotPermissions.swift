@@ -1,60 +1,97 @@
 import Foundation
 
-/// The user's policy, carried by the CLI in the encrypted bot roster.
+/// A bot's Access, as the CLI keeps it in the encrypted roster: the plugins it may use and how,
+/// and what it may do on its Runner. A bot with no policy has full access.
 struct BotPermissions: Decodable, Hashable {
     struct Connection: Decodable, Hashable {
         var capabilities: Set<String> = []
+        /// Original tool names; nil is every tool the plugin has, one added later included.
         var tools: Set<String>? = nil
-
-        var json: [String: Any] {
-            var result: [String: Any] = ["capabilities": capabilities.sorted()]
-            if let tools { result["tools"] = tools.sorted() }
-            return result
-        }
     }
 
+    /// Nil is every plugin on the Runner, one installed later included; a map denies the rest.
     var connections: [String: Connection]? = nil
-    var tools: Set<String>? = nil
-    var filesystem: String = "write"
-    var shell: Bool = true
+    var filesystem = AccessLevel.write
+    var shell = true
 
     init() {}
 
-    enum CodingKeys: CodingKey { case connections, tools, filesystem, shell }
+    enum CodingKeys: CodingKey { case connections, filesystem, shell }
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         connections = try values.decodeIfPresent([String: Connection].self, forKey: .connections)
-        tools = try values.decodeIfPresent(Set<String>.self, forKey: .tools)
-        filesystem = try values.decodeIfPresent(String.self, forKey: .filesystem) ?? "write"
+        filesystem = AccessLevel(rawValue: try values.decodeIfPresent(String.self, forKey: .filesystem) ?? "write") ?? .none
         shell = try values.decodeIfPresent(Bool.self, forKey: .shell) ?? true
     }
 
     var json: [String: Any] {
-        var result: [String: Any] = ["filesystem": filesystem, "shell": shell]
-        if let tools { result["tools"] = tools.sorted() }
-        if let connections { result["connections"] = connections.mapValues(\.json) }
+        var result: [String: Any] = ["filesystem": filesystem.rawValue, "shell": shell]
+        if let connections {
+            result["connections"] = connections.mapValues { grant in
+                var value: [String: Any] = ["capabilities": grant.capabilities.sorted()]
+                if let tools = grant.tools { value["tools"] = tools.sorted() }
+                return value
+            }
+        }
         return result
     }
 
+    /// What the bot may do with a plugin: the most its grant reaches.
+    func level(of pluginID: String) -> AccessLevel {
+        guard let connections else { return .write }
+        return AccessLevel(capabilities: connections[pluginID]?.capabilities ?? [])
+    }
+
+    /// The Profile card's word for it.
     var summary: String {
-        let accounts = connections.map { L("%d connections", $0.values.filter { !$0.capabilities.isEmpty }.count) } ?? L("All connections")
-        let localTools = tools.map { L("%d local tools", $0.count) } ?? L("All local tools")
-        return [accounts, localTools, shell ? L("Shell allowed") : L("Shell denied")].joined(separator: " · ")
+        connections == nil && filesystem == .write && shell ? L("Full access") : L("Limited")
     }
 }
 
-struct BotPermissionCatalog: Decodable {
-    struct Connection: Decodable {
+/// How far a grant reaches, each level taking in the ones below it: a plugin's read, draft,
+/// and write capabilities, or files read or changed.
+enum AccessLevel: String, CaseIterable {
+    case write, draft, read, none
+
+    init(capabilities: Set<String>) {
+        self = capabilities.contains("write") ? .write : capabilities.contains("draft") ? .draft : capabilities.contains("read") ? .read : .none
+    }
+
+    var capabilities: Set<String> {
+        switch self {
+        case .write: ["read", "draft", "write"]
+        case .draft: ["read", "draft"]
+        case .read: ["read"]
+        case .none: []
+        }
+    }
+
+    func allows(_ capability: String) -> Bool { capabilities.contains(capability) }
+
+    var title: String {
+        switch self {
+        case .write: L("Read and write")
+        case .draft: L("Read and draft")
+        case .read: L("Read only")
+        case .none: L("No access")
+        }
+    }
+}
+
+/// The plugins on a bot's Runner and the tools each offered when it last connected, for the
+/// Access sheet.
+struct BotAccessCatalog: Decodable {
+    struct Plugin: Decodable {
         struct Tool: Decodable {
             var name: String
+            var title: String?
             var description: String?
+            /// What the tool does, as its Runner last read it: read, draft, or write.
             var capability: String?
-            var hidden: Bool?
         }
         var id: String
         var name: String
         var tools: [Tool]
     }
-    var localTools: [String]
-    var connections: [Connection]
+    var connections: [Plugin]
 }

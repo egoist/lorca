@@ -628,8 +628,24 @@ struct PermissionRequest: Hashable {
         command ?? (summary.hasPrefix("$ ") ? String(summary.dropFirst(2)) : summary)
     }
 
+    /// The line under the title: an access request names a plugin's tool as it is, or what the
+    /// bot wanted to do on its Runner in the CLI's English, which reads here in the app's language.
+    var shownSummary: String {
+        guard isAccess else { return summary }
+        switch summary {
+        case "Shell commands": return L("Shell commands")
+        case "Changing files": return L("Changing files")
+        case "Reading files": return L("Reading files")
+        default: return summary
+        }
+    }
+
+    /// Why the card asks: what Auto-review said, or for an access request, where it is turned on.
+    var shownReason: String? { isAccess ? L("Not allowed in this bot's Access settings.") : reason }
+
     var isPending: Bool { decision == .pending }
     var isInstall: Bool { tool == "install" }
+    /// The bot's Access refused a call: the card opens its Access sheet or is dismissed.
     var isAccess: Bool { tool == "access" }
     /// A shell command on the bot's Runner.
     var isShell: Bool { pluginID == "computer" && !isAccess }
@@ -639,7 +655,7 @@ struct PermissionRequest: Hashable {
     /// "wants to use GitHub" / "wants to install GitHub" / "needs a sign-in to GitHub" /
     /// "wants to run a command on Workbench"
     var verbPhrase: String {
-        if isAccess { return L("needs additional access") }
+        if isAccess { return L("needs more access") }
         if isConnect { return L("needs a sign-in to %@", pluginName) }
         if isShell { return L("wants to run a command on %@", pluginName) }
         return isInstall ? L("wants to install %@", pluginName) : L("wants to use %@", pluginName)
