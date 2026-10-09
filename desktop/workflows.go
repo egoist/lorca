@@ -238,7 +238,9 @@ func (mk *marketplace) runWorkflowSample(wp *workflowPage) {
 		}
 	}
 	mk.performWorkflow(wp, []workflowStep{
-		{"configure", func(*model.WorkflowProgress) map[string]any { return map[string]any{"id": id, "answers": answers, "bot_ids": bots} }},
+		{"configure", func(*model.WorkflowProgress) map[string]any {
+			return map[string]any{"id": id, "answers": answers, "bot_ids": bots}
+		}},
 		{"sample", func(*model.WorkflowProgress) map[string]any { return map[string]any{"id": id} }},
 	}, func(saved model.WorkflowProgress) {
 		// Saved now: a new bot is a bot of its own, and the menus show what setup holds.

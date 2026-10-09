@@ -232,8 +232,8 @@ type marketplace struct {
 	// openChat takes the window to a chat once the sheet closes on one.
 	openChat func(chatID string)
 	sheet    *sheet
-	catalog model.Marketplace
-	loading marketLoading
+	catalog  model.Marketplace
+	loading  marketLoading
 	// installing are the plugins being installed, by id.
 	installing map[string]bool
 	// installed is what an install answered, by Runner and plugin, until the Runner's own list has
