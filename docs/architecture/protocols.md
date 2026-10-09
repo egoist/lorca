@@ -10,7 +10,7 @@ CLI → App: `snapshot` (what `roster.changed` carries, with each chat's newest 
 
 The app may choose ids (`bots.create.id`, `chats.create.id`, `chats.send.message_id`) so its optimistic rows match the CLI’s events.
 
-[Bot templates](templates.md) use `templates.contents`, `templates.export.preview` / `templates.export`, and `templates.import.preview` / `templates.import`. The final operations take `reviewed: true` and the preview's `expected_digest`, and refuse contents that changed since. File paths belong to the local CLI.
+[Bot templates](templates.md) use `templates.contents`, `templates.export.preview` / `templates.export`, `templates.share` / `templates.unshare` for links, and `templates.import.preview` / `templates.import`, which take a `path` or a `link`. The final operations take `reviewed: true` and the preview's `expected_digest`, and refuse contents that changed since. File paths belong to the local CLI. The snapshot and `roster.changed` carry the account's `shared_links`, which the roster blob holds with their keys.
 
 `routines.create` takes an optional `check` only on the bot's own Runner; a template import creates its routines there.
 
