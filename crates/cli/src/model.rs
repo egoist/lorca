@@ -714,6 +714,13 @@ pub struct Routine {
     /// skips it. `last_run_at` and `last_outcome` count the runs, not the checks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub check: Option<String>,
+    /// The pull request the routine watches, when it is a watch: the Runner reads it at each due
+    /// time, runs the bot when it changed, and ends the routine once it merges or closes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_request: Option<crate::routine_triggers::PullRequestWatch>,
+    /// The Calendar account whose events place the runs of a schedule around events.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calendar: Option<crate::routine_triggers::CalendarTrigger>,
     pub created_at: f64,
 }
 
@@ -739,7 +746,14 @@ impl Routine {
         if !self.is_enabled {
             return None;
         }
-        let next = crate::schedule::parse(&self.schedule).ok()?.next_after(since.max(self.anchor()), &self.timezone)?;
+        let schedule = crate::schedule::parse(&self.schedule).ok()?;
+        match &schedule {
+            // A one-time routine is due at its time until a run at or after it, by schedule or by hand.
+            crate::schedule::Schedule::Once(_) => return schedule.once_instant(&self.timezone).filter(|at| !crate::routine_triggers::once_taken(self, *at)),
+            crate::schedule::Schedule::Events(offset) => return crate::routine_triggers::next_event_run(self, *offset).map(|(due, _)| due),
+            _ => {}
+        }
+        let next = schedule.next_after(since.max(self.anchor()), &self.timezone)?;
         // After a failure that backs off, no sooner than the retry.
         let retry = self.health.as_ref().and_then(|health| health.retry_at()).unwrap_or(0.0);
         Some(next.max(retry as i64))

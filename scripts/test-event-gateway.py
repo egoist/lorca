@@ -60,6 +60,23 @@ class GatewayContract(unittest.TestCase):
         with self.assertRaises(ValueError):
             gateway.github_envelope(self.route, self.secret, body, signature, 1700000000)
 
+    def test_a_routine_webhook_takes_any_body_from_its_key_holder(self):
+        key = b"a-private-routine-webhook-key-with-entropy"
+        headers = {"Authorization": "Bearer " + key.decode()}
+        event = gateway.webhook_envelope(self.route, key, b'{"status":"deployed"}', headers, 1700000000)
+        self.assertEqual((event["event_type"], event["payload"]), ("webhook", '{"status":"deployed"}'))
+        text = gateway.webhook_envelope(self.route, key, "plain words 🌱".encode(), {"X-Lorca-Key": key.decode()}, 1700000000)
+        self.assertEqual(json.loads(text["payload"]), "plain words 🌱")
+        self.assertNotEqual(event["delivery_id"], gateway.webhook_envelope(self.route, key, b'{"status":"deployed"}', headers, 1700000000)["delivery_id"])
+        repeat = dict(headers, **{"Idempotency-Key": "deploy-7"})
+        self.assertEqual(
+            gateway.webhook_envelope(self.route, key, b"{}", repeat, 1700000000)["delivery_id"],
+            gateway.webhook_envelope(self.route, key, b"{}", repeat, 1700000001)["delivery_id"],
+        )
+        for bad in [{}, {"Authorization": "Bearer wrong"}, {"X-Lorca-Key": key.decode() + "x"}]:
+            with self.assertRaises(ValueError):
+                gateway.webhook_envelope(self.route, key, b"{}", bad, 1700000000)
+
 
 def free_port():
     with socket.socket() as listener:

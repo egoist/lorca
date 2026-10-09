@@ -788,7 +788,7 @@ mod tests {
             .insert_routine(Routine {
                 id: "rt-watch".into(), bot_id: devops.id.clone(), name: "Railway memory watch".into(), prompt: "Check Railway memory.".into(), feedback_authorization_prompt: None,
                 schedule: "every 2h".into(), timezone: "UTC".into(), missed_run_policy: Default::default(), last_scheduled_at: None, health: None,
-                is_enabled: true, enabled_at: 0.0, last_run_at: None, last_outcome: None, paused_reason: None, check: None, created_at: 0.0,
+                is_enabled: true, enabled_at: 0.0, last_run_at: None, last_outcome: None, paused_reason: None, check: None, pull_request: None, calendar: None, created_at: 0.0,
             })
             .unwrap();
         let marker = say(1.0, Author::System, Body::Notice { text: "Routine · Railway memory watch".into(), routine_id: Some(routine.id.clone()) });

@@ -49,6 +49,7 @@ pub mod review_queue;
 pub mod review_execution;
 pub mod routines;
 pub mod routine_health;
+pub mod routine_triggers;
 pub mod runtime;
 pub mod schedule;
 #[cfg(feature = "runner")]

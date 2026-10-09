@@ -587,24 +587,27 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
                     return Err("Save routine checks on the bot's assigned Runner.".into());
                 }
             }
-            let routine = routines::create_with_policy(
+            let triggers = routines::Triggers { pull_request: params["pull_request"].as_str(), calendar: params["calendar"].as_str(), event_match: params["event_match"].as_str() };
+            let routine = routines::create_routine(
                 app,
                 &bot_id,
                 &string(&params, "name")?,
-                &string(&params, "schedule")?,
+                params["schedule"].as_str().unwrap_or(""),
                 params["prompt"].as_str().unwrap_or(""),
                 check,
                 params["enabled"].as_bool().unwrap_or(true),
                 params["timezone"].as_str(),
                 params["missed_run_policy"].as_str(),
+                triggers,
             )?;
             Ok(json!({ "routine": app.routine_out(&routine) }))
         }
         "routines.update" => {
             let id = string(&params, "id")?;
             let mut routine = app.routine(&id).ok_or("Unknown routine")?;
-            if ["name", "schedule", "prompt", "timezone", "missed_run_policy"].iter().any(|field| params.get(field).is_some()) {
-                routine = routines::edit_with_policy(app, &id, opt_string(&params, "name").as_deref(), opt_string(&params, "schedule").as_deref(), params["prompt"].as_str(), None, params["timezone"].as_str(), params["missed_run_policy"].as_str())?;
+            if ["name", "schedule", "prompt", "timezone", "missed_run_policy", "pull_request", "calendar", "event_match"].iter().any(|field| params.get(field).is_some()) {
+                let triggers = routines::Triggers { pull_request: params["pull_request"].as_str(), calendar: params["calendar"].as_str(), event_match: params["event_match"].as_str() };
+                routine = routines::edit_routine(app, &id, opt_string(&params, "name").as_deref(), opt_string(&params, "schedule").as_deref(), params["prompt"].as_str(), None, params["timezone"].as_str(), params["missed_run_policy"].as_str(), triggers)?;
             }
             if let Some(enabled) = params["enabled"].as_bool() {
                 routine = routines::set_enabled(app, &id, enabled)?;

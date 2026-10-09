@@ -1491,8 +1491,37 @@ impl App {
 
     fn routine_out_with_state(&self, routine: &Routine, state: &State) -> Value {
         let mut out = serde_json::to_value(routine).unwrap_or_default();
-        out["schedule_text"] = json!(crate::schedule::parse(&routine.schedule).map(|s| s.describe()).unwrap_or_else(|_| routine.schedule.clone()));
+        out["schedule_text"] = json!(crate::routine_triggers::describe(routine));
         out["next_run_at"] = json!(crate::routines::next_run_shown(routine).map(|t| t as f64));
+        // What the apps word themselves: a one-time routine's instant, a watch's pull request,
+        // and the event a routine around events runs for next. What the Runner keeps to compare
+        // reads stays out.
+        if let Ok(schedule @ crate::schedule::Schedule::Once(_)) = crate::schedule::parse(&routine.schedule) {
+            out["once_at"] = json!(schedule.once_instant(&routine.timezone).map(|t| t as f64));
+        }
+        if let Some(watch) = &routine.pull_request {
+            let seen = watch.seen.as_ref();
+            out["pull_request"] = json!({
+                "repo": watch.repo,
+                "number": watch.number,
+                "title": seen.map(|seen| seen.title.clone()).unwrap_or_default(),
+                "url": seen.map(|seen| seen.url.clone()).filter(|url| !url.is_empty()).unwrap_or_else(|| format!("https://github.com/{}/pull/{}", watch.repo, watch.number)),
+            });
+        }
+        if let Some(calendar) = &routine.calendar {
+            let offset = match crate::schedule::parse(&routine.schedule) {
+                Ok(crate::schedule::Schedule::Events(offset)) => Some(offset),
+                _ => None,
+            };
+            let next = offset.and_then(|offset| crate::routine_triggers::next_event_run(routine, offset)).map(|(_, event)| json!({ "title": event.title, "start": event.start, "end": event.end }));
+            out["calendar"] = json!({
+                "account": calendar.account,
+                "matching": calendar.matching,
+                "minutes": offset.map(|offset| offset.minutes),
+                "after": offset.map(|offset| offset.after),
+                "next_event": next,
+            });
+        }
         let running = self.is_routine_running(&routine.id);
         out["is_running"] = json!(running);
         out["state"] = json!(self.routine_state(routine, state, running));
@@ -2103,6 +2132,8 @@ mod tests {
             last_outcome: None,
             paused_reason: None,
             check: None,
+            pull_request: None,
+            calendar: None,
             created_at: 1.0,
         }
     }
