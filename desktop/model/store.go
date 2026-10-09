@@ -151,6 +151,8 @@ type Store struct {
 	Attention AttentionView
 	// SharedLinks are the bots the account shares as links, shared through the roster.
 	SharedLinks []SharedLink
+	// Sections are the sidebar's sections, in order, shared through the roster.
+	Sections []*Section
 	// Providers are the account's provider credentials, the same on every Device.
 	Providers []ProviderCredential
 	// Models are what the CLI's catalog offers, for the Model and Thinking pickers.
@@ -493,6 +495,7 @@ func (s *Store) apply(snapshot WireSnapshot) {
 		s.Reviews = append(s.Reviews, &copy)
 	}
 	s.SharedLinks = snapshot.SharedLinks
+	s.Sections = ToSections(snapshot.Sections)
 	s.Providers = ToProviders(snapshot.Providers)
 	s.Models = ToModels(snapshot.Models)
 	s.Playbooks = snapshot.Playbooks
@@ -594,6 +597,9 @@ func (s *Store) handle(name string, data json.RawMessage) {
 		}
 		if roster.SharedLinks != nil {
 			s.SharedLinks = roster.SharedLinks
+		}
+		if roster.Sections != nil {
+			s.Sections = ToSections(roster.Sections)
 		}
 		if roster.AutoReview != nil {
 			s.AutoReview = ToAutoReview(roster.AutoReview)
@@ -2029,9 +2035,166 @@ func (s *Store) TogglePin(id string) {
 		return
 	}
 	chat.IsPinned = !chat.IsPinned
+	// A pinned chat is back in the sidebar.
+	if chat.IsPinned {
+		chat.IsHidden = false
+	}
 	s.sortChats()
 	s.emit(Event{Kind: EventChatsChanged})
 	s.perform("chats.pin", map[string]any{"chat_id": id, "pinned": chat.IsPinned})
+}
+
+// SetHidden takes a chat out of the sidebar, or puts it back. A hidden chat is not pinned.
+func (s *Store) SetHidden(id string, hidden bool) {
+	chat := s.Chat(id)
+	if chat == nil || chat.IsHidden == hidden {
+		return
+	}
+	chat.IsHidden = hidden
+	if hidden {
+		chat.IsPinned = false
+	}
+	s.sortChats()
+	s.emit(Event{Kind: EventChatsChanged})
+	s.perform("chats.hide", map[string]any{"chat_id": id, "hidden": hidden})
+}
+
+// Mute turns a chat's alerts off on every Device until `until`, or until unmuted when it is zero.
+func (s *Store) Mute(id string, until time.Time) {
+	chat := s.Chat(id)
+	if chat == nil {
+		return
+	}
+	chat.Mute = &ChatMute{Until: until}
+	s.emit(Event{Kind: EventChatsChanged})
+	params := map[string]any{"chat_id": id, "muted": true}
+	if !until.IsZero() {
+		params["until"] = float64(until.UnixMilli()) / 1000
+	}
+	s.perform("chats.mute", params)
+}
+
+func (s *Store) Unmute(id string) {
+	chat := s.Chat(id)
+	if chat == nil || chat.Mute == nil {
+		return
+	}
+	chat.Mute = nil
+	s.emit(Event{Kind: EventChatsChanged})
+	s.perform("chats.mute", map[string]any{"chat_id": id, "muted": false})
+}
+
+// MARK: - Sidebar sections
+
+func (s *Store) Section(id string) *Section {
+	for _, section := range s.Sections {
+		if section.ID == id {
+			return section
+		}
+	}
+	return nil
+}
+
+// SectionName is a section's name as the CLI keeps it: one line of at most 60 characters.
+func SectionName(name string) string {
+	name = strings.Join(strings.Fields(name), " ")
+	if runes := []rune(name); len(runes) > 60 {
+		name = string(runes[:60])
+	}
+	return name
+}
+
+// CreateSection adds a section after the others, with `chatID` moved into it when it is set.
+func (s *Store) CreateSection(name, chatID string) {
+	name = SectionName(name)
+	if name == "" {
+		return
+	}
+	section := &Section{ID: ShortID("section"), Name: name}
+	s.Sections = append(s.Sections, section)
+	params := map[string]any{"id": section.ID, "name": name}
+	if chat := s.Chat(chatID); chat != nil {
+		chat.SectionID, chat.IsPinned, chat.IsHidden = section.ID, false, false
+		params["chat_id"] = chatID
+		s.sortChats()
+	}
+	s.emit(Event{Kind: EventChatsChanged})
+	s.perform("sections.create", params)
+}
+
+func (s *Store) RenameSection(id, name string) {
+	name = SectionName(name)
+	section := s.Section(id)
+	if name == "" || section == nil || section.Name == name {
+		return
+	}
+	section.Name = name
+	s.emit(Event{Kind: EventChatsChanged})
+	s.perform("sections.rename", map[string]any{"id": id, "name": name})
+}
+
+// DeleteSection deletes a section; its chats go back to the chats in no section.
+func (s *Store) DeleteSection(id string) {
+	if s.Section(id) == nil {
+		return
+	}
+	s.Sections = slices.DeleteFunc(slices.Clone(s.Sections), func(section *Section) bool { return section.ID == id })
+	for _, chat := range s.Chats {
+		if chat.SectionID == id {
+			chat.SectionID = ""
+		}
+	}
+	s.emit(Event{Kind: EventChatsChanged})
+	s.perform("sections.delete", map[string]any{"id": id})
+}
+
+// MoveSection puts a section at `place` among the sections.
+func (s *Store) MoveSection(id string, place int) {
+	from := slices.IndexFunc(s.Sections, func(section *Section) bool { return section.ID == id })
+	if from < 0 {
+		return
+	}
+	to := max(0, min(len(s.Sections)-1, place))
+	if to == from {
+		return
+	}
+	sections := slices.Clone(s.Sections)
+	section := sections[from]
+	sections = slices.Insert(slices.Delete(sections, from, from+1), to, section)
+	s.Sections = sections
+	ids := make([]string, len(sections))
+	for i, section := range sections {
+		ids[i] = section.ID
+	}
+	s.emit(Event{Kind: EventChatsChanged})
+	s.perform("sections.reorder", map[string]any{"ids": ids})
+}
+
+func (s *Store) SetSectionCollapsed(id string, collapsed bool) {
+	section := s.Section(id)
+	if section == nil || section.Collapsed == collapsed {
+		return
+	}
+	section.Collapsed = collapsed
+	s.emit(Event{Kind: EventChatsChanged})
+	s.perform("sections.collapse", map[string]any{"id": id, "collapsed": collapsed})
+}
+
+// MoveChat lists a chat under a section, or with the chats in no section when `sectionID` is
+// empty, where the sidebar shows it: off the pinned rows and out of Hidden.
+func (s *Store) MoveChat(id, sectionID string) {
+	chat := s.Chat(id)
+	if chat == nil || (chat.SectionID == sectionID && !chat.IsPinned && !chat.IsHidden) {
+		return
+	}
+	chat.SectionID, chat.IsPinned, chat.IsHidden = sectionID, false, false
+	s.sortChats()
+	s.emit(Event{Kind: EventChatsChanged})
+	var section any
+	if sectionID != "" {
+		section = sectionID
+	}
+	s.perform("chats.set_section", map[string]any{"chat_id": id, "section_id": section})
 }
 
 // LoadOlderMessages asks the CLI for the page of messages before the chat's first one. The
@@ -2745,6 +2908,7 @@ func (s *Store) ResetMockData() {
 	s.AutoReview = mockAutoReview()
 	s.Attention = DefaultAttention()
 	s.SharedLinks = mockSharedLinks()
+	s.Sections = mockSections()
 	s.Providers = mockProviders()
 	s.Models = mockModels()
 	s.sortChats()

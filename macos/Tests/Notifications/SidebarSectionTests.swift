@@ -116,6 +116,18 @@ final class SidebarSectionTests: XCTestCase {
         XCTAssertTrue(Preferences.showsHiddenChats)
         try capture(outline, window: window, name: "mac-sidebar-hidden")
 
+        // Folded again around the chat on screen, Hidden stays folded until the chat is opened.
+        let hidden = try XCTUnwrap(outline.item(atRow: rows().count - 2) as? SidebarNode)
+        var picked: [Selection?] = []
+        sidebar.onSelect = { picked.append($0) }
+        outline.collapseItem(hidden)
+        XCTAssertEqual(rows().last, "[Hidden]")
+        XCTAssertTrue(picked.isEmpty, "folding the open chat's row away leaves the chat open")
+        sidebar.setSelection(.chat("chat-quill"))
+        XCTAssertEqual(rows().last, "[Hidden]")
+        sidebar.reveal("chat-quill")
+        XCTAssertEqual(rows().last, "chat-quill")
+
         // A new section goes after the others; deleting one leaves its chats under Chats.
         store.createSection(named: "  Customers ", moving: "chat-patch")
         XCTAssertEqual(store.sections.map(\.name), ["Product", "Engineering", "Customers"])

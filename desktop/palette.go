@@ -57,6 +57,9 @@ var paletteCommands = []struct{ id, symbol, keywords string }{
 	{"addBot", "person.badge.plus", "invite member group"},
 	{"renameChat", "pencil", "title name"},
 	{"pinChat", "pin", "unpin favorite"},
+	{"unmuteChat", "bell", "notifications alerts sound"},
+	{"hideChat", "eye.slash", "archive sidebar show"},
+	{"newSection", "folder.badge.plus", "group folder organize"},
 	{"newSkill", "book.closed", "playbook instructions workflow"},
 	{"stopResponding", "stop.circle", "cancel interrupt"},
 	{"runInBackground", "terminal", "detach server task"},
@@ -165,7 +168,8 @@ func paletteChats(m *mainWindow) []paletteItem {
 			keywords = append(keywords, bot.Name)
 		}
 		id := chat.ID
-		items = append(items, paletteItem{bots: bots, title: store.Title(chat), subtitle: store.Subtitle(chat), keywords: keywords, chatID: id, run: func() { m.open(id) }})
+		// A hidden chat is out of the list until a query finds it.
+		items = append(items, paletteItem{bots: bots, title: store.Title(chat), subtitle: store.Subtitle(chat), keywords: keywords, searchOnly: chat.IsHidden, chatID: id, run: func() { m.open(id) }})
 	}
 	return items
 }

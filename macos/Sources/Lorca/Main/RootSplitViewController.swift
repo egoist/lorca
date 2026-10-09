@@ -508,6 +508,7 @@ final class RootSplitViewController: NSSplitViewController {
 
     func open(_ chatID: Chat.ID) {
         select(.chat(chatID))
+        sidebar.reveal(chatID)
         chatController?.focusComposer()
     }
 

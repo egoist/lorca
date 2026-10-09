@@ -1662,6 +1662,32 @@ type Chat struct {
 	OwnerBotID string
 	// GroupDescription is what a group is for, which every member reads in its system prompt.
 	GroupDescription string
+	// SectionID is the sidebar section the chat is listed under; empty lists it with the chats in
+	// no section.
+	SectionID string
+	// IsHidden takes the chat out of the sidebar but keeps it: search finds it, and the sidebar's
+	// Hidden group lists it.
+	IsHidden bool
+	// Mute is set while the chat's alerts are off on every Device.
+	Mute *ChatMute
+}
+
+// ChatMute is a chat's alerts off until Until, or until unmuted when Until is zero.
+type ChatMute struct {
+	Until time.Time
+}
+
+// IsMuted is the chat's alerts off at `now`. The unread count is kept either way.
+func (c *Chat) IsMuted(now time.Time) bool {
+	return c.Mute != nil && (c.Mute.Until.IsZero() || now.Before(c.Mute.Until))
+}
+
+// Section is a named group of chats in the sidebar. Every Device shows the same sections, in the
+// same order, folded the same way.
+type Section struct {
+	ID        string
+	Name      string
+	Collapsed bool
 }
 
 func (c *Chat) IsGroup() bool { return c.Kind == ChatGroup }

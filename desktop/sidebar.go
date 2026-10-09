@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -23,6 +24,8 @@ type chatsSidebarState struct {
 	typedAt time.Time
 	// revealSelection scrolls the selected row into view once.
 	revealSelection bool
+	// shownChat is the chat last selected, so a chat opened some other way unfolds its group once.
+	shownChat string
 }
 
 // letterKeys are the keys that type the letters a type-select reads.
@@ -40,6 +43,147 @@ var letterKeys = func() map[ui.Key]rune {
 	return keys
 }()
 
+// sidebarGroup is a folding group of the chats sidebar: one of the account's sections, the chats
+// in no section, or the hidden chats.
+type sidebarGroup struct {
+	kind      sidebarGroupKind
+	sectionID string
+}
+
+type sidebarGroupKind int
+
+const (
+	groupSection sidebarGroupKind = iota
+	groupOthers
+	groupHidden
+)
+
+// sidebarRow is a row of the chats sidebar: a chat, or a group's header.
+type sidebarRow struct {
+	chat      *model.Chat
+	group     *sidebarGroup
+	collapsed bool
+}
+
+func (r sidebarRow) key() any {
+	if r.chat != nil {
+		return r.chat.ID
+	}
+	return *r.group
+}
+
+// sidebarRows are what the chats sidebar lists, after the Mac's SidebarLayout: the pinned chats;
+// each section with its chats, then the chats in no section under Chats; and the hidden chats
+// under Hidden. Without sections the chats are one list with no header, and without hidden chats
+// there is no Hidden. A folded group lists its header alone. `chats` are in the store's order.
+func sidebarRows(chats []*model.Chat, sections []*model.Section, showsHidden, collapsesOthers bool) []sidebarRow {
+	var rows []sidebarRow
+	var listed, hidden []*model.Chat
+	for _, chat := range chats {
+		if chat.IsHidden {
+			hidden = append(hidden, chat)
+		} else {
+			listed = append(listed, chat)
+		}
+	}
+	group := func(g sidebarGroup, collapsed bool, members []*model.Chat) {
+		rows = append(rows, sidebarRow{group: &g, collapsed: collapsed})
+		if !collapsed {
+			for _, chat := range members {
+				rows = append(rows, sidebarRow{chat: chat})
+			}
+		}
+	}
+	if len(sections) == 0 {
+		for _, chat := range listed {
+			rows = append(rows, sidebarRow{chat: chat})
+		}
+	} else {
+		known := map[string]bool{}
+		for _, section := range sections {
+			known[section.ID] = true
+		}
+		var others []*model.Chat
+		for _, chat := range listed {
+			switch {
+			case chat.IsPinned:
+				rows = append(rows, sidebarRow{chat: chat})
+			case !known[chat.SectionID]:
+				others = append(others, chat)
+			}
+		}
+		for _, section := range sections {
+			var members []*model.Chat
+			for _, chat := range listed {
+				if !chat.IsPinned && chat.SectionID == section.ID {
+					members = append(members, chat)
+				}
+			}
+			group(sidebarGroup{kind: groupSection, sectionID: section.ID}, section.Collapsed, members)
+		}
+		if len(others) > 0 {
+			group(sidebarGroup{kind: groupOthers}, collapsesOthers, others)
+		}
+	}
+	if len(hidden) > 0 {
+		group(sidebarGroup{kind: groupHidden}, !showsHidden, hidden)
+	}
+	return rows
+}
+
+// groupOf is the group a chat is listed under, when the sidebar has groups for it.
+func groupOf(chat *model.Chat) (sidebarGroup, bool) {
+	switch {
+	case chat.IsHidden:
+		return sidebarGroup{kind: groupHidden}, true
+	case len(store.Sections) == 0 || chat.IsPinned:
+		return sidebarGroup{}, false
+	case store.Section(chat.SectionID) != nil:
+		return sidebarGroup{kind: groupSection, sectionID: chat.SectionID}, true
+	default:
+		return sidebarGroup{kind: groupOthers}, true
+	}
+}
+
+func groupTitle(group sidebarGroup) string {
+	switch group.kind {
+	case groupSection:
+		if section := store.Section(group.sectionID); section != nil {
+			return section.Name
+		}
+		return ""
+	case groupOthers:
+		return Lc("Chats", "no section")
+	default:
+		return L("Hidden")
+	}
+}
+
+// foldGroup folds or unfolds a group: a section on every Device, the others on this computer.
+func foldGroup(group sidebarGroup, collapsed bool) {
+	switch group.kind {
+	case groupSection:
+		store.SetSectionCollapsed(group.sectionID, collapsed)
+	case groupOthers:
+		setPrefs(PreferencesPatch{CollapsesOtherChats: &collapsed})
+	case groupHidden:
+		shows := !collapsed
+		setPrefs(PreferencesPatch{ShowsHiddenChats: &shows})
+	}
+}
+
+func groupCollapsed(group sidebarGroup) bool {
+	switch group.kind {
+	case groupSection:
+		section := store.Section(group.sectionID)
+		return section != nil && section.Collapsed
+	case groupOthers:
+		return prefs.get().CollapsesOtherChats
+	default:
+		return !prefs.get().ShowsHiddenChats
+	}
+}
+
 func (m *mainWindow) chatsSidebar(c *ui.Context) {
 	p := colors(c)
 	s := &m.chatsList
@@ -56,20 +200,38 @@ func (m *mainWindow) chatsSidebar(c *ui.Context) {
 		}
 	})
 
-	chats := store.Chats
+	// A chat opened some other way (the palette, a notification, a hidden chat found by search)
+	// shows its row: its group unfolds.
+	if id := m.selection.ChatID; id != s.shownChat {
+		s.shownChat = id
+		if chat := store.Chat(id); chat != nil {
+			if group, ok := groupOf(chat); ok && groupCollapsed(group) {
+				foldGroup(group, false)
+			}
+		}
+	}
+	pr := prefs.get()
+	rows := sidebarRows(store.Chats, store.Sections, pr.ShowsHiddenChats, pr.CollapsesOtherChats)
+	var chatRows []int
 	selected := -1
-	for i, chat := range chats {
-		if chat.ID == m.selection.ChatID {
+	for i, row := range rows {
+		if row.chat == nil {
+			continue
+		}
+		chatRows = append(chatRows, i)
+		if row.chat.ID == m.selection.ChatID {
 			selected = i
 		}
 	}
-	selectAt := func(index int) {
-		if len(chats) == 0 {
+	place := slices.Index(chatRows, selected)
+	// selectAt chooses the chat at a place among the chat rows; headers are passed over.
+	selectAt := func(at int) {
+		if len(chatRows) == 0 {
 			return
 		}
-		index = max(0, min(len(chats)-1, index))
-		m.selectChat(chats[index].ID)
-		s.list.ScrollIntoView(index)
+		at = max(0, min(len(chatRows)-1, at))
+		m.selectChat(rows[chatRows[at]].chat.ID)
+		s.list.ScrollIntoView(chatRows[at])
 	}
 
 	holder := ui.Column(c).Grow(1).MinHeight(0).Focusable().FocusRing(false).Label(L("Chats")).Role(ui.RoleList)
@@ -82,17 +244,20 @@ func (m *mainWindow) chatsSidebar(c *ui.Context) {
 	page := max(1, int(holder.Bounds().H/54)-1)
 	switch {
 	case holder.Shortcut(0, ui.KeyDown):
-		selectAt(selected + 1)
+		selectAt(place + 1)
 	case holder.Shortcut(0, ui.KeyUp):
-		selectAt(selected - 1)
+		if place < 0 {
+			place = len(chatRows)
+		}
+		selectAt(place - 1)
 	case holder.Shortcut(0, ui.KeyPageDown):
-		selectAt(selected + page)
+		selectAt(place + page)
 	case holder.Shortcut(0, ui.KeyPageUp):
-		selectAt(selected - page)
+		selectAt(place - page)
 	case holder.Shortcut(0, ui.KeyHome):
 		selectAt(0)
 	case holder.Shortcut(0, ui.KeyEnd):
-		selectAt(len(chats) - 1)
+		selectAt(len(chatRows) - 1)
 	case holder.Shortcut(0, ui.KeyEnter):
 		if m.selection.IsChat() {
 			m.open(m.selection.ChatID)
@@ -112,9 +277,9 @@ func (m *mainWindow) chatsSidebar(c *ui.Context) {
 		}
 		s.typed += string(letter)
 		s.typedAt = time.Now()
-		for i, chat := range store.Chats {
-			if strings.HasPrefix(strings.ToLower(store.Title(chat)), s.typed) {
-				m.selectChat(chat.ID)
+		for _, i := range chatRows {
+			if strings.HasPrefix(strings.ToLower(store.Title(rows[i].chat)), s.typed) {
+				m.selectChat(rows[i].chat.ID)
 				s.list.ScrollIntoView(i)
 				break
 			}
@@ -123,17 +288,127 @@ func (m *mainWindow) chatsSidebar(c *ui.Context) {
 	})
 	hints := m.shortcutHints(c)
 	holder.Children(func() {
-		s.list.Key = func(i int) any { return chats[i].ID }
-		s.list.Label = func(i int) string { return store.Title(chats[i]) }
-		ui.List(c, &s.list, len(chats), func(i int) {
-			hint := ""
-			if hints && i < len(chatNumberKeys) {
-				hint = shortcutText(fmt.Sprintf("CmdOrCtrl+%d", i+1))
+		s.list.Key = func(i int) any { return rows[i].key() }
+		s.list.Label = func(i int) string {
+			if rows[i].chat != nil {
+				return store.Title(rows[i].chat)
 			}
-			m.chatRow(c, chats[i], i == selected, focused, hint)
+			return groupTitle(*rows[i].group)
+		}
+		// Chats drag into sections, and sections into another order.
+		s.list.Reorder = nil
+		if len(store.Sections) > 0 {
+			s.list.Reorder = func(dragged []int, to int) { dropSidebarRows(rows, dragged, to) }
+		}
+		ui.List(c, &s.list, len(rows), func(i int) {
+			row := rows[i]
+			if row.group != nil {
+				m.groupHeader(c, *row.group, row.collapsed)
+				return
+			}
+			hint := ""
+			if at := slices.Index(chatRows, i); hints && at >= 0 && at < len(chatNumberKeys) {
+				hint = shortcutText(fmt.Sprintf("CmdOrCtrl+%d", at+1))
+			}
+			m.chatRow(c, row.chat, i == selected, focused, hint)
 		}).Grow(1).Padding(2, 8, 8, 8)
 	})
 	m.sidebarFooter(c)
+}
+
+// visibleChats are the chats as their rows show, top down: Ctrl+1 to Ctrl+9 open the first nine.
+func visibleChats() []*model.Chat {
+	pr := prefs.get()
+	var chats []*model.Chat
+	for _, row := range sidebarRows(store.Chats, store.Sections, pr.ShowsHiddenChats, pr.CollapsesOtherChats) {
+		if row.chat != nil {
+			chats = append(chats, row.chat)
+		}
+	}
+	return chats
+}
+
+// dropSidebarRows puts a dragged row where it was let go, `to` being the row it goes before: a
+// chat into the group it lands in (not Hidden), a section among the sections.
+func dropSidebarRows(rows []sidebarRow, dragged []int, to int) {
+	if len(dragged) != 1 {
+		return
+	}
+	row := rows[dragged[0]]
+	to = min(to, len(rows))
+	switch {
+	case row.chat != nil:
+		for i := to - 1; i >= 0; i-- {
+			if group := rows[i].group; group != nil {
+				if group.kind != groupHidden {
+					store.MoveChat(row.chat.ID, group.sectionID)
+				}
+				return
+			}
+		}
+	case row.group != nil && row.group.kind == groupSection:
+		place := 0
+		for _, before := range rows[:to] {
+			if group := before.group; group != nil && group.kind == groupSection && group.sectionID != row.group.sectionID {
+				place++
+			}
+		}
+		store.MoveSection(row.group.sectionID, place)
+	}
+}
+
+// groupHeader is a group's header, after the Mac's source-list group row: its name in small bold
+// secondary text, a chevron that folds it while the pointer is over the row, and its menu.
+func (m *mainWindow) groupHeader(c *ui.Context, group sidebarGroup, collapsed bool) {
+	p := colors(c)
+	title := groupTitle(group)
+	row := ui.Row(c).Height(28).Padding(0, 6, 5, 6).AlignItems(ui.End).Gap(4).Label(title).Role(ui.RoleDisclosure).Expanded(!collapsed)
+	hovered := row.Hovered()
+	switch group.kind {
+	case groupSection:
+		id := group.sectionID
+		row.ContextMenu(func(menu *ui.Menu) {
+			at := slices.IndexFunc(store.Sections, func(section *model.Section) bool { return section.ID == id })
+			if menu.Item(L("Rename Section…")).Chosen() {
+				m.renameSection(id)
+			}
+			if menu.Item(L("Move Up")).Disabled(at <= 0).Chosen() {
+				store.MoveSection(id, at-1)
+			}
+			if menu.Item(L("Move Down")).Disabled(at < 0 || at >= len(store.Sections)-1).Chosen() {
+				store.MoveSection(id, at+1)
+			}
+			menu.Separator()
+			if menu.Item(L("Delete Section…")).Chosen() {
+				m.deleteSection(id)
+			}
+		})
+	case groupOthers:
+		row.ContextMenu(func(menu *ui.Menu) {
+			if menu.Item(L("New Section…")).Chosen() {
+				runCommand("newSection")
+			}
+		})
+	}
+	row.Children(func() {
+		ui.Text(c, title).Grow(1).Shrink(1).MinWidth(0).FontSize(11).FontWeight(700).TextColor(p.Label2).SingleLine()
+		name := "chevron.down"
+		if collapsed {
+			name = "chevron.right"
+		}
+		label := L("Hide")
+		if collapsed {
+			label = L("Show")
+		}
+		fold := ui.ButtonBase(c).Size(18, 18).Radius(4).Justify(ui.Center).TextColor(p.Label2).Label(label).FocusRing(false)
+		if !hovered && !fold.Focused() {
+			fold.Opacity(0)
+		}
+		fold.Children(func() { symbol(c, name, 11, 2.25) })
+		if fold.Clicked() {
+			foldGroup(group, !collapsed)
+		}
+	})
 }
 
 // shortcutHintDelay is how long Cmd (Ctrl on Windows and Linux) is held alone before the chats
@@ -170,9 +445,13 @@ func (m *mainWindow) chatRow(c *ui.Context, chat *model.Chat, selected, listFocu
 		}
 	}
 	title := store.Title(chat)
+	muted := chat.IsMuted(c.Now())
 	label := []string{title}
 	if chat.UnreadCount > 0 {
 		label = append(label, L("%d unread", chat.UnreadCount))
+	}
+	if muted {
+		label = append(label, L("Muted"))
 	}
 	if working {
 		label = append(label, L("Working"))
@@ -210,6 +489,8 @@ func (m *mainWindow) chatRow(c *ui.Context, chat *model.Chat, selected, listFocu
 		if menu.Item(pin).Chosen() {
 			store.TogglePin(chatID)
 		}
+		m.chatSidebarItems(menu, chat)
+		menu.Separator()
 		if chat.IsGroup() {
 			if menu.Item(L("Rename…")).Chosen() {
 				m.renameChat()
@@ -239,6 +520,9 @@ func (m *mainWindow) chatRow(c *ui.Context, chat *model.Chat, selected, listFocu
 		ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(2).Children(func() {
 			ui.Row(c).Gap(6).MinWidth(0).Children(func() {
 				ui.Text(c, title).Grow(1).Shrink(1).MinWidth(0).FontSize(13).FontWeight(500).SingleLine()
+				if muted {
+					symbol(c, "bell.slash.fill", 10, 2).TextColor(tertiary).Label(L("Muted"))
+				}
 				if chat.IsPinned {
 					symbol(c, "pin.fill", 10, 2).TextColor(tertiary).Label(L("Pinned"))
 				}
@@ -262,6 +546,79 @@ func (m *mainWindow) chatRow(c *ui.Context, chat *model.Chat, selected, listFocu
 			})
 		})
 	})
+}
+
+// chatSidebarItems are a chat's items that quiet and file it, after the Mac's: Mute and its spans
+// or Unmute, Move to Section and the sections (Move to New Section… while there are none), and
+// Hide or Show in Sidebar.
+func (m *mainWindow) chatSidebarItems(menu *ui.Menu, chat *model.Chat) {
+	chatID := chat.ID
+	if chat.IsMuted(time.Now()) {
+		if menu.Item(L("Unmute")).Chosen() {
+			store.Unmute(chatID)
+		}
+	} else {
+		menu.Submenu(L("Mute"), func(menu *ui.Menu) {
+			for _, span := range muteSpans() {
+				if menu.Item(span.title).Chosen() {
+					muteChat(chatID, span.seconds)
+				}
+			}
+		})
+	}
+	if len(store.Sections) == 0 {
+		if menu.Item(L("Move to New Section…")).Chosen() {
+			m.moveChatToNewSection(chatID)
+		}
+	} else {
+		menu.Submenu(L("Move to Section"), func(menu *ui.Menu) { m.sectionItems(menu, chat) })
+	}
+	hide := L("Hide")
+	if chat.IsHidden {
+		hide = L("Show in Sidebar")
+	}
+	if menu.Item(hide).Chosen() {
+		store.SetHidden(chatID, !chat.IsHidden)
+	}
+}
+
+// sectionItems are each section, checked where the chat is, then Chats for no section, then New
+// Section….
+func (m *mainWindow) sectionItems(menu *ui.Menu, chat *model.Chat) {
+	current := ""
+	if chat != nil && store.Section(chat.SectionID) != nil {
+		current = chat.SectionID
+	}
+	for _, section := range store.Sections {
+		if menu.Item(section.Name).Checked(chat != nil && current == section.ID).Disabled(chat == nil).Chosen() {
+			store.MoveChat(chat.ID, section.ID)
+		}
+	}
+	if menu.Item(Lc("Chats", "no section")).Checked(chat != nil && current == "").Disabled(chat == nil).Chosen() {
+		store.MoveChat(chat.ID, "")
+	}
+	menu.Separator()
+	if menu.Item(L("New Section…")).Disabled(chat == nil).Chosen() {
+		m.moveChatToNewSection(chat.ID)
+	}
+}
+
+type muteSpan struct {
+	title   string
+	seconds int
+}
+
+// muteSpans are how long Mute keeps a chat quiet; zero seconds is until unmuted.
+func muteSpans() []muteSpan {
+	return []muteSpan{{L("For 1 Hour"), 3600}, {L("For 8 Hours"), 8 * 3600}, {L("For 1 Week"), 7 * 24 * 3600}, {L("Always"), 0}}
+}
+
+func muteChat(chatID string, seconds int) {
+	var until time.Time
+	if seconds > 0 {
+		until = time.Now().Add(time.Duration(seconds) * time.Second)
+	}
+	store.Mute(chatID, until)
 }
 
 // sidebarFooter is Settings, and this computer, whose icon turns red while the CLI is not

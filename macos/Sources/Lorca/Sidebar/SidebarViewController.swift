@@ -387,14 +387,8 @@ final class SidebarViewController: NSViewController {
             return
         }
         guard case let .chat(id) = selection, let node = chatNodes[id] else { return }
-        // A chat opened some other way (the palette, a notification, a hidden chat found by
-        // search) shows its row: its group unfolds.
-        if selection != previous, let group = parentGroup(of: node), let kind = group.group, !outlineView.isItemExpanded(group) {
-            isApplyingFolds = true
-            outlineView.expandItem(group)
-            isApplyingFolds = false
-            remember(kind, collapsed: false)
-        }
+        // A chat selected some other way (the palette, a notification) shows its row.
+        if selection != previous { unfold(around: node) }
         let row = outlineView.row(forItem: node)
         guard row >= 0 else {
             outlineView.deselectAll(nil)
@@ -402,6 +396,23 @@ final class SidebarViewController: NSViewController {
         }
         guard row != outlineView.selectedRow else { return }
         outlineView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+    }
+
+    /// A chat opened from the palette, a notification, or search shows its row, selected, even
+    /// when it was already the chat on screen: its group unfolds.
+    func reveal(_ id: Chat.ID) {
+        guard listInstalled, let node = chatNodes[id] else { return }
+        unfold(around: node)
+        setSelection(.chat(id))
+        scrollSelectionToVisible()
+    }
+
+    private func unfold(around node: SidebarNode) {
+        guard let group = parentGroup(of: node), let kind = group.group, !outlineView.isItemExpanded(group) else { return }
+        isApplyingFolds = true
+        outlineView.expandItem(group)
+        isApplyingFolds = false
+        remember(kind, collapsed: false)
     }
 
     // MARK: - Shortcuts
@@ -649,23 +660,20 @@ extension SidebarViewController: NSOutlineViewDelegate {
 
     func outlineViewSelectionDidChange(_ notification: Notification) {
         guard !isApplyingSelection else { return }
+        let picked = currentSelection()
+        // Folding a group away deselects the row of the chat on screen, which stays open; its row
+        // is selected again when the group unfolds.
+        if picked == nil, case let .chat(id) = selection, let node = chatNodes[id], outlineView.row(forItem: node) < 0 { return }
         isNotifyingSelection = true
         defer { isNotifyingSelection = false }
-        selection = currentSelection()
+        selection = picked
         onSelect?(selection)
     }
 
-    // A group folded by the user. Folding away the selected row deselects it; the chat stays
-    // open, and its row is selected again when the group unfolds.
-
-    func outlineViewItemWillCollapse(_ notification: Notification) {
-        guard !isApplyingFolds else { return }
-        isApplyingSelection = true
-    }
+    // A group folded or unfolded by the user.
 
     func outlineViewItemDidCollapse(_ notification: Notification) {
         guard !isApplyingFolds else { return }
-        isApplyingSelection = false
         if let group = (notification.userInfo?["NSObject"] as? SidebarNode)?.group { remember(group, collapsed: true) }
     }
 

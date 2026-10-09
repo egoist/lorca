@@ -37,22 +37,29 @@ type Preferences struct {
 	SidebarWidth     int  `json:"sidebarWidth"`
 	InspectorWidth   int  `json:"inspectorWidth"`
 	SidebarCollapsed bool `json:"sidebarCollapsed"`
+	// ShowsHiddenChats is the sidebar's Hidden group open; it starts folded. CollapsesOtherChats
+	// folds the group of chats in no section. Sections fold on every Device through the roster;
+	// these two fold on this computer alone.
+	ShowsHiddenChats    bool `json:"showsHiddenChats"`
+	CollapsesOtherChats bool `json:"collapsesOtherChats"`
 }
 
 // PreferencesPatch changes the preferences it names.
 type PreferencesPatch struct {
-	HadIdentity      *bool   `json:"hadIdentity,omitempty"`
-	Selection        *string `json:"selection,omitempty"`
-	ShowsInspector   *bool   `json:"showsInspector,omitempty"`
-	SendOnReturn     *bool   `json:"sendOnReturn,omitempty"`
-	ShowTimestamps   *bool   `json:"showTimestamps,omitempty"`
-	RelayURL         *string `json:"relayURL,omitempty"`
-	CLIPort          *int    `json:"cliPort,omitempty"`
-	AppLanguage      *string `json:"appLanguage,omitempty"`
-	Appearance       *string `json:"appearance,omitempty"`
-	SidebarWidth     *int    `json:"sidebarWidth,omitempty"`
-	InspectorWidth   *int    `json:"inspectorWidth,omitempty"`
-	SidebarCollapsed *bool   `json:"sidebarCollapsed,omitempty"`
+	HadIdentity         *bool   `json:"hadIdentity,omitempty"`
+	Selection           *string `json:"selection,omitempty"`
+	ShowsInspector      *bool   `json:"showsInspector,omitempty"`
+	SendOnReturn        *bool   `json:"sendOnReturn,omitempty"`
+	ShowTimestamps      *bool   `json:"showTimestamps,omitempty"`
+	RelayURL            *string `json:"relayURL,omitempty"`
+	CLIPort             *int    `json:"cliPort,omitempty"`
+	AppLanguage         *string `json:"appLanguage,omitempty"`
+	Appearance          *string `json:"appearance,omitempty"`
+	SidebarWidth        *int    `json:"sidebarWidth,omitempty"`
+	InspectorWidth      *int    `json:"inspectorWidth,omitempty"`
+	SidebarCollapsed    *bool   `json:"sidebarCollapsed,omitempty"`
+	ShowsHiddenChats    *bool   `json:"showsHiddenChats,omitempty"`
+	CollapsesOtherChats *bool   `json:"collapsesOtherChats,omitempty"`
 }
 
 type prefsStore struct {
@@ -146,6 +153,12 @@ func (s *prefsStore) update(patch PreferencesPatch) Preferences {
 	}
 	if patch.SidebarCollapsed != nil {
 		v.SidebarCollapsed = *patch.SidebarCollapsed
+	}
+	if patch.ShowsHiddenChats != nil {
+		v.ShowsHiddenChats = *patch.ShowsHiddenChats
+	}
+	if patch.CollapsesOtherChats != nil {
+		v.CollapsesOtherChats = *patch.CollapsesOtherChats
 	}
 	saved := *v
 	path := s.path

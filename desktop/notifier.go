@@ -9,8 +9,8 @@ import (
 
 // System notifications for replies, failed responses, and questions, after the macOS app's Notifier
 // and ChatNotification: posted unless the message was read on a paired Device first, and a click
-// brings the app forward on the chat. The same "looking at" fact goes to the CLI (`ui.watching`),
-// so a Runner does not push a reply the user is watching arrive to their phone.
+// brings the app forward on the chat; a muted chat posts none. The same "looking at" fact goes to
+// the CLI (`ui.watching`), so no Runner pushes a reply the user is watching arrive to their phone.
 
 type notificationKind int
 
@@ -79,10 +79,10 @@ func finishedTurn(chat *model.Chat, botID string, startedAt time.Time) *chatNoti
 	return nil
 }
 
-// canDeliver is a notification still unread, not on screen, and its message still saying what
-// the alert would.
+// canDeliver is a notification still unread, not on screen, in a chat that is not muted, and its
+// message still saying what the alert would.
 func canDeliver(notification *chatNotification, chat *model.Chat, watched string) bool {
-	if watched == chat.ID || chat.UnreadCount <= 0 {
+	if watched == chat.ID || chat.UnreadCount <= 0 || chat.IsMuted(time.Now()) {
 		return false
 	}
 	message := chat.Message(notification.messageID)

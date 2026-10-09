@@ -149,8 +149,12 @@ func (a *appDelegate) storeChanged(event model.Event) {
 	case model.EventIdentityChanged, model.EventSnapshotReplaced, model.EventChatsChanged:
 		count := 0
 		if store.HasIdentity == nil || *store.HasIdentity {
+			// A muted chat keeps its count in the sidebar but leaves the badge alone.
+			now := time.Now()
 			for _, chat := range store.Chats {
-				count += chat.UnreadCount
+				if !chat.IsMuted(now) {
+					count += chat.UnreadCount
+				}
 			}
 		}
 		setBadge(count)
