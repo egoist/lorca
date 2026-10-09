@@ -444,8 +444,8 @@ describe("decision providers", () => {
   test("speak a decision API at its endpoint", () => {
     expect(["system-one", "decisions"].map(isDecisionAPI)).toEqual([true, true]);
     expect(["chat-completions", "responses", "messages", undefined].map(isDecisionAPI)).toEqual([false, false, false, false]);
-    expect(customAPI("system-one")).toMatchObject({ title: "System One", path: "/systemone", placeholder: "https://api.example.com/v1/systemone" });
-    expect(customAPI("decisions")).toMatchObject({ title: "OpenAI Decisions", path: "/decisions", placeholder: "https://api.example.com/v1/decisions" });
+    expect(customAPI("system-one")).toMatchObject({ title: "System One", path: "/systemone", placeholder: "https://api.example.com/v1" });
+    expect(customAPI("decisions")).toMatchObject({ title: "OpenAI Decisions", path: "/decisions", placeholder: "https://api.example.com/v1" });
     // A URL that ends in a decision path is the endpoint as typed; any other gets the API's path.
     expect(customRequestURL("system-one", "https://openrouter.ai/api/alpha/decisions")).toBe("https://openrouter.ai/api/alpha/decisions");
     expect(customRequestURL("system-one", " https://api.typesafe.ai/v1/systemone/ ")).toBe("https://api.typesafe.ai/v1/systemone");

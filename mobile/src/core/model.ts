@@ -408,13 +408,13 @@ export function isCustomProvider(kind: string): boolean {
 
 /// The protocols a custom provider's server can speak: the product's name, the same in every
 /// language; the path Lorca adds to the base URL for a model call; and the base URL's example.
-/// The decision APIs come last, with the endpoint itself as their example.
+/// The decision APIs come last; their example is a root, as the path is added to one.
 export const CUSTOM_APIS: readonly { id: CustomAPI; title: string; path: string; placeholder: string }[] = [
   { id: "chat-completions", title: "OpenAI Chat Completions", path: "/chat/completions", placeholder: "https://api.example.com/v1" },
   { id: "responses", title: "OpenAI Responses", path: "/responses", placeholder: "https://api.example.com/v1" },
   { id: "messages", title: "Anthropic Messages", path: "/v1/messages", placeholder: "https://api.example.com" },
-  { id: "system-one", title: "System One", path: "/systemone", placeholder: "https://api.example.com/v1/systemone" },
-  { id: "decisions", title: "OpenAI Decisions", path: "/decisions", placeholder: "https://api.example.com/v1/decisions" },
+  { id: "system-one", title: "System One", path: "/systemone", placeholder: "https://api.example.com/v1" },
+  { id: "decisions", title: "OpenAI Decisions", path: "/decisions", placeholder: "https://api.example.com/v1" },
 ];
 
 /// A decision API, whose models answer typed questions instead of chatting: Auto-review can run

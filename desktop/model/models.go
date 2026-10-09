@@ -332,11 +332,8 @@ func (api CustomAPI) Path() string {
 }
 
 func CustomBaseURLPlaceholder(api CustomAPI) string {
-	switch {
-	case api == APIMessages:
+	if api == APIMessages {
 		return "https://api.example.com"
-	case api.Decides():
-		return "https://api.example.com/v1" + api.Path()
 	}
 	return "https://api.example.com/v1"
 }

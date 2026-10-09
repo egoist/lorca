@@ -196,11 +196,7 @@ enum CustomAPI: String, CaseIterable, Hashable {
     }
 
     var baseURLPlaceholder: String {
-        switch self {
-        case .messages: "https://api.example.com"
-        case .systemOne, .decisions: "https://api.example.com/v1" + path
-        case .chatCompletions, .responses: "https://api.example.com/v1"
-        }
+        self == .messages ? "https://api.example.com" : "https://api.example.com/v1"
     }
 
     /// The URL the CLI calls for a base URL as typed: a pasted endpoint is cut back to its root
