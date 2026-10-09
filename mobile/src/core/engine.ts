@@ -10,7 +10,7 @@ import { t } from "../i18n";
 import { exactAnswer, ExactNumber, ExactObject, stringifyExact } from "./exactJson";
 import { reviewEditParams } from "./reviewEdit";
 import { hostFacts } from "./host";
-import { orderProjectEntries, providerConnectMethod, withReviewModel, type ProjectContext, type ProjectEntry, type ProjectKind, type ProjectSource, type Attachment, type AutoReview, type Bot, type BrowserProfile, type BudgetLimits, type BudgetState, type CallLimits, type Chat, type ChatMeta, type ChatSearchResults, type ChatUsage, type CustomAPI, type CustomModel, type DurableTask, type Message, type ReviewItem, type PluginDetail, type PluginStatus, type ProviderKind, type ProviderStatus } from "./model";
+import { orderProjectEntries, providerConnectMethod, withReviewModel, type PlaybookContent, type PlaybookRecord, type PlaybookScope, type ProjectContext, type ProjectEntry, type ProjectKind, type ProjectSource, type Attachment, type AutoReview, type Bot, type BrowserProfile, type BudgetLimits, type BudgetState, type CallLimits, type Chat, type ChatMeta, type ChatSearchResults, type ChatUsage, type CustomAPI, type CustomModel, type DurableTask, type Message, type ReviewItem, type PluginDetail, type PluginStatus, type ProviderKind, type ProviderStatus } from "./model";
 import { coreHome, loadPrefs, pathOf, wipePrefs } from "./prefs";
 import { clearPushes, installPushHandlers, registerForPushes } from "./push";
 import {
@@ -360,6 +360,48 @@ class Engine {
     const item = await core.request<ReviewItem>(method, params);
     acceptReview(item);
     return item;
+  }
+
+  /// The skills this phone fetched or drafted, by id, so a screen opens on one at once.
+  readonly skills = new Map<string, PlaybookRecord>();
+
+  /// A skill's body and history.
+  async playbook(scope: PlaybookScope, id: string): Promise<PlaybookRecord> {
+    const record = await core.request<PlaybookRecord>("playbooks.get", { scope, id });
+    this.skills.set(record.id, record);
+    return record;
+  }
+
+  /// Saves a new skill, or a new revision over the one `over` holds; the core refuses it when the
+  /// skill changed since `over` was read.
+  async savePlaybook(scope: PlaybookScope, content: PlaybookContent, over?: PlaybookRecord): Promise<PlaybookRecord> {
+    const record = await core.request<PlaybookRecord>("playbooks.save", {
+      scope,
+      content,
+      expected_revision: over?.revision ?? 0,
+      expected_hash: over?.hash ?? "",
+      ...(over ? { id: over.id, provenance: { kind: "edit" } } : {}),
+    });
+    this.skills.set(record.id, record);
+    return record;
+  }
+
+  async removePlaybook(record: PlaybookRecord): Promise<void> {
+    await core.request("playbooks.remove", { scope: record.scope, id: record.id, expected_revision: record.revision, expected_hash: record.hash });
+    this.skills.delete(record.id);
+  }
+
+  /// Has the bot's Runner write a draft from the picked messages, with the bot's provider. The
+  /// draft is used once it is saved.
+  async draftPlaybook(scope: PlaybookScope, botId: string, chatId: string, kind: "workflow" | "corrections", messageIds: string[]): Promise<PlaybookRecord> {
+    const record = await core.request<PlaybookRecord>("playbooks.draft", { scope, bot_id: botId, chat_id: chatId, kind, message_ids: messageIds });
+    this.skills.set(record.id, record);
+    return record;
+  }
+
+  /// The skill as a portable file's JSON: its content and bundled files, nothing about the account.
+  async exportPlaybook(scope: PlaybookScope, id: string): Promise<string> {
+    return JSON.stringify(await core.request("playbooks.export", { scope, id }), null, 2);
   }
 
   /// Every output version this phone has synced for the chat, for its details.

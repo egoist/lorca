@@ -116,6 +116,11 @@ async fn answer(app: &Arc<App>, request: &Request) -> Result<Value, String> {
         #[cfg(feature = "runner")]
         "bash.stdin" | "bash.stop" | "bash.background" => crate::shell::serve(app, &request.verb, body).await,
         #[cfg(feature = "runner")]
+        "playbooks.draft" => {
+            let scope = serde_json::from_value(body["scope"].clone()).map_err(|_| "Explicit playbook scope is required")?;
+            crate::playbook_tools::capture(app, &scope, body).await
+        }
+        #[cfg(feature = "runner")]
         "chats.send_now" => {
             let chat_id = body["chat_id"].as_str().ok_or("missing chat_id")?;
             let message_id = body["message_id"].as_str().ok_or("missing message_id")?;

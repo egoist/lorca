@@ -880,8 +880,13 @@ pub async fn dispatch(
         "playbooks.draft" => {
             #[cfg(feature = "runner")]
             return crate::playbook_tools::capture(app, &scope, &params).await;
+            // A phone asks the bot's Runner, which drafts with the bot's provider and syncs the
+            // draft back as its blob.
             #[cfg(not(feature = "runner"))]
-            Err("Draft a playbook through a Runner's CLI".into())
+            {
+                let bot = app.bot(params["bot_id"].as_str().unwrap_or_default()).ok_or("Bot not found")?;
+                crate::requests::ask_within(app, &bot.runner_id, method, params.clone(), std::time::Duration::from_secs(150)).await
+            }
         }
         _ => Err("Unknown playbook method".into()),
     }

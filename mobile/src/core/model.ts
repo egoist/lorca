@@ -1110,3 +1110,70 @@ export function projectSymbol(kind: ProjectKind): string {
 
 /// What the core answers when the entry being saved changed on another Device first.
 export const STALE_PROJECT_ENTRY = "This entry changed on another Device.";
+
+/// Whose skill it is: one bot's, in every chat it is in (`bot`), or a group's, for the bots in
+/// that group (`project`).
+export interface PlaybookScope {
+  kind: "bot" | "project";
+  id: string;
+}
+
+/// A reference or a script the skill carries, as text: `references/checklist.md`.
+export interface PlaybookFile {
+  path: string;
+  text: string;
+}
+
+export interface PlaybookContent {
+  name: string;
+  description: string;
+  instructions: string;
+  examples: string;
+  references: PlaybookFile[];
+  scripts: PlaybookFile[];
+}
+
+/// A skill as the roster lists it, without its body.
+export interface PlaybookSummary {
+  id: string;
+  scope: PlaybookScope;
+  name: string;
+  description: string;
+  status: "draft" | "saved" | "deleted";
+  revision: number;
+  hash: string;
+  updated_at: number;
+}
+
+/// One step of a skill's history: who changed it where, and what it said then.
+export interface PlaybookRevision {
+  id: string;
+  revision: number;
+  status: "draft" | "saved" | "deleted";
+  content: PlaybookContent | null;
+  provenance: { kind: string; chat_id?: string | null; message_ids: string[] };
+  device_id: string;
+  created_at: number;
+}
+
+/// A skill with its body and history, fetched when it opens.
+export interface PlaybookRecord {
+  id: string;
+  scope: PlaybookScope;
+  status: "draft" | "saved" | "deleted";
+  revision: number;
+  hash: string;
+  content: PlaybookContent | null;
+  revisions: PlaybookRevision[];
+}
+
+/// Whose skills a chat shows: the bot's in a DM, the group's in a group.
+export function skillScopeOf(chat: ChatMeta): PlaybookScope | undefined {
+  if (chat.kind === "group") return { kind: "project", id: chat.id };
+  return chat.bot_ids[0] ? { kind: "bot", id: chat.bot_ids[0] } : undefined;
+}
+
+/// What the core answers when a skill being saved changed on another Device first.
+export function isStaleSkill(error: string): boolean {
+  return error.includes("changed since");
+}

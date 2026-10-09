@@ -4,8 +4,8 @@ import { MenuView, type MenuComponentRef } from "@expo/ui/community/menu";
 import { Platform, PlatformColor, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 import { Pressable } from "../../src/ui/Pressable";
 import { chatTitle, engine } from "../../src/core/engine";
-import { BROWSER_PLUGIN_ID, PROJECT_KINDS, projectSymbol, providerKinds, providerLabel, providerModels, PROVIDER_KINDS, taskSymbol, thinkingLabel, thinkingLevels, withCustomModels, type Bot, type Routine } from "../../src/core/model";
-import { deviceIsOnline, useBotMap, useBudget, useChat, useDurableTasks, useOpenReviews, useOutputs, useProject, useRoutines, useStoppedTurn, useStore, useWorkingBotIds } from "../../src/core/store";
+import { BROWSER_PLUGIN_ID, PROJECT_KINDS, projectSymbol, skillScopeOf, providerKinds, providerLabel, providerModels, PROVIDER_KINDS, taskSymbol, thinkingLabel, thinkingLevels, withCustomModels, type Bot, type Routine } from "../../src/core/model";
+import { deviceIsOnline, useBotMap, useBudget, useChat, useDurableTasks, useOpenReviews, useOutputs, useProject, useRoutines, useSkills, useStoppedTurn, useStore, useWorkingBotIds } from "../../src/core/store";
 import { t, useLanguage } from "../../src/i18n";
 import { AvatarCluster, BotAvatar } from "../../src/ui/Avatar";
 import { CheckRow, FieldRow, MenuRow, Row, Section, ToggleRow } from "../../src/ui/forms";
@@ -53,6 +53,9 @@ export default function ChatInfoScreen() {
   const [allTasks, setAllTasks] = useState(false);
   const project = useProject(chat?.kind === "group" ? chat.id : undefined);
   const [allProject, setAllProject] = useState(false);
+  const skillScope = chat ? skillScopeOf(chat) : undefined;
+  const skills = useSkills(skillScope);
+  const [allSkills, setAllSkills] = useState(false);
   const limits = useBudget("chat", chat?.id, bot?.runner_id);
   const stoppedTurn = useStoppedTurn(chat?.id, bot?.runner_id);
   const budgets = useStore((s) => s.budgets);
@@ -342,6 +345,35 @@ export default function ChatInfoScreen() {
                 <View style={[styles.deviceDot, { backgroundColor: deviceIsOnline(runner.id) ? p.green : p.tertiaryLabel, borderColor: p.cell }]} />
               </View>
             }
+          />
+        </Section>
+      )}
+
+      {/* The DM's bot's skills, or the group's own, drafts first: a row opens the skill. Past
+          five rows the rest wait behind Show More; Add Skill writes a new one, or saves one from
+          this chat's messages. */}
+      {skillScope && (
+        <Section title={t("Skills")}>
+          {(allSkills || skills.length <= 5 ? skills : skills.slice(0, 4)).map((skill) => (
+            <Row
+              key={skill.id}
+              title={skill.name}
+              subtitle={skill.description}
+              subtitleLines={2}
+              icon="book.closed"
+              detail={skill.status === "draft" ? t("Draft") : undefined}
+              chevron
+              onPress={() => router.push({ pathname: "/chat-info/skill/[id]", params: { id: skill.id, kind: skill.scope.kind, scope: skill.scope.id } })}
+            />
+          ))}
+          {!allSkills && skills.length > 5 ? <Row title={t("Show {count} More", { count: skills.length - 4 })} icon="ellipsis" onPress={() => setAllSkills(true)} /> : null}
+          <MenuRow
+            title={t("Add Skill")}
+            icon="plus"
+            choices={[
+              { title: t("New Skill…"), selected: false, onPress: () => router.push({ pathname: "/chat-info/skill/[id]", params: { id: "new", kind: skillScope.kind, scope: skillScope.id } }) },
+              { title: t("From This Chat…"), selected: false, onPress: () => router.push(`/chat-info/save-skill/${chat.id}`) },
+            ]}
           />
         </Section>
       )}

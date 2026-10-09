@@ -40,6 +40,7 @@ const ANDROID: Record<string, string> = {
   "wand.and.stars": "auto_fix_high",
   "hammer.fill": "handyman",
   "book.fill": "menu_book",
+  "book.closed": "menu_book",
   "paintbrush.fill": "brush",
   "chart.bar.fill": "bar_chart",
   "terminal.fill": "terminal",
