@@ -100,7 +100,17 @@ const SCHEMA: &str = "
 /// version 1 is `SCHEMA`, version `n + 2` is `MIGRATIONS[n]`, as in the Postgres backend. A
 /// step only adds (a table, a nullable column, an index). Append; never edit a step that has
 /// shipped.
-const MIGRATIONS: &[&str] = &[];
+const MIGRATIONS: &[&str] = &[
+    // 2: shared links.
+    "CREATE TABLE IF NOT EXISTS shares (
+        id              TEXT PRIMARY KEY,
+        identity_pubkey TEXT NOT NULL,
+        ciphertext      BLOB NOT NULL,
+        created_at      INTEGER NOT NULL,
+        updated_at      INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS shares_identity ON shares(identity_pubkey);",
+];
 
 pub struct Sqlite {
     path: String,
@@ -341,7 +351,7 @@ pub fn delete_identity(connection: &mut Connection, identity_pubkey: &str, revok
     }
     tx.prepare_cached("DELETE FROM challenges WHERE machine_pubkey IN (SELECT machine_pubkey FROM machines WHERE identity_pubkey = ?1)")?
         .execute(params![identity_pubkey])?;
-    for table in ["push_tokens", "pairings", "blobs", "deleted_groups", "sequences", "usage", "machines"] {
+    for table in ["push_tokens", "pairings", "blobs", "deleted_groups", "sequences", "usage", "shares", "machines"] {
         tx.prepare_cached(&format!("DELETE FROM {table} WHERE identity_pubkey = ?1"))?.execute(params![identity_pubkey])?;
     }
     tx.prepare_cached("DELETE FROM identities WHERE pubkey = ?1")?.execute(params![identity_pubkey])?;
@@ -879,6 +889,43 @@ impl Store for Sqlite {
     async fn delete_identity(&self, identity_pubkey: &str, revoke: bool) -> ApiResult<DeletedIdentity> {
         let identity_pubkey = identity_pubkey.to_string();
         self.write(move |db| Ok(delete_identity(db, &identity_pubkey, revoke)?)).await
+    }
+
+    async fn put_share(&self, identity_pubkey: &str, id: &str, ciphertext: &[u8], max: i64) -> ApiResult<()> {
+        let (identity_pubkey, id, ciphertext) = (identity_pubkey.to_string(), id.to_string(), ciphertext.to_vec());
+        self.write(move |db| {
+            let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let owner: Option<String> = tx.query_row("SELECT identity_pubkey FROM shares WHERE id = ?1", params![id], |row| row.get(0)).optional()?;
+            match owner {
+                Some(owner) if owner != identity_pubkey => return Err(ApiError::forbidden("Not your link")),
+                Some(_) => {
+                    tx.execute("UPDATE shares SET ciphertext = ?1, updated_at = ?2 WHERE id = ?3", params![ciphertext, now(), id])?;
+                }
+                None => {
+                    let count: i64 = tx.query_row("SELECT COUNT(*) FROM shares WHERE identity_pubkey = ?1", params![identity_pubkey], |row| row.get(0))?;
+                    if count >= max {
+                        return Err(ApiError::conflict("This account has as many shared links as the relay keeps"));
+                    }
+                    tx.execute(
+                        "INSERT INTO shares (id, identity_pubkey, ciphertext, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)",
+                        params![id, identity_pubkey, ciphertext, now()],
+                    )?;
+                }
+            }
+            tx.commit()?;
+            Ok(())
+        })
+        .await
+    }
+
+    async fn share(&self, id: &str) -> ApiResult<Option<Vec<u8>>> {
+        let id = id.to_string();
+        self.read(move |db| Ok(db.query_row("SELECT ciphertext FROM shares WHERE id = ?1", params![id], |row| row.get(0)).optional()?)).await
+    }
+
+    async fn delete_share(&self, identity_pubkey: &str, id: &str) -> ApiResult<bool> {
+        let (identity_pubkey, id) = (identity_pubkey.to_string(), id.to_string());
+        self.write(move |db| Ok(db.execute("DELETE FROM shares WHERE id = ?1 AND identity_pubkey = ?2", params![id, identity_pubkey])? > 0)).await
     }
 
     async fn inactive_identities(&self, before: i64) -> ApiResult<Vec<String>> {
