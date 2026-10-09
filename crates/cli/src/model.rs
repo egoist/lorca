@@ -369,6 +369,7 @@ pub enum Body {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct MessageDraft {
     /// `email` or `slack`.
+    #[serde(default)]
     pub kind: String,
     /// Email addresses, or the Slack channel or person's id.
     #[serde(default)]

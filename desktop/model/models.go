@@ -1515,12 +1515,12 @@ type Body struct {
 type DraftFields struct {
 	// Kind is `email` or `slack`.
 	Kind        string      `json:"kind"`
-	To          []string    `json:"to"`
-	Cc          []string    `json:"cc"`
-	Bcc         []string    `json:"bcc"`
+	To          []string    `json:"to,omitempty"`
+	Cc          []string    `json:"cc,omitempty"`
+	Bcc         []string    `json:"bcc,omitempty"`
 	Subject     string      `json:"subject"`
 	Body        string      `json:"body"`
-	Attachments []DraftFile `json:"attachments"`
+	Attachments []DraftFile `json:"attachments,omitempty"`
 	// Reply is what it answers: an email's id or a Slack thread.
 	Reply string `json:"reply,omitempty"`
 }
