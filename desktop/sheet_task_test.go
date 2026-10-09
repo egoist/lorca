@@ -79,14 +79,6 @@ func taskInput(t *testing.T, tt *ui.Tester, label, value string) {
 	settle(tt)
 }
 
-func click(t *testing.T, tt *ui.Tester, label string) {
-	t.Helper()
-	if err := tt.Click(label); err != nil {
-		t.Fatalf("%s: %v (%q)", label, err, tt.Texts())
-	}
-	settle(tt)
-}
-
 func TestTaskSectionHidesWhileEmptyAndShowsOpenWorkFirst(t *testing.T) {
 	m := demoWindow(t)
 	view := func(c *ui.Context) { applyTheme(c); m.inspectorDurableTasks(c, store.Chat("chat-relay")) }

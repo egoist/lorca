@@ -14,7 +14,8 @@ struct ChatNotification: Equatable {
         self.botID = botID
         messageID = message.id
         switch message.body {
-        case let .permission(request) where request.isPending:
+        // An access request is the bot's to explain in its reply, which notifies on its own.
+        case let .permission(request) where request.isPending && !request.isAccess:
             kind = .permission
             body = L("Confirmation needed: %@", request.summary)
         case let .tool(tool) where tool.run?.state == .asking:

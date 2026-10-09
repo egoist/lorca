@@ -45,8 +45,32 @@ func (s settingsPane) bots(c *ui.Context, m *mainWindow) {
 	})
 }
 
-// device is the picked Device itself: what it is, whether it is online, its machine key, and
-// Unpair.
+// settingsServiceState is what the picked Runner said of `lorca service`, asked once each time
+// the Devices pane shows it.
+type settingsServiceState struct {
+	asked  string
+	status *model.ServiceStatus
+}
+
+// statusOf asks an online Runner how its service stands, and is what it answered, if it did.
+func (s *settingsServiceState) statusOf(device *model.Device) *model.ServiceStatus {
+	if !device.IsRunner() || device.Status != model.StatusOnline {
+		return nil
+	}
+	if s.asked != device.ID {
+		s.asked, s.status = device.ID, nil
+		id := device.ID
+		store.RunnerServiceStatus(id, func(status model.ServiceStatus, err error) {
+			if err == nil && s.asked == id {
+				s.status = &status
+			}
+		})
+	}
+	return s.status
+}
+
+// device is the picked Device itself: what it is, whether it is online, its machine key, whether
+// `lorca service` keeps a Runner's CLI running, and Unpair.
 func (s settingsPane) device(c *ui.Context, m *mainWindow) {
 	p := colors(c)
 	device := store.Device(m.settingsDeviceID)
@@ -54,6 +78,7 @@ func (s settingsPane) device(c *ui.Context, m *mainWindow) {
 		if device == nil {
 			return
 		}
+		service := m.settings.service.statusOf(device)
 		settingsDeviceHeader(c, device)
 		s.section(c, L("Machine"), nil, func(k *card) {
 			unknown := device.OS == model.OSUnknown
@@ -73,6 +98,16 @@ func (s settingsPane) device(c *ui.Context, m *mainWindow) {
 				role = L("Runner · runs bots with its own credentials")
 			}
 			s.mark(c, keyValueRow(c, k, L("Role"), role, false, nil), L("Role"))
+			if service != nil {
+				value := L("Not installed")
+				switch {
+				case service.Running:
+					value = L("Running")
+				case service.Installed:
+					value = L("Installed, not running")
+				}
+				s.mark(c, keyValueRow(c.Key("service"), k, L("Background service"), value, false, nil), L("Background service"))
+			}
 			lastSeen := model.LastSeen(device.LastSeen)
 			if device.Status == model.StatusOnline {
 				lastSeen = L("Active now")
@@ -80,12 +115,15 @@ func (s settingsPane) device(c *ui.Context, m *mainWindow) {
 			s.mark(c, keyValueRow(c, k, L("Last seen"), lastSeen, false, nil), L("Last seen"))
 			s.mark(c, keyValueRow(c, k, L("Relay"), settingsRelayText(), true, nil), L("Relay"))
 			pairing := pairingEntry().row
-			unpairElement, unpair := actionRow(c, k, pairing, actionRowOptions{Value: L("Paired to this account"), Tint: &p.Label2, Action: L("Unpair…")})
+			unpairElement, unpair := actionRow(c.Key("pairing"), k, pairing, actionRowOptions{Value: L("Paired to this account"), Tint: &p.Label2, Action: L("Unpair…")})
 			s.mark(c, unpairElement, pairing)
 			if unpair.Action {
 				s.w.confirmUnpair(device)
 			}
 		})
+		if service != nil && !service.Installed {
+			s.footnote(c, L("Run lorca service install in Terminal on %@ to keep its bots running while Lorca is closed.", device.Name))
+		}
 	})
 }
 

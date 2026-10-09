@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -73,6 +74,8 @@ const (
 	// EventRunningTasksChanged is a command in the chat that has run long enough to count as a
 	// running task.
 	EventRunningTasksChanged
+	// EventOutputsChanged is the chat's published outputs that changed.
+	EventOutputsChanged
 	EventConnectionChanged
 	EventIdentityChanged
 	EventDurableTasksChanged
@@ -184,6 +187,13 @@ type Store struct {
 	// attachmentFiles is where each attachment's bytes are on this computer.
 	attachmentFiles    map[string]string
 	fetchingAttachment map[string]bool
+	// attachmentErrors is why a fetch failed, kept until a retry so a scroll does not ask again.
+	attachmentErrors map[string]string
+	// outputMessages is every version of each shown chat's outputs, oldest first; outputRequests
+	// are the chats whose list is on its way.
+	outputMessages map[string][]*Message
+	outputRequests map[string]bool
+	staleOutputs   map[string]bool
 
 	mockMarketplace *Marketplace
 	mockMcp         map[string][]McpServer
@@ -210,6 +220,10 @@ func NewStore(transport Transport, post func(func()), mock bool) *Store {
 		thinkingBots:       map[string]string{},
 		attachmentFiles:    map[string]string{},
 		fetchingAttachment: map[string]bool{},
+		attachmentErrors:   map[string]string{},
+		outputMessages:     map[string][]*Message{},
+		outputRequests:     map[string]bool{},
+		staleOutputs:       map[string]bool{},
 		mockMcp:            map[string][]McpServer{},
 		isBootstrapping:    true,
 	}
@@ -370,6 +384,15 @@ func (s *Store) bootstrap(generation int) {
 
 func (s *Store) apply(snapshot WireSnapshot) {
 	previousTasks, previousIdentity := s.DurableTasks, s.IdentityID
+	if next := str(snapshot.IdentityID); next != s.IdentityID {
+		clear(s.attachmentFiles)
+		clear(s.fetchingAttachment)
+		clear(s.attachmentErrors)
+	}
+	// A resync may bring outputs this app missed; they are asked for again when next shown.
+	for chatID := range s.outputMessages {
+		s.staleOutputs[chatID] = true
+	}
 	has := snapshot.HasIdentity
 	s.HasIdentity = &has
 	s.IsIdentityDevice = snapshot.IsIdentityDevice
@@ -568,6 +591,7 @@ func (s *Store) handle(name string, data json.RawMessage) {
 		chat.Messages = slices.DeleteFunc(slices.Clone(chat.Messages), func(m *Message) bool { return m.ID == payload.MessageID })
 		delete(s.commandStarts, payload.MessageID)
 		s.emit(Event{Kind: EventMessageRemoved, ChatID: payload.ChatID, MessageID: payload.MessageID})
+		s.noteOutput(nil, payload.MessageID, payload.ChatID)
 
 	case "chat.removed":
 		payload, ok := decode[struct {
@@ -578,6 +602,8 @@ func (s *Store) handle(name string, data json.RawMessage) {
 		}
 		s.Chats = slices.DeleteFunc(slices.Clone(s.Chats), func(c *Chat) bool { return c.ID == payload.ChatID })
 		s.runningJobs = slices.DeleteFunc(s.runningJobs, func(job runningJob) bool { return job.chatID == payload.ChatID })
+		delete(s.outputMessages, payload.ChatID)
+		delete(s.staleOutputs, payload.ChatID)
 		s.emit(Event{Kind: EventChatsChanged})
 
 	case "job.started":
@@ -680,6 +706,7 @@ func (s *Store) upsert(message *Message, chatID string) {
 		return
 	}
 	s.noteCommand(message, chatID)
+	s.noteOutput(message, "", chatID)
 	if index := slices.IndexFunc(chat.Messages, func(m *Message) bool { return m.ID == message.ID }); index >= 0 {
 		messages := slices.Clone(chat.Messages)
 		messages[index] = message
@@ -1066,7 +1093,7 @@ func (s *Store) AddBotFromTemplate(template BotTemplate, runnerID string) string
 }
 
 // PreferredProvider is the provider a bot made without asking runs with: the first one the
-// account connected.
+// account connected that a bot can run with.
 func (s *Store) PreferredProvider() ProviderKind {
 	for _, kind := range s.ProviderKinds() {
 		if credential := s.Credential(kind); credential != nil && credential.IsConnected {
@@ -1076,11 +1103,24 @@ func (s *Store) PreferredProvider() ProviderKind {
 	return "deepseek"
 }
 
-// ProviderKinds is every provider a bot can run with: the built-in ones, then the ones the user added.
+// ProviderKinds is every provider a bot can run with: the built-in ones, then the ones the user
+// added, except those of decision models.
 func (s *Store) ProviderKinds() []ProviderKind {
 	out := slices.Clone(ProviderKinds)
 	for _, provider := range s.Providers {
-		if IsCustomKind(provider.Kind) {
+		if IsCustomKind(provider.Kind) && !provider.Decides() {
+			out = append(out, provider.Kind)
+		}
+	}
+	return out
+}
+
+// ReviewProviderKinds are the providers Auto-review can run a model of: every one the account has
+// connected, in the order the CLI lists them.
+func (s *Store) ReviewProviderKinds() []ProviderKind {
+	var out []ProviderKind
+	for _, provider := range s.Providers {
+		if provider.IsConnected {
 			out = append(out, provider.Kind)
 		}
 	}
@@ -1536,7 +1576,8 @@ func (s *Store) ParseMcpJSON(text string, done func([]ParsedServer, error)) {
 }
 
 // SetAutoReview replaces Auto-review (the switch and the rules); the change shows at once and the
-// CLI's roster event confirms it. A new rule gets its id from the CLI.
+// CLI's roster event confirms it. A new rule gets its id from the CLI. The model that reviews is
+// left out, so it stays as picked.
 func (s *Store) SetAutoReview(value AutoReview) {
 	s.AutoReview = value
 	s.emit(Event{Kind: EventRosterChanged})
@@ -1551,6 +1592,39 @@ func (s *Store) SetAutoReview(value AutoReview) {
 	s.perform("auto_review.set", map[string]any{"is_enabled": value.IsEnabled, "rules": rules})
 }
 
+// SetReviewProvider picks the provider Auto-review runs the review model of, or "" for the bot's
+// own.
+func (s *Store) SetReviewProvider(provider ProviderKind) {
+	s.AutoReview.Provider = provider
+	s.emit(Event{Kind: EventRosterChanged})
+	params := map[string]any{"provider": nil}
+	if provider != "" {
+		params["provider"] = provider
+	}
+	s.perform("auto_review.set", params)
+}
+
+// ReviewModel is the review model picked for a provider; empty for its default.
+func (s *Store) ReviewModel(kind ProviderKind) string { return s.AutoReview.Models[kind] }
+
+// SetReviewModel picks a provider's review model, or "" to put back its default. The other
+// providers' stay as they are.
+func (s *Store) SetReviewModel(model string, kind ProviderKind) {
+	models := maps.Clone(s.AutoReview.Models)
+	if models == nil {
+		models = map[ProviderKind]string{}
+	}
+	var value any
+	if model == "" {
+		delete(models, kind)
+	} else {
+		models[kind], value = model, model
+	}
+	s.AutoReview.Models = models
+	s.emit(Event{Kind: EventRosterChanged})
+	s.perform("auto_review.set", map[string]any{"models": map[string]any{kind: value}})
+}
+
 // AnswerPermission answers a question: a permission card's, or a command card's. `allow`,
 // `always`, or `deny`. The CLI confirms with the card's new state.
 func (s *Store) AnswerPermission(chatID, messageID, decision string) {
@@ -1562,7 +1636,11 @@ func (s *Store) AnswerPermission(chatID, messageID, decision string) {
 			case "always":
 				request.Decision = DecisionAlways
 			case "deny":
+				// An access request is only ever dismissed.
 				request.Decision = DecisionDenied
+				if request.IsAccess() {
+					request.Decision = DecisionDismissed
+				}
 			default:
 				request.Decision = DecisionAllowed
 			}
@@ -1671,8 +1749,9 @@ func (s *Store) SetRoutineEnabled(id string, enabled bool) {
 		return
 	}
 	routine.IsEnabled, routine.PausedReason = enabled, ""
+	routine.State = "on"
 	if !enabled {
-		routine.NextRunAt = time.Time{}
+		routine.State, routine.NextRunAt = "paused", time.Time{}
 	}
 	s.emit(Event{Kind: EventRosterChanged})
 	s.perform("routines.update", map[string]any{"id": id, "enabled": enabled})
@@ -2103,20 +2182,28 @@ func (s *Store) LocalFile(attachment Attachment, chatID, messageID string) strin
 }
 
 func (s *Store) fetchAttachment(attachment Attachment, landed func()) {
-	if s.IsMock || s.fetchingAttachment[attachment.ID] {
+	if s.IsMock || s.fetchingAttachment[attachment.ID] || s.attachmentErrors[attachment.ID] != "" {
 		return
 	}
 	s.fetchingAttachment[attachment.ID] = true
+	identity := s.IdentityID
 	Async(s, func() (string, error) {
 		reply, err := call[struct {
 			Path string `json:"path"`
 		}](s, "files.path", map[string]any{"attachment": map[string]any{"id": attachment.ID, "name": attachment.Name, "mime": attachment.Mime, "size": attachment.Size}})
+		if err == nil && reply.Path == "" {
+			err = &RequestError{L("File unavailable")}
+		}
 		return reply.Path, err
 	}, func(path string, err error) {
+		if identity != s.IdentityID {
+			return
+		}
+		delete(s.fetchingAttachment, attachment.ID)
 		if err != nil {
-			// Left in the fetching set: the relay does not have it, and every scroll would ask
-			// again. A relaunch retries.
+			s.attachmentErrors[attachment.ID] = ErrorText(err)
 			log.Printf("fetching %s failed: %s", attachment.Name, ErrorText(err))
+			landed()
 			return
 		}
 		s.attachmentFiles[attachment.ID] = path
@@ -2406,9 +2493,9 @@ type ModelQuery struct {
 	APIKey  string
 }
 
-// ListCustomModels answers the chat models a custom provider's server lists, in its order
-// (`providers.list_models`), for the sheet to pick from. Listed is false when the server publishes
-// no list. Fails with why the server could not be asked.
+// ListCustomModels answers the models a custom provider's server lists that its protocol can run,
+// in its order (`providers.list_models`), for the sheet to pick from. Listed is false when the
+// server publishes no list. Fails with why the server could not be asked.
 func (s *Store) ListCustomModels(query ModelQuery, done func(models []CustomModel, listed bool, err error)) {
 	if s.IsMock {
 		s.later(300*time.Millisecond, func() {
@@ -2459,8 +2546,16 @@ func (s *Store) SaveCustomProvider(options CustomProvider, done func(ProviderKin
 			kind = "custom:" + strings.ReplaceAll(strings.ToLower(name), " ", "-")
 		}
 		saved := ProviderCredential{Kind: kind, IsConnected: true, Detail: baseURL, BaseURL: baseURL, Name: name, API: options.API}
+		if len(models) > 0 {
+			saved.ReviewModel = models[0]
+		}
 		for _, id := range models {
-			saved.Models = append(saved.Models, CustomModel{ID: id, Levels: []string{"low", "medium", "high"}})
+			// A decision model does not think out loud.
+			var levels []string
+			if !options.API.Decides() {
+				levels = []string{"low", "medium", "high"}
+			}
+			saved.Models = append(saved.Models, CustomModel{ID: id, Levels: levels})
 		}
 		if existing := s.Credential(kind); existing != nil {
 			*existing = saved

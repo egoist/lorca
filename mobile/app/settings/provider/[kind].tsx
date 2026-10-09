@@ -1,6 +1,6 @@
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useState } from "react";
-import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from "react-native";
 import { engine } from "../../../src/core/engine";
 import {
   isProviderKind,
@@ -14,6 +14,7 @@ import { useStore } from "../../../src/core/store";
 import { t, useLanguage } from "../../../src/i18n";
 import { FieldRow, Row, Section } from "../../../src/ui/forms";
 import { usePalette } from "../../../src/ui/theme";
+import { alert } from "../../../src/ui/alert";
 
 export default function ProviderSettingsScreen() {
   useLanguage();
@@ -59,7 +60,7 @@ export default function ProviderSettingsScreen() {
   }
 
   function confirmDisconnect() {
-    Alert.alert(
+    alert(
       t("Disconnect {name}?", { name }),
       t("This removes the credential from every paired Device."),
       [

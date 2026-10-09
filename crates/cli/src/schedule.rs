@@ -1,8 +1,20 @@
 //! When a routine runs: an interval (`every 30m`, `every 2h`, `every 1d`) or a five-field cron
-//! expression (`0 9 * * 1-5`) read in the Runner's local time. `describe` says it in words the
-//! way Grok Bot's routine panel does; `next_after` finds the next firing.
+//! expression (`0 9 * * 1-5`) read in the routine's IANA timezone. `describe` says it in words
+//! the way Grok Bot's routine panel does; `next_after` finds the next firing.
 
-use crate::memory::{local_time, local_tm, start_of_local_day};
+use chrono::{Datelike, TimeZone, Timelike};
+use chrono_tz::Tz;
+
+/// An IANA timezone by name, or what to pass instead.
+pub fn timezone(name: &str) -> Result<Tz, String> {
+    name.trim().parse().map_err(|_| format!("Unknown timezone {name:?}. Use an IANA timezone such as America/New_York, Asia/Singapore, or UTC."))
+}
+
+/// This Device's IANA timezone, which a routine keeps from its creation on; UTC when the system
+/// names none Lorca knows.
+pub fn local_timezone() -> String {
+    iana_time_zone::get_timezone().ok().and_then(|name| timezone(&name).ok()).unwrap_or(Tz::UTC).to_string()
+}
 
 /// The shortest gap between two runs of one routine.
 pub const MIN_INTERVAL_SECS: i64 = 5 * 60;
@@ -89,12 +101,13 @@ fn parse_every(rest: &str) -> Result<Schedule, String> {
             (amount, unit)
         }
     };
-    let secs = match unit {
-        "m" | "min" | "mins" | "minute" | "minutes" => amount * 60,
-        "h" | "hr" | "hrs" | "hour" | "hours" => amount * 3600,
-        "d" | "day" | "days" => amount * 86_400,
+    let multiplier = match unit {
+        "m" | "min" | "mins" | "minute" | "minutes" => 60,
+        "h" | "hr" | "hrs" | "hour" | "hours" => 3600,
+        "d" | "day" | "days" => 86_400,
         _ => return Err(format!("Could not read the interval {rest:?}. Use every 30m, every 2h, or every 1d.")),
     };
+    let secs = amount.checked_mul(multiplier).ok_or("That interval is longer than a year.")?;
     if secs < MIN_INTERVAL_SECS {
         return Err("That runs too often. A routine runs at most every five minutes.".into());
     }
@@ -153,12 +166,15 @@ fn parse_value(text: &str, min: u32, max: u32, names: &[&str]) -> Result<u32, St
 }
 
 impl Schedule {
-    /// The first time this schedule fires strictly after `after` (unix seconds), in the local
-    /// time zone. `None` when nothing matches in the next two years.
-    pub fn next_after(&self, after: i64) -> Option<i64> {
+    /// The first time this schedule fires strictly after `after` (unix seconds), a cron read in
+    /// `zone`: the same instant on every Device. A minute that daylight saving skips does not
+    /// fire that day; one it repeats fires once, at its earlier instant. An interval counts
+    /// elapsed seconds. `None` for an unknown zone or when nothing matches in two years.
+    pub fn next_after(&self, after: i64, zone: &str) -> Option<i64> {
+        let zone = timezone(zone).ok()?;
         match self {
-            Schedule::Every(secs) => Some(after + secs),
-            Schedule::Cron(cron) => cron.next_after(after),
+            Schedule::Every(secs) => after.checked_add(*secs),
+            Schedule::Cron(cron) => cron.next_after(after, zone),
         }
     }
 
@@ -199,34 +215,32 @@ fn describe_interval(secs: i64) -> String {
 }
 
 impl Cron {
-    fn next_after(&self, after: i64) -> Option<i64> {
-        let horizon = after + 2 * 366 * 86_400;
-        let mut t = after - after.rem_euclid(60) + 60;
-        while t <= horizon {
-            let tm = local_tm(t);
-            let month_ok = self.months & (1 << (tm.tm_mon + 1)) != 0;
-            let dom_ok = self.days_of_month & (1 << tm.tm_mday) != 0;
-            let dow_ok = self.days_of_week & (1 << tm.tm_wday) != 0;
+    fn next_after(&self, after: i64, zone: Tz) -> Option<i64> {
+        let mut date = zone.timestamp_opt(after, 0).single()?.date_naive();
+        let horizon = after.checked_add(2 * 366 * 86_400)?;
+        for _ in 0..=733 {
+            let month_ok = self.months & (1 << date.month()) != 0;
+            let dom_ok = self.days_of_month & (1 << date.day()) != 0;
+            let dow_ok = self.days_of_week & (1 << date.weekday().num_days_from_sunday()) != 0;
             let day_ok = match (self.dom_restricted, self.dow_restricted) {
                 (true, true) => dom_ok || dow_ok,
                 (true, false) => dom_ok,
                 (false, true) => dow_ok,
                 (false, false) => true,
             };
-            if !month_ok || !day_ok {
-                // The next local midnight, whatever the day's length.
-                t = start_of_local_day(start_of_local_day(t) + 36 * 3600);
-                continue;
+            if month_ok && day_ok {
+                for hour in (0..24).filter(|hour| self.hours & (1 << hour) != 0) {
+                    for minute in (0..60).filter(|minute| self.minutes & (1 << minute) != 0) {
+                        let local = date.and_hms_opt(hour, minute, 0)?;
+                        if let Some(at) = zone.from_local_datetime(&local).earliest().map(|at| at.timestamp()) {
+                            if at > after && at <= horizon {
+                                return Some(at);
+                            }
+                        }
+                    }
+                }
             }
-            if self.hours & (1 << tm.tm_hour) == 0 {
-                t = t - (tm.tm_min as i64) * 60 + 3600;
-                continue;
-            }
-            if self.minutes & (1 << tm.tm_min) == 0 {
-                t += 60;
-                continue;
-            }
-            return Some(t);
+            date = date.succ_opt()?;
         }
         None
     }
@@ -327,30 +341,33 @@ fn evenly_spaced(values: &[u32], cycle: u32) -> bool {
     values.iter().enumerate().all(|(i, v)| *v == i as u32 * step)
 }
 
-/// `today 9:00 AM`, `tomorrow 9:00 AM`, `Mon 9:00 AM`, `2026-10-01 9:00 AM`: when a run is due.
-pub fn when_label(at: i64, now: i64) -> String {
-    let tm = local_tm(at);
-    let time = clock(tm.tm_hour as u32, tm.tm_min as u32);
-    let today = start_of_local_day(now);
-    let day = start_of_local_day(at);
-    if day == today {
-        format!("today {time}")
-    } else if day > today && day - today <= 36 * 3600 {
-        format!("tomorrow {time}")
-    } else if day > today && day - today < 7 * 86_400 {
-        format!("{} {time}", DAY_LABELS[tm.tm_wday as usize])
-    } else {
-        format!("{} {time}", local_time(at).date)
+/// `today 9:00 AM`, `tomorrow 9:00 AM`, `Monday 9:00 AM`, `2026-10-01 9:00 AM`: when a run is
+/// due, on the clock of `zone`.
+pub fn when_label(at: i64, now: i64, zone: &str) -> String {
+    let zone = timezone(zone).unwrap_or(Tz::UTC);
+    let (Some(at), Some(now)) = (zone.timestamp_opt(at, 0).single(), zone.timestamp_opt(now, 0).single()) else { return String::new() };
+    let time = clock(at.hour(), at.minute());
+    match (at.date_naive() - now.date_naive()).num_days() {
+        0 => format!("today {time}"),
+        1 => format!("tomorrow {time}"),
+        2..=6 => format!("{} {time}", DAY_LABELS[at.weekday().num_days_from_sunday() as usize]),
+        _ => format!("{} {time}", at.format("%Y-%m-%d")),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::local_unix;
+
+    /// A zone without daylight saving, so the plain cases read the same everywhere.
+    const ZONE: &str = "Asia/Singapore";
 
     fn at(date: &str, clock: &str) -> i64 {
-        local_unix(date, Some(clock)).unwrap()
+        chrono::DateTime::parse_from_rfc3339(&format!("{date}T{clock}:00+08:00")).unwrap().timestamp()
+    }
+
+    fn utc(text: &str) -> i64 {
+        chrono::DateTime::parse_from_rfc3339(text).unwrap().timestamp()
     }
 
     #[test]
@@ -366,7 +383,7 @@ mod tests {
         assert_eq!(parse("every 120m").unwrap().canonical(), "every 2h");
         assert!(parse("every 2m").unwrap_err().contains("too often"));
         assert!(parse("every fortnight").is_err());
-        assert_eq!(parse("every 30m").unwrap().next_after(1000), Some(2800));
+        assert_eq!(parse("every 30m").unwrap().next_after(1000, ZONE), Some(2800));
     }
 
     #[test]
@@ -395,36 +412,77 @@ mod tests {
     }
 
     #[test]
-    fn cron_finds_the_next_local_firing() {
+    fn cron_finds_the_next_firing_in_its_zone() {
         // 2026-09-17 is a Thursday.
         let thursday_noon = at("2026-09-17", "12:00");
         let weekdays = parse("0 9 * * 1-5").unwrap();
-        assert_eq!(weekdays.next_after(thursday_noon), Some(at("2026-09-18", "09:00")));
+        assert_eq!(weekdays.next_after(thursday_noon, ZONE), Some(at("2026-09-18", "09:00")));
         let friday_ten = at("2026-09-18", "10:00");
-        assert_eq!(weekdays.next_after(friday_ten), Some(at("2026-09-21", "09:00")), "skips the weekend");
-        assert_eq!(weekdays.next_after(at("2026-09-18", "09:00")), Some(at("2026-09-21", "09:00")), "strictly after");
-        assert_eq!(weekdays.next_after(at("2026-09-18", "08:59")), Some(at("2026-09-18", "09:00")));
+        assert_eq!(weekdays.next_after(friday_ten, ZONE), Some(at("2026-09-21", "09:00")), "skips the weekend");
+        assert_eq!(weekdays.next_after(at("2026-09-18", "09:00"), ZONE), Some(at("2026-09-21", "09:00")), "strictly after");
+        assert_eq!(weekdays.next_after(at("2026-09-18", "08:59"), ZONE), Some(at("2026-09-18", "09:00")));
 
         let quarter = parse("*/15 * * * *").unwrap();
-        assert_eq!(quarter.next_after(at("2026-09-17", "12:07")), Some(at("2026-09-17", "12:15")));
-        assert_eq!(quarter.next_after(at("2026-09-17", "12:45")), Some(at("2026-09-17", "13:00")));
+        assert_eq!(quarter.next_after(at("2026-09-17", "12:07"), ZONE), Some(at("2026-09-17", "12:15")));
+        assert_eq!(quarter.next_after(at("2026-09-17", "12:45"), ZONE), Some(at("2026-09-17", "13:00")));
 
         let first = parse("30 8 1 * *").unwrap();
-        assert_eq!(first.next_after(thursday_noon), Some(at("2026-10-01", "08:30")));
+        assert_eq!(first.next_after(thursday_noon, ZONE), Some(at("2026-10-01", "08:30")));
         let leap = parse("0 0 29 2 *").unwrap();
-        assert_eq!(leap.next_after(thursday_noon), Some(at("2028-02-29", "00:00")));
+        assert_eq!(leap.next_after(thursday_noon, ZONE), Some(at("2028-02-29", "00:00")));
         // Both day fields set: either matches, as cron has it.
         let either = parse("0 9 15 * 1").unwrap();
-        assert_eq!(either.next_after(at("2026-09-17", "12:00")), Some(at("2026-09-21", "09:00")));
-        assert_eq!(either.next_after(at("2026-10-13", "12:00")), Some(at("2026-10-15", "09:00")));
+        assert_eq!(either.next_after(at("2026-09-17", "12:00"), ZONE), Some(at("2026-09-21", "09:00")));
+        assert_eq!(either.next_after(at("2026-10-13", "12:00"), ZONE), Some(at("2026-10-15", "09:00")));
     }
 
     #[test]
     fn due_labels_read_like_a_person() {
         let now = at("2026-09-17", "12:00");
-        assert_eq!(when_label(at("2026-09-17", "17:30"), now), "today 5:30 PM");
-        assert_eq!(when_label(at("2026-09-18", "09:00"), now), "tomorrow 9:00 AM");
-        assert_eq!(when_label(at("2026-09-21", "09:00"), now), "Monday 9:00 AM");
-        assert_eq!(when_label(at("2026-10-01", "08:30"), now), "2026-10-01 8:30 AM");
+        assert_eq!(when_label(at("2026-09-17", "17:30"), now, ZONE), "today 5:30 PM");
+        assert_eq!(when_label(at("2026-09-18", "09:00"), now, ZONE), "tomorrow 9:00 AM");
+        assert_eq!(when_label(at("2026-09-21", "09:00"), now, ZONE), "Monday 9:00 AM");
+        assert_eq!(when_label(at("2026-10-01", "08:30"), now, ZONE), "2026-10-01 8:30 AM");
+        // The day turns on the routine's clock: 9:00 AM tomorrow in New York is 9:00 PM in Singapore.
+        assert_eq!(when_label(utc("2026-09-18T13:00:00Z"), now, "America/New_York"), "tomorrow 9:00 AM");
+    }
+
+    #[test]
+    fn explicit_timezones_use_the_same_instant_on_every_device() {
+        let morning = parse("0 9 * * *").unwrap();
+        let after = utc("2026-10-08T00:00:00Z");
+        assert_eq!(morning.next_after(after, "Asia/Singapore"), Some(utc("2026-10-08T01:00:00Z")));
+        assert_eq!(morning.next_after(after, "America/New_York"), Some(utc("2026-10-08T13:00:00Z")));
+        assert!(timezone("Mars/Base").is_err());
+        assert!(timezone(&local_timezone()).is_ok());
+        assert_eq!(morning.next_after(after, "Mars/Base"), None);
+        assert_eq!(parse("every 1d").unwrap().next_after(after, "America/New_York"), Some(after + 86_400));
+        assert!(parse("every 9223372036854775807d").is_err());
+    }
+
+    #[test]
+    fn daylight_saving_gaps_skip_and_folds_fire_only_at_the_earlier_instant() {
+        let zone = "America/New_York";
+        let morning = parse("0 9 * * *").unwrap();
+        assert_eq!(morning.next_after(utc("2026-03-07T14:00:00Z"), zone), Some(utc("2026-03-08T13:00:00Z")), "a 23-hour day");
+        assert_eq!(morning.next_after(utc("2026-10-31T13:00:00Z"), zone), Some(utc("2026-11-01T14:00:00Z")), "a 25-hour day");
+        let gap = parse("30 2 * * *").unwrap();
+        assert_eq!(gap.next_after(utc("2026-03-08T00:00:00Z"), zone), Some(utc("2026-03-09T06:30:00Z")), "02:30 does not exist on March 8");
+        let fold = parse("30 1 * * *").unwrap();
+        let first = utc("2026-11-01T05:30:00Z");
+        assert_eq!(fold.next_after(first - 60, zone), Some(first));
+        assert_eq!(fold.next_after(first, zone), Some(utc("2026-11-02T06:30:00Z")), "the repeated 01:30 never fires again");
+        assert_eq!(fold.next_after(utc("2026-11-01T06:00:00Z"), zone), Some(utc("2026-11-02T06:30:00Z")), "restarting inside the fold does not repeat it");
+    }
+
+    #[test]
+    fn explicit_cron_handles_month_boundaries_and_half_hour_dst() {
+        let first = parse("30 8 1 * *").unwrap();
+        assert_eq!(first.next_after(utc("2026-09-30T23:00:00Z"), "Asia/Singapore"), Some(utc("2026-10-01T00:30:00Z")));
+        let fold = parse("45 1 * * *").unwrap();
+        let zone = "Australia/Lord_Howe";
+        let first = utc("2026-04-04T14:45:00Z");
+        assert_eq!(fold.next_after(first - 60, zone), Some(first));
+        assert_eq!(fold.next_after(first, zone), Some(utc("2026-04-05T15:15:00Z")));
     }
 }

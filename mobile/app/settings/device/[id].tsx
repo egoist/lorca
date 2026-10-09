@@ -3,7 +3,7 @@
 
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useState } from "react";
-import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from "react-native";
 import { engine } from "../../../src/core/engine";
 import { deviceName, isRunner, providerLabel, type Device, type PluginStatus, type UpdateStatus } from "../../../src/core/model";
 import { deviceIsOnline, useStore } from "../../../src/core/store";
@@ -14,6 +14,7 @@ import { Row, Section } from "../../../src/ui/forms";
 import { lastSeen } from "../../../src/ui/format";
 import { Symbol } from "../../../src/ui/Symbol";
 import { Font, usePalette } from "../../../src/ui/theme";
+import { alert } from "../../../src/ui/alert";
 
 const OS_NAMES: Record<string, string> = { macos: "macOS", linux: "Linux", windows: "Windows", ios: "iOS", ipados: "iPadOS", android: "Android" };
 
@@ -83,7 +84,7 @@ export default function DeviceScreen() {
     const detail = isRunner(target)
       ? t("It loses its keys and synced chats the next time it connects, and bots assigned to it stop running until you assign them to another Runner. You can pair it again any time.")
       : t("It loses its keys and synced chats the next time it connects. You can pair it again any time.");
-    Alert.alert(t("Unpair {name}?", { name: deviceName(target) }), detail, [
+    alert(t("Unpair {name}?", { name: deviceName(target) }), detail, [
       { text: t("Cancel"), style: "cancel" },
       {
         text: t("Unpair"),
@@ -92,7 +93,7 @@ export default function DeviceScreen() {
           engine
             .unpairDevice(target.id)
             .then(() => router.back())
-            .catch((error: unknown) => Alert.alert(t("Couldn’t unpair {name}", { name: deviceName(target) }), error instanceof Error ? error.message : String(error)));
+            .catch((error: unknown) => alert(t("Couldn’t unpair {name}", { name: deviceName(target) }), error instanceof Error ? error.message : String(error)));
         },
       },
     ]);
@@ -105,7 +106,7 @@ export default function DeviceScreen() {
     setUpdating(true);
     engine
       .updateDevice(target.id)
-      .catch((error: unknown) => Alert.alert(t("Couldn’t update {name}", { name: deviceName(target) }), error instanceof Error ? error.message : String(error)))
+      .catch((error: unknown) => alert(t("Couldn’t update {name}", { name: deviceName(target) }), error instanceof Error ? error.message : String(error)))
       .finally(() => setUpdating(false));
   }
 

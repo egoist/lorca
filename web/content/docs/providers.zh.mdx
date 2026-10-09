@@ -56,8 +56,25 @@ lorca provider list
 ```bash
 lorca provider add "OpenRouter" https://openrouter.ai/api/v1 --model anthropic/claude-sonnet-5 --api-key-stdin
 lorca provider add "Ollama" http://localhost:11434/v1
-lorca provider add "Claude proxy" https://proxy.example.com --api messages --model claude-opus-5 --api-key-stdin
+lorca provider add "Claude proxy" https://proxy.example.com/v1 --api messages --model claude-opus-5 --api-key-stdin
 ```
+
+### 决策 API
+
+决策模型用概率回答带类型的问题，而不写文字。[自动审查](/zh/docs/auto-review#审查模型)可以使用它，智能体不能。在 **添加服务商…** 里选 **OpenRouter Decisions**、**OpenAI Decisions** 或 **TypeSafe** 会替你填好；选 **其他服务器…** 时，API 选择：
+
+- **System One：**TypeSafe 的 API，OpenRouter、OpenCode Zen 和 LLM Gateway 也提供。
+- **OpenAI Decisions：**OpenAI 的 Decisions API，Vercel 的 AI Gateway 也提供。
+
+这两种 API 的 URL 就是端点本身，例如 `https://openrouter.ai/api/alpha/decisions`；不带端点路径的 URL 会加上该 API 常用的路径（`/systemone` 或 `/decisions`）。模型列表会列出服务器的决策模型。决策服务商不会出现在智能体的服务商选择器里；在 **设置 › 自动审查** 里选择它，在 **审查模型** 里选择它的模型。
+
+```bash
+lorca provider add "TypeSafe" https://api.typesafe.ai/v1/systemone --api system-one --api-key-stdin
+```
+
+### 审查模型
+
+**设置 › 服务商 › 审查模型** 里是每个已接入服务商的审查模型，也就是[自动审查](/zh/docs/auto-review#审查模型)在它上面运行的模型。默认是一款小型快速模型；你可以改选这个服务商的任意模型，包括决策模型。
 
 ## 为每个智能体选模型
 

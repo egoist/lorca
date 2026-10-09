@@ -6,6 +6,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -154,6 +155,27 @@ func TestNewBotSheet(t *testing.T) {
 	}
 	if bot != nil && (bot.RunnerID != "dev-workbench" || bot.Provider != model.ProviderKinds[0] || bot.Model != "" || bot.Thinking != "") {
 		t.Errorf("bot runs %q on %q with %q/%q", bot.Provider, bot.RunnerID, bot.Model, bot.Thinking)
+	}
+}
+
+// New Bot offers no decision provider, and no decision model of a provider that has some.
+func TestNewBotLeavesDecisionModelsOut(t *testing.T) {
+	_, tt := sheetTester(t, func(m *mainWindow) { m.presentNewBot(nil) })
+	if err := tt.Click("DeepSeek (API key)"); err != nil {
+		t.Fatalf("%v in %q", err, tt.Texts())
+	}
+	if got := tt.Menu(); slices.Contains(got, "OpenRouter Decisions (Custom)") || !slices.Contains(got, "Ollama (Custom)") {
+		t.Errorf("providers %q", got)
+	}
+	if err := tt.ChooseMenuItem("OpenCode Zen (API key)"); err != nil {
+		t.Fatal(err)
+	}
+	settle(tt)
+	if err := tt.Click(L("Default (%@)", "DeepSeek V4.1 Flash")); err != nil {
+		t.Fatalf("%v in %q", err, tt.Texts())
+	}
+	if got := tt.Menu(); slices.Contains(got, "Jev 1.13") || slices.Contains(got, "Jev 1.13 Free") || len(got) != 4 {
+		t.Errorf("models %q", got)
 	}
 }
 

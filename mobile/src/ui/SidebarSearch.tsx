@@ -6,7 +6,8 @@
 // opens a chat.
 
 import { useRef } from "react";
-import { Pressable, StyleSheet, TextInput } from "react-native";
+import { StyleSheet, TextInput } from "react-native";
+import { Pressable } from "./Pressable";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { t, useLanguage } from "../i18n";
 import { Surface } from "./Composer";

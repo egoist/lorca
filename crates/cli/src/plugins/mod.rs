@@ -187,6 +187,9 @@ pub struct ToolHints {
     /// Run without asking.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub readonly: Vec<String>,
+    /// Tools that stage drafts without sending or publishing them. Still cross Auto-review.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub draft: Vec<String>,
     /// Never offered to the bot.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hide: Vec<String>,
@@ -205,7 +208,7 @@ pub struct ToolRule {
 
 impl ToolHints {
     fn is_empty(&self) -> bool {
-        self.readonly.is_empty() && self.hide.is_empty() && self.exposure.is_empty()
+        self.readonly.is_empty() && self.draft.is_empty() && self.hide.is_empty() && self.exposure.is_empty()
     }
 
     /// Whether `tool` is kept from bots: by its `exposure` rule (its exact name first, then the
@@ -904,15 +907,39 @@ pub async fn serve_request(app: &Arc<App>, verb: &str, body: &Value, requested_b
         }
         "plugins.sign_in.cancel" => mcp::cancel_sign_in(app, &plugin_id()?, body["sign_in"].as_str().ok_or("missing sign_in")?),
         "plugins.detail" => detail(app, &plugin_id()?),
+        // What the Access sheet offers: each installed plugin by name, with the tools it offered
+        // when it last connected and what each does, read, draft, or write.
+        "permissions.catalog" => {
+            let installed = app.plugins.lock().unwrap().installed().to_vec();
+            let statuses = app.plugins.lock().unwrap().statuses();
+            Ok(json!(installed.iter().map(|plugin| json!({
+                "id": plugin.manifest.id,
+                "name": statuses.iter().find(|status| status.id == plugin.manifest.id).map(|status| &status.name).unwrap_or(&plugin.manifest.name),
+                "tools": mcp::saved_tools(app, plugin).into_iter().filter(|tool| tool["hidden"] != true).collect::<Vec<_>>(),
+            })).collect::<Vec<_>>()))
+        }
         "plugins.sign_out" => Ok(json!(sign_out(app, &plugin_id()?, body["server"].as_str())?)),
         "permission.answer" => {
             let message_id = body["message_id"].as_str().ok_or("missing message_id")?;
             let decision = body["decision"].as_str().and_then(mcp::Decision::parse).ok_or("decision is allow, always, or deny")?;
+            let chat_id = body["chat_id"].as_str().ok_or("missing chat_id")?;
+            // An access request is only ever dismissed: access changes in the bot's Access sheet.
+            if let Some(mut message) = app.message(chat_id, message_id) {
+                if let crate::model::Body::Permission { tool, decision: current, .. } = &mut message.body {
+                    if tool == "access" {
+                        if decision != mcp::Decision::Denied {
+                            return Err("Change this bot's Access settings in its profile. An access request cannot grant permissions or add an Always allow rule.".into());
+                        }
+                        *current = "dismissed".into();
+                        app.upsert_message(message, true);
+                        return Ok(json!({ "answered": true }));
+                    }
+                }
+            }
             if mcp::answer(app, message_id, decision) {
                 return Ok(json!({ "answered": true }));
             }
             // Not a waiting tool: a sign-in card, answered by starting the flow.
-            let chat_id = body["chat_id"].as_str().ok_or("missing chat_id")?;
             mcp::answer_sign_in(app, chat_id, message_id, decision, elsewhere()).await
         }
         other => Err(format!("Unknown request {other}")),

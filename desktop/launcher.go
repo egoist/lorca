@@ -144,7 +144,7 @@ func (l *launcher) environment() []string {
 		}
 	}
 	set("RUST_LOG", "lorca=info")
-	set("LORCA_HOME", defaultCLIHome())
+	set("LORCA_HOME", cliHome())
 	if !isDevelopment() {
 		set("LORCA_DEFAULT_RELAY_URL", productionRelayURL)
 	}

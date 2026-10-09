@@ -17,6 +17,8 @@ enum StoreEvent {
     case turnFinished(Chat.ID, Bot.ID, Date)
     /// A command in the chat has run long enough to count as a running task.
     case runningTasksChanged(Chat.ID)
+    /// The chat's published outputs, or whether one's file could be fetched, changed.
+    case outputsChanged(Chat.ID)
     case selectionChanged
     case connectionChanged
     case identityChanged
@@ -284,6 +286,8 @@ final class AppStore {
             runningJobs.append(("chat:\(id)", id, "", nil))
         }
         sortChats()
+        // A resync may bring outputs this app missed; they are asked for again when next shown.
+        staleOutputs = Set(outputMessages.keys)
         emit(.snapshotReplaced)
     }
 
@@ -346,11 +350,14 @@ final class AppStore {
             chats[index].messages.removeAll { $0.id == payload.messageId }
             commandStarts[payload.messageId] = nil
             emit(.messageRemoved(payload.chatId, payload.messageId))
+            noteOutput(nil, removing: payload.messageId, in: payload.chatId)
 
         case "chat.removed":
             guard let payload = decode(Wire.ChatRemoved.self) else { return }
             chats.removeAll { $0.id == payload.chatId }
             runningJobs.removeAll { $0.chatID == payload.chatId }
+            outputMessages[payload.chatId] = nil
+            staleOutputs.remove(payload.chatId)
             emit(.chatsChanged)
 
         case "job.started":
@@ -414,6 +421,7 @@ final class AppStore {
     private func upsert(_ message: Message, in chatID: Chat.ID) {
         guard let chatIndex = chats.firstIndex(where: { $0.id == chatID }) else { return }
         noteCommand(message, in: chatID)
+        noteOutput(message, in: chatID)
         if let messageIndex = chats[chatIndex].index(of: message.id) {
             chats[chatIndex].messages[messageIndex] = message
             emit(.messageChanged(chatID, message.id))
@@ -670,9 +678,15 @@ final class AppStore {
         providerKinds.first { credential(for: $0)?.isConnected == true } ?? .deepseek
     }
 
-    /// Every provider a bot can run with: the built-in ones, then the ones the user added.
+    /// Every provider a bot can run with: the built-in ones, then the ones the user added,
+    /// except those of decision models.
     var providerKinds: [ProviderCredential.Kind] {
-        ProviderCredential.Kind.builtIn + providers.map(\.kind).filter(\.isCustom)
+        ProviderCredential.Kind.builtIn + providers.filter { $0.kind.isCustom && !$0.decides }.map(\.kind)
+    }
+
+    /// The providers Auto-review can run a model of: every one the account has connected.
+    var reviewProviderKinds: [ProviderCredential.Kind] {
+        providers.filter(\.isConnected).map(\.kind)
     }
 
     func updateBot(_ id: Bot.ID, name: String, description: String? = nil, provider: ProviderCredential.Kind? = nil) {
@@ -686,6 +700,20 @@ final class AppStore {
         if let description { params["description"] = description }
         if let provider { params["provider"] = provider.wireValue }
         perform("bots.update", params)
+    }
+
+    /// The plugins on the bot's Runner and their tools, asked of that Runner.
+    func botAccessCatalog(_ id: Bot.ID) async throws -> BotAccessCatalog {
+        if isMock { return MockData.accessCatalog() }
+        return try await client.request("bots.permissions", ["id": id], as: BotAccessCatalog.self)
+    }
+
+    /// Only the user changes a bot's Access; the CLI also dismisses the access requests it left.
+    func setBotPermissions(_ id: Bot.ID, _ policy: BotPermissions) {
+        guard let index = bots.firstIndex(where: { $0.id == id }) else { return }
+        bots[index].permissions = policy
+        emit(.rosterChanged)
+        perform("bots.update", ["id": id, "permissions": policy.json])
     }
 
     /// The bot's symbol and accent, the look under and behind its image.
@@ -990,6 +1018,20 @@ final class AppStore {
         perform("auto_review.set", ["is_enabled": value.isEnabled, "rules": rules])
     }
 
+    /// Picks the provider that reviews, or nil for the bot's own.
+    func setReviewProvider(_ provider: ProviderCredential.Kind?) {
+        autoReview.provider = provider
+        emit(.rosterChanged)
+        perform("auto_review.set", ["provider": provider?.wireValue ?? NSNull()])
+    }
+
+    /// Picks the model Auto-review runs on `kind`, or nil for its default review model.
+    func setReviewModel(_ model: String?, for kind: ProviderCredential.Kind) {
+        autoReview.models[kind] = model
+        emit(.rosterChanged)
+        perform("auto_review.set", ["models": [kind.wireValue: model ?? NSNull()] as [String: Any]])
+    }
+
     /// Answers a question: a permission card's, or a command card's. `allow`, `always`, or
     /// `deny`. The CLI confirms with the card's new state.
     func answerPermission(chatID: Chat.ID, messageID: Message.ID, decision: String) {
@@ -997,6 +1039,8 @@ final class AppStore {
             switch message.body {
             case var .permission(request):
                 request.decision = decision == "always" ? .always : (decision == "deny" ? .denied : .allowed)
+                // An access request is only ever dismissed.
+                if request.isAccess, request.decision == .denied { request.decision = .dismissed }
                 if request.isConnect, request.decision == .allowed { request.summary = L("Starting the sign-in…") }
                 message.body = .permission(request)
             case var .tool(tool):
@@ -1067,6 +1111,7 @@ final class AppStore {
         guard let index = routines.firstIndex(where: { $0.id == id }) else { return }
         routines[index].isEnabled = enabled
         routines[index].pausedReason = nil
+        routines[index].state = enabled ? "on" : "paused"
         if !enabled { routines[index].nextRunAt = nil }
         emit(.rosterChanged)
         perform("routines.update", ["id": id, "enabled": enabled])
@@ -1400,29 +1445,102 @@ final class AppStore {
 
     /// Where an attachment's bytes are on this computer. A file sent from here is known at once; one
     /// sent from another Device is fetched through the CLI, and the message reloads when it lands.
+    /// A fetch that failed keeps its reason until the user retries, so a scroll does not ask again.
     private var attachmentURLs: [Attachment.ID: URL] = [:]
     private var fetchingAttachments: Set<Attachment.ID> = []
+    private var attachmentErrors: [Attachment.ID: String] = [:]
 
     func localURL(for attachment: Attachment, in chatID: Chat.ID, messageID: Message.ID) -> URL? {
-        if let url = attachmentURLs[attachment.id] { return url }
-        guard !isMock, !fetchingAttachments.contains(attachment.id) else { return nil }
+        if let url = attachmentURLs[attachment.id], FileManager.default.fileExists(atPath: url.path) { return url }
+        guard !isMock, !fetchingAttachments.contains(attachment.id), attachmentErrors[attachment.id] == nil else { return nil }
         fetchingAttachments.insert(attachment.id)
         Task { [weak self] in
             let params: [String: Any] = [
                 "attachment": ["id": attachment.id, "name": attachment.name, "mime": attachment.mime, "size": attachment.size]
             ]
             guard let self else { return }
+            defer { fetchingAttachments.remove(attachment.id) }
             do {
                 let reply = try await client.request("files.path", params, as: Wire.FilePath.self)
                 attachmentURLs[attachment.id] = URL(fileURLWithPath: reply.path)
-                emit(.messageChanged(chatID, messageID))
             } catch {
-                // Left in the fetching set: the relay does not have it, and every scroll would
-                // ask again. A relaunch retries.
+                attachmentErrors[attachment.id] = error.localizedDescription
                 NSLog("fetching \(attachment.name) failed: \(error.localizedDescription)")
             }
+            emit(.messageChanged(chatID, messageID))
         }
         return nil
+    }
+
+    /// Why the attachment's bytes could not be fetched, until a retry.
+    func attachmentError(for attachment: Attachment) -> String? { attachmentErrors[attachment.id] }
+
+    func retryAttachment(_ attachment: Attachment, in chatID: Chat.ID, messageID: Message.ID) {
+        guard attachmentErrors.removeValue(forKey: attachment.id) != nil else { return }
+        _ = localURL(for: attachment, in: chatID, messageID: messageID)
+        emit(.messageChanged(chatID, messageID))
+    }
+
+    /// The attachment as a file named for what it is, for Quick Look, another app, or a copy:
+    /// the bytes under their attachment id carry no extension, so the CLI keeps a named copy.
+    func openableURL(for attachment: Attachment) async throws -> URL {
+        if let url = attachmentURLs[attachment.id], !url.pathExtension.isEmpty,
+            FileManager.default.fileExists(atPath: url.path)
+        { return url }
+        let params: [String: Any] = [
+            "attachment": ["id": attachment.id, "name": attachment.name, "mime": attachment.mime, "size": attachment.size],
+            "named": true,
+        ]
+        return URL(fileURLWithPath: try await client.request("files.path", params, as: Wire.FilePath.self).path)
+    }
+
+    // MARK: - Outputs
+
+    /// Every version of each chat's outputs, oldest first: what `outputs.list` answered, and
+    /// output messages that arrived since. A chat is asked for when something first shows it, and
+    /// again after a resync, while what it had stays on screen.
+    private var outputMessages: [Chat.ID: [Message]] = [:]
+    private var outputRequests: Set<Chat.ID> = []
+    private var staleOutputs: Set<Chat.ID> = []
+
+    /// The chat's outputs, the latest published first; empty until the CLI answers.
+    func outputs(in chatID: Chat.ID) -> [OutputSeries] {
+        if isMock { return OutputSeries.group(chat(chatID)?.messages ?? []) }
+        let known = outputMessages[chatID]
+        if known == nil || staleOutputs.contains(chatID) { listOutputs(in: chatID) }
+        return OutputSeries.group(known ?? [])
+    }
+
+    private func listOutputs(in chatID: Chat.ID) {
+        guard outputRequests.insert(chatID).inserted else { return }
+        staleOutputs.remove(chatID)
+        Task { [weak self] in
+            guard let self else { return }
+            defer { outputRequests.remove(chatID) }
+            do {
+                let reply = try await client.request("outputs.list", ["chat_id": chatID], as: Wire.OutputList.self)
+                // Output messages that arrived while the list was on its way are in it too.
+                var messages = reply.outputs.map { $0.toModel() }
+                for message in outputMessages[chatID] ?? [] where !messages.contains(where: { $0.id == message.id }) {
+                    messages.append(message)
+                }
+                outputMessages[chatID] = messages
+                emit(.outputsChanged(chatID))
+            } catch {
+                NSLog("listing outputs failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// Keeps a chat's known outputs in step with a message that was added, changed, or removed.
+    private func noteOutput(_ message: Message?, removing id: Message.ID? = nil, in chatID: Chat.ID) {
+        guard var messages = outputMessages[chatID] else { return }
+        let before = messages
+        messages.removeAll { $0.id == (message?.id ?? id) }
+        if let message, message.output != nil { messages.append(message) }
+        guard messages != before else { return }
+        outputMessages[chatID] = messages
+        emit(.outputsChanged(chatID))
     }
 
     func isResponding(in chatID: Chat.ID) -> Bool {
@@ -1558,6 +1676,12 @@ final class AppStore {
         _ = try await client.request("device.update", ["id": id])
     }
 
+    /// Whether `lorca service` keeps the CLI running on a Runner, asked of it through the CLI.
+    func serviceStatus(_ id: Device.ID) async throws -> Wire.ServiceStatus {
+        if isMock { return .init(installed: false, running: false) }
+        return try await client.request("device.service_status", ["id": id], as: Wire.ServiceStatus.self)
+    }
+
     func unpairDevice(_ id: Device.ID) async throws {
         if !isMock {
             _ = try await client.request("device.unpair", ["id": id])
@@ -1651,12 +1775,19 @@ final class AppStore {
         providers.first { $0.kind == kind }
     }
 
-    /// The models `kind` offers, in the catalog's order; the first is the default the CLI uses.
-    /// A custom provider's are the ones saved with it, with the levels the CLI says they take.
+    /// The models a bot of `kind` can run, in the catalog's order; the first is the default the
+    /// CLI uses. A custom provider's are the ones saved with it, with the levels the CLI says
+    /// they take. Decision models are Auto-review's alone.
     func models(for kind: ProviderCredential.Kind) -> [ProviderModel] {
+        reviewModels(for: kind).filter { !$0.decides }
+    }
+
+    /// Every model of `kind` Auto-review can run: the ones bots can, and decision models.
+    func reviewModels(for kind: ProviderCredential.Kind) -> [ProviderModel] {
         guard kind.isCustom else { return catalog.filter { $0.provider == kind } }
-        return (credential(for: kind)?.models ?? []).map {
-            ProviderModel(provider: kind, id: $0.id, label: $0.displayName, levels: $0.levels)
+        let credential = credential(for: kind)
+        return (credential?.models ?? []).map {
+            ProviderModel(provider: kind, id: $0.id, label: $0.displayName, levels: $0.levels, decides: credential?.decides == true)
         }
     }
 

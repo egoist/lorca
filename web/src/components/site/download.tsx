@@ -16,7 +16,7 @@ import { Trans, useTranslation } from 'react-i18next'
 
 import { Button } from '#/components/ui/button'
 import { i18nFor, type Language, languages } from '#/i18n'
-import type { DesktopRelease } from '#/lib/desktop-release'
+import type { AndroidRelease, DesktopRelease } from '#/lib/releases'
 import { cn } from '#/lib/utils'
 import { Logo } from './logo'
 import { Nav, SITE, docsPath, downloadPath } from './nav'
@@ -41,8 +41,10 @@ export type MacRelease = {
   appleSilicon: boolean
 }
 
-/// The newest Windows and Linux release, which the build reads (`define` in vite.config.ts).
+/// The newest Windows and Linux release and Android release, which the build reads (`define` in
+/// vite.config.ts).
 declare const __DESKTOP_RELEASE__: DesktopRelease | null
+declare const __ANDROID_RELEASE__: AndroidRelease | null
 
 const numeric = new Intl.Collator('en', { numeric: true })
 
@@ -107,6 +109,7 @@ const link = 'underline underline-offset-4 hover:text-foreground'
 export function Download({ release: mac }: { release: MacRelease | null }) {
   const { t, i18n } = useTranslation()
   const desktop = __DESKTOP_RELEASE__
+  const android = __ANDROID_RELEASE__
   return (
     <div className="flex min-h-svh flex-col">
       <Nav />
@@ -193,8 +196,13 @@ export function Download({ release: mac }: { release: MacRelease | null }) {
               <a href={TESTFLIGHT}>{t('download.ios.action')}</a>
             </Button>
           </Platform>
-          <Platform icon={Smartphone} title={t('download.android.title')} body={t('download.android.body')}>
-            <Soon />
+          <Platform
+            icon={Smartphone}
+            title={t('download.android.title')}
+            body={t('download.android.body')}
+            note={android && <Notes items={[t('download.version', { version: android.version }), t('download.android.system')]} />}
+          >
+            {android ? <DownloadButton href={android.apk}>{t('download.android.action')}</DownloadButton> : <Soon />}
           </Platform>
         </section>
         <section className="mx-auto max-w-4xl px-5 pt-5 pb-20">

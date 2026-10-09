@@ -67,12 +67,6 @@ const env: Record<string, string> = {
   ...(process.env as Record<string, string>),
   ANDROID_HOME: sdk,
   JAVA_HOME: javaHome,
-  // Gradle takes project properties from the environment, which keeps the password out of the
-  // command line. These are the ones Android Studio's signed builds use; they sign every variant.
-  "ORG_GRADLE_PROJECT_android.injected.signing.store.file": keystore,
-  "ORG_GRADLE_PROJECT_android.injected.signing.store.password": password,
-  "ORG_GRADLE_PROJECT_android.injected.signing.key.alias": "lorca",
-  "ORG_GRADLE_PROJECT_android.injected.signing.key.password": password,
 }
 // The variant variables would make a Lorca Dev build.
 delete env.LORCA_MOBILE_VARIANT
@@ -100,7 +94,29 @@ await $`bunx expo prebuild --platform android --no-install`.cwd(PROJECT).env(env
 log(`${color.bold("building")} ${color.dim(`${ABIS}, signed with ${keystore}`)}`)
 // Native libraries go in compressed: the APK is downloaded whole for every update, and Android
 // unpacks only the phone's ABI when it installs.
-await $`./gradlew :app:assembleRelease -PreactNativeArchitectures=${ABIS} -Pexpo.useLegacyPackaging=true`.cwd(ANDROID).env(env)
+//
+// The signing goes in the generated project's gradle.properties for the build: the properties
+// Android Studio's signed builds use, which sign every variant. On the command line the password
+// would show in ps, and as ORG_GRADLE_PROJECT_ variables their names hold dots, which dash, the
+// /bin/sh that runs gradlew on Ubuntu, drops: the APK came out with the debug key.
+const properties = join(ANDROID, "gradle.properties")
+const unsigned = await Bun.file(properties).text()
+// A .properties value takes a backslash as an escape.
+const value = (text: string) => text.replaceAll("\\", "\\\\")
+await Bun.write(
+  properties,
+  `${unsigned}
+android.injected.signing.store.file=${value(keystore)}
+android.injected.signing.store.password=${value(password)}
+android.injected.signing.key.alias=lorca
+android.injected.signing.key.password=${value(password)}
+`,
+)
+try {
+  await $`./gradlew :app:assembleRelease -PreactNativeArchitectures=${ABIS} -Pexpo.useLegacyPackaging=true`.cwd(ANDROID).env(env)
+} finally {
+  await Bun.write(properties, unsigned)
+}
 const built = join(ANDROID, "app", "build", "outputs", "apk", "release", "app-release.apk")
 if (!existsSync(built)) die("Gradle produced no APK")
 

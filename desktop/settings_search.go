@@ -70,6 +70,10 @@ func autoReviewSwitchEntry() settingsEntry {
 	return entry(model.PaneAutoReview, L("Check actions before they run"), "", L("auto-review approve approval permission plugin ask"))
 }
 
+func autoReviewProviderEntry() settingsEntry {
+	return entry(model.PaneAutoReview, L("Reviews with"), "", L("review provider"))
+}
+
 func autoReviewRulesEntry() settingsEntry {
 	return entry(model.PaneAutoReview, L("Auto-review Rules"), "", L("rule allow automatically ask first always allow"))
 }
@@ -115,6 +119,11 @@ func mcpServerEntry(plugin model.InstalledPlugin) settingsEntry {
 	return entry(model.PanePlugins, plugin.Name, "", plugin.Description, L("mcp server mcp.json"))
 }
 
+// reviewModelsEntry is the section that picks each connected provider's review model.
+func reviewModelsEntry() settingsEntry {
+	return entry(model.PaneProviders, L("Review Models"), "", L("review model auto-review decision"))
+}
+
 // providerEntry: a custom provider goes by the name the user gave it, as its row on the pane does.
 func providerEntry(kind model.ProviderKind) settingsEntry {
 	return entry(model.PaneProviders, model.ProviderName(kind, store.Providers), "", model.ProviderSubtitle(kind), L("credential connect disconnect sign in model"))
@@ -157,7 +166,7 @@ func entriesIn(pane model.SettingsPane, device *model.Device) []settingsEntry {
 		}
 		return out
 	case model.PaneAutoReview:
-		return []settingsEntry{autoReviewSwitchEntry(), autoReviewRulesEntry()}
+		return []settingsEntry{autoReviewSwitchEntry(), autoReviewProviderEntry(), autoReviewRulesEntry()}
 	case model.PaneAdvanced:
 		out := []settingsEntry{relayURLEntry(), cliPortEntry(), onboardingEntry()}
 		if store.HasIdentity != nil && *store.HasIdentity {
@@ -176,6 +185,9 @@ func entriesIn(pane model.SettingsPane, device *model.Device) []settingsEntry {
 		var out []settingsEntry
 		for _, credential := range store.Providers {
 			out = append(out, providerEntry(credential.Kind))
+		}
+		if len(store.ReviewProviderKinds()) > 0 {
+			out = append(out, reviewModelsEntry())
 		}
 		return out
 	case model.PanePlugins:

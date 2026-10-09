@@ -109,6 +109,9 @@ type sheetOptions struct {
 	ConfirmDisabled bool
 	// Leading builds controls at the start of the buttons' row.
 	Leading func()
+	// Footer builds a row of actions under the content, outside its scroll, so a tall sheet in a
+	// short window keeps them in view.
+	Footer func()
 	// ReturnInContent leaves Return to the content, as a multi-line editor's.
 	ReturnInContent bool
 }
@@ -156,6 +159,9 @@ func sheetFrame(c *ui.Context, o sheetOptions, content func()) sheetResult {
 				result.Confirmed = true
 			}
 			fieldSubmitted = false
+		}
+		if o.Footer != nil {
+			ui.Row(c).Margin(12, 0, 0, 0).Children(o.Footer)
 		}
 		if o.Confirm != "" || o.Leading != nil {
 			ui.Row(c).Gap(10).Margin(20, 0, 0, 0).Children(func() {

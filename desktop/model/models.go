@@ -169,11 +169,26 @@ type ProviderModel struct {
 	ID       string
 	Label    string
 	Levels   []string
+	// Decides is a decision model, which answers typed questions instead of chatting: Auto-review
+	// can run it, and no bot can.
+	Decides bool
 }
 
-// ProviderModels are the models a provider offers, in the catalog's order; the first is the
-// default the CLI uses.
+// ProviderModels are the models a bot of a provider can run, in the catalog's order; the first is
+// the default the CLI uses. Decision models are Auto-review's alone.
 func ProviderModels(models []ProviderModel, kind ProviderKind) []ProviderModel {
+	var out []ProviderModel
+	for _, model := range ReviewModels(models, kind) {
+		if !model.Decides {
+			out = append(out, model)
+		}
+	}
+	return out
+}
+
+// ReviewModels are every model of a provider Auto-review can run: the ones bots can, and
+// decision models.
+func ReviewModels(models []ProviderModel, kind ProviderKind) []ProviderModel {
 	var out []ProviderModel
 	for _, model := range models {
 		if model.Provider == kind {
@@ -238,7 +253,7 @@ func WithCustomModels(models []ProviderModel, providers []ProviderCredential) []
 			if label == "" {
 				label = model.ID
 			}
-			out = append(out, ProviderModel{Provider: provider.Kind, ID: model.ID, Label: label, Levels: model.Levels})
+			out = append(out, ProviderModel{Provider: provider.Kind, ID: model.ID, Label: label, Levels: model.Levels, Decides: provider.Decides()})
 		}
 	}
 	return out
@@ -256,7 +271,13 @@ type ProviderCredential struct {
 	Name   string
 	API    CustomAPI
 	Models []CustomModel
+	// ReviewModel is the model Auto-review runs on it unless the user picks another: the
+	// catalog's small one for a built-in provider, a custom provider's first. Empty for none.
+	ReviewModel string
 }
+
+// Decides is a custom provider of decision models, which Auto-review can run and no bot can.
+func (p ProviderCredential) Decides() bool { return IsCustomKind(p.Kind) && p.API.Decides() }
 
 // CustomAPI is the wire protocol a custom provider's server speaks.
 type CustomAPI string
@@ -265,10 +286,12 @@ const (
 	APIChatCompletions CustomAPI = "chat-completions"
 	APIResponses       CustomAPI = "responses"
 	APIMessages        CustomAPI = "messages"
+	APISystemOne       CustomAPI = "system-one"
+	APIDecisions       CustomAPI = "decisions"
 )
 
 // CustomAPIs are every protocol, in the order the custom provider sheet offers them.
-var CustomAPIs = []CustomAPI{APIChatCompletions, APIResponses, APIMessages}
+var CustomAPIs = []CustomAPI{APIChatCompletions, APIResponses, APIMessages, APISystemOne, APIDecisions}
 
 func IsCustomAPI(value string) bool { return slices.Contains(CustomAPIs, CustomAPI(value)) }
 
@@ -281,9 +304,17 @@ func (api CustomAPI) Title() string {
 		return "OpenAI Responses"
 	case APIMessages:
 		return "Anthropic Messages"
+	case APISystemOne:
+		return "System One"
+	case APIDecisions:
+		return "OpenAI Decisions"
 	}
 	return string(api)
 }
+
+// Decides is a decision API, whose models answer typed questions instead of chatting: Auto-review
+// can run them, and no bot can.
+func (api CustomAPI) Decides() bool { return api == APISystemOne || api == APIDecisions }
 
 // Path is what the CLI adds to the base URL for a model call.
 func (api CustomAPI) Path() string {
@@ -291,31 +322,36 @@ func (api CustomAPI) Path() string {
 	case APIResponses:
 		return "/responses"
 	case APIMessages:
-		return "/v1/messages"
+		return "/messages"
+	case APISystemOne:
+		return "/systemone"
+	case APIDecisions:
+		return "/decisions"
 	}
 	return "/chat/completions"
 }
 
 func CustomBaseURLPlaceholder(api CustomAPI) string {
-	if api == APIMessages {
-		return "https://api.example.com"
-	}
 	return "https://api.example.com/v1"
 }
 
 // CustomEndpoint is the URL the CLI calls for a base URL as typed: a pasted endpoint is cut back
-// to its root first, as the CLI does, then the API's path goes on.
+// to its root first, as the CLI does, then the API's path goes on, Messages' with the /v1 a root
+// without one lacks. A decision API's URL is its
+// endpoint, since vendors serve one at different paths: one that ends in a decision path stays as
+// it is.
 func CustomEndpoint(api CustomAPI, baseURL string) string {
 	root := strings.TrimRight(strings.TrimSpace(baseURL), "/")
-	pasted := []string{api.Path()}
-	if api == APIMessages {
-		pasted = []string{"/v1/messages", "/v1"}
-	}
-	for _, path := range pasted {
-		if strings.HasSuffix(root, path) {
-			root = strings.TrimSuffix(root, path)
-			break
+	if api.Decides() {
+		if strings.HasSuffix(root, "/systemone") || strings.HasSuffix(root, "/decisions") {
+			return root
 		}
+		return root + api.Path()
+	}
+	root = strings.TrimSuffix(root, api.Path())
+	// Messages adds the /v1 a root without one lacks (Moonshot's …/anthropic).
+	if api == APIMessages && !strings.HasSuffix(root, "/v1") {
+		root += "/v1"
 	}
 	return root + api.Path()
 }
@@ -356,8 +392,8 @@ type CustomPreset struct {
 	KeyPlaceholder func() string
 }
 
-// CustomPresets are what Add Provider… offers, in its menu's order: hosted APIs, then servers on
-// the user's network.
+// CustomPresets are the chat servers Add Provider… offers, in its menu's order: hosted APIs, then
+// servers on the user's network. Onboarding offers them too.
 var CustomPresets = []CustomPreset{
 	{"OpenAI", APIResponses, "https://api.openai.com/v1", false, func() string { return L("sk-… from platform.openai.com") }},
 	{"OpenRouter", APIChatCompletions, "https://openrouter.ai/api/v1", false, func() string { return L("sk-or-… from openrouter.ai/keys") }},
@@ -368,25 +404,46 @@ var CustomPresets = []CustomPreset{
 	{"LM Studio", APIChatCompletions, "http://localhost:1234/v1", true, func() string { return L("Optional for a server on your network") }},
 }
 
-// MatchingPreset is the preset for a base URL as typed, by its host and port.
-func MatchingPreset(baseURL string) *CustomPreset {
+// DecisionPresets are decision APIs, whose models Auto-review can run: Add Provider… offers them
+// after the chat servers, and onboarding, which picks what the first bot runs on, does not.
+var DecisionPresets = []CustomPreset{
+	{"OpenRouter Decisions", APISystemOne, "https://openrouter.ai/api/alpha/decisions", false, func() string { return L("sk-or-… from openrouter.ai/keys") }},
+	{"OpenAI Decisions", APIDecisions, "https://api.openai.com/v1/decisions", false, func() string { return L("sk-… from platform.openai.com") }},
+	{"TypeSafe", APISystemOne, "https://api.typesafe.ai/v1/systemone", false, func() string { return L("Key from typesafe.ai") }},
+}
+
+// MatchingPreset is the preset for a base URL as typed, by its host and port and, among a
+// server's presets, its API ("" when none is known), so openrouter.ai with System One is
+// OpenRouter Decisions and with Chat Completions OpenRouter.
+func MatchingPreset(baseURL string, api CustomAPI) *CustomPreset {
 	u, err := url.Parse(strings.TrimSpace(baseURL))
 	if err != nil || u.Hostname() == "" {
 		return nil
 	}
-	for i := range CustomPresets {
-		known, _ := url.Parse(CustomPresets[i].BaseURL)
-		if known.Hostname() == u.Hostname() && known.Port() == u.Port() {
-			return &CustomPresets[i]
+	var server []*CustomPreset
+	for _, presets := range [][]CustomPreset{CustomPresets, DecisionPresets} {
+		for i := range presets {
+			known, _ := url.Parse(presets[i].BaseURL)
+			if known.Hostname() == u.Hostname() && known.Port() == u.Port() {
+				server = append(server, &presets[i])
+			}
 		}
+	}
+	for _, preset := range server {
+		if preset.API == api {
+			return preset
+		}
+	}
+	if len(server) > 0 {
+		return server[0]
 	}
 	return nil
 }
 
 // SuggestedProviderName is what a provider left unnamed is saved as: the known server's name,
 // else the base URL's host.
-func SuggestedProviderName(baseURL string) string {
-	if preset := MatchingPreset(baseURL); preset != nil {
+func SuggestedProviderName(baseURL string, api CustomAPI) string {
+	if preset := MatchingPreset(baseURL, api); preset != nil {
 		return preset.Name
 	}
 	return CustomHost(baseURL)
@@ -733,8 +790,9 @@ type Bot struct {
 	Thinking string
 	// Avatar is a custom profile image, kept as a `file` blob like a message attachment. Shown in
 	// place of the symbol and accent once this computer has the bytes.
-	Avatar    *Attachment
-	CreatedAt time.Time
+	Avatar      *Attachment
+	Permissions *BotPermissions
+	CreatedAt   time.Time
 }
 
 // MARK: - Auto-review
@@ -757,10 +815,16 @@ func BehaviorTitle(behavior string) string {
 }
 
 // AutoReview is the check on effectful plugin actions and shell commands, shared by every Device
-// through the roster.
+// through the roster: on, a model asks only when needed; off, each one asks. The model is the
+// review model of the picked provider, else of the bot's provider.
 type AutoReview struct {
 	IsEnabled bool
 	Rules     []AutoReviewRule
+	// Provider is the provider that reviews; empty for the bot's own.
+	Provider ProviderKind
+	// Models are the review models the user picked, by provider; a provider without one reviews
+	// with its default (ProviderCredential.ReviewModel).
+	Models map[ProviderKind]string
 }
 
 // MARK: - Plugins
@@ -970,8 +1034,37 @@ func (r *PermissionRequest) FullCommand() string {
 func (r *PermissionRequest) IsPending() bool { return r.Decision == DecisionPending }
 func (r *PermissionRequest) IsInstall() bool { return r.Tool == "install" }
 
+// IsAccess is the bot's Access refusing a call: the card opens its Access sheet or is dismissed.
+func (r *PermissionRequest) IsAccess() bool { return r.Tool == "access" }
+
+// ShownSummary is the line under the title: an access request names a plugin's tool as it is,
+// or what the bot wanted to do on its Runner in the CLI's English, which reads here in the app's
+// language.
+func (r *PermissionRequest) ShownSummary() string {
+	if r.IsAccess() {
+		switch r.Summary {
+		case "Shell commands":
+			return L("Shell commands")
+		case "Changing files":
+			return L("Changing files")
+		case "Reading files":
+			return L("Reading files")
+		}
+	}
+	return r.Summary
+}
+
+// ShownReason is why the card asks: what Auto-review said, or for an access request, where it is
+// turned on.
+func (r *PermissionRequest) ShownReason() string {
+	if r.IsAccess() {
+		return L("Not allowed in this bot's Access settings.")
+	}
+	return r.Reason
+}
+
 // IsShell is a shell command on the bot's Runner.
-func (r *PermissionRequest) IsShell() bool { return r.PluginID == "computer" }
+func (r *PermissionRequest) IsShell() bool { return r.PluginID == "computer" && !r.IsAccess() }
 
 // IsConnect is a sign-in card: Sign in starts the OAuth flow on the Runner.
 func (r *PermissionRequest) IsConnect() bool { return r.Tool == "connect" }
@@ -980,6 +1073,8 @@ func (r *PermissionRequest) IsConnect() bool { return r.Tool == "connect" }
 // "wants to run a command on Workbench".
 func (r *PermissionRequest) VerbPhrase() string {
 	switch {
+	case r.IsAccess():
+		return L("needs more access")
 	case r.IsConnect():
 		return L("needs a sign-in to %@", r.PluginName)
 	case r.IsShell():
@@ -1028,6 +1123,8 @@ type Answer struct {
 // rule to add.
 func (r *PermissionRequest) Choices() []Answer {
 	switch {
+	case r.IsAccess():
+		return []Answer{{L("Edit Access…"), "access"}, {L("Dismiss"), "deny"}}
 	case r.IsConnect():
 		return []Answer{{L("Sign in"), "allow"}, {L("Not now"), "deny"}}
 	case r.IsInstall():
@@ -1102,12 +1199,22 @@ type Routine struct {
 	Name  string
 	// Prompt is the task, written to the bot, handed to it on every run.
 	Prompt string
-	// Schedule is `every 30m`, `every 2h`, `every 1d`, or five cron fields in the Runner's time.
+	// Schedule is `every 30m`, `every 2h`, `every 1d`, or five cron fields in Timezone.
 	Schedule string
+	// Timezone is the IANA timezone a cron schedule reads in.
+	Timezone string
+	// MissedRunPolicy is what happens after due times its Runner missed: "coalesce" runs once
+	// when it is back, "skip" waits for the next one.
+	MissedRunPolicy string
+	// State is how it stands, from the CLI: "on", "running", "paused", "blocked", "failed", or
+	// "waiting_for_runner".
+	State  string
+	Health RoutineHealth
 	// ScheduleText is the schedule in words: "Weekdays at 9:00 AM".
 	ScheduleText string
 	IsEnabled    bool
-	// PausedReason is why Lorca paused it, when it did: "away".
+	// PausedReason is why Lorca paused it, when it did: "away", or "authentication" after three
+	// failed sign-ins in a row.
 	PausedReason string
 	LastRunAt    time.Time
 	// LastOutcome is how the last run ended: "sent", "pass", or "error".
@@ -1124,6 +1231,9 @@ type Routine struct {
 func (r Routine) Detail() string {
 	if r.IsRunning {
 		return L("%@ · Running…", r.ScheduleText)
+	}
+	if problem := r.Problem(); problem != ProblemNone {
+		return problem.Text() + " · " + r.ScheduleText
 	}
 	if !r.IsEnabled {
 		if r.PausedReason == "away" {
@@ -1392,6 +1502,8 @@ type Message struct {
 	// Queued is a message of the user's the bot's turn holds for its next step; Send now has it
 	// read now.
 	Queued bool
+	// Output identifies an immutable published deliverable/evidence version.
+	Output *Output
 }
 
 // ReplyQuote is a message quoted by the user's reply: who wrote it and how it opens, as the CLI
