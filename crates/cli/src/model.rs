@@ -680,6 +680,9 @@ pub struct Routine {
     pub name: String,
     /// The task, written to the bot, handed to it on every run.
     pub prompt: String,
+    /// Original task authority retained when feedback revises the workflow text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feedback_authorization_prompt: Option<String>,
     /// `every 30m`, `every 2h`, `every 1d`, or five cron fields in `timezone`.
     pub schedule: String,
     /// The IANA timezone a cron schedule reads in: the Runner's when the routine was made,

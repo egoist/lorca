@@ -78,6 +78,8 @@ const (
 	EventOutputsChanged
 	EventConnectionChanged
 	EventIdentityChanged
+	// EventFeedbackChanged is a bot's workflow feedback changing on its Runner (BotID).
+	EventFeedbackChanged
 	EventBudgetsChanged
 	EventReviewsChanged
 	EventDurableTasksChanged
@@ -214,7 +216,9 @@ type Store struct {
 
 	mockMarketplace *Marketplace
 	mockMcp         map[string][]McpServer
-	mockBrowser     map[string][]BrowserProfile
+	// mockFeedback is the demo's workflow feedback, changed in place by the same calls.
+	mockFeedback map[string]BotFeedback
+	mockBrowser  map[string][]BrowserProfile
 }
 
 type pendingEvent struct {
@@ -244,6 +248,7 @@ func NewStore(transport Transport, post func(func()), mock bool) *Store {
 		outputRequests:     map[string]bool{},
 		staleOutputs:       map[string]bool{},
 		mockMcp:            map[string][]McpServer{},
+		mockFeedback:       map[string]BotFeedback{},
 		isBootstrapping:    true,
 	}
 }
@@ -557,6 +562,13 @@ func (s *Store) handle(name string, data json.RawMessage) {
 	case "snapshot":
 		if snapshot, ok := decode[WireSnapshot](data); ok {
 			s.apply(snapshot)
+		}
+
+	case "feedback.changed":
+		if payload, ok := decode[struct {
+			BotID string `json:"bot_id"`
+		}](data); ok {
+			s.emit(Event{Kind: EventFeedbackChanged, BotID: payload.BotID})
 		}
 
 	case "roster.changed":
@@ -2715,6 +2727,7 @@ func (s *Store) ResetMockData() {
 			s.replies.cancel(chat.ID)
 		}
 	}
+	s.mockFeedback = map[string]BotFeedback{}
 	s.Devices = mockDevices()
 	s.mockBrowser = nil
 	s.Bots = mockBots()

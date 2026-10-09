@@ -721,6 +721,51 @@ enum MockData {
         ]
     }
 
+    /// Project Manager's feedback on its briefs, with one change suggested and one applied.
+    @MainActor static func feedback(for botID: Bot.ID) -> BotFeedback {
+        guard botID == "bot-nova", let messages = AppStore.shared.chat("chat-nova")?.messages,
+            let marker = messages.first(where: { $0.text == "Routine · Morning brief" }),
+            let brief = messages.first(where: { $0.text.hasPrefix("**Today's focus") }),
+            let handoff = messages.first(where: { $0.author.botID == "bot-nova" && $0.text.hasPrefix("Writer has the brief.") })
+        else { return .empty }
+        let routine = FeedbackTarget(kind: "routine_prompt", id: "rt-brief")
+        let checklist = FeedbackTarget(kind: "routine_prompt", id: "rt-checklist")
+        let notes = [
+            FeedbackNote(id: "fb-good", kind: .accepted, chatID: "chat-nova", messageID: handoff.id, text: handoff.text, target: nil, createdAt: minutesAgo(30)),
+            FeedbackNote(id: "fb-edit", kind: .edited, chatID: "chat-nova", messageID: brief.id, text: "Lead with what needs my decision, then blockers.", target: routine, createdAt: minutesAgo(150)),
+            FeedbackNote(id: "fb-short", kind: .explicit, chatID: "chat-nova", messageID: brief.id, text: "Keep the brief to five bullets or fewer.", target: routine, createdAt: minutesAgo(60 * 26)),
+            FeedbackNote(id: "fb-failed", kind: .routineFailure, chatID: "chat-nova", messageID: marker.id, text: "The launch checklist was not in the workspace.", target: checklist, createdAt: minutesAgo(60 * 50)),
+        ]
+        let suggestion = FeedbackSuggestion(
+            id: "sg-brief", target: routine,
+            explanation: "You moved decisions to the top of two briefs and asked for five bullets at most. Each brief would open with what needs you, then blockers.",
+            diff: """
+                --- current
+                +++ proposed
+                @@ -1,1 +1,1 @@
+                -Read the recent messages in every chat you are in and the launch checklist in the workspace. Post a short brief: what changed, what needs a decision, and what the team will do first.
+                +Read the recent messages in every chat you are in and the launch checklist in the workspace. Post a brief of five bullets at most: what needs my decision first, then blockers, then what changed.
+                """,
+            diffHash: "mock", evidence: ["fb-edit", "fb-short"], createdAt: minutesAgo(20))
+        let change = FeedbackChange(
+            id: "ch-checklist", target: checklist,
+            diff: """
+                --- current
+                +++ proposed
+                @@ -1,1 +1,1 @@
+                -Review the launch checklist and the team's replies. Report anything new.
+                +Review the launch checklist in the workspace and the latest team replies. Report new blockers or completed milestones, or PASS when nothing changed.
+                """,
+            isUndo: false, canUndo: true, currentHash: "mock", createdAt: minutesAgo(60 * 24 * 4))
+        return BotFeedback(
+            notes: notes, noteCount: notes.count, suggestions: [suggestion], changes: [change], reviewEvery: 7 * 86_400,
+            targets: [
+                .init(name: "Morning brief", target: routine), .init(name: "Launch checklist", target: checklist),
+                .init(name: "Review requests", target: FeedbackTarget(kind: "routine_prompt", id: "rt-reviews")),
+                .init(name: "launch-post", target: FeedbackTarget(kind: "playbook", id: "playbook-launch-post", scope: .init(kind: "project", id: "chat-relay"))),
+            ])
+    }
+
     /// Limits in the demo: Project Manager's turns and Researcher's each have some, Researcher's
     /// newest turn stopped at its token limit, and Review requests used up its spending.
     static func budgets() -> [BudgetState] {

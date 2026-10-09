@@ -630,6 +630,8 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             }
         }
 
+        method if method.starts_with("feedback.") => crate::feedback::on_runner(app, method, params).await,
+
         // The marketplace: plugins, each with the Runners that have it, and bots to add from a
         // template (`bots.create { template_id }`).
         "marketplace" => {

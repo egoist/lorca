@@ -638,6 +638,7 @@ pub fn spawn_local_job(app: Arc<App>, job: Job, remote_blob_id: Option<String>) 
             }
         } else if let Some(id) = &job.routine_id {
             crate::routines::finished(&app, id, outcome);
+            if !cancel.is_cancelled() { crate::feedback::routine_outcome(&app, &job, outcome == TurnOutcome::Skipped || job.check.as_ref().is_some_and(|check|check.error.is_some())); }
         }
         if let Some(id) = remote_blob_id {
             crate::sync::delete_remote_blob(&app, &id).await;

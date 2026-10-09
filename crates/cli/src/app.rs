@@ -252,6 +252,11 @@ pub struct App {
     /// The checks of this Runner's routines.
     #[cfg(feature = "runner")]
     pub routine_checks: crate::routines::Checks,
+    /// Serializes encrypted feedback records and guarded revision decisions on this Runner.
+    pub feedback_lock: tokio::sync::Mutex<()>,
+    #[cfg(feature = "runner")]
+    /// At most one bounded coordinator review per bot; exclusions cancel its token.
+    pub feedback_reviews: Mutex<HashMap<String, CancellationToken>>,
     pub http: reqwest::Client,
 }
 
@@ -352,6 +357,9 @@ impl App {
             browser_sessions: crate::browser::Sessions::default(),
             #[cfg(feature = "runner")]
             routine_checks: crate::routines::Checks::default(),
+            feedback_lock: tokio::sync::Mutex::new(()),
+            #[cfg(feature = "runner")]
+            feedback_reviews: Mutex::new(HashMap::new()),
             http,
         });
         // Normalize and persist the in-memory view before background work begins.
@@ -581,6 +589,8 @@ impl App {
         #[cfg(feature = "provider-auth")]
         self.cancel_provider_auth();
         self.cancel_plugin_sign_in(None);
+        #[cfg(feature = "runner")]
+        for review in self.feedback_reviews.lock().unwrap().values() { review.cancel(); }
         #[cfg(feature = "runner")]
         self.steering_queues.lock().unwrap().clear();
         #[cfg(feature = "runner")]
@@ -1223,6 +1233,7 @@ impl App {
         if let Err(error) = self.store.forget_codemode_values_of(id) {
             tracing::warn!(%error, "forgetting a deleted bot's script values");
         }
+        crate::feedback::forget_bot(self, id);
         crate::playbooks::forget_scopes(self, &[id.to_string()], &removed_chat_ids);
         #[cfg(feature = "runner")]
         self.shell_sessions.close_orphans(self);
@@ -2075,6 +2086,7 @@ mod tests {
             bot_id: bot_id.into(),
             name: id.into(),
             prompt: String::new(),
+            feedback_authorization_prompt: None,
             schedule: "every 1h".into(),
             timezone: "UTC".into(),
             missed_run_policy: Default::default(),

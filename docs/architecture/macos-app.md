@@ -30,6 +30,8 @@ File › Share as Template… (also a DM's context menu) and New Bot from Templa
 
 A group's inspector lists its [project context](project-context.md#the-apps) under Group: a row per entry that opens it, and + to add one.
 
+A bot's message offers Give Feedback… beside Reply, and the DM inspector's Feedback section, shown once the bot has any, holds the changes it suggests and All feedback ([Workflow feedback](feedback.md#in-the-apps)). The inspector reads `feedback.list` with the bot's memory and again on `feedback.changed`.
+
 The inspector's Skills section, the skill sheet, and Save as Skill: [Playbooks](playbooks.md#app-and-api).
 
 The DM Profile card's Access row opens the [Access sheet](bot-permissions.md#requests-to-the-user).

@@ -366,6 +366,9 @@ func (m *mainWindow) messageCell(c *ui.Context, chat *model.Chat, message *model
 					if menu.Item(L("Reply")).Chosen() {
 						m.startReply(s, message)
 					}
+					if message.Author.BotID != "" && menu.Item(L("Give Feedback…")).Chosen() {
+						m.presentFeedback(chat.ID, message)
+					}
 					if strings.TrimSpace(message.Body.Text) != "" {
 						title := L("Save as Skill…")
 						if message.Author.Kind == model.AuthorYou {

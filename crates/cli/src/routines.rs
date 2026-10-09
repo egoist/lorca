@@ -73,6 +73,7 @@ pub fn create_with_policy(app: &Arc<App>, bot_id: &str, name: &str, schedule_tex
         bot_id: bot_id.to_string(),
         name,
         prompt: prompt.to_string(),
+        feedback_authorization_prompt: None,
         schedule: schedule.canonical(),
         timezone,
         missed_run_policy,
@@ -129,6 +130,10 @@ pub fn edit_with_policy(app: &Arc<App>, id: &str, name: Option<&str>, schedule_t
             routine.missed_run_policy = policy;
         }
         if let Some(prompt) = prompt {
+            // A task written here is the task the user asked for, feedback revisions included.
+            if prompt != routine.prompt {
+                routine.feedback_authorization_prompt = None;
+            }
             routine.prompt = prompt;
         }
         if let Some(check) = check {
@@ -158,7 +163,8 @@ fn clean_check(code: &str) -> Result<Option<String>, String> {
 /// A routine's check is its Runner's to change, and a build that does not know checks writes
 /// the roster without them. When `incoming` leaves out the check that a routine of a bot on
 /// `this_device` has in `current`, the check stays. True when one did, so the roster goes up
-/// again with it.
+/// again with it. The same merge keeps a feedback revision's original task authority while the
+/// task is still the revised one; a task edited on another Device is the user's own.
 pub fn keep_checks(current: &[Routine], incoming: &mut [Routine], bots: &[Bot], this_device: &str) -> bool {
     let mut kept = false;
     for routine in incoming.iter_mut() {
@@ -168,6 +174,10 @@ pub fn keep_checks(current: &[Routine], incoming: &mut [Routine], bots: &[Bot], 
         let Some(held) = current.iter().find(|held| held.id == routine.id) else { continue };
         if routine.check.is_none() && held.check.is_some() {
             routine.check = held.check.clone();
+            kept = true;
+        }
+        if routine.feedback_authorization_prompt.is_none() && held.feedback_authorization_prompt.is_some() && routine.prompt == held.prompt {
+            routine.feedback_authorization_prompt = held.feedback_authorization_prompt.clone();
             kept = true;
         }
         // A schedule/check edit or explicit resume re-arms it. Otherwise preserve this
@@ -332,6 +342,7 @@ pub fn model_result(app: &App, id: &str, error: Option<&str>) {
 pub async fn run(app: Arc<App>) {
     loop {
         tokio::time::sleep(TICK).await;
+        crate::feedback::tick(&app);
         tick(&app);
     }
 }
@@ -870,6 +881,7 @@ mod tests {
             bot_id: bot_id.into(),
             name: id.into(),
             prompt: "x".into(),
+            feedback_authorization_prompt: None,
             schedule: "every 1h".into(),
             timezone: "UTC".into(),
             missed_run_policy: Default::default(),

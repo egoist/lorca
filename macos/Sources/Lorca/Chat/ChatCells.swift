@@ -121,6 +121,8 @@ final class MessageCellView: TranscriptCellView {
     var onReply: (() -> Void)? {
         didSet { content.contextItems = onReply == nil ? nil : { [weak self] in self?.replyItems() ?? [] } }
     }
+    /// Feedback on a bot's message, for the bot to suggest changes to its routines and skills.
+    var onFeedback: (() -> Void)?
     var onCapturePlaybook: (() -> Void)?
     var capturePlaybookTitle: String = ""
     /// A click on a reply's quote line: bring the original into view.
@@ -271,6 +273,12 @@ final class MessageCellView: TranscriptCellView {
         item.target = self
         item.image = NSImage(systemSymbolName: "arrowshape.turn.up.left", accessibilityDescription: nil)
         var items = [item]
+        if onFeedback != nil {
+            let feedback = NSMenuItem(title: L("Give Feedback…"), action: #selector(giveFeedback), keyEquivalent: "")
+            feedback.target = self
+            feedback.image = NSImage(systemSymbolName: "hand.thumbsup", accessibilityDescription: nil)
+            items.append(feedback)
+        }
         if onCapturePlaybook != nil {
             let capture = NSMenuItem(title: capturePlaybookTitle, action: #selector(capturePlaybook), keyEquivalent: "")
             capture.target = self
@@ -279,6 +287,8 @@ final class MessageCellView: TranscriptCellView {
         }
         return items
     }
+
+    @objc private func giveFeedback() { onFeedback?() }
 
     @objc private func reply() {
         onReply?()

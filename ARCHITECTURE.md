@@ -105,6 +105,7 @@ One doc per subject under `docs/architecture/`, each short enough to read in one
 | [Coordinator attention](docs/architecture/attention.md) | Consolidated reviews, blockers, commitments and changes, coordinator briefs, deduplication, encrypted records and notification preferences |
 | [Shared project context](docs/architecture/project-context.md) | Group briefs, goals, constraints, decisions, source freshness and corrections, encrypted reference assets, bounded bot discovery |
 | [Playbooks](docs/architecture/playbooks.md) | Skills users write for a bot or group, saving one from a chat, revisions, discovery, export |
+| [Workflow feedback](docs/architecture/feedback.md) | Feedback on bots' work, suggested changes to routines and skills, versions and undo, exclusions |
 | [Providers](docs/architecture/providers.md) | Each model provider and its sign-in, custom providers, thinking levels, the model catalog and cost, compaction, retries |
 | [Budgets and connector limits](docs/architecture/budgets.md) | Limits on turns, tasks, and routines, stopping and resuming, price labels, shared plugin call limits |
 | [macOS app](docs/architecture/macos-app.md) | The AppKit app: launching the CLI, windows and onboarding, settings, updates, the command palette, sidebar and inspector |

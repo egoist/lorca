@@ -628,6 +628,16 @@ final class ChatViewController: NSViewController {
         }
     }
 
+    /// Brings a message into view, loading older pages until it is there, for feedback that
+    /// names it.
+    func reveal(loading messageID: Message.ID) {
+        guard let id = chatID else { return }
+        Task { [weak self] in
+            guard let self, (try? await self.store.loadMessage(messageID, in: id)) == true, self.chatID == id else { return }
+            self.reveal(messageID)
+        }
+    }
+
     /// Brings a quoted message into view and pulses its bubble. One on a page not loaded yet
     /// stays where it is.
     private func reveal(_ messageID: Message.ID) {
@@ -910,6 +920,9 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
                     metrics: metrics
                 )
                 messageCell.onReply = message.canBeQuoted ? { [weak self] in self?.startReply(to: message) } : nil
+                messageCell.onFeedback = message.author.botID.map { botID in { [weak self] in
+                    self?.presentAsSheet(FeedbackViewController(botID: botID, chatID: chat.id, message: message))
+                } }
                 messageCell.capturePlaybookTitle = message.author.isYou ? L("Save as Standing Instruction…") : L("Save as Skill…")
                 messageCell.onCapturePlaybook = message.canBeQuoted && !message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     ? { [weak self] in self?.captureSkill(from: message, in: chatID) } : nil

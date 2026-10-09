@@ -115,6 +115,10 @@ async fn answer(app: &Arc<App>, request: &Request) -> Result<Value, String> {
             let text = body["text"].as_str().ok_or("missing text")?;
             memory_write(app, body["bot_id"].as_str().ok_or("missing bot_id")?, text, body["expected_hash"].as_str())
         }
+        verb if verb.starts_with("feedback.") => {
+            app.device(&request.requested_by).ok_or("Unknown requesting Device")?;
+            crate::feedback::serve(app, verb, body, &request.requested_by).await
+        }
         #[cfg(feature = "runner")]
         verb if verb.starts_with("plugins.") || verb == "permission.answer" || verb == "permissions.catalog" => crate::plugins::serve_request(app, verb, body, Some(&request.requested_by)).await,
         #[cfg(feature = "runner")]

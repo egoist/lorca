@@ -505,7 +505,7 @@ fn request(app: &App, chat_id: &str, trigger: &Trigger) -> Option<Request> {
                 text.push_str(&format!(
                     "This turn is a scheduled run of the bot's routine \"{}\", with nobody watching. Its task:\n{}\n\n",
                     routine.name,
-                    clipped(&routine.prompt, REQUEST_CHARS)
+                    clipped(routine.feedback_authorization_prompt.as_deref().unwrap_or(&routine.prompt), REQUEST_CHARS)
                 ));
                 // DeepSeek writes most answers to "the language of the routine's task" in Chinese.
                 language = Some("the routine's task is written in".into());
@@ -786,7 +786,7 @@ mod tests {
 
         let routine = app
             .insert_routine(Routine {
-                id: "rt-watch".into(), bot_id: devops.id.clone(), name: "Railway memory watch".into(), prompt: "Check Railway memory.".into(),
+                id: "rt-watch".into(), bot_id: devops.id.clone(), name: "Railway memory watch".into(), prompt: "Check Railway memory.".into(), feedback_authorization_prompt: None,
                 schedule: "every 2h".into(), timezone: "UTC".into(), missed_run_policy: Default::default(), last_scheduled_at: None, health: None,
                 is_enabled: true, enabled_at: 0.0, last_run_at: None, last_outcome: None, paused_reason: None, check: None, created_at: 0.0,
             })
@@ -804,6 +804,8 @@ mod tests {
         app.update_routine(&routine.id, |routine| routine.prompt = "Redeploy the relay service.".into()).unwrap();
         assert_eq!(request(&app, chat_id, &run).unwrap().text, task);
         assert!(request(&app, chat_id, &at(&marker)).unwrap().text.ends_with("Its task:\nRedeploy the relay service.\n\n"));
+        app.update_routine(&routine.id, |routine| routine.feedback_authorization_prompt = Some("Check Railway memory.".into())).unwrap();
+        assert_eq!(request(&app, chat_id, &at(&marker)).unwrap().text, task, "workflow revisions retain original task authority");
         app.delete_routine(&routine.id).unwrap();
         assert_eq!(request(&app, chat_id, &run).unwrap().text, task);
         assert_eq!(request(&app, chat_id, &at("gone")), None);

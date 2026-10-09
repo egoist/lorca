@@ -60,3 +60,7 @@ Before a compaction summarizes part of a chat, a silent **memory flush** turn ru
 The macOS app's DM inspector shows the bot's memory (`bots.memory`): the index against its load budget, an editor (`bots.memory.write`, refused with the bot's current text when the file changed under the editor, then Reload or Overwrite), and a Show button for the folder. For a bot on another Runner the CLI asks that Runner through the relay (a `request` / `response` pair, see [Protocols](protocols.md)), so the same rows read and edit it; only the folder cannot be opened, and an offline Runner shows as such with a Retry. The phone shows no memory yet.
 
 A routine can have [limits](budgets.md): its runs and checks, scheduled or started by hand, count toward them together. Once it reaches one it stops until the user resumes it from the routine sheet's Limits row, after raising the limit or with the limits granted again in full.
+
+## Workflow feedback
+
+Explicit acceptance, rejection, edited drafts and user feedback have a structured, source-linked path alongside bot memory. Routine and check failures record mechanical outcomes on the assigned Runner. The coordinator proposes revisions of a routine's task or a skill's instructions with evidence and a diff; the user accepts a guarded version or rolls it back. Routine prompt revisions retain the original task in `feedback_authorization_prompt`, which Auto-review reads as action authority. Optional periodic review, neutral ignored-alert handling and sensitive-material exclusions are in [Workflow feedback](feedback.md).

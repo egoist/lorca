@@ -121,7 +121,8 @@ async fn run_budgeted_job(app: &Arc<App>, job: &Job, cancel: CancellationToken) 
                     return TurnOutcome::Skipped;
                 }
                 crate::routines::started(app, id);
-                let marker = Message::new(&job.chat_id, Author::System, Body::Notice { text: format!("Routine · {}", routine.name), routine_id: Some(id.to_string()) });
+                let mut marker = Message::new(&job.chat_id, Author::System, Body::Notice { text: format!("Routine · {}", routine.name), routine_id: Some(id.to_string()) });
+                marker.id = format!("routine-run-{}", job.id);
                 trigger = Trigger { message_id: marker.id.clone(), routine: Some(routine.clone()), event: None };
                 app.upsert_message(marker, true);
                 Some(routine)
@@ -191,6 +192,7 @@ async fn run_budgeted_job(app: &Arc<App>, job: &Job, cancel: CancellationToken) 
         Arc::new(CreateBot { app: app.clone(), chat_id: chat.meta.id.clone(), bot: bot.clone() }),
         Arc::new(EditBot { app: app.clone(), bot: bot.clone() }),
         Arc::new(Routines { app: app.clone(), bot: bot.clone() }),
+        Arc::new(crate::feedback::FeedbackTool { app: app.clone(), bot_id: bot.id.clone() }),
         Arc::new(crate::review_execution::StageReview { app: app.clone(), bot: bot.clone(), chat_id: chat.meta.id.clone(), trigger: trigger.clone() }),
         Arc::new(crate::tasks::TasksTool { app: app.clone(), bot_id: bot.id.clone(), chat_id: chat.meta.id.clone(), job_id: job.id.clone() }),
         Arc::new(crate::outputs::PublishOutputTool { app: app.clone(), chat_id: chat.meta.id.clone(), bot: bot.clone(), workdir: workdir.clone() }),
@@ -284,6 +286,11 @@ async fn run_budgeted_job(app: &Arc<App>, job: &Job, cancel: CancellationToken) 
         (Some(_), Some(report)) => Some(check_cue(report)),
         (Some(routine), None) if routine.check.is_some() => {
             let checked = crate::routines::check_now(app, routine, &cancel).await;
+            if checked.error.is_some() && !cancel.is_cancelled() {
+                let mut checked_job = job.clone();
+                checked_job.check = checked.report();
+                crate::feedback::routine_outcome(app, &checked_job, true);
+            }
             Some(checked.report().map(|report| check_cue(&report)).unwrap_or_else(|| "[Your check found nothing new. The user started this run by hand.]".to_string()))
         }
         _ => None,
@@ -683,6 +690,10 @@ impl LoopHooks for TurnHooks {
     async fn before_tool_call(&self, ctx: BeforeToolCallContext<'_>) -> Option<BeforeToolCallResult> {
         if let Some(refused) = over_limits() {
             return Some(refused);
+        }
+        if self.unattended && self.trigger.routine.as_ref().is_some_and(|r| r.feedback_authorization_prompt.is_some())
+            && crate::feedback::changes_controls(&ctx.tool_call.name, &ctx.tool_call.arguments) {
+            return Some(BeforeToolCallResult { block: true, reason: Some("Workflow feedback cannot authorize routine or bot changes. Stage a proposal or ask the user in chat.".into()), args: None, terminate: false });
         }
         if !self.plugin_tools.is_plugin_tool(&ctx.tool_call.name) {
             if let Err(denied) = crate::permissions::check_tool(&self.app, &self.bot, &ctx.tool_call.name) {

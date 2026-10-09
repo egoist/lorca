@@ -19,6 +19,7 @@ pub mod decisions;
 pub mod events;
 pub mod event_triggers;
 pub mod files;
+pub mod feedback;
 pub mod handoffs;
 pub mod identity;
 pub mod keys;
