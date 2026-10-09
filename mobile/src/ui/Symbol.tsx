@@ -111,6 +111,13 @@ const ANDROID: Record<string, string> = {
   "flame.fill": "local_fire_department",
   "puzzlepiece.extension": "extension",
   "doc.text.magnifyingglass": "pageview",
+  // Workflow feedback.
+  "hand.thumbsup": "thumb_up",
+  pencil: "edit",
+  "pencil.line": "edit_note",
+  "arrow.uturn.backward": "undo",
+  "eye.slash": "visibility_off",
+  "exclamationmark.triangle": "warning",
 };
 
 export interface SymbolProps {

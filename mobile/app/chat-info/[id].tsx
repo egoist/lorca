@@ -22,6 +22,8 @@ import { alert } from "../../src/ui/alert";
 import { OutputRow } from "../../src/ui/outputs";
 import { taskStateTitle, useTaskTint } from "../../src/ui/durableTasks";
 import { reviewHeadline, reviewStateWord, reviewSymbol } from "../../src/ui/reviews";
+import { loadFeedback, useFeedback } from "../../src/core/feedback";
+import { countsLine, isEmpty, targetName } from "../../src/ui/feedback";
 import { isStopped, limitsSummary, stoppedDetail, stoppedLabel } from "../../src/ui/limits";
 import { accentColor, Font } from "../../src/ui/theme";
 
@@ -56,6 +58,7 @@ export default function ChatInfoScreen() {
   const skillScope = chat ? skillScopeOf(chat) : undefined;
   const skills = useSkills(skillScope);
   const [allSkills, setAllSkills] = useState(false);
+  const feedback = useFeedback(bot?.id);
   const limits = useBudget("chat", chat?.id, bot?.runner_id);
   const stoppedTurn = useStoppedTurn(chat?.id, bot?.runner_id);
   const budgets = useStore((s) => s.budgets);
@@ -67,6 +70,10 @@ export default function ChatInfoScreen() {
   useEffect(() => {
     if (id) void engine.listOutputs(id);
   }, [id]);
+  // The bot's workflow feedback, from its Runner.
+  useEffect(() => {
+    if (bot?.id) void loadFeedback(bot.id);
+  }, [bot?.id]);
   // A group's project context, followed while its details are open and after.
   useEffect(() => {
     if (id && isGroup) void engine.loadProject(id);
@@ -398,6 +405,27 @@ export default function ChatInfoScreen() {
               onPress={() => showRoutine(routine)}
             />
           ))}
+        </Section>
+      )}
+
+      {/* What the user's feedback led to: the changes the bot suggests, each a tap away from its
+          diff, then all of it, and Give Feedback on one of its replies. */}
+      {bot && (
+        <Section title={t("Feedback")}>
+          {(feedback?.suggestions ?? []).slice(0, 3).map((suggestion) => (
+            <Row
+              key={suggestion.id}
+              title={targetName(feedback!, suggestion.target, routines)}
+              subtitle={t("Suggested change")}
+              icon="sparkles"
+              chevron
+              onPress={() => router.push({ pathname: "/chat-info/feedback-item", params: { bot: bot.id, suggestion: suggestion.id } })}
+            />
+          ))}
+          {feedback && !isEmpty(feedback) ? (
+            <Row title={t("All Feedback")} subtitle={countsLine(feedback)} icon="bubble.left.and.bubble.right" chevron onPress={() => router.push(`/chat-info/feedback/${bot.id}`)} />
+          ) : null}
+          <Row title={t("Give Feedback")} icon="hand.thumbsup" onPress={() => router.push(`/chat-info/give-feedback/${chat.id}`)} />
         </Section>
       )}
 
