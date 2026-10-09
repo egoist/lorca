@@ -184,7 +184,7 @@ final class RoutineViewController: SheetViewController {
         let row = DisclosureRow(key: L("Limits"))
         row.setValue(budget?.limits.summary ?? L("None", context: "limits"))
         row.onClick = { [weak self] in
-            guard let self, let dm = self.store.chats.first(where: { $0.isDM && $0.botIDs.contains(self.bot.id) }) else { return }
+            guard let self, let dm = self.store.chats.first(where: { $0.isBotDM && $0.botIDs.contains(self.bot.id) }) else { return }
             self.presentAsSheet(BudgetViewController(bot: self.bot, chatID: dm.id, routine: routine))
         }
         return row

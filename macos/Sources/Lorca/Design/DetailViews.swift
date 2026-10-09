@@ -1003,10 +1003,44 @@ final class SwitchRow: NSView {
         }
     }
 
+    /// A channel: where it listens and what it takes, after its state in orange when the user has
+    /// something to do about it.
+    func configure(channel: ChannelStatus) {
+        let paused = channel.state == .paused
+        configure(
+            symbol: channel.service == "slack" ? "number" : "paperplane", tint: paused ? .tertiaryLabelColor : .secondaryLabelColor,
+            title: channel.name, detail: channel.listen.summary, isOn: !paused,
+            toggleTooltip: paused ? L("Resume %@", channel.name) : L("Pause %@", channel.name), tooltip: channel.task)
+        let problem: String? = switch channel.state {
+        case .held: L("On hold")
+        case .offline: L("Can’t connect")
+        default: nil
+        }
+        if let problem {
+            let line = NSMutableAttributedString(string: problem, attributes: [.foregroundColor: NSColor.systemOrange, .font: Theme.Font.caption])
+            line.append(NSAttributedString(
+                string: " · \(channel.listen.summary)", attributes: [.foregroundColor: NSColor.secondaryLabelColor, .font: Theme.Font.caption]))
+            detail.attributedStringValue = line
+        }
+        // What it takes wraps rather than lose its last tag.
+        detail.maximumNumberOfLines = 2
+        detail.lineBreakMode = .byWordWrapping
+        detail.cell?.truncatesLastVisibleLine = true
+        // The service's mark, as the plugin rows show its account.
+        if let tile = PluginLogo.tile(for: channel.service, size: 18) {
+            icon.image = tile
+            icon.symbolConfiguration = nil
+            icon.contentTintColor = nil
+            icon.alphaValue = paused ? 0.5 : 1
+        }
+        toggle.setAccessibilityLabel(channel.name)
+    }
+
     func configure(symbol: String, tint: NSColor, title: String, detail detailText: String, isOn: Bool, toggleTooltip: String, tooltip: String) {
         icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
         icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
         icon.contentTintColor = tint
+        icon.alphaValue = 1
         name.stringValue = title
         detail.stringValue = detailText
         toggle.state = isOn ? .on : .off

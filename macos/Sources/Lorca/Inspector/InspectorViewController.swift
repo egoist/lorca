@@ -19,6 +19,7 @@ final class InspectorViewController: NSViewController {
     private let memory = SectionView(title: L("Memory"))
     private let skills = SectionView(title: L("Skills"))
     private let routines = SectionView(title: L("Routines"))
+    private let channels = SectionView(title: L("Channels"))
     private let feedback = SectionView(title: L("Feedback"))
     private let reviews = SectionView(title: L("Waiting for review"))
     private let tasks = SectionView(title: L("Tasks"))
@@ -83,6 +84,8 @@ final class InspectorViewController: NSViewController {
 
     /// Opens a chat on one of its messages, for feedback's Show in Chat.
     var onShowMessage: ((Chat.ID, Message.ID) -> Void)?
+    /// Opens a chat, for a channel's conversations.
+    var onOpenChat: ((Chat.ID) -> Void)?
     var onOpenDevice: ((Device.ID) -> Void)?
     var onRemoveBot: ((Bot.ID) -> Void)?
     var onAddBot: (() -> Void)?
@@ -130,6 +133,7 @@ final class InspectorViewController: NSViewController {
         column.addArrangedSubview(memory)
         column.addArrangedSubview(skills)
         column.addArrangedSubview(routines)
+        column.addArrangedSubview(channels)
         column.addArrangedSubview(feedback)
         column.addArrangedSubview(tasks)
         column.addArrangedSubview(plugins)
@@ -172,6 +176,7 @@ final class InspectorViewController: NSViewController {
             memory.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             skills.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             routines.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
+            channels.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             feedback.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             reviews.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             tasks.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
@@ -348,10 +353,12 @@ final class InspectorViewController: NSViewController {
             showRuntime(of: bot, in: chat)
             showMemory(of: bot)
             showRoutines(of: bot)
+            showChannels(of: bot)
             showFeedback(of: bot)
             showPlugins(of: bot)
-        } else if !feedback.isHidden {
-            feedback.isHidden = true
+        } else {
+            if !feedback.isHidden { feedback.isHidden = true }
+            if !channels.isHidden { channels.isHidden = true }
         }
         if let scope = Self.skillScope(of: chat, members: members) {
             showSkills(of: scope)
@@ -1011,6 +1018,27 @@ final class InspectorViewController: NSViewController {
                 }
                 return row
             })
+    }
+
+    /// Where the bot listens: a row per channel with its pause switch, the details in a sheet.
+    /// Left out while the bot has none; the bot sets one up when asked.
+    private func showChannels(of bot: Bot) {
+        let mine = store.channels(for: bot.id)
+        let hidden = mine.isEmpty
+        if channels.isHidden != hidden { channels.isHidden = hidden }
+        guard !hidden, changed(channels, to: [bot.id, mine]) else { return }
+        channels.setRows(mine.map { channel in
+            let row = keptRow("channel:\(channel.id):\(channel.state.rawValue)") { SwitchRow() }
+            row.configure(channel: channel)
+            row.onToggle = { [weak self] on in self?.store.setChannelPaused(channel.id, !on) }
+            row.onClick = { [weak self] in
+                guard let self, let bot = self.store.bot(bot.id) else { return }
+                let sheet = ChannelViewController(channelID: channel.id, bot: bot)
+                sheet.onOpenChat = { [weak self] chatID in self?.onOpenChat?(chatID) }
+                self.presentAsSheet(sheet)
+            }
+            return row
+        })
     }
 
     /// What the user's feedback led to: the changes the bot suggests, each a click away from its

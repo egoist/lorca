@@ -227,6 +227,7 @@ enum Wire {
         var status: String
         var lastSeen: Double
         var plugins: [PluginStatus]?
+        var channels: [ChannelStatus]?
         var version: String?
         var update: CLIUpdate?
         /// The relay lists the machine, but it never sent its `machine` blob: no name, no `os`.
@@ -238,6 +239,39 @@ enum Wire {
         var latest: String?
         var state: String?
         var error: String?
+    }
+
+    struct ChannelStatus: Decodable {
+        struct Chat: Decodable {
+            var id: String
+            var title: String?
+        }
+        struct Listen: Decodable {
+            var every: Bool?
+            var mentions: Bool?
+            var replies: Bool?
+            var tags: [String]?
+        }
+        var id: String
+        var botId: String
+        var name: String
+        var service: String
+        var accountId: String
+        var chats: [Chat]?
+        var listen: Listen
+        var task: String
+        var state: String
+        var detail: String?
+        var heldDelivery: String?
+
+        func toModel() -> Lorca.ChannelStatus {
+            Lorca.ChannelStatus(
+                id: id, botID: botId, name: name, service: service, accountID: accountId,
+                chats: (chats ?? []).map { .init(id: $0.id, title: $0.title ?? "") },
+                listen: listen.toModel(), task: task,
+                state: Lorca.ChannelStatus.State(rawValue: state) ?? .listening, detail: detail ?? "",
+                heldDelivery: heldDelivery)
+        }
     }
 
     struct PluginStatus: Decodable {
@@ -409,10 +443,19 @@ enum Wire {
         var createdAt: Double
     }
 
+    struct ChatChannel: Decodable {
+        var channelId: String
+        var service: String
+        var accountId: String
+        var chatId: String
+        var threadId: String?
+    }
+
     struct Chat: Decodable {
         var id: String
         var kind: String
         var title: String?
+        var channel: ChatChannel?
         var botIds: [String]
         var ownerBotId: String?
         var description: String?
@@ -517,6 +560,7 @@ enum Wire {
     struct Author: Decodable {
         var kind: String
         var botId: String?
+        var name: String?
     }
 
     struct Attachment: Decodable {
@@ -709,6 +753,7 @@ extension Wire.Device {
             lastSeen: Date(timeIntervalSince1970: lastSeen),
             machineKey: machineKey,
             plugins: (plugins ?? []).map { $0.toModel() },
+            channels: (channels ?? []).map { $0.toModel() },
             version: version ?? "",
             update: update.map { Device.CLIUpdate(auto: $0.auto, latest: $0.latest, state: $0.state, error: $0.error) }
         )
@@ -801,6 +846,7 @@ extension Wire.Author {
         switch kind {
         case "you": .you
         case "bot": .bot(botId ?? "")
+        case "contact": .contact(name ?? "")
         default: .system
         }
     }
@@ -812,7 +858,7 @@ extension Wire.Chat {
         return Chat(
             id: id,
             kind: modelKind,
-            customTitle: modelKind == .group ? title : nil,
+            customTitle: modelKind == .group || channel != nil ? title : nil,
             botIDs: botIds,
             messages: messages.map { $0.map { $0.toModel() } } ?? existingMessages ?? [],
             unreadCount: unreadCount ?? existingUnread,
@@ -821,7 +867,8 @@ extension Wire.Chat {
             usage: usage?.toModel(),
             hasMore: hasMore ?? existingHasMore,
             ownerBotID: ownerBotId,
-            groupDescription: modelKind == .group ? description ?? "" : ""
+            groupDescription: modelKind == .group ? description ?? "" : "",
+            channel: channel.map { ChatChannel(channelID: $0.channelId, service: $0.service, accountID: $0.accountId, chatID: $0.chatId, threadID: $0.threadId) }
         )
     }
 }
@@ -831,6 +878,12 @@ extension Wire.CallLimits {
         CallLimits(
             maxCalls: limits.maxCalls, windowSecs: limits.windowSecs, maxConcurrency: limits.maxConcurrency,
             retryAt: retryAt.map { Date(timeIntervalSince1970: $0) }, sharesService: serviceId != pluginId)
+    }
+}
+
+extension Wire.ChannelStatus.Listen {
+    func toModel() -> ChannelListen {
+        ChannelListen(every: every ?? false, mentions: mentions ?? false, replies: replies ?? false, tags: tags ?? [])
     }
 }
 

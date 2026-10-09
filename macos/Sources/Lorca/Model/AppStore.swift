@@ -582,13 +582,16 @@ final class AppStore {
     }
 
     func title(for chat: Chat) -> String {
-        if chat.isGroup, let custom = chat.customTitle, !custom.isEmpty { return custom }
+        if chat.isGroup || chat.channel != nil, let custom = chat.customTitle, !custom.isEmpty { return custom }
         let names = chat.botIDs.compactMap { bot($0)?.name }
         return names.isEmpty ? L("New Chat") : names.joined(separator: ", ")
     }
 
     func subtitle(for chat: Chat) -> String {
         let members = bots(in: chat)
+        if let channel = chat.channel, let only = members.first {
+            return L("%@ on %@", only.name, channel.service == "slack" ? "Slack" : "Telegram")
+        }
         if chat.isDM, let only = members.first {
             let host = device(only.runnerID)?.name ?? L("unassigned")
             return L("%@ on %@", only.provider.name, host)
@@ -672,7 +675,7 @@ final class AppStore {
     /// twice lands in the same thread.
     @discardableResult
     func dm(with botID: Bot.ID) -> Chat.ID {
-        if let existing = chats.first(where: { $0.isDM && $0.botIDs == [botID] }) {
+        if let existing = chats.first(where: { $0.isBotDM && $0.botIDs == [botID] }) {
             return existing.id
         }
         return createChat(kind: .dm, with: [botID], title: nil)
@@ -1370,6 +1373,67 @@ final class AppStore {
     }
 
     /// Runs the routine now, on its bot's Runner.
+    // MARK: - Channels
+
+    /// The bot's channels, as its Runner advertises them.
+    func channels(for botID: Bot.ID) -> [ChannelStatus] {
+        guard let bot = bot(botID) else { return [] }
+        return (device(bot.runnerID)?.channels ?? []).filter { $0.botID == botID }
+    }
+
+    func channel(_ id: String) -> ChannelStatus? {
+        devices.lazy.flatMap(\.channels).first { $0.id == id }
+    }
+
+    /// The conversations a channel keeps, the latest first.
+    func conversations(of channelID: String) -> [Chat] {
+        chats.filter { $0.channel?.channelID == channelID }.sorted { $0.lastActivity > $1.lastActivity }
+    }
+
+    /// The account a channel speaks through, by its name on the Runner: "Telegram · Community".
+    func accountName(of channel: ChannelStatus) -> String {
+        guard let bot = bot(channel.botID) else { return channel.serviceName }
+        return device(bot.runnerID)?.plugins.first { $0.id == channel.accountID }?.name ?? channel.serviceName
+    }
+
+    private func updateChannel(_ id: String, _ change: (inout ChannelStatus) -> Void) {
+        for index in devices.indices {
+            if let at = devices[index].channels.firstIndex(where: { $0.id == id }) {
+                change(&devices[index].channels[at])
+            }
+        }
+        emit(.rosterChanged)
+    }
+
+    private func runnerID(ofChannel id: String) -> Device.ID? {
+        devices.first { $0.channels.contains { $0.id == id } }?.id
+    }
+
+    /// Pauses or resumes a channel on its Runner. Paused, it takes no new messages.
+    func setChannelPaused(_ id: String, _ paused: Bool) {
+        guard let runnerID = runnerID(ofChannel: id) else { return }
+        updateChannel(id) { $0.state = paused ? .paused : .listening }
+        perform(paused ? "events.pause" : "events.resume", ["runner_id": runnerID, "id": id])
+    }
+
+    /// Tries the message that holds a channel again, or skips it, which lets the next ones run.
+    func settleHeldMessage(of id: String, retry: Bool) {
+        guard let runnerID = runnerID(ofChannel: id), let held = channel(id)?.heldDelivery else { return }
+        updateChannel(id) {
+            $0.state = .listening
+            $0.heldDelivery = nil
+            $0.detail = ""
+        }
+        perform(retry ? "events.retry" : "events.discard", ["runner_id": runnerID, "id": held])
+    }
+
+    func removeChannel(_ id: String) {
+        guard let runnerID = runnerID(ofChannel: id) else { return }
+        for index in devices.indices { devices[index].channels.removeAll { $0.id == id } }
+        emit(.rosterChanged)
+        perform("events.delete", ["runner_id": runnerID, "id": id])
+    }
+
     func runRoutine(_ id: Routine.ID) {
         guard let index = routines.firstIndex(where: { $0.id == id }) else { return }
         routines[index].isRunning = true
@@ -1516,8 +1580,9 @@ final class AppStore {
         guard let chat = chat(id) else { return }
 
         // A bot owns its DM, so deleting that row deletes the bot as one roster operation.
-        // Groups keep their other members; a group with nobody left is removed too.
-        if chat.isDM, let botID = chat.botIDs.first, bot(botID) != nil {
+        // Groups keep their other members; a group with nobody left is removed too. A channel's
+        // conversation is only its transcript.
+        if chat.isBotDM, let botID = chat.botIDs.first, bot(botID) != nil {
             let relatedChatIDs = chats.filter { $0.botIDs.contains(botID) }.map(\.id)
             for chatID in relatedChatIDs { replyEngine?.cancel(chatID: chatID) }
 

@@ -288,6 +288,7 @@ final class DurableTaskViewController: SheetViewController, NSTextFieldDelegate 
             case .you: title = L("Your message")
             case let .bot(id): title = L("Message from %@", store.bot(id)?.name ?? L("a bot"))
             case .system: title = L("Message")
+            case let .contact(name): title = L("Message from %@", name)
             }
             subtitle = Format.daySeparator(message.createdAt)
         } else if item.kind == "message" {

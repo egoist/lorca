@@ -148,7 +148,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 
         let content = UNMutableNotificationContent()
         content.title = store.bot(notification.botID)?.name ?? store.title(for: chat)
-        if !chat.isDM { content.subtitle = store.title(for: chat) }
+        if !chat.isBotDM { content.subtitle = store.title(for: chat) }
         content.body = String(notification.body.split(whereSeparator: \.isNewline).joined(separator: " ").prefix(280))
         content.sound = .default
         content.threadIdentifier = chatID

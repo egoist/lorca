@@ -18,7 +18,8 @@ enum MockData {
                 status: .online,
                 lastSeen: Date(),
                 machineKey: "mk_7c41…a09f",
-                plugins: plugins()
+                plugins: plugins(),
+                channels: channels()
             ),
             Device(
                 id: "dev-studio",
@@ -141,7 +142,19 @@ enum MockData {
         [
             InstalledPlugin(id: "github", name: "GitHub", description: "Issues, pull requests, code search, and repositories on GitHub.", version: "1", icon: "chevron.left.forwardslash.chevron.right", state: .ready, detail: "Ready"),
             InstalledPlugin(id: "linear", name: "Linear", description: "Issues, projects, and cycles in Linear.", version: "1", icon: "line.3.horizontal.decrease.circle", state: .needsAuth, detail: "Sign in"),
+            InstalledPlugin(id: "telegram-5f0c", name: "Telegram · Community", description: "Listen in a Telegram bot's groups and chats, and reply there as the bot.", version: "1", icon: "paperplane", state: .ready, detail: "Connected", serviceID: "telegram", accountName: "Community"),
         ] + mcpServers().compactMap { $0.isEnabled ? $0.status : nil }
+    }
+
+    /// The Feedback Collector listens in the community's Telegram group.
+    static func channels() -> [ChannelStatus] {
+        [
+            ChannelStatus(
+                id: "ev-feedback", botID: "bot-tally", name: "Community feedback", service: "telegram", accountID: "telegram-5f0c",
+                chats: [], listen: ChannelListen(mentions: true, replies: true, tags: ["feedback"]),
+                task: "Decide whether the new message is product feedback. If it is, find the matching open issue in acme/app and comment on it, or open a new one labeled feedback with the person's words quoted. Then reply to the person in their thread in one line with the issue number.",
+                state: .listening, detail: "", heldDelivery: nil),
+        ]
     }
 
     /// Workbench's mcp.json: a command, a remote server, one waiting for its sign-in, and one off.
@@ -921,6 +934,16 @@ enum MockData {
                 createdAt: minutesAgo(60 * 24 * 9)
             ),
             Bot(
+                id: "bot-tally",
+                name: "Feedback Collector",
+                description: "Collects product feedback from the community chat into GitHub issues, thanks people in their thread, and writes a digest each morning.",
+                symbolName: "tray.and.arrow.down.fill",
+                accent: .teal,
+                runnerID: "dev-workbench",
+                provider: .deepseek,
+                createdAt: minutesAgo(60 * 24 * 2)
+            ),
+            Bot(
                 id: "bot-ember",
                 name: "DevOps",
                 description: "Handles deploys and incident triage, watches the relay, and always states the blast radius first.",
@@ -1013,6 +1036,30 @@ enum MockData {
                 unreadCount: 0,
                 isPinned: false,
                 createdAt: minutesAgo(60 * 24 * 9)
+            ),
+            Chat(
+                id: "chat-community",
+                kind: .dm,
+                customTitle: "Acme Community",
+                botIDs: ["bot-tally"],
+                messages: communityThread(),
+                unreadCount: 0,
+                isPinned: false,
+                createdAt: minutesAgo(60 * 20),
+                channel: ChatChannel(channelID: "ev-feedback", service: "telegram", accountID: "telegram-5f0c", chatID: "-1001846203311")
+            ),
+            Chat(
+                id: "chat-tally",
+                kind: .dm,
+                customTitle: nil,
+                botIDs: ["bot-tally"],
+                messages: [
+                    Message(author: .you, body: .text("Listen in our Telegram group for #feedback and file it in acme/app."), createdAt: minutesAgo(60 * 22)),
+                    Message(author: .bot("bot-tally"), body: .text("Listening in the groups the Community bot is in, for mentions, replies, and #feedback. I'll file each one in acme/app and thank the person in their thread."), createdAt: minutesAgo(60 * 22 - 1)),
+                ],
+                unreadCount: 0,
+                isPinned: false,
+                createdAt: minutesAgo(60 * 22)
             ),
             Chat(
                 id: "chat-ember",
@@ -1155,6 +1202,19 @@ enum MockData {
                 createdAt: minutesAgo(27)
             ),
         ]
+    }
+
+    private static func communityThread() -> [Message] {
+        let alice = Message(author: .contact("Alice Chen"), body: .text("#feedback exporting a report as CSV crashes the app on the second try"), createdAt: minutesAgo(64))
+        var thanks = Message(author: .bot("bot-tally"), body: .text("Thanks Alice, tracked in #142."), createdAt: minutesAgo(63))
+        thanks.replyTo = ReplyQuote(messageID: alice.id, author: alice.author, text: "#feedback exporting a report as CSV crashes the app on the second try")
+        let ben = Message(author: .contact("Ben Ortiz"), body: .text("same here, happens on Android too"), createdAt: minutesAgo(41))
+        var more = Message(author: .bot("bot-tally"), body: .text("Added to #142, thanks Ben."), createdAt: minutesAgo(40))
+        more.replyTo = ReplyQuote(messageID: ben.id, author: ben.author, text: "same here, happens on Android too")
+        let maya = Message(author: .contact("Maya"), body: .text("@acme_feedback_bot could the dashboard remember my last filter? #feedback"), createdAt: minutesAgo(12))
+        var filed = Message(author: .bot("bot-tally"), body: .text("Good idea, tracked in #151."), createdAt: minutesAgo(11))
+        filed.replyTo = ReplyQuote(messageID: maya.id, author: maya.author, text: "@acme_feedback_bot could the dashboard remember my last filter? #feedback")
+        return [alice, thanks, ben, more, maya, filed]
     }
 
     private static func researcherThread() -> [Message] {

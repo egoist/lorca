@@ -413,6 +413,8 @@ struct Device: Identifiable, Hashable {
     var machineKey: String
     /// Plugins installed on this Runner, as it advertises them. Secrets stay on the Runner.
     var plugins: [InstalledPlugin] = []
+    /// The channels its bots listen on, as it advertises them.
+    var channels: [ChannelStatus] = []
     /// The `lorca` this Device runs.
     var version: String = ""
     /// Set for a CLI that updates itself (one installed with the site's script); a CLI an app
@@ -439,6 +441,63 @@ struct Device: Identifiable, Hashable {
     static var unknownNote: String {
         L("This machine is paired to your account but has not sent its name or system. If you don't recognize it, unpair it.")
     }
+}
+
+// MARK: - Channels
+
+/// Where a channel's conversation happens.
+struct ChatChannel: Hashable {
+    var channelID: String
+    var service: String
+    var accountID: String
+    var chatID: String
+    var threadID: String?
+}
+
+/// What a channel takes.
+struct ChannelListen: Hashable {
+    var every = false
+    var mentions = false
+    var replies = false
+    var tags: [String] = []
+
+    /// "Mentions, replies, #feedback", or "Every message".
+    var summary: String {
+        if every { return L("Every message") }
+        var parts: [String] = []
+        if mentions { parts.append(L("mentions")) }
+        if replies { parts.append(L("replies")) }
+        parts += tags.map { "#\($0)" }
+        let joined = parts.joined(separator: L(", ", context: "list"))
+        return joined.prefix(1).uppercased() + joined.dropFirst()
+    }
+}
+
+/// A bot listening on a Telegram or Slack account, as its Runner advertises it.
+struct ChannelStatus: Identifiable, Hashable {
+    enum State: String {
+        case listening, paused, held, offline
+    }
+
+    struct Chat: Hashable {
+        var id: String
+        var title: String
+    }
+
+    let id: String
+    var botID: Bot.ID
+    var name: String
+    var service: String
+    var accountID: String
+    var chats: [Chat]
+    var listen: ChannelListen
+    var task: String
+    var state: State
+    var detail: String
+    var heldDelivery: String?
+
+    var serviceName: String { service == "slack" ? "Slack" : "Telegram" }
+    var isPaused: Bool { state == .paused }
 }
 
 // MARK: - Bot
@@ -1196,9 +1255,16 @@ struct Message: Identifiable, Hashable {
         case you
         case bot(Bot.ID)
         case system
+        /// Someone outside Lorca, in a channel's conversation.
+        case contact(String)
 
         var botID: Bot.ID? {
             if case let .bot(id) = self { return id }
+            return nil
+        }
+
+        var contactName: String? {
+            if case let .contact(name) = self { return name }
             return nil
         }
 
@@ -1345,7 +1411,14 @@ struct Chat: Identifiable, Hashable {
     /// What a group is for, which every member reads in its system prompt; empty for none.
     var groupDescription = ""
 
+    /// A conversation a channel keeps: one Telegram chat or topic, or one Slack thread.
+    var channel: ChatChannel? = nil
+
     var isGroup: Bool { kind == .group }
+
+    /// A transcript with more than one speaker on the bots' side: a group, or a channel's
+    /// conversation with the people there.
+    var showsSpeakers: Bool { isGroup || channel != nil }
 
     /// A group's owner: the one set, else the first member, as the CLI picks.
     var owner: Bot.ID? {
@@ -1354,6 +1427,8 @@ struct Chat: Identifiable, Hashable {
         return botIDs.first
     }
     var isDM: Bool { kind == .dm }
+    /// The one DM a bot has with the user: a direct chat that is not a channel's conversation.
+    var isBotDM: Bool { kind == .dm && channel == nil }
 
     /// Whether another bot may join. Only groups grow, and never past the cap.
     var canAddBot: Bool { isGroup && botIDs.count < Self.maxGroupBots }

@@ -625,6 +625,7 @@ final class ChatViewController: NSViewController {
         case .you: L("You")
         case let .bot(botID): store.bot(botID)?.name ?? L("Bot")
         case .system: "Lorca"
+        case let .contact(name): name
         }
     }
 
@@ -766,8 +767,8 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
     /// A bot's row in a group carries its avatar, beside a bubble or a card, and the first bubble
     /// of a run its name as well; a DM's bot needs neither.
     private func showsAvatar(for message: Message?) -> Bool {
-        guard let chatID, store.chat(chatID)?.isGroup == true, message?.author.botID != nil else { return false }
-        return true
+        guard let chatID, store.chat(chatID)?.showsSpeakers == true, let author = message?.author else { return false }
+        return author.botID != nil || author.contactName != nil
     }
 
     /// The bot's avatar for a card in a group; nil in a DM.
@@ -896,6 +897,9 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
                 if metrics.showsName, case let .bot(botID) = message.author {
                     name = store.bot(botID)?.name ?? L("Bot")
                     nameColor = store.bot(botID)?.accent.color ?? .secondaryLabelColor
+                } else if metrics.showsName, case let .contact(contact) = message.author {
+                    name = contact
+                    nameColor = .secondaryLabelColor
                 } else {
                     name = ""
                     nameColor = .secondaryLabelColor
