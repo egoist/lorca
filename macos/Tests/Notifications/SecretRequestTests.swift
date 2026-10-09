@@ -43,6 +43,14 @@ final class SecretRequestTests: XCTestCase {
         window.contentViewController = chat
         window.setContentSize(NSSize(width: 620, height: 560))
         defer { window.close() }
+        _ = AppStore.shared.append(Message(author: .you, body: .text("Publish the CLI package to npm once the review is done."), createdAt: Date().addingTimeInterval(-60)), to: "chat-patch")
+        _ = AppStore.shared.append(Message(
+            author: .bot("bot-patch"),
+            body: .permission(PermissionRequest(
+                pluginID: "computer", pluginName: "Studio", tool: "secret", summary: "npm token", decision: .pending,
+                reason: "To publish the package to npm for you.",
+                secret: SecretAsk(use: .command, site: nil, fields: [.init(name: "NPM_TOKEN", label: "npm token")]))),
+            createdAt: Date()), to: "chat-patch")
         chat.show(chatID: "chat-patch")
         try await settle(chat.view)
         let card = try XCTUnwrap(descendants(chat.view).compactMap { $0 as? SecretCellView }.first)

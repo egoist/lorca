@@ -157,11 +157,37 @@ type WireBody struct {
 	Rule          *string          `json:"rule"`
 	Command       *string          `json:"command"`
 	Run           *WireRun         `json:"run"`
+	Secret        *WireSecretAsk   `json:"secret"`
 	ReplyTo       *struct {
 		MessageID string     `json:"message_id"`
 		Author    WireAuthor `json:"author"`
 		Text      string     `json:"text"`
 	} `json:"reply_to"`
+}
+
+// WireSecretAsk is a secret request's ask, in the CLI's shape.
+type WireSecretAsk struct {
+	Use    string `json:"use"`
+	Site   string `json:"site"`
+	Fields []struct {
+		Name  string `json:"name"`
+		Label string `json:"label"`
+	} `json:"fields"`
+}
+
+// WireSecret is one of a Runner's secrets, as `secrets.list` answers it.
+type WireSecret struct {
+	ID        string  `json:"id"`
+	BotID     string  `json:"bot_id"`
+	Name      string  `json:"name"`
+	Label     string  `json:"label"`
+	Use       string  `json:"use"`
+	Site      string  `json:"site"`
+	UpdatedAt float64 `json:"updated_at"`
+}
+
+func (w WireSecret) model() SavedSecret {
+	return SavedSecret{ID: w.ID, BotID: w.BotID, Name: w.Name, Label: w.Label, Use: SecretUse(w.Use), Site: w.Site, UpdatedAt: w.UpdatedAt}
 }
 
 type WireMessage struct {
@@ -746,6 +772,7 @@ func ToMessage(wire WireMessage) *Message {
 			Rule:       str(body.Rule),
 			HasRule:    body.Rule != nil,
 			Command:    str(body.Command),
+			Secret:     secretAsk(body.Secret),
 		}}
 	default:
 		message.Body = Body{Kind: BodyText, Text: str(body.Text)}
@@ -1036,4 +1063,15 @@ func ToBotMemory(wire WireBotMemory) BotMemory {
 		memory.MaxLines, memory.MaxBytes = index.MaxLines, index.MaxBytes
 	}
 	return memory
+}
+
+func secretAsk(wire *WireSecretAsk) *SecretAsk {
+	if wire == nil {
+		return nil
+	}
+	ask := &SecretAsk{Use: SecretUse(wire.Use), Site: wire.Site}
+	for _, field := range wire.Fields {
+		ask.Fields = append(ask.Fields, SecretField{Name: field.Name, Label: field.Label})
+	}
+	return ask
 }

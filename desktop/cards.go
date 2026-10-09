@@ -201,6 +201,117 @@ func (m *mainWindow) permissionCard(c *ui.Context, chat *model.Chat, message *mo
 	})
 }
 
+// MARK: - The secret card
+
+// secretCaption is the line under a secret card's title: why, while it asks; the answer and what
+// was asked for, once answered.
+func secretCaption(request *model.PermissionRequest) string {
+	if request.IsPending() {
+		return request.Reason
+	}
+	return request.DecisionText() + " · " + request.Summary
+}
+
+// runnerName is where a bot's message came from: its Runner's name.
+func runnerName(message *model.Message) string {
+	if bot := store.Bot(message.Author.BotID); bot != nil {
+		if device := store.Device(bot.RunnerID); device != nil {
+			return device.Name
+		}
+	}
+	return L("its Runner")
+}
+
+// secretCardState is a secret card's own: what is typed in each field, a save under way, and why
+// one failed, until the card is answered.
+type secretCardState struct {
+	values []string
+	busy   bool
+	err    string
+}
+
+// secretCard is a bot asking for a secret, after the macOS app's SecretCellView: who asks and where
+// it goes, why, a field for each value that hides what is typed, Save and Not now, and a note that
+// the value stays on the Runner and the bot never sees it, which a failed save turns into why.
+// Once answered, the answer and what was asked for: "Saved · npm token".
+func (m *mainWindow) secretCard(c *ui.Context, chat *model.Chat, message *model.Message, cardAvatar *avatarContent, groupStart bool) {
+	p := colors(c)
+	request := message.Body.Request
+	name := botName(message)
+	chatID, messageID := chat.ID, message.ID
+	fields := request.Secret.Fields
+	holder := ui.Box(c.Key("secret:" + message.ID))
+	st := ui.Local(holder, "card", func() secretCardState { return secretCardState{} })
+	if len(st.values) != len(fields) {
+		st.values = make([]string, len(fields))
+	}
+	filled := len(fields) > 0
+	for _, value := range st.values {
+		filled = filled && strings.TrimSpace(value) != ""
+	}
+	save := func() {
+		if st.busy || !filled {
+			return
+		}
+		values := map[string]string{}
+		for i, field := range fields {
+			values[field.Name] = st.values[i]
+		}
+		st.busy, st.err = true, ""
+		store.AnswerSecret(chatID, messageID, values, func(err error) {
+			st.busy = false
+			if err != nil {
+				st.err = model.ErrorText(err)
+			}
+		})
+	}
+	title := name + " " + request.VerbPhrase()
+	caption := secretCaption(request)
+	tint := p.Accent
+	if !request.IsPending() {
+		tint = p.Label2
+	}
+	holder.Children(func() {
+		cardFrame(c, cardAvatar, groupStart, title+": "+caption, func() {
+			ui.Row(c).Size(18, 18).Center().TextColor(tint).Children(func() { symbol(c, "key", 17, 1.9) })
+			ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Children(func() {
+				ui.Text(c, title).FontSize(12.5).FontWeight(600).FixedLineHeight(17).SingleLine().Tooltip(title)
+				if caption != "" {
+					ui.Text(c, caption).Margin(2, 0, 0, 0).FontSize(11.5).LineHeight(1.35).TextColor(p.Label2).MaxLines(4)
+				}
+				if !request.IsPending() {
+					return
+				}
+				ui.Column(c).Gap(6).Margin(9, 0, 0, 0).Children(func() {
+					for i, field := range fields {
+						ui.Row(c.Key(field.Name)).Children(func() {
+							input := textField(c, &st.values[i], fieldOptions{Secure: true, Placeholder: field.Label, Label: field.Label, Disabled: st.busy}).Grow(1).Shrink(1).MinWidth(0)
+							if input.Changed() {
+								st.err = ""
+							}
+							if input.Submitted() {
+								save()
+							}
+						})
+					}
+				})
+				ui.Row(c).Gap(6).Margin(9, 0, 0, 0).Children(func() {
+					if pushButton(c.Key("save"), L("Save"), pushOptions{Small: true, Disabled: st.busy || !filled}).Clicked() {
+						save()
+					}
+					if pushButton(c.Key("deny"), L("Not now"), pushOptions{Small: true, Disabled: st.busy}).Clicked() {
+						store.AnswerPermission(chatID, messageID, "deny")
+					}
+				})
+				note := ui.Text(c, firstNonEmpty(st.err, L("Saved on %@. %@ never sees it.", runnerName(message), name))).Margin(7, 0, 0, 0).FontSize(11).LineHeight(1.35).TextColor(p.Label2).SingleLine()
+				if st.err != "" {
+					note.TextColor(p.Red).Tooltip(st.err)
+				}
+			})
+		})
+	})
+}
+
 // MARK: - The command card
 
 // commandTitle is "Chef wants to run a command on Workbench", "Chef's command is running", or

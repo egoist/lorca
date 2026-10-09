@@ -1055,7 +1055,52 @@ type PermissionRequest struct {
 	HasRule bool
 	// Command is a shell card's whole command, where Summary is its first line.
 	Command string
+	// Secret is a secret request: what the bot asks for and where its Runner uses it. The card
+	// takes the values; they go sealed to the Runner and never come back.
+	Secret *SecretAsk
 }
+
+// SecretUse is where a secret goes.
+type SecretUse string
+
+const (
+	// SecretBrowser is typed into a sign-in page of the request's site in the bot's Browser.
+	SecretBrowser SecretUse = "browser"
+	// SecretCommand is an environment variable of the bot's commands.
+	SecretCommand SecretUse = "command"
+	// SecretPlugin is a setting of the card's plugin.
+	SecretPlugin SecretUse = "plugin"
+)
+
+// SecretAsk is what a secret request asks for: the values the bot names, and where its Runner uses
+// them.
+type SecretAsk struct {
+	Use    SecretUse
+	Site   string
+	Fields []SecretField
+}
+
+// SecretField is one value a secret request asks for: the name the bot uses it by, and what the
+// card calls it ("GitHub password").
+type SecretField struct {
+	Name  string
+	Label string
+}
+
+// SavedSecret is a secret kept on a Runner for one of its bots, as the Secrets pane lists it:
+// never its value.
+type SavedSecret struct {
+	ID        string
+	BotID     string
+	Name      string
+	Label     string
+	Use       SecretUse
+	Site      string
+	UpdatedAt float64
+}
+
+// IsSecret is a secret request: the card holds a field for each value.
+func (r *PermissionRequest) IsSecret() bool { return r.Tool == "secret" && r.Secret != nil }
 
 // FullCommand is the command as the card and its sheet show it, without the summary's `$ ` prompt.
 func (r *PermissionRequest) FullCommand() string {
@@ -1109,6 +1154,14 @@ func (r *PermissionRequest) VerbPhrase() string {
 	switch {
 	case r.IsAccess():
 		return L("needs more access")
+	case r.IsSecret():
+		switch r.Secret.Use {
+		case SecretBrowser:
+			return L("needs a secret for %@", firstNonEmpty(r.Secret.Site, r.PluginName))
+		case SecretPlugin:
+			return L("needs a secret for %@", r.PluginName)
+		}
+		return L("needs a secret for its commands")
 	case r.IsConnect():
 		return L("needs a sign-in to %@", r.PluginName)
 	case r.IsShell():
@@ -1124,6 +1177,9 @@ func (r *PermissionRequest) DecisionText() string {
 	case DecisionPending:
 		return L("Waiting for you")
 	case DecisionAllowed:
+		if r.IsSecret() {
+			return L("Saved")
+		}
 		if r.IsConnect() {
 			return L("Signing in")
 		}
@@ -1131,7 +1187,7 @@ func (r *PermissionRequest) DecisionText() string {
 	case DecisionAlways:
 		return L("Always allowed")
 	case DecisionDenied:
-		if r.IsConnect() {
+		if r.IsConnect() || r.IsSecret() {
 			return L("Not now")
 		}
 		return L("Denied")
@@ -1777,17 +1833,18 @@ const (
 	PaneAutoReview  SettingsPane = "auto-review"
 	PaneSharedLinks SettingsPane = "shared-links"
 	PanePlugins     SettingsPane = "plugins"
+	PaneSecrets     SettingsPane = "secrets"
 	PaneBots        SettingsPane = "bots"
 	PaneDevice      SettingsPane = "device"
 	PaneAdvanced    SettingsPane = "advanced"
 )
 
-var SettingsPanes = []SettingsPane{PaneGeneral, PaneProviders, PaneAutoReview, PaneSharedLinks, PanePlugins, PaneBots, PaneDevice, PaneAdvanced}
+var SettingsPanes = []SettingsPane{PaneGeneral, PaneProviders, PaneAutoReview, PaneSharedLinks, PanePlugins, PaneSecrets, PaneBots, PaneDevice, PaneAdvanced}
 
 // IsDeviceScoped is a pane that shows one Device, picked at the top of the page: bots and plugins
 // live on a Runner. The others hold this computer's settings and the account's.
 func (p SettingsPane) IsDeviceScoped() bool {
-	return p == PaneBots || p == PanePlugins || p == PaneDevice
+	return p == PaneBots || p == PanePlugins || p == PaneSecrets || p == PaneDevice
 }
 
 func (p SettingsPane) Title() string {
@@ -1806,6 +1863,8 @@ func (p SettingsPane) Title() string {
 		return L("Providers")
 	case PanePlugins:
 		return L("Plugins")
+	case PaneSecrets:
+		return L("Secrets")
 	case PaneDevice:
 		return L("Devices")
 	}
@@ -1828,6 +1887,8 @@ func (p SettingsPane) Symbol() string {
 		return "key"
 	case PanePlugins:
 		return "puzzlepiece.extension"
+	case PaneSecrets:
+		return "lock"
 	case PaneDevice:
 		return "desktopcomputer"
 	}

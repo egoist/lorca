@@ -1154,15 +1154,6 @@ enum MockData {
                 body: .text("The website build passes. I've left the changes ready for review."),
                 createdAt: minutesAgo(27)
             ),
-            Message(author: .you, body: .text("Publish the CLI package to npm once the review is done."), createdAt: minutesAgo(6)),
-            Message(
-                author: .bot("bot-patch"),
-                body: .permission(PermissionRequest(
-                    pluginID: "computer", pluginName: "Studio", tool: "secret", summary: "npm token", decision: .pending,
-                    reason: "To publish the package to npm for you.",
-                    secret: SecretAsk(use: .command, site: nil, fields: [.init(name: "NPM_TOKEN", label: "npm token")]))),
-                createdAt: minutesAgo(5)
-            ),
         ]
     }
 
