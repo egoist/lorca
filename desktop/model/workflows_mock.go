@@ -43,6 +43,16 @@ Start with #128: it blocks the release. Then ask the reporter of #133 for a cras
 // DemoWorkflowSampleTime is how long the demo's sample runs.
 var DemoWorkflowSampleTime = 2500 * time.Millisecond
 
+// demoWorkflowAccounts are the named accounts the demo's Runners have, by service: two inboxes to
+// pick from, a calendar that waits for its sign-in, and no Drive yet.
+func demoWorkflowAccounts() map[string][]WorkflowAccount {
+	return map[string][]WorkflowAccount{
+		"gmail": {{ID: "gmail-work", Name: "Gmail · Work", AccountName: "Work", State: PluginReady, Detail: "Connected"},
+			{ID: "gmail-personal", Name: "Gmail · Personal", AccountName: "Personal", State: PluginReady, Detail: "Connected"}},
+		"google-calendar": {{ID: "google-calendar-work", Name: "Google Calendar · Work", AccountName: "Work", State: PluginNeedsAuth, Detail: "Sign in"}},
+	}
+}
+
 type demoSetup struct {
 	id, runnerID, packID, botID, phase, sample string
 	answers, connections                       map[string]string
@@ -97,7 +107,21 @@ func (s *Store) demoWorkflow(method string, data json.RawMessage) (WorkflowProgr
 	case "connection":
 		setup.connections[params.ServiceID] = params.PluginID
 		if params.PluginID == "" {
-			setup.connections[params.ServiceID] = params.ServiceID
+			// Adds a named account for the workflow, waiting for its sign-in.
+			if s.mockWorkflowAccounts == nil {
+				s.mockWorkflowAccounts = demoWorkflowAccounts()
+			}
+			pack := demoWorkflowPacks()[slices.IndexFunc(demoWorkflowPacks(), func(p WorkflowPack) bool { return p.ID == setup.packID })]
+			name := params.ServiceID
+			for _, requirement := range pack.Connections {
+				if requirement.ServiceID == params.ServiceID {
+					name = requirement.Name
+				}
+			}
+			id := params.ServiceID + "-added"
+			s.mockWorkflowAccounts[params.ServiceID] = append(s.mockWorkflowAccounts[params.ServiceID],
+				WorkflowAccount{ID: id, Name: name + " · " + pack.Name, AccountName: pack.Name, State: PluginNeedsAuth, Detail: "Sign in"})
+			setup.connections[params.ServiceID] = id
 		}
 	case "sample":
 		setup.sample, setup.phase = "running", "sample"
@@ -151,12 +175,21 @@ func (s *Store) demoWorkflowProgress(setup *demoSetup) WorkflowProgress {
 	if runner := s.Device(setup.runnerID); runner != nil {
 		plugins = runner.Plugins
 	}
+	if s.mockWorkflowAccounts == nil {
+		s.mockWorkflowAccounts = demoWorkflowAccounts()
+	}
 	for _, requirement := range pack.Connections {
-		connection := WorkflowConnection{ServiceID: requirement.ServiceID, Name: requirement.Name, SelectedID: setup.connections[requirement.ServiceID], Available: requirement.ServiceID == "github"}
+		connection := WorkflowConnection{ServiceID: requirement.ServiceID, Name: requirement.Name, SelectedID: setup.connections[requirement.ServiceID], Available: true}
 		for _, plugin := range plugins {
-			if plugin.ID == requirement.ServiceID && !plugin.IsMcpServer() {
-				connection.Choices = append(connection.Choices, WorkflowAccount{ID: plugin.ID, Name: plugin.Name, State: plugin.State, Detail: plugin.Detail})
+			if plugin.MarketplaceID() == requirement.ServiceID && !plugin.IsMcpServer() {
+				connection.Choices = append(connection.Choices, WorkflowAccount{ID: plugin.ID, Name: plugin.Name, AccountName: plugin.AccountName, State: plugin.State, Detail: plugin.Detail})
 			}
+		}
+		connection.Choices = append(connection.Choices, s.mockWorkflowAccounts[requirement.ServiceID]...)
+		// What configure takes, as the CLI does: a service's only account.
+		if connection.SelectedID == "" && setup.botID != "" && len(connection.Choices) == 1 {
+			connection.SelectedID = connection.Choices[0].ID
+			progress.Setup.ConnectionIDs[requirement.ServiceID] = connection.SelectedID
 		}
 		progress.Connections = append(progress.Connections, connection)
 	}

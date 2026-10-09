@@ -33,11 +33,32 @@ enum Wire {
         var bots: [Bot]
         var chats: [Chat]
         var routines: [Routine]?
+        var reviews: [ReviewItem]?
+        var tasks: [DurableTask]?
+        var playbooks: [PlaybookSummary]?
         var autoReview: AutoReview?
         var providers: [Provider]?
         var models: [Model]?
         var runningChatIds: [String]
         var runningTurns: [RunningTurn]?
+        var attention: AttentionView?
+        var budgets: [BudgetState]?
+    }
+
+    struct BudgetsChanged: Decodable { var budgets: [BudgetState] }
+
+    /// `connector_limits.get`: an installed plugin account's shared call limit on its Runner.
+    struct CallLimits: Decodable {
+        struct Limits: Decodable {
+            var maxCalls: Int
+            var windowSecs: Int
+            var maxConcurrency: Int
+        }
+        var limits: Limits
+        var retryAt: Double?
+        /// The service the account belongs to; another account of it shares the service's limit.
+        var serviceId: String
+        var pluginId: String
     }
 
     /// A model the CLI's catalog offers, in the catalog's order.
@@ -46,10 +67,11 @@ enum Wire {
         var id: String
         var name: String
         var levels: [String]
+        var decides: Bool?
 
         func toModel() -> ProviderModel? {
             guard let kind = ProviderCredential.Kind(wireValue: provider) else { return nil }
-            return ProviderModel(provider: kind, id: id, label: name, levels: levels)
+            return ProviderModel(provider: kind, id: id, label: name, levels: levels, decides: decides ?? false)
         }
     }
 
@@ -67,9 +89,15 @@ enum Wire {
     struct AutoReview: Decodable {
         var isEnabled: Bool
         var rules: [AutoReviewRule]?
+        var provider: String?
+        var models: [String: String]?
 
         func toModel() -> Lorca.AutoReview {
-            Lorca.AutoReview(isEnabled: isEnabled, rules: (rules ?? []).map { $0.toModel() })
+            let models = (models ?? [:]).compactMap { kind, model in ProviderCredential.Kind(wireValue: kind).map { ($0, model) } }
+            return Lorca.AutoReview(
+                isEnabled: isEnabled, rules: (rules ?? []).map { $0.toModel() },
+                provider: provider.flatMap(ProviderCredential.Kind.init(wireValue:)),
+                models: Dictionary(models, uniquingKeysWith: { first, _ in first }))
         }
     }
 
@@ -81,6 +109,18 @@ enum Wire {
     }
 
     struct Routine: Decodable {
+        struct Health: Decodable {
+            struct Model: Decodable {
+                var status: String?
+                var authenticationFailures: Int?
+            }
+            var lastCheckAt: Double?
+            var lastSuccessAt: Double?
+            var status: String?
+            var connectionFailures: Int?
+            var authenticationFailures: Int?
+            var model: Model?
+        }
         var id: String
         var botId: String
         var name: String
@@ -95,19 +135,38 @@ enum Wire {
         var isRunning: Bool?
         var check: String?
         var createdAt: Double
+        var timezone: String?
+        var missedRunPolicy: String?
+        var state: String?
+        var health: Health?
 
         func toModel() -> Lorca.Routine {
             Lorca.Routine(
                 id: id, botID: botId, name: name, prompt: prompt, schedule: schedule, scheduleText: Format.schedule(scheduleText ?? schedule),
                 isEnabled: isEnabled, pausedReason: pausedReason, lastRunAt: lastRunAt.map { Date(timeIntervalSince1970: $0) },
                 lastOutcome: lastOutcome, nextRunAt: nextRunAt.map { Date(timeIntervalSince1970: $0) }, isRunning: isRunning ?? false,
-                createdAt: Date(timeIntervalSince1970: createdAt), check: check)
+                createdAt: Date(timeIntervalSince1970: createdAt), check: check,
+                timezone: timezone ?? TimeZone.current.identifier, missedRunPolicy: missedRunPolicy ?? "coalesce",
+                state: state ?? (isEnabled ? "on" : "paused"),
+                health: RoutineHealth(
+                    lastCheckAt: health?.lastCheckAt.map { Date(timeIntervalSince1970: $0) },
+                    lastSuccessAt: health?.lastSuccessAt.map { Date(timeIntervalSince1970: $0) },
+                    status: health?.status, connectionFailures: health?.connectionFailures ?? 0,
+                    authenticationFailures: health?.authenticationFailures ?? 0, modelStatus: health?.model?.status,
+                    modelAuthenticationFailures: health?.model?.authenticationFailures ?? 0))
         }
+    }
+
+    /// `device.service_status`: whether `lorca service` keeps the CLI running on that Device.
+    struct ServiceStatus: Decodable {
+        var installed: Bool
+        var running: Bool
     }
 
     struct RoutineChanged: Decodable {
         var routine: Routine
     }
+    struct DurableTaskChanged: Decodable { var task: DurableTask }
 
     /// Fetched only while editing a provider; never stored in the account snapshot.
     struct ProviderAPIKey: Decodable {
@@ -123,12 +182,13 @@ enum Wire {
         var name: String?
         var api: String?
         var models: [StatusModel]?
+        var reviewModel: String?
 
         func toModel() -> ProviderCredential? {
             guard let kind = ProviderCredential.Kind(wireValue: kind) else { return nil }
             return ProviderCredential(
                 kind: kind, isConnected: isConnected, detail: detail, baseURL: baseUrl, name: name,
-                api: api.flatMap(CustomAPI.init(rawValue:)), models: (models ?? []).map { $0.toModel() })
+                api: api.flatMap(CustomAPI.init(rawValue:)), models: (models ?? []).map { $0.toModel() }, reviewModel: reviewModel)
         }
     }
 
@@ -188,11 +248,14 @@ enum Wire {
         var state: String
         var detail: String?
         var source: String?
+        var serviceId: String?
+        var accountName: String?
 
         func toModel() -> InstalledPlugin {
             InstalledPlugin(
                 id: id, name: name, description: description ?? "", version: version ?? "", icon: icon ?? "",
-                state: InstalledPlugin.State(rawValue: state) ?? .unknown, detail: detail ?? "", source: source)
+                state: InstalledPlugin.State(rawValue: state) ?? .unknown, detail: detail ?? "", source: source,
+                serviceID: serviceId, accountName: accountName)
         }
     }
 
@@ -228,6 +291,7 @@ enum Wire {
         var variables: [Variable]?
         var skills: [Skill]?
         var installedOn: [String]?
+        var namedAccounts: Bool?
 
         func toModel() -> Lorca.MarketplacePlugin {
             let servers = (servers ?? [:]).sorted { $0.key < $1.key }.map { name, server in
@@ -244,7 +308,7 @@ enum Wire {
                 variables: (variables ?? []).map {
                     .init(name: $0.name, description: $0.description ?? "", secret: $0.secret ?? false, required: $0.required ?? false)
                 },
-                installedOn: installedOn ?? [])
+                installedOn: installedOn ?? [], namedAccounts: namedAccounts ?? false)
         }
     }
 
@@ -340,6 +404,7 @@ enum Wire {
         var model: String?
         var thinking: String?
         var avatar: Attachment?
+        var permissions: BotPermissions?
         var createdAt: Double
     }
 
@@ -392,6 +457,10 @@ enum Wire {
         var costUsd: Double
         var turns: Int
         var model: String
+        var apiCostUsd: Double?
+        var subscriptionEstimateUsd: Double?
+        var unknownPriceCalls: Int?
+        var pricingKinds: [String]?
     }
 
     struct BotMemory: Decodable {
@@ -462,6 +531,10 @@ enum Wire {
         var path: String
     }
 
+    struct OutputList: Decodable {
+        var outputs: [Message]
+    }
+
     struct Body: Decodable {
         var kind: String
         var text: String?
@@ -520,6 +593,8 @@ enum Wire {
         var state: State
         var createdAt: Double
         var queued: Bool?
+        var output: Output?
+        var notification: String?
     }
 
     struct RosterChanged: Decodable {
@@ -527,6 +602,7 @@ enum Wire {
         var bots: [Bot]
         var chats: [Chat]
         var routines: [Routine]?
+        var playbooks: [PlaybookSummary]?
         var autoReview: AutoReview?
         var providers: [Provider]?
         /// The catalog's models again, so a newer catalog the CLI installs reaches the pickers.
@@ -650,6 +726,7 @@ extension Wire.Bot {
             model: model,
             thinking: thinking,
             avatar: avatar.map { Attachment(id: $0.id, name: $0.name, mime: $0.mime, size: $0.size, width: $0.width, height: $0.height) },
+            permissions: permissions,
             createdAt: Date(timeIntervalSince1970: createdAt)
         )
     }
@@ -709,8 +786,10 @@ extension Wire.Message {
             attachments: (self.body.attachments ?? []).map {
                 Attachment(id: $0.id, name: $0.name, mime: $0.mime, size: $0.size, width: $0.width, height: $0.height)
             },
-            replyTo: self.body.replyTo.map { ReplyQuote(messageID: $0.messageId, author: $0.author.toModel(), text: $0.text) })
+            replyTo: self.body.replyTo.map { ReplyQuote(messageID: $0.messageId, author: $0.author.toModel(), text: $0.text) },
+            output: output)
         message.queued = queued ?? false
+        message.notification = notification
         return message
     }
 }
@@ -745,10 +824,20 @@ extension Wire.Chat {
     }
 }
 
+extension Wire.CallLimits {
+    func toModel() -> CallLimits {
+        CallLimits(
+            maxCalls: limits.maxCalls, windowSecs: limits.windowSecs, maxConcurrency: limits.maxConcurrency,
+            retryAt: retryAt.map { Date(timeIntervalSince1970: $0) }, sharesService: serviceId != pluginId)
+    }
+}
+
 extension Wire.ChatUsage {
     func toModel() -> ChatUsage {
         ChatUsage(
             contextTokens: contextTokens, contextWindow: contextWindow, inputTokens: inputTokens, outputTokens: outputTokens,
-            cacheReadTokens: cacheReadTokens, costUSD: costUsd, turns: turns, model: model)
+            cacheReadTokens: cacheReadTokens, costUSD: costUsd, turns: turns, model: model,
+            apiCostUSD: apiCostUsd ?? 0, subscriptionEstimateUSD: subscriptionEstimateUsd ?? 0,
+            unknownPriceCalls: unknownPriceCalls ?? 0, pricingKinds: pricingKinds ?? [])
     }
 }

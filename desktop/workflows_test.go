@@ -142,9 +142,34 @@ func TestWorkflowSampleBeforeSchedule(t *testing.T) {
 func TestWorkflowAccountsWaitForSignIn(t *testing.T) {
 	_, tt, mk := workflowTester(t)
 	workflowMarket = mk
-	workflowOpen(t, tt, "Meeting preparation")
-	wantText(t, tt, "Google Calendar", "Google Drive", L("Not available"))
-	renderBoth(t, tt, "workflow-unavailable")
+	// A calendar account that waits for its sign-in, and no Drive account yet: Add makes one,
+	// named after the workflow, which then waits for its own sign-in.
+	wp := workflowOpen(t, tt, "Meeting preparation")
+	wantText(t, tt, "Google Calendar", "Google Drive", L("Sign In"), L("Add"))
+	workflowClick(t, tt, L("Add"))
+	if id := wp.progress.Setup.ConnectionIDs["google-drive"]; id == "" {
+		t.Fatal("Add chose no account")
+	}
+	if account := wp.progress.Connections[1].Account(); account == nil || account.State != model.PluginNeedsAuth || account.AccountName != "Meeting preparation" {
+		t.Fatalf("the added Drive account: %+v", account)
+	}
+	renderBoth(t, tt, "workflow-accounts")
+	mk.goBack()
+	settle(tt)
+
+	// Of two inboxes, the user picks one; until then the row says so.
+	inbox := workflowOpen(t, tt, "Inbox triage")
+	wantText(t, tt, "Gmail", L("Not chosen"), L("Choose…"))
+	workflowClick(t, tt, L("Choose…"))
+	if err := tt.ChooseMenuItem("Personal"); err != nil {
+		t.Fatalf("pick an inbox: %v", err)
+	}
+	settle(tt)
+	if inbox.progress.Setup.ConnectionIDs["gmail"] != "gmail-personal" {
+		t.Fatalf("picked %q", inbox.progress.Setup.ConnectionIDs["gmail"])
+	}
+	wantText(t, tt, "Personal", L("Connected"))
+	renderBoth(t, tt, "workflow-named-accounts")
 	mk.goBack()
 	settle(tt)
 
@@ -156,7 +181,7 @@ func TestWorkflowAccountsWaitForSignIn(t *testing.T) {
 			}
 		}
 	}
-	wp := workflowOpen(t, tt, "Repository monitoring")
+	wp = workflowOpen(t, tt, "Repository monitoring")
 	workflowType(t, tt, "Repositories", "example/workflow-demo")
 	wantText(t, tt, L("Sign In"))
 	renderBoth(t, tt, "workflow-sign-in")

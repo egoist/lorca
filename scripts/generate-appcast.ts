@@ -3,8 +3,8 @@
 //   bun scripts/generate-appcast.ts <updates-dir>
 //
 // <updates-dir> holds Lorca-<version>.zip archives, the older ones included so Sparkle can build
-// binary deltas between them. The private EdDSA key comes from the login keychain
-// (docs/releasing-mac.md).
+// binary deltas between them. The private EdDSA key comes from the login keychain, or from the file
+// SPARKLE_KEY_FILE names, as `generate_keys -x` exports it (docs/releasing-mac.md).
 import { existsSync, readdirSync } from "node:fs"
 import { join } from "node:path"
 import { color, log, RELEASES_URL, SPARKLE_TOOLS } from "./app.ts"
@@ -30,8 +30,9 @@ export async function generateAppcast(updatesDir: string, downloadURLPrefix: str
   const seen = new Set(deltaNames(updatesDir))
   // The notes prefix makes generate_appcast link Lorca-<version>.md beside an archive as its
   // <sparkle:releaseNotesLink>; Sparkle renders the Markdown in the update window.
+  const keyFile = process.env.SPARKLE_KEY_FILE ? ["--ed-key-file", process.env.SPARKLE_KEY_FILE] : []
   const proc = Bun.spawn(
-    [tool, "--download-url-prefix", downloadURLPrefix, "--release-notes-url-prefix", downloadURLPrefix, updatesDir],
+    [tool, ...keyFile, "--download-url-prefix", downloadURLPrefix, "--release-notes-url-prefix", downloadURLPrefix, updatesDir],
     { stdout: "inherit", stderr: "inherit" },
   )
   // generate_appcast prints nothing while it builds a delta, a minute or so each for the CLI

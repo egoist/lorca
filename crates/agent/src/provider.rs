@@ -91,6 +91,11 @@ pub trait Provider: Send + Sync {
     fn model_info(&self) -> Option<&'static crate::models::ModelInfo> {
         None
     }
+    /// The adapter's default reply cap, when it sets one. Hosts that reserve usage must
+    /// distinguish this from the model's published maximum and preserve uncapped requests.
+    fn default_max_output_tokens(&self) -> Option<u64> {
+        None
+    }
     async fn stream(&self, request: ModelRequest, cancel: CancellationToken) -> AssistantEventStream;
 }
 

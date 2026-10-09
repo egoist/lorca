@@ -71,14 +71,14 @@ impl Callback {
     /// code from it. Every connection is served on its own, so a browser's idle preconnect never
     /// holds up the redirect.
     pub async fn wait(self, name: &str, timeout: Duration) -> Result<String, String> {
-        let port = self.port();
+        let origin = reqwest::Url::parse(&self.redirect_uri()).map_err(|_| "The callback URL does not read.")?.origin().ascii_serialization();
         let (listener, path) = (self.listener, self.path);
         let (landed, mut arrivals) = tokio::sync::mpsc::channel::<String>(1);
         let name = escape(name);
         let accepting = tokio::spawn(async move {
             loop {
                 let Ok((socket, _)) = listener.accept().await else { return };
-                tokio::spawn(serve(socket, port, path.clone(), name.clone(), landed.clone()));
+                tokio::spawn(serve(socket, origin.clone(), path.clone(), name.clone(), landed.clone()));
             }
         });
         let arrived = tokio::time::timeout(timeout, arrivals.recv()).await;
@@ -91,12 +91,12 @@ impl Callback {
     }
 }
 
-/// True for the redirect a Device's `Callback` listens on: plain http to 127.0.0.1 on a port of
+/// True for the redirect a Device's `Callback` listens on: plain http to a loopback host on a port of
 /// its own, at `/callback`, with no user, query, or fragment, so the code goes nowhere else.
 pub fn is_loopback_redirect(uri: &str) -> bool {
     let Ok(url) = reqwest::Url::parse(uri) else { return false };
     url.scheme() == "http"
-        && url.host_str() == Some("127.0.0.1")
+        && matches!(url.host_str(), Some("127.0.0.1" | "localhost"))
         && url.port().is_some()
         && url.username().is_empty()
         && url.password().is_none()
@@ -112,7 +112,7 @@ pub fn denied(callback: &str) -> bool {
 
 /// Serves one connection: the redirect to `expected`, or anything else the browser asks for (a
 /// favicon).
-async fn serve(mut socket: tokio::net::TcpStream, port: u16, expected: String, name: String, landed: tokio::sync::mpsc::Sender<String>) {
+async fn serve(mut socket: tokio::net::TcpStream, origin: String, expected: String, name: String, landed: tokio::sync::mpsc::Sender<String>) {
     let mut buffer = vec![0u8; 16 * 1024];
     let mut read = 0;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
@@ -137,7 +137,7 @@ async fn serve(mut socket: tokio::net::TcpStream, port: u16, expected: String, n
     let response = format!("HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
     let _ = socket.write_all(response.as_bytes()).await;
     let _ = socket.shutdown().await;
-    let _ = landed.send(format!("http://127.0.0.1:{port}{path}")).await;
+    let _ = landed.send(format!("{origin}{path}")).await;
 }
 
 fn escape(text: &str) -> String {
@@ -151,7 +151,15 @@ fn escape(text: &str) -> String {
 /// (`plugins.sign_in.cancel`). A Runner that signs in another way, with a device code on the
 /// card, answers with no page.
 pub async fn from_here(app: &Arc<App>, runner_id: &str, verb: &str, mut body: Value, plugin_id: &str, name: &str) -> Result<Value, String> {
-    let callback = Callback::bind().await?;
+    // A native client may register one fixed callback port (Slack). Bind it on the Device
+    // that opens the page, so the Runner still holds the tokens and needs no local browser.
+    let detail = crate::requests::ask(app, runner_id, "plugins.detail", json!({ "plugin_id": plugin_id })).await?;
+    let auth = detail["servers"].as_array().into_iter().flatten()
+        .find(|server| body["server"].as_str().is_none_or(|name| server["name"].as_str() == Some(name)) && server["auth"]["oauth"].as_bool() == Some(true))
+        .map(|server| &server["auth"]);
+    let port = auth.and_then(|auth| auth["callback_port"].as_u64()).and_then(|port| u16::try_from(port).ok());
+    let url = auth.and_then(|auth| auth["callback_url"].as_str()).filter(|url| is_loopback_redirect(url));
+    let callback = if port.is_some() || url.is_some() { Callback::bind_fixed(port, url).await? } else { Callback::bind().await? };
     body["redirect_uri"] = json!(callback.redirect_uri());
     let answer = crate::requests::ask_within(app, runner_id, verb, body, START_TIMEOUT).await?;
     let (Some(page), Some(id)) = (answer["url"].as_str().map(str::to_string), answer["sign_in"].as_str().map(str::to_string)) else { return Ok(answer) };
@@ -217,7 +225,7 @@ mod tests {
         let waiting = tokio::spawn(callback.wait("Docs", Duration::from_secs(5)));
         assert_eq!(reqwest::get(format!("http://127.0.0.1:{port}/callback?code=x")).await.unwrap().status(), 404, "only its own path is the redirect");
         assert_eq!(reqwest::get(format!("http://127.0.0.1:{port}/oauth/done?code=abc&state=s")).await.unwrap().status(), 200);
-        assert!(waiting.await.unwrap().unwrap().ends_with("/oauth/done?code=abc&state=s"));
+        assert_eq!(waiting.await.unwrap().unwrap(), format!("{redirect}?code=abc&state=s"), "the registered host and path survive the callback");
         // One written with its port is sent as written.
         let callback = Callback::bind_fixed(None, Some(&format!("http://127.0.0.1:{free}/cb"))).await.unwrap();
         assert_eq!(callback.redirect_uri(), format!("http://127.0.0.1:{free}/cb"));
@@ -237,12 +245,12 @@ mod tests {
         drop(idle);
 
         assert!(is_loopback_redirect(&redirect));
+        assert!(is_loopback_redirect("http://localhost:5555/callback"));
         for elsewhere in [
             "http://127.0.0.1:80@evil.example/callback",
             "http://user@127.0.0.1:5555/callback",
             "http://127.0.0.1.evil.example:5555/callback",
             "https://127.0.0.1:5555/callback",
-            "http://localhost:5555/callback",
             "http://127.0.0.1/callback",
             "http://127.0.0.1:5555/elsewhere",
             "http://127.0.0.1:5555/callback?next=https://evil.example",

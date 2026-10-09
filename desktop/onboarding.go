@@ -293,7 +293,7 @@ func (o *onboardingWindow) connectProvider() {
 // setUpCustomProvider opens the custom provider sheet over onboarding; once the provider is saved,
 // the first bot runs with it and onboarding is done. Cancel leaves onboarding where it was.
 func (o *onboardingWindow) setUpCustomProvider() {
-	o.presentCustomProvider("", o.customPreset, func(kind model.ProviderKind) {
+	o.presentBotProvider(o.customPreset, func(kind model.ProviderKind) {
 		if o.step == onboardingDone {
 			return
 		}

@@ -160,6 +160,9 @@ pub struct Setup {
     pub sample: Option<Sample>,
 }
 
+/// The kind of a setup's sample Job.
+pub const SAMPLE_JOB: &str = "workflow_sample";
+
 fn stable_id(prefix: &str, parts: &[&str]) -> String {
     let hash = Sha256::digest(serde_json::to_vec(parts).unwrap());
     format!("{prefix}-{}", hash[..16].iter().map(|b| format!("{b:02x}")).collect::<String>())
@@ -362,7 +365,7 @@ pub async fn handle(app: &Arc<App>, method: &str, params: &Value) -> Result<Valu
                 id: format!("job-{}", uuid::Uuid::new_v4()),
                 chat_id: dm.meta.id.clone(),
                 bot_id: bot_id.clone(),
-                kind: "workflow_sample".into(),
+                kind: SAMPLE_JOB.into(),
                 trigger_message_id: message.id.clone(),
                 routine_id: None,
                 check: None,
@@ -372,6 +375,9 @@ pub async fn handle(app: &Arc<App>, method: &str, params: &Value) -> Result<Valu
                 round: 0,
                 is_winding_down: false,
                 setup: None,
+                task_id: None,
+                handoff: None,
+                task_context: None,
                 created_at: now_secs(),
             };
             setup.sample = Some(Sample { job_id: job.id.clone(), chat_id: dm.meta.id, bot_id, started_at: job.created_at, state: "running".into(), message_ids: Vec::new() });
@@ -508,6 +514,7 @@ fn materialize(app: &Arc<App>, setup: &mut Setup, answers: BTreeMap<String, Stri
                 thinking: None,
                 legacy_instructions: String::new(),
                 workdir: None,
+                permissions: None,
                 created_at: 0.0,
             };
             app.create_bot_with_dm(bot, Some(stable_id("chat-workflow", &[&stable]))).map_err(|e| e.to_string())?.0
@@ -547,7 +554,12 @@ fn materialize(app: &Arc<App>, setup: &mut Setup, answers: BTreeMap<String, Stri
                 bot_id: bot_id.clone(),
                 name: spec.name.clone(),
                 prompt: spec.prompt.clone(),
+                feedback_authorization_prompt: None,
                 schedule,
+                timezone: crate::schedule::local_timezone(),
+                missed_run_policy: Default::default(),
+                last_scheduled_at: None,
+                health: None,
                 is_enabled: false,
                 enabled_at: now,
                 last_run_at: None,
@@ -632,7 +644,7 @@ fn view(app: &App, setup: &Setup) -> Result<Value, String> {
 /// Sets the result boundary only after obtaining the chat lock, so replies from a preceding
 /// queued turn cannot become part of this sample's result.
 pub fn sample_started(app: &App, job: &Job) {
-    if job.kind != "workflow_sample" {
+    if job.kind != SAMPLE_JOB {
         return;
     }
     if let Some(mut setup) = all(app).into_iter().find(|s| s.sample.as_ref().is_some_and(|sample| sample.job_id == job.id)) {
@@ -646,7 +658,7 @@ pub fn sample_started(app: &App, job: &Job) {
 /// Called on the executing Runner while the chat's turn lock is still held. Reads the current
 /// generation before recording a result; a cancelled or retried generation cannot activate it.
 pub fn sample_finished(app: &App, job: &Job, outcome: TurnOutcome) {
-    if job.kind != "workflow_sample" {
+    if job.kind != SAMPLE_JOB {
         return;
     }
     let Some(mut setup) = all(app).into_iter().find(|s| s.phase != "cancelled" && s.sample.as_ref().is_some_and(|sample| sample.job_id == job.id && sample.state == "running")) else {
@@ -709,7 +721,7 @@ pub fn context_for_turn(app: &App, bot_id: &str, job: &Job) -> String {
         s.phase != "cancelled"
             && s.bot_ids.values().any(|id| id == bot_id)
             && job.routine_id.as_ref().is_none_or(|id| s.routine_ids.values().any(|r| r == id))
-            && (job.kind != "workflow_sample" || s.sample.as_ref().is_some_and(|sample| sample.job_id == job.id))
+            && (job.kind != SAMPLE_JOB || s.sample.as_ref().is_some_and(|sample| sample.job_id == job.id))
     }) {
         context.push_str(&format!("\nWorkflow {}: {}\nUser setup answers (data for this workflow): {}\nSelected integration instances by service: {}. Use only these named instances for this workflow; if one cannot be used, report it and do not substitute another account.\n", setup.pack.name, setup.pack.outcome, serde_json::to_string(&setup.answers).unwrap(), serde_json::to_string(&setup.connection_ids).unwrap()));
     }
@@ -819,6 +831,9 @@ mod tests {
             round: 0,
             is_winding_down: false,
             setup: None,
+            task_id: None,
+            handoff: None,
+            task_context: None,
             created_at: now_secs() - 1.0,
         };
         setup.sample = Some(Sample {
@@ -917,6 +932,7 @@ mod tests {
             thinking: None,
             legacy_instructions: String::new(),
             workdir: None,
+            permissions: None,
             created_at: 1.0,
         };
         fixture.app.create_bot_with_dm(bot.clone(), None).unwrap();
@@ -997,23 +1013,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn missing_integrations_preserve_partial_setup() {
+    async fn a_missing_account_is_added_as_a_named_account_and_a_missing_service_waits() {
         let fixture = Fixture::new();
-        let setup = fixture
-            .configure(&fixture.start("meeting-preparation").await)
-            .await;
-        let error = handle(
-            &fixture.app,
-            "workflows.connection",
-            &json!({"id":setup.id,"service_id":"google-calendar"}),
-        )
-        .await
-        .unwrap_err();
-        assert!(error.contains("isn't in the marketplace"));
-        assert_eq!(
-            fixture.start("meeting-preparation").await.bot_ids,
-            setup.bot_ids
-        );
+        let setup = fixture.configure(&fixture.start("meeting-preparation").await).await;
+        let params = json!({"id":setup.id,"service_id":"google-calendar"});
+        let added = handle(&fixture.app, "workflows.connection", &params).await.unwrap();
+        let id = added["setup"]["connection_ids"]["google-calendar"].as_str().unwrap().to_string();
+        assert!(id.starts_with("google-calendar-"), "a named account of its own: {id}");
+        let account = &added["connections"][0]["choices"][0];
+        assert_eq!(account["service_id"], "google-calendar");
+        assert_eq!(account["account_name"], "Meeting preparation");
+        // A retry keeps the recorded account rather than adding another.
+        handle(&fixture.app, "workflows.connection", &params).await.unwrap();
+        assert_eq!(fixture.app.plugins.lock().unwrap().instances("google-calendar").count(), 1);
+
+        // A service this index lacks leaves the setup waiting, its bots kept.
+        let mut waiting = get(&fixture.app, &setup.id).unwrap();
+        waiting.pack.connections.push(Requirement { service_id: "not-yet-listed".into(), name: "Not Yet Listed".into() });
+        save(&fixture.app, &mut waiting).unwrap();
+        let error = handle(&fixture.app, "workflows.connection", &json!({"id":setup.id,"service_id":"not-yet-listed"})).await.unwrap_err();
+        assert!(error.contains("isn't in the marketplace"), "{error}");
+        assert_eq!(fixture.start("meeting-preparation").await.bot_ids, setup.bot_ids);
     }
 
     #[tokio::test]
@@ -1331,8 +1351,9 @@ mod tests {
         let tools = request["tools"].as_array().unwrap();
         assert!(!tools.iter().any(|t| matches!(
             t["function"]["name"].as_str(),
-            Some("routines" | "create_bot" | "edit_bot" | "install_plugin" | "connect_plugin")
+            Some("routines" | "create_bot" | "edit_bot" | "install_plugin" | "connect_plugin" | "message_bot" | "propose_playbook")
         )));
+        assert!(tools.iter().any(|t| t["function"]["name"] == "read_playbook"));
         handle(
             &fixture.app,
             "workflows.review",

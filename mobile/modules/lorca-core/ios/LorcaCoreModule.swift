@@ -1,11 +1,20 @@
 import ExpoModulesCore
+import QuickLook
 import Security
 
 /// The Rust core behind the phone: started once with the app's folder and the phone's facts,
 /// then one request at a time and a stream of events, the same JSON the desktop app speaks
 /// to the CLI over the local websocket.
 public class LorcaCoreModule: Module {
-  private var core: Core?
+  /// Written once by `start`, off the JS thread; read from the JS thread and the request queue.
+  private let lock = NSLock()
+  private var started: Core?
+  private var core: Core? {
+    get { lock.withLock { started } }
+    set { lock.withLock { started = newValue } }
+  }
+  /// `start` opens the account's database and loads it: off the JS thread, one at a time.
+  private let startQueue = DispatchQueue(label: "app.lorca.core.start", qos: .userInitiated)
 
   /// Events cross from the core's threads; sendEvent hops to the JS thread itself.
   private final class Listener: EventListener, @unchecked Sendable {
@@ -40,13 +49,15 @@ public class LorcaCoreModule: Module {
 
     Events("event")
 
-    Function("start") { (home: String, name: String, os: String, osVersion: String, model: String) throws in
+    // Off the JS thread, so the first frame does not wait for the account to load.
+    AsyncFunction("start") { (home: String, name: String, os: String, osVersion: String, model: String) throws in
       guard self.core == nil else { return }
       let listener = Listener()
       listener.module = self
       self.core = try Core.start(home: home, name: name, os: os, osVersion: osVersion, model: model, listener: listener)
       self.sharePushKey()
     }
+    .runOnQueue(startQueue)
 
     // Blocks until the core answers. On a concurrent queue, never the JS thread and never the
     // module's serial one: a request that waits (pair.accept, up to ten minutes) must not hold
@@ -60,7 +71,32 @@ public class LorcaCoreModule: Module {
     Function("wake") {
       self.core?.wake()
     }
+
+    // A file in Quick Look over the app: images, PDFs, text, recordings, and more, with the
+    // system's own share button.
+    AsyncFunction("previewFile") { (path: String) in
+      guard let presenter = self.appContext?.utilities?.currentViewController() else { return }
+      presenter.present(FilePreviewController(url: URL(fileURLWithPath: path)), animated: true)
+    }
+    .runOnQueue(.main)
   }
+}
+
+/// Quick Look on one file. The controller is its own data source, which it holds only weakly.
+private final class FilePreviewController: QLPreviewController, QLPreviewControllerDataSource {
+  private let url: URL
+
+  init(url: URL) {
+    self.url = url
+    super.init(nibName: nil, bundle: nil)
+    dataSource = self
+  }
+
+  @available(*, unavailable)
+  required init?(coder: NSCoder) { fatalError() }
+
+  func numberOfPreviewItems(in controller: QLPreviewController) -> Int { 1 }
+  func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> QLPreviewItem { url as NSURL }
 }
 
 final class NotStartedException: Exception {

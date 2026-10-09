@@ -493,7 +493,7 @@ func (mk *marketplace) workflowAccountRow(c *ui.Context, k *card, wp *workflowPa
 		switch account.State {
 		case model.PluginReady:
 			o.State = L("Connected")
-		case model.PluginNeedsAuth:
+		case model.PluginNeedsAuth, model.PluginInsufficientAccess:
 			o.ActionTitle = L("Sign In")
 		case model.PluginNeedsSetup:
 			o.ActionTitle = L("Set Up")
@@ -507,7 +507,7 @@ func (mk *marketplace) workflowAccountRow(c *ui.Context, k *card, wp *workflowPa
 	switch {
 	case (result.Clicked || result.Action) && account != nil:
 		if on := mk.runner(); on != nil {
-			mk.w.presentPlugin(account.ID, on)
+			mk.w.presentPlugin(account.ID, on, "", "")
 		}
 	case result.Action:
 		mk.addWorkflowAccount(wp, connection)

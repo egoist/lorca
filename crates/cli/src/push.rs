@@ -89,8 +89,26 @@ pub fn permission(app: &Arc<App>, message: &Message) {
     send(app, &chat, &bot, &format!("Confirmation needed: {summary}"), Some(message.id.clone()));
 }
 
+/// A structured coordinator brief or urgent specialist escalation, each with its own
+/// synced preference. Quiet updates never reach the push transport.
+pub fn attention(app: &Arc<App>, message: &Message) {
+    let Some(notification) = message.notification else { return };
+    if !crate::attention::allows(app, notification) { return }
+    let Author::Bot { bot_id } = &message.author else { return };
+    let (Some(chat), Some(bot)) = (app.chat(&message.chat_id), app.bot(bot_id)) else { return };
+    let crate::model::Body::Text { text, .. } = &message.body else { return };
+    send_inner(app, &chat, &bot, text, None, Some(message.id.clone()));
+}
+
 fn send(app: &Arc<App>, chat: &Chat, bot: &Bot, text: &str, permission_id: Option<String>) {
-    if !should_notify(app, &chat.meta.id, permission_id.as_deref()) {
+    send_inner(app, chat, bot, text, permission_id, None);
+}
+
+fn send_inner(app: &Arc<App>, chat: &Chat, bot: &Bot, text: &str, permission_id: Option<String>, attention_id: Option<String>) {
+    let eligible = |app: &App| should_notify(app, &chat.meta.id, permission_id.as_deref()) && attention_id.as_deref().is_none_or(|id| {
+        app.message(&chat.meta.id, id).and_then(|message| message.notification).is_some_and(|kind| crate::attention::allows(app, kind))
+    });
+    if !eligible(app) {
         return;
     }
     let (Some(dek), Some(url), Some(machine)) = (app.dek(), app.relay_url(), app.machine_file().and_then(|m| m.machine().ok())) else { return };
@@ -111,20 +129,24 @@ fn send(app: &Arc<App>, chat: &Chat, bot: &Bot, text: &str, permission_id: Optio
         }
     }
     let app = app.clone();
+    let chat_id = chat.meta.id.clone();
     tokio::spawn(async move {
+        let eligible = |app: &App| should_notify(app, &chat_id, permission_id.as_deref()) && attention_id.as_deref().is_none_or(|id| {
+            app.message(&chat_id, id).and_then(|message| message.notification).is_some_and(|kind| crate::attention::allows(app, kind))
+        });
         tokio::time::sleep(READ_GRACE).await;
         let give_up = tokio::time::Instant::now() + RETRY_FOR;
         let mut wait = FIRST_RETRY;
         loop {
             // A read mark is about a reply that arrived, so a phone left open or disconnected
             // before the reply finished cannot suppress future notifications.
-            if app.dek() != Some(dek) || !should_notify(&app, &notice.chat_id, permission_id.as_deref()) {
+            if app.dek() != Some(dek) || !eligible(&app) {
                 return;
             }
             let result = match crate::sync::token_or_register(&app, &url, &machine).await {
                 Ok(token) => {
                     // Authentication may have taken longer than the read mark.
-                    if app.dek() != Some(dek) || !should_notify(&app, &notice.chat_id, permission_id.as_deref()) {
+                    if app.dek() != Some(dek) || !eligible(&app) {
                         return;
                     }
                     app.relay.push(&url, &token, &crate::keys::b64(&sealed)).await
@@ -166,6 +188,52 @@ fn should_notify(app: &App, chat_id: &str, permission_id: Option<&str>) -> bool 
 mod tests {
     use super::*;
 
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn attention_pushes_honor_preferences_and_recheck_during_the_read_grace() {
+        use axum::{routing::post, Json, Router};
+        use crate::model::*;
+        use crate::attention::Notification;
+        let (sent, mut pushes) = tokio::sync::mpsc::unbounded_channel();
+        let server = Router::new()
+            .route("/v1/auth/challenge", post(|| async { Json(serde_json::json!({"nonce":"test"})) }))
+            .route("/v1/auth/verify", post(|| async { Json(serde_json::json!({"token":"test"})) }))
+            .route("/v1/push", post(move |Json(body): Json<serde_json::Value>| {
+                let sent = sent.clone();
+                async move { sent.send(body).unwrap(); Json(serde_json::json!({"queued":1})) }
+            }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, server).await.unwrap() });
+        let dek = crate::keys::random_32();
+        let (app, bot, home) = runner(&url, &dek);
+        let chat = Chat {
+            meta: ChatMeta { id: "attention-chat".into(), kind: "dm".into(), title: None,
+                bot_ids: vec![bot.id.clone()], owner_bot_id: None, description: None,
+                is_pinned: false, created_at: 1.0 },
+            unread_count: 0, usage: None, compactions: vec![],
+        };
+        app.state.lock().unwrap().chats.push(chat.clone());
+        crate::attention::dispatch(&app, "attention.preferences", serde_json::json!({"summaries":false}), None).unwrap();
+        for (body, notification) in [("Summary", Notification::Summary), ("Urgent", Notification::Urgent), ("Quiet", Notification::Quiet)] {
+            let mut message = Message::new(&chat.meta.id, Author::Bot { bot_id: bot.id.clone() }, Body::text(body));
+            message.notification = Some(notification);
+            app.upsert_message(message.clone(), false);
+            attention(&app, &message);
+        }
+        let pushed = tokio::time::timeout(READ_GRACE + Duration::from_secs(2), pushes.recv()).await.unwrap().unwrap();
+        assert_eq!(open(&dek, &crate::keys::unb64(pushed["ciphertext"].as_str().unwrap()).unwrap()).unwrap().body, "Urgent");
+        assert!(tokio::time::timeout(Duration::from_millis(150), pushes.recv()).await.is_err());
+        crate::attention::dispatch(&app, "attention.preferences", serde_json::json!({"summaries":true}), None).unwrap();
+        let mut message = Message::new(&chat.meta.id, Author::Bot { bot_id: bot.id }, Body::text("New summary"));
+        message.notification = Some(Notification::Summary);
+        app.upsert_message(message.clone(), false);
+        attention(&app, &message);
+        crate::attention::dispatch(&app, "attention.preferences", serde_json::json!({"summaries":false}), None).unwrap();
+        assert!(tokio::time::timeout(READ_GRACE + Duration::from_millis(200), pushes.recv()).await.is_err(), "preferences changing before delivery cancel the alert");
+        server.abort(); drop(app); let _ = std::fs::remove_dir_all(home);
+    }
+
     #[test]
     fn a_notice_round_trips_and_binds_the_key() {
         let dek = crate::keys::random_32();
@@ -204,7 +272,7 @@ mod tests {
         let bot = Bot {
             id: "bot".into(), name: "Chef".into(), description: String::new(), symbol_name: "sparkles".into(),
             accent: "indigo".into(), avatar: None, runner_id: "runner".into(), provider: "deepseek".into(),
-            model: None, thinking: None, legacy_instructions: String::new(), workdir: None, created_at: 1.0,
+            model: None, thinking: None, legacy_instructions: String::new(), workdir: None, permissions: None, created_at: 1.0,
         };
         app.state.lock().unwrap().bots.push(bot.clone());
         (app, bot, home)

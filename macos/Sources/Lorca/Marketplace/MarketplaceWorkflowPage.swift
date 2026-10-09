@@ -408,7 +408,7 @@ final class MarketplaceWorkflowPage: MarketplacePage {
                 state = L("Not available")
                 detail = L("%@ isn't in the marketplace yet. This setup waits for it.", connection.name)
             case .ready?: state = L("Connected")
-            case .needsAuth?: action = L("Sign In")
+            case .needsAuth?, .insufficientAccess?: action = L("Sign In")
             case .needsSetup?: action = L("Set Up")
             case .connecting?: state = L("Connecting…")
             case .error?, .unknown?:

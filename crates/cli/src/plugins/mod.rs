@@ -12,6 +12,9 @@ pub mod mcp_json;
 #[cfg(feature = "runner")]
 pub mod review;
 pub mod sign_in;
+pub mod accounts;
+#[cfg(feature = "runner")]
+mod oauth;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -52,6 +55,9 @@ pub struct Manifest {
     /// Search words for the marketplace.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+    /// Each install is a separately named account with its own stable id and sign-in.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub named_accounts: bool,
     #[serde(default)]
     pub servers: BTreeMap<String, ServerSpec>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -136,6 +142,12 @@ pub enum AuthSpec {
         device_authorization_endpoint: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         token_endpoint: Option<String>,
+        /// A service's native OAuth endpoint. Uses PKCE without MCP's resource indicator.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        authorization_endpoint: Option<String>,
+        /// Service consent options, e.g. Google's offline access and account picker.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        authorization_params: BTreeMap<String, String>,
         /// Sign in only once the server asks for it, with a 401 and its challenge: an `mcp.json`
         /// server says nothing about how it signs in, and many need no sign-in at all.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -187,6 +199,9 @@ pub struct ToolHints {
     /// Run without asking.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub readonly: Vec<String>,
+    /// Tools that stage drafts without sending or publishing them. Still cross Auto-review.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub draft: Vec<String>,
     /// Never offered to the bot.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hide: Vec<String>,
@@ -205,7 +220,7 @@ pub struct ToolRule {
 
 impl ToolHints {
     fn is_empty(&self) -> bool {
-        self.readonly.is_empty() && self.hide.is_empty() && self.exposure.is_empty()
+        self.readonly.is_empty() && self.draft.is_empty() && self.hide.is_empty() && self.exposure.is_empty()
     }
 
     /// Whether `tool` is kept from bots: by its `exposure` rule (its exact name first, then the
@@ -255,6 +270,20 @@ impl Manifest {
                     return Err(format!("Server {name} has no http(s) URL."))
                 }
                 _ => {}
+            }
+            if let ServerSpec::Http { auth: Some(AuthSpec::Oauth { authorization_params, authorization_endpoint, token_endpoint, .. }), .. } = server {
+                for key in authorization_params.keys() {
+                    if matches!(key.as_str(), "state" | "code_challenge" | "code_challenge_method" | "client_id" | "redirect_uri" | "response_type" | "scope" | "resource") {
+                        return Err(format!("Server {name} cannot override OAuth parameter {key}."));
+                    }
+                }
+                if authorization_endpoint.is_some() && token_endpoint.is_none() {
+                    return Err(format!("Server {name} needs a token_endpoint with its authorization_endpoint."));
+                }
+                for endpoint in [authorization_endpoint, token_endpoint].into_iter().flatten() {
+                    let valid = reqwest::Url::parse(endpoint).is_ok_and(|url| url.scheme() == "https" || (url.scheme() == "http" && matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "[::1]"))));
+                    if !valid { return Err(format!("Server {name} needs an HTTPS OAuth endpoint.")); }
+                }
             }
         }
         Ok(())
@@ -352,6 +381,24 @@ pub struct Installed {
     /// The plain variables. Secret ones live in `secrets.json`.
     #[serde(default)]
     pub variables: BTreeMap<String, String>,
+    /// The marketplace service of a named account; its manifest id is the instance id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_name: Option<String>,
+}
+
+impl Installed {
+    pub fn service_id(&self) -> &str {
+        self.service_id.as_deref().unwrap_or(&self.manifest.id)
+    }
+
+    pub fn display_name(&self) -> String {
+        match &self.account_name {
+            Some(account) => format!("{} · {account}", self.manifest.name),
+            None => self.manifest.name.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -417,6 +464,11 @@ impl Store {
         self.installed.iter().find(|p| p.manifest.id == id)
     }
 
+    /// The installed instances that meet a marketplace service requirement on this Runner.
+    pub fn instances<'a>(&'a self, service_id: &'a str) -> impl Iterator<Item = &'a Installed> + 'a {
+        self.installed.iter().filter(move |plugin| plugin.service_id() == service_id && plugin.source != mcp_json::SOURCE)
+    }
+
     /// Every value a server template may use: plain variables and secret ones.
     pub fn values(&self, id: &str) -> BTreeMap<String, String> {
         let mut values: BTreeMap<String, String> = self.get(id).map(|p| p.variables.clone()).unwrap_or_default();
@@ -432,6 +484,13 @@ impl Store {
 
     pub fn secret(&self, id: &str, key: &str) -> Option<Value> {
         self.secrets.get(id).and_then(|s| s.get(key)).cloned()
+    }
+
+    /// A review binds to the installed connection and its sign-in without carrying a secret
+    /// to another Device. Rotating or replacing credentials conservatively requires review.
+    pub fn review_fingerprint(&self, id: &str) -> Result<String, String> {
+        let plugin = self.get(id).ok_or("The reviewed connection was removed.")?;
+        Ok(crate::review_queue::fingerprint(&serde_json::json!({ "format": 1, "installed": plugin, "secrets": self.secrets.get(id) })))
     }
 
     /// A remote server's saved sign-in (`oauth`) or the challenge it answered with (`challenge`),
@@ -501,22 +560,24 @@ impl Store {
             (state.clone(), detail.clone())
         } else if !missing.is_empty() {
             ("needs_setup".to_string(), format!("Needs {}", missing.join(", ")))
+        } else if manifest.servers.keys().any(|server| self.secret(&manifest.id, &format!("scope:{server}")).is_some() && self.sign_in_secret(&manifest.id, "oauth", server).is_none()) {
+            ("insufficient_access".to_string(), "Sign in again to grant the required access".to_string())
         } else if let Some(server) = manifest.servers.iter().find(|(name, spec)| self.needs_sign_in(&manifest.id, name, spec, &values)).map(|(n, _)| n) {
             ("needs_auth".to_string(), if manifest.servers.len() > 1 { format!("Sign in to {server}") } else { "Sign in".to_string() })
         } else {
-            ("ready".to_string(), "Ready".to_string())
+            ("ready".to_string(), if plugin.account_name.is_some() { "Connected".to_string() } else { "Ready".to_string() })
         };
         PluginStatus {
-            service_id: None,
-            account_name: None,
             id: manifest.id.clone(),
-            name: manifest.name.clone(),
+            name: plugin.display_name(),
             description: manifest.description.clone(),
             version: manifest.version.clone(),
             icon: manifest.icon.clone(),
             state,
             detail,
             source: (plugin.source == mcp_json::SOURCE).then(|| plugin.source.clone()),
+            service_id: plugin.service_id.clone(),
+            account_name: plugin.account_name.clone(),
         }
     }
 
@@ -527,7 +588,12 @@ impl Store {
             ServerSpec::Http { auth: Some(AuthSpec::Oauth { token_variable, optional, .. }), .. } => {
                 let pasted = token_variable.as_ref().map(|v| values.contains_key(v)).unwrap_or(false);
                 let asked = !*optional || self.sign_in_secret(id, "challenge", server).is_some();
-                !pasted && asked && self.sign_in_secret(id, "oauth", server).is_none()
+                let tokens = self.sign_in_secret(id, "oauth", server);
+                let expired = tokens.as_ref().is_some_and(|saved| {
+                    let expiry = saved["signed_in_at"].as_f64().zip(saved["tokens"]["expires_in"].as_f64());
+                    expiry.is_some_and(|(received, seconds)| received + seconds <= now_secs()) && saved["tokens"]["refresh_token"].as_str().is_none_or(str::is_empty)
+                });
+                !pasted && asked && (tokens.is_none() || expired)
             }
             _ => false,
         }
@@ -564,6 +630,13 @@ impl Store {
 
 /// Installs or updates a plugin on this Runner and writes its skills to its folder.
 pub fn install(app: &Arc<App>, manifest: Manifest, source: &str) -> Result<PluginStatus, String> {
+    if manifest.named_accounts {
+        return accounts::install(app, manifest, source, None);
+    }
+    install_instance(app, manifest, source, None, None)
+}
+
+pub(crate) fn install_instance(app: &Arc<App>, manifest: Manifest, source: &str, service_id: Option<String>, account_name: Option<String>) -> Result<PluginStatus, String> {
     manifest.check()?;
     if let Some(server) = app.plugins.lock().unwrap().get(&manifest.id).filter(|plugin| plugin.source == mcp_json::SOURCE) {
         return Err(format!("The MCP server {} in mcp.json has the id {}. Rename it there first.", server.manifest.name, manifest.id));
@@ -577,12 +650,17 @@ pub fn install(app: &Arc<App>, manifest: Manifest, source: &str) -> Result<Plugi
     }
     let status = {
         let mut store = app.plugins.lock().unwrap();
+        if let (Some(service), Some(account)) = (&service_id, &account_name) {
+            accounts::check_unique(&store, service, &manifest.name, account, None)?;
+        }
+        #[cfg(feature = "runner")]
+        app.mcp.forget(&manifest.id);
         match store.installed.iter_mut().find(|p| p.manifest.id == manifest.id) {
             Some(existing) => {
                 existing.manifest = manifest.clone();
                 existing.source = source.to_string();
             }
-            None => store.installed.push(Installed { manifest: manifest.clone(), source: source.to_string(), installed_at: now_secs(), variables: BTreeMap::new() }),
+            None => store.installed.push(Installed { manifest: manifest.clone(), source: source.to_string(), installed_at: now_secs(), variables: BTreeMap::new(), service_id, account_name }),
         }
         store.notes.remove(&manifest.id);
         store.save(&app.config).map_err(|e| e.to_string())?;
@@ -590,7 +668,6 @@ pub fn install(app: &Arc<App>, manifest: Manifest, source: &str) -> Result<Plugi
     };
     #[cfg(feature = "runner")]
     {
-        app.mcp.forget(&manifest.id);
         mcp::prefetch_tools(app, &manifest.id);
     }
     announce(app);
@@ -610,6 +687,8 @@ pub fn uninstall(app: &Arc<App>, id: &str) -> Result<(), String> {
     {
         let mut store = app.plugins.lock().unwrap();
         let before = store.installed.len();
+        #[cfg(feature = "runner")]
+        app.mcp.forget(id);
         store.installed.retain(|p| p.manifest.id != id);
         if store.installed.len() == before {
             return Err("Unknown plugin".into());
@@ -618,8 +697,11 @@ pub fn uninstall(app: &Arc<App>, id: &str) -> Result<(), String> {
         store.notes.remove(id);
         store.save(&app.config).map_err(|e| e.to_string())?;
     }
+    // The bots' browser profiles stay, closed, for when Browser is back.
     #[cfg(feature = "runner")]
-    app.mcp.forget(id);
+    if id == crate::browser::PLUGIN_ID {
+        app.browser_sessions.close_all(app);
+    }
     let dir = app.config.plugins_dir().join(id);
     if dir.is_dir() {
         let _ = std::fs::remove_dir_all(&dir);
@@ -641,6 +723,8 @@ pub fn set_variables(app: &Arc<App>, id: &str, variables: &BTreeMap<String, Stri
     let status = {
         let mut store = app.plugins.lock().unwrap();
         let manifest = store.get(id).map(|p| p.manifest.clone()).ok_or("Unknown plugin")?;
+        #[cfg(feature = "runner")]
+        app.mcp.forget(id);
         for (name, value) in variables {
             let secret = manifest.variables.iter().find(|v| &v.name == name).map(|v| v.secret).unwrap_or(true);
             let value = value.trim();
@@ -663,7 +747,6 @@ pub fn set_variables(app: &Arc<App>, id: &str, variables: &BTreeMap<String, Stri
     };
     #[cfg(feature = "runner")]
     {
-        app.mcp.forget(id);
         mcp::prefetch_tools(app, id);
     }
     announce(app);
@@ -677,6 +760,8 @@ pub fn set_variables(app: &Arc<App>, id: &str, variables: &BTreeMap<String, Stri
 pub fn sign_out(app: &Arc<App>, id: &str, server: Option<&str>) -> Result<Option<PluginStatus>, String> {
     let status = {
         let mut store = app.plugins.lock().unwrap();
+        #[cfg(feature = "runner")]
+        app.mcp.forget(id);
         let servers: Vec<String> = match store.get(id) {
             Some(plugin) => plugin
                 .manifest
@@ -695,18 +780,32 @@ pub fn sign_out(app: &Arc<App>, id: &str, server: Option<&str>) -> Result<Option
         store.save(&app.config).map_err(|e| e.to_string())?;
         store.status(id)
     };
-    #[cfg(feature = "runner")]
-    app.mcp.forget(id);
     announce(app);
     Ok(status)
 }
 
 /// Keeps OAuth tokens for a server, or drops them.
 pub fn set_oauth(app: &Arc<App>, id: &str, server: &str, tokens: Option<Value>) -> Result<(), String> {
+    save_oauth(app, id, server, tokens, None)
+}
+
+#[cfg(feature = "runner")]
+pub(super) fn set_oauth_at_generation(app: &Arc<App>, id: &str, server: &str, tokens: Value, generation: u64) -> Result<(), String> {
+    save_oauth(app, id, server, Some(tokens), Some(generation))
+}
+
+fn save_oauth(app: &Arc<App>, id: &str, server: &str, tokens: Option<Value>, generation: Option<u64>) -> Result<(), String> {
     let mut store = app.plugins.lock().unwrap();
+    #[cfg(feature = "runner")]
+    if generation.is_some_and(|generation| app.mcp.generation(id) != generation) {
+        return Err("The account changed while authorizing. Start the sign-in again.".into());
+    }
+    #[cfg(not(feature = "runner"))]
+    let _ = generation;
     if store.get(id).is_none() {
         return Err("Unknown plugin".into());
     }
+    if tokens.is_some() { store.set_secret(id, &format!("scope:{server}"), None); }
     let tokens = tokens.map(|tokens| store.stamped(id, server, tokens));
     store.set_secret(id, &format!("oauth:{server}"), tokens);
     store.notes.remove(id);
@@ -767,6 +866,8 @@ pub fn detail(app: &Arc<App>, id: &str) -> Result<Value, String> {
                             "signed_in": oauth && !store.needs_sign_in(id, name, spec, &values),
                             "code": waiting.map(|code| &code.code),
                             "link": waiting.map(|code| &code.link),
+                            "callback_port": match auth { Some(AuthSpec::Oauth { callback_port, .. }) => *callback_port, _ => None },
+                            "callback_url": match auth { Some(AuthSpec::Oauth { callback_url, .. }) => callback_url.as_deref(), _ => None },
                         }),
                     )
                 }
@@ -778,6 +879,8 @@ pub fn detail(app: &Arc<App>, id: &str) -> Result<Value, String> {
         "manifest": plugin.manifest,
         "source": plugin.source,
         "installed_at": plugin.installed_at,
+        "service_id": plugin.service_id,
+        "account_name": plugin.account_name,
         "status": status,
         "variables": plugin.manifest.variables.iter().map(|v| json!({
             "name": v.name, "description": v.description, "secret": v.secret, "required": v.required,
@@ -799,10 +902,14 @@ pub fn refresh_installed(app: &Arc<App>, manifests: &[Manifest]) -> Vec<String> 
     {
         let mut store = app.plugins.lock().unwrap();
         for plugin in store.installed.iter_mut().filter(|p| p.source == "marketplace") {
-            let Some(fresh) = manifests.iter().find(|m| m.id == plugin.manifest.id) else { continue };
-            if *fresh != plugin.manifest {
-                plugin.manifest = fresh.clone();
-                updated.push(fresh.id.clone());
+            let Some(fresh) = manifests.iter().find(|m| m.id == plugin.service_id()) else { continue };
+            let mut fresh = fresh.clone();
+            fresh.id.clone_from(&plugin.manifest.id);
+            if fresh != plugin.manifest {
+                #[cfg(feature = "runner")]
+                app.mcp.forget(&plugin.manifest.id);
+                plugin.manifest = fresh;
+                updated.push(plugin.manifest.id.clone());
             }
         }
         if updated.is_empty() {
@@ -816,10 +923,9 @@ pub fn refresh_installed(app: &Arc<App>, manifests: &[Manifest]) -> Vec<String> 
         }
     }
     for id in &updated {
-        #[cfg(feature = "runner")]
-        app.mcp.forget(id);
         let skills = app.config.plugins_dir().join(id).join("skills");
-        if let Some(manifest) = manifests.iter().find(|m| &m.id == id) {
+        let manifest = app.plugins.lock().unwrap().get(id).map(|plugin| plugin.manifest.clone());
+        if let Some(manifest) = manifest {
             let _ = std::fs::create_dir_all(&skills);
             for skill in &manifest.skills {
                 let _ = std::fs::write(skills.join(format!("{}.md", slug(&skill.name))), skill.content.as_bytes());
@@ -855,6 +961,9 @@ pub async fn on_runner(app: &Arc<App>, runner_id: &str, verb: &str, body: Value)
 /// Device `requested_by`.
 #[cfg(feature = "runner")]
 pub async fn serve_request(app: &Arc<App>, verb: &str, body: &Value, requested_by: Option<&str>) -> Result<Value, String> {
+    if let Some(redirect) = body.get("redirect_uri").filter(|redirect| !redirect.is_null()) {
+        if !redirect.as_str().is_some_and(sign_in::is_loopback_redirect) { return Err("The sign-in redirect must be this Device's loopback callback.".into()); }
+    }
     let plugin_id = || body["plugin_id"].as_str().map(str::to_string).ok_or_else(|| "missing plugin_id".to_string());
     // A Device that listens on its own loopback for the browser's redirect opens the sign-in
     // page itself (`sign_in::from_here`).
@@ -867,8 +976,10 @@ pub async fn serve_request(app: &Arc<App>, verb: &str, body: &Value, requested_b
         "plugins.install" => {
             let manifest = Manifest::parse(&body["manifest"])?;
             let source = body["source"].as_str().unwrap_or("inline");
-            Ok(json!(install(app, manifest, source)?))
+            let status = if manifest.named_accounts { accounts::install(app, manifest, source, body["account_name"].as_str())? } else { install(app, manifest, source)? };
+            Ok(json!(status))
         }
+        "plugins.rename" => Ok(json!(accounts::rename(app, &plugin_id()?, body["account_name"].as_str().ok_or("missing account_name")?)?)),
         "plugins.uninstall" => {
             uninstall(app, &plugin_id()?)?;
             Ok(Value::Null)
@@ -907,15 +1018,39 @@ pub async fn serve_request(app: &Arc<App>, verb: &str, body: &Value, requested_b
         }
         "plugins.sign_in.cancel" => mcp::cancel_sign_in(app, &plugin_id()?, body["sign_in"].as_str().ok_or("missing sign_in")?),
         "plugins.detail" => detail(app, &plugin_id()?),
+        // What the Access sheet offers: each installed plugin by name, with the tools it offered
+        // when it last connected and what each does, read, draft, or write.
+        "permissions.catalog" => {
+            let installed = app.plugins.lock().unwrap().installed().to_vec();
+            let statuses = app.plugins.lock().unwrap().statuses();
+            Ok(json!(installed.iter().map(|plugin| json!({
+                "id": plugin.manifest.id,
+                "name": statuses.iter().find(|status| status.id == plugin.manifest.id).map(|status| &status.name).unwrap_or(&plugin.manifest.name),
+                "tools": mcp::saved_tools(app, plugin).into_iter().filter(|tool| tool["hidden"] != true).collect::<Vec<_>>(),
+            })).collect::<Vec<_>>()))
+        }
         "plugins.sign_out" => Ok(json!(sign_out(app, &plugin_id()?, body["server"].as_str())?)),
         "permission.answer" => {
             let message_id = body["message_id"].as_str().ok_or("missing message_id")?;
             let decision = body["decision"].as_str().and_then(mcp::Decision::parse).ok_or("decision is allow, always, or deny")?;
+            let chat_id = body["chat_id"].as_str().ok_or("missing chat_id")?;
+            // An access request is only ever dismissed: access changes in the bot's Access sheet.
+            if let Some(mut message) = app.message(chat_id, message_id) {
+                if let crate::model::Body::Permission { tool, decision: current, .. } = &mut message.body {
+                    if tool == "access" {
+                        if decision != mcp::Decision::Denied {
+                            return Err("Change this bot's Access settings in its profile. An access request cannot grant permissions or add an Always allow rule.".into());
+                        }
+                        *current = "dismissed".into();
+                        app.upsert_message(message, true);
+                        return Ok(json!({ "answered": true }));
+                    }
+                }
+            }
             if mcp::answer(app, message_id, decision) {
                 return Ok(json!({ "answered": true }));
             }
             // Not a waiting tool: a sign-in card, answered by starting the flow.
-            let chat_id = body["chat_id"].as_str().ok_or("missing chat_id")?;
             mcp::answer_sign_in(app, chat_id, message_id, decision, elsewhere()).await
         }
         other => Err(format!("Unknown request {other}")),
@@ -1006,7 +1141,7 @@ mod tests {
         let app = &scratch.0;
         let mut old = crate::marketplace::bundled().plugins.into_iter().find(|m| m.id == "github").unwrap();
         // As installed before the device flow existed: a bare OAuth entry.
-        old.servers.insert("github".into(), ServerSpec::Http { url: "https://api.githubcopilot.com/mcp/".into(), headers: BTreeMap::new(), auth: Some(AuthSpec::Oauth { scopes: vec![], token_variable: Some("GITHUB_TOKEN".into()), client_id_variable: None, client_secret_variable: None, client_id: None, client_secret: None, device_authorization_endpoint: None, token_endpoint: None, optional: false, client_name: None, callback_port: None, callback_url: None, auth_server_metadata_url: None }), timeout: None });
+        old.servers.insert("github".into(), ServerSpec::Http { url: "https://api.githubcopilot.com/mcp/".into(), headers: BTreeMap::new(), auth: Some(AuthSpec::Oauth { scopes: vec![], token_variable: Some("GITHUB_TOKEN".into()), client_id_variable: None, client_secret_variable: None, client_id: None, client_secret: None, device_authorization_endpoint: None, token_endpoint: None, authorization_endpoint: None, authorization_params: BTreeMap::new(), optional: false, client_name: None, callback_port: None, callback_url: None, auth_server_metadata_url: None }), timeout: None });
         install(app, old, "marketplace").unwrap();
         let mut vars = BTreeMap::new();
         vars.insert("GITHUB_TOKEN".to_string(), "ghp-secret".to_string());

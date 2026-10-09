@@ -77,3 +77,37 @@ func TestTranscriptScrollsSteadilyToEnd(t *testing.T) {
 		}
 	}
 }
+
+// A handoff's report comes back to the requesting bot's chat as the "Message from" marker, in its
+// DM and in a group the recipient is not in, and a click shows the whole report.
+func TestHandoffReportReadsAsMessageFrom(t *testing.T) {
+	m := demoWindow(t)
+	m.selectChat("chat-nova")
+	tt := ui.NewTester(m.frame(m.view), 1180, 760)
+	settle(tt)
+	report := "Draft saved to `launch/announcement.md`. It leads with what people can do and stays under 60 words."
+	spoken := L("Message from") + " Writer: " + report
+	if _, ok := tt.Find(spoken); !ok || !tt.HasText(L("Messaged")) {
+		t.Fatalf("no report marker in %q", tt.Texts())
+	}
+	renderBoth(t, tt, "handoff-report")
+	if err := tt.Click(spoken); err != nil {
+		t.Fatal(err)
+	}
+	renderBoth(t, tt, "handoff-report-popover")
+	tt.Key(0, ui.KeyEscape)
+
+	store.Append(&model.Message{ID: "report-job-1", Author: model.BotAuthor("bot-quill"),
+		Body:      model.Body{Kind: model.BodyHandoff, Handoff: model.Handoff{From: "bot-quill", To: "bot-nova", Reason: "Ended the turn without a reply."}},
+		State:     model.MessageState{Kind: model.StateComplete},
+		CreatedAt: time.Now()}, "chat-relay")
+	m.selectChat("chat-relay")
+	settle(tt)
+	if _, ok := tt.Find(L("Message from") + " Writer: Ended the turn without a reply."); !ok {
+		t.Fatalf("a report in a group reads otherwise: %q", tt.Texts())
+	}
+	if tt.HasText(L("%@ handed off to %@", "Writer", "Project Manager")) {
+		t.Fatal("a report in a group reads as a handoff between members")
+	}
+	renderBoth(t, tt, "handoff-report-group")
+}

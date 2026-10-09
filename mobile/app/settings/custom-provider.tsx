@@ -1,13 +1,14 @@
 // A custom provider, slid in from Settings inside the same sheet: any server that speaks
-// OpenAI's or Anthropic's API, such as a gateway or a model server on the user's network. With a
-// `preset` the form starts from a server people often add; with a provider's `kind` it edits that
-// one; with neither it starts empty. The core lists the server's models as the URL and the key
-// change, and reaches the server again before it saves; the provider joins the account's
-// encrypted credentials, which every paired Device shares.
+// OpenAI's or Anthropic's API, such as a gateway or a model server on the user's network, or a
+// decision API whose models Auto-review runs. With a `preset` the form starts from a server
+// people often add; with a provider's `kind` it edits that one; with neither it starts empty. The
+// core lists the server's models as the URL and the key change, and reaches the server again
+// before it saves; the provider joins the account's encrypted credentials, which every paired
+// Device shares.
 
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from "react-native";
 import { engine } from "../../src/core/engine";
 import {
   CUSTOM_APIS,
@@ -32,6 +33,7 @@ import { t, useLanguage } from "../../src/i18n";
 import { FieldRow, Row, Section } from "../../src/ui/forms";
 import { chooseDefaultModel, setModelListing, startModelDraft, takeModelListing, useModelDraft } from "../../src/ui/modelDraft";
 import { usePalette } from "../../src/ui/theme";
+import { alert } from "../../src/ui/alert";
 
 /// How long the form waits after the URL, protocol, or key last changed before it asks the server.
 const LISTING_DELAY_MS = 500;
@@ -108,7 +110,7 @@ export default function CustomProviderScreen() {
     setModelListing({ state: "loading" });
     const timer = setTimeout(() => {
       engine
-        .listCustomModels({ name: name.trim() || defaultProviderName(url), api, baseURL: url, apiKey })
+        .listCustomModels({ name: name.trim() || defaultProviderName(url, api), api, baseURL: url, apiKey })
         .then(({ listed, models }) => {
           if (ask === asked.current) takeModelListing(listed, models);
         })
@@ -134,7 +136,7 @@ export default function CustomProviderScreen() {
   const host = urlHost(baseURL);
   // The preset being added, else the one whose server the URL names or whose name the provider
   // has: for the key's hint.
-  const preset = adding ?? presetForURL(baseURL) ?? customPreset(saved?.name);
+  const preset = adding ?? presetForURL(baseURL, api) ?? customPreset(saved?.name);
   const requestURL = customRequestURL(api, baseURL);
   // On a phone, localhost is the phone: the server must be named as the Runners reach it.
   const local = !!adding?.local || isLoopbackHost(host);
@@ -147,8 +149,8 @@ export default function CustomProviderScreen() {
   const picked = rows.filter((row) => row.selected);
   const defaultId = defaultModelId(rows, chosenDefault);
   const defaultRow = picked.find((row) => row.id === defaultId);
-  // Left empty, the name is the preset's whose server the URL names, else the host.
-  const fallbackName = defaultProviderName(baseURL);
+  // Left empty, the name is the preset's whose server and API the URL and menu name, else the host.
+  const fallbackName = defaultProviderName(baseURL, api);
   const providerName = name.trim() || fallbackName;
   const canSave = !working && !!providerName && !!baseURL.trim() && picked.length > 0;
 
@@ -168,7 +170,7 @@ export default function CustomProviderScreen() {
 
   function confirmDelete() {
     if (!kind) return;
-    Alert.alert(t("Delete {name}?", { name: saved?.name || providerName }), t("This removes the provider from every paired Device."), [
+    alert(t("Delete {name}?", { name: saved?.name || providerName }), t("This removes the provider from every paired Device."), [
       { text: t("Cancel"), style: "cancel" },
       {
         text: t("Delete"),
@@ -196,7 +198,7 @@ export default function CustomProviderScreen() {
         keyboardDismissMode="on-drag"
         keyboardShouldPersistTaps="handled"
       >
-        <Section footer={t("Any server that speaks OpenAI’s or Anthropic’s API, such as a gateway or a model server on your network. Encrypted and shared with your paired Devices.")}>
+        <Section footer={t("Any server that speaks OpenAI’s or Anthropic’s API, such as a gateway or a model server on your network, or a decision API for Auto-review. Encrypted and shared with your paired Devices.")}>
           <FieldRow
             label={t("Name")}
             value={name}

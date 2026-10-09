@@ -118,6 +118,20 @@ extension AppStore {
 final class MockWorkflows {
     static let shared = MockWorkflows()
     private var setups: [String: [String: Any]] = [:]
+    /// Named accounts the mock Runner has, by service: two inboxes to pick from, a calendar that
+    /// waits for its sign-in, and no Drive yet.
+    private var accounts: [String: [[String: Any]]] = [
+        "gmail": [
+            ["id": "gmail-work", "name": "Gmail · Work", "service_id": "gmail", "account_name": "Work", "state": "ready", "detail": "Connected"],
+            ["id": "gmail-personal", "name": "Gmail · Personal", "service_id": "gmail", "account_name": "Personal", "state": "ready", "detail": "Connected"],
+        ],
+        "google-calendar": [
+            [
+                "id": "google-calendar-work", "name": "Google Calendar · Work", "service_id": "google-calendar", "account_name": "Work",
+                "state": "needs_auth", "detail": "Sign in",
+            ]
+        ],
+    ]
 
     nonisolated static func packs() -> [WorkflowPack] {
         let json: [[String: Any]] = [
@@ -198,8 +212,21 @@ final class MockWorkflows {
             setup["routine_enabled"] = setup["routine_enabled"] ?? false
             setup["phase"] = "connections"
         case "connection":
+            let service = params["service_id"] as? String ?? ""
             var connections = setup["connections"] as? [String: String] ?? [:]
-            connections[params["service_id"] as? String ?? ""] = params["plugin_id"] as? String ?? "github"
+            if let picked = params["plugin_id"] as? String {
+                connections[service] = picked
+            } else {
+                // Adds a named account for the workflow, waiting for its sign-in.
+                let pack = Self.packs().first { $0.id == setup["pack_id"] as? String }
+                let name = pack?.connections.first { $0.serviceId == service }?.name ?? service
+                let account: [String: Any] = [
+                    "id": "\(service)-added", "name": "\(name) · \(pack?.name ?? "")", "service_id": service, "account_name": pack?.name ?? "",
+                    "state": "needs_auth", "detail": "Sign in",
+                ]
+                accounts[service, default: []].append(account)
+                connections[service] = "\(service)-added"
+            }
             setup["connections"] = connections
         case "sample":
             setup["sample"] = "running"
@@ -233,7 +260,8 @@ final class MockWorkflows {
             let pack = Self.packs().first(where: { $0.id == packID })
         else { throw MockError("Unknown workflow setup.") }
         let runnerPlugins = store.device(runnerID)?.plugins.filter { !$0.isMcpServer } ?? []
-        let chosen = setup["connections"] as? [String: String] ?? [:]
+        let chosen = (setup["connections"] as? [String: String] ?? [:])
+            .merging(setup["bot_id"] == nil ? [:] : autoChosen(pack, runnerPlugins)) { picked, _ in picked }
         let botID = setup["bot_id"] as? String
         let chatID = botID.map(store.dm(with:)) ?? ""
         let sampleState = setup["sample"] as? String
@@ -254,10 +282,8 @@ final class MockWorkflows {
             "connections": pack.connections.map { requirement in
                 [
                     "service_id": requirement.serviceId, "name": requirement.name, "selected_id": chosen[requirement.serviceId] as Any,
-                    "available": requirement.serviceId == "github",
-                    "choices": runnerPlugins.filter { $0.id == requirement.serviceId }.map {
-                        ["id": $0.id, "name": $0.name, "state": $0.state.rawValue, "detail": $0.detail]
-                    },
+                    "available": true,
+                    "choices": choices(requirement.serviceId, runnerPlugins),
                 ] as [String: Any]
             },
             "specialists": [
@@ -278,6 +304,21 @@ final class MockWorkflows {
             "is_running": sampleState == "running",
         ]
         return try Self.decode(WorkflowProgress.self, json)
+    }
+
+    private func choices(_ service: String, _ runnerPlugins: [InstalledPlugin]) -> [[String: Any]] {
+        runnerPlugins.filter { $0.marketplaceID == service }.map { ["id": $0.id, "name": $0.name, "state": $0.state.rawValue, "detail": $0.detail] }
+            + (accounts[service] ?? [])
+    }
+
+    /// What configure takes as the CLI does: a service's only account.
+    private func autoChosen(_ pack: WorkflowPack, _ runnerPlugins: [InstalledPlugin]) -> [String: String] {
+        var chosen: [String: String] = [:]
+        for requirement in pack.connections {
+            let all = choices(requirement.serviceId, runnerPlugins)
+            if all.count == 1, let id = all[0]["id"] as? String { chosen[requirement.serviceId] = id }
+        }
+        return chosen
     }
 }
 

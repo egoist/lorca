@@ -10,6 +10,7 @@ class SheetViewController: NSViewController {
     private let buttonRow = Build.stack([], orientation: .horizontal, spacing: 10)
 
     private(set) var confirmButton = NSButton()
+    private(set) var cancelButton: NSButton?
     private var sheetWidth: CGFloat = 420
 
     init(title: String, subtitle: String, width: CGFloat = 420) {
@@ -56,7 +57,7 @@ class SheetViewController: NSViewController {
     }
 
     /// `cancel: nil` leaves only the confirm button, which then answers Escape as well.
-    func setButtons(confirm: String, cancel: String? = L("Cancel"), leading: NSButton? = nil) {
+    func setButtons(confirm: String, cancel: String? = L("Cancel"), leading: NSView? = nil) {
         confirmButton = NSButton(title: confirm, target: self, action: #selector(confirmTapped))
         confirmButton.bezelStyle = .rounded
         confirmButton.keyEquivalent = "\r"
@@ -72,6 +73,7 @@ class SheetViewController: NSViewController {
             cancelButton.bezelStyle = .rounded
             cancelButton.keyEquivalent = "\u{1b}"
             buttonRow.addArrangedSubview(cancelButton)
+            self.cancelButton = cancelButton
         }
         buttonRow.addArrangedSubview(confirmButton)
     }
@@ -81,8 +83,44 @@ class SheetViewController: NSViewController {
     }
 
     /// A new title, for a sheet that now shows what it just added.
-    func setSheetTitle(_ title: String) {
+    /// A label in the labels' column and a control filling the rest of the line, as New Bot's
+    /// form lays them out. A control taller than a line keeps its label by its first line.
+    func formRow(_ title: String, _ control: NSView, topAligned: Bool = false) -> NSView {
+        let container = NSView()
+        container.translatesAutoresizingMaskIntoConstraints = false
+        control.translatesAutoresizingMaskIntoConstraints = false
+        let label = Build.label(title, font: .systemFont(ofSize: 12), color: .secondaryLabelColor)
+        container.addSubview(label)
+        container.addSubview(control)
+        let labelAlignment = topAligned
+            ? label.topAnchor.constraint(equalTo: control.topAnchor, constant: 6)
+            : label.centerYAnchor.constraint(equalTo: control.centerYAnchor)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            labelAlignment,
+            label.widthAnchor.constraint(equalToConstant: 76),
+            control.leadingAnchor.constraint(equalTo: label.trailingAnchor, constant: 10),
+            control.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor),
+            control.topAnchor.constraint(equalTo: container.topAnchor),
+            control.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
+        if control is NSTextField || control is NSPopUpButton {
+            control.trailingAnchor.constraint(equalTo: container.trailingAnchor).isActive = true
+        }
+        return container
+    }
+
+    func setSheetTitle(_ title: String, subtitle: String? = nil) {
         titleLabel.stringValue = title
+        if let subtitle {
+            subtitleLabel.stringValue = subtitle
+            subtitleLabel.isHidden = subtitle.isEmpty
+        }
+    }
+
+    func setSheetSubtitle(_ subtitle: String) {
+        subtitleLabel.stringValue = subtitle
+        subtitleLabel.isHidden = subtitle.isEmpty
     }
 
     /// AppKit sizes a presented sheet once and afterwards only lets it grow with its content.

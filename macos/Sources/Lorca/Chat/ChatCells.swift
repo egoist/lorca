@@ -121,6 +121,10 @@ final class MessageCellView: TranscriptCellView {
     var onReply: (() -> Void)? {
         didSet { content.contextItems = onReply == nil ? nil : { [weak self] in self?.replyItems() ?? [] } }
     }
+    /// Feedback on a bot's message, for the bot to suggest changes to its routines and skills.
+    var onFeedback: (() -> Void)?
+    var onCapturePlaybook: (() -> Void)?
+    var capturePlaybookTitle: String = ""
     /// A click on a reply's quote line: bring the original into view.
     var onQuoteClick: (() -> Void)? {
         didSet { quote.onClick = onQuoteClick }
@@ -268,12 +272,28 @@ final class MessageCellView: TranscriptCellView {
         let item = NSMenuItem(title: L("Reply"), action: #selector(reply), keyEquivalent: "")
         item.target = self
         item.image = NSImage(systemSymbolName: "arrowshape.turn.up.left", accessibilityDescription: nil)
-        return [item]
+        var items = [item]
+        if onFeedback != nil {
+            let feedback = NSMenuItem(title: L("Give Feedback…"), action: #selector(giveFeedback), keyEquivalent: "")
+            feedback.target = self
+            feedback.image = NSImage(systemSymbolName: "hand.thumbsup", accessibilityDescription: nil)
+            items.append(feedback)
+        }
+        if onCapturePlaybook != nil {
+            let capture = NSMenuItem(title: capturePlaybookTitle, action: #selector(capturePlaybook), keyEquivalent: "")
+            capture.target = self
+            capture.image = NSImage(systemSymbolName: "book.closed", accessibilityDescription: nil)
+            items.append(capture)
+        }
+        return items
     }
+
+    @objc private func giveFeedback() { onFeedback?() }
 
     @objc private func reply() {
         onReply?()
     }
+    @objc private func capturePlaybook() { onCapturePlaybook?() }
 
     @objc private func sendNow() {
         onSendNow?()
@@ -699,11 +719,11 @@ final class PermissionCellView: TranscriptCellView {
     /// The line under the title: the call while it waits, the answer and the call once
     /// answered, or where to enter a sign-in code.
     static func summary(for request: PermissionRequest) -> String {
-        if request.isPending { return request.summary }
+        if request.isPending { return request.shownSummary }
         if request.decision == .allowed && request.code != nil {
             return L("Enter this code at %@, then come back.", URL(string: request.link ?? "")?.host ?? L("the link"))
         }
-        return "\(request.decisionText) · \(request.summary)"
+        return "\(request.decisionText) · \(request.shownSummary)"
     }
 
     /// The title and the line under it, for a screen reader: "Chef wants to run a command: …"
@@ -754,12 +774,12 @@ final class PermissionCellView: TranscriptCellView {
                 command = block
                 bottom = block.maxY
             } else {
-                let text = request.isPending ? request.summary : "\(request.decisionText) · \(request.summary)"
+                let text = request.isPending ? request.shownSummary : "\(request.decisionText) · \(request.shownSummary)"
                 let lines = Self.measure(text, font: Theme.Font.caption, width: textWidth, maxLines: request.isPending ? 2 : 3)
                 summary = NSRect(x: Self.textX, y: 30, width: textWidth, height: lines)
                 bottom = summary.maxY
             }
-            if request.isPending, let text = request.reason {
+            if request.isPending, let text = request.shownReason {
                 let lines = Self.measure(text, font: Self.reasonFont, width: textWidth)
                 let row = NSRect(x: Self.textX, y: bottom + 7, width: textWidth, height: lines)
                 reason = row
@@ -873,9 +893,9 @@ final class PermissionCellView: TranscriptCellView {
         code = request.code
         summary.stringValue = Self.summary(for: request)
         summary.lineBreakMode = request.isPending ? .byTruncatingTail : .byWordWrapping
-        summary.toolTip = request.summary
+        summary.toolTip = request.shownSummary
         command.text = request.fullCommand
-        reason.stringValue = request.reason ?? ""
+        reason.stringValue = request.shownReason ?? ""
         note.stringValue = Self.ruleNote(for: request) ?? ""
         codeLabel.stringValue = request.code ?? ""
         codeLabel.isHidden = !hasCode

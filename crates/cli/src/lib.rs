@@ -5,12 +5,22 @@
 
 pub mod api;
 pub mod app;
+pub mod attention;
+pub mod budgets;
+pub mod browser;
 pub mod catalog;
 pub mod config;
+#[cfg(feature = "runner")]
+pub mod connector_limits;
 pub mod credentials;
 pub mod crypto;
+#[cfg(feature = "runner")]
+pub mod decisions;
 pub mod events;
+pub mod event_triggers;
 pub mod files;
+pub mod feedback;
+pub mod handoffs;
 pub mod identity;
 pub mod keys;
 #[cfg(feature = "runner")]
@@ -19,8 +29,14 @@ pub mod marketplace;
 pub mod workflows;
 pub mod memory;
 pub mod model;
+pub mod outputs;
 pub mod pairing;
+pub mod permissions;
+pub mod playbooks;
+#[cfg(feature = "runner")]
+pub mod playbook_tools;
 pub mod plugins;
+pub mod project_context;
 #[cfg(feature = "provider-auth")]
 pub mod provider_auth;
 #[cfg(feature = "runner")]
@@ -28,7 +44,11 @@ pub mod providers;
 pub mod push;
 pub mod relay;
 pub mod requests;
+pub mod review_queue;
+#[cfg(feature = "runner")]
+pub mod review_execution;
 pub mod routines;
+pub mod routine_health;
 pub mod runtime;
 pub mod schedule;
 #[cfg(feature = "runner")]
@@ -39,6 +59,7 @@ pub mod service;
 #[cfg(feature = "runner")]
 pub mod shell;
 pub mod sync;
+pub mod tasks;
 pub mod local_store;
 #[cfg(feature = "runner")]
 pub mod turns;
