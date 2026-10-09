@@ -253,10 +253,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// to read it: Open in Lorca on lorca.app may be what launched the app.
     private var pendingTemplateLink: String?
 
-    /// `lorca://t/<id>#<key>` (`lorca-dev://` for Lorca Dev) from a shared bot's page.
+    /// `lorca://t/<id>#<key>` (`lorca-dev://` for Lorca Dev) from a shared bot's page, which the
+    /// sheet shows as the page's own address.
     func application(_ application: NSApplication, open urls: [URL]) {
-        for url in urls where url.host == "t" && url.scheme?.hasPrefix("lorca") == true {
-            pendingTemplateLink = url.absoluteString
+        for url in urls where url.host == "t" {
+            guard var page = URLComponents(url: url, resolvingAgainstBaseURL: false) else { continue }
+            page.scheme = "https"
+            page.host = "lorca.app"
+            page.path = "/t" + page.path
+            pendingTemplateLink = page.string
         }
         presentPendingTemplateLink()
     }

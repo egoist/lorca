@@ -18,11 +18,15 @@ var chooseTemplateDestination = saveTemplateDestination
 // account and a CLI to read it: Open in Lorca on lorca.app may be what started the app.
 var pendingTemplateLink string
 
+// openTemplateLink takes lorca://t/<id>#<key> (lorca-dev:// for Lorca Dev) from a shared bot's
+// page, which the sheet shows as the page's own address.
 func (a *appDelegate) openTemplateLink(link string) {
-	if u, err := url.Parse(link); err != nil || u.Host != "t" {
+	page, err := url.Parse(link)
+	if err != nil || page.Host != "t" {
 		return
 	}
-	pendingTemplateLink = link
+	page.Scheme, page.Host, page.Path = "https", "lorca.app", "/t"+page.Path
+	pendingTemplateLink = page.String()
 	a.presentPendingTemplateLink()
 }
 
