@@ -45,6 +45,15 @@ func defaultCLIHome() string {
 	return filepath.Join(home, ".lorca")
 }
 
+// cliHome is the CLI's data directory: `LORCA_HOME`, so a second app instance runs against its
+// own CLI, else this build's default.
+func cliHome() string {
+	if home, ok := os.LookupEnv("LORCA_HOME"); ok {
+		return home
+	}
+	return defaultCLIHome()
+}
+
 // cliCommand is how to start the CLI by hand, for the offline state and the Help note.
 func cliCommand() string {
 	if isDevelopment() {
