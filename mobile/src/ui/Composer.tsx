@@ -14,12 +14,13 @@ import { Column as ComposeColumn, Host as ComposeHost, Icon as ComposeIcon, List
 import { clickable, fillMaxWidth, padding } from "@expo/ui/jetpack-compose/modifiers";
 import * as DocumentPicker from "expo-document-picker";
 import { GlassView, isLiquidGlassAvailable } from "expo-glass-effect";
-import * as Haptics from "expo-haptics";
+import { haptic } from "./haptics";
 import { Image } from "expo-image";
 import * as ImagePicker from "expo-image-picker";
 import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from "expo-speech-recognition";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View, type ColorValue, type ImageSourcePropType, type StyleProp, type ViewStyle } from "react-native";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { Linking, Platform, ScrollView, StyleSheet, Text, TextInput, View, type ColorValue, type ImageSourcePropType, type StyleProp, type ViewStyle } from "react-native";
+import { Pressable } from "./Pressable";
 import type { PickedFile } from "../core/engine";
 import { fileSize, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS, type Bot } from "../core/model";
 import { BotAvatar } from "./Avatar";
@@ -29,6 +30,7 @@ import { joinDictation } from "./format";
 import { Symbol } from "./Symbol";
 import { Font, usePalette } from "./theme";
 import { AndroidIcons } from "./navigation";
+import { alert } from "./alert";
 
 const MAX_LINES = 5;
 const CHIP = 56;
@@ -43,14 +45,14 @@ export function Surface({ style, children, tint, edge, onPress }: { style: Style
   if (GLASS) {
     // The glass is a layer under the content; the edge is drawn by the wrapping view.
     return (
-      <Pressable onPress={onPress} disabled={!onPress} accessible={false} style={[style, outline]}>
+      <Pressable onPress={onPress} disabled={!onPress} accessible={false} ripple="none" style={[style, outline]}>
         <GlassView glassEffectStyle="regular" isInteractive style={[StyleSheet.absoluteFill, { borderRadius: StyleSheet.flatten(style)?.borderRadius }]} />
         {children}
       </Pressable>
     );
   }
   return (
-    <Pressable onPress={onPress} disabled={!onPress} accessible={false} style={[style, outline, { backgroundColor: tint }]}>
+    <Pressable onPress={onPress} disabled={!onPress} accessible={false} ripple="none" style={[style, outline, { backgroundColor: tint }]}>
       {children}
     </Pressable>
   );
@@ -70,7 +72,9 @@ interface AttachSource {
 /// label that is only the glyph would leave an empty disc behind.
 function AttachMenu({ sources, tint, label }: { sources: AttachSource[]; tint: ColorValue; label: ColorValue }) {
   return (
-    <View style={styles.disc}>
+    // The tap is SwiftUI's; claiming it here keeps it from the pill around the composer, whose
+    // press focuses the field: that expands the pill and moves this disc, which closes the menu.
+    <View style={styles.disc} onStartShouldSetResponder={() => true}>
       {/* The hosted view would otherwise avoid the keyboard by itself: SwiftUI treats the keys as
           a safe-area inset and pushes the disc up out of its frame while the sticky composer
           already rides above them. */}
@@ -95,7 +99,9 @@ function AttachMenu({ sources, tint, label }: { sources: AttachSource[]; tint: C
   );
 }
 
-export function Composer({
+/// Memoized: the chat renders again with every streamed piece of a reply, the composer only when
+/// its own inputs change.
+export const Composer = memo(function Composer({
   members,
   isGroup,
   placeholder,
@@ -112,7 +118,7 @@ export function Composer({
   /** The text, its files, and the bots its `@Name`s picked from the chips, by id. */
   onSend: (text: string, attachments: PickedFile[], mentions: string[]) => void;
 }) {
-  useLanguage();
+  const { language: appLanguage } = useLanguage();
   const p = usePalette();
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<PickedFile[]>([]);
@@ -169,7 +175,7 @@ export function Composer({
       return;
     }
     if (!canSend) return;
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    haptic.send();
     onSend(text, attachments, takeMentions(text));
     setText("");
     setAttachments([]);
@@ -194,7 +200,7 @@ export function Composer({
       }
       return next;
     });
-    if (problems.length) Alert.alert(t("Some files were not attached"), problems.join("\n"));
+    if (problems.length) alert(t("Some files were not attached"), problems.join("\n"));
   }
 
   async function pickPhotos() {
@@ -211,7 +217,7 @@ export function Composer({
   async function takePhoto() {
     const permission = await ImagePicker.requestCameraPermissionsAsync();
     if (!permission.granted) {
-      Alert.alert(t("Camera access is off"), t("Allow the camera for Lorca in Settings to take a photo."), [
+      alert(t("Camera access is off"), t("Allow the camera for Lorca in Settings to take a photo."), [
         { text: t("Settings"), onPress: () => void Linking.openSettings() },
         { text: t("OK"), style: "cancel" },
       ]);
@@ -274,13 +280,13 @@ export function Composer({
     if (words) setText(next);
     if (problem) {
       pendingSend.current = false;
-      Alert.alert(t("Dictation stopped"), problem);
+      alert(t("Dictation stopped"), problem);
       return;
     }
     if (pendingSend.current) {
       pendingSend.current = false;
       if (next.trim() || attachments.length) {
-        void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        haptic.send();
         onSend(next, attachments, takeMentions(next));
         setText("");
         setAttachments([]);
@@ -295,7 +301,7 @@ export function Composer({
     }
     const permission = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
     if (!permission.granted) {
-      Alert.alert(t("Dictation needs the microphone"), t("Allow the microphone and speech recognition for Lorca in Settings."), [
+      alert(t("Dictation needs the microphone"), t("Allow the microphone and speech recognition for Lorca in Settings."), [
         { text: t("Settings"), onPress: () => void Linking.openSettings() },
         { text: t("OK"), style: "cancel" },
       ]);
@@ -304,7 +310,7 @@ export function Composer({
     transcript.current = "";
     pendingSend.current = false;
     setListening(true);
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    haptic.start();
     ExpoSpeechRecognitionModule.start({
       lang: language,
       interimResults: true,
@@ -328,9 +334,11 @@ export function Composer({
       <Pressable
         key="plus"
         onPress={() => {
-          void Haptics.selectionAsync();
+          haptic.open();
           setAttachOpen(true);
         }}
+        // A 33 dp disc, touchable across Material's 48 dp.
+        hitSlop={8}
         style={({ pressed }) => [styles.disc, styles.androidDisc, { backgroundColor: p.fill, opacity: pressed ? 0.7 : 1 }]}
         accessibilityRole="button"
         accessibilityLabel={t("Attach")}
@@ -395,6 +403,7 @@ export function Composer({
             ? () => void pickDictationLanguage()
             : () => dictationMenuRef.current?.show()
       }
+      hitSlop={8}
       style={({ pressed }) => [styles.disc, Platform.OS === "android" && styles.androidDisc, { backgroundColor: primary === "send" ? p.tint : p.fill, opacity: pressed ? 0.7 : 1 }]}
       accessibilityLabel={primary === "send" ? t("Send") : t("Dictate")}
       accessibilityHint={primary === "dictate" ? t("Long press to choose the language") : undefined}
@@ -402,14 +411,18 @@ export function Composer({
       <Symbol name={primary === "send" ? "arrow.up" : "mic.fill"} size={16} color={primary === "send" ? p.userBubbleText : p.label} weight="bold" />
     </Pressable>
   );
-  const dictationActions: MenuAction[] = [
-    {
-      id: "automatic",
-      title: t("Automatic ({language})", { language: languageName(automaticLanguage(dictationLanguages)) }),
-      state: dictationSetting ? "off" : "on",
-    },
-    ...dictationLanguages.map((tag) => ({ id: tag, title: languageName(tag), state: dictationSetting === tag ? ("on" as const) : ("off" as const) })),
-  ];
+  const dictationActions = useMemo<MenuAction[]>(
+    () => [
+      {
+        id: "automatic",
+        title: t("Automatic ({language})", { language: languageName(automaticLanguage(dictationLanguages)) }),
+        state: dictationSetting ? "off" : "on",
+      },
+      ...dictationLanguages.map((tag) => ({ id: tag, title: languageName(tag), state: dictationSetting === tag ? ("on" as const) : ("off" as const) })),
+    ],
+    // `appLanguage` names the languages.
+    [dictationLanguages, dictationSetting, appLanguage],
+  );
   const primaryDisc =
     Platform.OS === "android" && primary === "dictate" ? (
       <MenuView
@@ -451,7 +464,7 @@ export function Composer({
               {"  "}
               {reply.text}
             </Text>
-            <Pressable onPress={onCancelReply} hitSlop={10} accessibilityRole="button" accessibilityLabel={t("Cancel reply")}>
+            <Pressable onPress={onCancelReply} hitSlop={14} ripple="borderless" rippleRadius={18} accessibilityRole="button" accessibilityLabel={t("Cancel reply")}>
               <Symbol name="xmark.circle.fill" size={17} color={p.tertiaryLabel} />
             </Pressable>
           </View>
@@ -475,7 +488,9 @@ export function Composer({
                 )}
                 <Pressable
                   onPress={() => setAttachments((current) => current.filter((_, i) => i !== index))}
-                  hitSlop={8}
+                  hitSlop={15}
+                  ripple="borderless"
+                  rippleRadius={16}
                   style={styles.remove}
                   accessibilityLabel={t("Remove {name}", { name: file.name })}
                 >
@@ -531,7 +546,7 @@ export function Composer({
       ) : null}
     </View>
   );
-}
+});
 
 function imageAsset(asset: ImagePicker.ImagePickerAsset): PickedFile {
   const name = asset.fileName ?? `Photo ${new Date().toISOString().slice(0, 19).replace("T", " ").replace(/:/g, ".")}.jpg`;

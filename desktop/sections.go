@@ -50,22 +50,25 @@ func section(c *ui.Context, title string, style sectionStyle, accessory func(), 
 	p := colors(c)
 	s := ui.Column(c).MinWidth(0).Label(title)
 	s.Children(func() {
-		header := ui.Row(c).Gap(8)
-		if style == sectionCaption {
-			header.MinHeight(14).Padding(0, 0, 0, 4).Margin(0, 0, 6, 0)
-		} else {
-			header.MinHeight(18).Padding(0, 12).Margin(0, 0, 9, 0)
-		}
-		header.Children(func() {
+		// Without a title the card starts at the top.
+		if title != "" || accessory != nil {
+			header := ui.Row(c).Gap(8)
 			if style == sectionCaption {
-				ui.Text(c, strings.ToUpper(title)).Grow(1).FontSize(10).FontWeight(600).TextColor(p.Label3).LetterSpacing(0.2).SingleLine()
+				header.MinHeight(14).Padding(0, 0, 0, 4).Margin(0, 0, 6, 0)
 			} else {
-				ui.Text(c, title).Grow(1).FontSize(13).FontWeight(700).TextColor(p.Label).SingleLine()
+				header.MinHeight(18).Padding(0, 12).Margin(0, 0, 9, 0)
 			}
-			if accessory != nil {
-				ui.Row(c).Margin(-6, 0).Children(accessory)
-			}
-		})
+			header.Children(func() {
+				if style == sectionCaption {
+					ui.Text(c, strings.ToUpper(title)).Grow(1).FontSize(10).FontWeight(600).TextColor(p.Label3).LetterSpacing(0.2).SingleLine()
+				} else {
+					ui.Text(c, title).Grow(1).FontSize(13).FontWeight(700).TextColor(p.Label).SingleLine()
+				}
+				if accessory != nil {
+					ui.Row(c).Margin(-6, 0).Children(accessory)
+				}
+			})
+		}
 		k := &card{line: p.Separator}
 		body := ui.Column(c).Background(p.BotBubble).Clip()
 		if style == sectionCaption {
@@ -210,7 +213,7 @@ func statusRow(c *ui.Context, k *card, o statusRowOptions) (ui.Element, statusRo
 		ui.Row(c).Width(18).Justify(ui.Center).TextColor(p.Label2).Children(func() {
 			if o.PluginID != "" {
 				pluginTile(c, o.PluginID, o.Symbol, 18)
-			} else {
+			} else if o.Symbol != "" {
 				symbol(c, o.Symbol, 16, 1.7)
 			}
 		})
@@ -349,6 +352,22 @@ func actionRow(c *ui.Context, k *card, label string, o actionRowOptions) (ui.Ele
 	return r, result
 }
 
+// disclosureRow is a key on the left, a short value and a chevron on the right, after the Mac's
+// DisclosureRow. It reports a click anywhere on it, which opens what the value sums up.
+func disclosureRow(c *ui.Context, k *card, label, value string) bool {
+	p := colors(c)
+	r := k.row(rowBox(c).Height(32).Padding(0, 12).Label(label).Cursor(ui.CursorPointer))
+	if r.Hovered() {
+		r.Background(p.RowHover)
+	}
+	r.Children(func() {
+		rowKey(c, label)
+		ui.Text(c, value).Grow(1).Shrink(1).MinWidth(0).TextAlign(ui.End).FontSize(12).TextColor(p.Label2).SingleLine()
+		ui.Row(c).Shrink(0).TextColor(p.Label3).Margin(0, 0, 0, -4).Children(func() { symbol(c, "chevron.right", 12, 2.2) })
+	})
+	return r.Clicked()
+}
+
 // summaryActionRow is a key and an action on the first line, with a wrapping two-line preview
 // under them. With no preview, the key and the action sit alone on one line. It reports the action.
 func summaryActionRow(c *ui.Context, k *card, label, value, action string) bool {
@@ -420,7 +439,7 @@ func editableRow(c *ui.Context, k *card, label, value, placeholder string, mono,
 // switchRow is a row with an icon for its state, a title over a detail line, and a switch: a
 // routine that pauses or resumes. It reports clicks outside the switch; change runs after the
 // view is built with the switch's new value.
-func switchRow(c *ui.Context, k *card, symbolName string, tint ui.Color, title, detail string, on *bool, toggleTooltip, tooltip string, change func(bool)) bool {
+func switchRow(c *ui.Context, k *card, symbolName string, tint ui.Color, title string, detail []ui.Span, on *bool, toggleTooltip, tooltip string, change func(bool)) bool {
 	p := colors(c)
 	r := k.row(rowBox(c).MinHeight(44).Label(title).Cursor(ui.CursorPointer))
 	if tooltip != "" {
@@ -431,7 +450,7 @@ func switchRow(c *ui.Context, k *card, symbolName string, tint ui.Color, title, 
 		ui.Row(c).Width(18).Justify(ui.Center).TextColor(tint).Children(func() { symbol(c, symbolName, 15, 1.8) })
 		ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(1).Children(func() {
 			ui.Text(c, title).FontSize(12.5).FontWeight(500).SingleLine()
-			ui.Text(c, detail).FontSize(textCaption).TextColor(p.Label2).SingleLine()
+			ui.RichText(c, detail...).FontSize(textCaption).TextColor(p.Label2).SingleLine()
 		})
 		toggle := toggleSwitch(c, on, true).Tooltip(toggleTooltip).Label(toggleTooltip).
 			OnChange(func() { change(*on) })

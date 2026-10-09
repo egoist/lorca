@@ -9,6 +9,8 @@ pub mod catalog;
 pub mod config;
 pub mod credentials;
 pub mod crypto;
+#[cfg(feature = "runner")]
+pub mod decisions;
 pub mod events;
 pub mod files;
 pub mod identity;
@@ -18,7 +20,9 @@ pub mod local_review;
 pub mod marketplace;
 pub mod memory;
 pub mod model;
+pub mod outputs;
 pub mod pairing;
+pub mod permissions;
 pub mod plugins;
 #[cfg(feature = "provider-auth")]
 pub mod provider_auth;
@@ -28,6 +32,7 @@ pub mod push;
 pub mod relay;
 pub mod requests;
 pub mod routines;
+pub mod routine_health;
 pub mod runtime;
 pub mod schedule;
 #[cfg(feature = "runner")]

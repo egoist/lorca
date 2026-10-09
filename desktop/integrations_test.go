@@ -45,7 +45,7 @@ func marketplaceOn(t *testing.T, name string) (*mainWindow, *ui.Tester) {
 func TestIntegrationAccountsOnTheServicePage(t *testing.T) {
 	_, tt := marketplaceOn(t, "Gmail")
 	wantText(t, tt, L("Accounts on %@", "Workbench"), "Work", "Personal", "Family", "Old job",
-		L("Connected"), L("Needs a sign-in"), L("Needs more access"), L("Can't connect"), L("Add Account…"))
+		L("Connected"), L("Needs a sign-in"), L("Needs more access"), L("Can’t connect"), L("Add Account…"))
 	for _, long := range []string{"Sign in again to grant the required access", L("Manage…")} {
 		if tt.HasText(long) {
 			t.Errorf("the page shows %q", long)
@@ -152,7 +152,7 @@ func TestIntegrationAccountSheetIsOneCard(t *testing.T) {
 		{"1", "Gmail · Work", "integration-account-work", []string{L("Signed in"), L("Sign in again"), L("Sign Out")}},
 		{"2", "Gmail · Personal", "integration-account-personal", []string{L("Not signed in"), L("Sign in")}},
 		{"3", "Gmail · Family", "", []string{L("Needs more access"), L("Sign in")}},
-		{"4", "Gmail · Old job", "", []string{L("Can't connect"), "gmailmcp.googleapis.com could not be reached. Check the connection and try again."}},
+		{"4", "Gmail · Old job", "", []string{L("Can’t connect"), "gmailmcp.googleapis.com could not be reached. Check the connection and try again."}},
 	} {
 		t.Run(c.title, func(t *testing.T) {
 			_, tt := sheetTester(t, func(m *mainWindow) {

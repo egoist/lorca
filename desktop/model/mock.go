@@ -91,15 +91,22 @@ func mockDevices() []*Device {
 
 func mockProviders() []ProviderCredential {
 	return []ProviderCredential{
-		{Kind: "deepseek", IsConnected: true, Detail: "sk-live…4f2c"},
-		{Kind: "anthropic", IsConnected: true, Detail: "sk-ant…8d1a"},
-		{Kind: "opencode", Detail: "Not connected"},
-		{Kind: "opencode-go", Detail: "Not connected"},
-		{Kind: "chatgpt", IsConnected: true, Detail: "you@lorca.app"},
-		{Kind: "grok", Detail: "Not connected"},
+		{Kind: "deepseek", IsConnected: true, Detail: "sk-live…4f2c", ReviewModel: "deepseek-flash"},
+		{Kind: "anthropic", IsConnected: true, Detail: "sk-ant…8d1a", ReviewModel: "claude-haiku-4-5"},
+		{Kind: "opencode", Detail: "Not connected", ReviewModel: "deepseek-v4.1-flash"},
+		{Kind: "opencode-go", Detail: "Not connected", ReviewModel: "glm-5.3-flash"},
+		{Kind: "chatgpt", IsConnected: true, Detail: "you@lorca.app", ReviewModel: "gpt-6-luna"},
+		{Kind: "grok", Detail: "Not connected", ReviewModel: "grok-4.7"},
 		{
 			Kind: "custom:ollama", IsConnected: true, Detail: "http://localhost:11434/v1", BaseURL: "http://localhost:11434/v1", Name: "Ollama", API: APIChatCompletions,
-			Models: []CustomModel{{ID: "qwen3:8b", Levels: []string{"low", "medium", "high"}}, {ID: "llava", Levels: []string{"low", "medium", "high"}}},
+			Models:      []CustomModel{{ID: "qwen3:8b", Levels: []string{"low", "medium", "high"}}, {ID: "llava", Levels: []string{"low", "medium", "high"}}},
+			ReviewModel: "qwen3:8b",
+		},
+		{
+			Kind: "custom:openrouter-decisions", IsConnected: true, Detail: "sk-or…9c0e · https://openrouter.ai/api/alpha/decisions", BaseURL: "https://openrouter.ai/api/alpha/decisions",
+			Name: "OpenRouter Decisions", API: APISystemOne,
+			Models:      []CustomModel{{ID: "typesafe/jev-1.13", Name: "TypeSafe: Jev 1.13"}, {ID: "perplexity/pplx-decider-v1.1-27b", Name: "Perplexity: Decider V1.1 27B"}},
+			ReviewModel: "typesafe/jev-1.13",
 		},
 	}
 }
@@ -107,10 +114,17 @@ func mockProviders() []ProviderCredential {
 func yes() *bool  { v := true; return &v }
 func nope() *bool { v := false; return &v }
 
-// mockListedModels is what a custom provider's server lists in the demo: a gateway's catalog, a
-// local server's few models, or no list at all.
+// mockListedModels is what a custom provider's server lists in the demo: a gateway's decision
+// models or its catalog, a local server's few models, or no list at all.
 func mockListedModels(baseURL string) ([]CustomModel, bool) {
 	switch {
+	case strings.Contains(baseURL, "openrouter.ai/api/alpha/decisions"):
+		return []CustomModel{
+			{ID: "typesafe/jev-1.13", Name: "TypeSafe: Jev 1.13", ContextWindow: 64_000},
+			{ID: "openai/gpt-6-luna-decisions", Name: "OpenAI: GPT-6 Luna Decisions", ContextWindow: 1_050_000, Images: yes()},
+			{ID: "perplexity/pplx-decider-v1.1-27b", Name: "Perplexity: Decider V1.1 27B", ContextWindow: 262_144, Images: yes()},
+			{ID: "cloudflare/clef-flash", Name: "Cloudflare: Clef Flash", ContextWindow: 65_536, Images: yes()},
+		}, true
 	case strings.Contains(baseURL, "openrouter"):
 		return []CustomModel{
 			{ID: "anthropic/claude-sonnet-5", Name: "Anthropic: Claude Sonnet 5", ContextWindow: 1_000_000, Images: yes()},
@@ -133,22 +147,25 @@ func mockListedModels(baseURL string) ([]CustomModel, bool) {
 	return nil, false
 }
 
-// mockModels are a few of the catalog's models for each provider, with their thinking levels.
+// mockModels are a few of the catalog's models for each provider, with their thinking levels, and
+// OpenCode Zen's decision models.
 func mockModels() []ProviderModel {
 	all := []string{"off", "low", "medium", "high", "xhigh", "max"}
 	on := []string{"low", "medium", "high", "xhigh", "max"}
 	return []ProviderModel{
-		{"deepseek", "deepseek-flash", "DeepSeek V4.1 Flash", all},
-		{"anthropic", "claude-opus-5", "Claude Opus 5", all},
-		{"anthropic", "claude-fable-5-1", "Claude Fable 5.1", on},
-		{"anthropic", "claude-haiku-4-5", "Claude Haiku 4.5", []string{"off", "minimal", "low", "medium", "high"}},
-		{"opencode", "deepseek-v4.1-flash", "DeepSeek V4.1 Flash", []string{"low", "high", "max"}},
-		{"opencode", "kimi-k3", "Kimi K3", []string{"max"}},
-		{"opencode", "big-pickle", "Big Pickle", nil},
-		{"opencode-go", "glm-5.3-flash", "GLM-5.3 Flash", []string{"low", "high", "max"}},
-		{"chatgpt", "gpt-6.1-sol", "GPT-6.1 Sol", on},
-		{"chatgpt", "gpt-6-luna", "GPT-6 Luna", on},
-		{"grok", "grok-4.7", "Grok 4.7", []string{"low", "medium", "high", "xhigh"}},
+		{"deepseek", "deepseek-flash", "DeepSeek V4.1 Flash", all, false},
+		{"anthropic", "claude-opus-5", "Claude Opus 5", all, false},
+		{"anthropic", "claude-fable-5-1", "Claude Fable 5.1", on, false},
+		{"anthropic", "claude-haiku-4-5", "Claude Haiku 4.5", []string{"off", "minimal", "low", "medium", "high"}, false},
+		{"opencode", "deepseek-v4.1-flash", "DeepSeek V4.1 Flash", []string{"low", "high", "max"}, false},
+		{"opencode", "kimi-k3", "Kimi K3", []string{"max"}, false},
+		{"opencode", "big-pickle", "Big Pickle", nil, false},
+		{"opencode", "jev-1.13", "Jev 1.13", nil, true},
+		{"opencode", "jev-1.13-free", "Jev 1.13 Free", nil, true},
+		{"opencode-go", "glm-5.3-flash", "GLM-5.3 Flash", []string{"low", "high", "max"}, false},
+		{"chatgpt", "gpt-6.1-sol", "GPT-6.1 Sol", on, false},
+		{"chatgpt", "gpt-6-luna", "GPT-6 Luna", on, false},
+		{"grok", "grok-4.7", "Grok 4.7", []string{"low", "medium", "high", "xhigh"}, false},
 	}
 }
 
@@ -205,10 +222,15 @@ func mockMarketplace() Marketplace {
 }
 
 func mockAutoReview() AutoReview {
-	return AutoReview{IsEnabled: true, Rules: []AutoReviewRule{
-		{ID: "ar-1", Text: "use GitHub create_issue", Behavior: "allow", Tool: "github/create_issue"},
-		{ID: "ar-2", Text: "comment on a pull request", Behavior: "ask"},
-	}}
+	return AutoReview{
+		IsEnabled: true,
+		Rules: []AutoReviewRule{
+			{ID: "ar-1", Text: "use GitHub create_issue", Behavior: "allow", Tool: "github/create_issue"},
+			{ID: "ar-2", Text: "comment on a pull request", Behavior: "ask"},
+		},
+		Provider: "custom:openrouter-decisions",
+		Models:   map[ProviderKind]string{"custom:openrouter-decisions": "perplexity/pplx-decider-v1.1-27b", "anthropic": "claude-opus-5"},
+	}
 }
 
 func nextNineAM() time.Time {
@@ -256,7 +278,7 @@ func mockBots() []*Bot {
 		{ID: "bot-nova", Name: "Project Manager", Description: "Plans the work and delegates it to the team. Breaks work down, hands it off with message_bot, and summarizes what came back.", SymbolName: "list.bullet.clipboard.fill", Accent: "indigo", RunnerID: "dev-workbench", Provider: "chatgpt", CreatedAt: minutesAgo(60 * 24 * 21)},
 		{ID: "bot-patch", Name: "Developer", Description: "Implements changes in small diffs, explains the tradeoff in one line, and never invents APIs.", SymbolName: "chevron.left.forwardslash.chevron.right", Accent: "blue", RunnerID: "dev-studio", Provider: "deepseek", CreatedAt: minutesAgo(60 * 24 * 18)},
 		{ID: "bot-scout", Name: "Researcher", Description: "Gathers context, reads the sources before answering, cites them, and says when it is unsure.", SymbolName: "magnifyingglass", Accent: "teal", RunnerID: "dev-studio", Provider: "deepseek", CreatedAt: minutesAgo(60 * 24 * 12)},
-		{ID: "bot-quill", Name: "Writer", Description: "Writes docs, copy, and release notes in plain language: short sentences, no filler, and no exclamation marks.", SymbolName: "pencil.and.scribble", Accent: "pink", RunnerID: "dev-workbench", Provider: "anthropic", CreatedAt: minutesAgo(60 * 24 * 9)},
+		{ID: "bot-quill", Name: "Writer", Description: "Writes docs, copy, and release notes in plain language: short sentences, no filler, and no exclamation marks.", SymbolName: "pencil.and.scribble", Accent: "pink", RunnerID: "dev-workbench", Provider: "anthropic", Permissions: mockWriterAccess(), CreatedAt: minutesAgo(60 * 24 * 9)},
 		{ID: "bot-ember", Name: "DevOps", Description: "Handles deploys and incident triage, watches the relay, and always states the blast radius first.", SymbolName: "server.rack", Accent: "orange", RunnerID: "dev-closet", Provider: "deepseek", CreatedAt: minutesAgo(60 * 24 * 4)},
 	}
 }
@@ -334,6 +356,10 @@ func writerThread() []*Message {
 	return []*Message{
 		mockMessage(BotAuthor("bot-nova"), Body{Kind: BodyHandoff, Handoff: Handoff{From: "bot-nova", To: "bot-quill", Reason: "Draft a short launch announcement that leads with what people can do."}}, minutesAgo(35)),
 		mockMessage(BotAuthor("bot-quill"), textBody("Create a team of bots for your everyday work. Give each one a role, bring them into a group chat, and pick up the conversation from your phone. Lorca runs the bots on your computers and encrypts your chats before they sync.\n\nDraft saved to `launch/announcement.md`."), minutesAgo(24)),
+		mockMessage(You, textBody("File an issue for the pairing section of the docs."), minutesAgo(12)),
+		// The Writer's Access lets it read GitHub and draft reviews, not open issues.
+		mockMessage(BotAuthor("bot-quill"), Body{Kind: BodyPermission, Request: &PermissionRequest{PluginID: "github", PluginName: "GitHub", Tool: "access", Summary: "GitHub · create_issue", Decision: DecisionPending}}, minutesAgo(11)),
+		mockMessage(BotAuthor("bot-quill"), textBody("I can't open issues on GitHub: my Access only lets me read it and draft reviews. I left a request above if you want to allow it."), minutesAgo(11)),
 	}
 }
 

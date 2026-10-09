@@ -883,7 +883,9 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
                     AttachmentsView.Item(
                         attachment: attachment,
                         url: store.localURL(for: attachment, in: chatID, messageID: message.id),
-                        frame: frame)
+                        frame: frame,
+                        error: store.attachmentError(for: attachment),
+                        onRetry: { [weak self] in self?.store.retryAttachment(attachment, in: chatID, messageID: message.id) })
                 }
                 messageCell.configure(
                     message: message,
@@ -938,6 +940,10 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
                     groupStart: groupStart)
                 permissionCell?.onDecision = { [weak self] decision in
                     guard let self else { return }
+                    if decision == "access", case let .bot(botID) = message.author {
+                        self.presentAsSheet(BotAccessViewController(botID: botID))
+                        return
+                    }
                     self.store.answerPermission(chatID: chat.id, messageID: message.id, decision: decision)
                 }
                 permissionCell?.onShowCommand = { [weak self] in

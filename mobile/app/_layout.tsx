@@ -8,7 +8,9 @@ import { engine } from "../src/core/engine";
 import { useStore } from "../src/core/store";
 import { startUpdateChecks } from "../src/core/updates";
 import { useStackScreenOptions } from "../src/ui/navigation";
-import { usePalette } from "../src/ui/theme";
+import { HostPaletteContext } from "@expo/ui/jetpack-compose";
+import { AlertHost } from "../src/ui/alert";
+import { useMaterialPalette, usePalette } from "../src/ui/theme";
 
 export default function RootLayout() {
   const ready = useStore((s) => s.ready);
@@ -16,6 +18,7 @@ export default function RootLayout() {
   const p = usePalette();
   const scheme = useColorScheme();
   const screenOptions = useStackScreenOptions();
+  const material = useMaterialPalette();
 
   useEffect(() => {
     void engine.start();
@@ -66,6 +69,7 @@ export default function RootLayout() {
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
+      <HostPaletteContext.Provider value={material}>
       <KeyboardProvider>
         <StatusBar style={scheme === "dark" ? "light" : "dark"} />
         {/* The native bar takes its light/dark appearance from the navigation theme, not the OS. */}
@@ -75,21 +79,24 @@ export default function RootLayout() {
               <Stack.Screen name="(main)" options={{ headerShown: false }} />
               <Stack.Screen name="chat-info" options={Platform.OS === "android" ? nestedSheet : { ...nestedSheet, sheetAllowedDetents: [0.7, 1], sheetGrabberVisible: true }} />
               <Stack.Screen name="message/[id]" options={Platform.OS === "android" ? sheet : { ...sheet, sheetAllowedDetents: [0.5, 1], sheetGrabberVisible: true }} />
+              <Stack.Screen name="command/[id]" options={Platform.OS === "android" ? sheet : { ...sheet, sheetAllowedDetents: [0.5, 1], sheetGrabberVisible: true }} />
               <Stack.Screen name="tasks" options={Platform.OS === "android" ? nestedSheet : { ...nestedSheet, sheetAllowedDetents: [0.5, 1], sheetGrabberVisible: true }} />
               <Stack.Screen name="new-bot" options={sheet} />
               <Stack.Screen name="new-group" options={sheet} />
               <Stack.Screen name="settings" options={nestedSheet} />
               <Stack.Screen
                 name="attachment/[id]"
-                options={{ presentation: "fullScreenModal", headerShown: true, headerStyle: { backgroundColor: "#000000" }, headerTintColor: "#FFFFFF", headerTitleStyle: { color: "#FFFFFF" }, contentStyle: { backgroundColor: "#000000" } }}
+                options={{ presentation: "fullScreenModal", headerShown: true, headerStyle: { backgroundColor: "#000000" }, headerTintColor: "#FFFFFF", headerTitleStyle: { color: "#FFFFFF" }, contentStyle: { backgroundColor: "#000000" }, statusBarStyle: "light" }}
               />
             </Stack.Protected>
             <Stack.Protected guard={!paired}>
               <Stack.Screen name="pair" options={{ headerShown: false, gestureEnabled: false }} />
             </Stack.Protected>
           </Stack>
+          <AlertHost />
         </ThemeProvider>
       </KeyboardProvider>
+      </HostPaletteContext.Provider>
     </GestureHandlerRootView>
   );
 }

@@ -782,7 +782,7 @@ final class OnboardingViewController: NSViewController {
     /// Opens the custom provider sheet over onboarding; once the provider is saved, the first
     /// bot runs with it and onboarding is done.
     private func setUpCustomProvider(_ preset: CustomProviderPreset?) {
-        CustomProviderViewController.present(kind: nil, preset: preset, from: self) { [weak self] kind in
+        CustomProviderViewController.present(kind: nil, preset: preset, forBots: true, from: self) { [weak self] kind in
             guard let self, self.step != .done else { return }
             if let bot = self.firstBot, bot.provider != kind {
                 self.store.updateBot(bot.id, name: bot.name, provider: kind)

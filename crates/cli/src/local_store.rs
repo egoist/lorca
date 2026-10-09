@@ -380,6 +380,19 @@ impl LocalStore {
         collect_messages(rows)
     }
 
+    /// Immutable output-version rows, without materializing unrelated tool transcripts.
+    pub fn outputs(&self, chat_id: &str, task_id: Option<&str>) -> anyhow::Result<Vec<Message>> {
+        let connection = self.connection.lock().unwrap();
+        let mut statement = connection.prepare(
+            "SELECT message_json FROM messages WHERE chat_id = ?1
+             AND json_type(message_json, '$.output') = 'object'
+             AND (?2 IS NULL OR json_extract(message_json, '$.output.task_id') = ?2)
+             ORDER BY position",
+        )?;
+        let rows = statement.query_map(params![chat_id, task_id], |row| row.get::<_, String>(0))?;
+        collect_messages(rows)
+    }
+
     /// The model-visible ordering, with a valid compaction cursor taking precedence over the
     /// fallback limit. Without a valid cursor only the newest `limit` rows are materialized.
     pub fn context(

@@ -44,6 +44,28 @@ func TestStatusesKeepCustomProviders(t *testing.T) {
 	expect(t, len(ToProviders(nil)), 0)
 }
 
+func TestAutoReviewKeepsItsModels(t *testing.T) {
+	picked := ToAutoReview(decodeJSON[*WireAutoReview](t, `{"is_enabled": true, "rules": [], "provider": "custom:typesafe",
+		"models": {"custom:typesafe": "jev-1.13", "anthropic": "claude-opus-5", "mistral": "m", "deepseek": ""}}`))
+	expect(t, picked.Provider, "custom:typesafe")
+	expect(t, picked.Models, map[ProviderKind]string{"custom:typesafe": "jev-1.13", "anthropic": "claude-opus-5"})
+	// Absent, and a kind this build does not know, are the bot's own provider.
+	own := ToAutoReview(decodeJSON[*WireAutoReview](t, `{"is_enabled": false, "rules": []}`))
+	expect(t, []any{own.IsEnabled, own.Provider, len(own.Models)}, []any{false, "", 0})
+	unknown := ToAutoReview(decodeJSON[*WireAutoReview](t, `{"is_enabled": true, "provider": "mistral"}`))
+	expect(t, unknown.Provider, "")
+	// The catalog marks its decision models, and a decision provider keeps its API; each status
+	// names the provider's default review model.
+	models := ToModels(decodeJSON[[]WireModel](t, `[{"provider": "opencode", "id": "jev-1.13", "name": "Jev 1.13", "levels": [], "decides": true},
+		{"provider": "opencode", "id": "kimi-k3", "name": "Kimi K3", "levels": ["max"]}]`))
+	expect(t, []bool{models[0].Decides, models[1].Decides}, []bool{true, false})
+	providers := ToProviders(decodeJSON[[]WireProvider](t, `[{"kind": "deepseek", "is_connected": true, "detail": "", "review_model": "deepseek-flash"},
+		{"kind": "custom:typesafe", "is_connected": true, "detail": "", "name": "TypeSafe", "api": "system-one", "review_model": "jev-1.13", "models": [{"id": "jev-1.13", "levels": []}]},
+		{"kind": "custom:empty", "is_connected": true, "detail": "", "name": "Empty", "api": "chat-completions", "models": []}]`))
+	expect(t, []any{providers[1].API, providers[1].Decides()}, []any{APISystemOne, true})
+	expect(t, []string{providers[0].ReviewModel, providers[1].ReviewModel, providers[2].ReviewModel}, []string{"deepseek-flash", "jev-1.13", ""})
+}
+
 func TestListedModelKeepsWhatItsServerSaid(t *testing.T) {
 	yes := true
 	expect(t, ToCustomModel(decodeJSON[WireCustomModel](t, `{"id": "llava:13b", "name": null, "context_window": 4096, "max_output": null, "images": true}`)),

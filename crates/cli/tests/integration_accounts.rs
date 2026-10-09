@@ -108,7 +108,7 @@ async fn paired_sign_in_selects_only_its_account_and_preserves_sources_and_revie
         assert_eq!(structured["structuredContent"]["document"]["webViewLink"], "https://docs.google.com/document/d/1/edit");
         assert_eq!(calls.lock().unwrap().last().unwrap(), expected);
     }
-    app.set_auto_review(AutoReview { is_enabled: false, rules: Vec::new() });
+    app.set_auto_review(AutoReview { is_enabled: false, ..AutoReview::default() });
     let bot: Bot = app.state.lock().unwrap().bots.first().unwrap().clone();
     let assistant = AssistantMessage::empty("test", "test");
     let context = AgentContext { system_prompt: String::new(), messages: Vec::new(), tools: Vec::new(), cache_points: Vec::new() };

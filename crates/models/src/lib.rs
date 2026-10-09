@@ -79,10 +79,13 @@ pub enum Wire {
     Messages,
     /// `/v1/responses`
     Responses,
+    /// `/v1/systemone`: a decision model, which answers typed questions with probabilities and
+    /// writes no text, so Auto-review can run it and bots cannot.
+    SystemOne,
 }
 
 impl Wire {
-    const ALL: [Wire; 3] = [Wire::ChatCompletions, Wire::Messages, Wire::Responses];
+    const ALL: [Wire; 4] = [Wire::ChatCompletions, Wire::Messages, Wire::Responses, Wire::SystemOne];
 
     /// Its name in the catalog, the one custom providers use for their protocol.
     pub fn as_str(&self) -> &'static str {
@@ -90,6 +93,7 @@ impl Wire {
             Wire::ChatCompletions => "chat-completions",
             Wire::Messages => "messages",
             Wire::Responses => "responses",
+            Wire::SystemOne => "system-one",
         }
     }
 }
@@ -121,6 +125,12 @@ pub struct ModelInfo {
 }
 
 impl ModelInfo {
+    /// Whether it is a decision model, one that answers typed questions instead of chatting:
+    /// Auto-review can run it, and no bot can.
+    pub fn decides(&self) -> bool {
+        self.wire == Some(Wire::SystemOne)
+    }
+
     /// What a response cost, at the tier its input size lands in.
     pub fn cost_of(&self, usage: &Usage) -> Cost {
         let input_tokens = usage.input + usage.cache_read + usage.cache_write;
@@ -184,14 +194,15 @@ pub fn find_any(model: &str) -> Option<&'static ModelInfo> {
     models.iter().find(|m| m.id == model).or_else(|| models.iter().find(dated))
 }
 
-/// The models a provider offers, in the catalog's order (the first is the default).
+/// The models a bot of a provider can run, in the catalog's order (the first is the default):
+/// every one it lists but its decision models.
 pub fn for_provider(provider: &str) -> Vec<&'static ModelInfo> {
-    models().iter().filter(|m| m.provider == provider).collect()
+    models().iter().filter(|m| m.provider == provider && !m.decides()).collect()
 }
 
 /// The model a provider runs when a bot names none: the first it lists.
 pub fn default_model(provider: &str) -> Option<&'static str> {
-    models().iter().find(|m| m.provider == provider).map(|m| m.id)
+    for_provider(provider).first().map(|m| m.id)
 }
 
 /// The small, fast model Auto-review runs on for a provider.
@@ -260,6 +271,15 @@ mod tests {
         // Zen can turn DeepSeek V4 Pro's thinking off; on Go it thinks at least at high.
         assert_eq!(find("opencode", "deepseek-v4-pro").unwrap().clamp_level(Off), Some(Off));
         assert_eq!(find("opencode-go", "deepseek-v4-pro").unwrap().clamp_level(Off), Some(High));
+    }
+
+    #[test]
+    fn decision_models_are_for_auto_review_alone() {
+        let jev = find("opencode", "jev-1.13").unwrap();
+        assert!(jev.decides() && jev.levels.is_empty());
+        assert!(models().iter().any(|m| m.provider == "opencode" && m.id == "jev-1.13-free"));
+        assert!(!for_provider("opencode").iter().any(|m| m.decides()), "a bot cannot run a decision model");
+        assert!(!find("opencode", "deepseek-v4.1-flash").unwrap().decides());
     }
 
     #[test]
