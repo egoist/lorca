@@ -1,18 +1,23 @@
 import Foundation
 
-/// What a note, a suggestion, or a change is about: a routine's task, or a skill of a plugin on
-/// the bot's Runner. The CLI names them; the app sends one back as it came.
+/// What a note, a suggestion, or a change is about: a routine's task, or a saved skill of the
+/// bot's or of a group it is in. The CLI names them; the app sends one back as it came.
 struct FeedbackTarget: Decodable, Hashable {
+    struct Scope: Decodable, Hashable {
+        var kind: String
+        var id: String
+    }
+
     var kind: String
     var id: String?
-    var pluginId: String?
-    var name: String?
+    var scope: Scope?
+
+    var isSkill: Bool { kind == "playbook" }
 
     var params: [String: Any] {
         var params: [String: Any] = ["kind": kind]
         if let id { params["id"] = id }
-        if let pluginId { params["plugin_id"] = pluginId }
-        if let name { params["name"] = name }
+        if let scope { params["scope"] = ["kind": scope.kind, "id": scope.id] }
         return params
     }
 }
@@ -87,7 +92,7 @@ struct BotFeedback: Hashable {
     @MainActor func name(of target: FeedbackTarget) -> String {
         if let known = targets.first(where: { $0.target == target }) { return known.name }
         if target.kind == "routine_prompt", let id = target.id, let routine = AppStore.shared.routine(id) { return routine.name }
-        return target.name ?? target.id ?? L("Workflow")
+        return target.id ?? L("Workflow")
     }
 
     func note(_ id: FeedbackNote.ID) -> FeedbackNote? {

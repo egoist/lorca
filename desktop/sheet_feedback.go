@@ -420,11 +420,8 @@ type feedbackItemState struct {
 }
 
 func feedbackTargetKind(kind string) string {
-	switch kind {
-	case "plugin_skill":
+	if kind == "playbook" {
 		return L("Skill")
-	case "playbook":
-		return L("Playbook")
 	}
 	return L("Task")
 }

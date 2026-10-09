@@ -41,28 +41,15 @@ impl Origin {
     }
 }
 
+/// What a revision changes: the task of one of the bot's routines, or the instructions of a
+/// saved skill in the bot's scope or a group project it belongs to.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Target {
-    RoutinePrompt {
-        id: String,
-    },
-    PluginSkill {
-        plugin_id: String,
-        name: String,
-    },
-    /// Calls #77's canonical get/save API when that module is present. No duplicate records.
-    Playbook {
-        scope: Scope,
-        id: String,
-    },
+    RoutinePrompt { id: String },
+    Playbook { scope: Scope, id: String },
 }
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct Scope {
-    pub kind: String,
-    pub id: String,
-}
+pub use crate::playbooks::Scope;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Feedback {

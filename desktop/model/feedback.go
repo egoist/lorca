@@ -11,13 +11,24 @@ import (
 // messages, the changes to its routines and skills the bot suggests from it, and the changes the
 // user accepted. The bot's Runner keeps all of it and applies every decision; the app asks.
 
-// FeedbackTarget is what a note, a suggestion, or a change is about: a routine's task, or a skill
-// of a plugin on the bot's Runner. The CLI names them; the app sends one back as it came.
+// FeedbackTarget is what a note, a suggestion, or a change is about: a routine's task, or a saved
+// skill of the bot's or of a group it is in. The CLI names them; the app sends one back as it
+// came. It is comparable, so a scope is a value.
 type FeedbackTarget struct {
-	Kind     string `json:"kind"`
-	ID       string `json:"id,omitempty"`
-	PluginID string `json:"plugin_id,omitempty"`
-	Name     string `json:"name,omitempty"`
+	Kind  string         `json:"kind"`
+	ID    string         `json:"id,omitempty"`
+	Scope *FeedbackScope `json:"scope,omitempty"`
+}
+
+// FeedbackScope is a skill's scope: a bot, or a group's project.
+type FeedbackScope struct {
+	Kind string `json:"kind"`
+	ID   string `json:"id"`
+}
+
+// Same is whether two targets name the same routine or skill.
+func (t FeedbackTarget) Same(o FeedbackTarget) bool {
+	return t.Kind == o.Kind && t.ID == o.ID && (t.Scope == nil) == (o.Scope == nil) && (t.Scope == nil || *t.Scope == *o.Scope)
 }
 
 // The kinds of a note: how the user found a message, or a routine run that failed.
@@ -104,14 +115,14 @@ func (f BotFeedback) Note(id string) *FeedbackNote {
 // FeedbackTargetName is what the user calls a target: its routine's or skill's name.
 func (s *Store) FeedbackTargetName(f BotFeedback, target FeedbackTarget) string {
 	for _, known := range f.Targets {
-		if known.Target == target {
+		if known.Target.Same(target) {
 			return known.Name
 		}
 	}
 	if routine := s.Routine(target.ID); target.Kind == "routine_prompt" && routine != nil {
 		return routine.Name
 	}
-	return firstNonEmpty(target.Name, target.ID, L("Workflow"))
+	return firstNonEmpty(target.ID, L("Workflow"))
 }
 
 func firstNonEmpty(values ...string) string {
@@ -483,7 +494,7 @@ func (s *Store) demoFeedback(botID string) BotFeedback {
 		Targets: []FeedbackTargetName{
 			{Name: "Morning brief", Target: brief}, {Name: "Launch checklist", Target: checklist},
 			{Name: "Review requests", Target: FeedbackTarget{Kind: "routine_prompt", ID: "rt-reviews"}},
-			{Name: "GitHub · Pull request review", Target: FeedbackTarget{Kind: "plugin_skill", PluginID: "github", Name: "Pull request review"}},
+			{Name: "launch-post", Target: FeedbackTarget{Kind: "playbook", ID: "playbook-launch-post", Scope: &FeedbackScope{Kind: "project", ID: "chat-relay"}}},
 		},
 	}
 }

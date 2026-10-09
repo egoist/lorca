@@ -553,9 +553,9 @@ pub async fn serve(
     require_actor(app, actor)?;
     #[cfg(feature = "runner")]
     if method == "reviews.create" || method == "reviews.edit" || method == "reviews.approve" {
-        return crate::review_execution::mutate(app, method, params, actor)
-            .await
-            .map(|item| json!(item));
+        let item = crate::review_execution::mutate(app, method, params, actor).await?;
+        crate::feedback::review_decided(app, &item).await;
+        return Ok(json!(item));
     }
     if method != "reviews.reject" && method != "reviews.cancel" {
         return Err("This Runner does not support that review action.".into());
@@ -603,5 +603,6 @@ pub async fn serve(
     };
     publish_origin(app, id);
     record_on_task(app, &item).await;
+    crate::feedback::review_decided(app, &item).await;
     Ok(json!(item))
 }

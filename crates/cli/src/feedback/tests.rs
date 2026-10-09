@@ -386,60 +386,66 @@ fn diff_handles_unicode_empty_files_and_shared_suffix() {
 }
 
 #[tokio::test]
-async fn installed_skills_apply_and_roll_back_without_refresh_overwriting_reviewed_text() {
+async fn a_skill_revision_is_a_guarded_save_with_its_provenance_and_undoes_the_same_way() {
     let s = scratch();
-    let mut manifest:crate::plugins::Manifest=serde_json::from_value(json!({"id":"feedback-test","name":"Feedback test","servers":{"test":{"type":"stdio","command":"lorca-feedback-test-missing-server"}},"skills":[{"name":"Brief","content":"Summarize the inbox."}]})).unwrap();
-    crate::plugins::install(&s.app, manifest.clone(), "marketplace").unwrap();
-    let f = record(&s.app, &s.bot, input(&s, Kind::Explicit))
-        .await
-        .unwrap();
-    let target = Target::PluginSkill {
-        plugin_id: manifest.id.clone(),
-        name: "Brief".into(),
-    };
-    let p = propose(
-        &s.app,
-        &s.bot,
-        Proposed {
-            target: target.clone(),
-            after: json!("Summarize the inbox. Put the summary first."),
-            evidence: vec![f.id],
-            explanation: "Use the user's selected ordering.".into(),
-        },
-    )
-    .await
-    .unwrap();
-    let applied = decide(&s.app, &s.bot, &p.id, &p.diff_hash, true, "device")
-        .await
-        .unwrap();
-    manifest.description = "Updated marketplace description".into();
-    manifest.skills[0].content = "New marketplace instructions".into();
-    crate::plugins::refresh_installed(&s.app, &[manifest]);
+    let scope = Scope::bot(&s.bot);
+    let content = crate::playbooks::PlaybookContent { name: "launch-brief".into(), description: "How to write the launch brief".into(), instructions: "Summarize the inbox.".into(), ..Default::default() };
+    let saved = crate::playbooks::save(&s.app, &scope, None, content, 0, "", Default::default()).unwrap();
+    let id = saved["id"].as_str().unwrap().to_string();
+    let target = Target::Playbook { scope: scope.clone(), id: id.clone() };
+    assert!(skills(&s.app, &s.bot).iter().any(|(t, name)| *t == target && name == "launch-brief"));
+    let f = record(&s.app, &s.bot, input(&s, Kind::Explicit)).await.unwrap();
+    let proposed = |after: &str| Proposed { target: target.clone(), after: json!(after), evidence: vec![f.id.clone()], explanation: "Use the user's ordering.".into() };
+    assert!(propose(&s.app, &s.bot, Proposed { after: json!({"instructions": "x"}), ..proposed("") }).await.is_err(), "text only");
+    let p = propose(&s.app, &s.bot, proposed("Summarize the inbox. Put the summary first.")).await.unwrap();
+    let applied = decide(&s.app, &s.bot, &p.id, &p.diff_hash, true, "device").await.unwrap();
+    let view = crate::playbooks::get(&s.app, &scope, &id).unwrap();
+    assert_eq!(view["content"]["instructions"], "Summarize the inbox. Put the summary first.");
+    assert_eq!(view["content"]["name"], "launch-brief", "only the instructions change");
+    assert_eq!(view["revision"], 2);
+    assert_eq!(view["provenance"]["kind"], "workflow_feedback");
+    assert_eq!(view["provenance"]["message_ids"][0], s.origin.message_id.as_str());
+
+    // An edit the user made since refuses the undo, as it would refuse a stale suggestion.
     let current = read_target(&s.app, &s.bot, &target).await.unwrap();
-    assert_eq!(current.content, p.after);
-    rollback(
-        &s.app,
-        &s.bot,
-        applied["revision"]["id"].as_str().unwrap(),
-        &current.hash,
-        "device",
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        read_target(&s.app, &s.bot, &target).await.unwrap().content,
-        json!("Summarize the inbox.")
-    );
-    assert!(read_target(
-        &s.app,
-        &s.bot,
-        &Target::PluginSkill {
-            plugin_id: "../escape".into(),
-            name: "x".into()
-        }
-    )
-    .await
-    .is_err());
+    let mut edited: crate::playbooks::PlaybookContent = serde_json::from_value(view["content"].clone()).unwrap();
+    edited.instructions = "Written by hand.".into();
+    crate::playbooks::save(&s.app, &scope, Some(&id), edited, 2, &current.hash, Default::default()).unwrap();
+    let revision = applied["revision"]["id"].as_str().unwrap();
+    assert!(rollback(&s.app, &s.bot, revision, &current.hash, "device").await.is_err());
+    let stale = propose(&s.app, &s.bot, proposed("Another change.")).await.unwrap();
+    let hand = read_target(&s.app, &s.bot, &target).await.unwrap();
+    let mut back: crate::playbooks::PlaybookContent = serde_json::from_value(crate::playbooks::get(&s.app, &scope, &id).unwrap()["content"].clone()).unwrap();
+    back.instructions = "Summarize the inbox. Put the summary first.".into();
+    crate::playbooks::save(&s.app, &scope, Some(&id), back, hand.revision, &hand.hash, Default::default()).unwrap();
+    assert!(decide(&s.app, &s.bot, &stale.id, &stale.diff_hash, true, "device").await.unwrap_err().contains("changed"));
+    let current = read_target(&s.app, &s.bot, &target).await.unwrap();
+    rollback(&s.app, &s.bot, revision, &current.hash, "device").await.unwrap();
+    assert_eq!(crate::playbooks::get(&s.app, &scope, &id).unwrap()["content"]["instructions"], "Summarize the inbox.");
+    assert!(read_target(&s.app, &s.bot, &Target::Playbook { scope: Scope::bot("another-bot"), id }).await.is_err());
+}
+#[tokio::test]
+async fn review_decisions_become_feedback_once_and_nothing_else_does() {
+    let s = scratch();
+    let actor = s.app.this_device_id().unwrap();
+    let entry = |id: &str, change: &str, previous: Option<&str>, text: &str| json!({"id": id, "change": change, "version": 1, "actor_device_id": actor, "at": 1.0,
+        "previous_payload": previous.map(|t| json!({"kind": "draft", "text": t})), "payload": {"kind": "draft", "text": text}});
+    let item: crate::review_queue::ReviewItem = serde_json::from_value(json!({
+        "id": "review-1", "runner_id": actor, "bot_id": s.bot, "request_hash": "h",
+        "origin": {"chat_id": s.origin.chat_id, "message_id": s.origin.message_id, "routine_id": null, "task_id": null},
+        "target": {"account": "Draft", "resource": "Launch note"}, "rationale": "", "payload": {"kind": "draft", "text": "Short note."},
+        "version": 2, "revision": 4, "preconditions": {"authorization_hash": "", "workdir": "", "connection_hash": null, "tool_hash": null, "files": []},
+        "state": "approved", "approval": null, "outcome": null, "created_at": 1.0, "updated_at": 1.0,
+        "history": [entry("h1", "created", None, "Long note."), entry("h2", "edited", Some("Long note."), "Short note."), entry("h3", "approved", None, "Short note."), entry("h4", "executed", None, "Short note.")],
+    })).unwrap();
+    review_decided(&s.app, &item).await;
+    review_decided(&s.app, &item).await;
+    let data = store::load(&s.app, &s.bot).unwrap();
+    let kinds: Vec<_> = data.feedback.iter().map(|f| f.kind.clone()).collect();
+    assert_eq!(kinds, vec![Kind::Edited, Kind::Accepted], "one record per decision, none for the rest");
+    assert_eq!(data.feedback[0].before.as_deref(), Some("Long note."));
+    assert_eq!(data.feedback[0].after.as_deref(), Some("Short note."));
+    assert_eq!(data.feedback[1].origin.review_id.as_deref(), Some("review-1"));
 }
 #[tokio::test]
 async fn workflow_exclusion_blocks_proposals_and_future_recording() {

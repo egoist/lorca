@@ -788,7 +788,6 @@ var zh = map[string]string{
 	"Pink":                             "粉色",
 	"Pinned":                           "已置顶",
 	"Plan this and delegate the parts": "制定计划并分派各部分",
-	"Playbook":                         "工作手册",
 	"Plugin call limit reached":        "已达插件调用上限",
 	"Plugin calls":                     "插件调用",
 	"plugin mcp marketplace":           "插件 插件市场 plugin mcp marketplace",

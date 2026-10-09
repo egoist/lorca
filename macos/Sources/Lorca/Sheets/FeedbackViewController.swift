@@ -666,9 +666,9 @@ final class FeedbackChangeViewController: SheetViewController {
         view.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
     }
 
-    /// The diff under what it changes: a routine's task, a skill, or a playbook.
+    /// The diff under what it changes: a routine's task, or a skill's instructions.
     private func diffSection(_ diff: String, width: CGFloat) -> SectionView {
-        let section = SectionView(title: kind == "plugin_skill" ? L("Skill") : kind == "playbook" ? L("Playbook") : L("Task"))
+        let section = SectionView(title: kind == "playbook" ? L("Skill") : L("Task"))
         section.setRows([FeedbackDiffView(diff: diff, width: width)])
         return section
     }

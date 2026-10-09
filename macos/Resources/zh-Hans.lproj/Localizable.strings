@@ -1238,7 +1238,6 @@
 "Couldn't undo the change" = "无法撤销修改";
 "“%@” has changed since, so this can't be undone." = "“%@”之后又改过，无法撤销这项修改。";
 "Skill" = "技能";
-"Playbook" = "工作手册";
 "Workflow" = "工作流";
 "All feedback" = "全部反馈";
 "1 note" = "1 条反馈";

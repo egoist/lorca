@@ -14,7 +14,7 @@ use store::{Revision, Store, MAX_TEXT};
 #[cfg(feature = "runner")]
 mod review;
 #[cfg(feature = "runner")]
-pub use review::{tick, FeedbackTool};
+pub use review::{tick, FeedbackTool, REVIEW_JOB};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -147,32 +147,23 @@ pub async fn record(app: &Arc<App>, bot_id: &str, input: Record) -> Result<Feedb
     Ok(feedback)
 }
 
+/// A skill the bot may revise from feedback: its own, or one of a group it is in.
 fn check_scope(app: &App, bot_id: &str, scope: &Scope) -> Result<(), String> {
-    match scope.kind.as_str() {
-        "bot" if scope.id == bot_id => Ok(()),
-        "project"
-            if app.chat(&scope.id).is_some_and(|c| {
-                c.meta.kind == "group" && c.meta.bot_ids.iter().any(|b| b == bot_id)
-            }) =>
-        {
-            Ok(())
-        }
-        _ => Err("A playbook scope must be this bot or a group containing it".into()),
-    }
+    let allowed = match scope.kind.as_str() {
+        "bot" => scope.id == bot_id,
+        "project" => app.chat(&scope.id).is_some_and(|c| c.meta.is_group() && c.meta.bot_ids.iter().any(|b| b == bot_id)),
+        _ => false,
+    };
+    if allowed { Ok(()) } else { Err("A skill's scope must be this bot or a group containing it".into()) }
 }
-fn skill_path(app: &App, plugin_id: &str, name: &str) -> Result<std::path::PathBuf, String> {
-    let plugins = app.plugins.lock().unwrap();
-    let plugin = plugins.get(plugin_id).ok_or("Unknown installed plugin")?;
-    if !plugin.manifest.skills.iter().any(|s| s.name == name) {
-        return Err("Unknown installed skill".into());
+/// A saved skill as `playbooks.get` answers it.
+fn saved_skill(app: &App, bot_id: &str, scope: &Scope, id: &str) -> Result<Value, String> {
+    check_scope(app, bot_id, scope)?;
+    let view = crate::playbooks::get(app, scope, id)?;
+    if view["status"] != "saved" {
+        return Err("Only a saved skill can be revised".into());
     }
-    // The identity comes from an installed manifest, never an arbitrary file path.
-    Ok(app
-        .config
-        .plugins_dir()
-        .join(plugin_id)
-        .join("skills")
-        .join(format!("{}.md", crate::plugins::slug(name))))
+    Ok(view)
 }
 async fn read_target(app: &Arc<App>, bot_id: &str, target: &Target) -> Result<Snapshot, String> {
     local_bot(app, bot_id)?;
@@ -184,34 +175,14 @@ async fn read_target(app: &Arc<App>, bot_id: &str, target: &Target) -> Result<Sn
                 .ok_or("Unknown routine for this bot")?;
             store::snapshot(json!(r.prompt), 0)
         }
-        Target::PluginSkill { plugin_id, name } => {
-            let text = std::fs::read_to_string(skill_path(app, plugin_id, name)?)
-                .map_err(|e| e.to_string())?;
-            store::snapshot(json!(text), 0)
-        }
+        // A skill's revisions change its instructions; its name, description and resources
+        // stay as the user saved them. The skill's own hash and revision guard the write.
         Target::Playbook { scope, id } => {
-            check_scope(app, bot_id, scope)?;
-            let value = Box::pin(crate::api::dispatch(
-                app,
-                "playbooks.get",
-                json!({"scope":scope,"id":id}),
-            ))
-            .await
-            .map_err(|e| {
-                format!("Canonical playbook adapter unavailable or refused the read: {e}")
-            })?;
+            let view = saved_skill(app, bot_id, scope, id)?;
             Snapshot {
-                content: value
-                    .get("content")
-                    .cloned()
-                    .ok_or("playbooks.get omitted content")?,
-                hash: value["hash"]
-                    .as_str()
-                    .ok_or("playbooks.get omitted hash")?
-                    .into(),
-                revision: value["revision"]
-                    .as_u64()
-                    .ok_or("playbooks.get omitted revision")?,
+                content: json!(view["content"]["instructions"].as_str().ok_or("This skill has no instructions")?),
+                hash: view["hash"].as_str().ok_or("This skill has no hash")?.into(),
+                revision: view["revision"].as_u64().ok_or("This skill has no revision")?,
             }
         }
     };
@@ -257,10 +228,8 @@ async fn propose_locked(
         }
     }
     let before = read_target(app, bot_id, &input.target).await?;
-    match &input.target {
-        Target::RoutinePrompt { .. } | Target::PluginSkill { .. } if !input.after.is_string() => return Err("This target accepts text only; permission, budget and schedule fields cannot be revised".into()),
-        Target::Playbook { .. } if !input.after.is_object() => return Err("A playbook revision takes its canonical content object".into()),
-        _ => {},
+    if !input.after.is_string() {
+        return Err("A revision is text only; permission, budget and schedule fields cannot be revised".into());
     }
     let after_text = store::text(&input.after);
     if after_text.trim().is_empty()
@@ -339,21 +308,17 @@ async fn write_target(
             app.roster_changed(true);
             Ok(())
         }
-        Target::PluginSkill { plugin_id, name } => {
-            let path = skill_path(app, plugin_id, name)?;
-            let _plugins = app.plugins.lock().unwrap();
-            let current = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-            if memory::hash_text(&current) != before.hash {
-                return Err("The skill changed; review a fresh proposal".into());
-            }
-            crate::config::write_private(&path, after.as_str().ok_or("A skill is text")?.as_bytes())
-                .map_err(|e| e.to_string())
-        }
         Target::Playbook { scope, id } => {
-            check_scope(app, bot_id, scope)?;
-            let origin = origins.first();
-            let provenance = json!({"kind":"workflow_feedback","chat_id":origin.map(|o| &o.chat_id),"message_ids":origins.iter().filter(|o| Some(&o.chat_id) == origin.map(|o| &o.chat_id)).map(|o| &o.message_id).collect::<Vec<_>>(),"note":"Explicitly reviewed workflow feedback revision"});
-            Box::pin(crate::api::dispatch(app, "playbooks.save", json!({"scope":scope,"id":id,"content":after,"expected_revision":before.revision,"expected_hash":before.hash,"provenance":provenance}))).await.map(|_| ())
+            let view = saved_skill(app, bot_id, scope, id)?;
+            let mut content: crate::playbooks::PlaybookContent = serde_json::from_value(view["content"].clone()).map_err(|e| e.to_string())?;
+            content.instructions = after.as_str().ok_or("A skill's instructions are text")?.into();
+            // The skill's history names the feedback behind the change, from a chat in its scope.
+            let chat_id = origins.iter().map(|o| &o.chat_id).find(|chat| scope.kind == "bot" || **chat == scope.id).cloned();
+            let message_ids = origins.iter().filter(|o| Some(&o.chat_id) == chat_id.as_ref()).map(|o| o.message_id.clone()).take(20).collect();
+            let provenance = crate::playbooks::Provenance { kind: "workflow_feedback".into(), chat_id, message_ids, note: "A change accepted from workflow feedback".into() };
+            crate::playbooks::save(app, scope, Some(id), content, before.revision, &before.hash, provenance)
+                .map(|_| ())
+                .map_err(|error| if error.contains("changed since") { "The skill changed; review a fresh proposal".into() } else { error })
         }
     }
 }
@@ -634,10 +599,8 @@ pub async fn serve(
             for r in app.routines_of(bot_id) {
                 targets.push(json!({"target":Target::RoutinePrompt{id:r.id},"name":r.name}));
             }
-            for p in app.plugins.lock().unwrap().installed() {
-                for s in &p.manifest.skills {
-                    targets.push(json!({"target":Target::PluginSkill{plugin_id:p.manifest.id.clone(),name:s.name.clone()},"name":format!("{} · {}",p.manifest.name,s.name)}));
-                }
+            for (target, name) in skills(app, bot_id) {
+                targets.push(json!({"target":target,"name":name}));
             }
             Ok(json!({"feedback":feedback,"feedback_count":included.len(),"proposals":pending,"revisions":revisions,"settings":{"review_every_secs":store.settings.review_every_secs},"targets":targets}))
         }
@@ -732,6 +695,60 @@ pub async fn serve(
         "feedback.review" => review::run(app, bot_id, false).await,
         other => Err(format!("Unknown feedback method {other}")),
     }
+}
+
+/// The review queue's explicit decisions are feedback on the work behind them: an approval, a
+/// rejection, or the user's edit of a proposed draft or action, each keyed by its history entry,
+/// so a decision seen again records nothing new. Created, cancelled, invalidated, executed and
+/// interrupted entries are no one's opinion.
+pub async fn review_decided(app: &Arc<App>, item: &crate::review_queue::ReviewItem) {
+    use crate::review_queue::{ReviewChange, ReviewPayload};
+    let text = |payload: &ReviewPayload| match payload {
+        ReviewPayload::Draft { text } => text.clone(),
+        other => store::text(&json!(other)),
+    };
+    for entry in &item.history {
+        let kind = match entry.change {
+            ReviewChange::Approved => Kind::Accepted,
+            ReviewChange::Rejected => Kind::Rejected,
+            ReviewChange::Edited => Kind::Edited,
+            _ => continue,
+        };
+        let edited = kind == Kind::Edited;
+        let reason = item.outcome.as_ref().map(|o| o.summary.as_str()).filter(|s| kind == Kind::Rejected && *s != "Rejected");
+        let input = Record {
+            kind,
+            origin: Origin {
+                chat_id: item.origin.chat_id.clone(),
+                message_id: item.origin.message_id.clone().unwrap_or_else(|| item.message_id()),
+                routine_id: item.origin.routine_id.clone(),
+                review_id: Some(item.id.clone()),
+                task_id: item.origin.task_id.clone(),
+            },
+            note: reason.unwrap_or_default().into(),
+            before: if edited { entry.previous_payload.as_ref().map(text) } else { None },
+            after: edited.then(|| text(&entry.payload)),
+            target: item.origin.routine_id.clone().map(|id| Target::RoutinePrompt { id }),
+            excluded: false,
+            event_id: Some(format!("review:{}:{}", item.id, entry.id)),
+        };
+        if let Err(error) = record(app, &item.bot_id, input).await {
+            tracing::debug!(%error, review = %item.id, "recording a review decision as feedback");
+        }
+    }
+}
+
+/// The saved skills a bot's feedback can revise: its own, then its groups', with their names.
+pub(crate) fn skills(app: &App, bot_id: &str) -> Vec<(Target, String)> {
+    crate::playbooks::summaries(app)
+        .into_iter()
+        .filter(|s| s["status"] == "saved")
+        .filter_map(|s| {
+            let scope: Scope = serde_json::from_value(s["scope"].clone()).ok()?;
+            check_scope(app, bot_id, &scope).ok()?;
+            Some((Target::Playbook { scope, id: s["id"].as_str()?.into() }, s["name"].as_str()?.into()))
+        })
+        .collect()
 }
 
 /// A deleted bot's feedback, proposals and revision history go with it.

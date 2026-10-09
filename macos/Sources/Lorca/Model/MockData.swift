@@ -756,7 +756,7 @@ enum MockData {
             targets: [
                 .init(name: "Morning brief", target: routine), .init(name: "Launch checklist", target: checklist),
                 .init(name: "Review requests", target: FeedbackTarget(kind: "routine_prompt", id: "rt-reviews")),
-                .init(name: "GitHub · Pull request review", target: FeedbackTarget(kind: "plugin_skill", pluginId: "github", name: "Pull request review")),
+                .init(name: "launch-post", target: FeedbackTarget(kind: "playbook", id: "playbook-launch-post", scope: .init(kind: "project", id: "chat-relay"))),
             ])
     }
 
