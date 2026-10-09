@@ -25,6 +25,7 @@ enum SettingsPane: String, CaseIterable {
     case general
     case providers
     case autoReview = "auto-review"
+    case sharedLinks = "shared-links"
     case plugins
     case bots
     case device
@@ -35,7 +36,7 @@ enum SettingsPane: String, CaseIterable {
     /// the provider credentials.
     var isDeviceScoped: Bool {
         switch self {
-        case .general, .providers, .autoReview, .advanced: false
+        case .general, .providers, .autoReview, .sharedLinks, .advanced: false
         case .bots, .plugins, .device: true
         }
     }
@@ -70,6 +71,8 @@ final class AppStore {
     private(set) var routines: [Routine] = []
     /// Auto-review, shared through the roster.
     private(set) var autoReview = AutoReview()
+    /// The bots the account shares as links, shared through the roster.
+    private(set) var sharedLinks: [SharedLink] = []
     /// The account's provider credentials, the same on every Device.
     private(set) var providers: [ProviderCredential] = []
     /// The models the CLI's catalog offers, for the Model and Thinking pickers.
@@ -274,6 +277,7 @@ final class AppStore {
         }
         routines = (snapshot.routines ?? []).map { $0.toModel() }
         autoReview = snapshot.autoReview?.toModel() ?? AutoReview()
+        sharedLinks = snapshot.sharedLinks ?? []
         providers = (snapshot.providers ?? []).compactMap { $0.toModel() }
         catalog = (snapshot.models ?? []).compactMap { $0.toModel() }
         runningJobs = (snapshot.runningTurns ?? []).map { ($0.jobId, $0.chatId, $0.botId, $0.routineId) }
@@ -301,6 +305,7 @@ final class AppStore {
             bots = roster.bots.map { $0.toModel() }
             if let incoming = roster.routines { routines = incoming.map { $0.toModel() } }
             if let incoming = roster.autoReview { autoReview = incoming.toModel() }
+            if let incoming = roster.sharedLinks { sharedLinks = incoming }
             if let incoming = roster.providers { providers = incoming.compactMap { $0.toModel() } }
             if let incoming = roster.models { catalog = incoming.compactMap { $0.toModel() } }
             var merged: [Chat] = []
@@ -1710,6 +1715,7 @@ final class AppStore {
         chats = MockData.chats()
         routines = MockData.routines()
         autoReview = MockData.autoReview()
+        sharedLinks = MockData.sharedLinks()
         providers = MockData.providers()
         catalog = MockData.models()
         sortChats()

@@ -35,7 +35,7 @@ enum PaletteIndex {
         (#selector(AppDelegate.newBot(_:)), "plus.message", "create add"),
         (#selector(AppDelegate.newGroupChat(_:)), "person.2", "create room"),
         (#selector(AppDelegate.importBotTemplate(_:)), "square.and.arrow.down", "open file template"),
-        (#selector(RootSplitViewController.exportBotTemplate(_:)), "square.and.arrow.up", "save file share template"),
+        (#selector(RootSplitViewController.shareBotTemplate(_:)), "square.and.arrow.up", "export link file template"),
         (#selector(AppDelegate.pairDevice(_:)), "qrcode", "phone link runner"),
         (#selector(RootSplitViewController.addBotToChat(_:)), "person.badge.plus", "invite member group"),
         (#selector(RootSplitViewController.renameChat(_:)), "pencil", "title name"),

@@ -43,11 +43,11 @@ final class TemplateSharingTests: XCTestCase {
         return ["digest": "digest-1", "can_import": selected != nil && linearInstalled, "issues": [], "template": template, "requirements": requirements]
     }
 
-    func testExportSendsThePickedContentInTheBotsOrder() async throws {
+    func testShareSendsThePickedContentInTheBotsOrder() async throws {
         try prepare()
         let bot = try XCTUnwrap(AppStore.shared.bot("bot-nova"))
         var preview: [String: Any]?
-        let controller = TemplateExportViewController(bot: bot) { [unowned self] method, params in
+        let controller = TemplateShareViewController(bot: bot) { [unowned self] method, params in
             switch method {
             case "templates.contents": return self.contents
             case "templates.export.preview":
@@ -67,6 +67,8 @@ final class TemplateSharingTests: XCTestCase {
         XCTAssertEqual(rows[0].accessibilityRole(), .staticText)
         XCTAssertEqual(rows.map(\.isSelected), Array(repeating: false, count: 9))
         XCTAssertTrue(controller.confirmButton.isEnabled)
+        XCTAssertEqual(controller.confirmButton.title, "Share Link")
+        XCTAssertTrue(descendants(controller.view).contains { ($0 as? NSButton)?.title == "Save as File…" })
         XCTAssertFalse(descendants(controller.view).contains { ($0 as? NSButton)?.title == "Select All" }, "a short list has no Select All")
         // Taller than its room, the list ends between rows, never through one.
         let list = try XCTUnwrap(descendants(controller.view).compactMap { $0 as? TemplateItemList }.first)
@@ -77,7 +79,7 @@ final class TemplateSharingTests: XCTestCase {
             let frame = row.convert(row.bounds, to: list)
             XCTAssertFalse(frame.minY < -0.5 && frame.maxY > 0.5, "the list's edge cuts through \(row.toolTip ?? "")")
         }
-        try capture(controller, window: window, name: "export")
+        try capture(controller, window: window, name: "share")
 
         // Picked out of order, listed in the bot's: routines, plugins, then memories.
         _ = rows[8].accessibilityPerformPress()
@@ -91,7 +93,91 @@ final class TemplateSharingTests: XCTestCase {
         XCTAssertEqual(preview?["requirement_ids"] as? [String], [])
         try await wait { self.labels(in: controller.view).contains("What you picked uses GitHub. Check it under Plugins too.") }
         XCTAssertTrue(controller.confirmButton.isEnabled, "the user fixes the selection and tries again")
-        try capture(controller, window: window, name: "export-error")
+        try capture(controller, window: window, name: "share-error")
+    }
+
+    func testShareLinkShowsTheLinkCopied() async throws {
+        try prepare()
+        let bot = try XCTUnwrap(AppStore.shared.bot("bot-nova"))
+        let url = "https://lorca.app/t/yWUtxVvEA7X0edjxRUKd2A#-xMo1zlzI63iQ_tY2ATkxlkle7thq-OfylCF-jFDqYw"
+        var shared: [String: Any]?
+        let controller = TemplateShareViewController(bot: bot) { [unowned self] method, params in
+            switch method {
+            case "templates.contents": return self.contents
+            case "templates.export.preview": return ["digest": "digest-1"]
+            case "templates.share":
+                shared = params
+                return ["link": ["id": "yWUtxVvEA7X0edjxRUKd2A", "url": url]]
+            default: XCTFail("unexpected \(method)"); return [:]
+            }
+        }
+        let window = host(controller)
+        defer {
+            controller.dismiss(nil)
+            window.close()
+        }
+        try await wait { self.rows(in: controller.view).count == 9 }
+        _ = rows(in: controller.view)[1].accessibilityPerformPress()
+        controller.confirmButton.performClick(nil)
+        try await wait { controller.confirmButton.title == "Done" }
+        XCTAssertEqual(shared?["expected_digest"] as? String, "digest-1")
+        XCTAssertEqual(shared?["reviewed"] as? Bool, true)
+        XCTAssertNil(shared?["link_id"], "a bot shared the first time gets a new link")
+        XCTAssertEqual((shared?["selection"] as? [String: Any])?["routine_ids"] as? [String], ["rt-brief"])
+        XCTAssertEqual(LinkBox.pasteboard.string(forType: .string), url, "the link is copied already")
+        XCTAssertTrue(labels(in: controller.view).contains(url))
+        XCTAssertFalse(descendants(controller.view).contains { ($0 as? NSButton)?.title == "Cancel" })
+        try capture(controller, window: window, name: "shared")
+    }
+
+    func testUpdateKeepsTheLinkAndStartsFromWhatItHolds() async throws {
+        try prepare()
+        let bot = try XCTUnwrap(AppStore.shared.bot("bot-quill"))
+        let link = try XCTUnwrap(AppStore.shared.sharedLink(for: bot.id))
+        var shared: [String: Any]?
+        let contents: [String: Any] = [
+            "profile": ["id": "profile", "content": ["name": "Writer", "symbol_name": "pencil.and.scribble", "accent": "pink",
+                "description": "Writes docs, copy, and release notes in plain language: short sentences, no filler, and no exclamation marks."]],
+            "memories": [["id": "memory-voice", "content": "- Plain words, short sentences, no exclamation marks."],
+                         ["id": "memory-launch", "content": "- The launch post goes out Friday morning."]],
+            "routines": [], "requirements": [["service_id": "notion", "name": "Notion"]]]
+        let controller = TemplateShareViewController(bot: bot) { method, params in
+            switch method {
+            case "templates.contents": return contents
+            case "templates.export.preview": return ["digest": "digest-2"]
+            default:
+                shared = params
+                return ["link": ["id": link.id, "url": link.url]]
+            }
+        }
+        let window = host(controller)
+        defer {
+            controller.dismiss(nil)
+            window.close()
+        }
+        try await wait { self.rows(in: controller.view).count == 4 }
+        XCTAssertEqual(controller.confirmButton.title, "Update Link")
+        XCTAssertTrue(labels(in: controller.view).contains(link.url))
+        XCTAssertEqual(rows(in: controller.view).map(\.isSelected), [false, false, true, false], "the memory the link holds starts picked")
+        try capture(controller, window: window, name: "update")
+        controller.confirmButton.performClick(nil)
+        try await wait { controller.confirmButton.title == "Done" }
+        XCTAssertEqual(shared?["link_id"] as? String, link.id)
+    }
+
+    func testSharedLinksListTheAccountsLinks() throws {
+        try prepare()
+        let pane = SharedLinksSettingsViewController()
+        let window = NSWindow(contentRect: NSRect(x: -4000, y: -4000, width: 640, height: 420), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentViewController = pane
+        window.setContentSize(NSSize(width: 640, height: 420))
+        defer { window.close() }
+        pane.view.layoutSubtreeIfNeeded()
+        let row = try XCTUnwrap(descendants(pane.view).compactMap { $0 as? BotRow }.first)
+        XCTAssertTrue(labels(in: pane.view).contains("Writer"))
+        XCTAssertEqual(row.menu?.items.map(\.title), ["Copy Link", "", "Revoke Link…"])
+        try captureView(pane.view, window: window, name: "shared-links")
     }
 
     func testLongListsOfferSelectAll() async throws {
@@ -102,7 +188,7 @@ final class TemplateSharingTests: XCTestCase {
         memories += [["id": "memory-notes", "content": "- Release notes go out on Monday."], ["id": "memory-design", "content": "- The design review is on Tuesdays."]]
         contents["memories"] = memories
         var preview: [String: Any]?
-        let controller = TemplateExportViewController(bot: bot) { method, params in
+        let controller = TemplateShareViewController(bot: bot) { method, params in
             if method == "templates.contents" { return contents }
             preview = params["selection"] as? [String: Any]
             throw CLIClient.RequestError(message: "stop")
@@ -127,7 +213,7 @@ final class TemplateSharingTests: XCTestCase {
         var linearInstalled = false
         var requests: [[String: Any]] = []
         let url = URL(fileURLWithPath: "/tmp/Project Manager.lorca-template")
-        let controller = TemplateImportViewController(url: url, reply: { [unowned self] method, params in
+        let controller = TemplateImportViewController(source: .file(url), reply: { [unowned self] method, params in
             XCTAssertEqual(method, "templates.import.preview")
             requests.append(params)
             return self.importPreview(selected: "github", linearInstalled: linearInstalled)
@@ -139,8 +225,9 @@ final class TemplateSharingTests: XCTestCase {
         }
         try await wait { self.labels(in: controller.view).contains("Add Linear to Workbench from the Marketplace first.") }
         XCTAssertEqual(requests.first?["runner_id"] as? String, "dev-workbench")
+        XCTAssertEqual(requests.first?["path"] as? String, url.path)
         XCTAssertFalse(controller.confirmButton.isEnabled)
-        XCTAssertEqual(fields(in: controller.view).first?.stringValue, "Project Manager")
+        XCTAssertEqual(fields(in: controller.view).map(\.stringValue), [(url.path as NSString).abbreviatingWithTildeInPath, "Project Manager"])
         try capture(controller, window: window, name: "import-missing")
 
         linearInstalled = true
@@ -154,6 +241,33 @@ final class TemplateSharingTests: XCTestCase {
         XCTAssertEqual(stack.frame.height, stack.fittingSize.height, accuracy: 1, "the sheet shrinks with its rows")
         XCTAssertEqual((requests.last?["mappings"] as? [String: String]) ?? [:], [:], "a new Runner starts over")
         try capture(controller, window: window, name: "import")
+    }
+
+    func testImportOpensAPastedLink() async throws {
+        try prepare()
+        var requests: [[String: Any]] = []
+        let controller = TemplateImportViewController(reply: { [unowned self] method, params in
+            requests.append(params)
+            return self.importPreview(selected: "github", linearInstalled: true)
+        }, onCreate: { _ in XCTFail("a test never adds a bot") })
+        let window = host(controller)
+        defer {
+            controller.dismiss(nil)
+            window.close()
+        }
+        // Nothing to set up until a template opens.
+        XCTAssertFalse(labels(in: controller.view).contains("Name"))
+        XCTAssertTrue(requests.isEmpty)
+        try capture(controller, window: window, name: "import-empty")
+        let from = try XCTUnwrap(fields(in: controller.view).first)
+        let link = "https://lorca.app/t/yWUtxVvEA7X0edjxRUKd2A#-xMo1zlzI63iQ_tY2ATkxlkle7thq-OfylCF-jFDqYw"
+        from.stringValue = link
+        (controller as NSTextFieldDelegate).controlTextDidChange?(Notification(name: NSControl.textDidChangeNotification, object: from))
+        try await wait { controller.confirmButton.isEnabled }
+        XCTAssertEqual(requests.first?["link"] as? String, link)
+        XCTAssertNil(requests.first?["path"])
+        XCTAssertTrue(labels(in: controller.view).contains("Name"))
+        try capture(controller, window: window, name: "import-link")
     }
 
     func testContentsReadTheCLIsShape() {
@@ -174,6 +288,23 @@ final class TemplateSharingTests: XCTestCase {
         guard AppStore.shared.isMock else { throw XCTSkip("The sheets run against the demo roster: set LORCA_MOCK=1") }
         _ = NSApplication.shared
         AppStore.shared.start()
+        // Copy Link goes to a pasteboard of the test's own, never the user's.
+        LinkBox.pasteboard = NSPasteboard(name: NSPasteboard.Name("app.lorca.tests"))
+    }
+
+    /// A pane as it shows, in each appearance, when `LORCA_UI_CAPTURE_DIR` names a folder.
+    private func captureView(_ view: NSView, window: NSWindow, name: String) throws {
+        guard let folder = ProcessInfo.processInfo.environment["LORCA_UI_CAPTURE_DIR"] else { return }
+        for (suffix, appearance) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
+            window.appearance = NSAppearance(named: appearance)
+            view.layoutSubtreeIfNeeded()
+            view.displayIfNeeded()
+            let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+            view.cacheDisplay(in: view.bounds, to: bitmap)
+            let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+            try FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
+            try png.write(to: URL(fileURLWithPath: folder).appendingPathComponent("\(name)-\(suffix).png"))
+        }
     }
 
     /// Presents the sheet as the app does, on a window out of sight.
@@ -219,6 +350,6 @@ final class TemplateSharingTests: XCTestCase {
     private func popups(in view: NSView) -> [NSPopUpButton] { descendants(view).compactMap { $0 as? NSPopUpButton } }
     private func fields(in view: NSView) -> [NSTextField] { descendants(view).compactMap { $0 as? NSTextField }.filter(\.isEditable) }
     private func labels(in view: NSView) -> [String] {
-        descendants(view).compactMap { $0 as? NSTextField }.filter { !$0.isHidden }.map(\.stringValue)
+        descendants(view).compactMap { $0 as? NSTextField }.filter { !$0.isHiddenOrHasHiddenAncestor }.map(\.stringValue)
     }
 }

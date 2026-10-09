@@ -5,13 +5,24 @@ extension UTType {
     static let lorcaTemplate = UTType(filenameExtension: "lorca-template") ?? .json
 }
 
-/// Exports a bot as a template file: the user picks its profile, memories, routines, and the
-/// plugins it needs, sees each as the file will hold it, and saves the file wherever they like.
-/// The CLI writes the file; saving publishes nothing.
-final class TemplateExportViewController: SheetViewController {
+/// Shares a bot as a template: the user picks what goes in it besides the profile (routines,
+/// plugins, memories), sees each as the template will hold it, and shares a link, which the CLI
+/// puts on the relay encrypted with a key only the link carries, or saves a file. A bot shared
+/// before updates its link, which keeps its address.
+final class TemplateShareViewController: SheetViewController {
     private let bot: Bot
     private let reply: TemplateReply
+    /// The link the bot was shared as, which Update Link replaces what is behind.
+    private let link: SharedLink?
     private let list = TemplateItemList(maxHeight: 380)
+    private let linkBox = LinkBox()
+    private lazy var saveButton: NSButton = {
+        let button = NSButton(title: L("Save as File…"), target: self, action: #selector(saveFile))
+        button.bezelStyle = .rounded
+        return button
+    }()
+    /// The link is out: the sheet shows it, and Done closes it.
+    private var isShared = false
     private let status = Build.label("", font: .systemFont(ofSize: 11.5), color: .secondaryLabelColor, lines: 0)
     private var rows: [String: TemplateItemRow] = [:]
     /// What is picked, by kind: `skill_ids`, `memory_ids`, `routine_ids`, `requirement_ids`. The
@@ -26,8 +37,12 @@ final class TemplateExportViewController: SheetViewController {
     init(bot: Bot, reply: TemplateReply? = nil) {
         self.bot = bot
         self.reply = reply ?? { method, params in try await AppStore.shared.templateReply(method, params) }
-        super.init(title: L("Export “%@”", bot.name),
-            subtitle: L("Pick what goes in the template. Keys, sign-ins, and chats never do."), width: 480)
+        link = AppStore.shared.sharedLink(for: bot.id)
+        super.init(title: L("Share “%@”", bot.name),
+            subtitle: link == nil
+                ? L("Others get a copy of what you pick. Keys, sign-ins, and chats stay.")
+                : L("Update the link with what you pick now. Its address stays the same."),
+            width: 480)
     }
 
     @available(*, unavailable)
@@ -35,12 +50,16 @@ final class TemplateExportViewController: SheetViewController {
 
     override func loadView() {
         super.loadView()
-        for view in [list, status] as [NSView] {
+        for view in [linkBox, list, status] as [NSView] {
             contentStack.addArrangedSubview(view)
             view.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
         }
-        setButtons(confirm: L("Export…"))
+        linkBox.url = link?.url ?? ""
+        linkBox.isHidden = link == nil
+        contentStack.setCustomSpacing(16, after: linkBox)
+        setButtons(confirm: link == nil ? L("Share Link") : L("Update Link"), leading: saveButton)
         confirmButton.isEnabled = false
+        saveButton.isEnabled = false
         show(status: L("Loading…"))
         Task { [weak self] in
             guard let self else { return }
@@ -83,6 +102,13 @@ final class TemplateExportViewController: SheetViewController {
             accessories[section.title] = button
         }
         list.setSections(sections.map { ($0.title, $0.rows) }, accessories: accessories)
+        // An update starts from what the link holds, less what the bot no longer has.
+        if let selection = link?.selection {
+            for (key, ids) in [("skill_ids", selection.skillIds), ("routine_ids", selection.routineIds), ("requirement_ids", selection.requirementIds), ("memory_ids", selection.memoryIds)] {
+                picked[key] = (order[key] ?? []).filter(ids.contains)
+                for id in picked[key] ?? [] { self.rows[key + ":" + id]?.isSelected = true }
+            }
+        }
         isLoaded = true
         showPicked()
         show(status: "")
@@ -116,6 +142,7 @@ final class TemplateExportViewController: SheetViewController {
                 attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor])
         }
         confirmButton.isEnabled = isLoaded && !isBusy
+        saveButton.isEnabled = isLoaded && !isBusy
         if status.textColor == .systemRed { show(status: "") }
     }
 
@@ -132,17 +159,56 @@ final class TemplateExportViewController: SheetViewController {
         fitSheetToContent()
     }
 
-    /// Builds the file's contents first, so the CLI's checks speak before the Save panel opens,
-    /// then writes what was shown: the CLI refuses the save if the contents changed since.
+    /// Builds the template first, so the CLI's checks speak before anything leaves, then shares
+    /// what was shown: the CLI refuses it if the contents changed since.
     override func confirmTapped() {
+        if isShared {
+            dismiss(nil)
+            return
+        }
+        guard !isBusy else { return }
+        let selection = selection
+        setBusy(true)
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let digest = try await self.preview(selection)
+                var params: [String: Any] = ["bot_id": self.bot.id, "selection": selection, "expected_digest": digest, "reviewed": true]
+                if let link = self.link { params["link_id"] = link.id }
+                let reply = try await self.reply("templates.share", params)
+                guard let url = (reply["link"] as? [String: Any])?["url"] as? String else { throw CLIClient.RequestError(message: L("Couldn't read the CLI's answer.")) }
+                self.showShared(url)
+            } catch {
+                self.setBusy(false)
+                self.show(status: error.localizedDescription, color: .systemRed)
+            }
+        }
+    }
+
+    /// The link, copied already, and what it does.
+    private func showShared(_ url: String) {
+        isShared = true
+        list.isHidden = true
+        status.isHidden = true
+        linkBox.url = url
+        linkBox.isHidden = false
+        linkBox.copyLink()
+        setSheetSubtitle(link == nil
+            ? L("Anyone with this link can add their own copy of %@. Revoke it in Settings › Shared Links.", bot.name)
+            : L("The link now holds what you picked. Anyone who opens it gets this version."))
+        setButtons(confirm: L("Done"), cancel: nil)
+        fitSheetToContent()
+    }
+
+    /// The same template as a file, wherever the user saves it.
+    @objc private func saveFile() {
         guard !isBusy, let window = view.window else { return }
         let selection = selection
         setBusy(true)
         Task { [weak self] in
             guard let self else { return }
             do {
-                let preview = try await self.reply("templates.export.preview", ["bot_id": self.bot.id, "selection": selection])
-                guard let digest = preview["digest"] as? String else { throw CLIClient.RequestError(message: L("Couldn't read the CLI's answer.")) }
+                let digest = try await self.preview(selection)
                 let panel = NSSavePanel()
                 panel.allowedContentTypes = [.lorcaTemplate]
                 panel.nameFieldStringValue = "\(self.bot.name).lorca-template"
@@ -160,8 +226,15 @@ final class TemplateExportViewController: SheetViewController {
         }
     }
 
+    private func preview(_ selection: [String: Any]) async throws -> String {
+        let preview = try await reply("templates.export.preview", ["bot_id": bot.id, "selection": selection])
+        guard let digest = preview["digest"] as? String else { throw CLIClient.RequestError(message: L("Couldn't read the CLI's answer.")) }
+        return digest
+    }
+
     private func setBusy(_ busy: Bool) {
         isBusy = busy
         confirmButton.isEnabled = !busy && isLoaded
+        saveButton.isEnabled = !busy && isLoaded
     }
 }

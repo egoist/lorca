@@ -117,6 +117,7 @@ extension SettingsPane {
         switch self {
         case .general: L("General")
         case .autoReview: L("Auto-review")
+        case .sharedLinks: L("Shared Links")
         case .advanced: L("Advanced")
         case .bots: L("Bots")
         case .providers: L("Providers")
@@ -129,6 +130,7 @@ extension SettingsPane {
         switch self {
         case .general: "gearshape"
         case .autoReview: "checkmark.shield"
+        case .sharedLinks: "link"
         case .advanced: "slider.horizontal.3"
         case .bots: "person.2"
         case .providers: "key"

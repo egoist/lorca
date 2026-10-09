@@ -436,6 +436,7 @@ final class RootSplitViewController: NSSplitViewController {
             switch pane {
             case .general: GeneralSettingsViewController()
             case .autoReview: AutoReviewSettingsViewController()
+            case .sharedLinks: SharedLinksSettingsViewController()
             case .advanced: AdvancedSettingsViewController()
             case .bots: BotsSettingsViewController()
             case .providers: ProvidersSettingsViewController()
@@ -490,14 +491,9 @@ final class RootSplitViewController: NSSplitViewController {
         presentAsSheet(sheet)
     }
 
-    func presentTemplateImport() {
-        guard let window = view.window else { return }
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.lorcaTemplate]
-        panel.beginSheetModal(for: window) { [weak self] result in
-            guard result == .OK, let self, let url = panel.url else { return }
-            self.presentAsSheet(TemplateImportViewController(url: url) { [weak self] chatID in self?.open(chatID) })
-        }
+    /// New Bot from Template, on a shared bot's link when one opened the app.
+    func presentTemplateImport(link: String? = nil) {
+        presentAsSheet(TemplateImportViewController(source: link.map { .link($0) }) { [weak self] chatID in self?.open(chatID) })
     }
 
     func open(_ chatID: Chat.ID) {
@@ -582,13 +578,13 @@ final class RootSplitViewController: NSSplitViewController {
         sidebar.scrollSelectionToVisible()
     }
 
-    /// The bot of the direct chat that is showing, as a template file.
-    @objc func exportBotTemplate(_ sender: Any?) {
+    /// The bot of the direct chat that is showing, shared as a template.
+    @objc func shareBotTemplate(_ sender: Any?) {
         guard let bot = selectedDMBot else {
             NSSound.beep()
             return
         }
-        presentAsSheet(TemplateExportViewController(bot: bot))
+        presentAsSheet(TemplateShareViewController(bot: bot))
     }
 
     private var selectedDMBot: Bot? {
@@ -670,7 +666,7 @@ extension RootSplitViewController: NSMenuItemValidation {
             guard case let .chat(id) = selection, let chat = store.chat(id) else { return false }
             return chat.isGroup
         }
-        if menuItem.action == #selector(exportBotTemplate(_:)) {
+        if menuItem.action == #selector(shareBotTemplate(_:)) {
             return selectedDMBot != nil
         }
         if menuItem.action == #selector(goToChat(_:)) {

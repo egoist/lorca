@@ -250,3 +250,57 @@ final class TemplateItemList: NSView {
         if edge.isHidden != hidden { edge.isHidden = hidden }
     }
 }
+
+/// A shared link's address on the code fill, with a button that copies it, as the pairing
+/// sheet shows its code.
+final class LinkBox: BackgroundView {
+    /// Where Copy puts links: the general pasteboard, or a test's own.
+    static var pasteboard = NSPasteboard.general
+
+    private let label = Build.label("", font: .systemFont(ofSize: 12))
+    let copyButton = CopyFeedbackButton()
+
+    var url = "" {
+        didSet {
+            label.stringValue = url
+            label.toolTip = url
+        }
+    }
+
+    override init() {
+        super.init()
+        translatesAutoresizingMaskIntoConstraints = false
+        cornerRadius = 8
+        fillColor = Theme.codeBackground
+        label.isSelectable = true
+        label.lineBreakMode = .byTruncatingMiddle
+        copyButton.image = NSImage(systemSymbolName: "doc.on.doc", accessibilityDescription: L("Copy Link"))
+        copyButton.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 11, weight: .medium)
+        copyButton.bezelStyle = .accessoryBarAction
+        copyButton.isBordered = false
+        copyButton.toolTip = L("Copy Link")
+        copyButton.target = self
+        copyButton.action = #selector(copyLink)
+        copyButton.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
+        addSubview(copyButton)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            label.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+            label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
+            copyButton.leadingAnchor.constraint(equalTo: label.trailingAnchor, constant: 8),
+            copyButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            copyButton.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    @objc func copyLink() {
+        Self.pasteboard.clearContents()
+        if Self.pasteboard.setString(url, forType: .string) {
+            copyButton.showCopied()
+        }
+    }
+}

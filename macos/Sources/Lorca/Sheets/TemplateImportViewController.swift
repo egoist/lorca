@@ -1,13 +1,29 @@
 import AppKit
 
-/// Adds a bot from a template file: its name, the Runner it runs on, the provider, and for each
-/// plugin it uses one of that Runner's own connections. The new bot shares nothing with the one
-/// it was exported from, and its routines start paused.
+/// Adds a bot from a template, a link someone shared or a file: its name, the Runner it runs on,
+/// the provider, and for each plugin it uses one of that Runner's own connections. The new bot
+/// shares nothing with the one it came from, and its routines start paused.
 final class TemplateImportViewController: SheetViewController {
+    enum Source: Equatable {
+        case link(String)
+        case file(URL)
+    }
+
     private let store = AppStore.shared
-    private let url: URL
+    private var source: Source?
     private let onCreate: (Chat.ID) -> Void
     private let reply: TemplateReply
+    /// Where the template comes from: a pasted link, or the file Choose File… picked.
+    private let fromField = NSTextField()
+    private lazy var chooseButton: NSButton = {
+        let button = NSButton(title: L("Choose File…"), target: self, action: #selector(chooseFile))
+        button.bezelStyle = .rounded
+        return button
+    }()
+    /// What the template sets up, shown once one opens.
+    private var formViews: [NSView] = []
+    /// Whether the user typed a name, which a template opened later leaves alone.
+    private var isNameEdited = false
     private let nameField = NSTextField()
     private let runnerPopup = NSPopUpButton()
     private let providerPopup = NSPopUpButton()
@@ -26,8 +42,8 @@ final class TemplateImportViewController: SheetViewController {
     /// The picked Runner's plugins as last previewed, so a change to them previews again.
     private var previewedPlugins: [InstalledPlugin] = []
 
-    init(url: URL, reply: TemplateReply? = nil, onCreate: @escaping (Chat.ID) -> Void) {
-        self.url = url
+    init(source: Source? = nil, reply: TemplateReply? = nil, onCreate: @escaping (Chat.ID) -> Void) {
+        self.source = source
         self.onCreate = onCreate
         self.reply = reply ?? { method, params in try await AppStore.shared.templateReply(method, params) }
         super.init(title: L("New Bot from Template"), subtitle: "", width: 480)
@@ -38,6 +54,16 @@ final class TemplateImportViewController: SheetViewController {
 
     override func loadView() {
         super.loadView()
+        fromField.placeholderString = L("Paste a link to a shared bot")
+        fromField.delegate = self
+        switch source {
+        case let .link(link): fromField.stringValue = link
+        case let .file(url): fromField.stringValue = (url.path as NSString).abbreviatingWithTildeInPath
+        case nil: break
+        }
+        let from = Build.stack([fromField, chooseButton], orientation: .horizontal, spacing: 8)
+        fromField.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        chooseButton.setContentCompressionResistancePriority(.required, for: .horizontal)
         nameField.placeholderString = L("Name")
         nameField.delegate = self
         for runner in runners {
@@ -50,14 +76,45 @@ final class TemplateImportViewController: SheetViewController {
         for kind in providerKinds { providerPopup.addItem(withTitle: "\(kind.name) (\(kind.subtitle))") }
         providerPopup.selectItem(at: providerKinds.firstIndex(of: store.preferredProvider) ?? 0)
 
-        let views = [formRow(L("Name"), nameField), formRow(L("Runner"), runnerPopup), formRow(L("Provider"), providerPopup), pluginRows, list, note]
-        for view in views {
+        let fromRow = formRow(L("From"), from)
+        from.trailingAnchor.constraint(equalTo: fromRow.trailingAnchor).isActive = true
+        formViews = [formRow(L("Name"), nameField), formRow(L("Runner"), runnerPopup), formRow(L("Provider"), providerPopup), pluginRows, list]
+        for view in [fromRow] + formViews + [note] {
             contentStack.addArrangedSubview(view)
             view.widthAnchor.constraint(equalTo: contentStack.widthAnchor).isActive = true
         }
         contentStack.setCustomSpacing(16, after: pluginRows)
+        formViews.forEach { $0.isHidden = true }
         setButtons(confirm: L("Create Bot"))
         confirmButton.isEnabled = false
+        if source != nil {
+            showNote(L("Loading…"))
+            refresh()
+        } else {
+            showNote("")
+        }
+    }
+
+    /// A file instead of a link.
+    @objc private func chooseFile() {
+        guard let window = view.window, !isImporting else { return }
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.lorcaTemplate]
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .OK, let url = panel.url else { return }
+            self.fromField.stringValue = (url.path as NSString).abbreviatingWithTildeInPath
+            self.open(.file(url))
+        }
+    }
+
+    /// Another template: what it sets up shows again from the start.
+    private func open(_ source: Source) {
+        guard source != self.source else { return }
+        self.source = source
+        mappings.removeAll()
+        listsContents = false
+        preview = nil
+        formViews.forEach { $0.isHidden = true }
         showNote(L("Loading…"))
         refresh()
     }
@@ -80,7 +137,12 @@ final class TemplateImportViewController: SheetViewController {
     private var trimmedName: String { nameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines) }
 
     private var params: [String: Any] {
-        var params: [String: Any] = ["path": url.path, "mappings": mappings]
+        var params: [String: Any] = ["mappings": mappings]
+        switch source {
+        case let .link(link): params["link"] = link
+        case let .file(url): params["path"] = url.path
+        case nil: break
+        }
         if let runner { params["runner_id"] = runner.id }
         return params
     }
@@ -97,6 +159,7 @@ final class TemplateImportViewController: SheetViewController {
     }
 
     private func refresh() {
+        guard source != nil else { return }
         generation += 1
         let current = generation
         let request = params
@@ -111,6 +174,7 @@ final class TemplateImportViewController: SheetViewController {
             } catch {
                 guard current == self.generation else { return }
                 self.preview = nil
+                self.formViews.forEach { $0.isHidden = true }
                 self.showNote(error.localizedDescription, color: .systemRed)
             }
         }
@@ -118,7 +182,15 @@ final class TemplateImportViewController: SheetViewController {
 
     private func show(_ preview: TemplateImportPreview) {
         self.preview = preview
-        if !listsContents, nameField.stringValue.isEmpty { nameField.stringValue = preview.profile?.title ?? "" }
+        // A file or link that holds no template only says why.
+        guard preview.hasTemplate else {
+            formViews.forEach { $0.isHidden = true }
+            showNote(preview.issues.joined(separator: "\n"), color: .systemRed)
+            updateButton()
+            return
+        }
+        formViews.forEach { $0.isHidden = false }
+        if !listsContents, !isNameEdited { nameField.stringValue = preview.profile?.title ?? "" }
         for plugin in preview.plugins { mappings[plugin.id] = plugin.selected }
         showPlugins(preview.plugins)
         if !listsContents {
@@ -226,5 +298,16 @@ final class TemplateImportViewController: SheetViewController {
 }
 
 extension TemplateImportViewController: NSTextFieldDelegate {
-    func controlTextDidChange(_ obj: Notification) { updateButton() }
+    func controlTextDidChange(_ obj: Notification) {
+        guard (obj.object as? NSTextField) === fromField else {
+            isNameEdited = true
+            updateButton()
+            return
+        }
+        // A link reads once it is whole: its page and the key after #.
+        let text = fromField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.contains("/t/"), text.contains("#") {
+            open(.link(text))
+        }
+    }
 }

@@ -83,7 +83,7 @@ enum MainMenu {
         add(menu, L("New Bot from Template…"), #selector(AppDelegate.importBotTemplate(_:)))
         add(menu, L("New Group Chat…"), #selector(AppDelegate.newGroupChat(_:)), "n", modifiers: [.command, .shift])
         menu.addItem(.separator())
-        add(menu, L("Export as Template…"), #selector(RootSplitViewController.exportBotTemplate(_:)))
+        add(menu, L("Share as Template…"), #selector(RootSplitViewController.shareBotTemplate(_:)))
         menu.addItem(.separator())
         add(menu, L("Marketplace…"), #selector(AppDelegate.showMarketplace(_:)), "m", modifiers: [.command, .shift])
         menu.addItem(.separator())

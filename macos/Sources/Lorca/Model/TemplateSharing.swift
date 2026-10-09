@@ -105,6 +105,8 @@ struct TemplateImportPreview {
     let digest: String
     let canImport: Bool
     let issues: [String]
+    /// Whether the file or link held a template this Lorca reads.
+    let hasTemplate: Bool
     let plugins: [Plugin]
     let profile: TemplateItem?
     let skills: [TemplateItem]
@@ -123,6 +125,7 @@ struct TemplateImportPreview {
             }
             return Plugin(id: id, name: requirement["name"] as? String ?? id, connections: connections, selected: requirement["selected"] as? String)
         }
+        hasTemplate = json["template"] is [String: Any]
         let template = json["template"] as? [String: Any] ?? [:]
         profile = (template["profile"] as? [String: Any]).map { .profile($0, flags: []) }
         skills = (template["skills"] as? [[String: Any]] ?? []).enumerated().map { .skill(id: "skill-\($0)", $1, flags: []) }
@@ -133,7 +136,46 @@ struct TemplateImportPreview {
     }
 }
 
+/// What goes in a template besides the profile, by the ids `templates.contents` gave.
+struct TemplateSelection: Codable, Hashable {
+    var profile = true
+    var skillIds: [String] = []
+    var memoryIds: [String] = []
+    var routineIds: [String] = []
+    var requirementIds: [String] = []
+
+    /// The selection as `templates.export.preview` and `templates.share` take it.
+    var json: [String: Any] {
+        ["profile": profile, "skill_ids": skillIds, "memory_ids": memoryIds, "routine_ids": routineIds, "requirement_ids": requirementIds]
+    }
+}
+
+/// A bot the account shares as a link. The roster carries it to every Device, which lists,
+/// updates, and revokes it.
+struct SharedLink: Decodable, Hashable, Identifiable {
+    let id: String
+    /// The whole address, the key in its fragment.
+    let url: String
+    let botId: String
+    /// The bot's name when it was last shared.
+    let name: String
+    let selection: TemplateSelection
+    let updatedAt: Double
+
+    var updated: Date { Date(timeIntervalSince1970: updatedAt) }
+}
+
 extension AppStore {
+    /// The link the bot was last shared as.
+    func sharedLink(for botID: Bot.ID) -> SharedLink? {
+        sharedLinks.last { $0.botId == botID }
+    }
+
+    /// Takes the link down: whoever opens it sees that it no longer works.
+    func revokeLink(_ id: SharedLink.ID) async throws {
+        _ = try await templateReply("templates.unshare", ["link_id": id])
+    }
+
     func templateReply(_ method: String, _ params: [String: Any]) async throws -> [String: Any] {
         guard !isMock else { throw CLIClient.RequestError(message: L("Templates need the Lorca CLI.")) }
         let data = try await client.request(method, params)

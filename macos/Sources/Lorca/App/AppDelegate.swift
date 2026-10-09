@@ -29,9 +29,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             case .identityChanged:
                 self?.identityStateChanged()
                 self?.updateDockBadge()
+                self?.presentPendingTemplateLink()
             case .connectionChanged:
                 self?.showMainWindowIfDue()
-            case .snapshotReplaced, .chatsChanged:
+                self?.presentPendingTemplateLink()
+            case .snapshotReplaced:
+                self?.updateDockBadge()
+                self?.presentPendingTemplateLink()
+            case .chatsChanged:
                 self?.updateDockBadge()
             case .rosterChanged:
                 self?.relayStateChanged()
@@ -240,6 +245,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     @objc func importBotTemplate(_ sender: Any?) {
         showMainWindow()
         mainWindowController?.root.presentTemplateImport()
+    }
+
+    // MARK: - Shared links
+
+    /// A shared bot's link the app was opened with, kept until there is an account and a CLI
+    /// to read it: Open in Lorca on lorca.app may be what launched the app.
+    private var pendingTemplateLink: String?
+
+    /// `lorca://t/<id>#<key>` (`lorca-dev://` for Lorca Dev) from a shared bot's page.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls where url.host == "t" && url.scheme?.hasPrefix("lorca") == true {
+            pendingTemplateLink = url.absoluteString
+        }
+        presentPendingTemplateLink()
+    }
+
+    private func presentPendingTemplateLink() {
+        guard let link = pendingTemplateLink, store.hasIdentity == true, store.isConnected || store.isMock else { return }
+        pendingTemplateLink = nil
+        showMainWindow()
+        mainWindowController?.root.presentTemplateImport(link: link)
     }
 
     @objc func showMarketplace(_ sender: Any?) {

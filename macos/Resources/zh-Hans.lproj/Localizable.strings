@@ -821,12 +821,8 @@
 "Waiting for the bot to finish its step." = "正在等智能体完成当前这一步。";
 
 /* Bot templates */
-"Export…" = "导出…";
 "New Bot from Template…" = "从模板新建智能体…";
 "New Bot from Template" = "从模板新建智能体";
-"Export as Template…" = "导出为模板…";
-"Export “%@”" = "导出“%@”";
-"Pick what goes in the template. Keys, sign-ins, and chats never do." = "选择要放进模板的内容。密钥、登录信息和聊天记录不会放进去。";
 "Deselect All" = "取消全选";
 "Email address" = "邮箱地址";
 "Phone number" = "电话号码";
@@ -843,3 +839,25 @@
 "Templates need the Lorca CLI." = "模板需要 Lorca CLI。";
 "Couldn't read the CLI's answer." = "无法读取 CLI 的回复。";
 "Couldn't read the imported bot." = "无法读取导入的智能体。";
+"Share as Template…" = "作为模板分享…";
+"Save as File…" = "存储为文件…";
+"Share “%@”" = "分享“%@”";
+"Others get a copy of what you pick. Keys, sign-ins, and chats stay." = "别人会得到你所选内容的副本。密钥、登录信息和聊天记录不会带走。";
+"Update the link with what you pick now. Its address stays the same." = "用你现在选的内容更新这个链接，链接地址不变。";
+"Share Link" = "分享链接";
+"Update Link" = "更新链接";
+"Anyone with this link can add their own copy of %@. Revoke it in Settings › Shared Links." = "拿到这个链接的人都能添加一份自己的 %@。可以在“设置 › 分享的链接”中撤销。";
+"The link now holds what you picked. Anyone who opens it gets this version." = "链接已更新为你所选的内容。之后打开它的人会得到这个版本。";
+"Choose File…" = "选取文件…";
+"Paste a link to a shared bot" = "粘贴分享的智能体链接";
+"From" = "来源";
+"Copy Link" = "拷贝链接";
+"Shared Links" = "分享的链接";
+"Anyone with a link can add their own copy of the bot. Revoking a link stops it working; copies already added stay." = "拿到链接的人都能添加一份自己的智能体。撤销链接后它就不能再用；已经添加的副本会保留。";
+"Updated %@" = "更新于 %@";
+"No shared links yet. Share a bot from its chat's menu or File › Share as Template…" = "还没有分享的链接。可以从智能体聊天的菜单或“文件 › 作为模板分享…”分享。";
+"Revoke Link…" = "撤销链接…";
+"Revoke the link to “%@”?" = "撤销“%@”的链接？";
+"Whoever opens it sees that it no longer works. Bots already added from it stay." = "打开它的人会看到链接已失效。已经用它添加的智能体会保留。";
+"Revoke" = "撤销";
+"Couldn't revoke the link" = "无法撤销链接";

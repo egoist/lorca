@@ -55,14 +55,21 @@ class SheetViewController: NSViewController {
         view = container
     }
 
-    /// `cancel: nil` leaves only the confirm button, which then answers Escape as well.
+    private var buttonRowLeading: NSLayoutConstraint?
+
+    /// `cancel: nil` leaves only the confirm button, which then answers Escape as well. Called
+    /// again, it replaces the buttons, for a sheet that moves on to another step.
     func setButtons(confirm: String, cancel: String? = L("Cancel"), leading: NSButton? = nil) {
+        buttonRow.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        buttonRowLeading?.isActive = false
+        buttonRowLeading = nil
         confirmButton = NSButton(title: confirm, target: self, action: #selector(confirmTapped))
         confirmButton.bezelStyle = .rounded
         confirmButton.keyEquivalent = "\r"
 
         if let leading {
-            buttonRow.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20).isActive = true
+            buttonRowLeading = buttonRow.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20)
+            buttonRowLeading?.isActive = true
             buttonRow.addArrangedSubview(leading)
             buttonRow.addArrangedSubview(NSView())
         }
@@ -110,6 +117,11 @@ class SheetViewController: NSViewController {
     /// A new title, for a sheet that now shows what it just added.
     func setSheetTitle(_ title: String) {
         titleLabel.stringValue = title
+    }
+
+    func setSheetSubtitle(_ subtitle: String) {
+        subtitleLabel.stringValue = subtitle
+        subtitleLabel.isHidden = subtitle.isEmpty
     }
 
     /// AppKit sizes a presented sheet once and afterwards only lets it grow with its content.
