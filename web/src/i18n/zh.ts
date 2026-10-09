@@ -132,7 +132,7 @@ export const zh: Messages = {
   template: {
     title: '在 Lorca 中分享的智能体',
     open: '在 Lorca 中打开',
-    noApp: '还没有 Lorca？<download>下载 Mac、Windows 或 Linux 版</download>，然后再打开这个链接。',
+    noApp: '还没有 Lorca？<download>下载 Mac、Windows、Linux、Android 或 iPhone 版</download>，然后再打开这个链接。',
     included: '包含的内容',
     routines: '例行任务',
     routinesNote: '例行任务添加后先处于暂停状态。',

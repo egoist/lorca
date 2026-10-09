@@ -130,7 +130,7 @@ export const en = {
   template: {
     title: 'A bot shared with Lorca',
     open: 'Open in Lorca',
-    noApp: "Don't have Lorca? <download>Get it for Mac, Windows, or Linux</download>, then open this link again.",
+    noApp: "Don't have Lorca? <download>Get it for Mac, Windows, Linux, Android, or iPhone</download>, then open this link again.",
     included: "What's included",
     routines: 'Routines',
     routinesNote: 'Routines start paused.',
