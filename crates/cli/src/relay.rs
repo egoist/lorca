@@ -232,14 +232,6 @@ impl RelayClient {
         Ok(value["protocol"].as_u64().unwrap_or(0) as u32)
     }
 
-    pub async fn require_current_protocol(&self, url: &str) -> RelayResult<()> {
-        let protocol = self.health(url).await?;
-        if protocol < PROTOCOL {
-            return Err(RelayError { status: None, message: format!("This relay speaks protocol {protocol}; update the relay to protocol {PROTOCOL} to sync persistent reviews.") });
-        }
-        Ok(())
-    }
-
     /// Signed by the identity: registers the identity (idempotent) and attests one machine.
     pub async fn register(&self, url: &str, identity: &Identity, machine_pubkey: &str, box_pubkey: &str) -> RelayResult<()> {
         let payload = json!({

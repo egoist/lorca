@@ -20,6 +20,12 @@ use crate::routes::{ApiError, ApiResult};
 
 pub const KINDS: &[&str] = &[
     "roster",
+    "task",
+    "handoff",
+    "review",
+    "attention",
+    "project_context",
+    "event",
     "chat",
     "job",
     "job_cancel",
@@ -28,11 +34,6 @@ pub const KINDS: &[&str] = &[
     "response",
     "machine",
     "credentials",
-    "review",
-    "task",
-    "attention",
-    "project_context",
-    "event",
     "key",
     "file",
 ];

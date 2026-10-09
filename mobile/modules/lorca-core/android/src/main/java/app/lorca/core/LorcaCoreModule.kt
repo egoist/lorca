@@ -11,7 +11,8 @@ import uniffi.lorca_mobile.EventListener
 /// The Rust core behind the phone: started once with the app's folder and the phone's facts,
 /// then one request at a time and a stream of events.
 class LorcaCoreModule : Module() {
-  private var core: Core? = null
+  /// Written once by `start`, on the IO pool; read from the JS thread and the IO pool.
+  @Volatile private var core: Core? = null
 
   override fun definition() = ModuleDefinition {
     Name("LorcaCore")
@@ -22,13 +23,18 @@ class LorcaCoreModule : Module() {
       Updater.onStatus = { status -> sendEvent("update", status) }
     }
 
-    Function("start") { home: String, name: String, os: String, osVersion: String, model: String ->
-      if (core == null) {
-        core = Core.start(home, name, os, osVersion, model, object : EventListener {
-          override fun onEvent(json: String) {
-            sendEvent("event", mapOf("json" to json))
+    // Off the JS thread, so the first frame does not wait for the account to load.
+    AsyncFunction("start").Coroutine { home: String, name: String, os: String, osVersion: String, model: String ->
+      withContext(Dispatchers.IO) {
+        synchronized(this@LorcaCoreModule) {
+          if (core == null) {
+            core = Core.start(home, name, os, osVersion, model, object : EventListener {
+              override fun onEvent(json: String) {
+                sendEvent("event", mapOf("json" to json))
+              }
+            })
           }
-        })
+        }
       }
     }
 

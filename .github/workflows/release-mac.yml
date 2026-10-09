@@ -1,0 +1,169 @@
+# Releases the Mac app (macos/) to the R2 bucket behind mac-releases.lorca.app, as
+# `bun run release-mac` does from a Mac. A tag mac-vX.Y.Z, naming "version" in the root
+# package.json, builds that version on Apple silicon, signs it with the Developer ID, notarizes the
+# disk image, and uploads the image, the Sparkle archive with its deltas and notes, and the appcast,
+# which every installed app polls. A run by hand does the same on the commit it runs on, or, with
+# publish off, stops once the image is notarized and keeps it as the run's artifact. A version that
+# is already in the bucket is left alone. docs/releasing-mac.md has the steps.
+name: Release Mac app
+
+on:
+  push:
+    tags: ["mac-v*"]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Upload to R2 (off builds, signs, and notarizes only)
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+# One run at a time, so two runs never write the appcast at once.
+concurrency:
+  group: release-mac
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    # The app builds against the macOS 26 SDK, as the macOS app job in test.yml does.
+    runs-on: macos-26
+    timeout-minutes: 90
+    env:
+      # A pushed tag publishes.
+      PUBLISH: ${{ github.event_name == 'push' || inputs.publish }}
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      # rclone's remote r2, from the environment instead of rclone.conf.
+      RCLONE_CONFIG_R2_TYPE: s3
+      RCLONE_CONFIG_R2_PROVIDER: Cloudflare
+      RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+      RCLONE_CONFIG_R2_REGION: auto
+      RCLONE_CONFIG_R2_NO_CHECK_BUCKET: "true"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+      - id: package
+        name: Name the release after package.json
+        run: |
+          version=$(bun -e 'import { readVersion } from "./scripts/app.ts"; console.log(readVersion())')
+          # A pushed tag, or a run by hand on one, has to name the version the app says it is.
+          if [[ $GITHUB_REF_TYPE == tag && $GITHUB_REF_NAME != "mac-v$version" ]]; then
+            echo "::error::$GITHUB_REF_NAME does not match version $version in package.json: set \"version\" there to ${GITHUB_REF_NAME#mac-v} and tag that commit"
+            exit 1
+          fi
+          if [[ $PUBLISH == true ]]; then
+            bun -e '
+              import { extractReleaseNotes } from "./scripts/changelog.ts"
+              if (!extractReleaseNotes(await Bun.file("CHANGELOG.md").text(), process.argv[1])) {
+                console.error(`::error::CHANGELOG.md has no "## [${process.argv[1]}]" section`)
+                process.exit(1)
+              }
+            ' "$version"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Install create-dmg and rclone
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+        run: brew install create-dmg rclone
+      - name: Check the R2 bucket
+        if: env.PUBLISH == 'true'
+        env:
+          VERSION: ${{ steps.package.outputs.version }}
+        run: |
+          for name in RCLONE_CONFIG_R2_ACCESS_KEY_ID RCLONE_CONFIG_R2_SECRET_ACCESS_KEY RCLONE_CONFIG_R2_ENDPOINT; do
+            if [[ -z ${!name} ]]; then
+              echo "::error::a secret for $name is missing: docs/releasing-mac.md"
+              exit 1
+            fi
+          done
+          # Before the build, so wrong credentials or a released version cost seconds, not the build.
+          published=$(rclone lsf r2:lorca-mac-releases --s3-no-check-bucket --files-only --include "*.zip")
+          if grep -qxF "Lorca-$VERSION.zip" <<<"$published"; then
+            echo "::error::Lorca-$VERSION.zip is already published: bump \"version\" in package.json"
+            exit 1
+          fi
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Sign in to App Store Connect and add the signing identity
+        env:
+          ASC_KEY: ${{ secrets.ASC_KEY }}
+          IDENTITY: ${{ secrets.MAC_SIGNING_IDENTITY }}
+          IDENTITY_PASSWORD: ${{ secrets.MAC_SIGNING_IDENTITY_PASSWORD }}
+          SPARKLE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          required=(ASC_KEY ASC_KEY_ID ASC_ISSUER_ID IDENTITY IDENTITY_PASSWORD)
+          if [[ $PUBLISH == true ]]; then required+=(SPARKLE_KEY); fi
+          for name in "${required[@]}"; do
+            if [[ -z ${!name} ]]; then
+              echo "::error::a secret for $name is missing: docs/releasing-mac.md"
+              exit 1
+            fi
+          done
+          umask 077
+          # notarytool signs in with the API key the phone app's workflow uploads with.
+          key=$RUNNER_TEMP/AuthKey_$ASC_KEY_ID.p8
+          printf '%s\n' "$ASC_KEY" > "$key"
+          echo "ASC_KEY_PATH=$key" >> "$GITHUB_ENV"
+          if [[ -n $SPARKLE_KEY ]]; then
+            printf '%s\n' "$SPARKLE_KEY" > "$RUNNER_TEMP/sparkle.key"
+            # The key has to be the one the app trusts, or no install would take the update.
+            bun -e '
+              import { createPrivateKey, createPublicKey } from "node:crypto"
+              import { SPARKLE_PUBLIC_KEY } from "./scripts/app.ts"
+              const secret = Buffer.from((await Bun.file(process.argv[1]).text()).trim(), "base64")
+              // A 32-byte seed from generate_keys -x, or an older 96-byte key that ends in its public half.
+              let pub
+              if (secret.length === 96) pub = secret.subarray(64)
+              else if (secret.length === 32) {
+                const der = Buffer.concat([Buffer.from("302e020100300506032b657004220420", "hex"), secret])
+                const jwk = createPublicKey(createPrivateKey({ key: der, format: "der", type: "pkcs8" })).export({ format: "jwk" })
+                pub = Buffer.from(jwk.x, "base64url")
+              } else {
+                console.error(`::error::SPARKLE_PRIVATE_KEY is ${secret.length} bytes, not a key generate_keys -x exports`)
+                process.exit(1)
+              }
+              if (pub.toString("base64") !== SPARKLE_PUBLIC_KEY) {
+                console.error(`::error::SPARKLE_PRIVATE_KEY is not the key SPARKLE_PUBLIC_KEY in scripts/app.ts names (${pub.toString("base64")})`)
+                process.exit(1)
+              }
+            ' "$RUNNER_TEMP/sparkle.key"
+            echo "SPARKLE_KEY_FILE=$RUNNER_TEMP/sparkle.key" >> "$GITHUB_ENV"
+          fi
+          # The Developer ID Application certificate, alone in a keychain of its own, so the
+          # script's partial name "Developer ID Application" matches exactly one identity.
+          keychain=$RUNNER_TEMP/signing.keychain-db
+          password=$(openssl rand -hex 16)
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          base64 --decode <<<"$IDENTITY" > "$RUNNER_TEMP/identity.p12"
+          security import "$RUNNER_TEMP/identity.p12" -k "$keychain" -P "$IDENTITY_PASSWORD" -f pkcs12 -T /usr/bin/codesign -T /usr/bin/security
+          rm "$RUNNER_TEMP/identity.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain"
+          security find-identity -v -p codesigning "$keychain"
+      - name: Build, notarize, and publish
+        if: env.PUBLISH == 'true'
+        run: bun run release-mac
+      - name: Build and notarize
+        if: env.PUBLISH != 'true'
+        run: bun run release-mac --local
+      - name: Keep the disk image
+        if: env.PUBLISH != 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: Lorca-${{ steps.package.outputs.version }}
+          path: dist/mac/Lorca-${{ steps.package.outputs.version }}.dmg
+          if-no-files-found: error
+      - name: Remove the keys and the keychain
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/signing.keychain-db" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP"/AuthKey_*.p8 "$RUNNER_TEMP/sparkle.key"

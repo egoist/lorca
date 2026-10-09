@@ -8,15 +8,17 @@ import { AppState, Platform, type AppStateStatus } from "react-native";
 import * as core from "../../modules/lorca-core";
 import { t } from "../i18n";
 import { hostFacts } from "./host";
-import { providerConnectMethod, type Attachment, type AutoReview, type Bot, type Chat, type ChatMeta, type ChatSearchResults, type ChatUsage, type CustomAPI, type CustomModel, type Message, type ProviderKind, type ProviderStatus } from "./model";
+import { providerConnectMethod, withReviewModel, type Attachment, type AutoReview, type Bot, type Chat, type ChatMeta, type ChatSearchResults, type ChatUsage, type CustomAPI, type CustomModel, type DurableTask, type Message, type ProviderKind, type ProviderStatus } from "./model";
 import { coreHome, loadPrefs, pathOf, wipePrefs } from "./prefs";
 import { clearPushes, installPushHandlers, registerForPushes } from "./push";
 import {
+  acceptDurableTask,
   applyRoster,
   botById,
   chatById,
   endActivity,
   markFile,
+  markFileError,
   markRead,
   patchRoutine,
   removeChat,
@@ -70,12 +72,20 @@ class Engine {
     const active = AppState.currentState === "active";
     useStore.setState({ dictation_lang: loadPrefs().dictation_lang, appActive: active, activeSince: active ? Date.now() : 0 });
     core.onEvent((frame) => this.receive(frame));
-    core.start(coreHome(), hostFacts());
-    AppState.addEventListener("change", (status) => this.onAppState(status));
-    // Read after every store update, including the roster's unread count that follows a
-    // message event, a backlog snapshot, and returning to a chat already mounted on screen.
-    useStore.subscribe(() => this.readVisibleChat());
-    await this.bootstrap();
+    // The core starts off the JS thread and emits as soon as it runs: what it says before the
+    // first snapshot waits for it, as during any snapshot.
+    this.bootstraps += 1;
+    try {
+      await core.start(coreHome(), hostFacts());
+      AppState.addEventListener("change", (status) => this.onAppState(status));
+      // Read after every store update, including the roster's unread count that follows a
+      // message event, a backlog snapshot, and returning to a chat already mounted on screen.
+      useStore.subscribe(() => this.readVisibleChat());
+      await this.bootstrap();
+    } finally {
+      this.bootstraps -= 1;
+      if (!this.bootstraps) this.applyHeld();
+    }
     installPushHandlers();
     if (useStore.getState().paired) void registerForPushes();
   }
@@ -144,6 +154,9 @@ class Engine {
     switch (event) {
       case "snapshot":
         replaceSnapshot(data as Snapshot);
+        break;
+      case "tasks.changed":
+        acceptDurableTask((data as { task: DurableTask }).task);
         break;
       case "roster.changed": {
         const { removed } = applyRoster(data);
@@ -259,17 +272,51 @@ class Engine {
     return core.request<ChatSearchResults>("chats.search", { query: value, limit: 24 });
   }
 
-  /// The attachment's bytes, from this phone's copy or the relay, as a file URI in the store.
+  /// The attachment's bytes, from this phone's copy or the relay, as a file URI in the store. A
+  /// fetch that failed is not asked again until `retryFile`.
   async fetchFile(attachment: Attachment): Promise<void> {
-    if (useStore.getState().files[attachment.id] || this.fetchingFiles.has(attachment.id)) return;
+    const { files, fileErrors } = useStore.getState();
+    if (files[attachment.id] || fileErrors[attachment.id] || this.fetchingFiles.has(attachment.id)) return;
     this.fetchingFiles.add(attachment.id);
     try {
       const { path } = await core.request<{ path: string }>("files.path", { attachment });
       markFile(attachment.id, `file://${path}`);
     } catch (error) {
-      console.warn("fetching attachment", error instanceof Error ? error.message : error);
+      markFileError(attachment.id, error instanceof Error ? error.message : String(error));
     } finally {
       this.fetchingFiles.delete(attachment.id);
+    }
+  }
+
+  retryFile(attachment: Attachment) {
+    markFileError(attachment.id, null);
+    void this.fetchFile(attachment);
+  }
+
+  /// The path of the attachment as a file named for what it is, for Quick Look or another app:
+  /// the bytes under their attachment id carry no extension, so the core keeps a private named
+  /// copy.
+  async namedFile(attachment: Attachment): Promise<string> {
+    const { path } = await core.request<{ path: string }>("files.path", { attachment, named: true });
+    return path;
+  }
+
+  /// A durable task method (`tasks.create`, `tasks.update`, `tasks.run`, `tasks.get`); the core
+  /// sends a write to the task's authority Runner. The task it answers with is kept unless a
+  /// newer revision arrived first.
+  async taskRequest(method: string, params: Record<string, unknown>): Promise<DurableTask> {
+    const task = await core.request<DurableTask>(method, params);
+    acceptDurableTask(task);
+    return task;
+  }
+
+  /// Every output version this phone has synced for the chat, for its details.
+  async listOutputs(chatId: string): Promise<void> {
+    try {
+      const { outputs } = await core.request<{ outputs: Message[] }>("outputs.list", { chat_id: chatId });
+      useStore.setState((s) => ({ outputs: { ...s.outputs, [chatId]: outputs } }));
+    } catch (error) {
+      console.warn("listing outputs", error instanceof Error ? error.message : error);
     }
   }
 
@@ -360,6 +407,27 @@ class Engine {
   setAutoReview(value: AutoReview) {
     useStore.setState({ auto_review: value });
     void core.request("auto_review.set", { is_enabled: value.is_enabled, rules: value.rules });
+  }
+
+  /// Picks the provider whose review model Auto-review runs, or none for the bot's own. Only
+  /// `provider` goes, so the switch, the rules, and the review models stay.
+  setReviewProvider(provider: string | undefined) {
+    const held = useStore.getState().auto_review.provider;
+    useStore.setState((s) => ({ auto_review: { ...s.auto_review, provider } }));
+    core.request("auto_review.set", { provider: provider ?? null }).catch(() => {
+      // The provider disconnected meanwhile: the core kept what it had.
+      useStore.setState((s) => ({ auto_review: { ...s.auto_review, provider: held } }));
+    });
+  }
+
+  /// Picks the model Auto-review runs on a provider, or puts its default back (`undefined`). The
+  /// patch names this provider alone, so the others' review models stay.
+  setReviewModel(kind: string, model: string | undefined) {
+    const held = useStore.getState().auto_review.models?.[kind];
+    useStore.setState((s) => ({ auto_review: withReviewModel(s.auto_review, kind, model) }));
+    core.request("auto_review.set", { models: { [kind]: model ?? null } }).catch(() => {
+      useStore.setState((s) => ({ auto_review: withReviewModel(s.auto_review, kind, held) }));
+    });
   }
 
   // MARK: - Providers

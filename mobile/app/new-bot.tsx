@@ -1,6 +1,7 @@
 import { Stack, useRouter } from "expo-router";
 import { useMemo, useState } from "react";
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ScrollView, StyleSheet, Text, View } from "react-native";
+import { Pressable } from "../src/ui/Pressable";
 import { LinearGradient } from "expo-linear-gradient";
 import { engine } from "../src/core/engine";
 import { connectedProviders, isRunner, providerLabel, providerModels, PROVIDER_KINDS, thinkingLabel, thinkingLevels, withCustomModels } from "../src/core/model";
@@ -11,6 +12,7 @@ import { BOT_SYMBOLS, Symbol } from "../src/ui/Symbol";
 import { ACCENTS, accentColors, usePalette } from "../src/ui/theme";
 import { deviceSymbol } from "../src/ui/devices";
 import { FormToolbar } from "../src/ui/navigation";
+import { alert } from "../src/ui/alert";
 
 export default function NewBotScreen() {
   useLanguage();
@@ -25,7 +27,8 @@ export default function NewBotScreen() {
   const [runnerId, setRunnerId] = useState<string>(() => runners.find((r) => deviceIsOnline(r.id))?.id ?? runners[0]?.id ?? "");
   const runner = runners.find((r) => r.id === runnerId);
   const statuses = useStore((s) => s.providers);
-  // The connected providers, custom ones after the built-ins, or every built-in while none is.
+  // The connected providers a bot can run with, custom ones after the built-ins, or every
+  // built-in while none is. Decision providers and models are Auto-review's alone.
   const connected = connectedProviders(statuses);
   const catalog = withCustomModels(useStore((s) => s.models), statuses);
   const providers: readonly string[] = connected.length ? connected : PROVIDER_KINDS;
@@ -48,7 +51,7 @@ export default function NewBotScreen() {
       router.dismiss();
       router.push(`/chat/${chatId}`);
     } catch (error) {
-      Alert.alert(t("Could not create the bot"), error instanceof Error ? error.message : String(error));
+      alert(t("Could not create the bot"), error instanceof Error ? error.message : String(error));
     }
   }
 

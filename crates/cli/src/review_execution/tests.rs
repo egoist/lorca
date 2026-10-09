@@ -461,34 +461,6 @@ async fn a_changed_runner_or_approving_device_cannot_execute_a_saved_approval() 
 }
 
 #[tokio::test]
-async fn an_old_relay_is_detected_before_encrypted_outbox_items_are_drained() {
-    let scratch = scratch();
-    let item = draft(&scratch.app).await;
-    let before = scratch.app.store.outbox().unwrap();
-    let (url, _) = crate::served::test_server("/v1/health", json!({ "protocol": 2 }).to_string());
-    let url = url.trim_end_matches("/v1/health");
-    assert!(scratch
-        .app
-        .relay
-        .require_current_protocol(url)
-        .await
-        .unwrap_err()
-        .message
-        .contains("update the relay"));
-    let after = scratch.app.store.outbox().unwrap();
-    assert_eq!(before.len(), after.len());
-    assert_eq!(
-        queue::get(&scratch.app, &item.id).unwrap().state,
-        ReviewState::Pending
-    );
-    scratch.app.store.clear().unwrap();
-    assert!(
-        queue::list(&scratch.app).unwrap().is_empty(),
-        "forgetting the account clears encrypted review records"
-    );
-}
-
-#[tokio::test]
 async fn size_admission_reserves_room_for_approval_and_the_terminal_outcome() {
     let scratch = scratch();
     let bot = scratch.app.state.lock().unwrap().bots[0].clone();
@@ -518,4 +490,28 @@ async fn size_admission_reserves_room_for_approval_and_the_terminal_outcome() {
         1,
         "failed admission writes no proposal"
     );
+}
+
+#[tokio::test]
+async fn an_item_staged_for_a_task_records_its_outcome_there() {
+    let scratch = scratch();
+    let app = &scratch.app;
+    let bot = app.state.lock().unwrap().bots[0].clone();
+    let dm = app.dm_with(&bot.id, None).unwrap();
+    let task: crate::tasks::Task = serde_json::from_value(
+        crate::tasks::dispatch(app, "tasks.create", json!({ "request_id": "create", "owner_bot_id": bot.id, "chat_ids": [dm.meta.id],
+            "goal": "Ship the release", "acceptance_criteria": ["Tagged"], "next_action": "Tag it" })).await.unwrap(),
+    ).unwrap();
+    let staged = mutate(app, "reviews.create", &json!({ "bot_id": bot.id, "request_id": "tag", "origin": { "chat_id": dm.meta.id, "task_id": task.id },
+        "payload": { "kind": "draft", "text": "Release notes" }, "target": { "account": "GitHub", "resource": "v1.4.0" }, "rationale": "Publishes the notes" }), &bot.runner_id).await.unwrap();
+    queue::serve(app, "reviews.reject", &json!({ "id": staged.id, "expected_version": staged.version }), &staged.runner_id).await.unwrap();
+    let task = crate::tasks::get(app, &task.id).unwrap();
+    let evidence = task.evidence.iter().find(|evidence| evidence.review_id.as_deref() == Some(staged.id.as_str())).expect("review evidence");
+    assert_eq!(evidence.message_id.as_deref(), Some(staged.message_id().as_str()));
+    // Recording again changes nothing.
+    queue::record_on_task(app, &queue::get(app, &staged.id).unwrap()).await;
+    assert_eq!(crate::tasks::get(app, &task.id).unwrap().revision, task.revision);
+    let unknown = mutate(app, "reviews.create", &json!({ "bot_id": bot.id, "request_id": "nowhere", "origin": { "chat_id": dm.meta.id, "task_id": "task-00000000-0000-4000-8000-000000000000" },
+        "payload": { "kind": "draft", "text": "x" }, "target": { "account": "a", "resource": "b" }, "rationale": "c" }), &bot.runner_id).await;
+    assert!(unknown.unwrap_err().contains("no task"));
 }

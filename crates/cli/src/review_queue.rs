@@ -145,7 +145,8 @@ impl ReviewItem {
         format!("review-status-{}", self.id)
     }
 
-    /// Matches TaskEvidence's review reference. Linking it never completes a task.
+    /// A task's `review` evidence: the outcome notice by its stable id. Linking it never
+    /// completes a task.
     pub fn outcome_evidence(&self) -> Value {
         json!({ "kind": "review", "label": self.outcome.as_ref().map(|outcome| outcome.summary.as_str()).unwrap_or("Review item"),
             "review_id": self.id, "chat_id": self.origin.chat_id, "message_id": self.message_id() })
@@ -392,6 +393,36 @@ pub fn enqueue_owned(app: &App) {
     }
 }
 
+/// Once an item staged for a task has ended, its outcome notice joins the task's evidence through
+/// the task's own revision check. Retried once when the task moved meanwhile; a refusal (the task
+/// ended, the chat left it) leaves the outcome on the item and in the chat.
+pub(crate) async fn record_on_task(app: &Arc<App>, item: &ReviewItem) {
+    let Some(task_id) = &item.origin.task_id else { return };
+    if item.outcome.is_none() || matches!(item.state, ReviewState::Pending | ReviewState::Approved | ReviewState::Executing) {
+        return;
+    }
+    for _ in 0..2 {
+        let Ok(task) = crate::tasks::get(app, task_id) else { return };
+        if task.evidence.iter().any(|evidence| evidence.review_id.as_deref() == Some(item.id.as_str())) {
+            return;
+        }
+        let mut evidence = serde_json::to_value(&task.evidence).unwrap_or_else(|_| json!([]));
+        if let Some(list) = evidence.as_array_mut() {
+            list.push(item.outcome_evidence());
+        }
+        let update = json!({ "id": task_id, "expected_revision": task.revision,
+            "request_id": format!("{}-outcome-{}", item.id, task.revision), "evidence": evidence });
+        match Box::pin(crate::tasks::dispatch(app, "tasks.update", update)).await {
+            Ok(_) => return,
+            Err(error) if error.contains("revision conflict") => continue,
+            Err(error) => {
+                tracing::warn!(%error, review_id = %item.id, "recording a review on its task");
+                return;
+            }
+        }
+    }
+}
+
 #[cfg(feature = "runner")]
 pub(crate) fn local_bot(app: &App, item: &ReviewItem) -> Result<crate::model::Bot, String> {
     if app.this_device_id().as_deref() != Some(item.runner_id.as_str()) {
@@ -537,5 +568,6 @@ pub async fn serve(
         item
     };
     publish_origin(app, id);
+    record_on_task(app, &item).await;
     Ok(json!(item))
 }

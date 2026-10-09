@@ -23,9 +23,9 @@ struct Prepared {
     preconditions: ReviewPreconditions,
 }
 
-/// The reusable authorization boundary for review execution. It checks the current origin
-/// and assignment, the approving Device, and the current connection before a claim can run.
-/// Bot permission policy checks integrate here through the permissions subject's helpers.
+/// The authorization boundary for review execution: the current origin and assignment, the
+/// approving Device, the bot's Access to the shell or to the exact plugin tool, and the current
+/// connection, before a claim can run. The call checks Access again as it starts.
 pub fn authorize_execution(app: &Arc<App>, item: &ReviewItem) -> Result<crate::model::Bot, String> {
     let bot = queue::local_bot(app, item)?;
     if let Some(approval) = &item.approval {
@@ -35,6 +35,12 @@ pub fn authorize_execution(app: &Arc<App>, item: &ReviewItem) -> Result<crate::m
             return Err("The approving Device is no longer paired.".into());
         }
     }
+    let access = match &item.payload {
+        ReviewPayload::Shell { .. } => crate::permissions::check_tool(app, &bot, "bash"),
+        ReviewPayload::Plugin { plugin_id, tool, .. } => crate::permissions::check_connection(app, &bot, plugin_id, tool, None),
+        ReviewPayload::Draft { .. } => Ok(()),
+    };
+    access.map_err(|denied| denied.to_string())?;
     if let ReviewPayload::Plugin {
         plugin_id,
         server_name,
@@ -133,7 +139,8 @@ async fn prepare(
                     "Reviewed commands run to completion; background is unavailable.".into(),
                 );
             }
-            Some(crate::shell::script_bash(app, &workdir))
+            // The bot's shell Access is checked again when the command starts.
+            crate::permissions::guarded::tools(app, &bot, &item.origin.chat_id, vec![crate::shell::script_bash(app, &workdir)]).pop()
         }
         ReviewPayload::Plugin {
             plugin_id,
@@ -142,7 +149,7 @@ async fn prepare(
             ..
         } => {
             let executable =
-                crate::plugins::mcp::reviewed_tool(app, plugin_id, server_name, tool, cancel)
+                crate::plugins::mcp::reviewed_tool(app, &bot, &item.origin.chat_id, plugin_id, server_name, tool, cancel)
                     .await?;
             preconditions.connection_hash =
                 Some(app.plugins.lock().unwrap().review_fingerprint(plugin_id)?);
@@ -186,7 +193,7 @@ fn editable(item: &ReviewItem) -> Result<(), String> {
     Ok(())
 }
 
-fn apply_fields(item: &mut ReviewItem, params: &Value) -> Result<(), String> {
+fn apply_fields(app: &App, item: &mut ReviewItem, params: &Value) -> Result<(), String> {
     if let Some(payload) = params.get("payload") {
         item.payload =
             serde_json::from_value(payload.clone()).map_err(|error| error.to_string())?;
@@ -215,9 +222,7 @@ fn apply_fields(item: &mut ReviewItem, params: &Value) -> Result<(), String> {
         return Err("A review needs its target account, resource, and rationale.".into());
     }
     if let Some(id) = &item.origin.task_id {
-        if !id.starts_with("task-") || uuid::Uuid::parse_str(&id[5..]).is_err() {
-            return Err("task_id must reference a canonical task-UUID.".into());
-        }
+        crate::tasks::get(app, id).map_err(|_| format!("There is no task {id}."))?;
     }
     if serde_json::to_vec(&item.payload)
         .map_err(|error| error.to_string())?
@@ -292,7 +297,7 @@ pub async fn mutate(
             created_at: at,
             updated_at: at,
         };
-        apply_fields(&mut item, params)?;
+        apply_fields(app, &mut item, params)?;
         let workdir = queue::local_bot(app, &item)?.working_directory(&app.config.home);
         std::fs::create_dir_all(&workdir).map_err(|error| error.to_string())?;
         item.preconditions = prepare(app, &item, &cancel).await?.preconditions;
@@ -317,7 +322,7 @@ pub async fn mutate(
     editable(&candidate)?;
     let old_payload = candidate.payload.clone();
     if method == "reviews.edit" {
-        apply_fields(&mut candidate, params)?;
+        apply_fields(app, &mut candidate, params)?;
     }
     let prepared = prepare(app, &candidate, &cancel).await?;
     let stale = prepared.preconditions != candidate.preconditions;
@@ -563,6 +568,9 @@ pub async fn execute_approved(app: &Arc<App>, id: &str) -> Result<(), String> {
         queue::save(app, &finished, Some(&previous), ReviewChange::Executed)?;
     }
     queue::publish_origin(app, id);
+    if let Ok(finished) = queue::get(app, id) {
+        queue::record_on_task(app, &finished).await;
+    }
     Ok(())
 }
 

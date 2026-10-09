@@ -4,6 +4,56 @@ use super::*;
 use lorca::app::OutboxItem;
 use lorca::relay::RelayClient;
 
+#[tokio::test]
+async fn encrypted_task_records_round_trip_and_replace_only_their_own_slot() {
+    fn task_outbox(app: &lorca::app::App) -> OutboxItem {
+        loop {
+            let item = app.store.first_outbox().unwrap().unwrap();
+            let state = app.state.lock().unwrap().clone();
+            app.store.remove_outbox_with_state(&item.id, &state).unwrap();
+            if item.kind == "task" { return item; }
+        }
+    }
+    let relay = Relay::start(0).await;
+    let app = lorca::app::App::load(lorca::config::Config { home: relay.home.join("source"), port: 0 }).unwrap();
+    lorca::identity::create(&app, Some("Source".into())).unwrap();
+    let bot = app.state.lock().unwrap().bots[0].clone();
+    let chat_id = app.state.lock().unwrap().chats[0].meta.id.clone();
+    let created = lorca::api::dispatch(&app, "tasks.create", serde_json::json!({
+        "request_id":"create","owner_bot_id":bot.id,"chat_ids":[chat_id],
+        "goal":"Encrypted durable work","acceptance_criteria":["Verified"],"next_action":"Inspect"
+    })).await.unwrap();
+    let id = created["id"].as_str().unwrap();
+    let first = task_outbox(&app);
+    assert!(!String::from_utf8_lossy(&first.ciphertext).contains("Encrypted durable work"));
+    let uploaded = relay.client.put_blob(&relay.url, &relay.token, first.clone()).await.unwrap();
+    assert_eq!(relay.client.put_blob(&relay.url, &relay.token, first).await.unwrap(), uploaded);
+    let (page, _) = relay.client.list_blobs(&relay.url, &relay.token, 0, "task").await.unwrap();
+    assert_eq!(page.len(), 1);
+    let replica = lorca::app::App::load(lorca::config::Config { home: relay.home.join("replica"), port: 0 }).unwrap();
+    lorca::identity::create(&replica, Some("Replica".into())).unwrap();
+    replica.machine.lock().unwrap().as_mut().unwrap().account_dek = app.machine_file().unwrap().account_dek;
+    let machine = replica.machine_file().unwrap();
+    lorca::sync::apply_blob(&replica, &machine, &page[0]);
+    assert_eq!(lorca::tasks::get(&replica, id).unwrap().revision, 1);
+    lorca::api::dispatch(&app, "tasks.update", serde_json::json!({
+        "id":id,"request_id":"progress","expected_revision":1,"next_action":"Verify"
+    })).await.unwrap();
+    let newest = task_outbox(&app);
+    relay.client.put_blob(&relay.url, &relay.token, newest).await.unwrap();
+    let (new_page, _) = relay.client.list_blobs(&relay.url, &relay.token, 0, "task").await.unwrap();
+    assert_eq!(new_page.len(), 1);
+    lorca::sync::apply_blob(&replica, &machine, &new_page[0]);
+    assert_eq!(lorca::tasks::get(&replica, id).unwrap().next_action, "Verify");
+    lorca::sync::apply_blob(&replica, &machine, &page[0]);
+    assert_eq!(lorca::tasks::get(&replica, id).unwrap().revision, 2);
+    for kind in ["roster","chat","job","job_cancel","job_result","request","response","machine","credentials","key","file","task","handoff","review","attention","project_context","event"] {
+        assert!(db::KINDS.contains(&kind));
+    }
+    assert!(db::SEALED_KINDS.contains(&"event"));
+    assert_eq!(PROTOCOL, lorca::relay::PROTOCOL);
+}
+
 struct Relay {
     state: AppState,
     url: String,

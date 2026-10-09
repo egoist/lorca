@@ -114,10 +114,7 @@ async fn an_unattended_plugin_proposal_executes_the_edited_version_on_its_exact_
         .unwrap()
         .name
         .clone();
-    app.set_auto_review(crate::model::AutoReview {
-        is_enabled: false,
-        rules: Vec::new(),
-    });
+    app.set_auto_review(crate::model::AutoReview { is_enabled: false, ..Default::default() });
     let routine = crate::routines::create(
         &app,
         &bot.id,
