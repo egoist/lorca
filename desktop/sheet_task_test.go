@@ -41,6 +41,7 @@ func launchTasks() []model.DurableTask {
 	reportID, output, version := "msg-onboarding-review-2", "out-onboarding-review", uint64(2)
 	relay := store.Chat("chat-relay")
 	relay.Messages = append(relay.Messages, &model.Message{ID: reportID, Author: model.BotAuthor("bot-scout"), CreatedAt: time.Now(),
+		Body:   model.Body{Kind: model.BodyText, Text: "[Onboarding review](https://docs.example.com/launch/onboarding-review)"},
 		Output: &model.Output{ID: output, Name: "Onboarding review", Mime: "text/html", BotID: "bot-scout", Version: 2, URL: "https://docs.example.com/launch/onboarding-review"}})
 	review.Evidence = []model.TaskEvidence{
 		{Kind: "message", Label: "Bot run result", ChatID: &chat, MessageID: &message},
@@ -190,10 +191,8 @@ func TestTaskSheetStepsFollowTheState(t *testing.T) {
 	}
 	var opened string
 	outputOpenURL = func(link string) { opened = link }
-	// The inspector lists the same output under Outputs; close it so the click lands on the sheet.
-	m.userWantsInspector = false
-	settle(tt)
-	click(t, tt, "Onboarding review")
+	// The transcript and the inspector name the same output; its version line is the sheet's own.
+	click(t, tt, "Version 2")
 	if opened != "https://docs.example.com/launch/onboarding-review" || !m.hasSheet() {
 		t.Fatalf("output evidence opened %q", opened)
 	}
