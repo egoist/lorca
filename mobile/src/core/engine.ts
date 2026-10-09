@@ -10,7 +10,7 @@ import { t } from "../i18n";
 import { exactAnswer, ExactNumber, ExactObject, stringifyExact } from "./exactJson";
 import { reviewEditParams } from "./reviewEdit";
 import { hostFacts } from "./host";
-import { orderProjectEntries, providerConnectMethod, withReviewModel, type PlaybookContent, type PlaybookRecord, type PlaybookScope, type ProjectContext, type ProjectEntry, type ProjectKind, type ProjectSource, type Attachment, type AutoReview, type Bot, type BrowserProfile, type BudgetLimits, type BudgetState, type CallLimits, type Chat, type ChatMeta, type ChatSearchResults, type ChatUsage, type CustomAPI, type CustomModel, type DurableTask, type Message, type ReviewItem, type PluginDetail, type PluginStatus, type ProviderKind, type ProviderStatus } from "./model";
+import { orderProjectEntries, providerConnectMethod, withReviewModel, type PlaybookContent, type PlaybookRecord, type PlaybookScope, type ProjectContext, type ProjectEntry, type ProjectKind, type ProjectSource, type Attachment, type AutoReview, type Bot, type BrowserProfile, type BudgetLimits, type BudgetState, type CallLimits, type Chat, type ChatMeta, type ChatSearchResults, type ChatUsage, type CustomAPI, type CustomModel, type DurableTask, type Message, type ReviewItem, type PluginDetail, type PluginStatus, type ProviderKind, type ProviderStatus, type SavedSecret } from "./model";
 import { coreHome, loadPrefs, pathOf, wipePrefs } from "./prefs";
 import type { SharedLink, TemplateContents, TemplateImportPreview, TemplateSelection } from "./templates";
 import { clearPushes, installPushHandlers, registerForPushes } from "./push";
@@ -855,6 +855,35 @@ class Engine {
   /// Types the user's answer into a command running in its terminal, then Return. It goes
   /// through the core, sealed to the bot's Runner, and nothing keeps it. Rejects with why it
   /// could not, such as the Runner being offline.
+  /// Answers a secret request with a value for each of its fields, by name. The core seals them to
+  /// the bot's Runner; the card reads Saved once the Runner has them. Rejects with why they did
+  /// not go, such as the Runner being offline.
+  async answerSecret(chatId: string, messageId: string, values: Record<string, string>) {
+    await core.request("chats.permission", { chat_id: chatId, message_id: messageId, decision: "allow", values });
+    useStore.setState((s) => ({
+      chats: s.chats.map((c) =>
+        c.id !== chatId
+          ? c
+          : { ...c, messages: c.messages.map((m) => (m.id === messageId && m.body.kind === "permission" && m.body.decision === "pending" ? { ...m, body: { ...m.body, decision: "allowed" as const } } : m)) },
+      ),
+    }));
+  }
+
+  /// The secrets a Runner keeps for its bots, asked of it through the relay.
+  async secrets(runnerId: string): Promise<SavedSecret[]> {
+    const { secrets } = await core.request<{ secrets: SavedSecret[] }>("secrets.list", { runner_id: runnerId });
+    return secrets;
+  }
+
+  /// A new value for one of a Runner's secrets; it goes sealed to the Runner.
+  async replaceSecret(runnerId: string, id: string, value: string) {
+    await core.request("secrets.set", { runner_id: runnerId, id, value });
+  }
+
+  async deleteSecret(runnerId: string, id: string) {
+    await core.request("secrets.delete", { runner_id: runnerId, id });
+  }
+
   async answerCommand(chatId: string, messageId: string, text: string) {
     await core.request("bash.stdin", { chat_id: chatId, message_id: messageId, text });
   }

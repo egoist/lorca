@@ -78,6 +78,8 @@ const ANDROID: Record<string, string> = {
   "ellipsis": "more_vert",
   "crown.fill": "workspace_premium",
   "key.fill": "key",
+  key: "key",
+  lock: "lock",
   "person.badge.key.fill": "badge",
   "antenna.radiowaves.left.and.right": "cell_tower",
   "link": "link",
