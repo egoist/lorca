@@ -38,3 +38,7 @@ rquickjs = { version = "0.14", optional = true }
 # `bash` on pipes: the shell and what it starts stop as one, a process group on Unix and a job
 # object on Windows.
 process-wrap = { version = "10", features = ["tokio1"] }
+
+[target.'cfg(windows)'.dependencies]
+# `bash` sessions on Windows: pseudo consoles, jobs, and processes (`tools::conpty`).
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Console", "Win32_System_JobObjects", "Win32_System_LibraryLoader", "Win32_System_Pipes", "Win32_System_Threading"] }

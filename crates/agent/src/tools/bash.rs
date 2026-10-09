@@ -45,8 +45,8 @@ const TERMINAL_DESCRIPTION: &str = "Execute a bash command in the current workin
 
 const NO_INPUT_DESCRIPTION: &str = "Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last 2000 \
      lines or 50KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in \
-     seconds. Commands get no input: stdin is closed, and interactive input is not available on Windows, so pass answers as flags \
-     (--yes, -y) or through files.";
+     seconds. Commands get no input: stdin is closed, and interactive input is not available on this computer, so pass answers as \
+     flags (--yes, -y) or through files.";
 
 const NO_SHELL: &str = "Commands run in Git for Windows' bash, and none was found: no bash.exe in Program Files, Program Files (x86), \
      %LOCALAPPDATA%\\Programs\\Git, or beside a git.exe on PATH. Install Git for Windows from https://git-scm.com/downloads/win, \
@@ -67,8 +67,8 @@ impl BashTool {
     }
 
     /// Runs each command in a terminal session `sessions` keeps, so a command waiting for input
-    /// returns with its session id and can be answered. On Windows commands still run on pipes,
-    /// with no input.
+    /// returns with its session id and can be answered. Where there are no terminals (a Windows
+    /// before 10 1809) commands still run on pipes, with no input.
     pub fn with_sessions(cwd: PathBuf, sessions: Arc<dyn BashSessions>) -> Self {
         BashTool { sessions: Some(sessions), ..BashTool::new(cwd) }
     }
@@ -86,9 +86,10 @@ impl BashTool {
         self
     }
 
-    /// Where commands run in terminals: a host that keeps sessions, on Unix.
+    /// Where commands run in terminals: a host that keeps sessions, where there are terminals
+    /// ([`super::bash_session::terminals`]).
     fn terminal(&self) -> Option<&Arc<dyn BashSessions>> {
-        self.sessions.as_ref().filter(|_| cfg!(unix))
+        self.sessions.as_ref().filter(|_| super::bash_session::terminals())
     }
 }
 
@@ -144,8 +145,7 @@ fn within(path: &Path, dir: &Path) -> bool {
     lower(path).starts_with(lower(dir))
 }
 
-/// Kills the process group the shell leads: `process_group(0)` on pipes, `setsid` in a terminal,
-/// both make its pid the group's id.
+/// Kills the process group a terminal's shell leads: `setsid` makes its pid the group's id.
 #[cfg(unix)]
 pub(crate) fn kill_group(pid: u32) {
     // Negative pid addresses the process group; -0 would be this process's own.
@@ -155,19 +155,6 @@ pub(crate) fn kill_group(pid: u32) {
     unsafe {
         libc::kill(-(pid as i32), libc::SIGKILL);
     }
-}
-
-/// Windows has no process group to signal: `taskkill /T` ends the shell and everything it started.
-#[cfg(windows)]
-pub(crate) fn kill_group(pid: u32) {
-    if pid == 0 {
-        return;
-    }
-    let _ = std::process::Command::new("taskkill")
-        .args(["/F", "/T", "/PID", &pid.to_string()])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
 }
 
 fn describe(text: &str, truncation: &super::truncate::TruncationResult, full_output_path: Option<&Path>) -> String {
