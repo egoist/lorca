@@ -26,7 +26,7 @@ The chat transcript is a view-based `NSTableView` with cached Markdown layout, i
 
 Sidebar: an `NSOutlineView` (`Sidebar/SidebarViewController.swift`) with one item per chat, kept for as long as the chat is listed. Only the first rows come in with a reload. After that, a store event moves, inserts, or removes the rows whose place in the order changed (new activity moves a chat up in one move, without animation), and a cell is reconfigured only when what its row shows (`SidebarChatCell.Content`: avatars, working dot, title, preview, stamp, pin, unread count) changed. Cells come from `makeView(withIdentifier:)`, and a moved row keeps its row view, cell, and selection.
 
-The Routines section, the routine sheet, and the Devices pane's Background service row are described in [Routines](routines.md#the-apps).
+The Routines section, the routine sheet, and the Devices pane's Background service row are described in [Routines](routines.md#the-apps); the Channels section after it and the channel sheet (`Sheets/ChannelViewController.swift`) in [Channels](channels.md#in-the-apps).
 
 File › Share as Template… (also a DM's context menu) and New Bot from Template… open the [template sheets](templates.md#in-the-apps) in `Sheets/Template*.swift`; Settings › Shared Links lists the account's links. Info.plist registers `lorca://` (`lorca-dev://` for Lorca Dev), and `application(_:open:)` keeps such a link until the account and CLI are up.
 

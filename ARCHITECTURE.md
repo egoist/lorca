@@ -52,6 +52,7 @@ Identity 1──* Chat
 Chat     *──* Bot          (kind dm: exactly 1 bot, fixed · kind group: 1–6 bots, members change)
 Chat     1──* Message
 Bot      1──* Routine      (a scheduled task, run in the bot's DM on its Runner)
+Bot      1──* Channel      (a Telegram or Slack account it listens on; each thread is a Chat)
 Device   1──* Plugin       (an MCP server installed on a Runner or in its mcp.json, per bot Access)
 Bot      1──* Job          (a turn on the bot's Runner)
 Bot      1──* Handoff      (a durable delegated request with attempts and result reports)
@@ -66,6 +67,7 @@ Identity 1──* Task         (durable work; an owning Bot, assigned Runner, an
 | Routine            | Name, schedule, prompt, state                             | Inside encrypted roster blobs                          |
 | Task               | Encrypted records, revisions, evidence references, and run claims | Account-encrypted task blobs; execution Jobs sealed to the assigned Runner |
 | Plugin             | Manifest, variables, secrets, tokens on the Runner        | Id and state inside the Runner's encrypted machine blob |
+| Channel            | Its subscription and inbox on the Runner; tokens in the plugin store | Its state inside the Runner's encrypted machine blob |
 | ProviderCredential | `credentials.json` on every Device                        | Inside the encrypted `credentials` blob                |
 | Chat / Message     | Account/chat DEK                                          | Encrypted blobs                                        |
 | Job                | Any paired Device may create; the assigned Runner runs it | Sealed envelope to that Runner’s machine box key; deleted once run. A hard Stop sends `job_cancel` to the Device running it; the Runner seals how the turn ended (`job_result`) to the requesting Device, and lists the turn and what it is doing in its `machine` blob for every Device |
@@ -102,6 +104,7 @@ One doc per subject under `docs/architecture/`, each short enough to read in one
 | [Bots and Memory](docs/architecture/bots.md) | The lead bot, DMs and groups, who answers, handoffs between bots, a bot's memory |
 | [Routines](docs/architecture/routines.md) | A bot's scheduled tasks: schedules and their timezones, runs and read-only checks, missed runs, health and recovery, and the apps' routine sheet and service row |
 | [Event triggers](docs/architecture/event-triggers.md) | Runner event subscriptions, gateways that sign and seal a service's events, the encrypted inbox, ordering and recovery |
+| [Channels](docs/architecture/channels.md) | A bot listening on Telegram and Slack: the accounts and their builtin servers, filters, the Runner's readers, conversations and what people write there, replies, the feedback collector |
 | [Durable tasks](docs/architecture/tasks.md) | Work that spans turns: owner, revisions, runs and recovery, evidence, the apps' Tasks section |
 | [Coordinator attention](docs/architecture/attention.md) | Consolidated reviews, blockers, commitments and changes, coordinator briefs, deduplication, encrypted records and notification preferences |
 | [Shared project context](docs/architecture/project-context.md) | Group briefs, goals, constraints, decisions, source freshness and corrections, encrypted reference assets, bounded bot discovery |
@@ -119,7 +122,7 @@ One doc per subject under `docs/architecture/`, each short enough to read in one
 
 ## Status
 
-Done: crypto and blob protocol, relay, CLI (identity, pairing, restore, local WS, API-key and subscription providers, server-side web search, agent loop, encrypt-before-upload, group chats, cross-Runner jobs and handoffs, steering and stop, routines, limits on turns and routines with resuming, shared plugin call limits, plugins over MCP with a marketplace, the user's own servers in `mcp.json`, and permission cards, encrypted pushes for replies, failures, and pending confirmations, signed self-updates of a CLI without an app, updated from any Device, and `lorca service`), app wiring and the bundled CLI launcher.
+Done: crypto and blob protocol, relay, CLI (identity, pairing, restore, local WS, API-key and subscription providers, server-side web search, agent loop, encrypt-before-upload, group chats, cross-Runner jobs and handoffs, steering and stop, routines, limits on turns and routines with resuming, shared plugin call limits, plugins over MCP with a marketplace, channels on Telegram and Slack, the user's own servers in `mcp.json`, and permission cards, encrypted pushes for replies, failures, and pending confirmations, signed self-updates of a CLI without an app, updated from any Device, and `lorca service`), app wiring and the bundled CLI launcher.
 
 Next: keychain storage.
 

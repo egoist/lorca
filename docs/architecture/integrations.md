@@ -1,6 +1,6 @@
 # Integrations and named accounts
 
-Slack, Gmail, Google Calendar, and Google Drive are [marketplace](marketplace.md) plugins backed by the services' streamable HTTP MCP servers. Settings › Plugins, the marketplace, and a bot's inspector manage them through the local CLI. The selected Runner holds each account's installation, setup, and authorization.
+Slack, Gmail, Google Calendar, and Google Drive are [marketplace](marketplace.md) plugins backed by the services' streamable HTTP MCP servers. A Slack account's app can also have a bot user that listens and answers in [channels](channels.md#accounts), with the bot and app tokens in its setup, and Telegram accounts are named accounts for channels alone. Settings › Plugins, the marketplace, and a bot's inspector manage them through the local CLI. The selected Runner holds each account's installation, setup, and authorization.
 
 ## Services and authorization
 
