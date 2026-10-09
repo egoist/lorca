@@ -236,6 +236,8 @@ pub struct App {
     pub shell_sessions: crate::shell::Sessions,
     /// What this Runner has installed, with the secrets kept apart.
     pub plugins: Mutex<crate::plugins::Store>,
+    /// This Runner's channels as its machine blob advertises them, and its accounts' readers.
+    pub channels: crate::channels::Channels,
     /// The marketplace index in use, and the checks for a newer one.
     pub marketplace: crate::marketplace::Updates,
     /// Serializes guided setup resource creation and installation on this Device.
@@ -350,6 +352,7 @@ impl App {
             #[cfg(feature = "runner")]
             shell_sessions: crate::shell::Sessions::default(),
             plugins: Mutex::new(plugins),
+            channels: crate::channels::Channels::default(),
             marketplace,
             workflow_editing: tokio::sync::Mutex::new(()),
             catalog: crate::catalog::Updates::default(),
@@ -648,6 +651,7 @@ impl App {
             os_version,
             box_pubkey: keys.box_pubkey(),
             plugins: self.plugins.lock().unwrap().statuses(),
+            channels: self.channels.statuses(),
             version: config::VERSION.into(),
             update: self.update_status(),
             updated_at: config::now_unix(),
@@ -810,13 +814,14 @@ impl App {
         let turns = self.turns_here();
         let budgets = self.budgets.local_snapshots(self);
         let fingerprint = format!(
-            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
             device.id,
             device.name,
             device.model,
             device.os,
             device.os_version,
             serde_json::to_string(&device.plugins).unwrap_or_default(),
+            serde_json::to_string(&device.channels).unwrap_or_default(),
             device.version,
             serde_json::to_string(&device.update).unwrap_or_default(),
             serde_json::to_string(&turns).unwrap_or_default(),
@@ -1285,7 +1290,10 @@ impl App {
             meta.created_at = config::now_secs();
         }
         let ids: Vec<String> = if meta.kind == "dm" {
-            meta.title = None;
+            // A channel's conversation is named after where it happens.
+            if meta.channel.is_none() {
+                meta.title = None;
+            }
             meta.description = None;
             meta.bot_ids.iter().take(1).cloned().collect()
         } else {
@@ -1327,7 +1335,7 @@ impl App {
             .unwrap()
             .chats
             .iter()
-            .find(|c| c.meta.kind == "dm" && c.meta.bot_ids == vec![bot_id.to_string()])
+            .find(|c| c.meta.kind == "dm" && c.meta.channel.is_none() && c.meta.bot_ids == vec![bot_id.to_string()])
             .cloned()
         {
             return Ok(existing);
@@ -1341,6 +1349,7 @@ impl App {
             description: None,
             is_pinned: false,
             created_at: 0.0,
+            channel: None,
         })
     }
 
@@ -2077,7 +2086,7 @@ mod tests {
                 owner_bot_id: owner.map(str::to_string),
                 description: None,
                 is_pinned: false,
-                created_at: 1.0,
+                created_at: 1.0, channel: None,
             },
             unread_count: 0,
             usage: None,

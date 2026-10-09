@@ -7,6 +7,8 @@
 //! side, with the permission gate, is `mcp` under the `runner` feature.
 
 #[cfg(feature = "runner")]
+pub mod builtin;
+#[cfg(feature = "runner")]
 pub mod mcp;
 pub mod mcp_json;
 #[cfg(feature = "runner")]
@@ -98,6 +100,13 @@ pub enum ServerSpec {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         timeout: Option<u64>,
     },
+    /// A server Lorca answers itself, in the Runner (`plugins::builtin`): `telegram`, or `slack`
+    /// for Slack's bot. Only the marketplace service of that name runs one.
+    Builtin {
+        service: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timeout: Option<u64>,
+    },
 }
 
 /// How long a plugin tool's call may go without an answer or progress, unless its server says.
@@ -108,7 +117,7 @@ impl ServerSpec {
     /// ten minutes.
     pub fn call_timeout(&self) -> std::time::Duration {
         let own = match self {
-            ServerSpec::Stdio { timeout, .. } | ServerSpec::Http { timeout, .. } => *timeout,
+            ServerSpec::Stdio { timeout, .. } | ServerSpec::Http { timeout, .. } | ServerSpec::Builtin { timeout, .. } => *timeout,
         };
         own.filter(|seconds| *seconds > 0).map(std::time::Duration::from_secs).unwrap_or(CALL_TIMEOUT)
     }
@@ -509,7 +518,7 @@ impl Store {
     fn server_origin(&self, id: &str, server: &str) -> Option<String> {
         match self.get(id)?.manifest.servers.get(server)? {
             ServerSpec::Http { url, .. } => Some(origin_of(url)),
-            ServerSpec::Stdio { .. } => None,
+            ServerSpec::Stdio { .. } | ServerSpec::Builtin { .. } => None,
         }
     }
 
@@ -849,6 +858,7 @@ pub fn detail(app: &Arc<App>, id: &str) -> Result<Value, String> {
         .map(|(name, spec)| {
             let (kind, auth) = match spec {
                 ServerSpec::Stdio { command, .. } => ("stdio", json!({ "command": command })),
+                ServerSpec::Builtin { service, .. } => ("builtin", json!({ "service": service })),
                 ServerSpec::Http { url, auth, .. } => {
                     let waiting = store.codes.get(id).filter(|code| &code.server == name);
                     // A server that signs in only when asked shows its sign-in once it has asked.

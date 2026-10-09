@@ -323,6 +323,7 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
                     bot_ids,
                     is_pinned: false,
                     created_at: 0.0,
+                    channel: None,
                 })
                 .map_err(|e| e.to_string())?
             };

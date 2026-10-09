@@ -350,6 +350,14 @@ async fn connect(app: &Arc<App>, plugin: &Installed, name: &str, spec: &ServerSp
                 }
             }
         }
+        ServerSpec::Builtin { service: name, .. } => {
+            // Telegram's server runs only for Telegram's accounts, and Slack's for Slack's.
+            let service = super::builtin::service(name)
+                .filter(|service| service.name() == plugin.service_id())
+                .ok_or_else(|| format!("{} needs a newer Lorca on this Runner.", plugin.manifest.name))?;
+            let pipe = super::builtin::start(app, &plugin.manifest.id, service);
+            client().serve(pipe).await.map_err(|e| format!("{} did not start: {e}", plugin.manifest.name))?
+        }
         ServerSpec::Http { url, headers, auth: auth_spec, .. } => {
             // `${VAR}` in an mcp.json server's URL is the environment's.
             let url = &fill(url, values);
@@ -2391,6 +2399,14 @@ impl Tool for PluginTool {
         let _permit = self.admit(&cancel).await?;
         params.name = tool.clone().into();
         params.arguments = args.as_object().cloned();
+        // A server of Lorca's own learns whose turn called, to keep what it sent in that chat.
+        let builtin = self.app.plugins.lock().unwrap().get(&self.plugin_id).is_some_and(|plugin| matches!(plugin.manifest.servers.get(&self.server_name), Some(ServerSpec::Builtin { .. })));
+        if let (true, Some((bot, chat_id))) = (builtin, &self.policy_context) {
+            let mut meta = serde_json::Map::new();
+            meta.insert("lorca/bot_id".into(), json!(bot.id));
+            meta.insert("lorca/chat_id".into(), json!(chat_id));
+            params.meta = Some(rmcp::model::RequestMetaObject(rmcp::model::MetaObject(meta)));
+        }
         // A call the user stops, or one that runs out of time, is called off at the server too
         // (`notifications/cancelled`), so it stops the work rather than finishing it unseen.
         let request = rmcp::model::ClientRequest::CallToolRequest(rmcp::model::CallToolRequest::new(params));

@@ -372,6 +372,7 @@ async fn main() -> anyhow::Result<()> {
             tokio::spawn(sync::run(app.clone()));
             tokio::spawn(routines::run(app.clone()));
             tokio::spawn(lorca::event_triggers::run(app.clone()));
+            tokio::spawn(lorca::channels::run(app.clone()));
             tokio::spawn(lorca::review_execution::run(app.clone()));
             ws::serve(app, ready_stdout).await
         }

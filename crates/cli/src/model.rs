@@ -47,6 +47,9 @@ pub struct Device {
     /// Plugins installed on that Runner, with their setup state. Secrets stay on the Runner.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub plugins: Vec<PluginStatus>,
+    /// The channels this Runner's bots listen on, with their state. Tokens stay on the Runner.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub channels: Vec<crate::channels::ChannelStatus>,
     /// The `lorca` this Device runs, as `lorca --version` says it.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub version: String,
@@ -234,6 +237,9 @@ pub enum Author {
     You,
     Bot { bot_id: String },
     System,
+    /// Someone outside Lorca writing in a channel's conversation (a Telegram group, a Slack
+    /// thread). Their words are data for the bot, never the user's instructions or approval.
+    Contact { name: String },
 }
 
 /// A file sent with a message. Its bytes travel as a `file` blob whose id is this id,
@@ -494,6 +500,10 @@ pub struct Message {
     /// own notification policy, shared by the Runner and the apps.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notification: Option<crate::attention::Notification>,
+    /// The message's id on the channel a conversation mirrors: a Telegram message id or a
+    /// Slack `ts`. Set on a contact's message and on what the bot sent there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_id: Option<String>,
 }
 
 /// How much of a tool call's detail the apps get: enough for the "Messaged ◉ X" marker.
@@ -542,6 +552,7 @@ impl Message {
             promoted_at: None,
             queued: false,
             output: None,
+            external_id: None,
         }
     }
 
@@ -599,6 +610,26 @@ pub struct ChatMeta {
     #[serde(default)]
     pub is_pinned: bool,
     pub created_at: f64,
+    /// A conversation a channel opened: a direct chat with its bot that mirrors one thread on
+    /// Telegram or Slack, named by `title`. The bot's own DM has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<ChatChannel>,
+}
+
+/// Where a channel's conversation happens outside Lorca.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ChatChannel {
+    /// The channel (its event subscription) that opened the conversation.
+    pub channel_id: String,
+    /// `telegram` or `slack`.
+    pub service: String,
+    /// The plugin instance of the account the bot speaks through.
+    pub account_id: String,
+    /// The chat on the service: a Telegram chat id, a Slack channel id.
+    pub chat_id: String,
+    /// A Telegram forum topic or a Slack thread's `ts`, when the conversation is one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
 }
 
 impl ChatMeta {

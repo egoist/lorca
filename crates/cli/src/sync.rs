@@ -968,7 +968,7 @@ fn apply_chat_op(app: &Arc<App>, op: ChatBlob) {
                 if !state.chats.iter().any(|c| c.meta.id == message.chat_id) {
                     // Roster not here yet: keep the message under a placeholder until it is.
                     state.chats.push(Chat {
-                        meta: ChatMeta { id: message.chat_id.clone(), kind: "group".into(), title: Some("Chat".into()), bot_ids: vec![], owner_bot_id: None, description: None, is_pinned: false, created_at: message.created_at },
+                        meta: ChatMeta { id: message.chat_id.clone(), kind: "group".into(), title: Some("Chat".into()), bot_ids: vec![], owner_bot_id: None, description: None, is_pinned: false, created_at: message.created_at, channel: None },
                         unread_count: 0,
                         usage: None,
                         compactions: Vec::new(),
@@ -1140,7 +1140,7 @@ mod tests {
         let entry = snapshot["devices"].as_array().unwrap().iter().find(|d| d["id"] == silent.as_str()).unwrap();
         assert_eq!((entry["name"].as_str(), entry["os"].as_str(), entry["is_this_device"].as_bool()), (Some(""), Some(""), Some(false)));
 
-        let device = Device { id: silent.clone(), name: "Laptop".into(), model: String::new(), os: "windows".into(), os_version: String::new(), box_pubkey: String::new(), plugins: Vec::new(), version: String::new(), update: None, updated_at: now };
+        let device = Device { id: silent.clone(), name: "Laptop".into(), model: String::new(), os: "windows".into(), os_version: String::new(), box_pubkey: String::new(), plugins: Vec::new(), channels: Vec::new(), version: String::new(), update: None, updated_at: now };
         upsert_device(&mut app.state.lock().unwrap().devices, device);
         assert!(unknown().is_empty(), "its blob landed");
         assert!(settle_unknown_machines(app));

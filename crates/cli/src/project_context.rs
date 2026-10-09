@@ -942,7 +942,7 @@ mod tests {
                     owner_bot_id: Some(bot.into()),
                     description: None,
                     is_pinned: false,
-                    created_at: 1.0,
+                    created_at: 1.0, channel: None,
                 },
                 unread_count: 0,
                 usage: None,
@@ -1189,7 +1189,7 @@ mod tests {
         let early = make_entry(input(Kind::Brief, "Sent before the roster that lists this group"));
         apply_remote(app, "later-group", &early).unwrap();
         app.state.lock().unwrap().chats.push(Chat {
-            meta: ChatMeta { id: "later-group".into(), kind: "group".into(), title: None, bot_ids: vec!["bot-a".into()], owner_bot_id: None, description: None, is_pinned: false, created_at: 1.0 },
+            meta: ChatMeta { id: "later-group".into(), kind: "group".into(), title: None, bot_ids: vec!["bot-a".into()], owner_bot_id: None, description: None, is_pinned: false, created_at: 1.0 , channel: None},
             unread_count: 0,
             usage: None,
             compactions: vec![],

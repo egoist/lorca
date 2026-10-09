@@ -64,6 +64,16 @@ pub struct SubscriptionConfig {
     pub is_enabled: bool,
     #[serde(default)]
     pub expires_at: Option<i64>,
+    /// A channel's account, chats, and filter, when `source` is `telegram` or `slack`: the
+    /// Runner reads the service itself ([`crate::channels`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<crate::channels::ChannelSpec>,
+}
+
+impl SubscriptionConfig {
+    pub fn is_channel(&self) -> bool {
+        crate::channels::service_of(&self.source).is_some()
+    }
 }
 
 fn enabled() -> bool {
@@ -167,6 +177,9 @@ pub struct EventTask {
     pub name: String,
     pub prompt: String,
     pub data: String,
+    /// A channel's turn: the contact's message in the conversation that started it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<String>,
 }
 
 fn dek(app: &App) -> anyhow::Result<[u8; 32]> {
@@ -288,8 +301,13 @@ fn local_target(app: &App, config: &SubscriptionConfig) -> anyhow::Result<()> {
 
 fn validate_config(app: &App, config: &SubscriptionConfig) -> anyhow::Result<()> {
     local_target(app, config)?;
-    if config.source != "gateway_hmac" {
-        bail!("source must be gateway_hmac");
+    if config.is_channel() {
+        #[cfg(feature = "runner")]
+        crate::channels::validate(app, config)?;
+        #[cfg(not(feature = "runner"))]
+        bail!("Channels run on a Runner");
+    } else if config.source != "gateway_hmac" || config.channel.is_some() {
+        bail!("source must be gateway_hmac, telegram, or slack");
     }
     if config.name.trim().is_empty()
         || config.name.chars().count() > 60
@@ -360,6 +378,9 @@ pub fn serve(app: &Arc<App>, method: &str, body: &Value) -> anyhow::Result<Value
             let db = app.store.connection.lock().unwrap();
             subscription(&db, &key, id)?
         };
+        if sub.config.is_channel() && matches!(method, "events.reconnect" | "events.route") {
+            bail!("A channel reads its service itself and has no gateway");
+        }
         if method == "events.reconnect" {
             sub.config.expires_at = body["expires_at"].as_i64();
             validate_config(app, &sub.config)?;
@@ -402,7 +423,8 @@ pub fn serve(app: &Arc<App>, method: &str, body: &Value) -> anyhow::Result<Value
             let mut sub = subscription(&tx, &key, id)?;
             if method == "events.update" {
                 let config: SubscriptionConfig = serde_json::from_value(body["config"].clone())?;
-                if config.bot_id != sub.config.bot_id || config.routine_id != sub.config.routine_id
+                if config.bot_id != sub.config.bot_id || config.routine_id != sub.config.routine_id || config.source != sub.config.source
+                    || config.channel.as_ref().map(|c| &c.account_id) != sub.config.channel.as_ref().map(|c| &c.account_id)
                 {
                     bail!("Create another subscription to change its target");
                 }
@@ -493,7 +515,84 @@ pub fn serve(app: &Arc<App>, method: &str, body: &Value) -> anyhow::Result<Value
         crate::attention::settle(app, &source, &held_prefix(id));
         crate::attention::settle(app, &source, &auth_prefix(id));
     }
+    if method != "events.list" {
+        channels_changed(app);
+    }
     Ok(reply)
+}
+
+/// What every Device shows of this Runner's channels follows a change of theirs.
+fn channels_changed(app: &App) {
+    #[cfg(feature = "runner")]
+    crate::channels::refresh(app);
+    #[cfg(not(feature = "runner"))]
+    let _ = app;
+}
+
+/// A channel's subscription as the apps and the bot see it: its configuration, and the delivery
+/// that holds it when one failed or was interrupted.
+pub struct ChannelView {
+    pub id: String,
+    pub config: SubscriptionConfig,
+    pub held: Option<String>,
+}
+
+/// This Runner's channels.
+pub fn channel_views(app: &App) -> anyhow::Result<Vec<ChannelView>> {
+    let key = dek(app)?;
+    let db = app.store.connection.lock().unwrap();
+    let mut views = Vec::new();
+    for sub in subscriptions(&db, &key)?.into_iter().filter(|sub| sub.config.is_channel()) {
+        let held = deliveries_of(&db, &key, &sub.id)?
+            .into_iter()
+            .find(|d| matches!(d.state, DeliveryState::Failed | DeliveryState::Uncertain))
+            .map(|d| d.id);
+        views.push(ChannelView { id: sub.id, config: sub.config, held });
+    }
+    Ok(views)
+}
+
+/// The channels of an account by id, or every channel with an empty `account_id`.
+pub fn channel_configs(app: &App, account_id: &str) -> anyhow::Result<Vec<(String, SubscriptionConfig)>> {
+    let Some(key) = app.dek() else { return Ok(Vec::new()) };
+    let db = app.store.connection.lock().unwrap();
+    Ok(subscriptions(&db, &key)?
+        .into_iter()
+        .filter(|sub| sub.config.channel.as_ref().is_some_and(|spec| account_id.is_empty() || spec.account_id == account_id))
+        .map(|sub| (sub.id, sub.config))
+        .collect())
+}
+
+pub fn channel_config(app: &App, id: &str) -> anyhow::Result<SubscriptionConfig> {
+    let key = dek(app)?;
+    let db = app.store.connection.lock().unwrap();
+    Ok(subscription(&db, &key, id)?.config)
+}
+
+/// A channel's message into its inbox: the Runner read it from the service itself, so it signs
+/// the delivery with the subscription's own secret and receives it as a gateway's.
+pub fn receive_local(app: &App, subscription_id: &str, delivery_id: &str, event_type: &str, payload: Value) -> anyhow::Result<Value> {
+    let key = dek(app)?;
+    let sub = {
+        let db = app.store.connection.lock().unwrap();
+        subscription(&db, &key, subscription_id)?
+    };
+    let mut event = Envelope {
+        version: 1,
+        subscription_id: sub.id.clone(),
+        generation: sub.generation,
+        delivery_id: delivery_id.chars().take(256).collect(),
+        occurred_at: now_unix(),
+        event_type: event_type.to_string(),
+        payload: payload.to_string(),
+        signature: String::new(),
+    };
+    event.sign(&sub.secret)?;
+    let receipt = receive(app, event)?;
+    if receipt["status"] == "rejected" {
+        bail!("The channel refused its own message");
+    }
+    Ok(receipt)
 }
 
 fn clear_problem(sub: &mut Subscription, problem: &str) {
@@ -550,7 +649,19 @@ fn report_held(app: &App, sub_id: &str) {
         };
         crate::attention::raise(app, &prefix, fresh, report, Some(&sub.config.bot_id));
     };
+    let bot = app.bot(&sub.config.bot_id).map(|bot| bot.name).unwrap_or_else(|| "the bot".into());
     match &held {
+        Some(item) if sub.config.is_channel() => raise(
+            held_prefix(&sub.id),
+            &item.id,
+            format!("Channel on hold: {}", sub.config.name),
+            if item.state == DeliveryState::Uncertain {
+                "Lorca stopped during a message’s turn, which may have acted already, so later messages wait."
+            } else {
+                "A message’s turn didn’t finish, so later messages wait."
+            },
+            format!("Read the conversation, then try the message again or skip it from the channel in {bot}’s details."),
+        ),
         Some(item) => raise(
             held_prefix(&sub.id),
             &item.id,
@@ -575,6 +686,7 @@ fn report_held(app: &App, sub_id: &str) {
     } else {
         crate::attention::settle(app, &source, &auth_prefix(&sub.id));
     }
+    channels_changed(app);
 }
 
 /// Manage another Runner through the existing encrypted request/response path.
@@ -928,7 +1040,21 @@ pub fn tick(app: &Arc<App>) -> anyhow::Result<()> {
                 continue;
             }
         }
-        let dm = app.dm_with(&sub.config.bot_id, None)?;
+        // A channel's message runs in its conversation, resolved for the next pending delivery
+        // before the store lock, since roster state is taken first; other events in the bot's DM.
+        let dm = if sub.config.is_channel() { None } else { Some(app.dm_with(&sub.config.bot_id, None)?) };
+        let conversation = if dm.is_none() {
+            let next = {
+                let db = app.store.connection.lock().unwrap();
+                deliveries_of(&db, &key, &sub.id)?.into_iter().find(|d| d.state == DeliveryState::Pending)
+            };
+            match next {
+                Some(next) => Some((next.id.clone(), conversation_of(app, &sub, &next.envelope))),
+                None => continue,
+            }
+        } else {
+            None
+        };
         let requested_by = app.this_device_id().unwrap_or_default();
         let mut db = app.store.connection.lock().unwrap();
         let tx = db.transaction()?;
@@ -954,16 +1080,34 @@ pub fn tick(app: &Arc<App>) -> anyhow::Result<()> {
         else {
             continue;
         };
+        let (chat_id, message_id, data) = match (&dm, conversation) {
+            (Some(dm), _) => (dm.meta.id.clone(), None, event_cue(&item.envelope)),
+            // Another delivery came first after all: the next tick resolves it.
+            (None, Some((resolved, _))) if resolved != item.id => continue,
+            (None, None) => continue,
+            (None, Some((_, found))) => match found {
+                Some((chat_id, message_id, data)) => (chat_id, Some(message_id), data),
+                // The user deleted the conversation: the message goes with it.
+                None => {
+                    item.state = DeliveryState::Done;
+                    item.envelope.payload.clear();
+                    save_delivery(&tx, &key, item)?;
+                    tx.commit()?;
+                    continue;
+                }
+            },
+        };
         item.state = DeliveryState::Running;
         item.task = Some(EventTask {
             name: sub.config.name.clone(),
             prompt: sub.config.prompt.clone(),
-            data: event_cue(&item.envelope),
+            data,
+            message_id,
         });
         save_delivery(&tx, &key, item)?;
         let job = crate::model::Job {
             id: format!("event-{}", item.id),
-            chat_id: dm.meta.id,
+            chat_id,
             bot_id: sub.config.bot_id.clone(),
             kind: "event".into(),
             trigger_message_id: item.id.clone(),
@@ -985,6 +1129,21 @@ pub fn tick(app: &Arc<App>) -> anyhow::Result<()> {
         crate::runtime::start_turn(app, job);
     }
     Ok(())
+}
+
+/// A channel's delivery: its conversation, the contact's message there, and the turn's closing
+/// note. The conversation must still be the channel's, with the channel's bot in it.
+#[cfg(feature = "runner")]
+fn conversation_of(app: &App, sub: &Subscription, event: &Envelope) -> Option<(String, String, String)> {
+    let payload: Value = serde_json::from_str(&event.payload).ok()?;
+    let chat = app.chat(payload["chat_id"].as_str()?)?;
+    let channel = chat.meta.channel.as_ref()?;
+    if channel.channel_id != sub.id || !chat.meta.bot_ids.contains(&sub.config.bot_id) {
+        return None;
+    }
+    let message_id = payload["message_id"].as_str()?.to_string();
+    let place = chat.meta.title.clone().unwrap_or_else(|| sub.config.name.clone());
+    Some((chat.meta.id, message_id, crate::channels::cue(payload["sender"].as_str().unwrap_or("Someone"), &place)))
 }
 
 pub fn event_cue(event: &Envelope) -> String {
@@ -1052,6 +1211,7 @@ mod tests {
             queue_policy: policy,
             is_enabled: true,
             expires_at: None,
+            channel: None,
         }
     }
     fn create(app: &Arc<App>, policy: QueuePolicy) -> (String, GatewayRoute) {
