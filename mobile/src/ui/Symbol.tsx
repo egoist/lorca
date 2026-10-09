@@ -84,6 +84,8 @@ const ANDROID: Record<string, string> = {
   "mic.fill": "mic",
   "waveform": "graphic_eq",
   "paperclip": "attach_file",
+  flag: "flag",
+  "checkmark.seal": "verified",
   "photo.on.rectangle": "photo_library",
   photo: "image",
   "doc.fill": "description",

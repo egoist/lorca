@@ -10,7 +10,7 @@ import { t } from "../i18n";
 import { exactAnswer, ExactNumber, ExactObject, stringifyExact } from "./exactJson";
 import { reviewEditParams } from "./reviewEdit";
 import { hostFacts } from "./host";
-import { providerConnectMethod, withReviewModel, type Attachment, type AutoReview, type Bot, type BrowserProfile, type BudgetLimits, type BudgetState, type CallLimits, type Chat, type ChatMeta, type ChatSearchResults, type ChatUsage, type CustomAPI, type CustomModel, type DurableTask, type Message, type ReviewItem, type PluginDetail, type PluginStatus, type ProviderKind, type ProviderStatus } from "./model";
+import { orderProjectEntries, providerConnectMethod, withReviewModel, type ProjectContext, type ProjectEntry, type ProjectKind, type ProjectSource, type Attachment, type AutoReview, type Bot, type BrowserProfile, type BudgetLimits, type BudgetState, type CallLimits, type Chat, type ChatMeta, type ChatSearchResults, type ChatUsage, type CustomAPI, type CustomModel, type DurableTask, type Message, type ReviewItem, type PluginDetail, type PluginStatus, type ProviderKind, type ProviderStatus } from "./model";
 import { coreHome, loadPrefs, pathOf, wipePrefs } from "./prefs";
 import { clearPushes, installPushHandlers, registerForPushes } from "./push";
 import {
@@ -170,6 +170,10 @@ class Engine {
         break;
       case "reviews.changed":
         acceptReview((data as { item: ReviewItem }).item);
+        break;
+      case "projects.changed":
+        // Only a group whose details listed its context follows it.
+        if (useStore.getState().projects[data.chat_id]) void this.loadProject(data.chat_id);
         break;
       case "roster.changed": {
         const { removed } = applyRoster(data);
@@ -366,6 +370,99 @@ class Engine {
     } catch (error) {
       console.warn("listing outputs", error instanceof Error ? error.message : error);
     }
+  }
+
+  /// Every page of `projects.get` for the group: its current entries, or with `history` every
+  /// revision.
+  private async projectPages(chatId: string, history: boolean): Promise<ProjectContext> {
+    const entries: ProjectEntry[] = [];
+    let conflicts: string[][] = [];
+    let after: string | undefined;
+    for (;;) {
+      const page = await core.request<{ entries: ProjectEntry[]; has_more: boolean; conflicts: Record<string, string[]> }>("projects.get", { chat_id: chatId, history, limit: 100, ...(after ? { after } : {}) });
+      entries.push(...page.entries);
+      conflicts = Object.values(page.conflicts);
+      if (!page.has_more || page.entries.length === 0) return { entries, conflicts };
+      after = page.entries[page.entries.length - 1].id;
+    }
+  }
+
+  /// The group's project context, for its details. A change while a listing is on its way lists it
+  /// again once that one lands.
+  private projectLoads = new Map<string, boolean>();
+  async loadProject(chatId: string): Promise<void> {
+    if (this.projectLoads.has(chatId)) {
+      this.projectLoads.set(chatId, true);
+      return;
+    }
+    this.projectLoads.set(chatId, false);
+    try {
+      const { entries, conflicts } = await this.projectPages(chatId, false);
+      useStore.setState((s) => ({ projects: { ...s.projects, [chatId]: { entries: orderProjectEntries(entries), conflicts } } }));
+    } catch (error) {
+      console.warn("listing project context", error instanceof Error ? error.message : error);
+    } finally {
+      const again = this.projectLoads.get(chatId);
+      this.projectLoads.delete(chatId);
+      if (again) void this.loadProject(chatId);
+    }
+  }
+
+  /// Adds an entry, or saves a new version of `replacing` and of any other versions of it. What
+  /// the user writes is agreed; a link the user typed becomes its source.
+  async saveProjectEntry(chatId: string, input: { kind: ProjectKind; title: string; text: string; link?: string; replacing?: ProjectEntry; alsoReplacing?: string[] }): Promise<void> {
+    const { replacing, link } = input;
+    let source: ProjectSource | undefined;
+    if (replacing && (replacing.source.url ?? undefined) === link) source = replacing.source;
+    else if (link) {
+      let label = link;
+      try {
+        label = new URL(link).hostname || link;
+      } catch {}
+      source = { kind: "url", label, url: link };
+    }
+    await core.request("projects.save", {
+      chat_id: chatId,
+      kind: input.kind,
+      title: input.title,
+      text: input.text,
+      verification: "agreed",
+      ...(source ? { source } : {}),
+      ...(replacing ? { supersedes: [replacing.id, ...(input.alsoReplacing ?? [])] } : {}),
+    });
+  }
+
+  /// Takes the entry out of the group's context; its history stays.
+  async removeProjectEntry(chatId: string, entry: ProjectEntry): Promise<void> {
+    await core.request("projects.save", { chat_id: chatId, kind: entry.kind, title: entry.title, source: entry.source, supersedes: [entry.id], removed: true });
+  }
+
+  /// What became of an entry another Device changed while it was open here: the current version
+  /// it led to, or undefined when it was removed.
+  async currentProjectEntry(chatId: string, id: string): Promise<ProjectEntry | undefined> {
+    const { entries } = await this.projectPages(chatId, true);
+    const frontier = [id];
+    const seen = new Set([id]);
+    while (frontier.length) {
+      const older = frontier.pop()!;
+      for (const entry of entries) {
+        if (!entry.supersedes?.includes(older) || seen.has(entry.id)) continue;
+        seen.add(entry.id);
+        if (entry.current && !entry.removed) return entry;
+        frontier.push(entry.id);
+      }
+    }
+    return undefined;
+  }
+
+  /// Reads the entry's link again; the answer is its new version, read or not.
+  async checkProjectLink(chatId: string, entryId: string): Promise<ProjectEntry> {
+    return core.request<ProjectEntry>("projects.refresh", { chat_id: chatId, entry_id: entryId });
+  }
+
+  /// Stores and encrypts a picked file for the group.
+  async addProjectFile(chatId: string, file: { uri: string; name: string; mime: string }): Promise<void> {
+    await core.request("projects.asset", { chat_id: chatId, file: { path: pathOf(file.uri), name: file.name, mime: file.mime } });
   }
 
   async createBot(input: { name: string; description: string; symbol_name: string; accent: string; runner_id: string; provider: string; model?: string; thinking?: string }): Promise<{ bot: Bot; chatId: string }> {

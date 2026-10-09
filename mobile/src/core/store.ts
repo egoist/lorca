@@ -5,7 +5,7 @@
 import { useMemo } from "react";
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
-import { groupOutputs, reviewIsOpen, runsInTerminal, taskOrder, type AutoReview, type BudgetState, type DurableTask, type ReviewItem, type OutputSeries, type Bot, type Chat, type ChatMeta, type ChatUsage, type Device, type Message, type ProviderModel, type ProviderStatus, type RelayProblem, type Routine } from "./model";
+import { groupOutputs, reviewIsOpen, runsInTerminal, taskOrder, type AutoReview, type ProjectContext, type BudgetState, type DurableTask, type ReviewItem, type OutputSeries, type Bot, type Chat, type ChatMeta, type ChatUsage, type Device, type Message, type ProviderModel, type ProviderStatus, type RelayProblem, type Routine } from "./model";
 import { t } from "../i18n";
 import { savePrefs } from "./prefs";
 import { emptyAttention, type AttentionView } from "./attention";
@@ -77,6 +77,9 @@ export interface StoreState {
   fileErrors: Record<string, string>;
   /// Chat id → every version of its outputs the core listed when the chat's details last opened.
   outputs: Record<string, Message[]>;
+  /// Group chat id → its project context as the core last listed it, from when the group's
+  /// details opened, and again on every `projects.changed` for it.
+  projects: Record<string, ProjectContext>;
   /// The account's durable tasks, each at the newest revision this phone has.
   tasks: DurableTask[];
   /// What the account's bots left for review, each at the newest revision this phone has.
@@ -113,6 +116,7 @@ function empty(): Omit<StoreState, "ready" | "dictation_lang" | "appActive" | "a
     files: {},
     fileErrors: {},
     outputs: {},
+    projects: {},
     tasks: [],
     reviews: [],
     budgets: [],
@@ -340,6 +344,7 @@ export function removeChat(chatId: string) {
     thinking: omit(s.thinking, chatId),
     retries: omit(s.retries, chatId),
     outputs: omit(s.outputs, chatId),
+    projects: omit(s.projects, chatId),
   }));
 }
 
@@ -430,6 +435,11 @@ export function useOutputs(chatId: string | undefined): OutputSeries[] {
   const listed = useStore((s) => (chatId ? s.outputs[chatId] : undefined));
   // The loaded message first: it is the newer copy of one the list also has.
   return useMemo(() => groupOutputs([...(messages ?? []), ...(listed ?? [])]), [messages, listed]);
+}
+
+/// The group's project context, once its details have listed it.
+export function useProject(chatId: string | undefined): ProjectContext | undefined {
+  return useStore((s) => (chatId ? s.projects[chatId] : undefined));
 }
 
 export function useBots(): Bot[] {

@@ -4,11 +4,13 @@ import { MenuView, type MenuComponentRef } from "@expo/ui/community/menu";
 import { Platform, PlatformColor, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 import { Pressable } from "../../src/ui/Pressable";
 import { chatTitle, engine } from "../../src/core/engine";
-import { BROWSER_PLUGIN_ID, providerKinds, providerLabel, providerModels, PROVIDER_KINDS, taskSymbol, thinkingLabel, thinkingLevels, withCustomModels, type Bot, type Routine } from "../../src/core/model";
-import { deviceIsOnline, useBotMap, useBudget, useChat, useDurableTasks, useOpenReviews, useOutputs, useRoutines, useStoppedTurn, useStore, useWorkingBotIds } from "../../src/core/store";
+import { BROWSER_PLUGIN_ID, PROJECT_KINDS, projectSymbol, providerKinds, providerLabel, providerModels, PROVIDER_KINDS, taskSymbol, thinkingLabel, thinkingLevels, withCustomModels, type Bot, type Routine } from "../../src/core/model";
+import { deviceIsOnline, useBotMap, useBudget, useChat, useDurableTasks, useOpenReviews, useOutputs, useProject, useRoutines, useStoppedTurn, useStore, useWorkingBotIds } from "../../src/core/store";
 import { t, useLanguage } from "../../src/i18n";
 import { AvatarCluster, BotAvatar } from "../../src/ui/Avatar";
-import { CheckRow, FieldRow, Row, Section, ToggleRow } from "../../src/ui/forms";
+import { CheckRow, FieldRow, MenuRow, Row, Section, ToggleRow } from "../../src/ui/forms";
+import { projectKindTitle, projectProblem, projectRowDetail } from "../../src/ui/project";
+import * as DocumentPicker from "expo-document-picker";
 import { pluginStateWord } from "../../src/ui/plugins";
 import { lastRunSummary, lastSeen, routineDetail } from "../../src/ui/format";
 import { Symbol } from "../../src/ui/Symbol";
@@ -49,6 +51,8 @@ export default function ChatInfoScreen() {
   const reviews = useOpenReviews(chat?.id);
   const taskTint = useTaskTint();
   const [allTasks, setAllTasks] = useState(false);
+  const project = useProject(chat?.kind === "group" ? chat.id : undefined);
+  const [allProject, setAllProject] = useState(false);
   const limits = useBudget("chat", chat?.id, bot?.runner_id);
   const stoppedTurn = useStoppedTurn(chat?.id, bot?.runner_id);
   const budgets = useStore((s) => s.budgets);
@@ -60,6 +64,10 @@ export default function ChatInfoScreen() {
   useEffect(() => {
     if (id) void engine.listOutputs(id);
   }, [id]);
+  // A group's project context, followed while its details are open and after.
+  useEffect(() => {
+    if (id && isGroup) void engine.loadProject(id);
+  }, [id, isGroup]);
 
   if (!chat) return null;
 
@@ -121,6 +129,19 @@ export default function ChatInfoScreen() {
     }
   }
 
+  /// A file for the group's bots, picked and added at once; another kind opens its form.
+  async function addToProject(kind: (typeof PROJECT_KINDS)[number]) {
+    if (kind !== "asset") return router.push({ pathname: "/chat-info/project/[id]", params: { id: "new", chat: chat!.id, kind } });
+    const picked = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true });
+    const file = picked.canceled ? undefined : picked.assets[0];
+    if (!file) return;
+    try {
+      await engine.addProjectFile(chat!.id, { uri: file.uri, name: file.name, mime: file.mimeType ?? "application/octet-stream" });
+    } catch (error) {
+      alert(t("Couldn't add “{name}”", { name: file.name }), error instanceof Error ? error.message : String(error));
+    }
+  }
+
   function confirmDelete() {
     alert(t("Delete “{name}”?", { name: chatTitle(chat!) }), t("The chat and its messages are removed from every paired Device."), [
       { text: t("Cancel"), style: "cancel" },
@@ -163,6 +184,30 @@ export default function ChatInfoScreen() {
         <Section>
           <FieldRow label={t("Name")} value={title} onChangeText={setTitle} placeholder={members.map((m) => m.name).join(", ")} onBlur={commitTitle} onSubmitEditing={commitTitle} returnKeyType="done" textAlign="right" />
           <Row title={t("Description")} subtitle={chat.description || undefined} subtitleLines={2} chevron onPress={() => router.push(`/chat-info/group-description/${chat.id}`)} />
+        </Section>
+      )}
+
+      {/* What every bot in the group can read: an entry a row, which opens it, the briefs and
+          decisions first. Past five rows the rest wait behind Show More; Add to Project adds one. */}
+      {isGroup && (
+        <Section title={t("Project")}>
+          {(allProject || (project?.entries.length ?? 0) <= 5 ? project?.entries ?? [] : project!.entries.slice(0, 4)).map((entry) => (
+            <Row
+              key={entry.id}
+              title={entry.title}
+              subtitle={projectRowDetail(project, entry)}
+              icon={projectSymbol(entry.kind)}
+              accessory={projectProblem(project, entry) ? <Symbol name="exclamationmark.circle.fill" size={18} color={orange} /> : undefined}
+              chevron
+              onPress={() => router.push({ pathname: "/chat-info/project/[id]", params: { id: entry.id, chat: chat.id } })}
+            />
+          ))}
+          {!allProject && (project?.entries.length ?? 0) > 5 ? <Row title={t("Show {count} More", { count: project!.entries.length - 4 })} icon="ellipsis" onPress={() => setAllProject(true)} /> : null}
+          <MenuRow
+            title={t("Add to Project")}
+            icon="plus"
+            choices={PROJECT_KINDS.map((kind) => ({ title: `${projectKindTitle(kind)}…`, selected: false, onPress: () => void addToProject(kind), dividerAfter: kind === "fact" }))}
+          />
         </Section>
       )}
 

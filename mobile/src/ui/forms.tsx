@@ -94,9 +94,10 @@ function MenuAccessory({ value, title, choices }: { value: string; title: string
 }
 
 /// An action row whose tap drops a native menu of choices, for an action that comes in kinds:
-/// the title in the tint color, as an action row's is. On iOS the row is the SwiftUI menu's
-/// label, drawn to match a `Row`; Android opens a Material dropdown from the row.
-export function MenuRow({ title, choices }: { title: string; choices: MenuChoice[] }) {
+/// the title in the tint color, after its symbol when it has one, as an action row's is. On iOS
+/// the row is the SwiftUI menu's label, drawn to match a `Row`; Android opens a Material dropdown
+/// from the row.
+export function MenuRow({ title, icon, choices }: { title: string; icon?: string; choices: MenuChoice[] }) {
   const p = usePalette();
   const menu = useRef<MenuComponentRef>(null);
   if (Platform.OS !== "ios") {
@@ -113,7 +114,7 @@ export function MenuRow({ title, choices }: { title: string; choices: MenuChoice
     );
     return (
       <MenuView ref={menu} title={title} actions={actions} shouldOpenOnLongPress onPressAction={({ nativeEvent }) => choices[Number(nativeEvent.event)]?.onPress()}>
-        <Row title={title} onPress={() => menu.current?.show()} />
+        <Row title={title} icon={icon} onPress={() => menu.current?.show()} />
       </MenuView>
     );
   }
@@ -122,7 +123,8 @@ export function MenuRow({ title, choices }: { title: string; choices: MenuChoice
       <Menu
         modifiers={[menuOrder("fixed"), tint(p.tint as any)]}
         label={
-          <HStack modifiers={[frame({ maxWidth: 10000, minHeight: 44, alignment: "leading" }), padding({ horizontal: 16 }), contentShape(shapes.rectangle())]}>
+          <HStack spacing={12} modifiers={[frame({ maxWidth: 10000, minHeight: 44, alignment: "leading" }), padding({ horizontal: 16 }), contentShape(shapes.rectangle())]}>
+            {icon ? <MenuImage systemName={icon as any} size={17} color={p.tint} modifiers={[frame({ width: 20 })]} /> : null}
             <MenuText modifiers={[font({ size: Font.body }), foregroundStyle(p.tint as any), lineLimit(1)]}>{title}</MenuText>
           </HStack>
         }

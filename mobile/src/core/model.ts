@@ -1025,3 +1025,88 @@ export interface CallLimits {
   plugin_id: string;
   service_id: string;
 }
+
+/// A group's shared project context, after the desktop apps' Project section: the briefs, goals,
+/// constraints, decisions, facts, links (`document`), and files (`asset`) every bot in the group
+/// can read. The core owns scope, revisions, source checks, and sync.
+export type ProjectKind = "brief" | "goal" | "constraint" | "decision" | "fact" | "document" | "asset";
+
+/// The order the Project section lists the kinds in, and the + menu offers them.
+export const PROJECT_KINDS: ProjectKind[] = ["brief", "goal", "constraint", "decision", "fact", "document", "asset"];
+
+/// Where an entry came from, kept whole so a correction carries a cited output along.
+export interface ProjectSource {
+  kind: "user" | "bot" | "url" | "message" | "output";
+  label: string;
+  url?: string | null;
+  message_id?: string | null;
+  output?: { chat_id: string; message_id: string; output_id: string; version: number } | null;
+}
+
+export interface ProjectEntry {
+  id: string;
+  kind: ProjectKind;
+  title: string;
+  text: string;
+  source: ProjectSource;
+  verification: string;
+  freshness: string;
+  updated_at: number;
+  verified_at?: number | null;
+  fetched_at?: number | null;
+  asset?: Attachment | null;
+  refresh_error?: string | null;
+  supersedes?: string[];
+  current?: boolean;
+  removed?: boolean;
+}
+
+/// A group's current entries in list order, and the entries that are two versions of one (two
+/// Devices changed it at once).
+export interface ProjectContext {
+  entries: ProjectEntry[];
+  conflicts: string[][];
+}
+
+/// Briefs first and files last, newest first within a kind.
+export function orderProjectEntries(entries: ProjectEntry[]): ProjectEntry[] {
+  return [...entries].sort((a, b) => PROJECT_KINDS.indexOf(a.kind) - PROJECT_KINDS.indexOf(b.kind) || b.updated_at - a.updated_at || a.id.localeCompare(b.id));
+}
+
+/// The other current versions of an entry two Devices changed at once.
+export function otherVersions(context: ProjectContext | undefined, id: string): string[] {
+  return context?.conflicts.find((versions) => versions.includes(id))?.filter((other) => other !== id) ?? [];
+}
+
+/// A bot's proposal, waiting for the user to accept it.
+export function isSuggestion(entry: ProjectEntry): boolean {
+  return entry.verification === "unverified" && entry.source.kind === "bot";
+}
+
+/// A bot reads the link again before it relies on it; an agreed decision is the user's to change.
+export function canCheckLink(entry: ProjectEntry): boolean {
+  return !!entry.source.url && !(entry.kind === "decision" && entry.verification === "agreed");
+}
+
+/// The last time the link was read or confirmed, in seconds.
+export function linkChecked(entry: ProjectEntry): number | undefined {
+  const times = [entry.fetched_at, entry.verified_at].filter((at): at is number => typeof at === "number");
+  return times.length ? Math.max(...times) : undefined;
+}
+
+/// The host of the entry's link, for its row.
+export function projectHost(entry: ProjectEntry): string | undefined {
+  if (!entry.source.url) return undefined;
+  try {
+    return new URL(entry.source.url).hostname.replace(/^www\./, "");
+  } catch {
+    return undefined;
+  }
+}
+
+export function projectSymbol(kind: ProjectKind): string {
+  return { brief: "doc.text", goal: "flag", constraint: "hand.raised", decision: "checkmark.seal", fact: "info.circle", document: "link", asset: "paperclip" }[kind];
+}
+
+/// What the core answers when the entry being saved changed on another Device first.
+export const STALE_PROJECT_ENTRY = "This entry changed on another Device.";

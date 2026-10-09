@@ -17,7 +17,7 @@ function weekday(date: Date): string {
 }
 
 /// "Sep 10", "9月10日".
-function monthDay(date: Date): string {
+export function monthDay(date: Date): string {
   return language === "zh" ? `${date.getMonth() + 1}月${date.getDate()}日` : `${MONTHS[date.getMonth()]} ${date.getDate()}`;
 }
 
