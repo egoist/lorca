@@ -183,12 +183,14 @@ async fn run_budgeted_job(app: &Arc<App>, job: &Job, cancel: CancellationToken) 
     }
 
     let unattended = routine.is_some() || event.is_some();
+    // What the turn hands off belongs to the work it continues, which a Stop ends.
+    let origin = crate::handoffs::origin_of(app, job);
     let attention_handled = Arc::new(std::sync::atomic::AtomicBool::new(job.kind == "attention_report"));
     let attention_started_at = now_secs();
     let mut tools: Vec<Arc<dyn Tool>> = vec![
         Arc::new(ListTeammates { app: app.clone(), chat_id: chat.meta.id.clone() }),
-        Arc::new(MessageBot { app: app.clone(), chat_id: chat.meta.id.clone(), bot: bot.clone(), hops: job.hops, task_id: job.task_id.clone() }),
-        Arc::new(Handoffs { app: app.clone(), bot_id: bot.id.clone(), request: match &job.handoff { Some(crate::handoffs::HandoffJob::Request { request }) => Some(request.clone()), _ => None } }),
+        Arc::new(MessageBot { app: app.clone(), chat_id: chat.meta.id.clone(), bot: bot.clone(), hops: job.hops, task_id: job.task_id.clone(), origin: origin.clone() }),
+        Arc::new(Handoffs { app: app.clone(), bot_id: bot.id.clone(), request: match &job.handoff { Some(crate::handoffs::HandoffJob::Request { request }) => Some(request.clone()), _ => None }, origin }),
         Arc::new(CreateBot { app: app.clone(), chat_id: chat.meta.id.clone(), bot: bot.clone() }),
         Arc::new(EditBot { app: app.clone(), bot: bot.clone() }),
         Arc::new(Routines { app: app.clone(), bot: bot.clone() }),
@@ -355,6 +357,7 @@ async fn run_budgeted_job(app: &Arc<App>, job: &Job, cancel: CancellationToken) 
         retry: Some(RetryPolicy::default()),
         request: lorca_agent::RequestOptions::default().with_session_id(&chat.meta.id),
         interrupt: interrupt.clone(),
+        stop_grace: lorca_agent::STOP_GRACE,
     };
 
     // Events reach the transcript through the sink, in order with the tools' own writes.
@@ -415,12 +418,16 @@ async fn run_budgeted_job(app: &Arc<App>, job: &Job, cancel: CancellationToken) 
         app.unregister_step_interrupt(&chat.meta.id, &job.id);
     }
     // Stop ends what the bot left running in the chat too, and what the user sent meanwhile no
-    // longer waits for a step; a turn that ends on its own leaves both.
+    // longer waits for a step; a turn that ends on its own leaves both. A command this turn
+    // started in the background runs on, and the chat says so.
+    let mut state = sink.0.lock().unwrap();
     if cancel.is_cancelled() {
         app.shell_sessions.stop_chat(&chat.meta.id);
         app.unqueue_chat(&chat.meta.id);
+        if let Some(text) = left_running_notice(&state.left_in_background()) {
+            app.notice(&chat.meta.id, text);
+        }
     }
-    let mut state = sink.0.lock().unwrap();
     state.finish();
     // A structured report/brief has its own alert. Other text in the reporting turn stays
     // in its source transcript, with no second specialist or coordinator alert.
@@ -939,6 +946,7 @@ async fn memory_flush(
         retry: Some(RetryPolicy::default()),
         request: lorca_agent::RequestOptions::default().with_session_id(&chat.meta.id),
         interrupt: None,
+        stop_grace: lorca_agent::STOP_GRACE,
     };
     let (tx, _rx) = mpsc::channel::<AgentEvent>(1);
     drop(_rx);
@@ -1493,6 +1501,21 @@ impl TurnState {
         self.done_parts = parts.len();
     }
 
+    /// What the commands this turn started in the background, or sent there, do: a Stop
+    /// leaves them running.
+    fn left_in_background(&self) -> Vec<String> {
+        self.tool_messages
+            .iter()
+            .filter_map(|(_, id)| self.app.message(&self.chat_id, id))
+            .filter_map(|message| match message.body {
+                Body::Tool { description, run: Some(run), .. } if run.background && run.is_live() => {
+                    description.or_else(|| first_line(&run.command, 80))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
     fn finish(&mut self) {
         self.current = None;
         // A tool that never reported back (cancelled) should not stay spinning.
@@ -1515,6 +1538,14 @@ impl TurnState {
         // What the turn left running is the user's now: its card shows.
         self.app.shell_sessions.hand_over(&self.app, &self.chat_id, &self.bot_id);
     }
+}
+
+/// The notice a Stop leaves when commands the turn started run on in the background, as they
+/// are meant to (a dev server, a watcher): which ones, so the user can stop them from Running
+/// tasks. None when there are none.
+fn left_running_notice(commands: &[String]) -> Option<String> {
+    let commands: Vec<&str> = commands.iter().map(|command| command.trim().trim_end_matches('.')).filter(|command| !command.is_empty()).collect();
+    (!commands.is_empty()).then(|| format!("Still running in the background: {}.", commands.join(", ")))
 }
 
 /// What a `command` turn opens with: how the command the bot left running ended, and its last
@@ -2168,6 +2199,8 @@ struct MessageBot {
     bot: Bot,
     hops: u32,
     task_id: Option<String>,
+    /// `handoffs::origin_of` the turn.
+    origin: String,
 }
 
 #[async_trait]
@@ -2197,7 +2230,7 @@ impl Tool for MessageBot {
         input.task_id = input.task_id.or_else(|| self.task_id.clone());
         let target = input.bot_id.clone();
         let message = input.message.clone();
-        let value = crate::handoffs::delegate(&self.app, &self.bot.id, &self.chat_id, self.hops, input).map_err(ToolError)?;
+        let value = crate::handoffs::delegate(&self.app, &self.bot.id, &self.chat_id, self.hops, &self.origin, input).map_err(ToolError)?;
         let name = name_of(&self.app, &target);
         let result = json!({ "handoff_id": value["handoff_id"], "job_id": value["job_id"], "target_runner_id": value["target_runner_id"], "delivery": value["delivery"] });
         Ok(ToolResult::text(result.to_string())
@@ -2209,6 +2242,8 @@ struct Handoffs {
     app: Arc<App>,
     bot_id: String,
     request: Option<crate::handoffs::HandoffRequest>,
+    /// `handoffs::origin_of` the turn, which owns what it follows up.
+    origin: String,
 }
 
 #[async_trait]
@@ -2244,6 +2279,7 @@ impl Tool for Handoffs {
             args["job_id"] = json!(request.job_id);
         }
         args["bot_id"] = json!(self.bot_id);
+        args["origin_job_id"] = json!(self.origin);
         if let Some(id) = args["handoff_id"].as_str() {
             let record = crate::handoffs::get(&self.app, id).map_err(ToolError)?;
             if record.current().request.from_bot_id != self.bot_id && record.current().request.target_bot_id != self.bot_id { return Err("This handoff belongs to other bots".into()); }
@@ -4447,6 +4483,11 @@ mod tests {
         let text = result.unwrap().text_content();
         assert!(text.starts_with("listening\n") && text.contains("[Running in the background as session "), "{text}");
         let (waiting, _) = call_tool(&mut turn, &bash, "call-2", wait(false)).await;
+        // Stopped now, the turn would leave the server running, and the chat would say so.
+        assert_eq!(turn.left_in_background(), ["Serve"]);
+        assert_eq!(left_running_notice(&turn.left_in_background()).as_deref(), Some("Still running in the background: Serve."));
+        assert_eq!(left_running_notice(&["Start the dev server.".into(), "Watch".into()]).as_deref(), Some("Still running in the background: Start the dev server, Watch."));
+        assert_eq!(left_running_notice(&[]), None);
         turn.finish();
         assert_eq!((card(&server).state.as_str(), card(&server).handed_over), ("running", false), "Running tasks shows it, not the chat");
         assert!(card(&waiting).handed_over);
@@ -4498,6 +4539,132 @@ mod tests {
         row_when(app, &build.id, |run| run.state == "exited").await;
         let job = crate::shell::wake_job(app, &app.shell_sessions, &id).expect("a command turn");
         assert!(command_cue(app, &job).unwrap().contains("built"));
+    }
+
+    /// A model on this machine that streams OpenAI chat completions: Chef starts a server in the
+    /// background, hands work to Scout, then reads a named pipe nobody writes to, which never
+    /// returns; Scout's reply never finishes. The words of each request reach `seen`.
+    #[cfg(all(unix, feature = "server"))]
+    async fn stalling_model(seen: Arc<std::sync::Mutex<Vec<String>>>) -> (String, tokio::task::JoinHandle<()>) {
+        use axum::{routing::post, Json, Router};
+        use futures::StreamExt;
+        let chunk = |delta: Value, finish: Option<&str>| {
+            format!("data: {}\n\n", json!({ "id": "fake", "object": "chat.completion.chunk", "model": "fake", "choices": [{ "index": 0, "delta": delta, "finish_reason": finish }] }))
+        };
+        let call = move |id: &str, name: &str, args: Value| {
+            let delta = json!({ "role": "assistant", "tool_calls": [{ "index": 0, "id": id, "type": "function", "function": { "name": name, "arguments": args.to_string() } }] });
+            format!("{}{}data: [DONE]\n\n", chunk(delta, None), chunk(json!({}), Some("tool_calls")))
+        };
+        let server = Router::new().route("/v1/chat/completions", post(move |Json(body): Json<Value>| {
+            let seen = seen.clone();
+            async move {
+                let words = body["messages"].to_string();
+                seen.lock().unwrap().push(words.clone());
+                let sse = [("content-type", "text/event-stream")];
+                let body = if words.contains("handed off to you") {
+                    let first = chunk(json!({ "role": "assistant", "content": "Looking" }), None);
+                    let never = futures::stream::once(async move { Ok::<_, std::io::Error>(first) }).chain(futures::stream::pending());
+                    axum::body::Body::from_stream(never)
+                } else {
+                    match words.matches("\"role\":\"tool\"").count() {
+                        0 => axum::body::Body::from(call("call-1", "bash", json!({ "command": "sleep 30", "description": "Serve the docs", "background": true }))),
+                        1 => axum::body::Body::from(call("call-2", "message_bot", json!({ "bot_id": "scout", "message": "Find the release notes" }))),
+                        _ => axum::body::Body::from(call("call-3", "read", json!({ "path": "pipe" }))),
+                    }
+                };
+                (sse, body)
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        (format!("http://{addr}/v1"), tokio::spawn(async move { axum::serve(listener, server).await.unwrap() }))
+    }
+
+    /// Stop on a turn whose call never returns: the call is cut off after the grace, the turn
+    /// ends, the work it handed off stops and reports so, what it started in the background runs
+    /// on with a notice, and the next turn reads what was cut off.
+    #[cfg(all(unix, feature = "server"))]
+    #[tokio::test]
+    async fn stop_ends_a_hung_call_and_the_work_the_turn_handed_off() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        crate::identity::create(app, Some("Runner".into())).unwrap();
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (base_url, server) = stalling_model(seen.clone()).await;
+        let custom = crate::credentials::CustomProvider {
+            name: "Fake".into(),
+            api: crate::credentials::CustomApi::ChatCompletions,
+            base_url,
+            api_key: String::new(),
+            models: vec![serde_json::from_value(json!({ "id": "fake", "context_window": 64000 })).unwrap()],
+            created_at: 0,
+        };
+        app.credentials.lock().unwrap().custom.insert("custom:fake".into(), custom);
+        let chef = {
+            let mut state = app.state.lock().unwrap();
+            state.bots[0].provider = "custom:fake".into();
+            state.bots[0].model = Some("fake".into());
+            state.bots[0].clone()
+        };
+        let (scout, _) = app.create_bot_with_dm(Bot { id: "scout".into(), name: "Scout".into(), ..chef.clone() }, None).unwrap();
+        let chat_id = app.dm_with(&chef.id, None).unwrap().meta.id;
+        let workdir = chef.working_directory(&app.config.home);
+        std::fs::create_dir_all(&workdir).unwrap();
+        let pipe = workdir.join("pipe");
+        let path = std::ffi::CString::new(pipe.to_str().unwrap()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+
+        crate::runtime::send_user_message(app.clone(), &chat_id, "Ask Scout for the notes, then read the pipe", None, Vec::new(), Vec::new(), None).unwrap();
+        let reading = |app: &App| app.messages(&chat_id).into_iter().any(|m| matches!(&m.body, Body::Tool { name, is_running: true, .. } if name == "read"));
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !(reading(app) && app.running_jobs.lock().unwrap().values().any(|job| job.bot_id == scout.id) && seen.lock().unwrap().len() >= 4) {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("Chef reads the pipe while Scout works");
+
+        let stopped = std::time::Instant::now();
+        crate::runtime::cancel_chat(app, &chat_id);
+        tokio::time::timeout(lorca_agent::STOP_GRACE + Duration::from_secs(10), async {
+            while !app.running_jobs.lock().unwrap().is_empty() {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("both turns end");
+        assert!(stopped.elapsed() >= lorca_agent::STOP_GRACE, "the call had its grace");
+
+        // The call that never returned reads as cut off, now and in the next turn.
+        let read = app.messages(&chat_id).into_iter().find(|m| matches!(&m.body, Body::Tool { name, .. } if name == "read")).unwrap();
+        let Body::Tool { result: Some(result), is_running: false, is_error: true, .. } = &read.body else { panic!("{:?}", read.body) };
+        assert!(result.starts_with("Cut off: this call was stopped and had not ended 15 seconds later"), "{result}");
+        let transcript = transcript_for(app, &app.chat(&chat_id).unwrap(), &chef, &workdir);
+        assert!(transcript.iter().any(|m| matches!(m, AgentMessage::ToolResult(r) if r.text() == *result)));
+
+        // Scout's work stopped with it, and says so in Chef's chat without starting Chef again.
+        let handoffs = crate::handoffs::list(app).unwrap();
+        let report = handoffs[0].current().outcome().unwrap();
+        assert_eq!((handoffs.len(), report.status, report.summary.as_str()), (1, crate::handoffs::HandoffStatus::Cancelled, "Stopped before finishing."));
+        let marker = app.message(&chat_id, &format!("report-{}", handoffs[0].current().request.job_id)).expect("the report");
+        assert!(matches!(&marker.body, Body::Handoff { from, reason, .. } if from == &scout.id && reason == "Stopped before finishing."));
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(app.running_jobs.lock().unwrap().is_empty(), "no continuation");
+        assert_eq!(seen.lock().unwrap().len(), 4, "nobody asked the model again");
+
+        // The server it started in the background runs on, and the chat says so.
+        let server_row = app.messages(&chat_id).into_iter().find(|m| matches!(&m.body, Body::Tool { name, .. } if name == "bash")).unwrap();
+        assert!(run_of(&server_row).is_some_and(|run| run.background && run.state == "running"));
+        let notices: Vec<String> = app.messages(&chat_id).into_iter().filter_map(|m| match m.body { Body::Notice { text, .. } => Some(text), _ => None }).collect();
+        assert_eq!(notices, ["Still running in the background: Serve the docs."]);
+        app.shell_sessions.shutdown(app);
+
+        // The thread still blocked on the pipe lets go once a writer comes and goes; on macOS a
+        // read that starts after the last writer left blocks, so this one stays a moment.
+        let writer = std::fs::OpenOptions::new().write(true).open(&pipe).unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        drop(writer);
+        server.abort();
     }
 
     /// Run in Background on a command the bot is waiting on: its call returns, and from then on
@@ -4695,7 +4862,7 @@ mod tests {
         let error = edit.execute("call", json!({ "bot_id": "Chef", "description": "Cooks" }), CancellationToken::new(), no_updates.clone()).await.unwrap_err();
         assert_eq!(error.0, "No bot with id Chef. Bots: Chef (b1), Chef (b2)");
 
-        let message = MessageBot { app: app.clone(), chat_id: "chat".into(), bot: chef.clone(), hops: 0, task_id: None };
+        let message = MessageBot { app: app.clone(), chat_id: "chat".into(), bot: chef.clone(), hops: 0, task_id: None, origin: "job-1".into() };
         let error = message.execute("call", json!({ "bot_id": "Chef", "message": "hi" }), CancellationToken::new(), no_updates).await.unwrap_err();
         assert_eq!(error.0, "No bot with id Chef. Bots: Chef (b1), Chef (b2)");
 

@@ -34,6 +34,10 @@ pub struct HandoffRequest {
     pub acceptance_criteria: Vec<String>,
     pub hops: u32,
     pub created_at: f64,
+    /// The requesting turn's job, or for a turn that continues from a report the job that
+    /// handed that work off (`origin_of`): a Stop on any of them stops this attempt.
+    #[serde(default)]
+    pub origin_job_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -407,6 +411,7 @@ pub fn delegate(
     from_bot_id: &str,
     chat_id: &str,
     hops: u32,
+    origin_job_id: &str,
     input: DelegateInput,
 ) -> Result<Value, String> {
     let from = app.bot(from_bot_id).ok_or("Requesting bot is gone")?;
@@ -468,8 +473,24 @@ pub fn delegate(
         acceptance_criteria: input.acceptance_criteria,
         hops: hops + 1,
         created_at: now_secs(),
+        origin_job_id: origin_job_id.into(),
     };
     admit(app, request, None)
+}
+
+/// The job a Stop on `job` reaches the handoffs of: the job itself, or for a turn that
+/// continues from a report, the job that handed that work off, so stopping the continuation
+/// stops the rest of what that turn started.
+pub fn origin_of(app: &App, job: &Job) -> String {
+    if let Some(HandoffJob::Result { handoff_id, request_job_id }) = &job.handoff {
+        let origin = get(app, handoff_id).ok().and_then(|record| {
+            record.attempts.iter().find(|a| &a.request.job_id == request_job_id).map(|a| a.request.origin_job_id.clone())
+        });
+        if let Some(origin) = origin.filter(|origin| !origin.is_empty()) {
+            return origin;
+        }
+    }
+    job.id.clone()
 }
 
 fn require_runner(app: &App, runner_id: &str) -> Result<(), String> {
@@ -716,10 +737,11 @@ pub fn finish_job(
             // such as a compaction, is no failure by itself. One its limits stopped waits on the
             // user, who can resume it in Limits (`resume_stopped`).
             let limited = outcome == TurnOutcome::Skipped && stopped_at_limits(app, job);
-            let status = if cancelled {
-                HandoffStatus::Cancelled
-            } else if limited {
+            // A runtime limit cancels the turn as Stop does; it reports blocked all the same.
+            let status = if limited {
                 HandoffStatus::Blocked
+            } else if cancelled {
+                HandoffStatus::Cancelled
             } else if outcome == TurnOutcome::Skipped {
                 HandoffStatus::Failed
             } else if outcome == TurnOutcome::Sent {
@@ -729,7 +751,7 @@ pub fn finish_job(
             };
             // The first line is what the requesting chat's marker shows.
             let summary = match status {
-                HandoffStatus::Cancelled => "Stopped before finishing.".into(),
+                HandoffStatus::Cancelled => STOPPED.into(),
                 HandoffStatus::Failed => failure.unwrap_or_else(|| "Couldn't finish.".into()),
                 HandoffStatus::Blocked if limited => failure.unwrap_or_else(|| "Stopped at its limits.".into()),
                 HandoffStatus::Blocked => "Ended the turn without a reply.".into(),
@@ -1052,7 +1074,10 @@ fn route_report(app: &Arc<App>, id: &str) -> Result<(), String> {
     } else {
         crate::attention::settle(app, &attention_source(app, request), &prefix);
     }
+    // A stopped attempt wakes nobody: the user stopped it, and the requesting bot reads the
+    // report in its next turn.
     if attempt.result_delivery == ResultDelivery::Pending
+        && report.status != HandoffStatus::Cancelled
         && app
             .bot(&request.from_bot_id)
             .is_some_and(|b| b.runner_id == request.source_runner_id)
@@ -1118,6 +1143,7 @@ pub fn follow_up(
     id: &str,
     expected_job_id: &str,
     message: &str,
+    origin_job_id: Option<&str>,
 ) -> Result<Value, String> {
     let _guard = app.handoff_lock.lock().unwrap();
     let record = get(app, id)?;
@@ -1146,6 +1172,9 @@ pub fn follow_up(
     request.trigger_message_id = format!("msg-{}", uuid::Uuid::new_v4());
     request.message = message.trim().into();
     request.created_at = now_secs();
+    if let Some(origin) = origin_job_id {
+        request.origin_job_id = origin.into();
+    }
     drop(_guard);
     let source = attention_source(app, &request);
     let admitted = admit(app, request, Some(expected_job_id))?;
@@ -1188,37 +1217,108 @@ pub fn cancel(
             created_at: now_secs(),
             started_after: None,
         };
-        let update = HandoffUpdate::Cancel {
-            request: request.clone(),
-            report,
-        };
-        let record = merge(app, &update)?;
-        let mut outbox = Vec::new();
-        if request.target_runner_id != request.source_runner_id {
-            let runner = app
-                .device(&request.target_runner_id)
-                .ok_or("Target Runner is unknown")?;
-            outbox.push(OutboxItem {
-                id: uuid::Uuid::new_v4().to_string(),
-                kind: "job_cancel".into(),
-                recipient: Some(runner.id),
-                ciphertext: crate::crypto::seal_json(
-                    &runner.box_pubkey,
-                    &JobCancel {
-                        job_id: request.job_id.clone(),
-                    },
-                )
-                .map_err(|e| e.to_string())?,
-                slot: None,
-                group: None,
-            });
-        }
-        save(app, &record, Some(&update), outbox)?;
+        record_cancellation(app, &request, report)?;
     }
     app.cancel_job(&request.job_id);
     route_report(app, id)?;
     Ok(get(app, id)?.view())
 }
+
+/// The requester's side of calling off an attempt, under the handoff lock: its cancellation,
+/// which wins a concurrent finish, and a sealed `job_cancel` for a recipient on another Runner.
+/// The caller cancels a job here once the lock is free.
+fn record_cancellation(app: &Arc<App>, request: &HandoffRequest, report: HandoffReport) -> Result<(), String> {
+    let update = HandoffUpdate::Cancel {
+        request: request.clone(),
+        report,
+    };
+    let record = merge(app, &update)?;
+    let mut outbox = Vec::new();
+    if request.target_runner_id != request.source_runner_id {
+        let runner = app
+            .device(&request.target_runner_id)
+            .ok_or("Target Runner is unknown")?;
+        outbox.push(OutboxItem {
+            id: uuid::Uuid::new_v4().to_string(),
+            kind: "job_cancel".into(),
+            recipient: Some(runner.id),
+            ciphertext: crate::crypto::seal_json(
+                &runner.box_pubkey,
+                &JobCancel {
+                    job_id: request.job_id.clone(),
+                },
+            )
+            .map_err(|e| e.to_string())?,
+            slot: None,
+            group: None,
+        });
+    }
+    save(app, &record, Some(&update), outbox)
+}
+
+/// A turn the user stopped stops the work it handed off too: every attempt this Runner sent
+/// for the same work (`origin_of`) that has not reported is cancelled, here and on its Runner,
+/// and its report reaches the requesting chat without waking anyone. The recipient's turn, once
+/// stopped, does the same for what it handed off in turn. A turn its limits stopped is not one
+/// the user stopped; what it handed off goes on.
+pub fn stop_handed_off(app: &Arc<App>, job: &Job) {
+    if stopped_at_limits(app, job) {
+        return;
+    }
+    let Some(device) = app.this_device_id() else { return };
+    let origin = origin_of(app, job);
+    let records = match list(app) {
+        Ok(records) => records,
+        Err(error) => {
+            tracing::error!(%error, job_id = %job.id, "reading handoffs to stop");
+            return;
+        }
+    };
+    for record in records {
+        let attempt = record.current();
+        let request = &attempt.request;
+        if request.source_runner_id != device || request.origin_job_id != origin || attempt.outcome().is_some_and(|r| r.status.terminal()) {
+            continue;
+        }
+        if let Err(error) = stop(app, &record.id, &request.job_id) {
+            tracing::error!(%error, handoff_id = %record.id, "stopping a handoff");
+        }
+    }
+}
+
+/// Stops one attempt still going: cancelled as the requesting bot would, and reported in the
+/// requesting chat as "Stopped before finishing.", which a Stop the requesting bot did not ask
+/// for needs and a cancellation it made itself does not.
+fn stop(app: &Arc<App>, id: &str, job_id: &str) -> Result<(), String> {
+    let (request, report) = {
+        let _guard = app.handoff_lock.lock().unwrap();
+        let record = get(app, id)?;
+        let attempt = record.current();
+        if attempt.request.job_id != job_id || attempt.outcome().is_some_and(|r| r.status.terminal()) {
+            return Ok(());
+        }
+        let request = attempt.request.clone();
+        let report = HandoffReport {
+            status: HandoffStatus::Cancelled,
+            summary: STOPPED.into(),
+            result_links: vec![request_link(&request)],
+            evidence: vec!["Stopped when the user stopped the turn that handed it off".into()],
+            created_at: now_secs(),
+            started_after: None,
+        };
+        record_cancellation(app, &request, report.clone())?;
+        (request, report)
+    };
+    app.cancel_job(&request.job_id);
+    if app.chat(&request.source_chat_id).is_some() {
+        app.upsert_message(result_message(&request, &report), true);
+    }
+    Ok(())
+}
+
+/// What a stopped attempt reports: the first line of the "Message from" marker in the
+/// requesting chat, and what the requesting bot reads there.
+const STOPPED: &str = "Stopped before finishing.";
 
 /// Restarts queued local work and delivery of reports. A recorded running turn becomes an
 /// explicit failure after process loss, so side effects are never automatically replayed.
@@ -1302,6 +1402,7 @@ pub fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Value, St
             required("handoff_id")?,
             required("job_id")?,
             required("message")?,
+            params["origin_job_id"].as_str().filter(|s| !s.is_empty()),
         ),
         "handoffs.cancel" => cancel(
             app,

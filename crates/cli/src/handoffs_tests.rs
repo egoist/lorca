@@ -28,6 +28,8 @@ impl Drop for Fixture {
 }
 
 const TASK: &str = "task-12345678-1234-1234-1234-123456789abc";
+/// The requesting turn's job.
+const ORIGIN: &str = "job-requesting-turn";
 
 fn fixture(remote: bool) -> Fixture {
     let homes: Vec<_> = (0..2)
@@ -115,6 +117,7 @@ fn delegate_work(f: &Fixture) -> HandoffRequest {
         &f.chef.id,
         &f.source_chat,
         0,
+        ORIGIN,
         DelegateInput {
             bot_id: f.specialist.id.clone(),
             message: "Review the parser".into(),
@@ -328,7 +331,7 @@ async fn explicit_blocker_reports_automatically_and_automatic_finish_preserves_i
     let items = crate::attention::view(&f.source).unwrap().items;
     assert_eq!(items.len(), 1);
     assert_eq!((items[0].category, items[0].summary.as_str(), items[0].coordinator_bot_id.as_str()), (crate::attention::Category::Blocker, "Need the repository URL", f.chef.id.as_str()));
-    follow_up(&f.source, &f.chef.id, &request.handoff_id, &request.job_id, "Use repository egoist/lorca").unwrap();
+    follow_up(&f.source, &f.chef.id, &request.handoff_id, &request.job_id, "Use repository egoist/lorca", None).unwrap();
     assert!(crate::attention::view(&f.source).unwrap().items.is_empty());
 }
 
@@ -493,6 +496,7 @@ async fn follow_up_retains_the_contract_and_late_results_cannot_overwrite_it() {
         &first.handoff_id,
         &first.job_id,
         "Use repository egoist/lorca",
+        None,
     )
     .unwrap();
     let second = get(&f.source, &first.handoff_id)
@@ -511,7 +515,8 @@ async fn follow_up_retains_the_contract_and_late_results_cannot_overwrite_it() {
         &f.chef.id,
         &first.handoff_id,
         &first.job_id,
-        "Duplicate retry"
+        "Duplicate retry",
+        None,
     )
     .unwrap_err()
     .contains("changed"));
@@ -640,6 +645,127 @@ async fn queued_local_work_and_hard_stop_have_durable_cancel_reports() {
         .source
         .message(&f.source_chat, &format!("report-{}", request.job_id))
         .is_some());
+    // The user stopped it: the requesting bot reads the report in its next turn, and no
+    // continuation starts the work again.
+    let record = get(&f.source, &request.handoff_id).unwrap();
+    assert_eq!(record.current().outcome().unwrap().summary, "Stopped before finishing.");
+    assert_eq!(record.current().result_delivery, ResultDelivery::Pending);
+}
+
+/// The requesting turn: what its handoffs carry as `origin_job_id`.
+fn requesting_turn(f: &Fixture) -> Job {
+    serde_json::from_value(json!({ "id": ORIGIN, "chat_id": f.source_chat, "bot_id": f.chef.id, "kind": "turn",
+        "trigger_message_id": "", "requested_by": f.source.this_device_id().unwrap(), "created_at": now_secs() }))
+    .unwrap()
+}
+
+async fn until_finished(app: &App, job_id: &str) {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while app.running_jobs.lock().unwrap().contains_key(job_id) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+/// Stop on a turn stops what it handed off, on this Runner and on another one: the attempt is
+/// cancelled, its turn never runs, and "Stopped before finishing." reaches the requesting chat
+/// without starting the requesting bot again.
+#[tokio::test]
+async fn stopping_a_turn_stops_the_work_it_handed_off() {
+    for remote in [false, true] {
+        let f = fixture(remote);
+        // Here, the recipient's turn waits behind another one in its chat.
+        let target_lock = f.source.chat_lock(&f.target_chat);
+        let held = target_lock.lock().await;
+        let request = delegate_work(&f);
+        assert_eq!(request.origin_job_id, ORIGIN);
+        // The requesting turn, stopped from its chat.
+        let source_lock = f.source.chat_lock(&f.source_chat);
+        let busy = source_lock.lock().await;
+        crate::runtime::spawn_local_job(f.source.clone(), requesting_turn(&f), None);
+        crate::runtime::cancel_chat(&f.source, &f.source_chat);
+        drop(busy);
+        until_finished(&f.source, ORIGIN).await;
+        drop(held);
+        settle(&f.source).await;
+
+        let record = get(&f.source, &request.handoff_id).unwrap();
+        let report = record.current().outcome().unwrap();
+        assert_eq!((report.status, report.summary.as_str()), (HandoffStatus::Cancelled, "Stopped before finishing."), "remote: {remote}");
+        let marker = f.source.message(&f.source_chat, &format!("report-{}", request.job_id)).expect("the report reaches the requesting chat");
+        assert!(matches!(marker.body, Body::Handoff { ref from, ref to, ref reason } if from == &f.specialist.id && to == &f.chef.id && reason == "Stopped before finishing."));
+        assert_eq!(record.current().result_delivery, ResultDelivery::Pending, "it wakes nobody");
+        let specialist = Author::Bot { bot_id: f.specialist.id.clone() };
+        if remote {
+            let cancels: Vec<_> = f.source.store.outbox().unwrap().into_iter().filter(|item| item.kind == "job_cancel").collect();
+            let machine = f.target.machine_file().unwrap().machine().unwrap();
+            let control: JobCancel = crate::crypto::unseal_json(&machine.box_secret, &cancels[0].ciphertext).unwrap();
+            assert_eq!((cancels.len(), control.job_id.as_str()), (1, request.job_id.as_str()));
+            // The Runner that had not started it never does.
+            transfer(&f.source, &f.target, "handoff");
+            transfer(&f.source, &f.target, "job");
+            settle(&f.target).await;
+            assert_eq!(get(&f.target, &request.handoff_id).unwrap().current().outcome().unwrap().status, HandoffStatus::Cancelled);
+            assert!(f.target.store.all(&f.target_chat).unwrap().iter().all(|m| m.author != specialist));
+        } else {
+            assert!(f.source.store.all(&f.target_chat).unwrap().iter().all(|m| m.author != specialist), "the queued turn never ran");
+        }
+    }
+}
+
+/// A turn that continues from a report carries on the work that handed it off: stopping it
+/// stops the rest of that work. Stopping another turn of the same bot stops none of it.
+#[tokio::test]
+async fn stopping_a_continuation_stops_the_rest_of_the_work() {
+    let f = fixture(true);
+    let first = delegate_work(&f);
+    let second = delegate_work(&f);
+    let mut other = requesting_turn(&f);
+    other.id = "job-another-turn".into();
+    stop_handed_off(&f.source, &other);
+    assert!(get(&f.source, &second.handoff_id).unwrap().current().outcome().is_none());
+
+    // The first reports back, and the requesting bot's continuation is stopped.
+    let job = request_job(&first);
+    stage_job(&f.target, &job).unwrap();
+    assert!(begin_job(&f.target, &job).unwrap());
+    finish_job(&f.target, &job, TurnOutcome::Pass, false).unwrap();
+    transfer(&f.target, &f.source, "handoff");
+    settle(&f.source).await;
+    let continuation = result_job(&first);
+    assert_eq!(origin_of(&f.source, &continuation), ORIGIN);
+    stop_handed_off(&f.source, &continuation);
+    assert_eq!(get(&f.source, &second.handoff_id).unwrap().current().outcome().unwrap().status, HandoffStatus::Cancelled);
+    assert_eq!(get(&f.source, &first.handoff_id).unwrap().current().outcome().unwrap().status, HandoffStatus::Blocked, "a report stands");
+
+    // What the continuation sends again is its work too.
+    let again = follow_up(&f.source, &f.chef.id, &first.handoff_id, &first.job_id, "Try the other parser", Some(&origin_of(&f.source, &continuation))).unwrap();
+    assert_eq!(get(&f.source, &first.handoff_id).unwrap().current().request.origin_job_id, ORIGIN);
+    stop_handed_off(&f.source, &continuation);
+    let record = get(&f.source, &first.handoff_id).unwrap();
+    assert_eq!((record.current().request.job_id.as_str(), record.current().outcome().unwrap().status), (again["job_id"].as_str().unwrap(), HandoffStatus::Cancelled));
+}
+
+/// A delegated turn its runtime limit stopped reports blocked, which the requesting bot hears and
+/// the user can resume, and what it handed off goes on.
+#[tokio::test]
+async fn a_turn_its_limits_stop_reports_blocked() {
+    let f = fixture(true);
+    let request = delegate_work(&f);
+    let mut job = request_job(&request);
+    stage_job(&f.target, &job).unwrap();
+    assert!(begin_job(&f.target, &job).unwrap());
+    // The chat's limits, which a turn outside a task takes.
+    job.task_id = None;
+    crate::budgets::serve(&f.target, "budgets.set", &json!({ "kind": "chat", "id": f.target_chat, "limits": { "max_runtime_secs": 1 } })).unwrap();
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let budget = crate::budgets::for_job(&f.target, &job).unwrap();
+    let ran = tokio::time::timeout(std::time::Duration::from_secs(5), budget.run(&cancel, cancel.cancelled())).await.expect("the limit ends the turn");
+    assert!(ran.is_err() && cancel.is_cancelled(), "the limit cancels the turn");
+    finish_job(&f.target, &job, TurnOutcome::Skipped, true).unwrap();
+    assert_eq!(get(&f.target, &request.handoff_id).unwrap().current().outcome().unwrap().status, HandoffStatus::Blocked);
 }
 
 #[tokio::test]
@@ -659,6 +785,7 @@ async fn contracts_and_reports_enforce_participant_and_reference_rules() {
         &f.chef.id,
         &f.source_chat,
         MAX_BOT_HOPS,
+        ORIGIN,
         DelegateInput {
             bot_id: f.specialist.id.clone(),
             message: "again".into(),
@@ -671,6 +798,7 @@ async fn contracts_and_reports_enforce_participant_and_reference_rules() {
         &f.chef.id,
         &f.source_chat,
         0,
+        ORIGIN,
         DelegateInput {
             bot_id: f.chef.id.clone(),
             message: "self".into(),
@@ -866,6 +994,7 @@ async fn delegating_for_a_task_checks_it_and_records_the_report_on_it() {
         &f.chef.id,
         &f.source_chat,
         0,
+        ORIGIN,
         DelegateInput {
             bot_id: f.specialist.id.clone(),
             message: "Review".into(),
