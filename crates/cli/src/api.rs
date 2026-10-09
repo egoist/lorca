@@ -20,6 +20,14 @@ fn opt_string(params: &Value, key: &str) -> Option<String> {
     params[key].as_str().map(str::to_string).filter(|s| !s.is_empty())
 }
 
+fn parse_permissions(params: &Value) -> Result<Option<crate::permissions::BotPermissions>, String> {
+    let Some(value) = params.get("permissions") else { return Ok(None) };
+    let policy: crate::permissions::BotPermissions = serde_json::from_value(value.clone())
+        .map_err(|error| format!("Invalid bot permissions: {error}. Use an explicit policy to change access."))?;
+    policy.validate()?;
+    Ok(Some(policy))
+}
+
 /// A Runner opens provider OAuth in its browser. A phone emits the URL to the Expo app,
 /// whose in-app browser keeps the core alive for the localhost callback.
 #[cfg(feature = "provider-auth")]
@@ -71,6 +79,8 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             let runner = string(&params, "runner_id")?;
             requests::ask(app, &runner, method, params).await
         }
+        method if method.starts_with("reviews.") => crate::review_queue::dispatch(app, method, params).await,
+        method if method.starts_with("tasks.") => crate::tasks::dispatch(app, method, params).await,
         "hello" => Ok(json!({
             "version": crate::config::VERSION,
             "has_identity": app.has_identity(),
@@ -88,6 +98,7 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             crate::marketplace::check_in_background(app);
             Ok(app.snapshot())
         }
+        method if method.starts_with("browser.") => crate::browser::dispatch(app, method, params).await,
 
         "identity.create" => {
             let phrase = identity::create(app, opt_string(&params, "device_name")).map_err(|e| e.to_string())?;
@@ -233,6 +244,7 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
                 // description, then clears this rolling-upgrade slot.
                 legacy_instructions: opt_string(&params, "instructions").unwrap_or_default(),
                 workdir: opt_string(&params, "workdir"),
+                permissions: parse_permissions(&params)?,
                 created_at: 0.0,
             };
             // Every bot has one direct chat; both land in a single roster change.
@@ -244,6 +256,8 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
         }
         "bots.update" => {
             let id = string(&params, "id")?;
+            let permissions = parse_permissions(&params)?;
+            let access_changed = permissions.is_some();
             // The image is copied and queued before the roster names it, so every Device can
             // fetch the blob by the time it reads the profile.
             let avatar = store_avatar(app, &params)?;
@@ -264,9 +278,17 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
                 if let Some(v) = params["thinking"].as_str() { bot.thinking = Some(v.trim().to_string()).filter(|t| !t.is_empty()); }
                 if let Some(v) = opt_string(&params, "runner_id") { bot.runner_id = v; }
                 if let Some(v) = params["workdir"].as_str() { bot.workdir = Some(v.to_string()).filter(|w| !w.trim().is_empty()); }
+                if let Some(v) = permissions { bot.permissions = Some(v); }
             })
             .map_err(|e| e.to_string())?;
+            if access_changed { crate::permissions::dismiss_requests(app, &id); }
             Ok(json!({ "bot": bot }))
+        }
+        // The plugins the bot's Runner has and their tools, for its Access sheet.
+        "bots.permissions" => {
+            let bot = app.bot(&string(&params, "id")?).ok_or("Unknown bot")?;
+            let catalog = crate::plugins::on_runner(app, &bot.runner_id, "permissions.catalog", json!({})).await?;
+            Ok(json!({ "connections": catalog }))
         }
         "bots.delete" => {
             app.delete_bot(&string(&params, "id")?).map_err(|e| e.to_string())?;
@@ -319,11 +341,35 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
                     .map_err(|e| e.to_string())?;
             Ok(json!({ "message": message }))
         }
+        "outputs.list" => {
+            let chat_id = string(&params, "chat_id")?;
+            let task_id = opt_string(&params, "task_id");
+            let messages = crate::outputs::list(app, &chat_id, task_id.as_deref())?;
+            Ok(json!({ "outputs": messages.into_iter().map(|message| message.for_app()).collect::<Vec<_>>() }))
+        }
+        #[cfg(feature = "runner")]
+        "outputs.publish" => {
+            let chat_id = string(&params, "chat_id")?;
+            let bot_id = string(&params, "bot_id")?;
+            let bot = app.bot(&bot_id).ok_or("Unknown producing bot")?;
+            let workdir = bot.working_directory(&app.config.home);
+            let mut payload = params;
+            payload.as_object_mut().ok_or("Output parameters must be an object")?.remove("chat_id");
+            payload.as_object_mut().unwrap().remove("bot_id");
+            let request = serde_json::from_value(payload).map_err(|error| format!("Invalid output: {error}"))?;
+            let app = app.clone();
+            let message = tokio::task::spawn_blocking(move || crate::outputs::publish(&app, &chat_id, &bot_id, &workdir, request)).await
+                .map_err(|error| error.to_string())??;
+            Ok(json!({ "message": message.for_app(), "task_evidence": message.output.as_ref().map(|output| output.task_evidence(&message.id)) }))
+        }
         "files.path" => {
             // Where the attachment's bytes are on this machine, fetched from the relay first
             // when another Device sent it.
             let attachment: Attachment = serde_json::from_value(params["attachment"].clone()).map_err(|e| e.to_string())?;
-            let path = crate::files::ensure_local(app, &attachment).await.map_err(|e| e.to_string())?;
+            let mut path = crate::files::ensure_local(app, &attachment).await.map_err(|e| e.to_string())?;
+            if params["named"].as_bool() == Some(true) {
+                path = crate::files::named_local_path(app, &attachment).map_err(|e| e.to_string())?;
+            }
             Ok(json!({ "path": path }))
         }
         "chats.stop" => {
@@ -521,7 +567,7 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
         // Routines live in the roster; any Device edits them, the bot's Runner runs them. A
         // routine's check is the bot's to write, on its Runner, with the routines tool.
         "routines.create" => {
-            let routine = routines::create(
+            let routine = routines::create_with_policy(
                 app,
                 &string(&params, "bot_id")?,
                 &string(&params, "name")?,
@@ -529,14 +575,16 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
                 params["prompt"].as_str().unwrap_or(""),
                 None,
                 params["enabled"].as_bool().unwrap_or(true),
+                params["timezone"].as_str(),
+                params["missed_run_policy"].as_str(),
             )?;
             Ok(json!({ "routine": app.routine_out(&routine) }))
         }
         "routines.update" => {
             let id = string(&params, "id")?;
             let mut routine = app.routine(&id).ok_or("Unknown routine")?;
-            if params.get("name").is_some() || params.get("schedule").is_some() || params.get("prompt").is_some() {
-                routine = routines::edit(app, &id, opt_string(&params, "name").as_deref(), opt_string(&params, "schedule").as_deref(), params["prompt"].as_str(), None)?;
+            if ["name", "schedule", "prompt", "timezone", "missed_run_policy"].iter().any(|field| params.get(field).is_some()) {
+                routine = routines::edit_with_policy(app, &id, opt_string(&params, "name").as_deref(), opt_string(&params, "schedule").as_deref(), params["prompt"].as_str(), None, params["timezone"].as_str(), params["missed_run_policy"].as_str())?;
             }
             if let Some(enabled) = params["enabled"].as_bool() {
                 routine = routines::set_enabled(app, &id, enabled)?;
@@ -551,7 +599,18 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             routines::run_now(app, &string(&params, "id")?)?;
             Ok(Value::Null)
         }
-        "routines.describe" => routines::describe(&string(&params, "schedule")?),
+        "routines.describe" => routines::describe(&string(&params, "schedule")?, params["timezone"].as_str(), params["missed_run_policy"].as_str()),
+        "device.service_status" => {
+            let runner = opt_string(&params, "id").or_else(|| app.this_device_id()).ok_or("No identity on this Device")?;
+            if app.this_device_id().as_deref() == Some(&runner) {
+                #[cfg(feature = "cli")]
+                { crate::service::status_out(&app.config) }
+                #[cfg(not(feature = "cli"))]
+                { Err("This Device does not run a CLI service.".into()) }
+            } else {
+                crate::requests::ask(app, &runner, "service.status", json!({})).await
+            }
+        }
 
         // The marketplace: plugins, each with the Runners that have it, and bots to add from a
         // template (`bots.create { template_id }`).
@@ -565,7 +624,7 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
                 .map(|m| {
                     let mut out = serde_json::to_value(m).unwrap_or_default();
                     // A server from a Runner's mcp.json that happens to share the id is not this plugin.
-                    out["installed_on"] = json!(installed_on.iter().filter(|(_, p)| p.iter().any(|s| s.id == m.id && s.source.is_none())).map(|(id, _)| id.clone()).collect::<Vec<_>>());
+                    out["installed_on"] = json!(installed_on.iter().filter(|(_, p)| p.iter().any(|s| s.service_id.as_deref().unwrap_or(&s.id) == m.id && s.source.is_none())).map(|(id, _)| id.clone()).collect::<Vec<_>>());
                     out
                 })
                 .collect();
@@ -599,13 +658,19 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
                 }
             };
             let source = if params.get("plugin_id").is_some() { "marketplace" } else { "inline" };
-            let body = json!({ "manifest": manifest, "source": source });
+            let body = json!({ "manifest": manifest, "source": source, "account_name": params["account_name"] });
             let status = crate::plugins::on_runner(app, &runner_id, "plugins.install", body).await?;
             Ok(json!({ "status": status }))
         }
         "plugins.uninstall" => {
             let runner_id = string(&params, "runner_id")?;
             crate::plugins::on_runner(app, &runner_id, "plugins.uninstall", json!({ "plugin_id": string(&params, "plugin_id")? })).await
+        }
+        "plugins.rename" => {
+            let runner_id = string(&params, "runner_id")?;
+            let body = json!({ "plugin_id": string(&params, "plugin_id")?, "account_name": string(&params, "account_name")? });
+            let status = crate::plugins::on_runner(app, &runner_id, "plugins.rename", body).await?;
+            Ok(json!({ "status": status }))
         }
         "plugins.set_variables" => {
             let runner_id = string(&params, "runner_id")?;
@@ -648,11 +713,32 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             Box::pin(crate::plugins::mcp_json::on_runner(app, runner_id.as_deref(), method, params)).await
         }
         // Auto-review: the check on plugin and shell actions, shared through the roster.
-        // `rules` replaces the list; a rule without an id gets one.
+        // `rules` replaces the list; a rule without an id gets one. `provider` picks a
+        // connected provider to review with (empty or null for the bot's own). `models` sets a
+        // provider's review model by kind, or with null or "" puts back its default; the
+        // providers it leaves out keep theirs.
         "auto_review.set" => {
             let mut auto_review = app.auto_review();
             if let Some(enabled) = params["is_enabled"].as_bool() {
                 auto_review.is_enabled = enabled;
+            }
+            if let Some(provider) = params.get("provider") {
+                let provider = provider.as_str().map(str::trim).filter(|kind| !kind.is_empty());
+                if let Some(kind) = provider {
+                    let credentials = app.credentials.lock().unwrap();
+                    if !credentials.connected_kinds().iter().any(|connected| connected == kind) {
+                        return Err(format!("{} is not connected", credentials.label(kind)));
+                    }
+                }
+                auto_review.provider = provider.map(str::to_string);
+            }
+            if let Some(models) = params["models"].as_object() {
+                for (kind, model) in models {
+                    match model.as_str().map(str::trim).filter(|model| !model.is_empty()) {
+                        Some(model) => auto_review.models.insert(kind.clone(), model.to_string()),
+                        None => auto_review.models.remove(kind),
+                    };
+                }
             }
             if let Some(rules) = params["rules"].as_array() {
                 auto_review.rules = rules

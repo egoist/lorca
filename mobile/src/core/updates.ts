@@ -8,11 +8,12 @@
 // iOS updates through TestFlight, and Lorca Dev never updates.
 
 import * as Application from "expo-application";
-import { Alert, AppState, Platform } from "react-native";
+import { AppState, Platform } from "react-native";
 import { create } from "zustand";
 import * as core from "../../modules/lorca-core";
 import { t } from "../i18n";
 import { loadPrefs, savePrefs } from "./prefs";
+import { alert } from "../ui/alert";
 
 const API = "https://api.github.com/repos/egoist/lorca";
 const TAG_PREFIX = "mobile-v";
@@ -126,7 +127,7 @@ function checkIfDue() {
 /// Sparkle's offer: what is new, then install it, ask again tomorrow, or never for this version.
 export function offerUpdate(release: Release) {
   const notes = release.notes.length > 1200 ? `${release.notes.slice(0, 1200).trimEnd()}…` : release.notes;
-  Alert.alert(
+  alert(
     t("Lorca {version} is available", { version: release.version }),
     [t("You have {version}.", { version: installedVersion }), notes].filter(Boolean).join("\n\n"),
     [

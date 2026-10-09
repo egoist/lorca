@@ -8,6 +8,7 @@ Limits apply to three scopes:
 
 - `chat`: the limits each new turn in that DM starts with. Changing them affects later turns.
 - `job`: one turn, under its existing Job id. Turns in a chat with limits get a record with the chat's limits copied in; a turn in a chat without limits has no record.
+- `task`: all runs of a [durable task](tasks.md) together, once the user sets limits on it from the task sheet. A task's run counts only toward the task. When the task's limits stop a run, the run's outcome blocks the task with the limit's reason (`tasks::execution::budget_block_reason` reads the task's snapshot), and the task sheet's Resume opens Limits, since a new run would only be refused again.
 - `routine`: all runs of a routine and its checks together, until the user resumes it with fresh limits. A routine's run counts only toward the routine.
 
 A `message_bot` handoff is the target bot's turn and counts toward the target's DM limits.
@@ -42,21 +43,22 @@ Snapshots carry the scope, its limits and usage, `state` (`ready`, `running`, `c
 
 | Method | Parameters and result |
 | --- | --- |
-| `budgets.set` | `kind` (`chat`, `job`, or `routine`), `id`, `limits`, `runner_id?`, `bot_id` for a turn, `chat_id?`; sets the limits and keeps what was used |
+| `budgets.set` | `kind` (`chat`, `job`, `task`, or `routine`), `id`, `limits`, `runner_id?`, `bot_id` for a turn, `chat_id?`; sets the limits and keeps what was used |
 | `budgets.resume` | `kind`, `id`, `request_id`, `runner_id?`, `renew?`, `run?`; resumes stopped work |
 
-Another Device's call goes to the bot's Runner through the existing sealed request path, and the Runner checks the bot is its own. Raising a limit keeps the stop until the user resumes. `renew: true` grants the limits again in full. A repeated request id returns its receipt and neither renews nor starts work again. A scope still running refuses to resume. `run: true` continues a stopped turn from its transcript under the same Job id, or starts a new run of a routine through `run_now`. A plugin call the turn made is never sent again from the ledger.
+Another Device's call goes to the bot's Runner through the existing sealed request path, and the Runner checks the bot is its own. Raising a limit keeps the stop until the user resumes. `renew: true` grants the limits again in full. A repeated request id returns its receipt and neither renews nor starts work again. A scope still running refuses to resume. `run: true` continues a stopped turn from its transcript under the same Job id, starts a new run of a routine through `run_now`, or of a task through `tasks.run` at its current revision, so the task's owner checks it as for any run. A plugin call the turn made is never sent again from the ledger.
 
 ## In the apps
 
-The macOS app and the Windows and Linux app show the same things:
+The macOS app and the Windows and Linux app show the same things, and the phone the same in its own idiom ([Phone app](phone-app.md)):
 
 - **The DM inspector**: a Limits row in Runs with, after Spent. Its value is the chat's limits ("$2.00 · 200k tokens", or None), or Limit reached / Interrupted in orange when the chat's newest turn stopped. The whole row opens the Limits sheet.
 - **The Limits sheet**: Spending (USD), Tokens, Run time (minutes), Retries, and Plugin calls, each empty for no limit, with what the work used beside each and the reached one in orange. When work stopped, a card above the form names the limit and what it used of it, with Resume. Resume saves the form as the turn's and the chat's limits and goes on, provided the limit it reached went up; otherwise it asks before granting the limits again in full. Save is the sheet's default button.
-- **Routines**: the routine sheet shows Limit reached as its state, has a Limits row in Schedule that opens the routine's Limits sheet, and keeps Run Now off until it is resumed. Its inspector row says Limit reached too.
+- **Tasks**: the task sheet's card ends with a Limits row, Limit reached in orange when the task's limits stopped it; then the card's Resume opens Limits.
+- **Routines**: the routine sheet shows Limit reached as its state, ahead of any [health](routines.md#missed-occurrences-and-recovery) state, with what it used under it, has a Limits row in Schedule that opens the routine's Limits sheet, and keeps Run Now off until it is resumed. Its inspector row says Limit reached too.
 - **Plugins**: the plugin sheet's Status has a Call limit row ("60 a minute", or "Waiting until 5:40 AM" while the service asked to slow down) that opens the Call Limit sheet: calls every n seconds and at once, with Applies to (this account, or all of the service's accounts) only for an account whose service has others.
 
-On the Mac these are `BudgetViewController`, `ConnectorLimitsViewController`, and `DisclosureRow`; in `desktop/` they are `sheet_budget.go`, `sheet_connector_limits.go`, `disclosureRow`, and `model/budgets.go`. Both apps' demo data has limits, a turn stopped at its token limit, and a routine stopped at its spending limit.
+On the Mac these are `BudgetViewController`, `ConnectorLimitsViewController`, and `DisclosureRow`; in `desktop/` they are `sheet_budget.go`, `sheet_connector_limits.go`, `disclosureRow`, and `model/budgets.go`. Both apps' demo data has limits, a turn stopped at its token limit, and a routine stopped at its spending limit. On the phone, a plugin's screen sets its account's call limit from menus; the service-wide limit is set on a computer.
 
 ## Shared connector admission
 

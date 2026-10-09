@@ -4,24 +4,15 @@ import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from "expo-rou
 import { useHeaderHeight } from "expo-router/react-navigation";
 import {
   forwardRef,
+  memo,
   useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
-import {
-  Alert,
-  type NativeScrollEvent,
-  type NativeSyntheticEvent,
-  PixelRatio,
-  Platform,
-  Pressable,
-  type ScrollViewProps,
-  StyleSheet,
-  Text,
-  View,
-} from "react-native";
+import { type NativeScrollEvent, type NativeSyntheticEvent, PixelRatio, Platform, type ScrollViewProps, StyleSheet, Text, View } from "react-native";
+import { Pressable } from "../../../src/ui/Pressable";
 import {
   KeyboardChatScrollView,
   KeyboardController,
@@ -37,8 +28,8 @@ import Animated, {
 } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { SoftScrollEdgeView } from "../../../modules/lorca-core/SoftScrollEdgeView";
-import { chatTitle, engine } from "../../../src/core/engine";
-import { canBeQuoted, isLive, type Bot, type Message } from "../../../src/core/model";
+import { chatTitle, engine, type PickedFile } from "../../../src/core/engine";
+import { isLive, type Bot, type Message } from "../../../src/core/model";
 import {
   useBotMap,
   useChat,
@@ -53,11 +44,13 @@ import { Composer, Surface } from "../../../src/ui/Composer";
 import { KeyboardFoot } from "../../../src/ui/KeyboardFoot";
 import { useWide } from "../../../src/ui/layout";
 import { Symbol } from "../../../src/ui/Symbol";
-import { usePalette } from "../../../src/ui/theme";
+import { usePalette, withAlpha } from "../../../src/ui/theme";
 import { quoteText } from "../../../src/ui/format";
 import { AnswerSheet } from "../../../src/ui/AnswerSheet";
+import { alert } from "../../../src/ui/alert";
 import {
   buildRows,
+  shareRows,
   DayRow,
   MarkerRow,
   MessageRow,
@@ -92,8 +85,6 @@ export default function ChatScreen() {
   const insets = useSafeAreaInsets();
   const headerHeight = useHeaderHeight();
   const visibleHeaderHeight = Platform.OS === "android" ? insets.top + ANDROID_BAR_HEIGHT : headerHeight;
-  const androidHeaderHeight = visibleHeaderHeight + ANDROID_FADE_HEIGHT;
-  const androidHeaderStop = visibleHeaderHeight / androidHeaderHeight;
   const chat = useChat(id);
   const bots = useBotMap();
   const workingBotIds = useWorkingBots(id);
@@ -661,17 +652,22 @@ export default function ChatScreen() {
   }, [id]));
 
   // The rows carry words, so a new language builds them again.
-  const rows = useMemo(
-    () => (chat ? buildRows(chat, bots, workingBotIds, isWorking, status) : []),
-    [chat, bots, workingBotIds, isWorking, status, language],
-  );
+  // Rows that did not change keep their identity, and so does the list when none did: FlashList
+  // diffs its data on every new array, and scrolls to the end on one near the bottom.
+  const sharedRows = useRef<Row[]>([]);
+  const rows = useMemo(() => {
+    const next = chat ? buildRows(chat, bots, workingBotIds, isWorking, status) : [];
+    return (sharedRows.current = shareRows(sharedRows.current, next));
+  }, [chat, bots, workingBotIds, isWorking, status, language]);
   rowsRef.current = rows;
+  // Keyed on the member list, not the chat, which changes with every streamed piece of a reply.
+  const botIds = chat?.bot_ids;
   const members = useMemo(
     () =>
-      (chat?.bot_ids ?? [])
+      (botIds ?? [])
         .map((b) => bots.get(b))
         .filter((b): b is Bot => !!b),
-    [chat, bots],
+    [botIds, bots],
   );
   const isGroup = chat?.kind === "group";
   const title = chat ? chatTitle(chat) : t("Chat");
@@ -700,6 +696,39 @@ export default function ChatScreen() {
     },
     [bots],
   );
+  const cancelReply = useCallback(() => setReplying(null), []);
+  // Stable while the reply target is, so the memoized composer skips the renders a streaming
+  // reply causes.
+  const send = useCallback(
+    (text: string, files: PickedFile[], mentions: string[]) => {
+      // The anchor is measured against the screen without the keyboard.
+      void KeyboardController.dismiss();
+      // Before the message reaches the list: FlashList notes "near the end" on a commit
+      // made while its catch-up is on, and scrolls to the end on the change after it.
+      setAnchored(true);
+      const replyTo = replying?.messageID;
+      setReplying(null);
+      const sent = engine
+        .sendMessage(id, text, files, mentions, replyTo)
+        .then((message) => {
+          stopSettling();
+          anchorKey.current = message.id;
+          anchorTarget.current = null;
+          anchorTouched.current = false;
+          anchorLifted.current = false;
+          anchorSpaced.current = false;
+          syncInsetTop();
+        });
+      sent.catch((error) => {
+        if (!anchorKey.current) releaseAnchor();
+        alert(
+          t("Could not send"),
+          error instanceof Error ? error.message : String(error),
+        );
+      });
+    },
+    [id, replying, releaseAnchor, stopSettling, syncInsetTop],
+  );
   /// The message a reply's quote names, brought into view with its bubble pulsing. One on a page
   /// not loaded yet stays where it is.
   const [flashId, setFlashId] = useState<string | null>(null);
@@ -726,9 +755,12 @@ export default function ChatScreen() {
   /// Answers a card. One whose answer cannot reach the bot's Runner asks again, and says why.
   const answerCard = useCallback((message: Message, decision: "allow" | "always" | "deny") => {
     engine.answerPermission(message.chat_id, message.id, decision).catch((error) => {
-      Alert.alert(t("Could not answer"), error instanceof Error ? error.message : String(error));
+      alert(t("Could not answer"), error instanceof Error ? error.message : String(error));
     });
   }, []);
+
+  const answerCommand = useCallback((message: Message) => setAnsweringId(message.id), []);
+  const stopCommand = useCallback((message: Message) => engine.stopCommand(message.chat_id, message.id), []);
 
   const renderItem = useCallback(
     ({ item }: { item: Row }) => {
@@ -741,7 +773,7 @@ export default function ChatScreen() {
               row={item}
               bots={bots}
               isGroup={isGroup}
-              onReply={canBeQuoted(item.message) ? () => startReply(item.message) : undefined}
+              onReply={startReply}
               onQuotePress={revealQuoted}
               flashing={flashId === item.message.id}
             />
@@ -755,7 +787,7 @@ export default function ChatScreen() {
             <PermissionRow
               row={item}
               isGroup={isGroup}
-              onDecide={(decision) => answerCard(item.message, decision)}
+              onDecide={answerCard}
             />
           );
         case "command":
@@ -763,9 +795,9 @@ export default function ChatScreen() {
             <CommandRow
               row={item}
               isGroup={isGroup}
-              onDecide={(decision) => answerCard(item.message, decision)}
-              onAnswer={() => setAnsweringId(item.message.id)}
-              onStop={() => engine.stopCommand(item.message.chat_id, item.message.id)}
+              onDecide={answerCard}
+              onAnswer={answerCommand}
+              onStop={stopCommand}
             />
           );
         case "working":
@@ -774,7 +806,7 @@ export default function ChatScreen() {
           return <StatusRow text={item.text} />;
       }
     },
-    [answerCard, bots, id, isGroup, openMarker, startReply, revealQuoted, flashId],
+    [answerCard, answerCommand, bots, id, isGroup, openMarker, startReply, revealQuoted, flashId, stopCommand],
   );
 
   if (!chat) {
@@ -790,74 +822,15 @@ export default function ChatScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: p.background }}>
-      <Stack.Screen options={{ title }} />
-      {Platform.OS === "ios" ? (
-        <>
-          <Stack.Title asChild>
-            <Pressable
-              onPress={() => router.push(`/chat-info/${id}`)}
-              style={styles.titleView}
-              accessibilityLabel={t("{title}, info", { title })}
-            >
-              <AvatarCluster bots={members} size={30} working={isWorking} />
-              <Text style={[styles.titleText, { color: p.label }]} numberOfLines={1}>
-                {title}
-              </Text>
-            </Pressable>
-          </Stack.Title>
-          <Stack.Toolbar placement="right">
-            {/* The commands the chat's bots are running, while there are any. */}
-            <Stack.Toolbar.Button hidden={!hasTasks} icon="terminal" accessibilityLabel={t("Running tasks")} onPress={() => router.push(`/tasks/${id}`)} />
-            <Stack.Toolbar.Button icon="ellipsis" accessibilityLabel={t("Chat info")} onPress={() => router.push(`/chat-info/${id}`)} />
-          </Stack.Toolbar>
-        </>
-      ) : (
-        <View pointerEvents="box-none" style={[styles.androidHeader, { height: androidHeaderHeight }]}>
-          <LinearGradient
-            pointerEvents="none"
-            colors={
-              p.dark
-                ? ["rgba(10,10,12,0.97)", "rgba(10,10,12,0.86)", "rgba(10,10,12,0.68)", "rgba(10,10,12,0)"]
-                : ["rgba(255,255,255,0.97)", "rgba(255,255,255,0.86)", "rgba(255,255,255,0.68)", "rgba(255,255,255,0)"]
-            }
-            locations={[0, androidHeaderStop * 0.55, androidHeaderStop, 1]}
-            start={{ x: 0.5, y: 0 }}
-            end={{ x: 0.5, y: 1 }}
-            style={StyleSheet.absoluteFill}
-          />
-          <View style={[styles.androidHeaderControls, { height: visibleHeaderHeight, paddingTop: insets.top }]}>
-            {wide ? (
-              // Beside the sidebar there is nothing to go back to; the title stays centered.
-              <View style={styles.androidHeaderButton} />
-            ) : (
-              <Pressable onPress={() => router.back()} style={styles.androidHeaderButton} accessibilityRole="button" accessibilityLabel={t("Back")}>
-                <Symbol name="arrow.left" size={26} color={p.label} />
-              </Pressable>
-            )}
-            {/* Room to match Running tasks on the other side, so the title stays centered. */}
-            {hasTasks ? <View style={styles.androidHeaderButton} /> : null}
-            <Pressable
-              onPress={() => router.push(`/chat-info/${id}`)}
-              style={styles.androidHeaderTitle}
-              accessibilityRole="button"
-              accessibilityLabel={t("{title}, info", { title })}
-            >
-              <AvatarCluster bots={members} size={30} working={isWorking} />
-              <Text style={[styles.titleText, { color: p.label }]} numberOfLines={1}>
-                {title}
-              </Text>
-            </Pressable>
-            {hasTasks ? (
-              <Pressable onPress={() => router.push(`/tasks/${id}`)} style={styles.androidHeaderButton} accessibilityRole="button" accessibilityLabel={t("Running tasks")}>
-                <Symbol name="terminal" size={24} color={p.label} />
-              </Pressable>
-            ) : null}
-            <Pressable onPress={() => router.push(`/chat-info/${id}`)} style={styles.androidHeaderButton} accessibilityRole="button" accessibilityLabel={t("Chat info")}>
-              <Symbol name="ellipsis" size={24} color={p.label} />
-            </Pressable>
-          </View>
-        </View>
-      )}
+      <ChatHeader
+        id={id}
+        title={title}
+        members={members}
+        working={isWorking}
+        hasTasks={hasTasks}
+        wide={wide}
+        top={insets.top}
+      />
       <View style={{ flex: 1 }}>
         <Animated.View ref={transcriptRef} style={[styles.transcript, revealStyle]}>
         <SoftScrollEdgeView
@@ -973,34 +946,8 @@ export default function ChatScreen() {
             isGroup={isGroup}
             placeholder={placeholder}
             reply={replying}
-            onCancelReply={() => setReplying(null)}
-            onSend={(text, files, mentions) => {
-              // The anchor is measured against the screen without the keyboard.
-              void KeyboardController.dismiss();
-              // Before the message reaches the list: FlashList notes "near the end" on a commit
-              // made while its catch-up is on, and scrolls to the end on the change after it.
-              setAnchored(true);
-              const replyTo = replying?.messageID;
-              setReplying(null);
-              const sent = engine
-                .sendMessage(id, text, files, mentions, replyTo)
-                .then((message) => {
-                  stopSettling();
-                  anchorKey.current = message.id;
-                  anchorTarget.current = null;
-                  anchorTouched.current = false;
-                  anchorLifted.current = false;
-                  anchorSpaced.current = false;
-                  syncInsetTop();
-                });
-              sent.catch((error) => {
-                if (!anchorKey.current) releaseAnchor();
-                Alert.alert(
-                  t("Could not send"),
-                  error instanceof Error ? error.message : String(error),
-                );
-              });
-            }}
+            onCancelReply={cancelReply}
+            onSend={send}
           />
         </KeyboardFoot>
       </View>
@@ -1015,6 +962,89 @@ export default function ChatScreen() {
   );
 }
 
+/// The chat's bar: the members and title (a tap opens Details), Running tasks while there are any,
+/// and the menu. Memoized, and its options held: the screen renders again with every event in the
+/// chat, and new header options re-apply the native bar.
+const ChatHeader = memo(function ChatHeader({ id, title, members, working, hasTasks, wide, top }: { id: string; title: string; members: Bot[]; working: boolean; hasTasks: boolean; wide: boolean; top: number }) {
+  useLanguage();
+  const router = useRouter();
+  const p = usePalette();
+  const options = useMemo(() => ({ title }), [title]);
+  // The bar is the surface color fading out over the transcript, the wallpaper's tint included.
+  const veil = useMemo(() => {
+    const surface = typeof p.background === "string" && p.background.startsWith("#") ? p.background : p.dark ? "#0a0a0c" : "#ffffff";
+    return [withAlpha(surface, 0.97), withAlpha(surface, 0.86), withAlpha(surface, 0.68), withAlpha(surface, 0)] as const;
+  }, [p]);
+  const visibleHeaderHeight = top + ANDROID_BAR_HEIGHT;
+  const androidHeaderHeight = visibleHeaderHeight + ANDROID_FADE_HEIGHT;
+  const androidHeaderStop = visibleHeaderHeight / androidHeaderHeight;
+  return (
+    <>
+      <Stack.Screen options={options} />
+      {Platform.OS === "ios" ? (
+        <>
+          <Stack.Title asChild>
+            <Pressable
+              onPress={() => router.push(`/chat-info/${id}`)}
+              style={styles.titleView}
+              accessibilityLabel={t("{title}, info", { title })}
+            >
+              <AvatarCluster bots={members} size={30} working={working} />
+              <Text style={[styles.titleText, { color: p.label }]} numberOfLines={1}>
+                {title}
+              </Text>
+            </Pressable>
+          </Stack.Title>
+          <Stack.Toolbar placement="right">
+            {/* The commands the chat's bots are running, while there are any. */}
+            <Stack.Toolbar.Button hidden={!hasTasks} icon="terminal" accessibilityLabel={t("Running tasks")} onPress={() => router.push(`/tasks/${id}`)} />
+            <Stack.Toolbar.Button icon="ellipsis" accessibilityLabel={t("Chat info")} onPress={() => router.push(`/chat-info/${id}`)} />
+          </Stack.Toolbar>
+        </>
+      ) : (
+        <View pointerEvents="box-none" style={[styles.androidHeader, { height: androidHeaderHeight }]}>
+          <LinearGradient
+            pointerEvents="none"
+            colors={veil}
+            locations={[0, androidHeaderStop * 0.55, androidHeaderStop, 1]}
+            start={{ x: 0.5, y: 0 }}
+            end={{ x: 0.5, y: 1 }}
+            style={StyleSheet.absoluteFill}
+          />
+          <View style={[styles.androidHeaderControls, { height: visibleHeaderHeight, paddingTop: top }]}>
+            {/* A Material top bar: Back, then the title at the start. Beside the sidebar there is
+                nothing to go back to. */}
+            {wide ? null : (
+              <Pressable onPress={() => router.back()} style={styles.androidHeaderButton} ripple="borderless" accessibilityRole="button" accessibilityLabel={t("Back")}>
+                <Symbol name="arrow.left" size={24} color={p.label} />
+              </Pressable>
+            )}
+            <Pressable
+              onPress={() => router.push(`/chat-info/${id}`)}
+              style={styles.androidHeaderTitle}
+              accessibilityRole="button"
+              accessibilityLabel={t("{title}, info", { title })}
+            >
+              <AvatarCluster bots={members} size={30} working={working} />
+              <Text style={[styles.titleText, { color: p.label }]} numberOfLines={1}>
+                {title}
+              </Text>
+            </Pressable>
+            {hasTasks ? (
+              <Pressable onPress={() => router.push(`/tasks/${id}`)} style={styles.androidHeaderButton} ripple="borderless" accessibilityRole="button" accessibilityLabel={t("Running tasks")}>
+                <Symbol name="terminal" size={24} color={p.label} />
+              </Pressable>
+            ) : null}
+            <Pressable onPress={() => router.push(`/chat-info/${id}`)} style={styles.androidHeaderButton} ripple="borderless" accessibilityRole="button" accessibilityLabel={t("Chat info")}>
+              <Symbol name="ellipsis" size={24} color={p.label} />
+            </Pressable>
+          </View>
+        </View>
+      )}
+    </>
+  );
+});
+
 const styles = StyleSheet.create({
   transcript: { flex: 1 },
   foot: { height: 0 },
@@ -1022,7 +1052,7 @@ const styles = StyleSheet.create({
   androidHeader: { position: "absolute", top: 0, left: 0, right: 0, zIndex: 100 },
   androidHeaderControls: { flexDirection: "row", alignItems: "center", paddingHorizontal: 12 },
   androidHeaderButton: { width: 48, height: ANDROID_BAR_HEIGHT, alignItems: "center", justifyContent: "center" },
-  androidHeaderTitle: { flex: 1, height: ANDROID_BAR_HEIGHT, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingHorizontal: 8 },
+  androidHeaderTitle: { flex: 1, height: ANDROID_BAR_HEIGHT, flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 8 },
   composer: { position: "absolute", left: 0, right: 0, bottom: 0 },
   jump: { position: "absolute", right: 12 },
   jumpDisc: {
@@ -1038,5 +1068,6 @@ const styles = StyleSheet.create({
     gap: 8,
     maxWidth: 240,
   },
-  titleText: { fontSize: 17, fontWeight: "600", flexShrink: 1 },
+  // A Material top bar's title is larger and lighter than iOS's.
+  titleText: Platform.select({ android: { fontSize: 20, fontWeight: "500", flexShrink: 1 }, default: { fontSize: 17, fontWeight: "600", flexShrink: 1 } }),
 });

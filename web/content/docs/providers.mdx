@@ -56,8 +56,25 @@ From a terminal:
 ```bash
 lorca provider add "OpenRouter" https://openrouter.ai/api/v1 --model anthropic/claude-sonnet-5 --api-key-stdin
 lorca provider add "Ollama" http://localhost:11434/v1
-lorca provider add "Claude proxy" https://proxy.example.com --api messages --model claude-opus-5 --api-key-stdin
+lorca provider add "Claude proxy" https://proxy.example.com/v1 --api messages --model claude-opus-5 --api-key-stdin
 ```
+
+### Decision APIs
+
+A decision model answers typed questions with probabilities instead of writing text. [Auto-review](/docs/auto-review#the-review-model) can run one, and bots can't. Add one under **Add Provider…**: **OpenRouter Decisions**, **OpenAI Decisions**, and **TypeSafe** fill it in. Under **Other Server…**, pick the API:
+
+- **System One:** TypeSafe's API, which OpenRouter, OpenCode Zen, and LLM Gateway serve too.
+- **OpenAI Decisions:** OpenAI's Decisions API, also served by Vercel's AI Gateway.
+
+For these two, the URL is the endpoint itself, such as `https://openrouter.ai/api/alpha/decisions`. A URL without one gets the API's usual path (`/systemone` or `/decisions`). The model list shows the server's decision models. A decision provider doesn't appear in the bots' provider pickers. Pick it in **Settings › Auto-review**, and its model under **Review Models**.
+
+```bash
+lorca provider add "TypeSafe" https://api.typesafe.ai/v1/systemone --api system-one --api-key-stdin
+```
+
+### Review models
+
+**Settings › Providers › Review Models** has each connected provider's review model, the one [Auto-review](/docs/auto-review#the-review-model) runs on it. By default it's a small, fast model; pick any of the provider's models, decision models included.
 
 ## Pick a model per bot
 

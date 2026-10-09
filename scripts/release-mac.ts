@@ -7,7 +7,9 @@
 //   FORCE=1 bun run release-mac      replace a version that is already published
 //   NO_HISTORY=1 bun run release-mac skip the old archives (a full download, no deltas)
 //
-// docs/releasing-mac.md has the one-time setup.
+// Notarization signs in with the NOTARY keychain profile, or with an App Store Connect API key when
+// ASC_KEY_PATH (the .p8 file), ASC_KEY_ID, and ASC_ISSUER_ID are set, as the Release Mac app
+// workflow sets them. docs/releasing-mac.md has the one-time setup.
 import { $ } from "bun"
 import { existsSync } from "node:fs"
 import { mkdir, rm } from "node:fs/promises"
@@ -44,6 +46,12 @@ const positional = args.filter((arg) => !arg.startsWith("--"))
 if (positional.length > 1) die("expected at most one version")
 
 const NOTARY_PROFILE = process.env.NOTARY_PROFILE ?? "NOTARY"
+const apiKey = ["ASC_KEY_PATH", "ASC_KEY_ID", "ASC_ISSUER_ID"].map((name) => process.env[name])
+if (apiKey.some(Boolean) && !apiKey.every(Boolean)) die("set all of ASC_KEY_PATH, ASC_KEY_ID, and ASC_ISSUER_ID, or none")
+const [keyPath, keyID, issuerID] = apiKey
+const notaryAuth = keyPath
+  ? ["--key", keyPath, "--key-id", keyID!, "--issuer", issuerID!]
+  : ["--keychain-profile", NOTARY_PROFILE]
 // A partial name matches while the keychain holds one Developer ID Application certificate.
 const SIGN_IDENTITY = process.env.SIGN_IDENTITY ?? "Developer ID Application"
 const R2_DEST = `${process.env.R2_REMOTE ?? "r2"}:${process.env.R2_BUCKET ?? "lorca-mac-releases"}`
@@ -112,8 +120,8 @@ if (!(await codesign(["--force", "--timestamp", "--sign", SIGN_IDENTITY, dmgPath
 
 // ---- 4. notarize and staple
 // Notarizing the disk image notarizes the code inside it, so one submission staples both.
-log(`notarizing ${color.dim(`profile ${NOTARY_PROFILE}`)}`)
-await $`xcrun notarytool submit ${dmgPath} --keychain-profile ${NOTARY_PROFILE} --wait`
+log(`notarizing ${color.dim(keyPath ? `API key ${keyID}` : `profile ${NOTARY_PROFILE}`)}`)
+await $`xcrun notarytool submit ${dmgPath} ${notaryAuth} --wait`
 await $`xcrun stapler staple ${dmgPath}`
 await $`xcrun stapler staple ${app}`
 await $`codesign --verify --deep --strict ${app}`

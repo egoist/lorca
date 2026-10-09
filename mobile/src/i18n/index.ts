@@ -70,7 +70,16 @@ export function useLanguage(): { language: Language; chosen: Language | undefine
 
 /// `t("{name} is working…", { name })`: the sentence in the app's language with the values in.
 export function t(key: string, values?: Record<string, string | number>): string {
-  const text = tables[language][key] ?? key;
+  return fill(tables[language][key] ?? key, values);
+}
+
+/// `tc("Open", "browser")`: one English word that means two things, as the Mac's
+/// `L("Open", context: "browser")`; the table's key is `Open|browser`.
+export function tc(key: string, context: string, values?: Record<string, string | number>): string {
+  return fill(tables[language][`${key}|${context}`] ?? key, values);
+}
+
+function fill(text: string, values?: Record<string, string | number>): string {
   if (!values) return text;
   return text.replace(/\{(\w+)\}/g, (match, name: string) => (name in values ? String(values[name]) : match));
 }

@@ -25,18 +25,18 @@ pub fn current() -> Option<BudgetContext> {
     CURRENT.try_with(Clone::clone).ok()
 }
 
-/// A turn counts toward its own limits, copied from its chat's when it starts, and a routine's
-/// run toward the routine's. A new turn replaces a stopped one in the same chat: the user
-/// moved on.
+/// A turn counts toward its own limits, copied from its chat's when it starts; a task's run
+/// toward the task's, and a routine's run toward the routine's. A new turn replaces a stopped
+/// one in the same chat: the user moved on.
 pub fn for_job(app: &Arc<App>, job: &Job) -> Result<BudgetContext, String> {
     let bot = app.bot(&job.bot_id).ok_or("Unknown bot")?;
     if app.this_device_id().as_deref() != Some(bot.runner_id.as_str()) {
         return Err("Work is admitted only on its assigned Runner.".into());
     }
-    let live = live(app);
+    let live = live(app, false);
     let keys = app.budgets.change(app, |ledger| {
         let job_key = key("job", &job.id);
-        if job.routine_id.is_none() && !ledger.records.contains_key(&job_key) {
+        if job.routine_id.is_none() && job.task_id.is_none() && !ledger.records.contains_key(&job_key) {
             ledger.records.retain(|_, r| r.view.kind != "job" || r.view.chat_id != job.chat_id || r.is_active());
             let limits = ledger.records.get(&key("chat", &job.chat_id)).map(|r| r.view.limits.clone()).filter(|l| !l.is_empty());
             if let Some(limits) = limits {
@@ -48,7 +48,8 @@ pub fn for_job(app: &Arc<App>, job: &Job) -> Result<BudgetContext, String> {
         }
         prune(ledger, &live);
         let routine_key = job.routine_id.as_ref().map(|id| key("routine", id));
-        let keys: Vec<String> = [Some(job_key), routine_key].into_iter().flatten().filter(|k| ledger.records.contains_key(k)).collect();
+        let task_key = job.task_id.as_ref().map(|id| key("task", id));
+        let keys: Vec<String> = [Some(job_key), task_key, routine_key].into_iter().flatten().filter(|k| ledger.records.contains_key(k)).collect();
         check_scopes(ledger, &keys)?;
         Ok(keys)
     });

@@ -1,5 +1,5 @@
-//! Runner-owned limits. A DM's turns, and a routine's runs, keep their existing identities;
-//! this module owns only what they used, reservations, a stop at a limit, and resuming.
+//! Runner-owned limits. A DM's turns, a task's runs, and a routine's runs keep their existing
+//! identities; this module owns only what they used, reservations, a stop at a limit, and resuming.
 
 use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -116,7 +116,7 @@ impl BudgetUsage {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct BudgetSnapshot {
     /// `chat` holds the limits each new turn in that chat starts with; `job` is one turn,
-    /// `routine` all runs of a routine.
+    /// `task` all runs of a task, `routine` all runs of a routine.
     pub kind: String,
     pub id: String,
     pub runner_id: String,
@@ -182,19 +182,23 @@ fn key(kind: &str, id: &str) -> String {
     format!("{kind}:{id}")
 }
 
-/// What still exists, read before the ledger's lock is taken.
+/// What still exists, read before the ledger's lock is taken. `tasks` is read only where the
+/// limits change, not on every turn.
 struct Live {
     chats: HashSet<String>,
     routines: HashSet<String>,
     devices: HashSet<String>,
+    tasks: Option<HashSet<String>>,
 }
 
-fn live(app: &App) -> Live {
+fn live(app: &App, with_tasks: bool) -> Live {
+    let tasks = with_tasks.then(|| crate::tasks::list(app).unwrap_or_default().into_iter().map(|task| task.id).collect());
     let state = app.state.lock().unwrap();
     Live {
         chats: state.chats.iter().map(|c| c.meta.id.clone()).collect(),
         routines: state.routines.iter().map(|r| r.id.clone()).collect(),
         devices: state.devices.iter().map(|d| d.id.clone()).collect(),
+        tasks,
     }
 }
 
@@ -208,6 +212,7 @@ fn prune(ledger: &mut Ledger, live: &Live) {
         }
         let exists = match record.view.kind.as_str() {
             "routine" => live.routines.contains(&record.view.id),
+            "task" => live.tasks.as_ref().is_none_or(|tasks| tasks.contains(&record.view.id)),
             _ => live.chats.contains(&record.view.chat_id),
         };
         exists
@@ -445,15 +450,17 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: &Value) -> Result<Va
 pub fn serve(app: &Arc<App>, method: &str, params: &Value) -> Result<Value, String> {
     let kind = params["kind"]
         .as_str()
-        .filter(|kind| matches!(*kind, "job" | "routine" | "chat"))
-        .ok_or("kind must be job, routine, or chat")?;
+        .filter(|kind| matches!(*kind, "job" | "task" | "routine" | "chat"))
+        .ok_or("kind must be job, task, routine, or chat")?;
     let id = params["id"].as_str().filter(|id| !id.is_empty()).ok_or("missing id")?;
     let record_key = key(kind, id);
     if method == "budgets.set" {
         let limits: BudgetLimits = serde_json::from_value(params["limits"].clone()).map_err(|e| e.to_string())?;
         limits.validate()?;
+        let task = (kind == "task").then(|| crate::tasks::get(app, id)).transpose()?;
         let bot_id = match kind {
             "routine" => app.routine(id).ok_or("Unknown routine")?.bot_id,
+            "task" => task.as_ref().map(|task| task.owner_bot_id.clone()).unwrap_or_default(),
             "chat" => app.chat(id).and_then(|c| c.meta.bot_ids.first().cloned()).ok_or("Unknown chat")?,
             _ => params["bot_id"].as_str().ok_or("missing bot_id")?.to_string(),
         };
@@ -461,8 +468,12 @@ pub fn serve(app: &Arc<App>, method: &str, params: &Value) -> Result<Value, Stri
         if app.this_device_id().as_deref() != Some(bot.runner_id.as_str()) {
             return Err("Budgets are managed on the bot's assigned Runner.".into());
         }
-        let chat_id = if kind == "chat" { id.to_string() } else { params["chat_id"].as_str().unwrap_or_default().to_string() };
-        let live = live(app);
+        let chat_id = match (kind, &task) {
+            ("chat", _) => id.to_string(),
+            (_, Some(task)) => task.chat_ids.first().cloned().unwrap_or_default(),
+            _ => params["chat_id"].as_str().unwrap_or_default().to_string(),
+        };
+        let live = live(app, true);
         let snapshot = app.budgets.change(app, |ledger| {
             if kind == "job" && !ledger.records.contains_key(&record_key) {
                 return Err("This turn has no limits to change.".into());
@@ -516,6 +527,17 @@ pub fn serve(app: &Arc<App>, method: &str, params: &Value) -> Result<Value, Stri
             match (kind, job) {
                 // A routine goes on with a new run, which checks it isn't running already.
                 ("routine", _) => crate::routines::run_now(app, id)?,
+                // A task goes on with a new run through its owner, which checks it may.
+                ("task", _) => {
+                    let task = crate::tasks::get(app, id)?;
+                    let params = json!({ "id": id, "expected_revision": task.revision, "request_id": format!("budgets-{receipt}") });
+                    let app = app.clone();
+                    tokio::spawn(async move {
+                        if let Err(error) = crate::tasks::dispatch(&app, "tasks.run", params).await {
+                            tracing::warn!(%error, "starting a task again after its limits");
+                        }
+                    });
+                }
                 // A turn goes on from the transcript as it stands; a plugin call it made is
                 // never sent again from here.
                 (_, Some(mut job)) => {

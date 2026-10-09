@@ -78,7 +78,7 @@ func (s *callLimitSheet) view(c *ui.Context, sh *sheet) {
 		}
 		ui.Column(c.Key("form")).Gap(8).Children(func() {
 			if s.limits != nil && s.limits.SharesService() {
-				newBotRow(c.Key("scope"), L("Applies to"), false, func() {
+				formRow(c.Key("scope"), L("Applies to"), false, func() {
 					current := "account"
 					if s.service {
 						current = "service"
@@ -90,7 +90,7 @@ func (s *callLimitSheet) view(c *ui.Context, sh *sheet) {
 					}
 				})
 			}
-			newBotRow(c.Key("calls"), L("Calls"), false, func() {
+			formRow(c.Key("calls"), L("Calls"), false, func() {
 				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 					textField(c.Key("calls-field"), &s.fields.Calls, fieldOptions{Label: L("Calls"), Disabled: disabled}).Width(64).TextAlign(ui.End)
 					label(Lc("every", "calls every n seconds"))
@@ -98,7 +98,7 @@ func (s *callLimitSheet) view(c *ui.Context, sh *sheet) {
 					label(L("seconds"))
 				})
 			})
-			newBotRow(c.Key("concurrency"), L("At once"), false, func() {
+			formRow(c.Key("concurrency"), L("At once"), false, func() {
 				textField(c.Key("concurrency-field"), &s.fields.Concurrency, fieldOptions{Label: L("At once"), Disabled: disabled}).Width(64).TextAlign(ui.End)
 			})
 		})

@@ -7,14 +7,16 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// budgetSheet is what a DM's turns or a routine's runs may use on the bot's Runner, after the
-// macOS app's BudgetViewController: a form of limits with what the work used beside each, and a
-// card with Resume when the work stopped. The fields are the user's until the sheet closes.
+// budgetSheet is what a DM's turns, a task's runs, or a routine's runs may use on the bot's
+// Runner, after the macOS app's BudgetViewController: a form of limits with what the work used
+// beside each, and a card with Resume when the work stopped. The fields are the user's until the
+// sheet closes.
 type budgetSheet struct {
 	w         *appWindow
 	bot       *model.Bot
 	chatID    string
 	routineID string
+	taskID    string
 	fields    model.BudgetFields
 	// invalid is the field that isn't a number.
 	invalid   string
@@ -30,23 +32,37 @@ func (w *appWindow) presentBudget(bot *model.Bot, chatID, routineID string) {
 		return
 	}
 	s := &budgetSheet{w: w, bot: bot, chatID: chatID, routineID: routineID}
+	s.open()
+}
+
+// presentTaskLimits opens a task's limits, which all of its runs count toward; `bot` is its owner.
+func (w *appWindow) presentTaskLimits(bot *model.Bot, task *model.DurableTask) {
+	if bot == nil || task == nil {
+		return
+	}
+	s := &budgetSheet{w: w, bot: bot, taskID: task.ID}
+	if len(task.ChatIDs) > 0 {
+		s.chatID = task.ChatIDs[0]
+	}
+	s.open()
+}
+
+func (s *budgetSheet) open() {
 	if configured := s.configured(); configured != nil {
 		s.fields = model.BudgetFieldsFor(configured.Limits)
 	}
-	w.present(s.view, func() { s.closed = true })
+	s.w.present(s.view, func() { s.closed = true })
 }
 
-// configured is the allowance the form edits: the routine's, or the DM's for new turns.
+// configured is the allowance the form edits: the task's or routine's, or the DM's for new turns.
 func (s *budgetSheet) configured() *model.BudgetState {
-	if s.routineID != "" {
-		return store.Budget("routine", s.routineID, s.bot.RunnerID)
-	}
-	return store.Budget("chat", s.chatID, s.bot.RunnerID)
+	scope := s.scope()
+	return store.Budget(scope.Kind, scope.ID, s.bot.RunnerID)
 }
 
-// stopped is what stopped and waits for Resume: the routine, or the DM's newest turn.
+// stopped is what stopped and waits for Resume: the task or routine, or the DM's newest turn.
 func (s *budgetSheet) stopped() *model.BudgetState {
-	if s.routineID != "" {
+	if s.scope().Kind != "chat" {
 		if b := s.configured(); b != nil && b.IsStopped() {
 			return b
 		}
@@ -58,7 +74,7 @@ func (s *budgetSheet) stopped() *model.BudgetState {
 // usage is whose use the form shows beside the limits.
 func (s *budgetSheet) usage() *model.BudgetUsage {
 	b := s.stopped()
-	if s.routineID != "" {
+	if s.scope().Kind != "chat" {
 		b = s.configured()
 	}
 	if b == nil {
@@ -82,6 +98,9 @@ func (s *budgetSheet) limits() (model.BudgetLimits, bool) {
 }
 
 func (s *budgetSheet) scope() model.BudgetTarget {
+	if s.taskID != "" {
+		return model.BudgetTarget{Kind: "task", ID: s.taskID}
+	}
 	if s.routineID != "" {
 		return model.BudgetTarget{Kind: "routine", ID: s.routineID}
 	}
@@ -121,8 +140,11 @@ func (s *budgetSheet) resume(sh *sheet, stopped model.BudgetState) {
 		return
 	}
 	message := L("Resume this turn with fresh limits?")
-	if s.routineID != "" {
+	switch s.scope().Kind {
+	case "routine":
 		message = L("Resume this routine with fresh limits?")
+	case "task":
+		message = L("Resume this task with fresh limits?")
 	}
 	s.w.showAlert(alertOptions{Message: message,
 		Informative: L("It already used its limits. Resuming lets it use them again in full."),
@@ -138,7 +160,9 @@ func (s *budgetSheet) resume(sh *sheet, stopped model.BudgetState) {
 func (s *budgetSheet) view(c *ui.Context, sh *sheet) {
 	p := colors(c)
 	subtitle := L("Each turn with %@ stops when it reaches one of these.", s.bot.Name)
-	if s.routineID != "" {
+	if s.taskID != "" {
+		subtitle = L("All runs of this task count toward these. When it reaches one, the task waits until you resume it.")
+	} else if s.routineID != "" {
 		name := L("Routine")
 		if routine := store.Routine(s.routineID); routine != nil {
 			name = routine.Name
@@ -172,7 +196,7 @@ func (s *budgetSheet) view(c *ui.Context, sh *sheet) {
 				{"connector_calls", L("Plugin calls"), "", &s.fields.ConnectorCalls},
 			} {
 				ui.Row(c.Key(field.key)).Gap(10).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, field.label).Width(newBotLabelWidth).FontSize(12).TextColor(p.Label2).SingleLine()
+					ui.Text(c, field.label).Width(formLabelWidth).FontSize(12).TextColor(p.Label2).SingleLine()
 					input := textField(c.Key("field"), field.value, fieldOptions{Label: field.label, Placeholder: L("No limit"), Disabled: s.busy}).Width(100).Shrink(0).TextAlign(ui.End)
 					if s.invalid == field.key && input.Changed() {
 						s.invalid, s.errorText = "", ""

@@ -854,7 +854,7 @@ func (s *mcpSheet) statusView(c *ui.Context) {
 	if s.connecting {
 		text, color = L("Connecting…"), p.Accent
 	}
-	needsSignIn := !s.connecting && server.Status != nil && server.Status.State == model.PluginNeedsAuth
+	needsSignIn := !s.connecting && server.Status != nil && (server.Status.State == model.PluginNeedsAuth || server.Status.State == model.PluginInsufficientAccess)
 	section(c, L("Status"), sectionCaption, nil, func(k *card) {
 		state := k.row(rowBox(c).MinHeight(36).Label(L("State")))
 		state.Children(func() {

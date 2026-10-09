@@ -16,19 +16,36 @@ final class MarketplacePluginPage: MarketplacePage {
             return
         }
         var views: [NSView] = [header(for: plugin)]
-        if let runner = market.runner, let installed = market.installedPlugin(plugin.id) {
+        if let runner = market.runner, plugin.namedAccounts {
+            let accounts = market.installedAccounts(plugin.id)
+            if !accounts.isEmpty {
+                let section = card(L("Accounts on %@", runner.name))
+                section.setRows(accounts.map { account in
+                    let row = StatusRow()
+                    row.configure(
+                        symbol: plugin.symbolName, image: PluginLogo.tile(for: plugin.id, size: 18),
+                        title: account.accountName ?? account.name, subtitle: "",
+                        state: account.shortStatus, stateColor: account.shortStatusColor)
+                    row.identifier = NSUserInterfaceItemIdentifier(account.id)
+                    row.toolTip = L("Open %@", account.name)
+                    row.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(openAccount(_:))))
+                    return row
+                })
+                views.append(section)
+            }
+        } else if let runner = market.runner, let installed = market.installedPlugin(plugin.id) {
             let section = card(L("On %@", runner.name))
             let row = StatusRow()
             let action: String? =
                 switch installed.state {
-                case .needsAuth: L("Connect")
+                case .needsAuth, .insufficientAccess: L("Connect")
                 case .needsSetup: L("Set Up")
                 default: nil
                 }
             row.configure(
                 symbol: runner.symbolName, title: installed.detail, subtitle: L("Every bot on %@ can use it.", runner.name),
                 state: nil, actionTitle: action)
-            row.onAction = { [weak self] in self?.market.manage(plugin.id) }
+            row.onAction = { [weak self] in self?.market.manage(installed.id) }
             section.setRows([row])
             views.append(section)
         }
@@ -103,8 +120,10 @@ final class MarketplacePluginPage: MarketplacePage {
             spinner.controlSize = .small
             spinner.startAnimation(nil)
             actions.append(spinner)
-        } else if market.installedPlugin(plugin.id) != nil {
-            actions.append(ActionButton(title: L("Manage…")) { [weak self] in self?.market.manage(plugin.id) })
+        } else if plugin.namedAccounts && market.installedPlugin(plugin.id) != nil {
+            actions.append(ActionButton(title: L("Add Account…")) { [weak self] in self?.market.addAccount(plugin) })
+        } else if let installed = market.installedPlugin(plugin.id) {
+            actions.append(ActionButton(title: L("Manage…")) { [weak self] in self?.market.manage(installed.id) })
         } else {
             let add = ActionButton(title: L("Add"), prominent: true) { [weak self] in self?.market.install(plugin) }
             add.isEnabled = market.runner != nil
@@ -136,6 +155,11 @@ final class MarketplacePluginPage: MarketplacePage {
         top.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         text.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         return stack
+    }
+
+    @objc private func openAccount(_ sender: NSClickGestureRecognizer) {
+        guard let id = sender.view?.identifier?.rawValue else { return }
+        market.manage(id)
     }
 
     /// A card in System Settings' look, its count beside the title.

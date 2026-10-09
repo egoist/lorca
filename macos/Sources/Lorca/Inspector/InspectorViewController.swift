@@ -12,11 +12,16 @@ final class InspectorViewController: NSViewController {
     private let profile = SectionView(title: L("Profile"))
     private let nameRow = EditableRow(key: L("Name"), placeholder: L("Name"))
     private let descriptionRow = SummaryActionRow(key: L("Description"), value: "", actionTitle: L("Edit…"))
+    private let accessRow = DisclosureRow(key: L("Access"))
     private let runtime = SectionView(title: L("Runs with"))
     private let memory = SectionView(title: L("Memory"))
     private let routines = SectionView(title: L("Routines"))
+    private let reviews = SectionView(title: L("Waiting for review"))
+    private let tasks = SectionView(title: L("Tasks"))
     private let plugins = SectionView(title: L("Plugins"))
     private let routing = SectionView(title: L("Where turns run"))
+    private let outputs = SectionView(title: L("Outputs"))
+    private lazy var allOutputsButton = ViewAllLabel(L("View all")) { [weak self] in self?.showAllOutputs() }
     private let addButton = NSButton()
 
     private var selection: Selection?
@@ -36,6 +41,8 @@ final class InspectorViewController: NSViewController {
     /// Rows kept for what they show (a bot, a Runner, a routine, a plugin), so a section that
     /// changed updates the rows it has instead of making new ones.
     private var keptRows: [String: NSView] = [:]
+    /// The chat whose Tasks section shows every task rather than the first few.
+    private var tasksShowingAll: Chat.ID?
     /// The usage rows under Runs with, which take new values after every turn.
     private var contextRow: ActionRow?
     private var spentRow: KeyValueRow?
@@ -79,18 +86,24 @@ final class InspectorViewController: NSViewController {
 
         nameRow.field.alignment = .right
         descriptionRow.onAction = { [weak self] in self?.editDescription() }
-        profile.setRows([nameRow, descriptionRow])
+        profile.setRows([nameRow, descriptionRow, accessRow])
         groupNameRow.field.alignment = .right
         groupDescriptionRow.onAction = { [weak self] in self?.editGroupDescription() }
         group.setRows([groupNameRow, groupDescriptionRow])
+        tasks.setHeaderAccessory(HoverButton(symbol: "plus", pointSize: 11, tooltip: L("New Task"), target: self, action: #selector(newTask)))
+        tasks.isHidden = true
+        outputs.isHidden = true
 
         column.addArrangedSubview(participants)
         column.addArrangedSubview(addButton)
         column.addArrangedSubview(group)
+        column.addArrangedSubview(reviews)
+        column.addArrangedSubview(outputs)
         column.addArrangedSubview(profile)
         column.addArrangedSubview(runtime)
         column.addArrangedSubview(memory)
         column.addArrangedSubview(routines)
+        column.addArrangedSubview(tasks)
         column.addArrangedSubview(plugins)
         column.addArrangedSubview(routing)
         column.setCustomSpacing(10, after: participants)
@@ -124,10 +137,13 @@ final class InspectorViewController: NSViewController {
             column.bottomAnchor.constraint(equalTo: documentView.bottomAnchor),
             participants.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             group.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
+            outputs.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             profile.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             runtime.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             memory.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             routines.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
+            reviews.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
+            tasks.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             plugins.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             routing.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
         ])
@@ -139,8 +155,11 @@ final class InspectorViewController: NSViewController {
         super.viewDidLoad()
         store.observe(self) { [weak self] event in
             switch event {
-            case .chatChanged, .chatsChanged, .snapshotReplaced, .rosterChanged, .budgetsChanged:
+            case .chatChanged, .chatsChanged, .snapshotReplaced, .rosterChanged, .reviewsChanged, .durableTasksChanged, .budgetsChanged:
                 self?.reload()
+            case let .outputsChanged(chatID):
+                guard let self, case .chat(chatID) = self.selection else { return }
+                self.reload()
             case let .respondingChanged(chatID):
                 // A turn ended (or started): what the bot remembers may have moved.
                 guard let self, case .chat(chatID) = self.selection, !self.store.isResponding(in: chatID) else { return }
@@ -221,11 +240,14 @@ final class InspectorViewController: NSViewController {
         // A DM never takes another bot; a group does until it is full or every bot is in it.
         let canAdd = chat.canAddBot && members.count < store.bots.count
         if addButton.isHidden != chat.isDM { addButton.isHidden = chat.isDM }
+        // Add Bot sits close under the bots; without it the next section keeps the usual gap.
+        column.setCustomSpacing(chat.isDM ? column.spacing : 10, after: participants)
         if addButton.isEnabled != canAdd { addButton.isEnabled = canAdd }
 
         // A group's name and what it is for.
         if group.isHidden == chat.isGroup { group.isHidden = !chat.isGroup }
         if chat.isGroup { showGroup(chat, members: members) }
+        showOutputs(in: chat)
 
         // A direct chat is one bot, so its profile, provider, and model are edited right here.
         let single = chat.isDM && members.count == 1
@@ -240,6 +262,80 @@ final class InspectorViewController: NSViewController {
             showPlugins(of: bot)
         }
         showRouting(members)
+        showReviews(in: chat)
+        showTasks(in: chat)
+    }
+
+    /// What the chat's bots left for the user to approve, oldest first, while any waits or runs;
+    /// a row opens it. How each ended stays in the chat, so the section goes once none is open.
+    private func showReviews(in chat: Chat) {
+        let items = store.reviews.filter { $0.origin.chatId == chat.id && $0.isOpen }.sorted { $0.createdAt < $1.createdAt }
+        let runner = items.first.flatMap { store.device($0.runnerId) }
+        guard changed(reviews, to: [chat.id, items.map { "\($0.id):\($0.revision)" }, runner?.plugins]) else { return }
+        if reviews.isHidden != items.isEmpty { reviews.isHidden = items.isEmpty }
+        reviews.setRows(
+            items.map { item in
+                let row: StatusRow = keptRow("review:\(item.id)") {
+                    let row = StatusRow()
+                    row.identifier = NSUserInterfaceItemIdentifier(item.id)
+                    row.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(openReview(_:))))
+                    return row
+                }
+                let plugin = item.payload.pluginId.flatMap { id in store.device(item.runnerId)?.plugins.first { $0.id == id } }
+                row.configure(
+                    symbol: item.payload.isDraft ? "doc.text" : (item.payload.isShell ? "terminal" : plugin?.symbolName ?? "puzzlepiece.extension"),
+                    image: plugin.flatMap { PluginLogo.tile(for: $0.marketplaceID, size: 18) },
+                    title: item.payload.kind == "plugin" ? store.pluginName(of: item) : item.headline,
+                    subtitle: item.rationale,
+                    state: item.stateText,
+                    subtitleLines: 2)
+                row.toolTip = item.rationale
+                return row
+            })
+    }
+
+    @objc private func openReview(_ sender: NSClickGestureRecognizer) {
+        guard let id = sender.view?.identifier?.rawValue, let item = store.review(id) else { return }
+        presentAsSheet(ReviewViewController(item: item))
+    }
+
+
+    /// The chat's durable tasks, open work first; hidden while it has none. A row opens the
+    /// task; the title's + starts a new one. Past five rows the rest wait behind Show All.
+    private func showTasks(in chat: Chat) {
+        let records = store.tasks(in: chat.id)
+        let showsAll = tasksShowingAll == chat.id
+        guard changed(tasks, to: [chat.id, chat.isGroup, records, showsAll, records.map { store.bot($0.ownerBotId)?.name }]) else { return }
+        if tasks.isHidden != records.isEmpty { tasks.isHidden = records.isEmpty }
+        let limit = 5
+        let shown = showsAll || records.count <= limit ? records : Array(records.prefix(limit - 1))
+        var rows: [NSView] = shown.map { task in
+            let row = keptRow("task:\(task.id)") { SwitchRow() }
+            var detail = task.state.title
+            if chat.isGroup, let owner = store.bot(task.ownerBotId) { detail += " · \(owner.name)" }
+            row.configure(symbol: task.state.symbol, tint: task.state.tint, title: task.goal, detail: detail, tooltip: task.goal)
+            row.onClick = { [weak self] in self?.openTask(task.id, in: chat.id) }
+            return row
+        }
+        if shown.count < records.count {
+            let more = keptRow("tasks:all") { SwitchRow() }
+            more.configure(symbol: "ellipsis", tint: .tertiaryLabelColor, title: L("Show %d More", records.count - shown.count), detail: "", tooltip: "")
+            more.onClick = { [weak self] in
+                self?.tasksShowingAll = chat.id
+                self?.reload()
+            }
+            rows.append(more)
+        }
+        tasks.setRows(rows)
+    }
+
+    private func openTask(_ id: String, in chatID: Chat.ID) {
+        presentAsSheet(DurableTaskViewController(chatID: chatID, task: store.durableTask(id)))
+    }
+
+    @objc private func newTask() {
+        guard case let .chat(chatID) = selection else { return }
+        presentAsSheet(DurableTaskViewController(chatID: chatID, task: nil))
     }
 
     /// Whether `state` differs from what `section` last showed; records it when it does.
@@ -329,8 +425,10 @@ final class InspectorViewController: NSViewController {
     private func showProfile(of bot: Bot) {
         // The Name row keeps what the user is typing, and puts the name back after.
         nameRow.setValue(bot.name)
-        guard changed(profile, to: [bot.id, bot.description]) else { return }
+        guard changed(profile, to: [bot.id, bot.description, bot.permissions]) else { return }
         descriptionRow.setValue(bot.description)
+        accessRow.setValue((bot.permissions ?? BotPermissions()).summary)
+        accessRow.onClick = { [weak self] in self?.presentAsSheet(BotAccessViewController(botID: bot.id)) }
         nameRow.onCommit = { [weak self] in self?.commitProfile(of: bot.id) }
     }
 
@@ -391,6 +489,38 @@ final class InspectorViewController: NSViewController {
                 )
                 return row
             })
+    }
+
+    /// What the chat's bots published, the latest first: a few rows, and View all for the rest.
+    /// Hidden while there is none.
+    private func showOutputs(in chat: Chat) {
+        let all = store.outputs(in: chat.id)
+        let shown = Array(all.prefix(3))
+        if outputs.isHidden != all.isEmpty { outputs.isHidden = all.isEmpty }
+        guard changed(outputs, to: [chat.id, chat.isGroup, shown, all.count > shown.count, store.bots.map(\.name)]) else { return }
+        outputs.setHeaderAccessory(all.count > shown.count ? allOutputsButton : nil)
+        outputs.setRows(
+            shown.map { series in
+                let row: StatusRow = keptRow("output:\(series.id)") {
+                    let row = StatusRow()
+                    row.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(openOutput(_:))))
+                    return row
+                }
+                row.configure(output: series, showsBot: chat.isGroup)
+                return row
+            })
+    }
+
+    @objc private func openOutput(_ sender: NSClickGestureRecognizer) {
+        guard let id = sender.view?.identifier?.rawValue, case let .chat(chatID) = selection,
+            let series = store.outputs(in: chatID).first(where: { $0.id == id })
+        else { return }
+        presentAsSheet(OutputViewController(chatID: chatID, series: series))
+    }
+
+    private func showAllOutputs() {
+        guard case let .chat(chatID) = selection else { return }
+        presentAsSheet(OutputsViewController(chatID: chatID))
     }
 
     /// Saves the compact Name row when it finishes editing. An emptied value keeps the old one;
@@ -565,20 +695,23 @@ final class InspectorViewController: NSViewController {
             })
     }
 
-    /// The plugins the bot's Runner has, which every bot there may use, and a way to the
-    /// marketplace. A plugin that needs setup says so; clicking opens it.
+    /// The plugins the bot's Runner has, and a way to the marketplace. A plugin that needs setup
+    /// says so, and one the bot's Access leaves out says it has none; clicking opens it.
     private func showPlugins(of bot: Bot) {
         let runner = store.device(bot.runnerID)
-        guard changed(plugins, to: [bot.id, bot.name, runner?.id, runner?.name, runner?.plugins]) else { return }
+        guard changed(plugins, to: [bot.id, bot.name, runner?.id, runner?.name, runner?.plugins, bot.permissions]) else { return }
         pluginBotID = bot.id
         var rows: [NSView] = (runner?.plugins ?? []).map { plugin in
-            let row: StatusRow = keptRow("plugin:\(plugin.id)") {
+            // A row keeps the vibrancy its state label had when it went in, so one with no
+            // access is a row of its own.
+            let off = bot.permissions?.level(of: plugin.id) == AccessLevel.none
+            let row: StatusRow = keptRow("plugin:\(plugin.id):\(off)") {
                 let row = StatusRow()
                 row.identifier = NSUserInterfaceItemIdentifier(plugin.id)
                 row.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(openPlugin(_:))))
                 return row
             }
-            row.configure(plugin: plugin)
+            row.configure(plugin: plugin, hasAccess: !off)
             row.toolTip = L("Open %@", plugin.name)
             return row
         }
@@ -592,7 +725,9 @@ final class InspectorViewController: NSViewController {
 
     @objc private func openPlugin(_ sender: NSClickGestureRecognizer) {
         guard let id = sender.view?.identifier?.rawValue, let bot = pluginBotID.flatMap(store.bot), let runner = store.device(bot.runnerID) else { return }
-        PluginViewController.present(pluginID: id, runner: runner, bot: bot, from: self)
+        var chatID: Chat.ID?
+        if case let .chat(chat) = selection { chatID = chat }
+        PluginViewController.present(pluginID: id, runner: runner, bot: bot, chatID: chatID, from: self)
     }
 
     @objc private func addBot() {
@@ -602,5 +737,26 @@ final class InspectorViewController: NSViewController {
     @objc private func openDevice(_ sender: NSClickGestureRecognizer) {
         guard let id = sender.view?.identifier?.rawValue else { return }
         onOpenDevice?(id)
+    }
+}
+
+/// A word that opens the rest of a section. A label, so its text ends on the rows' trailing text
+/// edge as a row's state does; a button's cell pads its title differently.
+private final class ViewAllLabel: NSTextField {
+    private var onPress: (() -> Void)?
+
+    convenience init(_ title: String, onPress: @escaping () -> Void) {
+        self.init(labelWithString: title)
+        self.onPress = onPress
+        font = .systemFont(ofSize: 11)
+        textColor = .secondaryLabelColor
+        setContentCompressionResistancePriority(.required, for: .horizontal)
+    }
+
+    override func mouseDown(with event: NSEvent) { onPress?() }
+    override func accessibilityRole() -> NSAccessibility.Role? { .button }
+    override func accessibilityPerformPress() -> Bool {
+        onPress?()
+        return true
     }
 }

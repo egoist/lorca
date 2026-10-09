@@ -71,6 +71,16 @@ impl Config {
         self.home.join("update.json")
     }
 
+    /// The secret a client of the local websocket sends (`ws.rs`): what `lorca serve` reads or
+    /// makes once it holds the port, and what the apps and `serve_call` read to connect.
+    pub fn serve_token_path(&self) -> PathBuf {
+        self.home.join("serve-token")
+    }
+
+    pub fn serve_token(&self) -> Option<String> {
+        std::fs::read_to_string(self.serve_token_path()).ok().map(|token| token.trim().to_string()).filter(|token| !token.is_empty())
+    }
+
     pub fn ensure_home(&self) -> anyhow::Result<()> {
         std::fs::create_dir_all(&self.home)?;
         set_private(&self.home)?;

@@ -1,8 +1,8 @@
 import AppKit
 
-/// What a DM's turns or a routine's runs may use on the bot's Runner: spending, tokens, run
-/// time, retries, and plugin calls. A turn or routine that stopped at a limit shows why on a
-/// card with Resume; raising the limit it reached and resuming goes on where it stopped.
+/// What a DM's turns, a task's runs, or a routine's runs may use on the bot's Runner: spending,
+/// tokens, run time, retries, and plugin calls. Work that stopped at a limit shows why on a card
+/// with Resume; raising the limit it reached and resuming goes on where it stopped.
 final class BudgetViewController: SheetViewController {
     private enum Field: CaseIterable {
         case usd, tokens, runtime, retries, connectorCalls
@@ -39,7 +39,8 @@ final class BudgetViewController: SheetViewController {
     private let store = AppStore.shared
     private let bot: Bot
     private let chatID: Chat.ID
-    private let routineID: Routine.ID?
+    /// What the limits are for: `chat` for each new turn in the DM, `task`, or `routine`.
+    private let scope: (kind: String, id: String)
     private var fields: [Field: NSTextField] = [:]
     private var used: [Field: NSTextField] = [:]
     private let card = BackgroundView()
@@ -53,7 +54,7 @@ final class BudgetViewController: SheetViewController {
     init(bot: Bot, chatID: Chat.ID) {
         self.bot = bot
         self.chatID = chatID
-        routineID = nil
+        scope = ("chat", chatID)
         super.init(title: L("Limits"), subtitle: L("Each turn with %@ stops when it reaches one of these.", bot.name), width: Self.width)
     }
 
@@ -61,26 +62,32 @@ final class BudgetViewController: SheetViewController {
     init(bot: Bot, chatID: Chat.ID, routine: Routine) {
         self.bot = bot
         self.chatID = chatID
-        routineID = routine.id
+        scope = ("routine", routine.id)
         super.init(title: L("Limits"), subtitle: L("All runs of %@ count toward these. When it reaches one, it waits until you resume it.", routine.name), width: Self.width)
+    }
+
+    /// A task's limits, which all of its runs count toward; `bot` is its owner.
+    init(bot: Bot, task: DurableTask) {
+        self.bot = bot
+        chatID = task.chatIds.first ?? ""
+        scope = ("task", task.id)
+        super.init(title: L("Limits"), subtitle: L("All runs of this task count toward these. When it reaches one, the task waits until you resume it."), width: Self.width)
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    /// The allowance the form edits: the routine's, or the DM's for new turns.
-    private var configured: BudgetState? {
-        routineID.map { store.budget("routine", $0, runnerID: bot.runnerID) } ?? store.budget("chat", chatID, runnerID: bot.runnerID)
-    }
+    /// The allowance the form edits: the task's or routine's, or the DM's for new turns.
+    private var configured: BudgetState? { store.budget(scope.kind, scope.id, runnerID: bot.runnerID) }
 
-    /// What stopped and waits for Resume: the routine, or the DM's newest turn.
+    /// What stopped and waits for Resume: the task or routine, or the DM's newest turn.
     private var stopped: BudgetState? {
-        if routineID != nil { return configured?.isStopped == true ? configured : nil }
+        if scope.kind != "chat" { return configured?.isStopped == true ? configured : nil }
         return store.stoppedTurn(in: chatID, runnerID: bot.runnerID)
     }
 
     /// Whose use the form shows beside the limits.
-    private var usage: BudgetState.Usage? { routineID != nil ? configured?.usage : stopped?.usage }
+    private var usage: BudgetState.Usage? { scope.kind != "chat" ? configured?.usage : stopped?.usage }
 
     override func loadView() {
         super.loadView()
@@ -268,7 +275,11 @@ final class BudgetViewController: SheetViewController {
         guard stopped.fits(limits) else {
             guard let window = view.window else { return }
             let alert = NSAlert()
-            alert.messageText = routineID == nil ? L("Resume this turn with fresh limits?") : L("Resume this routine with fresh limits?")
+            alert.messageText = switch scope.kind {
+            case "routine": L("Resume this routine with fresh limits?")
+            case "task": L("Resume this task with fresh limits?")
+            default: L("Resume this turn with fresh limits?")
+            }
             alert.informativeText = L("It already used its limits. Resuming lets it use them again in full.")
             alert.addButton(withTitle: L("Resume"))
             alert.addButton(withTitle: L("Cancel"))
@@ -282,11 +293,7 @@ final class BudgetViewController: SheetViewController {
     }
 
     private func save(_ limits: BudgetLimits) async throws {
-        if let routineID {
-            try await store.setBudget("routine", routineID, limits: limits, bot: bot, chatID: chatID)
-        } else {
-            try await store.setBudget("chat", chatID, limits: limits, bot: bot, chatID: chatID)
-        }
+        try await store.setBudget(scope.kind, scope.id, limits: limits, bot: bot, chatID: chatID)
     }
 
     /// The stopped turn takes the limits in the form too, so raising one lets it go on.

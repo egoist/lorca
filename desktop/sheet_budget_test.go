@@ -92,7 +92,7 @@ func typeInto(t *testing.T, tt *ui.Tester, label, text string) {
 	if !ok {
 		t.Fatalf("no %q in %q", label, tt.Texts())
 	}
-	tt.ClickAt(row.X+newBotLabelWidth+10+50, row.Y+row.H/2)
+	tt.ClickAt(row.X+formLabelWidth+10+50, row.Y+row.H/2)
 	tt.Key(ui.Cmd, ui.KeyA)
 	tt.Type(text)
 	tt.Frame()
@@ -196,10 +196,43 @@ func TestRenderLimits(t *testing.T) {
 	m.presentBudget(store.Bot("bot-nova"), "chat-nova", "rt-reviews")
 	renderBoth(t, tt, "limits-routine")
 	closeSheets(m)
-	m.presentPlugin("github", store.Device("dev-workbench"))
+	m.presentPlugin("github", store.Device("dev-workbench"), "bot-nova", "chat-nova")
 	renderBoth(t, tt, "limits-plugin")
 	m.presentCallLimit("github", "GitHub", store.Device("dev-workbench"), nil)
 	renderBoth(t, tt, "limits-call")
+	closeSheets(m)
+	m.selectChat("chat-scout")
+	m.presentDurableTask("chat-scout", stoppedTask())
+	renderBoth(t, tt, "limits-task")
+}
+
+// stoppedTask is a task of Researcher's its spending limit stopped, in the demo store.
+func stoppedTask() *model.DurableTask {
+	reason := "Stopped at the spending limit. Raise it in Limits to resume."
+	task := &model.DurableTask{ID: "task-demo", Revision: 3, AuthorityRunnerID: "dev-studio", OwnerBotID: "bot-scout", RunnerID: "dev-studio",
+		Goal: "Compare five setup guides", AcceptanceCriteria: []string{"A table of what each explains first"}, NextAction: "Read the guides",
+		ChatIDs: []string{"chat-scout"}, State: model.TaskBlocked, Reason: &reason}
+	usd := 2.0
+	store.DurableTasks = append(store.DurableTasks, task)
+	store.Budgets = append(store.Budgets, model.BudgetState{Kind: "task", ID: task.ID, RunnerID: "dev-studio", ChatID: "chat-scout",
+		Limits: model.BudgetLimits{MaxUSD: &usd}, Usage: model.BudgetUsage{Tokens: 410_000, APICostUSD: 2.01, RuntimeSecs: 1500, ConnectorCalls: 12},
+		State: "budget_exhausted", Reached: "usd"})
+	return task
+}
+
+func TestATaskItsLimitsStoppedResumesInLimits(t *testing.T) {
+	m := demoWindow(t)
+	m.selectChat("chat-scout")
+	tt := ui.NewTester(m.frame(m.view), 1180, 820)
+	m.presentDurableTask("chat-scout", stoppedTask())
+	settleTransitions(tt)
+	if err := tt.Click(L("Resume")); err != nil {
+		t.Fatal(err)
+	}
+	settleTransitions(tt)
+	if !tt.HasText(L("Spending limit reached")) || !tt.HasText(L("Used %@ of %@.", "$2.01", "$2.00")) {
+		t.Errorf("Resume didn't open the task's Limits: %q", tt.Texts())
+	}
 }
 
 func closeSheets(m *mainWindow) {

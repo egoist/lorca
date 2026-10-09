@@ -45,24 +45,17 @@ impl CallLimits {
     }
 }
 
-/// #71 names an account `<service-id>-<32 UUID hex>`. Legacy single-account plugins use
-/// their manifest ID. The stable ID is authoritative; display labels never affect quotas.
-fn service_id(plugin_id: &str) -> &str {
-    match plugin_id.rsplit_once('-') {
-        Some((service, account))
-            if account.len() == 32 && account.bytes().all(|b| b.is_ascii_hexdigit()) =>
-        {
-            service
-        }
-        _ => plugin_id,
-    }
+/// The service an installed account belongs to: a named account's marketplace service, or a
+/// single-account plugin's own id. Its account labels never pick a bucket.
+fn service_of(app: &App, plugin_id: &str) -> String {
+    app.plugins.lock().unwrap().get(plugin_id).map(|plugin| plugin.service_id().to_string()).unwrap_or_else(|| plugin_id.to_string())
 }
 
 fn account_key(plugin_id: &str) -> String {
     format!("account:{plugin_id}")
 }
-fn service_key(plugin_id: &str) -> String {
-    format!("service:{}", service_id(plugin_id))
+fn service_key(service: &str) -> String {
+    format!("service:{service}")
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -153,6 +146,7 @@ impl ConnectorLimits {
         plugin_id: &str,
         cancel: &CancellationToken,
     ) -> Result<CallPermit, String> {
+        let keys = [account_key(plugin_id), service_key(&service_of(app, plugin_id))];
         loop {
             if cancel.is_cancelled() {
                 return Err("Stopped before the connector call.".into());
@@ -163,7 +157,6 @@ impl ConnectorLimits {
             let wait = {
                 let mut held = app.connector_limits.state.lock().unwrap();
                 let state = app.connector_limits.load(app, &mut held)?;
-                let keys = [account_key(plugin_id), service_key(plugin_id)];
                 let now = now_secs();
                 let mut until = now;
                 let mut available = true;
@@ -288,14 +281,12 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: &Value) -> Result<Va
 
 pub fn serve(app: &Arc<App>, method: &str, params: &Value) -> Result<Value, String> {
     let plugin_id = params["plugin_id"].as_str().ok_or("missing plugin_id")?;
-    if app.plugins.lock().unwrap().get(plugin_id).is_none() {
-        return Err("Unknown installed account on this Runner.".into());
-    }
+    let service = app.plugins.lock().unwrap().get(plugin_id).map(|plugin| plugin.service_id().to_string()).ok_or("Unknown installed account on this Runner.")?;
     let mut held = app.connector_limits.state.lock().unwrap();
     let state = app.connector_limits.load(app, &mut held)?;
     let key = match params["scope"].as_str().unwrap_or("account") {
         "account" => account_key(plugin_id),
-        "service" => service_key(plugin_id),
+        "service" => service_key(&service),
         _ => return Err("scope must be account or service".into()),
     };
     if method == "connector_limits.set" {
@@ -317,7 +308,7 @@ pub fn serve(app: &Arc<App>, method: &str, params: &Value) -> Result<Value, Stri
     let limits = state.limits.get(&key).cloned().unwrap_or_default();
     let bucket = state.buckets.get(&key).cloned().unwrap_or_default();
     Ok(
-        json!({ "plugin_id": plugin_id, "service_id": service_id(plugin_id), "limits": limits, "retry_at": (bucket.cooldown_until > now_secs()).then_some(bucket.cooldown_until) }),
+        json!({ "plugin_id": plugin_id, "service_id": service, "limits": limits, "retry_at": (bucket.cooldown_until > now_secs()).then_some(bucket.cooldown_until) }),
     )
 }
 
@@ -523,15 +514,19 @@ mod tests {
     async fn named_accounts_share_the_services_concurrency_cap_without_a_fallback_account() {
         let scratch = scratch();
         let app = &scratch.0;
-        let work = format!("gmail-{}", uuid::Uuid::new_v4().simple());
-        let personal = format!("gmail-{}", uuid::Uuid::new_v4().simple());
+        let manifest = crate::plugins::Manifest::parse(&json!({ "id": "gmail", "name": "Gmail", "named_accounts": true,
+            "servers": { "api": { "type": "http", "url": "https://gmail.test/mcp", "auth": { "type": "oauth" } } } }))
+        .unwrap();
+        let work = crate::plugins::accounts::install(app, manifest.clone(), "marketplace", Some("Work")).unwrap().id;
+        let personal = crate::plugins::accounts::install(app, manifest, "marketplace", Some("Personal")).unwrap().id;
         assert_ne!(account_key(&work), account_key(&personal));
-        assert_eq!(service_key(&work), service_key(&personal));
+        assert_eq!(service_of(app, &work), "gmail");
+        assert_eq!(service_of(app, &personal), "gmail");
         {
             let mut held = app.connector_limits.state.lock().unwrap();
             let state = app.connector_limits.load(app, &mut held).unwrap();
             state.limits.insert(
-                service_key(&work),
+                service_key("gmail"),
                 CallLimits {
                     max_concurrency: 1,
                     ..CallLimits::default()
