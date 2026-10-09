@@ -151,6 +151,7 @@ export function Row({
   subtitleLines = 1,
   leading,
   action,
+  disabled,
   onLongPress,
 }: {
   title: string;
@@ -167,12 +168,20 @@ export function Row({
   chevron?: boolean;
   /// Draws the title in the tint color, as an action is; by default a row that only acts on a tap.
   action?: boolean;
+  /// An action that can't be taken yet: its title in the tertiary color, and no tap.
+  disabled?: boolean;
   onLongPress?: () => void;
 }) {
   const p = usePalette();
-  const color = destructive ? p.red : (action ?? (onPress && !chevron && !accessory)) ? p.tint : p.label;
+  const color = disabled ? p.tertiaryLabel : destructive ? p.red : (action ?? (onPress && !chevron && !accessory)) ? p.tint : p.label;
   return (
-    <Pressable onPress={onPress} onLongPress={onLongPress} disabled={!onPress && !onLongPress} style={({ pressed }) => [styles.row, pressed && { backgroundColor: p.fill }]}>
+    <Pressable
+      onPress={onPress}
+      onLongPress={onLongPress}
+      disabled={disabled || (!onPress && !onLongPress)}
+      accessibilityState={disabled ? { disabled } : undefined}
+      style={({ pressed }) => [styles.row, pressed && { backgroundColor: p.fill }]}
+    >
       {leading ?? (icon ? <Symbol name={icon} size={20} color={color} /> : null)}
       <View style={menu ? styles.rowTextWhole : styles.rowText}>
         <Text style={[styles.rowTitle, { color }]} numberOfLines={1}>

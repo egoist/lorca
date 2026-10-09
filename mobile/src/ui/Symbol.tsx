@@ -118,6 +118,10 @@ const ANDROID: Record<string, string> = {
   "arrow.uturn.backward": "undo",
   "eye.slash": "visibility_off",
   "exclamationmark.triangle": "warning",
+  // Workflows.
+  envelope: "mail",
+  "arrow.triangle.branch": "call_split",
+  "point.3.connected.trianglepath.dotted": "account_tree",
 };
 
 export interface SymbolProps {

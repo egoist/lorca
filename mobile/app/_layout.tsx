@@ -84,6 +84,7 @@ export default function RootLayout() {
               <Stack.Screen name="tasks" options={Platform.OS === "android" ? nestedSheet : { ...nestedSheet, sheetAllowedDetents: [0.5, 1], sheetGrabberVisible: true }} />
               <Stack.Screen name="new-bot" options={sheet} />
               <Stack.Screen name="new-group" options={sheet} />
+              <Stack.Screen name="workflows" options={nestedSheet} />
               <Stack.Screen name="settings" options={nestedSheet} />
               <Stack.Screen
                 name="attachment/[id]"
