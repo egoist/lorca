@@ -166,6 +166,8 @@ export interface BotPermissions {
   connections?: Record<string, { capabilities: string[]; tools?: string[] }>;
   filesystem?: "none" | "read" | "write";
   shell?: boolean;
+  /** Whether the bot's emails and Slack messages wait in the chat as drafts for the user to send; on unless false. */
+  drafts?: boolean;
 }
 
 /// A recurring task a bot runs on a schedule in its direct chat, as the roster carries it, with
@@ -278,7 +280,28 @@ export type Body =
   /// The bot asks before a plugin or shell action, or before installing a plugin (`tool` is `install`).
   /// `rule` is the rule Always allow adds, which Auto-review proposed for a shell command (`plugin_id` is `computer`);
   /// `command` is that command in full, where `summary` is its first line.
-  | { kind: "permission"; plugin_id: string; plugin_name: string; tool: string; summary: string; decision: "pending" | "allowed" | "always" | "denied" | "expired" | "dismissed" | "connected" | "failed"; reason?: string; rule?: string; command?: string; link?: string; code?: string };
+  | { kind: "permission"; plugin_id: string; plugin_name: string; tool: string; summary: string; decision: "pending" | "allowed" | "always" | "denied" | "expired" | "dismissed" | "connected" | "failed"; reason?: string; rule?: string; command?: string; link?: string; code?: string }
+  /// An email or Slack message the bot wrote in the chat, waiting for the user to send it: the
+  /// chat's view of its review item, whose `version` Send and Discard name. `note` says why it
+  /// was not sent or needs another look; `direct` is whether, with drafts off, the bot sends such
+  /// messages itself (Slack), where Gmail only keeps drafts.
+  | { kind: "draft"; review_id: string; version: number; state: ReviewState; plugin_id: string; account: string; draft: MessageDraft; note?: string; direct?: boolean };
+
+/// The parts of a message a bot wrote, as its draft card shows and edits them.
+export interface MessageDraft {
+  /** `email` or `slack`. */
+  kind: string;
+  /** Email addresses, or the Slack channel or person. */
+  to: string[];
+  cc?: string[];
+  bcc?: string[];
+  subject?: string;
+  body: string;
+  /** The files it carries; an edit keeps the ones it still names. */
+  attachments?: { name: string; size: number }[];
+  /** What it answers: an email's id or a Slack thread. */
+  reply?: string;
+}
 
 /// Where a bash call's command stands: Auto-review checking it, the question it asks, the command
 /// running in its terminal, what the command asks, and that it ended. While it asks, its card takes
@@ -931,6 +954,8 @@ export interface ReviewItem {
   state: ReviewState;
   outcome?: { summary: string; result?: { text?: string } | null; message_id: string } | null;
   created_at: number;
+  /** An email or Slack message: its draft card in the chat is where it is decided. */
+  is_message?: boolean;
 }
 
 export type ReviewPayload =
@@ -1205,4 +1230,11 @@ export function skillScopeOf(chat: ChatMeta): PlaybookScope | undefined {
 /// What the core answers when a skill being saved changed on another Device first.
 export function isStaleSkill(error: string): boolean {
   return error.includes("changed since");
+}
+
+/// Whether two drafts say the same: an unchanged card sends without an edit.
+export function sameDraft(a: MessageDraft, b: MessageDraft): boolean {
+  const list = (values?: string[]) => (values ?? []).join("\n");
+  const files = (draft: MessageDraft) => (draft.attachments ?? []).map((file) => file.name).join("\n");
+  return list(a.to) === list(b.to) && list(a.cc) === list(b.cc) && list(a.bcc) === list(b.bcc) && (a.subject ?? "") === (b.subject ?? "") && a.body === b.body && files(a) === files(b);
 }

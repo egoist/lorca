@@ -10,7 +10,7 @@ import { t } from "../i18n";
 import { exactAnswer, ExactNumber, ExactObject, stringifyExact } from "./exactJson";
 import { reviewEditParams } from "./reviewEdit";
 import { hostFacts } from "./host";
-import { orderProjectEntries, providerConnectMethod, withReviewModel, type PlaybookContent, type PlaybookRecord, type PlaybookScope, type ProjectContext, type ProjectEntry, type ProjectKind, type ProjectSource, type Attachment, type AutoReview, type Bot, type BrowserProfile, type BudgetLimits, type BudgetState, type CallLimits, type Chat, type ChatMeta, type ChatSearchResults, type ChatUsage, type CustomAPI, type CustomModel, type DurableTask, type Message, type ReviewItem, type PluginDetail, type PluginStatus, type ProviderKind, type ProviderStatus } from "./model";
+import { orderProjectEntries, providerConnectMethod, withReviewModel, type PlaybookContent, type PlaybookRecord, type PlaybookScope, type ProjectContext, type ProjectEntry, type ProjectKind, type ProjectSource, type Attachment, type AutoReview, type Bot, type BrowserProfile, type BudgetLimits, type BudgetState, type CallLimits, type Chat, type ChatMeta, type ChatSearchResults, type ChatUsage, type CustomAPI, type CustomModel, type DurableTask, type Message, type MessageDraft, type ReviewItem, type PluginDetail, sameDraft, type PluginStatus, type ProviderKind, type ProviderStatus } from "./model";
 import { coreHome, loadPrefs, pathOf, wipePrefs } from "./prefs";
 import type { SharedLink, TemplateContents, TemplateImportPreview, TemplateSelection } from "./templates";
 import { clearPushes, installPushHandlers, registerForPushes } from "./push";
@@ -351,13 +351,62 @@ class Engine {
     return this.reviewRequest("reviews.approve", { id: shown.id, expected_version: shown.version });
   }
 
+  /// Sends a draft card's message as `fields` shows it: an edit first, as the review item's next
+  /// version, then that version approved, which the bot's Runner sends. `always` then turns
+  /// drafts off for the bot, so its next messages go out directly. Rejects with why it was not
+  /// sent, with the card back as it was.
+  async sendDraft(chatId: string, messageId: string, fields: MessageDraft, always: boolean) {
+    const message = chatById(chatId)?.messages.find((m) => m.id === messageId);
+    if (!message || message.body.kind !== "draft") return;
+    const card = message.body;
+    const sending: Message = { ...message, body: { ...card, state: "approved", draft: fields } };
+    this.replaceMessage(chatId, message, sending);
+    try {
+      let version = card.version;
+      if (!sameDraft(fields, card.draft)) {
+        const edited = await this.reviewRequest("reviews.edit", { id: card.review_id, expected_version: version, message: fields });
+        version = edited.version;
+      }
+      await this.reviewRequest("reviews.approve", { id: card.review_id, expected_version: version });
+    } catch (error) {
+      this.replaceMessage(chatId, sending, message);
+      throw error;
+    }
+    if (always && message.author.kind === "bot") {
+      const botId = message.author.bot_id;
+      useStore.setState((s) => ({ bots: s.bots.map((bot) => (bot.id === botId ? { ...bot, permissions: { ...bot.permissions, drafts: false } } : bot)) }));
+      await core.request("bots.update", { id: botId, drafts: false });
+    }
+  }
+
+  /// Discards a draft card's message: nothing is sent.
+  async discardDraft(chatId: string, messageId: string) {
+    const message = chatById(chatId)?.messages.find((m) => m.id === messageId);
+    if (!message || message.body.kind !== "draft") return;
+    const discarded: Message = { ...message, body: { ...message.body, state: "rejected" } };
+    this.replaceMessage(chatId, message, discarded);
+    try {
+      await this.reviewRequest("reviews.reject", { id: message.body.review_id, expected_version: message.body.version });
+    } catch (error) {
+      this.replaceMessage(chatId, discarded, message);
+      throw error;
+    }
+  }
+
+  /// Puts `to` where `from` is in the chat, unless the core changed the message meanwhile.
+  private replaceMessage(chatId: string, from: Message, to: Message) {
+    useStore.setState((s) => ({
+      chats: s.chats.map((c) => (c.id === chatId ? { ...c, messages: c.messages.map((m) => (m === from ? to : m)) } : c)),
+    }));
+  }
+
   rejectReview(item: ReviewItem): Promise<ReviewItem> {
     return this.reviewRequest("reviews.reject", { id: item.id, expected_version: item.version });
   }
 
   /// A decision goes to the item's Runner through the core; the item it answers with is kept
   /// unless a newer revision arrived first.
-  private async reviewRequest(method: string, params: { id: string; expected_version: number }): Promise<ReviewItem> {
+  private async reviewRequest(method: string, params: { id: string; expected_version: number; message?: MessageDraft }): Promise<ReviewItem> {
     const item = await core.request<ReviewItem>(method, params);
     acceptReview(item);
     return item;

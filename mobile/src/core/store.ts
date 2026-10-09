@@ -584,11 +584,11 @@ export function acceptReview(item: ReviewItem) {
 }
 
 /// What the chat's bots left for the user that waits or runs, oldest first. How each ended stays
-/// in the chat.
+/// in the chat, and a message waits on its draft card there instead.
 export function useOpenReviews(chatId: string | undefined): ReviewItem[] {
   const reviews = useStore((s) => s.reviews);
   return useMemo(
-    () => (chatId ? reviews.filter((item) => item.origin.chat_id === chatId && reviewIsOpen(item)).sort((a, b) => a.created_at - b.created_at) : []),
+    () => (chatId ? reviews.filter((item) => item.origin.chat_id === chatId && reviewIsOpen(item) && !item.is_message).sort((a, b) => a.created_at - b.created_at) : []),
     [reviews, chatId],
   );
 }

@@ -1,13 +1,14 @@
 // A bot's Access, slid in from its Access row in Details, or opened from a "needs more access"
 // card: the plugins on its Runner, each with how far the bot may use it and a screen of its own
-// for that and its tools, then Files and Shell commands under the Runner's name. Each change
-// saves at once. The desktop apps' Access sheet holds the same.
+// for that and its tools, whether its messages wait as drafts, then Files and Shell commands under
+// the Runner's name. Each change saves at once. The desktop apps' Access sheet holds the same.
 
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect } from "react";
 import { ScrollView, StyleSheet } from "react-native";
 import {
   chosenTools,
+  draftsOn,
   filesLevel,
   levelTitle,
   loadAccessCatalog,
@@ -78,6 +79,9 @@ export default function AccessScreen() {
             ))}
           </Section>
         )}
+        <Section title={t("Messages")} footer={t("Emails and Slack messages wait in the chat for you to send. Off, {name} sends them itself where the service can.", { name: bot.name })}>
+          <ToggleRow title={t("Draft first")} value={draftsOn(policy)} onValueChange={(on) => void save({ ...policy, filesystem: filesLevel(policy), shell: shellOn(policy), drafts: on })} />
+        </Section>
         {/* Files and shell commands are the Runner's, so its section goes by the Runner's name. */}
         <Section title={runner?.name ?? t("Runner")} footer={t("Shell commands run as you on {runner} and can reach anything you can there.", { runner: runnerName })}>
           <Row
