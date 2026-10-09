@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 
-mock.module("../i18n", () => ({ t: (key: string) => (key === ", |list" ? ", " : key) }));
+mock.module("../i18n", () => ({ t: (key: string) => key, tc: (key: string) => key }));
 const { channelChats, channelProblem, listenSummary } = await import("./channels");
 
 describe("channels", () => {

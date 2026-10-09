@@ -6,6 +6,7 @@
 
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { ScrollView, StyleSheet, Text, View } from "react-native";
+import { useShallow } from "zustand/react/shallow";
 import { chatTitle, engine } from "../../../src/core/engine";
 import { useStore } from "../../../src/core/store";
 import { t, useLanguage } from "../../../src/i18n";
@@ -24,7 +25,7 @@ export default function ChannelScreen() {
   const channel = runner?.channels?.find((c) => c.id === id);
   const bot = useStore((s) => s.bots.find((b) => b.id === channel?.bot_id));
   const account = runner?.plugins?.find((plugin) => plugin.id === channel?.account_id);
-  const conversations = useStore((s) => s.chats.filter((c) => c.channel?.channel_id === id));
+  const conversations = useStore(useShallow((s) => s.chats.filter((c) => c.channel?.channel_id === id)));
   if (!channel) return null;
   const kept = [...conversations].sort((a, b) => (b.messages.at(-1)?.created_at ?? b.created_at) - (a.messages.at(-1)?.created_at ?? a.created_at)).slice(0, 6);
   const held = channel.state === "held";
@@ -61,8 +62,8 @@ export default function ChannelScreen() {
         </Section>
         <Section>
           <Row title={t("Account")} detail={account?.name ?? serviceName(channel.service)} />
-          <Row title={t("Chats")} detail={channelChats(channel)} />
-          <Row title={t("Messages")} detail={listenSummary(channel.listen)} />
+          <Row title={t("Chats")} subtitle={channelChats(channel)} subtitleLines={3} />
+          <Row title={t("Messages")} subtitle={listenSummary(channel.listen)} subtitleLines={2} />
         </Section>
         <Section title={t("Task")}>
           <View style={styles.task}>
