@@ -12,7 +12,6 @@ export const zh: Record<string, string> = {
   "Decision": "决定",
   "Changed": "变化",
   "Next": "下一步",
-  "Review": "待审阅",
   "Blocker": "受阻",
   "Commitment": "承诺",
   "Change": "更改",

@@ -108,7 +108,6 @@ const ANDROID: Record<string, string> = {
   "flame.fill": "local_fire_department",
   "puzzlepiece.extension": "extension",
   "doc.text.magnifyingglass": "pageview",
-  "arrow.triangle.2.circlepath": "sync",
 };
 
 export interface SymbolProps {

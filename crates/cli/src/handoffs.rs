@@ -1025,6 +1025,33 @@ fn route_report(app: &Arc<App>, id: &str) -> Result<(), String> {
     }
     let message = result_message(request, report);
     app.upsert_message(message.clone(), true);
+    // A blocked or failed attempt waits on the requesting bot, or on the user through it, until a
+    // follow-up or a cancellation; its continuation already wakes that bot.
+    let prefix = format!("handoff:{}:", request.handoff_id);
+    if matches!(report.status, HandoffStatus::Blocked | HandoffStatus::Failed) {
+        let target = crate::runtime::name_of(app, &request.target_bot_id);
+        let from = crate::runtime::name_of(app, &request.from_bot_id);
+        let summary = report.summary.trim();
+        crate::attention::raise(
+            app,
+            &prefix,
+            &request.job_id,
+            crate::attention::Report {
+                key: String::new(),
+                category: crate::attention::Category::Blocker,
+                title: if report.status == HandoffStatus::Blocked { format!("{target} is blocked") } else { format!("{target} couldn’t finish") },
+                summary: if summary.is_empty() { format!("{target} sent no details.") } else { summary.into() },
+                next_action: format!("Read {target}’s report and tell {from} how to go on."),
+                source: attention_source(app, request),
+                coordinator_bot_id: Some(request.from_bot_id.clone()),
+                urgent: false,
+                quiet: true,
+            },
+            Some(&request.target_bot_id),
+        );
+    } else {
+        crate::attention::settle(app, &attention_source(app, request), &prefix);
+    }
     if attempt.result_delivery == ResultDelivery::Pending
         && app
             .bot(&request.from_bot_id)
@@ -1040,6 +1067,17 @@ fn route_report(app: &Arc<App>, id: &str) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Where a handoff's attention item points: the requesting chat, its task while this Device has
+/// it, and the attempt's report.
+fn attention_source(app: &App, request: &HandoffRequest) -> crate::attention::Source {
+    crate::attention::Source {
+        chat_id: request.source_chat_id.clone(),
+        task_id: request.task_id.clone().filter(|id| crate::tasks::get(app, id).is_ok()),
+        message_id: Some(format!("report-{}", request.job_id)),
+        review_id: None,
+    }
 }
 
 /// A report for a task's handoff joins the task's evidence as the report message, through the
@@ -1109,7 +1147,10 @@ pub fn follow_up(
     request.message = message.trim().into();
     request.created_at = now_secs();
     drop(_guard);
-    admit(app, request, Some(expected_job_id))
+    let source = attention_source(app, &request);
+    let admitted = admit(app, request, Some(expected_job_id))?;
+    crate::attention::settle(app, &source, &format!("handoff:{id}:"));
+    Ok(admitted)
 }
 
 pub fn cancel(
@@ -1136,6 +1177,7 @@ pub fn cancel(
             return Err("Cancellation needs a reason of at most 32 KiB".into());
         }
         if attempt.outcome().is_some_and(|r| r.status.terminal()) {
+            crate::attention::settle(app, &attention_source(app, &request), &format!("handoff:{id}:"));
             return Ok(record.view());
         }
         let report = HandoffReport {

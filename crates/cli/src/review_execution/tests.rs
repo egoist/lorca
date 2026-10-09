@@ -515,3 +515,28 @@ async fn an_item_staged_for_a_task_records_its_outcome_there() {
         "payload": { "kind": "draft", "text": "x" }, "target": { "account": "a", "resource": "b" }, "rationale": "c" }), &bot.runner_id).await;
     assert!(unknown.unwrap_err().contains("no task"));
 }
+
+#[tokio::test]
+async fn a_pending_item_waits_in_attention_until_it_is_decided() {
+    let scratch = scratch();
+    let app = &scratch.app;
+    let attention = || crate::attention::view(app).unwrap().items;
+    let first = draft(app).await;
+    let items = attention();
+    assert_eq!(items.len(), 1);
+    assert_eq!(
+        (items[0].category, items[0].title.as_str(), items[0].summary.as_str()),
+        (crate::attention::Category::Review, "Draft: test resource", "Send the reviewed draft")
+    );
+    assert_eq!(items[0].sources[0].review_id.as_deref(), Some(first.id.as_str()));
+    approve(app, &first).await;
+    assert!(attention().is_empty(), "an approval settles it");
+    // An edit after the approval needs approving again: it is back, under its new version.
+    let edited = mutate(app, "reviews.edit", &json!({ "id": first.id, "expected_version": first.version,
+        "payload": { "kind": "draft", "text": "corrected draft" } }), &first.runner_id).await.unwrap();
+    assert_eq!(attention().len(), 1);
+    queue::serve(app, "reviews.reject", &json!({ "id": edited.id, "expected_version": edited.version }), &edited.runner_id)
+        .await
+        .unwrap();
+    assert!(attention().is_empty());
+}

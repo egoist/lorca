@@ -7,7 +7,7 @@ import { MenuView, type MenuAction, type MenuComponentRef } from "@expo/ui/commu
 import * as Haptics from "expo-haptics";
 import { Stack, useRouter } from "expo-router";
 import { useRef, useState } from "react";
-import { Alert, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Alert, Platform, ScrollView, StyleSheet, Text, View } from "react-native";
 import { request } from "../modules/lorca-core";
 import type { AttentionBrief, AttentionItem } from "../src/core/attention";
 import { chatTitle } from "../src/core/engine";
@@ -17,6 +17,7 @@ import { t, useLanguage } from "../src/i18n";
 import { BotAvatar } from "../src/ui/Avatar";
 import { stamp } from "../src/ui/format";
 import { Section } from "../src/ui/forms";
+import { Pressable } from "../src/ui/Pressable";
 import { AndroidIcons, CloseToolbar } from "../src/ui/navigation";
 import { Symbol } from "../src/ui/Symbol";
 import { Font, usePalette } from "../src/ui/theme";

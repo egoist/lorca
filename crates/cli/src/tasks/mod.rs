@@ -703,6 +703,48 @@ fn commit(
 
 fn changed(app: &App, task: &Task) {
     app.emit(crate::events::Event::TaskChanged { task: task.clone() });
+    if app.this_device_id().as_deref() == Some(task.authority_runner_id.as_str()) {
+        attention(app, task);
+    }
+}
+
+/// A blocked task, or one whose result waits for review, shows in Attention until it moves on.
+/// The task's authority raises and settles it, once for every Device.
+fn attention(app: &App, task: &Task) {
+    use crate::attention::{raise, settle, Category, Report, Source};
+    let Some(chat_id) = task.chat_ids.iter().find(|id| app.chat(id).is_some()) else { return };
+    let source = Source { chat_id: chat_id.clone(), task_id: Some(task.id.clone()), message_id: None, review_id: None };
+    let (blocked, review) = ("task:blocked:", "task:review:");
+    if task.state != TaskState::Blocked {
+        settle(app, &source, blocked);
+    }
+    if task.state != TaskState::AwaitingReview {
+        settle(app, &source, review);
+    }
+    let goal = task.goal.lines().map(str::trim).find(|line| !line.is_empty()).unwrap_or("A task").to_string();
+    let owner = crate::runtime::name_of(app, &task.owner_bot_id);
+    let report = |category, summary: Option<&String>, fallback: String, next_action: String| Report {
+        key: String::new(),
+        category,
+        title: goal.clone(),
+        summary: summary.map(|text| text.trim()).filter(|text| !text.is_empty()).map(str::to_string).unwrap_or(fallback),
+        next_action,
+        source: source.clone(),
+        coordinator_bot_id: None,
+        urgent: false,
+        quiet: true,
+    };
+    let revision = format!("r{}", task.revision);
+    match task.state {
+        TaskState::Blocked => {
+            let next = Some(task.next_action.trim()).filter(|text| !text.is_empty()).map(str::to_string).unwrap_or_else(|| format!("Tell {owner} how to go on."));
+            raise(app, blocked, &revision, report(Category::Blocker, task.reason.as_ref(), format!("{owner} is blocked."), next), Some(&task.owner_bot_id));
+        }
+        TaskState::AwaitingReview => {
+            raise(app, review, &revision, report(Category::Review, task.result.as_ref(), format!("{owner} finished and waits for your review."), "Check the result and accept it or send it back.".into()), Some(&task.owner_bot_id));
+        }
+        _ => {}
+    }
 }
 
 /// Applies a replica snapshot. The authority never accepts its own record from the relay;

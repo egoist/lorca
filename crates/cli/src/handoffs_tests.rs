@@ -324,6 +324,12 @@ async fn explicit_blocker_reports_automatically_and_automatic_finish_preserves_i
         1
     );
     assert!(!begin_job(&f.target, &job).unwrap());
+    // It waits in the requester's Attention until the requester follows up.
+    let items = crate::attention::view(&f.source).unwrap().items;
+    assert_eq!(items.len(), 1);
+    assert_eq!((items[0].category, items[0].summary.as_str(), items[0].coordinator_bot_id.as_str()), (crate::attention::Category::Blocker, "Need the repository URL", f.chef.id.as_str()));
+    follow_up(&f.source, &f.chef.id, &request.handoff_id, &request.job_id, "Use repository egoist/lorca").unwrap();
+    assert!(crate::attention::view(&f.source).unwrap().items.is_empty());
 }
 
 #[tokio::test]

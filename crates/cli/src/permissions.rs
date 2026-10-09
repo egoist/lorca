@@ -404,7 +404,7 @@ mod tests {
         for tool in ["bash", "bash_input", "bash_output", "write", "edit"] {
             assert!(policy.local_denial(tool).is_some(), "{tool}");
         }
-        for tool in ["read", "grep", "find", "ls", "codemode", "memory_update", "message_bot"] {
+        for tool in ["read", "grep", "find", "ls", "codemode", "memory_update", "message_bot", "attention"] {
             assert_eq!(policy.local_denial(tool), None, "{tool}");
         }
         let none = BotPermissions { filesystem: FilesystemAccess::None, ..Default::default() };

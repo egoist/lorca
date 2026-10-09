@@ -354,10 +354,29 @@ pub fn coordinator(app: &App, chat_id: &str) -> Option<String> {
 /// actor is the reporting bot's id; a user API call uses None. No work is executed here.
 pub fn report(
     app: &Arc<App>,
-    mut report: Report,
+    report: Report,
     actor: Option<&str>,
     hops: u32,
 ) -> Result<Item, String> {
+    let quiet = report.quiet;
+    let (item, significant) = record(app, report, actor)?;
+    if significant && !quiet {
+        if item.urgent {
+            post_item_alert(app, &item, actor)
+        }
+        if let Some(actor) = actor.filter(|id| *id != item.coordinator_bot_id) {
+            wake_coordinator(app, &item, actor, hops)
+        }
+    }
+    Ok(view(app)?
+        .items
+        .into_iter()
+        .find(|current| current.id == item.id)
+        .unwrap_or(item))
+}
+
+/// Saves a reporter's observation, and says whether it changed what the item says.
+fn record(app: &App, mut report: Report, actor: Option<&str>) -> Result<(Item, bool), String> {
     report.key = text(&report.key, "key", 200)?;
     report.title = text(&report.title, "title", 200)?;
     report.summary = text(&report.summary, "summary", 4000)?;
@@ -366,10 +385,9 @@ pub fn report(
         return Err("Source chat is gone".into());
     }
     if let Some(id) = &report.source.task_id {
-        let uuid = id
-            .strip_prefix("task-")
-            .ok_or("Use a canonical task-UUID from tasks.get")?;
-        uuid::Uuid::parse_str(uuid).map_err(|_| "Use a canonical task-UUID from tasks.get")?;
+        if crate::tasks::get(app, id).is_err() {
+            return Err("Use the id of an existing task from tasks.get".into());
+        }
     }
     if let Some(actor) = actor {
         if app.bot(actor).is_none() {
@@ -426,24 +444,51 @@ pub fn report(
     };
     // Repeated reports from one bot are no-ops, including their revision and relay write.
     if known.iter().any(|known| known.id == record.id && matches!(&known.content, Content::Observation { item: previous } if previous.title == item.title && previous.summary == item.summary && previous.next_action == item.next_action && previous.category == item.category && previous.urgent == item.urgent && previous.sources == item.sources && previous.coordinator_bot_id == item.coordinator_bot_id)) {
-        return Ok(old.unwrap_or(item));
+        return Ok((old.unwrap_or(item), false));
     }
     save(app, &record)?;
     drop(_write);
     changed(app);
-    if significant && !report.quiet {
-        if item.urgent {
-            post_item_alert(app, &item, actor)
-        }
-        if let Some(actor) = actor.filter(|id| *id != item.coordinator_bot_id) {
-            wake_coordinator(app, &item, actor, hops)
+    Ok((item, significant))
+}
+
+/// What a producer (a durable task, a review, a handoff) has the user look at: one active item
+/// under a topic `prefix` for the source's task or chat, reported again with fresh words while it
+/// lasts, and a new one under `prefix` + `fresh` once the last was resolved. It is quiet: the
+/// producer already tells the bots and the user in its own way, so the item only joins the list
+/// and the coordinator's prompt. Words past the limits are cut, and a refusal (a deleted chat or
+/// bot) only logs.
+pub fn raise(app: &App, prefix: &str, fresh: &str, mut report: Report, actor: Option<&str>) {
+    report.key = active(app, &report.source, prefix)
+        .first()
+        .map(|item| item.key.clone())
+        .unwrap_or_else(|| format!("{prefix}{fresh}"));
+    for (text, limit) in [(&mut report.title, 200), (&mut report.summary, 4000), (&mut report.next_action, 1000)] {
+        *text = text.trim().chars().take(limit).collect();
+    }
+    report.quiet = true;
+    if let Err(error) = record(app, report, actor) {
+        tracing::debug!(%error, prefix, "raising attention");
+    }
+}
+
+/// Resolves the active items a producer raised under `prefix` for this source's task or chat, as
+/// the work moves on: a review decided, a task unblocked or done, a handoff followed up.
+pub fn settle(app: &App, source: &Source, prefix: &str) {
+    for item in active(app, source, prefix) {
+        if let Err(error) = resolve(app, &item.id, None, None) {
+            tracing::warn!(%error, prefix, "settling attention");
         }
     }
-    Ok(view(app)?
-        .items
+}
+
+fn active(app: &App, source: &Source, prefix: &str) -> Vec<Item> {
+    view(app)
+        .map(|view| view.items)
+        .unwrap_or_default()
         .into_iter()
-        .find(|current| current.id == item_id)
-        .unwrap_or(item))
+        .filter(|item| item.key.starts_with(prefix) && item.id == item_id(source, &item.key))
+        .collect()
 }
 
 /// Resolution changes this projection only: tasks and review outcomes keep their own CAS.
@@ -552,6 +597,7 @@ fn wake_coordinator(app: &Arc<App>, item: &Item, reporter: &str, hops: u32) {
             setup: None,
             task_id: None,
             task_context: None,
+            handoff: None,
             created_at: now_secs(),
         },
     );
@@ -870,6 +916,7 @@ mod tests {
         scout: Bot,
         chef_chat: String,
         scout_chat: String,
+        task_id: String,
     }
     impl Account {
         fn new() -> Self {
@@ -887,6 +934,17 @@ mod tests {
             scout.id = "scout".into();
             scout.name = "Scout".into();
             let (scout, dm) = app.create_bot_with_dm(scout, None).unwrap();
+            // A durable task the reports link, made on a runtime of its own so a #[tokio::test]
+            // can build the account too.
+            let params = json!({"request_id":"attention-task","owner_bot_id":scout.id,"chat_ids":[dm.meta.id],
+                "goal":"Close the contract","acceptance_criteria":["Signed"],"next_action":"Review the draft"});
+            let task_app = app.clone();
+            let task_id = std::thread::spawn(move || {
+                let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+                runtime.block_on(crate::tasks::dispatch(&task_app, "tasks.create", params)).unwrap()["id"].as_str().unwrap().to_string()
+            })
+            .join()
+            .unwrap();
             Self {
                 app,
                 home,
@@ -894,6 +952,7 @@ mod tests {
                 scout,
                 chef_chat,
                 scout_chat: dm.meta.id,
+                task_id,
             }
         }
         fn report(&self) -> Report {
@@ -905,7 +964,7 @@ mod tests {
                 next_action: "Review the draft".into(),
                 source: Source {
                     chat_id: self.scout_chat.clone(),
-                    task_id: Some("task-08a3fb26-3a14-4084-ae89-10f7d4028c47".into()),
+                    task_id: Some(self.task_id.clone()),
                     message_id: None,
                     review_id: Some("review-contract".into()),
                 },

@@ -302,7 +302,41 @@ pub(crate) fn save(
         item: item.clone(),
         change,
     });
+    attention(app, item);
     Ok(())
+}
+
+/// A pending item waits on the user's decision, so it shows in Attention until it is decided.
+/// An item invalidated after approval is pending again under a new version, a new topic.
+fn attention(app: &App, item: &ReviewItem) {
+    let source = crate::attention::Source {
+        chat_id: item.origin.chat_id.clone(),
+        task_id: item.origin.task_id.clone().filter(|id| crate::tasks::get(app, id).is_ok()),
+        message_id: Some(item.message_id()),
+        review_id: Some(item.id.clone()),
+    };
+    let prefix = format!("review:{}:", item.id);
+    if item.state != ReviewState::Pending {
+        return crate::attention::settle(app, &source, &prefix);
+    }
+    let rationale = item.rationale.trim();
+    crate::attention::raise(
+        app,
+        &prefix,
+        &format!("v{}", item.version),
+        crate::attention::Report {
+            key: String::new(),
+            category: crate::attention::Category::Review,
+            title: item.summary(),
+            summary: if rationale.is_empty() { format!("{} asks before it goes ahead.", crate::runtime::name_of(app, &item.bot_id)) } else { rationale.into() },
+            next_action: "Approve or reject it in its chat.".into(),
+            source,
+            coordinator_bot_id: None,
+            urgent: false,
+            quiet: true,
+        },
+        Some(&item.bot_id),
+    );
 }
 
 /// Projects the newest status into the originating chat under a stable message id, where the
