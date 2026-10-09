@@ -155,7 +155,17 @@ export interface Bot {
   /** How much the model thinks: off, minimal, low, medium, high, xhigh, max. */
   thinking?: string;
   workdir?: string;
+  /** The user's Access for it (`src/core/access.ts`); none is full access. */
+  permissions?: BotPermissions;
   created_at: number;
+}
+
+/// A bot's Access, as the CLI keeps it in the encrypted roster: without `connections` every plugin
+/// on the Runner, else only those it lists; files `write` and shell on unless they say otherwise.
+export interface BotPermissions {
+  connections?: Record<string, { capabilities: string[]; tools?: string[] }>;
+  filesystem?: "none" | "read" | "write";
+  shell?: boolean;
 }
 
 /// A recurring task a bot runs on a schedule in its direct chat, as the roster carries it, with

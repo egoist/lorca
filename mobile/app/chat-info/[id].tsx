@@ -27,6 +27,7 @@ import { countsLine, isEmpty, targetName } from "../../src/ui/feedback";
 import { isStopped, limitsSummary, stoppedDetail, stoppedLabel } from "../../src/ui/limits";
 import { accentColor, Font } from "../../src/ui/theme";
 import { sharedLinkFor } from "../../src/core/templates";
+import { accessSummary, pluginLevel } from "../../src/core/access";
 
 export default function ChatInfoScreen() {
   useLanguage();
@@ -189,6 +190,7 @@ export default function ChatInfoScreen() {
         <Section>
           <FieldRow label={t("Name")} value={botName} onChangeText={setBotName} onBlur={() => void commitBotName()} autoCapitalize="words" returnKeyType="done" submitBehavior="blurAndSubmit" textAlign="right" />
           <Row title={t("Description")} subtitle={bot.description || undefined} subtitleLines={2} chevron onPress={() => router.push(`/chat-info/description/${bot.id}`)} />
+          <Row title={t("Access")} detail={accessSummary(bot.permissions)} chevron onPress={() => router.push(`/chat-info/access/${bot.id}`)} />
         </Section>
       )}
 
@@ -432,15 +434,16 @@ export default function ChatInfoScreen() {
       )}
 
       {bot && runner && (
-        <Section title={t("Plugins")} footer={(runner.plugins ?? []).length === 0 ? t("No plugins on {runner} yet. Add one from the desktop app, or ask {bot} to find one.", { runner: runner.name, bot: bot.name }) : t("Installed on {runner}, for {bot} and every other bot there.", { runner: runner.name, bot: bot.name })}>
+        <Section title={t("Plugins")} footer={(runner.plugins ?? []).length === 0 ? t("No plugins on {runner} yet. Add one from the desktop app, or ask {bot} to find one.", { runner: runner.name, bot: bot.name }) : t("Installed on {runner}. Access says which ones {bot} may use.", { runner: runner.name, bot: bot.name })}>
           {(runner.plugins ?? []).map((plugin) => (
             // A plugin opens its screen, its state and call limit; a named account's (Gmail · Work)
-            // has its name and sign-in, and its name already says which.
+            // has its name and sign-in, and its name already says which. One the bot's Access
+            // leaves out says it has none.
             plugin.account_name ? (
               <Row
                 key={plugin.id}
                 title={plugin.name}
-                detail={pluginStateWord(plugin)}
+                detail={pluginLevel(bot.permissions, plugin.id) === "none" ? t("No access") : pluginStateWord(plugin)}
                 icon={plugin.icon || "puzzlepiece.extension"}
                 chevron
                 onPress={() => router.push({ pathname: "/chat-info/account/[id]", params: { id: plugin.id, runner: runner.id } })}
@@ -451,6 +454,7 @@ export default function ChatInfoScreen() {
                 key={plugin.id}
                 title={plugin.name}
                 subtitle={plugin.state === "ready" ? plugin.description : plugin.detail}
+                detail={pluginLevel(bot.permissions, plugin.id) === "none" ? t("No access") : undefined}
                 icon={plugin.icon || "puzzlepiece.extension"}
                 chevron
                 onPress={() => router.push({ pathname: "/chat-info/browser/[id]", params: { id: bot.id, chat: chat.id } })}
@@ -460,6 +464,7 @@ export default function ChatInfoScreen() {
                 key={plugin.id}
                 title={plugin.name}
                 subtitle={plugin.state === "ready" ? plugin.description : plugin.detail}
+                detail={pluginLevel(bot.permissions, plugin.id) === "none" ? t("No access") : undefined}
                 icon={plugin.icon || "puzzlepiece.extension"}
                 chevron
                 onPress={() => router.push({ pathname: "/chat-info/account/[id]", params: { id: plugin.id, runner: runner.id } })}
