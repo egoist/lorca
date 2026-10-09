@@ -39,10 +39,20 @@ pub(crate) fn call(name: &str, detail: &str) -> String {
     }
 }
 
-/// The most telling input of one of Claude Code's tools.
-pub(crate) fn claude_detail(name: &str, input: &Value) -> String {
+/// A path as the transcript shows it: from the folder the agent works in when it is inside it,
+/// else from the home folder.
+pub(crate) fn path(path: &str, folder: &std::path::Path) -> String {
+    let full = std::path::Path::new(path);
+    match full.strip_prefix(folder) {
+        Ok(rest) if !rest.as_os_str().is_empty() => rest.display().to_string(),
+        _ => super::home_relative(full),
+    }
+}
+
+/// The most telling input of one of Claude Code's tools, its paths from `folder`.
+pub(crate) fn claude_detail(name: &str, input: &Value, folder: &std::path::Path) -> String {
     let field = |key: &str| input.get(key).and_then(Value::as_str).map(str::to_string);
-    let path = |key: &str| field(key).map(|path| super::home_relative(std::path::Path::new(&path)));
+    let path = |key: &str| field(key).map(|path| self::path(&path, folder));
     match name {
         "Bash" => field("command"),
         "Read" | "Write" | "Edit" | "MultiEdit" => path("file_path"),
@@ -97,8 +107,11 @@ mod tests {
         assert_eq!(sent("Fix the login bug\nand add a test"), vec!["> Fix the login bug", "  and add a test"]);
         assert_eq!(call("Bash", "git status\n  --short"), "● Bash(git status --short)");
         assert_eq!(call("TodoWrite", ""), "● TodoWrite");
-        assert_eq!(claude_detail("Grep", &json!({ "pattern": "fn main" })), "fn main");
-        assert_eq!(claude_detail("mcp__github__create_issue", &json!({ "title": "Crash", "body": "x".repeat(500) })), "Crash");
+        let folder = std::path::Path::new("/work/shop");
+        assert_eq!(claude_detail("Grep", &json!({ "pattern": "fn main" }), folder), "fn main");
+        assert_eq!(claude_detail("Write", &json!({ "file_path": "/work/shop/src/login.rs" }), folder), "src/login.rs");
+        assert_eq!(claude_detail("Read", &json!({ "file_path": "/etc/hosts" }), folder), "/etc/hosts");
+        assert_eq!(claude_detail("mcp__github__create_issue", &json!({ "title": "Crash", "body": "x".repeat(500) }), folder), "Crash");
         let lines = result("a\nb\n\nc\nd\ne\nf", false);
         assert_eq!(lines, vec!["  ⎿ a", "    b", "    c", "    d", "    … +2 lines"]);
         assert_eq!(result("", true), vec!["  ⎿ Error"]);

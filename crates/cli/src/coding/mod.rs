@@ -156,6 +156,7 @@ impl Transcript {
     fn tail(&self, count: usize) -> Vec<String> {
         match &self.screen {
             Some(screen) => {
+                let screen = screen::body(screen);
                 let lines: Vec<&str> = screen.lines().collect();
                 let start = lines.len().saturating_sub(count);
                 lines[start..].iter().map(|line| line.to_string()).collect()
@@ -876,6 +877,10 @@ async fn handle(app: &Arc<App>, agent: &Arc<Agent>, event: Event, generation: u6
             tokio::spawn(async move { answer_screen(&app, &agent, screen).await });
             false
         }
+        Event::Unblocked => {
+            agent.asked.fetch_add(1, Ordering::SeqCst);
+            false
+        }
         Event::Ended(end) => {
             ended(app, agent, end, generation);
             false
@@ -1038,7 +1043,7 @@ async fn approve(app: &Arc<App>, agent: &Arc<Agent>, approval: Approval) -> Resu
         }
         Approval::Tool { name: tool, input } => {
             let description = format!("{who}, a coding agent this bot started in {}, wants to use its tool {tool} as the user on {runner_name}.", home_relative(&folder));
-            let detail = lines::claude_detail(tool, input);
+            let detail = lines::claude_detail(tool, input, &folder);
             let question = AgentQuestion { kind: "command".into(), command: Some(lines::call(tool, &detail).trim_start_matches("● ").to_string()), ..Default::default() };
             ("coding_agent_tool", description, json!({ "tool": tool, "input": input }), question)
         }
@@ -1114,9 +1119,10 @@ async fn answer_screen(app: &Arc<App>, agent: &Arc<Agent>, screen: String) {
     if !still() {
         return;
     }
-    let question = screen::read(&screen);
-    let record = agent.record();
     let Some(driver) = agent.driver() else { return };
+    // A question can show before the agent reads keys: it is read again once it holds still.
+    let question = settled(&*driver, screen).await;
+    let record = agent.record();
     let who = name(&record.kind);
     if let (Some(index), Some(bot)) = (question.allow_once(), app.bot(&record.bot_id)) {
         if crate::permissions::check_tool(app, &bot, "bash").is_ok() && app.auto_review().is_enabled {
@@ -1131,10 +1137,21 @@ async fn answer_screen(app: &Arc<App>, agent: &Arc<Agent>, screen: String) {
             let action = crate::plugins::review::Action { target_name: &runner_name, tool: "coding_agent_question", description: &description, args: &args, script: None, propose_rule: false };
             let cancel = tokio_util::sync::CancellationToken::new();
             if crate::plugins::review::review(app, &bot, &record.chat_id, &trigger, action, &cancel).await == crate::plugins::review::Outcome::Allow {
-                if still() {
-                    let _ = driver.answer(&Answer::Keys(question.keys_for(index))).await;
+                if !still() {
+                    return;
                 }
-                return;
+                match driver.answer(&Answer::Keys(question.keys_for(index))).await {
+                    Ok(()) => {
+                        // An answer that took moves the pane on; one that did not goes to the user.
+                        for _ in 0..20 {
+                            tokio::time::sleep(Duration::from_millis(200)).await;
+                            if !still() {
+                                return;
+                            }
+                        }
+                    }
+                    Err(error) => tracing::warn!(%error, "answering a coding agent's pane"),
+                }
             }
         }
     }
@@ -1176,6 +1193,19 @@ async fn answer_screen(app: &Arc<App>, agent: &Arc<Agent>, screen: String) {
     }
 }
 
+/// What a pane asks once its screen has held still for a moment.
+async fn settled(driver: &dyn Driver, mut screen: String) -> screen::Question {
+    for _ in 0..10 {
+        tokio::time::sleep(Duration::from_millis(700)).await;
+        match driver.screen_now().await {
+            Some(now) if now == screen => break,
+            Some(now) => screen = now,
+            None => break,
+        }
+    }
+    screen::read(&screen)
+}
+
 /// Reads the pane of an agent in a terminal host. True when it shows something new.
 async fn refresh_screen(app: &Arc<App>, agent: &Arc<Agent>) -> bool {
     let Some(driver) = agent.driver() else { return false };
@@ -1208,10 +1238,12 @@ pub async fn serve(app: &Arc<App>, verb: &str, body: &Value) -> Result<Value, St
                     agent.transcript.lock().unwrap().screen = Some(screen);
                 }
             }
-            let transcript = agent.transcript.lock().unwrap();
-            let text = match &transcript.screen {
-                Some(screen) => screen.clone(),
-                None => transcript.tail(APP_LINES).join("\n"),
+            let text = {
+                let transcript = agent.transcript.lock().unwrap();
+                match &transcript.screen {
+                    Some(screen) => screen.clone(),
+                    None => transcript.tail(APP_LINES).join("\n"),
+                }
             };
             Ok(json!({ "text": text, "card": app.coding_agents.card(app, &agent) }))
         }

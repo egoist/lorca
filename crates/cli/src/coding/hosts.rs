@@ -86,9 +86,15 @@ async fn herdr_socket() -> PathBuf {
     named.unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".config").join("herdr").join("herdr.sock"))
 }
 
-/// One request to Herdr's socket.
+/// One request to Herdr's socket, which has a while to answer: starting an agent takes long.
 #[cfg(unix)]
 async fn herdr(socket: &Path, method: &str, params: Value) -> Result<Value, String> {
+    let limit = if method == "agent.start" { START_TIMEOUT + Duration::from_secs(10) } else { Duration::from_secs(15) };
+    tokio::time::timeout(limit, herdr_once(socket, method, params)).await.unwrap_or_else(|_| Err(format!("Herdr did not answer {method}")))
+}
+
+#[cfg(unix)]
+async fn herdr_once(socket: &Path, method: &str, params: Value) -> Result<Value, String> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     let mut stream = tokio::net::UnixStream::connect(socket).await.map_err(|e| format!("Herdr is not running: {e}"))?;
     let request = json!({ "id": format!("lorca:{method}"), "method": method, "params": params });
@@ -125,6 +131,12 @@ async fn luvus(program: &Path, args: &[&str]) -> Result<Value, String> {
     }
 }
 
+/// The agent a pane runs, as its host sees it.
+struct Info {
+    kind: String,
+    ready: bool,
+}
+
 /// An agent's state as its host reports it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Status {
@@ -157,9 +169,11 @@ struct InPane {
 impl InPane {
     async fn read(&self, visible: bool) -> Option<String> {
         let text = match &self.host {
+            // The pane's, since Herdr names the agent only once it is ready, past any question it
+            // starts with.
             Host::Herdr { socket } => {
                 let source = if visible { "visible" } else { "recent_unwrapped" };
-                let read = herdr(socket, "agent.read", json!({ "target": self.target.name, "source": source, "lines": SCREEN_LINES, "strip_ansi": true })).await.ok()?;
+                let read = herdr(socket, "pane.read", json!({ "pane_id": self.target.pane, "source": source, "lines": SCREEN_LINES, "strip_ansi": true })).await.ok()?;
                 read["read"]["text"].as_str().or(read["text"].as_str())?.to_string()
             }
             Host::Luvus { program } => {
@@ -172,31 +186,60 @@ impl InPane {
         Some(lorca_agent::tools::sanitize::terminal_text(text.as_bytes()).trim_end().to_string())
     }
 
+    /// Presses `keys` one at a time: sent together, an arrow's escape sequence can read as Esc.
     async fn keys(&self, keys: &[String]) -> Result<(), String> {
+        for (index, key) in keys.iter().enumerate() {
+            if index > 0 {
+                tokio::time::sleep(Duration::from_millis(150)).await;
+            }
+            match &self.host {
+                Host::Herdr { socket } => herdr(socket, "pane.send_keys", json!({ "pane_id": self.target.pane, "keys": [key] })).await.map(drop)?,
+                // Luvus's `enter` is a line feed; `return` is the key that sends.
+                Host::Luvus { program } => {
+                    let key = if key == "enter" { "return" } else { key.as_str() };
+                    luvus(program, &["agent", "keys", self.target.name.as_str(), key]).await.map(drop)?
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Types a message into the agent's input and sends it, on one line. Typed, not pasted:
+    /// Claude Code holds back from acting on a message that is nothing but pasted text.
+    async fn prompt(&self, text: &str) -> Result<(), String> {
+        let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
         match &self.host {
-            Host::Herdr { socket } => herdr(socket, "agent.send_keys", json!({ "target": self.target.name, "keys": keys })).await.map(drop),
+            Host::Herdr { socket } => {
+                herdr(socket, "pane.send_text", json!({ "pane_id": self.target.pane, "text": line })).await?;
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                herdr(socket, "pane.send_keys", json!({ "pane_id": self.target.pane, "keys": ["enter"] })).await.map(drop)
+            }
+            // `pane run` types the line and a line feed, which an agent's composer may take as a
+            // new line: Return sends it.
             Host::Luvus { program } => {
-                let mut args = vec!["agent", "keys", self.target.name.as_str()];
-                args.extend(keys.iter().map(String::as_str));
-                luvus(program, &args).await.map(drop)
+                luvus(program, &["pane", "run", &self.target.pane, &line]).await?;
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                luvus(program, &["agent", "keys", &self.target.name, "return"]).await.map(drop)
             }
         }
     }
 
-    async fn prompt(&self, text: &str) -> Result<(), String> {
+    /// The agent its pane runs now, and whether it is ready for a prompt: started, and not
+    /// asking. None when no agent runs there.
+    async fn info(&self) -> Option<Info> {
         match &self.host {
-            Host::Herdr { socket } => herdr(socket, "agent.prompt", json!({ "target": self.target.name, "text": text })).await.map(drop),
-            Host::Luvus { program } => luvus(program, &["agent", "prompt", &self.target.name, text]).await.map(drop),
-        }
-    }
-
-    /// Whether the agent is ready for its first prompt: started, and not asking.
-    async fn ready(&self) -> bool {
-        match &self.host {
-            Host::Herdr { socket } => herdr(socket, "agent.get", json!({ "target": self.target.name }))
-                .await
-                .is_ok_and(|info| info["agent"]["interactive_ready"].as_bool().unwrap_or(false) && matches!(info["agent"]["agent_status"].as_str(), Some("idle" | "done"))),
-            Host::Luvus { program } => luvus(program, &["agent", "get", &self.target.name]).await.is_ok_and(|info| matches!(info["status"].as_str(), Some("idle" | "done"))),
+            Host::Herdr { socket } => {
+                let pane = herdr(socket, "pane.get", json!({ "pane_id": self.target.pane })).await.ok()?;
+                let pane = if pane["pane"].is_object() { &pane["pane"] } else { &pane };
+                let kind = pane["agent"].as_str()?.to_string();
+                let agent = herdr(socket, "agent.get", json!({ "target": self.target.name })).await.ok();
+                let ready = agent.is_some_and(|agent| agent["agent"]["interactive_ready"].as_bool().unwrap_or(false) && matches!(agent["agent"]["agent_status"].as_str(), Some("idle" | "done")));
+                Some(Info { kind, ready })
+            }
+            Host::Luvus { program } => {
+                let agent = luvus(program, &["agent", "get", &self.target.name]).await.ok()?;
+                Some(Info { kind: agent["agent"].as_str()?.to_string(), ready: matches!(agent["status"].as_str(), Some("idle" | "done")) })
+            }
         }
     }
 }
@@ -239,6 +282,10 @@ impl Driver for InPane {
         self.read(false).await
     }
 
+    async fn screen_now(&self) -> Option<String> {
+        self.read(true).await
+    }
+
     async fn focus(&self) -> Result<(), String> {
         match &self.host {
             Host::Herdr { socket } => {
@@ -273,7 +320,16 @@ pub(crate) async fn start(app: &Arc<App>, agent: &Arc<Agent>, host: &Host, progr
             let workspace = created["workspace"]["workspace_id"].as_str().ok_or("Herdr made no workspace")?.to_string();
             let pane = created["root_pane"]["pane_id"].as_str().ok_or("Herdr made no pane")?.to_string();
             let target = Target { workspace: workspace.clone(), pane: pane.clone(), name: record.id.clone() };
-            let started = herdr(socket, "agent.start", json!({ "name": record.id, "kind": record.kind, "pane_id": pane, "args": args, "timeout_ms": START_TIMEOUT.as_millis() as u64 })).await;
+            // A new pane's shell takes a moment to reach its prompt, before which Herdr finds the
+            // pane busy.
+            let mut started = Err(String::new());
+            for _ in 0..20 {
+                started = herdr(socket, "agent.start", json!({ "name": record.id, "kind": record.kind, "pane_id": pane, "args": args, "timeout_ms": START_TIMEOUT.as_millis() as u64 })).await;
+                match &started {
+                    Err(error) if error.contains("not an available shell") => tokio::time::sleep(Duration::from_millis(500)).await,
+                    _ => break,
+                }
+            }
             if let Err(error) = started {
                 let _ = herdr(socket, "workspace.close", json!({ "workspace_id": workspace })).await;
                 return Err(format!("Herdr could not start {}: {error}", super::name(&record.kind)));
@@ -353,7 +409,7 @@ fn same_folder(path: &str, folder: &Path) -> bool {
 /// a hook; Codex runs commands in its sandbox and asks before anything past it.
 fn agent_args(app: &App, kind: &str, id: &str, _program: &Path) -> Vec<String> {
     if kind == "codex" {
-        return ["--ask-for-approval", "on-request", "--sandbox", "workspace-write"].iter().map(|arg| arg.to_string()).collect();
+        return ["--ask-for-approval", "on-request", "--sandbox", "workspace-write", "-c", "check_for_update_on_startup=false"].iter().map(|arg| arg.to_string()).collect();
     }
     let lorca = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("lorca"));
     let quote = |text: &str| format!("'{}'", text.replace('\'', r"'\''"));
@@ -368,27 +424,75 @@ fn agent_args(app: &App, kind: &str, id: &str, _program: &Path) -> Vec<String> {
     vec!["--settings".into(), settings.to_string()]
 }
 
-/// Turns the host's reports on the agent into its events.
+/// Turns the host's reports on the agent into its events. The host's states can lag behind the
+/// agent itself, so the agent is also looked for every few seconds: one that has exited (a
+/// question it was answered no to, a crash, the user quitting it in the pane) ends.
 fn follow(pane: Arc<InPane>, events: Events) {
     let (statuses_tx, mut statuses) = mpsc::unbounded_channel();
     watch(&pane, statuses_tx);
     tokio::spawn(async move {
         let mut worked = false;
+        let mut blocked = false;
+        let mut seen = false;
         let started = tokio::time::Instant::now();
+        let mut next_look = started;
         loop {
-            // The first prompt goes in once the agent is ready, which the host may not report
-            // as a change: it is looked for every second until it is.
-            let waiting = pane.prompt.lock().unwrap().is_some();
-            let next = if waiting { tokio::time::timeout(Duration::from_secs(1), statuses.recv()).await } else { Ok(statuses.recv().await) };
-            let status = match next {
+            let status = match tokio::time::timeout(Duration::from_secs(1), statuses.recv()).await {
                 Ok(Some(status)) => Some(status),
                 Ok(None) => Some(Status::Gone),
                 Err(_) => None,
             };
-            // Before its first prompt, what it does is getting ready: it may ask (a folder to
-            // trust), and work is not yet the bot's.
-            if waiting && !matches!(status, Some(Status::Gone | Status::Blocked)) {
-                if pane.ready().await {
+            if status == Some(Status::Gone) {
+                let outcome = if pane.closing.load(Ordering::SeqCst) { "Stopped".to_string() } else { format!("Its {} pane closed", pane.host.title()) };
+                let _ = events.send(Event::Ended(Ended { outcome, failed: false }));
+                break;
+            }
+            // What it asked is answered, here or in the pane.
+            if blocked && matches!(status, Some(Status::Working | Status::Idle)) {
+                blocked = false;
+                let _ = events.send(Event::Unblocked);
+            }
+            let waiting = pane.prompt.lock().unwrap().is_some();
+            // Is the agent still there, and ready for its first prompt?
+            let mut ready = false;
+            if waiting || tokio::time::Instant::now() >= next_look {
+                next_look = tokio::time::Instant::now() + Duration::from_secs(5);
+                match pane.info().await {
+                    Some(info) if info.kind == pane.kind => {
+                        seen = true;
+                        ready = info.ready;
+                    }
+                    _ if pane.closing.load(Ordering::SeqCst) => continue,
+                    _ if seen || started.elapsed() > START_TIMEOUT => {
+                        let outcome = if seen { format!("{} exited in its pane", super::name(&pane.kind)) } else { format!("{} did not start in its pane", super::name(&pane.kind)) };
+                        let _ = events.send(Event::Ended(Ended { outcome, failed: !seen }));
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            if status == Some(Status::Blocked) && !blocked {
+                blocked = true;
+                let screen = pane.read(true).await.unwrap_or_default();
+                let _ = events.send(Event::Blocked(screen));
+                continue;
+            }
+            // Before its first prompt, what it does is getting ready, which may take a question
+            // (a folder to trust, an update notice); work is not yet the bot's. A menu on its
+            // screen asks even while the host reports it idle, and no prompt is typed over one.
+            if waiting {
+                let screen = pane.read(true).await.unwrap_or_default();
+                let menu = super::screen::asks(&screen);
+                if menu && !blocked {
+                    blocked = true;
+                    let _ = events.send(Event::Blocked(screen));
+                    continue;
+                }
+                if !menu && blocked && status != Some(Status::Blocked) {
+                    blocked = false;
+                    let _ = events.send(Event::Unblocked);
+                }
+                if ready && !blocked {
                     tokio::time::sleep(Duration::from_millis(800)).await;
                     let prompt = pane.prompt.lock().unwrap().take();
                     if let Some(prompt) = prompt {
@@ -398,21 +502,13 @@ fn follow(pane: Arc<InPane>, events: Events) {
                         }
                         let _ = events.send(Event::Lines(super::lines::sent(&prompt)));
                     }
-                } else if started.elapsed() > START_TIMEOUT {
-                    let _ = events.send(Event::Ended(Ended { outcome: format!("{} did not get ready in its pane", super::name(&pane.kind)), failed: true }));
-                    break;
                 }
                 continue;
             }
             match status {
-                None => {}
-                Some(Status::Working) => {
+                Some(Status::Working) if !worked => {
                     worked = true;
                     let _ = events.send(Event::Working);
-                }
-                Some(Status::Blocked) => {
-                    let screen = pane.read(true).await.unwrap_or_default();
-                    let _ = events.send(Event::Blocked(screen));
                 }
                 Some(Status::Idle) if worked => {
                     worked = false;
@@ -429,12 +525,7 @@ fn follow(pane: Arc<InPane>, events: Events) {
                     let said = screen.map(|screen| screen.lines().rev().take(30).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n"));
                     let _ = events.send(Event::Idle(said));
                 }
-                Some(Status::Idle) => {}
-                Some(Status::Gone) => {
-                    let outcome = if pane.closing.load(Ordering::SeqCst) { "Stopped".to_string() } else { format!("Its {} pane closed", pane.host.title()) };
-                    let _ = events.send(Event::Ended(Ended { outcome, failed: false }));
-                    break;
-                }
+                _ => {}
             }
         }
     });

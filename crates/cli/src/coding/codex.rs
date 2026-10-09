@@ -40,7 +40,7 @@ pub(crate) async fn start(program: &Path, folder: &Path, prompt: &str, thread: O
     let pending: Arc<Pending> = Arc::new(Mutex::new(HashMap::new()));
     let turn = Arc::new(Mutex::new(None));
     let cutting_in = Arc::new(AtomicBool::new(false));
-    tokio::spawn(read(process.clone(), process::json_lines(stdout), exit, events, pending.clone(), turn.clone(), cutting_in.clone()));
+    tokio::spawn(read(process.clone(), process::json_lines(stdout), exit, events, pending.clone(), turn.clone(), cutting_in.clone(), folder.to_path_buf()));
     let mut codex = Codex { process, pending, next_id: AtomicU64::new(1), thread: String::new(), turn, cutting_in };
     codex.request("initialize", json!({ "clientInfo": { "name": "lorca", "title": "Lorca", "version": env!("CARGO_PKG_VERSION") } })).await?;
     codex.process.send(&json!({ "jsonrpc": "2.0", "method": "initialized" })).await?;
@@ -132,6 +132,7 @@ async fn read(
     pending: Arc<Pending>,
     turn: Arc<Mutex<Option<String>>>,
     cutting_in: Arc<AtomicBool>,
+    folder: std::path::PathBuf,
 ) {
     let mut last_said: Option<String> = None;
     // The files each change it is making touches, for its approval.
@@ -232,7 +233,7 @@ async fn read(
                     }
                     "item/completed" => {
                         let item = &params["item"];
-                        let out = item_lines(item, &mut last_said);
+                        let out = item_lines(item, &mut last_said, &folder);
                         if let Some(id) = item["id"].as_str() {
                             changes.remove(id);
                         }
@@ -266,8 +267,8 @@ async fn read(
     let _ = events.send(Event::Ended(ended));
 }
 
-/// One finished item of a turn, in the transcript.
-fn item_lines(item: &Value, last_said: &mut Option<String>) -> Vec<String> {
+/// One finished item of a turn, in the transcript, its paths from `folder`.
+fn item_lines(item: &Value, last_said: &mut Option<String>, folder: &Path) -> Vec<String> {
     match item["type"].as_str().unwrap_or("") {
         "userMessage" => {
             let text = item["content"].as_array().into_iter().flatten().filter_map(|part| part["text"].as_str()).collect::<Vec<_>>().join("\n");
@@ -302,7 +303,7 @@ fn item_lines(item: &Value, last_said: &mut Option<String>) -> Vec<String> {
                     Some("delete") => "Delete",
                     _ => "Edit",
                 };
-                lines::call(name, &super::home_relative(Path::new(change["path"].as_str().unwrap_or(""))))
+                lines::call(name, &lines::path(change["path"].as_str().unwrap_or(""), folder))
             })
             .collect(),
         "mcpToolCall" => vec![lines::call(&format!("{}.{}", item["server"].as_str().unwrap_or("mcp"), item["tool"].as_str().unwrap_or("tool")), "")],
@@ -319,12 +320,12 @@ mod tests {
     fn a_turns_items_read_as_the_transcript() {
         let mut said = None;
         let command = json!({ "type": "commandExecution", "command": "/bin/zsh -lc 'git status --short'", "commandActions": [{ "command": "git status --short" }], "aggregatedOutput": "?? hi.txt\n", "exitCode": 0, "status": "completed" });
-        assert_eq!(item_lines(&command, &mut said), vec!["● Bash(git status --short)", "  ⎿ ?? hi.txt"]);
+        assert_eq!(item_lines(&command, &mut said, Path::new("/tmp/x")), vec!["● Bash(git status --short)", "  ⎿ ?? hi.txt"]);
         let message = json!({ "type": "agentMessage", "text": "Done.\nAll tests pass." });
-        assert_eq!(item_lines(&message, &mut said), vec!["Done.", "All tests pass."]);
+        assert_eq!(item_lines(&message, &mut said, Path::new("/tmp/x")), vec!["Done.", "All tests pass."]);
         assert_eq!(said.as_deref(), Some("Done.\nAll tests pass."));
         let change = json!({ "type": "fileChange", "changes": [{ "path": "/tmp/x/hi.txt", "kind": { "type": "add" } }] });
-        assert_eq!(item_lines(&change, &mut said), vec!["● Write(/tmp/x/hi.txt)"]);
-        assert!(item_lines(&json!({ "type": "reasoning" }), &mut said).is_empty());
+        assert_eq!(item_lines(&change, &mut said, Path::new("/tmp/x")), vec!["● Write(hi.txt)"]);
+        assert!(item_lines(&json!({ "type": "reasoning" }), &mut said, Path::new("/tmp/x")).is_empty());
     }
 }

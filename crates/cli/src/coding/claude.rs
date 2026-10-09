@@ -51,7 +51,7 @@ pub(crate) async fn start(program: &Path, folder: &Path, prompt: &str, session: 
     }
     let (process, stdout, exit) = process::spawn(program, &args, folder).await?;
     let pending = Arc::new(AtomicUsize::new(0));
-    tokio::spawn(read(process.clone(), process::json_lines(stdout), exit, events, pending.clone()));
+    tokio::spawn(read(process.clone(), process::json_lines(stdout), exit, events, pending.clone(), folder.to_path_buf()));
     process
         .send(&json!({
             "type": "control_request",
@@ -84,7 +84,14 @@ impl Driver for Claude {
     }
 }
 
-async fn read(process: Arc<Process>, mut messages: tokio::sync::mpsc::UnboundedReceiver<Value>, exit: oneshot::Receiver<process::Exit>, events: Events, pending: Arc<AtomicUsize>) {
+async fn read(
+    process: Arc<Process>,
+    mut messages: tokio::sync::mpsc::UnboundedReceiver<Value>,
+    exit: oneshot::Receiver<process::Exit>,
+    events: Events,
+    pending: Arc<AtomicUsize>,
+    folder: std::path::PathBuf,
+) {
     let mut session_told = false;
     let mut last_said: Option<String> = None;
     while let Some(message) = messages.recv().await {
@@ -112,7 +119,7 @@ async fn read(process: Arc<Process>, mut messages: tokio::sync::mpsc::UnboundedR
                         }
                         Some("tool_use") => {
                             let name = part["name"].as_str().unwrap_or("Tool");
-                            out.push(lines::call(name, &lines::claude_detail(name, &part["input"])));
+                            out.push(lines::call(name, &lines::claude_detail(name, &part["input"], &folder)));
                         }
                         _ => {}
                     }
@@ -142,8 +149,7 @@ async fn read(process: Arc<Process>, mut messages: tokio::sync::mpsc::UnboundedR
                 for part in content.as_array().into_iter().flatten() {
                     if part["type"] == "tool_result" {
                         out.extend(lines::result(&lines::content_text(&part["content"]), part["is_error"].as_bool().unwrap_or(false)));
-                    } else if let Some(text) = part["text"].as_str().filter(|text| text.starts_with("[Request interrupted")) {
-                        let _ = text;
+                    } else if part["text"].as_str().is_some_and(|text| text.starts_with("[Request interrupted")) {
                         out.push("  ⎿ Interrupted".into());
                     }
                 }

@@ -24,6 +24,8 @@ pub(crate) enum Event {
     Approve(Approval, oneshot::Sender<Result<(), String>>),
     /// Its pane asks something (an agent in a terminal host): what the pane shows.
     Blocked(String),
+    /// Its pane no longer asks: answered there or from its card.
+    Unblocked,
     /// It is gone.
     Ended(Ended),
 }
@@ -63,8 +65,12 @@ pub(crate) trait Driver: Send + Sync {
     async fn answer(&self, _answer: &Answer) -> Result<(), String> {
         Err("It asks nothing that takes typed answers".into())
     }
-    /// What its pane shows, for an agent in a terminal host.
+    /// What its pane shows, for an agent in a terminal host: as much as the transcript keeps.
     async fn screen(&self) -> Option<String> {
+        None
+    }
+    /// What its pane shows on screen now, for an agent in a terminal host.
+    async fn screen_now(&self) -> Option<String> {
         None
     }
     /// Brings its pane forward on the Runner's screen.

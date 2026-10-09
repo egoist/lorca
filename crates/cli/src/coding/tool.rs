@@ -195,7 +195,9 @@ fn brief(prompt: &str, proof: Option<&str>, place: &workspace::Place) -> String 
         Some(proof) => brief.push_str(&format!(" When you are done, save the proof of your work in {}: {proof}.", proof_folder.display())),
         None => brief.push_str(&format!(" Save test output and screenshots that show your work in {}.", proof_folder.display())),
     }
-    brief.push_str(" Test output goes in .txt or .log files there, screenshots in .png files; name a screenshot before-… or after-… when it shows a change. If you open a pull request, give its link in your last message.");
+    brief.push_str(
+        " That folder stays out of git, so never commit it. Test output goes in .txt or .log files there, screenshots in .png files; name a screenshot before-… or after-… when it shows a change. If you open a pull request, give its link in your last message.",
+    );
     brief
 }
 

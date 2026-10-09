@@ -77,6 +77,46 @@ pub(crate) fn read(screen: &str) -> Question {
     Question { text: question_above(lines), choices: Vec::new(), selected: 0 }
 }
 
+/// Whether the screen ends on a menu waiting for a choice: an agent may ask one while its host
+/// still reports it idle (Codex's update notice, a first-run question).
+pub(crate) fn asks(screen: &str) -> bool {
+    let question = read(screen);
+    let Some(last) = question.choices.last() else { return false };
+    if question.choices.len() < 2 {
+        return false;
+    }
+    let lines: Vec<String> = screen.lines().map(clean).filter(|line| !line.trim().is_empty() && !is_hint(line)).collect();
+    lines.iter().rev().take(2).any(|line| label(line) == *last)
+}
+
+/// A pane's screen without the agent's own chrome at its foot: the input box and the status
+/// lines under it, which close with a rule a few lines from the bottom.
+pub(crate) fn body(screen: &str) -> String {
+    let lines: Vec<&str> = screen.trim_end().lines().collect();
+    let is_rule = |line: &str| {
+        let trimmed = line.trim();
+        trimmed.chars().count() >= 8 && trimmed.chars().all(|c| matches!(c, '─' | '━' | '═' | '-'))
+    };
+    let mut end = lines.len();
+    // The input box is a rule, a line or two, and a rule; the status lines follow it.
+    for _ in 0..2 {
+        match lines[..end].iter().rposition(|line| is_rule(line)) {
+            Some(rule) if end - rule <= 6 => end = rule,
+            _ => break,
+        }
+    }
+    // An input line without rules (Codex's `› `) and the footer under it.
+    if let Some(input) = lines[..end].iter().rposition(|line| {
+        let trimmed = line.trim_start();
+        trimmed.starts_with("› ") || trimmed.starts_with("❯ ") || trimmed == "›" || trimmed == "❯"
+    }) {
+        if end - input <= 6 {
+            end = input;
+        }
+    }
+    lines[..end].join("\n").trim_end().to_string()
+}
+
 /// A screen line without the box drawn around it.
 fn clean(line: &str) -> String {
     let line = line.trim_end();
@@ -124,7 +164,7 @@ fn label(line: &str) -> String {
 /// A line that says how to answer rather than what is asked: "Enter to confirm · Esc to cancel".
 fn is_hint(line: &str) -> bool {
     let lower = line.trim().to_lowercase();
-    numbered(line).is_none() && ["to confirm", "to cancel", "to select", "to navigate", "to go back"].iter().any(|words| lower.contains(words))
+    numbered(line).is_none() && ["to confirm", "to cancel", "to select", "to navigate", "to go back", "enter continue", "esc skip"].iter().any(|words| lower.contains(words))
 }
 
 /// The question: the last few lines with something on them, up to a rule or a blank gap.
@@ -180,6 +220,24 @@ mod tests {
         assert_eq!(Question { selected: 2, ..question.clone() }.keys_for(0), vec!["up", "up", "enter"]);
         let always = Question { text: String::new(), choices: vec!["Always allow".into(), "No".into()], selected: 0 };
         assert_eq!(always.allow_once(), None);
+    }
+
+    #[test]
+    fn a_menu_at_the_foot_of_the_screen_asks_and_an_input_box_does_not() {
+        let update = "  Update available · 0.161.0 → 0.162.1\n\n› 1. Update now (runs `npm install -g @openai/codex`)\n  2. Skip\n  3. Skip until next version\n\n  enter continue · esc skip\n";
+        assert!(asks(update));
+        let idle = "⏺ Done.\n\n──────────────\n❯ Try \"fix typecheck errors\"\n──────────────\n  ⏵⏵ auto mode on (shift+tab to cycle)\n";
+        assert!(!asks(idle));
+        assert!(!asks("1. First step\n2. Second step\n\nAll done, next steps above."));
+    }
+
+    #[test]
+    fn the_input_box_and_status_lines_are_not_the_body() {
+        let screen = "⏺ Done: committed NOTES.md.\n\n✻ Baked for 12s\n\n──────────────\n❯ \n──────────────\n  ⏵⏵ auto mode on (shift+tab to cycle)\n";
+        assert_eq!(body(screen), "⏺ Done: committed NOTES.md.\n\n✻ Baked for 12s");
+        assert_eq!(body("one\ntwo"), "one\ntwo");
+        let codex = "• Committed NOTES.md.\n\n  Worked for 17s\n\n\n› Ask Codex to do anything\n\n  GPT-6.1 high · /tmp/x\n  ? for shortcuts\n";
+        assert_eq!(body(codex), "• Committed NOTES.md.\n\n  Worked for 17s");
     }
 
     #[test]
