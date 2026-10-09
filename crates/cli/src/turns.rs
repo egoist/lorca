@@ -4524,7 +4524,17 @@ mod tests {
             })
             .await
             .expect("the command runs");
-            tokio::time::sleep(Duration::from_millis(300)).await;
+            // Sent once it prints, not after a set time: Git Bash on Windows can take longer
+            // than that to start.
+            let id = run_of(&row).and_then(|run| run.session_id).expect("a session");
+            let session = app.shell_sessions.find("chat", "b1", &id).expect("the session is kept");
+            tokio::time::timeout(Duration::from_secs(20), async {
+                while !session.last_lines(3).iter().any(|line| line == "tick") {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .expect("the command prints");
             crate::api::dispatch(app, "bash.background", json!({ "chat_id": "chat", "message_id": row.id })).await
         };
         let ((row, result), sent) = tokio::join!(call_tool(&mut turn, &bash, "call-1", args), send);
