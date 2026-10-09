@@ -618,6 +618,45 @@ final class RootSplitViewController: NSSplitViewController {
         store.togglePin(chatID)
     }
 
+    @objc func toggleHideChat(_ sender: Any?) {
+        guard case let .chat(chatID) = selection, let chat = store.chat(chatID) else { return }
+        store.setHidden(chatID, !chat.isHidden)
+    }
+
+    /// The menu item's tag is how long, in seconds; zero mutes the chat until it is unmuted.
+    @objc func muteChat(_ sender: NSMenuItem) {
+        guard case let .chat(chatID) = selection else { return }
+        store.mute(chatID, until: sender.tag > 0 ? Date().addingTimeInterval(TimeInterval(sender.tag)) : nil)
+    }
+
+    @objc func unmuteChat(_ sender: Any?) {
+        guard case let .chat(chatID) = selection else { return }
+        store.unmute(chatID)
+    }
+
+    /// The menu item names the section; one without lists the chat with the chats in none.
+    @objc func moveChatToSection(_ sender: NSMenuItem) {
+        guard case let .chat(chatID) = selection else { return }
+        store.moveChat(chatID, toSection: sender.representedObject as? String)
+    }
+
+    @objc func moveChatToNewSection(_ sender: Any?) {
+        guard case let .chat(chatID) = selection, let window = view.window else {
+            NSSound.beep()
+            return
+        }
+        SectionPrompt.name(title: L("New Section"), button: L("Create"), in: window) { [weak self] name in
+            self?.store.createSection(named: name, moving: chatID)
+        }
+    }
+
+    @objc func newSection(_ sender: Any?) {
+        guard let window = view.window else { return }
+        SectionPrompt.name(title: L("New Section"), button: L("Create"), in: window) { [weak self] name in
+            self?.store.createSection(named: name)
+        }
+    }
+
     @objc func deleteChat(_ sender: Any?) {
         guard case let .chat(chatID) = selection, let chat = store.chat(chatID),
             let window = view.window
@@ -696,6 +735,20 @@ extension RootSplitViewController: NSMenuItemValidation {
         }
         if menuItem.action == #selector(goToChat(_:)) {
             return sidebar.chatSelection(forShortcut: menuItem.tag) != nil
+        }
+        let chatActions: [Selector] = [
+            #selector(togglePinChat(_:)), #selector(toggleHideChat(_:)), #selector(muteChat(_:)), #selector(unmuteChat(_:)),
+            #selector(moveChatToSection(_:)), #selector(moveChatToNewSection(_:)),
+        ]
+        if let action = menuItem.action, chatActions.contains(action) {
+            guard case let .chat(id) = selection, let chat = store.chat(id) else { return false }
+            // The Chat menu says what its items will do; a row's menu words them itself.
+            if menuItem.menu?.supermenu === NSApp.mainMenu {
+                if action == #selector(togglePinChat(_:)) { menuItem.title = chat.isPinned ? L("Unpin Chat") : L("Pin Chat") }
+                if action == #selector(toggleHideChat(_:)) { menuItem.title = chat.isHidden ? L("Show in Sidebar") : L("Hide Chat") }
+            }
+            if action == #selector(unmuteChat(_:)) { return chat.mute != nil }
+            return true
         }
         return true
     }

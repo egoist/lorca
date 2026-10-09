@@ -57,6 +57,18 @@ final class ChatNotificationTests: XCTestCase {
         XCTAssertFalse(notification.canDeliver(in: current, watchedChat: nil))
     }
 
+    func testAMutedChatStaysQuietUntilItsMuteRunsOut() throws {
+        let message = reply("Done")
+        let notification = try XCTUnwrap(ChatNotification(message))
+        var current = chat([message])
+        current.mute = Chat.Mute(until: Date().addingTimeInterval(3600))
+        XCTAssertFalse(notification.canDeliver(in: current, watchedChat: nil))
+        current.mute = Chat.Mute(until: nil)
+        XCTAssertFalse(notification.canDeliver(in: current, watchedChat: nil))
+        current.mute = Chat.Mute(until: Date().addingTimeInterval(-1))
+        XCTAssertTrue(notification.canDeliver(in: current, watchedChat: nil))
+    }
+
     func testStreamingEmptyAndEarlierRepliesStayQuiet() {
         var earlier = reply("Old reply")
         earlier.createdAt = start.addingTimeInterval(-60)

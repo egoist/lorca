@@ -40,6 +40,9 @@ enum PaletteIndex {
         (#selector(RootSplitViewController.addBotToChat(_:)), "person.badge.plus", "invite member group"),
         (#selector(RootSplitViewController.renameChat(_:)), "pencil", "title name"),
         (#selector(RootSplitViewController.togglePinChat(_:)), "pin", "unpin favorite"),
+        (#selector(RootSplitViewController.unmuteChat(_:)), "bell", "notifications alerts sound"),
+        (#selector(RootSplitViewController.toggleHideChat(_:)), "eye.slash", "archive sidebar show"),
+        (#selector(RootSplitViewController.newSection(_:)), "folder.badge.plus", "group folder organize"),
         (#selector(RootSplitViewController.newSkill(_:)), "book.closed", "playbook instructions workflow"),
         (#selector(ChatViewController.stopResponding(_:)), "stop.circle", "cancel interrupt"),
         (#selector(ChatViewController.runCommandsInBackground(_:)), "terminal", "detach server task"),
@@ -66,7 +69,7 @@ enum PaletteIndex {
         guard let menu = NSApp.mainMenu else { return [] }
         for item in menu.items { item.submenu?.update() }
         return commands.compactMap { command in
-            guard let item = find(command.action, in: menu), item.isEnabled else { return nil }
+            guard let item = find(command.action, in: menu), item.isEnabled, !item.isHidden else { return nil }
             return PaletteItem(
                 icon: .symbol(command.symbol), title: item.title, shortcut: shortcut(of: item),
                 keywords: [command.keywords]
@@ -80,9 +83,10 @@ enum PaletteIndex {
         guard store.isConnected else { return [] }
         return store.chats.map { chat in
             let bots = store.bots(in: chat)
+            // A hidden chat is out of the list until a query finds it.
             return PaletteItem(
                 icon: .chat(bots), title: store.title(for: chat), subtitle: store.subtitle(for: chat),
-                keywords: bots.map(\.name) + [store.preview(for: chat)], chatID: chat.id
+                keywords: bots.map(\.name) + [store.preview(for: chat)], isSearchOnly: chat.isHidden, chatID: chat.id
             ) { [weak root] in
                 root?.open(chat.id)
             }

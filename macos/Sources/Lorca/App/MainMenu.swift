@@ -1,5 +1,6 @@
 import AppKit
 
+@MainActor
 enum MainMenu {
     static func build() -> NSMenu {
         let main = NSMenu()
@@ -83,6 +84,7 @@ enum MainMenu {
         add(menu, L("New Bot from Template…"), #selector(AppDelegate.importBotTemplate(_:)))
         add(menu, L("New Group Chat…"), #selector(AppDelegate.newGroupChat(_:)), "n", modifiers: [.command, .shift])
         add(menu, L("New Task…"), #selector(AppDelegate.newTask(_:)))
+        add(menu, L("New Section…"), #selector(RootSplitViewController.newSection(_:)))
         menu.addItem(.separator())
         add(menu, L("Share as Template…"), #selector(RootSplitViewController.shareBotTemplate(_:)))
         menu.addItem(.separator())
@@ -142,6 +144,15 @@ enum MainMenu {
         add(menu, L("Add Bot…"), #selector(RootSplitViewController.addBotToChat(_:)), "b", modifiers: [.command, .option])
         add(menu, L("Rename Chat…"), #selector(RootSplitViewController.renameChat(_:)), "r")
         add(menu, L("Pin Chat"), #selector(RootSplitViewController.togglePinChat(_:)), "p")
+        // Mute Chat shows for a chat with its alerts on, Unmute Chat for a muted one.
+        let mute = NSMenuItem(title: L("Mute Chat"), action: nil, keyEquivalent: "")
+        mute.submenu = ChatSubmenus.shared.mute
+        menu.addItem(mute)
+        add(menu, L("Unmute Chat"), #selector(RootSplitViewController.unmuteChat(_:)))
+        let sections = NSMenuItem(title: L("Move to Section"), action: nil, keyEquivalent: "")
+        sections.submenu = ChatSubmenus.shared.sections
+        menu.addItem(sections)
+        add(menu, L("Hide Chat"), #selector(RootSplitViewController.toggleHideChat(_:)))
         add(menu, L("New Skill…"), #selector(RootSplitViewController.newSkill(_:)))
         menu.addItem(.separator())
         add(menu, L("Stop Responding"), #selector(ChatViewController.stopResponding(_:)), ".")
@@ -157,6 +168,7 @@ enum MainMenu {
             item.isHidden = true
             item.allowsKeyEquivalentWhenHidden = true
         }
+        menu.delegate = ChatSubmenus.shared
         return menu
     }
 

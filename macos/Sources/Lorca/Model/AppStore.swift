@@ -90,6 +90,8 @@ final class AppStore {
     private(set) var attention = AttentionView()
     /// The bots the account shares as links, shared through the roster.
     private(set) var sharedLinks: [SharedLink] = []
+    /// The sidebar's sections, in order, shared through the roster.
+    private(set) var sections: [SidebarSection] = []
     /// The account's provider credentials, the same on every Device.
     private(set) var providers: [ProviderCredential] = []
     /// The models the CLI's catalog offers, for the Model and Thinking pickers.
@@ -301,6 +303,7 @@ final class AppStore {
             }
             return chat
         }
+        sections = (snapshot.sections ?? []).map { $0.toModel() }
         routines = (snapshot.routines ?? []).map { $0.toModel() }
         budgets = snapshot.budgets ?? []
         reviews = snapshot.reviews ?? []
@@ -350,6 +353,7 @@ final class AppStore {
             guard let roster = decode(Wire.RosterChanged.self) else { return }
             devices = roster.devices.map { $0.toModel() }
             bots = roster.bots.map { $0.toModel() }
+            if let incoming = roster.sections { sections = incoming.map { $0.toModel() } }
             if let incoming = roster.routines { routines = incoming.map { $0.toModel() } }
             if let incoming = roster.playbooks { playbooks = incoming }
             if let incoming = roster.autoReview { autoReview = incoming.toModel() }
@@ -1571,9 +1575,110 @@ final class AppStore {
     func togglePin(_ id: Chat.ID) {
         guard let index = chats.firstIndex(where: { $0.id == id }) else { return }
         chats[index].isPinned.toggle()
+        // A pinned chat is back in the sidebar.
+        if chats[index].isPinned { chats[index].isHidden = false }
         sortChats()
         emit(.chatsChanged)
         perform("chats.pin", ["chat_id": id, "pinned": chats.first { $0.id == id }?.isPinned ?? false])
+    }
+
+    /// Takes a chat out of the sidebar, or puts it back. A hidden chat is not pinned.
+    func setHidden(_ id: Chat.ID, _ hidden: Bool) {
+        guard let index = chats.firstIndex(where: { $0.id == id }), chats[index].isHidden != hidden else { return }
+        chats[index].isHidden = hidden
+        if hidden { chats[index].isPinned = false }
+        sortChats()
+        emit(.chatsChanged)
+        perform("chats.hide", ["chat_id": id, "hidden": hidden])
+    }
+
+    /// Turns a chat's alerts off on every Device until `until`, or until unmuted.
+    func mute(_ id: Chat.ID, until: Date?) {
+        guard let index = chats.firstIndex(where: { $0.id == id }) else { return }
+        chats[index].mute = Chat.Mute(until: until)
+        emit(.chatsChanged)
+        var params: [String: Any] = ["chat_id": id, "muted": true]
+        if let until { params["until"] = until.timeIntervalSince1970 }
+        perform("chats.mute", params)
+    }
+
+    func unmute(_ id: Chat.ID) {
+        guard let index = chats.firstIndex(where: { $0.id == id }), chats[index].mute != nil else { return }
+        chats[index].mute = nil
+        emit(.chatsChanged)
+        perform("chats.mute", ["chat_id": id, "muted": false])
+    }
+
+    // MARK: - Sidebar sections
+
+    func section(_ id: SidebarSection.ID) -> SidebarSection? {
+        sections.first { $0.id == id }
+    }
+
+    /// Adds a section after the others, with `chatID` moved into it.
+    func createSection(named name: String, moving chatID: Chat.ID? = nil) {
+        let name = Self.sectionName(name)
+        guard !name.isEmpty else { return }
+        let section = SidebarSection(id: "section-\(UUID().uuidString.lowercased().prefix(8))", name: name)
+        sections.append(section)
+        if let chatID, let index = chats.firstIndex(where: { $0.id == chatID }) { chats[index].sectionID = section.id }
+        emit(.chatsChanged)
+        var params: [String: Any] = ["id": section.id, "name": section.name]
+        if let chatID { params["chat_id"] = chatID }
+        perform("sections.create", params)
+    }
+
+    func renameSection(_ id: SidebarSection.ID, to name: String) {
+        let name = Self.sectionName(name)
+        guard !name.isEmpty, let index = sections.firstIndex(where: { $0.id == id }), sections[index].name != name else { return }
+        sections[index].name = name
+        emit(.chatsChanged)
+        perform("sections.rename", ["id": id, "name": name])
+    }
+
+    /// Deletes a section; its chats go back to the chats in no section.
+    func deleteSection(_ id: SidebarSection.ID) {
+        guard sections.contains(where: { $0.id == id }) else { return }
+        sections.removeAll { $0.id == id }
+        for index in chats.indices where chats[index].sectionID == id { chats[index].sectionID = nil }
+        emit(.chatsChanged)
+        perform("sections.delete", ["id": id])
+    }
+
+    /// Puts a section at `place` among the sections.
+    func moveSection(_ id: SidebarSection.ID, to place: Int) {
+        guard let from = sections.firstIndex(where: { $0.id == id }) else { return }
+        let to = max(0, min(sections.count - 1, place))
+        guard to != from else { return }
+        sections.insert(sections.remove(at: from), at: to)
+        emit(.chatsChanged)
+        perform("sections.reorder", ["ids": sections.map(\.id)])
+    }
+
+    func setSectionCollapsed(_ id: SidebarSection.ID, _ collapsed: Bool) {
+        guard let index = sections.firstIndex(where: { $0.id == id }), sections[index].isCollapsed != collapsed else { return }
+        sections[index].isCollapsed = collapsed
+        emit(.chatsChanged)
+        perform("sections.collapse", ["id": id, "collapsed": collapsed])
+    }
+
+    /// Lists a chat under a section, or with the chats in no section, where the sidebar shows
+    /// it: off the pinned rows and out of Hidden.
+    func moveChat(_ id: Chat.ID, toSection sectionID: SidebarSection.ID?) {
+        guard let index = chats.firstIndex(where: { $0.id == id }) else { return }
+        let chat = chats[index]
+        guard chat.sectionID != sectionID || chat.isPinned || chat.isHidden else { return }
+        chats[index].sectionID = sectionID
+        chats[index].isPinned = false
+        chats[index].isHidden = false
+        sortChats()
+        emit(.chatsChanged)
+        perform("chats.set_section", ["chat_id": id, "section_id": sectionID ?? NSNull()])
+    }
+
+    /// One line of at most 60 characters, as the CLI keeps it.
+    static func sectionName(_ name: String) -> String {
+        String(name.split(whereSeparator: \.isWhitespace).joined(separator: " ").prefix(60))
     }
 
     /// Asks the CLI for the page of messages before the chat's first one. The transcript calls
@@ -2222,6 +2327,7 @@ final class AppStore {
         mockPlaybooks = MockData.playbooks()
         autoReview = MockData.autoReview()
         sharedLinks = MockData.sharedLinks()
+        sections = MockData.sections()
         providers = MockData.providers()
         catalog = MockData.models()
         sortChats()

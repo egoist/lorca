@@ -32,6 +32,7 @@ enum Wire {
         var devices: [Device]
         var bots: [Bot]
         var chats: [Chat]
+        var sections: [Section]?
         var routines: [Routine]?
         var reviews: [ReviewItem]?
         var tasks: [DurableTask]?
@@ -417,11 +418,28 @@ enum Wire {
         var ownerBotId: String?
         var description: String?
         var isPinned: Bool
+        var sectionId: String?
+        var isHidden: Bool?
+        var mute: Mute?
         var createdAt: Double
         var messages: [Message]?
         var unreadCount: Int?
         var usage: ChatUsage?
         var hasMore: Bool?
+
+        struct Mute: Decodable {
+            var until: Double?
+        }
+    }
+
+    struct Section: Decodable {
+        var id: String
+        var name: String
+        var collapsed: Bool?
+
+        func toModel() -> SidebarSection {
+            SidebarSection(id: id, name: name, isCollapsed: collapsed ?? false)
+        }
     }
 
     struct MessagePage: Decodable {
@@ -602,6 +620,7 @@ enum Wire {
         var devices: [Device]
         var bots: [Bot]
         var chats: [Chat]
+        var sections: [Section]?
         var routines: [Routine]?
         var playbooks: [PlaybookSummary]?
         var autoReview: AutoReview?
@@ -821,7 +840,10 @@ extension Wire.Chat {
             usage: usage?.toModel(),
             hasMore: hasMore ?? existingHasMore,
             ownerBotID: ownerBotId,
-            groupDescription: modelKind == .group ? description ?? "" : ""
+            groupDescription: modelKind == .group ? description ?? "" : "",
+            sectionID: sectionId,
+            isHidden: isHidden ?? false,
+            mute: mute.map { Chat.Mute(until: $0.until.map(Date.init(timeIntervalSince1970:))) }
         )
     }
 }

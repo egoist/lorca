@@ -50,7 +50,7 @@ struct ChatNotification: Equatable {
     }
 
     func canDeliver(in chat: Chat, watchedChat: Chat.ID?) -> Bool {
-        guard watchedChat != chat.id, chat.unreadCount > 0,
+        guard watchedChat != chat.id, chat.unreadCount > 0, !chat.isMuted,
             let message = chat.messages.first(where: { $0.id == messageID })
         else { return false }
         return ChatNotification(message) == self

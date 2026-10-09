@@ -2,8 +2,8 @@ import AppKit
 import UserNotifications
 
 /// System notifications for replies, failed responses, and pending confirmations,
-/// unless read on a paired Device; a click brings the app forward on the chat. The
-/// same "looking at" fact goes to the CLI (`ui.watching`), so a Runner does not push a reply
+/// unless read on a paired Device or the chat is muted; a click brings the app forward on the
+/// chat. The same "looking at" fact goes to the CLI (`ui.watching`), so no Runner pushes a reply
 /// the user is watching arrive to their phone.
 @MainActor
 final class Notifier: NSObject, UNUserNotificationCenterDelegate {
@@ -49,12 +49,16 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
                 MainActor.assumeIsolated { self?.watchingChanged() }
             }
         }
+        observePresence()
         watchingChanged()
     }
 
-    /// The chat the user is looking at: the app is frontmost and its window shows the chat.
+    /// The chat the user is looking at: the app is frontmost, its window shows the chat, and the
+    /// user is at the computer, with the screen awake and unlocked and some input in the last
+    /// few minutes.
     private var watchedChat: Chat.ID? {
-        NSApp.isActive ? visibleChat() : nil
+        guard NSApp.isActive, !screenAway, Self.idleSeconds < Self.awayAfter else { return nil }
+        return visibleChat()
     }
 
     /// Call when the selection or the window's visibility changes.
@@ -64,6 +68,46 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         store.setWatchedChat(watched)
         // Whatever was posted for the chat now on screen has been seen.
         if let watched { clear(watched) }
+        // Input stopping is noticed by looking again; so is input coming back.
+        presenceCheck?.invalidate()
+        presenceCheck = nil
+        if NSApp.isActive, !screenAway, visibleChat() != nil {
+            presenceCheck = Timer.scheduledTimer(withTimeInterval: 15, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated { self?.watchingChanged() }
+            }
+        }
+    }
+
+    // MARK: - Presence
+
+    /// Without input for this long, the user is taken to be away from the screen.
+    private static let awayAfter: TimeInterval = 300
+    private var screenAway = false
+    private var presenceCheck: Timer?
+
+    private static var idleSeconds: TimeInterval {
+        CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!)
+    }
+
+    /// A locked or sleeping screen, or another user's session in front, is a user away.
+    private func observePresence() {
+        let workspace = NSWorkspace.shared.notificationCenter
+        let away: [(NotificationCenter, Notification.Name, Bool)] = [
+            (workspace, NSWorkspace.screensDidSleepNotification, true),
+            (workspace, NSWorkspace.screensDidWakeNotification, false),
+            (workspace, NSWorkspace.sessionDidResignActiveNotification, true),
+            (workspace, NSWorkspace.sessionDidBecomeActiveNotification, false),
+            (DistributedNotificationCenter.default(), Notification.Name("com.apple.screenIsLocked"), true),
+            (DistributedNotificationCenter.default(), Notification.Name("com.apple.screenIsUnlocked"), false),
+        ]
+        for (center, name, isAway) in away {
+            center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.screenAway = isAway
+                    self?.watchingChanged()
+                }
+            }
+        }
     }
 
     // MARK: - Posting

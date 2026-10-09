@@ -89,7 +89,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     private func updateDockBadge() {
-        let unreadCount = store.hasIdentity == false ? 0 : store.chats.reduce(0) { $0 + $1.unreadCount }
+        // A muted chat keeps its count in the sidebar but leaves the Dock alone.
+        let unreadCount = store.hasIdentity == false ? 0 : store.chats.reduce(0) { $0 + ($1.isMuted ? 0 : $1.unreadCount) }
         NSApp.dockTile.badgeLabel = unreadCount > 0 ? String(unreadCount) : nil
     }
 

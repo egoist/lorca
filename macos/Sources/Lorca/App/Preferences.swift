@@ -11,6 +11,8 @@ enum Preferences {
         static let showTimestamps = "lorca.showTimestamps"
         static let dictationLanguage = "lorca.dictationLanguage"
         static let appearance = "lorca.appearance"
+        static let showsHiddenChats = "lorca.showsHiddenChats"
+        static let collapsesOtherChats = "lorca.collapsesOtherChats"
     }
 
     /// The look picked in Settings › General, in the order its pop-up lists them.
@@ -55,6 +57,19 @@ enum Preferences {
     static var showTimestamps: Bool {
         get { defaults.object(forKey: Key.showTimestamps) as? Bool ?? true }
         set { defaults.set(newValue, forKey: Key.showTimestamps) }
+    }
+
+    /// Whether the sidebar's Hidden group is open. It starts folded.
+    static var showsHiddenChats: Bool {
+        get { defaults.bool(forKey: Key.showsHiddenChats) }
+        set { defaults.set(newValue, forKey: Key.showsHiddenChats) }
+    }
+
+    /// Whether the sidebar's group of chats in no section is folded. Sections fold on every
+    /// Device through the roster; this group and Hidden fold on this Mac alone.
+    static var collapsesOtherChats: Bool {
+        get { defaults.bool(forKey: Key.collapsesOtherChats) }
+        set { defaults.set(newValue, forKey: Key.collapsesOtherChats) }
     }
 
     /// Applied at launch, before any window shows.

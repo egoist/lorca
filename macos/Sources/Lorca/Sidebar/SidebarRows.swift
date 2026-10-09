@@ -22,6 +22,8 @@ final class SidebarNode: NSObject {
     enum Kind: Hashable {
         case header(String)
         case chat(Chat.ID)
+        /// A group of chats under a header that folds: a section, the chats in none, or Hidden.
+        case group(SidebarGroup)
         case pane(SettingsPane)
         /// A search result in the settings sidebar: one setting on its pane.
         case setting(SettingsEntry)
@@ -36,7 +38,7 @@ final class SidebarNode: NSObject {
 
     var selection: Selection? {
         switch kind {
-        case .header: nil
+        case .header, .group: nil
         case let .chat(id): .chat(id)
         case let .pane(pane): .settings(pane)
         case let .setting(entry): .settings(entry.pane)
@@ -48,9 +50,76 @@ final class SidebarNode: NSObject {
         return nil
     }
 
+    var group: SidebarGroup? {
+        if case let .group(group) = kind { return group }
+        return nil
+    }
+
     var isHeader: Bool {
-        if case .header = kind { return true }
-        return false
+        switch kind {
+        case .header, .group: true
+        default: false
+        }
+    }
+}
+
+/// A folding group of the chats sidebar.
+enum SidebarGroup: Hashable {
+    /// One of the account's sections.
+    case section(SidebarSection.ID)
+    /// The chats in no section, listed after the sections.
+    case others
+    /// The hidden chats, at the end.
+    case hidden
+
+    var sectionID: SidebarSection.ID? {
+        if case let .section(id) = self { return id }
+        return nil
+    }
+}
+
+/// What the chats sidebar lists, in order: the pinned chats; each section with its chats, then
+/// the chats in no section under Chats; and the hidden chats under Hidden. Without sections the
+/// chats are one list with no header, and without hidden chats there is no Hidden.
+struct SidebarLayout: Equatable {
+    enum Entry: Equatable {
+        case chat(Chat.ID)
+        case group(Group)
+    }
+
+    struct Group: Equatable {
+        var kind: SidebarGroup
+        var chatIDs: [Chat.ID]
+        var isCollapsed: Bool
+    }
+
+    var entries: [Entry]
+
+    /// `chats` in the store's order: pinned first, then by activity.
+    init(chats: [Chat], sections: [SidebarSection], showsHidden: Bool, collapsesOthers: Bool) {
+        let listed = chats.filter { !$0.isHidden }
+        let hidden = chats.filter(\.isHidden).map(\.id)
+        if sections.isEmpty {
+            entries = listed.map { .chat($0.id) }
+        } else {
+            let known = Set(sections.map(\.id))
+            let loose = listed.filter { !$0.isPinned }
+            entries = listed.filter(\.isPinned).map { .chat($0.id) }
+            entries += sections.map { section in
+                .group(Group(kind: .section(section.id), chatIDs: loose.filter { $0.sectionID == section.id }.map(\.id), isCollapsed: section.isCollapsed))
+            }
+            let others = loose.filter { $0.sectionID.map { !known.contains($0) } ?? true }.map(\.id)
+            if !others.isEmpty {
+                entries.append(.group(Group(kind: .others, chatIDs: others, isCollapsed: collapsesOthers)))
+            }
+        }
+        if !hidden.isEmpty {
+            entries.append(.group(Group(kind: .hidden, chatIDs: hidden, isCollapsed: !showsHidden)))
+        }
+    }
+
+    var groups: [Group] {
+        entries.compactMap { if case let .group(group) = $0 { group } else { nil } }
     }
 }
 
@@ -99,6 +168,7 @@ final class SidebarHeaderCell: NSTableCellView {
     /// A header may carry one action for its section, shown as a plus at the trailing edge.
     func configure(_ title: String, actionTooltip: String? = nil, onAction: (() -> Void)? = nil) {
         label.stringValue = title
+        setAccessibilityLabel(title)
         self.onAction = onAction
         button.isHidden = onAction == nil
         button.toolTip = actionTooltip
@@ -229,6 +299,7 @@ final class SidebarChatCell: NSTableCellView {
         var preview: String
         var stamp: String
         var isPinned: Bool
+        var isMuted: Bool
         var unreadCount: Int
 
         @MainActor
@@ -239,6 +310,7 @@ final class SidebarChatCell: NSTableCellView {
             preview = store.preview(for: chat)
             stamp = Format.stamp(chat.lastActivity)
             isPinned = chat.isPinned
+            isMuted = chat.isMuted
             unreadCount = chat.unreadCount
         }
     }
@@ -252,6 +324,7 @@ final class SidebarChatCell: NSTableCellView {
     private let stamp = Build.label(
         "", font: Theme.Font.caption, color: .tertiaryLabelColor, alignment: .right)
     private let pin = NSImageView()
+    private let muted = NSImageView()
     /// Unread messages: a pill holding the count.
     private let badge = BackgroundView()
     private let count = Build.label(
@@ -268,6 +341,10 @@ final class SidebarChatCell: NSTableCellView {
     // and preview claim the reclaimed space by switching which view they stop at.
     private lazy var titleBeforePin = title.trailingAnchor.constraint(
         lessThanOrEqualTo: pin.leadingAnchor, constant: -5)
+    private lazy var titleBeforeMuted = title.trailingAnchor.constraint(
+        lessThanOrEqualTo: muted.leadingAnchor, constant: -5)
+    private lazy var mutedBeforePin = muted.trailingAnchor.constraint(equalTo: pin.leadingAnchor, constant: -3)
+    private lazy var mutedBeforeStamp = muted.trailingAnchor.constraint(equalTo: stamp.leadingAnchor, constant: -4)
     private lazy var titleBeforeStamp = title.trailingAnchor.constraint(
         lessThanOrEqualTo: stamp.leadingAnchor, constant: -6)
     private lazy var previewBeforeBadge = preview.trailingAnchor.constraint(
@@ -284,16 +361,22 @@ final class SidebarChatCell: NSTableCellView {
         pin.translatesAutoresizingMaskIntoConstraints = false
         pin.isHidden = true
 
+        muted.image = NSImage(systemSymbolName: "bell.slash.fill", accessibilityDescription: L("Muted"))
+        muted.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 9, weight: .medium)
+        muted.contentTintColor = .tertiaryLabelColor
+        muted.translatesAutoresizingMaskIntoConstraints = false
+        muted.isHidden = true
+
         badge.cornerRadius = 8
         badge.isHidden = true
         badge.addSubview(count)
 
-        for tight in [stamp, pin, badge, count] as [NSView] {
+        for tight in [stamp, pin, muted, badge, count] as [NSView] {
             tight.setContentCompressionResistancePriority(.required, for: .horizontal)
             tight.setContentHuggingPriority(.required, for: .horizontal)
         }
 
-        for subview in [avatars, title, preview, stamp, pin, badge] as [NSView] {
+        for subview in [avatars, title, preview, stamp, pin, muted, badge] as [NSView] {
             addSubview(subview)
         }
 
@@ -306,6 +389,7 @@ final class SidebarChatCell: NSTableCellView {
 
             pin.trailingAnchor.constraint(equalTo: stamp.leadingAnchor, constant: -4),
             pin.firstBaselineAnchor.constraint(equalTo: title.firstBaselineAnchor),
+            muted.firstBaselineAnchor.constraint(equalTo: title.firstBaselineAnchor),
 
             stamp.trailingAnchor.constraint(
                 equalTo: trailingAnchor, constant: -SidebarMetric.trailingInset),
@@ -342,8 +426,14 @@ final class SidebarChatCell: NSTableCellView {
         updateStamp()
 
         pin.isHidden = !content.isPinned
-        titleBeforePin.isActive = content.isPinned
-        titleBeforeStamp.isActive = !content.isPinned
+        muted.isHidden = !content.isMuted
+        // Deactivate before activating, so no two of a kind hold at once.
+        for constraint in [titleBeforePin, titleBeforeMuted, titleBeforeStamp, mutedBeforePin, mutedBeforeStamp] {
+            constraint.isActive = false
+        }
+        mutedBeforePin.isActive = content.isPinned
+        mutedBeforeStamp.isActive = !content.isPinned
+        (content.isMuted ? titleBeforeMuted : content.isPinned ? titleBeforePin : titleBeforeStamp).isActive = true
 
         let unread = content.unreadCount
         badge.isHidden = unread == 0
@@ -353,7 +443,7 @@ final class SidebarChatCell: NSTableCellView {
         previewBeforeBadge.isActive = unread > 0
         previewBeforeEdge.isActive = unread == 0
         setAccessibilityLabel(
-            [title.stringValue, unreadLabel, avatars.isWorking ? L("Working") : nil]
+            [title.stringValue, unreadLabel, content.isMuted ? L("Muted") : nil, avatars.isWorking ? L("Working") : nil]
                 .compactMap { $0 }.joined(separator: ", "))
         applyBackgroundStyle()
     }
@@ -371,6 +461,7 @@ final class SidebarChatCell: NSTableCellView {
         preview.textColor = emphasized ? NSColor.white.withAlphaComponent(0.75) : .secondaryLabelColor
         stamp.textColor = emphasized ? NSColor.white.withAlphaComponent(0.65) : .tertiaryLabelColor
         pin.contentTintColor = emphasized ? NSColor.white.withAlphaComponent(0.7) : .tertiaryLabelColor
+        muted.contentTintColor = pin.contentTintColor
         badge.fillColor = emphasized ? NSColor.white.withAlphaComponent(0.25) : .tertiaryLabelColor
     }
 }

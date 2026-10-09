@@ -1344,8 +1344,27 @@ struct Chat: Identifiable, Hashable {
     var ownerBotID: Bot.ID? = nil
     /// What a group is for, which every member reads in its system prompt; empty for none.
     var groupDescription = ""
+    /// The sidebar section the chat is listed under; none lists it with the chats in no section.
+    var sectionID: SidebarSection.ID? = nil
+    /// Out of the sidebar but kept: search finds it, and the sidebar's Hidden group lists it.
+    var isHidden = false
+    /// Set while the chat's alerts are off on every Device.
+    var mute: Mute? = nil
+
+    /// Alerts are off until `until`, or until unmuted without one.
+    struct Mute: Hashable {
+        var until: Date?
+    }
 
     var isGroup: Bool { kind == .group }
+
+    /// Whether the chat's alerts are off now. The unread count is kept either way.
+    var isMuted: Bool { isMuted(at: Date()) }
+
+    func isMuted(at date: Date) -> Bool {
+        guard let mute else { return false }
+        return mute.until.map { date < $0 } ?? true
+    }
 
     /// A group's owner: the one set, else the first member, as the CLI picks.
     var owner: Bot.ID? {
@@ -1370,6 +1389,16 @@ struct Chat: Identifiable, Hashable {
     }
 }
 
+
+// MARK: - Sidebar sections
+
+/// A named group of chats in the sidebar. Every Device shows the same sections, in the same
+/// order, folded the same way.
+struct SidebarSection: Identifiable, Hashable {
+    let id: String
+    var name: String
+    var isCollapsed = false
+}
 
 // MARK: - Usage
 

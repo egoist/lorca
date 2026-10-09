@@ -1485,14 +1485,19 @@ impl App {
         self.roster_changed(true);
     }
 
-    /// Lists a chat under a section, or with the chats in no section.
+    /// Lists a chat under a section, or with the chats in no section, where the sidebar shows
+    /// it: off the pinned rows and out of Hidden.
     pub fn set_chat_section(&self, chat_id: &str, section_id: Option<String>) -> anyhow::Result<()> {
         if let Some(id) = &section_id {
             if !self.state.lock().unwrap().sections.iter().any(|section| &section.id == id) {
                 anyhow::bail!("Unknown section");
             }
         }
-        self.update_chat_meta(chat_id, |meta| meta.section_id = section_id)
+        self.update_chat_meta(chat_id, |meta| {
+            meta.section_id = section_id;
+            meta.is_pinned = false;
+            meta.is_hidden = false;
+        })
     }
 
     /// Takes a chat out of the sidebar, or puts it back. A hidden chat is not pinned.

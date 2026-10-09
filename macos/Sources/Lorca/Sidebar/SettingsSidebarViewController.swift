@@ -335,7 +335,7 @@ extension SettingsSidebarViewController: NSOutlineViewDelegate {
             cell.configure(entry: entry)
             return cell
 
-        case .chat:
+        case .chat, .group:
             return nil
         }
     }
