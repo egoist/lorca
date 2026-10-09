@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Routine } from "../core/model";
-import { lastCheckSummary, missedRuns, problemExplanation, problemNeedsUser, problemWord, routineDetail, routineProblem, scheduleSummary } from "./routines";
+import { lastCheck, lastRun, missedRuns, problemExplanation, problemNeedsUser, problemWord, routineDetail, routineProblem, timezoneLabel } from "./routines";
 
 // A routine as the core sends it: its timezone, missed-run policy, state, and check health.
 const base: Routine = {
@@ -36,19 +36,22 @@ describe("routines", () => {
     expect(routineProblem(routine({}))).toBeUndefined();
   });
 
-  test("the schedule names another timezone only, and an interval none", () => {
+  test("a routine names another timezone only, and an interval none", () => {
     const now = new Date(Date.UTC(2026, 9, 10, 12));
     const here = -now.getTimezoneOffset();
     // A zone 14 hours ahead of UTC is another zone wherever the test runs, except there.
     const away = here === 14 * 60 ? "Europe/London" : "Pacific/Kiritimati";
-    expect(scheduleSummary(routine({ timezone: away }), now)).toBe(`Weekdays at 9:00 AM (${away === "Europe/London" ? "London" : "Kiritimati"} time)`);
-    expect(scheduleSummary(routine({ timezone: "America/New_York", schedule: "every 2h", schedule_text: "Every 2 hours" }), now)).toBe("Every 2 hours");
-    expect(scheduleSummary(routine({ timezone: "Mars/Base" }), now)).toBe("Weekdays at 9:00 AM");
+    expect(timezoneLabel(routine({ timezone: away }), now)).toBe(`${away === "Europe/London" ? "London" : "Kiritimati"} time`);
+    expect(timezoneLabel(routine({ timezone: "America/New_York", schedule: "every 2h", schedule_text: "Every 2 hours" }), now)).toBeUndefined();
+    expect(timezoneLabel(routine({ timezone: "Mars/Base" }), now)).toBeUndefined();
+    expect(timezoneLabel(routine({ timezone: Intl.DateTimeFormat().resolvedOptions().timeZone }), now)).toBeUndefined();
   });
 
-  test("the last check says how it went, and missed runs what they do", () => {
-    expect(lastCheckSummary(routine({}))).toBeUndefined();
-    expect(lastCheckSummary(routine({ check: "x", health: { last_check_at: Date.now() / 1000, status: "quiet" } }))).toEndWith(" · nothing new");
+  test("the last check and run say how they went, and missed runs what they do", () => {
+    expect(lastCheck(routine({}))).toBeUndefined();
+    expect(lastCheck(routine({ check: "x", health: { last_check_at: Date.now() / 1000, status: "quiet" } }))?.outcome).toBe("Nothing new");
+    expect(lastRun(routine({}))).toEqual({ when: "Never" });
+    expect(lastRun(routine({ last_run_at: Date.now() / 1000, last_outcome: "pass" })).outcome).toBe("Nothing to report");
     expect(missedRuns(routine({}), "Workbench").value).toBe("Run once");
     expect(missedRuns(routine({ missed_run_policy: "skip" }), "Workbench").note).toBe("When Workbench was off at a scheduled time, the routine waits for the next one.");
   });

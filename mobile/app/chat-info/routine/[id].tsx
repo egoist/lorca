@@ -1,6 +1,6 @@
 // One routine, slid in from its row in the chat's Details, after the Mac app's routine sheet: how
 // it stands, with what happened and how to fix it when something went wrong, Run Now, Pause or
-// Resume, and its Limits; the schedule (with its timezone when the phone keeps other hours), the
+// Resume, and its Limits; the schedule with its timezone when the phone keeps other hours, the
 // next run, what happens to runs its Runner missed, and its last check and run; the task, the
 // check, and Delete. The bot owns the routine: the user asks it in chat to change one.
 
@@ -11,10 +11,10 @@ import { deviceName } from "../../../src/core/model";
 import { useBotMap, useBudget, useRoutines, useStore } from "../../../src/core/store";
 import { t, useLanguage } from "../../../src/i18n";
 import { alert } from "../../../src/ui/alert";
-import { daySeparator, lastRunSummary } from "../../../src/ui/format";
+import { daySeparator, scheduleText } from "../../../src/ui/format";
 import { Row, Section } from "../../../src/ui/forms";
 import { isStopped, limitsSummary, stoppedDetail, stoppedLabel } from "../../../src/ui/limits";
-import { checkIsFailing, lastCheckSummary, missedRuns, nextRunText, problemExplanation, problemNeedsUser, problemWord, routineProblem, scheduleSummary } from "../../../src/ui/routines";
+import { checkIsFailing, lastCheck, lastRun, missedRuns, nextRunText, problemExplanation, problemNeedsUser, problemWord, routineProblem, timezoneLabel } from "../../../src/ui/routines";
 import { Symbol } from "../../../src/ui/Symbol";
 import { accentColor, Font, usePalette } from "../../../src/ui/theme";
 
@@ -48,7 +48,8 @@ export default function RoutineScreen() {
   // A run needs its Runner online, and a routine paused by failed sign-ins needs Resume.
   const canRun = !routine.is_running && routine.state !== "waiting_for_runner" && routine.paused_reason !== "authentication";
   const missed = missedRuns(routine, runnerName);
-  const lastCheck = lastCheckSummary(routine);
+  const checked = lastCheck(routine);
+  const ran = lastRun(routine);
   const lastSuccess = routine.health?.last_success_at;
 
   function confirmDelete() {
@@ -83,13 +84,14 @@ export default function RoutineScreen() {
         </Section>
 
         <Section title={t("Schedule")} footer={missed.note}>
-          <Row title={t("Schedule")} detail={scheduleSummary(routine)} />
+          <Row title={scheduleText(routine.schedule_text)} detail={timezoneLabel(routine)} />
           <Row title={routine.check ? t("Next check") : t("Next run")} detail={nextRunText(routine) ?? "—"} />
           <Row title={t("Missed runs")} detail={missed.value} />
-          {lastCheck ? <Row title={t("Last check")} detail={lastCheck} /> : null}
+          {/* The time on the right and how it went under the title, so neither is cut short. */}
+          {checked ? <Row title={t("Last check")} subtitle={checked.outcome} detail={checked.when} /> : null}
           {/* Only a failing check has a success to tell apart from it. */}
-          {lastCheck && checkIsFailing(routine) ? <Row title={t("Last successful check")} detail={lastSuccess ? daySeparator(new Date(lastSuccess * 1000)) : t("Never")} /> : null}
-          <Row title={t("Last run")} detail={lastRunSummary(routine)} />
+          {checked && checkIsFailing(routine) ? <Row title={t("Last successful check")} detail={lastSuccess ? daySeparator(new Date(lastSuccess * 1000)) : t("Never")} /> : null}
+          <Row title={t("Last run")} subtitle={ran.outcome} detail={ran.when} />
         </Section>
 
         <Section title={t("Task")} footer={t("Ask {name} in chat to change this routine.", { name: bot.name })}>

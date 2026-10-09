@@ -94,37 +94,37 @@ function offsetIn(zone: string, at: Date): number | undefined {
   }
 }
 
-/// The schedule in words, with its timezone when the phone keeps other hours, now or in half a
-/// year: "Weekdays at 9:00 AM (New York time)". An interval counts time, whatever the zone.
-export function scheduleSummary(routine: Routine, now = new Date()): string {
-  const text = scheduleText(routine.schedule_text);
+/// The routine's timezone, as "New York time", when the phone keeps other hours now or in half a
+/// year; none for an interval, which counts time whatever the zone. The Mac says it after the
+/// schedule; the phone's Schedule section gives it a row's value.
+export function timezoneLabel(routine: Routine, now = new Date()): string | undefined {
   const zone = routine.timezone;
-  if (!zone || routine.schedule.startsWith("every ")) return text;
+  if (!zone || routine.schedule.startsWith("every ")) return undefined;
   const differs = [now, new Date(now.getTime() + 182 * 86_400_000)].some((at) => {
     const there = offsetIn(zone, at);
     return there !== undefined && there !== -at.getTimezoneOffset();
   });
-  if (!differs) return text;
-  const city = zone.slice(zone.lastIndexOf("/") + 1).replace(/_/g, " ");
-  return t("{schedule} ({city} time)", { schedule: text, city });
+  return differs ? t("{city} time", { city: zone.slice(zone.lastIndexOf("/") + 1).replace(/_/g, " ") }) : undefined;
 }
 
-/// "Today 9:00 AM · nothing new", for a routine with a check that has run.
-export function lastCheckSummary(routine: Routine): string | undefined {
+/// When the routine's check last ran and how it went ("Nothing new"), for a routine with a
+/// check that has run.
+export function lastCheck(routine: Routine): { when: string; outcome?: string } | undefined {
   const at = routine.health?.last_check_at;
   if (!routine.check || !at) return undefined;
-  const when = daySeparator(new Date(at * 1000));
-  switch (routine.health?.status) {
-    case "quiet":
-      return `${when} · ${t("nothing new")}`;
-    case "ready":
-      return `${when} · ${t("found something")}`;
-    case "failed":
-    case "blocked":
-      return `${when} · ${t("failed")}`;
-  }
-  return when;
+  const outcome = { quiet: t("nothing new"), ready: t("found something"), failed: t("failed"), blocked: t("failed") }[routine.health?.status ?? ""];
+  return { when: daySeparator(new Date(at * 1000)), outcome: outcome && capitalized(outcome) };
 }
+
+/// When the routine last ran and how it ended ("Replied"), or Never.
+export function lastRun(routine: Routine): { when: string; outcome?: string } {
+  if (!routine.last_run_at) return { when: t("Never") };
+  const outcome = { sent: t("replied"), pass: t("nothing to report"), error: t("failed") }[routine.last_outcome ?? ""];
+  return { when: daySeparator(new Date(routine.last_run_at * 1000)), outcome: outcome && capitalized(outcome) };
+}
+
+/// A word that starts a line: "Nothing new". Chinese has no case and reads as it is.
+const capitalized = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 
 /// Whether the last check failed, so the last successful one says something.
 export const checkIsFailing = (routine: Routine) => routine.health?.status === "failed" || routine.health?.status === "blocked";
@@ -132,8 +132,7 @@ export const checkIsFailing = (routine: Routine) => routine.health?.status === "
 /// "Tomorrow 9:00 AM": the next run on a line of its own, as the last check and run read.
 export function nextRunText(routine: Routine): string | undefined {
   if (!routine.next_run_at) return undefined;
-  const when = upcoming(routine.next_run_at);
-  return when.charAt(0).toUpperCase() + when.slice(1);
+  return capitalized(upcoming(routine.next_run_at));
 }
 
 /// What happens to runs the Runner missed: the value, and what it means.

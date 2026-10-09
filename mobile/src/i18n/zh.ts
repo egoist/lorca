@@ -834,7 +834,7 @@ export const zh: Record<string, string> = {
   "The last check couldn’t sign in to a plugin. Sign in to it again on {runner}; after three failures in a row the routine pauses.": "上次检查无法登录插件。请在 {runner} 上重新登录；连续失败三次后例行任务会暂停。",
   "The check stopped with an error. {bot} got the error and can fix the check.": "检查出错停止了。{bot} 已收到错误，可以修好这个检查。",
   "The check tried to change something, or to use something this bot's Access leaves out. Ask {bot} to fix it.": "检查尝试修改内容，或使用此智能体的访问权限不允许的内容。请让 {bot} 修好它。",
-  "{schedule} ({city} time)": "{schedule}（{city} 时间）",
+  "{city} time": "{city} 时间",
   "nothing new": "没有新内容",
   "found something": "有新发现",
   "Skip": "跳过",
