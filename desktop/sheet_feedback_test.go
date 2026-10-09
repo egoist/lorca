@@ -220,8 +220,17 @@ func TestFeedbackFormIgnoresALateReply(t *testing.T) {
 	f.wait(t, tt, func() bool { return f.last("feedback.list") != nil && !m.hasSheet() })
 }
 
+// pinClock fixes the formatters' clock, which the demo's times also read, for one test: what a view
+// stamps and what the test expects come from the same instant, whatever minute or day it runs in.
+func pinClock(t *testing.T, at time.Time) {
+	t.Helper()
+	model.Now = func() time.Time { return at }
+	t.Cleanup(func() { model.Now = time.Now })
+}
+
 // The demo, as `LORCA_MOCK=1` shows it: Project Manager's feedback in the inspector and its sheets.
 func TestFeedbackInTheDemo(t *testing.T) {
+	pinClock(t, time.Date(2026, time.October, 7, 14, 30, 0, 0, time.Local))
 	m := demoWindow(t)
 	store.Subscribe(m.storeChanged)
 	m.sidebarCollapsed = true
@@ -293,7 +302,8 @@ func TestFeedbackInTheDemo(t *testing.T) {
 		t.Fatal(err)
 	}
 	settle(tt)
-	if !tt.HasText(L("Undone %@", model.Stamp(time.Now()))) {
+	undone := m.inspector.feedback["bot-nova"].Changes[0]
+	if !undone.IsUndo || !tt.HasText(L("Undone %@", model.Stamp(undone.CreatedAt))) {
 		t.Fatalf("no undo in the list: %q", tt.Texts())
 	}
 
