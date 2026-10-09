@@ -987,9 +987,8 @@ final class SwitchRow: NSView {
     /// A routine stopped at its limits says so before anything else, as a problem the user has
     /// to act on: it runs again only once the user resumes it.
     func configure(routine: Routine, stopped: String? = nil) {
-        let symbol = routine.isRunning ? "arrow.triangle.2.circlepath" : (routine.isEnabled ? "clock" : "pause.circle")
         configure(
-            symbol: symbol,
+            symbol: routine.symbol,
             tint: routine.isRunning ? .controlAccentColor : (routine.isEnabled ? .secondaryLabelColor : .tertiaryLabelColor),
             title: routine.name, detail: routine.detail, isOn: routine.isEnabled,
             toggleTooltip: routine.isEnabled ? L("Pause %@", routine.name) : L("Resume %@", routine.name), tooltip: routine.prompt)

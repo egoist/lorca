@@ -140,10 +140,39 @@ enum Wire {
         var missedRunPolicy: String?
         var state: String?
         var health: Health?
+        var onceAt: Double?
+        var pullRequest: PullRequest?
+        var calendar: Calendar?
+
+        struct PullRequest: Decodable {
+            var repo: String
+            var number: Int
+            var title: String?
+            var url: String?
+        }
+
+        struct Calendar: Decodable {
+            struct Event: Decodable { var title: String? }
+            var account: String?
+            var matching: String?
+            var minutes: Int?
+            var after: Bool?
+            var nextEvent: Event?
+        }
 
         func toModel() -> Lorca.Routine {
-            Lorca.Routine(
-                id: id, botID: botId, name: name, prompt: prompt, schedule: schedule, scheduleText: Format.schedule(scheduleText ?? schedule),
+            let watch = pullRequest.map { RoutineWatch(repo: $0.repo, number: $0.number, title: $0.title ?? "", url: $0.url.flatMap(URL.init(string:))) }
+            let events = calendar.map {
+                RoutineCalendar(account: $0.account ?? "", matching: $0.matching, minutes: $0.minutes ?? 0, after: $0.after ?? false, nextEventTitle: $0.nextEvent?.title)
+            }
+            let zone = TimeZone(identifier: timezone ?? "") ?? .current
+            let words: String =
+                if let watch { L("Watches %@", watch.label) }
+                else if let events { Format.aroundEvents(minutes: events.minutes, after: events.after, matching: events.matching) }
+                else if let onceAt { Format.once(Date(timeIntervalSince1970: onceAt), in: zone) }
+                else { Format.schedule(scheduleText ?? schedule) }
+            return Lorca.Routine(
+                id: id, botID: botId, name: name, prompt: prompt, schedule: schedule, scheduleText: words,
                 isEnabled: isEnabled, pausedReason: pausedReason, lastRunAt: lastRunAt.map { Date(timeIntervalSince1970: $0) },
                 lastOutcome: lastOutcome, nextRunAt: nextRunAt.map { Date(timeIntervalSince1970: $0) }, isRunning: isRunning ?? false,
                 createdAt: Date(timeIntervalSince1970: createdAt), check: check,
@@ -154,7 +183,8 @@ enum Wire {
                     lastSuccessAt: health?.lastSuccessAt.map { Date(timeIntervalSince1970: $0) },
                     status: health?.status, connectionFailures: health?.connectionFailures ?? 0,
                     authenticationFailures: health?.authenticationFailures ?? 0, modelStatus: health?.model?.status,
-                    modelAuthenticationFailures: health?.model?.authenticationFailures ?? 0))
+                    modelAuthenticationFailures: health?.model?.authenticationFailures ?? 0),
+                onceAt: onceAt.map { Date(timeIntervalSince1970: $0) }, pullRequest: watch, calendar: events)
         }
     }
 

@@ -718,7 +718,34 @@ enum MockData {
                     store('seen', [...seen, ...fresh.map((pr) => pr.number)]);
                     return fresh.map((pr) => `#${pr.number} ${pr.title}`).join('\\n');
                     """),
+            // A watch on one pull request, a one-time reminder, and a routine around calendar events.
+            Routine(
+                id: "rt-login-pr", botID: "bot-patch", name: "Login PR",
+                prompt: "Tell me what changed on the passkey sign-in pull request and whether it needs me.",
+                schedule: "every 10m", scheduleText: L("Watches %@", "acme/project#42"), isEnabled: true, pausedReason: nil,
+                lastRunAt: minutesAgo(50), lastOutcome: "sent", nextRunAt: Date().addingTimeInterval(6 * 60), isRunning: false,
+                createdAt: minutesAgo(60 * 24), health: RoutineHealth(lastCheckAt: minutesAgo(4), lastSuccessAt: minutesAgo(4), status: "quiet"),
+                pullRequest: RoutineWatch(repo: "acme/project", number: 42, title: "Add passkey sign-in", url: URL(string: "https://github.com/acme/project/pull/42"))),
+            Routine(
+                id: "rt-tag-release", botID: "bot-patch", name: "Tag the release",
+                prompt: "Remind me to tag v1.4.0 once the go/no-go call says go.",
+                schedule: "once", scheduleText: Format.once(tomorrowAtNine(), in: .current), isEnabled: true, pausedReason: nil,
+                lastRunAt: nil, lastOutcome: nil, nextRunAt: tomorrowAtNine(), isRunning: false,
+                createdAt: minutesAgo(120), onceAt: tomorrowAtNine()),
+            Routine(
+                id: "rt-call-prep", botID: "bot-scout", name: "Call prep",
+                prompt: "Write a one-page prep for the customer call: who they are, their open issues, and what to ask.",
+                schedule: "15m before events", scheduleText: Format.aroundEvents(minutes: 15, after: false, matching: "Customer call"), isEnabled: true,
+                pausedReason: nil, lastRunAt: minutesAgo(60 * 22), lastOutcome: "sent", nextRunAt: Date().addingTimeInterval(60 * 60), isRunning: false,
+                createdAt: minutesAgo(60 * 24 * 3),
+                calendar: RoutineCalendar(account: "Google Calendar · Work", matching: "Customer call", minutes: 15, after: false, nextEventTitle: "Customer call: Acme")),
         ]
+    }
+
+    /// Tomorrow at 9:00 AM on this Mac's clock.
+    private static func tomorrowAtNine() -> Date {
+        let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: Date())!
+        return Calendar.current.date(bySettingHour: 9, minute: 0, second: 0, of: tomorrow)!
     }
 
     /// Project Manager's feedback on its briefs, with one change suggested and one applied.
