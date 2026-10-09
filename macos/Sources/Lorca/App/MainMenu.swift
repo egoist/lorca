@@ -81,6 +81,7 @@ enum MainMenu {
         let menu = NSMenu()
         add(menu, L("New Bot…"), #selector(AppDelegate.newBot(_:)), "n")
         add(menu, L("New Group Chat…"), #selector(AppDelegate.newGroupChat(_:)), "n", modifiers: [.command, .shift])
+        add(menu, L("New Task…"), #selector(AppDelegate.newTask(_:)))
         menu.addItem(.separator())
         add(menu, L("Marketplace…"), #selector(AppDelegate.showMarketplace(_:)), "m", modifiers: [.command, .shift])
         menu.addItem(.separator())
@@ -118,6 +119,7 @@ enum MainMenu {
     private static func viewMenu() -> NSMenu {
         let menu = NSMenu()
         add(menu, L("Command Palette…"), #selector(AppDelegate.toggleCommandPalette(_:)), "k")
+        add(menu, L("Attention"), #selector(MainWindowController.toggleAttention(_:)), "a", modifiers: [.command, .shift])
         menu.addItem(.separator())
         add(menu, L("Toggle Sidebar"), #selector(NSSplitViewController.toggleSidebar(_:)), "b")
         add(
@@ -137,6 +139,7 @@ enum MainMenu {
         add(menu, L("Add Bot…"), #selector(RootSplitViewController.addBotToChat(_:)), "b", modifiers: [.command, .option])
         add(menu, L("Rename Chat…"), #selector(RootSplitViewController.renameChat(_:)), "r")
         add(menu, L("Pin Chat"), #selector(RootSplitViewController.togglePinChat(_:)), "p")
+        add(menu, L("New Skill…"), #selector(RootSplitViewController.newSkill(_:)))
         menu.addItem(.separator())
         add(menu, L("Stop Responding"), #selector(ChatViewController.stopResponding(_:)), ".")
         add(menu, L("Run Command in Background"), #selector(ChatViewController.runCommandsInBackground(_:)), "b", modifiers: .control)

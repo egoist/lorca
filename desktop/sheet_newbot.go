@@ -29,9 +29,6 @@ var newBotLooks = []newBotLook{
 	{"flame.fill", "red"},
 }
 
-// newBotLabelWidth is the labels' column; the controls take the rest of the sheet's width.
-const newBotLabelWidth = 76
-
 type newBotState struct {
 	name        string
 	description string
@@ -125,7 +122,7 @@ func (st *newBotState) view(c *ui.Context, s *sheet, onCreate func(botID string)
 	p := colors(c)
 	const width = 440
 	// The pop-ups fill the row after the label, as wide as the sheet's content allows.
-	fill := float32(width - 40 - newBotLabelWidth - 10)
+	fill := float32(width - 40 - formLabelWidth - 10)
 	catalog := st.catalog()
 	models := model.ProviderModels(catalog, st.provider)
 	levels := model.ThinkingLevels(catalog, st.provider, st.model)
@@ -136,10 +133,10 @@ func (st *newBotState) view(c *ui.Context, s *sheet, onCreate func(botID string)
 		Confirm:         L("Create Bot"),
 		ConfirmDisabled: !st.canCreate(),
 	}, func() {
-		newBotRow(c, L("Name"), false, func() {
+		formRow(c, L("Name"), false, func() {
 			textField(c, &st.name, fieldOptions{Placeholder: L("Name"), AutoFocus: true, Label: L("Name")}).Grow(1).MinWidth(0)
 		})
-		newBotRow(c, L("Description"), true, func() {
+		formRow(c, L("Description"), true, func() {
 			field := textArea(c, &st.description, 0, fieldOptions{Placeholder: L("What it does and how it should work"), Label: L("Description")}).
 				Lines(3, 12).Grow(1).MinWidth(0).MinHeight(54)
 			composing := field.Composing()
@@ -152,7 +149,7 @@ func (st *newBotState) view(c *ui.Context, s *sheet, onCreate func(botID string)
 				return true
 			})
 		})
-		newBotRow(c, L("Look"), false, func() {
+		formRow(c, L("Look"), false, func() {
 			ui.Row(c).Gap(8).Children(func() {
 				for i, look := range newBotLooks {
 					b := ui.ButtonBase(c).Size(26, 26).Radius(13).Label(look.symbolName).Role(ui.RoleToggleButton).Checked(i == st.look).Cursor(ui.CursorPointer)
@@ -168,7 +165,7 @@ func (st *newBotState) view(c *ui.Context, s *sheet, onCreate func(botID string)
 				}
 			})
 		})
-		newBotRow(c, L("Runner"), false, func() {
+		formRow(c, L("Runner"), false, func() {
 			var options []popUpOption
 			for _, device := range store.Runners() {
 				label := device.Name
@@ -185,7 +182,7 @@ func (st *newBotState) view(c *ui.Context, s *sheet, onCreate func(botID string)
 				st.runnerID = picked
 			}
 		})
-		newBotRow(c, L("Provider"), false, func() {
+		formRow(c, L("Provider"), false, func() {
 			options := make([]popUpOption, 0, len(st.kinds))
 			for _, kind := range st.kinds {
 				options = append(options, popUpOption{Value: kind, Label: model.ProviderName(kind, store.Providers) + " (" + model.ProviderSubtitle(kind) + ")"})
@@ -195,7 +192,7 @@ func (st *newBotState) view(c *ui.Context, s *sheet, onCreate func(botID string)
 				st.provider, st.model, st.thinking = picked, "", ""
 			}
 		})
-		newBotRow(c, L("Model"), false, func() {
+		formRow(c, L("Model"), false, func() {
 			first := ""
 			if len(models) > 0 {
 				first = models[0].Label
@@ -215,7 +212,7 @@ func (st *newBotState) view(c *ui.Context, s *sheet, onCreate func(botID string)
 		})
 		// Only the levels this model takes; a model without any has no choice to make.
 		if len(levels) > 0 {
-			newBotRow(c, L("Thinking"), false, func() {
+			formRow(c, L("Thinking"), false, func() {
 				options := []popUpOption{{Value: "", Label: L("Default")}}
 				for _, level := range levels {
 					options = append(options, popUpOption{Value: level.ID, Label: level.Label})
@@ -240,20 +237,4 @@ func (st *newBotState) view(c *ui.Context, s *sheet, onCreate func(botID string)
 	case result.Confirmed, returned && st.canCreate():
 		st.create(s, onCreate)
 	}
-}
-
-// newBotRow is a label in the labels' column and a control filling the rest of the line. A
-// control taller than a line keeps its label by its first line.
-func newBotRow(c *ui.Context, label string, top bool, control func()) {
-	row := ui.Row(c).Gap(10)
-	if top {
-		row.AlignItems(ui.Start)
-	}
-	row.Children(func() {
-		text := ui.Text(c, label).Width(newBotLabelWidth).FontSize(12).TextColor(colors(c).Label2).SingleLine()
-		if top {
-			text.Padding(6, 0, 0, 0)
-		}
-		ui.Row(c).Grow(1).MinWidth(0).Children(control)
-	})
 }

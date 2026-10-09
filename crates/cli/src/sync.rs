@@ -14,7 +14,7 @@ const BULK_BLOBS: usize = 20;
 
 /// What a pull takes. `file` blobs are left out: a transcript fetches them by id when it
 /// needs them, so a photo sent to one bot is not downloaded by every Device.
-pub const POLL_KINDS: &str = "roster,chat,machine,credentials,job,job_cancel,job_result,request,response";
+pub const POLL_KINDS: &str = "roster,task,project_context,playbook,chat,machine,credentials,review,handoff,attention,job,event,job_cancel,job_result,request,response";
 
 pub async fn run(app: Arc<App>) {
     let mut failures: u32 = 0;
@@ -222,7 +222,7 @@ async fn session(app: &Arc<App>, failures: &mut u32) -> Result<(), RelayError> {
 }
 
 /// Everything a Device polls for but the messages.
-const NOT_CHAT_KINDS: &str = "roster,machine,credentials,job,job_cancel,job_result,request,response";
+const NOT_CHAT_KINDS: &str = "roster,task,project_context,playbook,machine,credentials,review,handoff,attention,job,event,job_cancel,job_result,request,response";
 /// How much of each chat a Device takes when it first syncs: what a bot's turn reads.
 const FIRST_SYNC_MESSAGES: usize = 400;
 /// Messages to a page when reading a chat backwards.
@@ -268,7 +268,7 @@ async fn first_sync_quietly(app: &Arc<App>, url: &str, token: &str, machine_file
             break;
         };
         for blob in &blobs {
-            apply_blob(app, machine_file, blob);
+            apply_synced_blob(app, machine_file, blob)?;
         }
         since = last;
     }
@@ -339,6 +339,29 @@ async fn older_messages_from(app: &Arc<App>, url: &str, token: &str, machine_fil
 
 /// Pulls the log from `last_seq` until a page comes back empty.
 async fn pull_blobs(app: &Arc<App>, url: &str, token: &str, machine_file: &crate::keys::MachineFile) -> Result<(), RelayError> {
+    // An older build can already have consumed the relay log while ignoring attention or
+    // project context. Replay each of these bounded slot families once when its local table is
+    // empty; ordinary first sync already reads them through NOT_CHAT_KINDS.
+    if !app.attention_backfilled.load(Ordering::Relaxed) {
+        let local = |error: anyhow::Error| RelayError { status: None, message: error.to_string() };
+        let mut kinds = Vec::new();
+        if app.state.lock().unwrap().last_seq > 0 {
+            if app.store.attention_rows().map_err(local)?.is_empty() { kinds.push("attention"); }
+            if !app.store.has_project_entries().map_err(local)? { kinds.push("project_context"); }
+            if app.playbooks.lock().unwrap().records.is_empty() { kinds.push(crate::playbooks::BLOB_KIND); }
+        }
+        if !kinds.is_empty() {
+            let kinds = kinds.join(",");
+            let mut since = 0;
+            loop {
+                let (blobs, _) = app.relay.list_blobs(url, token, since, &kinds).await?;
+                let Some(last) = blobs.last().map(|blob| blob.seq) else { break };
+                for blob in &blobs { apply_blob(app, machine_file, blob); }
+                since = last;
+            }
+        }
+        app.attention_backfilled.store(true, Ordering::Relaxed);
+    }
     if app.state.lock().unwrap().last_seq == 0 && first_sync(app, url, token, machine_file).await? == FirstSync::CannotPage {
         // A relay that cannot page a chat: replay its log. It keeps the latest roster, which
         // in a replay comes after the messages, so that is taken first as a preview.
@@ -371,7 +394,11 @@ async fn pull_blobs(app: &Arc<App>, url: &str, token: &str, machine_file: &crate
             if bulk && blob.kind == "job_result" {
                 results.push(blob);
             } else {
-                apply_blob(app, machine_file, &blob);
+                if let Err(error) = apply_synced_blob(app, machine_file, &blob) {
+                    app.bulk_sync.store(false, Ordering::Relaxed);
+                    app.save_state_now();
+                    return Err(error);
+                }
             }
             let mut state = app.state.lock().unwrap();
             state.last_seq = state.last_seq.max(seq);
@@ -464,6 +491,7 @@ pub async fn ensure_registered(app: &Arc<App>, url: &str) -> Result<(), RelayErr
             }
         }
         app.push_roster();
+        crate::review_queue::enqueue_owned(app);
         app.push_history();
     }
     app.save_machine().map_err(|e| RelayError { status: None, message: e.to_string() })?;
@@ -712,6 +740,16 @@ pub async fn delete_remote_blob(app: &Arc<App>, id: &str) {
 
 // MARK: - Applying blobs
 
+fn apply_synced_blob(app: &Arc<App>, machine_file: &crate::keys::MachineFile, blob: &BlobIn) -> Result<(), RelayError> {
+    if blob.kind == "event" {
+        crate::event_triggers::receive_blob(app, machine_file, blob)
+            .map_err(|error| RelayError { status: None, message: format!("Persisting event delivery: {error}") })
+    } else {
+        apply_blob(app, machine_file, blob);
+        Ok(())
+    }
+}
+
 pub fn apply_blob(app: &Arc<App>, machine_file: &crate::keys::MachineFile, blob: &BlobIn) {
     let already = {
         let mut state = app.state.lock().unwrap();
@@ -734,6 +772,18 @@ fn apply_blob_contents(app: &Arc<App>, machine_file: &crate::keys::MachineFile, 
     let Ok(dek) = machine_file.dek() else { return };
 
     match blob.kind.as_str() {
+        "review" => {
+            if let Err(error) = crate::review_queue::apply(app, &ciphertext) { tracing::warn!(%error, "review blob"); }
+        }
+        "task" => match crate::crypto::decrypt_json::<crate::tasks::Task>(&dek, "task", &ciphertext) {
+            Ok(task) => { if let Err(error) = crate::tasks::apply(app, task) { tracing::warn!(%error, "task sync conflict"); } },
+            Err(error) => tracing::warn!(%error, "task blob"),
+        },
+        "attention" => {
+            if let Err(error) = crate::attention::receive(app, &ciphertext) {
+                tracing::warn!(%error, "attention blob");
+            }
+        }
         "roster" => match crate::crypto::decrypt_json::<RosterBlob>(&dek, "roster", &ciphertext) {
             Ok(roster) => apply_roster(app, roster),
             Err(error) => tracing::warn!(%error, "roster blob"),
@@ -742,11 +792,25 @@ fn apply_blob_contents(app: &Arc<App>, machine_file: &crate::keys::MachineFile, 
             Ok(op) => apply_chat_op(app, op),
             Err(error) => tracing::warn!(%error, "chat blob"),
         },
+        crate::playbooks::BLOB_KIND => {
+            if let Err(error) = crate::playbooks::apply_remote(app, &dek, &ciphertext) {
+                tracing::warn!(%error, "playbook blob");
+            }
+        }
+        "project_context" => match crate::crypto::decrypt_json::<crate::project_context::ProjectBlob>(&dek, "project_context", &ciphertext) {
+            Ok(project) => {
+                if let Err(error) = crate::project_context::apply_remote(app, &project.chat_id, &project.entry) {
+                    tracing::warn!(%error, chat_id = %project.chat_id, "applying shared project context");
+                }
+            }
+            Err(error) => tracing::warn!(%error, "project context blob"),
+        },
         "machine" => match crate::crypto::decrypt_json::<MachineBlob>(&dek, "machine", &ciphertext) {
-            Ok(MachineBlob { device, turns }) => {
+            Ok(MachineBlob { device, turns, budgets }) => {
                 if app.this_device_id().as_deref() == Some(device.id.as_str()) {
                     return;
                 }
+                app.budgets.merge_remote(app, &device.id, budgets);
                 // Shown only while the relay lists the Device online, so a key it no longer
                 // lists shows nothing.
                 app.set_device_turns(&device.id, turns);
@@ -775,10 +839,25 @@ fn apply_blob_contents(app: &Arc<App>, machine_file: &crate::keys::MachineFile, 
             Ok(credentials) => app.apply_credentials(&credentials),
             Err(error) => tracing::warn!(%error, "credentials blob"),
         },
+        "handoff" => match crate::crypto::decrypt_json::<crate::handoffs::HandoffUpdate>(&dek, "handoff", &ciphertext) {
+            Ok(update) => {
+                if let Err(error) = crate::handoffs::apply_update(app, update) {
+                    tracing::warn!(%error, "handoff update");
+                }
+            }
+            Err(error) => tracing::warn!(%error, "handoff blob"),
+        },
         "job" => {
             let Ok(machine) = machine_file.machine() else { return };
             match crate::crypto::unseal_json::<Job>(&machine.box_secret, &ciphertext) {
                 Ok(job) => {
+                    // The signed durable inbox alone admits event work and its budget scope.
+                    if job.kind == "event" {
+                        let app = app.clone();
+                        let blob_id = blob.id.clone();
+                        tokio::spawn(async move { delete_remote_blob(&app, &blob_id).await });
+                        return;
+                    }
                     crate::runtime::spawn_local_job(app.clone(), job, Some(blob.id.clone()));
                 }
                 Err(error) => tracing::warn!(%error, "job envelope"),
@@ -827,15 +906,20 @@ fn apply_blob_contents(app: &Arc<App>, machine_file: &crate::keys::MachineFile, 
 }
 
 fn apply_roster(app: &Arc<App>, mut roster: RosterBlob) {
+    let _project_context = app.project_context_lock.lock().unwrap();
     let removed: Vec<String>;
     let normalized_descriptions = roster.bots.iter_mut().fold(false, |changed, bot| bot.normalize_description() || changed);
     let this_device = app.this_device_id();
     let kept_checks;
+    let kept_permissions;
+    let removed_bots: Vec<String>;
     {
         let mut state = app.state.lock().unwrap();
         let local_updated = state.chats.iter().map(|_| 0.0).fold(0.0, f64::max);
         let _ = local_updated;
         kept_checks = this_device.is_some_and(|this| crate::routines::keep_checks(&state.routines, &mut roster.routines, &roster.bots, &this));
+        kept_permissions = crate::permissions::keep_policies(&state.bots, &mut roster.bots);
+        removed_bots = state.bots.iter().filter(|bot| !roster.bots.iter().any(|kept| kept.id == bot.id)).map(|bot| bot.id.clone()).collect();
         state.bots = roster.bots;
         state.routines = roster.routines;
         state.auto_review = roster.auto_review;
@@ -858,13 +942,16 @@ fn apply_roster(app: &Arc<App>, mut roster: RosterBlob) {
     if let Err(error) = app.store.retain_codemode_bots(&bot_ids) {
         tracing::warn!(%error, "forgetting deleted bots' script values");
     }
+    // The skills of bots and groups this roster deleted go too; their blobs go with the
+    // deleted chats' groups on the relay.
+    crate::playbooks::forget_scopes(app, &removed_bots, &removed);
     for chat_id in removed {
         app.cancel_chat(&chat_id);
         app.emit(Event::ChatRemoved { chat_id });
     }
     #[cfg(feature = "runner")]
     app.shell_sessions.close_orphans(app);
-    app.roster_changed(normalized_descriptions || kept_checks);
+    app.roster_changed(normalized_descriptions || kept_checks || kept_permissions);
 }
 
 fn apply_chat_op(app: &Arc<App>, op: ChatBlob) {
@@ -931,6 +1018,63 @@ mod tests {
         let home = std::env::temp_dir().join(format!("lorca-sync-{}", uuid::Uuid::new_v4()));
         let app = App::load(Config { home: home.clone(), port: 0 }).unwrap();
         ScratchApp(app, home)
+    }
+
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn attention_arrives_in_live_pulls_and_backfills_after_an_older_build_consumed_the_log() {
+        use axum::{extract::Query, routing::get, Json, Router};
+        use std::collections::HashMap;
+        use std::sync::atomic::AtomicUsize;
+        use crate::attention::{Category, Report, Source};
+        let sender = scratch_app();
+        crate::identity::create(&sender.0, Some("Runner".into())).unwrap();
+        let bot = sender.0.state.lock().unwrap().bots[0].clone();
+        let chat = sender.0.dm_with(&bot.id, None).unwrap();
+        for key in ["older-decision", "new-blocker"] {
+            crate::attention::report(&sender.0, Report {
+                key: key.into(), category: Category::Blocker, title: key.into(), summary: "Private coordinator work".into(),
+                next_action: "Review the source".into(), source: Source { chat_id: chat.meta.id.clone(), task_id: None, message_id: None, review_id: None },
+                coordinator_bot_id: Some(bot.id.clone()), urgent: false, quiet: true,
+            }, Some(&bot.id), 0).unwrap();
+        }
+        let queued: Vec<_> = sender.0.store.outbox().unwrap().into_iter().filter(|blob| blob.kind == "attention").collect();
+        let blobs: Vec<serde_json::Value> = queued.iter().zip([50, 101]).map(|(blob, seq)| serde_json::json!({
+            "id":blob.id,"kind":"attention","seq":seq,"recipient_machine_pubkey":null,
+            "ciphertext":crate::keys::b64(&blob.ciphertext),"created_at":1,
+        })).collect();
+        let backfills = Arc::new(AtomicUsize::new(0));
+        let counted = backfills.clone();
+        let server = Router::new().route("/v1/blobs", get(move |Query(query): Query<HashMap<String,String>>| {
+            let blobs = blobs.clone(); let counted = counted.clone();
+            async move {
+                let kinds = query.get("kinds").cloned().unwrap_or_default();
+                let since: i64 = query["since"].parse().unwrap();
+                // The replay asks for the slot families an older build skipped, and nothing else.
+                if since == 0 && kinds.split(',').all(|kind| kind == "attention" || kind == "project_context" || kind == "playbook") { counted.fetch_add(1, Ordering::Relaxed); }
+                let selected: Vec<_> = blobs.into_iter().filter(|blob| kinds.split(',').any(|kind| kind == "attention") && blob["seq"].as_i64().unwrap() > since).collect();
+                Json(serde_json::json!({"blobs":selected,"seq":101}))
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, server).await.unwrap() });
+        let receiver = || {
+            let receiver = scratch_app();
+            *receiver.0.machine.lock().unwrap() = sender.0.machine_file();
+            *receiver.0.state.lock().unwrap() = sender.0.state.lock().unwrap().clone();
+            receiver.0.state.lock().unwrap().last_seq = 100;
+            receiver
+        };
+        let live = receiver(); live.0.attention_backfilled.store(true, Ordering::Relaxed);
+        pull_blobs(&live.0, &url, "test", &live.0.machine_file().unwrap()).await.unwrap();
+        assert_eq!(crate::attention::view(&live.0).unwrap().items.len(), 1, "normal live polling includes attention");
+        let upgraded = receiver();
+        pull_blobs(&upgraded.0, &url, "test", &upgraded.0.machine_file().unwrap()).await.unwrap();
+        assert_eq!(crate::attention::view(&upgraded.0).unwrap(), crate::attention::view(&sender.0).unwrap(), "records an older build skipped are recovered");
+        pull_blobs(&upgraded.0, &url, "test", &upgraded.0.machine_file().unwrap()).await.unwrap();
+        assert_eq!(backfills.load(Ordering::Relaxed), 1, "an empty account does not replay on every cycle");
+        server.abort();
     }
 
     #[tokio::test]

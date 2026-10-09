@@ -359,11 +359,11 @@ func (m *mainWindow) feedbackListView(c *ui.Context, s *sheet, st *feedbackListS
 			if len(f.Changes) > 0 {
 				section(c, L("Changes"), sectionCaption, nil, func(k *card) {
 					for _, change := range f.Changes {
-						symbolName, state := "pencil.line", L("Changed")
+						symbolName, state := "pencil.line", L("Changed %@", model.Stamp(change.CreatedAt))
 						if change.IsUndo {
-							symbolName, state = "arrow.uturn.backward", L("Undone")
+							symbolName, state = "arrow.uturn.backward", L("Undone %@", model.Stamp(change.CreatedAt))
 						}
-						if feedbackRow(c.Key(change.ID), k, symbolName, store.FeedbackTargetName(f, change.Target), state+" · "+model.Stamp(change.CreatedAt), "").Clicked() {
+						if feedbackRow(c.Key(change.ID), k, symbolName, store.FeedbackTargetName(f, change.Target), state, "").Clicked() {
 							m.presentFeedbackChange(st.botID, f, change)
 						}
 					}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -12,10 +13,10 @@ import (
 // The provider sheets, after the macOS app's ConnectProviderViewController,
 // CustomProviderViewController, and APIKeyField. A built-in provider connects with a pasted key, or
 // signs in through the browser, driven by the CLI. A custom provider is any server that speaks
-// OpenAI's Chat Completions or Responses API, or Anthropic's Messages API: the sheet loads the
-// models the server lists as the user fills it in, and the user picks the ones bots can use, adding
-// any the server does not list. Either credential reaches every paired Device encrypted with the
-// account key.
+// OpenAI's Chat Completions or Responses API, or Anthropic's Messages API, or a decision API
+// (System One, OpenAI Decisions) whose models Auto-review can run: the sheet loads the models the
+// server lists as the user fills it in, and the user picks the ones to offer, adding any the server
+// does not list. Either credential reaches every paired Device encrypted with the account key.
 
 // providerFetching is a sheet's saved key being fetched before it opens, so a second click waits.
 var providerFetching bool
@@ -131,12 +132,13 @@ func providerKeyField(c *ui.Context, value *string, placeholder string, disabled
 
 // MARK: - Add Provider…
 
-// addProviderMenu fills Add Provider…'s menu: the servers people often add, then any other. A
-// preset the account has a provider for, by name, is checked and opens that provider.
+// addProviderMenu fills Add Provider…'s menu: the servers people often add, hosted, on the user's
+// network, and decision APIs, then any other. A preset the account has a provider for, by name, is
+// checked and opens that provider.
 func (w *appWindow) addProviderMenu(menu *ui.Menu) {
-	presets := model.CustomPresets
+	presets := append(slices.Clone(model.CustomPresets), model.DecisionPresets...)
 	for i, preset := range presets {
-		if i > 0 && preset.Local != presets[i-1].Local {
+		if i > 0 && (preset.Local != presets[i-1].Local || preset.API.Decides() != presets[i-1].API.Decides()) {
 			menu.Separator()
 		}
 		existing := model.PresetProvider(preset, store.Providers)
@@ -162,6 +164,16 @@ func (w *appWindow) addProviderMenu(menu *ui.Menu) {
 // no longer has opens the sheet to add one. onSave gets the provider's kind once it is saved; it
 // may be nil.
 func (w *appWindow) presentCustomProvider(kind model.ProviderKind, preset *model.CustomPreset, onSave func(model.ProviderKind)) {
+	w.presentProviderSheet(kind, preset, false, onSave)
+}
+
+// presentBotProvider opens the sheet to add a provider a bot will run with: its API picker leaves
+// out the decision APIs.
+func (w *appWindow) presentBotProvider(preset *model.CustomPreset, onSave func(model.ProviderKind)) {
+	w.presentProviderSheet("", preset, true, onSave)
+}
+
+func (w *appWindow) presentProviderSheet(kind model.ProviderKind, preset *model.CustomPreset, forBots bool, onSave func(model.ProviderKind)) {
 	if providerFetching {
 		return
 	}
@@ -177,6 +189,7 @@ func (w *appWindow) presentCustomProvider(kind model.ProviderKind, preset *model
 			preset = nil
 		}
 		s := newProviderCustomSheet(existing, preset, apiKey, onSave)
+		s.forBots = forBots
 		w.present(s.view, func() { s.closed = true })
 	}
 	if existing == nil {
@@ -217,6 +230,8 @@ type providerCustomSheet struct {
 	kind        model.ProviderKind
 	initialName string
 	onSave      func(model.ProviderKind)
+	// forBots leaves the decision APIs out of the API picker, for a provider a bot will run with.
+	forBots bool
 
 	name, baseURL, key string
 	api                model.CustomAPI
@@ -269,13 +284,13 @@ func (s *providerCustomSheet) savedName() string {
 	if name := strings.TrimSpace(s.name); name != "" {
 		return name
 	}
-	return model.SuggestedProviderName(s.baseURL)
+	return model.SuggestedProviderName(s.baseURL, s.api)
 }
 
 // keyPlaceholder is the key's hint: while adding, the one of the server the base URL names.
 func (s *providerCustomSheet) keyPlaceholder() string {
 	if s.existing == nil {
-		if preset := model.MatchingPreset(s.baseURL); preset != nil {
+		if preset := model.MatchingPreset(s.baseURL, s.api); preset != nil {
 			return preset.KeyPlaceholder()
 		}
 	}
@@ -468,7 +483,7 @@ func (s *providerCustomSheet) view(c *ui.Context, sh *sheet) {
 	}
 	result := sheetFrame(c, sheetOptions{
 		Title:           title,
-		Subtitle:        L("Any server that speaks OpenAI’s or Anthropic’s API, such as a gateway or a model server on your network. Encrypted and shared with your paired Devices."),
+		Subtitle:        L("Any server that speaks OpenAI’s or Anthropic’s API, such as a gateway or a model server on your network, or a decision API for Auto-review. Encrypted and shared with your paired Devices."),
 		Width:           520,
 		Confirm:         confirm,
 		ConfirmDisabled: !s.canConfirm(),
@@ -494,7 +509,7 @@ func (s *providerCustomSheet) formView(c *ui.Context) {
 	ui.Column(c).Gap(8).Children(func() {
 		providerFormRow(c, labelWidth, L("Name"), func() {
 			textField(c, &s.name, fieldOptions{
-				Placeholder: firstNonEmpty(model.SuggestedProviderName(s.baseURL), "OpenRouter"),
+				Placeholder: firstNonEmpty(model.SuggestedProviderName(s.baseURL, s.api), "OpenRouter"),
 				Disabled:    s.busy,
 				Label:       L("Name"),
 				// A preset needs its key next; an empty sheet starts at the name.
@@ -504,7 +519,9 @@ func (s *providerCustomSheet) formView(c *ui.Context) {
 		providerFormRow(c, labelWidth, L("API"), func() {
 			options := make([]popUpOption, 0, len(model.CustomAPIs))
 			for _, api := range model.CustomAPIs {
-				options = append(options, popUpOption{Value: string(api), Label: api.Title()})
+				if !s.forBots || !api.Decides() {
+					options = append(options, popUpOption{Value: string(api), Label: api.Title()})
+				}
 			}
 			if picked, changed, _ := popUpButton(c, popUp{Options: options, Value: string(s.api), Disabled: s.busy, Label: L("API")}); changed {
 				s.api = model.CustomAPI(picked)

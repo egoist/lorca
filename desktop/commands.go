@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/egoist/lorca/desktop/model"
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 )
@@ -50,6 +51,7 @@ func selectedChatIsGroup() bool {
 var commandTable = []command{
 	{id: "newBot", title: func() string { return L("New Bot…") }, accelerator: "CmdOrCtrl+N", opensMain: true},
 	{id: "newGroupChat", title: func() string { return L("New Group Chat…") }, accelerator: "CmdOrCtrl+Shift+N", opensMain: true},
+	{id: "newTask", title: func() string { return L("New Task…") }, enabled: chatSelected},
 	{id: "marketplace", title: func() string { return L("Marketplace…") }, accelerator: "CmdOrCtrl+Shift+M", opensMain: true},
 	{id: "pairDevice", title: func() string { return L("Pair a Device…") }, accelerator: "CmdOrCtrl+Shift+P", opensMain: true},
 	{id: "settings", title: func() string { return L("Settings…") }, accelerator: "CmdOrCtrl+,"},
@@ -57,6 +59,7 @@ var commandTable = []command{
 	{id: "quit", title: func() string { return L("Quit %@", appName()) }, accelerator: "CmdOrCtrl+Q", role: mygo.RoleQuit},
 	{id: "find", title: func() string { return L("Find…") }, accelerator: "CmdOrCtrl+F", opensMain: true},
 	{id: "palette", title: func() string { return L("Command Palette…") }, accelerator: "CmdOrCtrl+K", opensMain: true},
+	{id: "attention", title: func() string { return L("Attention") }, accelerator: "CmdOrCtrl+Shift+A", opensMain: true, enabled: func() bool { return app.main == nil || !app.main.isSettings() }},
 	{id: "toggleSidebar", title: func() string { return L("Toggle Sidebar") }, accelerator: "CmdOrCtrl+B"},
 	{id: "toggleInspector", title: func() string { return L("Toggle Inspector") }, accelerator: "CmdOrCtrl+Shift+B"},
 	{id: "scrollToLatest", title: func() string { return L("Scroll to Latest") }, accelerator: "CmdOrCtrl+J", enabled: chatSelected},
@@ -71,6 +74,14 @@ var commandTable = []command{
 	}},
 	{id: "renameChat", title: func() string { return L("Rename Chat…") }, accelerator: "CmdOrCtrl+R", enabled: selectedChatIsGroup},
 	{id: "pinChat", title: func() string { return L("Pin Chat") }, accelerator: "CmdOrCtrl+P", enabled: chatSelected},
+	{id: "newSkill", title: func() string { return L("New Skill…") }, enabled: func() bool {
+		if !chatSelected() {
+			return false
+		}
+		chat := store.Chat(app.main.selection.ChatID)
+		_, ok := model.SkillScope(chat, store.BotsIn(chat))
+		return ok
+	}},
 	{id: "stopResponding", title: func() string { return L("Stop Responding") }, accelerator: "CmdOrCtrl+.", enabled: chatSelected},
 	{
 		// The Mac's ⌃B has no counterpart here: Ctrl+B toggles the sidebar.
@@ -286,7 +297,7 @@ func windowMenuBar(kind windowKind) *mygo.Menu {
 	}
 	help = append(help, sep(), at("about"))
 	return mygo.NewMenu([]*mygo.MenuItem{
-		submenu(L("File"), at("newBot"), at("newGroupChat"), sep(), at("marketplace"), sep(), at("pairDevice"), sep(), at("settings"), sep(), at("closeWindow"), at("quit")),
+		submenu(L("File"), at("newBot"), at("newGroupChat"), at("newTask"), sep(), at("marketplace"), sep(), at("pairDevice"), sep(), at("settings"), sep(), at("closeWindow"), at("quit")),
 		submenu(L("Edit"),
 			&mygo.MenuItem{Role: mygo.RoleUndo, Label: L("Undo")},
 			&mygo.MenuItem{Role: mygo.RoleRedo, Label: L("Redo")},
@@ -299,8 +310,8 @@ func windowMenuBar(kind windowKind) *mygo.Menu {
 			sep(),
 			at("find"),
 		),
-		submenu(L("View"), at("palette"), sep(), at("toggleSidebar"), at("toggleInspector"), sep(), at("scrollToLatest"), sep(), at("fullScreen")),
-		submenu(L("Chat"), at("addBot"), at("renameChat"), at("pinChat"), sep(), at("stopResponding"), at("runInBackground"), sep(), at("deleteChat")),
+		submenu(L("View"), at("palette"), at("attention"), sep(), at("toggleSidebar"), at("toggleInspector"), sep(), at("scrollToLatest"), sep(), at("fullScreen")),
+		submenu(L("Chat"), at("addBot"), at("renameChat"), at("pinChat"), at("newSkill"), sep(), at("stopResponding"), at("runInBackground"), sep(), at("deleteChat")),
 		submenu(L("Window"), &mygo.MenuItem{Role: mygo.RoleMinimize, Label: L("Minimize")}, &mygo.MenuItem{Role: mygo.RoleZoom, Label: L("Zoom")}),
 		submenu("Debug", at("simulateOffline"), at("replayMock"), sep(), at("showOnboarding")),
 		submenu(L("Help"), help...),

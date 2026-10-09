@@ -29,6 +29,11 @@ pub(crate) fn bearer_auth(request: reqwest::RequestBuilder, key: &str) -> reqwes
 /// Hooks the adapters call around one request. Every method has a default that does nothing.
 #[async_trait]
 pub trait RequestHooks: Send + Sync {
+    /// Admission for every HTTP attempt, including adapter retries. A host can enforce a
+    /// shared budget before the request reaches the service. Refusal is final.
+    async fn before_request(&self, _retry: bool, _cancel: &tokio_util::sync::CancellationToken) -> Result<(), String> {
+        Ok(())
+    }
     /// A key to use for this call instead of the adapter's own, for tokens that expire.
     async fn api_key(&self) -> Option<String> {
         None

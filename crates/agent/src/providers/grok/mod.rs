@@ -183,9 +183,8 @@ impl Provider for GrokProvider {
                 let request = client.post(&url).bearer_auth(&tokens.access_token).header("Accept", "text/event-stream");
                 options.apply_to(request).json(&body)
             };
-            let response = match send_with_retry(build, 2, DEFAULT_MAX_RETRY_DELAY_MS, &cancel).await {
+            let response = match send_with_retry(build, 2, DEFAULT_MAX_RETRY_DELAY_MS, &cancel, &options).await {
                 Ok(response) => {
-                    options.report(&response);
                     response
                 }
                 Err(failure) => {

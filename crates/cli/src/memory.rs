@@ -216,7 +216,11 @@ pub fn scrub(text: &str) -> String {
         out = pattern.replace_all(&out, |m: &regex::Captures| redaction(m[0].chars().count())).to_string();
     }
     SECRET_ASSIGNMENT
-        .replace_all(&out, |m: &regex::Captures| format!("{}{}", &m[1], redaction(m[2].chars().count())))
+        .replace_all(&out, |m: &regex::Captures| {
+            // Already scrubbed material is read and exported again. Keep the marker intact.
+            if &m[2] == "«redacted" { m[0].to_string() }
+            else { format!("{}{}", &m[1], redaction(m[2].chars().count())) }
+        })
         .to_string()
 }
 

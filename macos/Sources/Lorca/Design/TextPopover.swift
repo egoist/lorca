@@ -53,11 +53,13 @@ enum TextPopover {
         override var isFlipped: Bool { true }
     }
 
-    /// The first non-empty line of `text`, with fence markers skipped: what a one-line preview shows.
+    /// The first non-empty line of `text`, with fence markers skipped and bold and code marks
+    /// dropped, as the sidebar's preview drops them: what a one-line preview shows.
     static func firstLine(of text: String) -> String {
-        text.split(whereSeparator: \.isNewline)
+        let line = text.split(whereSeparator: \.isNewline)
             .lazy
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .first { !$0.isEmpty && !$0.hasPrefix("```") } ?? ""
+        return line.replacingOccurrences(of: "**", with: "").replacingOccurrences(of: "`", with: "")
     }
 }

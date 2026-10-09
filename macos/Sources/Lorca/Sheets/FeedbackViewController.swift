@@ -471,7 +471,7 @@ final class FeedbackListViewController: SheetViewController {
         changes.setRows(feedback.changes.map { change in
             let row = FeedbackRow(
                 symbol: change.isUndo ? "arrow.uturn.backward" : "pencil.line", title: feedback.name(of: change.target),
-                detail: "\(change.isUndo ? L("Undone") : L("Changed")) · \(Format.stamp(change.createdAt))")
+                detail: change.isUndo ? L("Undone %@", Format.stamp(change.createdAt)) : L("Changed %@", Format.stamp(change.createdAt)))
             row.onClick = { [weak self] in self?.open(change) }
             return row
         })

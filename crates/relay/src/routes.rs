@@ -99,7 +99,8 @@ pub type ApiResult<T> = Result<T, ApiError>;
 
 /// The protocol this relay speaks, in `/v1/health`. A client sends the one it speaks as
 /// `Lorca-Protocol`. 1: group paging, `DELETE /v1/identity`. 2: `POST /v1/machines`.
-pub const PROTOCOL: u32 = 2;
+/// 3: durable subject records and sealed event envelopes.
+pub const PROTOCOL: u32 = 3;
 
 /// Turns away a client older than `--min-protocol` before anything else looks at it. The
 /// answer is the same on every route, the sync socket's upgrade included, so a client learns
@@ -329,6 +330,9 @@ async fn put_blob(State(state): State<AppState>, auth: Auth, Json(body): Json<Pu
     }
     if body.kind == "file" {
         return Err(ApiError::bad_request("Upload attachments with PUT /v1/files/{id}"));
+    }
+    if body.kind == "event" && (body.recipient_machine_pubkey.is_none() || body.slot.is_some() || body.group.is_some()) {
+        return Err(ApiError::bad_request("Event envelopes require a recipient and have no slot or group"));
     }
     let id = body.id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     if !valid_id(&id) {

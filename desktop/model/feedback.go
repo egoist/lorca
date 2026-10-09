@@ -440,18 +440,33 @@ func (s *Store) demoFeedback(botID string) BotFeedback {
 		return f
 	}
 	chat := s.Chat("chat-nova")
-	if botID != "bot-nova" || chat == nil || len(chat.Messages) < 7 {
+	if botID != "bot-nova" || chat == nil {
 		return BotFeedback{}
 	}
-	messages := chat.Messages
+	find := func(match func(*Message) bool) *Message {
+		for _, m := range chat.Messages {
+			if match(m) {
+				return m
+			}
+		}
+		return nil
+	}
+	marker := find(func(m *Message) bool { return m.Body.Text == "Routine · Morning brief" })
+	report := find(func(m *Message) bool { return strings.HasPrefix(m.Body.Text, "**Today's focus") })
+	handoff := find(func(m *Message) bool {
+		return m.Author.BotID == "bot-nova" && strings.HasPrefix(m.Body.Text, "Writer has the brief.")
+	})
+	if marker == nil || report == nil || handoff == nil {
+		return BotFeedback{}
+	}
 	brief := FeedbackTarget{Kind: "routine_prompt", ID: "rt-brief"}
 	checklist := FeedbackTarget{Kind: "routine_prompt", ID: "rt-checklist"}
 	week := int64(7 * 86_400)
 	notes := []FeedbackNote{
-		{ID: "fb-good", Kind: FeedbackAccepted, ChatID: "chat-nova", MessageID: messages[6].ID, Text: "Writer has the brief. I'll keep the final draft with the launch checklist for your review.", CreatedAt: minutesAgo(30)},
-		{ID: "fb-edit", Kind: FeedbackEdited, ChatID: "chat-nova", MessageID: messages[3].ID, Text: "Lead with what needs my decision, then blockers.", Target: &brief, CreatedAt: minutesAgo(150)},
-		{ID: "fb-short", Kind: FeedbackExplicit, ChatID: "chat-nova", MessageID: messages[3].ID, Text: "Keep the brief to five bullets or fewer.", Target: &brief, CreatedAt: minutesAgo(60 * 26)},
-		{ID: "fb-failed", Kind: FeedbackRoutineFailure, ChatID: "chat-nova", MessageID: messages[2].ID, Text: "The launch checklist was not in the workspace.", Target: &checklist, CreatedAt: minutesAgo(60 * 50)},
+		{ID: "fb-good", Kind: FeedbackAccepted, ChatID: "chat-nova", MessageID: handoff.ID, Text: handoff.Body.Text, CreatedAt: minutesAgo(30)},
+		{ID: "fb-edit", Kind: FeedbackEdited, ChatID: "chat-nova", MessageID: report.ID, Text: "Lead with what needs my decision, then blockers.", Target: &brief, CreatedAt: minutesAgo(150)},
+		{ID: "fb-short", Kind: FeedbackExplicit, ChatID: "chat-nova", MessageID: report.ID, Text: "Keep the brief to five bullets or fewer.", Target: &brief, CreatedAt: minutesAgo(60 * 26)},
+		{ID: "fb-failed", Kind: FeedbackRoutineFailure, ChatID: "chat-nova", MessageID: marker.ID, Text: "The launch checklist was not in the workspace.", Target: &checklist, CreatedAt: minutesAgo(60 * 50)},
 	}
 	return BotFeedback{
 		Notes: notes, NoteCount: len(notes), ReviewEvery: &week,

@@ -89,12 +89,12 @@ func hostOf(link string) string {
 // once answered, or where to enter a sign-in code.
 func permissionSummary(request *model.PermissionRequest) string {
 	if request.IsPending() {
-		return request.Summary
+		return request.ShownSummary()
 	}
 	if request.Decision == model.DecisionAllowed && request.Code != "" {
 		return L("Enter this code at %@, then come back.", firstNonEmpty(hostOf(request.Link), L("the link")))
 	}
-	return request.DecisionText() + " · " + request.Summary
+	return request.DecisionText() + " · " + request.ShownSummary()
 }
 
 // ruleNote is what a card says about its rule: the one Always allow would add, or the one it added.
@@ -167,7 +167,7 @@ func (m *mainWindow) permissionCard(c *ui.Context, chat *model.Chat, message *mo
 				if request.IsPending() {
 					lines = 2
 				}
-				ui.Text(c, permissionSummary(request)).Margin(2, 0, 0, 0).FontSize(textCaption).LineHeight(1.35).TextColor(p.Label2).MaxLines(lines).Tooltip(request.Summary)
+				ui.Text(c, permissionSummary(request)).Margin(2, 0, 0, 0).FontSize(textCaption).LineHeight(1.35).TextColor(p.Label2).MaxLines(lines).Tooltip(request.ShownSummary())
 			}
 			if request.Decision == model.DecisionAllowed && request.Code != "" {
 				ui.Row(c).Gap(10).Margin(10, 0, 0, 0).Children(func() {
@@ -178,14 +178,18 @@ func (m *mainWindow) permissionCard(c *ui.Context, chat *model.Chat, message *mo
 					}
 				})
 			}
-			if request.IsPending() && request.Reason != "" {
-				ui.Text(c, request.Reason).Margin(7, 0, 0, 0).FontSize(11.5).LineHeight(1.35).TextColor(p.Label2)
+			if reason := request.ShownReason(); request.IsPending() && reason != "" {
+				ui.Text(c, reason).Margin(7, 0, 0, 0).FontSize(11.5).LineHeight(1.35).TextColor(p.Label2)
 			}
 			if request.IsPending() {
 				ui.Row(c).Wrap().Gap(6).Margin(10, 0, 0, 0).Children(func() {
 					for _, choice := range request.Choices() {
 						if pushButton(c.Key(choice.Decision), choice.Title, pushOptions{Small: true}).Clicked() {
-							store.AnswerPermission(chatID, messageID, choice.Decision)
+							if choice.Decision == "access" && message.Author.Kind == model.AuthorBot {
+								m.presentBotAccess(message.Author.BotID)
+							} else {
+								store.AnswerPermission(chatID, messageID, choice.Decision)
+							}
 						}
 					}
 				})

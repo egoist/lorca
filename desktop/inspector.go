@@ -9,7 +9,7 @@ import (
 )
 
 // The pane beside a chat, after the macOS app's InspectorViewController: the bots in the chat, a
-// group's name and description, and for a DM the bot's profile, what it runs with (provider,
+// group's name, description, and project context, what the chat's bots published, and for a DM the bot's profile, what it runs with (provider,
 // model, thinking, the credential, and what the turns used), its memory, its routines, the plugins
 // on its Runner, and where turns run.
 
@@ -28,6 +28,11 @@ type inspectorState struct {
 	// shownChat is the chat the pane last opened on.
 	shownChat string
 	scroll    ui.ScrollState
+	// tasksShowingAll is the chat whose Tasks section shows every task rather than the first few.
+	tasksShowingAll string
+	project         projectInspectorState
+	// skillsShowingAll is the bot or group whose Skills section shows every skill.
+	skillsShowingAll model.PlaybookScope
 }
 
 // refreshMemory asks the CLI for the bot's memory; the section redraws when it answers.
@@ -81,7 +86,8 @@ func (s *inspectorState) refreshShownMemory(chatID string) {
 }
 
 // inspectorStoreChanged follows the turns: one that ended may have moved what the bot remembers.
-// A bot's feedback is asked for again when its Runner says it changed.
+// A bot's feedback is asked for again when its Runner says it changed, and a group's project
+// context is listed again when it changes.
 func (m *mainWindow) inspectorStoreChanged(event model.Event) {
 	if event.Kind == model.EventRespondingChanged && event.ChatID == m.inspector.shownChat && !store.IsResponding(event.ChatID) {
 		m.inspector.refreshShownMemory(event.ChatID)
@@ -90,6 +96,9 @@ func (m *mainWindow) inspectorStoreChanged(event model.Event) {
 		if _, known := m.inspector.feedback[event.BotID]; known {
 			m.inspector.refreshFeedback(event.BotID)
 		}
+	}
+	if event.Kind == model.EventProjectContextChanged && event.ChatID == m.inspector.shownChat {
+		m.inspector.project.refresh(event.ChatID)
 	}
 }
 
@@ -110,6 +119,9 @@ func (m *mainWindow) inspectorView(c *ui.Context, chatID string) {
 	if s.shownChat != chatID {
 		s.shownChat = chatID
 		s.refreshShownMemory(chatID)
+		if chat := store.Chat(chatID); chat != nil && chat.IsGroup() {
+			s.project.refresh(chatID)
+		}
 	}
 	chat := store.Chat(chatID)
 	if chat == nil {
@@ -130,13 +142,22 @@ func (m *mainWindow) inspectorView(c *ui.Context, chatID string) {
 					m.addBotToChat(chat.ID)
 				}
 				m.inspectorGroup(c, chat, members)
+				m.inspectorProject(c, chat)
 			}
+			m.inspectorReviews(c, chat)
+			m.inspectorOutputs(c, chat)
 			if single != nil {
 				m.inspectorProfile(c, single)
 				m.inspectorRuntime(c, single, chat)
 				m.inspectorMemory(c, single)
+			}
+			m.inspectorSkills(c, chat, members)
+			if single != nil {
 				m.inspectorRoutines(c, single)
 				m.inspectorFeedback(c, single)
+			}
+			m.inspectorDurableTasks(c, chat)
+			if single != nil {
 				m.inspectorPlugins(c, single)
 			}
 			m.inspectorRouting(c, members)
@@ -217,6 +238,9 @@ func (m *mainWindow) inspectorProfile(c *ui.Context, bot *model.Bot) {
 		}
 		if summaryActionRow(c, k, L("Description"), bot.Description, L("Edit…")) {
 			m.presentBotDescription(bot.ID)
+		}
+		if disclosureRow(c.Key("bot-access"), k, L("Access"), bot.Permissions.Summary(), nil) {
+			m.presentBotAccess(bot.ID)
 		}
 	})
 }
@@ -304,7 +328,22 @@ func (m *mainWindow) inspectorRuntime(c *ui.Context, bot *model.Bot, chat *model
 			if _, result := actionRow(c, k, L("Context"), actionRowOptions{Value: usage.ContextSummary(), Tint: &label, Action: L("Compact")}); result.Action {
 				store.CompactChat(chat.ID)
 			}
-			keyValueRow(c, k, L("Spent"), usage.SpendSummary(), false, nil)
+			if note := usage.SpendNote(); note != "" {
+				keyValueRow(c, k, L("Spent"), usage.SpendSummary(), false, nil).Tooltip(note)
+			} else {
+				keyValueRow(c, k, L("Spent"), usage.SpendSummary(), false, nil)
+			}
+		}
+		// What each turn may use, or the turn that stopped at a limit.
+		limits, tint := Lc("None", "limits"), p.Label2
+		if b := store.Budget("chat", chat.ID, bot.RunnerID); b != nil {
+			limits = b.Limits.Summary()
+		}
+		if stopped := store.StoppedTurn(chat.ID, bot.RunnerID); stopped != nil {
+			limits, tint = stopped.StoppedLabel(), p.Orange
+		}
+		if disclosureRow(c, k, L("Limits"), limits, &tint) {
+			m.presentBudget(bot, chat.ID, "")
 		}
 	})
 }
@@ -411,10 +450,18 @@ func (m *mainWindow) inspectorRoutines(c *ui.Context, bot *model.Bot) {
 			if !routine.IsEnabled {
 				toggle = L("Resume %@", routine.Name)
 			}
+			// What went wrong leads, in orange while the user has to do something about it; a
+			// routine stopped at its limits says so first, since it runs again only once resumed.
+			detail := []ui.Span{{Text: routine.Detail(), Color: p.Label2}}
+			if budget := store.Budget("routine", routine.ID, bot.RunnerID); budget != nil && budget.IsStopped() {
+				detail = []ui.Span{{Text: budget.StoppedLabel(), Color: p.Orange}, {Text: " · " + routine.ScheduleText, Color: p.Label2}}
+			} else if problem := routine.Problem(); problem.NeedsUser() {
+				detail = []ui.Span{{Text: problem.Text(), Color: p.Orange}, {Text: " · " + routine.ScheduleText, Color: p.Label2}}
+			}
 			on := routine.IsEnabled
 			id, botID := routine.ID, bot.ID
 			ui.Box(c.Key(routine.ID)).Children(func() {
-				if switchRow(c, k, symbolName, tint, routine.Name, routine.Detail(), &on, toggle, routine.Prompt,
+				if switchRow(c, k, symbolName, tint, routine.Name, detail, &on, toggle, routine.Prompt,
 					func(on bool) { store.SetRoutineEnabled(id, on) }) {
 					if current := store.Bot(botID); current != nil {
 						m.presentRoutine(id, current, m.prefill)
@@ -436,8 +483,8 @@ func (m *mainWindow) prefill(text string) {
 	m.invalidate()
 }
 
-// inspectorPlugins are the plugins the bot's Runner has, which every bot there may use, and a way to
-// the marketplace. A plugin that needs setup says so; clicking opens it.
+// inspectorPlugins are the plugins the bot's Runner has, and a way to the marketplace. A plugin that
+// needs setup says so, and one the bot's Access leaves out says it has none; clicking opens it.
 func (m *mainWindow) inspectorPlugins(c *ui.Context, bot *model.Bot) {
 	p := colors(c)
 	runner := store.Device(bot.RunnerID)
@@ -450,10 +497,20 @@ func (m *mainWindow) inspectorPlugins(c *ui.Context, bot *model.Bot) {
 			pluginID := plugin.ID
 			var row statusRowResult
 			ui.Box(c.Key(plugin.ID)).Children(func() {
-				_, row = pluginRow(c, k, plugin, true, L("Open %@", plugin.Name))
+				// A plugin the bot's Access leaves out says it has none.
+				if bot.Permissions.Level(plugin.ID) == model.AccessNone {
+					subtitle := plugin.Description
+					if plugin.AccountName != "" {
+						subtitle = ""
+					}
+					_, row = statusRow(c, k, statusRowOptions{Symbol: plugin.Symbol(), PluginID: plugin.MarketplaceID(), Title: plugin.Name, Subtitle: subtitle,
+						State: L("No access"), Clickable: true, Tooltip: L("Open %@", plugin.Name)})
+				} else {
+					_, row = pluginRow(c, k, plugin, true, L("Open %@", plugin.Name))
+				}
 			})
 			if row.Clicked && runner != nil {
-				m.presentPlugin(pluginID, runner)
+				m.presentPlugin(pluginID, runner, bot.ID, m.selectedChatID())
 			}
 		}
 		if len(plugins) == 0 {

@@ -51,7 +51,7 @@ func TestMessageTextMenu(t *testing.T) {
 		t.Fatalf("no message: %q", tt.Texts())
 	}
 	tt.RightClickAt(bubble.X+40, bubble.Y+20)
-	if want := []string{L("Reply"), "-", "Copy", "-", "Select All"}; !slices.Equal(tt.Menu(), want) {
+	if want := []string{L("Reply"), L("Save as Standing Instruction…"), "-", "Copy", "-", "Select All"}; !slices.Equal(tt.Menu(), want) {
 		t.Fatalf("menu %q, want %q", tt.Menu(), want)
 	}
 	if err := tt.ChooseMenuItem(L("Reply")); err != nil {

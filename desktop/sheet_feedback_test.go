@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -101,17 +102,16 @@ func feedbackTester(t *testing.T, inspector bool) (*mainWindow, *ui.Tester, *fee
 	return m, tt, f
 }
 
-// choose picks an item from the pop-up that shows `current`.
-func choose(t *testing.T, tt *ui.Tester, current, item string) {
+// feedbackDemoMessage is the demo's message in Project Manager's chat that starts with `prefix`.
+func feedbackDemoMessage(t *testing.T, prefix string) *model.Message {
 	t.Helper()
-	if err := tt.Click(current); err != nil {
-		t.Fatal(err)
+	for _, message := range store.Chat("chat-nova").Messages {
+		if strings.HasPrefix(message.Body.Text, prefix) {
+			return message
+		}
 	}
-	tt.Frame()
-	if err := tt.ChooseMenuItem(item); err != nil {
-		t.Fatal(err)
-	}
-	tt.Frame()
+	t.Fatalf("no message %q", prefix)
+	return nil
 }
 
 // clickBeside clicks the control to the right of a form label.
@@ -127,8 +127,7 @@ func clickBeside(t *testing.T, tt *ui.Tester, label string) {
 
 func TestFeedbackFormSendsWhatTheUserSaid(t *testing.T) {
 	m, tt, f := feedbackTester(t, false)
-	messages := store.Chat("chat-nova").Messages
-	reply, yours := messages[6], messages[4]
+	reply, yours := feedbackDemoMessage(t, "Writer has the brief."), feedbackDemoMessage(t, "Ask Writer")
 	if err := tt.RightClick(model.MessageText(yours)); err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +212,7 @@ func TestFeedbackSuggestionSendsTheChangeItShowed(t *testing.T) {
 
 func TestFeedbackFormIgnoresALateReply(t *testing.T) {
 	m, tt, f := feedbackTester(t, false)
-	m.presentFeedback("chat-nova", store.Chat("chat-nova").Messages[6])
+	m.presentFeedback("chat-nova", feedbackDemoMessage(t, "Writer has the brief."))
 	tt.Frame()
 	for m.hasSheet() {
 		m.sheets[len(m.sheets)-1].dismiss()
@@ -285,7 +284,7 @@ func TestFeedbackInTheDemo(t *testing.T) {
 	}
 
 	change := m.inspector.feedback["bot-nova"].Changes[0]
-	if err := tt.Click(L("Changed") + " · " + model.Stamp(change.CreatedAt)); err != nil {
+	if err := tt.Click(L("Changed %@", model.Stamp(change.CreatedAt))); err != nil {
 		t.Fatal(err)
 	}
 	settle(tt)
@@ -294,7 +293,7 @@ func TestFeedbackInTheDemo(t *testing.T) {
 		t.Fatal(err)
 	}
 	settle(tt)
-	if !tt.HasText(L("Undone") + " · " + model.Stamp(time.Now())) {
+	if !tt.HasText(L("Undone %@", model.Stamp(time.Now()))) {
 		t.Fatalf("no undo in the list: %q", tt.Texts())
 	}
 
@@ -308,7 +307,7 @@ func TestFeedbackInTheDemo(t *testing.T) {
 		t.Fatalf("message not shown: sheet %v, flash %q", m.hasSheet(), m.chat.flashID)
 	}
 
-	m.presentFeedback("chat-nova", store.Chat("chat-nova").Messages[3])
+	m.presentFeedback("chat-nova", feedbackDemoMessage(t, "**Today's focus"))
 	settle(tt)
 	choose(t, tt, L("Looks good"), L("I corrected it"))
 	clickBeside(t, tt, L("Note"))

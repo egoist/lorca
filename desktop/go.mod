@@ -4,7 +4,7 @@ go 1.27.1
 
 require (
 	github.com/coder/websocket v1.8.15
-	github.com/egoist/mygo v0.3.4-0.20261008134904-e6cb2f146f33
+	github.com/egoist/mygo v0.3.6
 	github.com/yuin/goldmark v1.8.6
 	golang.org/x/image v0.46.0
 	golang.org/x/text v0.42.0
