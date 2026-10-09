@@ -112,7 +112,7 @@ mod tests {
         assert_eq!(app.plugins.lock().unwrap().status(&personal.id).unwrap().state, "ready");
         plugins::uninstall(&app, &work.id).unwrap();
         assert!(app.plugins.lock().unwrap().get(&personal.id).is_some());
-        std::fs::remove_dir_all(home).unwrap();
+        let _ = std::fs::remove_dir_all(home);
     }
 
     #[test]
