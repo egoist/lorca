@@ -44,9 +44,9 @@ final class InspectorViewController: NSViewController {
     private var projectChangedMeanwhile: Set<Chat.ID> = []
     /// The group whose Project section shows every entry rather than the first few.
     private var projectShowingAll: Chat.ID?
-    /// Whose skills are showing, for + and a click on one, and the lists showing all their rows.
+    /// Whose skills are showing, for + and a click on one, and whose show every row.
     private var skillScope: PlaybookScope?
-    private var expandedSkills: Set<PlaybookScope> = []
+    private var skillsShowingAll: PlaybookScope?
 
     /// What each section last showed. The store sends events many times a turn, and a section
     /// they leave as it was keeps its rows: a new row brings new buttons, and each button sizes
@@ -405,16 +405,16 @@ final class InspectorViewController: NSViewController {
         return members.first.map { .bot($0.id) }
     }
 
-    /// The skills, hidden while there are none: the first five, then the rest a click away. A row
-    /// opens its skill, and its menu exports or deletes it; + adds one.
+    /// The skills, hidden while there are none: past five rows the rest wait behind Show More. A
+    /// row opens its skill, and its menu exports or deletes it; + adds one.
     private func showSkills(of scope: PlaybookScope) {
         let list = store.skills(in: scope)
-        let expanded = expandedSkills.contains(scope)
-        guard changed(skills, to: [scope, list, expanded]) else { return }
+        let showsAll = skillsShowingAll == scope
+        guard changed(skills, to: [scope, list, showsAll]) else { return }
         skillScope = scope
         if skills.isHidden != list.isEmpty { skills.isHidden = list.isEmpty }
-        let collapses = list.count > 6
-        var rows: [NSView] = (collapses && !expanded ? Array(list.prefix(5)) : list).map { skill in
+        let shown = showsAll || list.count <= 5 ? list : Array(list.prefix(4))
+        var rows: [NSView] = shown.map { skill in
             let row: StatusRow = keptRow("skill:\(skill.id)") {
                 let row = StatusRow()
                 row.identifier = NSUserInterfaceItemIdentifier(skill.id)
@@ -425,9 +425,13 @@ final class InspectorViewController: NSViewController {
             row.menu = skillMenu(for: skill)
             return row
         }
-        if collapses {
-            let more = keptRow("skills:more") { ShowMoreRow(target: self, action: #selector(toggleAllSkills)) }
-            more.title = expanded ? L("Show Less") : L("Show All %d", list.count)
+        if shown.count < list.count {
+            let more: StatusRow = keptRow("skills:more") {
+                let row = StatusRow()
+                row.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(showAllSkills)))
+                return row
+            }
+            more.configure(symbol: "ellipsis.circle", title: L("Show %d More", list.count - shown.count), subtitle: "", state: nil)
             rows.append(more)
         }
         skills.setRows(rows)
@@ -453,9 +457,8 @@ final class InspectorViewController: NSViewController {
         presentAsSheet(PlaybookViewController(scope: skillScope))
     }
 
-    @objc private func toggleAllSkills() {
-        guard let skillScope else { return }
-        if !expandedSkills.insert(skillScope).inserted { expandedSkills.remove(skillScope) }
+    @objc private func showAllSkills() {
+        skillsShowingAll = skillScope
         reload()
     }
 

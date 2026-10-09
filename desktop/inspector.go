@@ -27,8 +27,8 @@ type inspectorState struct {
 	// tasksShowingAll is the chat whose Tasks section shows every task rather than the first few.
 	tasksShowingAll string
 	project         projectInspectorState
-	// expandedSkills are the skill lists showing all their rows.
-	expandedSkills map[model.PlaybookScope]bool
+	// skillsShowingAll is the bot or group whose Skills section shows every skill.
+	skillsShowingAll model.PlaybookScope
 }
 
 // refreshMemory asks the CLI for the bot's memory; the section redraws when it answers.

@@ -1160,8 +1160,6 @@ var zh = map[string]string{
 	"Save as Standing Instruction…":        "存为长期指令…",
 	"Saved":                                "已保存",
 	"Scripts":                              "脚本",
-	"Show All %d":                          "显示全部 %d 个",
-	"Show Less":                            "收起",
 	"The bots in %@":                       "%@ 中的智能体",
 	"The bots in %@ can use it there.":     "%@ 中的智能体可以在那里使用它。",
 	"The draft is deleted.":                "草稿将被删除。",

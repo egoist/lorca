@@ -1077,32 +1077,6 @@ final class SwitchRow: NSView {
     }
 }
 
-/// The last row of a list that shows its first few: Show All, then Show Less.
-final class ShowMoreRow: NSView {
-    private let button: HoverButton
-
-    var title: String {
-        get { button.label ?? "" }
-        set { button.label = newValue }
-    }
-
-    init(target: AnyObject, action: Selector) {
-        button = HoverButton(title: "", target: target, action: action)
-        super.init(frame: .zero)
-        translatesAutoresizingMaskIntoConstraints = false
-        button.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(button)
-        NSLayoutConstraint.activate([
-            heightAnchor.constraint(equalToConstant: 34),
-            button.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
-            button.centerYAnchor.constraint(equalTo: centerYAnchor),
-        ])
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError() }
-}
-
 /// A sentence inside a section card, for an empty state, or in a color for what went wrong.
 final class NoteRow: NSView {
     init(text: String, tint: NSColor = .secondaryLabelColor) {

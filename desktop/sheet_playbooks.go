@@ -18,8 +18,8 @@ import (
 // skill, and Save as Skill on a message.
 
 // inspectorSkills are the skills of the bot in a DM, or of the group, hidden while there are none:
-// the first five, then the rest a click away. A row opens its skill, and its menu exports or deletes
-// it; + adds one.
+// past five rows the rest wait behind Show More. A row opens its skill, and its menu exports or
+// deletes it; + adds one.
 func (m *mainWindow) inspectorSkills(c *ui.Context, chat *model.Chat, members []*model.Bot) {
 	scope, ok := model.SkillScope(chat, members)
 	if !ok {
@@ -30,13 +30,11 @@ func (m *mainWindow) inspectorSkills(c *ui.Context, chat *model.Chat, members []
 		return
 	}
 	s := &m.inspector
-	expanded := s.expandedSkills[scope]
-	collapses := len(skills) > 6
 	shown := skills
-	if collapses && !expanded {
-		shown = skills[:5]
+	if s.skillsShowingAll != scope && len(skills) > 5 {
+		shown = skills[:4]
 	}
-	section(c, L("Skills"), sectionCaption, func() {
+	section(c.Key("skills"), L("Skills"), sectionCaption, func() {
 		if hoverButton(c, hoverButtonOptions{Symbol: "plus", Size: 13, Tooltip: L("New Skill")}).Clicked() {
 			m.presentPlaybook(scope, nil)
 		}
@@ -67,19 +65,14 @@ func (m *mainWindow) inspectorSkills(c *ui.Context, chat *model.Chat, members []
 				m.openPlaybook(skill)
 			}
 		}
-		if collapses {
-			title := L("Show All %d", len(skills))
-			if expanded {
-				title = L("Show Less")
-			}
-			k.row(ui.Row(c.Key("skills-more")).MinHeight(34).Padding(0, 4)).Children(func() {
-				if hoverButton(c, hoverButtonOptions{Title: title}).Clicked() {
-					if s.expandedSkills == nil {
-						s.expandedSkills = map[model.PlaybookScope]bool{}
-					}
-					s.expandedSkills[scope] = !expanded
-				}
+		if len(shown) < len(skills) {
+			var more statusRowResult
+			ui.Box(c.Key("skills/more")).Children(func() {
+				_, more = statusRow(c, k, statusRowOptions{Symbol: "ellipsis.circle", Title: L("Show %d More", len(skills)-len(shown)), Clickable: true})
 			})
+			if more.Clicked {
+				s.skillsShowingAll = scope
+			}
 		}
 	})
 }
