@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -1533,28 +1534,37 @@ func (s *Store) SetAutoReview(value AutoReview) {
 	s.perform("auto_review.set", map[string]any{"is_enabled": value.IsEnabled, "rules": rules})
 }
 
-// SetReviewModel picks the model Auto-review runs: a provider's, or "" for the bot's own. A
-// provider alone starts on its review model, which the CLI picks and its roster event brings; the
-// demo, with no CLI, takes the provider's first.
-func (s *Store) SetReviewModel(provider ProviderKind, model string) {
-	s.AutoReview.Provider, s.AutoReview.Model = provider, ""
-	if provider != "" {
-		s.AutoReview.Model = model
-		if model == "" && s.IsMock {
-			if models := ReviewModels(WithCustomModels(s.Models, s.Providers), provider); len(models) > 0 {
-				s.AutoReview.Model = models[0].ID
-			}
-		}
-	}
+// SetReviewProvider picks the provider Auto-review runs the review model of, or "" for the bot's
+// own.
+func (s *Store) SetReviewProvider(provider ProviderKind) {
+	s.AutoReview.Provider = provider
 	s.emit(Event{Kind: EventRosterChanged})
 	params := map[string]any{"provider": nil}
 	if provider != "" {
 		params["provider"] = provider
-		if model != "" {
-			params["model"] = model
-		}
 	}
 	s.perform("auto_review.set", params)
+}
+
+// ReviewModel is the review model picked for a provider; empty for its default.
+func (s *Store) ReviewModel(kind ProviderKind) string { return s.AutoReview.Models[kind] }
+
+// SetReviewModel picks a provider's review model, or "" to put back its default. The other
+// providers' stay as they are.
+func (s *Store) SetReviewModel(model string, kind ProviderKind) {
+	models := maps.Clone(s.AutoReview.Models)
+	if models == nil {
+		models = map[ProviderKind]string{}
+	}
+	var value any
+	if model == "" {
+		delete(models, kind)
+	} else {
+		models[kind], value = model, model
+	}
+	s.AutoReview.Models = models
+	s.emit(Event{Kind: EventRosterChanged})
+	s.perform("auto_review.set", map[string]any{"models": map[string]any{kind: value}})
 }
 
 // AnswerPermission answers a question: a permission card's, or a command card's. `allow`,
@@ -2465,6 +2475,9 @@ func (s *Store) SaveCustomProvider(options CustomProvider, done func(ProviderKin
 			kind = "custom:" + strings.ReplaceAll(strings.ToLower(name), " ", "-")
 		}
 		saved := ProviderCredential{Kind: kind, IsConnected: true, Detail: baseURL, BaseURL: baseURL, Name: name, API: options.API}
+		if len(models) > 0 {
+			saved.ReviewModel = models[0]
+		}
 		for _, id := range models {
 			// A decision model does not think out loud.
 			var levels []string

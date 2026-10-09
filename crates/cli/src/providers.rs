@@ -160,19 +160,15 @@ pub enum Reviewer {
     Decides(Decider),
 }
 
-/// The model Auto-review runs for a bot on `kind`: the provider and model the user picked in
-/// Auto-review's settings while that provider is connected, else the bot's own provider's
-/// [`small_model`]. A chat model thinks the least it can.
+/// The model Auto-review runs for a bot on `kind`: the review model of the provider the user
+/// picked in Auto-review's settings while it is connected, else of the bot's own provider. A
+/// provider's review model is the one picked for it in Providers, else its [`small_model`]. A
+/// chat model thinks the least it can.
 pub fn reviewer(app: &Arc<App>, kind: &str) -> Result<Reviewer, String> {
     let review = app.auto_review();
     let connected = app.credentials.lock().unwrap().connected_kinds();
-    let (kind, model) = match review.provider.filter(|picked| connected.contains(picked)) {
-        Some(picked) => {
-            let model = review.model.or_else(|| app.credentials.lock().unwrap().review_model(&picked)).unwrap_or_default();
-            (picked, model)
-        }
-        None => (kind.to_string(), small_model(app, kind).0),
-    };
+    let kind = review.provider.filter(|picked| connected.contains(picked)).unwrap_or_else(|| kind.to_string());
+    let model = review.models.get(&kind).cloned().unwrap_or_else(|| small_model(app, &kind).0);
     if let Some(decider) = decider(app, &kind, &model)? {
         return Ok(Reviewer::Decides(decider));
     }
@@ -614,8 +610,10 @@ mod tests {
         let app = &scratch.0;
         let key = || Some(ApiKeyCredential { api_key: "key".into(), base_url: None, connected_at: 0 });
         app.credentials.lock().unwrap().deepseek = key();
+        // Reviews with `provider`, at the review model picked for it, if any.
         let pick = |provider: &str, model: Option<&str>| {
-            app.set_auto_review(AutoReview { provider: Some(provider.into()), model: model.map(str::to_string), ..AutoReview::default() })
+            let models = model.map(|model| [(provider.to_string(), model.to_string())].into()).unwrap_or_default();
+            app.set_auto_review(AutoReview { provider: Some(provider.into()), models, ..AutoReview::default() })
         };
         let chat = |reviewer: Reviewer| match reviewer {
             Reviewer::Chat { provider, thinking } => (provider.provider_id().to_string(), provider.model_id().to_string(), thinking),
@@ -626,8 +624,10 @@ mod tests {
             Reviewer::Chat { provider, .. } => panic!("{} chats", provider.model_id()),
         };
 
-        // Nothing picked: the bot's own provider's small model.
+        // Nothing picked: the bot's own provider's small model, or the review model picked for it.
         assert_eq!(chat(reviewer(app, "deepseek").unwrap()), ("deepseek".into(), "deepseek-flash".into(), Some(ThinkingLevel::Off)));
+        app.set_auto_review(AutoReview { models: [("deepseek".to_string(), "deepseek-v4-pro".to_string())].into(), ..AutoReview::default() });
+        assert_eq!(chat(reviewer(app, "deepseek").unwrap()).1, "deepseek-v4-pro");
         // Another provider's chat model.
         add_custom(app, "custom:lab", CustomApi::ChatCompletions, vec![model("qwen3:8b"), model("llama4")]);
         pick("custom:lab", Some("llama4"));

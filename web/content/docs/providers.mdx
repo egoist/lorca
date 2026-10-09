@@ -66,11 +66,15 @@ A decision model answers typed questions with probabilities instead of writing t
 - **System One:** TypeSafe's API, which OpenRouter, OpenCode Zen, and LLM Gateway serve too.
 - **OpenAI Decisions:** OpenAI's Decisions API, also served by Vercel's AI Gateway.
 
-For these two, the URL is the endpoint itself, such as `https://openrouter.ai/api/alpha/decisions`. A URL without one gets the API's usual path (`/systemone` or `/decisions`). The model list shows the server's decision models. A decision provider doesn't appear in the bots' provider pickers. Pick its model in **Settings › Auto-review**.
+For these two, the URL is the endpoint itself, such as `https://openrouter.ai/api/alpha/decisions`. A URL without one gets the API's usual path (`/systemone` or `/decisions`). The model list shows the server's decision models. A decision provider doesn't appear in the bots' provider pickers. Pick it in **Settings › Auto-review**, and its model under **Review Models**.
 
 ```bash
 lorca provider add "TypeSafe" https://api.typesafe.ai/v1/systemone --api system-one --api-key-stdin
 ```
+
+### Review models
+
+**Settings › Providers › Review Models** has each connected provider's review model, the one [Auto-review](/docs/auto-review#the-review-model) runs on it. By default it's a small, fast model; pick any of the provider's models, decision models included.
 
 ## Pick a model per bot
 

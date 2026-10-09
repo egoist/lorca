@@ -225,15 +225,17 @@ type WireAutoReview struct {
 		Behavior string  `json:"behavior"`
 		Tool     *string `json:"tool"`
 	} `json:"rules"`
-	// Provider and Model are the model that reviews; absent for a small one on the bot's provider.
-	Provider *string `json:"provider"`
-	Model    *string `json:"model"`
+	// Provider is the provider that reviews, absent for the bot's own; Models the review models
+	// picked by provider.
+	Provider *string           `json:"provider"`
+	Models   map[string]string `json:"models"`
 }
 
 type WireProvider struct {
 	Kind        string            `json:"kind"`
 	IsConnected bool              `json:"is_connected"`
 	Detail      string            `json:"detail"`
+	ReviewModel *string           `json:"review_model"`
 	BaseURL     *string           `json:"base_url"`
 	Name        *string           `json:"name"`
 	API         *string           `json:"api"`
@@ -827,7 +829,15 @@ func ToAutoReview(wire *WireAutoReview) AutoReview {
 	}
 	review := AutoReview{IsEnabled: wire.IsEnabled}
 	if provider := str(wire.Provider); IsProviderKind(provider) {
-		review.Provider, review.Model = provider, str(wire.Model)
+		review.Provider = provider
+	}
+	for kind, model := range wire.Models {
+		if IsProviderKind(kind) && model != "" {
+			if review.Models == nil {
+				review.Models = map[ProviderKind]string{}
+			}
+			review.Models[kind] = model
+		}
 	}
 	for _, rule := range wire.Rules {
 		behavior := "allow"
@@ -847,7 +857,7 @@ func ToProviders(wire []WireProvider) []ProviderCredential {
 		if !IsProviderKind(provider.Kind) {
 			continue
 		}
-		credential := ProviderCredential{Kind: provider.Kind, IsConnected: provider.IsConnected, Detail: provider.Detail, BaseURL: str(provider.BaseURL)}
+		credential := ProviderCredential{Kind: provider.Kind, IsConnected: provider.IsConnected, Detail: provider.Detail, BaseURL: str(provider.BaseURL), ReviewModel: str(provider.ReviewModel)}
 		if IsCustomKind(provider.Kind) {
 			credential.Name = str(provider.Name)
 			if api := str(provider.API); IsCustomAPI(api) {

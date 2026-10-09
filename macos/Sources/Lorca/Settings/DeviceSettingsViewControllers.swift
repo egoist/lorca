@@ -90,16 +90,19 @@ final class BotsSettingsViewController: DevicePaneViewController {
 
 // MARK: - Providers
 
-/// The account's provider credentials: connected on any Device, used by every Runner.
+/// The account's provider credentials: connected on any Device, used by every Runner. Then each
+/// connected provider's review model, the one Auto-review runs on it.
 final class ProvidersSettingsViewController: SettingsPaneViewController {
     private let store = AppStore.shared
     private let section = SectionView(title: L("Credentials"))
+    private let reviewSection = SectionView(title: SettingsEntry.reviewModels.row)
 
     override func viewDidLoad() {
         title = L("Providers")
         addSection(section)
         addFootnote(
             L("Credentials belong to your account. They reach your paired Devices encrypted with the account key, so a bot uses them on whichever Runner it is assigned to; the relay stores ciphertext."))
+        addSection(reviewSection)
         super.viewDidLoad()
         store.observe(self) { [weak self] event in
             switch event {
@@ -113,8 +116,10 @@ final class ProvidersSettingsViewController: SettingsPaneViewController {
     private func reload() {
         guard !store.providers.isEmpty else {
             section.setRows([KeyValueRow(key: L("Waiting for the CLI"), value: "")])
+            reviewSection.isHidden = true
             return
         }
+        renderReviewModels()
         var rows: [NSView] = store.providers.map { credential in
             let row = StatusRow()
             // A subscription disconnects right here; an API key or a custom provider opens its sheet.
@@ -168,6 +173,43 @@ final class ProvidersSettingsViewController: SettingsPaneViewController {
         other.target = self
         menu.addItem(other)
         return menu
+    }
+
+    /// A pop-up for each connected provider: its default review model, then every model it has,
+    /// decision models among them. A picked model the provider no longer lists stays listed.
+    private func renderReviewModels() {
+        let review = store.autoReview
+        let rows: [NSView] = store.reviewProviderKinds.map { kind in
+            let credential = store.credential(for: kind)
+            var models = store.reviewModels(for: kind)
+            if let picked = review.models[kind], !models.contains(where: { $0.id == picked }) {
+                models.append(ProviderModel(provider: kind, id: picked, label: picked, levels: []))
+            }
+            let popUp = SettingsPopUpButton()
+            let fallback = credential?.reviewModel.map { id in models.first { $0.id == id }?.label ?? id }
+            popUp.addItem(withTitle: fallback.map { L("Default (%@)", $0) } ?? L("Default"))
+            popUp.menu?.addItem(.separator())
+            for model in models {
+                popUp.addItem(withTitle: model.label)
+                popUp.lastItem?.representedObject = model.id
+            }
+            popUp.select(popUp.itemArray.first { $0.representedObject as? String == review.models[kind] } ?? popUp.item(at: 0))
+            popUp.target = self
+            popUp.action = #selector(reviewModelPicked(_:))
+            popUp.identifier = NSUserInterfaceItemIdentifier(kind.wireValue)
+            return AccessoryRow(key: credential?.name ?? kind.name, accessory: popUp)
+        }
+        reviewSection.isHidden = rows.isEmpty
+        reviewSection.setRows(rows + [
+            NoteRow(text: L("Auto-review runs the review model of the bot's provider, or of the provider picked in Auto-review. A decision model writes no rule, so a card it pauses offers Allow once and Deny."))
+        ])
+    }
+
+    @objc private func reviewModelPicked(_ sender: NSPopUpButton) {
+        guard let wire = sender.identifier?.rawValue, let kind = ProviderCredential.Kind(wireValue: wire) else { return }
+        let model = sender.selectedItem?.representedObject as? String
+        guard model != store.autoReview.models[kind] else { return }
+        store.setReviewModel(model, for: kind)
     }
 
     private func existing(named name: String) -> ProviderCredential? {

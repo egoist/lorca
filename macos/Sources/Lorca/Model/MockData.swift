@@ -60,23 +60,25 @@ enum MockData {
 
     static func providers() -> [ProviderCredential] {
         [
-            ProviderCredential(kind: .deepseek, isConnected: true, detail: "sk-live…4f2c"),
-            ProviderCredential(kind: .anthropic, isConnected: true, detail: "sk-ant…8d1a"),
-            ProviderCredential(kind: .opencode, isConnected: false, detail: "Not connected"),
-            ProviderCredential(kind: .opencodeGo, isConnected: false, detail: "Not connected"),
-            ProviderCredential(kind: .chatgpt, isConnected: true, detail: "you@lorca.app"),
-            ProviderCredential(kind: .grok, isConnected: false, detail: "Not connected"),
+            ProviderCredential(kind: .deepseek, isConnected: true, detail: "sk-live…4f2c", reviewModel: "deepseek-flash"),
+            ProviderCredential(kind: .anthropic, isConnected: true, detail: "sk-ant…8d1a", reviewModel: "claude-haiku-4-5"),
+            ProviderCredential(kind: .opencode, isConnected: false, detail: "Not connected", reviewModel: "deepseek-v4.1-flash"),
+            ProviderCredential(kind: .opencodeGo, isConnected: false, detail: "Not connected", reviewModel: "glm-5.3-flash"),
+            ProviderCredential(kind: .chatgpt, isConnected: true, detail: "you@lorca.app", reviewModel: "gpt-6-luna"),
+            ProviderCredential(kind: .grok, isConnected: false, detail: "Not connected", reviewModel: "grok-4.7"),
             ProviderCredential(
                 kind: .custom("custom:ollama"), isConnected: true, detail: "http://localhost:11434/v1",
                 baseURL: "http://localhost:11434/v1", name: "Ollama", api: .chatCompletions,
-                models: [CustomModel(id: "qwen3:8b", levels: ["low", "medium", "high"]), CustomModel(id: "llava", levels: ["low", "medium", "high"])]),
+                models: [CustomModel(id: "qwen3:8b", levels: ["low", "medium", "high"]), CustomModel(id: "llava", levels: ["low", "medium", "high"])],
+                reviewModel: "qwen3:8b"),
             ProviderCredential(
                 kind: .custom("custom:openrouter-decisions"), isConnected: true, detail: "sk-or…9c0e · https://openrouter.ai/api/alpha/decisions",
                 baseURL: "https://openrouter.ai/api/alpha/decisions", name: "OpenRouter Decisions", api: .systemOne,
                 models: [
                     CustomModel(id: "typesafe/jev-1.13", name: "TypeSafe: Jev 1.13"),
                     CustomModel(id: "perplexity/pplx-decider-v1.1-27b", name: "Perplexity: Decider V1.1 27B"),
-                ]),
+                ],
+                reviewModel: "typesafe/jev-1.13"),
         ]
     }
 
@@ -630,7 +632,8 @@ enum MockData {
                 AutoReviewRule(id: "ar-1", text: "use GitHub create_issue", behavior: .allow, tool: "github/create_issue"),
                 AutoReviewRule(id: "ar-2", text: "comment on a pull request", behavior: .ask),
             ],
-            provider: .custom("custom:openrouter-decisions"), model: "typesafe/jev-1.13")
+            provider: .custom("custom:openrouter-decisions"),
+            models: [.custom("custom:openrouter-decisions"): "perplexity/pplx-decider-v1.1-27b", .anthropic: "claude-opus-5"])
     }
 
     static func routines() -> [Routine] {

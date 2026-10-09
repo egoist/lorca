@@ -35,6 +35,7 @@ import {
   providerModels,
   providerUsesAPIKey,
   PROVIDER_KINDS,
+  reviewModelRows,
   reviewModels,
   reviewPicker,
   reviewProviders,
@@ -47,6 +48,7 @@ import {
   urlHost,
   thinkingLevels,
   withCustomModels,
+  withReviewModel,
   type ProviderModel,
   type Body,
   type Bot,
@@ -416,10 +418,14 @@ describe("decision providers", () => {
     name: "TypeSafe",
     api: "system-one",
     models: [{ id: "jev-latest", name: "Jev", levels: [] }, { id: "jev-1.13", levels: [] }],
+    review_model: "jev-latest",
   };
+  // A custom provider whose status names no review model.
   const lab: ProviderStatus = { kind: "custom:lab", is_connected: true, detail: "", base_url: "http://192.168.1.20:11434/v1", name: "Lab", api: "chat-completions", models: [{ id: "llama4", levels: ["low"] }] };
+  // The review models the core names: DeepSeek's in the catalog, OpenCode Zen's not.
+  const reviewModelOf: Record<string, string> = { deepseek: "deepseek-flash", opencode: "zen-mini" };
   const statuses: ProviderStatus[] = [
-    ...PROVIDER_KINDS.map((kind) => ({ kind, is_connected: kind === "deepseek" || kind === "opencode", detail: "" })),
+    ...PROVIDER_KINDS.map((kind) => ({ kind, is_connected: kind === "deepseek" || kind === "opencode", detail: "", review_model: reviewModelOf[kind] })),
     typesafe,
     lab,
   ];
@@ -476,29 +482,53 @@ describe("decision providers", () => {
 
   test("Reviews with offers the bot's provider, then every connected one", () => {
     const review = { is_enabled: true, rules: [] };
-    // The bot's own provider: no model to pick.
-    expect(reviewPicker(review, statuses, catalog)).toEqual({ providers: ["deepseek", "opencode", "custom:typesafe", "custom:lab"], models: [], decides: false });
-    // A built-in provider's catalog models, decision models among them; the note follows the model.
-    const zen = reviewPicker({ ...review, provider: "opencode", model: "jev-1.13" }, statuses, catalog);
-    expect([zen.provider, zen.model, zen.decides]).toEqual(["opencode", "jev-1.13", true]);
-    expect(zen.models.map((model) => model.id)).toEqual(["jev-1.13", "kimi-k3"]);
-    expect(reviewPicker({ ...review, provider: "opencode", model: "kimi-k3" }, statuses, catalog).decides).toBe(false);
-    // A stored model the list lacks is still shown, by its id.
-    const gone = reviewPicker({ ...review, provider: "deepseek", model: "deepseek-old" }, statuses, catalog);
-    expect(gone.models.map((model) => [model.id, model.name])).toEqual([
-      ["deepseek-pro", "DeepSeek Pro"],
-      ["deepseek-flash", "DeepSeek Flash"],
-      ["deepseek-old", "deepseek-old"],
-    ]);
-    expect([gone.model, gone.decides]).toEqual(["deepseek-old", false]);
-    // Every model of a decision provider decides, a stored one it no longer lists too.
-    expect(reviewPicker({ ...review, provider: "custom:typesafe", model: "jev-0.9" }, statuses, catalog).decides).toBe(true);
-    // Until the core's roster event brings the model a provider starts on, the first shows.
-    expect(reviewPicker({ ...review, provider: "custom:lab" }, statuses, catalog)).toMatchObject({ provider: "custom:lab", model: "llama4", decides: false });
+    const connected = ["deepseek", "opencode", "custom:typesafe", "custom:lab"];
+    expect(reviewPicker(review, statuses)).toEqual({ providers: connected, provider: undefined });
+    expect(reviewPicker({ ...review, provider: "custom:typesafe" }, statuses)).toEqual({ providers: connected, provider: "custom:typesafe" });
     // A provider the account no longer has reads as the bot's, as the core then reviews.
-    const disconnected = reviewPicker({ ...review, provider: "anthropic", model: "claude-haiku-4-5" }, statuses, catalog);
-    expect([disconnected.provider, disconnected.models, disconnected.decides]).toEqual([undefined, [], false]);
-    expect(reviewPicker({ ...review, provider: "custom:gone", model: "m" }, statuses, catalog).provider).toBeUndefined();
+    expect(reviewPicker({ ...review, provider: "anthropic" }, statuses).provider).toBeUndefined();
+    expect(reviewPicker({ ...review, provider: "custom:gone" }, statuses).provider).toBeUndefined();
+    expect(reviewPicker(review, [])).toEqual({ providers: [], provider: undefined });
+  });
+
+  test("Review Models has a row for every connected provider, Default or the model picked", () => {
+    const review = { is_enabled: true, rules: [], models: { opencode: "jev-1.13", "custom:typesafe": "jev-0.9" } };
+    const rows = reviewModelRows(review, statuses, catalog);
+    expect(rows.map((row) => [row.kind, row.defaultName, row.picked])).toEqual([
+      // Default names the status's review model, by its name in the catalog, else its id.
+      ["deepseek", "DeepSeek Flash", undefined],
+      ["opencode", "zen-mini", "jev-1.13"],
+      ["custom:typesafe", "Jev", "jev-0.9"],
+      // No review model named: just Default.
+      ["custom:lab", undefined, undefined],
+    ]);
+    // All a provider's models, decision models among them.
+    expect(rows[1].models.map((model) => [model.id, !!model.decides])).toEqual([
+      ["jev-1.13", true],
+      ["kimi-k3", false],
+    ]);
+    // A picked model the list lacks is still shown, titled by its id.
+    expect(rows[2].models.map((model) => [model.id, model.name])).toEqual([
+      ["jev-latest", "Jev"],
+      ["jev-1.13", "jev-1.13"],
+      ["jev-0.9", "jev-0.9"],
+    ]);
+    expect(rows[0].models.map((model) => model.id)).toEqual(["deepseek-pro", "deepseek-flash"]);
+    // No provider connected, no rows.
+    expect(reviewModelRows(review, [lab].map((status) => ({ ...status, is_connected: false })), catalog)).toEqual([]);
+  });
+
+  test("a provider's review model is picked or put back to its default, the others' kept", () => {
+    const review = { is_enabled: false, rules: [], provider: "custom:typesafe" };
+    const picked = withReviewModel(review, "anthropic", "claude-opus-5");
+    expect(picked).toEqual({ ...review, models: { anthropic: "claude-opus-5" } });
+    const both = withReviewModel(picked, "deepseek", "deepseek-pro");
+    expect(both.models).toEqual({ anthropic: "claude-opus-5", deepseek: "deepseek-pro" });
+    expect(withReviewModel(both, "deepseek", "deepseek-flash").models).toEqual({ anthropic: "claude-opus-5", deepseek: "deepseek-flash" });
+    expect(withReviewModel(both, "anthropic", undefined).models).toEqual({ deepseek: "deepseek-pro" });
+    // The last one put back leaves none.
+    expect(withReviewModel(picked, "anthropic", undefined)).toEqual({ ...review, models: undefined });
+    expect(withReviewModel(review, "grok", undefined).models).toBeUndefined();
   });
 });
 

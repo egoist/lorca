@@ -6,7 +6,7 @@ Sparkle shows it in the update window. The Windows and Linux app's are in
 
 ## [Unreleased]
 
-- Settings › Auto-review has Reviews with: Auto-review can run any connected provider's model instead of a small one on the bot's provider, including a decision model such as OpenCode Zen's Jev 1.13, which only allows an action or names what it could harm.
+- Pick the model Auto-review runs: Settings › Providers › Review Models has each provider's, a small, fast one unless you pick another, including a decision model such as OpenCode Zen's Jev 1.13, which only allows an action or names what it could harm. Settings › Auto-review › Reviews with picks another provider to review for every bot.
 - Add Provider… offers decision APIs for Auto-review: OpenRouter Decisions, OpenAI Decisions, and TypeSafe, and a custom provider can speak System One or OpenAI Decisions. Bots never run on them.
 
 ## [1.0.11]

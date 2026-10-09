@@ -154,6 +154,8 @@ struct ProviderCredential: Hashable, Identifiable {
     var name: String? = nil
     var api: CustomAPI? = nil
     var models: [CustomModel] = []
+    /// The model Auto-review runs on it unless the user picks another.
+    var reviewModel: String? = nil
 
     /// A custom provider of decision models, which Auto-review can run and no bot can.
     var decides: Bool { api?.decides == true }
@@ -486,14 +488,15 @@ struct AutoReviewRule: Hashable, Identifiable {
 }
 
 /// The check on effectful plugin actions and shell commands, shared by every Device through
-/// the roster: on, a model asks only when needed; off, each one asks. The model is the picked
-/// provider's, else a small one on the bot's provider.
+/// the roster: on, a model asks only when needed; off, each one asks. The model is the review
+/// model of the picked provider, else of the bot's.
 struct AutoReview: Hashable {
     var isEnabled: Bool = true
     var rules: [AutoReviewRule] = []
-    /// The provider whose model reviews; nil for the bot's own.
+    /// The provider that reviews; nil for the bot's own.
     var provider: ProviderCredential.Kind? = nil
-    var model: String? = nil
+    /// The review model picked for each provider; one without uses its default.
+    var models: [ProviderCredential.Kind: String] = [:]
 }
 
 // MARK: - Plugins

@@ -7,7 +7,7 @@ import { ActivityIndicator, Alert, Platform, ScrollView, StyleSheet, Text, View 
 import { engine } from "../../src/core/engine";
 import { loadPrefs } from "../../src/core/prefs";
 import { checkForUpdates, installedVersion, installUpdate, setDailyChecks, updatesSupported, useUpdates, type Updates } from "../../src/core/updates";
-import { CUSTOM_PRESETS, customProviderNamed, deviceName, isCustomProvider, isRunner, presetGroup, providerLabel, reviewPicker, withCustomModels } from "../../src/core/model";
+import { CUSTOM_PRESETS, customProviderNamed, deviceName, isCustomProvider, isRunner, presetGroup, providerLabel, reviewModelRows, reviewPicker, withCustomModels, type ReviewModelRow } from "../../src/core/model";
 import { deviceIsOnline, useStore } from "../../src/core/store";
 import { deviceLanguage, languageNames, languages, setAppLanguage, t, useLanguage } from "../../src/i18n";
 import { FieldRow, MenuRow, Row, Section, ToggleRow, type MenuChoice } from "../../src/ui/forms";
@@ -78,16 +78,15 @@ export default function SettingsScreen() {
     { title: systemLanguage, selected: !appLanguage.chosen, onPress: () => setAppLanguage(undefined) },
     ...languages.map((code) => ({ title: languageNames[code], selected: appLanguage.chosen === code, onPress: () => setAppLanguage(code) })),
   ];
-  // Reviews with, after Details' Runs with: the bot's own provider, then every connected one;
-  // and, while one is picked, its models, decision models among them.
-  const reviewer = reviewPicker(autoReview, providers, catalog);
+  // Reviews with, after Details' Runs with: the bot's own provider, then every connected one.
+  const reviewer = reviewPicker(autoReview, providers);
   const botsProvider = t("Bot's provider");
   const reviewProviderChoices: MenuChoice[] = [
     {
       title: botsProvider,
       selected: !reviewer.provider,
       onPress: () => {
-        if (autoReview.provider) engine.setReviewModel(undefined);
+        if (autoReview.provider) engine.setReviewProvider(undefined);
       },
       dividerAfter: reviewer.providers.length > 0,
     },
@@ -95,17 +94,35 @@ export default function SettingsScreen() {
       title: providerLabel(kind, providers),
       selected: kind === reviewer.provider,
       onPress: () => {
-        if (kind !== autoReview.provider) engine.setReviewModel(kind);
+        if (kind !== autoReview.provider) engine.setReviewProvider(kind);
       },
     })),
   ];
-  const reviewModelChoices: MenuChoice[] = reviewer.models.map((model) => ({
-    title: model.name,
-    selected: model.id === reviewer.model,
-    onPress: () => {
-      if (reviewer.provider && model.id !== autoReview.model) engine.setReviewModel(reviewer.provider, model.id);
-    },
-  }));
+  // Review Models: each connected provider's, Default (the model its status names) first, then
+  // all its models, decision models among them.
+  const reviewModels = reviewModelRows(autoReview, providers, catalog);
+  function reviewModelMenu(row: ReviewModelRow) {
+    const fallback = row.defaultName ? t("Default ({model})", { model: row.defaultName }) : t("Default");
+    const choices: MenuChoice[] = [
+      {
+        title: fallback,
+        selected: !row.picked,
+        onPress: () => {
+          if (row.picked) engine.setReviewModel(row.kind, undefined);
+        },
+        dividerAfter: row.models.length > 0,
+      },
+      ...row.models.map((model) => ({
+        title: model.name,
+        selected: model.id === row.picked,
+        onPress: () => {
+          if (model.id !== row.picked) engine.setReviewModel(row.kind, model.id);
+        },
+      })),
+    ];
+    const value = row.picked ? (row.models.find((model) => model.id === row.picked)?.name ?? row.picked) : fallback;
+    return { title: providerLabel(row.kind, providers), value, choices };
+  }
   // Add Custom Provider's menu: the hosted presets, the ones on the user's own computer, the
   // decision APIs Auto-review can use, then any other server. A preset the account has already
   // opens that provider, checked.
@@ -275,14 +292,7 @@ export default function SettingsScreen() {
           />
         </Section>
 
-        <Section
-          title={t("Reviews with")}
-          footer={
-            reviewer.decides
-              ? t("A decision model picks allow or what the action could harm, and writes no rule, so a card it pauses offers Allow once and Deny.")
-              : undefined
-          }
-        >
+        <Section title={t("Reviews with")}>
           <Row
             title={t("Provider")}
             menu={{
@@ -291,16 +301,6 @@ export default function SettingsScreen() {
               choices: reviewProviderChoices,
             }}
           />
-          {reviewer.provider && reviewer.models.length > 0 ? (
-            <Row
-              title={t("Model")}
-              menu={{
-                title: t("Model"),
-                value: reviewer.models.find((model) => model.id === reviewer.model)?.name ?? "",
-                choices: reviewModelChoices,
-              }}
-            />
-          ) : null}
         </Section>
 
         <Section title={t("Auto-review Rules")}>
@@ -349,6 +349,18 @@ export default function SettingsScreen() {
             <MenuRow key="add-custom-provider" title={t("Add Custom Provider")} choices={customProviderChoices} />,
           ]}
         </Section>
+
+        {reviewModels.length > 0 && (
+          <Section
+            title={t("Review Models")}
+            footer={t("Auto-review runs the review model of the bot's provider, or of the provider picked in Auto-review. A decision model writes no rule, so a card it pauses offers Allow once and Deny.")}
+          >
+            {reviewModels.map((row) => {
+              const menu = reviewModelMenu(row);
+              return <Row key={row.kind} title={menu.title} menu={menu} />;
+            })}
+          </Section>
+        )}
 
         <Section
           title={t("Devices")}

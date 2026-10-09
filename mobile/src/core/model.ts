@@ -14,6 +14,9 @@ export interface ProviderStatus {
   name?: string;
   api?: CustomAPI;
   models?: CustomModel[];
+  /** The model Auto-review runs on this provider unless the user picks another: the catalog's
+   * small, fast review model for a built-in, a custom provider's first. */
+  review_model?: string;
 }
 
 /// The wire protocol a custom provider's server speaks: a chat protocol, or a decision API
@@ -294,10 +297,11 @@ export function showsCard(tool: Extract<Body, { kind: "tool" }>): boolean {
 /// a plugin tool it adds a rule for that exact tool (`tool`).
 export type AutoReviewRule = { id: string; text: string; behavior: "allow" | "ask"; tool?: string };
 
-/// The check on effectful plugin actions and shell commands, shared through the roster. The
-/// model that reviews is `model` of `provider`, any provider the account has connected; without
-/// a provider, a small, fast model of the bot's own.
-export type AutoReview = { is_enabled: boolean; rules: AutoReviewRule[]; provider?: string; model?: string };
+/// The check on effectful plugin actions and shell commands, shared through the roster. It runs
+/// the review model of `provider`, any provider the account has connected, or without one of the
+/// bot's own provider. `models` holds the review models the user picked, by provider kind; any
+/// other provider runs its status's `review_model`.
+export type AutoReview = { is_enabled: boolean; rules: AutoReviewRule[]; provider?: string; models?: Record<string, string> };
 
 export type MessageState =
   | { kind: "thinking" }
@@ -692,30 +696,48 @@ export function reviewModels(models: ProviderModel[], provider: string): Provide
   return models.filter((model) => model.provider === provider);
 }
 
-/// What Settings' Reviews with offers and shows: every connected provider; the one picked, none
-/// for the bot's own (as when the picked one is no longer connected, which the core then reviews
-/// with too); all its models, with the stored one added when the list lacks it; the model in
-/// force; and whether that model decides.
-export interface ReviewPicker {
-  providers: string[];
-  provider?: string;
-  models: ProviderModel[];
-  model?: string;
-  decides: boolean;
-}
-
-/// `catalog` is the core's with the custom providers' models (`withCustomModels`).
-export function reviewPicker(review: AutoReview, providers: readonly ProviderStatus[], catalog: ProviderModel[]): ReviewPicker {
+/// What Auto-review's Reviews with offers and shows: every connected provider, and the one
+/// picked, none for the bot's own (as when the picked one is no longer connected, which the core
+/// then reviews with too).
+export function reviewPicker(review: AutoReview, providers: readonly ProviderStatus[]): { providers: string[]; provider?: string } {
   const kinds = reviewProviders(providers);
   const provider = review.provider && kinds.includes(review.provider) ? review.provider : undefined;
-  if (!provider) return { providers: kinds, models: [], decides: false };
-  const offered = reviewModels(catalog, provider);
-  const stored = review.model;
-  const models = stored && !offered.some((model) => model.id === stored) ? [...offered, { provider, id: stored, name: stored, levels: [] }] : offered;
-  // The core sets the model with the provider; until its roster event brings it, the first.
-  const model = stored ?? models[0]?.id;
-  const decides = isDecisionAPI(providers.find((p) => p.kind === provider)?.api) || !!models.find((each) => each.id === model)?.decides;
-  return { providers: kinds, provider, models, model, decides };
+  return { providers: kinds, provider };
+}
+
+/// One row of Settings' Review Models: a connected provider, the name of the model it reviews
+/// with by default (none when its status names none), all its models with decision models among
+/// them and the picked one added, by its id, when the list lacks it, and the model the user
+/// picked, none for the default.
+export interface ReviewModelRow {
+  kind: string;
+  defaultName?: string;
+  models: ProviderModel[];
+  picked?: string;
+}
+
+/// Auto-review with a provider's review model picked, or its default put back (`undefined`), as
+/// an `auto_review.set` patch of `models` leaves it.
+export function withReviewModel(review: AutoReview, kind: string, model: string | undefined): AutoReview {
+  const { [kind]: _, ...others } = review.models ?? {};
+  const models = model ? { ...others, [kind]: model } : others;
+  return { ...review, models: Object.keys(models).length ? models : undefined };
+}
+
+/// A row for every connected provider, in the order the core lists them. `catalog` is the core's
+/// with the custom providers' models (`withCustomModels`).
+export function reviewModelRows(review: AutoReview, providers: readonly ProviderStatus[], catalog: ProviderModel[]): ReviewModelRow[] {
+  return providers
+    .filter((status) => status.is_connected)
+    .map((status) => {
+      const kind = status.kind;
+      const offered = reviewModels(catalog, kind);
+      const picked = review.models?.[kind] || undefined;
+      const models = picked && !offered.some((model) => model.id === picked) ? [...offered, { provider: kind, id: picked, name: picked, levels: [] }] : offered;
+      const fallback = status.review_model;
+      const defaultName = fallback ? (offered.find((model) => model.id === fallback)?.name ?? fallback) : undefined;
+      return { kind, defaultName, models, picked };
+    });
 }
 
 /** Every thinking level, lowest first. */

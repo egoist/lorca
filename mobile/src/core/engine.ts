@@ -8,7 +8,7 @@ import { AppState, Platform, type AppStateStatus } from "react-native";
 import * as core from "../../modules/lorca-core";
 import { t } from "../i18n";
 import { hostFacts } from "./host";
-import { providerConnectMethod, type Attachment, type AutoReview, type Bot, type Chat, type ChatMeta, type ChatSearchResults, type ChatUsage, type CustomAPI, type CustomModel, type Message, type ProviderKind, type ProviderStatus } from "./model";
+import { providerConnectMethod, withReviewModel, type Attachment, type AutoReview, type Bot, type Chat, type ChatMeta, type ChatSearchResults, type ChatUsage, type CustomAPI, type CustomModel, type Message, type ProviderKind, type ProviderStatus } from "./model";
 import { coreHome, loadPrefs, pathOf, wipePrefs } from "./prefs";
 import { clearPushes, installPushHandlers, registerForPushes } from "./push";
 import {
@@ -370,16 +370,24 @@ class Engine {
     void core.request("auto_review.set", { is_enabled: value.is_enabled, rules: value.rules });
   }
 
-  /// Picks the model Auto-review runs: one of a connected provider's, or, without a provider, a
-  /// small one of the bot's own. A provider alone starts on its review model, which the core
-  /// picks and its roster event brings. Only these fields go, so the switch and the rules stay.
-  setReviewModel(provider: string | undefined, model?: string) {
-    const held = useStore.getState().auto_review;
-    useStore.setState({ auto_review: { ...held, provider, model: provider ? model : undefined } });
-    const params = provider ? { provider, ...(model ? { model } : {}) } : { provider: null };
-    core.request("auto_review.set", params).catch(() => {
-      // A provider disconnected meanwhile: the core kept what it had.
-      useStore.setState((s) => ({ auto_review: { ...s.auto_review, provider: held.provider, model: held.model } }));
+  /// Picks the provider whose review model Auto-review runs, or none for the bot's own. Only
+  /// `provider` goes, so the switch, the rules, and the review models stay.
+  setReviewProvider(provider: string | undefined) {
+    const held = useStore.getState().auto_review.provider;
+    useStore.setState((s) => ({ auto_review: { ...s.auto_review, provider } }));
+    core.request("auto_review.set", { provider: provider ?? null }).catch(() => {
+      // The provider disconnected meanwhile: the core kept what it had.
+      useStore.setState((s) => ({ auto_review: { ...s.auto_review, provider: held } }));
+    });
+  }
+
+  /// Picks the model Auto-review runs on a provider, or puts its default back (`undefined`). The
+  /// patch names this provider alone, so the others' review models stay.
+  setReviewModel(kind: string, model: string | undefined) {
+    const held = useStore.getState().auto_review.models?.[kind];
+    useStore.setState((s) => ({ auto_review: withReviewModel(s.auto_review, kind, model) }));
+    core.request("auto_review.set", { models: { [kind]: model ?? null } }).catch(() => {
+      useStore.setState((s) => ({ auto_review: withReviewModel(s.auto_review, kind, held) }));
     });
   }
 

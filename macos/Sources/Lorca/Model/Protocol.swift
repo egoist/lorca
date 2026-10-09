@@ -69,12 +69,14 @@ enum Wire {
         var isEnabled: Bool
         var rules: [AutoReviewRule]?
         var provider: String?
-        var model: String?
+        var models: [String: String]?
 
         func toModel() -> Lorca.AutoReview {
-            Lorca.AutoReview(
+            let models = (models ?? [:]).compactMap { kind, model in ProviderCredential.Kind(wireValue: kind).map { ($0, model) } }
+            return Lorca.AutoReview(
                 isEnabled: isEnabled, rules: (rules ?? []).map { $0.toModel() },
-                provider: provider.flatMap(ProviderCredential.Kind.init(wireValue:)), model: model)
+                provider: provider.flatMap(ProviderCredential.Kind.init(wireValue:)),
+                models: Dictionary(models, uniquingKeysWith: { first, _ in first }))
         }
     }
 
@@ -128,12 +130,13 @@ enum Wire {
         var name: String?
         var api: String?
         var models: [StatusModel]?
+        var reviewModel: String?
 
         func toModel() -> ProviderCredential? {
             guard let kind = ProviderCredential.Kind(wireValue: kind) else { return nil }
             return ProviderCredential(
                 kind: kind, isConnected: isConnected, detail: detail, baseURL: baseUrl, name: name,
-                api: api.flatMap(CustomAPI.init(rawValue:)), models: (models ?? []).map { $0.toModel() })
+                api: api.flatMap(CustomAPI.init(rawValue:)), models: (models ?? []).map { $0.toModel() }, reviewModel: reviewModel)
         }
     }
 

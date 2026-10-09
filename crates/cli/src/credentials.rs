@@ -309,6 +309,7 @@ impl Credentials {
                 kind: kind.to_string(),
                 is_connected: detail.is_some(),
                 detail: detail.unwrap_or_else(|| "Not connected".into()),
+                review_model: self.review_model(kind),
                 base_url: self.api_key(kind).and_then(|c| c.base_url.clone()),
                 ..Default::default()
             }
@@ -320,6 +321,7 @@ impl Credentials {
                 key => format!("{} · {}", mask_key(key), provider.base_url),
             };
             ProviderStatus {
+                review_model: self.review_model(&kind),
                 kind,
                 is_connected: true,
                 detail,

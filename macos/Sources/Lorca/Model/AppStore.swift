@@ -989,16 +989,18 @@ final class AppStore {
         perform("auto_review.set", ["is_enabled": value.isEnabled, "rules": rules])
     }
 
-    /// Picks the model Auto-review runs: a provider's, or nil for the bot's own. A provider alone
-    /// starts on its review model, which the CLI picks and its roster event brings.
-    func setReviewModel(provider: ProviderCredential.Kind?, model: String? = nil) {
+    /// Picks the provider that reviews, or nil for the bot's own.
+    func setReviewProvider(_ provider: ProviderCredential.Kind?) {
         autoReview.provider = provider
-        // The demo has no CLI to pick one.
-        autoReview.model = provider.flatMap { model ?? (isMock ? reviewModels(for: $0).first?.id : nil) }
         emit(.rosterChanged)
-        var params: [String: Any] = ["provider": provider?.wireValue ?? NSNull()]
-        if provider != nil, let model { params["model"] = model }
-        perform("auto_review.set", params)
+        perform("auto_review.set", ["provider": provider?.wireValue ?? NSNull()])
+    }
+
+    /// Picks the model Auto-review runs on `kind`, or nil for its default review model.
+    func setReviewModel(_ model: String?, for kind: ProviderCredential.Kind) {
+        autoReview.models[kind] = model
+        emit(.rosterChanged)
+        perform("auto_review.set", ["models": [kind.wireValue: model ?? NSNull()] as [String: Any]])
     }
 
     /// Answers a question: a permission card's, or a command card's. `allow`, `always`, or

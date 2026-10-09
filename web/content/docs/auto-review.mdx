@@ -43,7 +43,7 @@ Read-only plugin actions never ask, and neither do read-only shell commands: Lor
 
 ## The review model
 
-By default a small, fast model on the bot's own provider reviews, such as GPT-6 Luna on ChatGPT or Claude Haiku 4.5 on Anthropic. Under **Settings › Auto-review › Reviews with** you can pick any model of a provider you've connected instead, for every bot: a cheaper or a stronger chat model, or a **decision model**.
+The review model of the bot's own provider reviews its actions. Under **Settings › Auto-review › Reviews with** you can pick another connected provider to review for every bot instead. Each provider's review model is under **Settings › Providers › Review Models**. By default it's a small, fast model, such as GPT-6 Luna on ChatGPT or Claude Haiku 4.5 on Anthropic, and you can pick any of the provider's models: a cheaper or a stronger chat model, or a **decision model**.
 
 A decision model answers a question with probabilities instead of writing text, which makes it fast and cheap. Examples are Jev from TypeSafe, OpenRouter's decision models, and OpenAI's GPT-6 Luna on its Decisions API. It picks *allow*, or what the action could harm, and Lorca runs the action only when the model is at least 70% sure it's safe. Otherwise the card names the harm. A decision model writes no rule, so its cards offer Allow once and Deny; write rules yourself in Settings. To use one, connect OpenCode Zen, which serves Jev 1.13 (and a free Jev 1.13 Free), or add a decision API as a [custom provider](/docs/providers#custom-providers).
 

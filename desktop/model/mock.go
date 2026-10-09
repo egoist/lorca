@@ -91,20 +91,22 @@ func mockDevices() []*Device {
 
 func mockProviders() []ProviderCredential {
 	return []ProviderCredential{
-		{Kind: "deepseek", IsConnected: true, Detail: "sk-live…4f2c"},
-		{Kind: "anthropic", IsConnected: true, Detail: "sk-ant…8d1a"},
-		{Kind: "opencode", Detail: "Not connected"},
-		{Kind: "opencode-go", Detail: "Not connected"},
-		{Kind: "chatgpt", IsConnected: true, Detail: "you@lorca.app"},
-		{Kind: "grok", Detail: "Not connected"},
+		{Kind: "deepseek", IsConnected: true, Detail: "sk-live…4f2c", ReviewModel: "deepseek-flash"},
+		{Kind: "anthropic", IsConnected: true, Detail: "sk-ant…8d1a", ReviewModel: "claude-haiku-4-5"},
+		{Kind: "opencode", Detail: "Not connected", ReviewModel: "deepseek-v4.1-flash"},
+		{Kind: "opencode-go", Detail: "Not connected", ReviewModel: "glm-5.3-flash"},
+		{Kind: "chatgpt", IsConnected: true, Detail: "you@lorca.app", ReviewModel: "gpt-6-luna"},
+		{Kind: "grok", Detail: "Not connected", ReviewModel: "grok-4.7"},
 		{
 			Kind: "custom:ollama", IsConnected: true, Detail: "http://localhost:11434/v1", BaseURL: "http://localhost:11434/v1", Name: "Ollama", API: APIChatCompletions,
-			Models: []CustomModel{{ID: "qwen3:8b", Levels: []string{"low", "medium", "high"}}, {ID: "llava", Levels: []string{"low", "medium", "high"}}},
+			Models:      []CustomModel{{ID: "qwen3:8b", Levels: []string{"low", "medium", "high"}}, {ID: "llava", Levels: []string{"low", "medium", "high"}}},
+			ReviewModel: "qwen3:8b",
 		},
 		{
 			Kind: "custom:openrouter-decisions", IsConnected: true, Detail: "sk-or…9c0e · https://openrouter.ai/api/alpha/decisions", BaseURL: "https://openrouter.ai/api/alpha/decisions",
 			Name: "OpenRouter Decisions", API: APISystemOne,
-			Models: []CustomModel{{ID: "typesafe/jev-1.13", Name: "TypeSafe: Jev 1.13"}, {ID: "perplexity/pplx-decider-v1.1-27b", Name: "Perplexity: Decider V1.1 27B"}},
+			Models:      []CustomModel{{ID: "typesafe/jev-1.13", Name: "TypeSafe: Jev 1.13"}, {ID: "perplexity/pplx-decider-v1.1-27b", Name: "Perplexity: Decider V1.1 27B"}},
+			ReviewModel: "typesafe/jev-1.13",
 		},
 	}
 }
@@ -227,7 +229,7 @@ func mockAutoReview() AutoReview {
 			{ID: "ar-2", Text: "comment on a pull request", Behavior: "ask"},
 		},
 		Provider: "custom:openrouter-decisions",
-		Model:    "typesafe/jev-1.13",
+		Models:   map[ProviderKind]string{"custom:openrouter-decisions": "perplexity/pplx-decider-v1.1-27b", "anthropic": "claude-opus-5"},
 	}
 }
 

@@ -8,8 +8,8 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// autoReview is the switch, the model that reviews, and the rules, shared by every Device through
-// the roster. Add and Edit use a sheet; a card's Always allow adds a rule here.
+// autoReview is the switch, the provider that reviews, and the rules, shared by every Device
+// through the roster. Add and Edit use a sheet; a card's Always allow adds a rule here.
 func (s settingsPane) autoReview(c *ui.Context) {
 	p := colors(c)
 	review := store.AutoReview
@@ -63,59 +63,30 @@ func (s settingsPane) autoReview(c *ui.Context) {
 				store.SetAutoReview(next)
 			}
 		})
-		s.footnote(c, L("Read-only commands and commands inside Lorca's own folders run at once. Auto-review checks effectful plugin actions and every other shell command before they run: the model under Reviews with (a small, fast model on the bot's provider unless you pick another) applies your rules and latest request, so safe work normally runs automatically and risky work asks. Off, every such action asks. Write one short, natural-language rule for each action; \"Ask first\" takes priority if rules conflict. Built-in safety checks always apply."))
+		s.footnote(c, L("Read-only commands and commands inside Lorca's own folders run at once. Auto-review checks effectful plugin actions and every other shell command before they run: the review model of the bot's provider, or of the provider under Reviews with, applies your rules and latest request, so safe work normally runs automatically and risky work asks. Each provider's review model is in Providers: a small, fast one unless you pick another. Off, every such action asks. Write one short, natural-language rule for each action; \"Ask first\" takes priority if rules conflict. Built-in safety checks always apply."))
 	})
 }
 
-// reviewsWith is the model that reviews, as the inspector's Runs with picks a bot's: the bot's own
-// provider, or any connected one, decision providers included, and then any of its models. A
-// provider no longer connected reads as the bot's own, as the CLI falls back to it.
+// reviewsWith is the provider that reviews: the bot's own, or any connected one, decision providers
+// included. Auto-review runs its review model, which Providers picks. A provider no longer
+// connected reads as the bot's own, as the CLI falls back to it.
 func (s settingsPane) reviewsWith(c *ui.Context, review model.AutoReview) {
 	kinds := store.ReviewProviderKinds()
 	provider := review.Provider
 	if !slices.Contains(kinds, provider) {
 		provider = ""
 	}
-	s.section(c, autoReviewModelEntry().row, nil, func(k *card) {
-		providers := []popUpOption{{Value: "", Label: L("Bot's provider")}}
+	s.section(c, autoReviewProviderEntry().row, nil, func(k *card) {
+		options := []popUpOption{{Value: "", Label: L("Bot's provider")}}
 		for i, kind := range kinds {
-			providers = append(providers, popUpOption{Value: kind, Label: model.ProviderName(kind, store.Providers), Separated: i == 0})
+			options = append(options, popUpOption{Value: kind, Label: model.ProviderName(kind, store.Providers), Separated: i == 0})
 		}
-		providerLabel := L("Provider")
-		accessoryRow(c, k, providerLabel, "", func() {
-			// A new provider starts on its review model, which the CLI picks.
-			if picked, changed, _ := popUpButton(c, popUp{Options: providers, Value: provider, Style: popUpSettings, Label: providerLabel}); changed {
-				store.SetReviewModel(picked, "")
+		label := L("Provider")
+		accessoryRow(c, k, label, "", func() {
+			if picked, changed, _ := popUpButton(c, popUp{Options: options, Value: provider, Style: popUpSettings, Label: label}); changed {
+				store.SetReviewProvider(picked)
 			}
 		})
-		if provider == "" {
-			return
-		}
-		// Every model of the provider, decision models too; a stored one it no longer lists still
-		// shows, by its id.
-		credential := store.Credential(provider)
-		decides := credential != nil && credential.Decides()
-		var options []popUpOption
-		listed := false
-		for _, each := range model.ReviewModels(model.WithCustomModels(store.Models, store.Providers), provider) {
-			options = append(options, popUpOption{Value: each.ID, Label: each.Label})
-			if each.ID == review.Model {
-				listed = true
-				decides = decides || each.Decides
-			}
-		}
-		if !listed && review.Model != "" {
-			options = append(options, popUpOption{Value: review.Model, Label: review.Model})
-		}
-		modelLabel := L("Model")
-		accessoryRow(c, k, modelLabel, "", func() {
-			if picked, changed, _ := popUpButton(c, popUp{Options: options, Value: review.Model, Style: popUpSettings, Label: modelLabel}); changed {
-				store.SetReviewModel(provider, picked)
-			}
-		})
-		if decides {
-			noteRow(c, k, L("A decision model picks allow or what the action could harm, and writes no rule, so a card it pauses offers Allow once and Deny."), nil)
-		}
 	})
 }
 

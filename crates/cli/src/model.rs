@@ -10,6 +10,9 @@ pub struct ProviderStatus {
     pub kind: String,
     pub is_connected: bool,
     pub detail: String,
+    /// The model Auto-review runs on it unless the user picks another.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_model: Option<String>,
     /// A custom API base URL, when the credential has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
@@ -160,18 +163,19 @@ pub struct AutoReview {
     pub is_enabled: bool,
     #[serde(default)]
     pub rules: Vec<AutoReviewRule>,
-    /// The provider whose model reviews, any the account has connected; unset for a small
-    /// model of the bot's own provider.
+    /// The provider that reviews, any the account has connected; unset for the bot's own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
-    /// That provider's model: a chat model or a decision model. Set with `provider`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
+    /// Each provider's review model the user picked, by kind: a chat model or a decision model.
+    /// A provider without one reviews with its default
+    /// ([`Credentials::review_model`](crate::credentials::Credentials::review_model)).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub models: std::collections::BTreeMap<String, String>,
 }
 
 impl Default for AutoReview {
     fn default() -> Self {
-        AutoReview { is_enabled: true, rules: Vec::new(), provider: None, model: None }
+        AutoReview { is_enabled: true, rules: Vec::new(), provider: None, models: Default::default() }
     }
 }
 

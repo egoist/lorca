@@ -271,6 +271,9 @@ type ProviderCredential struct {
 	Name   string
 	API    CustomAPI
 	Models []CustomModel
+	// ReviewModel is the model Auto-review runs on it unless the user picks another: the
+	// catalog's small one for a built-in provider, a custom provider's first. Empty for none.
+	ReviewModel string
 }
 
 // Decides is a custom provider of decision models, which Auto-review can run and no bot can.
@@ -822,14 +825,15 @@ func BehaviorTitle(behavior string) string {
 
 // AutoReview is the check on effectful plugin actions and shell commands, shared by every Device
 // through the roster: on, a model asks only when needed; off, each one asks. The model is the
-// picked provider's, else a small one on the bot's provider.
+// review model of the picked provider, else of the bot's provider.
 type AutoReview struct {
 	IsEnabled bool
 	Rules     []AutoReviewRule
-	// Provider is the provider whose model reviews; empty for the bot's own.
+	// Provider is the provider that reviews; empty for the bot's own.
 	Provider ProviderKind
-	// Model is that provider's model, set with Provider.
-	Model string
+	// Models are the review models the user picked, by provider; a provider without one reviews
+	// with its default (ProviderCredential.ReviewModel).
+	Models map[ProviderKind]string
 }
 
 // MARK: - Plugins

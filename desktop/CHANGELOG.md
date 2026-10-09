@@ -6,9 +6,10 @@ and the update window shows it.
 
 ## [Unreleased]
 
-- Settings › Auto-review has Reviews with: Auto-review can run any connected provider's model
-  instead of a small one on the bot's provider, including a decision model such as OpenCode Zen's
-  Jev 1.13, which only allows an action or names what it could harm.
+- Settings › Providers has Review Models: pick the model Auto-review runs on each connected
+  provider instead of its small, fast default, including a decision model such as OpenCode Zen's
+  Jev 1.13, which only allows an action or names what it could harm. Settings › Auto-review has
+  Reviews with, to review with another connected provider than the bot's.
 - Add Provider… offers decision APIs for Auto-review: OpenRouter Decisions, OpenAI Decisions, and
   TypeSafe, and a custom provider can speak System One or OpenAI Decisions. Bots never run on
   them.

@@ -641,8 +641,9 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
         }
         // Auto-review: the check on plugin and shell actions, shared through the roster.
         // `rules` replaces the list; a rule without an id gets one. `provider` picks a
-        // connected provider's model to review with (empty or null for the bot's own), and
-        // `model` one of its models, else its review model.
+        // connected provider to review with (empty or null for the bot's own). `models` sets a
+        // provider's review model by kind, or with null or "" puts back its default; the
+        // providers it leaves out keep theirs.
         "auto_review.set" => {
             let mut auto_review = app.auto_review();
             if let Some(enabled) = params["is_enabled"].as_bool() {
@@ -656,18 +657,15 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
                         return Err(format!("{} is not connected", credentials.label(kind)));
                     }
                 }
-                if provider != auto_review.provider.as_deref() {
-                    auto_review.model = None;
-                }
                 auto_review.provider = provider.map(str::to_string);
             }
-            if let Some(model) = params.get("model") {
-                auto_review.model = model.as_str().map(str::trim).filter(|model| !model.is_empty()).map(str::to_string);
-            }
-            match &auto_review.provider {
-                Some(kind) if auto_review.model.is_none() => auto_review.model = app.credentials.lock().unwrap().review_model(kind),
-                None => auto_review.model = None,
-                _ => {}
+            if let Some(models) = params["models"].as_object() {
+                for (kind, model) in models {
+                    match model.as_str().map(str::trim).filter(|model| !model.is_empty()) {
+                        Some(model) => auto_review.models.insert(kind.clone(), model.to_string()),
+                        None => auto_review.models.remove(kind),
+                    };
+                }
             }
             if let Some(rules) = params["rules"].as_array() {
                 auto_review.rules = rules
