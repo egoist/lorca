@@ -5,33 +5,19 @@ import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useState } from "react";
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from "react-native";
 import { engine } from "../../../src/core/engine";
-import { deviceName, isRunner, providerLabel, type Device, type PluginStatus, type UpdateStatus } from "../../../src/core/model";
+import { deviceName, isRunner, providerLabel, type Device, type UpdateStatus } from "../../../src/core/model";
 import { deviceIsOnline, useStore } from "../../../src/core/store";
 import { t, useLanguage } from "../../../src/i18n";
 import { BotAvatar } from "../../../src/ui/Avatar";
 import { deviceSymbol } from "../../../src/ui/devices";
 import { Row, Section } from "../../../src/ui/forms";
+import { pluginStateWord } from "../../../src/ui/plugins";
 import { lastSeen } from "../../../src/ui/format";
 import { Symbol } from "../../../src/ui/Symbol";
 import { Font, usePalette } from "../../../src/ui/theme";
 import { alert } from "../../../src/ui/alert";
 
 const OS_NAMES: Record<string, string> = { macos: "macOS", linux: "Linux", windows: "Windows", ios: "iOS", ipados: "iPadOS", android: "Android" };
-
-function pluginState(state: PluginStatus["state"]): string {
-  switch (state) {
-    case "ready":
-      return t("Ready");
-    case "needs_setup":
-      return t("Needs setup");
-    case "needs_auth":
-      return t("Needs sign-in");
-    case "connecting":
-      return t("Connecting…");
-    case "error":
-      return t("Error");
-  }
-}
 
 /// A self-updating Runner's CLI: its version, then where its updates stand.
 function cliStatus(version: string, update: UpdateStatus): string {
@@ -135,7 +121,14 @@ export default function DeviceScreen() {
             {(device.plugins ?? []).length === 0 ? (
               <Row title={t("No plugins installed")} />
             ) : (
-              (device.plugins ?? []).map((plugin) => <Row key={plugin.id} title={plugin.name} subtitle={plugin.state === "error" ? plugin.detail || plugin.description : plugin.description} detail={pluginState(plugin.state)} icon={plugin.icon ?? "puzzlepiece.extension"} />)
+              (device.plugins ?? []).map((plugin) =>
+                // A named account (Gmail · Work) opens its own screen; its name already says which.
+                plugin.account_name ? (
+                  <Row key={plugin.id} title={plugin.name} detail={pluginStateWord(plugin)} icon={plugin.icon ?? "puzzlepiece.extension"} chevron onPress={() => router.push({ pathname: "/settings/account/[id]", params: { id: plugin.id, runner: device.id } })} />
+                ) : (
+                  <Row key={plugin.id} title={plugin.name} subtitle={plugin.state === "error" ? plugin.detail || plugin.description : plugin.description} detail={pluginStateWord(plugin)} icon={plugin.icon ?? "puzzlepiece.extension"} />
+                ),
+              )
             )}
           </Section>
         )}

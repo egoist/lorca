@@ -89,8 +89,18 @@ export interface PluginStatus {
   version?: string;
   /// An SF Symbol name.
   icon?: string;
-  state: "ready" | "needs_setup" | "needs_auth" | "connecting" | "error";
+  state: "ready" | "needs_setup" | "needs_auth" | "insufficient_access" | "connecting" | "error";
   detail?: string;
+  /// A named account's marketplace service (gmail) and the user's name for it (Work); its `id`
+  /// is the account's own.
+  service_id?: string;
+  account_name?: string;
+}
+
+/// An installed plugin as its Runner details it: here, how each server signs in.
+export interface PluginDetail {
+  status: PluginStatus;
+  servers: { name: string; kind: string; auth: { oauth?: boolean; signed_in?: boolean } }[];
 }
 
 /// The connected kinds a bot can run with: built-ins first, then custom providers in the order

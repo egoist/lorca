@@ -1,5 +1,5 @@
 // The chat info sheet's own stack: Details first, with Look, the bot's or group's Description
-// editors, and the chat's outputs sliding in inside the one form sheet the root presents.
+// editors, the chat's outputs, and a plugin's named account sliding in inside the one form sheet the root presents.
 
 import { Stack } from "expo-router";
 import { Platform } from "react-native";
@@ -25,6 +25,7 @@ export default function ChatInfoLayout() {
       <Stack.Screen name="group-description/[id]" />
       <Stack.Screen name="output/[id]" />
       <Stack.Screen name="outputs/[id]" />
+      <Stack.Screen name="account/[id]" />
     </Stack>
   );
 }
