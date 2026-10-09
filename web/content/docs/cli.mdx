@@ -113,6 +113,6 @@ Restarting into a new release on Windows takes `lorca service`; without it, `lor
 
 ## Files
 
-Everything is under `~/.lorca/`, readable only by your user: your identity and machine keys, provider credentials, settings, chats, attachments, plugins, your MCP servers in `mcp.json`, the last model catalog fetched in `catalog.json`, the last marketplace fetched in `marketplace.json`, the last update check in `update.json`, and one workspace folder per bot with its memory.
+Everything is under `~/.lorca/`, readable only by your user: your identity and machine keys, provider credentials, settings, chats, attachments, plugins, your MCP servers in `mcp.json`, the last model catalog fetched in `catalog.json`, the last marketplace fetched in `marketplace.json`, the last update check in `update.json`, the token the apps and `lorca` send to a running `lorca serve` in `serve-token` (a web page cannot reach it), and one workspace folder per bot with its memory.
 
 The macOS app logs the service to `~/Library/Logs/Lorca/cli.log`. Under `lorca service` the log is `~/Library/Logs/Lorca/serve.log` on macOS, `journalctl --user -u lorca` on Linux, and `serve.log` in `~/.lorca` on Windows.

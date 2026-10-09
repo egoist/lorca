@@ -113,6 +113,6 @@ lorca service install
 
 ## 文件
 
-一切都在 `~/.lorca/` 下，只有你的用户可读：身份和机器密钥、服务商凭据、设置、聊天、附件、插件、`mcp.json` 里你自己的 MCP 服务器、`catalog.json` 里最近一次获取的模型目录、`marketplace.json` 里最近一次获取的市场、`update.json` 里最近一次的更新检查，以及每个智能体一个的工作区文件夹（里面有它的记忆）。
+一切都在 `~/.lorca/` 下，只有你的用户可读：身份和机器密钥、服务商凭据、设置、聊天、附件、插件、`mcp.json` 里你自己的 MCP 服务器、`catalog.json` 里最近一次获取的模型目录、`marketplace.json` 里最近一次获取的市场、`update.json` 里最近一次的更新检查、`serve-token` 里应用和 `lorca` 连接正在运行的 `lorca serve` 所用的令牌（网页连不上它），以及每个智能体一个的工作区文件夹（里面有它的记忆）。
 
 macOS 应用把服务的日志写到 `~/Library/Logs/Lorca/cli.log`。使用 `lorca service` 时，日志在 macOS 上是 `~/Library/Logs/Lorca/serve.log`，在 Linux 上用 `journalctl --user -u lorca` 查看，在 Windows 上是 `~/.lorca` 里的 `serve.log`。

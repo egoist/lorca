@@ -23,7 +23,7 @@ provider-auth = ["dep:lorca-provider-auth"]
 # Running bots: the agent loop, providers, tools. Off for a Device that only takes part.
 runner = ["provider-auth", "dep:lorca-agent", "dep:open", "dep:rmcp", "dep:mcp_http", "dep:process-wrap"]
 # The local websocket the desktop app connects to.
-server = ["dep:axum"]
+server = ["dep:axum", "dep:subtle"]
 
 [dependencies]
 lorca-agent = { path = "../agent", optional = true }
@@ -56,6 +56,8 @@ rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+# The local websocket compares its token in constant time.
+subtle = { version = "2.6", optional = true }
 thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true

@@ -1,11 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -94,7 +98,7 @@ func (c *cliClient) open() {
 
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		conn, _, err := websocket.Dial(ctx, url, nil)
+		conn, _, err := websocket.Dial(ctx, url, &websocket.DialOptions{HTTPHeader: cliAuthorization()})
 		cancel()
 		if err != nil {
 			c.dropped(generation)
@@ -119,6 +123,17 @@ func (c *cliClient) open() {
 		}
 		c.read(generation, conn)
 	}()
+}
+
+// cliAuthorization carries the token in the CLI's data directory, without which it takes no
+// client. The CLI writes it once it listens, so one found running and one the launcher starts
+// both have it.
+func cliAuthorization() http.Header {
+	token, err := os.ReadFile(filepath.Join(cliHome(), "serve-token"))
+	if err != nil || len(bytes.TrimSpace(token)) == 0 {
+		return nil
+	}
+	return http.Header{"Authorization": {"Bearer " + string(bytes.TrimSpace(token))}}
 }
 
 func (c *cliClient) read(generation int, conn *websocket.Conn) {
