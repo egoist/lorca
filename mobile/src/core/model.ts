@@ -857,3 +857,75 @@ export function thinkingLabel(level: string): string {
   };
   return labels[level] ?? level.charAt(0).toUpperCase() + level.slice(1);
 }
+
+/// Durable work a bot keeps across turns, as the core's `tasks` methods carry it: an owning bot
+/// (and so its Runner), what done looks like, the next step, the tasks it waits for, and, once a
+/// run ends, a result with what supports it. Not the Running tasks of `app/tasks`, which are a
+/// chat's terminal commands.
+export interface DurableTask {
+  id: string;
+  revision: number;
+  authority_runner_id: string;
+  owner_bot_id: string;
+  runner_id: string;
+  goal: string;
+  acceptance_criteria: string[];
+  dependencies: string[];
+  next_action: string;
+  chat_ids: string[];
+  links: { label: string; url: string }[];
+  state: DurableTaskState;
+  reason?: string | null;
+  result?: string | null;
+  evidence: TaskEvidence[];
+  active_run?: { id: string; bot_id: string; runner_id: string; chat_id: string; started_at: number } | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export type DurableTaskState = "queued" | "working" | "blocked" | "awaiting_review" | "completed" | "cancelled";
+
+/// What supports a task's result: a message, an output version, a file, a review, or a link.
+export interface TaskEvidence {
+  kind: "message" | "output" | "file" | "review" | "url";
+  label: string;
+  chat_id?: string | null;
+  message_id?: string | null;
+  attachment_id?: string | null;
+  url?: string | null;
+  output_id?: string | null;
+  version?: number | null;
+  review_id?: string | null;
+}
+
+/// Why a task the user cancelled in the app stopped, for its bot to read; the apps show the state
+/// alone for it.
+export const CANCELLED_BY_USER = "Cancelled by the user.";
+
+export const taskIsFinished = (state: DurableTaskState) => state === "completed" || state === "cancelled";
+
+/// A run can start: queued or blocked, and not running.
+export const taskCanStart = (task: DurableTask) => (task.state === "queued" || task.state === "blocked") && !task.active_run;
+
+/// The SF Symbol for a state, the same as the desktop apps'.
+export function taskSymbol(state: DurableTaskState): string {
+  switch (state) {
+    case "working":
+      return "arrow.triangle.2.circlepath";
+    case "blocked":
+      return "exclamationmark.circle.fill";
+    case "awaiting_review":
+      return "eye";
+    case "completed":
+      return "checkmark.circle";
+    case "cancelled":
+      return "xmark.circle";
+    default:
+      return "circle";
+  }
+}
+
+/// What waits on the user first, then open work, then finished tasks.
+export function taskOrder(state: DurableTaskState): number {
+  return { blocked: 0, awaiting_review: 1, working: 2, queued: 3, completed: 4, cancelled: 4 }[state];
+}

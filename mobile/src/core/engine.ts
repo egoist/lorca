@@ -8,10 +8,11 @@ import { AppState, Platform, type AppStateStatus } from "react-native";
 import * as core from "../../modules/lorca-core";
 import { t } from "../i18n";
 import { hostFacts } from "./host";
-import { providerConnectMethod, withReviewModel, type Attachment, type AutoReview, type Bot, type Chat, type ChatMeta, type ChatSearchResults, type ChatUsage, type CustomAPI, type CustomModel, type Message, type ProviderKind, type ProviderStatus } from "./model";
+import { providerConnectMethod, withReviewModel, type Attachment, type AutoReview, type Bot, type Chat, type ChatMeta, type ChatSearchResults, type ChatUsage, type CustomAPI, type CustomModel, type DurableTask, type Message, type ProviderKind, type ProviderStatus } from "./model";
 import { coreHome, loadPrefs, pathOf, wipePrefs } from "./prefs";
 import { clearPushes, installPushHandlers, registerForPushes } from "./push";
 import {
+  acceptDurableTask,
   applyRoster,
   botById,
   chatById,
@@ -154,6 +155,9 @@ class Engine {
       case "snapshot":
         replaceSnapshot(data as Snapshot);
         break;
+      case "tasks.changed":
+        acceptDurableTask((data as { task: DurableTask }).task);
+        break;
       case "roster.changed": {
         const { removed } = applyRoster(data);
         for (const chatId of removed) removeChat(chatId);
@@ -295,6 +299,15 @@ class Engine {
   async namedFile(attachment: Attachment): Promise<string> {
     const { path } = await core.request<{ path: string }>("files.path", { attachment, named: true });
     return path;
+  }
+
+  /// A durable task method (`tasks.create`, `tasks.update`, `tasks.run`, `tasks.get`); the core
+  /// sends a write to the task's authority Runner. The task it answers with is kept unless a
+  /// newer revision arrived first.
+  async taskRequest(method: string, params: Record<string, unknown>): Promise<DurableTask> {
+    const task = await core.request<DurableTask>(method, params);
+    acceptDurableTask(task);
+    return task;
   }
 
   /// Every output version this phone has synced for the chat, for its details.

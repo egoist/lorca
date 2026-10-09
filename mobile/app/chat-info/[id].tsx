@@ -4,8 +4,8 @@ import { MenuView, type MenuComponentRef } from "@expo/ui/community/menu";
 import { Platform, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 import { Pressable } from "../../src/ui/Pressable";
 import { chatTitle, engine } from "../../src/core/engine";
-import { providerKinds, providerLabel, providerModels, PROVIDER_KINDS, thinkingLabel, thinkingLevels, withCustomModels, type Bot, type Routine } from "../../src/core/model";
-import { deviceIsOnline, useBotMap, useChat, useOutputs, useRoutines, useStore, useWorkingBotIds } from "../../src/core/store";
+import { providerKinds, providerLabel, providerModels, PROVIDER_KINDS, taskSymbol, thinkingLabel, thinkingLevels, withCustomModels, type Bot, type Routine } from "../../src/core/model";
+import { deviceIsOnline, useBotMap, useChat, useDurableTasks, useOutputs, useRoutines, useStore, useWorkingBotIds } from "../../src/core/store";
 import { t, useLanguage } from "../../src/i18n";
 import { AvatarCluster, BotAvatar } from "../../src/ui/Avatar";
 import { CheckRow, FieldRow, Row, Section, ToggleRow } from "../../src/ui/forms";
@@ -17,6 +17,7 @@ import { AndroidIcons, CloseToolbar } from "../../src/ui/navigation";
 import { haptic } from "../../src/ui/haptics";
 import { alert } from "../../src/ui/alert";
 import { OutputRow } from "../../src/ui/outputs";
+import { taskStateTitle, useTaskTint } from "../../src/ui/durableTasks";
 
 export default function ChatInfoScreen() {
   useLanguage();
@@ -40,6 +41,9 @@ export default function ChatInfoScreen() {
   const [botName, setBotName] = useState(bot?.name ?? "");
   const routines = useRoutines(chat?.kind === "dm" ? chat.bot_ids[0] : undefined);
   const outputs = useOutputs(chat?.id);
+  const tasks = useDurableTasks(chat?.id);
+  const taskTint = useTaskTint();
+  const [allTasks, setAllTasks] = useState(false);
 
   useEffect(() => setBotName(bot?.name ?? ""), [bot?.id, bot?.name]);
   // The chat's outputs, older ones the transcript has not loaded included.
@@ -144,6 +148,23 @@ export default function ChatInfoScreen() {
           <Row title={t("Description")} subtitle={chat.description || undefined} subtitleLines={2} chevron onPress={() => router.push(`/chat-info/group-description/${chat.id}`)} />
         </Section>
       )}
+
+      {/* The chat's durable tasks, what waits on the user first: a row opens the task. Past five
+          rows the rest wait behind Show More; New Task adds one for this chat. */}
+      <Section title={t("Tasks")}>
+        {(allTasks || tasks.length <= 5 ? tasks : tasks.slice(0, 4)).map((task) => (
+          <Row
+            key={task.id}
+            title={task.goal}
+            subtitle={isGroup && bots.get(task.owner_bot_id) ? `${taskStateTitle(task.state)} · ${bots.get(task.owner_bot_id)!.name}` : taskStateTitle(task.state)}
+            leading={<Symbol name={taskSymbol(task.state)} size={20} color={taskTint(task.state)} />}
+            chevron
+            onPress={() => router.push({ pathname: "/chat-info/durable-task/[id]", params: { id: task.id, chat: chat.id } })}
+          />
+        ))}
+        {!allTasks && tasks.length > 5 ? <Row title={t("Show {count} More", { count: tasks.length - 4 })} icon="ellipsis" onPress={() => setAllTasks(true)} /> : null}
+        <Row title={t("New Task")} icon="plus" onPress={() => router.push({ pathname: "/chat-info/durable-task/[id]", params: { id: "new", chat: chat.id } })} />
+      </Section>
 
       {/* What the chat's bots published: the latest three, and View All for the rest. */}
       {outputs.length > 0 && (
