@@ -3,6 +3,7 @@ package main
 import (
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/egoist/lorca/desktop/model"
 	"github.com/egoist/mygo/ui"
@@ -20,6 +21,7 @@ func taskFixture(id string, state model.TaskState, owner, goal string, updated f
 
 // launchTasks are the Launch room's tasks in every state, as the inspector and the sheet show them.
 func launchTasks() []model.DurableTask {
+	runPosts() // the demo's own snapshot first, so it doesn't replace what follows
 	blocked := taskFixture("task-1", model.TaskBlocked, "bot-patch", "Fix the Linux download link", 90)
 	reason := "The Linux download returns 404: the release bucket has no arm64 tarball."
 	blocked.Reason = &reason
@@ -35,7 +37,16 @@ func launchTasks() []model.DurableTask {
 			break
 		}
 	}
-	review.Evidence = []model.TaskEvidence{{Kind: "message", Label: "Bot run result", ChatID: &chat, MessageID: &message}, {Kind: "url", Label: "Onboarding notes", URL: &notes}}
+	// The output the run published for the task, as #87 hands it back.
+	reportID, output, version := "msg-onboarding-review-2", "out-onboarding-review", uint64(2)
+	relay := store.Chat("chat-relay")
+	relay.Messages = append(relay.Messages, &model.Message{ID: reportID, Author: model.BotAuthor("bot-scout"), CreatedAt: time.Now(),
+		Output: &model.Output{ID: output, Name: "Onboarding review", Mime: "text/html", BotID: "bot-scout", Version: 2, URL: "https://docs.example.com/launch/onboarding-review"}})
+	review.Evidence = []model.TaskEvidence{
+		{Kind: "message", Label: "Bot run result", ChatID: &chat, MessageID: &message},
+		{Kind: "output", Label: "Onboarding review", ChatID: &chat, MessageID: &reportID, OutputID: &output, Version: &version},
+		{Kind: "url", Label: "Onboarding notes", URL: &notes},
+	}
 	working := taskFixture("task-3", model.TaskWorking, "bot-nova", "Write the launch announcement", 70)
 	working.ActiveRun = &model.TaskRun{ID: "task-run-1", BotID: "bot-nova", RunnerID: working.RunnerID, ChatID: "chat-relay", StartedAt: 1}
 	queued := taskFixture("task-4", model.TaskQueued, "bot-nova", "Send the go/no-go summary on Friday", 60)
@@ -174,8 +185,17 @@ func TestTaskSheetStepsFollowTheState(t *testing.T) {
 
 	m, _, tt = taskSheetTester(t, "task-2")
 	renderBoth(t, tt, "desktop-task-review")
-	if !tt.HasText("Message from Researcher") || !tt.HasText("docs.example.com") {
+	if !tt.HasText("Message from Researcher") || !tt.HasText("docs.example.com") || !tt.HasText("Version 2") {
 		t.Fatalf("evidence: %q", tt.Texts())
+	}
+	var opened string
+	outputOpenURL = func(link string) { opened = link }
+	// The inspector lists the same output under Outputs; close it so the click lands on the sheet.
+	m.userWantsInspector = false
+	settle(tt)
+	click(t, tt, "Onboarding review")
+	if opened != "https://docs.example.com/launch/onboarding-review" || !m.hasSheet() {
+		t.Fatalf("output evidence opened %q", opened)
 	}
 	click(t, tt, "Mark Complete")
 	if task := store.DurableTask("task-2"); m.hasSheet() || task.State != model.TaskCompleted {

@@ -295,7 +295,7 @@ func (st *taskSheet) statusCard(c *ui.Context, s *sheet, task *model.DurableTask
 			evidence = evidence[:limit-1]
 		}
 		for i, item := range evidence {
-			ui.Box(c.Key(i)).Children(func() { evidenceRow(c, k, item) })
+			ui.Box(c.Key(i)).Children(func() { st.evidenceRow(c, k, item) })
 		}
 		if len(task.Evidence) > limit {
 			noteRow(c.Key("more"), k, L("%d more", len(task.Evidence)-(limit-1)), nil)
@@ -303,9 +303,11 @@ func (st *taskSheet) statusCard(c *ui.Context, s *sheet, task *model.DurableTask
 	})
 }
 
-// evidenceRow is a message by who wrote it and when, a link by where it goes, or the CLI's label.
-func evidenceRow(c *ui.Context, k *card, item model.TaskEvidence) {
+// evidenceRow is a message by who wrote it and when, an output by its name and version (a click
+// opens that version), a link by where it goes, or the CLI's label.
+func (st *taskSheet) evidenceRow(c *ui.Context, k *card, item model.TaskEvidence) {
 	o := statusRowOptions{Symbol: "bubble.left", Title: item.Label}
+	var output *model.Message
 	switch item.Kind {
 	case "url":
 		o.Symbol = "link"
@@ -313,6 +315,19 @@ func evidenceRow(c *ui.Context, k *card, item model.TaskEvidence) {
 		o.Symbol = "doc.text"
 	case "output":
 		o.Symbol = "doc.richtext"
+		if item.Version != nil {
+			o.Subtitle = L("Version %d", int(*item.Version))
+		}
+		if item.ChatID != nil && item.MessageID != nil {
+			if chat := store.Chat(*item.ChatID); chat != nil {
+				for _, message := range chat.Messages {
+					if message.ID == *item.MessageID && message.Output != nil {
+						output = message
+						o.Tooltip, o.Clickable = L("Open %@", item.Label), true
+					}
+				}
+			}
+		}
 	case "review":
 		o.Symbol = "checkmark.circle"
 	case "message":
@@ -344,8 +359,13 @@ func evidenceRow(c *ui.Context, k *card, item model.TaskEvidence) {
 		}
 		o.Tooltip, o.Clickable = *item.URL, true
 	}
-	if _, row := statusRow(c, k, o); row.Clicked && item.URL != nil {
-		openLink(*item.URL)
+	if _, row := statusRow(c, k, o); row.Clicked {
+		switch {
+		case output != nil:
+			st.w.openOutput(output)
+		case item.URL != nil:
+			openLink(*item.URL)
+		}
 	}
 }
 

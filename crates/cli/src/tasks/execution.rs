@@ -166,6 +166,19 @@ pub(super) fn finish_here(app: &Arc<App>, finish: Finish, sender: &str) -> Resul
     Ok(json!(task))
 }
 
+/// The outputs this run published for its task, the newest version of each, as the evidence
+/// `publish_output` hands back (`Output::task_evidence`).
+pub(super) fn published_outputs(app: &App, job: &Job, task_id: &str) -> Vec<TaskEvidence> {
+    let mut newest: Vec<TaskEvidence> = Vec::new();
+    for message in crate::outputs::list(app, &job.chat_id, Some(task_id)).unwrap_or_default() {
+        let Some(output) = message.output.as_ref().filter(|_| message.created_at >= job.created_at) else { continue };
+        let Ok(reference) = serde_json::from_value::<TaskEvidence>(output.task_evidence(&message.id)) else { continue };
+        newest.retain(|e| e.output_id != reference.output_id);
+        newest.push(reference);
+    }
+    newest
+}
+
 pub(crate) async fn finished(app: &Arc<App>, job: &Job, outcome: TurnOutcome) {
     let Some(id) = job.task_id.as_ref() else {
         return;
@@ -183,7 +196,7 @@ pub(crate) async fn finished(app: &Arc<App>, job: &Job, outcome: TurnOutcome) {
                 && matches!(&m.author,Author::Bot{bot_id} if bot_id==&job.bot_id)
                 && matches!(&m.body,Body::Text{text,..} if nonempty(text))
         });
-    let (result, evidence) = reply
+    let (result, mut evidence) = reply
         .map(|m| {
             let result = if let Body::Text { text, .. } = &m.body {
                 Some(text.clone())
@@ -206,6 +219,7 @@ pub(crate) async fn finished(app: &Arc<App>, job: &Job, outcome: TurnOutcome) {
             )
         })
         .unwrap_or_default();
+    evidence.extend(published_outputs(app, job, id));
     let reason = if let Some(reason) = budget_block_reason(
         &app.snapshot(),
         id,

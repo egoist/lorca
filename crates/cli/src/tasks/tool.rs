@@ -18,7 +18,7 @@ impl Tool for TasksTool {
         "tasks"
     }
     fn description(&self) -> &str {
-        "Durable tasks persist ownership, goal, acceptance criteria, dependencies, next action, state, and result/evidence across turns and compaction. list/get inspect current records. create makes queued work; run claims a single turn on the owning bot's Runner. update changes only supplied fields, using expected_revision from the latest record; stale edits fail. request_id identifies a mutation: reuse it with identical arguments only when retrying delivery. blocked/cancelled need reason; completed needs result and evidence. Evidence kinds message/output/file/review reference records in linked chats; url uses HTTPS. A child handoff references task_id without claiming the parent run."
+        "Durable tasks persist ownership, goal, acceptance criteria, dependencies, next action, state, and result/evidence across turns and compaction. list/get inspect current records. create makes queued work; run claims a single turn on the owning bot's Runner. update changes only supplied fields, using expected_revision from the latest record; stale edits fail. request_id identifies a mutation: reuse it with identical arguments only when retrying delivery. blocked/cancelled need reason; completed needs result and evidence. Evidence kinds message/output/file/review reference records in linked chats; url uses HTTPS. For a file or link you published for the task (publish_output with its task_id), pass the task_evidence object publish_output returned; a task run records the outputs it published as evidence when it ends. A child handoff references task_id without claiming the parent run."
     }
     fn parameters(&self) -> Value {
         json!({

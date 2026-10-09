@@ -663,3 +663,41 @@ fn unrelated_edits_keep_unresolved_run_evidence_and_completion_resolves_it() {
         .unwrap_err()
         .contains("synced"));
 }
+
+#[test]
+fn outputs_published_for_the_task_are_its_evidence() {
+    let scratch = scratch_app();
+    let app = &scratch.0;
+    let task = make(app, "create");
+    let (_, job) = launch(app, &task);
+    let publish = |task_id: &str, name: &str, replaces: Option<String>| {
+        crate::outputs::publish(app, &task.chat_ids[0], &task.owner_bot_id, &scratch.1, crate::outputs::PublishOutput {
+            name: name.into(),
+            path: None,
+            url: Some("https://docs.example.com/report".into()),
+            mime: None,
+            task_id: Some(task_id.into()),
+            replaces,
+            evidence: None,
+        })
+        .unwrap()
+    };
+    let first = publish(&task.id, "Report", None);
+    let second = publish(&task.id, "Report", Some(first.id.clone()));
+    let other = publish(&format!("task-{}", uuid::Uuid::new_v4()), "Other", None);
+    // The run's outcome takes the newest version of each output it published for the task.
+    let evidence = super::execution::published_outputs(app, &job, &task.id);
+    assert_eq!(evidence.len(), 1);
+    assert_eq!(evidence[0].kind, EvidenceKind::Output);
+    assert_eq!(evidence[0].message_id.as_deref(), Some(second.id.as_str()));
+    assert_eq!(evidence[0].output_id, first.output.as_ref().map(|o| o.id.clone()));
+    assert_eq!(evidence[0].version, Some(2));
+    let finish = Finish { task_id: task.id.clone(), run_id: job.id.clone(), result: Some("Report ready".into()), evidence, reason: None };
+    finish_here(app, finish, &task.runner_id).unwrap();
+    let review = get(app, &task.id).unwrap();
+    let done = update(app, &review, json!({"state":"completed"}), "complete").unwrap();
+    assert_eq!(done.state, TaskState::Completed);
+    // What publish_output hands back for another task is not this task's evidence.
+    let foreign = other.output.as_ref().unwrap().task_evidence(&other.id);
+    assert!(update(app, &done, json!({"evidence":[foreign]}), "foreign").unwrap_err().contains("output"));
+}

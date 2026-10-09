@@ -260,12 +260,20 @@ final class DurableTaskViewController: SheetViewController, NSTextFieldDelegate 
         return rows
     }
 
-    /// A message by who wrote it and when, a link by where it goes; the CLI's label otherwise.
+    /// A message by who wrote it and when, an output by its name and version (a click opens that
+    /// version), a link by where it goes; the CLI's label otherwise.
     private func evidenceRow(_ item: DurableTask.Evidence) -> NSView {
         let row = StatusRow()
         var title = item.label
         var subtitle = ""
-        if item.kind == "message", let chatID = item.chatId, let message = store.chat(chatID)?.messages.first(where: { $0.id == item.messageId }) {
+        let message = item.chatId.flatMap { store.chat($0) }?.messages.first { $0.id == item.messageId }
+        if item.kind == "output", let version = item.version {
+            subtitle = L("Version %d", Int(version))
+            if let message {
+                row.toolTip = L("Open %@", item.label)
+                row.addGestureRecognizer(ClickHandler { [weak self] in OutputActions.open(message, window: self?.view.window) })
+            }
+        } else if item.kind == "message", let message {
             switch message.author {
             case .you: title = L("Your message")
             case let .bot(id): title = L("Message from %@", store.bot(id)?.name ?? L("a bot"))
