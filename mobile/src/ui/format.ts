@@ -1,7 +1,7 @@
 // Stamps, previews, and the working row's words, the rules the Mac app uses
 // (Design/Formatters.swift, AppStore.preview, ChatViewController.activity).
 
-import type { Body, Bot, Chat, Routine } from "../core/model";
+import type { Body, Bot, Chat, Message, Routine } from "../core/model";
 import { attachmentSummary, isSentMessage } from "../core/model";
 import type { StoreState } from "../core/store";
 import { language, t } from "../i18n";
@@ -153,7 +153,11 @@ export function lastSeen(seenUnix: number | undefined): string {
 
 /// The last thing worth previewing: tool calls never are, except a sent message.
 export function preview(chat: Chat, bots: Map<string, Bot>): string {
-  const shown = [...chat.messages].reverse().find((m) => (m.body.kind === "tool" ? isSentMessage(m.body) : true));
+  let shown: Message | undefined;
+  for (let i = chat.messages.length - 1; i >= 0 && !shown; i--) {
+    const m = chat.messages[i];
+    if (m.body.kind !== "tool" || isSentMessage(m.body)) shown = m;
+  }
   if (!shown) return t("No messages yet");
   let body: string;
   switch (shown.body.kind) {
@@ -165,7 +169,7 @@ export function preview(chat: Chat, bots: Map<string, Bot>): string {
       break;
     case "handoff":
       body =
-        chat.kind !== "group" && chat.bot_ids.includes(shown.body.to)
+        chat.bot_ids.includes(shown.body.to) && !chat.bot_ids.includes(shown.body.from)
           ? t("Message from {name}: {reason}", { name: bots.get(shown.body.from)?.name ?? t("a teammate"), reason: shown.body.reason })
           : t("Handed off to {name}", { name: bots.get(shown.body.to)?.name ?? t("a teammate") });
       break;

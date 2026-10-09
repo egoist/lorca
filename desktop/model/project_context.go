@@ -79,7 +79,6 @@ type ProjectOutput struct {
 	MessageID string `json:"message_id"`
 	OutputID  string `json:"output_id"`
 	Version   uint32 `json:"version"`
-	TaskID    string `json:"task_id,omitempty"`
 }
 
 // ProjectSource is where an entry came from, kept whole so a correction carries a message or

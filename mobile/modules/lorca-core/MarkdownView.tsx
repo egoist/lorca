@@ -2,7 +2,7 @@
 // selectable in place (UITextView on iOS, TextView on Android), sizes itself to its text within
 // `maxWidth`, and opens links.
 import { requireNativeModule, requireNativeViewManager } from "expo-modules-core";
-import type { ProcessedColorValue, StyleProp, ViewStyle } from "react-native";
+import { PixelRatio, type ProcessedColorValue, type StyleProp, type ViewStyle } from "react-native";
 
 export interface MarkdownViewProps {
   markdown: string;
@@ -21,12 +21,29 @@ export interface MarkdownViewProps {
   style?: StyleProp<ViewStyle>;
 }
 
-const native = requireNativeModule<{ measure?(markdown: string, maxWidth: number, fontSize: number, codeFontSize: number): { width: number; height: number } }>("MarkdownView");
+const native = requireNativeModule<{ measure(markdown: string, maxWidth: number, fontSize: number, codeFontSize: number): { width: number; height: number } }>("MarkdownView");
 
-/// The size the text takes within `maxWidth`, measured natively before the view renders. iOS
-/// sizes the view from this; on Android the view claims its own size.
+/// Sizes already measured, by text and width, most recent last. A chat opened again, or a row
+/// FlashList recycles while scrolling, asks for the same sizes; measuring parses the Markdown and
+/// lays its text out.
+const measured = new Map<string, { width: number; height: number }>();
+const MEASURED_LIMIT = 600;
+
+/// The size the text takes within `maxWidth`, measured natively before the view renders. The
+/// view is sized from this, so a transcript's rows have their heights in their first layout.
 export function measureMarkdown(markdown: string, maxWidth: number, fontSize: number, codeFontSize: number) {
-  return native.measure?.(markdown, maxWidth, fontSize, codeFontSize);
+  // Android sizes the text in sp, so the system's font scale is part of the answer.
+  const key = `${maxWidth}|${fontSize}|${codeFontSize}|${PixelRatio.getFontScale()}|${markdown}`;
+  const hit = measured.get(key);
+  if (hit) {
+    measured.delete(key);
+    measured.set(key, hit);
+    return hit;
+  }
+  const size = native.measure(markdown, maxWidth, fontSize, codeFontSize);
+  measured.set(key, size);
+  if (measured.size > MEASURED_LIMIT) measured.delete(measured.keys().next().value!);
+  return size;
 }
 
 export const MarkdownView = requireNativeViewManager<MarkdownViewProps>("MarkdownView");

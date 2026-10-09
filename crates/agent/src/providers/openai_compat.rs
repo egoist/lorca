@@ -383,9 +383,8 @@ impl Provider for OpenAiCompatProvider {
 
         tokio::spawn(async move {
             let build = || options.apply_to(bearer_auth(client.post(&url), &api_key).header("User-Agent", USER_AGENT)).json(&body);
-            let response = match send_with_retry(build, max_retries, max_retry_delay_ms, &cancel).await {
+            let response = match send_with_retry(build, max_retries, max_retry_delay_ms, &cancel, &options).await {
                 Ok(response) => {
-                    options.report(&response);
                     response
                 }
                 Err(failure) => {

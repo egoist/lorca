@@ -54,7 +54,6 @@ struct ProjectEntry: Decodable, Hashable, Identifiable {
             var messageId: String
             var outputId: String
             var version: Int
-            var taskId: String?
         }
         var kind: String
         var label: String

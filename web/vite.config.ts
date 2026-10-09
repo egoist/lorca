@@ -11,7 +11,7 @@ import tailwindcss from '@tailwindcss/vite'
 import { cloudflare } from '@cloudflare/vite-plugin'
 import { fumadocsMdx } from 'fumadocs-mdx/vite'
 
-import { fetchDesktopRelease } from './src/lib/desktop-release.ts'
+import { fetchReleases } from './src/lib/releases.ts'
 
 /** The files every Device checks for a newer copy of: the model catalog at `/models/v1.json` and
  * the marketplace index at `/marketplace/v1.json`, the CLI's own `crates/models/catalog.json` and
@@ -38,11 +38,12 @@ function servedFiles(): Plugin {
 
 const config = defineConfig(async ({ command }) => ({
   resolve: { tsconfigPaths: true },
-  // The download page's Windows and Linux links, read once per build: a new desktop release
+  // The download page's Windows, Linux, and Android links, read once per build: a new release
   // reaches the page with the next deploy.
-  define: {
-    __DESKTOP_RELEASE__: JSON.stringify(await fetchDesktopRelease({ required: command === 'build' })),
-  },
+  define: await fetchReleases({ required: command === 'build' }).then(({ desktop, android }) => ({
+    __DESKTOP_RELEASE__: JSON.stringify(desktop),
+    __ANDROID_RELEASE__: JSON.stringify(android),
+  })),
   // The docs' generated modules import this at the first server render. Found then, it makes the
   // dev server re-optimize and reload its dependencies mid-render, and that render mixes two copies
   // of React ("Invalid hook call" at Nav). Declared here, it is optimized at startup.

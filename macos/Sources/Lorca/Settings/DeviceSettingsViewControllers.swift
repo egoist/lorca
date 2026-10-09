@@ -90,16 +90,19 @@ final class BotsSettingsViewController: DevicePaneViewController {
 
 // MARK: - Providers
 
-/// The account's provider credentials: connected on any Device, used by every Runner.
+/// The account's provider credentials: connected on any Device, used by every Runner. Then each
+/// connected provider's review model, the one Auto-review runs on it.
 final class ProvidersSettingsViewController: SettingsPaneViewController {
     private let store = AppStore.shared
     private let section = SectionView(title: L("Credentials"))
+    private let reviewSection = SectionView(title: SettingsEntry.reviewModels.row)
 
     override func viewDidLoad() {
         title = L("Providers")
         addSection(section)
         addFootnote(
             L("Credentials belong to your account. They reach your paired Devices encrypted with the account key, so a bot uses them on whichever Runner it is assigned to; the relay stores ciphertext."))
+        addSection(reviewSection)
         super.viewDidLoad()
         store.observe(self) { [weak self] event in
             switch event {
@@ -113,8 +116,10 @@ final class ProvidersSettingsViewController: SettingsPaneViewController {
     private func reload() {
         guard !store.providers.isEmpty else {
             section.setRows([KeyValueRow(key: L("Waiting for the CLI"), value: "")])
+            reviewSection.isHidden = true
             return
         }
+        renderReviewModels()
         var rows: [NSView] = store.providers.map { credential in
             let row = StatusRow()
             // A subscription disconnects right here; an API key or a custom provider opens its sheet.
@@ -149,10 +154,11 @@ final class ProvidersSettingsViewController: SettingsPaneViewController {
         section.setRows(rows)
     }
 
-    /// The servers people often add, then any other. One the account has already opens it.
+    /// The servers people often add, the decision APIs Auto-review can use, then any other. One
+    /// the account has already opens it.
     private func addMenu() -> NSMenu {
         let menu = NSMenu()
-        for (index, presets) in [CustomProviderPreset.cloud, CustomProviderPreset.local].enumerated() {
+        for (index, presets) in [CustomProviderPreset.cloud, CustomProviderPreset.local, CustomProviderPreset.decisions].enumerated() {
             if index > 0 { menu.addItem(.separator()) }
             for preset in presets {
                 let item = NSMenuItem(title: preset.name, action: #selector(addPreset(_:)), keyEquivalent: "")
@@ -167,6 +173,43 @@ final class ProvidersSettingsViewController: SettingsPaneViewController {
         other.target = self
         menu.addItem(other)
         return menu
+    }
+
+    /// A pop-up for each connected provider: its default review model, then every model it has,
+    /// decision models among them. A picked model the provider no longer lists stays listed.
+    private func renderReviewModels() {
+        let review = store.autoReview
+        let rows: [NSView] = store.reviewProviderKinds.map { kind in
+            let credential = store.credential(for: kind)
+            var models = store.reviewModels(for: kind)
+            if let picked = review.models[kind], !models.contains(where: { $0.id == picked }) {
+                models.append(ProviderModel(provider: kind, id: picked, label: picked, levels: []))
+            }
+            let popUp = SettingsPopUpButton()
+            let fallback = credential?.reviewModel.map { id in models.first { $0.id == id }?.label ?? id }
+            popUp.addItem(withTitle: fallback.map { L("Default (%@)", $0) } ?? L("Default"))
+            popUp.menu?.addItem(.separator())
+            for model in models {
+                popUp.addItem(withTitle: model.label)
+                popUp.lastItem?.representedObject = model.id
+            }
+            popUp.select(popUp.itemArray.first { $0.representedObject as? String == review.models[kind] } ?? popUp.item(at: 0))
+            popUp.target = self
+            popUp.action = #selector(reviewModelPicked(_:))
+            popUp.identifier = NSUserInterfaceItemIdentifier(kind.wireValue)
+            return AccessoryRow(key: credential?.name ?? kind.name, accessory: popUp)
+        }
+        reviewSection.isHidden = rows.isEmpty
+        reviewSection.setRows(rows + [
+            NoteRow(text: L("Auto-review runs the review model of the bot's provider, or of the provider picked in Auto-review. A decision model writes no rule, so a card it pauses offers Allow once and Deny."))
+        ])
+    }
+
+    @objc private func reviewModelPicked(_ sender: NSPopUpButton) {
+        guard let wire = sender.identifier?.rawValue, let kind = ProviderCredential.Kind(wireValue: wire) else { return }
+        let model = sender.selectedItem?.representedObject as? String
+        guard model != store.autoReview.models[kind] else { return }
+        store.setReviewModel(model, for: kind)
     }
 
     private func existing(named name: String) -> ProviderCredential? {
@@ -386,16 +429,31 @@ final class PluginsSettingsViewController: DevicePaneViewController {
 
 // MARK: - Devices
 
-/// The picked Device itself: what it is, whether it is online, its machine key, and Unpair.
+/// The picked Device itself: what it is, whether it is online, its machine key, whether
+/// `lorca service` keeps a Runner's CLI running, and Unpair.
 final class AboutDeviceSettingsViewController: DevicePaneViewController {
     private let header = DeviceHeaderView()
     private let machineSection = SectionView(title: L("Machine"))
+    /// How to keep a Runner available without the app, under the card while it has no service.
+    private let serviceNote = Build.label("", font: Theme.Font.caption, color: .tertiaryLabelColor, lines: 0)
+    /// What the Runner shown said of its service; asked again each time the pane shows.
+    private var service: Wire.ServiceStatus?
+    private var serviceAsked: Device.ID?
+    private var isAskingService = false
 
     override func viewDidLoad() {
         title = L("Devices")
         add(header)
         addSection(machineSection)
+        add(serviceNote)
         super.viewDidLoad()
+    }
+
+    override func viewWillAppear() {
+        super.viewWillAppear()
+        guard !isAskingService else { return }
+        serviceAsked = nil
+        reload()
     }
 
     override func reload() {
@@ -419,6 +477,16 @@ final class AboutDeviceSettingsViewController: DevicePaneViewController {
             KeyValueRow(
                 key: L("Role"),
                 value: device.isRunner ? L("Runner · runs bots with its own credentials") : L("Device · never runs bots")))
+        askService(device)
+        let service = device.isRunner && device.status == .online ? service : nil
+        if let service {
+            rows.append(
+                KeyValueRow(
+                    key: L("Background service"),
+                    value: service.running ? L("Running") : service.installed ? L("Installed, not running") : L("Not installed")))
+        }
+        serviceNote.stringValue = L("Run lorca service install in Terminal on %@ to keep its bots running while Lorca is closed.", device.name)
+        serviceNote.isHidden = service?.installed != false
         rows.append(
             KeyValueRow(
                 key: L("Last seen"),
@@ -439,6 +507,23 @@ final class AboutDeviceSettingsViewController: DevicePaneViewController {
         unpair.onAction = { [weak self] in UnpairDevice.confirm(device, in: self?.view.window) }
         rows.append(unpair)
         machineSection.setRows(rows)
+    }
+
+    /// Asks an online Runner whether `lorca service` keeps its CLI running, once per Device shown.
+    private func askService(_ device: Device) {
+        guard serviceAsked != device.id else { return }
+        service = nil
+        guard device.isRunner, device.status == .online else { return }
+        serviceAsked = device.id
+        isAskingService = true
+        Task { @MainActor [weak self] in
+            let status = try? await self?.store.serviceStatus(device.id)
+            guard let self else { return }
+            self.isAskingService = false
+            guard self.serviceAsked == device.id else { return }
+            self.service = status
+            self.reload()
+        }
     }
 
     /// The version of a CLI that updates itself, how its update goes, and Update while a newer

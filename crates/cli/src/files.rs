@@ -4,6 +4,7 @@
 //! bot's working directory for its turn, and the app shows them in the transcript.
 
 use std::path::{Path, PathBuf};
+use std::io::Read;
 use std::sync::Arc;
 
 #[cfg(feature = "runner")]
@@ -67,14 +68,18 @@ pub fn store(app: &App, file: &OutgoingFile) -> anyhow::Result<Attachment> {
         .or_else(|| source.file_name().map(|n| n.to_string_lossy().into_owned()))
         .unwrap_or_else(|| "file".into());
     let mime = file.mime.clone().filter(|m| m.contains('/')).unwrap_or_else(|| mime_for(&name).to_string());
-    let bytes = std::fs::read(source)?;
+    let mut bytes = Vec::new();
+    std::fs::File::open(source)?.take(MAX_ATTACHMENT_BYTES + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_ATTACHMENT_BYTES {
+        anyhow::bail!("{} is larger than {} MB", file.path, MAX_ATTACHMENT_BYTES / 1024 / 1024);
+    }
     write_local(app, &id, &bytes)?;
     let (width, height) = match (file.width, file.height) {
         (Some(w), Some(h)) => (Some(w), Some(h)),
         _ if mime.starts_with("image/") => image_size(&bytes),
         _ => (None, None),
     };
-    Ok(Attachment { id, name, mime, size: metadata.len(), width, height })
+    Ok(Attachment { id, name, mime, size: bytes.len() as u64, width, height })
 }
 
 fn write_local(app: &App, id: &str, bytes: &[u8]) -> anyhow::Result<()> {
@@ -99,6 +104,9 @@ pub fn push_blob(app: &App, chat_id: Option<&str>, attachment: &Attachment) -> a
 
 /// The attachment's bytes on this machine, fetched from the relay when another Device sent it.
 pub async fn ensure_local(app: &Arc<App>, attachment: &Attachment) -> anyhow::Result<PathBuf> {
+    if !valid_id(&attachment.id) {
+        anyhow::bail!("Invalid attachment id");
+    }
     let path = local_path(app, &attachment.id);
     if path.is_file() {
         return Ok(path);
@@ -116,6 +124,25 @@ pub async fn ensure_local(app: &Arc<App>, attachment: &Attachment) -> anyhow::Re
         .ok_or_else(|| anyhow::anyhow!("the relay no longer has {}", attachment.name))?;
     let bytes = crate::crypto::decrypt(&dek, "file", &ciphertext)?;
     write_local(app, &attachment.id, &bytes)?;
+    Ok(path)
+}
+
+fn valid_id(id: &str) -> bool {
+    id.starts_with("att-") && id.len() <= 48 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
+/// A private copy with the real filename and extension, so native preview/open/save handlers
+/// recognize reports and recordings. The immutable attachment id keeps versions apart.
+pub fn named_local_path(app: &App, attachment: &Attachment) -> anyhow::Result<PathBuf> {
+    if !valid_id(&attachment.id) { anyhow::bail!("Invalid attachment id"); }
+    let dir = app.config.files_dir().join("open").join(&attachment.id);
+    std::fs::create_dir_all(&dir)?;
+    crate::config::set_private(&dir)?;
+    let path = dir.join(safe_name(&attachment.name));
+    if !path.is_file() {
+        std::fs::copy(local_path(app, &attachment.id), &path)?;
+        crate::config::set_private(&path)?;
+    }
     Ok(path)
 }
 

@@ -306,10 +306,10 @@ private class MarkdownRenderer(context: Context, private val style: MarkdownStyl
   }
 }
 
-/// A selectable TextView styled for message text.
-private fun messageText(context: Context, style: MarkdownStyle, text: CharSequence): TextView =
+/// A TextView styled for message text: selectable with tappable links, or, to measure, plain.
+private fun messageText(context: Context, style: MarkdownStyle, text: CharSequence, interactive: Boolean = true): TextView =
   TextView(context).apply {
-    setTextIsSelectable(true)
+    if (interactive) setTextIsSelectable(true)
     background = null
     includeFontPadding = false
     setPadding(0, 0, 0, 0)
@@ -318,7 +318,7 @@ private fun messageText(context: Context, style: MarkdownStyle, text: CharSequen
     highlightColor = (style.tint and 0x00FFFFFF) or 0x40000000
     setTextSize(TypedValue.COMPLEX_UNIT_SP, style.fontSize)
     this.text = text
-    movementMethod = LinkMovementMethod.getInstance()
+    if (interactive) movementMethod = LinkMovementMethod.getInstance()
   }
 
 /// A table as a grid: columns measured from their cells and shrunk to fit when they must,
@@ -331,6 +331,7 @@ private class MarkdownTableView(
   renderer: MarkdownRenderer,
   /// The width the bubble allows, in px.
   private val maxWidth: Int,
+  interactive: Boolean,
 ) : ViewGroup(context) {
   private val density = context.resources.displayMetrics.density
   private val cells: List<List<TextView>>
@@ -348,7 +349,7 @@ private class MarkdownTableView(
     cells = rows.mapIndexed { r, row ->
       (0 until columns).map { c ->
         val spans = row.getOrNull(c)?.spans ?: emptyList()
-        messageText(context, style, renderer.cell(spans, header = r == 0)).apply {
+        messageText(context, style, renderer.cell(spans, header = r == 0), interactive).apply {
           setPadding(padX, padY, padX, padY)
           gravity = when (spec.alignments.getOrNull(c)) {
             Align.CENTER -> Gravity.CENTER_HORIZONTAL
@@ -422,10 +423,44 @@ private class MarkdownTableView(
   }
 }
 
+/// Fills `parent` with a message's views: the text runs as TextViews and the tables as grids,
+/// stacked with the block gap, then measures it against `maxWidth`. Returns the size in dp.
+private fun layOutMessage(parent: LinearLayout, style: MarkdownStyle, interactive: Boolean): Pair<Double, Double> {
+  val context = parent.context
+  val density = context.resources.displayMetrics.density
+  val maxPx = max(1, (style.maxWidth * density).roundToInt())
+  val renderer = MarkdownRenderer(context, style)
+  parent.removeAllViews()
+  renderer.render(parseMarkdown(style.markdown)).forEachIndexed { index, segment ->
+    val view: View = when (segment) {
+      is Segment.Text -> messageText(context, style, segment.text, interactive)
+      is Segment.Table -> HorizontalScrollView(context).apply {
+        isHorizontalScrollBarEnabled = false
+        overScrollMode = View.OVER_SCROLL_NEVER
+        addView(MarkdownTableView(context, style, segment, renderer, maxPx, interactive), ViewGroup.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+      }
+    }
+    val params = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+    if (index > 0) params.topMargin = renderer.dp(Layout.GAP)
+    parent.addView(view, params)
+  }
+  parent.measure(
+    View.MeasureSpec.makeMeasureSpec(maxPx, View.MeasureSpec.AT_MOST),
+    View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+  )
+  return Pair(parent.measuredWidth / density.toDouble(), parent.measuredHeight / density.toDouble())
+}
+
+/// The size a message takes within `maxWidth`, in dp, from the same views the message view
+/// builds. Called on the JS thread, so the size lands in the same commit as the text; the views
+/// are detached and plain, which lays the text out exactly as the selectable ones do.
+fun measureMessage(context: Context, style: MarkdownStyle): Pair<Double, Double> =
+  layOutMessage(LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }, style, interactive = false)
+
 /// A message body as native views: the core parses the Markdown, this renders the text runs
-/// into selectable TextViews and the tables into grids, stacked with the block gap. It
-/// measures everything against `maxWidth` and claims exactly the used size, so a one-line
-/// message keeps a narrow bubble.
+/// into selectable TextViews and the tables into grids, stacked with the block gap. JS sizes the
+/// view from `measureMessage` before it mounts, so the rows of a transcript have their heights
+/// in their first layout.
 class MarkdownView(context: Context, appContext: AppContext) : ExpoView(context, appContext) {
   val style = MarkdownStyle()
 
@@ -436,27 +471,6 @@ class MarkdownView(context: Context, appContext: AppContext) : ExpoView(context,
   }
 
   fun render() {
-    val density = resources.displayMetrics.density
-    val maxPx = max(1, (style.maxWidth * density).roundToInt())
-    val renderer = MarkdownRenderer(context, style)
-    removeAllViews()
-    renderer.render(parseMarkdown(style.markdown)).forEachIndexed { index, segment ->
-      val view: View = when (segment) {
-        is Segment.Text -> messageText(context, style, segment.text)
-        is Segment.Table -> HorizontalScrollView(context).apply {
-          isHorizontalScrollBarEnabled = false
-          overScrollMode = OVER_SCROLL_NEVER
-          addView(MarkdownTableView(context, style, segment, renderer, maxPx), LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
-        }
-      }
-      val params = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-      if (index > 0) params.topMargin = renderer.dp(Layout.GAP)
-      addView(view, params)
-    }
-    measure(
-      MeasureSpec.makeMeasureSpec(maxPx, MeasureSpec.AT_MOST),
-      MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED),
-    )
-    shadowNodeProxy.setViewSize(measuredWidth / density.toDouble(), measuredHeight / density.toDouble())
+    layOutMessage(this, style, interactive = true)
   }
 }

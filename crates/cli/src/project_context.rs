@@ -71,18 +71,7 @@ pub enum SourceKind {
     Output,
 }
 
-/// References describe another subject's immutable output version, never a second output.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct OutputReference {
-    pub chat_id: String,
-    pub message_id: String,
-    pub output_id: String,
-    pub version: u32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub task_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Source {
     pub kind: SourceKind,
     pub label: String,
@@ -91,7 +80,9 @@ pub struct Source {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub output: Option<OutputReference>,
+    /// An immutable output version a bot published in this group, never a second output. Its
+    /// task, when it has one, is the output's own.
+    pub output: Option<crate::outputs::OutputReference>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -398,11 +389,30 @@ fn make_entry(input: SaveEntry) -> Entry {
     }
 }
 
+/// A newly cited output version must be one this Device has: its message carries that output's
+/// id and version in this group. Checked when an entry is written here, not when another
+/// Device's revision lands, which may come before the message does.
+fn check_output(app: &App, chat_id: &str, source: Option<&Source>) -> Result<(), String> {
+    let Some(reference) = source.and_then(|source| source.output.as_ref()) else { return Ok(()) };
+    let published = app.message(chat_id, &reference.message_id).and_then(|message| message.output);
+    if !published.is_some_and(|output| output.id == reference.output_id && output.version == reference.version && output.chat_id == chat_id) {
+        return Err("The cited output version is not in this group".into());
+    }
+    Ok(())
+}
+
 pub fn save(app: &App, chat_id: &str, input: SaveEntry) -> Result<Entry, String> {
     let _guard = app.project_context_lock.lock().unwrap();
     require_group(app, chat_id)?;
     let entries = load(app, chat_id)?;
     check_change(&entries, &input)?;
+    // A correction that keeps its predecessor's citation needs no message this Device may lack.
+    let cited_before = input.source.as_ref().is_some_and(|source| {
+        entries.iter().any(|old| input.supersedes.contains(&old.id) && &old.source == source)
+    });
+    if !cited_before {
+        check_output(app, chat_id, input.source.as_ref())?;
+    }
     let mut entry = make_entry(input);
     if entry.kind == Kind::Asset {
         entry.asset = entry.supersedes.iter().find_map(|id| {
@@ -1149,6 +1159,27 @@ mod tests {
         apply_remote(app, "project-a", &make_entry(input(Kind::Fact, "From another Device"))).unwrap();
         save(app, "project-a", edit).unwrap();
         assert_eq!(active(&load(app, "project-a").unwrap()).len(), 2);
+    }
+
+    #[test]
+    fn a_cited_output_names_a_version_published_in_the_group() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        let bot = app.state.lock().unwrap().bots[0].id.clone();
+        app.state.lock().unwrap().chats.iter_mut().find(|chat| chat.meta.id == "project-a").unwrap().meta.bot_ids.push(bot.clone());
+        let request = crate::outputs::PublishOutput { name: "Launch plan".into(), url: Some("https://docs.example.com/plan".into()), ..Default::default() };
+        let message = crate::outputs::publish(app, "project-a", &bot, &scratch.1, request).unwrap();
+        let reference = message.output.as_ref().unwrap().reference(&message.id);
+        let cite = |reference: crate::outputs::OutputReference| SaveEntry {
+            source: Some(Source { kind: SourceKind::Output, label: "Launch plan".into(), url: None, message_id: None, output: Some(reference) }),
+            ..input(Kind::Document, "The plan the bots published")
+        };
+        let cited = save(app, "project-a", cite(reference.clone())).unwrap();
+        assert_eq!(cited.source.output, Some(reference.clone()));
+        let other_version = crate::outputs::OutputReference { version: 2, ..reference.clone() };
+        assert!(save(app, "project-a", cite(other_version)).is_err());
+        let elsewhere = crate::outputs::OutputReference { chat_id: "project-b".into(), ..reference };
+        assert!(save(app, "project-b", cite(elsewhere)).is_err());
     }
 
     #[test]
