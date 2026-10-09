@@ -872,6 +872,37 @@ export function thinkingLabel(level: string): string {
 /// (and so its Runner), what done looks like, the next step, the tasks it waits for, and, once a
 /// run ends, a result with what supports it. Not the Running tasks of `app/tasks`, which are a
 /// chat's terminal commands.
+/// A draft or an exact call a bot left for the user to approve, as its Runner keeps it: what it
+/// would do (`payload`), where (`target`), why (`rationale`), and how it ended. Only that Runner
+/// changes it, and a decision names the `version` the user saw.
+export interface ReviewItem {
+  id: string;
+  runner_id: string;
+  bot_id: string;
+  origin: { chat_id: string; message_id?: string | null; routine_id?: string | null; task_id?: string | null };
+  target: { account: string; resource: string };
+  rationale: string;
+  payload: ReviewPayload;
+  version: number;
+  revision: number;
+  preconditions: { workdir: string; files: { path: string; hash?: string | null }[] };
+  state: ReviewState;
+  outcome?: { summary: string; result?: { text?: string } | null; message_id: string } | null;
+  created_at: number;
+}
+
+export type ReviewPayload =
+  | { kind: "draft"; text: string }
+  | { kind: "shell"; arguments: { command?: string } }
+  | { kind: "plugin"; plugin_id: string; server_name: string; tool: string; arguments: unknown };
+
+export type ReviewState = "pending" | "approved" | "executing" | "succeeded" | "failed" | "rejected" | "cancelled" | "uncertain";
+
+/// Waiting for the user, or approved and about to run.
+export function reviewIsOpen(item: ReviewItem): boolean {
+  return item.state === "pending" || item.state === "approved" || item.state === "executing";
+}
+
 export interface DurableTask {
   id: string;
   revision: number;

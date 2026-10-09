@@ -7,12 +7,15 @@ import * as WebBrowser from "expo-web-browser";
 import { AppState, Platform, type AppStateStatus } from "react-native";
 import * as core from "../../modules/lorca-core";
 import { t } from "../i18n";
+import { exactAnswer, ExactNumber, ExactObject, stringifyExact } from "./exactJson";
+import { reviewEditParams } from "./reviewEdit";
 import { hostFacts } from "./host";
-import { providerConnectMethod, withReviewModel, type Attachment, type AutoReview, type Bot, type Chat, type ChatMeta, type ChatSearchResults, type ChatUsage, type CustomAPI, type CustomModel, type DurableTask, type Message, type PluginDetail, type PluginStatus, type ProviderKind, type ProviderStatus } from "./model";
+import { providerConnectMethod, withReviewModel, type Attachment, type AutoReview, type Bot, type Chat, type ChatMeta, type ChatSearchResults, type ChatUsage, type CustomAPI, type CustomModel, type DurableTask, type Message, type ReviewItem, type PluginDetail, type PluginStatus, type ProviderKind, type ProviderStatus } from "./model";
 import { coreHome, loadPrefs, pathOf, wipePrefs } from "./prefs";
 import { clearPushes, installPushHandlers, registerForPushes } from "./push";
 import {
   acceptDurableTask,
+  acceptReview,
   applyRoster,
   botById,
   chatById,
@@ -157,6 +160,9 @@ class Engine {
         break;
       case "tasks.changed":
         acceptDurableTask((data as { task: DurableTask }).task);
+        break;
+      case "reviews.changed":
+        acceptReview((data as { item: ReviewItem }).item);
         break;
       case "roster.changed": {
         const { removed } = applyRoster(data);
@@ -308,6 +314,41 @@ class Engine {
     const task = await core.request<DurableTask>(method, params);
     acceptDurableTask(task);
     return task;
+  }
+
+  /// A review item as its Runner keeps it, with its numbers spelled as they were: the review
+  /// screen shows and edits a call's arguments from it, since `JSON.parse` rounds an id past 2^53.
+  async exactReview(id: string): Promise<ExactObject> {
+    const item = exactAnswer(await core.requestText("reviews.get", JSON.stringify({ id })));
+    if (!(item instanceof ExactObject)) throw new Error("No such review");
+    return item;
+  }
+
+  /// Approves the version the user saw. `edited`, the field's text when the user changed it, is
+  /// saved first as the next version, and that version is approved: what runs is what the field
+  /// showed. A command's other arguments and a call's server and tool stay as they were.
+  async approveReview(item: ReviewItem, edited?: string): Promise<ReviewItem> {
+    let shown = item;
+    if (edited !== undefined) {
+      // The edit names the version the user saw; one changed elsewhere is refused.
+      const exact = (await this.exactReview(item.id)).with("version", new ExactNumber(String(item.version)));
+      const params = reviewEditParams(exact, edited, t("The arguments need to be a JSON object."));
+      shown = JSON.parse(stringifyExact(exactAnswer(await core.requestText("reviews.edit", params)))) as ReviewItem;
+      acceptReview(shown);
+    }
+    return this.reviewRequest("reviews.approve", { id: shown.id, expected_version: shown.version });
+  }
+
+  rejectReview(item: ReviewItem): Promise<ReviewItem> {
+    return this.reviewRequest("reviews.reject", { id: item.id, expected_version: item.version });
+  }
+
+  /// A decision goes to the item's Runner through the core; the item it answers with is kept
+  /// unless a newer revision arrived first.
+  private async reviewRequest(method: string, params: { id: string; expected_version: number }): Promise<ReviewItem> {
+    const item = await core.request<ReviewItem>(method, params);
+    acceptReview(item);
+    return item;
   }
 
   /// Every output version this phone has synced for the chat, for its details.

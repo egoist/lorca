@@ -5,7 +5,7 @@ import { Platform, ScrollView, StyleSheet, Switch, Text, View } from "react-nati
 import { Pressable } from "../../src/ui/Pressable";
 import { chatTitle, engine } from "../../src/core/engine";
 import { providerKinds, providerLabel, providerModels, PROVIDER_KINDS, taskSymbol, thinkingLabel, thinkingLevels, withCustomModels, type Bot, type Routine } from "../../src/core/model";
-import { deviceIsOnline, useBotMap, useChat, useDurableTasks, useOutputs, useRoutines, useStore, useWorkingBotIds } from "../../src/core/store";
+import { deviceIsOnline, useBotMap, useChat, useDurableTasks, useOpenReviews, useOutputs, useRoutines, useStore, useWorkingBotIds } from "../../src/core/store";
 import { t, useLanguage } from "../../src/i18n";
 import { AvatarCluster, BotAvatar } from "../../src/ui/Avatar";
 import { CheckRow, FieldRow, Row, Section, ToggleRow } from "../../src/ui/forms";
@@ -19,6 +19,7 @@ import { haptic } from "../../src/ui/haptics";
 import { alert } from "../../src/ui/alert";
 import { OutputRow } from "../../src/ui/outputs";
 import { taskStateTitle, useTaskTint } from "../../src/ui/durableTasks";
+import { reviewHeadline, reviewStateWord, reviewSymbol } from "../../src/ui/reviews";
 
 export default function ChatInfoScreen() {
   useLanguage();
@@ -43,6 +44,7 @@ export default function ChatInfoScreen() {
   const routines = useRoutines(chat?.kind === "dm" ? chat.bot_ids[0] : undefined);
   const outputs = useOutputs(chat?.id);
   const tasks = useDurableTasks(chat?.id);
+  const reviews = useOpenReviews(chat?.id);
   const taskTint = useTaskTint();
   const [allTasks, setAllTasks] = useState(false);
 
@@ -147,6 +149,28 @@ export default function ChatInfoScreen() {
         <Section>
           <FieldRow label={t("Name")} value={title} onChangeText={setTitle} placeholder={members.map((m) => m.name).join(", ")} onBlur={commitTitle} onSubmitEditing={commitTitle} returnKeyType="done" textAlign="right" />
           <Row title={t("Description")} subtitle={chat.description || undefined} subtitleLines={2} chevron onPress={() => router.push(`/chat-info/group-description/${chat.id}`)} />
+        </Section>
+      )}
+
+      {/* What the chat's bots left for review, oldest first, while any waits or runs: a row opens
+          it. How each ended stays in the chat. */}
+      {reviews.length > 0 && (
+        <Section title={t("Waiting for review")}>
+          {reviews.map((item) => {
+            const host = devices.find((device) => device.id === item.runner_id);
+            return (
+              <Row
+                key={item.id}
+                title={reviewHeadline(item, host)}
+                subtitle={item.rationale || undefined}
+                subtitleLines={2}
+                icon={reviewSymbol(item, host)}
+                detail={reviewStateWord(item)}
+                chevron
+                onPress={() => router.push(`/chat-info/review/${item.id}`)}
+              />
+            );
+          })}
         </Section>
       )}
 

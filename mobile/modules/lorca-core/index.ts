@@ -44,6 +44,12 @@ export async function request<T = unknown>(method: string, params: unknown = {})
   return parsed.result as T;
 }
 
+/// One API call with `params` as JSON text, answered with the core's JSON text as it is: for a
+/// caller that must keep numbers past 2^53 exact, which `JSON.parse` would round.
+export function requestText(method: string, params: string): Promise<string> {
+  return native.request(method, params);
+}
+
 export function onEvent(listener: (frame: Frame) => void): () => void {
   const subscription = native.addListener("event", ({ json }) => listener(JSON.parse(json) as Frame));
   return () => subscription.remove();

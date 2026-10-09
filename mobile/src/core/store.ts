@@ -5,7 +5,7 @@
 import { useMemo } from "react";
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
-import { groupOutputs, runsInTerminal, taskOrder, type AutoReview, type DurableTask, type OutputSeries, type Bot, type Chat, type ChatMeta, type ChatUsage, type Device, type Message, type ProviderModel, type ProviderStatus, type RelayProblem, type Routine } from "./model";
+import { groupOutputs, reviewIsOpen, runsInTerminal, taskOrder, type AutoReview, type DurableTask, type ReviewItem, type OutputSeries, type Bot, type Chat, type ChatMeta, type ChatUsage, type Device, type Message, type ProviderModel, type ProviderStatus, type RelayProblem, type Routine } from "./model";
 import { t } from "../i18n";
 import { savePrefs } from "./prefs";
 
@@ -77,6 +77,8 @@ export interface StoreState {
   outputs: Record<string, Message[]>;
   /// The account's durable tasks, each at the newest revision this phone has.
   tasks: DurableTask[];
+  /// What the account's bots left for review, each at the newest revision this phone has.
+  reviews: ReviewItem[];
   dictation_lang?: string;
 }
 
@@ -107,6 +109,7 @@ function empty(): Omit<StoreState, "ready" | "dictation_lang" | "appActive" | "a
     fileErrors: {},
     outputs: {},
     tasks: [],
+    reviews: [],
   };
 }
 
@@ -162,6 +165,7 @@ export function replaceSnapshot(snapshot: {
   chats: Chat[];
   routines?: Routine[];
   tasks?: DurableTask[];
+  reviews?: ReviewItem[];
   auto_review?: AutoReview;
   providers?: ProviderStatus[];
   models?: ProviderModel[];
@@ -194,6 +198,7 @@ export function replaceSnapshot(snapshot: {
     }),
     routines: snapshot.routines ?? [],
     tasks: snapshot.tasks ?? [],
+    reviews: snapshot.reviews ?? [],
     auto_review: snapshot.auto_review ?? { is_enabled: true, rules: [] },
     providers: snapshot.providers ?? [],
     models: snapshot.models ?? [],
@@ -505,4 +510,30 @@ export function useDurableTasks(chatId: string | undefined): DurableTask[] {
 
 export function useDurableTask(id: string | undefined): DurableTask | undefined {
   return useStore((s) => s.tasks.find((task) => task.id === id));
+}
+
+/// Takes a review item from a reply or an event unless this phone already has a newer revision.
+export function acceptReview(item: ReviewItem) {
+  useStore.setState((s) => {
+    const index = s.reviews.findIndex((each) => each.id === item.id);
+    if (index < 0) return { reviews: [...s.reviews, item] };
+    if (s.reviews[index].revision > item.revision) return {};
+    const reviews = s.reviews.slice();
+    reviews[index] = item;
+    return { reviews };
+  });
+}
+
+/// What the chat's bots left for the user that waits or runs, oldest first. How each ended stays
+/// in the chat.
+export function useOpenReviews(chatId: string | undefined): ReviewItem[] {
+  const reviews = useStore((s) => s.reviews);
+  return useMemo(
+    () => (chatId ? reviews.filter((item) => item.origin.chat_id === chatId && reviewIsOpen(item)).sort((a, b) => a.created_at - b.created_at) : []),
+    [reviews, chatId],
+  );
+}
+
+export function useReview(id: string | undefined): ReviewItem | undefined {
+  return useStore((s) => s.reviews.find((item) => item.id === id));
 }
