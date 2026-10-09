@@ -5,15 +5,17 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/egoist/lorca/desktop/model"
 	"github.com/egoist/mygo/ui"
 )
 
-// Bot templates, after the macOS app's TemplateExportViewController and TemplateItemViews.
-// Exporting: the user picks a bot's profile, routines, plugins, and memories, sees each as the file
-// will hold it, and saves the file where they like. The CLI writes the file; saving publishes
-// nothing.
+// Bot templates, after the macOS app's TemplateShareViewController and TemplateItemViews.
+// Sharing: the user picks what goes in a bot's template besides its profile (routines, plugins,
+// memories), sees each as the template will hold it, and shares a link, which the CLI puts on the
+// relay encrypted with a key only the link carries, or saves a file. A bot shared before updates
+// its link, which keeps its address.
 
 // templateItem is a piece of a template as the sheets list it.
 type templateItem struct {
@@ -237,22 +239,31 @@ func selectAll(c *ui.Context, items []templateItem, picked *[]string, disabled b
 	}
 }
 
-type templateExportState struct {
+type templateShareState struct {
 	botID, name string
 	contents    *model.TemplateContents
-	// picked is what goes in the file, by section title, in the bot's order.
+	// link is the link the bot was shared as, which Update Link replaces what is behind.
+	link *model.SharedLink
+	// picked is what goes in the template, by section title, in the bot's order.
 	picked map[string][]string
 	status string
 	failed bool
 	busy   bool
+	// shared is the link once it is out, which the sheet shows; copiedAt is when it was copied.
+	shared   string
+	copiedAt time.Time
 }
 
-func (w *appWindow) presentTemplateExport(botID string) {
+func (w *appWindow) presentTemplateShare(botID string) {
 	bot := store.Bot(botID)
 	if bot == nil {
 		return
 	}
-	st := &templateExportState{botID: botID, name: bot.Name, status: L("Loading…"), picked: map[string][]string{}}
+	st := &templateShareState{botID: botID, name: bot.Name, status: L("Loading…"), picked: map[string][]string{}}
+	if link := store.SharedLinkFor(botID); link != nil {
+		copied := *link
+		st.link = &copied
+	}
 	s := w.present(func(c *ui.Context, s *sheet) { st.view(c, w, s) }, nil)
 	store.TemplateContents(botID, func(contents model.TemplateContents, err error) {
 		if s.window == nil {
@@ -263,11 +274,23 @@ func (w *appWindow) presentTemplateExport(botID string) {
 			return
 		}
 		st.contents, st.status = &contents, ""
+		// An update starts from what the link holds, less what the bot no longer has.
+		if st.link != nil {
+			held := map[string][]string{L("Skills"): st.link.Selection.SkillIDs, L("Routines"): st.link.Selection.RoutineIDs,
+				L("Plugins"): st.link.Selection.RequirementIDs, L("Memories"): st.link.Selection.MemoryIDs}
+			for _, sec := range st.sections() {
+				for _, item := range sec.items {
+					if slices.Contains(held[sec.title], item.id) {
+						st.picked[sec.title] = append(st.picked[sec.title], item.id)
+					}
+				}
+			}
+		}
 	})
 }
 
 // sections are the bot's pieces by kind; memories come last, the longest list and most personal.
-func (st *templateExportState) sections() []templateSection {
+func (st *templateShareState) sections() []templateSection {
 	contents := st.contents
 	// The profile is what makes a template a bot, so it is always in the file.
 	profile := templateSection{title: L("Profile"), items: []templateItem{templateProfile(contents.Profile.Content, contents.Profile.Flags)}, fixed: true}
@@ -294,7 +317,7 @@ func (st *templateExportState) sections() []templateSection {
 	return []templateSection{profile, skills, routines, plugins, memories}
 }
 
-func (st *templateExportState) toggle(sections []templateSection, title, id string) {
+func (st *templateShareState) toggle(sections []templateSection, title, id string) {
 	ids := st.picked[title]
 	if slices.Contains(ids, id) {
 		ids = slices.DeleteFunc(slices.Clone(ids), func(each string) bool { return each == id })
@@ -318,7 +341,7 @@ func (st *templateExportState) toggle(sections []templateSection, title, id stri
 	}
 }
 
-func (st *templateExportState) selection() model.TemplateSelection {
+func (st *templateShareState) selection() model.TemplateSelection {
 	return model.TemplateSelection{
 		Profile:        true,
 		SkillIDs:       st.picked[L("Skills")],
@@ -328,15 +351,39 @@ func (st *templateExportState) selection() model.TemplateSelection {
 	}
 }
 
-func (st *templateExportState) view(c *ui.Context, w *appWindow, s *sheet) {
+func (st *templateShareState) view(c *ui.Context, w *appWindow, s *sheet) {
 	p := colors(c)
-	result := sheetFrame(c, sheetOptions{
-		Title:           L("Export “%@”", st.name),
-		Subtitle:        L("Pick what goes in the template. Keys, sign-ins, and chats never do."),
+	options := sheetOptions{
+		Title:           L("Share “%@”", st.name),
+		Subtitle:        L("Others get a copy of what you pick. Keys, sign-ins, and chats stay."),
 		Width:           480,
-		Confirm:         L("Export…"),
+		Confirm:         L("Share Link"),
 		ConfirmDisabled: st.busy || st.contents == nil,
-	}, func() {
+		Leading: func() {
+			if pushButton(c, L("Save as File…"), pushOptions{Disabled: st.busy || st.contents == nil}).Clicked() {
+				st.export(w, s)
+			}
+		},
+	}
+	switch {
+	case st.shared != "":
+		options.Subtitle = L("Anyone with this link can add their own copy of %@. Revoke it in Settings › Shared Links.", st.name)
+		if st.link != nil {
+			options.Subtitle = L("The link now holds what you picked. Anyone who opens it gets this version.")
+		}
+		options.Confirm, options.NoCancel, options.ConfirmDisabled, options.Leading = L("Done"), true, false, nil
+	case st.link != nil:
+		options.Subtitle = L("Update the link with what you pick now. Its address stays the same.")
+		options.Confirm = L("Update Link")
+	}
+	result := sheetFrame(c, options, func() {
+		if st.shared != "" {
+			linkBox(c.Key("shared-link"), st.shared, &st.copiedAt)
+			return
+		}
+		if st.link != nil {
+			linkBox(c.Key("shared-link"), st.link.URL, &st.copiedAt)
+		}
 		if st.contents != nil {
 			sections := st.sections()
 			// A long list picks all at once, whichever kind it is.
@@ -364,16 +411,53 @@ func (st *templateExportState) view(c *ui.Context, w *appWindow, s *sheet) {
 		}
 	})
 	switch {
+	case result.Confirmed && st.shared != "":
+		s.dismiss()
 	case result.Cancelled && !st.busy:
 		s.dismiss()
 	case result.Confirmed && !st.busy && st.contents != nil:
-		st.export(w, s)
+		st.share(s)
 	}
+}
+
+// share builds the template first, so the CLI's checks speak before anything leaves, then shares
+// what was shown: the CLI refuses it if the contents changed since. The link is copied at once.
+func (st *templateShareState) share(s *sheet) {
+	selection := st.selection().Clone()
+	st.busy = true
+	fail := func(err error) {
+		st.busy, st.failed, st.status = false, true, model.ErrorText(err)
+	}
+	store.PreviewTemplateExport(st.botID, selection, func(preview model.TemplatePreview, err error) {
+		if s.window == nil {
+			return
+		}
+		if err != nil {
+			fail(err)
+			return
+		}
+		options := model.TemplateShareOptions{BotID: st.botID, Selection: selection, ExpectedDigest: preview.Digest, Reviewed: true}
+		if st.link != nil {
+			options.LinkID = st.link.ID
+		}
+		store.ShareTemplate(options, func(link model.SharedLink, err error) {
+			if s.window == nil {
+				return
+			}
+			if err != nil {
+				fail(err)
+				return
+			}
+			st.busy, st.shared = false, link.URL
+			copyText(link.URL)
+			st.copiedAt = time.Now()
+		})
+	})
 }
 
 // export builds the file's contents first, so the CLI's checks speak before the Save dialog opens,
 // then writes what was shown: the CLI refuses the save if the contents changed since.
-func (st *templateExportState) export(w *appWindow, s *sheet) {
+func (st *templateShareState) export(w *appWindow, s *sheet) {
 	selection := st.selection().Clone()
 	st.busy = true
 	fail := func(err error) {
@@ -427,6 +511,39 @@ func (st *templateExportState) export(w *appWindow, s *sheet) {
 					st.busy = false
 				}
 			})
+		})
+	})
+}
+
+// linkBox is a shared link's address on the code fill with a button that copies it, as the
+// pairing sheet shows its code. `copiedAt` is when it was last copied, by the button or by a share
+// that copied it at once; the button says Copied for a moment after.
+func linkBox(c *ui.Context, url string, copiedAt *time.Time) {
+	p := colors(c)
+	ui.Row(c).Gap(8).Padding(4, 6, 4, 10).Radius(8).Background(p.Code).Children(func() {
+		ui.Text(c, url).Grow(1).Shrink(1).MinWidth(0).FontSize(12).SingleLine().Selectable().Tooltip(url)
+		copied := !copiedAt.IsZero() && c.Now().Sub(*copiedAt) < 1500*time.Millisecond
+		if copied {
+			c.After(1500*time.Millisecond - c.Now().Sub(*copiedAt))
+		}
+		b := ui.ButtonBase(c).Height(24).MinWidth(24).Gap(5).Padding(0, 4).Justify(ui.Center).Radius(5).TextColor(p.Label2).Label(L("Copy Link"))
+		if b.Hovered() {
+			b.Background(p.Hover)
+		}
+		if b.Clicked() {
+			copyText(url)
+			*copiedAt = c.Now()
+		}
+		if copied {
+			b.TextColor(p.Green)
+		}
+		b.Children(func() {
+			if copied {
+				symbol(c, "checkmark", 13, 2)
+				ui.Text(c, L("Copied")).SingleLine()
+			} else {
+				symbol(c, "doc.on.doc", 13, 2)
+			}
 		})
 	})
 }

@@ -8,14 +8,19 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// Adding a bot from a template file, after the macOS app's TemplateImportViewController: its name,
-// the Runner it runs on, the provider, and for each plugin it uses one of that Runner's own
-// connections. The new bot shares nothing with the one it was exported from, and its routines
-// start paused.
+// Adding a bot from a template, a link someone shared or a file, after the macOS app's
+// TemplateImportViewController: its name, the Runner it runs on, the provider, and for each plugin
+// it uses one of that Runner's own connections. The new bot shares nothing with the one it came
+// from, and its routines start paused.
 
 type templateImportState struct {
-	path, name, runnerID string
-	provider             model.ProviderKind
+	// from is the From field: a pasted link, or the file Choose File… picked. link and path are
+	// the template it opened.
+	from, link, path string
+	// nameEdited is a name the user typed, which a template opened later leaves alone.
+	nameEdited     bool
+	name, runnerID string
+	provider       model.ProviderKind
 	// mappings is the connection each plugin uses, by plugin: the CLI's pick until the user makes one.
 	mappings map[string]string
 	preview  *model.TemplatePreview
@@ -30,23 +35,10 @@ type templateImportState struct {
 	onCreate  func(string)
 }
 
-func (w *appWindow) presentTemplateImport(onCreate func(string)) {
-	chooseTemplateSource(w.win, func(path string, err error) {
-		if w.win != nil && w.win.IsDestroyed() {
-			return
-		}
-		if err != nil {
-			w.showNote(L("New Bot from Template"), model.ErrorText(err))
-			return
-		}
-		if path != "" {
-			w.presentTemplateImportPath(path, onCreate)
-		}
-	})
-}
-
-func (w *appWindow) presentTemplateImportPath(path string, onCreate func(string)) {
-	st := &templateImportState{path: path, provider: store.PreferredProvider(), mappings: map[string]string{}, status: L("Loading…"), onCreate: onCreate}
+// presentTemplateImport is New Bot from Template, opening a shared bot's link (the one that opened
+// the app) or a file when it is given one.
+func (w *appWindow) presentTemplateImport(link, path string, onCreate func(string)) {
+	st := &templateImportState{provider: store.PreferredProvider(), mappings: map[string]string{}, onCreate: onCreate}
 	for i, runner := range store.Runners() {
 		if i == 0 || runner.IsThisDevice {
 			st.runnerID = runner.ID
@@ -55,7 +47,31 @@ func (w *appWindow) presentTemplateImportPath(path string, onCreate func(string)
 			break
 		}
 	}
-	s := w.present(func(c *ui.Context, s *sheet) { st.view(c, s) }, nil)
+	s := w.present(func(c *ui.Context, s *sheet) { st.view(c, w, s) }, nil)
+	switch {
+	case link != "":
+		st.from = link
+		st.open(s, link, "")
+	case path != "":
+		st.from = path
+		st.open(s, "", path)
+	}
+}
+
+// isTemplateLink is whether the From field holds a whole link: its page and the key after #.
+func isTemplateLink(text string) bool {
+	return strings.Contains(text, "/t/") && strings.Contains(text, "#")
+}
+
+// open reads another template: what it sets up shows again from the start.
+func (st *templateImportState) open(s *sheet, link, path string) {
+	if link == st.link && path == st.path {
+		return
+	}
+	st.link, st.path = link, path
+	st.mappings = map[string]string{}
+	st.preview, st.named = nil, false
+	st.status, st.failed = L("Loading…"), false
 	st.refresh(s)
 }
 
@@ -75,10 +91,13 @@ func (st *templateImportState) runnerPlugins() string {
 }
 
 func (st *templateImportState) refresh(s *sheet) {
+	if st.link == "" && st.path == "" {
+		return
+	}
 	st.generation++
 	generation := st.generation
 	st.previewed = st.runnerPlugins()
-	options := model.TemplateImportOptions{Path: st.path, RunnerID: st.runnerID, Mappings: st.mappings}
+	options := model.TemplateImportOptions{Path: st.path, Link: st.link, RunnerID: st.runnerID, Mappings: st.mappings}
 	store.PreviewTemplateImport(options, func(preview model.TemplatePreview, err error) {
 		if s.window == nil || generation != st.generation {
 			return
@@ -88,7 +107,12 @@ func (st *templateImportState) refresh(s *sheet) {
 			return
 		}
 		st.preview, st.status, st.failed = &preview, "", false
-		if !st.named && preview.Template != nil && preview.Template.Profile != nil {
+		if preview.Template == nil {
+			// A file or link that holds no template only says why.
+			st.status, st.failed = strings.Join(preview.Issues, "\n"), true
+			return
+		}
+		if !st.named && !st.nameEdited && preview.Template.Profile != nil {
 			st.name = preview.Template.Profile.Name
 		}
 		st.named = true
@@ -142,7 +166,7 @@ func (st *templateImportState) create(s *sheet) {
 	if !st.canCreate() {
 		return
 	}
-	options := model.TemplateImportOptions{Path: st.path, RunnerID: st.runnerID, Name: strings.TrimSpace(st.name), Provider: st.provider,
+	options := model.TemplateImportOptions{Path: st.path, Link: st.link, RunnerID: st.runnerID, Name: strings.TrimSpace(st.name), Provider: st.provider,
 		Mappings: st.mappings, ExpectedDigest: st.preview.Digest, Reviewed: true}
 	st.importing = true
 	store.ImportTemplate(options, func(chatID string, err error) {
@@ -186,7 +210,7 @@ func (st *templateImportState) sections() []templateSection {
 	return []templateSection{profile, skills, routines, memories}
 }
 
-func (st *templateImportState) view(c *ui.Context, s *sheet) {
+func (st *templateImportState) view(c *ui.Context, w *appWindow, s *sheet) {
 	p := colors(c)
 	const width = 480
 	// The pop-ups fill the row after the label, as wide as the sheet's content allows.
@@ -202,8 +226,41 @@ func (st *templateImportState) view(c *ui.Context, s *sheet) {
 		Confirm:         L("Create Bot"),
 		ConfirmDisabled: !st.canCreate(),
 	}, func() {
+		newBotRow(c, L("From"), false, func() {
+			ui.Row(c).Grow(1).MinWidth(0).Gap(8).Children(func() {
+				field := textField(c.Key("template-from"), &st.from, fieldOptions{Placeholder: L("Paste a link to a shared bot"), Label: L("From"), Disabled: st.importing}).Grow(1).MinWidth(0)
+				field.OnChange(func() {
+					if text := strings.TrimSpace(st.from); isTemplateLink(text) {
+						st.open(s, text, "")
+					}
+				})
+				if pushButton(c, L("Choose File…"), pushOptions{Disabled: st.importing}).Clicked() {
+					chooseTemplateSource(w.win, func(path string, err error) {
+						if s.window == nil || path == "" {
+							return
+						}
+						if err != nil {
+							st.status, st.failed = model.ErrorText(err), true
+							return
+						}
+						st.from = path
+						st.open(s, "", path)
+					})
+				}
+			})
+		})
+		if st.preview == nil || st.preview.Template == nil {
+			if text != "" {
+				tint := p.Label3
+				if st.failed {
+					tint = p.Red
+				}
+				ui.Text(c, text).FontSize(11.5).LineHeight(1.4).TextColor(tint)
+			}
+			return
+		}
 		newBotRow(c, L("Name"), false, func() {
-			textField(c.Key("template-name"), &st.name, fieldOptions{Placeholder: L("Name"), Label: L("Name"), Disabled: st.importing}).Grow(1).MinWidth(0)
+			textField(c.Key("template-name"), &st.name, fieldOptions{Placeholder: L("Name"), Label: L("Name"), Disabled: st.importing}).Grow(1).MinWidth(0).OnChange(func() { st.nameEdited = true })
 		})
 		newBotRow(c, L("Runner"), false, func() {
 			var options []popUpOption

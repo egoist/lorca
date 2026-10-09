@@ -334,10 +334,10 @@ func (m *mainWindow) run(id string) {
 	case "newBot":
 		m.newBot()
 	case "importBotTemplate":
-		m.presentTemplateImport(func(chatID string) { m.selectChat(chatID) })
-	case "exportBotTemplate":
+		m.presentTemplateImport("", "", m.selectChat)
+	case "shareBotTemplate":
 		if bot := selectedDMBot(); bot != nil {
-			m.presentTemplateExport(bot.ID)
+			m.presentTemplateShare(bot.ID)
 		}
 	case "newGroupChat":
 		m.newGroupChat()

@@ -118,6 +118,8 @@ type templateUIFixture struct {
 	queue     chan func()
 	// linearReady is the Runner's Linear sign-in, as the import preview reads it.
 	linearReady atomic.Bool
+	// copied is what Copy Link put on the clipboard, which tests keep apart from the user's.
+	copied string
 }
 
 func newTemplateUIFixture(t *testing.T) *templateUIFixture {
@@ -133,6 +135,12 @@ func newTemplateUIFixture(t *testing.T) *templateUIFixture {
 			return map[string]any{"digest": "export-digest", "template": map[string]any{}}, nil
 		case "templates.export":
 			return map[string]any{"path": call.params["path"]}, nil
+		case "templates.share":
+			id := "yWUtxVvEA7X0edjxRUKd2A"
+			if linkID, ok := call.params["link_id"].(string); ok {
+				id = linkID
+			}
+			return map[string]any{"link": map[string]any{"id": id, "url": "https://lorca.app/t/" + id + "#-xMo1zlzI63iQ_tY2ATkxlkle7thq-OfylCF-jFDqYw", "bot_id": call.params["bot_id"], "name": "Project Manager", "selection": call.params["selection"], "updated_at": 1}}, nil
 		case "templates.import.preview":
 			return templateImportFixture(call, f.linearReady.Load()), nil
 		case "templates.import":
@@ -146,6 +154,10 @@ func newTemplateUIFixture(t *testing.T) *templateUIFixture {
 	store.Devices, store.Bots, store.Chats, store.Routines = previous.Devices, previous.Bots, previous.Chats, previous.Routines
 	store.Providers, store.Models = previous.Providers, previous.Models
 	store.HasIdentity, store.IsConnected, store.IsStarting = previous.HasIdentity, true, false
+	store.SharedLinks = previous.SharedLinks
+	oldCopy := copyText
+	t.Cleanup(func() { copyText = oldCopy })
+	copyText = func(text string) { f.copied = text }
 	f.tt = ui.NewTester(m.frame(m.view), 1180, 900)
 	if os.Getenv("LORCA_RENDER") != "" {
 		f.tt.SetScale(2)
@@ -211,9 +223,12 @@ func (f *templateUIFixture) stubDestination(t *testing.T, path string) {
 
 func TestTemplateExportSendsThePickedContentInTheBotsOrder(t *testing.T) {
 	f := newTemplateUIFixture(t)
-	f.m.presentTemplateExport("bot-nova")
+	f.m.presentTemplateShare("bot-nova")
 	f.wait(t, func() bool { return f.tt.HasText("Launch checklist") })
-	renderBoth(t, f.tt, "desktop-template-export")
+	renderBoth(t, f.tt, "desktop-template-share")
+	if !f.tt.HasText("Share Link") || !f.tt.HasText("Save as File…") {
+		t.Fatal("Share Link is not the sheet's button")
+	}
 
 	if f.tt.HasText("Select All") {
 		t.Fatal("a short list offers Select All")
@@ -226,14 +241,14 @@ func TestTemplateExportSendsThePickedContentInTheBotsOrder(t *testing.T) {
 	f.click(t, "The launch is on Friday; the go/no-go call is Thursday at 4 PM.")
 	path := filepath.Join(t.TempDir(), "Project Manager.lorca-template")
 	f.stubDestination(t, path)
-	f.click(t, "Export…")
+	f.click(t, "Save as File…")
 	f.wait(t, func() bool { return !f.m.hasSheet() })
 	previews, saves := f.transport.methodCalls("templates.export.preview"), f.transport.methodCalls("templates.export")
 	if len(previews) != 1 || len(saves) != 1 {
 		t.Fatalf("calls: %d previews, %d saves", len(previews), len(saves))
 	}
 	selection, _ := json.Marshal(saves[0].params["selection"])
-	if string(selection) != `{"memory_ids":["memory-launch","topic-release"],"profile":true,"requirement_ids":["github"],"routine_ids":["rt-brief"],"skill_ids":null}` {
+	if string(selection) != `{"memory_ids":["memory-launch","topic-release"],"profile":true,"requirement_ids":["github"],"routine_ids":["rt-brief"]}` {
 		t.Fatalf("selection %s", selection)
 	}
 	if saves[0].params["path"] != path || saves[0].params["expected_digest"] != "export-digest" || saves[0].params["reviewed"] != true || saves[0].params["overwrite"] != false {
@@ -258,11 +273,11 @@ func TestTemplateExportOffersSelectAllOnALongList(t *testing.T) {
 		return contents, nil
 	}
 	f.transport.mu.Unlock()
-	f.m.presentTemplateExport("bot-nova")
+	f.m.presentTemplateShare("bot-nova")
 	f.wait(t, func() bool { return f.tt.HasText("Launch checklist") })
 	f.scrollList(t)
 	f.click(t, "Select All")
-	f.click(t, "Export…")
+	f.click(t, "Share Link")
 	f.wait(t, func() bool { return len(f.transport.methodCalls("templates.export.preview")) == 1 })
 	selection := f.transport.methodCalls("templates.export.preview")[0].params["selection"].(map[string]any)
 	if ids, _ := selection["memory_ids"].([]any); len(ids) != 6 {
@@ -281,13 +296,13 @@ func TestTemplateExportShowsWhyItCannotSave(t *testing.T) {
 		return next(call)
 	}
 	f.transport.mu.Unlock()
-	f.m.presentTemplateExport("bot-nova")
+	f.m.presentTemplateShare("bot-nova")
 	f.wait(t, func() bool { return f.tt.HasText("Launch checklist") })
 	f.click(t, "Morning brief")
 	f.stubDestination(t, filepath.Join(t.TempDir(), "never.lorca-template"))
-	f.click(t, "Export…")
+	f.click(t, "Share Link")
 	f.wait(t, func() bool { return f.tt.HasText("What you picked uses GitHub. Check it under Plugins too.") })
-	renderBoth(t, f.tt, "desktop-template-export-error")
+	renderBoth(t, f.tt, "desktop-template-share-error")
 	if !f.m.hasSheet() || len(f.transport.methodCalls("templates.export")) > 0 {
 		t.Fatal("a refused export saved or closed the sheet")
 	}
@@ -301,7 +316,7 @@ func TestTemplateExportShowsWhyItCannotSave(t *testing.T) {
 func TestTemplateImportUsesTheRunnersConnectionAndOpensTheNewChat(t *testing.T) {
 	f := newTemplateUIFixture(t)
 	var opened string
-	f.m.presentTemplateImportPath("/fixture/Project Manager.lorca-template", func(id string) { opened = id; f.m.selectChat(id) })
+	f.m.presentTemplateImport("", "/fixture/Project Manager.lorca-template", func(id string) { opened = id; f.m.selectChat(id) })
 	f.wait(t, func() bool { return f.tt.HasText("Finish setting up Linear on Workbench first.") })
 	renderBoth(t, f.tt, "desktop-template-import-setup")
 	if calls := f.transport.methodCalls("templates.import.preview"); calls[0].params["runner_id"] != "dev-workbench" {
@@ -344,7 +359,7 @@ func TestTemplateImportUsesTheRunnersConnectionAndOpensTheNewChat(t *testing.T) 
 
 func TestTemplateImportExplainsAFileItCannotRead(t *testing.T) {
 	f := newTemplateUIFixture(t)
-	f.m.presentTemplateImportPath("/fixture/future.lorca-template", nil)
+	f.m.presentTemplateImport("", "/fixture/future.lorca-template", nil)
 	f.wait(t, func() bool { return f.tt.HasText("Unsupported template version 2; this Lorca reads version 1.") })
 	f.click(t, "Create Bot")
 	if len(f.transport.methodCalls("templates.import")) > 0 {
@@ -357,7 +372,7 @@ func TestTemplateImportExplainsAFileItCannotRead(t *testing.T) {
 
 func TestTemplateExportIsForTheDirectChatShowing(t *testing.T) {
 	f := newTemplateUIFixture(t)
-	export := commandByID("exportBotTemplate")
+	export := commandByID("shareBotTemplate")
 	f.m.selectChat("chat-launch")
 	f.step()
 	if export.isEnabled() {
@@ -372,8 +387,8 @@ func TestTemplateExportIsForTheDirectChatShowing(t *testing.T) {
 	if !export.isEnabled() {
 		t.Fatal("a direct chat doesn't export")
 	}
-	runCommand("exportBotTemplate")
-	f.wait(t, func() bool { return f.tt.HasText("Export “Project Manager”") })
+	runCommand("shareBotTemplate")
+	f.wait(t, func() bool { return f.tt.HasText("Share “Project Manager”") })
 }
 
 func TestTemplateSupersededRepliesAndDismissedSheets(t *testing.T) {
@@ -382,7 +397,8 @@ func TestTemplateSupersededRepliesAndDismissedSheets(t *testing.T) {
 	f.transport.mu.Lock()
 	next := f.transport.handler
 	f.transport.handler = func(call templateUICall) (any, error) {
-		if call.method == "templates.import.preview" && call.params["runner_id"] == "dev-workbench" {
+		// The preview for Studio comes back late, after the one for Workbench again.
+		if call.method == "templates.import.preview" && call.params["runner_id"] == "dev-studio" {
 			close(entered)
 			<-release
 			defer close(returned)
@@ -391,19 +407,27 @@ func TestTemplateSupersededRepliesAndDismissedSheets(t *testing.T) {
 		return next(call)
 	}
 	f.transport.mu.Unlock()
-	f.m.presentTemplateImportPath("/fixture/Project Manager.lorca-template", nil)
-	f.step()
-	select {
-	case <-entered:
-	case <-time.After(time.Second):
-		t.Fatal("no first preview")
-	}
+	f.m.presentTemplateImport("", "/fixture/Project Manager.lorca-template", nil)
+	f.wait(t, func() bool { return f.tt.HasText("Finish setting up Linear on Workbench first.") })
 	f.click(t, "Workbench (this computer)")
 	if err := f.tt.ChooseMenuItem("Studio"); err != nil {
 		t.Fatal(err)
 	}
 	f.step()
-	f.wait(t, func() bool { return f.tt.HasText("Finish setting up Linear on Studio first.") })
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("no preview for Studio")
+	}
+	// The Runner pop-up, right of its label: a Studio row behind the sheet shows Studio too.
+	runner, _ := f.tt.Find("Runner")
+	f.tt.ClickAt(runner.X+200, runner.Y+runner.H/2)
+	f.step()
+	if err := f.tt.ChooseMenuItem("Workbench (this computer)"); err != nil {
+		t.Fatal(err)
+	}
+	f.step()
+	f.wait(t, func() bool { return f.tt.HasText("Finish setting up Linear on Workbench first.") })
 	close(release)
 	<-returned
 	for range 4 {
@@ -414,7 +438,7 @@ func TestTemplateSupersededRepliesAndDismissedSheets(t *testing.T) {
 		t.Fatal("an old answer replaced the new one")
 	}
 	f.click(t, "Cancel")
-	f.m.presentTemplateExport("bot-nova")
+	f.m.presentTemplateShare("bot-nova")
 	f.step()
 	f.click(t, "Cancel")
 	for range 4 {
@@ -428,14 +452,14 @@ func TestTemplateSupersededRepliesAndDismissedSheets(t *testing.T) {
 
 func TestTemplateExportAsksBeforeTheExtensionReplacesAFile(t *testing.T) {
 	f := newTemplateUIFixture(t)
-	f.m.presentTemplateExport("bot-nova")
+	f.m.presentTemplateShare("bot-nova")
 	f.wait(t, func() bool { return f.tt.HasText("Launch checklist") })
 	path := filepath.Join(t.TempDir(), "brief")
 	if err := os.WriteFile(path+".lorca-template", []byte("original"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	f.stubDestination(t, path)
-	f.click(t, "Export…")
+	f.click(t, "Save as File…")
 	f.wait(t, func() bool {
 		return f.tt.HasText("“brief.lorca-template” already exists. Do you want to replace it?")
 	})
@@ -470,4 +494,121 @@ func TestTemplateFilenameAndExtensionSafety(t *testing.T) {
 	if actual, exists, extra := templateDestination(strings.TrimSuffix(path, ".lorca-template")); actual != path || !exists || !extra {
 		t.Fatal("a replacement the extension caused needs asking")
 	}
+}
+
+func TestTemplateShareLinkShowsTheLinkCopied(t *testing.T) {
+	f := newTemplateUIFixture(t)
+	f.m.presentTemplateShare("bot-nova")
+	f.wait(t, func() bool { return f.tt.HasText("Launch checklist") })
+	f.click(t, "Morning brief")
+	f.click(t, "Share Link")
+	f.wait(t, func() bool { return f.tt.HasText("Done") })
+	shares := f.transport.methodCalls("templates.share")
+	if len(shares) != 1 || shares[0].params["expected_digest"] != "export-digest" || shares[0].params["reviewed"] != true || shares[0].params["link_id"] != nil {
+		t.Fatalf("share %v", shares)
+	}
+	url := "https://lorca.app/t/yWUtxVvEA7X0edjxRUKd2A#-xMo1zlzI63iQ_tY2ATkxlkle7thq-OfylCF-jFDqYw"
+	if f.copied != url || !f.tt.HasText(url) || f.tt.HasText("Cancel") {
+		t.Fatalf("the link isn't shown copied: %q", f.copied)
+	}
+	renderBoth(t, f.tt, "desktop-template-shared")
+	f.click(t, "Done")
+	if f.m.hasSheet() {
+		t.Fatal("Done left the sheet up")
+	}
+}
+
+func TestTemplateUpdateKeepsTheLinkAndStartsFromWhatItHolds(t *testing.T) {
+	f := newTemplateUIFixture(t)
+	f.transport.mu.Lock()
+	next := f.transport.handler
+	f.transport.handler = func(call templateUICall) (any, error) {
+		if call.method != "templates.contents" {
+			return next(call)
+		}
+		return map[string]any{
+			"profile": map[string]any{"id": "profile", "content": map[string]any{"name": "Writer", "symbol_name": "pencil.and.scribble", "accent": "pink",
+				"description": "Writes docs, copy, and release notes in plain language: short sentences, no filler, and no exclamation marks."}},
+			"memories": []any{map[string]any{"id": "memory-voice", "content": "- Plain words, short sentences, no exclamation marks."},
+				map[string]any{"id": "memory-launch", "content": "- The launch post goes out Friday morning."}},
+			"requirements": []any{map[string]any{"service_id": "notion", "name": "Notion"}},
+		}, nil
+	}
+	f.transport.mu.Unlock()
+	link := store.SharedLinkFor("bot-quill")
+	if link == nil {
+		t.Fatal("no demo link")
+	}
+	f.m.presentTemplateShare("bot-quill")
+	f.wait(t, func() bool {
+		return f.tt.HasText("Update Link") && f.tt.HasText("The launch post goes out Friday morning.")
+	})
+	if !f.tt.HasText(link.URL) {
+		t.Fatal("the sheet doesn't show the link")
+	}
+	renderBoth(t, f.tt, "desktop-template-update")
+	f.click(t, "Update Link")
+	f.wait(t, func() bool { return f.tt.HasText("Done") })
+	share := f.transport.methodCalls("templates.share")[0]
+	selection, _ := json.Marshal(share.params["selection"])
+	if share.params["link_id"] != link.ID || string(selection) != `{"memory_ids":["memory-voice"],"profile":true}` {
+		t.Fatalf("update %v", share.params)
+	}
+}
+
+func TestTemplateSharedLinksListTheAccountsLinks(t *testing.T) {
+	f := newTemplateUIFixture(t)
+	f.m.showSettings(model.PaneSharedLinks)
+	f.wait(t, func() bool { return f.tt.HasText("Writer") })
+	renderBoth(t, f.tt, "desktop-template-shared-links")
+	if err := f.tt.RightClick("Writer"); err != nil {
+		t.Fatal(err)
+	}
+	if menu := f.tt.Menu(); !slices.Equal(menu, []string{"Copy Link", "-", "Revoke Link…"}) {
+		t.Fatalf("menu %q", menu)
+	}
+	if err := f.tt.ChooseMenuItem("Copy Link"); err != nil {
+		t.Fatal(err)
+	}
+	f.step()
+	if f.copied != store.SharedLinks[0].URL {
+		t.Fatalf("copied %q", f.copied)
+	}
+	if err := f.tt.RightClick("Writer"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.tt.ChooseMenuItem("Revoke Link…"); err != nil {
+		t.Fatal(err)
+	}
+	f.step()
+	f.wait(t, func() bool { return f.tt.HasText("Revoke the link to “Writer”?") })
+	f.click(t, "Revoke")
+	f.wait(t, func() bool { return len(f.transport.methodCalls("templates.unshare")) == 1 })
+	if f.transport.methodCalls("templates.unshare")[0].params["link_id"] != "mock-link" {
+		t.Fatal("revoked another link")
+	}
+}
+
+func TestTemplateImportOpensAPastedLink(t *testing.T) {
+	f := newTemplateUIFixture(t)
+	f.linearReady.Store(true)
+	f.m.presentTemplateImport("", "", nil)
+	f.wait(t, func() bool { return f.tt.HasText("Choose File…") })
+	if f.tt.HasText("Provider") || len(f.transport.methodCalls("templates.import.preview")) > 0 {
+		t.Fatal("the form shows before a template opens")
+	}
+	renderBoth(t, f.tt, "desktop-template-import-empty")
+	link := "https://lorca.app/t/yWUtxVvEA7X0edjxRUKd2A#-xMo1zlzI63iQ_tY2ATkxlkle7thq-OfylCF-jFDqYw"
+	// The From field is left of Choose File….
+	choose, _ := f.tt.Find("Choose File…")
+	f.tt.ClickAt(choose.X-100, choose.Y+choose.H/2)
+	f.step()
+	f.tt.Type(link)
+	f.step()
+	f.wait(t, func() bool { return f.tt.HasText("Routines start paused.") })
+	preview := f.transport.methodCalls("templates.import.preview")[0]
+	if preview.params["link"] != link || preview.params["path"] != nil {
+		t.Fatalf("preview %v", preview.params)
+	}
+	renderBoth(t, f.tt, "desktop-template-import-link")
 }

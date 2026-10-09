@@ -132,6 +132,8 @@ type Store struct {
 	Routines []*Routine
 	// AutoReview is shared through the roster.
 	AutoReview AutoReview
+	// SharedLinks are the bots the account shares as links, shared through the roster.
+	SharedLinks []SharedLink
 	// Providers are the account's provider credentials, the same on every Device.
 	Providers []ProviderCredential
 	// Models are what the CLI's catalog offers, for the Model and Thinking pickers.
@@ -407,6 +409,7 @@ func (s *Store) apply(snapshot WireSnapshot) {
 		s.Routines = append(s.Routines, ToRoutine(routine))
 	}
 	s.AutoReview = ToAutoReview(snapshot.AutoReview)
+	s.SharedLinks = snapshot.SharedLinks
 	s.Providers = ToProviders(snapshot.Providers)
 	s.Models = ToModels(snapshot.Models)
 	s.runningJobs = nil
@@ -475,6 +478,9 @@ func (s *Store) handle(name string, data json.RawMessage) {
 			for _, routine := range roster.Routines {
 				s.Routines = append(s.Routines, ToRoutine(routine))
 			}
+		}
+		if roster.SharedLinks != nil {
+			s.SharedLinks = roster.SharedLinks
 		}
 		if roster.AutoReview != nil {
 			s.AutoReview = ToAutoReview(roster.AutoReview)
@@ -2477,6 +2483,7 @@ func (s *Store) ResetMockData() {
 	s.Chats = mockChats()
 	s.Routines = mockRoutines()
 	s.AutoReview = mockAutoReview()
+	s.SharedLinks = mockSharedLinks()
 	s.Providers = mockProviders()
 	s.Models = mockModels()
 	s.sortChats()

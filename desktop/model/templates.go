@@ -58,12 +58,65 @@ type TemplateContents struct {
 	Requirements []TemplateService               `json:"requirements"`
 }
 
+// TemplateSelection is what goes in a template besides the profile, by the ids TemplateContents
+// gave. A list left out is none.
 type TemplateSelection struct {
 	Profile        bool     `json:"profile"`
-	SkillIDs       []string `json:"skill_ids"`
-	MemoryIDs      []string `json:"memory_ids"`
-	RoutineIDs     []string `json:"routine_ids"`
-	RequirementIDs []string `json:"requirement_ids"`
+	SkillIDs       []string `json:"skill_ids,omitempty"`
+	MemoryIDs      []string `json:"memory_ids,omitempty"`
+	RoutineIDs     []string `json:"routine_ids,omitempty"`
+	RequirementIDs []string `json:"requirement_ids,omitempty"`
+}
+
+// SharedLink is a bot the account shares as a link. The roster carries it to every Device, which
+// lists, updates, and revokes it.
+type SharedLink struct {
+	ID string `json:"id"`
+	// URL is the whole address, the key in its fragment.
+	URL   string `json:"url"`
+	BotID string `json:"bot_id"`
+	// Name is the bot's name when it was last shared.
+	Name      string            `json:"name"`
+	Selection TemplateSelection `json:"selection"`
+	UpdatedAt float64           `json:"updated_at"`
+}
+
+// SharedLinkFor is the link the bot was last shared as.
+func (s *Store) SharedLinkFor(botID string) *SharedLink {
+	for i := len(s.SharedLinks) - 1; i >= 0; i-- {
+		if s.SharedLinks[i].BotID == botID {
+			return &s.SharedLinks[i]
+		}
+	}
+	return nil
+}
+
+// TemplateShareOptions is a reviewed template to share as a link, or to update LinkID's with.
+type TemplateShareOptions struct {
+	BotID          string            `json:"bot_id"`
+	Selection      TemplateSelection `json:"selection"`
+	ExpectedDigest string            `json:"expected_digest"`
+	Reviewed       bool              `json:"reviewed"`
+	LinkID         string            `json:"link_id,omitempty"`
+}
+
+// ShareTemplate puts the template on the relay behind a link and answers it.
+func (s *Store) ShareTemplate(options TemplateShareOptions, done func(SharedLink, error)) {
+	options.Selection = options.Selection.Clone()
+	type reply struct {
+		Link SharedLink `json:"link"`
+	}
+	Async(s, func() (reply, error) { return call[reply](s, "templates.share", options) }, func(result reply, err error) {
+		done(result.Link, err)
+	})
+}
+
+// RevokeLink takes the link down: whoever opens it sees that it no longer works.
+func (s *Store) RevokeLink(id string, done func(error)) {
+	Async(s, func() (struct{}, error) {
+		_, err := call[struct{}](s, "templates.unshare", map[string]any{"link_id": id})
+		return struct{}{}, err
+	}, func(_ struct{}, err error) { done(err) })
 }
 
 func (selection TemplateSelection) Clone() TemplateSelection {
@@ -118,7 +171,8 @@ type TemplateExportOptions struct {
 }
 
 type TemplateImportOptions struct {
-	Path           string            `json:"path"`
+	Path           string            `json:"path,omitempty"`
+	Link           string            `json:"link,omitempty"`
 	RunnerID       string            `json:"runner_id,omitempty"`
 	Name           string            `json:"name,omitempty"`
 	Provider       ProviderKind      `json:"provider,omitempty"`

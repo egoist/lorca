@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,33 @@ import (
 // the CLI reads and writes the file.
 var chooseTemplateSource = openTemplateSource
 var chooseTemplateDestination = saveTemplateDestination
+
+// pendingTemplateLink is a shared bot's link the app was opened with, kept until there is an
+// account and a CLI to read it: Open in Lorca on lorca.app may be what started the app.
+var pendingTemplateLink string
+
+func (a *appDelegate) openTemplateLink(link string) {
+	if u, err := url.Parse(link); err != nil || u.Host != "t" {
+		return
+	}
+	pendingTemplateLink = link
+	a.presentPendingTemplateLink()
+}
+
+func (a *appDelegate) presentPendingTemplateLink() {
+	if pendingTemplateLink == "" || store.HasIdentity == nil || !*store.HasIdentity || !(store.IsConnected || store.IsMock) {
+		return
+	}
+	link := pendingTemplateLink
+	pendingTemplateLink = ""
+	a.showMainWindow()
+	if a.main != nil {
+		a.main.presentTemplateImport(link, "", a.main.selectChat)
+	}
+}
+
+// copyText puts a shared link on the clipboard; tests keep it off the user's.
+var copyText = func(text string) { mygo.Clipboard.WriteText(text) }
 
 func openTemplateSource(parent *mygo.Window, done func(string, error)) {
 	options := mygo.OpenDialogOptions{Parent: parent, Filters: []mygo.FileFilter{{Name: L("Bot templates"), Extensions: []string{"lorca-template"}}}}

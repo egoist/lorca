@@ -64,7 +64,7 @@ var commandTable = []command{
 	{id: "newBot", title: func() string { return L("New Bot…") }, accelerator: "CmdOrCtrl+N", opensMain: true},
 	{id: "importBotTemplate", title: func() string { return L("New Bot from Template…") }, opensMain: true},
 	{id: "newGroupChat", title: func() string { return L("New Group Chat…") }, accelerator: "CmdOrCtrl+Shift+N", opensMain: true},
-	{id: "exportBotTemplate", title: func() string { return L("Export as Template…") }, enabled: func() bool { return selectedDMBot() != nil }},
+	{id: "shareBotTemplate", title: func() string { return L("Share as Template…") }, enabled: func() bool { return selectedDMBot() != nil }},
 	{id: "marketplace", title: func() string { return L("Marketplace…") }, accelerator: "CmdOrCtrl+Shift+M", opensMain: true},
 	{id: "pairDevice", title: func() string { return L("Pair a Device…") }, accelerator: "CmdOrCtrl+Shift+P", opensMain: true},
 	{id: "settings", title: func() string { return L("Settings…") }, accelerator: "CmdOrCtrl+,"},
@@ -301,7 +301,7 @@ func windowMenuBar(kind windowKind) *mygo.Menu {
 	}
 	help = append(help, sep(), at("about"))
 	return mygo.NewMenu([]*mygo.MenuItem{
-		submenu(L("File"), at("newBot"), at("importBotTemplate"), at("newGroupChat"), sep(), at("exportBotTemplate"), sep(), at("marketplace"), sep(), at("pairDevice"), sep(), at("settings"), sep(), at("closeWindow"), at("quit")),
+		submenu(L("File"), at("newBot"), at("importBotTemplate"), at("newGroupChat"), sep(), at("shareBotTemplate"), sep(), at("marketplace"), sep(), at("pairDevice"), sep(), at("settings"), sep(), at("closeWindow"), at("quit")),
 		submenu(L("Edit"),
 			&mygo.MenuItem{Role: mygo.RoleUndo, Label: L("Undo")},
 			&mygo.MenuItem{Role: mygo.RoleRedo, Label: L("Redo")},

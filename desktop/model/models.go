@@ -1597,16 +1597,17 @@ func (u ChatUsage) SpendSummary() string {
 type SettingsPane string
 
 const (
-	PaneGeneral    SettingsPane = "general"
-	PaneProviders  SettingsPane = "providers"
-	PaneAutoReview SettingsPane = "auto-review"
-	PanePlugins    SettingsPane = "plugins"
-	PaneBots       SettingsPane = "bots"
-	PaneDevice     SettingsPane = "device"
-	PaneAdvanced   SettingsPane = "advanced"
+	PaneGeneral     SettingsPane = "general"
+	PaneProviders   SettingsPane = "providers"
+	PaneAutoReview  SettingsPane = "auto-review"
+	PaneSharedLinks SettingsPane = "shared-links"
+	PanePlugins     SettingsPane = "plugins"
+	PaneBots        SettingsPane = "bots"
+	PaneDevice      SettingsPane = "device"
+	PaneAdvanced    SettingsPane = "advanced"
 )
 
-var SettingsPanes = []SettingsPane{PaneGeneral, PaneProviders, PaneAutoReview, PanePlugins, PaneBots, PaneDevice, PaneAdvanced}
+var SettingsPanes = []SettingsPane{PaneGeneral, PaneProviders, PaneAutoReview, PaneSharedLinks, PanePlugins, PaneBots, PaneDevice, PaneAdvanced}
 
 // IsDeviceScoped is a pane that shows one Device, picked at the top of the page: bots and plugins
 // live on a Runner. The others hold this computer's settings and the account's.
@@ -1620,6 +1621,8 @@ func (p SettingsPane) Title() string {
 		return L("General")
 	case PaneAutoReview:
 		return L("Auto-review")
+	case PaneSharedLinks:
+		return L("Shared Links")
 	case PaneAdvanced:
 		return L("Advanced")
 	case PaneBots:
@@ -1640,6 +1643,8 @@ func (p SettingsPane) Symbol() string {
 		return "gearshape"
 	case PaneAutoReview:
 		return "checkmark.shield"
+	case PaneSharedLinks:
+		return "link"
 	case PaneAdvanced:
 		return "slider.horizontal.3"
 	case PaneBots:

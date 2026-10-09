@@ -18,6 +18,9 @@ func main() {
 	useUpdater()
 
 	mygo.App.OnSecondInstance(func(args []string, workingDir string) { app.reopen() })
+	// Open in Lorca on a shared bot's page: lorca://t/<id>#<key> (lorca-dev:// for Lorca Dev),
+	// with the launch or from a second instance.
+	mygo.App.OnOpenURL(func(link string) { post(func() { app.openTemplateLink(link) }) })
 	mygo.App.OnActivate(func(hasVisibleWindows bool) {
 		if !hasVisibleWindows {
 			app.reopen()
