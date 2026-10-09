@@ -60,22 +60,39 @@ enum MockData {
 
     static func providers() -> [ProviderCredential] {
         [
-            ProviderCredential(kind: .deepseek, isConnected: true, detail: "sk-live…4f2c"),
-            ProviderCredential(kind: .anthropic, isConnected: true, detail: "sk-ant…8d1a"),
-            ProviderCredential(kind: .opencode, isConnected: false, detail: "Not connected"),
-            ProviderCredential(kind: .opencodeGo, isConnected: false, detail: "Not connected"),
-            ProviderCredential(kind: .chatgpt, isConnected: true, detail: "you@lorca.app"),
-            ProviderCredential(kind: .grok, isConnected: false, detail: "Not connected"),
+            ProviderCredential(kind: .deepseek, isConnected: true, detail: "sk-live…4f2c", reviewModel: "deepseek-flash"),
+            ProviderCredential(kind: .anthropic, isConnected: true, detail: "sk-ant…8d1a", reviewModel: "claude-haiku-4-5"),
+            ProviderCredential(kind: .opencode, isConnected: false, detail: "Not connected", reviewModel: "deepseek-v4.1-flash"),
+            ProviderCredential(kind: .opencodeGo, isConnected: false, detail: "Not connected", reviewModel: "glm-5.3-flash"),
+            ProviderCredential(kind: .chatgpt, isConnected: true, detail: "you@lorca.app", reviewModel: "gpt-6-luna"),
+            ProviderCredential(kind: .grok, isConnected: false, detail: "Not connected", reviewModel: "grok-4.7"),
             ProviderCredential(
                 kind: .custom("custom:ollama"), isConnected: true, detail: "http://localhost:11434/v1",
                 baseURL: "http://localhost:11434/v1", name: "Ollama", api: .chatCompletions,
-                models: [CustomModel(id: "qwen3:8b", levels: ["low", "medium", "high"]), CustomModel(id: "llava", levels: ["low", "medium", "high"])]),
+                models: [CustomModel(id: "qwen3:8b", levels: ["low", "medium", "high"]), CustomModel(id: "llava", levels: ["low", "medium", "high"])],
+                reviewModel: "qwen3:8b"),
+            ProviderCredential(
+                kind: .custom("custom:openrouter-decisions"), isConnected: true, detail: "sk-or…9c0e · https://openrouter.ai/api/alpha/decisions",
+                baseURL: "https://openrouter.ai/api/alpha/decisions", name: "OpenRouter Decisions", api: .systemOne,
+                models: [
+                    CustomModel(id: "typesafe/jev-1.13", name: "TypeSafe: Jev 1.13"),
+                    CustomModel(id: "perplexity/pplx-decider-v1.1-27b", name: "Perplexity: Decider V1.1 27B"),
+                ],
+                reviewModel: "typesafe/jev-1.13"),
         ]
     }
 
     /// What a custom provider's server lists in mock mode: a gateway's catalog, a local
     /// server's few models, or no list at all.
     static func listedModels(baseURL: String) -> [CustomModel]? {
+        if baseURL.contains("openrouter.ai/api/alpha/decisions") {
+            return [
+                CustomModel(id: "typesafe/jev-1.13", name: "TypeSafe: Jev 1.13", contextWindow: 64_000),
+                CustomModel(id: "openai/gpt-6-luna-decisions", name: "OpenAI: GPT-6 Luna Decisions", contextWindow: 1_050_000, images: true),
+                CustomModel(id: "perplexity/pplx-decider-v1.1-27b", name: "Perplexity: Decider V1.1 27B", contextWindow: 262_144, images: true),
+                CustomModel(id: "cloudflare/clef-flash", name: "Cloudflare: Clef Flash", contextWindow: 65_536, images: true),
+            ]
+        }
         if baseURL.contains("openrouter") {
             return [
                 CustomModel(id: "anthropic/claude-sonnet-5", name: "Anthropic: Claude Sonnet 5", contextWindow: 1_000_000, images: true),
@@ -111,6 +128,8 @@ enum MockData {
             ProviderModel(provider: .opencode, id: "deepseek-v4.1-flash", label: "DeepSeek V4.1 Flash", levels: ["low", "high", "max"]),
             ProviderModel(provider: .opencode, id: "kimi-k3", label: "Kimi K3", levels: ["max"]),
             ProviderModel(provider: .opencode, id: "big-pickle", label: "Big Pickle", levels: []),
+            ProviderModel(provider: .opencode, id: "jev-1.13", label: "Jev 1.13", levels: [], decides: true),
+            ProviderModel(provider: .opencode, id: "jev-1.13-free", label: "Jev 1.13 Free", levels: [], decides: true),
             ProviderModel(provider: .opencodeGo, id: "glm-5.3-flash", label: "GLM-5.3 Flash", levels: ["low", "high", "max"]),
             ProviderModel(provider: .chatgpt, id: "gpt-6.1-sol", label: "GPT-6.1 Sol", levels: on),
             ProviderModel(provider: .chatgpt, id: "gpt-6-luna", label: "GPT-6 Luna", levels: on),
@@ -607,10 +626,14 @@ enum MockData {
     }
 
     static func autoReview() -> AutoReview {
-        AutoReview(isEnabled: true, rules: [
-            AutoReviewRule(id: "ar-1", text: "use GitHub create_issue", behavior: .allow, tool: "github/create_issue"),
-            AutoReviewRule(id: "ar-2", text: "comment on a pull request", behavior: .ask),
-        ])
+        AutoReview(
+            isEnabled: true,
+            rules: [
+                AutoReviewRule(id: "ar-1", text: "use GitHub create_issue", behavior: .allow, tool: "github/create_issue"),
+                AutoReviewRule(id: "ar-2", text: "comment on a pull request", behavior: .ask),
+            ],
+            provider: .custom("custom:openrouter-decisions"),
+            models: [.custom("custom:openrouter-decisions"): "perplexity/pplx-decider-v1.1-27b", .anthropic: "claude-opus-5"])
     }
 
     /// The demo's skills: two of the Developer's and a draft it proposed, and one for the Launch
@@ -692,6 +715,117 @@ enum MockData {
         ]
     }
 
+    /// Limits in the demo: Project Manager's turns and Researcher's each have some, Researcher's
+    /// newest turn stopped at its token limit, and Review requests used up its spending.
+    static func budgets() -> [BudgetState] {
+        let now = Date().timeIntervalSince1970
+        func usage(tokens: Int = 0, api: Double = 0, estimate: Double = 0, runtime: Double = 0, retries: Int = 0, calls: Int = 0) -> BudgetState.Usage {
+            .init(tokens: tokens, apiCostUsd: api, subscriptionEstimateUsd: estimate, unknownPriceCalls: 0, runtimeSecs: runtime, retries: retries, connectorCalls: calls)
+        }
+        return [
+            BudgetState(
+                kind: "chat", id: "chat-nova", runnerId: "dev-workbench", chatId: "chat-nova", limits: BudgetLimits(maxUsd: 2, maxTokens: 200_000),
+                usage: usage(), state: "ready", updatedAt: now - 60 * 60 * 24),
+            BudgetState(
+                kind: "chat", id: "chat-scout", runnerId: "dev-studio", chatId: "chat-scout", limits: BudgetLimits(maxTokens: 100_000, maxRuntimeSecs: 900),
+                usage: usage(), state: "ready", updatedAt: now - 60 * 60 * 24),
+            BudgetState(
+                kind: "job", id: "job-demo-research", runnerId: "dev-studio", chatId: "chat-scout",
+                limits: BudgetLimits(maxTokens: 100_000, maxRuntimeSecs: 900),
+                usage: usage(tokens: 100_412, api: 0.21, runtime: 384, retries: 1, calls: 9), state: "budget_exhausted", reached: "tokens", updatedAt: now - 60 * 28),
+            BudgetState(
+                kind: "routine", id: "rt-reviews", runnerId: "dev-workbench", chatId: "chat-nova", limits: BudgetLimits(maxUsd: 5, maxRuntimeSecs: 3600),
+                usage: usage(tokens: 1_840_000, estimate: 5.02, runtime: 2_760, calls: 64), state: "budget_exhausted", reached: "usd", updatedAt: now - 60 * 5),
+        ]
+    }
+
+    /// What the demo's bots left for review, as the CLI sends items: a command and a GitHub call
+    /// held while Project Manager's routine ran, and a draft it wants edited.
+    static func reviews() -> [ReviewItem] {
+        reviewRecords = [
+            reviewRecord(
+                id: "review-tag", minutesAgo: 189,
+                payload: ["kind": "shell", "arguments": ["command": "git tag v1.4.0 && git push origin v1.4.0", "description": "Tag the release"]],
+                account: "Workbench", resource: "~/Projects/relay",
+                rationale: "Pushes a release tag to the shared repository, which starts the release build."),
+            reviewRecord(
+                id: "review-comment", minutesAgo: 188,
+                payload: ["kind": "plugin", "plugin_id": "github", "server_name": "github", "tool": "add_issue_comment",
+                          "arguments": ["owner": "lorca-app", "repo": "relay", "issue_number": 214, "body": "Release notes are ready: the TLS rollout, the new pairing flow, and the relay quotas."]],
+                account: "GitHub", resource: "add_issue_comment · owner: lorca-app, repo: relay, issue_number: 214",
+                rationale: "Posts a public comment on a pull request."),
+            reviewRecord(
+                id: "review-draft", minutesAgo: 33,
+                payload: ["kind": "draft", "text": "Lorca 1.4 is out. Pair your phone in one step, keep chats in sync across every Device, and run bots on the computers you already own.\n\nUpdate from the app, or download it from lorca.app."],
+                account: "Launch room", resource: "Launch announcement",
+                rationale: "Writer's draft, shortened to lead with what people can do. Edit it before it goes to the team."),
+        ]
+        return reviewRecords.compactMap { try? Wire.decoder.decode(ReviewItem.self, from: JSONSerialization.data(withJSONObject: $0)) }
+    }
+
+    private static var reviewRecords: [[String: Any]] = []
+
+    private static func reviewRecord(id: String, minutesAgo minutes: Double, payload: [String: Any], account: String, resource: String, rationale: String) -> [String: Any] {
+        [
+            "id": id, "runner_id": "dev-workbench", "bot_id": "bot-nova", "origin": ["chat_id": "chat-nova"],
+            "target": ["account": account, "resource": resource], "rationale": rationale, "payload": payload,
+            "version": 1, "revision": 1, "preconditions": ["workdir": "~/Projects/relay", "files": [] as [Any]], "state": "pending",
+            "created_at": minutesAgo(minutes).timeIntervalSince1970,
+        ]
+    }
+
+    struct ReviewChanged: LocalizedError {
+        var errorDescription: String? { "This changed on another Device. Review it again." }
+    }
+
+    /// The demo's Runner deciding: an edit makes the next version, and an approval runs at once.
+    static func changedReview(_ item: ReviewItem, action: String, fields: [String: Any]) throws -> Data {
+        guard let index = reviewRecords.firstIndex(where: { $0["id"] as? String == item.id }),
+            reviewRecords[index]["version"] as? Int == Int(item.version)
+        else { throw ReviewChanged() }
+        var record = reviewRecords[index]
+        record["revision"] = (record["revision"] as? Int ?? 1) + 1
+        let status = "review-status-\(item.id)"
+        switch action {
+        case "edit":
+            record["payload"] = fields["payload"]
+            record["version"] = Int(item.version) + 1
+        case "approve":
+            record["state"] = "succeeded"
+            let text = item.payload.isDraft ? item.payload.editorText : ""
+            record["outcome"] = ["summary": item.payload.isDraft ? "Accepted" : "Done", "message_id": status, "result": ["text": text]]
+        default:
+            record["state"] = "rejected"
+            record["outcome"] = ["summary": "Rejected", "message_id": status]
+        }
+        reviewRecords[index] = record
+        return try JSONSerialization.data(withJSONObject: record)
+    }
+
+    /// What Workbench's plugins offered when they last connected, for the Access sheet.
+    static func accessCatalog() -> BotAccessCatalog {
+        typealias Tool = BotAccessCatalog.Plugin.Tool
+        let github: [Tool] = [
+            Tool(name: "search_issues", title: "Search issues", capability: "read"),
+            Tool(name: "get_pull_request", title: "Get a pull request", capability: "read"),
+            Tool(name: "create_pull_request_review", title: "Draft a review", capability: "draft"),
+            Tool(name: "create_issue", title: "Create an issue", capability: "write"),
+            Tool(name: "merge_pull_request", title: "Merge a pull request", capability: "write"),
+        ]
+        let linear: [Tool] = [
+            Tool(name: "list_issues", title: "List issues", capability: "read"),
+            Tool(name: "create_issue", title: "Create an issue", capability: "write"),
+        ]
+        let servers = mcpServers().filter(\.isEnabled).map { server in
+            BotAccessCatalog.Plugin(
+                id: server.id, name: server.name,
+                tools: (server.tools ?? []).map { Tool(name: $0.name, description: $0.about, capability: $0.isReadOnly ? "read" : "write") })
+        }
+        return BotAccessCatalog(connections: [
+            .init(id: "github", name: "GitHub", tools: github), .init(id: "linear", name: "Linear", tools: linear),
+        ] + servers)
+    }
+
     static func bots() -> [Bot] {
         [
             Bot(
@@ -732,6 +866,7 @@ enum MockData {
                 accent: .pink,
                 runnerID: "dev-workbench",
                 provider: .anthropic,
+                permissions: writerAccess(),
                 createdAt: minutesAgo(60 * 24 * 9)
             ),
             Bot(
@@ -745,6 +880,18 @@ enum MockData {
                 createdAt: minutesAgo(60 * 24 * 4)
             ),
         ]
+    }
+
+    /// The Writer reads GitHub and its notes folder, drafts reviews, and runs no commands.
+    static func writerAccess() -> BotPermissions {
+        var access = BotPermissions()
+        access.connections = [
+            "github": .init(capabilities: AccessLevel.draft.capabilities, tools: ["search_issues", "get_pull_request", "create_pull_request_review"]),
+            "filesystem": .init(capabilities: AccessLevel.write.capabilities),
+            "deepwiki": .init(capabilities: AccessLevel.read.capabilities),
+        ]
+        access.shell = false
+        return access
     }
 
     static func chats() -> [Chat] {
@@ -768,7 +915,10 @@ enum MockData {
                 messages: managerThread(),
                 unreadCount: 0,
                 isPinned: false,
-                createdAt: minutesAgo(60 * 30)
+                createdAt: minutesAgo(60 * 30),
+                usage: ChatUsage(
+                    contextTokens: 18_400, contextWindow: 400_000, inputTokens: 212_000, outputTokens: 31_000, cacheReadTokens: 160_000,
+                    costUSD: 0.86, turns: 14, model: "gpt-5.5", subscriptionEstimateUSD: 0.86, pricingKinds: ["subscription_estimate"])
             ),
             Chat(
                 id: "chat-patch",
@@ -798,7 +948,10 @@ enum MockData {
                 messages: researcherThread(),
                 unreadCount: 1,
                 isPinned: false,
-                createdAt: minutesAgo(60 * 24 * 12)
+                createdAt: minutesAgo(60 * 24 * 12),
+                usage: ChatUsage(
+                    contextTokens: 61_000, contextWindow: 128_000, inputTokens: 402_000, outputTokens: 22_000, cacheReadTokens: 290_000,
+                    costUSD: 0.34, turns: 9, model: "deepseek-chat", apiCostUSD: 0.34, pricingKinds: ["api"])
             ),
             Chat(
                 id: "chat-quill",
@@ -887,19 +1040,48 @@ enum MockData {
                 createdAt: minutesAgo(190)
             ),
             Message(
+                author: .system,
+                body: .notice("Waiting for your review · $ git tag v1.4.0 && git push origin v1.4.0"),
+                createdAt: minutesAgo(189)
+            ),
+            Message(
+                author: .system,
+                body: .notice("Waiting for your review · GitHub: add_issue_comment · owner: lorca-app, repo: relay, issue_number: 214"),
+                createdAt: minutesAgo(188)
+            ),
+            Message(
                 author: .you,
                 body: .text("Ask Writer to keep the announcement short and lead with what people can do."),
                 createdAt: minutesAgo(36)
             ),
             Message(
                 author: .bot("bot-nova"),
-                body: .handoff(from: "bot-nova", to: "bot-quill", reason: "Draft a short launch announcement that leads with what people can do."),
+                body: .tool(ToolInvocation(
+                    name: "message_bot", summary: "Messaged Writer",
+                    detail: "Draft a short launch announcement that leads with what people can do.",
+                    isRunning: false, targetBotID: "bot-quill")),
                 createdAt: minutesAgo(35)
             ),
             Message(
                 author: .bot("bot-nova"),
-                body: .text("Writer has the brief. I'll keep the final draft with the launch checklist for your review."),
+                body: .text("Writer has the brief. I'll bring the draft back here when it's ready."),
                 createdAt: minutesAgo(34)
+            ),
+            // Writer's handoff report, which wakes Project Manager in this chat.
+            Message(
+                author: .bot("bot-quill"),
+                body: .handoff(from: "bot-quill", to: "bot-nova", reason: "Draft saved to `launch/announcement.md`. It leads with what people can do and stays under 60 words."),
+                createdAt: minutesAgo(24)
+            ),
+            Message(
+                author: .bot("bot-nova"),
+                body: .text("Writer's draft is in `launch/announcement.md`: three short sentences that open with building a team of bots. I added it to the launch checklist for your review."),
+                createdAt: minutesAgo(23)
+            ),
+            Message(
+                author: .system,
+                body: .notice("Waiting for your review · Draft: Launch announcement"),
+                createdAt: minutesAgo(22)
             ),
         ]
     }
@@ -936,6 +1118,16 @@ enum MockData {
                 body: .text("I'd explain the Device roles right after pairing: your Mac runs the bots, and your phone lets you chat with them. I added that note to `research/onboarding.md`."),
                 createdAt: minutesAgo(45)
             ),
+            Message(
+                author: .you,
+                body: .text("Read the setup guides of five similar apps and compare what each explains first."),
+                createdAt: minutesAgo(34)
+            ),
+            Message(
+                author: .system,
+                body: .notice("Stopped at the token limit. Raise it in Limits to resume."),
+                createdAt: minutesAgo(28)
+            ),
         ]
     }
 
@@ -950,6 +1142,18 @@ enum MockData {
                 author: .bot("bot-quill"),
                 body: .text("Create a team of bots for your everyday work. Give each one a role, bring them into a group chat, and pick up the conversation from your phone. Lorca runs the bots on your computers and encrypts your chats before they sync.\n\nDraft saved to `launch/announcement.md`."),
                 createdAt: minutesAgo(24)
+            ),
+            Message(author: .you, body: .text("File an issue for the pairing section of the docs."), createdAt: minutesAgo(12)),
+            // The Writer's Access lets it read GitHub and draft reviews, not open issues.
+            Message(
+                author: .bot("bot-quill"),
+                body: .permission(PermissionRequest(pluginID: "github", pluginName: "GitHub", tool: "access", summary: "GitHub · create_issue", decision: .pending)),
+                createdAt: minutesAgo(11)
+            ),
+            Message(
+                author: .bot("bot-quill"),
+                body: .text("I can't open issues on GitHub: my Access only lets me read it and draft reviews. I left a request above if you want to allow it."),
+                createdAt: minutesAgo(11)
             ),
         ]
     }

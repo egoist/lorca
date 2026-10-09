@@ -136,7 +136,7 @@ func McpStateText(server McpServer) (string, Tone) {
 			return L("1 tool"), ToneGreen
 		}
 		return L("%d tools", server.ToolCount), ToneGreen
-	case PluginNeedsAuth:
+	case PluginNeedsAuth, PluginInsufficientAccess:
 		return L("Needs a sign-in"), ToneOrange
 	case PluginConnecting:
 		if status.Detail != "" {

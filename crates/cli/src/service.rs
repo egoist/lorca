@@ -32,6 +32,13 @@ pub struct Status {
     pub log: String,
 }
 
+/// `device.service_status`: whether the service is installed and running here, for the apps'
+/// Device pane, on this Device or in a sealed request to a Runner.
+pub fn status_out(config: &Config) -> Result<serde_json::Value, String> {
+    let status = status(config);
+    Ok(serde_json::json!({ "installed": status.installed, "running": status.running.is_some() }))
+}
+
 /// The binary the service runs: this one, through any symlink to it.
 fn exe() -> anyhow::Result<PathBuf> {
     let exe = std::env::current_exe()?;

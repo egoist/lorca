@@ -4,6 +4,56 @@ use super::*;
 use lorca::app::OutboxItem;
 use lorca::relay::RelayClient;
 
+#[tokio::test]
+async fn encrypted_task_records_round_trip_and_replace_only_their_own_slot() {
+    fn task_outbox(app: &lorca::app::App) -> OutboxItem {
+        loop {
+            let item = app.store.first_outbox().unwrap().unwrap();
+            let state = app.state.lock().unwrap().clone();
+            app.store.remove_outbox_with_state(&item.id, &state).unwrap();
+            if item.kind == "task" { return item; }
+        }
+    }
+    let relay = Relay::start(0).await;
+    let app = lorca::app::App::load(lorca::config::Config { home: relay.home.join("source"), port: 0 }).unwrap();
+    lorca::identity::create(&app, Some("Source".into())).unwrap();
+    let bot = app.state.lock().unwrap().bots[0].clone();
+    let chat_id = app.state.lock().unwrap().chats[0].meta.id.clone();
+    let created = lorca::api::dispatch(&app, "tasks.create", serde_json::json!({
+        "request_id":"create","owner_bot_id":bot.id,"chat_ids":[chat_id],
+        "goal":"Encrypted durable work","acceptance_criteria":["Verified"],"next_action":"Inspect"
+    })).await.unwrap();
+    let id = created["id"].as_str().unwrap();
+    let first = task_outbox(&app);
+    assert!(!String::from_utf8_lossy(&first.ciphertext).contains("Encrypted durable work"));
+    let uploaded = relay.client.put_blob(&relay.url, &relay.token, first.clone()).await.unwrap();
+    assert_eq!(relay.client.put_blob(&relay.url, &relay.token, first).await.unwrap(), uploaded);
+    let (page, _) = relay.client.list_blobs(&relay.url, &relay.token, 0, "task").await.unwrap();
+    assert_eq!(page.len(), 1);
+    let replica = lorca::app::App::load(lorca::config::Config { home: relay.home.join("replica"), port: 0 }).unwrap();
+    lorca::identity::create(&replica, Some("Replica".into())).unwrap();
+    replica.machine.lock().unwrap().as_mut().unwrap().account_dek = app.machine_file().unwrap().account_dek;
+    let machine = replica.machine_file().unwrap();
+    lorca::sync::apply_blob(&replica, &machine, &page[0]);
+    assert_eq!(lorca::tasks::get(&replica, id).unwrap().revision, 1);
+    lorca::api::dispatch(&app, "tasks.update", serde_json::json!({
+        "id":id,"request_id":"progress","expected_revision":1,"next_action":"Verify"
+    })).await.unwrap();
+    let newest = task_outbox(&app);
+    relay.client.put_blob(&relay.url, &relay.token, newest).await.unwrap();
+    let (new_page, _) = relay.client.list_blobs(&relay.url, &relay.token, 0, "task").await.unwrap();
+    assert_eq!(new_page.len(), 1);
+    lorca::sync::apply_blob(&replica, &machine, &new_page[0]);
+    assert_eq!(lorca::tasks::get(&replica, id).unwrap().next_action, "Verify");
+    lorca::sync::apply_blob(&replica, &machine, &page[0]);
+    assert_eq!(lorca::tasks::get(&replica, id).unwrap().revision, 2);
+    for kind in ["roster","chat","job","job_cancel","job_result","request","response","machine","credentials","key","file","task","handoff","review","attention","project_context","playbook","event"] {
+        assert!(db::KINDS.contains(&kind));
+    }
+    assert!(db::SEALED_KINDS.contains(&"event"));
+    assert_eq!(PROTOCOL, lorca::relay::PROTOCOL);
+}
+
 struct Relay {
     state: AppState,
     url: String,
@@ -134,6 +184,26 @@ async fn binary_attachment_round_trip_stays_encrypted_and_idempotent() {
         .unwrap_err();
     assert_eq!(error.status, Some(409));
     assert!(!relay.home.join("files/identity/att-late").exists());
+}
+
+#[tokio::test]
+async fn encrypted_review_blobs_round_trip_and_keep_the_latest_version() {
+    let relay = Relay::start(0).await;
+    let make = |id: &str, version: u64| OutboxItem { id: id.into(), kind: "review".into(), recipient: None,
+        ciphertext: lorca::crypto::encrypt_json(&[9; 32], "review", &json!({ "id": "review-one", "version": version, "draft": "private draft" })).unwrap(),
+        slot: Some(lorca::app::Slot::latest(lorca::model::relay_name("review/review-one"))), group: None };
+    let first = make("review-first", 1);
+    relay.client.put_blob(&relay.url, &relay.token, first.clone()).await.unwrap();
+    relay.client.put_blob(&relay.url, &relay.token, first).await.unwrap();
+    let latest = make("review-last", 2);
+    relay.client.put_blob(&relay.url, &relay.token, latest.clone()).await.unwrap();
+    let (blobs, _) = relay.client.list_blobs(&relay.url, &relay.token, 0, "review").await.unwrap();
+    assert_eq!(blobs.len(), 1);
+    assert_eq!(blobs[0].id, "review-last");
+    let ciphertext = lorca::keys::unb64(&blobs[0].ciphertext).unwrap();
+    assert_eq!(ciphertext, latest.ciphertext);
+    let content: Value = lorca::crypto::decrypt_json(&[9; 32], "review", &ciphertext).unwrap();
+    assert_eq!(content["version"], 2);
 }
 
 #[tokio::test]
@@ -328,4 +398,87 @@ async fn attesting_a_machine_takes_a_bearer_and_keeps_keys_apart() {
     assert!(relay.state.db.revoke_machine("identity", &laptop).await.unwrap());
     let refused = relay.client.attest(&relay.url, &relay.token, &laptop, &box_key).await.unwrap_err();
     assert_eq!(refused.status, Some(410));
+}
+
+#[tokio::test]
+async fn attention_slots_round_trip_as_ciphertext_at_protocol_three() {
+    assert_eq!(PROTOCOL, lorca::relay::PROTOCOL);
+    let relay = Relay::start(1_000_000).await;
+    let dek = lorca::keys::random_32();
+    let payload = serde_json::json!({"source":{"chat_id":"private-chat"},"summary":"Private decision"});
+    for (id, summary) in [("attention-first", "Private decision"), ("attention-latest", "Updated decision")] {
+        let mut payload = payload.clone(); payload["summary"] = summary.into();
+        relay.client.put_blob(&relay.url, &relay.token, OutboxItem {
+            id: id.into(), kind: "attention".into(), recipient: None,
+            ciphertext: lorca::crypto::encrypt_json(&dek, "attention", &payload).unwrap(),
+            slot: Some(lorca::app::Slot::latest("opaque-attention-slot")), group: None,
+        }).await.unwrap();
+    }
+    let (blobs, _) = relay.client.list_blobs(&relay.url, &relay.token, 0, "attention").await.unwrap();
+    assert_eq!(blobs.len(), 1);
+    assert_eq!(blobs[0].id, "attention-latest");
+    let bytes = lorca::keys::unb64(&blobs[0].ciphertext).unwrap();
+    let opened: serde_json::Value = lorca::crypto::decrypt_json(&dek, "attention", &bytes).unwrap();
+    assert_eq!(opened["summary"], "Updated decision");
+    assert!(lorca::crypto::decrypt_json::<serde_json::Value>(&lorca::keys::random_32(), "attention", &bytes).is_err());
+    let response = relay.http.get(format!("{}/v1/blobs?kinds=attention", relay.url)).bearer_auth(&relay.token).header("lorca-protocol", "2").send().await.unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::UPGRADE_REQUIRED);
+}
+
+#[tokio::test]
+async fn handoff_request_report_and_cancellation_round_trip_in_independent_slots() {
+    let relay = Relay::start(0).await;
+    let key = [42; 32];
+    let make = |id: &str, role: &str, text: &str| OutboxItem {
+        id: id.into(), kind: "handoff".into(), recipient: None,
+        ciphertext: lorca::crypto::encrypt(&key, "handoff", text.as_bytes()).unwrap(),
+        slot: Some(lorca::app::Slot::latest(format!("handoff-test-1-{role}"))), group: None,
+    };
+    relay.client.put_blob(&relay.url, &relay.token, make("request", "request", "contract")).await.unwrap();
+    relay.client.put_blob(&relay.url, &relay.token, make("started", "report", "running")).await.unwrap();
+    relay.client.put_blob(&relay.url, &relay.token, make("finished", "report", "completed with evidence")).await.unwrap();
+    relay.client.put_blob(&relay.url, &relay.token, make("cancel", "cancel", "requester cancelled")).await.unwrap();
+    let (rows, _) = relay.client.list_blobs(&relay.url, &relay.token, 0, lorca::sync::POLL_KINDS).await.unwrap();
+    assert_eq!(rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["request", "finished", "cancel"]);
+    for (row, expected) in rows.iter().zip(["contract", "completed with evidence", "requester cancelled"]) {
+        let ciphertext = lorca::keys::unb64(&row.ciphertext).unwrap();
+        assert_ne!(ciphertext, expected.as_bytes());
+        assert_eq!(lorca::crypto::decrypt(&key, "handoff", &ciphertext).unwrap(), expected.as_bytes());
+    }
+    let health: Value = relay.http.get(format!("{}/v1/health", relay.url)).send().await.unwrap().json().await.unwrap();
+    assert_eq!(health["protocol"], 3);
+    assert!(!db::SEALED_KINDS.contains(&"handoff"));
+}
+
+#[tokio::test]
+async fn project_context_sync_is_encrypted_separate_from_transcript_paging_and_group_deleted() {
+    let relay = Relay::start(0).await;
+    let dek = [9; 32];
+    let plaintext = serde_json::json!({ "chat_id": "project-a", "entry": { "text": "confidential project brief" } });
+    let ciphertext = lorca::crypto::encrypt_json(&dek, "project_context", &plaintext).unwrap();
+    let context = OutboxItem {
+        id: "project-revision".into(), kind: "project_context".into(), recipient: None,
+        ciphertext: ciphertext.clone(), slot: Some(lorca::app::Slot::latest("project-revision")), group: Some("project-a".into()),
+    };
+    relay.client.put_blob(&relay.url, &relay.token, context.clone()).await.unwrap();
+    relay.client.put_blob(&relay.url, &relay.token, context).await.unwrap();
+    for i in 0..410 {
+        relay.client.put_blob(&relay.url, &relay.token, OutboxItem {
+            id: format!("message-{i}"), kind: "chat".into(), recipient: None,
+            ciphertext: vec![i as u8], slot: Some(lorca::app::Slot::latest(format!("message-{i}"))), group: Some("project-a".into()),
+        }).await.unwrap();
+    }
+    let (blobs, _) = relay.client.list_blobs(&relay.url, &relay.token, 0, "project_context").await.unwrap();
+    assert_eq!(blobs.len(), 1, "context is loaded independently of the newest transcript page");
+    let downloaded = lorca::keys::unb64(&blobs[0].ciphertext).unwrap();
+    assert_eq!(downloaded, ciphertext);
+    assert_eq!(lorca::crypto::decrypt_json::<serde_json::Value>(&dek, "project_context", &downloaded).unwrap(), plaintext);
+    let (page, has_more) = relay.client.group_page(&relay.url, &relay.token, "project-a", None, 400).await.unwrap();
+    assert_eq!(page.len(), 400);
+    assert!(has_more);
+    assert!(page.iter().flat_map(|slot| &slot.blobs).all(|blob| blob.kind == "chat"));
+    relay.client.delete_group(&relay.url, &relay.token, "project-a").await.unwrap();
+    assert!(relay.client.list_blobs(&relay.url, &relay.token, 0, "project_context").await.unwrap().0.is_empty());
+    let late = OutboxItem { id: "late-context".into(), kind: "project_context".into(), recipient: None, ciphertext, slot: None, group: Some("project-a".into()) };
+    assert_eq!(relay.client.put_blob(&relay.url, &relay.token, late).await.unwrap_err().status, Some(409));
 }

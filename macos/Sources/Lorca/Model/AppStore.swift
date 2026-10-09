@@ -2,8 +2,11 @@ import AppKit
 import Foundation
 
 enum StoreEvent {
+    case attentionChanged
     case snapshotReplaced
     case rosterChanged
+    case reviewsChanged
+    case durableTasksChanged
     case chatsChanged
     case chatChanged(Chat.ID)
     case messageAdded(Chat.ID, Message.ID)
@@ -16,6 +19,12 @@ enum StoreEvent {
     case turnFinished(Chat.ID, Bot.ID, Date)
     /// A command in the chat has run long enough to count as a running task.
     case runningTasksChanged(Chat.ID)
+    /// A Runner's limits, or what its work used of them, changed.
+    case budgetsChanged
+    /// The chat's published outputs, or whether one's file could be fetched, changed.
+    case outputsChanged(Chat.ID)
+    /// A group's shared project context changed, here or on another Device.
+    case projectContextChanged(Chat.ID)
     case selectionChanged
     case connectionChanged
     case identityChanged
@@ -68,8 +77,14 @@ final class AppStore {
     private(set) var chats: [Chat] = []
     /// Every bot's routines, from the roster.
     private(set) var routines: [Routine] = []
+    /// Every Runner's limits and what its turns and routines used of them.
+    private(set) var budgets: [BudgetState] = []
+    private(set) var reviews: [ReviewItem] = []
+    private(set) var durableTasks: [DurableTask] = []
     /// Auto-review, shared through the roster.
     private(set) var autoReview = AutoReview()
+    /// What waits on the user across chats, kept by the bots (`attention.changed`).
+    private(set) var attention = AttentionView()
     /// The account's provider credentials, the same on every Device.
     private(set) var providers: [ProviderCredential] = []
     /// The models the CLI's catalog offers, for the Model and Thinking pickers.
@@ -282,8 +297,12 @@ final class AppStore {
             return chat
         }
         routines = (snapshot.routines ?? []).map { $0.toModel() }
+        budgets = snapshot.budgets ?? []
+        reviews = snapshot.reviews ?? []
+        durableTasks = snapshot.tasks ?? []
         playbooks = snapshot.playbooks ?? []
         autoReview = snapshot.autoReview?.toModel() ?? AutoReview()
+        attention = snapshot.attention ?? AttentionView()
         providers = (snapshot.providers ?? []).compactMap { $0.toModel() }
         catalog = (snapshot.models ?? []).compactMap { $0.toModel() }
         runningJobs = (snapshot.runningTurns ?? []).map { ($0.jobId, $0.chatId, $0.botId, $0.routineId) }
@@ -291,6 +310,8 @@ final class AppStore {
             runningJobs.append(("chat:\(id)", id, "", nil))
         }
         sortChats()
+        // A resync may bring outputs this app missed; they are asked for again when next shown.
+        staleOutputs = Set(outputMessages.keys)
         emit(.snapshotReplaced)
     }
 
@@ -302,8 +323,17 @@ final class AppStore {
         }
 
         switch name {
+        case "attention.changed":
+            if let incoming = decode(AttentionView.self) { applyAttention(incoming) }
+        case "reviews.changed":
+            struct Change: Decodable { var item: ReviewItem }
+            if let change = decode(Change.self) { upsertReview(change.item) }
         case "snapshot":
             if let snapshot = decode(Wire.Snapshot.self) { apply(snapshot: snapshot) }
+
+        case "tasks.changed":
+            guard let payload = decode(Wire.DurableTaskChanged.self) else { return }
+            acceptDurableTask(payload.task)
 
         case "roster.changed":
             guard let roster = decode(Wire.RosterChanged.self) else { return }
@@ -350,11 +380,14 @@ final class AppStore {
             chats[index].messages.removeAll { $0.id == payload.messageId }
             commandStarts[payload.messageId] = nil
             emit(.messageRemoved(payload.chatId, payload.messageId))
+            noteOutput(nil, removing: payload.messageId, in: payload.chatId)
 
         case "chat.removed":
             guard let payload = decode(Wire.ChatRemoved.self) else { return }
             chats.removeAll { $0.id == payload.chatId }
             runningJobs.removeAll { $0.chatID == payload.chatId }
+            outputMessages[payload.chatId] = nil
+            staleOutputs.remove(payload.chatId)
             emit(.chatsChanged)
 
         case "job.started":
@@ -397,6 +430,11 @@ final class AppStore {
             chats[index].usage = payload.usage.toModel()
             emit(.chatChanged(payload.chatId))
 
+        case "budgets.changed":
+            guard let payload = decode(Wire.BudgetsChanged.self) else { return }
+            budgets = payload.budgets
+            emit(.budgetsChanged)
+
         case "relay.status":
             guard let status = decode(Wire.RelayStatus.self) else { return }
             relayConnected = status.connected
@@ -404,6 +442,11 @@ final class AppStore {
             relayError = status.error?.message
             relayURL = status.url ?? relayURL
             emit(.rosterChanged)
+
+        case "projects.changed":
+            struct ProjectChanged: Decodable { var chatId: String }
+            guard let payload = decode(ProjectChanged.self) else { return }
+            emit(.projectContextChanged(payload.chatId))
 
         case "identity.changed":
             guard let payload = decode(Wire.IdentityChanged.self) else { return }
@@ -418,6 +461,7 @@ final class AppStore {
     private func upsert(_ message: Message, in chatID: Chat.ID) {
         guard let chatIndex = chats.firstIndex(where: { $0.id == chatID }) else { return }
         noteCommand(message, in: chatID)
+        noteOutput(message, in: chatID)
         if let messageIndex = chats[chatIndex].index(of: message.id) {
             chats[chatIndex].messages[messageIndex] = message
             emit(.messageChanged(chatID, message.id))
@@ -431,6 +475,38 @@ final class AppStore {
     }
 
     // MARK: - Observation
+
+    func applyAttention(_ view: AttentionView) {
+        guard view != attention else { return }
+        attention = view
+        emit(.attentionChanged)
+    }
+
+    /// Takes an item off the Attention list. A coordinator resolves its items itself; this is
+    /// the user saying it is done. The task or review it links to is left as it is.
+    func resolveAttention(_ item: AttentionItem) async throws {
+        if isMock {
+            var view = attention
+            view.items.removeAll { $0.id == item.id }
+            return applyAttention(view)
+        }
+        _ = try await client.request("attention.resolve", ["id": item.id, "expected_revision": item.revision.params])
+    }
+
+    /// `summaries`, `urgent_direct`, or `default_coordinator_bot_id` (a bot's id, or nil for
+    /// each chat's own coordinator). The account's, on every Device.
+    func setAttentionPreference(_ key: String, _ value: Any?) async throws {
+        if isMock {
+            var view = attention
+            switch key {
+            case "summaries": view.preferences.summaries = value as? Bool ?? true
+            case "urgent_direct": view.preferences.urgentDirect = value as? Bool ?? true
+            default: view.preferences.defaultCoordinatorBotId = value as? String
+            }
+            return applyAttention(view)
+        }
+        _ = try await client.request("attention.preferences", [key: value ?? NSNull()])
+    }
 
     func observe(_ owner: AnyObject, _ handler: @escaping (StoreEvent) -> Void) {
         subscriptions.append(Subscription(owner: owner, handler: handler))
@@ -518,7 +594,7 @@ final class AppStore {
         case let .text(value): body = value.isEmpty ? Attachment.summary(last.attachments) : value
         case let .tool(tool): body = L("Messaged %@: %@", tool.targetBotID.flatMap(bot)?.name ?? L("a teammate"), tool.detail)
         case let .handoff(from, to, reason):
-            body = !chat.isGroup && chat.botIDs.contains(to)
+            body = chat.botIDs.contains(to) && !chat.botIDs.contains(from)
                 ? L("Message from %@: %@", bot(from)?.name ?? L("a teammate"), reason)
                 : L("Handed off to %@", bot(to)?.name ?? L("a teammate"))
         case let .notice(value): body = value
@@ -674,9 +750,15 @@ final class AppStore {
         providerKinds.first { credential(for: $0)?.isConnected == true } ?? .deepseek
     }
 
-    /// Every provider a bot can run with: the built-in ones, then the ones the user added.
+    /// Every provider a bot can run with: the built-in ones, then the ones the user added,
+    /// except those of decision models.
     var providerKinds: [ProviderCredential.Kind] {
-        ProviderCredential.Kind.builtIn + providers.map(\.kind).filter(\.isCustom)
+        ProviderCredential.Kind.builtIn + providers.filter { $0.kind.isCustom && !$0.decides }.map(\.kind)
+    }
+
+    /// The providers Auto-review can run a model of: every one the account has connected.
+    var reviewProviderKinds: [ProviderCredential.Kind] {
+        providers.filter(\.isConnected).map(\.kind)
     }
 
     func updateBot(_ id: Bot.ID, name: String, description: String? = nil, provider: ProviderCredential.Kind? = nil) {
@@ -690,6 +772,20 @@ final class AppStore {
         if let description { params["description"] = description }
         if let provider { params["provider"] = provider.wireValue }
         perform("bots.update", params)
+    }
+
+    /// The plugins on the bot's Runner and their tools, asked of that Runner.
+    func botAccessCatalog(_ id: Bot.ID) async throws -> BotAccessCatalog {
+        if isMock { return MockData.accessCatalog() }
+        return try await client.request("bots.permissions", ["id": id], as: BotAccessCatalog.self)
+    }
+
+    /// Only the user changes a bot's Access; the CLI also dismisses the access requests it left.
+    func setBotPermissions(_ id: Bot.ID, _ policy: BotPermissions) {
+        guard let index = bots.firstIndex(where: { $0.id == id }) else { return }
+        bots[index].permissions = policy
+        emit(.rosterChanged)
+        perform("bots.update", ["id": id, "permissions": policy.json])
     }
 
     /// The bot's symbol and accent, the look under and behind its image.
@@ -750,17 +846,52 @@ final class AppStore {
     }
 
     /// Installs a marketplace plugin on a Runner (here, or sealed to that Runner).
-    func installPlugin(_ pluginID: String, on runnerID: Device.ID) async throws -> InstalledPlugin {
-        guard !isMock else { return InstalledPlugin(id: pluginID, name: pluginID, description: "", version: "", icon: "", state: .ready, detail: "Ready") }
-        return try await client.request("plugins.install", ["runner_id": runnerID, "plugin_id": pluginID], as: Wire.PluginInstalled.self).status.toModel()
+    func installPlugin(_ pluginID: String, on runnerID: Device.ID, accountName: String? = nil) async throws -> InstalledPlugin {
+        if isMock {
+            let named = accountName != nil
+            let status = InstalledPlugin(id: named ? "\(pluginID)-\(UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased())" : pluginID,
+                                         name: accountName.map { "\(pluginID) · \($0)" } ?? pluginID, description: "", version: "", icon: "", state: .ready, detail: "Connected",
+                                         serviceID: named ? pluginID : nil, accountName: accountName)
+            if let index = devices.firstIndex(where: { $0.id == runnerID }) { devices[index].plugins.append(status); emit(.rosterChanged) }
+            return status
+        }
+        var params: [String: Any] = ["runner_id": runnerID, "plugin_id": pluginID]
+        if let accountName { params["account_name"] = accountName }
+        let status = try await client.request("plugins.install", params, as: Wire.PluginInstalled.self).status.toModel()
+        rememberPlugin(status, on: runnerID)
+        return status
+    }
+
+    func renamePluginAccount(_ pluginID: String, on runnerID: Device.ID, accountName: String) async throws -> InstalledPlugin {
+        if isMock, var status = device(runnerID)?.plugins.first(where: { $0.id == pluginID }) {
+            status.name = "\(status.name.components(separatedBy: " · ").first ?? status.name) · \(accountName)"
+            status.accountName = accountName
+            rememberPlugin(status, on: runnerID)
+            return status
+        }
+        let status = try await client.request("plugins.rename", ["runner_id": runnerID, "plugin_id": pluginID, "account_name": accountName], as: Wire.PluginInstalled.self).status.toModel()
+        rememberPlugin(status, on: runnerID)
+        return status
+    }
+
+    /// A sealed management reply can arrive before the Runner's next machine advertisement.
+    private func rememberPlugin(_ status: InstalledPlugin, on runnerID: Device.ID) {
+        guard let index = devices.firstIndex(where: { $0.id == runnerID }) else { return }
+        if let plugin = devices[index].plugins.firstIndex(where: { $0.id == status.id }) { devices[index].plugins[plugin] = status }
+        else { devices[index].plugins.append(status) }
+        emit(.rosterChanged)
     }
 
     func uninstallPlugin(_ pluginID: String, on runnerID: Device.ID) async throws {
-        guard !isMock else { return }
-        _ = try await client.request("plugins.uninstall", ["runner_id": runnerID, "plugin_id": pluginID])
+        if !isMock { _ = try await client.request("plugins.uninstall", ["runner_id": runnerID, "plugin_id": pluginID]) }
+        if let index = devices.firstIndex(where: { $0.id == runnerID }) { devices[index].plugins.removeAll { $0.id == pluginID }; emit(.rosterChanged) }
     }
 
     func pluginDetail(_ pluginID: String, on runnerID: Device.ID) async throws -> PluginDetail {
+        if isMock, pluginID == BrowserProfile.pluginID, let status = device(runnerID)?.plugins.first(where: { $0.id == pluginID }) {
+            // Browser runs on the Runner and signs in to nothing itself.
+            return PluginDetail(status: status, homepage: "https://github.com/microsoft/playwright-mcp", variables: [], servers: [], skills: [(name: "Reading a page", description: "How to read a page without filling the context.")])
+        }
         if isMock {
             let status = device(runnerID)?.plugins.first { $0.id == pluginID } ?? InstalledPlugin(id: pluginID, name: pluginID, description: "", version: "", icon: "", state: .ready, detail: "Ready")
             return PluginDetail(status: status, homepage: nil, variables: [.init(name: "GITHUB_TOKEN", description: "A personal access token, instead of signing in.", secret: true, required: false, isSet: false, value: nil)], servers: [.init(name: "github", kind: "http", url: "https://api.githubcopilot.com/mcp/", oauth: true, signedIn: status.state == .ready)], skills: [])
@@ -785,6 +916,71 @@ final class AppStore {
     func signOutPlugin(_ pluginID: String, server: String, on runnerID: Device.ID) async throws {
         guard !isMock else { return }
         _ = try await client.request("plugins.sign_out", ["runner_id": runnerID, "plugin_id": pluginID, "server": server])
+    }
+
+    // MARK: - Limits
+
+    func budget(_ kind: String, _ id: String, runnerID: Device.ID) -> BudgetState? {
+        budgets.first { $0.kind == kind && $0.id == id && $0.runnerId == runnerID }
+    }
+
+    /// The DM's newest turn when it stopped at a limit or was interrupted: the one to resume.
+    func stoppedTurn(in chatID: Chat.ID, runnerID: Device.ID) -> BudgetState? {
+        let newest = budgets
+            .filter { $0.kind == "job" && $0.chatId == chatID && $0.runnerId == runnerID }
+            .max { $0.updatedAt < $1.updatedAt }
+        return newest?.isStopped == true ? newest : nil
+    }
+
+    /// Sets limits on the bot's Runner. What the work used stays.
+    func setBudget(_ kind: String, _ id: String, limits: BudgetLimits, bot: Bot, chatID: Chat.ID) async throws {
+        if isMock {
+            let index = budgets.firstIndex { $0.kind == kind && $0.id == id }
+            var state = index.map { budgets[$0] } ?? BudgetState(
+                kind: kind, id: id, runnerId: bot.runnerID, chatId: chatID, limits: BudgetLimits(),
+                usage: .init(tokens: 0, apiCostUsd: 0, subscriptionEstimateUsd: 0, unknownPriceCalls: 0, runtimeSecs: 0, retries: 0, connectorCalls: 0),
+                state: "ready", updatedAt: Date().timeIntervalSince1970)
+            state.limits = limits
+            if let index { budgets[index] = state } else { budgets.append(state) }
+            emit(.budgetsChanged)
+            return
+        }
+        let params: [String: Any] = ["kind": kind, "id": id, "bot_id": bot.id, "chat_id": chatID, "runner_id": bot.runnerID, "limits": limits.params]
+        _ = try await client.request("budgets.set", params)
+    }
+
+    /// Resumes a stopped turn or routine where it left off. `fresh` grants the whole allowance
+    /// again; otherwise it goes on with what it used counted against the limits.
+    func resumeBudget(_ kind: String, _ id: String, bot: Bot, fresh: Bool) async throws {
+        if isMock {
+            guard let index = budgets.firstIndex(where: { $0.kind == kind && $0.id == id }) else { return }
+            budgets[index].state = "ready"
+            budgets[index].reached = nil
+            if fresh { budgets[index].usage = .init(tokens: 0, apiCostUsd: 0, subscriptionEstimateUsd: 0, unknownPriceCalls: 0, runtimeSecs: 0, retries: 0, connectorCalls: 0) }
+            emit(.budgetsChanged)
+            return
+        }
+        // The request id makes a repeated delivery a no-op on the Runner.
+        let params: [String: Any] = ["kind": kind, "id": id, "runner_id": bot.runnerID, "renew": fresh, "run": true, "request_id": UUID().uuidString]
+        _ = try await client.request("budgets.resume", params)
+    }
+
+    /// A plugin account's call limit, or with `service` the one all of its service's accounts share.
+    func callLimits(_ pluginID: String, on runnerID: Device.ID, service: Bool = false) async throws -> CallLimits {
+        if isMock {
+            return CallLimits(maxCalls: 60, windowSecs: 60, maxConcurrency: 4, retryAt: pluginID == "github" ? Date().addingTimeInterval(4 * 60) : nil, sharesService: false)
+        }
+        let params: [String: Any] = ["runner_id": runnerID, "plugin_id": pluginID, "scope": service ? "service" : "account"]
+        return try await client.request("connector_limits.get", params, as: Wire.CallLimits.self).toModel()
+    }
+
+    func setCallLimits(_ pluginID: String, on runnerID: Device.ID, service: Bool, limits: CallLimits) async throws {
+        guard !isMock else { return }
+        let params: [String: Any] = [
+            "runner_id": runnerID, "plugin_id": pluginID, "scope": service ? "service" : "account",
+            "limits": ["max_calls": limits.maxCalls, "window_secs": limits.windowSecs, "max_concurrency": limits.maxConcurrency],
+        ]
+        _ = try await client.request("connector_limits.set", params)
     }
 
     // MARK: - MCP servers
@@ -994,6 +1190,20 @@ final class AppStore {
         perform("auto_review.set", ["is_enabled": value.isEnabled, "rules": rules])
     }
 
+    /// Picks the provider that reviews, or nil for the bot's own.
+    func setReviewProvider(_ provider: ProviderCredential.Kind?) {
+        autoReview.provider = provider
+        emit(.rosterChanged)
+        perform("auto_review.set", ["provider": provider?.wireValue ?? NSNull()])
+    }
+
+    /// Picks the model Auto-review runs on `kind`, or nil for its default review model.
+    func setReviewModel(_ model: String?, for kind: ProviderCredential.Kind) {
+        autoReview.models[kind] = model
+        emit(.rosterChanged)
+        perform("auto_review.set", ["models": [kind.wireValue: model ?? NSNull()] as [String: Any]])
+    }
+
     /// Answers a question: a permission card's, or a command card's. `allow`, `always`, or
     /// `deny`. The CLI confirms with the card's new state.
     func answerPermission(chatID: Chat.ID, messageID: Message.ID, decision: String) {
@@ -1001,6 +1211,8 @@ final class AppStore {
             switch message.body {
             case var .permission(request):
                 request.decision = decision == "always" ? .always : (decision == "deny" ? .denied : .allowed)
+                // An access request is only ever dismissed.
+                if request.isAccess, request.decision == .denied { request.decision = .dismissed }
                 if request.isConnect, request.decision == .allowed { request.summary = L("Starting the sign-in…") }
                 message.body = .permission(request)
             case var .tool(tool):
@@ -1066,11 +1278,56 @@ final class AppStore {
 
     // MARK: - Routines
 
+    func review(_ id: String) -> ReviewItem? { reviews.first { $0.id == id } }
+
+    private func upsertReview(_ item: ReviewItem) {
+        if let index = reviews.firstIndex(where: { $0.id == item.id }) {
+            guard reviews[index].revision <= item.revision else { return }
+            reviews[index] = item
+        } else { reviews.append(item) }
+        emit(.reviewsChanged)
+    }
+
+    /// The plugin a call goes to, as its Runner lists it and the permission card names it: "GitHub".
+    func pluginName(of item: ReviewItem) -> String {
+        device(item.runnerId)?.plugins.first { $0.id == item.payload.pluginId }?.name ?? item.target.account
+    }
+
+    /// Approves the version the user saw. An edit made in the sheet is saved first, as the next
+    /// version, and that is the one approved: what runs is what the editor showed.
+    func approveReview(_ item: ReviewItem, payload: [String: Any]?) async throws -> ReviewItem {
+        var shown = item
+        if let payload { shown = try await changeReview(shown, action: "edit", fields: ["payload": payload]) }
+        return try await changeReview(shown, action: "approve")
+    }
+
+    func rejectReview(_ item: ReviewItem) async throws -> ReviewItem {
+        try await changeReview(item, action: "reject")
+    }
+
+    /// A change names the version the sheet displayed, so one made on another Device meanwhile is
+    /// refused rather than decided blind.
+    private func changeReview(_ item: ReviewItem, action: String, fields: [String: Any] = [:]) async throws -> ReviewItem {
+        var params = fields
+        params["id"] = item.id
+        params["expected_version"] = item.version
+        let data: Data
+        if isMock {
+            data = try MockData.changedReview(item, action: action, fields: fields)
+        } else {
+            data = try await client.request("reviews.\(action)", params)
+        }
+        let updated = try Wire.decoder.decode(ReviewItem.self, from: data)
+        upsertReview(updated)
+        return review(updated.id) ?? updated
+    }
+
     /// Pauses or resumes a routine. A resumed schedule counts from now.
     func setRoutineEnabled(_ id: Routine.ID, _ enabled: Bool) {
         guard let index = routines.firstIndex(where: { $0.id == id }) else { return }
         routines[index].isEnabled = enabled
         routines[index].pausedReason = nil
+        routines[index].state = enabled ? "on" : "paused"
         if !enabled { routines[index].nextRunAt = nil }
         emit(.rosterChanged)
         perform("routines.update", ["id": id, "enabled": enabled])
@@ -1404,29 +1661,102 @@ final class AppStore {
 
     /// Where an attachment's bytes are on this computer. A file sent from here is known at once; one
     /// sent from another Device is fetched through the CLI, and the message reloads when it lands.
+    /// A fetch that failed keeps its reason until the user retries, so a scroll does not ask again.
     private var attachmentURLs: [Attachment.ID: URL] = [:]
     private var fetchingAttachments: Set<Attachment.ID> = []
+    private var attachmentErrors: [Attachment.ID: String] = [:]
 
     func localURL(for attachment: Attachment, in chatID: Chat.ID, messageID: Message.ID) -> URL? {
-        if let url = attachmentURLs[attachment.id] { return url }
-        guard !isMock, !fetchingAttachments.contains(attachment.id) else { return nil }
+        if let url = attachmentURLs[attachment.id], FileManager.default.fileExists(atPath: url.path) { return url }
+        guard !isMock, !fetchingAttachments.contains(attachment.id), attachmentErrors[attachment.id] == nil else { return nil }
         fetchingAttachments.insert(attachment.id)
         Task { [weak self] in
             let params: [String: Any] = [
                 "attachment": ["id": attachment.id, "name": attachment.name, "mime": attachment.mime, "size": attachment.size]
             ]
             guard let self else { return }
+            defer { fetchingAttachments.remove(attachment.id) }
             do {
                 let reply = try await client.request("files.path", params, as: Wire.FilePath.self)
                 attachmentURLs[attachment.id] = URL(fileURLWithPath: reply.path)
-                emit(.messageChanged(chatID, messageID))
             } catch {
-                // Left in the fetching set: the relay does not have it, and every scroll would
-                // ask again. A relaunch retries.
+                attachmentErrors[attachment.id] = error.localizedDescription
                 NSLog("fetching \(attachment.name) failed: \(error.localizedDescription)")
             }
+            emit(.messageChanged(chatID, messageID))
         }
         return nil
+    }
+
+    /// Why the attachment's bytes could not be fetched, until a retry.
+    func attachmentError(for attachment: Attachment) -> String? { attachmentErrors[attachment.id] }
+
+    func retryAttachment(_ attachment: Attachment, in chatID: Chat.ID, messageID: Message.ID) {
+        guard attachmentErrors.removeValue(forKey: attachment.id) != nil else { return }
+        _ = localURL(for: attachment, in: chatID, messageID: messageID)
+        emit(.messageChanged(chatID, messageID))
+    }
+
+    /// The attachment as a file named for what it is, for Quick Look, another app, or a copy:
+    /// the bytes under their attachment id carry no extension, so the CLI keeps a named copy.
+    func openableURL(for attachment: Attachment) async throws -> URL {
+        if let url = attachmentURLs[attachment.id], !url.pathExtension.isEmpty,
+            FileManager.default.fileExists(atPath: url.path)
+        { return url }
+        let params: [String: Any] = [
+            "attachment": ["id": attachment.id, "name": attachment.name, "mime": attachment.mime, "size": attachment.size],
+            "named": true,
+        ]
+        return URL(fileURLWithPath: try await client.request("files.path", params, as: Wire.FilePath.self).path)
+    }
+
+    // MARK: - Outputs
+
+    /// Every version of each chat's outputs, oldest first: what `outputs.list` answered, and
+    /// output messages that arrived since. A chat is asked for when something first shows it, and
+    /// again after a resync, while what it had stays on screen.
+    private var outputMessages: [Chat.ID: [Message]] = [:]
+    private var outputRequests: Set<Chat.ID> = []
+    private var staleOutputs: Set<Chat.ID> = []
+
+    /// The chat's outputs, the latest published first; empty until the CLI answers.
+    func outputs(in chatID: Chat.ID) -> [OutputSeries] {
+        if isMock { return OutputSeries.group(chat(chatID)?.messages ?? []) }
+        let known = outputMessages[chatID]
+        if known == nil || staleOutputs.contains(chatID) { listOutputs(in: chatID) }
+        return OutputSeries.group(known ?? [])
+    }
+
+    private func listOutputs(in chatID: Chat.ID) {
+        guard outputRequests.insert(chatID).inserted else { return }
+        staleOutputs.remove(chatID)
+        Task { [weak self] in
+            guard let self else { return }
+            defer { outputRequests.remove(chatID) }
+            do {
+                let reply = try await client.request("outputs.list", ["chat_id": chatID], as: Wire.OutputList.self)
+                // Output messages that arrived while the list was on its way are in it too.
+                var messages = reply.outputs.map { $0.toModel() }
+                for message in outputMessages[chatID] ?? [] where !messages.contains(where: { $0.id == message.id }) {
+                    messages.append(message)
+                }
+                outputMessages[chatID] = messages
+                emit(.outputsChanged(chatID))
+            } catch {
+                NSLog("listing outputs failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// Keeps a chat's known outputs in step with a message that was added, changed, or removed.
+    private func noteOutput(_ message: Message?, removing id: Message.ID? = nil, in chatID: Chat.ID) {
+        guard var messages = outputMessages[chatID] else { return }
+        let before = messages
+        messages.removeAll { $0.id == (message?.id ?? id) }
+        if let message, message.output != nil { messages.append(message) }
+        guard messages != before else { return }
+        outputMessages[chatID] = messages
+        emit(.outputsChanged(chatID))
     }
 
     func isResponding(in chatID: Chat.ID) -> Bool {
@@ -1512,6 +1842,31 @@ final class AppStore {
         perform("chats.stop", ["chat_id": chatID])
     }
 
+    /// The chat's tasks, what waits on the user first, then open work, each newest first.
+    func tasks(in chatID: Chat.ID) -> [DurableTask] {
+        durableTasks.filter { $0.chatIds.contains(chatID) }.sorted {
+            ($0.state.order, -$0.updatedAt) < ($1.state.order, -$1.updatedAt)
+        }
+    }
+
+    func durableTask(_ id: String) -> DurableTask? {
+        durableTasks.first { $0.id == id }
+    }
+
+    private func acceptDurableTask(_ task: DurableTask) {
+        if let index = durableTasks.firstIndex(where: { $0.id == task.id }) {
+            guard durableTasks[index].revision < task.revision else { return }
+            durableTasks[index] = task
+        } else { durableTasks.append(task) }
+        emit(.durableTasksChanged)
+    }
+
+    func taskRequest(_ method: String, params: [String: Any]) async throws -> DurableTask {
+        let task = try await client.request(method, params, as: DurableTask.self)
+        acceptDurableTask(task)
+        return task
+    }
+
     // MARK: - Identity, pairing, providers
 
     func createIdentity() async throws -> [String] {
@@ -1535,6 +1890,12 @@ final class AppStore {
             return
         }
         _ = try await client.request("device.update", ["id": id])
+    }
+
+    /// Whether `lorca service` keeps the CLI running on a Runner, asked of it through the CLI.
+    func serviceStatus(_ id: Device.ID) async throws -> Wire.ServiceStatus {
+        if isMock { return .init(installed: false, running: false) }
+        return try await client.request("device.service_status", ["id": id], as: Wire.ServiceStatus.self)
     }
 
     func unpairDevice(_ id: Device.ID) async throws {
@@ -1630,12 +1991,19 @@ final class AppStore {
         providers.first { $0.kind == kind }
     }
 
-    /// The models `kind` offers, in the catalog's order; the first is the default the CLI uses.
-    /// A custom provider's are the ones saved with it, with the levels the CLI says they take.
+    /// The models a bot of `kind` can run, in the catalog's order; the first is the default the
+    /// CLI uses. A custom provider's are the ones saved with it, with the levels the CLI says
+    /// they take. Decision models are Auto-review's alone.
     func models(for kind: ProviderCredential.Kind) -> [ProviderModel] {
+        reviewModels(for: kind).filter { !$0.decides }
+    }
+
+    /// Every model of `kind` Auto-review can run: the ones bots can, and decision models.
+    func reviewModels(for kind: ProviderCredential.Kind) -> [ProviderModel] {
         guard kind.isCustom else { return catalog.filter { $0.provider == kind } }
-        return (credential(for: kind)?.models ?? []).map {
-            ProviderModel(provider: kind, id: $0.id, label: $0.displayName, levels: $0.levels)
+        let credential = credential(for: kind)
+        return (credential?.models ?? []).map {
+            ProviderModel(provider: kind, id: $0.id, label: $0.displayName, levels: $0.levels, decides: credential?.decides == true)
         }
     }
 
@@ -1701,6 +2069,8 @@ final class AppStore {
         bots = MockData.bots()
         chats = MockData.chats()
         routines = MockData.routines()
+        budgets = MockData.budgets()
+        reviews = MockData.reviews()
         mockPlaybooks = MockData.playbooks()
         autoReview = MockData.autoReview()
         providers = MockData.providers()

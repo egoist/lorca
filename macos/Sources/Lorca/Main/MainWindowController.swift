@@ -28,6 +28,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private var tasksPopover: NSPopover?
     /// When the popover last closed. A click on the button closes it before the button acts.
     private var tasksClosedAt = Date.distantPast
+    /// What waits on the user across chats: shown while anything does, or while its popover is
+    /// open, with how many as the item's badge.
+    private lazy var attentionButton = HoverButton(
+        symbol: "tray.full", tooltip: L("Attention (⇧⌘A)"), target: self, action: #selector(toggleAttention(_:)))
+    private weak var attentionItem: NSToolbarItem?
+    private var attentionBadge = 0
+    private var attentionPopover: NSPopover?
+    private var attentionClosedAt = Date.distantPast
 
     init() {
         StartupTrace.mark("window objects initialized")
@@ -77,6 +85,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             switch event {
             case .rosterChanged, .snapshotReplaced: self?.updateToolbar()
             case .messageAdded, .messageChanged, .messageRemoved, .chatsChanged, .runningTasksChanged: self?.updateRunningTasks()
+            case .attentionChanged: self?.updateAttention()
             default: break
             }
         }
@@ -94,8 +103,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         installTitlebarButtons()
         tasksPopover?.close()
         tasksButton.toolTip = L("Running tasks")
+        attentionPopover?.close()
+        attentionButton.toolTip = L("Attention (⇧⌘A)")
         if let toolbar = window?.toolbar {
-            let worded: Set<NSToolbarItem.Identifier> = [.settingsNavigation, .devicePicker, .inspectorToggle, .runningTasks]
+            let worded: Set<NSToolbarItem.Identifier> = [
+                .settingsNavigation, .devicePicker, .inspectorToggle, .runningTasks, .attention,
+            ]
             for (index, item) in toolbar.items.enumerated() where worded.contains(item.itemIdentifier) {
                 toolbar.removeItem(at: index)
                 toolbar.insertItem(withItemIdentifier: item.itemIdentifier, at: index)
@@ -158,6 +171,16 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             toolbar.insertItem(withItemIdentifier: .runningTasks, at: at)
         }
         updateRunningTasks()
+        // Attention, account-wide, sits beside them at the same edge.
+        let attention = toolbar.items.firstIndex { $0.itemIdentifier == .attention }
+        if isSettings, let attention {
+            attentionPopover?.close()
+            toolbar.removeItem(at: attention)
+        } else if !isSettings, attention == nil {
+            let at = toolbar.items.firstIndex { $0.itemIdentifier == .inspectorTrackingSeparator } ?? toolbar.items.count
+            toolbar.insertItem(withItemIdentifier: .attention, at: at)
+        }
+        updateAttention()
 
         // The picker joins the toolbar with Settings. An item entering, leaving, or hiding makes
         // the toolbar lay its glass out again, which blinks the back and forward buttons.
@@ -287,6 +310,43 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         popover.show(relativeTo: tasksButton.bounds, of: tasksButton, preferredEdge: .maxY)
     }
 
+    // MARK: - Attention
+
+    private func updateAttention() {
+        let items = AppStore.shared.attention.items
+        attentionButton.isHidden = items.isEmpty && attentionPopover == nil
+        let badge = items.count
+        if #available(macOS 26.0, *), attentionBadge != badge, let attentionItem {
+            attentionItem.badge = badge > 0 ? .count(badge) : nil
+            attentionBadge = badge
+        }
+        attentionButton.setAccessibilityLabel(L("Attention (%d)", items.count))
+    }
+
+    /// The toolbar button and View › Attention (⇧⌘A). With nothing to show the popover says so,
+    /// and the button stays for it while it is open.
+    @objc func toggleAttention(_ sender: Any?) {
+        if let popover = attentionPopover {
+            popover.close()
+            return
+        }
+        // The click that closed the popover.
+        guard Date().timeIntervalSince(attentionClosedAt) > 0.3, root.selection?.isSettings != true else { return }
+        let content = AttentionViewController()
+        content.onOpen = { [weak self] chatID in
+            guard let self else { return }
+            attentionPopover?.close()
+            root.open(chatID)
+        }
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.contentViewController = content
+        popover.delegate = self
+        attentionPopover = popover
+        updateAttention()
+        popover.show(relativeTo: attentionButton.bounds, of: attentionButton, preferredEdge: .maxY)
+    }
+
     /// Lays square plain buttons out as a leading titlebar accessory, just past the traffic lights.
     private static func leadingAccessory(_ buttons: [HoverButton]) -> NSTitlebarAccessoryViewController {
         let inset: CGFloat = 8
@@ -388,6 +448,7 @@ extension NSToolbarItem.Identifier {
     static let devicePicker = NSToolbarItem.Identifier("lorca.devicePicker")
     static let settingsNavigation = NSToolbarItem.Identifier("lorca.settingsNavigation")
     static let runningTasks = NSToolbarItem.Identifier("lorca.runningTasks")
+    static let attention = NSToolbarItem.Identifier("lorca.attention")
 }
 
 // Standard toolbar items sit on glass platters; a borderless custom-view item doesn't. AppKit moves
@@ -405,7 +466,7 @@ extension MainWindowController: NSToolbarDelegate {
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        toolbarDefaultItemIdentifiers(toolbar) + [.devicePicker, .settingsNavigation, .runningTasks]
+        toolbarDefaultItemIdentifiers(toolbar) + [.devicePicker, .settingsNavigation, .runningTasks, .attention]
     }
 
     func toolbar(
@@ -482,6 +543,15 @@ extension MainWindowController: NSToolbarDelegate {
             tasksBadge = 0
             return item
         }
+        if identifier == .attention {
+            let item = NSToolbarItem(itemIdentifier: identifier)
+            item.label = L("Attention")
+            item.view = attentionButton
+            item.isBordered = false
+            attentionItem = item
+            attentionBadge = 0
+            return item
+        }
         guard identifier == .inspectorToggle else { return nil }
         let item = NSToolbarItem(itemIdentifier: identifier)
         item.label = L("Inspector")
@@ -495,9 +565,21 @@ extension MainWindowController: NSToolbarDelegate {
 
 extension MainWindowController: NSPopoverDelegate {
     func popoverDidClose(_ notification: Notification) {
+        if (notification.object as? NSPopover) === attentionPopover {
+            attentionPopover = nil
+            attentionClosedAt = Date()
+            updateAttention()
+        }
         guard (notification.object as? NSPopover) === tasksPopover else { return }
         tasksPopover = nil
         tasksClosedAt = Date()
         updateRunningTasks()
+    }
+}
+
+extension MainWindowController: NSMenuItemValidation {
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        guard menuItem.action == #selector(toggleAttention(_:)) else { return true }
+        return root.selection?.isSettings != true
     }
 }

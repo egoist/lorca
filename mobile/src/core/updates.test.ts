@@ -7,8 +7,10 @@ const alerts: { title: string; buttons: { text: string; onPress?: () => void }[]
 const installs: unknown[][] = [];
 mock.module("react-native", () => ({
   Platform: { OS: "android" },
-  Alert: { alert: (title: string, _message: string, buttons: (typeof alerts)[number]["buttons"]) => alerts.push({ title, buttons }) },
   AppState: { addEventListener: () => {} },
+}));
+mock.module("../ui/alert", () => ({
+  alert: (title: string, _message: string, buttons: (typeof alerts)[number]["buttons"]) => alerts.push({ title, buttons }),
 }));
 mock.module("expo-application", () => ({ applicationId: "app.lorca", nativeApplicationVersion: "1.2.0" }));
 mock.module("./prefs", () => ({ loadPrefs: () => prefs, savePrefs: (next: Record<string, unknown>) => { prefs = next; } }));

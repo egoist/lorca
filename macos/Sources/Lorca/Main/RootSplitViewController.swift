@@ -481,6 +481,12 @@ final class RootSplitViewController: NSSplitViewController {
         presentAsSheet(sheet)
     }
 
+    /// A task for the chat on screen; there is nothing to add it to anywhere else.
+    func presentNewTask() {
+        guard case let .chat(chatID) = selection else { return }
+        presentAsSheet(DurableTaskViewController(chatID: chatID, task: nil))
+    }
+
     /// Every bot has a direct chat, so creating one lands in that chat right away.
     func presentNewBot() {
         let sheet = NewBotViewController { [weak self] botID in

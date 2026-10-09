@@ -420,28 +420,59 @@ impl Library {
             }
         }
         self.validate()?;
-        Ok(self.records.iter().any(|(id, record)| {
-            incoming.records.get(id).is_none_or(|other| {
-                record
-                    .revisions
-                    .iter()
-                    .any(|revision| !other.revisions.contains(revision))
-            })
+        // Whether this side has revisions of the incoming records that they lack.
+        Ok(incoming.records.iter().any(|(id, other)| {
+            self.records[id].revisions.iter().any(|revision| !other.revisions.contains(revision))
         }))
     }
 }
 
-/// Merge without erasing local revisions when another Device carries an older roster.
-/// Returns whether the roster needs the merged library in reply.
-pub fn apply_synced(app: &App, incoming: Option<&Library>) -> Result<bool, String> {
-    let mut library = app.playbooks.lock().unwrap();
-    let mut merged = library.clone();
-    let ahead = merged.merge(incoming.unwrap_or(&Library::default()))?;
-    if merged != *library {
-        merged.persist(app)?;
-        *library = merged;
+/// Each skill syncs as a blob of its own, its whole record in one slot, so a change sends only
+/// that skill and the roster carries none.
+pub const BLOB_KIND: &str = "playbook";
+
+/// Queues the record for the relay. It belongs to the group of its scope's chat, a group's own
+/// or the bot's DM, so deleting that chat deletes it there too.
+fn publish(app: &App, record: &Playbook) {
+    let Some(dek) = app.dek() else { return };
+    let group = {
+        let state = app.state.lock().unwrap();
+        state
+            .chats
+            .iter()
+            .find(|chat| match record.scope.kind.as_str() {
+                "bot" => !chat.meta.is_group() && chat.meta.bot_ids == [record.scope.id.clone()],
+                _ => chat.meta.id == record.scope.id,
+            })
+            .map(|chat| crate::model::relay_name(&chat.meta.id))
+    };
+    match crate::crypto::encrypt_json(&dek, BLOB_KIND, record) {
+        Ok(ciphertext) => app.push_slot_blob(BLOB_KIND, crate::app::Slot::latest(crate::model::relay_name(&record.id)), group, ciphertext),
+        Err(error) => tracing::warn!(%error, "encrypting a playbook"),
     }
-    Ok(ahead)
+}
+
+/// Merges a skill another Device sent, keeping every revision either side has. When this
+/// Device has revisions the blob lacks, it sends the merged record back.
+pub fn apply_remote(app: &App, dek: &[u8; 32], ciphertext: &[u8]) -> Result<(), String> {
+    let record: Playbook = crate::crypto::decrypt_json(dek, BLOB_KIND, ciphertext).map_err(|e| e.to_string())?;
+    let incoming = Library { records: BTreeMap::from([(record.id.clone(), record)]) };
+    let merged = {
+        let mut library = app.playbooks.lock().unwrap();
+        let mut next = library.clone();
+        let ahead = next.merge(&incoming)?;
+        if next != *library {
+            next.persist(app)?;
+            *library = next;
+        }
+        let id = incoming.records.keys().next().unwrap();
+        ahead.then(|| library.records[id].clone())
+    };
+    if let Some(record) = merged {
+        publish(app, &record);
+    }
+    app.roster_changed(false);
+    Ok(())
 }
 
 pub fn get(app: &App, scope: &Scope, id: &str) -> Result<Value, String> {
@@ -461,19 +492,15 @@ pub fn summaries(app: &App) -> Vec<Value> {
     library.records.values().filter(|r| r.current().status != Status::Deleted).map(Playbook::summary).collect()
 }
 
-/// Drops the skills of a bot or group that no longer exists. Runs with every roster change, so
-/// a deleted bot's skills leave each Device with the roster that deletes it.
-pub fn prune(app: &App) {
-    let (bots, groups): (BTreeSet<String>, BTreeSet<String>) = {
-        let state = app.state.lock().unwrap();
-        (
-            state.bots.iter().map(|b| b.id.clone()).collect(),
-            state.chats.iter().filter(|c| c.meta.is_group()).map(|c| c.meta.id.clone()).collect(),
-        )
-    };
+/// Drops the skills of deleted bots and groups. Their blobs go with the deleted chats' groups on
+/// the relay: a group's own chat, or the bot's DM.
+pub fn forget_scopes(app: &App, bots: &[String], chats: &[String]) {
+    if bots.is_empty() && chats.is_empty() {
+        return;
+    }
     let mut library = app.playbooks.lock().unwrap();
     let mut next = library.clone();
-    next.records.retain(|_, r| if r.scope.kind == "bot" { bots.contains(&r.scope.id) } else { groups.contains(&r.scope.id) });
+    next.records.retain(|_, r| !(if r.scope.kind == "bot" { bots.contains(&r.scope.id) } else { chats.contains(&r.scope.id) }));
     if next.records.len() == library.records.len() {
         return;
     }
@@ -542,6 +569,7 @@ fn write_revision(
         .this_device_id()
         .ok_or("Create or pair an identity first")?;
     let value;
+    let written;
     {
         let mut library = app.playbooks.lock().unwrap();
         let mut next = library.clone();
@@ -608,9 +636,11 @@ fn write_revision(
         let record_id = record.id.clone();
         next.persist(app)?;
         value = record_view(&next, &record_id);
+        written = next.records[&record_id].clone();
         *library = next;
     }
-    app.roster_changed(true);
+    publish(app, &written);
+    app.roster_changed(false);
     Ok(value)
 }
 
@@ -1062,7 +1092,10 @@ mod tests {
     #[test]
     fn persistence_and_roster_are_encrypted_and_restart_keeps_the_library() {
         let f = Fixture::new();
+        let rosters = || f.app.store.outbox().unwrap().iter().filter(|item| item.kind == "roster").count();
+        let before = rosters();
         let saved = write(&f, &f.scope(), "report");
+        assert_eq!(rosters(), before, "a skill change uploads no roster");
         let bytes = std::fs::read(f.home.join("playbooks.enc")).unwrap();
         assert!(!String::from_utf8_lossy(&bytes).contains("BODY_ONLY"));
         let dek = f.app.dek().unwrap();
@@ -1091,14 +1124,13 @@ mod tests {
                 0o600
             );
         }
-        let roster = crate::model::RosterBlob {
-            playbooks: Some(records),
-            ..Default::default()
-        };
-        let encrypted = crate::crypto::encrypt_json(&dek, "roster", &roster).unwrap();
-        let decoded: crate::model::RosterBlob =
-            crate::crypto::decrypt_json(&dek, "roster", &encrypted).unwrap();
-        assert!(apply_synced(&restored, decoded.playbooks.as_ref()).is_ok());
+        // Each skill goes up as a blob of its own; the roster carries none.
+        let outbox = f.app.store.outbox().unwrap();
+        let blob = outbox.iter().find(|item| item.kind == BLOB_KIND).unwrap();
+        assert!(!String::from_utf8_lossy(&blob.ciphertext).contains("BODY_ONLY"));
+        assert!(crate::crypto::decrypt_json::<Playbook>(&dek, "roster", &blob.ciphertext).is_err());
+        assert_eq!(crate::crypto::decrypt_json::<Playbook>(&dek, BLOB_KIND, &blob.ciphertext).unwrap(), records.records[saved["id"].as_str().unwrap()]);
+        assert!(apply_remote(&restored, &dek, &blob.ciphertext).is_ok());
         f.app.forget_identity().unwrap();
         assert!(!f.home.join("playbooks.enc").exists());
         assert!(f.app.playbooks.lock().unwrap().records.is_empty());
@@ -1140,10 +1172,30 @@ mod tests {
         left.records.get_mut(id).unwrap().revisions.push(deletion);
         left.merge(&baseline).unwrap();
         assert_eq!(left.records[id].current().status, Status::Deleted);
-        assert!(
-            apply_synced(&f.app, None).unwrap(),
-            "Roster from a build without playbooks must not erase them"
-        );
+        // A Device that sends an older copy of the skill gets the merged record back.
+        let dek = f.app.dek().unwrap();
+        let ours = f.app.playbooks.lock().unwrap().records[id].clone();
+        let mut stale = ours.clone();
+        stale.revisions.truncate(1);
+        let mut newer = ours.clone();
+        let mut edit = newer.current().clone();
+        edit.id = "edited-elsewhere".into();
+        edit.revision = 2;
+        edit.content.as_mut().unwrap().instructions = "Edited on another Device".into();
+        edit.hash = edit.content.as_ref().unwrap().hash();
+        newer.revisions.push(edit);
+        // The outbox keeps the newest blob of each slot: the revisions it would send.
+        let queued = || {
+            let outbox = f.app.store.outbox().unwrap();
+            let blob = outbox.iter().rev().find(|item| item.kind == BLOB_KIND).unwrap();
+            crate::crypto::decrypt_json::<Playbook>(&dek, BLOB_KIND, &blob.ciphertext).unwrap().revisions.len()
+        };
+        assert_eq!(queued(), 1);
+        apply_remote(&f.app, &dek, &crate::crypto::encrypt_json(&dek, BLOB_KIND, &newer).unwrap()).unwrap();
+        assert_eq!(get(&f.app, &f.scope(), id).unwrap()["revision"], 2);
+        assert_eq!(queued(), 1, "nothing to send back when the blob has everything");
+        apply_remote(&f.app, &dek, &crate::crypto::encrypt_json(&dek, BLOB_KIND, &stale).unwrap()).unwrap();
+        assert_eq!(queued(), 2, "the merged record goes back to the relay");
         let mut corrupt = baseline.clone();
         corrupt.records.get_mut(id).unwrap().revisions[0]
             .provenance

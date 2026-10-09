@@ -1,9 +1,11 @@
 import AppKit
 
-/// One routine's details, after Grok Bot's routine page: the schedule and its next and last
-/// runs, the task, the check when it has one, and the actions on it. Run Now starts it on the
-/// bot's Runner; Pause and Resume flip the switch the inspector shows; Edit in Chat hands the bot
-/// the change to make, since the bot owns its routines; Delete asks first.
+/// One routine's details, after Grok Bot's routine page: how it stands, with what happened and
+/// how to fix it when something went wrong; the schedule, its next run, what happens to runs its
+/// Runner missed, and its last check and run; the task, the check when it has one, and the
+/// actions on it. Run Now starts it on the bot's Runner; Pause and Resume flip the switch the
+/// inspector shows; Edit in Chat hands the bot the change to make, since the bot owns its
+/// routines (its timezone and missed-run policy too); Delete asks first.
 final class RoutineViewController: SheetViewController {
     private let store = AppStore.shared
     private let routineID: Routine.ID
@@ -102,7 +104,7 @@ final class RoutineViewController: SheetViewController {
         super.viewDidLoad()
         store.observe(self) { [weak self] event in
             switch event {
-            case .rosterChanged, .chatsChanged, .snapshotReplaced:
+            case .rosterChanged, .chatsChanged, .snapshotReplaced, .budgetsChanged:
                 self?.refresh()
             default:
                 break
@@ -117,26 +119,75 @@ final class RoutineViewController: SheetViewController {
             dismiss(nil)
             return
         }
+        let runner = store.device(bot.runnerID)
+        let runnerName = runner?.name ?? L("its Runner")
+        let problem = routine.problem
+        // A routine stopped at its limits runs again only once the user resumes it in Limits,
+        // which comes before anything else that's wrong with it.
+        let budget = store.budget("routine", routineID, runnerID: bot.runnerID)
+        let stopped = budget.flatMap { $0.isStopped ? $0 : nil }
         let state: (String, NSColor) =
-            routine.isRunning
-            ? (L("Running…"), .controlAccentColor)
-            : routine.isEnabled ? (L("On"), .systemGreen) : (routine.pausedReason == "away" ? L("Paused while you were away") : L("Paused"), .secondaryLabelColor)
-        let scheduleRow = KeyValueRow(key: L("Schedule"), value: routine.scheduleText)
-        scheduleRow.toolTip = routine.schedule
-        schedule.setRows([
-            KeyValueRow(key: L("State"), value: state.0, tint: state.1),
+            if let stopped {
+                (stopped.stoppedLabel, .systemOrange)
+            } else if routine.isRunning {
+                (L("Running…"), .controlAccentColor)
+            } else if let problem {
+                (problem.text, problem.needsUser ? .systemOrange : .secondaryLabelColor)
+            } else if routine.isEnabled {
+                (L("On"), .systemGreen)
+            } else {
+                (routine.pausedReason == "away" ? L("Paused while you were away") : L("Paused"), .secondaryLabelColor)
+            }
+        var rows: [NSView] = [KeyValueRow(key: L("State"), value: state.0, tint: state.1)]
+        if let stopped {
+            rows.append(NoteRow(text: stopped.stoppedDetail))
+        } else if let problem {
+            rows.append(NoteRow(text: problem.explanation(bot: bot.name, runner: runnerName)))
+        }
+        let scheduleRow = KeyValueRow(key: L("Schedule"), value: routine.scheduleSummary)
+        scheduleRow.toolTip = routine.schedule.hasPrefix("every ") ? routine.schedule : "\(routine.schedule) · \(routine.timezone)"
+        let skips = routine.missedRunPolicy == "skip"
+        let missedRow = KeyValueRow(key: L("Missed runs"), value: skips ? L("Skip") : L("Run once"))
+        missedRow.toolTip = skips
+            ? L("When %@ was off at a scheduled time, the routine waits for the next one.", runnerName)
+            : L("When %@ was off at a scheduled time, the routine runs once when it’s back.", runnerName)
+        // "Tomorrow 9:00 AM" on a line of its own, as the last check and run read.
+        let next = routine.nextRunAt.map { Format.upcoming($0) }.map { $0.prefix(1).uppercased() + $0.dropFirst() }
+        rows += [
             scheduleRow,
-            KeyValueRow(key: routine.check == nil ? L("Next run") : L("Next check"), value: routine.nextRunAt.map { Format.upcoming($0) } ?? "—"),
-            KeyValueRow(key: L("Last run"), value: routine.lastRunSummary),
-        ])
+            KeyValueRow(key: routine.check == nil ? L("Next run") : L("Next check"), value: next ?? "—"),
+            missedRow,
+        ]
+        if let lastCheck = routine.lastCheckSummary {
+            rows.append(KeyValueRow(key: L("Last check"), value: lastCheck))
+            // Only a failing check has a success to tell apart from it.
+            if ["failed", "blocked"].contains(routine.health.status) {
+                rows.append(KeyValueRow(key: L("Last successful check"), value: routine.health.lastSuccessAt.map { Format.daySeparator($0) } ?? L("Never")))
+            }
+        }
+        rows.append(KeyValueRow(key: L("Last run"), value: routine.lastRunSummary))
+        rows.append(limitsRow(budget, routine: routine))
+        schedule.setRows(rows)
         if prompt.string != routine.prompt { prompt.string = routine.prompt }
         checkSection.isHidden = routine.check == nil
         if check.string != (routine.check ?? "") { check.string = routine.check ?? "" }
         pauseButton.title = routine.isEnabled ? L("Pause") : L("Resume")
-        runButton.isEnabled = !routine.isRunning
-        let runner = store.device(bot.runnerID)
+        // A run needs its Runner online, a routine paused by failed sign-ins needs Resume, and one
+        // stopped at its limits resumes in Limits.
+        runButton.isEnabled = !routine.isRunning && routine.state != "waiting_for_runner" && routine.pausedReason != "authentication" && stopped == nil
         runButton.toolTip = runner.map { L("Runs on %@ now", $0.name) } ?? L("Runs on the bot's Runner now")
         fitSheetToContent()
+    }
+
+    /// What its runs may use; opens the routine's Limits, where a stopped routine resumes.
+    private func limitsRow(_ budget: BudgetState?, routine: Routine) -> NSView {
+        let row = DisclosureRow(key: L("Limits"))
+        row.setValue(budget?.limits.summary ?? L("None", context: "limits"))
+        row.onClick = { [weak self] in
+            guard let self, let dm = self.store.chats.first(where: { $0.isDM && $0.botIDs.contains(self.bot.id) }) else { return }
+            self.presentAsSheet(BudgetViewController(bot: self.bot, chatID: dm.id, routine: routine))
+        }
+        return row
     }
 
     @objc private func runNow() {

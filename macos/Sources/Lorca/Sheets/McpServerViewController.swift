@@ -825,11 +825,11 @@ extension McpServerViewController: NSTextFieldDelegate, NSTextViewDelegate {
 
 extension PluginViewController {
     /// A plugin's sheet, or for one of the Runner's mcp.json servers, the server's own.
-    static func present(pluginID: String, runner: Device, bot: Bot?, from presenter: NSViewController) {
+    static func present(pluginID: String, runner: Device, bot: Bot?, chatID: Chat.ID? = nil, from presenter: NSViewController) {
         if let plugin = runner.plugins.first(where: { $0.id == pluginID }), plugin.isMcpServer {
             McpServerViewController.present(runner: runner, name: plugin.name, from: presenter)
         } else {
-            presenter.presentAsSheet(PluginViewController(pluginID: pluginID, runner: runner, bot: bot))
+            presenter.presentAsSheet(PluginViewController(pluginID: pluginID, runner: runner, bot: bot, chatID: chatID))
         }
     }
 }
