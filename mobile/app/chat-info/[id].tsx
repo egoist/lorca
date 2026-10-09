@@ -4,22 +4,22 @@ import { MenuView, type MenuComponentRef } from "@expo/ui/community/menu";
 import { Platform, PlatformColor, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 import { Pressable } from "../../src/ui/Pressable";
 import { chatTitle, engine } from "../../src/core/engine";
-import { BROWSER_PLUGIN_ID, PROJECT_KINDS, projectSymbol, skillScopeOf, providerKinds, providerLabel, providerModels, PROVIDER_KINDS, taskSymbol, thinkingLabel, thinkingLevels, withCustomModels, type Bot, type Routine } from "../../src/core/model";
+import { BROWSER_PLUGIN_ID, isMuted, PROJECT_KINDS, projectSymbol, skillScopeOf, providerKinds, providerLabel, providerModels, PROVIDER_KINDS, taskSymbol, thinkingLabel, thinkingLevels, withCustomModels, type Bot, type Routine } from "../../src/core/model";
 import { deviceIsOnline, useBotMap, useBudget, useChat, useDurableTasks, useOpenReviews, useOutputs, useProject, useRoutines, useSkills, useStoppedTurn, useStore, useWorkingBotIds } from "../../src/core/store";
-import { t, useLanguage } from "../../src/i18n";
+import { t, tc, useLanguage } from "../../src/i18n";
 import { AvatarCluster, BotAvatar } from "../../src/ui/Avatar";
 import { CheckRow, FieldRow, MenuRow, Row, Section, ToggleRow } from "../../src/ui/forms";
 import { projectKindTitle, projectProblem, projectRowDetail } from "../../src/ui/project";
 import * as DocumentPicker from "expo-document-picker";
 import { pluginStateWord } from "../../src/ui/plugins";
-import { lastSeen, scheduleText } from "../../src/ui/format";
+import { lastSeen, muteSpans, scheduleText, time, upcoming } from "../../src/ui/format";
 import { problemNeedsUser, routineDetail, routineProblem } from "../../src/ui/routines";
 import { Symbol } from "../../src/ui/Symbol";
 import { usePalette } from "../../src/ui/theme";
 import { deviceSymbol } from "../../src/ui/devices";
 import { AndroidIcons, CloseToolbar } from "../../src/ui/navigation";
 import { haptic } from "../../src/ui/haptics";
-import { alert } from "../../src/ui/alert";
+import { alert, prompt } from "../../src/ui/alert";
 import { OutputRow } from "../../src/ui/outputs";
 import { taskStateTitle, useTaskTint } from "../../src/ui/durableTasks";
 import { reviewHeadline, reviewStateWord, reviewSymbol } from "../../src/ui/reviews";
@@ -35,6 +35,7 @@ export default function ChatInfoScreen() {
   const router = useRouter();
   const p = usePalette();
   const chat = useChat(id);
+  const sections = useStore((s) => s.sections);
   const bots = useBotMap();
   const allBots = useStore((s) => s.bots);
   const devices = useStore((s) => s.devices);
@@ -521,6 +522,34 @@ export default function ChatInfoScreen() {
 
       <Section>
         <ToggleRow title={t("Pinned")} icon="pin.fill" value={chat.is_pinned} onValueChange={(v) => engine.pinChat(chat.id, v)} />
+        <Row
+          title={t("Mute")}
+          icon="bell.slash"
+          menu={{
+            value: muteValue(chat.mute, isMuted(chat)),
+            title: t("Mute"),
+            choices: [
+              { title: t("Off"), selected: !isMuted(chat), onPress: () => engine.unmuteChat(chat.id), dividerAfter: true },
+              ...muteSpans().map((span) => ({ title: span.title, selected: false, onPress: () => engine.muteChat(chat.id, span.seconds) })),
+            ],
+          }}
+        />
+        {sections.length ? (
+          <Row
+            title={t("Section")}
+            icon="folder"
+            menu={{
+              value: sections.find((section) => section.id === chat.section_id)?.name ?? tc("Chats", "no section"),
+              title: t("Section"),
+              choices: [
+                ...sections.map((section) => ({ title: section.name, selected: section.id === chat.section_id, onPress: () => engine.moveChat(chat.id, section.id) })),
+                { title: tc("Chats", "no section"), selected: !sections.some((section) => section.id === chat.section_id), onPress: () => engine.moveChat(chat.id, null), dividerAfter: true },
+                { title: t("New Section…"), selected: false, onPress: () => prompt(t("New Section"), { placeholder: t("Section name"), confirm: t("Create"), done: (name) => engine.createSection(name, chat.id) }) },
+              ],
+            }}
+          />
+        ) : null}
+        <ToggleRow title={t("Hidden")} icon="eye.slash" value={!!chat.is_hidden} onValueChange={(v) => engine.hideChat(chat.id, v)} />
       </Section>
 
       <Section>
@@ -560,4 +589,12 @@ function RemovableRow({ label, onRemove, children }: { label: string; onRemove: 
       </MenuView>
     </View>
   );
+}
+
+/// What a chat's Mute row says: Off, Always, or when its alerts come back on.
+function muteValue(mute: { until?: number | null } | null | undefined, muted: boolean): string {
+  if (!muted || !mute) return t("Off");
+  if (mute.until == null) return t("Always");
+  const until = new Date(mute.until * 1000);
+  return t("Until {when}", { when: until.toDateString() === new Date().toDateString() ? time(until) : upcoming(mute.until) });
 }

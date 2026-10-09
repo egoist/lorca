@@ -10,7 +10,7 @@ import { t } from "../i18n";
 import { exactAnswer, ExactNumber, ExactObject, stringifyExact } from "./exactJson";
 import { reviewEditParams } from "./reviewEdit";
 import { hostFacts } from "./host";
-import { orderProjectEntries, providerConnectMethod, withReviewModel, type PlaybookContent, type PlaybookRecord, type PlaybookScope, type ProjectContext, type ProjectEntry, type ProjectKind, type ProjectSource, type Attachment, type AutoReview, type Bot, type BrowserProfile, type BudgetLimits, type BudgetState, type CallLimits, type Chat, type ChatMeta, type ChatSearchResults, type ChatUsage, type CustomAPI, type CustomModel, type DurableTask, type Message, type ReviewItem, type PluginDetail, type PluginStatus, type ProviderKind, type ProviderStatus } from "./model";
+import { orderProjectEntries, providerConnectMethod, sectionName, withReviewModel, type Section, type PlaybookContent, type PlaybookRecord, type PlaybookScope, type ProjectContext, type ProjectEntry, type ProjectKind, type ProjectSource, type Attachment, type AutoReview, type Bot, type BrowserProfile, type BudgetLimits, type BudgetState, type CallLimits, type Chat, type ChatMeta, type ChatSearchResults, type ChatUsage, type CustomAPI, type CustomModel, type DurableTask, type Message, type ReviewItem, type PluginDetail, type PluginStatus, type ProviderKind, type ProviderStatus } from "./model";
 import { coreHome, loadPrefs, pathOf, wipePrefs } from "./prefs";
 import type { SharedLink, TemplateContents, TemplateImportPreview, TemplateSelection } from "./templates";
 import { clearPushes, installPushHandlers, registerForPushes } from "./push";
@@ -75,7 +75,8 @@ class Engine {
     if (this.started) return;
     this.started = true;
     const active = AppState.currentState === "active";
-    useStore.setState({ dictation_lang: loadPrefs().dictation_lang, appActive: active, activeSince: active ? Date.now() : 0 });
+    const prefs = loadPrefs();
+    useStore.setState({ dictation_lang: prefs.dictation_lang, showsHidden: !!prefs.shows_hidden, collapsesOthers: !!prefs.collapses_others, appActive: active, activeSince: active ? Date.now() : 0 });
     core.onEvent((frame) => this.receive(frame));
     // The core starts off the JS thread and emits as soon as it runs: what it says before the
     // first snapshot waits for it, as during any snapshot.
@@ -621,9 +622,79 @@ class Engine {
     void core.request("chats.set_description", { chat_id: chatId, description: trimmed });
   }
 
+  /// A pinned chat is back in the list.
   pinChat(chatId: string, pinned: boolean) {
-    this.patchChat(chatId, (meta) => ({ ...meta, is_pinned: pinned }));
+    this.patchChat(chatId, (meta) => ({ ...meta, is_pinned: pinned, is_hidden: pinned ? false : meta.is_hidden }));
     void core.request("chats.pin", { chat_id: chatId, pinned });
+  }
+
+  /// Takes a chat out of the list, or puts it back. A hidden chat is not pinned.
+  hideChat(chatId: string, hidden: boolean) {
+    this.patchChat(chatId, (meta) => ({ ...meta, is_hidden: hidden, is_pinned: hidden ? false : meta.is_pinned }));
+    void core.request("chats.hide", { chat_id: chatId, hidden });
+  }
+
+  /// Turns a chat's alerts off on every Device for `seconds`, or until unmuted when it is 0.
+  muteChat(chatId: string, seconds: number) {
+    const until = seconds > 0 ? Date.now() / 1000 + seconds : null;
+    this.patchChat(chatId, (meta) => ({ ...meta, mute: { until } }));
+    void core.request("chats.mute", { chat_id: chatId, muted: true, ...(until ? { until } : {}) });
+  }
+
+  unmuteChat(chatId: string) {
+    this.patchChat(chatId, (meta) => ({ ...meta, mute: null }));
+    void core.request("chats.mute", { chat_id: chatId, muted: false });
+  }
+
+  /// Lists a chat under a section, or with the chats in no section, where the list shows it:
+  /// off the pinned rows and out of Hidden.
+  moveChat(chatId: string, sectionId: string | null) {
+    this.patchChat(chatId, (meta) => ({ ...meta, section_id: sectionId, is_pinned: false, is_hidden: false }));
+    void core.request("chats.set_section", { chat_id: chatId, section_id: sectionId });
+  }
+
+  // MARK: - Sections
+
+  /// Adds a section after the others, with `chatId` moved into it.
+  createSection(name: string, chatId?: string) {
+    const trimmed = sectionName(name);
+    if (!trimmed) return;
+    const section: Section = { id: `section-${Math.random().toString(16).slice(2, 10)}`, name: trimmed };
+    useStore.setState((s) => ({ sections: [...s.sections, section] }));
+    if (chatId) this.patchChat(chatId, (meta) => ({ ...meta, section_id: section.id, is_pinned: false, is_hidden: false }));
+    void core.request("sections.create", { id: section.id, name: trimmed, ...(chatId ? { chat_id: chatId } : {}) });
+  }
+
+  renameSection(id: string, name: string) {
+    const trimmed = sectionName(name);
+    if (!trimmed) return;
+    useStore.setState((s) => ({ sections: s.sections.map((section) => (section.id === id ? { ...section, name: trimmed } : section)) }));
+    void core.request("sections.rename", { id, name: trimmed });
+  }
+
+  /// Deletes a section; its chats go back to the chats in no section.
+  deleteSection(id: string) {
+    useStore.setState((s) => ({
+      sections: s.sections.filter((section) => section.id !== id),
+      chats: s.chats.map((chat) => (chat.section_id === id ? { ...chat, section_id: null } : chat)),
+    }));
+    void core.request("sections.delete", { id });
+  }
+
+  /// Puts a section at `place` among the sections.
+  moveSection(id: string, place: number) {
+    const sections = [...useStore.getState().sections];
+    const from = sections.findIndex((section) => section.id === id);
+    const to = Math.max(0, Math.min(sections.length - 1, place));
+    if (from < 0 || from === to) return;
+    sections.splice(to, 0, ...sections.splice(from, 1));
+    useStore.setState({ sections });
+    void core.request("sections.reorder", { ids: sections.map((section) => section.id) });
+  }
+
+  setSectionCollapsed(id: string, collapsed: boolean) {
+    useStore.setState((s) => ({ sections: s.sections.map((section) => (section.id === id ? { ...section, collapsed } : section)) }));
+    void core.request("sections.collapse", { id, collapsed });
   }
 
   deleteChat(chatId: string) {

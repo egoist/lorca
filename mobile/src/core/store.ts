@@ -5,9 +5,9 @@
 import { useMemo } from "react";
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
-import { groupOutputs, reviewIsOpen, runsInTerminal, taskOrder, type AutoReview, type ProjectContext, type BudgetState, type DurableTask, type ReviewItem, type OutputSeries, type PlaybookScope, type PlaybookSummary, type Bot, type Chat, type ChatMeta, type ChatUsage, type Device, type Message, type ProviderModel, type ProviderStatus, type RelayProblem, type Routine } from "./model";
+import { groupOutputs, reviewIsOpen, runsInTerminal, taskOrder, type AutoReview, type ProjectContext, type BudgetState, type DurableTask, type ReviewItem, type OutputSeries, type PlaybookScope, type PlaybookSummary, type Bot, type Chat, type ChatMeta, type ChatUsage, type Device, type Message, type ProviderModel, type ProviderStatus, type RelayProblem, type Routine, type Section } from "./model";
 import { t } from "../i18n";
-import { savePrefs } from "./prefs";
+import { loadPrefs, savePrefs } from "./prefs";
 import { emptyAttention, type AttentionView } from "./attention";
 import type { SharedLink } from "./templates";
 
@@ -91,6 +91,12 @@ export interface StoreState {
   playbooks: PlaybookSummary[];
   /// The bots the account shares as links, from the roster.
   shared_links: SharedLink[];
+  /// The chat list's sections, in order, from the roster.
+  sections: Section[];
+  /// Whether the chat list's Hidden group is open (it starts folded), and whether its group of
+  /// chats in no section is folded: this phone's own, where sections fold on every Device.
+  showsHidden: boolean;
+  collapsesOthers: boolean;
   /// A shared bot's link the app was opened with (Open in Lorca on lorca.app), kept until there
   /// is an account to read it with.
   pendingTemplateLink: string | null;
@@ -130,6 +136,9 @@ function empty(): Omit<StoreState, "ready" | "dictation_lang" | "appActive" | "a
     budgets: [],
     playbooks: [],
     shared_links: [],
+    sections: [],
+    showsHidden: false,
+    collapsesOthers: false,
     pendingTemplateLink: null,
   };
 }
@@ -139,7 +148,8 @@ export const useStore = create<StoreState>()(() => ({ ...empty(), ready: false, 
 /// Applies a change to the phone's own prefs and saves them.
 export function mutate(update: (s: StoreState) => Partial<StoreState>) {
   useStore.setState((s) => update(s));
-  savePrefs({ dictation_lang: useStore.getState().dictation_lang });
+  const { dictation_lang, showsHidden, collapsesOthers } = useStore.getState();
+  savePrefs({ ...loadPrefs(), dictation_lang, shows_hidden: showsHidden, collapses_others: collapsesOthers });
 }
 
 /// Back to unpaired: everything the core told us goes; the phone's prefs stay, and so does a
@@ -191,6 +201,7 @@ export function replaceSnapshot(snapshot: {
   budgets?: BudgetState[];
   playbooks?: PlaybookSummary[];
   shared_links?: SharedLink[];
+  sections?: Section[];
   auto_review?: AutoReview;
   attention?: AttentionView;
   providers?: ProviderStatus[];
@@ -228,6 +239,7 @@ export function replaceSnapshot(snapshot: {
     budgets: snapshot.budgets ?? [],
     playbooks: snapshot.playbooks ?? [],
     shared_links: snapshot.shared_links ?? [],
+    sections: snapshot.sections ?? [],
     auto_review: snapshot.auto_review ?? { is_enabled: true, rules: [] },
     attention: snapshot.attention ?? emptyAttention(),
     providers: snapshot.providers ?? [],
@@ -266,7 +278,7 @@ function seenOf(devices: Device[]): Record<string, number> {
 
 /// `roster.changed`: bots replace, chat metadata merges over kept messages, chats not named
 /// are gone.
-export function applyRoster(roster: { devices: Device[]; bots: Bot[]; chats: (ChatMeta & { unread_count: number; usage?: ChatUsage })[]; routines?: Routine[]; auto_review?: AutoReview; providers?: ProviderStatus[]; models?: ProviderModel[]; playbooks?: PlaybookSummary[]; shared_links?: SharedLink[] }): { removed: string[] } {
+export function applyRoster(roster: { devices: Device[]; bots: Bot[]; chats: (ChatMeta & { unread_count: number; usage?: ChatUsage })[]; routines?: Routine[]; auto_review?: AutoReview; providers?: ProviderStatus[]; models?: ProviderModel[]; playbooks?: PlaybookSummary[]; shared_links?: SharedLink[]; sections?: Section[] }): { removed: string[] } {
   const removed: string[] = [];
   useStore.setState((s) => {
     const incoming = new Set(roster.chats.map((c) => c.id));
@@ -291,6 +303,7 @@ export function applyRoster(roster: { devices: Device[]; bots: Bot[]; chats: (Ch
       models: same(s.models, roster.models ?? s.models),
       playbooks: same(s.playbooks, roster.playbooks ?? s.playbooks),
       shared_links: same(s.shared_links, roster.shared_links ?? s.shared_links),
+      sections: same(s.sections, roster.sections ?? s.sections),
     };
   });
   return { removed };

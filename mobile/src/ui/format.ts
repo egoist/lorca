@@ -295,3 +295,13 @@ function toolActivity(s: WorkState, botId: string, tool: Extract<Body, { kind: "
   }
   return t("Working…");
 }
+
+/// How long Mute keeps a chat quiet, in seconds; 0 is until unmuted.
+export function muteSpans(): { title: string; seconds: number }[] {
+  return [
+    { title: t("For 1 Hour"), seconds: 3600 },
+    { title: t("For 8 Hours"), seconds: 8 * 3600 },
+    { title: t("For 1 Week"), seconds: 7 * 24 * 3600 },
+    { title: t("Always"), seconds: 0 },
+  ];
+}

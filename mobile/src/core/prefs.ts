@@ -15,6 +15,9 @@ export interface Prefs {
   update_checked_at?: number;
   /// Android: the release the user chose to skip.
   update_skipped?: string;
+  /// The chat list's Hidden group is open; its group of chats in no section is folded.
+  shows_hidden?: boolean;
+  collapses_others?: boolean;
 }
 
 function root(): Directory {

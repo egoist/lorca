@@ -479,7 +479,32 @@ export interface ChatMeta {
   /// What a group is for, which every member reads in its system prompt.
   description?: string | null;
   is_pinned: boolean;
+  /// The sidebar section the chat is listed under; none lists it with the chats in no section.
+  section_id?: string | null;
+  /// Out of the chat list but kept: search finds it, and the list's Hidden group holds it.
+  is_hidden?: boolean;
+  /// Set while the chat's alerts are off on every Device: until `until` (seconds), or until unmuted.
+  mute?: { until?: number | null } | null;
   created_at: number;
+}
+
+/// A named group of chats in the chat list. Every Device shows the same sections, in the same
+/// order, folded the same way.
+export interface Section {
+  id: string;
+  name: string;
+  collapsed?: boolean;
+}
+
+/// Whether a chat's alerts are off at `now` (ms). The unread count is kept either way.
+export function isMuted(chat: ChatMeta, now = Date.now()): boolean {
+  if (!chat.mute) return false;
+  return chat.mute.until == null || now < chat.mute.until * 1000;
+}
+
+/// A section's name as the core keeps it: one line of at most 60 characters.
+export function sectionName(name: string): string {
+  return [...name.split(/\s+/).filter(Boolean).join(" ")].slice(0, 60).join("");
 }
 
 /// The tokens and money the turns in a chat used, from its Runner.

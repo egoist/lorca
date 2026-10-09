@@ -6,7 +6,7 @@ import { memo, useEffect, useMemo } from "react";
 import { StyleSheet, Text, View, type ColorValue } from "react-native";
 import { Pressable } from "./Pressable";
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withRepeat, withTiming, type SharedValue } from "react-native-reanimated";
-import type { Bot, Chat } from "../core/model";
+import { isMuted, type Bot, type Chat } from "../core/model";
 import { t, useLanguage } from "../i18n";
 import { AvatarCluster } from "./Avatar";
 import { lastActivity, preview, stamp } from "./format";
@@ -30,6 +30,7 @@ export const ChatRow = memo(function ChatRow({ chat, bots, title, working, respo
             <Text style={[styles.title, { color: p.label }]} numberOfLines={1}>
               {title}
             </Text>
+            {isMuted(chat) && <Symbol name="bell.slash.fill" size={12} color={p.tertiaryLabel} />}
             {chat.is_pinned && <Symbol name="pin.fill" size={12} color={p.tertiaryLabel} />}
           </View>
           <View style={styles.stampLine}>

@@ -60,6 +60,8 @@ const ANDROID: Record<string, string> = {
   "cart.fill": "shopping_cart",
   "arrow.triangle.turn.up.right.diamond.fill": "alt_route",
   "chevron.right": "chevron_right",
+  "chevron.down": "expand_more",
+  "bell.slash.fill": "notifications_off",
   // A value menu: Material's dropdown arrow.
   "chevron.up.chevron.down": "arrow_drop_down",
   "arrow.down": "arrow_downward",
