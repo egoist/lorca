@@ -66,6 +66,11 @@ enum Command {
         #[usage(subcommand)]
         command: McpCommand,
     },
+    /// Runner event subscriptions and encrypted gateway delivery.
+    Events {
+        #[usage(subcommand)]
+        command: EventsCommand,
+    },
     /// The marketplace: the plugins and bots Lorca offers to add.
     Marketplace {
         #[usage(subcommand)]
@@ -135,6 +140,32 @@ enum IdentityCommand {
     },
     /// Print the identity id and public keys.
     Show,
+}
+
+#[derive(Subcommands, Debug)]
+enum EventsCommand {
+    /// Read configuration, queue state and health, without secrets or payloads.
+    List,
+    /// Create a subscription from a JSON configuration file.
+    Add { file: PathBuf },
+    /// Replace configuration from a JSON file; target stays fixed.
+    Edit { id: String, file: PathBuf },
+    /// Hold a subscription's work; deliveries still queue.
+    Pause { id: String },
+    /// Run held work again.
+    Resume { id: String },
+    /// Rotate the gateway signing key; export a new route afterwards.
+    Reconnect { id: String, #[usage(long)] expires_at: Option<i64> },
+    /// Export the signing secret and Runner public keys to a private file.
+    Route { id: String, file: PathBuf },
+    /// Delete a subscription and its queue.
+    Remove { id: String },
+    /// Explicitly retry a delivery after reviewing failed or interrupted work.
+    Retry { id: String },
+    /// Drop a pending, failed, or interrupted delivery; a redelivery of it stays ignored.
+    Discard { id: String },
+    /// Verify a signed envelope from stdin and durably queue encrypted delivery.
+    Forward { file: PathBuf },
 }
 
 #[derive(Subcommands, Debug)]
@@ -340,9 +371,11 @@ async fn main() -> anyhow::Result<()> {
             tokio::spawn(lorca_agent::login_shell::environment());
             tokio::spawn(sync::run(app.clone()));
             tokio::spawn(routines::run(app.clone()));
+            tokio::spawn(lorca::event_triggers::run(app.clone()));
             tokio::spawn(lorca::review_execution::run(app.clone()));
             ws::serve(app, ready_stdout).await
         }
+        Command::Events { command } => events(&app, command).await,
         Command::Identity { command } => match command {
             IdentityCommand::New { name } => {
                 let phrase = identity::create(&app, name)?;
@@ -604,6 +637,47 @@ async fn mcp_call(app: &std::sync::Arc<App>, method: &str, params: serde_json::V
         None => (Box::pin(lorca::api::dispatch(app, method, params)).await, false),
     };
     Ok((result.map_err(|message| anyhow::anyhow!(message))?, live))
+}
+
+async fn events(app: &std::sync::Arc<App>, command: EventsCommand) -> anyhow::Result<()> {
+    use serde_json::json;
+    let mut route_file = None;
+    let read = |file: &PathBuf| -> anyhow::Result<serde_json::Value> { Ok(serde_json::from_slice(&std::fs::read(file)?)?) };
+    let (method, params) = match command {
+        EventsCommand::List => ("events.list", json!({})),
+        EventsCommand::Add { file } => ("events.create", json!({"config": read(&file)?})),
+        EventsCommand::Edit { id, file } => ("events.update", json!({"id": id, "config": read(&file)?})),
+        EventsCommand::Pause { id } => ("events.pause", json!({"id": id})),
+        EventsCommand::Resume { id } => ("events.resume", json!({"id": id})),
+        EventsCommand::Reconnect { id, expires_at } => ("events.reconnect", json!({"id": id, "expires_at": expires_at})),
+        EventsCommand::Route { id, file } => { route_file = Some(file); ("events.route", json!({"id": id})) }
+        EventsCommand::Remove { id } => ("events.delete", json!({"id": id})),
+        EventsCommand::Retry { id } => ("events.retry", json!({"id": id})),
+        EventsCommand::Discard { id } => ("events.discard", json!({"id": id})),
+        EventsCommand::Forward { file } => {
+            use std::io::Read;
+            let mut bytes = Vec::new();
+            std::io::stdin().take((2 * lorca::event_triggers::MAX_PAYLOAD_BYTES + 4096) as u64).read_to_end(&mut bytes)?;
+            let event: serde_json::Value = serde_json::from_slice(&bytes)?;
+            ("events.forward", json!({"route": read(&file)?, "envelope": event}))
+        }
+    };
+    let (reply, live) = mcp_call(app, method, params).await?;
+    if let Some(file) = route_file {
+        // create_new prevents overwriting or following a symlink to an existing private file.
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)] { use std::os::unix::fs::OpenOptionsExt; options.mode(0o600); }
+        let mut output = options.open(&file)?;
+        use std::io::Write;
+        output.write_all(&serde_json::to_vec_pretty(&reply)?)?;
+        output.sync_all()?;
+        println!("Saved gateway route to {}", file.display());
+    } else {
+        println!("{}", serde_json::to_string_pretty(&reply)?);
+    }
+    if !live && method == "events.forward" { flush_outbox_once(app).await; }
+    Ok(())
 }
 
 async fn mcp(app: &std::sync::Arc<App>, command: McpCommand) -> anyhow::Result<()> {

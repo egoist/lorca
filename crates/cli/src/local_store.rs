@@ -76,6 +76,17 @@ impl LocalStore {
                  position INTEGER NOT NULL,
                  json     TEXT NOT NULL
              );
+             CREATE TABLE IF NOT EXISTS event_subscriptions (
+                 id TEXT PRIMARY KEY NOT NULL,
+                 ciphertext BLOB NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS event_inbox (
+                 position INTEGER PRIMARY KEY AUTOINCREMENT,
+                 id TEXT UNIQUE NOT NULL,
+                 subscription_id TEXT NOT NULL,
+                 ciphertext BLOB NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS event_inbox_subscription ON event_inbox(subscription_id, position);
              CREATE TABLE IF NOT EXISTS group_deletes (
                  id       TEXT PRIMARY KEY NOT NULL,
                  position INTEGER NOT NULL
@@ -1150,6 +1161,8 @@ impl LocalStore {
             "bots",
             "chats",
             "routines",
+            "event_subscriptions",
+            "event_inbox",
             "group_deletes",
             "blob_deletes",
             "device_seen",

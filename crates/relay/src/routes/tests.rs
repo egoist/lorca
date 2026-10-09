@@ -131,6 +131,20 @@ impl Drop for Relay {
     }
 }
 
+#[tokio::test]
+async fn event_blobs_require_a_recipient_and_travel_as_opaque_ciphertext() {
+    let relay = Relay::start(0).await;
+    let item = OutboxItem { id: "event-envelope".into(), kind: "event".into(), recipient: Some("machine".into()), ciphertext: b"opaque encrypted event".to_vec(), slot: None, group: None };
+    let seq = relay.client.put_blob(&relay.url, &relay.token, item.clone()).await.unwrap();
+    assert_eq!(relay.client.put_blob(&relay.url, &relay.token, item).await.unwrap(), seq);
+    let (blobs, _) = relay.client.list_blobs(&relay.url, &relay.token, 0, "event").await.unwrap();
+    assert_eq!(blobs.len(), 1);
+    assert_eq!(lorca::keys::unb64(&blobs[0].ciphertext).unwrap(), b"opaque encrypted event");
+    let response = relay.http.put(format!("{}/v1/blobs", relay.url)).bearer_auth(&relay.token)
+        .json(&json!({"id": "broadcast-event", "kind": "event", "ciphertext": lorca::keys::b64(b"ciphertext")})).send().await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
 fn file(id: &str, group: Option<&str>, ciphertext: Vec<u8>) -> OutboxItem {
     OutboxItem {
         id: id.into(),

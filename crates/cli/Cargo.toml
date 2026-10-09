@@ -45,6 +45,7 @@ dirs.workspace = true
 ed25519-dalek.workspace = true
 futures.workspace = true
 hkdf.workspace = true
+hmac.workspace = true
 libc.workspace = true
 open = { workspace = true, optional = true }
 # A reply's quote of a message reads as plain text.

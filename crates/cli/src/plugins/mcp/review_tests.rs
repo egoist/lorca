@@ -131,6 +131,7 @@ async fn an_unattended_plugin_proposal_executes_the_edited_version_on_its_exact_
     let trigger = super::super::review::Trigger {
         message_id: "routine-marker".into(),
         routine: Some(routine),
+        event: None,
     };
     let arguments = json!({ "body": "original draft" });
     let call = lorca_agent::ToolCall {

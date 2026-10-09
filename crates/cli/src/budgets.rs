@@ -538,6 +538,12 @@ pub fn serve(app: &Arc<App>, method: &str, params: &Value) -> Result<Value, Stri
                         }
                     });
                 }
+                // An event's delivery goes back to its subscription's inbox, which admits it
+                // again in its order, as the same Job.
+                (_, Some(job)) if job.kind == "event" => {
+                    crate::event_triggers::serve(app, "events.retry", &json!({ "id": job.trigger_message_id }))
+                        .map_err(|error| error.to_string())?;
+                }
                 // A turn goes on from the transcript as it stands; a plugin call it made is
                 // never sent again from here.
                 (_, Some(mut job)) => {

@@ -1928,6 +1928,7 @@ dependencies = [
  "flate2",
  "futures",
  "hkdf",
+ "hmac 0.12.1",
  "httpdate",
  "iana-time-zone",
  "if-addrs",

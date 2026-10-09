@@ -843,7 +843,8 @@ pub struct Job {
     pub task_context: Option<crate::tasks::Task>,
     /// `turn` for a user message in a DM, `room_turn` for one member's turn in a group,
     /// `message` for a teammate's message_bot, `routine` for a run of a routine, `command` for
-    /// a command the bot left running that ended.
+    /// a command the bot left running that ended, `event` for a service event an event
+    /// subscription's inbox admitted.
     pub kind: String,
     pub trigger_message_id: String,
     /// A durable delegated request or the continuation that reads its report.

@@ -14,7 +14,7 @@ const BULK_BLOBS: usize = 20;
 
 /// What a pull takes. `file` blobs are left out: a transcript fetches them by id when it
 /// needs them, so a photo sent to one bot is not downloaded by every Device.
-pub const POLL_KINDS: &str = "roster,task,project_context,playbook,chat,machine,credentials,review,handoff,attention,job,job_cancel,job_result,request,response";
+pub const POLL_KINDS: &str = "roster,task,project_context,playbook,chat,machine,credentials,review,handoff,attention,job,event,job_cancel,job_result,request,response";
 
 pub async fn run(app: Arc<App>) {
     let mut failures: u32 = 0;
@@ -222,7 +222,7 @@ async fn session(app: &Arc<App>, failures: &mut u32) -> Result<(), RelayError> {
 }
 
 /// Everything a Device polls for but the messages.
-const NOT_CHAT_KINDS: &str = "roster,task,project_context,playbook,machine,credentials,review,handoff,attention,job,job_cancel,job_result,request,response";
+const NOT_CHAT_KINDS: &str = "roster,task,project_context,playbook,machine,credentials,review,handoff,attention,job,event,job_cancel,job_result,request,response";
 /// How much of each chat a Device takes when it first syncs: what a bot's turn reads.
 const FIRST_SYNC_MESSAGES: usize = 400;
 /// Messages to a page when reading a chat backwards.
@@ -268,7 +268,7 @@ async fn first_sync_quietly(app: &Arc<App>, url: &str, token: &str, machine_file
             break;
         };
         for blob in &blobs {
-            apply_blob(app, machine_file, blob);
+            apply_synced_blob(app, machine_file, blob)?;
         }
         since = last;
     }
@@ -394,7 +394,11 @@ async fn pull_blobs(app: &Arc<App>, url: &str, token: &str, machine_file: &crate
             if bulk && blob.kind == "job_result" {
                 results.push(blob);
             } else {
-                apply_blob(app, machine_file, &blob);
+                if let Err(error) = apply_synced_blob(app, machine_file, &blob) {
+                    app.bulk_sync.store(false, Ordering::Relaxed);
+                    app.save_state_now();
+                    return Err(error);
+                }
             }
             let mut state = app.state.lock().unwrap();
             state.last_seq = state.last_seq.max(seq);
@@ -736,6 +740,16 @@ pub async fn delete_remote_blob(app: &Arc<App>, id: &str) {
 
 // MARK: - Applying blobs
 
+fn apply_synced_blob(app: &Arc<App>, machine_file: &crate::keys::MachineFile, blob: &BlobIn) -> Result<(), RelayError> {
+    if blob.kind == "event" {
+        crate::event_triggers::receive_blob(app, machine_file, blob)
+            .map_err(|error| RelayError { status: None, message: format!("Persisting event delivery: {error}") })
+    } else {
+        apply_blob(app, machine_file, blob);
+        Ok(())
+    }
+}
+
 pub fn apply_blob(app: &Arc<App>, machine_file: &crate::keys::MachineFile, blob: &BlobIn) {
     let already = {
         let mut state = app.state.lock().unwrap();
@@ -837,6 +851,13 @@ fn apply_blob_contents(app: &Arc<App>, machine_file: &crate::keys::MachineFile, 
             let Ok(machine) = machine_file.machine() else { return };
             match crate::crypto::unseal_json::<Job>(&machine.box_secret, &ciphertext) {
                 Ok(job) => {
+                    // The signed durable inbox alone admits event work and its budget scope.
+                    if job.kind == "event" {
+                        let app = app.clone();
+                        let blob_id = blob.id.clone();
+                        tokio::spawn(async move { delete_remote_blob(&app, &blob_id).await });
+                        return;
+                    }
                     crate::runtime::spawn_local_job(app.clone(), job, Some(blob.id.clone()));
                 }
                 Err(error) => tracing::warn!(%error, "job envelope"),

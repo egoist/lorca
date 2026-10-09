@@ -35,6 +35,8 @@ Every bot maintains structured reviews, blockers, commitments and changes throug
 
 A routine is a task a bot runs on a schedule in its direct chat, on its assigned Runner. The roster carries its schedule, timezone, missed-run policy, and check health. See [Routines](routines.md) for scheduling, read-only checks, recovery, and how the apps show them.
 
+A service's events start work in a bot's DM too, through [event subscriptions](event-triggers.md) on its Runner: each runs the subscription's own task, unattended as a routine's run is, and one that targets a routine waits while the routine is paused.
+
 ## Memory
 
 Reusable procedures live in [Playbooks](playbooks.md), with explicit bot or group-project scope, reviewed workflow capture and standing-instruction proposals, and encrypted revision history. The inspector lists a bot's skills under its memory; saved skills are discovered on later turns and read on demand.

@@ -351,6 +351,7 @@ async fn a_routine_stages_a_held_call_without_a_live_permission_wait() {
     let trigger = Trigger {
         message_id: "routine-marker".into(),
         routine: Some(routine.clone()),
+        event: None,
     };
     let mut auto = scratch.app.auto_review();
     auto.is_enabled = false;
