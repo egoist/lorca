@@ -334,15 +334,20 @@ mod runner {
                 let spec = view.config.channel.clone()?;
                 let service = service_of(&view.config.source)?;
                 let problem = app.channels.problem(&spec.account_id);
+                let installed = app.plugins.lock().unwrap().get(&spec.account_id).is_some();
                 let account_ready = tokens(app, &spec.account_id, service).is_some();
                 let (state, detail) = if !view.config.is_enabled {
                     ("paused", String::new())
+                } else if !installed {
+                    ("offline", "Its account was removed from this Runner.".to_string())
                 } else if let Some(problem) = problem {
                     ("offline", problem)
                 } else if !account_ready {
                     ("offline", setup_words(service).to_string())
                 } else if view.held.is_some() {
                     ("held", "A message’s turn didn’t finish, so later messages wait.".to_string())
+                } else if let Some(waiting) = view.waiting {
+                    ("held", waiting.to_string())
                 } else {
                     let privacy = service == TELEGRAM
                         && spec.listen.needs_every_message()
@@ -605,15 +610,20 @@ mod runner {
 
     // MARK: - The bot's side
 
-    /// What a bot reads about its channels and, in a channel's conversation, where it is.
+    /// What a bot reads about its channels and, in a channel's conversation, where it is: once
+    /// its Runner has a Telegram or Slack account, or it has a channel.
     pub fn prompt(app: &App, bot: &Bot, chat: &Chat) -> String {
+        let mine: Vec<ChannelStatus> = app.channels.statuses().into_iter().filter(|channel| channel.bot_id == bot.id).collect();
+        let accounts = app.plugins.lock().unwrap().installed().iter().any(|plugin| service_of(plugin.service_id()).is_some());
+        if mine.is_empty() && !accounts && chat.meta.channel.is_none() {
+            return String::new();
+        }
         let mut prompt = String::from(
             "\nChannels: a channel has you listen on a Telegram or Slack account the user added: in the chats its bot is in, \
              to every message, mentions of it, replies to it, or hashtags. Each chat or thread becomes a conversation with you \
              here, and each message the channel takes starts your turn there with the channel's task. Set one up with the \
              channels tool when the user asks; pause or remove it when asked.\n",
         );
-        let mine: Vec<ChannelStatus> = app.channels.statuses().into_iter().filter(|channel| channel.bot_id == bot.id).collect();
         if !mine.is_empty() {
             prompt.push_str("Your channels:\n");
             for channel in &mine {

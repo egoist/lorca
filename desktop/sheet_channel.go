@@ -52,8 +52,14 @@ func (w *appWindow) channelView(c *ui.Context, s *sheet, title, channelID string
 			accessoryRow(c.Key("listening"), k, L("Listening"), "", func() {
 				toggleSwitch(c, &on, true).Label(L("Listening")).OnChange(func() { store.SetChannelPaused(id, !on) })
 			})
-			switch channel.State {
-			case model.ChannelHeld:
+			switch {
+			case channel.State == model.ChannelHeld && channel.HeldDelivery == "":
+				// Nothing to settle: it waits for the user, or for its bot to come back.
+				keyValueRow(c.Key("waiting"), k, L("State"), L("On hold"), false, &p.Orange)
+				if channel.Detail != "" {
+					noteRow(c.Key("waiting-note"), k, channel.Detail, nil)
+				}
+			case channel.State == model.ChannelHeld:
 				_, held := actionRow(c.Key("held"), k, L("State"), actionRowOptions{Value: L("On hold"), Tint: &p.Orange, Action: L("Try Again"), Second: L("Skip")})
 				if held.Action {
 					store.SettleHeldMessage(id, true)
@@ -62,12 +68,12 @@ func (w *appWindow) channelView(c *ui.Context, s *sheet, title, channelID string
 					store.SettleHeldMessage(id, false)
 				}
 				noteRow(c.Key("held-note"), k, L("A message’s turn didn’t finish, so later messages wait. Read its conversation, then try it again or skip it."), nil)
-			case model.ChannelOffline:
+			case channel.State == model.ChannelOffline:
 				keyValueRow(c.Key("offline"), k, L("State"), L("Can’t connect"), false, &p.Orange)
 				if channel.Detail != "" {
 					noteRow(c.Key("offline-note"), k, channel.Detail, nil)
 				}
-			case model.ChannelListening:
+			case channel.State == model.ChannelListening:
 				if channel.Detail != "" {
 					noteRow(c.Key("note"), k, channel.Detail, nil)
 				}

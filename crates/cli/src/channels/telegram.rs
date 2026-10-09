@@ -124,11 +124,13 @@ pub async fn read(app: Arc<App>, account_id: String, token: String, cancel: Canc
             failures = 0;
             set_problem(&app, &account_id, None);
         }
+        let mut stuck = false;
         for update in updates.as_array().into_iter().flatten() {
             let Some(update_id) = update["update_id"].as_i64() else { continue };
             if let Some(message) = incoming(&account_id, &me, update) {
                 if let Err(error) = ingest(&app, &message) {
                     tracing::error!(%error, "keeping a Telegram message");
+                    stuck = true;
                     break;
                 }
             }
@@ -136,8 +138,13 @@ pub async fn read(app: Arc<App>, account_id: String, token: String, cancel: Canc
             state.offset = Some(update_id + 1);
             if let Err(error) = save_account(&app, &account_id, &state) {
                 tracing::error!(%error, "saving a Telegram account's place");
+                stuck = true;
                 break;
             }
+        }
+        // The update stays unconfirmed, and is read again after a pause.
+        if stuck && !pause(&cancel, 5.0).await {
+            return;
         }
     }
 }

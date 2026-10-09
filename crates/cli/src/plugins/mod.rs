@@ -838,8 +838,11 @@ pub fn note(app: &Arc<App>, id: &str, state: Option<(&str, &str)>) {
     announce(app);
 }
 
-/// The Runner's plugin list changed: the machine blob and the local app hear.
+/// The Runner's plugin list changed: the machine blob and the local app hear, and the channels
+/// whose accounts it names say how they stand now.
 pub(crate) fn announce(app: &Arc<App>) {
+    #[cfg(feature = "runner")]
+    crate::channels::refresh(app);
     app.push_machine_blob_if_changed();
     app.emit(app.roster_summary());
 }

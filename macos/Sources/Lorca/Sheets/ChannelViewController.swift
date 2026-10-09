@@ -86,6 +86,10 @@ final class ChannelViewController: SheetViewController {
         toggle.state = channel.isPaused ? .off : .on
         var rows: [NSView] = [AccessoryRow(key: L("Listening"), accessory: toggle)]
         switch channel.state {
+        case .held where channel.heldDelivery == nil:
+            // Nothing to settle: it waits for the user, or for its bot to come back.
+            rows.append(KeyValueRow(key: L("State"), value: L("On hold"), tint: .systemOrange))
+            if !channel.detail.isEmpty { rows.append(NoteRow(text: channel.detail)) }
         case .held:
             let held = ActionRow(key: L("State"), value: L("On hold"), tint: .systemOrange, actionTitle: L("Try Again"), secondActionTitle: L("Skip"))
             held.onAction = { [weak self] in self?.settle(retry: true) }

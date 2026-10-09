@@ -535,6 +535,9 @@ pub struct ChannelView {
     pub id: String,
     pub config: SubscriptionConfig,
     pub held: Option<String>,
+    /// Why its work waits with no delivery to settle: a week without the user, or a bot that
+    /// left this Runner.
+    pub waiting: Option<&'static str>,
 }
 
 /// This Runner's channels.
@@ -547,7 +550,12 @@ pub fn channel_views(app: &App) -> anyhow::Result<Vec<ChannelView>> {
             .into_iter()
             .find(|d| matches!(d.state, DeliveryState::Failed | DeliveryState::Uncertain))
             .map(|d| d.id);
-        views.push(ChannelView { id: sub.id, config: sub.config, held });
+        let waiting = match sub.health.problem.as_deref() {
+            Some(AWAY_PROBLEM) => Some("Nobody has written in Lorca for a week, so messages wait until you do."),
+            Some(TARGET_PROBLEM) => Some("Its bot is no longer on this Runner. Remove the channel and ask the bot to set it up again."),
+            _ => None,
+        };
+        views.push(ChannelView { id: sub.id, config: sub.config, held, waiting });
     }
     Ok(views)
 }
@@ -990,11 +998,18 @@ fn purge(app: &App) -> anyhow::Result<()> {
 /// edit that landed since this tick read it is kept.
 #[cfg(feature = "runner")]
 fn hold(app: &App, key: &[u8; 32], id: &str, problem: Option<&str>) -> anyhow::Result<()> {
-    let db = app.store.connection.lock().unwrap();
-    let mut sub = subscription(&db, key, id)?;
-    if sub.health.problem.as_deref() != problem {
-        sub.health.problem = problem.map(str::to_string);
-        save_subscription(&db, key, &sub)?;
+    let changed = {
+        let db = app.store.connection.lock().unwrap();
+        let mut sub = subscription(&db, key, id)?;
+        let changed = sub.health.problem.as_deref() != problem;
+        if changed {
+            sub.health.problem = problem.map(str::to_string);
+            save_subscription(&db, key, &sub)?;
+        }
+        changed && sub.config.is_channel()
+    };
+    if changed {
+        channels_changed(app);
     }
     Ok(())
 }
@@ -1711,6 +1726,32 @@ mod tests {
         }
         let listed = &serve(&scratch.0, "events.list", &json!({})).unwrap()["subscriptions"][0];
         assert_ne!(listed["health"]["problem"], AWAY_PROBLEM);
+    }
+
+    #[cfg(feature = "runner")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_channel_waiting_for_the_user_says_so_with_nothing_to_settle() {
+        let scratch = scratch();
+        let app = &scratch.0;
+        let manifest = crate::marketplace::current(app).plugin("telegram").cloned().unwrap();
+        let account = crate::plugins::accounts::install(app, manifest, "marketplace", Some("Community")).unwrap();
+        crate::plugins::set_variables(app, &account.id, &[("TELEGRAM_BOT_TOKEN".to_string(), "1:abc".to_string())].into_iter().collect()).unwrap();
+        let bot = config(app, QueuePolicy::Fifo).bot_id;
+        let listen = crate::channels::Listen { tags: vec!["feedback".into()], ..Default::default() };
+        let channel = crate::channels::config_for(&bot, "telegram", "Feedback", "File it", crate::channels::ChannelSpec { account_id: account.id, chats: vec![], listen });
+        let id = serve(app, "events.create", &json!({ "config": channel })).unwrap()["id"].as_str().unwrap().to_string();
+        assert_eq!(app.channels.statuses()[0].state, "listening");
+        {
+            let key = app.dek().unwrap();
+            let db = app.store.connection.lock().unwrap();
+            let mut sub = subscription(&db, &key, &id).unwrap();
+            sub.enabled_at -= crate::routines::AWAY_AFTER_SECS + 60;
+            save_subscription(&db, &key, &sub).unwrap();
+        }
+        tick(app).unwrap();
+        let status = app.channels.statuses().remove(0);
+        assert_eq!(status.state, "held");
+        assert!(status.detail.contains("for a week") && status.held_delivery.is_none(), "{status:?}");
     }
 
     #[test]

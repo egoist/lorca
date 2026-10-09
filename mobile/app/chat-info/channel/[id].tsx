@@ -28,7 +28,9 @@ export default function ChannelScreen() {
   if (!channel) return null;
   const kept = [...conversations].sort((a, b) => (b.messages.at(-1)?.created_at ?? b.created_at) - (a.messages.at(-1)?.created_at ?? a.created_at)).slice(0, 6);
   const held = channel.state === "held";
-  const footer = held
+  // A held message can be tried again or skipped; a channel waiting for the user has nothing to settle.
+  const settles = held && !!channel.held_delivery;
+  const footer = settles
     ? t("A message’s turn didn’t finish, so later messages wait. Read its conversation, then try it again or skip it.")
     : channel.detail || undefined;
 
@@ -53,8 +55,8 @@ export default function ChannelScreen() {
         <Section footer={footer}>
           <ToggleRow title={t("Listening")} value={channel.state !== "paused"} onValueChange={(on) => engine.setChannelPaused(channel.id, !on)} />
           {held && <Row title={t("State")} detail={t("On hold")} />}
-          {held && <Row title={t("Try Again")} action onPress={() => engine.settleHeldMessage(channel.id, true)} />}
-          {held && <Row title={t("Skip")} action onPress={() => engine.settleHeldMessage(channel.id, false)} />}
+          {settles && <Row title={t("Try Again")} action onPress={() => engine.settleHeldMessage(channel.id, true)} />}
+          {settles && <Row title={t("Skip")} action onPress={() => engine.settleHeldMessage(channel.id, false)} />}
           {channel.state === "offline" && <Row title={t("State")} detail={t("Can’t connect")} />}
         </Section>
         <Section>
