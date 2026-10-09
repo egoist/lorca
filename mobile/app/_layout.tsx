@@ -1,4 +1,4 @@
-import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from "expo-router";
+import { DarkTheme, DefaultTheme, Stack, ThemeProvider, usePathname, useRootNavigationState, useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { useEffect, useMemo } from "react";
 import { Platform, useColorScheme } from "react-native";
@@ -19,11 +19,23 @@ export default function RootLayout() {
   const scheme = useColorScheme();
   const screenOptions = useStackScreenOptions();
   const material = useMaterialPalette();
+  const router = useRouter();
+  const pathname = usePathname();
+  const navigationKey = useRootNavigationState()?.key;
+  const pendingLink = useStore((s) => s.pendingTemplateLink);
 
   useEffect(() => {
     void engine.start();
     startUpdateChecks();
   }, []);
+
+  // A shared bot's link the app was opened with opens New Bot from Template once the phone has an
+  // account; the sheet takes one that arrives while it is up.
+  useEffect(() => {
+    if (!navigationKey || !ready || !paired || !pendingLink || pathname === "/template") return;
+    useStore.setState({ pendingTemplateLink: null });
+    router.push({ pathname: "/template", params: { link: pendingLink } });
+  }, [navigationKey, ready, paired, pendingLink, pathname]);
 
   const navigationTheme = useMemo(() => {
     const base = p.dark ? DarkTheme : DefaultTheme;
@@ -83,6 +95,7 @@ export default function RootLayout() {
               <Stack.Screen name="command/[id]" options={Platform.OS === "android" ? sheet : { ...sheet, sheetAllowedDetents: [0.5, 1], sheetGrabberVisible: true }} />
               <Stack.Screen name="tasks" options={Platform.OS === "android" ? nestedSheet : { ...nestedSheet, sheetAllowedDetents: [0.5, 1], sheetGrabberVisible: true }} />
               <Stack.Screen name="new-bot" options={sheet} />
+              <Stack.Screen name="template" options={sheet} />
               <Stack.Screen name="new-group" options={sheet} />
               <Stack.Screen name="settings" options={nestedSheet} />
               <Stack.Screen

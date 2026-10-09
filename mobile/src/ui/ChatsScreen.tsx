@@ -199,6 +199,9 @@ export function ChatsScreen({ sidebar = false }: { sidebar?: boolean }) {
               <Stack.Toolbar.MenuAction icon="person.badge.plus" onPress={() => router.push("/new-bot")}>
                 {t("New Bot")}
               </Stack.Toolbar.MenuAction>
+              <Stack.Toolbar.MenuAction icon="square.and.arrow.down" onPress={() => router.push("/template")}>
+                {t("New Bot from Template…")}
+              </Stack.Toolbar.MenuAction>
             </Stack.Toolbar.Menu>
           </Stack.Toolbar>
         </>
@@ -215,6 +218,9 @@ export function ChatsScreen({ sidebar = false }: { sidebar?: boolean }) {
               </Stack.Toolbar.MenuAction>
               <Stack.Toolbar.MenuAction icon={AndroidIcons.personAdd} onPress={() => router.push("/new-bot")}>
                 {t("New Bot")}
+              </Stack.Toolbar.MenuAction>
+              <Stack.Toolbar.MenuAction icon={AndroidIcons.download} onPress={() => router.push("/template")}>
+                {t("New Bot from Template…")}
               </Stack.Toolbar.MenuAction>
             </Stack.Toolbar.Menu>
           </Stack.Toolbar>
