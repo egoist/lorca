@@ -1,4 +1,5 @@
 import ExpoModulesCore
+import QuickLook
 import Security
 
 /// The Rust core behind the phone: started once with the app's folder and the phone's facts,
@@ -70,7 +71,32 @@ public class LorcaCoreModule: Module {
     Function("wake") {
       self.core?.wake()
     }
+
+    // A file in Quick Look over the app: images, PDFs, text, recordings, and more, with the
+    // system's own share button.
+    AsyncFunction("previewFile") { (path: String) in
+      guard let presenter = self.appContext?.utilities?.currentViewController() else { return }
+      presenter.present(FilePreviewController(url: URL(fileURLWithPath: path)), animated: true)
+    }
+    .runOnQueue(.main)
   }
+}
+
+/// Quick Look on one file. The controller is its own data source, which it holds only weakly.
+private final class FilePreviewController: QLPreviewController, QLPreviewControllerDataSource {
+  private let url: URL
+
+  init(url: URL) {
+    self.url = url
+    super.init(nibName: nil, bundle: nil)
+    dataSource = self
+  }
+
+  @available(*, unavailable)
+  required init?(coder: NSCoder) { fatalError() }
+
+  func numberOfPreviewItems(in controller: QLPreviewController) -> Int { 1 }
+  func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> QLPreviewItem { url as NSURL }
 }
 
 final class NotStartedException: Exception {

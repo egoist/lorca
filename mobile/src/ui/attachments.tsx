@@ -1,6 +1,7 @@
 // Attachments in a bubble: image thumbnails sized from the width and height the message
-// carries, and a card for any other file. The bytes come from the phone's own store, or from
-// the relay the first time a message from another Device shows them.
+// carries, and a card for any other file, which opens it. The bytes come from the phone's own
+// store, or from the relay the first time a message from another Device shows them; a fetch that
+// failed says so and is tried again on a tap.
 
 import { Image } from "expo-image";
 import { useRouter } from "expo-router";
@@ -13,6 +14,7 @@ import { useStore } from "../core/store";
 import { t, useLanguage } from "../i18n";
 import { Symbol } from "./Symbol";
 import { Font, usePalette } from "./theme";
+import { openFile } from "./outputs";
 
 export const IMAGE_MAX = 220;
 const IMAGE_MIN = 72;
@@ -50,10 +52,11 @@ function AttachmentTile({ attachment, onUserBubble, maxWidth }: { attachment: At
   const p = usePalette();
   const router = useRouter();
   const uri = useAttachmentUri(attachment);
+  const error = useStore((s) => s.fileErrors[attachment.id]);
   const quiet: ColorValue = onUserBubble ? "rgba(255,255,255,0.18)" : p.fill;
   const foreground: ColorValue = onUserBubble ? p.userBubbleText : p.botBubbleText;
 
-  if (isImage(attachment)) {
+  if (isImage(attachment) && !error) {
     const box = imageBox(attachment, maxWidth);
     return (
       <Pressable
@@ -65,16 +68,27 @@ function AttachmentTile({ attachment, onUserBubble, maxWidth }: { attachment: At
       </Pressable>
     );
   }
+  // A file's card opens it, as its sheet's Open does; one whose bytes could not be fetched says so
+  // and fetches them again on a tap.
+  const detail = error ? t("Couldn't download · Retry") : uri ? fileSize(attachment.size) : `${fileSize(attachment.size)} · ${t("fetching…")}`;
   return (
-    <View style={[styles.card, { backgroundColor: quiet, width: Math.min(FILE_WIDTH, maxWidth) }]} accessibilityLabel={attachment.name}>
-      <Symbol name="doc.fill" size={22} color={foreground} />
+    <Pressable
+      onPress={error ? () => engine.retryFile(attachment) : uri ? () => void openFile(attachment) : undefined}
+      disabled={!error && !uri}
+      style={[styles.card, { backgroundColor: quiet, width: Math.min(FILE_WIDTH, maxWidth) }, isImage(attachment) && imageBox(attachment, maxWidth)]}
+      accessibilityLabel={`${attachment.name}, ${detail}`}
+      accessibilityRole="button"
+    >
+      <Symbol name={isImage(attachment) ? "photo" : "doc.fill"} size={22} color={foreground} />
       <View style={{ flex: 1 }}>
         <Text style={[styles.name, { color: foreground }]} numberOfLines={1}>
           {attachment.name}
         </Text>
-        <Text style={[styles.size, { color: foreground, opacity: 0.7 }]}>{uri ? fileSize(attachment.size) : `${fileSize(attachment.size)} · ${t("fetching…")}`}</Text>
+        <Text style={[styles.size, { color: foreground, opacity: 0.7 }]} numberOfLines={1}>
+          {detail}
+        </Text>
       </View>
-    </View>
+    </Pressable>
   );
 }
 

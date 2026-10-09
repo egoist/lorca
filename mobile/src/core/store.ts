@@ -5,7 +5,7 @@
 import { useMemo } from "react";
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
-import { runsInTerminal, type AutoReview, type Bot, type Chat, type ChatMeta, type ChatUsage, type Device, type Message, type ProviderModel, type ProviderStatus, type RelayProblem, type Routine } from "./model";
+import { groupOutputs, runsInTerminal, type AutoReview, type OutputSeries, type Bot, type Chat, type ChatMeta, type ChatUsage, type Device, type Message, type ProviderModel, type ProviderStatus, type RelayProblem, type Routine } from "./model";
 import { t } from "../i18n";
 import { savePrefs } from "./prefs";
 
@@ -70,6 +70,11 @@ export interface StoreState {
   activeSince: number;
   /// Attachment id → file URI, for the bytes this phone has.
   files: Record<string, string>;
+  /// Attachment id → why its bytes could not be fetched, kept until the user retries, so a
+  /// scroll does not ask again.
+  fileErrors: Record<string, string>;
+  /// Chat id → every version of its outputs the core listed when the chat's details last opened.
+  outputs: Record<string, Message[]>;
   dictation_lang?: string;
 }
 
@@ -97,6 +102,8 @@ function empty(): Omit<StoreState, "ready" | "dictation_lang" | "appActive" | "a
     pendingTasks: {},
     openChatId: null,
     files: {},
+    fileErrors: {},
+    outputs: {},
   };
 }
 
@@ -302,6 +309,7 @@ export function removeMessage(chatId: string, messageId: string) {
   useStore.setState((s) => ({
     chats: s.chats.map((chat) => (chat.id === chatId ? { ...chat, messages: chat.messages.filter((m) => m.id !== messageId) } : chat)),
     pendingTasks: omit(s.pendingTasks, messageId),
+    outputs: s.outputs[chatId] ? { ...s.outputs, [chatId]: s.outputs[chatId].filter((m) => m.id !== messageId) } : s.outputs,
   }));
 }
 
@@ -311,6 +319,7 @@ export function removeChat(chatId: string) {
     statuses: omit(s.statuses, chatId),
     thinking: omit(s.thinking, chatId),
     retries: omit(s.retries, chatId),
+    outputs: omit(s.outputs, chatId),
   }));
 }
 
@@ -332,7 +341,12 @@ export function markRead(chatId: string) {
 }
 
 export function markFile(id: string, uri: string) {
-  useStore.setState((s) => (s.files[id] === uri ? s : { files: { ...s.files, [id]: uri } }));
+  useStore.setState((s) => (s.files[id] === uri ? s : { files: { ...s.files, [id]: uri }, fileErrors: omit(s.fileErrors, id) }));
+}
+
+/// The attachment's bytes could not be fetched, or (`null`) may be asked for again.
+export function markFileError(id: string, error: string | null) {
+  useStore.setState((s) => ({ fileErrors: error === null ? omit(s.fileErrors, id) : { ...s.fileErrors, [id]: error } }));
 }
 
 export function setRunning(jobId: string, running: Running | null) {
@@ -387,6 +401,15 @@ function pick<T>(record: Record<string, T>, keys: Set<string>): Record<string, T
 
 export function useChat(id: string): Chat | undefined {
   return useStore((s) => s.chats.find((c) => c.id === id));
+}
+
+/// The chat's outputs, the latest published first: the output messages loaded in the chat and
+/// what `outputs.list` answered for it, one series per output with every version.
+export function useOutputs(chatId: string | undefined): OutputSeries[] {
+  const messages = useStore((s) => (chatId ? s.chats.find((c) => c.id === chatId)?.messages : undefined));
+  const listed = useStore((s) => (chatId ? s.outputs[chatId] : undefined));
+  // The loaded message first: it is the newer copy of one the list also has.
+  return useMemo(() => groupOutputs([...(messages ?? []), ...(listed ?? [])]), [messages, listed]);
 }
 
 export function useBots(): Bot[] {

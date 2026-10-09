@@ -17,6 +17,7 @@ import {
   chatById,
   endActivity,
   markFile,
+  markFileError,
   markRead,
   patchRoutine,
   removeChat,
@@ -267,17 +268,42 @@ class Engine {
     return core.request<ChatSearchResults>("chats.search", { query: value, limit: 24 });
   }
 
-  /// The attachment's bytes, from this phone's copy or the relay, as a file URI in the store.
+  /// The attachment's bytes, from this phone's copy or the relay, as a file URI in the store. A
+  /// fetch that failed is not asked again until `retryFile`.
   async fetchFile(attachment: Attachment): Promise<void> {
-    if (useStore.getState().files[attachment.id] || this.fetchingFiles.has(attachment.id)) return;
+    const { files, fileErrors } = useStore.getState();
+    if (files[attachment.id] || fileErrors[attachment.id] || this.fetchingFiles.has(attachment.id)) return;
     this.fetchingFiles.add(attachment.id);
     try {
       const { path } = await core.request<{ path: string }>("files.path", { attachment });
       markFile(attachment.id, `file://${path}`);
     } catch (error) {
-      console.warn("fetching attachment", error instanceof Error ? error.message : error);
+      markFileError(attachment.id, error instanceof Error ? error.message : String(error));
     } finally {
       this.fetchingFiles.delete(attachment.id);
+    }
+  }
+
+  retryFile(attachment: Attachment) {
+    markFileError(attachment.id, null);
+    void this.fetchFile(attachment);
+  }
+
+  /// The path of the attachment as a file named for what it is, for Quick Look or another app:
+  /// the bytes under their attachment id carry no extension, so the core keeps a private named
+  /// copy.
+  async namedFile(attachment: Attachment): Promise<string> {
+    const { path } = await core.request<{ path: string }>("files.path", { attachment, named: true });
+    return path;
+  }
+
+  /// Every output version this phone has synced for the chat, for its details.
+  async listOutputs(chatId: string): Promise<void> {
+    try {
+      const { outputs } = await core.request<{ outputs: Message[] }>("outputs.list", { chat_id: chatId });
+      useStore.setState((s) => ({ outputs: { ...s.outputs, [chatId]: outputs } }));
+    } catch (error) {
+      console.warn("listing outputs", error instanceof Error ? error.message : error);
     }
   }
 

@@ -6,6 +6,8 @@ interface Native {
   start(home: string, name: string, os: string, osVersion: string, model: string): Promise<void>;
   request(method: string, params: string): Promise<string>;
   wake(): void;
+  /// iOS only.
+  previewFile?(path: string): Promise<void>;
   /// Android only.
   setOpenChat?(chatId: string | null): void;
   /// Android only.
@@ -45,6 +47,13 @@ export async function request<T = unknown>(method: string, params: unknown = {})
 export function onEvent(listener: (frame: Frame) => void): () => void {
   const subscription = native.addListener("event", ({ json }) => listener(JSON.parse(json) as Frame));
   return () => subscription.remove();
+}
+
+/// iOS: the file in Quick Look, over the app. Android has none; the file goes to the share sheet.
+export const canPreviewFiles = !!native.previewFile;
+
+export function previewFile(path: string): Promise<void> {
+  return native.previewFile ? native.previewFile(path) : Promise.resolve();
 }
 
 /// The app came to the foreground: sync now rather than after the backoff.

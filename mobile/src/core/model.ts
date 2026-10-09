@@ -321,6 +321,88 @@ export interface Message {
   promoted_at?: number;
   /** A message of the user's the bot's turn holds for its next step; Send now has it read now. */
   queued?: boolean;
+  /** A file or document link a bot published: this message is one version of it. */
+  output?: Output;
+}
+
+/// A published output: `id` names it across its versions, the message carrying it is the version.
+/// A file is the message's attachment; a link is `url`.
+export interface Output {
+  id: string;
+  name: string;
+  mime: string;
+  bot_id: string;
+  version: number;
+  url?: string;
+  evidence?: OutputEvidence;
+}
+
+/// What the bot says it checked: a test run, a screenshot from before or after a change, or
+/// another check, and how it went.
+export interface OutputEvidence {
+  kind: "test_result" | "before_screenshot" | "after_screenshot" | "verification";
+  summary: string;
+  status: "passed" | "failed" | "unverified";
+  command?: string;
+}
+
+export function evidenceTitle(evidence: OutputEvidence): string {
+  switch (evidence.kind) {
+    case "test_result":
+      return t("Test result");
+    case "before_screenshot":
+      return t("Before screenshot");
+    case "after_screenshot":
+      return t("After screenshot");
+    default:
+      return t("Check");
+  }
+}
+
+export function evidenceStatus(evidence: OutputEvidence): string {
+  return evidence.status === "passed" ? t("Passed") : evidence.status === "failed" ? t("Failed") : t("Not verified");
+}
+
+/// The document a link output points at; only an https address without credentials opens.
+export function documentUrl(output: Output): string | undefined {
+  if (!output.url) return undefined;
+  try {
+    const url = new URL(output.url);
+    return url.protocol === "https:" && url.hostname && !url.username && !url.password ? url.href : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/// The SF Symbol for what the output is.
+export function outputSymbol(output: Output): string {
+  if (output.url) return "link";
+  if (output.mime.startsWith("image/")) return "photo";
+  if (output.mime.startsWith("video/")) return "film";
+  if (output.mime.startsWith("audio/")) return "waveform";
+  if (output.mime === "application/pdf") return "doc.richtext";
+  if (output.mime.startsWith("text/") || output.mime === "application/json") return "doc.text";
+  return "doc";
+}
+
+/// An output and its versions, newest first.
+export interface OutputSeries {
+  id: string;
+  versions: Message[];
+}
+
+/// A chat's output messages as one series per output, the latest published first.
+export function groupOutputs(messages: Message[]): OutputSeries[] {
+  const byId = new Map<string, Message[]>();
+  for (const message of messages) {
+    if (!message.output) continue;
+    const versions = byId.get(message.output.id) ?? [];
+    if (!versions.some((m) => m.id === message.id)) versions.push(message);
+    byId.set(message.output.id, versions);
+  }
+  return [...byId.entries()]
+    .map(([id, versions]) => ({ id, versions: versions.sort((a, b) => b.output!.version - a.output!.version) }))
+    .sort((a, b) => b.versions[0].created_at - a.versions[0].created_at);
 }
 
 /// A message quoted by the user's reply: who wrote it and how it opens, as the core keeps it with

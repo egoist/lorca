@@ -5,7 +5,7 @@ import { Platform, ScrollView, StyleSheet, Switch, Text, View } from "react-nati
 import { Pressable } from "../../src/ui/Pressable";
 import { chatTitle, engine } from "../../src/core/engine";
 import { providerKinds, providerLabel, providerModels, PROVIDER_KINDS, thinkingLabel, thinkingLevels, withCustomModels, type Bot, type Routine } from "../../src/core/model";
-import { deviceIsOnline, useBotMap, useChat, useRoutines, useStore, useWorkingBotIds } from "../../src/core/store";
+import { deviceIsOnline, useBotMap, useChat, useOutputs, useRoutines, useStore, useWorkingBotIds } from "../../src/core/store";
 import { t, useLanguage } from "../../src/i18n";
 import { AvatarCluster, BotAvatar } from "../../src/ui/Avatar";
 import { CheckRow, FieldRow, Row, Section, ToggleRow } from "../../src/ui/forms";
@@ -16,6 +16,7 @@ import { deviceSymbol } from "../../src/ui/devices";
 import { AndroidIcons, CloseToolbar } from "../../src/ui/navigation";
 import { haptic } from "../../src/ui/haptics";
 import { alert } from "../../src/ui/alert";
+import { OutputRow } from "../../src/ui/outputs";
 
 export default function ChatInfoScreen() {
   useLanguage();
@@ -38,8 +39,13 @@ export default function ChatInfoScreen() {
   const [title, setTitle] = useState(chat?.title ?? "");
   const [botName, setBotName] = useState(bot?.name ?? "");
   const routines = useRoutines(chat?.kind === "dm" ? chat.bot_ids[0] : undefined);
+  const outputs = useOutputs(chat?.id);
 
   useEffect(() => setBotName(bot?.name ?? ""), [bot?.id, bot?.name]);
+  // The chat's outputs, older ones the transcript has not loaded included.
+  useEffect(() => {
+    if (id) void engine.listOutputs(id);
+  }, [id]);
 
   if (!chat) return null;
 
@@ -136,6 +142,16 @@ export default function ChatInfoScreen() {
         <Section>
           <FieldRow label={t("Name")} value={title} onChangeText={setTitle} placeholder={members.map((m) => m.name).join(", ")} onBlur={commitTitle} onSubmitEditing={commitTitle} returnKeyType="done" textAlign="right" />
           <Row title={t("Description")} subtitle={chat.description || undefined} subtitleLines={2} chevron onPress={() => router.push(`/chat-info/group-description/${chat.id}`)} />
+        </Section>
+      )}
+
+      {/* What the chat's bots published: the latest three, and View All for the rest. */}
+      {outputs.length > 0 && (
+        <Section title={t("Outputs")}>
+          {outputs.slice(0, 3).map((series) => (
+            <OutputRow key={series.id} series={series} isGroup={isGroup} onPress={() => router.push({ pathname: "/chat-info/output/[id]", params: { id: series.id, chat: chat.id } })} />
+          ))}
+          {outputs.length > 3 ? <Row title={t("View All")} detail={String(outputs.length)} chevron onPress={() => router.push(`/chat-info/outputs/${chat.id}`)} /> : null}
         </Section>
       )}
 
