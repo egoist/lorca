@@ -438,8 +438,9 @@ mod tests {
         let mut unsupported = raw["packs"][0].clone();
         unsupported["version"] = serde_json::json!(99);
         raw["packs"].as_array_mut().unwrap().push(unsupported);
+        let bundled = raw["packs"].as_array().unwrap().len() - 1;
         let parsed = parse(&raw.to_string()).unwrap();
-        assert_eq!(parsed.packs.len(), 3);
+        assert_eq!(parsed.packs.len(), bundled);
         assert_eq!(parsed.plugins.len(), old.plugins.len());
         assert_eq!(parsed.bots.len(), old.bots.len());
         raw.as_object_mut().unwrap().remove("packs");

@@ -1892,6 +1892,7 @@ impl App {
                     "status": status,
                     "last_seen": seen as f64,
                     "plugins": device.plugins,
+                    "channels": device.channels,
                     "version": device.version,
                     "update": device.update,
                 })

@@ -44,8 +44,22 @@ pub struct PackRoutine {
     pub prompt: String,
 }
 
+/// A channel the workflow's bot listens on once the workflow is on: the account of one of its
+/// connections, what it takes, and what the bot does with each message.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PackChannel {
+    pub id: String,
+    pub specialist_id: String,
+    /// A connection's service: `telegram` or `slack`.
+    pub service_id: String,
+    pub name: String,
+    pub listen: crate::channels::Listen,
+    pub task: String,
+}
+
 /// Optional, additive entries in the v1 index. A service a pack needs may arrive in a later
-/// index; until then its setup waits on that account.
+/// index; until then its setup waits on that account. A pack with channels is version 2, which
+/// a build that does not know channels skips.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Pack {
     pub id: String,
@@ -61,6 +75,8 @@ pub struct Pack {
     pub connections: Vec<Requirement>,
     pub specialists: Vec<Specialist>,
     pub routines: Vec<PackRoutine>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub channels: Vec<PackChannel>,
     pub sample_specialist: String,
     pub sample_prompt: String,
 }
@@ -76,19 +92,32 @@ fn pack_symbol() -> String {
 impl Pack {
     pub fn parse(value: &Value, index: &Index) -> Result<Self, String> {
         let pack: Self = serde_json::from_value(value.clone()).map_err(|e| format!("Not a workflow pack: {e}"))?;
-        if pack.version != 1
+        if pack.version != if pack.channels.is_empty() { 1 } else { 2 }
             || !crate::plugins::is_id(&pack.id)
             || [&pack.name, &pack.outcome, &pack.description, &pack.sample_prompt].iter().any(|s| s.trim().is_empty())
         {
             return Err("A workflow pack needs a supported version, id, name, outcome, description and sample.".into());
         }
-        if pack.specialists.is_empty() || pack.specialists.len() > 6 || pack.questions.len() > 12 || pack.connections.len() > 12 || pack.routines.len() > 20 {
+        if pack.specialists.is_empty() || pack.specialists.len() > 6 || pack.questions.len() > 12 || pack.connections.len() > 12 || pack.routines.len() > 20 || pack.channels.len() > 6 {
             return Err("A workflow pack exceeds its setup limits.".into());
         }
         unique_ids(pack.questions.iter().map(|q| q.id.as_str()))?;
         unique_ids(pack.specialists.iter().map(|s| s.id.as_str()))?;
         unique_ids(pack.connections.iter().map(|c| c.service_id.as_str()))?;
         unique_ids(pack.routines.iter().map(|r| r.id.as_str()))?;
+        unique_ids(pack.channels.iter().map(|c| c.id.as_str()))?;
+        for channel in &pack.channels {
+            if !pack.specialists.iter().any(|s| s.id == channel.specialist_id)
+                || !pack.connections.iter().any(|c| c.service_id == channel.service_id)
+                || crate::channels::service_of(&channel.service_id).is_none()
+                || channel.listen.is_empty()
+                || channel.name.trim().is_empty()
+                || channel.name.chars().count() > 60
+                || channel.task.trim().is_empty()
+            {
+                return Err("A workflow channel needs a specialist, a Telegram or Slack connection, a filter, a name, and a task.".into());
+            }
+        }
         if pack.questions.iter().any(|q| q.label.trim().is_empty()) {
             return Err("A setup question needs a label.".into());
         }
@@ -158,6 +187,9 @@ pub struct Setup {
     /// questions, connections, sample, reviewed, enabled, cancelled.
     pub phase: String,
     pub sample: Option<Sample>,
+    /// The channels the setup made on its Runner, by the pack's channel id.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub channel_ids: BTreeMap<String, String>,
 }
 
 /// The kind of a setup's sample Job.
@@ -293,6 +325,7 @@ pub async fn handle(app: &Arc<App>, method: &str, params: &Value) -> Result<Valu
             connection_ids: BTreeMap::new(),
             phase: "questions".into(),
             sample: None,
+            channel_ids: BTreeMap::new(),
         };
         save(app, &mut setup)?;
         return view(app, &setup);
@@ -411,6 +444,7 @@ pub async fn handle(app: &Arc<App>, method: &str, params: &Value) -> Result<Valu
             for id in setup.routine_ids.values() {
                 crate::routines::set_enabled(app, id, true)?;
             }
+            turn_on_channels(app, &mut setup).await?;
             setup.phase = "enabled".into();
             save(app, &mut setup)?;
         }
@@ -425,6 +459,7 @@ pub async fn handle(app: &Arc<App>, method: &str, params: &Value) -> Result<Valu
                 }
             }
             pause_owned(app, &setup)?;
+            pause_channels(app, &setup).await;
             setup.phase = "cancelled".into();
             setup.sample = None;
             save(app, &mut setup)?;
@@ -442,6 +477,47 @@ pub async fn handle(app: &Arc<App>, method: &str, params: &Value) -> Result<Valu
         }
     }
     Ok(out)
+}
+
+/// Makes or updates the workflow's channels on its Runner and turns them on: the one recorded
+/// when it is still there with the same bot and account, else the Runner's channel of that bot,
+/// account, and name (a lost reply), else a new one. One whose account changed is replaced.
+async fn turn_on_channels(app: &Arc<App>, setup: &mut Setup) -> Result<(), String> {
+    for spec in setup.pack.channels.clone() {
+        let bot_id = setup.bot_ids.get(&spec.specialist_id).cloned().ok_or("Set up the workflow's bot first.")?;
+        let account_id = setup.connection_ids.get(&spec.service_id).cloned().ok_or("Choose the workflow's account first.")?;
+        let channel = crate::channels::ChannelSpec { account_id: account_id.clone(), chats: Vec::new(), listen: spec.listen.clone().normalized() };
+        let config = crate::channels::config_for(&bot_id, &spec.service_id, &spec.name, &spec.task, channel);
+        let advertised = app.device(&setup.runner_id).map(|runner| runner.channels).unwrap_or_default();
+        let recorded = setup.channel_ids.get(&spec.id).and_then(|id| advertised.iter().find(|c| &c.id == id));
+        let existing = recorded
+            .filter(|c| c.bot_id == bot_id && c.account_id == account_id)
+            .or_else(|| advertised.iter().find(|c| c.bot_id == bot_id && c.account_id == account_id && c.name == config.name));
+        if let Some(stale) = recorded.filter(|c| existing.is_none_or(|e| e.id != c.id)) {
+            let _ = crate::event_triggers::dispatch(app, "events.delete", json!({ "runner_id": setup.runner_id, "id": stale.id })).await;
+        }
+        let id = match existing {
+            Some(existing) => {
+                crate::event_triggers::dispatch(app, "events.update", json!({ "runner_id": setup.runner_id, "id": existing.id, "config": config })).await?;
+                existing.id.clone()
+            }
+            None => {
+                let created = crate::event_triggers::dispatch(app, "events.create", json!({ "runner_id": setup.runner_id, "config": config })).await?;
+                str_param(&created, "id")?.to_string()
+            }
+        };
+        setup.channel_ids.insert(spec.id.clone(), id);
+    }
+    Ok(())
+}
+
+/// Turning a workflow off pauses its channels; their conversations stay.
+async fn pause_channels(app: &Arc<App>, setup: &Setup) {
+    for id in setup.channel_ids.values() {
+        if let Err(error) = crate::event_triggers::dispatch(app, "events.pause", json!({ "runner_id": setup.runner_id, "id": id })).await {
+            tracing::warn!(%error, "pausing a workflow's channel");
+        }
+    }
 }
 
 fn validate_answers(pack: &Pack, answers: &BTreeMap<String, String>) -> Result<(), String> {
@@ -636,9 +712,17 @@ fn view(app: &App, setup: &Setup) -> Result<Value, String> {
         .map(|s| json!({ "id": s.id, "name": setup.templates[&s.id].name, "selected_id": planned_bot(app, setup, &s.id, None).map(|b| b.id), "choices": candidates }))
         .collect();
     let routines: Vec<_> = setup.routine_ids.values().filter_map(|id| app.routine(id)).map(|r| app.routine_out(&r)).collect();
+    // What the workflow listens to, and once it is on, the Runner's channel.
+    let advertised = app.device(&setup.runner_id).map(|runner| runner.channels).unwrap_or_default();
+    let channels: Vec<_> = setup
+        .pack
+        .channels
+        .iter()
+        .map(|c| json!({ "id": c.id, "name": c.name, "service_id": c.service_id, "listen": c.listen, "channel": setup.channel_ids.get(&c.id).and_then(|id| advertised.iter().find(|s| &s.id == id)) }))
+        .collect();
     let sample_messages: Vec<_> =
         setup.sample.as_ref().into_iter().flat_map(|s| s.message_ids.iter().filter_map(|id| app.message(&s.chat_id, id))).map(|m| m.for_app()).collect();
-    Ok(json!({ "setup": setup, "connections": connections, "specialists": specialists, "routines": routines, "sample_messages": sample_messages, "is_running": is_running(app, setup) }))
+    Ok(json!({ "setup": setup, "connections": connections, "specialists": specialists, "routines": routines, "channels": channels, "sample_messages": sample_messages, "is_running": is_running(app, setup) }))
 }
 
 /// Sets the result boundary only after obtaining the chat lock, so replies from a preceding
@@ -852,9 +936,16 @@ mod tests {
     #[test]
     fn packs_validate_references_ids_versions_and_schedules() {
         let index = marketplace::bundled();
-        assert_eq!(index.packs.len(), 3);
+        assert_eq!(index.packs.len(), 4);
         for pack in &index.packs {
             assert!(Pack::parse(&serde_json::to_value(pack).unwrap(), &index).is_ok());
+        }
+        // A pack with channels is version 2, and each channel names one of its connections.
+        let feedback = serde_json::to_value(index.pack("feedback-collector").unwrap()).unwrap();
+        for (pointer, value) in [("/version", json!(1)), ("/channels/0/service_id", json!("gmail")), ("/channels/0/listen", json!({})), ("/channels/0/specialist_id", json!("missing"))] {
+            let mut invalid = feedback.clone();
+            *invalid.pointer_mut(pointer).unwrap() = value;
+            assert!(Pack::parse(&invalid, &index).is_err(), "{pointer}");
         }
         let original = serde_json::to_value(&index.packs[0]).unwrap();
         for (field, value) in [
@@ -1157,6 +1248,41 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn turning_a_workflow_on_starts_its_channel_and_turning_it_off_pauses_it() {
+        let fixture = Fixture::new();
+        fixture.provider();
+        let app = &fixture.app;
+        let manifest = marketplace::bundled().plugin("telegram").cloned().unwrap();
+        let telegram = crate::plugins::accounts::install(app, manifest, "marketplace", Some("Community")).unwrap();
+        crate::plugins::set_variables(app, &telegram.id, &[("TELEGRAM_BOT_TOKEN".to_string(), "1:abc".to_string())].into_iter().collect()).unwrap();
+        let setup = fixture.configure(&fixture.start("feedback-collector").await).await;
+        // A stand-in GitHub account, advertised once the Runner's own record is current.
+        fixture.advertise("github", &["github"]);
+        for (service, plugin) in [("telegram", telegram.id.as_str()), ("github", "github")] {
+            handle(app, "workflows.connection", &json!({"id":setup.id,"service_id":service,"plugin_id":plugin})).await.unwrap();
+        }
+        let mut setup = get(app, &setup.id).unwrap();
+        let viewed = handle(app, "workflows.get", &json!({"id":setup.id})).await.unwrap();
+        assert_eq!(viewed["channels"][0]["name"], "Community feedback");
+        assert!(viewed["channels"][0]["channel"].is_null(), "nothing listens before the workflow is on");
+        assert!(app.channels.statuses().is_empty());
+        let job = preview(app, &mut setup, "feedback-sample");
+        let result = Message::new(&job.chat_id, Author::Bot { bot_id: job.bot_id.clone() }, Body::text("Today's digest: none yet."));
+        app.upsert_message(result, true);
+        sample_finished(app, &job, TurnOutcome::Sent);
+        handle(app, "workflows.review", &json!({"id":setup.id,"job_id":job.id})).await.unwrap();
+        handle(app, "workflows.enable", &json!({"id":setup.id})).await.unwrap();
+        let channel = app.channels.statuses().remove(0);
+        assert_eq!((channel.bot_id.as_str(), channel.account_id.as_str(), channel.state.as_str()), (setup.bot_ids["collector"].as_str(), telegram.id.as_str(), "listening"));
+        assert_eq!(channel.listen.describe(), "mentions, replies, #feedback");
+        assert_eq!(get(app, &setup.id).unwrap().channel_ids["community"], channel.id);
+        let viewed = handle(app, "workflows.get", &json!({"id":setup.id})).await.unwrap();
+        assert_eq!(viewed["channels"][0]["channel"]["id"], channel.id);
+        handle(app, "workflows.cancel", &json!({"id":setup.id})).await.unwrap();
+        assert_eq!(app.channels.statuses()[0].state, "paused", "turning it off pauses the channel and keeps it");
     }
 
     #[tokio::test]
