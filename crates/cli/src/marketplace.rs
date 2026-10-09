@@ -428,6 +428,22 @@ mod tests {
     }
 
     #[test]
+    fn builtin_servers_stay_out_of_what_older_builds_read() {
+        // An older build drops an entry whose server type it does not know, so the index keeps
+        // builtin servers apart from `servers`, and Slack stays readable everywhere.
+        let raw: Value = serde_json::from_str(BUNDLED_INDEX).unwrap();
+        for plugin in raw["plugins"].as_array().unwrap() {
+            for server in plugin["servers"].as_object().unwrap().values() {
+                assert!(matches!(server["type"].as_str(), Some("stdio" | "http")), "{}", plugin["id"]);
+            }
+        }
+        let index = bundled();
+        assert!(matches!(index.plugin("slack").unwrap().servers.get("bot"), Some(crate::plugins::ServerSpec::Builtin { service, .. }) if service == "slack"));
+        assert!(matches!(index.plugin("telegram").unwrap().servers.get("telegram"), Some(crate::plugins::ServerSpec::Builtin { service, .. }) if service == "telegram"));
+        assert!(index.plugin("telegram").unwrap().builtin_servers.is_empty());
+    }
+
+    #[test]
     fn packs_are_additive_and_bad_entries_do_not_hide_the_catalog() {
         #[derive(Deserialize)]
         struct OlderIndex { version: u64, plugins: Vec<Value>, bots: Vec<Value> }

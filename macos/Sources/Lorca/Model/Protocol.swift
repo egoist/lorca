@@ -329,7 +329,8 @@ enum Wire {
         var namedAccounts: Bool?
 
         func toModel() -> Lorca.MarketplacePlugin {
-            let servers = (servers ?? [:]).sorted { $0.key < $1.key }.map { name, server in
+            // A server Lorca answers itself (Telegram's, Slack's bot) is Lorca, not one to list.
+            let servers = (servers ?? [:]).filter { $0.value.type != "builtin" }.sorted { $0.key < $1.key }.map { name, server in
                 Lorca.MarketplacePlugin.Server(
                     name: name,
                     address: server.url ?? ([server.command ?? ""] + (server.args ?? [])).joined(separator: " "),

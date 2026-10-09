@@ -53,11 +53,10 @@
             "callback_port": 3118,
             "callback_url": "http://localhost:3118/callback"
           }
-        },
-        "bot": {
-          "type": "builtin",
-          "service": "slack"
         }
+      },
+      "builtin_servers": {
+        "bot": "slack"
       },
       "variables": [
         {
@@ -125,11 +124,9 @@
         "feedback",
         "bot"
       ],
-      "servers": {
-        "telegram": {
-          "type": "builtin",
-          "service": "telegram"
-        }
+      "servers": {},
+      "builtin_servers": {
+        "telegram": "telegram"
       },
       "variables": [
         {

@@ -1017,6 +1017,10 @@ func ToMarketplacePlugin(wire WireMarketplacePlugin) MarketplacePlugin {
 	slices.Sort(names)
 	for _, name := range names {
 		server := wire.Servers[name]
+		// A server Lorca answers itself (Telegram's, Slack's bot) is Lorca, not one to list.
+		if server.Type == "builtin" {
+			continue
+		}
 		address := str(server.URL)
 		if address == "" {
 			address = strings.Join(append([]string{str(server.Command)}, server.Args...), " ")

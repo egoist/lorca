@@ -62,6 +62,11 @@ pub struct Manifest {
     pub named_accounts: bool,
     #[serde(default)]
     pub servers: BTreeMap<String, ServerSpec>,
+    /// Servers the Runner answers itself (`ServerSpec::Builtin`), by name: the service each
+    /// serves. An index lists them here, apart from `servers`, so a build that does not know them
+    /// still reads the entry; `parse` moves them into `servers`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub builtin_servers: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub variables: Vec<VariableSpec>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -254,7 +259,10 @@ pub fn pattern_matches(pattern: &str, name: &str) -> bool {
 impl Manifest {
     /// Reads a manifest, refusing one that could not be installed.
     pub fn parse(value: &Value) -> Result<Manifest, String> {
-        let manifest: Manifest = serde_json::from_value(value.clone()).map_err(|e| format!("Not a plugin manifest: {e}"))?;
+        let mut manifest: Manifest = serde_json::from_value(value.clone()).map_err(|e| format!("Not a plugin manifest: {e}"))?;
+        for (name, service) in std::mem::take(&mut manifest.builtin_servers) {
+            manifest.servers.entry(name).or_insert(ServerSpec::Builtin { service, timeout: None });
+        }
         manifest.check()?;
         Ok(manifest)
     }
