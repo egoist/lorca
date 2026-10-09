@@ -780,14 +780,45 @@ final class AppStore {
     }
 
     /// Installs a marketplace plugin on a Runner (here, or sealed to that Runner).
-    func installPlugin(_ pluginID: String, on runnerID: Device.ID) async throws -> InstalledPlugin {
-        guard !isMock else { return InstalledPlugin(id: pluginID, name: pluginID, description: "", version: "", icon: "", state: .ready, detail: "Ready") }
-        return try await client.request("plugins.install", ["runner_id": runnerID, "plugin_id": pluginID], as: Wire.PluginInstalled.self).status.toModel()
+    func installPlugin(_ pluginID: String, on runnerID: Device.ID, accountName: String? = nil) async throws -> InstalledPlugin {
+        if isMock {
+            let named = accountName != nil
+            let status = InstalledPlugin(id: named ? "\(pluginID)-\(UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased())" : pluginID,
+                                         name: accountName.map { "\(pluginID) · \($0)" } ?? pluginID, description: "", version: "", icon: "", state: .ready, detail: "Connected",
+                                         serviceID: named ? pluginID : nil, accountName: accountName)
+            if let index = devices.firstIndex(where: { $0.id == runnerID }) { devices[index].plugins.append(status); emit(.rosterChanged) }
+            return status
+        }
+        var params: [String: Any] = ["runner_id": runnerID, "plugin_id": pluginID]
+        if let accountName { params["account_name"] = accountName }
+        let status = try await client.request("plugins.install", params, as: Wire.PluginInstalled.self).status.toModel()
+        rememberPlugin(status, on: runnerID)
+        return status
+    }
+
+    func renamePluginAccount(_ pluginID: String, on runnerID: Device.ID, accountName: String) async throws -> InstalledPlugin {
+        if isMock, var status = device(runnerID)?.plugins.first(where: { $0.id == pluginID }) {
+            status.name = "\(status.name.components(separatedBy: " · ").first ?? status.name) · \(accountName)"
+            status.accountName = accountName
+            rememberPlugin(status, on: runnerID)
+            return status
+        }
+        let status = try await client.request("plugins.rename", ["runner_id": runnerID, "plugin_id": pluginID, "account_name": accountName], as: Wire.PluginInstalled.self).status.toModel()
+        rememberPlugin(status, on: runnerID)
+        return status
+    }
+
+    /// A sealed management reply can arrive before the Runner's next machine advertisement.
+    private func rememberPlugin(_ status: InstalledPlugin, on runnerID: Device.ID) {
+        guard let index = devices.firstIndex(where: { $0.id == runnerID }) else { return }
+        if let plugin = devices[index].plugins.firstIndex(where: { $0.id == status.id }) { devices[index].plugins[plugin] = status }
+        else { devices[index].plugins.append(status) }
+        emit(.rosterChanged)
     }
 
     func uninstallPlugin(_ pluginID: String, on runnerID: Device.ID) async throws {
-        guard !isMock else { return }
-        _ = try await client.request("plugins.uninstall", ["runner_id": runnerID, "plugin_id": pluginID])
+        if !isMock { _ = try await client.request("plugins.uninstall", ["runner_id": runnerID, "plugin_id": pluginID]) }
+        if let index = devices.firstIndex(where: { $0.id == runnerID }) { devices[index].plugins.removeAll { $0.id == pluginID }; emit(.rosterChanged) }
     }
 
     func pluginDetail(_ pluginID: String, on runnerID: Device.ID) async throws -> PluginDetail {

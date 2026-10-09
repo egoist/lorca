@@ -229,11 +229,14 @@ enum Wire {
         var state: String
         var detail: String?
         var source: String?
+        var serviceId: String?
+        var accountName: String?
 
         func toModel() -> InstalledPlugin {
             InstalledPlugin(
                 id: id, name: name, description: description ?? "", version: version ?? "", icon: icon ?? "",
-                state: InstalledPlugin.State(rawValue: state) ?? .unknown, detail: detail ?? "", source: source)
+                state: InstalledPlugin.State(rawValue: state) ?? .unknown, detail: detail ?? "", source: source,
+                serviceID: serviceId, accountName: accountName)
         }
     }
 
@@ -269,6 +272,7 @@ enum Wire {
         var variables: [Variable]?
         var skills: [Skill]?
         var installedOn: [String]?
+        var namedAccounts: Bool?
 
         func toModel() -> Lorca.MarketplacePlugin {
             let servers = (servers ?? [:]).sorted { $0.key < $1.key }.map { name, server in
@@ -285,7 +289,7 @@ enum Wire {
                 variables: (variables ?? []).map {
                     .init(name: $0.name, description: $0.description ?? "", secret: $0.secret ?? false, required: $0.required ?? false)
                 },
-                installedOn: installedOn ?? [])
+                installedOn: installedOn ?? [], namedAccounts: namedAccounts ?? false)
         }
     }
 

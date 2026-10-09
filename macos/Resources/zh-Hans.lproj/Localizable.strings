@@ -936,6 +936,14 @@
 "Cancel Task" = "取消任务";
 "Keep Task" = "保留任务";
 "This task changed since you opened it. Your edits are still here; save again to keep them." = "打开后这个任务有了变化。你的修改还在，再次保存即可保留。";
+"Accounts on %@" = "%@ 上的账号";
+"Add Account…" = "添加账号…";
+"New %@ Account" = "添加 %@ 账号";
+"A name such as Work or Personal tells your bots which account to use." = "起个名字，比如“工作”或“个人”，智能体就知道该用哪个账号。";
+"Work" = "工作";
+"Couldn't rename it" = "无法重命名";
+"Needs more access" = "需要更多权限";
+"Needs setup" = "需要设置";
 
 /* Review queue */
 "Waiting for review" = "等待审核";

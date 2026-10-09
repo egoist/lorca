@@ -58,15 +58,23 @@ func (st *reviewSheet) follow() bool {
 	return false
 }
 
-// reviewPluginName is the plugin a call goes to, as its Runner lists it and the permission card
-// names it: "GitHub".
-func reviewPluginName(item model.ReviewItem) string {
+// reviewPlugin is the installed plugin, or account of one, a call goes to; nil once it is gone.
+func reviewPlugin(item model.ReviewItem) *model.InstalledPlugin {
 	if runner := store.Device(item.RunnerID); runner != nil {
-		for _, installed := range runner.Plugins {
-			if installed.ID == item.Payload.PluginID {
-				return installed.Name
+		for i := range runner.Plugins {
+			if runner.Plugins[i].ID == item.Payload.PluginID {
+				return &runner.Plugins[i]
 			}
 		}
+	}
+	return nil
+}
+
+// reviewPluginName is the plugin a call goes to, as its Runner lists it and the permission card
+// names it: "GitHub", or "Gmail · Work" for one of several accounts.
+func reviewPluginName(item model.ReviewItem) string {
+	if plugin := reviewPlugin(item); plugin != nil {
+		return plugin.Name
 	}
 	return item.Target.Account
 }
@@ -233,7 +241,11 @@ func (m *mainWindow) inspectorReviews(c *ui.Context, chat *model.Chat) {
 			case "shell":
 				o.Symbol = "terminal"
 			default:
-				o.Title, o.Symbol, o.PluginID = reviewPluginName(item), "puzzlepiece.extension", item.Payload.PluginID
+				o.Title, o.Symbol = reviewPluginName(item), "puzzlepiece.extension"
+				// The logo is the service's, which every account of it shares.
+				if plugin := reviewPlugin(item); plugin != nil {
+					o.Symbol, o.PluginID = plugin.Symbol(), plugin.MarketplaceID()
+				}
 			}
 			if _, row := statusRow(c.Key("review:"+item.ID), k, o); row.Clicked {
 				m.presentReview(item)

@@ -9,6 +9,7 @@ import { deviceIsOnline, useBotMap, useChat, useDurableTasks, useOutputs, useRou
 import { t, useLanguage } from "../../src/i18n";
 import { AvatarCluster, BotAvatar } from "../../src/ui/Avatar";
 import { CheckRow, FieldRow, Row, Section, ToggleRow } from "../../src/ui/forms";
+import { pluginStateWord } from "../../src/ui/plugins";
 import { lastRunSummary, lastSeen, routineDetail } from "../../src/ui/format";
 import { Symbol } from "../../src/ui/Symbol";
 import { usePalette } from "../../src/ui/theme";
@@ -279,12 +280,24 @@ export default function ChatInfoScreen() {
       {bot && runner && (
         <Section title={t("Plugins")} footer={(runner.plugins ?? []).length === 0 ? t("No plugins on {runner} yet. Add one from the desktop app, or ask {bot} to find one.", { runner: runner.name, bot: bot.name }) : t("Installed on {runner}, for {bot} and every other bot there.", { runner: runner.name, bot: bot.name })}>
           {(runner.plugins ?? []).map((plugin) => (
-            <Row
-              key={plugin.id}
-              title={plugin.name}
-              subtitle={plugin.state === "ready" ? plugin.description : plugin.detail}
-              icon={plugin.icon || "puzzlepiece.extension"}
-            />
+            // A named account (Gmail · Work) opens its own screen; its name already says which.
+            plugin.account_name ? (
+              <Row
+                key={plugin.id}
+                title={plugin.name}
+                detail={pluginStateWord(plugin)}
+                icon={plugin.icon || "puzzlepiece.extension"}
+                chevron
+                onPress={() => router.push({ pathname: "/chat-info/account/[id]", params: { id: plugin.id, runner: runner.id } })}
+              />
+            ) : (
+              <Row
+                key={plugin.id}
+                title={plugin.name}
+                subtitle={plugin.state === "ready" ? plugin.description : plugin.detail}
+                icon={plugin.icon || "puzzlepiece.extension"}
+              />
+            )
           ))}
         </Section>
       )}

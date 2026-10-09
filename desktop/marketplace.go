@@ -316,19 +316,42 @@ func (mk *marketplace) template(id string) *model.BotTemplate {
 }
 
 // installedPlugin is the plugin as the picked Runner has it; false when it is not installed there.
+// Of a service's named accounts, one that is ready stands for them all; each says how it stands on
+// the service's page.
 func (mk *marketplace) installedPlugin(id string) (model.InstalledPlugin, bool) {
-	on := mk.runner()
-	if on == nil {
-		return model.InstalledPlugin{}, false
-	}
-	// A server of the Runner's mcp.json that shares the id is not this plugin.
-	for _, plugin := range on.Plugins {
-		if plugin.ID == id && !plugin.IsMcpServer() {
-			return plugin, true
+	accounts := mk.installedAccounts(id)
+	for _, account := range accounts {
+		if account.State == model.PluginReady {
+			return account, true
 		}
 	}
-	plugin, ok := mk.installed[on.ID][id]
-	return plugin, ok
+	if len(accounts) > 0 {
+		return accounts[0], true
+	}
+	return model.InstalledPlugin{}, false
+}
+
+// installedAccounts is each install of a marketplace plugin on the picked Runner: one, or a
+// service's accounts, in the Runner's order.
+func (mk *marketplace) installedAccounts(id string) []model.InstalledPlugin {
+	on := mk.runner()
+	if on == nil {
+		return nil
+	}
+	var accounts, replied []model.InstalledPlugin
+	// A server of the Runner's mcp.json that shares the id is not this plugin.
+	for _, plugin := range on.Plugins {
+		if plugin.MarketplaceID() == id && !plugin.IsMcpServer() {
+			accounts = append(accounts, plugin)
+		}
+	}
+	for _, plugin := range mk.installed[on.ID] {
+		if plugin.MarketplaceID() == id && !slices.ContainsFunc(accounts, func(each model.InstalledPlugin) bool { return each.ID == plugin.ID }) {
+			replied = append(replied, plugin)
+		}
+	}
+	sort.Slice(replied, func(a, b int) bool { return replied[a].Name < replied[b].Name })
+	return append(accounts, replied...)
 }
 
 // installedPlugins is everything the picked Runner has, the marketplace's and the rest, in its own
@@ -369,7 +392,7 @@ func marketNextStep(plugin model.InstalledPlugin, on *model.Device) string {
 	switch plugin.State {
 	case model.PluginReady:
 		return L("Added %@. Every bot on %@ can use it.", plugin.Name, on.Name)
-	case model.PluginNeedsAuth:
+	case model.PluginNeedsAuth, model.PluginInsufficientAccess:
 		return L("Added %@. It needs a sign-in: click Connect.", plugin.Name)
 	case model.PluginNeedsSetup:
 		return L("Added %@. It needs setup: click Set Up.", plugin.Name)
@@ -383,6 +406,10 @@ func (mk *marketplace) install(plugin *model.MarketplacePlugin) {
 	if on == nil || mk.installing[plugin.ID] {
 		return
 	}
+	if plugin.NamedAccounts {
+		mk.addAccount(plugin)
+		return
+	}
 	id, name := plugin.ID, plugin.Name
 	mk.installing[id] = true
 	store.InstallPlugin(id, on.ID, func(status model.InstalledPlugin, err error) {
@@ -391,15 +418,55 @@ func (mk *marketplace) install(plugin *model.MarketplacePlugin) {
 			mk.showNotice(L("Couldn't install %@: %@", name, model.ErrorText(err)), true)
 			return
 		}
-		if mk.installed[on.ID] == nil {
-			mk.installed[on.ID] = map[string]model.InstalledPlugin{}
-		}
-		mk.installed[on.ID][id] = status
+		mk.remember(on.ID, status)
 		mk.showNotice(marketNextStep(status, on), false)
 	})
 }
 
-// manage opens the plugin's own sheet on the picked Runner: its sign-in, its setup, and Remove.
+// addAccount adds another account of a service with named accounts, such as a work Gmail beside a
+// personal one, and opens it for its setup and sign-in.
+func (mk *marketplace) addAccount(plugin *model.MarketplacePlugin) {
+	on := mk.runner()
+	if on == nil || mk.installing[plugin.ID] {
+		return
+	}
+	id, name, runnerID := plugin.ID, plugin.Name, on.ID
+	value := ""
+	mk.m.showAlert(alertOptions{
+		Message:     L("New %@ Account", name),
+		Informative: L("A name such as Work or Personal tells your bots which account to use."),
+		Buttons:     []alertButton{{Title: L("Add")}, {Title: L("Cancel")}},
+		Accessory: func(c *ui.Context) {
+			textField(c, &value, fieldOptions{Placeholder: L("Work"), AutoFocus: true})
+		},
+	}, func(answer int) {
+		if answer != 0 {
+			return
+		}
+		mk.installing[id] = true
+		// A blank name becomes the next free "Account 1" on the Runner.
+		store.InstallPluginAccount(id, runnerID, strings.TrimSpace(value), func(status model.InstalledPlugin, err error) {
+			delete(mk.installing, id)
+			if err != nil {
+				mk.showNotice(L("Couldn't install %@: %@", name, model.ErrorText(err)), true)
+				return
+			}
+			mk.remember(runnerID, status)
+			mk.manage(status.ID)
+		})
+	})
+}
+
+// remember keeps what an install answered until the Runner's roster lists it.
+func (mk *marketplace) remember(runnerID string, status model.InstalledPlugin) {
+	if mk.installed[runnerID] == nil {
+		mk.installed[runnerID] = map[string]model.InstalledPlugin{}
+	}
+	mk.installed[runnerID][status.ID] = status
+}
+
+// manage opens an installed plugin's own sheet on the picked Runner, by the id the Runner gave it (a
+// named account's own): its sign-in, its setup, and Remove.
 func (mk *marketplace) manage(pluginID string) {
 	if on := mk.runner(); on != nil {
 		mk.m.presentPlugin(pluginID, on)
@@ -589,7 +656,7 @@ func (mk *marketplace) pluginAccessory(c *ui.Context, plugin *model.MarketplaceP
 		return
 	}
 	if current, ok := mk.installedPlugin(plugin.ID); ok {
-		mk.installedAccessory(c, current, plugin.ID)
+		mk.installedAccessory(c, current)
 		return
 	}
 	on := mk.runner()
@@ -602,7 +669,7 @@ func (mk *marketplace) pluginAccessory(c *ui.Context, plugin *model.MarketplaceP
 	}
 }
 
-func (mk *marketplace) installedAccessory(c *ui.Context, current model.InstalledPlugin, pluginID string) {
+func (mk *marketplace) installedAccessory(c *ui.Context, current model.InstalledPlugin) {
 	p := colors(c)
 	switch current.State {
 	case model.PluginReady:
@@ -610,16 +677,18 @@ func (mk *marketplace) installedAccessory(c *ui.Context, current model.Installed
 			symbol(c, "checkmark", 12, 2.6).TextColor(p.Green)
 			ui.Text(c, L("Added")).FontSize(12.5).TextColor(p.Label2).SingleLine()
 		})
-	case model.PluginNeedsAuth:
+	case model.PluginNeedsAuth, model.PluginInsufficientAccess:
 		if pushButton(c, L("Connect"), pushOptions{}).Clicked() {
-			mk.manage(pluginID)
+			mk.manage(current.ID)
 		}
 	case model.PluginNeedsSetup:
 		if pushButton(c, L("Set Up"), pushOptions{}).Clicked() {
-			mk.manage(pluginID)
+			mk.manage(current.ID)
 		}
 	default:
-		ui.Text(c, current.Detail).FontSize(12).TextColor(p.tone(current.State.Tone())).SingleLine()
+		// What went wrong, in full, is the tooltip and in the plugin's sheet.
+		text, tone := current.ShortStatus()
+		ui.Text(c, text).FontSize(12.5).TextColor(p.tone(tone)).SingleLine().Tooltip(current.Detail)
 	}
 }
 

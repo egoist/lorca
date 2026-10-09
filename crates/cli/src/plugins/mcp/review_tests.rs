@@ -70,6 +70,7 @@ async fn connected(app: &Arc<App>, name: &str, seen: Arc<Mutex<Vec<Value>>>) -> 
         resources: false,
         auth: None,
         bearer_expires_at: None,
+        generation: app.mcp.generation("review-mail"),
     });
     app.mcp
         .servers
@@ -98,6 +99,8 @@ async fn an_unattended_plugin_proposal_executes_the_edited_version_on_its_exact_
         source: "inline".into(),
         installed_at: 0.0,
         variables: Default::default(),
+        service_id: None,
+        account_name: None,
     });
     let first_seen = Arc::new(Mutex::new(Vec::new()));
     let second_seen = Arc::new(Mutex::new(Vec::new()));

@@ -94,6 +94,9 @@ type pluginSheet struct {
 }
 
 func (s *pluginSheet) name() string {
+	if s.detail != nil && s.detail.Status.Name != "" {
+		return s.detail.Status.Name
+	}
 	if s.installed != nil {
 		return s.installed.Name
 	}
@@ -165,6 +168,9 @@ func (s *pluginSheet) save() {
 	}
 	s.saving = true
 	store.SetPluginVariables(s.pluginID, s.runner.ID, values, func(_ model.InstalledPlugin, err error) {
+		if s.closed {
+			return
+		}
 		s.saving = false
 		if err != nil {
 			s.w.showAlert(alertOptions{Message: L("Couldn't save"), Informative: model.ErrorText(err)}, nil)
@@ -180,9 +186,29 @@ func (s *pluginSheet) save() {
 	})
 }
 
+// rename gives a named account a new name when editing ends. Its id, sign-in, and tools stay.
+func (s *pluginSheet) rename(name string) {
+	if s.detail == nil || name == "" || name == s.detail.Status.AccountName {
+		return
+	}
+	store.RenamePluginAccount(s.pluginID, s.runner.ID, name, func(_ model.InstalledPlugin, err error) {
+		if s.closed {
+			return
+		}
+		if err != nil {
+			s.w.showAlert(alertOptions{Message: L("Couldn't rename it"), Informative: model.ErrorText(err)}, nil)
+			return
+		}
+		s.load()
+	})
+}
+
 func (s *pluginSheet) connect() {
 	// The Runner notes the sign-in on the plugin, so the State row reads it.
 	store.ConnectPlugin(s.pluginID, s.runner.ID, func(err error) {
+		if s.closed {
+			return
+		}
 		if err != nil {
 			s.w.showAlert(alertOptions{Message: L("Couldn't start the sign-in"), Informative: model.ErrorText(err)}, nil)
 			return
@@ -194,6 +220,9 @@ func (s *pluginSheet) connect() {
 // signOut forgets a server's sign-in on the Runner; the plugin's next use asks again.
 func (s *pluginSheet) signOut(server string) {
 	store.SignOutPlugin(s.pluginID, s.runner.ID, server, func(err error) {
+		if s.closed {
+			return
+		}
 		if err != nil {
 			s.w.showAlert(alertOptions{Message: L("Couldn't sign out of %@", s.name()), Informative: model.ErrorText(err)}, nil)
 			return
@@ -268,6 +297,13 @@ func (s *pluginSheet) view(c *ui.Context, sh *sheet) {
 // site.
 func (s *pluginSheet) statusSection(c *ui.Context) {
 	p := colors(c)
+	// A named account (Gmail · Work) says how it stands in its Account card, and its service's page
+	// has the site.
+	named := s.loadError == "" && s.isNamedAccount()
+	rules := s.rules()
+	if named && len(rules) == 0 {
+		return
+	}
 	section(c, L("Status"), sectionCaption, nil, func(k *card) {
 		if s.loadError != "" || s.detail == nil {
 			value, tint := L("Loading…"), p.Label2
@@ -278,9 +314,11 @@ func (s *pluginSheet) statusSection(c *ui.Context) {
 			return
 		}
 		detail := s.detail
-		tint := p.tone(detail.Status.State.Tone())
-		keyValueRow(c, k, L("State"), detail.Status.Detail, false, &tint)
-		if rules := s.rules(); len(rules) > 0 {
+		if !named {
+			tint := p.tone(detail.Status.State.Tone())
+			keyValueRow(c, k, L("State"), detail.Status.Detail, false, &tint)
+		}
+		if len(rules) > 0 {
 			prefix := s.pluginID + "/"
 			tools := make([]string, 0, len(rules))
 			for _, rule := range rules {
@@ -291,7 +329,7 @@ func (s *pluginSheet) statusSection(c *ui.Context) {
 				s.resetRules()
 			}
 		}
-		if site := hostOf(detail.Homepage); detail.Homepage != "" && site != "" {
+		if site := hostOf(detail.Homepage); !named && detail.Homepage != "" && site != "" {
 			_, r := actionRow(c, k, L("Site"), actionRowOptions{Value: site, Tint: &p.Label2, Action: L("Open")})
 			if r.Action {
 				_ = openExternal(detail.Homepage)
@@ -314,13 +352,27 @@ func (s *pluginSheet) signInSection(c *ui.Context) {
 			servers = append(servers, server)
 		}
 	}
-	if len(servers) == 0 {
+	named, status := s.isNamedAccount(), s.detail.Status
+	if len(servers) == 0 && !named {
 		return
 	}
-	section(c, L("Sign-in"), sectionCaption, nil, func(k *card) {
+	title := L("Sign-in")
+	if named {
+		// A named account's one card: its name, and its sign-in, which says how it stands.
+		title = L("Account")
+	}
+	section(c, title, sectionCaption, nil, func(k *card) {
+		if named {
+			if name, ok := editableRow(c, k, L("Name"), status.AccountName, L("Work"), false, true); ok {
+				s.rename(name)
+			}
+		}
 		for _, server := range servers {
 			label := L("Account")
-			if len(servers) > 1 {
+			switch {
+			case named:
+				label = L("Sign-in")
+			case len(servers) > 1:
 				label = server.Name
 			}
 			if server.Code != "" && server.Link != "" {
@@ -347,6 +399,14 @@ func (s *pluginSheet) signInSection(c *ui.Context) {
 			if server.SignedIn {
 				value, tint, action, second = L("Signed in"), p.Green, L("Sign Out"), L("Sign in again")
 			}
+			if named && status.State != model.PluginReady && status.State != model.PluginNeedsAuth {
+				text, tone := status.ShortStatus()
+				value, tint = text, p.tone(tone)
+			}
+			if named && status.State == model.PluginNeedsSetup {
+				// Before its setup, an account has nothing to sign in with.
+				action, second = "", ""
+			}
 			_, r := actionRow(c, k, label, actionRowOptions{Value: value, Tint: &tint, Action: action, Second: second})
 			if r.Second {
 				s.connect()
@@ -359,7 +419,15 @@ func (s *pluginSheet) signInSection(c *ui.Context) {
 				}
 			}
 		}
+		// Why an account can't connect, in the server's words.
+		if named && status.State == model.PluginError && status.Detail != "" {
+			noteRow(c, k, status.Detail, nil)
+		}
 	})
+}
+
+func (s *pluginSheet) isNamedAccount() bool {
+	return s.detail != nil && s.detail.Status.AccountName != ""
 }
 
 // setupSection is the plugin's variables: a secret is masked and never shown, its field saying

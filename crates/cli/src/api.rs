@@ -615,7 +615,7 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
                 .map(|m| {
                     let mut out = serde_json::to_value(m).unwrap_or_default();
                     // A server from a Runner's mcp.json that happens to share the id is not this plugin.
-                    out["installed_on"] = json!(installed_on.iter().filter(|(_, p)| p.iter().any(|s| s.id == m.id && s.source.is_none())).map(|(id, _)| id.clone()).collect::<Vec<_>>());
+                    out["installed_on"] = json!(installed_on.iter().filter(|(_, p)| p.iter().any(|s| s.service_id.as_deref().unwrap_or(&s.id) == m.id && s.source.is_none())).map(|(id, _)| id.clone()).collect::<Vec<_>>());
                     out
                 })
                 .collect();
@@ -649,13 +649,19 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
                 }
             };
             let source = if params.get("plugin_id").is_some() { "marketplace" } else { "inline" };
-            let body = json!({ "manifest": manifest, "source": source });
+            let body = json!({ "manifest": manifest, "source": source, "account_name": params["account_name"] });
             let status = crate::plugins::on_runner(app, &runner_id, "plugins.install", body).await?;
             Ok(json!({ "status": status }))
         }
         "plugins.uninstall" => {
             let runner_id = string(&params, "runner_id")?;
             crate::plugins::on_runner(app, &runner_id, "plugins.uninstall", json!({ "plugin_id": string(&params, "plugin_id")? })).await
+        }
+        "plugins.rename" => {
+            let runner_id = string(&params, "runner_id")?;
+            let body = json!({ "plugin_id": string(&params, "plugin_id")?, "account_name": string(&params, "account_name")? });
+            let status = crate::plugins::on_runner(app, &runner_id, "plugins.rename", body).await?;
+            Ok(json!({ "status": status }))
         }
         "plugins.set_variables" => {
             let runner_id = string(&params, "runner_id")?;

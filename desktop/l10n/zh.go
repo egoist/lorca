@@ -924,6 +924,14 @@ var zh = map[string]string{
 	"Completed":        "已完成",
 	"Cancelled":        "已取消",
 	"The account changed. Open the task again.": "账户已更换。请重新打开这个任务。",
+	"Accounts on %@": "%@ 上的账号",
+	"Add Account…":   "添加账号…",
+	"New %@ Account": "添加 %@ 账号",
+	"A name such as Work or Personal tells your bots which account to use.": "起个名字，比如“工作”或“个人”，智能体就知道该用哪个账号。",
+	"Work":               "工作",
+	"Couldn't rename it": "无法重命名",
+	"Needs more access":  "需要更多权限",
+	"Needs setup":        "需要设置",
 
 	// Review queue.
 	"Waiting for review": "等待审核",

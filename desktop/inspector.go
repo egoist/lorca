@@ -404,7 +404,11 @@ func (m *mainWindow) inspectorPlugins(c *ui.Context, bot *model.Bot) {
 			ui.Box(c.Key(plugin.ID)).Children(func() {
 				// A plugin the bot's Access leaves out says it has none.
 				if bot.Permissions.Level(plugin.ID) == model.AccessNone {
-					_, row = statusRow(c, k, statusRowOptions{Symbol: plugin.Symbol(), PluginID: plugin.ID, Title: plugin.Name, Subtitle: plugin.Description,
+					subtitle := plugin.Description
+					if plugin.AccountName != "" {
+						subtitle = ""
+					}
+					_, row = statusRow(c, k, statusRowOptions{Symbol: plugin.Symbol(), PluginID: plugin.MarketplaceID(), Title: plugin.Name, Subtitle: subtitle,
 						State: L("No access"), Clickable: true, Tooltip: L("Open %@", plugin.Name)})
 				} else {
 					_, row = pluginRow(c, k, plugin, true, L("Open %@", plugin.Name))

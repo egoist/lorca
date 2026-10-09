@@ -957,7 +957,7 @@ fn setup_cue(app: &App, setup: &TemplateSetup) -> String {
     }
     let (installed, missing): (Vec<&SetupPlugin>, Vec<&SetupPlugin>) = {
         let store = app.plugins.lock().unwrap();
-        setup.plugins.iter().partition(|plugin| store.status(&plugin.id).is_some())
+        setup.plugins.iter().partition(|plugin| store.instances(&plugin.id).next().is_some())
     };
     if !installed.is_empty() {
         let names: Vec<String> = installed.iter().map(|plugin| plugin.name.clone()).collect();
@@ -2941,6 +2941,13 @@ impl Tool for InstallPlugin {
         }
         let manifest = manifest.ok_or_else(|| ToolError(format!("No plugin {wanted:?} in the marketplace. Use search_plugins to see what exists.")))?;
         let runner = self.app.device(&self.bot.runner_id).map(|d| d.name).unwrap_or_else(|| "this Runner".into());
+        let existing = {
+            let store = self.app.plugins.lock().unwrap();
+            store.instances(&manifest.id).map(|plugin| plugin.manifest.id.clone()).collect::<Vec<_>>()
+        };
+        if manifest.named_accounts && !existing.is_empty() {
+            return Ok(ToolResult::text(format!("{} accounts are already installed on {runner}: {}. Select the intended account by its id in the codemode catalog. Ask the user if unclear; add another named account from the plugin's settings.", manifest.name, existing.join(", "))));
+        }
         if let Some(status) = self.app.plugins.lock().unwrap().status(&manifest.id) {
             let next = match status.state.as_str() {
                 "ready" => "It is ready; call its tools from a codemode script when you need them.".to_string(),
@@ -2966,15 +2973,15 @@ impl Tool for InstallPlugin {
         let status = crate::plugins::install(&self.app, manifest.clone(), "marketplace").map_err(ToolError)?;
         let next = match status.state.as_str() {
             "ready" => "It is ready; call its tools from a codemode script when you need them.".to_string(),
-            "needs_auth" => match crate::plugins::mcp::post_sign_in_card(&self.app, &self.chat_id, &self.bot.id, &manifest.id) {
+            "needs_auth" => match crate::plugins::mcp::post_sign_in_card(&self.app, &self.chat_id, &self.bot.id, &status.id) {
                 Ok(_) => format!("A sign-in card for {} is in the chat: ask the user to tap Sign in on it. After that, call its tools from a codemode script.", manifest.name),
                 Err(error) => format!("It needs a sign-in ({error}); the user can do it from this chat's inspector."),
             },
             "needs_setup" => format!("The user still has to set {} in this chat's inspector (Plugins); tell them.", status.detail.trim_start_matches("Needs ")),
             _ => status.detail.clone(),
         };
-        Ok(ToolResult::text(format!("{} is installed on {runner}. {next}", manifest.name))
-            .with_details(json!({ "summary": format!("Installed {}", manifest.name), "plugin_id": manifest.id })))
+        Ok(ToolResult::text(format!("{} is installed on {runner} with account id {}. {next}", status.name, status.id))
+            .with_details(json!({ "summary": format!("Installed {}", status.name), "plugin_id": status.id })))
     }
 }
 

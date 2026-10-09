@@ -61,6 +61,7 @@ pub struct Server {
     /// Device-flow tokens are plain bearers. Drop this pooled server before its bearer expires;
     /// the next connection refreshes and persists the rotating token pair itself.
     bearer_expires_at: Option<f64>,
+    generation: u64,
 }
 
 impl Server {
@@ -113,7 +114,7 @@ impl Pool {
         self.servers.lock().unwrap().retain(|key, _| !key.starts_with(&format!("{plugin_id}/")));
     }
 
-    fn generation(&self, plugin_id: &str) -> u64 {
+    pub(super) fn generation(&self, plugin_id: &str) -> u64 {
         self.generations.lock().unwrap().get(plugin_id).copied().unwrap_or_default()
     }
 
@@ -143,22 +144,20 @@ impl Pool {
         if let Some(server) = self.cached_server(&key) {
             return Ok(server);
         }
-        let (plugin, values) = {
+        let (plugin, values, generation) = {
             let store = app.plugins.lock().unwrap();
             let plugin = store.get(plugin_id).cloned().ok_or_else(|| format!("{plugin_id} is not installed on this Runner"))?;
-            (plugin, store.values(plugin_id))
+            (plugin, store.values(plugin_id), self.generation(plugin_id))
         };
         let values = template_values(&plugin, values).await;
         let spec = plugin.manifest.servers.get(name).cloned().ok_or_else(|| format!("{} has no server {name}", plugin.manifest.name))?;
-        let generation = self.generation(plugin_id);
         super::note(app, plugin_id, Some(("connecting", "Connecting…")));
-        let connected = tokio::time::timeout(CONNECT_TIMEOUT, connect(app, &plugin, name, &spec, &values))
+        let connected = tokio::time::timeout(CONNECT_TIMEOUT, connect(app, &plugin, name, &spec, &values, generation))
             .await
             .unwrap_or_else(|_| Err(format!("{} did not start within {} minutes", plugin.manifest.name, CONNECT_TIMEOUT.as_secs() / 60)));
         match connected {
             // The plugin changed (new settings, a sign-in, an uninstall) while it connected.
             Ok(_) if self.generation(plugin_id) != generation => {
-                super::note(app, plugin_id, None);
                 Err(format!("{}'s settings changed while it connected. Try again.", plugin.manifest.name))
             }
             Ok(server) => {
@@ -169,6 +168,16 @@ impl Pool {
                 Ok(server)
             }
             Err(error) => {
+                if self.generation(plugin_id) != generation { return Err("The account's settings changed while connecting. Try again.".into()); }
+                if let Some((scope, challenge)) = insufficient_scope(&std::io::Error::other(error.clone())) {
+                    needs_more_access(app, plugin_id, name, &scope, &challenge);
+                } else if error.contains("sign-in needs more access") {
+                    needs_more_access(app, plugin_id, name, "", "");
+                }
+                // A named account whose authorization expired or was revoked reads Sign in.
+                if plugin.service_id.is_some() && authorization_expired(&error) {
+                    let _ = super::set_oauth(app, plugin_id, name, None);
+                }
                 // A server that answered that it needs a sign-in reads Sign in, not an error.
                 let signs_in = {
                     let store = app.plugins.lock().unwrap();
@@ -198,13 +207,12 @@ impl Pool {
     }
 }
 
-async fn connect(app: &Arc<App>, plugin: &Installed, name: &str, spec: &ServerSpec, values: &BTreeMap<String, String>) -> Result<Server, String> {
+async fn connect(app: &Arc<App>, plugin: &Installed, name: &str, spec: &ServerSpec, values: &BTreeMap<String, String>, generation: u64) -> Result<Server, String> {
     let mut implementation = Implementation::default();
     implementation.name = "Lorca".into();
     implementation.version = crate::config::VERSION.into();
     let mut info = ClientConfig::default();
     info.client_info = implementation;
-    let generation = app.mcp.generation(&plugin.manifest.id);
     // A client per try, since a handshake takes the one it is given.
     let client = || Client { info: info.clone(), app: Arc::downgrade(app), plugin_id: plugin.manifest.id.clone(), server: name.to_string(), generation };
     let mut auth = None;
@@ -276,7 +284,11 @@ async fn connect(app: &Arc<App>, plugin: &Installed, name: &str, spec: &ServerSp
                 Some(AuthSpec::Oauth { token_variable: Some(variable), .. }) => values.get(variable).cloned(),
                 _ => None,
             };
-            let tokens = app.plugins.lock().unwrap().sign_in_secret(&plugin.manifest.id, "oauth", name);
+            let tokens = {
+                let store = app.plugins.lock().unwrap();
+                if app.mcp.generation(&plugin.manifest.id) != generation { return Err("The account's settings changed while connecting. Try again.".into()); }
+                store.sign_in_secret(&plugin.manifest.id, "oauth", name)
+            };
             let http = app.mcp.http.clone();
             let plain = |config: StreamableHttpClientTransportConfig| move || StreamableHttpClientTransport::with_client(http.clone(), config.clone());
             match (pasted, auth_spec, tokens) {
@@ -286,7 +298,18 @@ async fn connect(app: &Arc<App>, plugin: &Installed, name: &str, spec: &ServerSp
                         AuthSpec::Oauth { auth_server_metadata_url, .. } => auth_server_metadata_url.as_deref(),
                         _ => None,
                     };
-                    if stored["device_flow"].as_bool() == Some(true) {
+                    if stored["native_flow"].as_bool() == Some(true) {
+                        let token_endpoint = match oauth {
+                            AuthSpec::Oauth { token_endpoint: Some(endpoint), .. } => endpoint,
+                            _ => return Err("The saved sign-in cannot be refreshed. Sign in again.".into()),
+                        };
+                        let refreshed = super::oauth::refresh(&app.http, token_endpoint, &stored).await?;
+                        let saved = refreshed.as_ref().unwrap_or(&stored);
+                        if let Some(refreshed) = &refreshed { super::set_oauth_at_generation(app, &plugin.manifest.id, name, refreshed.clone(), generation)?; }
+                        let token = saved["tokens"]["access_token"].as_str().ok_or("The saved sign-in has no access token")?.to_string();
+                        bearer_expires_at = token_expires_at(saved);
+                        serve_retrying(&client, plain(config.auth_header(token))).await.map_err(|e| describe_connect_error(&e.to_string(), url))?
+                    } else if stored["device_flow"].as_bool() == Some(true) {
                         // GitHub's refresh endpoint has its own contract: no `scope` or MCP
                         // `resource`. Refresh it here, then give the transport a plain bearer.
                         let token_endpoint = match oauth {
@@ -343,7 +366,7 @@ async fn connect(app: &Arc<App>, plugin: &Installed, name: &str, spec: &ServerSp
     if let Some(manager) = &auth {
         // The handshake itself may have refreshed and rotated the pair. Save it before the
         // next request can fail, the connection can sit unused, or the process can exit.
-        persist_refreshed(app, &plugin.manifest.id, name, manager).await;
+        persist_refreshed(app, &plugin.manifest.id, name, manager, generation).await;
     }
     let instructions = service.peer_info().and_then(|i| i.instructions.clone());
     let resources = service.peer_info().is_some_and(|info| info.capabilities.resources.is_some());
@@ -351,7 +374,7 @@ async fn connect(app: &Arc<App>, plugin: &Installed, name: &str, spec: &ServerSp
     // hidden one needs no reconnecting.
     let tools = all_tools(service.peer()).await.map_err(|e| format!("{} could not list its tools: {e}", plugin.manifest.name))?;
     tracing::info!(plugin = %plugin.manifest.id, server = name, tools = tools.len(), resources, "connected an MCP server");
-    Ok(Server { plugin_id: plugin.manifest.id.clone(), name: name.to_string(), service, tools: std::sync::RwLock::new(tools), instructions, resources, auth, bearer_expires_at })
+    Ok(Server { plugin_id: plugin.manifest.id.clone(), name: name.to_string(), service, tools: std::sync::RwLock::new(tools), instructions, resources, auth, bearer_expires_at, generation })
 }
 
 /// Lorca as an MCP client: its name and version, and what it does when a connected server says
@@ -561,6 +584,11 @@ fn describe_connect_error(error: &str, url: &str) -> String {
     }
 }
 
+fn authorization_expired(error: &str) -> bool {
+    let error = error.to_lowercase();
+    ["invalid_token", "invalid_grant", "token_expired", "token_revoked", "invalid_auth", "not_authed", "bad_refresh_token", "401 unauthorized", "authentication_required", "sign-in expired", "refused the credentials", "another authorization server"].iter().any(|marker| error.contains(marker))
+}
+
 /// `https://mcp.example.com` for any URL there.
 fn shown_url(url: &str) -> String {
     match reqwest::Url::parse(url) {
@@ -634,7 +662,7 @@ async fn auth_server_metadata(app: &Arc<App>, metadata_url: &str, name: &str) ->
 /// A token response without the optional fields a server sent empty or null, as some send
 /// `"scope": ""` for a token with no scope. Kept, an empty scope is asked for again at every
 /// refresh.
-fn tidy_tokens(tokens: &Value) -> Value {
+pub(super) fn tidy_tokens(tokens: &Value) -> Value {
     let mut tokens = tokens.clone();
     if let Some(fields) = tokens.as_object_mut() {
         fields.retain(|key, value| {
@@ -768,9 +796,10 @@ async fn refresh_device_bearer(http: &reqwest::Client, token_endpoint: &str, nam
 }
 
 async fn device_bearer(app: &Arc<App>, plugin_id: &str, server: &str, name: &str, token_endpoint: &str, stored: &Value) -> Result<DeviceBearer, String> {
+    let generation = app.mcp.generation(plugin_id);
     let (bearer, refreshed) = refresh_device_bearer(&app.http, token_endpoint, name, stored).await?;
     if let Some(refreshed) = refreshed {
-        super::set_oauth(app, plugin_id, server, Some(refreshed))?;
+        super::set_oauth_at_generation(app, plugin_id, server, refreshed, generation)?;
     }
     Ok(bearer)
 }
@@ -805,10 +834,16 @@ pub struct SignInStart {
 /// A browser sign-in another Device finishes: the authorization this Runner holds until that
 /// Device sends back where the browser landed, and what to update when it ends.
 struct Pending {
-    state: OAuthState,
+    state: BrowserState,
     server: String,
     name: String,
     card: Option<(String, String)>,
+    generation: u64,
+}
+
+enum BrowserState {
+    Mcp(OAuthState),
+    Native(super::oauth::Pending),
 }
 
 /// The OAuth server of a plugin, when it has one.
@@ -921,6 +956,8 @@ pub async fn connect_oauth_for_card(app: &Arc<App>, plugin_id: &str, server: &st
                     client_secret,
                     device_authorization_endpoint,
                     token_endpoint,
+                    authorization_endpoint,
+                    authorization_params,
                     client_name,
                     callback_port,
                     callback_url,
@@ -944,6 +981,9 @@ pub async fn connect_oauth_for_card(app: &Arc<App>, plugin_id: &str, server: &st
                 callback_port: *callback_port,
                 callback_url: callback_url.clone(),
                 metadata_url: auth_server_metadata_url.clone(),
+                authorization_endpoint: authorization_endpoint.clone(),
+                token_endpoint: token_endpoint.clone(),
+                authorization_params: authorization_params.clone(),
             };
             let device = match (device_authorization_endpoint, token_endpoint, &hint.id) {
                 (Some(device_endpoint), Some(token_endpoint), Some(_)) => Some((device_endpoint.clone(), token_endpoint.clone())),
@@ -962,8 +1002,15 @@ pub async fn connect_oauth_for_card(app: &Arc<App>, plugin_id: &str, server: &st
         _ => return Err(format!("{server} does not sign in with OAuth.")),
     };
     // A redirect the client was registered with is this Runner's own, so its browser opens here.
-    let elsewhere = elsewhere.filter(|_| !client.has_fixed_redirect());
-    let name = plugin.manifest.name.clone();
+    if client.authorization_endpoint.is_some() && elsewhere.as_ref().is_some_and(|device| client.has_fixed_redirect() && !client.matches_redirect(&device.redirect_uri)) {
+        return Err("The sign-in needs the registered loopback callback on this Device. Check the integration's callback settings.".into());
+    }
+    let elsewhere = elsewhere.filter(|device| !client.has_fixed_redirect() || client.matches_redirect(&device.redirect_uri));
+    let name = plugin.display_name();
+    // A newer consent attempt supersedes an older one for this account. Other accounts keep
+    // their generations and tokens.
+    app.mcp.forget(plugin_id);
+    let generation = app.mcp.generation(plugin_id);
     // A device code works on any Device, so it is the sign-in wherever the user asked.
     let opens_on = match (&device, &elsewhere) {
         (Some(_), _) => None,
@@ -981,11 +1028,11 @@ pub async fn connect_oauth_for_card(app: &Arc<App>, plugin_id: &str, server: &st
     if let (Some(elsewhere), None) = (elsewhere, &device) {
         return match begin_sign_in(app, &url, &scopes, &name, &client, elsewhere.redirect_uri).await {
             Ok((state, page)) => {
-                let id = hold_sign_in(app, plugin_id, Pending { state, server: server.to_string(), name: name.clone(), card });
+                let id = hold_sign_in(app, plugin_id, Pending { state, server: server.to_string(), name: name.clone(), card, generation });
                 Ok(SignInStart { message: format!("Open the {name} sign-in page on {}.", elsewhere.device), url: Some(page), id: Some(id), done: None })
             }
             Err(error) => {
-                end_sign_in(app, plugin_id, server, &name, card, Err(error.clone()));
+                let _ = end_sign_in(app, plugin_id, server, &name, card, generation, Err(error.clone()));
                 Err(error)
             }
         };
@@ -998,8 +1045,7 @@ pub async fn connect_oauth_for_card(app: &Arc<App>, plugin_id: &str, server: &st
             Some((device_endpoint, token_endpoint)) => device_sign_in(&app, &plugin_id, &server, device_endpoint, token_endpoint, &scopes, &name, client.id.as_deref().unwrap_or(""), card.as_ref()).await,
             None => sign_in(&app, &url, &scopes, &name, &client).await,
         };
-        let outcome = flow.as_ref().map(|_| ()).map_err(Clone::clone);
-        end_sign_in(&app, &plugin_id, &server, &name, card, flow);
+        let outcome = end_sign_in(&app, &plugin_id, &server, &name, card, generation, flow);
         let _ = ended.send(outcome);
     });
     Ok(SignInStart { message, url: None, id: None, done: Some(done) })
@@ -1022,7 +1068,7 @@ fn hold_sign_in(app: &Arc<App>, plugin_id: &str, pending: Pending) -> String {
     tokio::spawn(async move {
         tokio::time::sleep(super::sign_in::TIMEOUT).await;
         if let Some(pending) = take_sign_in(&app, &plugin_id, &held) {
-            end_sign_in(&app, &plugin_id, &pending.server, &pending.name, pending.card, Err("Timed out waiting for the browser".into()));
+            let _ = end_sign_in(&app, &plugin_id, &pending.server, &pending.name, pending.card, pending.generation, Err("Timed out waiting for the browser".into()));
         }
     });
     id
@@ -1038,10 +1084,10 @@ fn take_sign_in(app: &App, plugin_id: &str, id: &str) -> Option<Pending> {
 /// tokens here.
 pub async fn finish_sign_in(app: &Arc<App>, plugin_id: &str, id: &str, callback: &str) -> Result<Value, String> {
     let pending = take_sign_in(app, plugin_id, id).ok_or("That sign-in is over. Start it again.")?;
-    let flow = complete_sign_in(pending.state, callback, &pending.name).await;
-    let finished = flow.as_ref().map(|_| ()).map_err(String::clone);
-    end_sign_in(app, plugin_id, &pending.server, &pending.name, pending.card, flow);
-    finished.map(|()| json!({ "signed_in": true }))
+    if app.mcp.generation(plugin_id) != pending.generation { return Err("That account's settings changed. Start the sign-in again.".into()); }
+    let flow = complete_sign_in(app, pending.state, callback, &pending.name).await;
+    end_sign_in(app, plugin_id, &pending.server, &pending.name, pending.card, pending.generation, flow)?;
+    Ok(json!({ "signed_in": true }))
 }
 
 /// The page closed before the sign-in finished: the plugin waits for a sign-in again, and its
@@ -1059,8 +1105,14 @@ pub fn cancel_sign_in(app: &Arc<App>, plugin_id: &str, id: &str) -> Result<Value
 /// Ends a sign-in: the tokens saved and every card that asks for the plugin's sign-in reads
 /// Signed in, or the plugin and the card say why it failed. A failure leaves alone a plugin
 /// another sign-in got ready, and a card that already says how it went.
-fn end_sign_in(app: &Arc<App>, plugin_id: &str, server: &str, name: &str, card: Option<(String, String)>, flow: Result<Value, String>) {
-    match flow.and_then(|saved| super::set_oauth(app, plugin_id, server, Some(saved))) {
+fn end_sign_in(app: &Arc<App>, plugin_id: &str, server: &str, name: &str, card: Option<(String, String)>, generation: u64, flow: Result<Value, String>) -> Result<(), String> {
+    if app.mcp.generation(plugin_id) != generation {
+        if let Some((chat_id, message_id)) = card {
+            set_card_while(app, &chat_id, &message_id, "allowed", "dismissed", "The account changed while the sign-in was open. Start it again.".into());
+        }
+        return Err("The account changed while the sign-in was open. Start it again.".into());
+    }
+    match flow.and_then(|saved| super::set_oauth_at_generation(app, plugin_id, server, saved, generation)) {
         Ok(()) => {
             app.mcp.forget(plugin_id);
             super::note(app, plugin_id, None);
@@ -1069,14 +1121,19 @@ fn end_sign_in(app: &Arc<App>, plugin_id: &str, server: &str, name: &str, card: 
                 set_card(app, &chat_id, &message_id, "connected", Some(format!("Signed in to {name}.")), None, None);
             }
             settle_sign_in_cards(app, plugin_id, name);
+            Ok(())
         }
         Err(error) => {
-            if !is_ready(app, plugin_id) {
+            if app.mcp.generation(plugin_id) != generation { return Err(error); }
+            if error.contains("sign-in needs more access") {
+                needs_more_access(app, plugin_id, server, "", "");
+            } else if !is_ready(app, plugin_id) {
                 super::note(app, plugin_id, Some(("error", &error)));
             }
             if let Some((chat_id, message_id)) = card {
                 set_card_while(app, &chat_id, &message_id, "allowed", "failed", format!("Sign-in failed: {error}"));
             }
+            Err(error)
         }
     }
 }
@@ -1241,12 +1298,25 @@ struct ClientHint {
     callback_url: Option<String>,
     /// The authorization server's metadata document, in place of discovery.
     metadata_url: Option<String>,
+    authorization_endpoint: Option<String>,
+    token_endpoint: Option<String>,
+    authorization_params: BTreeMap<String, String>,
 }
 
 impl ClientHint {
     /// A redirect the client was registered with, which only this Runner's own loopback can take.
     fn has_fixed_redirect(&self) -> bool {
         self.callback_port.is_some() || self.callback_url.is_some()
+    }
+
+    fn matches_redirect(&self, redirect: &str) -> bool {
+        let Ok(url) = reqwest::Url::parse(redirect) else { return false };
+        if let Some(fixed) = &self.callback_url {
+            let Ok(expected) = reqwest::Url::parse(fixed) else { return false };
+            return url.scheme() == expected.scheme() && url.host_str() == expected.host_str() && url.path() == expected.path()
+                && expected.port().or(self.callback_port).is_none_or(|port| url.port() == Some(port));
+        }
+        self.callback_port.is_none_or(|port| url.port() == Some(port))
     }
 }
 
@@ -1284,7 +1354,13 @@ async fn challenge_of(app: &Arc<App>, url: &str) -> Option<String> {
 /// (registered on the fly as a native app, or the preregistered one), PKCE. Answers with what
 /// finishes it and the page to open, for the browser to come back to `redirect`. The server
 /// has `sign_in::SETUP_TIMEOUT` for all of it, so a Device waiting on the start hears how it went.
-async fn begin_sign_in(app: &Arc<App>, url: &str, scopes: &[String], name: &str, client: &ClientHint, redirect: String) -> Result<(OAuthState, String), String> {
+async fn begin_sign_in(app: &Arc<App>, url: &str, scopes: &[String], name: &str, client: &ClientHint, redirect: String) -> Result<(BrowserState, String), String> {
+    if let Some(endpoint) = &client.authorization_endpoint {
+        let id = client.id.as_deref().ok_or_else(|| client.no_registration_advice(name))?;
+        let token = client.token_endpoint.as_deref().ok_or("The integration has no token endpoint.")?;
+        let (pending, page) = super::oauth::Pending::begin(endpoint, token, id, client.secret.as_deref(), &redirect, scopes, &client.authorization_params)?;
+        return Ok((BrowserState::Native(pending), page));
+    }
     let setup = async {
         let mut state = OAuthState::new(url, Some(app.mcp.http.clone())).await.map_err(|e| format!("{name}: {e}"))?;
         let client_name = client.name.as_deref().unwrap_or("Lorca");
@@ -1313,13 +1389,17 @@ async fn begin_sign_in(app: &Arc<App>, url: &str, scopes: &[String], name: &str,
             None => state.start_authorization(request).await.map_err(refused)?,
         }
         let page = state.get_authorization_url().await.map_err(|e| e.to_string())?;
-        Ok((state, page))
+        Ok((BrowserState::Mcp(state), page))
     };
     tokio::time::timeout(super::sign_in::SETUP_TIMEOUT, setup).await.map_err(|_| format!("{name} did not answer the sign-in in time."))?
 }
 
 /// Finishes an authorization with where the browser landed: its code for the tokens.
-async fn complete_sign_in(mut state: OAuthState, callback: &str, name: &str) -> Result<Value, String> {
+async fn complete_sign_in(app: &Arc<App>, state: BrowserState, callback: &str, name: &str) -> Result<Value, String> {
+    let mut state = match state {
+        BrowserState::Native(pending) => return pending.finish(&app.http, callback).await,
+        BrowserState::Mcp(state) => state,
+    };
     if super::sign_in::denied(callback) {
         return Err("The sign-in was denied.".into());
     }
@@ -1339,7 +1419,7 @@ async fn sign_in(app: &Arc<App>, url: &str, scopes: &[String], name: &str, clien
     let (state, page) = begin_sign_in(app, url, scopes, name, client, callback.redirect_uri()).await?;
     open_browser(app, &page)?;
     let landed = callback.wait(name, super::sign_in::TIMEOUT).await?;
-    complete_sign_in(state, &landed, name).await
+    complete_sign_in(app, state, &landed, name).await
 }
 
 /// Opens a sign-in page in this computer's browser. `LORCA_OAUTH_NO_BROWSER=1` fetches it
@@ -1494,7 +1574,7 @@ pub async fn reviewed_tool(app: &Arc<App>, bot: &Bot, chat_id: &str, plugin_id: 
     };
     let tool = server.tools().into_iter().find(|tool| tool.name.as_ref() == name).ok_or("The server no longer offers the reviewed tool.")?;
     let description = tool.description.as_deref().unwrap_or("").to_string();
-    Ok(Arc::new(PluginTool { app: app.clone(), plugin_id: plugin_id.into(), plugin_name: plugin.manifest.name,
+    Ok(Arc::new(PluginTool { app: app.clone(), plugin_id: plugin_id.into(), plugin_name: plugin.display_name(),
         server_name: server_name.into(), tool, name: tool_name(plugin_id, name), description, read_only: false, kind: ToolKind::Call,
         timeout: plugin.manifest.servers.get(server_name).map(ServerSpec::call_timeout).unwrap_or(super::CALL_TIMEOUT),
         policy_context: Some((bot.clone(), chat_id.into())) }))
@@ -1628,7 +1708,7 @@ impl PluginCatalog {
                 app: self.app.clone(),
                 policy_context: self.policy_context.clone(),
                 plugin_id: plugin.manifest.id.clone(),
-                plugin_name: plugin.manifest.name.clone(),
+                plugin_name: plugin.display_name(),
                 server_name: server_name.to_string(),
                 tool: tool.clone(),
                 name: name.clone(),
@@ -1644,7 +1724,7 @@ impl PluginCatalog {
                     name,
                     original_name,
                     plugin_id: plugin.manifest.id.clone(),
-                    plugin_name: plugin.manifest.name.clone(),
+                    plugin_name: plugin.display_name(),
                     server_name: server_name.to_string(),
                     description: utf8_prefix(&description, MAX_SEARCH_INDEX_DESCRIPTION_BYTES).to_string(),
                     search_schema: utf8_prefix(&raw_search_schema, MAX_SEARCH_SCHEMA_BYTES).to_string(),
@@ -1666,7 +1746,7 @@ impl PluginCatalog {
             return Vec::new();
         }
         let status = self.app.plugins.lock().unwrap().status(&plugin.manifest.id);
-        if let Some(status) = status.filter(|status| status.state == "needs_setup" || status.state == "needs_auth") {
+        if let Some(status) = status.filter(|status| matches!(status.state.as_str(), "needs_setup" | "needs_auth" | "insufficient_access")) {
             return vec![status.detail];
         }
         let mut problems = Vec::new();
@@ -1729,13 +1809,16 @@ impl PluginCatalog {
 /// turn to turn.
 fn plugin_group(app: &App, plugin: &Installed, saved: &[Offered]) -> PluginGroup {
     let manifest = &plugin.manifest;
-    let mut description = manifest.name.clone();
+    let mut description = plugin.display_name();
+    if let Some(service) = &plugin.service_id {
+        description.push_str(&format!(" (service {service}, account id {}). Use this namespace to explicitly select this account; ask the user when the intended account is unclear.", manifest.id));
+    }
     if let Some(about) = manifest.description.lines().map(str::trim).find(|line| !line.is_empty()) {
         description.push_str(&format!(": {about}"));
     }
     let status = app.plugins.lock().unwrap().status(&manifest.id);
     match status.as_ref().map(|status| status.state.as_str()) {
-        Some("needs_auth") => description.push_str("\nNeeds a sign-in before its tools work: call connect_plugin."),
+        Some("needs_auth" | "insufficient_access") => description.push_str("\nNeeds a sign-in before its tools work: call connect_plugin with this account id."),
         Some("needs_setup") => description.push_str(&format!("\nNot set up yet ({}): the user sets it up in the plugin's settings.", status.map(|status| status.detail).unwrap_or_default())),
         _ => {}
     }
@@ -1785,7 +1868,7 @@ impl codemode::Catalog for PluginCatalog {
         if !known {
             self.connect_plugin(&plugin, cancel).await;
         }
-        let about = self.groups.iter().find(|group| group.id == id).map(|group| group.about.clone()).unwrap_or_else(|| plugin.manifest.name.clone());
+        let about = self.groups.iter().find(|group| group.id == id).map(|group| group.about.clone()).unwrap_or_else(|| plugin.display_name());
         let state = self.state.lock().unwrap();
         let instructions: Vec<&str> = state.instructions.iter().filter(|((plugin_id, _), _)| *plugin_id == id).map(|(_, text)| text.as_str()).collect();
         let tools = state.tools.values().filter(|tool| tool.plugin_id == id).map(|tool| tool.name.clone()).collect();
@@ -1841,7 +1924,7 @@ pub fn plugin_briefs(app: &App) -> Vec<PluginBrief> {
             let status = store.status(&plugin.manifest.id);
             PluginBrief {
                 id: plugin.manifest.id.clone(),
-                name: plugin.manifest.name.clone(),
+                name: plugin.display_name(),
                 state: status.as_ref().map(|status| status.state.clone()).unwrap_or_else(|| "ready".into()),
                 detail: status.map(|status| status.detail).unwrap_or_default(),
                 skills: plugin
@@ -2213,7 +2296,7 @@ impl Tool for PluginTool {
             }
         };
         if let Some(auth) = &server.auth {
-            persist_refreshed(&self.app, &self.plugin_id, &server.name, auth).await;
+            persist_refreshed(&self.app, &self.plugin_id, &server.name, auth, server.generation).await;
         }
         let result = match response {
             Ok(rmcp::model::ServerResult::CallToolResult(result)) => result,
@@ -2224,6 +2307,12 @@ impl Tool for PluginTool {
                     needs_more_access(&self.app, &self.plugin_id, &self.server_name, &scope, &challenge);
                     return Err(ToolError(format!("{} needs more access for {tool}. The user signs in to it again to grant it.", self.plugin_name)));
                 }
+                if self.is_named_account() && authorization_expired(&error.to_string()) {
+                    let _ = super::set_oauth(&self.app, &self.plugin_id, &self.server_name, None);
+                    self.app.mcp.forget(&self.plugin_id);
+                    super::announce(&self.app);
+                    return Err(ToolError(format!("{} needs a new sign-in. Use connect_plugin with account id {}.", self.plugin_name, self.plugin_id)));
+                }
                 // The next call starts the server again.
                 if server.is_closed() {
                     return Err(ToolError(format!("{} stopped running: {error}", self.plugin_name)));
@@ -2232,6 +2321,17 @@ impl Tool for PluginTool {
             }
         };
         let is_error = result.is_error.unwrap_or(false);
+        // Slack and Google answer a revoked or narrowed authorization with an error result.
+        if is_error && self.is_named_account() {
+            let failure = serde_json::to_string(&result).unwrap_or_default();
+            if let Some((scope, challenge)) = insufficient_scope(&std::io::Error::other(failure.clone())) {
+                needs_more_access(&self.app, &self.plugin_id, &self.server_name, &scope, &challenge);
+            } else if authorization_expired(&failure) {
+                let _ = super::set_oauth(&self.app, &self.plugin_id, &self.server_name, None);
+                self.app.mcp.forget(&self.plugin_id);
+                super::announce(&self.app);
+            }
+        }
         // Off the async threads: making a large image one a model takes takes a moment.
         let (result, mut content) = tokio::task::spawn_blocking(move || {
             let content = model_content(&result);
@@ -2252,6 +2352,10 @@ impl Tool for PluginTool {
 }
 
 impl PluginTool {
+    fn is_named_account(&self) -> bool {
+        self.app.plugins.lock().unwrap().get(&self.plugin_id).is_some_and(|plugin| plugin.service_id.is_some())
+    }
+
     async fn check_policy(&self, cancel: &CancellationToken) -> Result<(), ToolError> {
         let Some((bot, chat_id)) = &self.policy_context else { return Ok(()) };
         match authorize_plugin(&self.app, bot, self, cancel).await {
@@ -2486,14 +2590,14 @@ fn push_text(content: &mut Vec<ContentPart>, text_len: &mut usize, mut text: Str
 
 /// Saves tokens the transport refreshed, so the next connection does not start from a stale
 /// refresh token.
-async fn persist_refreshed(app: &Arc<App>, plugin_id: &str, server: &str, auth: &Arc<tokio::sync::Mutex<AuthorizationManager>>) {
+async fn persist_refreshed(app: &Arc<App>, plugin_id: &str, server: &str, auth: &Arc<tokio::sync::Mutex<AuthorizationManager>>, generation: u64) {
     let credentials = auth.lock().await.get_credentials().await;
     if let Ok((client_id, Some(tokens))) = credentials {
         let key = format!("oauth:{server}");
         let saved = app.plugins.lock().unwrap().secret(plugin_id, &key);
         let fresh = json!({ "client_id": client_id, "tokens": tidy_tokens(&json!(tokens)), "signed_in_at": now_secs() });
         if saved.as_ref().map(|s| s["tokens"] != fresh["tokens"]).unwrap_or(true) {
-            let _ = super::set_oauth(app, plugin_id, server, Some(fresh));
+            let _ = super::set_oauth_at_generation(app, plugin_id, server, fresh, generation);
         }
     }
 }
@@ -2996,7 +3100,7 @@ for line in sys.stdin:
         let store = app.plugins.lock().unwrap();
         assert_eq!(store.secret("hub", "scope:api").unwrap()["scope"], json!("repo read:org admin:org"), "what it had and what it needs, once each");
         assert!(store.sign_in_secret("hub", "oauth", "api").is_none());
-        assert_eq!(store.status("hub").unwrap().state, "needs_auth");
+        assert_eq!(store.status("hub").unwrap().state, "insufficient_access");
     }
 
     #[test]
@@ -3093,7 +3197,7 @@ for line in sys.stdin:
             let (url, posts) = answering(status).await;
             let manifest = super::super::Manifest::parse(&json!({ "id": id, "name": id, "servers": { "api": { "type": "http", "url": url } } })).unwrap();
             // Not `install`, whose background connection would try too.
-            app.plugins.lock().unwrap().installed.push(super::super::Installed { manifest, source: "inline".into(), installed_at: 0.0, variables: BTreeMap::new() });
+            app.plugins.lock().unwrap().installed.push(super::super::Installed { manifest, source: "inline".into(), installed_at: 0.0, variables: BTreeMap::new(), service_id: None, account_name: None });
             assert!(app.mcp.server(app, id, "api").await.is_err());
             assert_eq!(posts.load(std::sync::atomic::Ordering::SeqCst), tries, "{status}");
         }

@@ -1266,11 +1266,26 @@ func (s *Store) InstallPlugin(pluginID, runnerID string, done func(InstalledPlug
 	Async(s, func() (InstalledPlugin, error) {
 		reply, err := call[pluginReply](s, "plugins.install", map[string]any{"runner_id": runnerID, "plugin_id": pluginID})
 		return ToPlugin(reply.Status), err
-	}, done)
+	}, func(plugin InstalledPlugin, err error) {
+		if err == nil {
+			s.rememberPlugin(runnerID, plugin)
+		}
+		done(plugin, err)
+	})
 }
 
 func (s *Store) UninstallPlugin(pluginID, runnerID string, done func(error)) {
-	s.simple(done, "plugins.uninstall", map[string]any{"runner_id": runnerID, "plugin_id": pluginID})
+	s.simple(func(err error) {
+		if err == nil {
+			if runner := s.Device(runnerID); runner != nil {
+				runner.Plugins = slices.DeleteFunc(runner.Plugins, func(p InstalledPlugin) bool { return p.ID == pluginID })
+				s.emit(Event{Kind: EventRosterChanged})
+			}
+		}
+		if done != nil {
+			done(err)
+		}
+	}, "plugins.uninstall", map[string]any{"runner_id": runnerID, "plugin_id": pluginID})
 }
 
 // simple is a request whose answer is only whether it went through.
@@ -1305,6 +1320,25 @@ func (s *Store) PluginDetail(pluginID, runnerID string, done func(PluginDetail, 
 			Variables: []PluginDetailVariable{{Name: "GITHUB_TOKEN", Description: "A personal access token, instead of signing in.", Secret: true}},
 			Servers:   []PluginDetailServer{{Name: "github", Kind: "http", URL: "https://api.githubcopilot.com/mcp/", OAuth: true, SignedIn: status.State == PluginReady}},
 		}
+		if status.ServiceID != "" {
+			detail.Variables, detail.Servers = nil, nil
+			for _, manifest := range mockMarketplace().Plugins {
+				if manifest.ID != status.ServiceID {
+					continue
+				}
+				detail.Homepage, detail.Skills = manifest.Homepage, manifest.Skills
+				for _, variable := range manifest.Variables {
+					field := PluginDetailVariable{Name: variable.Name, Description: variable.Description, Secret: variable.Secret, Required: variable.Required}
+					if !variable.Secret && status.State != PluginNeedsSetup {
+						field.IsSet, field.Value = true, "demo-client-id"
+					}
+					detail.Variables = append(detail.Variables, field)
+				}
+				for _, server := range manifest.Servers {
+					detail.Servers = append(detail.Servers, PluginDetailServer{Name: server.Name, Kind: "http", URL: server.Address, OAuth: server.SignsIn, SignedIn: status.State == PluginReady})
+				}
+			}
+		}
 		s.post(func() { done(detail, nil) })
 		return
 	}
@@ -1318,6 +1352,14 @@ func (s *Store) PluginDetail(pluginID, runnerID string, done func(PluginDetail, 
 // read back.
 func (s *Store) SetPluginVariables(pluginID, runnerID string, variables map[string]string, done func(InstalledPlugin, error)) {
 	if s.IsMock {
+		if runner := s.Device(runnerID); runner != nil {
+			for _, plugin := range runner.Plugins {
+				if plugin.ID == pluginID && plugin.ServiceID != "" {
+					s.post(func() { done(plugin, nil) })
+					return
+				}
+			}
+		}
 		s.post(func() { done(readyPlugin(pluginID), nil) })
 		return
 	}
@@ -1329,12 +1371,18 @@ func (s *Store) SetPluginVariables(pluginID, runnerID string, variables map[stri
 
 // ConnectPlugin starts a plugin's sign-in for the Runner; the browser opens on this computer.
 func (s *Store) ConnectPlugin(pluginID, runnerID string, done func(error)) {
+	if s.mockIntegrationState(pluginID, runnerID, PluginReady, "Connected", done) {
+		return
+	}
 	s.simple(done, "plugins.connect", map[string]any{"runner_id": runnerID, "plugin_id": pluginID})
 }
 
 // SignOutPlugin forgets a plugin server's sign-in on its Runner. Nothing is revoked at the server;
 // the plugin's next use asks for a sign-in again.
 func (s *Store) SignOutPlugin(pluginID, runnerID, server string, done func(error)) {
+	if s.mockIntegrationState(pluginID, runnerID, PluginNeedsAuth, "Sign in", done) {
+		return
+	}
 	s.simple(done, "plugins.sign_out", map[string]any{"runner_id": runnerID, "plugin_id": pluginID, "server": server})
 }
 

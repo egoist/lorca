@@ -832,12 +832,13 @@ type AutoReview struct {
 type PluginState string
 
 const (
-	PluginReady      PluginState = "ready"
-	PluginNeedsSetup PluginState = "needs_setup"
-	PluginNeedsAuth  PluginState = "needs_auth"
-	PluginConnecting PluginState = "connecting"
-	PluginError      PluginState = "error"
-	PluginUnknown    PluginState = "unknown"
+	PluginReady              PluginState = "ready"
+	PluginNeedsSetup         PluginState = "needs_setup"
+	PluginNeedsAuth          PluginState = "needs_auth"
+	PluginInsufficientAccess PluginState = "insufficient_access"
+	PluginConnecting         PluginState = "connecting"
+	PluginError              PluginState = "error"
+	PluginUnknown            PluginState = "unknown"
 )
 
 // InstalledPlugin is a plugin as its Runner advertises it: installed, and in what state.
@@ -851,6 +852,17 @@ type InstalledPlugin struct {
 	Detail      string
 	// Source is `mcp.json` for one of the Runner's own MCP servers, which the server sheet edits.
 	Source string
+	// ServiceID and AccountName are a named account's marketplace service (gmail) and the user's
+	// name for it (Work). Its ID is the account's own.
+	ServiceID   string
+	AccountName string
+}
+
+func (p InstalledPlugin) MarketplaceID() string {
+	if p.ServiceID != "" {
+		return p.ServiceID
+	}
+	return p.ID
 }
 
 func (p InstalledPlugin) Symbol() string {
@@ -874,6 +886,26 @@ const (
 	ToneRed
 	ToneOrange
 )
+
+// ShortStatus is the state in a word or two, for a row in a list; what it needs, in full, is in its
+// sheet. It is colored only when the user has something to do.
+func (p InstalledPlugin) ShortStatus() (string, Tone) {
+	switch p.State {
+	case PluginReady:
+		return L("Connected"), ToneSecondary
+	case PluginConnecting:
+		return L("Connecting…"), ToneSecondary
+	case PluginNeedsAuth:
+		return L("Needs a sign-in"), ToneOrange
+	case PluginInsufficientAccess:
+		return L("Needs more access"), ToneOrange
+	case PluginNeedsSetup:
+		return L("Needs setup"), ToneOrange
+	case PluginError:
+		return L("Can’t connect"), ToneRed
+	}
+	return p.Detail, ToneSecondary
+}
 
 func (s PluginState) Tone() Tone {
 	switch s {
@@ -909,19 +941,20 @@ type PluginVariable struct {
 
 // MarketplacePlugin is a marketplace plugin, with the Runners that already have it.
 type MarketplacePlugin struct {
-	ID          string
-	Name        string
-	Description string
-	Icon        string
-	Homepage    string
-	Author      string
-	Category    string
-	IsFeatured  bool
-	Tags        []string
-	Servers     []MarketplaceServer
-	Skills      []NamedText
-	Variables   []PluginVariable
-	InstalledOn []string
+	ID            string
+	Name          string
+	Description   string
+	Icon          string
+	Homepage      string
+	Author        string
+	Category      string
+	IsFeatured    bool
+	Tags          []string
+	Servers       []MarketplaceServer
+	Skills        []NamedText
+	Variables     []PluginVariable
+	InstalledOn   []string
+	NamedAccounts bool
 }
 
 // SignsIn is whether at least one server signs in with OAuth on the Runner.

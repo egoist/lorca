@@ -21,6 +21,7 @@ export default function SettingsLayout() {
     >
       <Stack.Screen name="index" />
       <Stack.Screen name="device/[id]" />
+      <Stack.Screen name="account/[id]" />
       <Stack.Screen name="provider/[kind]" />
       <Stack.Screen name="custom-provider" />
       <Stack.Screen name="custom-models" />

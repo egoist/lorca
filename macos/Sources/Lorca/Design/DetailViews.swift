@@ -577,16 +577,17 @@ final class StatusRow: NSView, NSGestureRecognizerDelegate {
     func configure(plugin: InstalledPlugin, hasAccess: Bool = true) {
         guard hasAccess else {
             configure(
-                symbol: plugin.symbolName, image: PluginLogo.tile(for: plugin.id, size: 18), title: plugin.name,
-                subtitle: plugin.description, state: L("No access"))
+                symbol: plugin.symbolName, image: PluginLogo.tile(for: plugin.marketplaceID, size: 18), title: plugin.name,
+                subtitle: plugin.accountName == nil ? plugin.description : "", state: L("No access"))
             return
         }
         let ready = plugin.state == .ready
         configure(
             symbol: plugin.symbolName,
-            image: PluginLogo.tile(for: plugin.id, size: 18),
+            image: PluginLogo.tile(for: plugin.marketplaceID, size: 18),
             title: plugin.name,
-            subtitle: plugin.description,
+            // A service's accounts would each repeat its description; their names tell them apart.
+            subtitle: plugin.accountName == nil ? plugin.description : "",
             state: ready ? L("Ready") : plugin.detail,
             stateSymbol: ready ? "checkmark" : "exclamationmark.circle.fill",
             stateColor: ready ? .systemGreen : .systemOrange,

@@ -121,8 +121,10 @@ final class BotAccessViewController: SheetViewController {
 
     private func makeRow(for plugin: BotAccessCatalog.Plugin) -> PluginAccessRow {
         let row = PluginAccessRow()
-        row.icon = PluginLogo.tile(for: plugin.id, size: 18)
-            ?? NSImage(systemSymbolName: runner?.plugins.first { $0.id == plugin.id }?.symbolName ?? "puzzlepiece.extension", accessibilityDescription: nil)
+        // A named account (Gmail · Work) has its service's mark.
+        let installed = runner?.plugins.first { $0.id == plugin.id }
+        row.icon = PluginLogo.tile(for: installed?.marketplaceID ?? plugin.id, size: 18)
+            ?? NSImage(systemSymbolName: installed?.symbolName ?? "puzzlepiece.extension", accessibilityDescription: nil)
         row.onLevel = { [weak self] level in
             self?.levels[plugin.id] = level
             self?.render()

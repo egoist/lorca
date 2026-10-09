@@ -8,7 +8,7 @@ import { AppState, Platform, type AppStateStatus } from "react-native";
 import * as core from "../../modules/lorca-core";
 import { t } from "../i18n";
 import { hostFacts } from "./host";
-import { providerConnectMethod, withReviewModel, type Attachment, type AutoReview, type Bot, type Chat, type ChatMeta, type ChatSearchResults, type ChatUsage, type CustomAPI, type CustomModel, type DurableTask, type Message, type ProviderKind, type ProviderStatus } from "./model";
+import { providerConnectMethod, withReviewModel, type Attachment, type AutoReview, type Bot, type Chat, type ChatMeta, type ChatSearchResults, type ChatUsage, type CustomAPI, type CustomModel, type DurableTask, type Message, type PluginDetail, type PluginStatus, type ProviderKind, type ProviderStatus } from "./model";
 import { coreHome, loadPrefs, pathOf, wipePrefs } from "./prefs";
 import { clearPushes, installPushHandlers, registerForPushes } from "./push";
 import {
@@ -545,6 +545,32 @@ class Engine {
       replace(shown, asked);
       throw error;
     }
+  }
+
+  /// A plugin on its Runner, with how each of its servers signs in; sealed to another Runner.
+  pluginDetail(runnerId: string, pluginId: string): Promise<PluginDetail> {
+    return core.request<PluginDetail>("plugins.detail", { runner_id: runnerId, plugin_id: pluginId });
+  }
+
+  /// Signs a plugin in on its Runner. The page opens here (`plugin.auth`) and the Runner keeps the
+  /// tokens; resolves once the sign-in has finished or failed.
+  async connectPlugin(runnerId: string, pluginId: string) {
+    await core.request("plugins.connect", { runner_id: runnerId, plugin_id: pluginId });
+  }
+
+  /// Forgets a plugin's sign-in on its Runner; its next use asks again.
+  async signOutPlugin(runnerId: string, pluginId: string) {
+    await core.request("plugins.sign_out", { runner_id: runnerId, plugin_id: pluginId });
+  }
+
+  /// Renames a named account (Gmail · Work). Its id, sign-in, and tools stay; the answer stands in
+  /// the Runner's list until its next machine blob lists the new name.
+  async renamePluginAccount(runnerId: string, pluginId: string, accountName: string) {
+    const { status } = await core.request<{ status: PluginStatus }>("plugins.rename", { runner_id: runnerId, plugin_id: pluginId, account_name: accountName });
+    useStore.setState((s) => ({
+      devices: s.devices.map((d) => (d.id === runnerId ? { ...d, plugins: (d.plugins ?? []).map((plugin) => (plugin.id === status.id ? status : plugin)) } : d)),
+    }));
+    return status;
   }
 
   // MARK: - Commands

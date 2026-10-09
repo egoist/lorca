@@ -283,7 +283,7 @@ final class InspectorViewController: NSViewController {
                 let plugin = item.payload.pluginId.flatMap { id in store.device(item.runnerId)?.plugins.first { $0.id == id } }
                 row.configure(
                     symbol: item.payload.isDraft ? "doc.text" : (item.payload.isShell ? "terminal" : plugin?.symbolName ?? "puzzlepiece.extension"),
-                    image: plugin.flatMap { PluginLogo.tile(for: $0.id, size: 18) },
+                    image: plugin.flatMap { PluginLogo.tile(for: $0.marketplaceID, size: 18) },
                     title: item.payload.kind == "plugin" ? store.pluginName(of: item) : item.headline,
                     subtitle: item.rationale,
                     state: item.stateText,
