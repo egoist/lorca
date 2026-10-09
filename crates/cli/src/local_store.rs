@@ -86,6 +86,11 @@ impl LocalStore {
                  position INTEGER NOT NULL,
                  json     TEXT NOT NULL
              );
+             CREATE TABLE IF NOT EXISTS sidebar_sections (
+                 id       TEXT PRIMARY KEY NOT NULL,
+                 position INTEGER NOT NULL,
+                 json     TEXT NOT NULL
+             );
              CREATE TABLE IF NOT EXISTS event_subscriptions (
                  id TEXT PRIMARY KEY NOT NULL,
                  ciphertext BLOB NOT NULL
@@ -166,6 +171,10 @@ impl LocalStore {
                  id   TEXT PRIMARY KEY NOT NULL,
                  json TEXT NOT NULL
              );
+             CREATE TABLE IF NOT EXISTS device_watching (
+                 id      TEXT PRIMARY KEY NOT NULL,
+                 chat_id TEXT NOT NULL
+             );
              CREATE TABLE IF NOT EXISTS sent_jobs (
                  id         TEXT PRIMARY KEY NOT NULL,
                  chat_id    TEXT NOT NULL,
@@ -214,6 +223,7 @@ impl LocalStore {
             devices: load_json_table(&connection, "devices")?,
             bots: load_json_table(&connection, "bots")?,
             chats: load_json_table(&connection, "chats")?,
+            sections: load_json_table(&connection, "sidebar_sections")?,
             routines: load_json_table(&connection, "routines")?,
             workflows: load_json_table(&connection, "workflow_setups")?,
             auto_review,
@@ -227,6 +237,7 @@ impl LocalStore {
             device_online: Default::default(),
             turns_online: Default::default(),
             device_turns: load_device_turns(&connection)?,
+            device_watching: load_device_watching(&connection)?,
             applied_blob_ids: load_ordered_ids(&connection, "applied_blobs")?,
             listed_machines: Default::default(),
             unknown_machines: Default::default(),
@@ -1061,6 +1072,20 @@ impl LocalStore {
         Ok(())
     }
 
+    /// The chat another computer's latest machine blob says it shows, or none.
+    pub fn set_device_watching(&self, device_id: &str, chat_id: Option<&str>) -> anyhow::Result<()> {
+        let connection = self.connection.lock().unwrap();
+        match chat_id {
+            Some(chat_id) => connection.execute(
+                "INSERT INTO device_watching (id, chat_id) VALUES (?1, ?2)
+                 ON CONFLICT(id) DO UPDATE SET chat_id = excluded.chat_id",
+                params![device_id, chat_id],
+            )?,
+            None => connection.execute("DELETE FROM device_watching WHERE id = ?1", [device_id])?,
+        };
+        Ok(())
+    }
+
     /// Keeps a job sealed to another Runner until its wait ends.
     pub fn insert_sent_job(&self, job: &SentJob) -> anyhow::Result<()> {
         let connection = self.connection.lock().unwrap();
@@ -1175,6 +1200,7 @@ impl LocalStore {
             "routines",
             "workflow_setups",
             "shared_links",
+            "sidebar_sections",
             "event_subscriptions",
             "event_inbox",
             "group_deletes",
@@ -1186,6 +1212,7 @@ impl LocalStore {
             "outbox",
             "sent_jobs",
             "device_turns",
+            "device_watching",
             "handoffs",
             "review_items",
             "durable_tasks",
@@ -1322,6 +1349,11 @@ fn save_state_tx(tx: &Transaction<'_>, state: &State) -> anyhow::Result<()> {
     sync_json_table(
         tx, "workflow_setups",
         state.workflows.iter().map(|setup| (setup.id.clone(), serde_json::to_string(setup))).collect::<Vec<_>>(),
+    )?;
+    sync_json_table(
+        tx,
+        "sidebar_sections",
+        state.sections.iter().map(|section| (section.id.clone(), serde_json::to_string(section))).collect::<Vec<_>>(),
     )?;
     sync_json_table(
         tx,
@@ -1569,6 +1601,12 @@ fn load_device_turns(
         Ok((id, serde_json::from_str(&json).context("decoding a Device's turns")?))
     })
     .collect()
+}
+
+fn load_device_watching(connection: &Connection) -> anyhow::Result<std::collections::HashMap<String, String>> {
+    let mut statement = connection.prepare("SELECT id, chat_id FROM device_watching")?;
+    let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+    rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
 }
 
 fn load_device_seen(

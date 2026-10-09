@@ -17,6 +17,9 @@ use crate::local_store::LocalStore;
 use crate::credentials::Credentials;
 use crate::relay::RelayClient;
 
+/// How long the app's chat on screen stays put before the other Devices hear of it, so a run
+/// through the sidebar goes up once.
+const WATCH_SETTLE: std::time::Duration = std::time::Duration::from_millis(500);
 
 #[derive(Debug, Clone)]
 pub struct OutboxItem {
@@ -57,6 +60,8 @@ pub struct State {
     pub devices: Vec<Device>,
     pub bots: Vec<Bot>,
     pub chats: Vec<Chat>,
+    /// The sidebar's sections, in order.
+    pub sections: Vec<Section>,
     pub routines: Vec<Routine>,
     pub workflows: Vec<crate::workflows::Setup>,
     pub auto_review: AutoReview,
@@ -80,6 +85,9 @@ pub struct State {
     pub turns_online: std::collections::HashSet<String>,
     /// The turns each other Device's latest machine blob lists, by machine pubkey.
     pub device_turns: HashMap<String, Vec<LiveTurn>>,
+    /// The chat each other computer's latest machine blob says its app shows in front of the
+    /// user, by machine pubkey.
+    pub device_watching: HashMap<String, String>,
     /// The relay's machine list as last read: machine pubkey → when the relay attested it, on
     /// this Device's clock. Not kept across runs.
     pub listed_machines: HashMap<String, i64>,
@@ -715,6 +723,7 @@ impl App {
                 workflows: Some(state.workflows.clone()),
                 bots: state.bots.clone(),
                 chats: state.chats.iter().map(|c| c.meta.clone()).collect(),
+                sections: state.sections.clone(),
                 routines: state.routines.clone(),
                 auto_review: state.auto_review.clone(),
                 shared_links: state.shared_links.clone(),
@@ -809,8 +818,9 @@ impl App {
         let (Some(dek), Some(device)) = (self.dek(), self.local_device()) else { return };
         let turns = self.turns_here();
         let budgets = self.budgets.local_snapshots(self);
+        let watching = self.watched_chat.lock().unwrap().clone();
         let fingerprint = format!(
-            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
             device.id,
             device.name,
             device.model,
@@ -820,7 +830,8 @@ impl App {
             device.version,
             serde_json::to_string(&device.update).unwrap_or_default(),
             serde_json::to_string(&turns).unwrap_or_default(),
-            serde_json::to_string(&budgets).unwrap_or_default()
+            serde_json::to_string(&budgets).unwrap_or_default(),
+            watching.as_deref().unwrap_or_default()
         );
         let hash = keys::b64(&<sha2::Sha256 as sha2::Digest>::digest(fingerprint.as_bytes()));
         let changed = {
@@ -837,7 +848,7 @@ impl App {
             return;
         }
         let device_id = device.id.clone();
-        match crate::crypto::encrypt_json(&dek, "machine", &MachineBlob { device, turns, budgets }) {
+        match crate::crypto::encrypt_json(&dek, "machine", &MachineBlob { device, turns, budgets, watching }) {
             Ok(ciphertext) => {
                 self.push_slot_blob("machine", Slot::latest(format!("machine-{}", device_id)), None, ciphertext);
             }
@@ -1084,6 +1095,7 @@ impl App {
             devices: self.devices_out(&state),
             bots: state.bots.clone(),
             chats: state.chats.iter().map(|c| ChatSummary { meta: c.meta.clone(), unread_count: c.unread_count, usage: c.usage.clone() }).collect(),
+            sections: state.sections.clone(),
             routines: self.routines_out(&state),
             auto_review: state.auto_review.clone(),
             shared_links: state.shared_links.iter().map(crate::templates::links::SharedLink::out).collect(),
@@ -1340,6 +1352,9 @@ impl App {
             owner_bot_id: Some(bot_id.to_string()),
             description: None,
             is_pinned: false,
+            section_id: None,
+            is_hidden: false,
+            mute: None,
             created_at: 0.0,
         })
     }
@@ -1403,6 +1418,106 @@ impl App {
         }
         self.roster_changed(true);
         Ok(())
+    }
+
+    // MARK: - Sidebar
+
+    /// Adds a section after the others, with `chat_id` moved into it in the same roster change.
+    pub fn create_section(&self, id: Option<String>, name: &str, chat_id: Option<&str>) -> anyhow::Result<Section> {
+        let name = section_name(name)?;
+        let section = {
+            let mut state = self.state.lock().unwrap();
+            let id = id.filter(|id| !id.trim().is_empty()).unwrap_or_else(|| format!("section-{}", &uuid::Uuid::new_v4().to_string()[..8]));
+            if state.sections.iter().any(|section| section.id == id) {
+                anyhow::bail!("That section already exists");
+            }
+            if let Some(chat_id) = chat_id {
+                let chat = state.chats.iter_mut().find(|chat| chat.meta.id == chat_id).ok_or_else(|| anyhow::anyhow!("Unknown chat"))?;
+                chat.meta.section_id = Some(id.clone());
+            }
+            let section = Section { id, name, collapsed: false };
+            state.sections.push(section.clone());
+            section
+        };
+        self.roster_changed(true);
+        Ok(section)
+    }
+
+    pub fn update_section(&self, id: &str, update: impl FnOnce(&mut Section)) -> anyhow::Result<()> {
+        {
+            let mut state = self.state.lock().unwrap();
+            let section = state.sections.iter_mut().find(|section| section.id == id).ok_or_else(|| anyhow::anyhow!("Unknown section"))?;
+            update(section);
+        }
+        self.roster_changed(true);
+        Ok(())
+    }
+
+    pub fn rename_section(&self, id: &str, name: &str) -> anyhow::Result<()> {
+        let name = section_name(name)?;
+        self.update_section(id, |section| section.name = name)
+    }
+
+    /// Deletes a section. Its chats go back to the chats in no section.
+    pub fn delete_section(&self, id: &str) -> anyhow::Result<()> {
+        {
+            let mut state = self.state.lock().unwrap();
+            let before = state.sections.len();
+            state.sections.retain(|section| section.id != id);
+            if state.sections.len() == before {
+                anyhow::bail!("Unknown section");
+            }
+            for chat in state.chats.iter_mut().filter(|chat| chat.meta.section_id.as_deref() == Some(id)) {
+                chat.meta.section_id = None;
+            }
+        }
+        self.roster_changed(true);
+        Ok(())
+    }
+
+    /// Puts the sections in the order of `ids`. Sections it leaves out follow, in their order.
+    pub fn reorder_sections(&self, ids: &[String]) {
+        {
+            let mut state = self.state.lock().unwrap();
+            let place = |section: &Section| ids.iter().position(|id| *id == section.id).unwrap_or(usize::MAX);
+            state.sections.sort_by_key(place);
+        }
+        self.roster_changed(true);
+    }
+
+    /// Lists a chat under a section, or with the chats in no section.
+    pub fn set_chat_section(&self, chat_id: &str, section_id: Option<String>) -> anyhow::Result<()> {
+        if let Some(id) = &section_id {
+            if !self.state.lock().unwrap().sections.iter().any(|section| &section.id == id) {
+                anyhow::bail!("Unknown section");
+            }
+        }
+        self.update_chat_meta(chat_id, |meta| meta.section_id = section_id)
+    }
+
+    /// Takes a chat out of the sidebar, or puts it back. A hidden chat is not pinned.
+    pub fn hide_chat(&self, chat_id: &str, hidden: bool) -> anyhow::Result<()> {
+        self.update_chat_meta(chat_id, |meta| {
+            meta.is_hidden = hidden;
+            if hidden {
+                meta.is_pinned = false;
+            }
+        })
+    }
+
+    /// Pins or unpins a chat. A pinned chat is back in the sidebar.
+    pub fn pin_chat(&self, chat_id: &str, pinned: Option<bool>) -> anyhow::Result<()> {
+        self.update_chat_meta(chat_id, |meta| {
+            meta.is_pinned = pinned.unwrap_or(!meta.is_pinned);
+            if meta.is_pinned {
+                meta.is_hidden = false;
+            }
+        })
+    }
+
+    /// Turns a chat's alerts off on every Device, until `until` or until unmuted, or back on.
+    pub fn mute_chat(&self, chat_id: &str, mute: Option<Mute>) -> anyhow::Result<()> {
+        self.update_chat_meta(chat_id, |meta| meta.mute = mute)
     }
 
     // MARK: - Routines
@@ -1529,8 +1644,47 @@ impl App {
         *self.watched_chat.lock().unwrap() = chat_id;
     }
 
+    /// The same, told to the other Devices in this Device's machine blob once the user settles
+    /// on a chat, so a Runner elsewhere does not push it to a phone either.
+    pub fn watch_chat(self: &Arc<Self>, chat_id: Option<String>) {
+        self.set_watched_chat(chat_id);
+        let app = self.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(WATCH_SETTLE).await;
+            app.push_machine_blob_if_changed();
+        });
+    }
+
+    /// Whether the user looks at the chat on this Device.
     pub fn is_watching(&self, chat_id: &str) -> bool {
         self.watched_chat.lock().unwrap().as_deref() == Some(chat_id)
+    }
+
+    /// Whether the user looks at the chat on this Device or on another computer the relay lists
+    /// online.
+    pub fn is_watched_anywhere(&self, chat_id: &str) -> bool {
+        if self.is_watching(chat_id) {
+            return true;
+        }
+        let state = self.state.lock().unwrap();
+        state.device_watching.iter().any(|(device_id, watched)| watched == chat_id && state.device_online.contains(device_id))
+    }
+
+    /// The chat another computer's latest machine blob says it shows.
+    pub fn set_device_watching(&self, device_id: &str, chat_id: Option<String>) {
+        {
+            let mut state = self.state.lock().unwrap();
+            if state.device_watching.get(device_id) == chat_id.as_ref() {
+                return;
+            }
+            match &chat_id {
+                Some(chat_id) => state.device_watching.insert(device_id.to_string(), chat_id.clone()),
+                None => state.device_watching.remove(device_id),
+            };
+        }
+        if let Err(error) = self.store.set_device_watching(device_id, chat_id.as_deref()) {
+            tracing::error!(%error, "keeping the chat another Device shows");
+        }
     }
 
     /// Clears a chat's unread count. Read on this Device (`upload`), it clears on every other
@@ -1942,6 +2096,7 @@ impl App {
             "devices": self.devices_out(&state),
             "bots": state.bots,
             "chats": state.chats.iter().map(|chat| self.chat_for_app(chat)).collect::<Vec<_>>(),
+            "sections": state.sections,
             "routines": self.routines_out(&state),
             "reviews": crate::review_queue::list(self).unwrap_or_default(),
             "tasks": crate::tasks::list(self).unwrap_or_default(),
@@ -1960,6 +2115,15 @@ impl App {
 
 /// The models the apps offer in their pickers, in the catalog's order, so each provider's first
 /// is its default: the provider, id, and name, and the thinking levels each one takes.
+/// A section's name as the sidebar shows it: one line, at most 60 characters.
+fn section_name(name: &str) -> anyhow::Result<String> {
+    let name = name.split_whitespace().collect::<Vec<_>>().join(" ");
+    if name.is_empty() {
+        anyhow::bail!("A section needs a name");
+    }
+    Ok(name.chars().take(60).collect())
+}
+
 fn models_out() -> Vec<Value> {
     lorca_models::models()
         .iter()
@@ -2077,6 +2241,9 @@ mod tests {
                 owner_bot_id: owner.map(str::to_string),
                 description: None,
                 is_pinned: false,
+                section_id: None,
+                is_hidden: false,
+                mute: None,
                 created_at: 1.0,
             },
             unread_count: 0,
@@ -2148,6 +2315,53 @@ mod tests {
             assert!(!home.join(name).exists());
         }
         assert!(scratch.0.config.database_path().is_file());
+    }
+
+    #[test]
+    fn sections_hidden_chats_and_mutes_are_kept_in_the_roster() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        {
+            let mut state = app.state.lock().unwrap();
+            state.bots.push(bot("b1"));
+            state.chats.push(chat("a", "dm", &["b1"], Some("b1")));
+            state.chats.push(chat("b", "group", &["b1"], Some("b1")));
+        }
+        let pipeline = app.create_section(None, "  Big   deals ", Some("a")).unwrap();
+        assert_eq!(pipeline.name, "Big deals");
+        assert!(app.create_section(None, "   ", None).is_err(), "a section needs a name");
+        assert!(app.create_section(Some(pipeline.id.clone()), "Twice", None).is_err());
+        let customers = app.create_section(Some("customers".into()), "Customers", None).unwrap();
+        assert_eq!(app.chat("a").unwrap().meta.section_id.as_deref(), Some(pipeline.id.as_str()));
+        app.reorder_sections(&["customers".into()]);
+        app.rename_section(&pipeline.id, "Pipeline").unwrap();
+        app.update_section(&pipeline.id, |section| section.collapsed = true).unwrap();
+        assert!(app.set_chat_section("b", Some("gone".into())).is_err(), "a chat moves only into a section that exists");
+        app.set_chat_section("b", Some(customers.id.clone())).unwrap();
+        let names = |app: &App| app.state.lock().unwrap().sections.iter().map(|s| (s.name.clone(), s.collapsed)).collect::<Vec<_>>();
+        assert_eq!(names(app), [("Customers".to_string(), false), ("Pipeline".to_string(), true)]);
+
+        app.pin_chat("a", Some(true)).unwrap();
+        app.hide_chat("a", true).unwrap();
+        assert!(app.chat("a").unwrap().meta.is_hidden && !app.chat("a").unwrap().meta.is_pinned, "a hidden chat is not pinned");
+        app.mute_chat("b", Some(Mute { until: Some(100.0) })).unwrap();
+        assert!(app.chat("b").unwrap().meta.is_muted(99.0) && !app.chat("b").unwrap().meta.is_muted(100.0));
+
+        // Everything is still there after a restart.
+        let reloaded = App::load(Config { home: scratch.1.clone(), port: 0 }).unwrap();
+        assert_eq!(names(&reloaded), names(app));
+        assert_eq!(reloaded.chat("a").unwrap().meta, app.chat("a").unwrap().meta);
+        assert_eq!(reloaded.chat("b").unwrap().meta.mute, Some(Mute { until: Some(100.0) }));
+        drop(reloaded);
+
+        // Pinning brings a hidden chat back; deleting a section leaves its chats in none.
+        app.pin_chat("a", None).unwrap();
+        assert!(!app.chat("a").unwrap().meta.is_hidden);
+        app.delete_section(&customers.id).unwrap();
+        assert_eq!(app.chat("b").unwrap().meta.section_id, None);
+        assert!(app.delete_section(&customers.id).is_err());
+        app.mute_chat("b", None).unwrap();
+        assert!(!app.chat("b").unwrap().meta.is_muted(0.0));
     }
 
     #[test]

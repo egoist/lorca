@@ -3,7 +3,7 @@
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::model::{AutoReview, Bot, ChatMeta, ChatUsage, Message, ProviderStatus};
+use crate::model::{AutoReview, Bot, ChatMeta, ChatUsage, Message, ProviderStatus, Section};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "event", content = "data")]
@@ -19,7 +19,7 @@ pub enum Event {
     #[serde(rename = "attention.changed")]
     AttentionChanged(crate::attention::View),
     #[serde(rename = "roster.changed")]
-    RosterChanged { devices: Vec<Value>, bots: Vec<Bot>, chats: Vec<ChatSummary>, routines: Vec<Value>, auto_review: AutoReview, shared_links: Vec<Value>, providers: Vec<ProviderStatus>, models: Vec<Value>, playbooks: Vec<Value> },
+    RosterChanged { devices: Vec<Value>, bots: Vec<Bot>, chats: Vec<ChatSummary>, sections: Vec<Section>, routines: Vec<Value>, auto_review: AutoReview, shared_links: Vec<Value>, providers: Vec<ProviderStatus>, models: Vec<Value>, playbooks: Vec<Value> },
     /// Metadata only; the app fetches encrypted Runner-owned evidence when opened.
     #[serde(rename = "feedback.changed")]
     FeedbackChanged { bot_id: String, pending_count: usize },

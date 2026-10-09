@@ -201,9 +201,10 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
         }
 
         // The desktop app names the chat on screen while it is frontmost, null otherwise; a
-        // reply the user is watching arrive is not pushed to their phone.
+        // reply the user is watching arrive is not pushed to their phone, from this Runner or
+        // another.
         "ui.watching" => {
-            app.set_watched_chat(opt_string(&params, "chat_id"));
+            app.watch_chat(opt_string(&params, "chat_id"));
             Ok(Value::Null)
         }
         // A phone's APNs or FCM device token, registered with the relay under this machine.
@@ -322,6 +323,9 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
                     description: opt_string(&params, "description").map(|text| text.trim().to_string()),
                     bot_ids,
                     is_pinned: false,
+                    section_id: None,
+                    is_hidden: false,
+                    mute: None,
                     created_at: 0.0,
                 })
                 .map_err(|e| e.to_string())?
@@ -451,8 +455,46 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             Ok(Value::Null)
         }
         "chats.pin" => {
-            let pinned = params["pinned"].as_bool();
-            app.update_chat_meta(&string(&params, "chat_id")?, |meta| meta.is_pinned = pinned.unwrap_or(!meta.is_pinned)).map_err(|e| e.to_string())?;
+            app.pin_chat(&string(&params, "chat_id")?, params["pinned"].as_bool()).map_err(|e| e.to_string())?;
+            Ok(Value::Null)
+        }
+        "chats.hide" => {
+            app.hide_chat(&string(&params, "chat_id")?, params["hidden"].as_bool().unwrap_or(true)).map_err(|e| e.to_string())?;
+            Ok(Value::Null)
+        }
+        // `until` is unix seconds; without it the chat stays muted until unmuted.
+        "chats.mute" => {
+            let mute = params["muted"].as_bool().unwrap_or(true).then(|| Mute { until: params["until"].as_f64() });
+            app.mute_chat(&string(&params, "chat_id")?, mute).map_err(|e| e.to_string())?;
+            Ok(Value::Null)
+        }
+        // A null `section_id` lists the chat with the chats in no section.
+        "chats.set_section" => {
+            app.set_chat_section(&string(&params, "chat_id")?, opt_string(&params, "section_id")).map_err(|e| e.to_string())?;
+            Ok(Value::Null)
+        }
+        "sections.create" => {
+            let section = app
+                .create_section(opt_string(&params, "id"), &string(&params, "name")?, opt_string(&params, "chat_id").as_deref())
+                .map_err(|e| e.to_string())?;
+            Ok(json!({ "section": section }))
+        }
+        "sections.rename" => {
+            app.rename_section(&string(&params, "id")?, &string(&params, "name")?).map_err(|e| e.to_string())?;
+            Ok(Value::Null)
+        }
+        "sections.collapse" => {
+            let collapsed = params["collapsed"].as_bool().unwrap_or(true);
+            app.update_section(&string(&params, "id")?, |section| section.collapsed = collapsed).map_err(|e| e.to_string())?;
+            Ok(Value::Null)
+        }
+        "sections.reorder" => {
+            let ids: Vec<String> = serde_json::from_value(params["ids"].clone()).map_err(|_| "ids must be a list of section ids")?;
+            app.reorder_sections(&ids);
+            Ok(Value::Null)
+        }
+        "sections.delete" => {
+            app.delete_section(&string(&params, "id")?).map_err(|e| e.to_string())?;
             Ok(Value::Null)
         }
         "chats.add_bot" => {

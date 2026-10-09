@@ -598,12 +598,43 @@ pub struct ChatMeta {
     pub description: Option<String>,
     #[serde(default)]
     pub is_pinned: bool,
+    /// The sidebar section the chat is listed under; none lists it with the chats in no section.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section_id: Option<String>,
+    /// Out of the sidebar but kept: search finds it, and the sidebar's Hidden group lists it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_hidden: bool,
+    /// No alerts for the chat on any Device while set; its unread count is kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mute: Option<Mute>,
     pub created_at: f64,
+}
+
+/// A chat's notifications are off until `until` (unix seconds), or until unmuted without one.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct Mute {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub until: Option<f64>,
+}
+
+/// A named group of chats in the sidebar, in the order the roster lists them. Every Device
+/// shows the same sections, folded the same way.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Section {
+    pub id: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub collapsed: bool,
 }
 
 impl ChatMeta {
     pub fn is_group(&self) -> bool {
         self.kind == "group"
+    }
+
+    /// Whether the chat's alerts are off at `now` (unix seconds).
+    pub fn is_muted(&self, now: f64) -> bool {
+        self.mute.as_ref().is_some_and(|mute| mute.until.is_none_or(|until| now < until))
     }
 
     /// A group's owner: the one set while it is a member, else the first member.
@@ -768,6 +799,9 @@ pub struct RosterBlob {
     pub workflows: Option<Vec<crate::workflows::Setup>>,
     pub bots: Vec<Bot>,
     pub chats: Vec<ChatMeta>,
+    /// The sidebar's sections, in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sections: Vec<Section>,
     #[serde(default)]
     pub routines: Vec<Routine>,
     #[serde(default)]
@@ -836,6 +870,9 @@ pub struct MachineBlob {
     pub turns: Vec<LiveTurn>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub budgets: Vec<crate::budgets::BudgetSnapshot>,
+    /// The chat the desktop app shows in front of the user, so no Runner pushes it to a phone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub watching: Option<String>,
 }
 
 /// `kind = job`, sealed to the Runner's box key: run one bot turn in one chat.

@@ -177,8 +177,11 @@ fn send_inner(app: &Arc<App>, chat: &Chat, bot: &Bot, text: &str, permission_id:
     });
 }
 
+/// A muted chat never alerts, and neither does one the user looks at here or on another
+/// computer that is online.
 fn should_notify(app: &App, chat_id: &str, permission_id: Option<&str>) -> bool {
-    !app.is_watching(chat_id) && app.chat(chat_id).is_some_and(|chat| chat.unread_count > 0)
+    !app.is_watched_anywhere(chat_id)
+        && app.chat(chat_id).is_some_and(|chat| chat.unread_count > 0 && !chat.meta.is_muted(crate::config::now_secs()))
         && permission_id.is_none_or(|id| {
             app.message(chat_id, id).is_some_and(|message| message.confirmation().is_some())
         })
@@ -210,7 +213,7 @@ mod tests {
         let chat = Chat {
             meta: ChatMeta { id: "attention-chat".into(), kind: "dm".into(), title: None,
                 bot_ids: vec![bot.id.clone()], owner_bot_id: None, description: None,
-                is_pinned: false, created_at: 1.0 },
+                is_pinned: false, section_id: None, is_hidden: false, mute: None, created_at: 1.0 },
             unread_count: 0, usage: None, compactions: vec![],
         };
         app.state.lock().unwrap().chats.push(chat.clone());
@@ -285,7 +288,7 @@ mod tests {
 
         let chat = Chat {
             meta: ChatMeta { id: id.into(), kind: "dm".into(), title: None, bot_ids: vec![bot.id.clone()],
-                owner_bot_id: None, description: None, is_pinned: false, created_at: 1.0 },
+                owner_bot_id: None, description: None, is_pinned: false, section_id: None, is_hidden: false, mute: None, created_at: 1.0 },
             unread_count: 0, usage: None, compactions: vec![],
         };
         app.state.lock().unwrap().chats.push(chat.clone());
@@ -386,6 +389,73 @@ mod tests {
         assert_eq!((notices[0].chat_id.as_str(), notices[0].body.as_str()), ("failed", "Reply failed: Provider connection lost"));
         assert_eq!((notices[1].chat_id.as_str(), notices[1].body.as_str()), ("pending", "Confirmation needed: Deploy the app"));
         assert!(tokio::time::timeout(Duration::from_millis(150), pushes.recv()).await.is_err());
+        server.abort();
+        drop(app);
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    /// A muted chat alerts no phone, unless its mute has run out, and neither does a chat the
+    /// user has in front on another computer while the relay lists that computer online.
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn muted_chats_and_chats_in_front_on_a_computer_do_not_push() {
+        use axum::{routing::post, Json, Router};
+        use crate::model::*;
+
+        let (sent, mut pushes) = tokio::sync::mpsc::unbounded_channel();
+        let server = Router::new()
+            .route("/v1/auth/challenge", post(|| async { Json(serde_json::json!({ "nonce": "test" })) }))
+            .route("/v1/auth/verify", post(|| async { Json(serde_json::json!({ "token": "test" })) }))
+            .route("/v1/push", post(move |Json(body): Json<serde_json::Value>| {
+                let sent = sent.clone();
+                async move {
+                    sent.send(body).unwrap();
+                    Json(serde_json::json!({ "queued": 1 }))
+                }
+            }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, server).await.unwrap() });
+        let dek = crate::keys::random_32();
+        let (app, bot, home) = runner(&url, &dek);
+        let now = crate::config::now_secs();
+        {
+            let mut state = app.state.lock().unwrap();
+            state.device_online.insert("mac".into());
+        }
+        app.set_device_watching("mac", Some("in-front".into()));
+        app.set_device_watching("offline-mac", Some("in-front-offline".into()));
+        for id in ["muted", "muted-for-now", "mute-ran-out", "in-front", "in-front-offline"] {
+            let chat = Chat {
+                meta: ChatMeta { id: id.into(), kind: "dm".into(), title: None, bot_ids: vec![bot.id.clone()],
+                    owner_bot_id: None, description: None, is_pinned: false, section_id: None, is_hidden: false, mute: None, created_at: 1.0 },
+                unread_count: 0, usage: None, compactions: vec![],
+            };
+            app.state.lock().unwrap().chats.push(chat);
+        }
+        app.mute_chat("muted", Some(Mute { until: None })).unwrap();
+        app.mute_chat("muted-for-now", Some(Mute { until: Some(now + 3600.0) })).unwrap();
+        app.mute_chat("mute-ran-out", Some(Mute { until: Some(now - 1.0) })).unwrap();
+        for id in ["muted", "muted-for-now", "mute-ran-out", "in-front", "in-front-offline"] {
+            app.upsert_message(Message::new(id, Author::Bot { bot_id: bot.id.clone() }, Body::text("Done")), false);
+            reply(&app, &app.chat(id).unwrap(), &bot, "Done");
+        }
+        assert_eq!(app.chat("muted").unwrap().unread_count, 1, "a muted chat keeps its unread count");
+        let mut pushed = Vec::new();
+        for _ in 0..2 {
+            let push = tokio::time::timeout(READ_GRACE + Duration::from_secs(2), pushes.recv()).await.unwrap().unwrap();
+            pushed.push(open(&dek, &crate::keys::unb64(push["ciphertext"].as_str().unwrap()).unwrap()).unwrap().chat_id);
+        }
+        pushed.sort();
+        assert_eq!(pushed, ["in-front-offline", "mute-ran-out"]);
+        assert!(tokio::time::timeout(Duration::from_millis(150), pushes.recv()).await.is_err());
+
+        // The computer left the chat: the next reply pushes.
+        app.set_device_watching("mac", None);
+        app.upsert_message(Message::new("in-front", Author::Bot { bot_id: bot.id.clone() }, Body::text("Again")), false);
+        reply(&app, &app.chat("in-front").unwrap(), &bot, "Again");
+        let push = tokio::time::timeout(READ_GRACE + Duration::from_secs(2), pushes.recv()).await.unwrap().unwrap();
+        assert_eq!(open(&dek, &crate::keys::unb64(push["ciphertext"].as_str().unwrap()).unwrap()).unwrap().chat_id, "in-front");
         server.abort();
         drop(app);
         let _ = std::fs::remove_dir_all(home);

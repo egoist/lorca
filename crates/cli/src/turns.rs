@@ -3448,7 +3448,7 @@ mod tests {
 
     fn chat(id: &str, kind: &str, title: Option<&str>, bot_ids: &[&str]) -> Chat {
         Chat {
-            meta: ChatMeta { id: id.into(), kind: kind.into(), title: title.map(str::to_string), bot_ids: bot_ids.iter().map(|b| b.to_string()).collect(), owner_bot_id: None, description: None, is_pinned: false, created_at: 0.0 },
+            meta: ChatMeta { id: id.into(), kind: kind.into(), title: title.map(str::to_string), bot_ids: bot_ids.iter().map(|b| b.to_string()).collect(), owner_bot_id: None, description: None, is_pinned: false, section_id: None, is_hidden: false, mute: None, created_at: 0.0 },
             unread_count: 0,
             usage: None,
             compactions: Vec::new(),

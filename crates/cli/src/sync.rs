@@ -806,11 +806,12 @@ fn apply_blob_contents(app: &Arc<App>, machine_file: &crate::keys::MachineFile, 
             Err(error) => tracing::warn!(%error, "project context blob"),
         },
         "machine" => match crate::crypto::decrypt_json::<MachineBlob>(&dek, "machine", &ciphertext) {
-            Ok(MachineBlob { device, turns, budgets }) => {
+            Ok(MachineBlob { device, turns, budgets, watching }) => {
                 if app.this_device_id().as_deref() == Some(device.id.as_str()) {
                     return;
                 }
                 app.budgets.merge_remote(app, &device.id, budgets);
+                app.set_device_watching(&device.id, watching);
                 // Shown only while the relay lists the Device online, so a key it no longer
                 // lists shows nothing.
                 app.set_device_turns(&device.id, turns);
@@ -926,6 +927,7 @@ fn apply_roster(app: &Arc<App>, mut roster: RosterBlob) {
         state.routines = roster.routines;
         state.auto_review = roster.auto_review;
         state.shared_links = roster.shared_links;
+        state.sections = roster.sections;
         let incoming_ids: Vec<String> = roster.chats.iter().map(|c| c.id.clone()).collect();
         removed = state.chats.iter().filter(|c| !incoming_ids.contains(&c.meta.id)).map(|c| c.meta.id.clone()).collect();
         state.chats.retain(|c| incoming_ids.contains(&c.meta.id));
@@ -968,7 +970,7 @@ fn apply_chat_op(app: &Arc<App>, op: ChatBlob) {
                 if !state.chats.iter().any(|c| c.meta.id == message.chat_id) {
                     // Roster not here yet: keep the message under a placeholder until it is.
                     state.chats.push(Chat {
-                        meta: ChatMeta { id: message.chat_id.clone(), kind: "group".into(), title: Some("Chat".into()), bot_ids: vec![], owner_bot_id: None, description: None, is_pinned: false, created_at: message.created_at },
+                        meta: ChatMeta { id: message.chat_id.clone(), kind: "group".into(), title: Some("Chat".into()), bot_ids: vec![], owner_bot_id: None, description: None, is_pinned: false, section_id: None, is_hidden: false, mute: None, created_at: message.created_at },
                         unread_count: 0,
                         usage: None,
                         compactions: Vec::new(),
@@ -1021,6 +1023,40 @@ mod tests {
         let home = std::env::temp_dir().join(format!("lorca-sync-{}", uuid::Uuid::new_v4()));
         let app = App::load(Config { home: home.clone(), port: 0 }).unwrap();
         ScratchApp(app, home)
+    }
+
+    /// Sections, a hidden chat, a mute, and the chat a computer has in front reach the other
+    /// Devices.
+    #[tokio::test]
+    async fn sidebar_state_and_the_chat_in_front_travel_to_other_devices() {
+        let sender = scratch_app();
+        crate::identity::create(&sender.0, Some("Runner".into())).unwrap();
+        let bot = sender.0.state.lock().unwrap().bots[0].clone();
+        let chat = sender.0.dm_with(&bot.id, None).unwrap();
+        let section = sender.0.create_section(None, "Pipeline", Some(&chat.meta.id)).unwrap();
+        sender.0.update_section(&section.id, |section| section.collapsed = true).unwrap();
+        sender.0.hide_chat(&chat.meta.id, true).unwrap();
+        sender.0.mute_chat(&chat.meta.id, Some(Mute { until: Some(5.0) })).unwrap();
+        sender.0.set_watched_chat(Some(chat.meta.id.clone()));
+        sender.0.push_machine_blob_if_changed();
+        let dek = sender.0.dek().unwrap();
+        let outbox = sender.0.store.outbox().unwrap();
+        let roster: RosterBlob = crate::crypto::decrypt_json(&dek, "roster", &outbox.iter().rev().find(|blob| blob.kind == "roster").unwrap().ciphertext).unwrap();
+        let machine: MachineBlob = crate::crypto::decrypt_json(&dek, "machine", &outbox.iter().rev().find(|blob| blob.kind == "machine").unwrap().ciphertext).unwrap();
+        assert_eq!(machine.watching.as_deref(), Some(chat.meta.id.as_str()));
+
+        let receiver = scratch_app();
+        apply_roster(&receiver.0, roster);
+        let state = receiver.0.state.lock().unwrap().clone();
+        assert_eq!(state.sections, [Section { id: section.id.clone(), name: "Pipeline".into(), collapsed: true }]);
+        let meta = &state.chats.iter().find(|c| c.meta.id == chat.meta.id).unwrap().meta;
+        assert_eq!((meta.section_id.as_deref(), meta.is_hidden, meta.mute.clone()), (Some(section.id.as_str()), true, Some(Mute { until: Some(5.0) })));
+
+        receiver.0.set_device_watching(&machine.device.id, machine.watching.clone());
+        assert!(!receiver.0.is_watched_anywhere(&chat.meta.id), "only while the relay lists the computer online");
+        receiver.0.state.lock().unwrap().device_online.insert(machine.device.id.clone());
+        assert!(receiver.0.is_watched_anywhere(&chat.meta.id));
+        assert!(!receiver.0.is_watching(&chat.meta.id), "another computer's chat is not read here");
     }
 
     #[cfg(feature = "server")]
