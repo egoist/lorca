@@ -707,6 +707,9 @@ pub struct RosterBlob {
     pub routines: Vec<Routine>,
     #[serde(default)]
     pub auto_review: AutoReview,
+    /// The bots the account shares as links, with their keys.
+    #[serde(default)]
+    pub shared_links: Vec<crate::templates::links::SharedLink>,
     pub updated_at: f64,
 }
 

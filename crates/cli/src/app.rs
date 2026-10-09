@@ -59,6 +59,7 @@ pub struct State {
     pub chats: Vec<Chat>,
     pub routines: Vec<Routine>,
     pub auto_review: AutoReview,
+    pub shared_links: Vec<crate::templates::links::SharedLink>,
     pub last_seq: i64,
     /// Chats deleted here whose blobs the relay still has to drop.
     pub group_deletes: Vec<String>,
@@ -650,6 +651,7 @@ impl App {
                 chats: state.chats.iter().map(|c| c.meta.clone()).collect(),
                 routines: state.routines.clone(),
                 auto_review: state.auto_review.clone(),
+                shared_links: state.shared_links.clone(),
                 updated_at: config::now_secs(),
             }
         };

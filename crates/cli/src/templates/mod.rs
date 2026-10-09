@@ -4,6 +4,7 @@
 
 mod files;
 pub mod format;
+pub mod links;
 mod playbooks;
 mod routines;
 mod secrets;
@@ -19,7 +20,7 @@ use crate::app::App;
 use crate::model::{Bot, PluginStatus};
 use format::{Profile, Requirement, Routine, Skill, Template};
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Selection {
     #[serde(default)]
@@ -393,8 +394,15 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: &Value) -> Result<Va
             )?;
             Ok(json!({ "path": path }))
         }
+        "templates.share" => links::share(app, params).await,
+        "templates.links" => Ok(links::list(app)),
+        "templates.unshare" => links::revoke(app, required(params, "link_id")?).await,
         "templates.import.preview" | "templates.import" => {
-            let text = files::read(Path::new(required(params, "path")?), format::MAX_BYTES)?;
+            // A file this CLI reads, or a link whose template it fetches and opens.
+            let text = match params["link"].as_str() {
+                Some(link) => links::fetch(app, link).await?,
+                None => files::read(Path::new(required(params, "path")?), format::MAX_BYTES)?,
+            };
             let digest = crate::memory::hash_text(&text);
             let preview = import_preview(app, &text, params).await;
             if method.ends_with(".preview") {
@@ -409,9 +417,9 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: &Value) -> Result<Va
                 import_text(app, &text, params).await
             } else {
                 let mut body = params.clone();
-                body.as_object_mut()
-                    .ok_or("Invalid import params")?
-                    .remove("path");
+                let fields = body.as_object_mut().ok_or("Invalid import params")?;
+                fields.remove("path");
+                fields.remove("link");
                 body["text"] = json!(text);
                 crate::requests::ask(app, runner_id, "templates.import", body).await
             }
