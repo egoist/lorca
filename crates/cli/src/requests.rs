@@ -99,15 +99,22 @@ async fn answer(app: &Arc<App>, request: &Request) -> Result<Value, String> {
     let body = &request.body;
     match request.verb.as_str() {
         verb if verb.starts_with("events.") => crate::event_triggers::serve(app, verb, body).map_err(|e| e.to_string()),
+        verb if verb.starts_with("budgets.") => crate::budgets::serve(app, verb, body),
+        #[cfg(feature = "runner")]
+        verb if verb.starts_with("connector_limits.") => crate::connector_limits::serve(app, verb, body),
+        verb if verb.starts_with("reviews.") => crate::review_queue::serve(app, verb, body, &request.requested_by).await,
+        verb if verb.starts_with("tasks.") => crate::tasks::serve(app, verb, body, &request.requested_by),
         "memory.read" => memory_read(app, body["bot_id"].as_str().ok_or("missing bot_id")?),
         "memory.write" => {
             let text = body["text"].as_str().ok_or("missing text")?;
             memory_write(app, body["bot_id"].as_str().ok_or("missing bot_id")?, text, body["expected_hash"].as_str())
         }
         #[cfg(feature = "runner")]
-        verb if verb.starts_with("plugins.") || verb == "permission.answer" => crate::plugins::serve_request(app, verb, body, Some(&request.requested_by)).await,
+        verb if verb.starts_with("plugins.") || verb == "permission.answer" || verb == "permissions.catalog" => crate::plugins::serve_request(app, verb, body, Some(&request.requested_by)).await,
         #[cfg(feature = "runner")]
         verb if verb.starts_with("mcp.") => crate::plugins::mcp_json::serve_request(app, verb, body).await,
+        #[cfg(feature = "runner")]
+        verb if verb.starts_with("browser.") => crate::browser::serve(app, verb, body, true).await,
         #[cfg(feature = "runner")]
         "bash.stdin" | "bash.stop" | "bash.background" => crate::shell::serve(app, &request.verb, body).await,
         #[cfg(feature = "runner")]
@@ -120,6 +127,8 @@ async fn answer(app: &Arc<App>, request: &Request) -> Result<Value, String> {
         "update.install" => crate::update::install_now(app).await,
         #[cfg(feature = "cli")]
         "update.auto" => crate::update::set_auto(app, body["on"].as_bool().ok_or("missing on")?),
+        #[cfg(feature = "cli")]
+        "service.status" => crate::service::status_out(&app.config),
         other => Err(format!("Unknown request {other}")),
     }
 }

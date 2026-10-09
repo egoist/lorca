@@ -1,10 +1,33 @@
 # Changelog
 
-The Windows and Linux app's release notes, by the version in `desktop/package.json`. A release
+The Windows and Linux app's release notes, by the version in `mygo.config.ts`. A release
 (`bun run release-desktop`, or a `desktop-vX.Y.Z` tag) attaches a version's section to its update,
 and the update window shows it.
 
 ## [Unreleased]
+
+- Settings › Providers has Review Models: pick the model Auto-review runs on each connected
+  provider instead of its small, fast default, including a decision model such as OpenCode Zen's
+  Jev 1.13, which only allows an action or names what it could harm. Settings › Auto-review has
+  Reviews with, to review with another connected provider than the bot's.
+- Add Provider… offers decision APIs for Auto-review: OpenRouter Decisions, OpenAI Decisions, and
+  TypeSafe, and a custom provider can speak System One or OpenAI Decisions. Bots never run on
+  them.
+
+## [0.1.6]
+
+- On Linux, double-clicking the top of the main window maximizes it or restores its size, as a
+  title bar does; on Wayland it did nothing.
+- On Linux, small capitalized headings and pairing codes show in full: their letter spacing made
+  them wrap or cut off.
+- The message box's attach button and the search field's Clear button show the arrow pointer, not
+  the text cursor.
+
+## [0.1.5]
+
+- Open Lorca, on onboarding's last step, opens the main window; before, the app quit there.
+
+## [0.1.4]
 
 - A computer that runs the Lorca command line without the app keeps it up to date by itself: it
   installs each new release, signed by Lorca, and restarts into it once no bot is working there.

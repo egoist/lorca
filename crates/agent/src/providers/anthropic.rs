@@ -211,11 +211,22 @@ impl AnthropicProvider {
         let mark_last_tool = usize::from(has_system) + marks.len() < MAX_CACHE_MARKS;
 
         let requested = request.max_tokens.unwrap_or(self.max_tokens);
-        let (thinking, output_config, max_tokens) = self.thinking_fields(requested);
+        let (mut thinking, output_config, max_tokens) = self.thinking_fields(requested);
+        // A host's allowance wins over the thinking level's preferred output budget.
+        // Budget-mode thinking needs at least 1024 tokens and must fit below max_tokens.
+        let max_tokens = request.max_tokens.map(|cap| max_tokens.min(cap)).unwrap_or(max_tokens);
         let max_tokens = match self.info.map(|i| i.max_output).filter(|cap| *cap > 0) {
             Some(cap) => max_tokens.min(cap),
             None => max_tokens,
         };
+        if let Some(budget) = thinking.as_ref().and_then(|v| v["budget_tokens"].as_u64()) {
+            if max_tokens <= 1024 {
+                thinking = None;
+            } else if budget >= max_tokens || request.max_tokens.is_some() {
+                let cap = max_tokens.saturating_sub(1024).max(1024).min(max_tokens - 1);
+                if let Some(thinking) = &mut thinking { thinking["budget_tokens"] = json!(budget.min(cap)); }
+            }
+        }
         let mut body = json!({
             "model": self.model,
             "max_tokens": max_tokens,
@@ -611,6 +622,10 @@ fn server_tool_summary(name: &str, detail: &str, result: &Value) -> String {
 
 #[async_trait]
 impl Provider for AnthropicProvider {
+    fn default_max_output_tokens(&self) -> Option<u64> {
+        let cap = self.thinking_fields(self.max_tokens).2;
+        Some(self.info.map(|info| info.max_output).filter(|limit| *limit > 0).map(|limit| cap.min(limit)).unwrap_or(cap))
+    }
     fn provider_id(&self) -> &str {
         &self.provider_id
     }
@@ -651,9 +666,8 @@ impl Provider for AnthropicProvider {
                     .header("User-Agent", USER_AGENT);
                 options.apply_to(request).json(&body)
             };
-            let response = match send_with_retry(build, max_retries, max_retry_delay_ms, &cancel).await {
+            let response = match send_with_retry(build, max_retries, max_retry_delay_ms, &cancel, &options).await {
                 Ok(response) => {
-                    options.report(&response);
                     response
                 }
                 Err(failure) => {
@@ -866,6 +880,14 @@ mod tests {
         let mut request_capped = request(vec![LlmMessage::User(UserMessage::text("hi"))]);
         request_capped.max_tokens = Some(500);
         assert_eq!(AnthropicProvider::deepseek("k", None).body(&request_capped)["max_tokens"], 500);
+        let haiku = AnthropicProvider::anthropic("k", Some("claude-haiku-4-5")).with_thinking(Some(ThinkingLevel::Max));
+        let capped = haiku.body(&request_capped);
+        assert_eq!(capped["max_tokens"], 500, "thinking cannot enlarge a host's remaining allowance");
+        assert!(capped.get("thinking").is_none());
+        request_capped.max_tokens = Some(4096);
+        let capped = haiku.body(&request_capped);
+        assert_eq!(capped["max_tokens"], 4096);
+        assert_eq!(capped["thinking"]["budget_tokens"], 3072);
     }
 
     #[test]

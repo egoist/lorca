@@ -21,9 +21,9 @@ cli = ["runner", "server", "dep:usage", "dep:tracing-subscriber", "dep:flate2", 
 # Connecting and disconnecting account providers. Devices use this without the agent loop.
 provider-auth = ["dep:lorca-provider-auth"]
 # Running bots: the agent loop, providers, tools. Off for a Device that only takes part.
-runner = ["provider-auth", "dep:lorca-agent", "dep:open", "dep:rmcp", "dep:mcp_http", "dep:process-wrap"]
+runner = ["provider-auth", "dep:lorca-agent", "dep:open", "dep:rmcp", "dep:mcp_http", "dep:process-wrap", "dep:sse-stream", "dep:httpdate"]
 # The local websocket the desktop app connects to.
-server = ["dep:axum"]
+server = ["dep:axum", "dep:subtle"]
 
 [dependencies]
 lorca-agent = { path = "../agent", optional = true }
@@ -35,6 +35,9 @@ async-trait.workspace = true
 axum = { workspace = true, optional = true }
 base64.workspace = true
 chacha20poly1305.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+chrono-tz = "0.10"
+iana-time-zone = "0.1"
 usage = { package = "usage-rs", version = "6", optional = true }
 crypto_box.workspace = true
 data-encoding.workspace = true
@@ -54,6 +57,8 @@ rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+# The local websocket compares its token in constant time.
+subtle = { version = "2.6", optional = true }
 thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
@@ -72,6 +77,8 @@ mcp_http = { package = "reqwest", version = "0.13", default-features = false, fe
 rmcp = { version = "3.4.0", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "auth", "reqwest"], optional = true }
 # rmcp's process wrapper, to start a stdio server in a process group (a job object on Windows) that stops as one.
 process-wrap = { version = "10", features = ["tokio1"], optional = true }
+sse-stream = { version = "0.2.4", optional = true }
+httpdate = { version = "1", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 # `serve --parent-pid` watches the parent through a process handle; `lorca service run` leaves

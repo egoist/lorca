@@ -587,6 +587,8 @@ impl ServerConfig {
                     client_secret: oauth.client_secret.clone(),
                     device_authorization_endpoint: None,
                     token_endpoint: None,
+                    authorization_endpoint: None,
+                    authorization_params: BTreeMap::new(),
                     optional: true,
                     client_name: oauth.client_name.clone(),
                     callback_port: oauth.callback_port,
@@ -666,6 +668,7 @@ impl FileServer {
                 category: String::new(),
                 featured: false,
                 tags: Vec::new(),
+                named_accounts: false,
                 servers: BTreeMap::from([(SERVER.to_string(), config.spec())]),
                 variables: Vec::new(),
                 skills: Vec::new(),
@@ -674,6 +677,8 @@ impl FileServer {
             source: SOURCE.into(),
             installed_at: 0.0,
             variables: BTreeMap::new(),
+            service_id: None,
+            account_name: None,
         })
     }
 }

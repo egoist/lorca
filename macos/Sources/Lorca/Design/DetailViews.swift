@@ -19,6 +19,8 @@ final class SectionView: NSView {
 
     private var headerLeading: NSLayoutConstraint!
     private var cardTop: NSLayoutConstraint!
+    /// Without a title the card starts at the top.
+    private var untitledCardTop: NSLayoutConstraint!
     private var headerAccessory: NSView?
     private var headerAccessoryConstraints: [NSLayoutConstraint] = []
 
@@ -52,6 +54,9 @@ final class SectionView: NSView {
         for (index, end) in dividerEnds.enumerated() {
             end.constant = index.isMultiple(of: 2) ? dividerInset : -dividerInset
         }
+        header.isHidden = title.isEmpty
+        cardTop.isActive = !title.isEmpty
+        untitledCardTop.isActive = title.isEmpty
     }
     private let header: NSTextField
     private let card = BackgroundView()
@@ -85,12 +90,15 @@ final class SectionView: NSView {
 
         headerLeading = header.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4)
         cardTop = card.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 6)
+        untitledCardTop = card.topAnchor.constraint(equalTo: topAnchor)
+        cardTop.isActive = !title.isEmpty
+        untitledCardTop.isActive = title.isEmpty
+        header.isHidden = title.isEmpty
         NSLayoutConstraint.activate([
             header.topAnchor.constraint(equalTo: topAnchor),
             headerLeading,
             header.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
 
-            cardTop,
             card.leadingAnchor.constraint(equalTo: leadingAnchor),
             card.trailingAnchor.constraint(equalTo: trailingAnchor),
             card.bottomAnchor.constraint(equalTo: bottomAnchor),
@@ -112,6 +120,8 @@ final class SectionView: NSView {
     private var shownRows: [NSView] = []
 
     func setRows(_ views: [NSView]) {
+        // With no rows, the title (and its accessory) stands alone.
+        card.isHidden = views.isEmpty
         // The rows it shows already, updated in place, keep their places and dividers.
         guard !views.elementsEqual(shownRows, by: ===) else { return }
         shownRows = views
@@ -253,6 +263,86 @@ final class KeyValueRow: NSView {
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
+}
+
+/// Key on the left, a short value and a chevron on the right. A click anywhere on the row
+/// opens what the value sums up.
+final class DisclosureRow: NSView {
+    private let value = Build.label("", font: .systemFont(ofSize: 12), color: .secondaryLabelColor, alignment: .right)
+    private var tracking: NSTrackingArea?
+    private var isHovered = false { didSet { needsDisplay = true } }
+    var onClick: (() -> Void)?
+
+    init(key keyText: String) {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        let key = Build.label(keyText, font: .systemFont(ofSize: 12), color: .secondaryLabelColor)
+        key.setContentCompressionResistancePriority(.required, for: .horizontal)
+        value.lineBreakMode = .byTruncatingTail
+        let chevron = NSImageView(image: NSImage(systemSymbolName: "chevron.right", accessibilityDescription: nil) ?? NSImage())
+        chevron.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 10, weight: .semibold)
+        chevron.contentTintColor = .tertiaryLabelColor
+        chevron.setContentCompressionResistancePriority(.required, for: .horizontal)
+        for view in [key, value, chevron] as [NSView] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(view)
+        }
+        NSLayoutConstraint.activate([
+            heightAnchor.constraint(equalToConstant: 32),
+            key.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            key.centerYAnchor.constraint(equalTo: centerYAnchor),
+            value.leadingAnchor.constraint(greaterThanOrEqualTo: key.trailingAnchor, constant: 10),
+            value.centerYAnchor.constraint(equalTo: centerYAnchor),
+            chevron.leadingAnchor.constraint(equalTo: value.trailingAnchor, constant: 6),
+            chevron.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            chevron.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+        setAccessibilityLabel(keyText)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    func setValue(_ text: String) {
+        value.stringValue = text
+        setAccessibilityValue(text)
+    }
+
+    /// A value in a color of its own, such as orange for something to act on.
+    func setValue(_ text: String, tint: NSColor) {
+        value.textColor = tint
+        setValue(text)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        onClick?()
+    }
+
+    override func accessibilityPerformPress() -> Bool {
+        onClick?()
+        return onClick != nil
+    }
+
+    override var allowsVibrancy: Bool { false }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow], owner: self)
+        addTrackingArea(area)
+        tracking = area
+    }
+
+    override func mouseEntered(with event: NSEvent) { isHovered = true }
+    override func mouseExited(with event: NSEvent) { isHovered = false }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard isHovered else { return }
+        NSColor.labelColor.withAlphaComponent(0.05).setFill()
+        bounds.fill()
+    }
 }
 
 /// Bot line used in the inspector, the Device pane and pickers.
@@ -443,12 +533,18 @@ final class StatusRow: NSView, NSGestureRecognizerDelegate {
         stateColor: NSColor = .secondaryLabelColor,
         stateDetail: String? = nil,
         actionTitle: String? = nil,
-        destructive: Bool = false
+        destructive: Bool = false,
+        symbolTint: NSColor = .secondaryLabelColor,
+        subtitleLines: Int = 0
     ) {
         icon.image = image ?? NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
         icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
+        icon.contentTintColor = symbolTint
         title.stringValue = titleText
         subtitle.stringValue = subtitleText
+        subtitle.maximumNumberOfLines = subtitleLines
+        subtitle.cell?.truncatesLastVisibleLine = subtitleLines > 0
+        subtitle.isHidden = subtitleText.isEmpty
         // With a symbol, the state's words are its tooltip and what VoiceOver reads.
         let showsSymbol = stateText != nil && stateSymbol != nil
         state.stringValue = stateText ?? ""
@@ -484,14 +580,22 @@ final class StatusRow: NSView, NSGestureRecognizerDelegate {
 
     /// A plugin and its state as a symbol: a check when it is ready, an exclamation mark when
     /// it needs something. What the Runner says it needs (a variable, a sign-in, an error's
-    /// message) is the symbol's tooltip and a click away, so a long one never widens the row.
-    func configure(plugin: InstalledPlugin) {
+    /// message) is the symbol's tooltip and a click away, so a long one never widens the row. A
+    /// plugin the bot's Access leaves out says so instead.
+    func configure(plugin: InstalledPlugin, hasAccess: Bool = true) {
+        guard hasAccess else {
+            configure(
+                symbol: plugin.symbolName, image: PluginLogo.tile(for: plugin.marketplaceID, size: 18), title: plugin.name,
+                subtitle: plugin.accountName == nil ? plugin.description : "", state: L("No access"))
+            return
+        }
         let ready = plugin.state == .ready
         configure(
             symbol: plugin.symbolName,
-            image: PluginLogo.tile(for: plugin.id, size: 18),
+            image: PluginLogo.tile(for: plugin.marketplaceID, size: 18),
             title: plugin.name,
-            subtitle: plugin.description,
+            // A service's accounts would each repeat its description; their names tell them apart.
+            subtitle: plugin.accountName == nil ? plugin.description : "",
             state: ready ? L("Ready") : plugin.detail,
             stateSymbol: ready ? "checkmark" : "exclamationmark.circle.fill",
             stateColor: ready ? .systemGreen : .systemOrange,
@@ -822,6 +926,7 @@ final class SwitchRow: NSView {
     private let name = Build.label("", font: .systemFont(ofSize: 12.5, weight: .medium))
     private let detail = Build.label("", font: Theme.Font.caption, color: .secondaryLabelColor)
     private let toggle = NSSwitch()
+    private var textBeforeToggle: NSLayoutConstraint!
     private var tracking: NSTrackingArea?
     private var isHovered = false { didSet { needsDisplay = true } }
 
@@ -843,6 +948,7 @@ final class SwitchRow: NSView {
         addSubview(icon)
         addSubview(text)
         addSubview(toggle)
+        textBeforeToggle = text.trailingAnchor.constraint(lessThanOrEqualTo: toggle.leadingAnchor, constant: -8)
         NSLayoutConstraint.activate([
             heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
             icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
@@ -850,7 +956,10 @@ final class SwitchRow: NSView {
             icon.widthAnchor.constraint(equalToConstant: 18),
             text.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 10),
             text.centerYAnchor.constraint(equalTo: centerYAnchor),
-            text.trailingAnchor.constraint(lessThanOrEqualTo: toggle.leadingAnchor, constant: -8),
+            text.topAnchor.constraint(greaterThanOrEqualTo: topAnchor, constant: 8),
+            text.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -8),
+            textBeforeToggle,
+            text.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -12),
             toggle.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
             toggle.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
@@ -866,13 +975,23 @@ final class SwitchRow: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(routine: Routine) {
+    /// A routine stopped at its limits says so before anything else, as a problem the user has
+    /// to act on: it runs again only once the user resumes it.
+    func configure(routine: Routine, stopped: String? = nil) {
         let symbol = routine.isRunning ? "arrow.triangle.2.circlepath" : (routine.isEnabled ? "clock" : "pause.circle")
         configure(
             symbol: symbol,
             tint: routine.isRunning ? .controlAccentColor : (routine.isEnabled ? .secondaryLabelColor : .tertiaryLabelColor),
             title: routine.name, detail: routine.detail, isOn: routine.isEnabled,
             toggleTooltip: routine.isEnabled ? L("Pause %@", routine.name) : L("Resume %@", routine.name), tooltip: routine.prompt)
+        // What went wrong leads, in orange while the user has to do something about it.
+        if let problem = stopped ?? routine.problem.flatMap({ $0.needsUser ? $0.text : nil }) {
+            let line = NSMutableAttributedString(string: problem, attributes: [.foregroundColor: NSColor.systemOrange, .font: Theme.Font.caption])
+            line.append(NSAttributedString(
+                string: " · \(routine.scheduleText)", attributes: [.foregroundColor: NSColor.secondaryLabelColor, .font: Theme.Font.caption]))
+            detail.attributedStringValue = line
+            detail.lineBreakMode = .byTruncatingTail
+        }
     }
 
     func configure(symbol: String, tint: NSColor, title: String, detail detailText: String, isOn: Bool, toggleTooltip: String, tooltip: String) {
@@ -884,6 +1003,21 @@ final class SwitchRow: NSView {
         toggle.state = isOn ? .on : .off
         toggle.toolTip = toggleTooltip
         toolTip = tooltip
+    }
+
+    /// A row with nothing to switch, which only opens its details: a task, whose title takes
+    /// two lines before it truncates.
+    func configure(symbol: String, tint: NSColor, title: String, detail detailText: String, tooltip: String) {
+        configure(symbol: symbol, tint: tint, title: title, detail: detailText, isOn: false, toggleTooltip: "", tooltip: tooltip)
+        name.maximumNumberOfLines = 2
+        name.lineBreakMode = .byWordWrapping
+        name.cell?.truncatesLastVisibleLine = true
+        detail.isHidden = detailText.isEmpty
+        toggle.isHidden = true
+        textBeforeToggle.isActive = false
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+        setAccessibilityLabel(title)
     }
 
     /// One of a Runner's MCP servers: its symbol in the color of how it stands, how it stands in
@@ -908,6 +1042,12 @@ final class SwitchRow: NSView {
 
     @objc private func toggled() {
         onToggle?(toggle.state == .on)
+    }
+
+    override func accessibilityPerformPress() -> Bool {
+        guard let onClick else { return false }
+        onClick()
+        return true
     }
 
     override var allowsVibrancy: Bool { false }

@@ -864,6 +864,9 @@ pub fn tick(app: &Arc<App>) -> anyhow::Result<()> {
             round: 0,
             is_winding_down: false,
             setup: None,
+            task_id: None,
+            task_context: None,
+            handoff: None,
             created_at: crate::config::now_secs(),
         };
         tx.commit()?;

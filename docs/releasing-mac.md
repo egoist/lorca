@@ -4,10 +4,12 @@ Lorca.app updates itself with [Sparkle](https://sparkle-project.org). Releases l
 Cloudflare R2 bucket served at `https://mac-releases.lorca.app`: a notarized `.dmg` for a first
 download, a `.zip` Sparkle installs (with binary deltas from recent versions), and
 `appcast.xml`, the feed the app polls. Sparkle checks every archive against the EdDSA public key
-inside the app before it installs. One command produces all of it:
+inside the app before it installs. One command produces all of it, from a Mac or on GitHub
+Actions:
 
 ```sh
-bun run release-mac 0.2.0
+bun run release-mac 0.2.0                          # from a Mac
+git tag mac-v0.2.0 && git push origin mac-v0.2.0   # on GitHub Actions
 ```
 
 - Updater: [`macos/Sources/Lorca/App/Updater.swift`](../macos/Sources/Lorca/App/Updater.swift).
@@ -17,6 +19,7 @@ bun run release-mac 0.2.0
 - Release: [`scripts/release-mac.ts`](../scripts/release-mac.ts),
   [`scripts/generate-appcast.ts`](../scripts/generate-appcast.ts),
   [`scripts/changelog.ts`](../scripts/changelog.ts).
+- Workflow: [`.github/workflows/release-mac.yml`](../.github/workflows/release-mac.yml).
 
 ## One-time setup
 
@@ -132,6 +135,68 @@ To test an update, keep an older build in /Applications and choose **Check for U
 `bun run release-mac --local` stops after step 3: a notarized app and `.dmg` to try on another Mac,
 with nothing published.
 
+## On GitHub Actions
+
+The Release Mac app workflow runs `bun run release-mac` on a `macos-26` runner (Apple silicon, the
+macOS 26 SDK). A tag `mac-v<version>` starts it; the tag has to name `"version"` in the root
+`package.json`, and `CHANGELOG.md` needs that version's section. So the version bump and the notes
+are a commit first:
+
+1. Set `"version"` in `package.json` and add the `## [0.2.0]` section to `CHANGELOG.md`; commit and
+   push.
+2. Tag that commit:
+
+   ```sh
+   git tag mac-v0.2.0 && git push origin mac-v0.2.0
+   ```
+
+Actions ▸ Release Mac app ▸ Run workflow does the same on the commit it runs on. With **publish**
+off, it stops after notarizing, as `--local` does, and keeps `Lorca-<version>.dmg` as the run's
+artifact: a way to check the signing secrets without releasing anything. A version already in the
+bucket fails the run before the build.
+
+The runner has no login keychain items, so the workflow hands the script what a Mac keeps there:
+
+- the Developer ID identity, imported into a keychain of its own;
+- the App Store Connect API key as `ASC_KEY_PATH`, `ASC_KEY_ID`, and `ASC_ISSUER_ID`, which
+  `notarytool` signs in with instead of the `NOTARY` profile;
+- the Sparkle key as the file `SPARKLE_KEY_FILE` names, which `generate_appcast` reads with
+  `--ed-key-file`, after checking that its public half is `SPARKLE_PUBLIC_KEY`;
+- the `r2` rclone remote, as `RCLONE_CONFIG_R2_*` variables.
+
+### Secrets
+
+The workflow reads these Actions secrets (Settings ▸ Secrets and variables ▸ Actions) and stops
+before building when one it needs is missing. The App Store Connect key is the one the phone app's
+workflow uploads with ([releasing-mobile.md](releasing-mobile.md#1-app-store-connect-api-key)); a
+team key can notarize.
+
+| Secret | What |
+| --- | --- |
+| `ASC_KEY` | The App Store Connect API key, the text of `AuthKey_<id>.p8` |
+| `ASC_KEY_ID` | Its key ID |
+| `ASC_ISSUER_ID` | The team's issuer ID |
+| `MAC_SIGNING_IDENTITY` | The Developer ID Application certificate and its private key, as a base64 `.p12` |
+| `MAC_SIGNING_IDENTITY_PASSWORD` | The `.p12`'s password |
+| `SPARKLE_PRIVATE_KEY` | The Sparkle private key, as `generate_keys -x` exports it |
+| `R2_ACCESS_KEY_ID` | The R2 API token's access key ID |
+| `R2_SECRET_ACCESS_KEY` | Its secret access key |
+| `R2_ENDPOINT` | `https://<ACCOUNT_ID>.r2.cloudflarestorage.com` |
+
+Export the identity from Keychain Access ▸ login ▸ My Certificates: the "Developer ID
+Application: …" item with its private key, File ▸ Export Items… as `identity.p12` with a password.
+
+```sh
+base64 -i identity.p12 | gh secret set MAC_SIGNING_IDENTITY
+gh secret set MAC_SIGNING_IDENTITY_PASSWORD
+macos/.build/artifacts/sparkle/Sparkle/bin/generate_keys -x sparkle_private_key.txt
+gh secret set SPARKLE_PRIVATE_KEY < sparkle_private_key.txt
+rm sparkle_private_key.txt identity.p12
+gh secret set R2_ACCESS_KEY_ID
+gh secret set R2_SECRET_ACCESS_KEY
+gh secret set R2_ENDPOINT --body https://<ACCOUNT_ID>.r2.cloudflarestorage.com
+```
+
 ### Options
 
 | Env | Default | Purpose |
@@ -139,6 +204,8 @@ with nothing published.
 | `R2_BUCKET` | `lorca-mac-releases` | R2 bucket |
 | `R2_REMOTE` | `r2` | rclone remote |
 | `NOTARY_PROFILE` | `NOTARY` | `notarytool` keychain profile |
+| `ASC_KEY_PATH`, `ASC_KEY_ID`, `ASC_ISSUER_ID` | | notarize with an App Store Connect API key instead of the profile |
+| `SPARKLE_KEY_FILE` | | the Sparkle private key file, instead of the keychain item |
 | `SIGN_IDENTITY` | `Developer ID Application` | codesigning identity |
 | `SPARKLE_BIN` | the SwiftPM copy | directory holding `generate_appcast` |
 | `DOWNLOAD_URL_PREFIX` | `https://mac-releases.lorca.app/` | base URL of the appcast's links, and of `SUFeedURL` |
@@ -163,5 +230,6 @@ with nothing published.
 - **A debug build never updates.** `Updater.isEnabled` is false under `DEBUG`: the menu item and
   the settings rows leave themselves out of the dev loop's bundle.
 - **The build is for the Mac that runs it.** `cargo build` and `swift build` target the host
-  architecture, so a release cut on Apple silicon is an arm64 app.
+  architecture, so a release cut on Apple silicon, the workflow's runner included, is an arm64
+  app.
 - Old archives stay in R2, so an install far behind still has a full archive to move to.
