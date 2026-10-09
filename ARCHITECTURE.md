@@ -90,6 +90,7 @@ One doc per subject under `docs/architecture/`, each short enough to read in one
 | [Tools](docs/architecture/tools.md) | Team, memory, and coding tools, Auto-review |
 | [Handoffs](docs/architecture/handoffs.md) | Durable delegated contracts, expected outputs, result evidence and return routing, offline delivery and restart recovery |
 | [Review queue](docs/architecture/review-queue.md) | Encrypted editable proposals, version-bound approval, Runner execution and outcomes |
+| [Message drafts](docs/architecture/drafts.md) | Emails and Slack messages a bot writes in a chat as drafts the user edits, sends, or discards; sending directly; edits as feedback |
 | [Outputs and evidence](docs/architecture/outputs.md) | Bot-generated files and document links, immutable versions, task evidence references, encrypted transport and native previews |
 | [Terminal sessions](docs/architecture/terminal-sessions.md) | A bot's commands in terminals of their own: when a call returns, background commands, the command's card, answering and stopping, Running tasks |
 | [Browser sessions](docs/architecture/browser-sessions.md) | A bot's browser profiles on its Runner: their sign-ins, opening one in a window, taking the browser over and handing it back, screenshots in the chat, what works from another Device, the Profiles section |
