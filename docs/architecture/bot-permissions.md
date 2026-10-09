@@ -27,7 +27,7 @@ The three capabilities are separate grants: `write` does not take in `read`. The
 
 ## Execution boundary
 
-- `check_tool(app, bot, name)` reads the bot as stored now and checks `shell` for `bash`, `bash_input`, and `bash_output`, and `filesystem` for the coding tools: `read`, `grep`, `find`, and `ls` need `read`; `write` and `edit` need `write`.
+- `check_tool(app, bot, name)` reads the bot as stored now and checks `shell` for `bash`, `bash_input`, and `bash_output`, and `filesystem` for the coding tools: `read`, `grep`, `find`, and `ls` need `read`; `write` and `edit` need `write`. `publish_output` given a `path` reads that file, so it checks `read` itself when it runs (`check_file_read`), with the same request to the user; publishing a link needs nothing.
 - `check_connection(app, bot, plugin_id, tool, capability)` checks the plugin and the exact tool, then, given one, the capability. With no capability it runs before a server starts to classify the tool.
 - A bot deleted, or moved to another Runner, during a turn makes no more calls; that refusal asks nobody.
 

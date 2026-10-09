@@ -268,7 +268,7 @@ fn markdown_words(value: &str) -> String {
 pub struct PublishOutputTool {
     pub app: std::sync::Arc<App>,
     pub chat_id: String,
-    pub bot_id: String,
+    pub bot: crate::model::Bot,
     pub workdir: std::path::PathBuf,
 }
 
@@ -318,10 +318,17 @@ impl lorca_agent::Tool for PublishOutputTool {
         if cancel.is_cancelled() {
             return Err(lorca_agent::ToolError("Stopped".into()));
         }
-        let request = serde_json::from_value(args).map_err(|error| lorca_agent::ToolError(format!("Invalid output: {error}")))?;
+        let request: PublishOutput = serde_json::from_value(args).map_err(|error| lorca_agent::ToolError(format!("Invalid output: {error}")))?;
+        // Publishing a file reads it on the Runner, which the bot's Access may not allow.
+        if request.path.is_some() {
+            if let Err(denied) = crate::permissions::check_file_read(&self.app, &self.bot, self.name()) {
+                let refused = crate::permissions::refuse(&self.app, &self.chat_id, &self.bot, denied);
+                return Err(lorca_agent::ToolError(refused.reason.unwrap_or_default()));
+            }
+        }
         let app = self.app.clone();
         let chat_id = self.chat_id.clone();
-        let bot_id = self.bot_id.clone();
+        let bot_id = self.bot.id.clone();
         let workdir = self.workdir.clone();
         let message = tokio::task::spawn_blocking(move || {
             if cancel.is_cancelled() {
@@ -542,7 +549,7 @@ mod tests {
         assert_eq!(response["task_evidence"]["kind"], "output");
         assert_eq!(response["message"]["output"]["evidence"]["status"], "failed");
         assert_eq!(crate::api::dispatch(&f.app, "outputs.list", json!({"chat_id":f.chat})).await.unwrap()["outputs"].as_array().unwrap().len(), 1);
-        let tool = PublishOutputTool { app: f.app.clone(), chat_id: f.chat.clone(), bot_id: f.bot.clone(), workdir: f.workdir.clone() };
+        let tool = PublishOutputTool { app: f.app.clone(), chat_id: f.chat.clone(), bot: f.app.bot(&f.bot).unwrap(), workdir: f.workdir.clone() };
         let cancel = tokio_util::sync::CancellationToken::new();
         cancel.cancel();
         assert!(tool.execute("stopped", json!({"name":"Stopped","path":"report.txt"}), cancel, Arc::new(|_| {})).await.is_err());
@@ -572,6 +579,25 @@ mod tests {
             .await
             .unwrap();
         assert!(script_result.text_content().contains("out-"), "codemode receives the structured evidence reference");
+    }
+
+    #[cfg(feature = "runner")]
+    #[tokio::test]
+    async fn a_bot_without_file_access_publishes_links_but_no_files() {
+        use lorca_agent::Tool;
+        let f = Fixture::new();
+        f.file(b"private notes");
+        f.app.state.lock().unwrap().bots[0].permissions =
+            Some(crate::permissions::BotPermissions { filesystem: crate::permissions::FilesystemAccess::None, ..Default::default() });
+        let tool = PublishOutputTool { app: f.app.clone(), chat_id: f.chat.clone(), bot: f.app.bot(&f.bot).unwrap(), workdir: f.workdir.clone() };
+        let run = |args: serde_json::Value| tool.execute("publish", args, tokio_util::sync::CancellationToken::new(), Arc::new(|_| {}));
+        let refused = run(json!({"name":"Notes","path":"report.txt"})).await.unwrap_err();
+        assert!(refused.0.contains("reading files is off"), "{}", refused.0);
+        assert!(list(&f.app, &f.chat, None).unwrap().is_empty(), "nothing was published");
+        let requests = f.app.store.page(&f.chat, None, 50).unwrap().0;
+        assert!(requests.iter().any(|m| matches!(&m.body, Body::Permission { tool, summary, .. } if tool == "access" && summary == "Reading files")), "the user is asked");
+        run(json!({"name":"Spec","url":"https://docs.example.invalid/spec"})).await.unwrap();
+        assert_eq!(list(&f.app, &f.chat, None).unwrap().len(), 1);
     }
 
     #[cfg(feature = "server")]

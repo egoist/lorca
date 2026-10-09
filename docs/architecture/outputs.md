@@ -21,7 +21,7 @@ A bot publishes a generated file or an existing HTTPS document link with `publis
 }
 ```
 
-Exactly one of `path` and `url` is required. A relative path resolves in the producing bot's working directory; `mime` overrides the filename's media type. Publication runs on that bot's assigned Runner and requires membership in the chat and an account key. Files are regular files up to 100 MiB, copied into the private attachment store with a fresh attachment id. The file blob is encrypted with the account DEK and queued before the chat message. The source path stays on the Runner. A changed or removed source file does not change the published copy.
+Exactly one of `path` and `url` is required. A relative path resolves in the producing bot's working directory; `mime` overrides the filename's media type. Publication runs on that bot's assigned Runner and requires membership in the chat and an account key. A file also needs the bot's [Access](bot-permissions.md#execution-boundary) to allow reading files; without it the call is refused and the user is asked, as for `read`. Files are regular files up to 100 MiB, copied into the private attachment store with a fresh attachment id. The file blob is encrypted with the account DEK and queued before the chat message. The source path stays on the Runner. A changed or removed source file does not change the published copy.
 
 A `url` is an HTTPS document reference without embedded credentials. Recording it performs no request to the document's service. Creating a document, uploading bytes, or publishing externally uses the existing shell or plugin tools and their [Auto-review boundary](tools.md). Integrations and their credentials stay on the assigned Runner.
 

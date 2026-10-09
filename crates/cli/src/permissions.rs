@@ -156,6 +156,16 @@ pub fn check_tool(app: &Arc<App>, bot: &Bot, tool: &str) -> Result<(), AccessDen
     }
 }
 
+/// A call that reads a Runner file through another tool, as `publish_output` with a `path` does,
+/// needs what `read` needs.
+pub fn check_file_read(app: &Arc<App>, bot: &Bot, tool: &str) -> Result<(), AccessDenied> {
+    let current = current(app, bot, tool, None)?;
+    match current.permissions.as_ref().and_then(|policy| policy.local_denial("read")) {
+        Some(reason) => Err(AccessDenied { tool: tool.into(), connection_id: None, capability: None, reason, grantable: true }),
+        None => Ok(()),
+    }
+}
+
 /// The instance and tool selection with no capability, before a server starts to say what a
 /// tool does; with one, the whole grant.
 pub fn check_connection(app: &Arc<App>, bot: &Bot, connection: &str, tool: &str, capability: Option<Capability>) -> Result<(), AccessDenied> {
