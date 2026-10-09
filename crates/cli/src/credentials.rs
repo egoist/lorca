@@ -36,23 +36,37 @@ pub enum CustomApi {
     ChatCompletions,
     /// OpenAI-compatible Responses, at `{base_url}/responses`.
     Responses,
-    /// Anthropic-compatible Messages, at `{base_url}/v1/messages`.
+    /// Anthropic-compatible Messages, at `{base_url}/messages`, or `{base_url}/v1/messages` for a
+    /// root without its `/v1` (Moonshot's `…/anthropic`).
     Messages,
+    /// System One decisions (TypeSafe's, which OpenRouter and other gateways serve too), at
+    /// `base_url` itself: a `state` and a map of typed questions.
+    SystemOne,
+    /// OpenAI's Decisions API, at `base_url` itself: an `input` and a list of typed questions.
+    Decisions,
 }
 
 impl CustomApi {
-    pub const ALL: [CustomApi; 3] = [CustomApi::ChatCompletions, CustomApi::Responses, CustomApi::Messages];
+    pub const ALL: [CustomApi; 5] = [CustomApi::ChatCompletions, CustomApi::Responses, CustomApi::Messages, CustomApi::SystemOne, CustomApi::Decisions];
 
     pub fn id(self) -> &'static str {
         match self {
             CustomApi::ChatCompletions => "chat-completions",
             CustomApi::Responses => "responses",
             CustomApi::Messages => "messages",
+            CustomApi::SystemOne => "system-one",
+            CustomApi::Decisions => "decisions",
         }
     }
 
     pub fn parse(id: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|api| api.id() == id)
+    }
+
+    /// Whether its models are decision models, which answer typed questions instead of
+    /// chatting: Auto-review can run them, and no bot can.
+    pub fn decides(self) -> bool {
+        matches!(self, CustomApi::SystemOne | CustomApi::Decisions)
     }
 }
 
@@ -225,9 +239,9 @@ impl Credentials {
         self.statuses().into_iter().filter(|s| s.is_connected).map(|s| s.kind).collect()
     }
 
-    /// Every kind a bot can run with: the built-in providers, then the custom ones.
+    /// Every kind a bot can run with: the built-in providers, then the custom ones that chat.
     pub fn kinds(&self) -> Vec<String> {
-        PROVIDER_KINDS.iter().map(|kind| kind.to_string()).chain(self.custom_kinds()).collect()
+        PROVIDER_KINDS.iter().map(|kind| kind.to_string()).chain(self.custom_kinds().into_iter().filter(|kind| !self.custom[kind].api.decides())).collect()
     }
 
     /// The custom providers' kinds, in the order the user added them.
@@ -239,9 +253,12 @@ impl Credentials {
 
     /// The models a bot of `kind` can pick, as every app's Model menu offers them: the catalog's
     /// for a built-in provider and the saved ones of a custom provider, the first being the
-    /// default. None for a kind the account does not have.
+    /// default. None for a kind the account does not have, or one whose models only decide.
     pub fn models(&self, kind: &str) -> Vec<OfferedModel> {
         if let Some(provider) = self.custom.get(kind) {
+            if provider.api.decides() {
+                return Vec::new();
+            }
             return provider
                 .models
                 .iter()
@@ -249,6 +266,16 @@ impl Credentials {
                 .collect();
         }
         lorca_models::for_provider(kind).into_iter().map(|model| OfferedModel { id: model.id.into(), name: model.name.into(), levels: model.levels.to_vec() }).collect()
+    }
+
+    /// The model Auto-review runs on a provider when the user picked none: the catalog's small,
+    /// fast `review` model for a built-in provider, and the first model of a custom one, the one
+    /// the user put at the top.
+    pub fn review_model(&self, kind: &str) -> Option<String> {
+        match self.custom.get(kind) {
+            Some(provider) => provider.models.first().map(|model| model.id.clone()),
+            None => lorca_models::review_model(kind).map(str::to_string),
+        }
     }
 
     /// The name people know a provider by: a custom provider's own, else the built-in's.
@@ -283,6 +310,7 @@ impl Credentials {
                 kind: kind.to_string(),
                 is_connected: detail.is_some(),
                 detail: detail.unwrap_or_else(|| "Not connected".into()),
+                review_model: self.review_model(kind),
                 base_url: self.api_key(kind).and_then(|c| c.base_url.clone()),
                 ..Default::default()
             }
@@ -294,13 +322,18 @@ impl Credentials {
                 key => format!("{} · {}", mask_key(key), provider.base_url),
             };
             ProviderStatus {
+                review_model: self.review_model(&kind),
                 kind,
                 is_connected: true,
                 detail,
                 base_url: Some(provider.base_url.clone()),
                 name: Some(provider.name.clone()),
                 api: Some(provider.api),
-                models: provider.models.iter().map(|model| StatusModel { model: model.clone(), levels: custom_levels(&model.id).to_vec() }).collect(),
+                models: provider
+                    .models
+                    .iter()
+                    .map(|model| StatusModel { model: model.clone(), levels: if provider.api.decides() { Vec::new() } else { custom_levels(&model.id).to_vec() } })
+                    .collect(),
             }
         });
         built_in.chain(custom).collect()
@@ -430,6 +463,15 @@ mod tests {
         assert_eq!(lab.iter().map(|m| (m.id.as_str(), m.name.as_str())).collect::<Vec<_>>(), [("m", "m"), ("anthropic/claude-opus-5", "Opus 5")]);
         assert_eq!(lab[1].levels, custom_levels("anthropic/claude-opus-5"));
         assert!(credentials.models("custom:gone").is_empty());
+
+        // A decision provider's models review actions; a bot runs none of them.
+        let mut decider = custom("Decider", 2);
+        decider.api = CustomApi::SystemOne;
+        credentials.custom.insert("custom:decider".into(), decider);
+        assert!(credentials.models("custom:decider").is_empty());
+        assert!(!credentials.kinds().contains(&"custom:decider".to_string()));
+        let status = credentials.statuses().into_iter().find(|status| status.kind == "custom:decider").unwrap();
+        assert_eq!((status.api, status.models.len(), status.models[0].levels.len()), (Some(CustomApi::SystemOne), 1, 0));
     }
 
     #[test]

@@ -8,8 +8,14 @@ use crate::model::{AutoReview, Bot, ChatMeta, ChatUsage, Message, ProviderStatus
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "event", content = "data")]
 pub enum Event {
+    #[serde(rename = "budgets.changed")]
+    BudgetsChanged { budgets: Vec<crate::budgets::BudgetSnapshot> },
     #[serde(rename = "snapshot")]
     Snapshot(Value),
+    #[serde(rename = "reviews.changed")]
+    ReviewChanged { item: crate::review_queue::ReviewItem, change: crate::review_queue::ReviewChange },
+    #[serde(rename = "tasks.changed")]
+    TaskChanged { task: crate::tasks::Task },
     #[serde(rename = "attention.changed")]
     AttentionChanged(crate::attention::View),
     #[serde(rename = "roster.changed")]

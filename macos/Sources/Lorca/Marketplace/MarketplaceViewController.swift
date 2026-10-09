@@ -141,11 +141,23 @@ final class MarketplaceViewController: NSViewController {
         catalog.plugins.first { $0.id == id }
     }
 
-    /// The plugin as the picked Runner has it, nil when it is not installed there.
+    /// The plugin as the picked Runner has it, nil when it is not installed there. Of a service's
+    /// named accounts, one that is ready stands for them all; each says how it stands on the
+    /// service's page.
     func installedPlugin(_ id: MarketplacePlugin.ID) -> InstalledPlugin? {
-        guard let runner else { return nil }
+        let accounts = installedAccounts(id)
+        return accounts.first { $0.state == .ready } ?? accounts.first
+    }
+
+    /// Each install of a marketplace plugin on the picked Runner: one, or a service's accounts.
+    func installedAccounts(_ id: MarketplacePlugin.ID) -> [InstalledPlugin] {
+        guard let runner else { return [] }
         // A server of the Runner's mcp.json that shares the id is not this plugin.
-        return runner.plugins.first { $0.id == id && !$0.isMcpServer } ?? installed[runner.id]?[id]
+        let advertised = runner.plugins.filter { $0.marketplaceID == id && !$0.isMcpServer }
+        let replied = (installed[runner.id] ?? [:]).values.filter { plugin in
+            plugin.marketplaceID == id && !advertised.contains { $0.id == plugin.id }
+        }
+        return advertised + replied.sorted { $0.name < $1.name }
     }
 
     /// Everything the picked Runner has, the marketplace's and the rest, in its own order.
@@ -245,6 +257,7 @@ final class MarketplaceViewController: NSViewController {
 
     /// Installs a plugin on the picked Runner, for every bot there.
     func install(_ plugin: MarketplacePlugin) {
+        if plugin.namedAccounts { return addAccount(plugin) }
         guard let runner, !installing.contains(plugin.id) else { return }
         installing.insert(plugin.id)
         reloadPages()
@@ -252,7 +265,7 @@ final class MarketplaceViewController: NSViewController {
             guard let self else { return }
             do {
                 let status = try await self.store.installPlugin(plugin.id, on: runner.id)
-                self.installed[runner.id, default: [:]][plugin.id] = status
+                self.installed[runner.id, default: [:]][status.id] = status
                 self.showNotice(self.nextStep(for: status, on: runner))
             } catch {
                 self.showNotice(L("Couldn't install %@: %@", plugin.name, error.localizedDescription), isError: true)
@@ -262,17 +275,53 @@ final class MarketplaceViewController: NSViewController {
         }
     }
 
+    /// Adds another account of a service with named accounts, such as a work Gmail beside a
+    /// personal one, and opens it for its setup and sign-in.
+    func addAccount(_ plugin: MarketplacePlugin) {
+        guard let runner, !installing.contains(plugin.id), let window = view.window else { return }
+        let alert = NSAlert()
+        alert.messageText = L("New %@ Account", plugin.name)
+        alert.informativeText = L("A name such as Work or Personal tells your bots which account to use.")
+        alert.addButton(withTitle: L("Add"))
+        alert.addButton(withTitle: L("Cancel"))
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        field.placeholderString = L("Work")
+        alert.accessoryView = field
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .alertFirstButtonReturn else { return }
+            // A blank name becomes the next free "Account 1" on the Runner.
+            let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            self.installing.insert(plugin.id)
+            self.reloadPages()
+            Task { [weak self] in
+                guard let self else { return }
+                do {
+                    let status = try await self.store.installPlugin(plugin.id, on: runner.id, accountName: name.isEmpty ? nil : name)
+                    self.installed[runner.id, default: [:]][status.id] = status
+                    self.manage(status.id)
+                } catch {
+                    self.showNotice(L("Couldn't install %@: %@", plugin.name, error.localizedDescription), isError: true)
+                }
+                self.installing.remove(plugin.id)
+                self.reloadPages()
+            }
+        }
+        // The accessory view only becomes first responder once the sheet exists.
+        DispatchQueue.main.async { alert.window.makeFirstResponder(field) }
+    }
+
     private func nextStep(for plugin: InstalledPlugin, on runner: Device) -> String {
         switch plugin.state {
         case .ready: L("Added %@. Every bot on %@ can use it.", plugin.name, runner.name)
-        case .needsAuth: L("Added %@. It needs a sign-in: click Connect.", plugin.name)
+        case .needsAuth, .insufficientAccess: L("Added %@. It needs a sign-in: click Connect.", plugin.name)
         case .needsSetup: L("Added %@. It needs setup: click Set Up.", plugin.name)
         case .connecting, .error, .unknown: "\(plugin.name): \(plugin.detail)"
         }
     }
 
-    /// The plugin's own sheet on the picked Runner: its sign-in, its setup, and Remove.
-    func manage(_ pluginID: MarketplacePlugin.ID) {
+    /// An installed plugin's own sheet on the picked Runner, by the id the Runner gave it (a named
+    /// account's own): its sign-in, its setup, and Remove.
+    func manage(_ pluginID: InstalledPlugin.ID) {
         guard let runner else { return }
         PluginViewController.present(pluginID: pluginID, runner: runner, bot: nil, from: self)
     }

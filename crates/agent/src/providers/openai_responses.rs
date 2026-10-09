@@ -159,10 +159,9 @@ impl Provider for OpenAiResponsesProvider {
                 options.apply_to(request).json(&body)
             };
             let response =
-                match send_with_retry(build, max_retries, max_retry_delay_ms, &cancel).await {
+                match send_with_retry(build, max_retries, max_retry_delay_ms, &cancel, &options).await {
                     Ok(response) => {
-                        options.report(&response);
-                        response
+                            response
                     }
                     Err(failure) => {
                         let aborted = matches!(failure, RequestFailure::Aborted);

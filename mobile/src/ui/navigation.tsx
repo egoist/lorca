@@ -17,6 +17,7 @@ export const AndroidIcons = {
   camera: require("../../assets/material/camera.xml") as ImageSourcePropType,
   folder: require("../../assets/material/folder.xml") as ImageSourcePropType,
   send: require("../../assets/material/send.xml") as ImageSourcePropType,
+  copy: require("../../assets/material/content_copy.xml") as ImageSourcePropType,
   inbox: require("../../assets/material/inbox.xml") as ImageSourcePropType,
   more: require("../../assets/material/more_vert.xml") as ImageSourcePropType,
 } as const;

@@ -33,7 +33,7 @@ func (s settingsPane) plugins(c *ui.Context, m *mainWindow) {
 						rowElement, row := pluginRow(c, k, plugin, true, "")
 						s.mark(c, rowElement, plugin.Name)
 						if row.Clicked {
-							s.w.presentPlugin(plugin.ID, device)
+							s.w.presentPlugin(plugin.ID, device, "", "")
 						}
 					})
 				}

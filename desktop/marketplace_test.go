@@ -55,10 +55,19 @@ func TestRenderMarketplace(t *testing.T) {
 	}
 	renderBoth(t, tt, "market-home")
 
+	// The curated index can add featured entries ahead of GitHub. Find the installed plugin
+	// through the same search users have, rather than depending on the first preview rows.
+	marketClick(t, tt, L("Search plugins and bots"))
+	tt.Type("github")
+	tt.Frame()
 	marketClick(t, tt, "GitHub")
 	wantText(t, tt, L("Manage…"), L("On %@", "Workbench"), L("Servers"), L("Information"))
 	renderBoth(t, tt, "market-plugin-github")
 	marketClick(t, tt, L("Back"))
+	marketClick(t, tt, L("Search plugins and bots"))
+	tt.Key(ui.Cmd, ui.KeyA)
+	tt.Key(0, ui.KeyBackspace)
+	tt.Frame()
 
 	marketClick(t, tt, L("View all"))
 	wantText(t, tt, L("Plugins"), "Granola")

@@ -68,13 +68,25 @@ final class CLIClient: NSObject {
         generation += 1
         let myGeneration = generation
         state = .connecting
-        let task = session.webSocketTask(with: url)
+        // The CLI takes only a client holding the token in its data directory; it writes it once
+        // it listens, so a CLI found running and one this app starts both have it.
+        var request = URLRequest(url: url)
+        if let token = Self.token() {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        let task = session.webSocketTask(with: request)
         // The default is 1 MiB, and a message over it fails the receive, which reads as a dropped
         // connection. A snapshot carries every chat's messages and outgrows that.
         task.maximumMessageSize = 256 * 1024 * 1024
         self.task = task
         task.resume()
         receive(on: task, generation: myGeneration)
+    }
+
+    private static func token() -> String? {
+        let url = AppInfo.cliHome.appendingPathComponent("serve-token")
+        let token = (try? String(contentsOf: url, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return token?.isEmpty == false ? token : nil
     }
 
     private func close() {

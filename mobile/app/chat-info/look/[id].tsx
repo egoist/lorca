@@ -5,7 +5,8 @@
 import { ImageManipulator, SaveFormat } from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
 import { Stack, useLocalSearchParams } from "expo-router";
-import { Alert, Pressable, ScrollView, StyleSheet, View } from "react-native";
+import { ScrollView, StyleSheet, View } from "react-native";
+import { Pressable } from "../../../src/ui/Pressable";
 import { engine, type PickedFile } from "../../../src/core/engine";
 import { useBotMap } from "../../../src/core/store";
 import { t, useLanguage } from "../../../src/i18n";
@@ -13,6 +14,7 @@ import { AvatarDisc, useBotAvatarUri } from "../../../src/ui/Avatar";
 import { Row, Section } from "../../../src/ui/forms";
 import { BOT_SYMBOLS, Symbol } from "../../../src/ui/Symbol";
 import { ACCENTS, accentColors, usePalette } from "../../../src/ui/theme";
+import { alert } from "../../../src/ui/alert";
 
 export default function BotLookScreen() {
   useLanguage();
@@ -34,12 +36,12 @@ export default function BotLookScreen() {
       const square = await squareAvatar(asset);
       await engine.setBotAvatar(bot!.id, square);
     } catch (error) {
-      Alert.alert(t("Could not use that photo"), error instanceof Error ? error.message : String(error));
+      alert(t("Could not use that photo"), error instanceof Error ? error.message : String(error));
     }
   }
 
   function removePhoto() {
-    void engine.setBotAvatar(bot!.id, null).catch((error) => Alert.alert(t("Could not remove the photo"), error instanceof Error ? error.message : String(error)));
+    void engine.setBotAvatar(bot!.id, null).catch((error) => alert(t("Could not remove the photo"), error instanceof Error ? error.message : String(error)));
   }
 
   return (

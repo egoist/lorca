@@ -550,6 +550,8 @@ fn wake_coordinator(app: &Arc<App>, item: &Item, reporter: &str, hops: u32) {
             round: 0,
             is_winding_down: false,
             setup: None,
+            task_id: None,
+            task_context: None,
             created_at: now_secs(),
         },
     );
