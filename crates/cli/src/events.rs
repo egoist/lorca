@@ -10,6 +10,8 @@ use crate::model::{AutoReview, Bot, ChatMeta, ChatUsage, Message, ProviderStatus
 pub enum Event {
     #[serde(rename = "snapshot")]
     Snapshot(Value),
+    #[serde(rename = "tasks.changed")]
+    TaskChanged { task: crate::tasks::Task },
     #[serde(rename = "roster.changed")]
     RosterChanged { devices: Vec<Value>, bots: Vec<Bot>, chats: Vec<ChatSummary>, routines: Vec<Value>, auto_review: AutoReview, providers: Vec<ProviderStatus>, models: Vec<Value> },
     #[serde(rename = "message.added")]

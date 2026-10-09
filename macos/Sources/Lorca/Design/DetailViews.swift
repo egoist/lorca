@@ -525,10 +525,12 @@ final class StatusRow: NSView, NSGestureRecognizerDelegate {
         stateColor: NSColor = .secondaryLabelColor,
         stateDetail: String? = nil,
         actionTitle: String? = nil,
-        destructive: Bool = false
+        destructive: Bool = false,
+        symbolTint: NSColor = .secondaryLabelColor
     ) {
         icon.image = image ?? NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
         icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
+        icon.contentTintColor = symbolTint
         title.stringValue = titleText
         subtitle.stringValue = subtitleText
         subtitle.isHidden = subtitleText.isEmpty
@@ -913,6 +915,7 @@ final class SwitchRow: NSView {
     private let name = Build.label("", font: .systemFont(ofSize: 12.5, weight: .medium))
     private let detail = Build.label("", font: Theme.Font.caption, color: .secondaryLabelColor)
     private let toggle = NSSwitch()
+    private var textBeforeToggle: NSLayoutConstraint!
     private var tracking: NSTrackingArea?
     private var isHovered = false { didSet { needsDisplay = true } }
 
@@ -934,6 +937,7 @@ final class SwitchRow: NSView {
         addSubview(icon)
         addSubview(text)
         addSubview(toggle)
+        textBeforeToggle = text.trailingAnchor.constraint(lessThanOrEqualTo: toggle.leadingAnchor, constant: -8)
         NSLayoutConstraint.activate([
             heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
             icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
@@ -941,7 +945,10 @@ final class SwitchRow: NSView {
             icon.widthAnchor.constraint(equalToConstant: 18),
             text.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 10),
             text.centerYAnchor.constraint(equalTo: centerYAnchor),
-            text.trailingAnchor.constraint(lessThanOrEqualTo: toggle.leadingAnchor, constant: -8),
+            text.topAnchor.constraint(greaterThanOrEqualTo: topAnchor, constant: 8),
+            text.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -8),
+            textBeforeToggle,
+            text.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -12),
             toggle.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
             toggle.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
@@ -985,6 +992,21 @@ final class SwitchRow: NSView {
         toolTip = tooltip
     }
 
+    /// A row with nothing to switch, which only opens its details: a task, whose title takes
+    /// two lines before it truncates.
+    func configure(symbol: String, tint: NSColor, title: String, detail detailText: String, tooltip: String) {
+        configure(symbol: symbol, tint: tint, title: title, detail: detailText, isOn: false, toggleTooltip: "", tooltip: tooltip)
+        name.maximumNumberOfLines = 2
+        name.lineBreakMode = .byWordWrapping
+        name.cell?.truncatesLastVisibleLine = true
+        detail.isHidden = detailText.isEmpty
+        toggle.isHidden = true
+        textBeforeToggle.isActive = false
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+        setAccessibilityLabel(title)
+    }
+
     /// One of a Runner's MCP servers: its symbol in the color of how it stands, how it stands in
     /// that color, then where it runs, and its switch, unless it cannot run.
     func configure(server: McpServer) {
@@ -1007,6 +1029,12 @@ final class SwitchRow: NSView {
 
     @objc private func toggled() {
         onToggle?(toggle.state == .on)
+    }
+
+    override func accessibilityPerformPress() -> Bool {
+        guard let onClick else { return false }
+        onClick()
+        return true
     }
 
     override var allowsVibrancy: Bool { false }

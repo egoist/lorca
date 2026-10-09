@@ -199,6 +199,25 @@ func sheetFrame(c *ui.Context, o sheetOptions, content func()) sheetResult {
 	return result
 }
 
+// formRow is a label in the labels' column and a control filling the rest of the line, as New
+// Bot's form lays them out. A control taller than a line keeps its label by its first line.
+func formRow(c *ui.Context, label string, top bool, control func()) {
+	row := ui.Row(c).Gap(10)
+	if top {
+		row.AlignItems(ui.Start)
+	}
+	row.Children(func() {
+		text := ui.Text(c, label).Width(formLabelWidth).FontSize(12).TextColor(colors(c).Label2).SingleLine()
+		if top {
+			text.Padding(6, 0, 0, 0)
+		}
+		ui.Row(c).Grow(1).MinWidth(0).Children(control)
+	})
+}
+
+// formLabelWidth is the labels' column; the controls take the rest of the sheet's width.
+const formLabelWidth = 76
+
 // sheetBody is the part of a sheet's panel that scrolls when the window is too short for the
 // panel, reaching the panel's edges so its fields' focus rings show whole.
 func sheetBody(c *ui.Context) ui.Element {

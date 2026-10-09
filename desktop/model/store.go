@@ -78,6 +78,7 @@ const (
 	EventOutputsChanged
 	EventConnectionChanged
 	EventIdentityChanged
+	EventDurableTasksChanged
 )
 
 // Event says what in the store changed.
@@ -132,7 +133,8 @@ type Store struct {
 	Bots    []*Bot
 	Chats   []*Chat
 	// Routines are every bot's routines, from the roster.
-	Routines []*Routine
+	Routines     []*Routine
+	DurableTasks []*DurableTask
 	// AutoReview is shared through the roster.
 	AutoReview AutoReview
 	// Providers are the account's provider credentials, the same on every Device.
@@ -381,6 +383,7 @@ func (s *Store) bootstrap(generation int) {
 }
 
 func (s *Store) apply(snapshot WireSnapshot) {
+	previousTasks, previousIdentity := s.DurableTasks, s.IdentityID
 	if next := str(snapshot.IdentityID); next != s.IdentityID {
 		clear(s.attachmentFiles)
 		clear(s.fetchingAttachment)
@@ -426,6 +429,29 @@ func (s *Store) apply(snapshot WireSnapshot) {
 	}
 	s.Chats = chats
 	s.Routines = s.Routines[:0:0]
+	s.DurableTasks = nil
+	for _, task := range snapshot.Tasks {
+		copy := task.Clone()
+		if snapshot.HasIdentity && previousIdentity == s.IdentityID {
+			for _, previous := range previousTasks {
+				if previous.ID == task.ID && previous.Revision > task.Revision {
+					copy = previous.Clone()
+					break
+				}
+			}
+		}
+		s.DurableTasks = append(s.DurableTasks, &copy)
+	}
+	if snapshot.HasIdentity && previousIdentity == s.IdentityID {
+		// Tasks are retained records; cancellation changes state rather than deleting one.
+		// A snapshot taken before a newly delivered record must not remove that record.
+		for _, previous := range previousTasks {
+			if s.DurableTask(previous.ID) == nil {
+				copy := previous.Clone()
+				s.DurableTasks = append(s.DurableTasks, &copy)
+			}
+		}
+	}
 	for _, routine := range snapshot.Routines {
 		s.Routines = append(s.Routines, ToRoutine(routine))
 	}
@@ -475,6 +501,12 @@ func decode[T any](data json.RawMessage) (T, bool) {
 
 func (s *Store) handle(name string, data json.RawMessage) {
 	switch name {
+	case "tasks.changed":
+		if event, ok := decode[struct {
+			Task DurableTask `json:"task"`
+		}](data); ok {
+			s.AcceptDurableTask(event.Task)
+		}
 	case "snapshot":
 		if snapshot, ok := decode[WireSnapshot](data); ok {
 			s.apply(snapshot)

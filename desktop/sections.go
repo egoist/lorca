@@ -175,11 +175,13 @@ func pluginTile(c *ui.Context, pluginID, symbolName string, size float32) ui.Ele
 }
 
 type statusRowOptions struct {
-	Symbol   string
-	PluginID string
-	Title    string
-	Subtitle string
-	State    string
+	Symbol string
+	// SymbolColor tints the symbol; secondary text by default.
+	SymbolColor *ui.Color
+	PluginID    string
+	Title       string
+	Subtitle    string
+	State       string
 	// StateSymbol shows the state as a symbol, whose words are its tooltip.
 	StateSymbol string
 	StateColor  *ui.Color
@@ -210,7 +212,11 @@ func statusRow(c *ui.Context, k *card, o statusRowOptions) (ui.Element, statusRo
 		result.Clicked = r.Clicked()
 	}
 	r.Children(func() {
-		ui.Row(c).Width(18).Justify(ui.Center).TextColor(p.Label2).Children(func() {
+		tint := p.Label2
+		if o.SymbolColor != nil {
+			tint = *o.SymbolColor
+		}
+		ui.Row(c).Width(18).Justify(ui.Center).TextColor(tint).Children(func() {
 			if o.PluginID != "" {
 				pluginTile(c, o.PluginID, o.Symbol, 18)
 			} else if o.Symbol != "" {

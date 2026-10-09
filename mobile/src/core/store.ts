@@ -5,7 +5,7 @@
 import { useMemo } from "react";
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
-import { groupOutputs, runsInTerminal, type AutoReview, type OutputSeries, type Bot, type Chat, type ChatMeta, type ChatUsage, type Device, type Message, type ProviderModel, type ProviderStatus, type RelayProblem, type Routine } from "./model";
+import { groupOutputs, runsInTerminal, taskOrder, type AutoReview, type DurableTask, type OutputSeries, type Bot, type Chat, type ChatMeta, type ChatUsage, type Device, type Message, type ProviderModel, type ProviderStatus, type RelayProblem, type Routine } from "./model";
 import { t } from "../i18n";
 import { savePrefs } from "./prefs";
 
@@ -75,6 +75,8 @@ export interface StoreState {
   fileErrors: Record<string, string>;
   /// Chat id → every version of its outputs the core listed when the chat's details last opened.
   outputs: Record<string, Message[]>;
+  /// The account's durable tasks, each at the newest revision this phone has.
+  tasks: DurableTask[];
   dictation_lang?: string;
 }
 
@@ -104,6 +106,7 @@ function empty(): Omit<StoreState, "ready" | "dictation_lang" | "appActive" | "a
     files: {},
     fileErrors: {},
     outputs: {},
+    tasks: [],
   };
 }
 
@@ -158,6 +161,7 @@ export function replaceSnapshot(snapshot: {
   bots: Bot[];
   chats: Chat[];
   routines?: Routine[];
+  tasks?: DurableTask[];
   auto_review?: AutoReview;
   providers?: ProviderStatus[];
   models?: ProviderModel[];
@@ -189,6 +193,7 @@ export function replaceSnapshot(snapshot: {
       return { ...c, ...kept, unread_count: c.unread_count ?? 0 };
     }),
     routines: snapshot.routines ?? [],
+    tasks: snapshot.tasks ?? [],
     auto_review: snapshot.auto_review ?? { is_enabled: true, rules: [] },
     providers: snapshot.providers ?? [],
     models: snapshot.models ?? [],
@@ -470,4 +475,34 @@ export function useRoutines(botId: string | undefined): Routine[] {
   const routines = useStore(useShallow((s) => s.routines.filter((r) => r.bot_id === botId).sort((a, b) => a.created_at - b.created_at)));
   const running = useStore(useShallow((s) => Object.values(s.running).flatMap((r) => (r.routineId ? [r.routineId] : []))));
   return useMemo(() => routines.map((r) => (r.is_running || !running.includes(r.id) ? r : { ...r, is_running: true })), [routines, running]);
+}
+
+/// Takes a task from a reply or an event unless this phone already has a newer revision of it.
+export function acceptDurableTask(task: DurableTask) {
+  useStore.setState((s) => {
+    const index = s.tasks.findIndex((each) => each.id === task.id);
+    if (index < 0) return { tasks: [...s.tasks, task] };
+    if (s.tasks[index].revision >= task.revision) return {};
+    const tasks = s.tasks.slice();
+    tasks[index] = task;
+    return { tasks };
+  });
+}
+
+/// The chat's durable tasks, what waits on the user first, then open work, each newest first.
+export function useDurableTasks(chatId: string | undefined): DurableTask[] {
+  const tasks = useStore((s) => s.tasks);
+  return useMemo(
+    () =>
+      chatId
+        ? tasks
+            .filter((task) => task.chat_ids.includes(chatId))
+            .sort((a, b) => taskOrder(a.state) - taskOrder(b.state) || b.updated_at - a.updated_at)
+        : [],
+    [tasks, chatId],
+  );
+}
+
+export function useDurableTask(id: string | undefined): DurableTask | undefined {
+  return useStore((s) => s.tasks.find((task) => task.id === id));
 }

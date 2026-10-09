@@ -151,6 +151,7 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
         Arc::new(CreateBot { app: app.clone(), chat_id: chat.meta.id.clone(), bot: bot.clone() }),
         Arc::new(EditBot { app: app.clone(), bot: bot.clone() }),
         Arc::new(Routines { app: app.clone(), bot: bot.clone() }),
+        Arc::new(crate::tasks::TasksTool { app: app.clone(), bot_id: bot.id.clone(), chat_id: chat.meta.id.clone(), job_id: job.id.clone() }),
         Arc::new(crate::outputs::PublishOutputTool { app: app.clone(), chat_id: chat.meta.id.clone(), bot: bot.clone(), workdir: workdir.clone() }),
         Arc::new(SearchPlugins { app: app.clone() }),
         Arc::new(InstallPlugin { app: app.clone(), chat_id: chat.meta.id.clone(), bot: bot.clone(), unattended }),
@@ -590,7 +591,12 @@ impl LoopHooks for QuietHooks {
 #[async_trait]
 impl LoopHooks for TurnHooks {
     async fn transform_context(&self, messages: Vec<AgentMessage>, _cancel: &CancellationToken) -> Vec<AgentMessage> {
-        materialize_steering_messages(&self.app, &self.bot, &self.workdir, messages).await
+        let mut messages = materialize_steering_messages(&self.app, &self.bot, &self.workdir, messages).await;
+        messages.retain(|message| !matches!(message, AgentMessage::User(user) if user.content.iter().filter_map(ContentPart::as_text).any(crate::tasks::is_context)));
+        if let Some(note) = crate::tasks::context(&self.app, &self.bot.id, &self.chat_id) {
+            messages.push(AgentMessage::User(UserMessage::text(note)));
+        }
+        messages
     }
 
     fn convert_to_llm(&self, messages: &[AgentMessage]) -> Vec<LlmMessage> {
@@ -1555,6 +1561,10 @@ fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job, store: &Memo
         bot.id
     ));
     prompt.push_str(&routines_prompt(app, bot));
+    prompt.push_str("\nDurable work: use tasks to track multi-turn goals, ownership, acceptance criteria, dependencies, next action, blockers, and result/evidence. Open records appear after the transcript on every request, even after compaction. A queued task only runs when explicitly started with tasks run. Read the latest revision before editing; a conflict means reload, never overwrite.\n");
+    if let Some(id) = &job.task_id {
+        prompt.push_str(&format!("\nThis turn references durable task {id}. {}\n", if job.kind == "task" { "The explicit task run starts your work regardless of new group messages. You own its active run: perform its next action, record progress, and complete only with a result and supporting evidence, or record the blocker. A reply alone awaits review." } else { "This turn supports that task; it does not claim or complete the task's active run." }));
+    }
     prompt.push_str(&plugins_prompt(app, bot, plugins));
     prompt.push_str(&memory_prompt(store));
     prompt.push_str("\nPublish deliverables with publish_output so the user can retrieve them on paired Devices. Attach test results and, for visual changes, before/after screenshots as evidence. Report failures and what remains unverified; publishing evidence does not complete a task. Creating or uploading to an external service uses its reviewed tools.\n");
@@ -2101,6 +2111,8 @@ impl Tool for MessageBot {
             chat_id: dm.meta.id.clone(),
             bot_id: target.id.clone(),
             kind: "message".into(),
+            task_id: None,
+            task_context: None,
             trigger_message_id: incoming.id,
             routine_id: None,
             check: None,
@@ -3353,6 +3365,8 @@ mod tests {
             chat_id: chat_id.into(),
             bot_id: bot_id.into(),
             kind: "room_turn".into(),
+            task_id: None,
+            task_context: None,
             trigger_message_id: String::new(),
             routine_id: None,
             check: None,
@@ -3727,6 +3741,8 @@ mod tests {
                 chat_id: "chat".into(),
                 bot_id: bot.id.clone(),
                 kind: "turn".into(),
+                task_id: None,
+                task_context: None,
                 trigger_message_id: String::new(),
                 check: None,
                 routine_id: None,

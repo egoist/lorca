@@ -4,6 +4,7 @@ import Foundation
 enum StoreEvent {
     case snapshotReplaced
     case rosterChanged
+    case durableTasksChanged
     case chatsChanged
     case chatChanged(Chat.ID)
     case messageAdded(Chat.ID, Message.ID)
@@ -70,6 +71,7 @@ final class AppStore {
     private(set) var chats: [Chat] = []
     /// Every bot's routines, from the roster.
     private(set) var routines: [Routine] = []
+    private(set) var durableTasks: [DurableTask] = []
     /// Auto-review, shared through the roster.
     private(set) var autoReview = AutoReview()
     /// The account's provider credentials, the same on every Device.
@@ -275,6 +277,7 @@ final class AppStore {
             return chat
         }
         routines = (snapshot.routines ?? []).map { $0.toModel() }
+        durableTasks = snapshot.tasks ?? []
         autoReview = snapshot.autoReview?.toModel() ?? AutoReview()
         providers = (snapshot.providers ?? []).compactMap { $0.toModel() }
         catalog = (snapshot.models ?? []).compactMap { $0.toModel() }
@@ -298,6 +301,10 @@ final class AppStore {
         switch name {
         case "snapshot":
             if let snapshot = decode(Wire.Snapshot.self) { apply(snapshot: snapshot) }
+
+        case "tasks.changed":
+            guard let payload = decode(Wire.DurableTaskChanged.self) else { return }
+            acceptDurableTask(payload.task)
 
         case "roster.changed":
             guard let roster = decode(Wire.RosterChanged.self) else { return }
@@ -1648,6 +1655,31 @@ final class AppStore {
             return
         }
         perform("chats.stop", ["chat_id": chatID])
+    }
+
+    /// The chat's tasks, what waits on the user first, then open work, each newest first.
+    func tasks(in chatID: Chat.ID) -> [DurableTask] {
+        durableTasks.filter { $0.chatIds.contains(chatID) }.sorted {
+            ($0.state.order, -$0.updatedAt) < ($1.state.order, -$1.updatedAt)
+        }
+    }
+
+    func durableTask(_ id: String) -> DurableTask? {
+        durableTasks.first { $0.id == id }
+    }
+
+    private func acceptDurableTask(_ task: DurableTask) {
+        if let index = durableTasks.firstIndex(where: { $0.id == task.id }) {
+            guard durableTasks[index].revision < task.revision else { return }
+            durableTasks[index] = task
+        } else { durableTasks.append(task) }
+        emit(.durableTasksChanged)
+    }
+
+    func taskRequest(_ method: String, params: [String: Any]) async throws -> DurableTask {
+        let task = try await client.request(method, params, as: DurableTask.self)
+        acceptDurableTask(task)
+        return task
     }
 
     // MARK: - Identity, pairing, providers

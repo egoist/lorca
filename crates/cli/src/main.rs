@@ -81,6 +81,11 @@ enum Command {
         #[usage(subcommand)]
         command: ChatsCommand,
     },
+    /// Durable work: inspect tasks, or create/update/run with a JSON object or - for stdin.
+    Tasks {
+        #[usage(subcommand)]
+        command: TasksCommand,
+    },
     /// Update this computer's lorca to the latest release. `lorca serve` checks once a day and
     /// installs what it finds, then restarts into it once no bot is at work.
     Update {
@@ -100,6 +105,19 @@ enum Command {
     Status,
     /// Check the local setup.
     Doctor,
+}
+
+#[derive(Subcommands, Debug)]
+enum TasksCommand {
+    /// List tasks; filters refer to canonical ids.
+    List { #[usage(long)] chat_id: Option<String>, #[usage(long)] owner_bot_id: Option<String>, #[usage(long)] state: Option<String> },
+    Get { id: String },
+    /// JSON uses owner_bot_id, goal, acceptance_criteria, next_action, chat_ids, request_id.
+    Create { json: String },
+    /// JSON uses id, expected_revision, request_id and the fields to change.
+    Update { json: String },
+    /// JSON uses id, expected_revision, request_id and optional chat_id.
+    Run { json: String },
 }
 
 #[derive(Subcommands, Debug)]
@@ -276,7 +294,7 @@ async fn main() -> anyhow::Result<()> {
     };
     // `lorca mcp` and `lorca chats` say how each step went in their own words; the log keeps to
     // warnings.
-    let quiet = matches!(command, Command::Mcp { .. } | Command::Marketplace { .. } | Command::Models { .. } | Command::Chats { .. });
+    let quiet = matches!(command, Command::Mcp { .. } | Command::Marketplace { .. } | Command::Models { .. } | Command::Chats { .. } | Command::Tasks { .. });
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| if quiet { "lorca=warn,lorca_agent=warn".into() } else { "lorca=info,lorca_agent=info".into() }))
         .with_target(false)
@@ -298,6 +316,7 @@ async fn main() -> anyhow::Result<()> {
             lorca::service::trim_log();
             lorca::update::start(&app);
             runtime::resume_sent_jobs(&app);
+            lorca::tasks::start(&app);
             // A command a Lorca that quit left waiting went with it; its row says so now.
             {
                 let app = app.clone();
@@ -392,6 +411,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Marketplace { command: MarketplaceCommand::Reload } => reload(&app, "marketplace.reload", lorca::marketplace::enable, "marketplace").await,
         Command::Models { command: ModelsCommand::Reload } => reload(&app, "models.reload", lorca::catalog::enable, "model catalog").await,
         Command::Chats { command } => chats(&app, command).await,
+        Command::Tasks { command } => tasks(&app, command).await,
         Command::Update { check, auto } => update(&app, check, auto).await,
         Command::Service { .. } => unreachable!(),
         Command::Status => {
@@ -455,8 +475,37 @@ async fn provider(app: &std::sync::Arc<App>, command: ProviderCommand) -> anyhow
     Ok(())
 }
 
-/// Names groups and bots as the apps show them. A change goes through the running `lorca serve`
-/// when there is one, so the apps see it at once; otherwise here, followed by one sync pass.
+/// Task reads can use the local replica; mutations use the service's live authority routing.
+async fn tasks(app: &std::sync::Arc<App>, command: TasksCommand) -> anyhow::Result<()> {
+    use serde_json::{json, Value};
+    let parse = |input: String| -> anyhow::Result<Value> {
+        let input = if input == "-" { std::io::read_to_string(std::io::stdin())? } else { input };
+        let value: Value = serde_json::from_str(&input)?;
+        anyhow::ensure!(value.is_object(), "Task parameters must be a JSON object.");
+        Ok(value)
+    };
+    let (method, params) = match command {
+        TasksCommand::List { chat_id, owner_bot_id, state } => ("tasks.list", json!({"chat_id":chat_id,"owner_bot_id":owner_bot_id,"state":state})),
+        TasksCommand::Get { id } => ("tasks.get", json!({"id":id,"refresh":true})),
+        TasksCommand::Create { json } => ("tasks.create", parse(json)?),
+        TasksCommand::Update { json } => ("tasks.update", parse(json)?),
+        TasksCommand::Run { json } => ("tasks.run", parse(json)?),
+    };
+    let result = match serve_call(&app.config, method, &params).await? {
+        Some(result) => result.map_err(anyhow::Error::msg)?,
+        None if matches!(method, "tasks.list" | "tasks.get") => {
+            let mut params = params;
+            params["refresh"] = serde_json::json!(false);
+            lorca::tasks::dispatch(app, method, params).await.map_err(anyhow::Error::msg)?
+        },
+        None => anyhow::bail!("Start lorca serve to edit or run durable tasks."),
+    };
+    println!("{}", serde_json::to_string_pretty(&result)?);
+    Ok(())
+}
+
+/// Names groups and bots as the apps show them. A change goes through the running service
+/// when there is one, or updates the local state and syncs once.
 async fn chats(app: &std::sync::Arc<App>, command: ChatsCommand) -> anyhow::Result<()> {
     match command {
         ChatsCommand::List => {

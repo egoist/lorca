@@ -33,6 +33,7 @@ enum Wire {
         var bots: [Bot]
         var chats: [Chat]
         var routines: [Routine]?
+        var tasks: [DurableTask]?
         var autoReview: AutoReview?
         var providers: [Provider]?
         var models: [Model]?
@@ -145,6 +146,7 @@ enum Wire {
     struct RoutineChanged: Decodable {
         var routine: Routine
     }
+    struct DurableTaskChanged: Decodable { var task: DurableTask }
 
     /// Fetched only while editing a provider; never stored in the account snapshot.
     struct ProviderAPIKey: Decodable {

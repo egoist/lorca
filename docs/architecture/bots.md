@@ -1,5 +1,9 @@
 # Bots and Memory
 
+## Bot profiles
+
+A bot's look is an SF Symbol (`symbol_name`) on an accent gradient (`accent`), or a profile image of the user's own: `avatar` is an attachment record whose bytes travel as an encrypted `file` blob, the same way a message attachment does, and every Device shows the image in place of the symbol once it has fetched it. Clicking a bot's avatar in the macOS inspector opens the Look sheet. The macOS Profile card keeps Name trailing-aligned and opens Description in its own editing sheet. On the phone, tapping the avatar in Details slides the Look screen in inside the same form sheet (`app/chat-info` has its own stack); Name is trailing-aligned there too, and the Description row pushes a full editor. Details also has native Provider, Model, and Thinking menus under Runs with; a provider change clears the other two to that provider's defaults, and Thinking offers only the levels the model takes (see [Providers](providers.md)). `bots.update` carries all of these changes, including `symbol_name`, `accent`, and `avatar` (a `{ path, … }` file to store and upload, or `null` to remove).
+
 ## The lead bot
 
 A new identity starts with one bot, **Chef**, a chief of staff on the first Runner: an ordinary bot whose description has it plan the work, delegate each task to the right teammate with `message_bot`, propose a new one for `create_bot` when none fits, and do hands-on work when necessary. Nothing about it is privileged; rename or delete it like any bot.
@@ -18,6 +22,10 @@ Who answers, after Grok Bot's rooms:
 - **Bot to bot:** `message_bot` from any chat to a bot outside it; the message lands in the target's DM. Each hop carries `hops`; after eight bot-to-bot hops without a user message the tool refuses, so two bots cannot loop. Members of one group talk to each other in the group.
 
 A bot's profile also carries the user's [Access](bot-permissions.md): the plugins it may use, how far, and which of their tools, and whether it reads or changes files and runs shell commands. The CLI checks it on each call, and a teammate a bot creates gets its creator's current Access.
+
+## Durable work
+
+[Durable tasks](tasks.md) keep goals, ownership, dependencies, next actions, blockers, and completion evidence across turns and chats. The `tasks` tool and the apps' Tasks section read and edit them. A bot with open tasks reads them again on every provider request, including after compaction. A Job references its canonical task id; a group's chat owner and a task's owner are independent.
 
 ## Routines
 

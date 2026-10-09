@@ -16,6 +16,7 @@ final class InspectorViewController: NSViewController {
     private let runtime = SectionView(title: L("Runs with"))
     private let memory = SectionView(title: L("Memory"))
     private let routines = SectionView(title: L("Routines"))
+    private let tasks = SectionView(title: L("Tasks"))
     private let plugins = SectionView(title: L("Plugins"))
     private let routing = SectionView(title: L("Where turns run"))
     private let outputs = SectionView(title: L("Outputs"))
@@ -39,6 +40,8 @@ final class InspectorViewController: NSViewController {
     /// Rows kept for what they show (a bot, a Runner, a routine, a plugin), so a section that
     /// changed updates the rows it has instead of making new ones.
     private var keptRows: [String: NSView] = [:]
+    /// The chat whose Tasks section shows every task rather than the first few.
+    private var tasksShowingAll: Chat.ID?
     /// The usage rows under Runs with, which take new values after every turn.
     private var contextRow: ActionRow?
     private var spentRow: KeyValueRow?
@@ -85,6 +88,8 @@ final class InspectorViewController: NSViewController {
         groupNameRow.field.alignment = .right
         groupDescriptionRow.onAction = { [weak self] in self?.editGroupDescription() }
         group.setRows([groupNameRow, groupDescriptionRow])
+        tasks.setHeaderAccessory(HoverButton(symbol: "plus", pointSize: 11, tooltip: L("New Task"), target: self, action: #selector(newTask)))
+        tasks.isHidden = true
         outputs.isHidden = true
 
         column.addArrangedSubview(participants)
@@ -95,6 +100,7 @@ final class InspectorViewController: NSViewController {
         column.addArrangedSubview(runtime)
         column.addArrangedSubview(memory)
         column.addArrangedSubview(routines)
+        column.addArrangedSubview(tasks)
         column.addArrangedSubview(plugins)
         column.addArrangedSubview(routing)
         column.setCustomSpacing(10, after: participants)
@@ -133,6 +139,7 @@ final class InspectorViewController: NSViewController {
             runtime.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             memory.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             routines.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
+            tasks.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             plugins.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
             routing.widthAnchor.constraint(equalTo: column.widthAnchor, constant: -32),
         ])
@@ -144,7 +151,7 @@ final class InspectorViewController: NSViewController {
         super.viewDidLoad()
         store.observe(self) { [weak self] event in
             switch event {
-            case .chatChanged, .chatsChanged, .snapshotReplaced, .rosterChanged:
+            case .chatChanged, .chatsChanged, .snapshotReplaced, .rosterChanged, .durableTasksChanged:
                 self?.reload()
             case let .outputsChanged(chatID):
                 guard let self, case .chat(chatID) = self.selection else { return }
@@ -251,6 +258,45 @@ final class InspectorViewController: NSViewController {
             showPlugins(of: bot)
         }
         showRouting(members)
+        showTasks(in: chat)
+    }
+
+    /// The chat's durable tasks, open work first; hidden while it has none. A row opens the
+    /// task; the title's + starts a new one. Past five rows the rest wait behind Show All.
+    private func showTasks(in chat: Chat) {
+        let records = store.tasks(in: chat.id)
+        let showsAll = tasksShowingAll == chat.id
+        guard changed(tasks, to: [chat.id, chat.isGroup, records, showsAll, records.map { store.bot($0.ownerBotId)?.name }]) else { return }
+        if tasks.isHidden != records.isEmpty { tasks.isHidden = records.isEmpty }
+        let limit = 5
+        let shown = showsAll || records.count <= limit ? records : Array(records.prefix(limit - 1))
+        var rows: [NSView] = shown.map { task in
+            let row = keptRow("task:\(task.id)") { SwitchRow() }
+            var detail = task.state.title
+            if chat.isGroup, let owner = store.bot(task.ownerBotId) { detail += " · \(owner.name)" }
+            row.configure(symbol: task.state.symbol, tint: task.state.tint, title: task.goal, detail: detail, tooltip: task.goal)
+            row.onClick = { [weak self] in self?.openTask(task.id, in: chat.id) }
+            return row
+        }
+        if shown.count < records.count {
+            let more = keptRow("tasks:all") { SwitchRow() }
+            more.configure(symbol: "ellipsis", tint: .tertiaryLabelColor, title: L("Show %d More", records.count - shown.count), detail: "", tooltip: "")
+            more.onClick = { [weak self] in
+                self?.tasksShowingAll = chat.id
+                self?.reload()
+            }
+            rows.append(more)
+        }
+        tasks.setRows(rows)
+    }
+
+    private func openTask(_ id: String, in chatID: Chat.ID) {
+        presentAsSheet(DurableTaskViewController(chatID: chatID, task: store.durableTask(id)))
+    }
+
+    @objc private func newTask() {
+        guard case let .chat(chatID) = selection else { return }
+        presentAsSheet(DurableTaskViewController(chatID: chatID, task: nil))
     }
 
     /// Whether `state` differs from what `section` last showed; records it when it does.

@@ -24,6 +24,8 @@ type inspectorState struct {
 	// shownChat is the chat the pane last opened on.
 	shownChat string
 	scroll    ui.ScrollState
+	// tasksShowingAll is the chat whose Tasks section shows every task rather than the first few.
+	tasksShowingAll string
 }
 
 // refreshMemory asks the CLI for the bot's memory; the section redraws when it answers.
@@ -108,6 +110,9 @@ func (m *mainWindow) inspectorView(c *ui.Context, chatID string) {
 				m.inspectorRuntime(c, single, chat)
 				m.inspectorMemory(c, single)
 				m.inspectorRoutines(c, single)
+			}
+			m.inspectorDurableTasks(c, chat)
+			if single != nil {
 				m.inspectorPlugins(c, single)
 			}
 			m.inspectorRouting(c, members)

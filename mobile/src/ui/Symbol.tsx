@@ -63,6 +63,15 @@ const ANDROID: Record<string, string> = {
   "chevron.up.chevron.down": "arrow_drop_down",
   "arrow.down": "arrow_downward",
   "plus": "add",
+  // Durable tasks' states and evidence.
+  "circle": "radio_button_unchecked",
+  "arrow.triangle.2.circlepath": "sync",
+  "exclamationmark.circle.fill": "error",
+  "checkmark.circle": "check_circle",
+  "xmark.circle": "cancel",
+  "bubble.left": "chat_bubble",
+  play: "play_arrow",
+  "arrow.counterclockwise": "replay",
   "xmark": "close",
   // Android's overflow menu is the vertical one.
   "ellipsis": "more_vert",

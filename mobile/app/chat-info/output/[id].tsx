@@ -18,11 +18,12 @@ import { canPreviewFiles } from "../../../modules/lorca-core";
 
 export default function OutputScreen() {
   useLanguage();
-  const { id, chat } = useLocalSearchParams<{ id: string; chat: string }>();
+  // `version` opens on that version's message, as a task's evidence names it.
+  const { id, chat, version } = useLocalSearchParams<{ id: string; chat: string; version?: string }>();
   const p = usePalette();
   const bots = useBotMap();
   const series = useOutputs(chat).find((each) => each.id === id);
-  const [picked, setPicked] = useState<string>();
+  const [picked, setPicked] = useState<string | undefined>(version || undefined);
   const message = series?.versions.find((version) => version.id === picked) ?? series?.versions[0];
   const attachment = message ? outputAttachment(message) : undefined;
   const error = useStore((s) => (attachment ? s.fileErrors[attachment.id] : undefined));

@@ -137,7 +137,7 @@ func TestNewBotSheet(t *testing.T) {
 	settle(tt)
 	// Back to the name field, right of its label.
 	label, _ := tt.Find(L("Name"))
-	tt.ClickAt(label.X+newBotLabelWidth+60, label.Y+label.H/2)
+	tt.ClickAt(label.X+formLabelWidth+60, label.Y+label.H/2)
 	tt.Type("Analyst")
 	tt.Key(0, ui.KeyTab)
 	tt.Type("Reads the numbers.")

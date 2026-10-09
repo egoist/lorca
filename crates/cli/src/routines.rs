@@ -269,6 +269,8 @@ fn job_for(app: &Arc<App>, routine: &Routine) -> Result<Job, String> {
         chat_id: dm.meta.id,
         bot_id: routine.bot_id.clone(),
         kind: "routine".into(),
+        task_id: None,
+        task_context: None,
         trigger_message_id: String::new(),
         routine_id: Some(routine.id.clone()),
         check: None,

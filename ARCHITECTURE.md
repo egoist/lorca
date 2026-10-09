@@ -54,6 +54,7 @@ Chat     1──* Message
 Bot      1──* Routine      (a scheduled task, run in the bot's DM on its Runner)
 Device   1──* Plugin       (an MCP server installed on a Runner or in its mcp.json, per bot Access)
 Bot      1──* Job          (a turn on the bot's Runner)
+Identity 1──* Task         (durable work; an owning Bot, assigned Runner, and linked Chats)
 ```
 
 | Entity             | Device                                                    | Relay                                                  |
@@ -62,12 +63,13 @@ Bot      1──* Job          (a turn on the bot's Runner)
 | Device             | Machine keypair, `os`                                     | Machine public key + encrypted metadata blob           |
 | Bot                | Decrypted profile                                         | Inside encrypted roster blobs                          |
 | Routine            | Name, schedule, prompt, state                             | Inside encrypted roster blobs                          |
+| Task               | Encrypted records, revisions, evidence references, and run claims | Account-encrypted task blobs; execution Jobs sealed to the assigned Runner |
 | Plugin             | Manifest, variables, secrets, tokens on the Runner        | Id and state inside the Runner's encrypted machine blob |
 | ProviderCredential | `credentials.json` on every Device                        | Inside the encrypted `credentials` blob                |
 | Chat / Message     | Account/chat DEK                                          | Encrypted blobs                                        |
 | Job                | Any paired Device may create; the assigned Runner runs it | Sealed envelope to that Runner’s machine box key; deleted once run. A hard Stop sends `job_cancel` to the Device running it; the Runner seals how the turn ended (`job_result`) to the requesting Device, and lists the turn and what it is doing in its `machine` blob for every Device |
 
-A bot's look is an SF Symbol (`symbol_name`) on an accent gradient (`accent`), or a profile image of the user's own: `avatar` is an attachment record whose bytes travel as an encrypted `file` blob, the same way a message attachment does, and every Device shows the image in place of the symbol once it has fetched it. Clicking a bot's avatar in the macOS inspector opens the Look sheet. The macOS Profile card keeps Name trailing-aligned and opens Description in its own editing sheet. On the phone, tapping the avatar in Details slides the Look screen in inside the same form sheet (`app/chat-info` has its own stack); Name is trailing-aligned there too, and the Description row pushes a full editor. Details also has native Provider, Model, and Thinking menus under Runs with; a provider change clears the other two to that provider's defaults, and Thinking offers only the levels the model takes (see [Providers](docs/architecture/providers.md)). `bots.update` carries all of these changes, including `symbol_name`, `accent`, and `avatar` (a `{ path, … }` file to store and upload, or `null` to remove).
+Bots carry a name, description, provider/model settings, and an SF Symbol or encrypted avatar attachment. The apps edit these profiles through the local CLI ([Bot profiles](docs/architecture/bots.md#bot-profiles)).
 
 Creating a bot for Runner B from Device A: A writes an encrypted bot profile into the roster (paired Devices can read it) and pins B’s machine id. Bot create rejects a target whose `os` is not desktop. Turns are job envelopes addressed to B. B decrypts the job, runs the loop with the account’s provider credentials, and uploads encrypted replies.
 
@@ -93,6 +95,7 @@ One doc per subject under `docs/architecture/`, each short enough to read in one
 | [MCP servers](docs/architecture/mcp-servers.md) | The user's own MCP servers in a Runner's `mcp.json`: the file and other apps' spellings, sign-in when a server asks, the `mcp.*` methods and `lorca mcp`, the apps' MCP Servers section and server sheet |
 | [Bots and Memory](docs/architecture/bots.md) | The lead bot, DMs and groups, who answers, handoffs between bots, a bot's memory |
 | [Routines](docs/architecture/routines.md) | A bot's scheduled tasks: schedules and their timezones, runs and read-only checks, missed runs, health and recovery, and the apps' routine sheet and service row |
+| [Durable tasks](docs/architecture/tasks.md) | Work that spans turns: owner, revisions, runs and recovery, evidence, the apps' Tasks section |
 | [Providers](docs/architecture/providers.md) | Each model provider and its sign-in, custom providers, thinking levels, the model catalog and cost, compaction, retries |
 | [macOS app](docs/architecture/macos-app.md) | The AppKit app: launching the CLI, windows and onboarding, settings, updates, the command palette, sidebar and inspector |
 | [macOS chat](docs/architecture/macos-chat.md) | Transcript, composer, output previews, working and read state in AppKit |

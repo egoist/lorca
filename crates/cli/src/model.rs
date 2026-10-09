@@ -819,6 +819,13 @@ pub struct Job {
     pub id: String,
     pub chat_id: String,
     pub bot_id: String,
+    /// Canonical durable task context. Child/handoff Jobs may reference it without owning
+    /// the task's execution claim; only `kind = task` is a durable task run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+    /// The authority's immutable dispatch snapshot, so a Job can arrive before task sync.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_context: Option<crate::tasks::Task>,
     /// `turn` for a user message in a DM, `room_turn` for one member's turn in a group,
     /// `message` for a teammate's message_bot, `routine` for a run of a routine, `command` for
     /// a command the bot left running that ended.

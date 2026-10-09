@@ -34,6 +34,7 @@ var symbolIcons = map[string]string{
 	"stop.fill":                          "Square",
 	"xmark":                              "X",
 	"xmark.circle.fill":                  "CircleX",
+	"xmark.circle":                       "CircleX",
 	"arrowshape.turn.up.left":            "Reply",
 	"arrowshape.turn.up.left.fill":       "Reply",
 	"doc.fill":                           "File",

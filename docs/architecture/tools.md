@@ -2,6 +2,8 @@
 
 Team tools (the CLI):
 
+- `tasks { action: list | get | create | update | run, ... }` — [durable tasks](tasks.md): goals, ownership, acceptance criteria, dependencies, next action, blockers, results, and evidence. Mutations require a request id; updates and runs require the current revision. A queued record starts only through run, and completion requires result and evidence.
+
 - `message_bot { bot_id, message }` — a message to a bot outside the current chat. The caller's chat shows a "Messaged ◉ X" marker: the tool row carries the recipient's id as `target_bot_id`, and the apps take its name and avatar from the roster for the marker and for "Messaging X…" while the call runs. The target's own DM gets a "Message from ◉ X" marker and a `message` Job (with `from_bot_id` and `hops`) whose envelope goes to the **target bot’s Runner**. The tool refuses a member of the same group: they read that chat and take their own turn.
 - `list_teammates` — decrypted local roster with each bot’s id, Runner, online state, and the provider, model, and thinking it runs with. `message_bot` and `edit_bot` name a bot by that id, since two bots can share a name; a user’s `@Name` arrives with the id (see Mentions in [the lead bot](bots.md#the-lead-bot)), the system prompt gives the caller its own id and that of a bot whose message started the turn, and `create_bot` answers with the new bot’s.
 - `memory_update { action: append | replace | remove | supersede, text?, old_text? }` — changes the bot’s curated `MEMORY.md` one fact at a time (see [Memory](bots.md#memory)).

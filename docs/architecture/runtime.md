@@ -4,6 +4,8 @@
 
 Commands:
 
+- `lorca tasks list` / `get <id>` / `create '<JSON>'` / `update '<JSON>'` / `run '<JSON>'` — [durable work](tasks.md), through the local service for mutations; `-` reads JSON from stdin. Encrypted records, receipts, and run journals share `lorca.sqlite3`, and interrupted claims require explicit recovery.
+
 - `lorca serve` — the app connects here; `lorca` alone lists the commands and starts nothing, so a bot's `lorca` never starts a second service
 - `lorca identity new` / `identity restore <phrase>` / `identity show`
 - `lorca pair` — show a pairing string and wait; `lorca pair <string>` joins
