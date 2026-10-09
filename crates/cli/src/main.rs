@@ -133,16 +133,18 @@ enum ProviderCommand {
         base_url: Option<String>,
     },
     /// Add a custom provider: any server that speaks OpenAI's Chat Completions or Responses, or
-    /// Anthropic's Messages, such as a gateway or a model server on your network.
+    /// Anthropic's Messages, such as a gateway or a model server on your network, or a decision
+    /// API (System One, OpenAI's Decisions) whose models Auto-review can run.
     Add {
         /// The name the apps show.
         name: String,
-        /// The API root, such as https://openrouter.ai/api/v1 or http://localhost:11434/v1.
+        /// The API root, such as https://openrouter.ai/api/v1 or http://localhost:11434/v1; for a
+        /// decision API, its endpoint, such as https://openrouter.ai/api/alpha/decisions.
         base_url: String,
         /// The wire protocol it speaks.
-        #[usage(long, choices("chat-completions", "responses", "messages"), default = "chat-completions")]
+        #[usage(long, choices("chat-completions", "responses", "messages", "system-one", "decisions"), default = "chat-completions")]
         api: String,
-        /// A model id bots can pick; repeat for more. Omit to take every model the server lists.
+        /// A model id it offers; repeat for more. Omit to take every model the server lists.
         #[usage(long)]
         model: Vec<String>,
         /// Read an API key from stdin. Without it the server is called with no key.

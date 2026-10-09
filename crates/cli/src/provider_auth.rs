@@ -187,7 +187,12 @@ pub async fn connect_custom(app: &Arc<App>, input: CustomInput) -> Result<String
     }
     {
         let credentials = app.credentials.lock().unwrap();
-        let taken = credentials.kinds().into_iter().filter(|kind| Some(kind) != input.kind.as_ref()).any(|kind| credentials.label(&kind).eq_ignore_ascii_case(&name));
+        let taken = PROVIDER_KINDS
+            .iter()
+            .map(|kind| kind.to_string())
+            .chain(credentials.custom_kinds())
+            .filter(|kind| Some(kind) != input.kind.as_ref())
+            .any(|kind| credentials.label(&kind).eq_ignore_ascii_case(&name));
         if taken {
             return Err(format!("A provider named {name} exists already"));
         }
@@ -196,11 +201,11 @@ pub async fn connect_custom(app: &Arc<App>, input: CustomInput) -> Result<String
     let listed = list_models(app, &name, api, &base_url, &api_key).await?;
     let models = if ids.is_empty() {
         let listed = listed.ok_or_else(|| format!("{name} publishes no model list. Add the model ids yourself."))?;
-        let chat: Vec<CustomModel> = listed.into_iter().filter(|model| !model.0).map(|model| model.1).collect();
-        if chat.is_empty() {
+        let usable = usable(api, listed);
+        if usable.is_empty() {
             return Err(format!("{name} lists no models. Add the model ids yourself."));
         }
-        chat
+        usable
     } else {
         let listed = listed.unwrap_or_default();
         ids.into_iter()
@@ -225,15 +230,37 @@ pub async fn connect_custom(app: &Arc<App>, input: CustomInput) -> Result<String
     Ok(kind)
 }
 
-/// The chat models a custom provider's server lists, for the apps' model picker: `None` when
-/// the server publishes no list. The base URL is read as `connect_custom` reads it, and a key
-/// the server refuses or a server that cannot be reached fails the same way.
+/// The models a custom provider's server lists that its protocol can run, for the apps' model
+/// picker: `None` when the server publishes no list. The base URL is read as `connect_custom`
+/// reads it, and a key the server refuses or a server that cannot be reached fails the same way.
 pub async fn list_custom_models(app: &Arc<App>, name: &str, api: &str, base_url: &str, api_key: &str) -> Result<Option<Vec<CustomModel>>, String> {
     let name = Some(name.trim()).filter(|name| !name.is_empty()).unwrap_or("The server");
     let api = CustomApi::parse(api.trim()).ok_or_else(|| format!("Unknown API {}", api.trim()))?;
     let root = custom_root(api, base_url)?;
     let listed = list_models(app, name, api, &root, api_key.trim()).await?;
-    Ok(listed.map(|models| models.into_iter().filter(|(not_chat, _)| !not_chat).map(|(_, model)| model).collect()))
+    Ok(listed.map(|models| usable(api, models)))
+}
+
+/// What a listed model is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Use {
+    Chat,
+    /// A decision model: OpenRouter lists its output as `decisions`, Vercel's AI Gateway its
+    /// type as `evaluation`.
+    Decides,
+    /// Embeddings, speech, images, and the rest chat cannot use.
+    Other,
+}
+
+/// The listed models a provider of `api` can run: the chat models for a chat protocol. A
+/// decision API takes the models the list marks as decision models, or every chat model of a
+/// list that marks none, as a vendor's list of its own decision models does.
+fn usable(api: CustomApi, listed: Vec<(Use, CustomModel)>) -> Vec<CustomModel> {
+    let wanted = match api.decides() {
+        true if listed.iter().any(|(using, _)| *using == Use::Decides) => Use::Decides,
+        _ => Use::Chat,
+    };
+    listed.into_iter().filter(|(using, _)| *using == wanted).map(|(_, model)| model).collect()
 }
 
 /// A new custom provider's kind: `custom:` and a slug of its name, with a number when another
@@ -259,28 +286,54 @@ fn custom_kind(credentials: &Credentials, name: &str) -> String {
 }
 
 /// A custom provider's base URL: required, http(s), and cut back to the root when the user
-/// pasted a whole endpoint, since each adapter adds the path its protocol needs.
+/// pasted a whole endpoint, since each adapter adds the path its protocol needs. A decision
+/// API's is its endpoint, since vendors serve one shape at different paths (OpenRouter's System
+/// One at `/api/alpha/decisions`): the one the user gave, or a root and the path the API has
+/// at TypeSafe and OpenAI.
 fn custom_root(api: CustomApi, base_url: &str) -> Result<String, String> {
     let url = custom_base_url(Some(base_url))?.ok_or("Enter the server's base URL")?;
     let endpoint: &[&str] = match api {
         CustomApi::ChatCompletions => &["/chat/completions"],
         CustomApi::Responses => &["/responses"],
-        CustomApi::Messages => &["/v1/messages", "/v1"],
+        CustomApi::Messages => &["/messages"],
+        CustomApi::SystemOne | CustomApi::Decisions if url.ends_with("/systemone") || url.ends_with("/decisions") => return Ok(url),
+        CustomApi::SystemOne => return Ok(format!("{url}/systemone")),
+        CustomApi::Decisions => return Ok(format!("{url}/decisions")),
     };
     Ok(endpoint.iter().find_map(|path| url.strip_suffix(path)).unwrap_or(&url).to_string())
 }
 
-/// The models a custom provider's server lists, each with whether it is not for chat
-/// (embeddings, speech, images); `None` when the server publishes no list. A key the server
-/// refuses, or a server that cannot be reached, fails.
-async fn list_models(app: &Arc<App>, name: &str, api: CustomApi, root: &str, api_key: &str) -> Result<Option<Vec<(bool, CustomModel)>>, String> {
+/// A Messages base URL without its `/v1`, which the Messages paths add, so `…/v1` and a root
+/// without one (`…/anthropic`) reach the same endpoints.
+pub(crate) fn messages_root(base_url: &str) -> &str {
+    base_url.strip_suffix("/v1").unwrap_or(base_url)
+}
+
+/// Where a decision endpoint's server lists its models: beside the endpoint. OpenRouter keeps
+/// decisions in its alpha API and lists their models with the rest, by their output.
+fn decision_models_url(endpoint: &str) -> String {
+    if let Some(root) = endpoint.strip_suffix("/alpha/decisions") {
+        return format!("{root}/v1/models?output_modalities=decisions");
+    }
+    let parent = endpoint.rsplit_once('/').map_or(endpoint, |(parent, _)| parent);
+    format!("{parent}/models")
+}
+
+/// The models a custom provider's server lists, each with what it is for; `None` when the
+/// server publishes no list. A key the server refuses, or a server that cannot be reached,
+/// fails.
+async fn list_models(app: &Arc<App>, name: &str, api: CustomApi, root: &str, api_key: &str) -> Result<Option<Vec<(Use, CustomModel)>>, String> {
     let mut request = match api {
         CustomApi::ChatCompletions | CustomApi::Responses => {
             let request = app.http.get(format!("{root}/models"));
             if api_key.is_empty() { request } else { request.bearer_auth(api_key) }
         }
+        CustomApi::SystemOne | CustomApi::Decisions => {
+            let request = app.http.get(decision_models_url(root));
+            if api_key.is_empty() { request } else { request.bearer_auth(api_key) }
+        }
         CustomApi::Messages => {
-            let request = app.http.get(format!("{root}/v1/models?limit=1000")).header("anthropic-version", ANTHROPIC_VERSION);
+            let request = app.http.get(format!("{}/v1/models?limit=1000", messages_root(root))).header("anthropic-version", ANTHROPIC_VERSION);
             if api_key.is_empty() { request } else { request.header("x-api-key", api_key) }
         }
     };
@@ -299,7 +352,7 @@ async fn list_models(app: &Arc<App>, name: &str, api: CustomApi, root: &str, api
 
 /// A model list in the shape OpenAI, Anthropic, and most gateways and local servers answer
 /// with: `data`, `models`, or a bare array of entries.
-fn listed_models(body: &Value) -> Option<Vec<(bool, CustomModel)>> {
+fn listed_models(body: &Value) -> Option<Vec<(Use, CustomModel)>> {
     let entries = body.get("data").or_else(|| body.get("models")).unwrap_or(body).as_array()?;
     Some(entries.iter().filter_map(listed_model).collect())
 }
@@ -314,8 +367,8 @@ const NOT_CHAT_WORDS: [&str; 14] =
 const NOT_CHAT_TYPES: [&str; 8] = ["embedding", "rerank", "image", "audio", "transcribe", "moderation", "video", "tts"];
 
 /// One entry of a model list, read for the fields servers use for a model's name, window,
-/// output cap, and inputs, and whether it is a model chat cannot use.
-fn listed_model(entry: &Value) -> Option<(bool, CustomModel)> {
+/// output cap, and inputs, and what it is for.
+fn listed_model(entry: &Value) -> Option<(Use, CustomModel)> {
     let id = entry["id"].as_str().or_else(|| entry["name"].as_str()).map(str::trim).filter(|id| !id.is_empty())?.to_string();
     let number = |paths: &[&str]| paths.iter().find_map(|path| entry.pointer(path).and_then(Value::as_u64)).filter(|n| *n > 0);
     let name = ["display_name", "name"]
@@ -329,11 +382,21 @@ fn listed_model(entry: &Value) -> Option<(bool, CustomModel)> {
     let inputs = entry.pointer("/architecture/input_modalities").or_else(|| entry.pointer("/modalities/input")).and_then(Value::as_array);
     let images = inputs.map(|inputs| inputs.iter().any(|input| input == "image")).or_else(|| entry.pointer("/capabilities/vision").and_then(Value::as_bool));
     let lower = id.to_ascii_lowercase();
+    let outputs = entry.pointer("/architecture/output_modalities").and_then(Value::as_array);
+    let decides = outputs.is_some_and(|outputs| outputs.iter().any(|output| output == "decisions"))
+        || entry["type"].as_str().is_some_and(|kind| kind == "evaluation" || kind.contains("decision"));
     let not_chat = NOT_CHAT_WORDS.iter().any(|word| lower.contains(word))
         || entry["type"].as_str().is_some_and(|kind| NOT_CHAT_TYPES.contains(&kind))
         || entry.pointer("/capabilities/completion_chat").and_then(Value::as_bool) == Some(false)
-        || entry.pointer("/architecture/output_modalities").and_then(Value::as_array).is_some_and(|outputs| !outputs.iter().any(|output| output == "text"));
-    Some((not_chat, CustomModel { id, name, context_window, max_output, images }))
+        || outputs.is_some_and(|outputs| !outputs.iter().any(|output| output == "text"));
+    let using = if decides {
+        Use::Decides
+    } else if not_chat {
+        Use::Other
+    } else {
+        Use::Chat
+    };
+    Some((using, CustomModel { id, name, context_window, max_output, images }))
 }
 
 /// Runs a ChatGPT sign-in, opening its authorization URL through the Device's UI.
@@ -415,9 +478,39 @@ mod tests {
         assert_eq!(root(CustomApi::ChatCompletions, "https://openrouter.ai/api/v1/"), "https://openrouter.ai/api/v1");
         assert_eq!(root(CustomApi::ChatCompletions, "http://localhost:11434/v1/chat/completions"), "http://localhost:11434/v1");
         assert_eq!(root(CustomApi::Responses, "https://gateway.example/v1/responses"), "https://gateway.example/v1");
-        assert_eq!(root(CustomApi::Messages, "https://api.anthropic.com/v1/messages"), "https://api.anthropic.com");
+        assert_eq!(root(CustomApi::Messages, "https://api.anthropic.com/v1/messages"), "https://api.anthropic.com/v1");
+        assert_eq!(root(CustomApi::Messages, "https://api.anthropic.com/v1"), "https://api.anthropic.com/v1");
         assert_eq!(root(CustomApi::Messages, "https://api.moonshot.ai/anthropic"), "https://api.moonshot.ai/anthropic");
+        // Messages paths add the `/v1` a root without one lacks.
+        assert_eq!(messages_root("https://api.anthropic.com/v1"), "https://api.anthropic.com");
+        assert_eq!(messages_root("https://api.moonshot.ai/anthropic"), "https://api.moonshot.ai/anthropic");
         assert_eq!(custom_root(CustomApi::Messages, " ").unwrap_err(), "Enter the server's base URL");
+    }
+
+    #[test]
+    fn a_decision_api_keeps_its_endpoint() {
+        let endpoint = |api, url| custom_root(api, url).unwrap();
+        assert_eq!(endpoint(CustomApi::SystemOne, "https://api.typesafe.ai/v1"), "https://api.typesafe.ai/v1/systemone");
+        assert_eq!(endpoint(CustomApi::SystemOne, "https://api.typesafe.ai/v1/systemone/"), "https://api.typesafe.ai/v1/systemone");
+        assert_eq!(endpoint(CustomApi::SystemOne, "https://openrouter.ai/api/alpha/decisions"), "https://openrouter.ai/api/alpha/decisions");
+        assert_eq!(endpoint(CustomApi::Decisions, "https://api.openai.com/v1"), "https://api.openai.com/v1/decisions");
+        assert_eq!(endpoint(CustomApi::Decisions, "https://ai-gateway.vercel.sh/v1/decisions"), "https://ai-gateway.vercel.sh/v1/decisions");
+        // Each lists its models beside the endpoint; OpenRouter with the rest of its models.
+        assert_eq!(decision_models_url("https://api.typesafe.ai/v1/systemone"), "https://api.typesafe.ai/v1/models");
+        assert_eq!(decision_models_url("https://api.openai.com/v1/decisions"), "https://api.openai.com/v1/models");
+        assert_eq!(decision_models_url("https://openrouter.ai/api/alpha/decisions"), "https://openrouter.ai/api/v1/models?output_modalities=decisions");
+    }
+
+    #[test]
+    fn a_decision_api_takes_the_decision_models_a_list_marks() {
+        let model = |id: &str| CustomModel { id: id.into(), name: None, context_window: None, max_output: None, images: None };
+        let listed = vec![(Use::Chat, model("openai/gpt-6-luna")), (Use::Decides, model("openai/gpt-6-luna-decisions")), (Use::Other, model("embed"))];
+        let ids = |api, listed: &Vec<(Use, CustomModel)>| usable(api, listed.clone()).into_iter().map(|m| m.id).collect::<Vec<_>>();
+        assert_eq!(ids(CustomApi::Decisions, &listed), ["openai/gpt-6-luna-decisions"]);
+        assert_eq!(ids(CustomApi::ChatCompletions, &listed), ["openai/gpt-6-luna"]);
+        // A vendor's own list marks nothing; its models are all there is to pick from.
+        let own = vec![(Use::Chat, model("jev-latest")), (Use::Chat, model("jev-1.13")), (Use::Other, model("embed"))];
+        assert_eq!(ids(CustomApi::SystemOne, &own), ["jev-latest", "jev-1.13"]);
     }
 
     #[test]
@@ -434,13 +527,13 @@ mod tests {
     #[test]
     fn model_lists_tell_windows_inputs_and_what_is_not_for_chat() {
         // OpenRouter
-        let (not_chat, model) = listed_model(&json!({
+        let (using, model) = listed_model(&json!({
             "id": "anthropic/claude-sonnet-5", "name": "Anthropic: Claude Sonnet 5", "context_length": 1000000,
             "architecture": { "input_modalities": ["text", "image"], "output_modalities": ["text"] },
             "top_provider": { "max_completion_tokens": 128000 }
         }))
         .unwrap();
-        assert!(!not_chat);
+        assert_eq!(using, Use::Chat);
         assert_eq!(model.name.as_deref(), Some("Anthropic: Claude Sonnet 5"));
         assert_eq!((model.context_window, model.max_output, model.images), (Some(1_000_000), Some(128_000), Some(true)));
         // Anthropic
@@ -449,14 +542,18 @@ mod tests {
         // Mistral and vLLM
         let (_, model) = listed_model(&json!({ "id": "pixtral-large", "max_context_length": 131072, "capabilities": { "vision": true, "completion_chat": true } })).unwrap();
         assert_eq!((model.context_window, model.images), (Some(131_072), Some(true)));
-        assert!(listed_model(&json!({ "id": "mistral-embed", "capabilities": { "completion_chat": false } })).unwrap().0);
+        assert_eq!(listed_model(&json!({ "id": "mistral-embed", "capabilities": { "completion_chat": false } })).unwrap().0, Use::Other);
         assert_eq!(listed_model(&json!({ "id": "qwen3-32b", "max_model_len": 40960 })).unwrap().1.context_window, Some(40_960));
         // OpenAI lists models chat cannot use.
-        assert!(listed_model(&json!({ "id": "text-embedding-3-large", "object": "model" })).unwrap().0);
-        assert!(listed_model(&json!({ "id": "gpt-4o-mini-tts" })).unwrap().0);
-        assert!(listed_model(&json!({ "id": "gpt-image-1" })).unwrap().0);
-        assert!(listed_model(&json!({ "id": "black-forest-labs/FLUX.1-schnell", "type": "image" })).unwrap().0);
-        assert!(!listed_model(&json!({ "id": "meta-llama/Llama-4-Scout", "type": "chat" })).unwrap().0);
+        let using = |entry: Value| listed_model(&entry).unwrap().0;
+        assert_eq!(using(json!({ "id": "text-embedding-3-large", "object": "model" })), Use::Other);
+        assert_eq!(using(json!({ "id": "gpt-4o-mini-tts" })), Use::Other);
+        assert_eq!(using(json!({ "id": "gpt-image-1" })), Use::Other);
+        assert_eq!(using(json!({ "id": "black-forest-labs/FLUX.1-schnell", "type": "image" })), Use::Other);
+        assert_eq!(using(json!({ "id": "meta-llama/Llama-4-Scout", "type": "chat" })), Use::Chat);
+        // Decision models, as OpenRouter and Vercel's AI Gateway mark them.
+        assert_eq!(using(json!({ "id": "typesafe/jev-1.13", "architecture": { "output_modalities": ["decisions"] } })), Use::Decides);
+        assert_eq!(using(json!({ "id": "openai/gpt-6-luna-decisions", "type": "evaluation", "modalities": { "output": ["text"] } })), Use::Decides);
         assert!(listed_model(&json!({ "id": "" })).is_none());
         // A bare array (Together) and Ollama's `models`.
         assert_eq!(listed_models(&json!([{ "id": "a" }, { "id": "b" }])).unwrap().len(), 2);
@@ -540,7 +637,7 @@ mod tests {
         assert!(request.starts_with("GET /v1/models?limit=1000 "), "{request}");
         assert!(request.contains("x-api-key: sk-proxy-1234"), "{request}");
         let provider = app.credentials.lock().unwrap().custom[&kind].clone();
-        assert_eq!(provider.base_url, root);
+        assert_eq!(provider.base_url, format!("{root}/v1"));
         assert_eq!(provider.models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["claude-sonnet-5", "claude-opus-5"]);
         assert_eq!(provider.models[1].name.as_deref(), Some("Claude Opus 5"));
 

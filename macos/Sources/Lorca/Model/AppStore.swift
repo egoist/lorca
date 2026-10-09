@@ -671,9 +671,15 @@ final class AppStore {
         providerKinds.first { credential(for: $0)?.isConnected == true } ?? .deepseek
     }
 
-    /// Every provider a bot can run with: the built-in ones, then the ones the user added.
+    /// Every provider a bot can run with: the built-in ones, then the ones the user added,
+    /// except those of decision models.
     var providerKinds: [ProviderCredential.Kind] {
-        ProviderCredential.Kind.builtIn + providers.map(\.kind).filter(\.isCustom)
+        ProviderCredential.Kind.builtIn + providers.filter { $0.kind.isCustom && !$0.decides }.map(\.kind)
+    }
+
+    /// The providers Auto-review can run a model of: every one the account has connected.
+    var reviewProviderKinds: [ProviderCredential.Kind] {
+        providers.filter(\.isConnected).map(\.kind)
     }
 
     func updateBot(_ id: Bot.ID, name: String, description: String? = nil, provider: ProviderCredential.Kind? = nil) {
@@ -687,6 +693,20 @@ final class AppStore {
         if let description { params["description"] = description }
         if let provider { params["provider"] = provider.wireValue }
         perform("bots.update", params)
+    }
+
+    /// The plugins on the bot's Runner and their tools, asked of that Runner.
+    func botAccessCatalog(_ id: Bot.ID) async throws -> BotAccessCatalog {
+        if isMock { return MockData.accessCatalog() }
+        return try await client.request("bots.permissions", ["id": id], as: BotAccessCatalog.self)
+    }
+
+    /// Only the user changes a bot's Access; the CLI also dismisses the access requests it left.
+    func setBotPermissions(_ id: Bot.ID, _ policy: BotPermissions) {
+        guard let index = bots.firstIndex(where: { $0.id == id }) else { return }
+        bots[index].permissions = policy
+        emit(.rosterChanged)
+        perform("bots.update", ["id": id, "permissions": policy.json])
     }
 
     /// The bot's symbol and accent, the look under and behind its image.
@@ -991,6 +1011,20 @@ final class AppStore {
         perform("auto_review.set", ["is_enabled": value.isEnabled, "rules": rules])
     }
 
+    /// Picks the provider that reviews, or nil for the bot's own.
+    func setReviewProvider(_ provider: ProviderCredential.Kind?) {
+        autoReview.provider = provider
+        emit(.rosterChanged)
+        perform("auto_review.set", ["provider": provider?.wireValue ?? NSNull()])
+    }
+
+    /// Picks the model Auto-review runs on `kind`, or nil for its default review model.
+    func setReviewModel(_ model: String?, for kind: ProviderCredential.Kind) {
+        autoReview.models[kind] = model
+        emit(.rosterChanged)
+        perform("auto_review.set", ["models": [kind.wireValue: model ?? NSNull()] as [String: Any]])
+    }
+
     /// Answers a question: a permission card's, or a command card's. `allow`, `always`, or
     /// `deny`. The CLI confirms with the card's new state.
     func answerPermission(chatID: Chat.ID, messageID: Message.ID, decision: String) {
@@ -998,6 +1032,8 @@ final class AppStore {
             switch message.body {
             case var .permission(request):
                 request.decision = decision == "always" ? .always : (decision == "deny" ? .denied : .allowed)
+                // An access request is only ever dismissed.
+                if request.isAccess, request.decision == .denied { request.decision = .dismissed }
                 if request.isConnect, request.decision == .allowed { request.summary = L("Starting the sign-in…") }
                 message.body = .permission(request)
             case var .tool(tool):
@@ -1068,6 +1104,7 @@ final class AppStore {
         guard let index = routines.firstIndex(where: { $0.id == id }) else { return }
         routines[index].isEnabled = enabled
         routines[index].pausedReason = nil
+        routines[index].state = enabled ? "on" : "paused"
         if !enabled { routines[index].nextRunAt = nil }
         emit(.rosterChanged)
         perform("routines.update", ["id": id, "enabled": enabled])
@@ -1607,6 +1644,12 @@ final class AppStore {
         _ = try await client.request("device.update", ["id": id])
     }
 
+    /// Whether `lorca service` keeps the CLI running on a Runner, asked of it through the CLI.
+    func serviceStatus(_ id: Device.ID) async throws -> Wire.ServiceStatus {
+        if isMock { return .init(installed: false, running: false) }
+        return try await client.request("device.service_status", ["id": id], as: Wire.ServiceStatus.self)
+    }
+
     func unpairDevice(_ id: Device.ID) async throws {
         if !isMock {
             _ = try await client.request("device.unpair", ["id": id])
@@ -1700,12 +1743,19 @@ final class AppStore {
         providers.first { $0.kind == kind }
     }
 
-    /// The models `kind` offers, in the catalog's order; the first is the default the CLI uses.
-    /// A custom provider's are the ones saved with it, with the levels the CLI says they take.
+    /// The models a bot of `kind` can run, in the catalog's order; the first is the default the
+    /// CLI uses. A custom provider's are the ones saved with it, with the levels the CLI says
+    /// they take. Decision models are Auto-review's alone.
     func models(for kind: ProviderCredential.Kind) -> [ProviderModel] {
+        reviewModels(for: kind).filter { !$0.decides }
+    }
+
+    /// Every model of `kind` Auto-review can run: the ones bots can, and decision models.
+    func reviewModels(for kind: ProviderCredential.Kind) -> [ProviderModel] {
         guard kind.isCustom else { return catalog.filter { $0.provider == kind } }
-        return (credential(for: kind)?.models ?? []).map {
-            ProviderModel(provider: kind, id: $0.id, label: $0.displayName, levels: $0.levels)
+        let credential = credential(for: kind)
+        return (credential?.models ?? []).map {
+            ProviderModel(provider: kind, id: $0.id, label: $0.displayName, levels: $0.levels, decides: credential?.decides == true)
         }
     }
 

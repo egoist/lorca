@@ -136,7 +136,8 @@ func (s *pluginSheet) resetRules() {
 			kept = append(kept, rule)
 		}
 	}
-	store.SetAutoReview(model.AutoReview{IsEnabled: review.IsEnabled, Rules: kept})
+	review.Rules = kept
+	store.SetAutoReview(review)
 }
 
 // value is a variable's field: what was typed, else the variable's value, a secret's empty.

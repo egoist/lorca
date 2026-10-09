@@ -263,6 +263,80 @@ final class KeyValueRow: NSView {
     required init?(coder: NSCoder) { fatalError() }
 }
 
+/// Key on the left, a short value and a chevron on the right. A click anywhere on the row
+/// opens what the value sums up.
+final class DisclosureRow: NSView {
+    private let value = Build.label("", font: .systemFont(ofSize: 12), color: .secondaryLabelColor, alignment: .right)
+    private var tracking: NSTrackingArea?
+    private var isHovered = false { didSet { needsDisplay = true } }
+    var onClick: (() -> Void)?
+
+    init(key keyText: String) {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        let key = Build.label(keyText, font: .systemFont(ofSize: 12), color: .secondaryLabelColor)
+        key.setContentCompressionResistancePriority(.required, for: .horizontal)
+        value.lineBreakMode = .byTruncatingTail
+        let chevron = NSImageView(image: NSImage(systemSymbolName: "chevron.right", accessibilityDescription: nil) ?? NSImage())
+        chevron.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 10, weight: .semibold)
+        chevron.contentTintColor = .tertiaryLabelColor
+        chevron.setContentCompressionResistancePriority(.required, for: .horizontal)
+        for view in [key, value, chevron] as [NSView] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(view)
+        }
+        NSLayoutConstraint.activate([
+            heightAnchor.constraint(equalToConstant: 32),
+            key.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            key.centerYAnchor.constraint(equalTo: centerYAnchor),
+            value.leadingAnchor.constraint(greaterThanOrEqualTo: key.trailingAnchor, constant: 10),
+            value.centerYAnchor.constraint(equalTo: centerYAnchor),
+            chevron.leadingAnchor.constraint(equalTo: value.trailingAnchor, constant: 6),
+            chevron.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            chevron.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+        setAccessibilityLabel(keyText)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    func setValue(_ text: String) {
+        value.stringValue = text
+        setAccessibilityValue(text)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        onClick?()
+    }
+
+    override func accessibilityPerformPress() -> Bool {
+        onClick?()
+        return onClick != nil
+    }
+
+    override var allowsVibrancy: Bool { false }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow], owner: self)
+        addTrackingArea(area)
+        tracking = area
+    }
+
+    override func mouseEntered(with event: NSEvent) { isHovered = true }
+    override func mouseExited(with event: NSEvent) { isHovered = false }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard isHovered else { return }
+        NSColor.labelColor.withAlphaComponent(0.05).setFill()
+        bounds.fill()
+    }
+}
+
 /// Bot line used in the inspector, the Device pane and pickers.
 final class BotRow: NSView {
     private let avatar = AvatarView(diameter: 28)
@@ -492,8 +566,15 @@ final class StatusRow: NSView, NSGestureRecognizerDelegate {
 
     /// A plugin and its state as a symbol: a check when it is ready, an exclamation mark when
     /// it needs something. What the Runner says it needs (a variable, a sign-in, an error's
-    /// message) is the symbol's tooltip and a click away, so a long one never widens the row.
-    func configure(plugin: InstalledPlugin) {
+    /// message) is the symbol's tooltip and a click away, so a long one never widens the row. A
+    /// plugin the bot's Access leaves out says so instead.
+    func configure(plugin: InstalledPlugin, hasAccess: Bool = true) {
+        guard hasAccess else {
+            configure(
+                symbol: plugin.symbolName, image: PluginLogo.tile(for: plugin.id, size: 18), title: plugin.name,
+                subtitle: plugin.description, state: L("No access"))
+            return
+        }
         let ready = plugin.state == .ready
         configure(
             symbol: plugin.symbolName,
@@ -881,6 +962,14 @@ final class SwitchRow: NSView {
             tint: routine.isRunning ? .controlAccentColor : (routine.isEnabled ? .secondaryLabelColor : .tertiaryLabelColor),
             title: routine.name, detail: routine.detail, isOn: routine.isEnabled,
             toggleTooltip: routine.isEnabled ? L("Pause %@", routine.name) : L("Resume %@", routine.name), tooltip: routine.prompt)
+        // What went wrong leads, in orange while the user has to do something about it.
+        if let problem = routine.problem, problem.needsUser {
+            let line = NSMutableAttributedString(string: problem.text, attributes: [.foregroundColor: NSColor.systemOrange, .font: Theme.Font.caption])
+            line.append(NSAttributedString(
+                string: " · \(routine.scheduleText)", attributes: [.foregroundColor: NSColor.secondaryLabelColor, .font: Theme.Font.caption]))
+            detail.attributedStringValue = line
+            detail.lineBreakMode = .byTruncatingTail
+        }
     }
 
     func configure(symbol: String, tint: NSColor, title: String, detail detailText: String, isOn: Bool, toggleTooltip: String, tooltip: String) {

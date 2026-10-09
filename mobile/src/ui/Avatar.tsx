@@ -4,7 +4,7 @@
 
 import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
-import { useEffect } from "react";
+import { memo, useEffect } from "react";
 import { StyleSheet, View, type StyleProp, type ViewStyle } from "react-native";
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withRepeat, withTiming } from "react-native-reanimated";
 import { engine } from "../core/engine";
@@ -42,7 +42,7 @@ export function AvatarDisc({ symbol, accent, uri, size, style }: { symbol: strin
   );
 }
 
-export function BotAvatar({ bot, size = 40, working = false, style }: { bot: Bot | undefined; size?: number; working?: boolean; style?: StyleProp<ViewStyle> }) {
+export const BotAvatar = memo(function BotAvatar({ bot, size = 40, working = false, style }: { bot: Bot | undefined; size?: number; working?: boolean; style?: StyleProp<ViewStyle> }) {
   const p = usePalette();
   const uri = useBotAvatarUri(bot);
   return (
@@ -51,7 +51,7 @@ export function BotAvatar({ bot, size = 40, working = false, style }: { bot: Bot
       {working && <PresenceDot size={size} ring={p.background} />}
     </View>
   );
-}
+});
 
 export function YouAvatar({ size = 40 }: { size?: number }) {
   const p = usePalette();
@@ -63,7 +63,8 @@ export function YouAvatar({ size = 40 }: { size?: number }) {
 }
 
 /// The presence dot: a green disc with a ring in the surface color, pulsing while working.
-export function PresenceDot({ size, ring }: { size: number; ring: any }) {
+/// Memoized: an animated style re-rendered reads its shared values back from the UI thread.
+export const PresenceDot = memo(function PresenceDot({ size, ring }: { size: number; ring: any }) {
   const p = usePalette();
   const scale = useSharedValue(1);
   useEffect(() => {
@@ -90,11 +91,11 @@ export function PresenceDot({ size, ring }: { size: number; ring: any }) {
       <View style={{ width: dot, height: dot, borderRadius: dot / 2, backgroundColor: p.green }} />
     </Animated.View>
   );
-}
+});
 
 /// One to six members. One shows its avatar; two sit diagonally; more stack the first two
 /// with the rest implied, the way the Mac sidebar clusters them.
-export function AvatarCluster({ bots, size = 40, working = false }: { bots: Bot[]; size?: number; working?: boolean }) {
+export const AvatarCluster = memo(function AvatarCluster({ bots, size = 40, working = false }: { bots: Bot[]; size?: number; working?: boolean }) {
   const p = usePalette();
   if (bots.length <= 1) return <BotAvatar bot={bots[0]} size={size} working={working} />;
   const small = size * 0.66;
@@ -107,7 +108,7 @@ export function AvatarCluster({ bots, size = 40, working = false }: { bots: Bot[
       {working && <PresenceDot size={size} ring={p.background} />}
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   disc: { alignItems: "center", justifyContent: "center" },

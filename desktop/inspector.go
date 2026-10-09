@@ -189,6 +189,9 @@ func (m *mainWindow) inspectorProfile(c *ui.Context, bot *model.Bot) {
 		if summaryActionRow(c, k, L("Description"), bot.Description, L("Edit…")) {
 			m.presentBotDescription(bot.ID)
 		}
+		if disclosureRow(c.Key("bot-access"), k, L("Access"), bot.Permissions.Summary()) {
+			m.presentBotAccess(bot.ID)
+		}
 	})
 }
 
@@ -349,10 +352,15 @@ func (m *mainWindow) inspectorRoutines(c *ui.Context, bot *model.Bot) {
 			if !routine.IsEnabled {
 				toggle = L("Resume %@", routine.Name)
 			}
+			// What went wrong leads, in orange while the user has to do something about it.
+			detail := []ui.Span{{Text: routine.Detail(), Color: p.Label2}}
+			if problem := routine.Problem(); problem.NeedsUser() {
+				detail = []ui.Span{{Text: problem.Text(), Color: p.Orange}, {Text: " · " + routine.ScheduleText, Color: p.Label2}}
+			}
 			on := routine.IsEnabled
 			id, botID := routine.ID, bot.ID
 			ui.Box(c.Key(routine.ID)).Children(func() {
-				if switchRow(c, k, symbolName, tint, routine.Name, routine.Detail(), &on, toggle, routine.Prompt,
+				if switchRow(c, k, symbolName, tint, routine.Name, detail, &on, toggle, routine.Prompt,
 					func(on bool) { store.SetRoutineEnabled(id, on) }) {
 					if current := store.Bot(botID); current != nil {
 						m.presentRoutine(id, current, m.prefill)
@@ -374,8 +382,8 @@ func (m *mainWindow) prefill(text string) {
 	m.invalidate()
 }
 
-// inspectorPlugins are the plugins the bot's Runner has, which every bot there may use, and a way to
-// the marketplace. A plugin that needs setup says so; clicking opens it.
+// inspectorPlugins are the plugins the bot's Runner has, and a way to the marketplace. A plugin that
+// needs setup says so, and one the bot's Access leaves out says it has none; clicking opens it.
 func (m *mainWindow) inspectorPlugins(c *ui.Context, bot *model.Bot) {
 	p := colors(c)
 	runner := store.Device(bot.RunnerID)
@@ -388,7 +396,13 @@ func (m *mainWindow) inspectorPlugins(c *ui.Context, bot *model.Bot) {
 			pluginID := plugin.ID
 			var row statusRowResult
 			ui.Box(c.Key(plugin.ID)).Children(func() {
-				_, row = pluginRow(c, k, plugin, true, L("Open %@", plugin.Name))
+				// A plugin the bot's Access leaves out says it has none.
+				if bot.Permissions.Level(plugin.ID) == model.AccessNone {
+					_, row = statusRow(c, k, statusRowOptions{Symbol: plugin.Symbol(), PluginID: plugin.ID, Title: plugin.Name, Subtitle: plugin.Description,
+						State: L("No access"), Clickable: true, Tooltip: L("Open %@", plugin.Name)})
+				} else {
+					_, row = pluginRow(c, k, plugin, true, L("Open %@", plugin.Name))
+				}
 			})
 			if row.Clicked && runner != nil {
 				m.presentPlugin(pluginID, runner)

@@ -9,6 +9,20 @@ class MarkdownViewModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("MarkdownView")
 
+    // The size a message takes within `maxWidth`. Synchronous, so the size lands in the same
+    // commit as the text.
+    Function("measure") { markdown: String, maxWidth: Double, fontSize: Double, codeFontSize: Double ->
+      val context = appContext.currentActivity ?: appContext.reactContext ?: throw IllegalStateException("No context to measure in")
+      val style = MarkdownStyle().apply {
+        this.markdown = markdown
+        this.maxWidth = maxWidth.toFloat()
+        this.fontSize = fontSize.toFloat()
+        this.codeFontSize = codeFontSize.toFloat()
+      }
+      val (width, height) = measureMessage(context, style)
+      mapOf("width" to width, "height" to height)
+    }
+
     View(MarkdownView::class) {
       Prop("markdown") { view: MarkdownView, markdown: String -> view.style.markdown = markdown }
       Prop("maxWidth") { view: MarkdownView, width: Double -> view.style.maxWidth = width.toFloat() }

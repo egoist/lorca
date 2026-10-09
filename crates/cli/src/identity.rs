@@ -82,6 +82,7 @@ fn create_lead_bot(app: &Arc<App>) {
         thinking: None,
         legacy_instructions: String::new(),
         workdir: None,
+        permissions: None,
             created_at: 0.0,
     };
     match app.create_bot_with_dm(bot, None) {

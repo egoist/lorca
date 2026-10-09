@@ -348,6 +348,22 @@ func actionRow(c *ui.Context, k *card, label string, o actionRowOptions) (ui.Ele
 	return r, result
 }
 
+// disclosureRow is a key on the left, a short value and a chevron on the right, after the Mac's
+// DisclosureRow. It reports a click anywhere on it, which opens what the value sums up.
+func disclosureRow(c *ui.Context, k *card, label, value string) bool {
+	p := colors(c)
+	r := k.row(rowBox(c).Height(32).Padding(0, 12).Label(label).Cursor(ui.CursorPointer))
+	if r.Hovered() {
+		r.Background(p.RowHover)
+	}
+	r.Children(func() {
+		rowKey(c, label)
+		ui.Text(c, value).Grow(1).Shrink(1).MinWidth(0).TextAlign(ui.End).FontSize(12).TextColor(p.Label2).SingleLine()
+		ui.Row(c).Shrink(0).TextColor(p.Label3).Margin(0, 0, 0, -4).Children(func() { symbol(c, "chevron.right", 12, 2.2) })
+	})
+	return r.Clicked()
+}
+
 // summaryActionRow is a key and an action on the first line, with a wrapping two-line preview
 // under them. With no preview, the key and the action sit alone on one line. It reports the action.
 func summaryActionRow(c *ui.Context, k *card, label, value, action string) bool {
@@ -419,7 +435,7 @@ func editableRow(c *ui.Context, k *card, label, value, placeholder string, mono,
 // switchRow is a row with an icon for its state, a title over a detail line, and a switch: a
 // routine that pauses or resumes. It reports clicks outside the switch; change runs after the
 // view is built with the switch's new value.
-func switchRow(c *ui.Context, k *card, symbolName string, tint ui.Color, title, detail string, on *bool, toggleTooltip, tooltip string, change func(bool)) bool {
+func switchRow(c *ui.Context, k *card, symbolName string, tint ui.Color, title string, detail []ui.Span, on *bool, toggleTooltip, tooltip string, change func(bool)) bool {
 	p := colors(c)
 	r := k.row(rowBox(c).MinHeight(44).Label(title).Cursor(ui.CursorPointer))
 	if tooltip != "" {
@@ -430,7 +446,7 @@ func switchRow(c *ui.Context, k *card, symbolName string, tint ui.Color, title, 
 		ui.Row(c).Width(18).Justify(ui.Center).TextColor(tint).Children(func() { symbol(c, symbolName, 15, 1.8) })
 		ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(1).Children(func() {
 			ui.Text(c, title).FontSize(12.5).FontWeight(500).SingleLine()
-			ui.Text(c, detail).FontSize(textCaption).TextColor(p.Label2).SingleLine()
+			ui.RichText(c, detail...).FontSize(textCaption).TextColor(p.Label2).SingleLine()
 		})
 		toggle := toggleSwitch(c, on, true).Tooltip(toggleTooltip).Label(toggleTooltip).
 			OnChange(func() { change(*on) })
