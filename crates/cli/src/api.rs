@@ -822,6 +822,34 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             requests::ask(app, &bot.runner_id, method, body).await
         }
 
+        // A coding agent's card: its transcript, Stop, an answer to what its pane asks, and its
+        // pane brought forward on the Runner. Here when the bot runs here, else sealed to its
+        // Runner, except showing the pane, which is the Runner's own.
+        "coding.transcript" | "coding.stop" | "coding.answer" | "coding.show" => {
+            let chat_id = string(&params, "chat_id")?;
+            let message_id = string(&params, "message_id")?;
+            let message = app.message(&chat_id, &message_id).ok_or("Unknown message")?;
+            let Author::Bot { bot_id } = &message.author else { return Err("That row has no coding agent".into()) };
+            let bot = app.bot(bot_id).ok_or("Unknown bot")?;
+            let body = json!({ "chat_id": chat_id, "message_id": message_id, "choice": params["choice"], "text": params["text"] });
+            if app.this_device_id().as_deref() == Some(bot.runner_id.as_str()) {
+                #[cfg(feature = "runner")]
+                return crate::coding::serve(app, method, &body).await;
+            }
+            if method == "coding.show" {
+                return Err("Its pane is on the Runner".into());
+            }
+            requests::ask(app, &bot.runner_id, method, body).await
+        }
+        // `lorca coding hook` in the pane of a coding agent this CLI runs asks whether its next
+        // command may run.
+        #[cfg(feature = "runner")]
+        "coding.review" => {
+            let id = string(&params, "agent_id")?;
+            let command = string(&params, "command")?;
+            crate::coding::review_for_hook(app, &id, &command).await
+        }
+
         // Read one API key on demand for the local settings editor. Snapshots and events
         // continue to carry masked provider statuses.
         "providers.api_key" => {

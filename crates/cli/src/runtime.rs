@@ -96,9 +96,13 @@ pub fn greet_new_bot(app: &Arc<App>, chat_id: &str, bot_id: &str, text: &str, se
 /// Runner currently doing that work. This is the hard Stop path; ordinary messages steer and
 /// do not call it.
 pub fn cancel_chat(app: &Arc<App>, chat_id: &str) {
-    // A command left waiting for input in this chat stops too, turn or no turn.
+    // A command left waiting for input in this chat stops too, turn or no turn, and so do the
+    // coding agents its bots run.
     #[cfg(feature = "runner")]
-    app.shell_sessions.stop_chat(chat_id);
+    {
+        app.shell_sessions.stop_chat(chat_id);
+        app.coding_agents.stop_chat(app, chat_id);
+    }
     for (job_id, runner_id) in app.cancel_chat(chat_id) {
         let Some(runner) = app.device(&runner_id).filter(|runner| !runner.box_pubkey.is_empty()) else { continue };
         match crate::crypto::seal_json(&runner.box_pubkey, &JobCancel { job_id: job_id.clone() }) {
@@ -154,6 +158,12 @@ pub fn command_job(app: &App, chat_id: &str, bot_id: &str, card_id: &str) -> Job
         setup: None,
         created_at: now_secs(),
     }
+}
+
+/// The turn in which a bot hears what a coding agent it runs did (`coding::wake`):
+/// `trigger_message_id` is the agent's card.
+pub fn agent_job(app: &App, chat_id: &str, bot_id: &str, card_id: &str) -> Job {
+    Job { kind: "agent".into(), ..command_job(app, chat_id, bot_id, card_id) }
 }
 
 /// Members in chat order, with the ones the message mentions first, then the one whose message

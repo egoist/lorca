@@ -84,10 +84,14 @@ async fn run_budgeted_job(app: &Arc<App>, job: &Job, cancel: CancellationToken) 
     if app.chat(&job.chat_id).is_none() {
         return TurnOutcome::Skipped;
     }
-    // A command's end that the bot has read already, in a turn that ran meanwhile, needs no
-    // turn of its own.
+    // A command's end, or what a coding agent did, that the bot has heard already, in a turn
+    // that ran meanwhile, needs no turn of its own.
     let command_end = match job.kind.as_str() {
         "command" => match command_cue(app, job) {
+            Some(cue) => Some(cue),
+            None => return TurnOutcome::Skipped,
+        },
+        "agent" => match crate::coding::wake_cue(app, job) {
             Some(cue) => Some(cue),
             None => return TurnOutcome::Skipped,
         },
@@ -213,6 +217,16 @@ async fn run_budgeted_job(app: &Arc<App>, job: &Job, cancel: CancellationToken) 
     let browser = app.plugins.lock().unwrap().get(crate::browser::PLUGIN_ID).is_some();
     if browser && bot.permissions.as_ref().is_none_or(|policy| policy.allows_connection(crate::browser::PLUGIN_ID)) {
         tools.push(Arc::new(crate::browser::SessionTool { app: app.clone(), bot: bot.clone() }));
+    }
+    // Claude Code or Codex on this Runner, which the bot starts and supervises.
+    if job.kind != crate::workflows::SAMPLE_JOB {
+        tools.push(Arc::new(crate::coding::CodingAgentTool {
+            app: app.clone(),
+            bot: bot.clone(),
+            chat_id: chat.meta.id.clone(),
+            workdir: workdir.clone(),
+            trigger_message_id: trigger.message_id.clone(),
+        }));
     }
     tools.extend(memory_tools(app, &store, &chat));
     tools.extend(crate::playbook_tools::tools(app, &bot.id, &chat.meta.id));
@@ -418,6 +432,7 @@ async fn run_budgeted_job(app: &Arc<App>, job: &Job, cancel: CancellationToken) 
     // longer waits for a step; a turn that ends on its own leaves both.
     if cancel.is_cancelled() {
         app.shell_sessions.stop_chat(&chat.meta.id);
+        app.coding_agents.stop_chat(app, &chat.meta.id);
         app.unqueue_chat(&chat.meta.id);
     }
     let mut state = sink.0.lock().unwrap();
@@ -709,6 +724,9 @@ impl LoopHooks for TurnHooks {
             }
         }
         if let Some(refused) = crate::browser::review_call(&self.app, &self.bot, &self.chat_id, &self.trigger, self.unattended, &ctx).await {
+            return Some(refused);
+        }
+        if let Some(refused) = crate::coding::review_start(&self.app, &self.bot, &self.chat_id, &self.trigger, self.unattended, &ctx).await {
             return Some(refused);
         }
         if let Some(refused) = crate::plugins::mcp::review_call(&self.app, &self.plugin_tools, &self.chat_id, &self.trigger, &self.bot, self.unattended, &ctx).await {
@@ -1211,6 +1229,7 @@ impl TurnState {
                         target_bot_id: None,
                         script_command: None,
                         run: None,
+                        agent: None,
                     },
                 );
                 message.state = MessageState::Streaming;
@@ -1281,6 +1300,16 @@ impl TurnState {
                     state: "running".into(),
                     ..CommandRun::default()
                 });
+                // A coding agent's card shows from the start too: Auto-review's question, the
+                // agent at work, what it asks, how it ended.
+                let starts_agent = tool_name == "coding_agent" && args["action"] == "start";
+                let agent = starts_agent.then(|| crate::model::AgentRun {
+                    kind: args["agent"].as_str().filter(|kind| crate::coding::KINDS.contains(kind)).unwrap_or("").to_string(),
+                    task: args["prompt"].as_str().unwrap_or("").lines().map(str::trim).find(|line| !line.is_empty()).unwrap_or("").chars().take(200).collect(),
+                    state: "starting".into(),
+                    started_at: Some(crate::config::now_secs()),
+                    ..crate::model::AgentRun::default()
+                });
                 let target_bot_id =
                     if tool_name == "message_bot" { args["bot_id"].as_str().map(str::trim).filter(|id| !id.is_empty()).map(str::to_string) } else { None };
                 // Waiting on a command that asks leaves the question to the user.
@@ -1303,11 +1332,15 @@ impl TurnState {
                         target_bot_id,
                         script_command: None,
                         run,
+                        agent,
                     },
                 );
                 message.state = MessageState::Streaming;
                 if tool_name == "bash" {
                     self.app.shell_sessions.begin(&self.chat_id, &self.bot_id, &tool_call_id, &message.id);
+                }
+                if starts_agent {
+                    self.app.coding_agents.begin(&self.chat_id, &tool_call_id, &message.id);
                 }
                 if let Some(id) = waits_on {
                     self.app.shell_sessions.bot_waits(&self.app, &self.chat_id, &self.bot_id, &id);
@@ -1374,6 +1407,8 @@ impl TurnState {
                 if tool_name == "bash" {
                     // With the command's card, in the same write.
                     self.app.shell_sessions.call_ended(&self.app, &self.chat_id, &tool_call_id, &message_id, is_error, &text, finish);
+                } else if tool_name == "coding_agent" && self.app.coding_agents.row(&self.chat_id, &tool_call_id).is_some() {
+                    self.app.coding_agents.call_ended(&self.app, &self.chat_id, &tool_call_id, &message_id, is_error, &text, finish);
                 } else if let Some(mut message) = self.app.message(&self.chat_id, &message_id) {
                     finish(&mut message);
                     self.app.upsert_message(message, true);
@@ -1500,13 +1535,16 @@ impl TurnState {
             if let Some(mut message) = self.app.message(&self.chat_id, &message_id) {
                 if let Body::Tool { is_running, summary, name, .. } = &mut message.body {
                     if *is_running {
-                        let bash = name == "bash";
+                        let (bash, coding) = (name == "bash", name == "coding_agent");
                         *is_running = false;
                         *summary = "Stopped".into();
                         message.state = MessageState::Complete;
                         self.app.upsert_message(message, true);
                         if bash {
                             self.app.shell_sessions.abandon_call(&self.app, &self.chat_id, &call_id, &message_id);
+                        }
+                        if coding {
+                            self.app.coding_agents.abandon_call(&self.app, &self.chat_id, &call_id, &message_id);
                         }
                     }
                 }
@@ -1725,6 +1763,14 @@ fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job, store: &Memo
              command you left running ends by itself, you get a turn to hear how it went and carry on; bash_output shows \
              more of what it printed. Start a server, a watcher, or a long build with background: true, never with & or \
              nohup: it keeps running after your turn, the user can see and stop it, and you hear when it ends.\n",
+        );
+    }
+    if job.kind != crate::workflows::SAMPLE_JOB {
+        prompt.push_str(
+            "\nFor a larger coding job in a repository on this Runner (a feature, a fix with tests, a refactor), or when the user \
+             asks for Claude Code or Codex, hand it to a coding agent with coding_agent: it works on its own in a git worktree \
+             while you supervise. Say what proof you expect back, check its work against the request when you hear it is done, \
+             send it follow-ups, and report to the user with its outputs. Its commands go through Auto-review as yours do.\n",
         );
     }
     if let Some(runner) = runner {
@@ -4375,6 +4421,7 @@ mod tests {
                 name: "bash".into(), summary: "Waiting for input".into(), detail: String::new(), is_running: false, call_id: format!("call-{}", bot.id),
                 arguments: json!({}), result: Some("…".into()), is_error: false, description: None, target_bot_id: None, script_command: None,
                 run: Some(CommandRun { session_id: Some(format!("bash-{}", bot.id)), command: "sudo -v".into(), state: state.into(), prompt: Some("Password:".into()), ..CommandRun::default() }),
+                agent: None,
             });
             message.state = MessageState::Complete;
             app.upsert_message(message.clone(), false);

@@ -110,6 +110,18 @@ enum Command {
     Status,
     /// Check the local setup.
     Doctor,
+    /// The coding agents bots run on this Runner.
+    Coding {
+        #[usage(subcommand)]
+        command: CodingCommand,
+    },
+}
+
+#[derive(Subcommands, Debug)]
+enum CodingCommand {
+    /// Claude Code's PreToolUse hook in a coding agent's pane: reads the hook's input on stdin
+    /// and prints whether the running lorca serve lets the command run.
+    Hook { agent: String },
 }
 
 #[derive(Subcommands, Debug)]
@@ -338,6 +350,7 @@ async fn main() -> anyhow::Result<()> {
     // The service manages a process; it needs no account of its own.
     let command = match command {
         Command::Service { command } => return service(&config, command).await,
+        Command::Coding { command: CodingCommand::Hook { agent } } => return coding_hook(&config, &agent).await,
         command => command,
     };
     let app = App::load(config)?;
@@ -353,6 +366,9 @@ async fn main() -> anyhow::Result<()> {
                 let app = app.clone();
                 tokio::task::spawn_blocking(move || lorca::shell::close_stale_rows(&app));
             }
+            // The coding agents the last run left: their cards and handles stay, and one in a
+            // terminal host is followed again.
+            lorca::coding::load(&app);
             #[cfg(unix)]
             tokio::spawn(stop_on_signal(app.clone()));
             // Installed marketplace plugins follow the index in use: this build's, or a later
@@ -447,7 +463,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Chats { command } => chats(&app, command).await,
         Command::Tasks { command } => tasks(&app, command).await,
         Command::Update { check, auto } => update(&app, check, auto).await,
-        Command::Service { .. } => unreachable!(),
+        Command::Service { .. } | Command::Coding { .. } => unreachable!(),
         Command::Status => {
             let snapshot = app.snapshot();
             println!("{}", serde_json::to_string_pretty(&snapshot)?);
@@ -1198,6 +1214,28 @@ async fn service(config: &Config, command: ServiceCommand) -> anyhow::Result<()>
     Ok(())
 }
 
+/// `lorca coding hook <agent>`: asks the `lorca serve` running the agent whether its Bash
+/// command may run, and prints the answer as Claude Code's hook output. A serve that does not
+/// answer lets nothing run.
+async fn coding_hook(config: &Config, agent: &str) -> anyhow::Result<()> {
+    use std::io::Read;
+    let mut input = String::new();
+    std::io::stdin().read_to_string(&mut input)?;
+    let Some(command) = lorca::coding::hook_command(&input) else {
+        println!("{}", lorca::coding::hook_answer(Ok(())));
+        return Ok(());
+    };
+    let verdict = match serve_call(config, "coding.review", &serde_json::json!({ "agent_id": agent, "command": command })).await {
+        Ok(Some(Ok(answer))) if answer["allow"].as_bool().unwrap_or(false) => Ok(()),
+        Ok(Some(Ok(answer))) => Err(answer["reason"].as_str().unwrap_or("Lorca did not allow it.").to_string()),
+        Ok(Some(Err(error))) => Err(format!("Lorca could not decide: {error}")),
+        Ok(None) => Err("Lorca is not running, so nothing it supervises may run.".to_string()),
+        Err(error) => Err(format!("Lorca could not decide: {error}")),
+    };
+    println!("{}", lorca::coding::hook_answer(verdict));
+    Ok(())
+}
+
 /// One request to the `lorca serve` on the configured port, with the token in the data
 /// directory; `None` when nothing listens there.
 async fn serve_call(config: &Config, method: &str, params: &serde_json::Value) -> anyhow::Result<Option<Result<serde_json::Value, String>>> {
@@ -1241,6 +1279,7 @@ async fn watch_parent(app: std::sync::Arc<App>, pid: u32) {
         if !process_alive(pid) {
             tracing::info!(pid, "parent exited; stopping");
             app.shell_sessions.shutdown(&app);
+            app.coding_agents.shutdown(&app).await;
             app.browser_sessions.shutdown(&app).await;
             std::process::exit(0);
         }
@@ -1262,6 +1301,7 @@ async fn stop_on_signal(app: std::sync::Arc<App>) {
         _ = hangup.recv() => libc::SIGHUP,
     };
     app.shell_sessions.shutdown(&app);
+    app.coding_agents.shutdown(&app).await;
     app.browser_sessions.shutdown(&app).await;
     unsafe {
         libc::signal(number, libc::SIG_DFL);

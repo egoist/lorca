@@ -954,6 +954,8 @@ fn apply_roster(app: &Arc<App>, mut roster: RosterBlob) {
     }
     #[cfg(feature = "runner")]
     app.shell_sessions.close_orphans(app);
+    #[cfg(feature = "runner")]
+    app.coding_agents.close_orphans(app);
     app.roster_changed(normalized_descriptions || kept_checks || kept_permissions || kept_workflows);
 }
 

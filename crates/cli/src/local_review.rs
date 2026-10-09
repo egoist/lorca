@@ -190,6 +190,13 @@ async fn review_input(app: &Arc<App>, chat_id: &str, trigger: &Trigger, bot: &Bo
     }
 }
 
+/// Whether a command runs without a review while Auto-review is on: the parser proves it only
+/// reads, or it stays in Lorca's own folders, run from `workdir`. A coding agent's commands
+/// (`crate::coding`) take the same fast path as the bot's own.
+pub(crate) fn needs_no_review(app: &App, command: &str, workdir: &Path) -> bool {
+    read_only(command) || stays_in_lorca(command, workdir, &lorca_folders(app), dirs::home_dir().as_deref())
+}
+
 /// A call that does not run, with why: the model reads it, and a script it came from ends.
 pub(crate) fn blocked(reason: String) -> BeforeToolCallResult {
     BeforeToolCallResult { block: true, reason: Some(reason), args: None, terminate: false }

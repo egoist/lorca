@@ -234,6 +234,9 @@ pub struct App {
     /// Commands `bash` left running in their terminals, waiting for input.
     #[cfg(feature = "runner")]
     pub shell_sessions: crate::shell::Sessions,
+    /// The coding agents the bots run on this Runner.
+    #[cfg(feature = "runner")]
+    pub coding_agents: crate::coding::Agents,
     /// What this Runner has installed, with the secrets kept apart.
     pub plugins: Mutex<crate::plugins::Store>,
     /// The marketplace index in use, and the checks for a newer one.
@@ -349,6 +352,8 @@ impl App {
             pending_permissions: Mutex::new(HashMap::new()),
             #[cfg(feature = "runner")]
             shell_sessions: crate::shell::Sessions::default(),
+            #[cfg(feature = "runner")]
+            coding_agents: crate::coding::Agents::default(),
             plugins: Mutex::new(plugins),
             marketplace,
             workflow_editing: tokio::sync::Mutex::new(()),
@@ -1242,6 +1247,8 @@ impl App {
         crate::playbooks::forget_scopes(self, &[id.to_string()], &removed_chat_ids);
         #[cfg(feature = "runner")]
         self.shell_sessions.close_orphans(self);
+        #[cfg(feature = "runner")]
+        self.coding_agents.close_orphans(self);
         self.roster_changed(true);
         Ok(())
     }
@@ -1363,6 +1370,8 @@ impl App {
         crate::playbooks::forget_scopes(self, &[], &[chat_id.to_string()]);
         #[cfg(feature = "runner")]
         self.shell_sessions.close_orphans(self);
+        #[cfg(feature = "runner")]
+        self.coding_agents.close_orphans(self);
         self.roster_changed(true);
     }
 

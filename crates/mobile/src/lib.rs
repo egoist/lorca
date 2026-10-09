@@ -263,6 +263,7 @@ mod tests {
                 target_bot_id: None,
                 script_command: None,
                 run: None,
+                agent: None,
             },
         );
         let tool_id = tool.id.clone();

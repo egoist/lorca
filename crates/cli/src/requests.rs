@@ -127,6 +127,10 @@ async fn answer(app: &Arc<App>, request: &Request) -> Result<Value, String> {
         verb if verb.starts_with("browser.") => crate::browser::serve(app, verb, body, true).await,
         #[cfg(feature = "runner")]
         "bash.stdin" | "bash.stop" | "bash.background" => crate::shell::serve(app, &request.verb, body).await,
+        // A coding agent's card on another Device: its transcript, Stop, and an answer to what
+        // its pane asks. Showing its pane happens only at the Runner.
+        #[cfg(feature = "runner")]
+        "coding.transcript" | "coding.stop" | "coding.answer" => crate::coding::serve(app, &request.verb, body).await,
         #[cfg(feature = "runner")]
         "playbooks.draft" => {
             let scope = serde_json::from_value(body["scope"].clone()).map_err(|_| "Explicit playbook scope is required")?;

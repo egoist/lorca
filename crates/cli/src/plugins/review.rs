@@ -735,6 +735,7 @@ mod tests {
             name: "bash".into(), summary: format!("$ {command}"), detail: String::new(), is_running, call_id: String::new(),
             arguments: serde_json::json!({ "command": command }), result: None, is_error: false, description: None, target_bot_id: None, script_command: None,
             run: Some(CommandRun { command: command.into(), state: "exited".into(), decision: decision.map(str::to_string), ..Default::default() }),
+            agent: None,
         };
         let at = |message_id: &str| Trigger { message_id: message_id.into(), routine: None, event: None };
         let turn = "This turn so far, starting with the message that asked for it:\n";
