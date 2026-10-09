@@ -11,6 +11,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/egoist/lorca/desktop/model"
@@ -30,6 +31,8 @@ const (
 	avatarImage
 	avatarYou
 	avatarSystem
+	// avatarContact is someone outside Lorca, by the first letter of their name.
+	avatarContact
 )
 
 type avatarContent struct {
@@ -38,6 +41,8 @@ type avatarContent struct {
 	Accent     model.Accent
 	// Path is an image's file on this computer.
 	Path string
+	// Name is a contact's name.
+	Name string
 }
 
 // botAvatar is the bot's image when this computer has the bytes (the store fetches them and
@@ -55,6 +60,8 @@ func authorAvatar(author model.Author) avatarContent {
 	switch author.Kind {
 	case model.AuthorYou:
 		return avatarContent{Kind: avatarYou}
+	case model.AuthorContact:
+		return avatarContent{Kind: avatarContact, Name: author.Name}
 	case model.AuthorBot:
 		if bot := store.Bot(author.BotID); bot != nil {
 			return botAvatar(bot)
@@ -87,6 +94,9 @@ func avatarOn(c *ui.Context, content avatarContent, size float32, working bool, 
 			disc.Gradient(tint.Mix(p.White, 0.28), tint, 180)
 		case avatarYou:
 			disc.Background(p.Label3)
+		case avatarContact:
+			gray := ui.RGB(142, 142, 147)
+			disc.Gradient(gray.Mix(p.White, 0.25), gray, 180)
 		default:
 			disc.Background(p.Label4)
 		}
@@ -96,6 +106,12 @@ func avatarOn(c *ui.Context, content avatarContent, size float32, working bool, 
 				if bitmap := loadBitmap(content.Path); bitmap != nil {
 					ui.Image(c, bitmap).Size(size, size).Fit(ui.Cover)
 				}
+			case avatarContact:
+				initial := "?"
+				if name := []rune(strings.TrimSpace(content.Name)); len(name) > 0 {
+					initial = strings.ToUpper(string(name[0]))
+				}
+				ui.Text(c, initial).FontSize(float32(math.Round(float64(size * 0.46)))).FontWeight(600).SingleLine()
 			default:
 				name, scale := "gearshape.fill", float32(0.5)
 				switch content.Kind {

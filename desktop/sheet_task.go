@@ -357,6 +357,8 @@ func (st *taskSheet) evidenceRow(c *ui.Context, k *card, item model.TaskEvidence
 							name = bot.Name
 						}
 						o.Title = L("Message from %@", name)
+					case model.AuthorContact:
+						o.Title = L("Message from %@", message.Author.Name)
 					}
 					o.Subtitle = model.DaySeparator(message.CreatedAt)
 				}

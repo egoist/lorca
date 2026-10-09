@@ -277,7 +277,7 @@ func (n *notifier) post(notification *chatNotification, chatID string) {
 		title = bot.Name
 	}
 	subtitle := ""
-	if !chat.IsDM() {
+	if !chat.IsBotDM() {
 		subtitle = store.Title(chat)
 	}
 	body := strings.Join(strings.FieldsFunc(notification.body, func(r rune) bool { return r == '\n' || r == '\r' }), " ")

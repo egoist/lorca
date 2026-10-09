@@ -97,6 +97,21 @@ type WorkflowRoutine struct {
 	IsEnabled    bool   `json:"is_enabled"`
 }
 
+// WorkflowChannel is a channel the workflow listens on once it is on, with the Runner's channel
+// then.
+type WorkflowChannel struct {
+	ID        string        `json:"id"`
+	Name      string        `json:"name"`
+	ServiceID string        `json:"service_id"`
+	Listen    ChannelListen `json:"listen"`
+	Channel   *WireChannel  `json:"channel"`
+}
+
+// IsOn is whether the workflow's channel listens now.
+func (c WorkflowChannel) IsOn() bool {
+	return c.Channel != nil && c.Channel.State != string(ChannelPaused)
+}
+
 type WorkflowSampleMessage struct {
 	ID   string `json:"id"`
 	Body struct {
@@ -111,6 +126,7 @@ type WorkflowProgress struct {
 	Connections    []WorkflowConnection    `json:"connections"`
 	Specialists    []WorkflowSpecialist    `json:"specialists"`
 	Routines       []WorkflowRoutine       `json:"routines"`
+	Channels       []WorkflowChannel       `json:"channels"`
 	SampleMessages []WorkflowSampleMessage `json:"sample_messages"`
 	IsRunning      bool                    `json:"is_running"`
 }

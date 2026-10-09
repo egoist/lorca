@@ -1289,4 +1289,17 @@ var zh = map[string]string{
 	"Can't connect":        "无法连接",
 	"%@ is working on it…": "%@ 正在处理…",
 	"The sample didn't finish. %@'s chat says what happened.": "示例没有完成。原因见 %@ 的聊天。",
+
+	"Channels":                 "渠道",
+	"Channel":                  "渠道",
+	"Conversations":            "对话",
+	"Listening":                "接收消息",
+	"On hold":                  "待处理",
+	"Every message":            "所有消息",
+	"mentions":                 "提及",
+	"replies":                  "回复",
+	", |list":                  "、",
+	"Every chat the bot is in": "账户所在的所有聊天",
+	"A message’s turn didn’t finish, so later messages wait. Read its conversation, then try it again or skip it.": "有条消息没有处理完，后面的消息都在等待。先看看它的对话，再重试或跳过。",
+	"%@ stops listening there. Its conversations stay.":                                                            "%@ 不再接收那里的消息。已有的对话会保留。",
 }

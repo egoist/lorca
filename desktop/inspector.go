@@ -154,6 +154,7 @@ func (m *mainWindow) inspectorView(c *ui.Context, chatID string) {
 			m.inspectorSkills(c, chat, members)
 			if single != nil {
 				m.inspectorRoutines(c, single)
+				m.inspectorChannels(c, single)
 				m.inspectorFeedback(c, single)
 			}
 			m.inspectorDurableTasks(c, chat)
@@ -465,6 +466,28 @@ func (m *mainWindow) inspectorRoutines(c *ui.Context, bot *model.Bot) {
 					func(on bool) { store.SetRoutineEnabled(id, on) }) {
 					if current := store.Bot(botID); current != nil {
 						m.presentRoutine(id, current, m.prefill)
+					}
+				}
+			})
+		}
+	})
+}
+
+// inspectorChannels is where the bot listens: a row per channel with its pause switch, the details
+// in a sheet. Left out while the bot has none; the bot sets one up when asked.
+func (m *mainWindow) inspectorChannels(c *ui.Context, bot *model.Bot) {
+	channels := store.Channels(bot.ID)
+	if len(channels) == 0 {
+		return
+	}
+	section(c, L("Channels"), sectionCaption, nil, func(k *card) {
+		for i := range channels {
+			channel := &channels[i]
+			id, botID := channel.ID, bot.ID
+			ui.Box(c.Key(channel.ID)).Children(func() {
+				if channelRow(c, k, channel, func(on bool) { store.SetChannelPaused(id, !on) }) {
+					if current := store.Bot(botID); current != nil {
+						m.presentChannel(id, current, m.open)
 					}
 				}
 			})

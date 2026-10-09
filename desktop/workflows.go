@@ -340,7 +340,7 @@ func (mk *marketplace) workflowPage(c *ui.Context, page *marketPage) {
 		if sample := setup.Sample; sample != nil {
 			mk.workflowSampleCard(c, wp, sample)
 		}
-		if len(progress.Routines) > 0 {
+		if len(progress.Routines) > 0 || len(progress.Channels) > 0 {
 			section(c, L("Schedule"), sectionHeading, nil, func(k *card) {
 				for _, routine := range progress.Routines {
 					o := statusRowOptions{Symbol: "pause.circle", Title: routine.Name, Subtitle: model.Schedule(routine.ScheduleText), State: L("Off")}
@@ -348,6 +348,18 @@ func (mk *marketplace) workflowPage(c *ui.Context, page *marketPage) {
 						o.Symbol, o.State = "clock", L("On")
 					}
 					ui.Box(c.Key("routine:" + routine.ID)).Children(func() { statusRow(c, k, o) })
+				}
+				// What the workflow listens to once it is on.
+				for _, channel := range progress.Channels {
+					service := "Telegram"
+					if channel.ServiceID == "slack" {
+						service = "Slack"
+					}
+					o := statusRowOptions{Symbol: "paperplane", PluginID: channel.ServiceID, Title: channel.Name, Subtitle: service + " · " + channel.Listen.Summary(), State: L("Off")}
+					if channel.IsOn() {
+						o.State = L("On")
+					}
+					ui.Box(c.Key("channel:" + channel.ID)).Children(func() { statusRow(c, k, o) })
 				}
 			})
 		}

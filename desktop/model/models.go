@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 )
 
 // MARK: - Providers
@@ -705,6 +706,8 @@ type Device struct {
 	MachineKey   string
 	// Plugins installed on this Runner, as it advertises them. Secrets stay on the Runner.
 	Plugins []InstalledPlugin
+	// Channels are the channels its bots listen on, as it advertises them.
+	Channels []Channel
 	// Version is the `lorca` this Device runs; empty when its CLI has not said.
 	Version string
 	// Update is how a CLI that replaces itself keeps current; nil where an app updates the CLI it
@@ -1464,11 +1467,15 @@ const (
 	AuthorYou AuthorKind = iota
 	AuthorBot
 	AuthorSystem
+	// AuthorContact is someone outside Lorca, in a channel's conversation.
+	AuthorContact
 )
 
 type Author struct {
 	Kind  AuthorKind
 	BotID string
+	// Name is a contact's name.
+	Name string
 }
 
 var (
@@ -1480,7 +1487,7 @@ func BotAuthor(id string) Author { return Author{Kind: AuthorBot, BotID: id} }
 
 // Same is whether two authors are one: the user, the system, or the same bot.
 func (a Author) Same(b Author) bool {
-	return a.Kind == b.Kind && (a.Kind != AuthorBot || a.BotID == b.BotID)
+	return a.Kind == b.Kind && (a.Kind != AuthorBot || a.BotID == b.BotID) && (a.Kind != AuthorContact || a.Name == b.Name)
 }
 
 type BodyKind int
@@ -1662,10 +1669,104 @@ type Chat struct {
 	OwnerBotID string
 	// GroupDescription is what a group is for, which every member reads in its system prompt.
 	GroupDescription string
+	// Channel is set on a conversation a channel keeps: one Telegram chat or topic, or one Slack
+	// thread, named by CustomTitle.
+	Channel *ChatChannel
 }
 
 func (c *Chat) IsGroup() bool { return c.Kind == ChatGroup }
 func (c *Chat) IsDM() bool    { return c.Kind == ChatDM }
+
+// IsBotDM is the one DM a bot has with the user: a direct chat that is not a channel's
+// conversation.
+func (c *Chat) IsBotDM() bool { return c.Kind == ChatDM && c.Channel == nil }
+
+// ShowsSpeakers is a transcript with more than one speaker on the bots' side: a group, or a
+// channel's conversation with the people there.
+func (c *Chat) ShowsSpeakers() bool { return c.IsGroup() || c.Channel != nil }
+
+// ChatChannel is where a channel's conversation happens.
+type ChatChannel struct {
+	ChannelID string
+	Service   string
+	AccountID string
+	ChatID    string
+	ThreadID  string
+}
+
+// ChannelListen is what a channel takes.
+type ChannelListen struct {
+	Every    bool     `json:"every,omitempty"`
+	Mentions bool     `json:"mentions,omitempty"`
+	Replies  bool     `json:"replies,omitempty"`
+	Tags     []string `json:"tags,omitempty"`
+}
+
+// Summary is "Mentions, replies, #feedback", or "Every message".
+func (l ChannelListen) Summary() string {
+	if l.Every {
+		return L("Every message")
+	}
+	var parts []string
+	if l.Mentions {
+		parts = append(parts, L("mentions"))
+	}
+	if l.Replies {
+		parts = append(parts, L("replies"))
+	}
+	for _, tag := range l.Tags {
+		parts = append(parts, "#"+tag)
+	}
+	joined := strings.Join(parts, Lc(", ", "list"))
+	if joined == "" {
+		return ""
+	}
+	first, size := utf8.DecodeRuneInString(joined)
+	return string(unicode.ToUpper(first)) + joined[size:]
+}
+
+// ChannelState is how a channel stands.
+type ChannelState string
+
+const (
+	ChannelListening ChannelState = "listening"
+	ChannelPaused    ChannelState = "paused"
+	// ChannelHeld is a message's turn that didn't finish, so later ones wait.
+	ChannelHeld ChannelState = "held"
+	// ChannelOffline is an account its Runner can't read now.
+	ChannelOffline ChannelState = "offline"
+)
+
+// ChannelChat is one chat a channel listens in.
+type ChannelChat struct {
+	ID    string
+	Title string
+}
+
+// Channel is a bot listening on a Telegram or Slack account, as its Runner advertises it.
+type Channel struct {
+	ID           string
+	BotID        string
+	Name         string
+	Service      string
+	AccountID    string
+	Chats        []ChannelChat
+	Listen       ChannelListen
+	Task         string
+	State        ChannelState
+	Detail       string
+	HeldDelivery string
+}
+
+// ServiceName is the service as people call it.
+func (c *Channel) ServiceName() string {
+	if c.Service == "slack" {
+		return "Slack"
+	}
+	return "Telegram"
+}
+
+func (c *Channel) IsPaused() bool { return c.State == ChannelPaused }
 
 // CanAddBot is whether another bot may join. Only groups grow, and never past the cap.
 func (c *Chat) CanAddBot() bool { return c.IsGroup() && len(c.BotIDs) < MaxGroupBots }

@@ -438,7 +438,7 @@ func (m *mainWindow) deleteChat() {
 		return
 	}
 	chatID := chat.ID
-	deletesBot := chat.IsDM() && len(chat.BotIDs) > 0 && store.Bot(chat.BotIDs[0]) != nil
+	deletesBot := chat.IsBotDM() && len(chat.BotIDs) > 0 && store.Bot(chat.BotIDs[0]) != nil
 	informative := L("The transcript is removed from this Device and from paired Devices.")
 	confirm := L("Delete")
 	if deletesBot {

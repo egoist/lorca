@@ -86,6 +86,7 @@ type WireDevice struct {
 	Status       string             `json:"status"`
 	LastSeen     float64            `json:"last_seen"`
 	Plugins      []WirePluginStatus `json:"plugins"`
+	Channels     []WireChannel      `json:"channels"`
 	// Unknown is a machine the relay lists that never sent its `machine` blob: no name, no OS.
 	Unknown bool              `json:"unknown"`
 	Version *string           `json:"version"`
@@ -132,6 +133,34 @@ type WireRun struct {
 type WireAuthor struct {
 	Kind  string  `json:"kind"`
 	BotID *string `json:"bot_id"`
+	Name  *string `json:"name"`
+}
+
+// WireChannel is a channel in its Runner's record.
+type WireChannel struct {
+	ID        string `json:"id"`
+	BotID     string `json:"bot_id"`
+	Name      string `json:"name"`
+	Service   string `json:"service"`
+	AccountID string `json:"account_id"`
+	Chats     []struct {
+		ID    string `json:"id"`
+		Title string `json:"title"`
+	} `json:"chats"`
+	Listen       ChannelListen `json:"listen"`
+	Task         string        `json:"task"`
+	State        string        `json:"state"`
+	Detail       string        `json:"detail"`
+	HeldDelivery string        `json:"held_delivery"`
+}
+
+// WireChatChannel is where a channel's conversation happens.
+type WireChatChannel struct {
+	ChannelID string  `json:"channel_id"`
+	Service   string  `json:"service"`
+	AccountID string  `json:"account_id"`
+	ChatID    string  `json:"chat_id"`
+	ThreadID  *string `json:"thread_id"`
 }
 
 type WireBody struct {
@@ -195,18 +224,19 @@ type WireChatUsage struct {
 }
 
 type WireChat struct {
-	ID          string         `json:"id"`
-	Kind        string         `json:"kind"`
-	Title       *string        `json:"title"`
-	BotIDs      []string       `json:"bot_ids"`
-	OwnerBotID  *string        `json:"owner_bot_id"`
-	Description *string        `json:"description"`
-	IsPinned    bool           `json:"is_pinned"`
-	CreatedAt   float64        `json:"created_at"`
-	Messages    []WireMessage  `json:"messages"`
-	UnreadCount *int           `json:"unread_count"`
-	Usage       *WireChatUsage `json:"usage"`
-	HasMore     *bool          `json:"has_more"`
+	ID          string           `json:"id"`
+	Kind        string           `json:"kind"`
+	Title       *string          `json:"title"`
+	BotIDs      []string         `json:"bot_ids"`
+	OwnerBotID  *string          `json:"owner_bot_id"`
+	Description *string          `json:"description"`
+	IsPinned    bool             `json:"is_pinned"`
+	CreatedAt   float64          `json:"created_at"`
+	Messages    []WireMessage    `json:"messages"`
+	UnreadCount *int             `json:"unread_count"`
+	Usage       *WireChatUsage   `json:"usage"`
+	HasMore     *bool            `json:"has_more"`
+	Channel     *WireChatChannel `json:"channel"`
 }
 
 type WireRoutine struct {
@@ -625,6 +655,9 @@ func ToDevice(wire WireDevice) *Device {
 	for _, plugin := range wire.Plugins {
 		device.Plugins = append(device.Plugins, ToPlugin(plugin))
 	}
+	for _, channel := range wire.Channels {
+		device.Channels = append(device.Channels, ToChannel(channel))
+	}
 	if wire.Update != nil {
 		update := &DeviceUpdate{Auto: wire.Update.Auto, Latest: str(wire.Update.Latest), Error: str(wire.Update.Error)}
 		switch state := str(wire.Update.State); state {
@@ -673,8 +706,27 @@ func toAuthor(wire WireAuthor) Author {
 		return You
 	case "bot":
 		return BotAuthor(str(wire.BotID))
+	case "contact":
+		return Author{Kind: AuthorContact, Name: str(wire.Name)}
 	}
 	return System
+}
+
+// ToChannel reads a channel from its Runner's record.
+func ToChannel(wire WireChannel) Channel {
+	channel := Channel{
+		ID: wire.ID, BotID: wire.BotID, Name: wire.Name, Service: wire.Service, AccountID: wire.AccountID,
+		Listen: wire.Listen, Task: wire.Task, State: ChannelState(wire.State), Detail: wire.Detail, HeldDelivery: wire.HeldDelivery,
+	}
+	switch channel.State {
+	case ChannelListening, ChannelPaused, ChannelHeld, ChannelOffline:
+	default:
+		channel.State = ChannelListening
+	}
+	for _, chat := range wire.Chats {
+		channel.Chats = append(channel.Chats, ChannelChat{ID: chat.ID, Title: chat.Title})
+	}
+	return channel
 }
 
 func ToMessage(wire WireMessage) *Message {
@@ -802,6 +854,14 @@ func ToChat(wire WireChat, existing *Chat) *Chat {
 	} else {
 		chat.CustomTitle = str(wire.Title)
 		chat.GroupDescription = str(wire.Description)
+	}
+	if wire.Channel != nil {
+		// A channel's conversation is named after where it happens.
+		chat.CustomTitle = str(wire.Title)
+		chat.Channel = &ChatChannel{
+			ChannelID: wire.Channel.ChannelID, Service: wire.Channel.Service, AccountID: wire.Channel.AccountID,
+			ChatID: wire.Channel.ChatID, ThreadID: str(wire.Channel.ThreadID),
+		}
 	}
 	chat.OwnerBotID = str(wire.OwnerBotID)
 	if wire.Messages != nil {

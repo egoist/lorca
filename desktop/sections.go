@@ -485,6 +485,44 @@ func switchRow(c *ui.Context, k *card, symbolName string, tint ui.Color, title s
 	return clicked
 }
 
+// channelRow is a channel, after the Mac's SwitchRow for one: the service's mark, its name, and
+// what it takes, which wraps rather than lose its last tag, after its state in orange when the
+// user has something to do about it; then its pause switch. It reports a click elsewhere on it.
+func channelRow(c *ui.Context, k *card, channel *model.Channel, change func(bool)) bool {
+	p := colors(c)
+	paused := channel.IsPaused()
+	r := k.row(rowBox(c).MinHeight(44).Label(channel.Name).Cursor(ui.CursorPointer).Tooltip(channel.Task))
+	clicked := r.Clicked()
+	r.Children(func() {
+		icon := ui.Row(c).Width(18).Justify(ui.Center).TextColor(p.Label2)
+		if paused {
+			icon.Opacity(0.5)
+		}
+		icon.Children(func() { pluginTile(c, channel.Service, "paperplane", 18) })
+		ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(1).Children(func() {
+			ui.Text(c, channel.Name).FontSize(12.5).FontWeight(500).SingleLine()
+			detail := []ui.Span{{Text: channel.Listen.Summary(), Color: p.Label2}}
+			switch channel.State {
+			case model.ChannelHeld:
+				detail = append([]ui.Span{{Text: L("On hold"), Color: p.Orange}, {Text: " · ", Color: p.Label2}}, detail...)
+			case model.ChannelOffline:
+				detail = append([]ui.Span{{Text: L("Can’t connect"), Color: p.Orange}, {Text: " · ", Color: p.Label2}}, detail...)
+			}
+			ui.RichText(c, detail...).FontSize(textCaption).TextColor(p.Label2).MaxLines(2)
+		})
+		on := !paused
+		tooltip := L("Pause %@", channel.Name)
+		if paused {
+			tooltip = L("Resume %@", channel.Name)
+		}
+		toggle := toggleSwitch(c, &on, true).Tooltip(tooltip).Label(channel.Name).OnChange(func() { change(on) })
+		if toggle.Changed() {
+			clicked = false
+		}
+	})
+	return clicked
+}
+
 // noteRow is a sentence inside a card, for an empty state, or in a color for what went wrong.
 func noteRow(c *ui.Context, k *card, text string, tint *ui.Color) ui.Element {
 	p := colors(c)

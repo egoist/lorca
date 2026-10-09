@@ -232,7 +232,7 @@ func (m *mainWindow) chatRowView(c *ui.Context, chat *model.Chat, row chatRow, s
 		workingCell(c, bots, workingActivity(row.botIDs, chat), chat.IsGroup())
 	case rowMessage:
 		message := row.message
-		showsAvatar := chat.IsGroup() && message.Author.Kind == model.AuthorBot
+		showsAvatar := chat.ShowsSpeakers() && (message.Author.Kind == model.AuthorBot || message.Author.Kind == model.AuthorContact)
 		var cardAvatar *avatarContent
 		if showsAvatar {
 			content := authorAvatar(message.Author)
@@ -289,6 +289,8 @@ func quoteAuthorName(author model.Author) string {
 			return bot.Name
 		}
 		return L("Bot")
+	case model.AuthorContact:
+		return author.Name
 	}
 	return "Lorca"
 }
@@ -325,6 +327,9 @@ func (m *mainWindow) messageCell(c *ui.Context, chat *model.Chat, message *model
 				name, tint := L("Bot"), p.Label2
 				if bot != nil {
 					name, tint = bot.Name, p.accentColor(bot.Accent)
+				}
+				if message.Author.Kind == model.AuthorContact {
+					name = message.Author.Name
 				}
 				ui.Text(c, name).Padding(0, 0, 0, 4).Margin(0, 0, 2, 0).FontSize(11).FontWeight(600).FixedLineHeight(16).TextColor(tint).SingleLine()
 			}

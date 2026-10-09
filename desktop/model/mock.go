@@ -30,6 +30,7 @@ func mockPlugins() []InstalledPlugin {
 	plugins := []InstalledPlugin{
 		{ID: "github", Name: "GitHub", Description: "Issues, pull requests, code search, and repositories on GitHub.", Version: "1", Icon: "chevron.left.forwardslash.chevron.right", State: PluginReady, Detail: "Ready"},
 		{ID: "linear", Name: "Linear", Description: "Issues, projects, and cycles in Linear.", Version: "1", Icon: "line.3.horizontal.decrease.circle", State: PluginNeedsAuth, Detail: "Sign in"},
+		{ID: "telegram-5f0c", Name: "Telegram · Community", Description: "Listen in a Telegram bot's groups and chats, and reply there as the bot.", Version: "1", Icon: "paperplane", State: PluginReady, Detail: "Connected", ServiceID: "telegram", AccountName: "Community"},
 	}
 	for _, server := range mockMcpServers() {
 		if server.Status != nil {
@@ -83,11 +84,21 @@ func mockMcpServers() []McpServer {
 
 func mockDevices() []*Device {
 	return []*Device{
-		{ID: "dev-workbench", Name: "Workbench", Model: "ThinkPad X1 Carbon Gen 13", OS: OSLinux, OSVersion: "Ubuntu 26.04", IsThisDevice: true, Status: StatusOnline, LastSeen: time.Now(), MachineKey: "mk_7c41…a09f", Plugins: mockPlugins(), Version: "0.1.11"},
+		{ID: "dev-workbench", Name: "Workbench", Model: "ThinkPad X1 Carbon Gen 13", OS: OSLinux, OSVersion: "Ubuntu 26.04", IsThisDevice: true, Status: StatusOnline, LastSeen: time.Now(), MachineKey: "mk_7c41…a09f", Plugins: mockPlugins(), Channels: mockChannels(), Version: "0.1.11"},
 		{ID: "dev-studio", Name: "Studio", Model: "Mac Studio (M3 Ultra)", OS: OSMacOS, OSVersion: "macOS 27.0", Status: StatusOnline, LastSeen: minutesAgo(1), MachineKey: "mk_1f88…23bd", Version: "0.1.10", Update: &DeviceUpdate{Auto: true, Latest: "0.1.11"}},
 		{ID: "dev-closet", Name: "Closet PC", Model: "Desktop", OS: OSWindows, OSVersion: "Windows 11 25H2", Status: StatusOffline, LastSeen: minutesAgo(184), MachineKey: "mk_c052…77e1", Version: "0.1.11"},
 		{ID: "dev-phone", Name: "iPhone", Model: "iPhone 17 Pro", OS: OSIOS, OSVersion: "iOS 27.0", Status: StatusOnline, LastSeen: minutesAgo(12), MachineKey: "mk_9e3d…51c8"},
 	}
+}
+
+// mockChannels has the Feedback Collector listening in the community's Telegram group.
+func mockChannels() []Channel {
+	return []Channel{{
+		ID: "ev-feedback", BotID: "bot-tally", Name: "Community feedback", Service: "telegram", AccountID: "telegram-5f0c",
+		Listen: ChannelListen{Mentions: true, Replies: true, Tags: []string{"feedback"}},
+		Task:   "Decide whether the new message is product feedback. If it is, find the matching open issue in acme/app and comment on it, or open a new one labeled feedback with the person's words quoted. Then reply to the person in their thread in one line with the issue number.",
+		State:  ChannelListening,
+	}}
 }
 
 func mockProviders() []ProviderCredential {
@@ -288,6 +299,7 @@ func mockBots() []*Bot {
 		{ID: "bot-scout", Name: "Researcher", Description: "Gathers context, reads the sources before answering, cites them, and says when it is unsure.", SymbolName: "magnifyingglass", Accent: "teal", RunnerID: "dev-studio", Provider: "deepseek", CreatedAt: minutesAgo(60 * 24 * 12)},
 		{ID: "bot-quill", Name: "Writer", Description: "Writes docs, copy, and release notes in plain language: short sentences, no filler, and no exclamation marks.", SymbolName: "pencil.and.scribble", Accent: "pink", RunnerID: "dev-workbench", Provider: "anthropic", Permissions: mockWriterAccess(), CreatedAt: minutesAgo(60 * 24 * 9)},
 		{ID: "bot-ember", Name: "DevOps", Description: "Handles deploys and incident triage, watches the relay, and always states the blast radius first.", SymbolName: "server.rack", Accent: "orange", RunnerID: "dev-closet", Provider: "deepseek", CreatedAt: minutesAgo(60 * 24 * 4)},
+		{ID: "bot-tally", Name: "Feedback Collector", Description: "Collects product feedback from the community chat into GitHub issues, thanks people in their thread, and writes a digest each morning.", SymbolName: "tray.and.arrow.down.fill", Accent: "teal", RunnerID: "dev-workbench", Provider: "deepseek", CreatedAt: minutesAgo(60 * 24 * 2)},
 	}
 }
 
@@ -335,8 +347,37 @@ func mockChats() []*Chat {
 				CostUSD: 0.34, Turns: 9, Model: "deepseek-chat", APICostUSD: 0.34, PricingKinds: []string{"api"}}
 		}),
 		mockChat("chat-quill", ChatDM, []string{"bot-quill"}, writerThread(), func(c *Chat) { c.CreatedAt = minutesAgo(60 * 24 * 9) }),
+		mockChat("chat-community", ChatDM, []string{"bot-tally"}, communityThread(), func(c *Chat) {
+			c.CustomTitle = "Acme Community"
+			c.CreatedAt = minutesAgo(60 * 20)
+			c.Channel = &ChatChannel{ChannelID: "ev-feedback", Service: "telegram", AccountID: "telegram-5f0c", ChatID: "-1001846203311"}
+		}),
+		mockChat("chat-tally", ChatDM, []string{"bot-tally"}, []*Message{
+			mockMessage(You, textBody("Listen in our Telegram group for #feedback and file it in acme/app."), minutesAgo(60*22)),
+			mockMessage(BotAuthor("bot-tally"), textBody("Listening in the groups the Community bot is in, for mentions, replies, and #feedback. I'll file each one in acme/app and thank the person in their thread."), minutesAgo(60*22-1)),
+		}, func(c *Chat) { c.CreatedAt = minutesAgo(60 * 22) }),
 		mockChat("chat-ember", ChatDM, []string{"bot-ember"}, devopsThread(), func(c *Chat) { c.CreatedAt = minutesAgo(60 * 72) }),
 	}
+}
+
+// communityThread is a channel's conversation: people in the group and the bot's replies there.
+func communityThread() []*Message {
+	var thread []*Message
+	for _, exchange := range []struct {
+		name, said, reply string
+		at                float64
+	}{
+		{"Alice Chen", "#feedback exporting a report as CSV crashes the app on the second try", "Thanks Alice, tracked in #142.", 64},
+		{"Ben Ortiz", "same here, happens on Android too", "Added to #142, thanks Ben.", 41},
+		{"Maya", "@acme_feedback_bot could the dashboard remember my last filter? #feedback", "Good idea, tracked in #151.", 12},
+	} {
+		said := mockMessage(Author{Kind: AuthorContact, Name: exchange.name}, textBody(exchange.said), minutesAgo(exchange.at))
+		reply := mockMessage(BotAuthor("bot-tally"), textBody(exchange.reply), minutesAgo(exchange.at-1))
+		reply.ReplyTo = &ReplyQuote{MessageID: said.ID, Author: said.Author, Text: exchange.said}
+		reply.Notification = NotificationQuiet
+		thread = append(thread, said, reply)
+	}
+	return thread
 }
 
 func launchRoomThread() []*Message {
