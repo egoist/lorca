@@ -166,8 +166,8 @@ fn tls() -> Arc<rustls::ClientConfig> {
 
 /// The relay protocol this client speaks, sent as `Lorca-Protocol` with every request. A
 /// relay may refuse one it no longer serves with `426`. 1: group paging, `DELETE /v1/identity`.
-/// 2: `POST /v1/machines`.
-pub const PROTOCOL: u32 = 2;
+/// 2: `POST /v1/machines`. 3: durable subject records and sealed event envelopes.
+pub const PROTOCOL: u32 = 3;
 
 const FILE_TRANSFER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 

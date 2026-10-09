@@ -459,7 +459,7 @@ func imageSize(attachment model.Attachment) (float32, float32) {
 
 // attachmentTiles are thumbnails and file cards inside a bubble, above the text: images side by
 // side, wrapping at the bubble's edge, and each file card on a row of its own. A click opens the
-// file.
+// file, or retries a fetch that failed; the menu also saves a copy.
 func attachmentTiles(c *ui.Context, chatID string, message *model.Message, onUser bool) ui.Element {
 	p := colors(c)
 	var rows [][]model.Attachment
@@ -478,16 +478,34 @@ func attachmentTiles(c *ui.Context, chatID string, message *model.Message, onUse
 					// The bytes of a file sent from another Device land later; the message's
 					// change brings them in.
 					path := store.LocalFile(attachment, chatID, message.ID)
+					fileError := store.AttachmentError(attachment.ID)
 					tooltip := attachment.Name
-					if path == "" {
+					if fileError != "" {
+						tooltip = attachment.Name + ": " + fileError
+					} else if path == "" {
 						tooltip = L("%@ · fetching…", attachment.Name)
+					}
+					// A card with the file's name and its size, or, when the fetch failed, what
+					// happened; an image that failed shows the same card in its box.
+					card := func(symbolName string) {
+						symbol(c, symbolName, 20, 1.8)
+						ui.Column(c).MinWidth(0).Shrink(1).Children(func() {
+							ui.Text(c, attachment.Name).FontSize(12.5).FontWeight(500).SingleLine()
+							detail := model.SizeText(attachment.Size)
+							if fileError != "" {
+								detail = L("Couldn't download · Retry")
+							}
+							ui.Text(c, detail).FontSize(11).Opacity(0.7)
+						})
 					}
 					var tile ui.Element
 					if attachment.IsImage() {
 						w, h := imageSize(attachment)
 						tile = ui.ButtonBase(c.Key(attachment.ID)).Size(w, h).Radius(8).Clip().Background(p.Code)
 						tile.Children(func() {
-							if bitmap := loadBitmap(path); bitmap != nil {
+							if fileError != "" {
+								ui.Row(c).FillWidth().FillHeight().Padding(0, 10).Gap(8).Children(func() { card("photo") })
+							} else if bitmap := loadBitmap(path); bitmap != nil {
 								ui.Image(c, bitmap).Size(w, h).Fit(ui.Cover)
 							}
 						})
@@ -496,17 +514,31 @@ func attachmentTiles(c *ui.Context, chatID string, message *model.Message, onUse
 						if onUser {
 							tile.Background(ui.RGBA(255, 255, 255, 0.18))
 						}
-						tile.Children(func() {
-							symbol(c, "doc.fill", 20, 1.8)
-							ui.Column(c).MinWidth(0).Shrink(1).Children(func() {
-								ui.Text(c, attachment.Name).FontSize(12.5).FontWeight(500).SingleLine()
-								ui.Text(c, model.SizeText(attachment.Size)).FontSize(11).Opacity(0.7)
-							})
-						})
+						tile.Children(func() { card("doc.fill") })
 					}
 					tile.Label(attachment.Name).Tooltip(tooltip)
-					if tile.Clicked() && path != "" {
-						openFile(path)
+					messageID := message.ID
+					tile.ContextMenu(func(menu *ui.Menu) {
+						switch {
+						case fileError != "":
+							if menu.Item(L("Try Again")).Chosen() {
+								store.RetryAttachment(attachment, chatID, messageID)
+							}
+						case path != "" && app.main != nil:
+							if menu.Item(L("Open")).Chosen() {
+								app.main.openAttachment(attachment)
+							}
+							if menu.Item(L("Save As…")).Chosen() {
+								app.main.saveAttachment(attachment)
+							}
+						}
+					})
+					if tile.Clicked() {
+						if fileError != "" {
+							store.RetryAttachment(attachment, chatID, messageID)
+						} else if path != "" && app.main != nil {
+							app.main.openAttachment(attachment)
+						}
 					}
 				}
 			})

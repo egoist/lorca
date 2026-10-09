@@ -81,6 +81,11 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
     let routine = match job.routine_id.as_deref() {
         Some(id) => match app.routine(id) {
             Some(routine) => {
+                // A job sent before three failed sign-ins paused the routine waits for a resume.
+                if routine.paused_reason.as_deref() == Some("authentication") {
+                    app.notice(&job.chat_id, crate::routines::signed_out_text(&routine));
+                    return TurnOutcome::Skipped;
+                }
                 crate::routines::started(app, id);
                 let marker = Message::new(&job.chat_id, Author::System, Body::Notice { text: format!("Routine · {}", routine.name), routine_id: Some(id.to_string()) });
                 trigger = Trigger { message_id: marker.id.clone(), routine: Some(routine.clone()) };
@@ -97,6 +102,9 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
     let provider = match providers::provider_for(app, &bot.provider, bot.model.as_deref(), providers::thinking_level(&bot)) {
         Ok(provider) => provider,
         Err(reason) => {
+            if let Some(id) = job.routine_id.as_deref() {
+                crate::routines::model_result(app, id, Some(&reason));
+            }
             let label = app.credentials.lock().unwrap().label(&bot.provider);
             app.notice(&job.chat_id, format!("{} cannot run yet: {reason}. Connect {label} in Settings.", bot.name));
             return TurnOutcome::Skipped;
@@ -115,6 +123,7 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
         .rev()
         .filter_map(|m| match (&m.author, &m.body) {
             (Author::You, Body::Text { attachments, .. }) => Some(attachments.clone()),
+            (_, Body::Text { attachments, .. }) if m.output.is_some() => Some(attachments.clone()),
             _ => None,
         })
         .flatten()
@@ -127,9 +136,12 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
     let window = provider.model_info().map(|i| i.context_window).unwrap_or(0);
     let settings = compaction_settings(window);
     let store = MemoryStore::for_bot(&app.config.home, &bot);
-    // The prompt names the installed plugins; their tools are in the codemode tool's description,
-    // and their servers stay dormant until a script calls them.
-    let plugin_briefs = crate::plugins::mcp::plugin_briefs(app);
+    // The prompt names the installed plugins the bot's Access lets it use; their tools are in the
+    // codemode tool's description, and their servers stay dormant until a script calls them.
+    let plugin_briefs: Vec<_> = crate::plugins::mcp::plugin_briefs(app)
+        .into_iter()
+        .filter(|brief| bot.permissions.as_ref().is_none_or(|policy| policy.allows_connection(&brief.id)))
+        .collect();
     let system_prompt = system_prompt(app, &chat, &bot, job, &store, routine.as_ref(), &plugin_briefs);
 
     let unattended = routine.is_some();
@@ -139,12 +151,17 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
         Arc::new(CreateBot { app: app.clone(), chat_id: chat.meta.id.clone(), bot: bot.clone() }),
         Arc::new(EditBot { app: app.clone(), bot: bot.clone() }),
         Arc::new(Routines { app: app.clone(), bot: bot.clone() }),
+        Arc::new(crate::review_execution::StageReview { app: app.clone(), bot: bot.clone(), chat_id: chat.meta.id.clone(), trigger: trigger.clone() }),
+        Arc::new(crate::tasks::TasksTool { app: app.clone(), bot_id: bot.id.clone(), chat_id: chat.meta.id.clone(), job_id: job.id.clone() }),
+        Arc::new(crate::outputs::PublishOutputTool { app: app.clone(), chat_id: chat.meta.id.clone(), bot: bot.clone(), workdir: workdir.clone() }),
         Arc::new(SearchPlugins { app: app.clone() }),
         Arc::new(InstallPlugin { app: app.clone(), chat_id: chat.meta.id.clone(), bot: bot.clone(), unattended }),
         Arc::new(ConnectPlugin { app: app.clone(), chat_id: chat.meta.id.clone(), bot: bot.clone() }),
     ];
-    // A bot's browser profiles come with the Browser plugin on its Runner.
-    if app.plugins.lock().unwrap().get(crate::browser::PLUGIN_ID).is_some() {
+    // A bot's browser profiles come with the Browser plugin on its Runner, when its Access
+    // allows Browser.
+    let browser = app.plugins.lock().unwrap().get(crate::browser::PLUGIN_ID).is_some();
+    if browser && bot.permissions.as_ref().is_none_or(|policy| policy.allows_connection(crate::browser::PLUGIN_ID)) {
         tools.push(Arc::new(crate::browser::SessionTool { app: app.clone(), bot: bot.clone() }));
     }
     tools.extend(memory_tools(app, &store, &chat));
@@ -153,19 +170,21 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
     // wait for input.
     let sessions = Arc::new(crate::shell::TurnSessions::new(app, &chat.meta.id, &bot.id));
     tools.extend(lorca_agent::tools::coding_tools_with_sessions(workdir.clone(), sessions, crate::shell::bot_shell_extras(app)));
+    let mut tools = crate::permissions::guarded::tools(app, &bot, &chat.meta.id, tools);
     // Plugin tools are called from codemode scripts, with the bot's own file and memory tools
     // and a bash of the scripts' own, on pipes. The tool list stays the same for the whole
     // turn, and so does its prompt cache.
     let mut scriptable: Vec<Arc<dyn Tool>> = tools.iter().filter(|tool| SCRIPTABLE_TOOLS.contains(&tool.name())).cloned().collect();
-    scriptable.push(crate::shell::script_bash(app, &workdir));
-    let plugin_tools = crate::plugins::mcp::turn_catalog_for_bot(app, scriptable, &bot.id, &chat.meta.id);
+    scriptable.extend(crate::permissions::guarded::tools(app, &bot, &chat.meta.id, vec![crate::shell::script_bash(app, &workdir)]));
+    let plugin_tools = crate::plugins::mcp::bot_catalog(app, &bot, &chat.meta.id, scriptable);
     let script_store = Arc::new(crate::scripts::ScriptStore { app: app.clone(), chat_id: chat.meta.id.clone(), bot_id: bot.id.clone() });
     let functions: Vec<Arc<dyn HostFunction>> =
         crate::scripts::ModelsAsk::new(app, &chat.meta.id, &bot.provider).map(|ask| Arc::new(ask) as Arc<dyn HostFunction>).into_iter().collect();
     // A routine's script has nobody to press Stop, so it gets less time.
     let timeout = std::time::Duration::from_secs(if unattended { 10 * 60 } else { 30 * 60 });
     let options = CodemodeOptions { mcp_types: !plugin_briefs.is_empty(), timeout, guidance: Some(SCRIPT_GUIDANCE.into()), ..CodemodeOptions::default() };
-    tools.push(Arc::new(CodemodeTool::new(plugin_tools.clone(), options).with_store(script_store).with_functions(functions)));
+    // Codemode itself also rechecks after any asynchronous review; its children have guards.
+    tools.extend(crate::permissions::guarded::tools(app, &bot, &chat.meta.id, vec![Arc::new(CodemodeTool::new(plugin_tools.clone(), options).with_store(script_store).with_functions(functions))]));
 
     // A transcript that no longer fits, or that has outgrown what a turn rebuilds, is
     // summarized before the turn starts, from the chat, so the model never sees the overflow
@@ -338,6 +357,12 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
     }
     let mut state = sink.0.lock().unwrap();
     state.finish();
+    // A routine's run counts in its streak with the provider; one that failed without the
+    // provider's error to say why, or that was stopped, leaves the streak as it was.
+    let error = state.last_error.as_deref().filter(|_| state.failed);
+    if let Some(id) = job.routine_id.as_deref().filter(|_| !cancel.is_cancelled() && (error.is_some() || !failed)) {
+        crate::routines::model_result(app, id, error);
+    }
     let outcome = if state.sent {
         TurnOutcome::Sent
     } else if failed || state.failed {
@@ -573,7 +598,12 @@ impl LoopHooks for QuietHooks {
 #[async_trait]
 impl LoopHooks for TurnHooks {
     async fn transform_context(&self, messages: Vec<AgentMessage>, _cancel: &CancellationToken) -> Vec<AgentMessage> {
-        materialize_steering_messages(&self.app, &self.bot, &self.workdir, messages).await
+        let mut messages = materialize_steering_messages(&self.app, &self.bot, &self.workdir, messages).await;
+        messages.retain(|message| !matches!(message, AgentMessage::User(user) if user.content.iter().filter_map(ContentPart::as_text).any(crate::tasks::is_context)));
+        if let Some(note) = crate::tasks::context(&self.app, &self.bot.id, &self.chat_id) {
+            messages.push(AgentMessage::User(UserMessage::text(note)));
+        }
+        messages
     }
 
     fn convert_to_llm(&self, messages: &[AgentMessage]) -> Vec<LlmMessage> {
@@ -585,6 +615,11 @@ impl LoopHooks for TurnHooks {
     }
 
     async fn before_tool_call(&self, ctx: BeforeToolCallContext<'_>) -> Option<BeforeToolCallResult> {
+        if !self.plugin_tools.is_plugin_tool(&ctx.tool_call.name) {
+            if let Err(denied) = crate::permissions::check_tool(&self.app, &self.bot, &ctx.tool_call.name) {
+                return Some(crate::permissions::refuse(&self.app, &self.chat_id, &self.bot, denied));
+            }
+        }
         if let Some(refused) = crate::browser::review_call(&self.app, &self.bot, &self.chat_id, &self.trigger, self.unattended, &ctx).await {
             return Some(refused);
         }
@@ -931,7 +966,7 @@ fn setup_cue(app: &App, setup: &TemplateSetup) -> String {
     }
     let (installed, missing): (Vec<&SetupPlugin>, Vec<&SetupPlugin>) = {
         let store = app.plugins.lock().unwrap();
-        setup.plugins.iter().partition(|plugin| store.status(&plugin.id).is_some())
+        setup.plugins.iter().partition(|plugin| store.instances(&plugin.id).next().is_some())
     };
     if !installed.is_empty() {
         let names: Vec<String> = installed.iter().map(|plugin| plugin.name.clone()).collect();
@@ -1439,11 +1474,11 @@ fn script_summary(plugins: &[String], failed: bool) -> String {
     }
 }
 
-/// What codemode scripts call besides plugin tools: the bot's own file and memory tools. `bash`
+/// What codemode scripts call besides plugin tools: the bot's own file, memory and output tools. `bash`
 /// is the scripts' own (`shell::script_bash`); the tools that hand work to teammates, change
 /// bots or routines, or install and sign in to plugins stay calls of their own, as `bash_input`
 /// and `bash_output` do.
-const SCRIPTABLE_TOOLS: [&str; 9] = ["read", "write", "edit", "grep", "find", "ls", "memory_update", "memory_log", "recall"];
+const SCRIPTABLE_TOOLS: [&str; 10] = ["read", "write", "edit", "grep", "find", "ls", "memory_update", "memory_log", "recall", "publish_output"];
 
 /// What a script's `bash` does differently from the bot's own.
 const SCRIPT_GUIDANCE: &str = "In a script, `bash` runs one command at a time, on pipes with nothing on stdin: a command that asks \
@@ -1519,7 +1554,8 @@ fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job, store: &Memo
     if let Some(routine) = routine {
         prompt.push_str(&format!(
             "\nThis turn is a run of your routine \"{}\" ({}). The user is not here: nobody answers a question now. Do the \
-             task in the routine marker below on your own, then reply with what the user should know, kept short. Answer \
+             task in the routine marker below on your own. Use stage_review to leave an editable draft or exact proposed action \
+             for later approval; an action held by Auto-review is staged automatically. Do not retry a staged call. Then reply with what the user should know, kept short. Answer \
              with exactly PASS when there is nothing new to report.\n",
             routine.name,
             schedule_words(&routine.schedule)
@@ -1536,8 +1572,13 @@ fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job, store: &Memo
         bot.id
     ));
     prompt.push_str(&routines_prompt(app, bot));
+    prompt.push_str("\nDurable work: use tasks to track multi-turn goals, ownership, acceptance criteria, dependencies, next action, blockers, and result/evidence. Open records appear after the transcript on every request, even after compaction. A queued task only runs when explicitly started with tasks run. Read the latest revision before editing; a conflict means reload, never overwrite.\n");
+    if let Some(id) = &job.task_id {
+        prompt.push_str(&format!("\nThis turn references durable task {id}. {}\n", if job.kind == "task" { "The explicit task run starts your work regardless of new group messages. You own its active run: perform its next action, record progress, and complete only with a result and supporting evidence, or record the blocker. A reply alone awaits review." } else { "This turn supports that task; it does not claim or complete the task's active run." }));
+    }
     prompt.push_str(&plugins_prompt(app, bot, plugins));
     prompt.push_str(&memory_prompt(store));
+    prompt.push_str("\nPublish deliverables with publish_output so the user can retrieve them on paired Devices. Attach test results and, for visual changes, before/after screenshots as evidence. Report failures and what remains unverified; publishing evidence does not complete a task. Creating or uploading to an external service uses its reviewed tools.\n");
 
     prompt.push_str(
         "\nWrite like a teammate in a chat app: short and direct, usually one to three sentences, and one line when one \
@@ -1546,7 +1587,8 @@ fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job, store: &Memo
          Markdown renders. Do not invent APIs, files, or results.\n",
     );
     prompt.push_str(&format!("\nTools on your Runner: {}", lorca_agent::tools::coding_tools_snippet()));
-    if cfg!(unix) {
+    let terminals = lorca_agent::tools::terminals();
+    if terminals {
         prompt.push_str(&format!(" {}", lorca_agent::tools::session_tools_snippet()));
     }
     prompt.push('\n');
@@ -1561,10 +1603,14 @@ fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job, store: &Memo
          commands with care and say what you ran.\n",
         workdir.display()
     ));
-    if cfg!(unix) {
+    if terminals {
+        prompt.push_str(if cfg!(windows) {
+            "Each command runs in a console of its own: ssh and `read` ask there"
+        } else {
+            "Each command runs in a terminal of its own, and /dev/tty is that terminal: sudo, ssh, and `read </dev/tty` ask there"
+        });
         prompt.push_str(
-            "Each command runs in a terminal of its own, and /dev/tty is that terminal: sudo, ssh, and `read </dev/tty` \
-             ask there, and what the user types into the command's card reaches them. A question a command prints into a \
+            ", and what the user types into the command's card reaches them. A question a command prints into a \
              pipe or a file (`| tail`, `> log`) never shows, so run scaffolders and installers with their non-interactive \
              options (--yes, --no-interactive). A command that stops for input \
              returns while it still runs, with a session id; answer what you know with bash_input. When it asks for \
@@ -1590,12 +1636,14 @@ fn schedule_words(schedule: &str) -> String {
 /// The routines part of the system prompt: what a routine is, how to set one up, and the
 /// bot's own list with each one's next run.
 fn routines_prompt(app: &App, bot: &Bot) -> String {
-    let mut prompt = String::from(
+    let mut prompt = format!(
         "\nRoutines: a routine is a task you run on a schedule in your direct chat with the user, with nobody typing: a \
          morning brief, an hourly check, a weekly report. When the user wants something done regularly, set it up with \
          the routines tool (a name, a schedule, and the task written as an instruction to yourself), then say the schedule \
-         back in words. To watch for something, give the routine a check, a script that runs without you and starts the \
-         run only when it finds something. Edit, pause, resume, run, or delete one when asked.\n",
+         back in words. A cron schedule keeps the timezone it was made in: this Runner's, {}, unless the user wants \
+         another. To watch for something, give the routine a check, a script that runs without you and starts the run \
+         only when it finds something. Edit, pause, resume, run, or delete one when asked.\n",
+        crate::schedule::local_timezone()
     );
     let routines = app.routines_of(&bot.id);
     if !routines.is_empty() {
@@ -1606,9 +1654,9 @@ fn routines_prompt(app: &App, bot: &Bot) -> String {
             let state = match routine.next_run_at() {
                 None => "paused".to_string(),
                 Some(_) if routine.check.is_some() => "checks first".to_string(),
-                Some(next) => format!("next {}", crate::schedule::when_label(next, now)),
+                Some(next) => format!("next {}", crate::schedule::when_label(next, now, &routine.timezone)),
             };
-            prompt.push_str(&format!("- {} · {} · {state}\n", routine.name, schedule_words(&routine.schedule)));
+            prompt.push_str(&format!("- {} · {} ({}) · {state}\n", routine.name, schedule_words(&routine.schedule), routine.timezone));
         }
     }
     prompt
@@ -1818,6 +1866,21 @@ fn transcript_bounded(app: &App, chat: &Chat, bot: &Bot, workdir: &std::path::Pa
         }
         let timestamp = (message.promoted_at.unwrap_or(message.created_at) * 1000.0) as u64;
         match (&message.author, &message.body) {
+            (Author::Bot { bot_id }, Body::Text { text, attachments, .. }) if message.output.is_some() => {
+                let output = message.output.as_ref().unwrap();
+                let mut words = format!(
+                    "[{} published \"{}\": output {}, version {}, message_id {}]",
+                    name_of(app, bot_id), output.name, output.id, output.version, message.id
+                );
+                if !text.is_empty() {
+                    words.push_str(&format!("\n{text}"));
+                }
+                let mut content = vec![ContentPart::text(words)];
+                for attachment in attachments {
+                    content.extend(crate::files::content_parts(app, attachment, workdir, pixels));
+                }
+                out.push(AgentMessage::User(UserMessage { content, timestamp }));
+            }
             (Author::You, Body::Text { text, attachments, mentions, reply_to }) if attachments.is_empty() => {
                 out.push(user(&user_words(app, bot, text, mentions, reply_to.as_ref()), timestamp))
             }
@@ -2059,6 +2122,8 @@ impl Tool for MessageBot {
             chat_id: dm.meta.id.clone(),
             bot_id: target.id.clone(),
             kind: "message".into(),
+            task_id: None,
+            task_context: None,
             trigger_message_id: incoming.id,
             routine_id: None,
             check: None,
@@ -2451,6 +2516,7 @@ impl Tool for CreateBot {
     }
     async fn execute(&self, _id: &str, args: Value, _cancel: CancellationToken, _on_update: ToolUpdateFn) -> Result<ToolResult, ToolError> {
         let name = args["name"].as_str().unwrap_or("").trim().trim_start_matches('@').to_string();
+        if args.get("permissions").is_some() { return Err("Only the user can change bot access in its profile.".into()); }
         let description = args["description"].as_str().unwrap_or("").trim().to_string();
         if name.is_empty() || description.is_empty() {
             return Err("name and description are required".into());
@@ -2481,6 +2547,7 @@ impl Tool for CreateBot {
             thinking: runs.thinking,
             legacy_instructions: String::new(),
             workdir: args["workdir"].as_str().map(|w| w.trim().to_string()).filter(|w| !w.is_empty()),
+            permissions: self.app.bot(&self.bot.id).ok_or("The calling bot is gone")?.permissions,
             created_at: 0.0,
         };
         let (created, _dm) = self.app.create_bot_with_dm(bot, None).map_err(|e| ToolError(e.to_string()))?;
@@ -2554,6 +2621,7 @@ impl Tool for EditBot {
     }
     async fn execute(&self, _id: &str, args: Value, _cancel: CancellationToken, _on_update: ToolUpdateFn) -> Result<ToolResult, ToolError> {
         let bot_id = args["bot_id"].as_str().unwrap_or("").trim();
+        if args.get("permissions").is_some() { return Err("Only the user can change bot access in its profile.".into()); }
         if bot_id.is_empty() {
             return Err("bot_id is required".into());
         }
@@ -2640,9 +2708,12 @@ impl Tool for Routines {
          create takes a name, a schedule, and a prompt (the task, written as an instruction to yourself, with everything a \
          run needs since the user is not there to answer), and a check when one fits; edit changes any of those on an \
          existing one (check \"\" removes the check); pause, resume, run (a run right now), and delete take the routine's \
-         name. A schedule is every 30m, every 2h, every 1d, or five cron fields in your Runner's local time (0 9 * * 1-5 is \
-         weekdays at 9:00 AM); at most one run per five minutes. Set one up when the user asks for something regular, and \
-         tell them the schedule in words.\n\
+         name. A schedule is every 30m, every 2h, every 1d, or five cron fields read in the routine's timezone (0 9 * * 1-5 \
+         is weekdays at 9:00 AM); at most one run per five minutes. timezone is an IANA name; a routine keeps your Runner's \
+         unless you give another. When your Runner was off at a due time, a routine runs once when it is back \
+         (missed_run_policy coalesce, the default) or waits for its next time (skip). A check or run that can't connect \
+         waits longer before each retry; three failed sign-ins in a row pause the routine until the user reconnects and \
+         resumes it. Set one up when the user asks for something regular, and tell them the schedule in words.\n\
          A check is JavaScript your Runner runs at each due time before you, with no model, so a quiet one runs no turn: \
          use one to watch something (an inbox, a repository, a feed, a page). It runs like a codemode script with only the \
          read-only plugin tools, read, grep, find, ls, store() and load() (shared with your scripts in your direct chat), and \
@@ -2659,6 +2730,8 @@ impl Tool for Routines {
                 "routine": { "type": "string", "description": "The routine's name, for edit, pause, resume, run, and delete" },
                 "name": { "type": "string", "description": "A short name, for create or a rename" },
                 "schedule": { "type": "string", "description": "every 30m, every 2h, every 1d, or five cron fields like 0 9 * * 1-5" },
+                "timezone": { "type": "string", "description": "IANA timezone the cron schedule reads in, such as America/New_York; your Runner's when left out" },
+                "missed_run_policy": { "type": "string", "enum": ["coalesce", "skip"], "description": "After due times your Runner missed: coalesce runs once when it is back (default), skip waits for the next time" },
                 "prompt": { "type": "string", "description": "What to do on each run, as an instruction to yourself" },
                 "check": { "type": "string", "description": "JavaScript run before each run, returning what needs you or nothing; \"\" on edit removes it" },
                 "enabled": { "type": "boolean", "description": "create: start it on (default) or paused" }
@@ -2675,12 +2748,17 @@ impl Tool for Routines {
         let action = field("action").unwrap_or("");
         let now = now_secs() as i64;
         let line = |routine: &Routine| {
-            let state = match crate::routines::next_run_shown(&self.app, routine) {
-                Some(next) if routine.check.is_some() => format!("next check {}", crate::schedule::when_label(next, now)),
-                Some(next) => format!("next run {}", crate::schedule::when_label(next, now)),
+            let state = match crate::routines::next_run_shown(routine) {
+                Some(next) if routine.check.is_some() => format!("next check {}", crate::schedule::when_label(next, now, &routine.timezone)),
+                Some(next) => format!("next run {}", crate::schedule::when_label(next, now, &routine.timezone)),
+                None if routine.paused_reason.as_deref() == Some("authentication") => "paused until a sign-in works again".to_string(),
                 None => "paused".to_string(),
             };
-            format!("{} · {} · {state}", routine.name, schedule_words(&routine.schedule))
+            let missed = match routine.missed_run_policy {
+                crate::routine_health::MissedRunPolicy::Coalesce => "one run after missed times",
+                crate::routine_health::MissedRunPolicy::Skip => "skips missed times",
+            };
+            format!("{} · {} ({}) · {missed} · {state}", routine.name, schedule_words(&routine.schedule), routine.timezone)
         };
         // A check runs once as it is saved: a bad one shows now, its first run records what is
         // already there, and the schedule counts from it.
@@ -2730,7 +2808,7 @@ impl Tool for Routines {
                 let schedule = field("schedule").ok_or("schedule is required")?;
                 let prompt = field("prompt").ok_or("prompt is required")?;
                 let enabled = args["enabled"].as_bool().unwrap_or(true);
-                let routine = crate::routines::create(&self.app, &self.bot.id, name, schedule, prompt, field("check"), enabled).map_err(ToolError)?;
+                let routine = crate::routines::create_with_policy(&self.app, &self.bot.id, name, schedule, prompt, field("check"), enabled, field("timezone"), field("missed_run_policy")).map_err(ToolError)?;
                 let state = if routine.is_enabled { "It is on." } else { "It starts paused." };
                 let mut text = format!("Created routine {}. {state} Runs post in your direct chat with the user.", line(&routine));
                 if routine.check.is_some() {
@@ -2741,7 +2819,7 @@ impl Tool for Routines {
             "edit" => {
                 let target = find(field("routine").ok_or("routine is required: the routine's current name")?)?;
                 let check = args["check"].as_str();
-                let routine = crate::routines::edit(&self.app, &target.id, field("name"), field("schedule"), field("prompt"), check).map_err(ToolError)?;
+                let routine = crate::routines::edit_with_policy(&self.app, &target.id, field("name"), field("schedule"), field("prompt"), check, field("timezone"), field("missed_run_policy")).map_err(ToolError)?;
                 let mut text = format!("Updated routine {}.", line(&routine));
                 if check.is_some() && routine.check.is_some() {
                     text.push_str(&tried(routine.clone()).await);
@@ -2872,6 +2950,13 @@ impl Tool for InstallPlugin {
         }
         let manifest = manifest.ok_or_else(|| ToolError(format!("No plugin {wanted:?} in the marketplace. Use search_plugins to see what exists.")))?;
         let runner = self.app.device(&self.bot.runner_id).map(|d| d.name).unwrap_or_else(|| "this Runner".into());
+        let existing = {
+            let store = self.app.plugins.lock().unwrap();
+            store.instances(&manifest.id).map(|plugin| plugin.manifest.id.clone()).collect::<Vec<_>>()
+        };
+        if manifest.named_accounts && !existing.is_empty() {
+            return Ok(ToolResult::text(format!("{} accounts are already installed on {runner}: {}. Select the intended account by its id in the codemode catalog. Ask the user if unclear; add another named account from the plugin's settings.", manifest.name, existing.join(", "))));
+        }
         if let Some(status) = self.app.plugins.lock().unwrap().status(&manifest.id) {
             let next = match status.state.as_str() {
                 "ready" => "It is ready; call its tools from a codemode script when you need them.".to_string(),
@@ -2897,15 +2982,15 @@ impl Tool for InstallPlugin {
         let status = crate::plugins::install(&self.app, manifest.clone(), "marketplace").map_err(ToolError)?;
         let next = match status.state.as_str() {
             "ready" => "It is ready; call its tools from a codemode script when you need them.".to_string(),
-            "needs_auth" => match crate::plugins::mcp::post_sign_in_card(&self.app, &self.chat_id, &self.bot.id, &manifest.id) {
+            "needs_auth" => match crate::plugins::mcp::post_sign_in_card(&self.app, &self.chat_id, &self.bot.id, &status.id) {
                 Ok(_) => format!("A sign-in card for {} is in the chat: ask the user to tap Sign in on it. After that, call its tools from a codemode script.", manifest.name),
                 Err(error) => format!("It needs a sign-in ({error}); the user can do it from this chat's inspector."),
             },
             "needs_setup" => format!("The user still has to set {} in this chat's inspector (Plugins); tell them.", status.detail.trim_start_matches("Needs ")),
             _ => status.detail.clone(),
         };
-        Ok(ToolResult::text(format!("{} is installed on {runner}. {next}", manifest.name))
-            .with_details(json!({ "summary": format!("Installed {}", manifest.name), "plugin_id": manifest.id })))
+        Ok(ToolResult::text(format!("{} is installed on {runner} with account id {}. {next}", status.name, status.id))
+            .with_details(json!({ "summary": format!("Installed {}", status.name), "plugin_id": status.id })))
     }
 }
 
@@ -2953,6 +3038,9 @@ impl Tool for ConnectPlugin {
             .find(|p| p.id.to_lowercase() == wanted || p.name.to_lowercase() == wanted)
             .map(|p| p.id)
             .ok_or_else(|| ToolError(format!("No plugin {wanted:?} is installed here. Use search_plugins and install_plugin first.")))?;
+        if !self.app.bot(&self.bot.id).and_then(|bot| bot.permissions).is_none_or(|policy| policy.allows_connection(&id)) {
+            return Err(ToolError(format!("{wanted} is off for this bot in its Access settings, which only the user changes.")));
+        }
         let message = crate::plugins::mcp::post_sign_in_card(&self.app, &self.chat_id, &self.bot.id, &id).map_err(ToolError)?;
         let Body::Permission { plugin_name, .. } = &message.body else { unreachable!() };
         Ok(ToolResult::text(format!("A sign-in card for {plugin_name} is in the chat. Ask the user to tap Sign in on it, then to tell you when it is done."))
@@ -3112,6 +3200,31 @@ mod tests {
     }
 
     #[test]
+    fn published_output_files_remain_inspectable_in_later_turn_context() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        crate::identity::create(app, None).unwrap();
+        let bot = app.state.lock().unwrap().bots[0].clone();
+        let chat = app.state.lock().unwrap().chats[0].clone();
+        let workdir = bot.working_directory(&app.config.home);
+        std::fs::create_dir_all(&workdir).unwrap();
+        std::fs::write(workdir.join("tests.log"), "all tests passed").unwrap();
+        let output = crate::outputs::publish(app, &chat.meta.id, &bot.id, &workdir, crate::outputs::PublishOutput {
+            name: "Tests.log".into(), path: Some("tests.log".into()), ..Default::default()
+        }).unwrap();
+        let transcript = transcript_for(app, &chat, &bot, &workdir);
+        let words = transcript.iter().filter_map(|message| match message {
+            AgentMessage::User(message) => Some(message.content.iter().filter_map(ContentPart::as_text).collect::<Vec<_>>().join("\n")),
+            _ => None,
+        }).collect::<Vec<_>>().join("\n");
+        assert!(words.contains(&output.id), "the immutable version reference is in context");
+        assert!(words.contains("[Attached: Tests.log"), "the file is named where the next turn can inspect it");
+        let Body::Text { attachments, .. } = &output.body else { panic!() };
+        let materialized = crate::files::materialize(app, &attachments[0], &workdir).unwrap();
+        assert_eq!(std::fs::read_to_string(materialized).unwrap(), "all tests passed");
+    }
+
+    #[test]
     fn a_pass_never_shows() {
         assert!(is_pass("PASS"));
         assert!(is_pass(" pass. "));
@@ -3174,6 +3287,28 @@ mod tests {
         ScratchApp(app, home)
     }
 
+    #[tokio::test]
+    async fn bot_permissions_cannot_be_granted_by_edit_or_teammate_creation() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        crate::identity::create(app, Some("Runner".into())).unwrap();
+        let caller = app.state.lock().unwrap().bots[0].clone();
+        let chat_id = app.dm_with(&caller.id, None).unwrap().meta.id;
+        let create = CreateBot { app: app.clone(), bot: caller.clone(), chat_id };
+        let policy = serde_json::from_value(json!({"connections":{},"shell":false,"filesystem":"none"})).unwrap();
+        app.update_bot(&caller.id, |bot| bot.permissions = Some(policy)).unwrap();
+        let update: ToolUpdateFn = Arc::new(|_| {});
+        create.execute("new", json!({"name":"Inbox", "description":"Read selected inbox"}), CancellationToken::new(), update.clone()).await.unwrap();
+        let created = app.state.lock().unwrap().bots.iter().find(|bot| bot.name == "Inbox").unwrap().clone();
+        assert_eq!(created.permissions, app.bot(&caller.id).unwrap().permissions, "inherit current policy, not the turn's snapshot");
+        let edit = EditBot { app: app.clone(), bot: caller.clone() };
+        let refused = edit.execute("grant", json!({"bot_id":caller.id,"permissions":{}}), CancellationToken::new(), update.clone()).await.unwrap_err();
+        assert!(refused.0.contains("Only the user"));
+        let refused = create.execute("grant", json!({"name":"Admin","description":"Use everything","permissions":{}}), CancellationToken::new(), update).await.unwrap_err();
+        assert!(refused.0.contains("Only the user"));
+        assert_eq!(app.state.lock().unwrap().bots.len(), 2);
+    }
+
     fn bot(id: &str, name: &str) -> Bot {
         Bot {
             id: id.into(),
@@ -3188,6 +3323,7 @@ mod tests {
             thinking: None,
             legacy_instructions: String::new(),
             workdir: None,
+            permissions: None,
             created_at: 0.0,
         }
     }
@@ -3240,6 +3376,8 @@ mod tests {
             chat_id: chat_id.into(),
             bot_id: bot_id.into(),
             kind: "room_turn".into(),
+            task_id: None,
+            task_context: None,
             trigger_message_id: String::new(),
             routine_id: None,
             check: None,
@@ -3423,7 +3561,7 @@ mod tests {
             state.bots.push(chef.clone());
             state.chats.push(chat("chat", "dm", None, &["b1"]));
         }
-        app.set_auto_review(AutoReview { is_enabled: false, rules: Vec::new() });
+        app.set_auto_review(AutoReview { is_enabled: false, ..AutoReview::default() });
         let catalog = linear_catalog(app);
         let assistant = AssistantMessage::empty("test", "test");
         let context = AgentContext { system_prompt: String::new(), messages: Vec::new(), tools: Vec::new(), cache_points: Vec::new() };
@@ -3614,6 +3752,8 @@ mod tests {
                 chat_id: "chat".into(),
                 bot_id: bot.id.clone(),
                 kind: "turn".into(),
+                task_id: None,
+                task_context: None,
                 trigger_message_id: String::new(),
                 check: None,
                 routine_id: None,
@@ -3645,7 +3785,7 @@ mod tests {
 
     /// One call as `run_job` makes it: the row goes up as the call starts, and the result lands
     /// in it when the call returns. Returns the row as it is then.
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     async fn call_tool(turn: &mut TurnState, tool: &dyn Tool, call_id: &str, args: Value) -> (Message, Result<ToolResult, ToolError>) {
         turn.handle(AgentEvent::ToolExecutionStart { tool_call_id: call_id.into(), tool_name: tool.name().into(), args: args.clone() });
         let result = tool.execute(call_id, args, CancellationToken::new(), Arc::new(|_| {})).await;
@@ -3667,7 +3807,7 @@ mod tests {
     }
 
     /// The row once its session's state reached it: the watcher writes it when the command ends.
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     async fn row_when(app: &Arc<App>, message_id: &str, done: impl Fn(&CommandRun) -> bool) -> Message {
         tokio::time::timeout(Duration::from_secs(10), async {
             loop {
@@ -3904,14 +4044,15 @@ mod tests {
     /// A call's result and its command's card go up in one write, so no Device sees the call
     /// returned beside a card that still reads as running: the apps show a card after its call
     /// only while the command runs on.
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[tokio::test]
     async fn a_returned_call_goes_up_with_its_card() {
         use lorca_agent::tools::BashTool;
         let (scratch, chef) = chef_in_a_dm();
         let app = &scratch.0;
         let mut turn = turn_state(app, &chef, "dev");
-        // On pipes, as on Windows: no session follows the command, so the call ends its card.
+        // On pipes, as on a Windows without a pseudo console: no session follows the command, so the
+        // call ends its card.
         let bash = BashTool::new(scratch.1.clone());
         let mut events = app.events.subscribe();
         let (row, _) = call_tool(&mut turn, &bash, "call-1", json!({ "command": "echo hi", "description": "Say hi" })).await;
@@ -4130,7 +4271,7 @@ mod tests {
         assert_eq!(terminal(&there).state, "waiting", "another Runner's command is its own");
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[tokio::test]
     async fn stop_and_deleting_the_chat_end_what_waits_there() {
         use lorca_agent::tools::{BashSessions, BashTool, SessionEnd};
@@ -4240,7 +4381,7 @@ mod tests {
 
     /// Run in Background on a command the bot is waiting on: its call returns, and from then on
     /// it is a background command.
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[tokio::test]
     async fn the_user_sends_a_running_command_to_the_background() {
         use lorca_agent::tools::{BashSessions, BashTool};

@@ -1,11 +1,13 @@
 import { CameraView, useCameraPermissions } from "expo-camera";
 import * as Clipboard from "expo-clipboard";
-import * as Haptics from "expo-haptics";
+import { ClipboardPasteButton } from "expo-clipboard";
+import { haptic } from "../src/ui/haptics";
 import * as Application from "expo-application";
 import { LinearGradient } from "expo-linear-gradient";
 import { useEffect, useRef, useState } from "react";
 import { useLocalSearchParams } from "expo-router";
-import { ActivityIndicator, Alert, Image, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Image, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Pressable } from "../src/ui/Pressable";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { engine } from "../src/core/engine";
 import { hostFacts } from "../src/core/host";
@@ -13,6 +15,7 @@ import { parsePairingString } from "../src/core/pairing";
 import { t, useLanguage } from "../src/i18n";
 import { Symbol } from "../src/ui/Symbol";
 import { Font, usePalette } from "../src/ui/theme";
+import { alert } from "../src/ui/alert";
 
 type Phase = "idle" | "posting" | "waiting";
 const appIcon = Application.applicationId === "app.lorca.dev" ? require("../assets/icon-dev.png") : require("../assets/icon.png");
@@ -52,11 +55,11 @@ export default function PairScreen() {
     try {
       parsePairingString(text);
     } catch (error) {
-      Alert.alert(t("Not a pairing code"), error instanceof Error ? error.message : String(error));
+      alert(t("Not a pairing code"), error instanceof Error ? error.message : String(error));
       return;
     }
     if (lastFailed.current === text.trim()) {
-      Alert.alert(t("Code already used"), t("Each code pairs one Device. Get a fresh code from Lorca on the other computer."));
+      alert(t("Code already used"), t("Each code pairs one Device. Get a fresh code from Lorca on the other computer."));
       return;
     }
     inFlight.current = true;
@@ -64,24 +67,45 @@ export default function PairScreen() {
     setPhase("posting");
     try {
       await engine.pair(text, name, (progress) => setPhase(progress.phase === "done" ? "idle" : progress.phase), cancel.current.signal);
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      haptic.success();
     } catch (error) {
       setPhase("idle");
       // Cancel was tapped here: the core's "Pairing cancelled" is not news.
       if (cancel.current?.signal.aborted) return;
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      haptic.error();
       lastFailed.current = text.trim();
-      Alert.alert(t("Pairing failed"), error instanceof Error ? error.message : String(error));
+      alert(t("Pairing failed"), error instanceof Error ? error.message : String(error));
     } finally {
       inFlight.current = false;
     }
   }
 
+  // The system's scanner where there is one: VisionKit's on iOS, Google's code scanner on Android
+  // (no camera permission). It reports the code here; the camera screen below is the fallback.
+  useEffect(() => {
+    if (!CameraView.isModernBarcodeScannerAvailable) return;
+    const subscription = CameraView.onModernBarcodeScanned(({ data }) => {
+      if (!data.includes("pair?") || inFlight.current || scanned.current) return;
+      scanned.current = true;
+      void CameraView.dismissScanner();
+      haptic.scanned();
+      setCode(data);
+      void pair(data);
+    });
+    return () => subscription.remove();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   async function scan() {
+    if (CameraView.isModernBarcodeScannerAvailable) {
+      scanned.current = false;
+      await CameraView.launchScanner({ barcodeTypes: ["qr"], isGuidanceEnabled: true, isHighlightingEnabled: true });
+      return;
+    }
     if (!permission?.granted) {
       const result = await requestPermission();
       if (!result.granted) {
-        Alert.alert(t("Camera access needed"), t("Allow the camera to scan the pairing code, or paste the code instead."));
+        alert(t("Camera access needed"), t("Allow the camera to scan the pairing code, or paste the code instead."));
         return;
       }
     }
@@ -90,12 +114,15 @@ export default function PairScreen() {
   }
 
   async function paste() {
-    const text = (await Clipboard.getStringAsync()).trim();
+    takePasted((await Clipboard.getStringAsync()).trim());
+  }
+
+  function takePasted(text: string) {
     if (text.includes("pair?")) {
       setCode(text);
       void pair(text);
     } else {
-      Alert.alert(t("Nothing to paste"), t("Copy a pairing code from Lorca on another computer first."));
+      alert(t("Nothing to paste"), t("Copy a pairing code from Lorca on another computer first."));
     }
   }
 
@@ -130,10 +157,23 @@ export default function PairScreen() {
                 <Symbol name="qrcode.viewfinder" size={20} color={p.userBubbleText} weight="semibold" />
                 <Text style={[styles.primaryText, { color: p.userBubbleText }]}>{t("Scan Code")}</Text>
               </Pressable>
-              <Pressable onPress={paste} style={({ pressed }) => [styles.secondary, { backgroundColor: p.fill, opacity: pressed ? 0.7 : 1 }]}>
-                <Symbol name="doc.on.clipboard" size={18} color={p.tint} />
-                <Text style={[styles.secondaryText, { color: p.tint }]}>{t("Paste Code")}</Text>
-              </Pressable>
+              {Clipboard.isPasteButtonAvailable ? (
+                // UIKit's paste control: the code arrives on a tap, with no "Allow Paste" question.
+                <ClipboardPasteButton
+                  onPress={(data) => takePasted(data.type === "text" ? data.text.trim() : "")}
+                  acceptedContentTypes={["plain-text"]}
+                  displayMode="iconAndLabel"
+                  cornerStyle="large"
+                  backgroundColor={p.dark ? "#2C2C2E" : "#E5E5EA"}
+                  foregroundColor={p.dark ? "#0A84FF" : "#007AFF"}
+                  style={styles.pasteControl}
+                />
+              ) : (
+                <Pressable onPress={paste} style={({ pressed }) => [styles.secondary, { backgroundColor: p.fill, opacity: pressed ? 0.7 : 1 }]}>
+                  <Symbol name="doc.on.clipboard" size={18} color={p.tint} />
+                  <Text style={[styles.secondaryText, { color: p.tint }]}>{t("Paste Code")}</Text>
+                </Pressable>
+              )}
               <View style={[styles.card, { backgroundColor: p.cell, marginTop: 8 }]}>
                 <Text style={[styles.label, { color: p.secondaryLabel }]}>{t("OR TYPE IT")}</Text>
                 <TextInput
@@ -166,13 +206,13 @@ export default function PairScreen() {
               if (!data.includes("pair?") || inFlight.current || scanned.current) return;
               scanned.current = true;
               setScanning(false);
-              void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+              haptic.scanned();
               setCode(data);
               void pair(data);
             }}
           />
           <View style={[styles.scanOverlay, { paddingTop: insets.top + 12 }]}>
-            <Pressable onPress={() => setScanning(false)} style={styles.close} hitSlop={10} accessibilityLabel={t("Close")}>
+            <Pressable onPress={() => setScanning(false)} style={styles.close} hitSlop={10} ripple="borderless" accessibilityLabel={t("Close")}>
               <Symbol name="xmark" size={16} color="#FFFFFF" weight="bold" />
             </Pressable>
             <Text style={styles.scanHint}>{t("Point at the pairing QR code")}</Text>
@@ -201,6 +241,7 @@ const styles = StyleSheet.create({
   primaryText: { fontSize: Font.body, fontWeight: "600" },
   secondary: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, borderRadius: 14, paddingVertical: 14 },
   secondaryText: { fontSize: Font.body, fontWeight: "600" },
+  pasteControl: { height: 50, width: "100%" },
   progress: { flexDirection: "row", alignItems: "center", gap: 12 },
   scanOverlay: { position: "absolute", top: 0, left: 0, right: 0, paddingHorizontal: 16, flexDirection: "row", alignItems: "center", gap: 12 },
   close: { width: 36, height: 36, borderRadius: 18, backgroundColor: "rgba(0,0,0,0.5)", alignItems: "center", justifyContent: "center" },

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"maps"
+	"slices"
 	"testing"
 	"time"
 
@@ -149,6 +151,135 @@ func TestSettingsAutoReview(t *testing.T) {
 		t.Fatalf("after delete, rules %+v", got)
 	}
 	renderTo(t, tt, "settings-auto-review-after")
+}
+
+// Reviews with picks the provider whose review model Auto-review runs: the bot's own, or any
+// connected one, decision providers included.
+func TestSettingsReviewsWith(t *testing.T) {
+	m, tt := settingsWindowTester(t, 900)
+	m.showSettings(model.PaneAutoReview)
+	settle(tt)
+	// The demo reviews with a decision provider; the model is Providers' to pick.
+	for _, text := range []string{L("Reviews with"), L("Provider"), "OpenRouter Decisions"} {
+		if !tt.HasText(text) {
+			t.Errorf("no %q in %q", text, tt.Texts())
+		}
+	}
+	if tt.HasText(L("Model")) || tt.HasText("Perplexity: Decider V1.1 27B") {
+		t.Errorf("a model row: %q", tt.Texts())
+	}
+	renderBoth(t, tt, "settings-reviews-with")
+	if err := tt.Click("OpenRouter Decisions"); err != nil {
+		t.Fatal(err)
+	}
+	// The bot's own provider, then every connected one in the account's order, decision ones too.
+	want := []string{L("Bot's provider"), "-", "DeepSeek", "Anthropic", "ChatGPT", "Ollama", "OpenRouter Decisions"}
+	if got := tt.Menu(); len(got) != len(want) || got[2] != want[2] || got[4] != want[4] || got[6] != want[6] {
+		t.Fatalf("providers %q", got)
+	}
+	if err := tt.ChooseMenuItem("Anthropic"); err != nil {
+		t.Fatal(err)
+	}
+	settle(tt)
+	if got := store.AutoReview; got.Provider != "anthropic" || got.Models["anthropic"] != "claude-opus-5" || len(got.Rules) != 2 {
+		t.Fatalf("after the provider: %+v", got)
+	}
+	// The switch keeps the provider.
+	r, ok := tt.Find(autoReviewSwitchEntry().row)
+	if !ok {
+		t.Fatal("no switch row")
+	}
+	tt.ClickAt(r.X+r.W-25, r.Y+r.H/2)
+	settle(tt)
+	if got := store.AutoReview; got.IsEnabled || got.Provider != "anthropic" {
+		t.Errorf("after the switch: %+v", got)
+	}
+	// A provider no longer connected reads as the bot's own.
+	store.Credential("anthropic").IsConnected = false
+	settle(tt)
+	if !tt.HasText(L("Bot's provider")) {
+		t.Errorf("disconnected: %q", tt.Texts())
+	}
+	store.Credential("anthropic").IsConnected = true
+	settle(tt)
+	if err := tt.Click("Anthropic"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.ChooseMenuItem(L("Bot's provider")); err != nil {
+		t.Fatal(err)
+	}
+	settle(tt)
+	if got := store.AutoReview; got.Provider != "" {
+		t.Errorf("back to the bot's provider: %+v", got)
+	}
+}
+
+// Review Models picks each connected provider's review model: its default, named by the provider's
+// status, or any of its models, decision models included.
+func TestSettingsReviewModels(t *testing.T) {
+	m, tt := settingsWindowTester(t, 1100)
+	store.Credential("opencode").IsConnected = true
+	m.showSettings(model.PaneProviders)
+	settle(tt)
+	note := L("Auto-review runs the review model of the bot's provider, or of the provider picked in Auto-review. A decision model writes no rule, so a card it pauses offers Allow once and Deny.")
+	// The demo's overrides, and the defaults of the rest.
+	for _, text := range []string{L("Review Models"), note, "Claude Opus 5", "Perplexity: Decider V1.1 27B", L("Default (%@)", "DeepSeek V4.1 Flash"), L("Default (%@)", "GPT-6 Luna"), L("Default (%@)", "qwen3:8b")} {
+		if !tt.HasText(text) {
+			t.Errorf("no %q in %q", text, tt.Texts())
+		}
+	}
+	// One Default for DeepSeek, one for OpenCode Zen, whose review model has the same name.
+	opencode := L("Default (%@)", "DeepSeek V4.1 Flash")
+	if got := len(slices.DeleteFunc(tt.Texts(), func(text string) bool { return text != opencode })); got != 2 {
+		t.Errorf("%d DeepSeek V4.1 Flash defaults", got)
+	}
+	renderBoth(t, tt, "settings-review-models")
+	// Every model of the provider, its decision models too. With DeepSeek away, OpenCode Zen's
+	// Default is the one left.
+	store.Credential("deepseek").IsConnected = false
+	settle(tt)
+	if err := tt.Click(opencode); err != nil {
+		t.Fatal(err)
+	}
+	if got := tt.Menu(); len(got) != 7 || got[0] != opencode || got[1] != "-" || got[6] != "Jev 1.13 Free" {
+		t.Fatalf("models %q", got)
+	}
+	if err := tt.ChooseMenuItem("Jev 1.13 Free"); err != nil {
+		t.Fatal(err)
+	}
+	settle(tt)
+	want := map[model.ProviderKind]string{"anthropic": "claude-opus-5", "custom:openrouter-decisions": "perplexity/pplx-decider-v1.1-27b", "opencode": "jev-1.13-free"}
+	if got := store.AutoReview.Models; !maps.Equal(got, want) {
+		t.Fatalf("after the pick: %v", got)
+	}
+	// Default puts the provider's back.
+	if err := tt.Click("Claude Opus 5"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.ChooseMenuItem(L("Default (%@)", "Claude Haiku 4.5")); err != nil {
+		t.Fatalf("%v: %q", err, tt.Menu())
+	}
+	settle(tt)
+	delete(want, "anthropic")
+	if got := store.AutoReview.Models; !maps.Equal(got, want) || !tt.HasText(L("Default (%@)", "Claude Haiku 4.5")) {
+		t.Fatalf("after Default: %v", got)
+	}
+	// A model the provider no longer lists shows by its id; a provider without a review model has
+	// a plain Default.
+	store.AutoReview.Models["opencode"] = "jev-1.12"
+	store.Credential("custom:ollama").ReviewModel = ""
+	settle(tt)
+	if !tt.HasText("jev-1.12") || !tt.HasText(L("Default")) {
+		t.Errorf("unlisted: %q", tt.Texts())
+	}
+	// No provider connected, no section.
+	for i := range store.Providers {
+		store.Providers[i].IsConnected = false
+	}
+	settle(tt)
+	if tt.HasText(L("Review Models")) || tt.HasText(note) {
+		t.Errorf("with none connected: %q", tt.Texts())
+	}
 }
 
 func TestSettingsReveal(t *testing.T) {

@@ -91,7 +91,7 @@ func TestRenderPluginSheetSignIn(t *testing.T) {
 		}}
 	m.present(s.view, nil)
 	sheetASettle(tt)
-	for _, text := range []string{"atlassian", "Installed on Studio.", "Waiting for the sign-in", "Site", "www.atlassian.com", "jira", "WDJB-MJHT", "Copy code and open auth.atlassian.com", "confluence", "ATLASSIAN_SITE *", "SKILLS", "triage", "Keys and sign-ins are sent sealed to Studio and stay there."} {
+	for _, text := range []string{"Atlassian", "Installed on Studio.", "Waiting for the sign-in", "Site", "www.atlassian.com", "jira", "WDJB-MJHT", "Copy code and open auth.atlassian.com", "confluence", "ATLASSIAN_SITE *", "SKILLS", "triage", "Keys and sign-ins are sent sealed to Studio and stay there."} {
 		if !tt.HasText(text) {
 			t.Errorf("no %q in %q", text, tt.Texts())
 		}

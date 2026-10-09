@@ -2,8 +2,9 @@
 // preview without a "You:" prefix (three pulsing dots and "Working…" while the chat has a turn
 // in flight), and the unread count pill beside it.
 
-import { memo, useEffect } from "react";
-import { Pressable, StyleSheet, Text, View, type ColorValue } from "react-native";
+import { memo, useEffect, useMemo } from "react";
+import { StyleSheet, Text, View, type ColorValue } from "react-native";
+import { Pressable } from "./Pressable";
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withRepeat, withTiming, type SharedValue } from "react-native-reanimated";
 import type { Bot, Chat } from "../core/model";
 import { t, useLanguage } from "../i18n";
@@ -18,7 +19,7 @@ import { Font, usePalette } from "./theme";
 export const ChatRow = memo(function ChatRow({ chat, bots, title, working, responding, selected, onPress, onLongPress }: { chat: Chat; bots: Map<string, Bot>; title: string; working: boolean; responding: boolean; selected?: boolean; onPress: () => void; onLongPress?: () => void }) {
   useLanguage();
   const p = usePalette();
-  const members = chat.bot_ids.map((id) => bots.get(id)).filter((b): b is Bot => !!b);
+  const members = useMemo(() => chat.bot_ids.map((id) => bots.get(id)).filter((b): b is Bot => !!b), [chat.bot_ids, bots]);
   const unread = chat.unread_count;
   return (
     <Pressable onPress={onPress} onLongPress={onLongPress} style={({ pressed }) => [styles.row, { backgroundColor: pressed || selected ? p.fill : "transparent" }]}>
@@ -60,8 +61,10 @@ export const ChatRow = memo(function ChatRow({ chat, bots, title, working, respo
   );
 });
 
-/// Three dots that light up in turn: a wave runs across them, then they rest.
-function PulsingDots({ color }: { color: ColorValue }) {
+/// Three dots that light up in turn: a wave runs across them, then they rest. Memoized: the row
+/// renders again with every streamed piece of the reply, and an animated style re-rendered reads
+/// its shared values back from the UI thread.
+const PulsingDots = memo(function PulsingDots({ color }: { color: ColorValue }) {
   const beat = useSharedValue(0);
   useEffect(() => {
     beat.value = withRepeat(withTiming(1, { duration: 1200, easing: Easing.linear }), -1);
@@ -73,7 +76,7 @@ function PulsingDots({ color }: { color: ColorValue }) {
       ))}
     </View>
   );
-}
+});
 
 function PulsingDot({ beat, index, color }: { beat: SharedValue<number>; index: number; color: ColorValue }) {
   const animated = useAnimatedStyle(() => {

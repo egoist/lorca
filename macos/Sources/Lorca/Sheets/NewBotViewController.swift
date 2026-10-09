@@ -62,6 +62,7 @@ final class NewBotViewController: SheetViewController {
             field.translatesAutoresizingMaskIntoConstraints = false
             field.delegate = self
         }
+        descriptionField.heightAnchor.constraint(greaterThanOrEqualToConstant: 54).isActive = true
 
         runnerPopup.translatesAutoresizingMaskIntoConstraints = false
         for device in store.runners {
@@ -85,15 +86,15 @@ final class NewBotViewController: SheetViewController {
 
         buildLookRow()
 
-        let thinkingRow = labeled(L("Thinking"), thinkingPopup)
+        let thinkingRow = formRow(L("Thinking"), thinkingPopup)
         self.thinkingRow = thinkingRow
         let rows = [
-            labeled(L("Name"), nameField),
-            labeled(L("Description"), descriptionField, topAligned: true),
-            labeled(L("Look"), lookRow),
-            labeled(L("Runner"), runnerPopup),
-            labeled(L("Provider"), providerPopup),
-            labeled(L("Model"), modelPopup),
+            formRow(L("Name"), nameField),
+            formRow(L("Description"), descriptionField, topAligned: true),
+            formRow(L("Look"), lookRow),
+            formRow(L("Runner"), runnerPopup),
+            formRow(L("Provider"), providerPopup),
+            formRow(L("Model"), modelPopup),
             thinkingRow,
             note,
         ]
@@ -106,33 +107,6 @@ final class NewBotViewController: SheetViewController {
 
         setButtons(confirm: L("Create Bot"))
         runnerChanged()
-    }
-
-    private func labeled(_ title: String, _ control: NSView, topAligned: Bool = false) -> NSView {
-        let container = NSView()
-        container.translatesAutoresizingMaskIntoConstraints = false
-        let label = Build.label(title, font: .systemFont(ofSize: 12), color: .secondaryLabelColor)
-        container.addSubview(label)
-        container.addSubview(control)
-        let labelAlignment = topAligned
-            ? label.topAnchor.constraint(equalTo: control.topAnchor, constant: 6)
-            : label.centerYAnchor.constraint(equalTo: control.centerYAnchor)
-        NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            labelAlignment,
-            label.widthAnchor.constraint(equalToConstant: 76),
-            control.leadingAnchor.constraint(equalTo: label.trailingAnchor, constant: 10),
-            control.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor),
-            control.topAnchor.constraint(equalTo: container.topAnchor),
-            control.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-        ])
-        if control is NSTextField || control is NSPopUpButton {
-            control.trailingAnchor.constraint(equalTo: container.trailingAnchor).isActive = true
-        }
-        if control === descriptionField {
-            control.heightAnchor.constraint(greaterThanOrEqualToConstant: 54).isActive = true
-        }
-        return container
     }
 
     private func buildLookRow() {

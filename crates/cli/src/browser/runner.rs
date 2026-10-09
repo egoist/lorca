@@ -10,7 +10,7 @@ use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 use tokio_util::sync::CancellationToken;
 
 use crate::app::App;
-use crate::model::{Author, Body, Bot, Message};
+use crate::model::{Bot, Message};
 use crate::plugins::mcp::Server;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -558,10 +558,11 @@ fn require_chat(app: &App, chat_id: &str, bot_id: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// A screenshot of a profile's browser as the bot's message in the chat: the PNG travels as an
-/// encrypted `file` blob, as any attachment does.
+/// A screenshot of a profile's browser, published as the bot's output in the chat: one series per
+/// profile, each screenshot its next version, an after screenshot no one has verified.
 pub fn publish_image(app: &Arc<App>, bot_id: &str, chat_id: &str, name: &str, result: &rmcp::model::CallToolResult) -> Result<Message, String> {
     use base64::Engine;
+    use crate::outputs::{EvidenceKind, EvidenceStatus, OutputEvidence, PublishOutput};
     require_chat(app, chat_id, bot_id)?;
     let image = result
         .content
@@ -575,21 +576,34 @@ pub fn publish_image(app: &Arc<App>, bot_id: &str, chat_id: &str, name: &str, re
     if image.mime_type != "image/png" || !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
         return Err("The Browser server returned a screenshot that isn't a PNG.".into());
     }
-    let path = app.config.home.join("browser").join(format!("{}.png", uuid::Uuid::new_v4()));
+    let title = format!("Browser · {name}.png");
+    let latest = crate::outputs::list(app, chat_id, None)?
+        .into_iter()
+        .filter_map(|message| {
+            let output = message.output.as_ref()?;
+            (output.bot_id == bot_id && output.name == title).then(|| (output.version, message.id.clone()))
+        })
+        .max_by_key(|(version, _)| *version)
+        .map(|(_, id)| id);
+    let dir = app.config.home.join("browser");
+    let path = dir.join(format!("{}.png", uuid::Uuid::new_v4()));
     crate::config::write_private(&path, &bytes).map_err(|e| e.to_string())?;
-    let attachment = crate::files::store(
+    let published = crate::outputs::publish(
         app,
-        &crate::files::OutgoingFile { id: None, path: path.display().to_string(), name: Some("Screenshot.png".into()), mime: Some("image/png".into()), width: None, height: None },
+        chat_id,
+        bot_id,
+        &dir,
+        PublishOutput {
+            name: title,
+            path: Some(path.display().to_string()),
+            mime: Some("image/png".into()),
+            replaces: latest,
+            evidence: Some(OutputEvidence { kind: EvidenceKind::AfterScreenshot, summary: format!("What the {name} browser showed."), status: EvidenceStatus::Unverified, command: None, exit_code: None }),
+            ..Default::default()
+        },
     );
     let _ = std::fs::remove_file(path);
-    let attachment = attachment.map_err(|e| e.to_string())?;
-    crate::files::push_blob(app, Some(chat_id), &attachment).map_err(|e| e.to_string())?;
-    let mut message = Message::new(chat_id, Author::Bot { bot_id: bot_id.to_string() }, Body::text(format!("Browser screenshot · {name}")));
-    if let Body::Text { attachments, .. } = &mut message.body {
-        attachments.push(attachment);
-    }
-    app.upsert_message(message.clone(), true);
-    Ok(message)
+    published
 }
 
 pub struct SessionTool {
@@ -633,11 +647,15 @@ impl Tool for SessionTool {
     }
 }
 
-/// `browser_session` waits out a takeover, and opening a window on the Runner passes
-/// Auto-review as a plugin action does.
+/// `browser_session` needs the bot's Access to Browser, waits out a takeover, and opening a
+/// window on the Runner passes Auto-review as a plugin action does.
 pub async fn review_call(app: &Arc<App>, bot: &Bot, chat_id: &str, trigger: &crate::plugins::review::Trigger, unattended: bool, ctx: &BeforeToolCallContext<'_>) -> Option<BeforeToolCallResult> {
     if ctx.tool_call.name != "browser_session" {
         return None;
+    }
+    // Profiles are part of the Browser plugin: the bot's Access to it covers them.
+    if let Err(denied) = crate::permissions::check_plugin(app, bot, super::PLUGIN_ID, "browser_session") {
+        return Some(crate::permissions::refuse(app, chat_id, bot, denied));
     }
     if let Err(error) = app.browser_sessions.wait_if_taken_over(&bot.id, ctx.cancel).await {
         return Some(crate::local_review::blocked(error));

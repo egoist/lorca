@@ -1,9 +1,11 @@
 import { FlashList } from "@shopify/flash-list";
 import { MenuView, type MenuAction, type MenuComponentRef } from "@expo/ui/community/menu";
-import * as Haptics from "expo-haptics";
+import { haptic } from "./haptics";
 import { Link, Stack, useRouter } from "expo-router";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Alert, Platform, Pressable, StyleSheet, Text, useWindowDimensions, type StyleProp, type TextStyle, View } from "react-native";
+import Swipeable, { type SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ActivityIndicator, Platform, StyleSheet, Text, useWindowDimensions, type StyleProp, type TextStyle, View } from "react-native";
+import { Pressable } from "./Pressable";
 import { chatTitle, engine } from "../core/engine";
 import type { Bot, Chat, ChatSearchResults } from "../core/model";
 import { markRead, useBotMap, useStore, useWorkingBotIds } from "../core/store";
@@ -18,6 +20,7 @@ import { SidebarSearch, useSidebarSearchInset } from "./SidebarSearch";
 import { Symbol } from "./Symbol";
 import { Font, usePalette } from "./theme";
 import { AndroidIcons } from "./navigation";
+import { alert } from "./alert";
 
 // FlashList keeps the first visible row where it is when rows change, which for a list resting at
 // its top means a chat moving to the top pushes the list down by one row: the new first row lands
@@ -30,7 +33,8 @@ export function ChatsScreen({ sidebar = false }: { sidebar?: boolean }) {
   const { language } = useLanguage();
   const p = usePalette();
   const router = useRouter();
-  const openChatId = useStore((s) => s.openChatId);
+  // Only the sidebar lights the open chat; a phone's list would re-render under the chat it pushes.
+  const openChatId = useStore((s) => (sidebar ? s.openChatId : null));
   const sidebarWidth = useSidebarWidth();
   // The search field sits at the foot of the list. An iPhone's native bar puts it there; the
   // sidebar and Android have their own (see SidebarSearch).
@@ -116,19 +120,21 @@ export function ChatsScreen({ sidebar = false }: { sidebar?: boolean }) {
   // Chats with a turn in flight: their rows read "Working…" in place of the preview.
   const responding = useMemo(() => new Set(Object.values(running).map((r) => r.chatId)), [running]);
 
-  function isWorking(chat: Chat): boolean {
-    return responding.has(chat.id) || chat.bot_ids.some((id) => workingBots.has(id));
-  }
-
-  function openChat(chat: Chat) {
+  // The rows are memoized, so what they call back stays the same function across renders; it
+  // reads this render's state through the ref.
+  const latest = useRef({ sidebar, openChatId });
+  latest.current = { sidebar, openChatId };
+  const openChat = useCallback((chat: Chat) => {
+    const { sidebar, openChatId } = latest.current;
     if (!sidebar) return router.push(`/chat/${chat.id}`);
     if (chat.id === openChatId) return;
     if (openChatId) router.replace(`/chat/${chat.id}`);
     else router.push(`/chat/${chat.id}`);
-  }
+  }, [router]);
 
-  function confirmDelete(chat: Chat) {
-    Alert.alert(t("Delete “{name}”?", { name: chatTitle(chat) }), t("The chat and its messages are removed from every paired Device."), [
+  const confirmDelete = useCallback((chat: Chat) => {
+    const { sidebar, openChatId } = latest.current;
+    alert(t("Delete “{name}”?", { name: chatTitle(chat) }), t("The chat and its messages are removed from every paired Device."), [
       { text: t("Cancel"), style: "cancel" },
       {
         text: t("Delete"),
@@ -140,7 +146,31 @@ export function ChatsScreen({ sidebar = false }: { sidebar?: boolean }) {
         },
       },
     ]);
-  }
+  }, [router]);
+
+  const renderItem = useCallback(
+    ({ item }: { item: Chat | SearchRow }) => {
+      if ("key" in item) return <SearchResultRow item={item} bots={bots} query={searchingText} onOpen={openChat} />;
+      const chat = item;
+      const working = responding.has(chat.id) || chat.bot_ids.some((id) => workingBots.has(id));
+      // A sidebar row has no peek: the chat opens beside it.
+      if (Platform.OS === "android" || sidebar)
+        return (
+          <MenuChatRow
+            chat={chat}
+            bots={bots}
+            working={working}
+            responding={responding.has(chat.id)}
+            selected={sidebar ? chat.id === openChatId : undefined}
+            width={sidebar ? sidebarWidth : undefined}
+            onOpen={openChat}
+            onDelete={confirmDelete}
+          />
+        );
+      return <PeekChatRow chat={chat} bots={bots} working={working} responding={responding.has(chat.id)} onDelete={confirmDelete} />;
+    },
+    [bots, confirmDelete, openChat, openChatId, responding, searchingText, sidebar, sidebarWidth, workingBots],
+  );
 
   return (
     <>
@@ -228,6 +258,7 @@ export function ChatsScreen({ sidebar = false }: { sidebar?: boolean }) {
           contentInsetAdjustmentBehavior="automatic"
           maintainVisibleContentPosition={KEEP_OFFSET}
           keyboardDismissMode="on-drag"
+          onScrollBeginDrag={closeOpenRow}
           contentContainerStyle={{ paddingBottom: floatingSearch ? searchInset + 8 : 24 }}
           ListEmptyComponent={
             <View style={styles.empty}>
@@ -236,65 +267,10 @@ export function ChatsScreen({ sidebar = false }: { sidebar?: boolean }) {
               <Text style={[styles.emptyText, { color: p.secondaryLabel }]}>{query ? t("Try another word.") : t("Your bots and their chats sync from the relay once this phone hears from your Runner.")}</Text>
             </View>
           }
-          renderItem={({ item }) => {
-            if ("key" in item) {
-              return <SearchResultRow item={item} bots={bots} query={searchingText} onPress={() => openChat(item.chat)} />;
-            }
-            const chat = item;
-            const title = chatTitle(chat);
-            // A sidebar row has no peek: the chat opens beside it.
-            if (Platform.OS === "android" || sidebar) {
-              return (
-                <MenuChatRow
-                  chat={chat}
-                  bots={bots}
-                  title={title}
-                  working={isWorking(chat)}
-                  responding={responding.has(chat.id)}
-                  selected={sidebar ? chat.id === openChatId : undefined}
-                  width={sidebar ? sidebarWidth : undefined}
-                  onPress={() => openChat(chat)}
-                  onDelete={() => confirmDelete(chat)}
-                />
-              );
-            }
-            const row = (
-              <ChatRow
-                chat={chat}
-                bots={bots}
-                title={title}
-                working={isWorking(chat)}
-                responding={responding.has(chat.id)}
-                onPress={() => router.push(`/chat/${chat.id}`)}
-              />
-            );
-            return (
-              <Link href={`/chat/${chat.id}`} asChild>
-                <Link.Trigger>{row}</Link.Trigger>
-                <Link.Preview style={{ width: 340, height: 420 }}>
-                  <PaneWidth value={340}>
-                    <ChatPeek chat={chat} bots={bots} title={title} />
-                  </PaneWidth>
-                </Link.Preview>
-                <Link.Menu>
-                  <Link.MenuAction icon={chat.is_pinned ? "pin.slash" : "pin"} onPress={() => engine.pinChat(chat.id, !chat.is_pinned)}>
-                    {chat.is_pinned ? t("Unpin") : t("Pin")}
-                  </Link.MenuAction>
-                  {chat.unread_count > 0 ? (
-                    <Link.MenuAction icon="checkmark.circle" onPress={() => markRead(chat.id)}>
-                      {t("Mark as Read")}
-                    </Link.MenuAction>
-                  ) : null}
-                  <Link.MenuAction icon="trash" destructive onPress={() => confirmDelete(chat)}>
-                    {t("Delete")}
-                  </Link.MenuAction>
-                </Link.Menu>
-              </Link>
-            );
-          }}
-          ItemSeparatorComponent={() => <View style={[styles.separator, { backgroundColor: p.separator }]} />}
+          renderItem={renderItem}
+          ItemSeparatorComponent={Separator}
           onRefresh={() => {
-            void Haptics.selectionAsync();
+            haptic.refresh();
             engine.notify();
           }}
           refreshing={false}
@@ -320,10 +296,19 @@ function useConnecting(): boolean {
   return connecting;
 }
 
+/// The separator between rows: one component, so the list keeps its separators across renders.
+function Separator() {
+  const p = usePalette();
+  return <View style={[styles.separator, { backgroundColor: p.separator }]} />;
+}
+
 /// A row whose long press opens a native menu: every row on Android, a sidebar row on iOS.
-function MenuChatRow({ chat, bots, title, working, responding, selected, width: fixedWidth, onPress, onDelete }: { chat: Chat; bots: Map<string, Bot>; title: string; working: boolean; responding: boolean; selected?: boolean; width?: number; onPress: () => void; onDelete: () => void }) {
+/// Memoized: the list sits under an open chat and renders again with every change to any chat.
+const MenuChatRow = memo(function MenuChatRow({ chat, bots, working, responding, selected, width: fixedWidth, onOpen, onDelete }: { chat: Chat; bots: Map<string, Bot>; working: boolean; responding: boolean; selected?: boolean; width?: number; onOpen: (chat: Chat) => void; onDelete: (chat: Chat) => void }) {
   useLanguage();
   const menuRef = useRef<MenuComponentRef>(null);
+  const onPress = useCallback(() => onOpen(chat), [chat, onOpen]);
+  const onLongPress = useCallback(() => menuRef.current?.show(), []);
   const { width: windowWidth } = useWindowDimensions();
   const width = fixedWidth ?? windowWidth;
   // iOS says pinned through the Unpin title and glyph, as its Link menu does; Android checks the item.
@@ -340,17 +325,120 @@ function MenuChatRow({ chat, bots, title, working, responding, selected, width: 
       actions={actions}
       shouldOpenOnLongPress
       style={{ width }}
-      onOpenMenu={() => void Haptics.selectionAsync()}
+      onOpenMenu={haptic.longPress}
       onPressAction={({ nativeEvent }) => {
         if (nativeEvent.event === "pin") void engine.pinChat(chat.id, !chat.is_pinned);
         else if (nativeEvent.event === "read") markRead(chat.id);
-        else if (nativeEvent.event === "delete") onDelete();
+        else if (nativeEvent.event === "delete") onDelete(chat);
       }}
     >
       <View style={{ width }}>
-        <ChatRow chat={chat} bots={bots} title={title} working={working} responding={responding} selected={selected} onPress={onPress} onLongPress={ios ? undefined : () => menuRef.current?.show()} />
+        <ChatRow chat={chat} bots={bots} title={chatTitle(chat)} working={working} responding={responding} selected={selected} onPress={onPress} onLongPress={ios ? undefined : onLongPress} />
       </View>
     </MenuView>
+  );
+});
+
+/// An iPhone row, as in Messages: a tap opens the chat, a long press peeks at it with its menu, a
+/// swipe to the left offers Pin and Delete and one to the right Mark as Read.
+const PeekChatRow = memo(function PeekChatRow({ chat, bots, working, responding, onDelete }: { chat: Chat; bots: Map<string, Bot>; working: boolean; responding: boolean; onDelete: (chat: Chat) => void }) {
+  useLanguage();
+  const router = useRouter();
+  const title = chatTitle(chat);
+  const onPress = useCallback(() => router.push(`/chat/${chat.id}`), [router, chat.id]);
+  const unread = chat.unread_count > 0;
+  const swipeRef = useRef<SwipeableMethods>(null);
+  const opening = useCallback(() => {
+    if (openRow && openRow !== swipeRef.current) openRow.close();
+    openRow = swipeRef.current;
+  }, []);
+  const trailing = useCallback(
+    (_progress: unknown, _translation: unknown, swipeable: SwipeableMethods) => (
+      <View style={styles.swipeActions}>
+        <SwipeAction
+          icon={chat.is_pinned ? "pin.slash.fill" : "pin.fill"}
+          label={chat.is_pinned ? t("Unpin") : t("Pin")}
+          color="#FF9500"
+          onPress={() => {
+            swipeable.close();
+            void engine.pinChat(chat.id, !chat.is_pinned);
+          }}
+        />
+        <SwipeAction
+          icon="trash.fill"
+          label={t("Delete")}
+          color="#FF3B30"
+          onPress={() => {
+            swipeable.close();
+            onDelete(chat);
+          }}
+        />
+      </View>
+    ),
+    [chat, onDelete],
+  );
+  const leading = useCallback(
+    (_progress: unknown, _translation: unknown, swipeable: SwipeableMethods) => (
+      <View style={styles.swipeActions}>
+        <SwipeAction
+          icon="checkmark.message.fill"
+          label={t("Read")}
+          color="#007AFF"
+          onPress={() => {
+            swipeable.close();
+            markRead(chat.id);
+          }}
+        />
+      </View>
+    ),
+    [chat.id],
+  );
+  return (
+    <Swipeable ref={swipeRef} friction={1.6} overshootFriction={8} rightThreshold={40} leftThreshold={40} renderRightActions={trailing} renderLeftActions={unread ? leading : undefined} onSwipeableWillOpen={opening}>
+    <Link href={`/chat/${chat.id}`} asChild>
+      <Link.Trigger>
+        <ChatRow chat={chat} bots={bots} title={title} working={working} responding={responding} onPress={onPress} />
+      </Link.Trigger>
+      <Link.Preview style={{ width: 340, height: 420 }}>
+        <PaneWidth value={340}>
+          <ChatPeek chat={chat} bots={bots} title={title} />
+        </PaneWidth>
+      </Link.Preview>
+      <Link.Menu>
+        <Link.MenuAction icon={chat.is_pinned ? "pin.slash" : "pin"} onPress={() => engine.pinChat(chat.id, !chat.is_pinned)}>
+          {chat.is_pinned ? t("Unpin") : t("Pin")}
+        </Link.MenuAction>
+        {chat.unread_count > 0 ? (
+          <Link.MenuAction icon="checkmark.circle" onPress={() => markRead(chat.id)}>
+            {t("Mark as Read")}
+          </Link.MenuAction>
+        ) : null}
+        <Link.MenuAction icon="trash" destructive onPress={() => onDelete(chat)}>
+          {t("Delete")}
+        </Link.MenuAction>
+      </Link.Menu>
+    </Link>
+    </Swipeable>
+  );
+});
+
+function closeOpenRow() {
+  openRow?.close();
+  openRow = null;
+}
+
+/// The row whose actions show: one at a time, closed when the list scrolls, as in Messages.
+let openRow: SwipeableMethods | null = null;
+
+/// One button behind a swiped row: a full-height colored cell with its symbol over its name.
+function SwipeAction({ icon, label, color, onPress }: { icon: string; label: string; color: string; onPress: () => void }) {
+  return (
+    <Pressable onPress={onPress} style={[styles.swipeAction, { backgroundColor: color }]} accessibilityRole="button" accessibilityLabel={label}>
+      <Symbol name={icon} size={20} color="#FFFFFF" />
+      <Text style={styles.swipeLabel} numberOfLines={1}>
+        {label}
+      </Text>
+    </Pressable>
   );
 }
 
@@ -362,8 +450,9 @@ type SearchRow = {
   createdAt?: number;
 };
 
-function SearchResultRow({ item, bots, query, onPress }: { item: SearchRow; bots: Map<string, Bot>; query: string; onPress: () => void }) {
+function SearchResultRow({ item, bots, query, onOpen }: { item: SearchRow; bots: Map<string, Bot>; query: string; onOpen: (chat: Chat) => void }) {
   useLanguage();
+  const onPress = () => onOpen(item.chat);
   const p = usePalette();
   const members = item.chat.bot_ids.map((id) => bots.get(id)).filter((bot): bot is Bot => !!bot);
   const at = item.createdAt ?? lastActivity(item.chat);
@@ -405,6 +494,9 @@ function HighlightedText({ text, query, style, numberOfLines }: { text: string; 
 }
 
 const styles = StyleSheet.create({
+  swipeActions: { flexDirection: "row" },
+  swipeAction: { width: 76, alignItems: "center", justifyContent: "center", gap: 4 },
+  swipeLabel: { color: "#FFFFFF", fontSize: 13, fontWeight: "500" },
   screen: { flex: 1 },
   list: { flex: 1 },
   separator: { height: StyleSheet.hairlineWidth, marginLeft: 78 },

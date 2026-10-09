@@ -14,7 +14,7 @@ const BULK_BLOBS: usize = 20;
 
 /// What a pull takes. `file` blobs are left out: a transcript fetches them by id when it
 /// needs them, so a photo sent to one bot is not downloaded by every Device.
-pub const POLL_KINDS: &str = "roster,chat,machine,credentials,job,job_cancel,job_result,request,response";
+pub const POLL_KINDS: &str = "roster,task,chat,machine,credentials,review,job,job_cancel,job_result,request,response";
 
 pub async fn run(app: Arc<App>) {
     let mut failures: u32 = 0;
@@ -222,7 +222,7 @@ async fn session(app: &Arc<App>, failures: &mut u32) -> Result<(), RelayError> {
 }
 
 /// Everything a Device polls for but the messages.
-const NOT_CHAT_KINDS: &str = "roster,machine,credentials,job,job_cancel,job_result,request,response";
+const NOT_CHAT_KINDS: &str = "roster,task,machine,credentials,review,job,job_cancel,job_result,request,response";
 /// How much of each chat a Device takes when it first syncs: what a bot's turn reads.
 const FIRST_SYNC_MESSAGES: usize = 400;
 /// Messages to a page when reading a chat backwards.
@@ -464,6 +464,7 @@ pub async fn ensure_registered(app: &Arc<App>, url: &str) -> Result<(), RelayErr
             }
         }
         app.push_roster();
+        crate::review_queue::enqueue_owned(app);
         app.push_history();
     }
     app.save_machine().map_err(|e| RelayError { status: None, message: e.to_string() })?;
@@ -734,6 +735,13 @@ fn apply_blob_contents(app: &Arc<App>, machine_file: &crate::keys::MachineFile, 
     let Ok(dek) = machine_file.dek() else { return };
 
     match blob.kind.as_str() {
+        "review" => {
+            if let Err(error) = crate::review_queue::apply(app, &ciphertext) { tracing::warn!(%error, "review blob"); }
+        }
+        "task" => match crate::crypto::decrypt_json::<crate::tasks::Task>(&dek, "task", &ciphertext) {
+            Ok(task) => { if let Err(error) = crate::tasks::apply(app, task) { tracing::warn!(%error, "task sync conflict"); } },
+            Err(error) => tracing::warn!(%error, "task blob"),
+        },
         "roster" => match crate::crypto::decrypt_json::<RosterBlob>(&dek, "roster", &ciphertext) {
             Ok(roster) => apply_roster(app, roster),
             Err(error) => tracing::warn!(%error, "roster blob"),
@@ -831,11 +839,13 @@ fn apply_roster(app: &Arc<App>, mut roster: RosterBlob) {
     let normalized_descriptions = roster.bots.iter_mut().fold(false, |changed, bot| bot.normalize_description() || changed);
     let this_device = app.this_device_id();
     let kept_checks;
+    let kept_permissions;
     {
         let mut state = app.state.lock().unwrap();
         let local_updated = state.chats.iter().map(|_| 0.0).fold(0.0, f64::max);
         let _ = local_updated;
         kept_checks = this_device.is_some_and(|this| crate::routines::keep_checks(&state.routines, &mut roster.routines, &roster.bots, &this));
+        kept_permissions = crate::permissions::keep_policies(&state.bots, &mut roster.bots);
         state.bots = roster.bots;
         state.routines = roster.routines;
         state.auto_review = roster.auto_review;
@@ -864,7 +874,7 @@ fn apply_roster(app: &Arc<App>, mut roster: RosterBlob) {
     }
     #[cfg(feature = "runner")]
     app.shell_sessions.close_orphans(app);
-    app.roster_changed(normalized_descriptions || kept_checks);
+    app.roster_changed(normalized_descriptions || kept_checks || kept_permissions);
 }
 
 fn apply_chat_op(app: &Arc<App>, op: ChatBlob) {

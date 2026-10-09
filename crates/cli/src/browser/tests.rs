@@ -153,7 +153,7 @@ async fn a_stopped_call_keeps_the_browser_and_holds_a_takeover_until_it_answers(
     let owner = bot(app);
     let (session, calls) = opened(app, &owner).await;
     let chat_id = app.state.lock().unwrap().chats[0].meta.id.clone();
-    let tool = crate::plugins::mcp::tests::browser_tool(app, &owner.id, &chat_id, "browser_wait_for");
+    let tool = crate::plugins::mcp::tests::browser_tool(app, &owner, &chat_id, "browser_wait_for");
     let cancel = CancellationToken::new();
     let call = {
         let cancel = cancel.clone();
@@ -183,16 +183,22 @@ async fn screenshot_evidence_uses_encrypted_file_and_chat_blobs() {
     let (session, _) = opened(app, &owner).await;
     let chat_id = app.state.lock().unwrap().chats[0].meta.id.clone();
     let message = app.browser_sessions.screenshot(app, &owner.id, &session.id, &chat_id).await.unwrap();
-    let Body::Text { attachments, text, .. } = &message.body else { panic!("a text message with the image") };
-    assert_eq!(text, "Browser screenshot · Work");
+    let crate::model::Body::Text { attachments, .. } = &message.body else { panic!("a text message with the image") };
     assert_eq!(attachments.len(), 1);
+    let output = message.output.as_ref().unwrap();
+    assert_eq!((output.name.as_str(), output.version, output.bot_id.as_str()), ("Browser · Work.png", 1, owner.id.as_str()));
+    let evidence = output.evidence.as_ref().unwrap();
+    assert_eq!((evidence.kind, evidence.status), (crate::outputs::EvidenceKind::AfterScreenshot, crate::outputs::EvidenceStatus::Unverified));
     let pending = app.store.outbox().unwrap();
     let file = pending.iter().find(|item| item.id == attachments[0].id).unwrap();
     assert_eq!(file.kind, "file");
     assert_eq!(file.group.as_deref(), Some(chat_id.as_str()));
     let decrypted = crate::crypto::decrypt(&app.dek().unwrap(), "file", &file.ciphertext).unwrap();
     assert_eq!(&decrypted[..8], b"\x89PNG\r\n\x1a\n");
-    assert_eq!(app.message(&chat_id, &message.id).unwrap().id, message.id);
+    // The profile's next screenshot is the next version of the same output.
+    let next = app.browser_sessions.screenshot(app, &owner.id, &session.id, &chat_id).await.unwrap();
+    let next = next.output.unwrap();
+    assert_eq!((next.id.as_str(), next.version, next.previous_message_id.as_deref()), (output.id.as_str(), 2, Some(message.id.as_str())));
     assert!(app.browser_sessions.screenshot(app, &owner.id, &session.id, "wrong-chat").await.is_err());
     // Another Device lists and controls the profile, but no window opens for it here.
     let remote = crate::browser::serve(app, "browser.sessions", &json!({ "bot_id": owner.id }), true).await.unwrap();
@@ -318,4 +324,19 @@ async fn live_visible_browser_keeps_its_sign_in() {
     app.browser_sessions.screenshot(app, &owner.id, &session.id, &chat_id).await.unwrap();
     app.browser_sessions.stop(app, &owner.id, &session.id).await.unwrap();
     fixture.abort();
+}
+
+#[tokio::test]
+async fn the_bots_access_to_browser_covers_its_profiles() {
+    let scratch = setup();
+    let app = &scratch.0;
+    let mut owner = bot(app);
+    // A grant that lists only some of Browser's own tools still covers browser_session.
+    owner.permissions = Some(serde_json::from_value(json!({ "connections": { "playwright": { "capabilities": ["read"], "tools": ["browser_snapshot"] } } })).unwrap());
+    app.state.lock().unwrap().bots[0] = owner.clone();
+    assert!(crate::permissions::check_plugin(app, &owner, super::super::PLUGIN_ID, "browser_session").is_ok());
+    owner.permissions = Some(serde_json::from_value(json!({ "connections": {} })).unwrap());
+    app.state.lock().unwrap().bots[0] = owner.clone();
+    let denied = crate::permissions::check_plugin(app, &owner, super::super::PLUGIN_ID, "browser_session").unwrap_err();
+    assert!(denied.grantable && denied.reason.contains("Browser is off"), "{denied}");
 }
