@@ -40,7 +40,7 @@ On Windows, bots run their commands in Git for Windows' bash, not WSL's, so inst
 | `lorca pair` | Shows a pairing string and waits for the other device. |
 | `lorca pair <string>` | Joins an account with a pairing string. |
 | `lorca provider set <kind> [api-key]` | Connects `deepseek`, `anthropic`, `opencode`, `opencode-go`, `chatgpt`, or `grok`. The key is read from stdin when omitted; `--base-url` sets a custom endpoint. |
-| `lorca provider add <name> <base-url>` | Adds a custom provider: any server that speaks OpenAI's or Anthropic's API. `--api` picks `chat-completions` (the default), `responses`, or `messages`; `--model` names a model, once per model; `--api-key-stdin` reads a key. |
+| `lorca provider add <name> <base-url>` | Adds a custom provider: any server that speaks OpenAI's or Anthropic's API, or a decision API for Auto-review. `--api` picks `chat-completions` (the default), `responses`, `messages`, `system-one`, or `decisions`; `--model` names a model, once per model; `--api-key-stdin` reads a key. |
 | `lorca provider remove <kind>` | Disconnects a provider on every device, or deletes a custom one (`custom:openrouter`, as `provider list` shows it). |
 | `lorca provider list` | Lists the connected providers. |
 | `lorca mcp …` | Manages this computer's own MCP servers; see [MCP servers](#mcp-servers). |
@@ -113,6 +113,6 @@ Restarting into a new release on Windows takes `lorca service`; without it, `lor
 
 ## Files
 
-Everything is under `~/.lorca/`, readable only by your user: your identity and machine keys, provider credentials, settings, chats, attachments, plugins, your MCP servers in `mcp.json`, the last model catalog fetched in `catalog.json`, the last marketplace fetched in `marketplace.json`, the last update check in `update.json`, and one workspace folder per bot with its memory.
+Everything is under `~/.lorca/`, readable only by your user: your identity and machine keys, provider credentials, settings, chats, attachments, plugins, your MCP servers in `mcp.json`, the last model catalog fetched in `catalog.json`, the last marketplace fetched in `marketplace.json`, the last update check in `update.json`, the token the apps and `lorca` send to a running `lorca serve` in `serve-token` (a web page cannot reach it), and one workspace folder per bot with its memory.
 
 The macOS app logs the service to `~/Library/Logs/Lorca/cli.log`. Under `lorca service` the log is `~/Library/Logs/Lorca/serve.log` on macOS, `journalctl --user -u lorca` on Linux, and `serve.log` in `~/.lorca` on Windows.

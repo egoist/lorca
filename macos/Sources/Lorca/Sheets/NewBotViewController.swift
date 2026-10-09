@@ -62,6 +62,7 @@ final class NewBotViewController: SheetViewController {
             field.translatesAutoresizingMaskIntoConstraints = false
             field.delegate = self
         }
+        descriptionField.heightAnchor.constraint(greaterThanOrEqualToConstant: 54).isActive = true
 
         runnerPopup.translatesAutoresizingMaskIntoConstraints = false
         for device in store.runners {
@@ -85,15 +86,15 @@ final class NewBotViewController: SheetViewController {
 
         buildLookRow()
 
-        let thinkingRow = labeled(L("Thinking"), thinkingPopup)
+        let thinkingRow = formRow(L("Thinking"), thinkingPopup)
         self.thinkingRow = thinkingRow
         let rows = [
-            labeled(L("Name"), nameField),
-            labeled(L("Description"), descriptionField, topAligned: true),
-            labeled(L("Look"), lookRow),
-            labeled(L("Runner"), runnerPopup),
-            labeled(L("Provider"), providerPopup),
-            labeled(L("Model"), modelPopup),
+            formRow(L("Name"), nameField),
+            formRow(L("Description"), descriptionField, topAligned: true),
+            formRow(L("Look"), lookRow),
+            formRow(L("Runner"), runnerPopup),
+            formRow(L("Provider"), providerPopup),
+            formRow(L("Model"), modelPopup),
             thinkingRow,
             note,
         ]
@@ -106,13 +107,6 @@ final class NewBotViewController: SheetViewController {
 
         setButtons(confirm: L("Create Bot"))
         runnerChanged()
-    }
-
-    private func labeled(_ title: String, _ control: NSView, topAligned: Bool = false) -> NSView {
-        if control === descriptionField {
-            control.heightAnchor.constraint(greaterThanOrEqualToConstant: 54).isActive = true
-        }
-        return formRow(title, control, topAligned: topAligned)
     }
 
     private func buildLookRow() {

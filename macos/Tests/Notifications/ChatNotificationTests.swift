@@ -64,4 +64,28 @@ final class ChatNotificationTests: XCTestCase {
         XCTAssertNil(ChatNotification.finishedTurn(in: chat(messages), botID: "bot", startedAt: start))
         XCTAssertNil(ChatNotification.finishedTurn(in: chat([reply("Done")]), botID: "another-bot", startedAt: start))
     }
+
+    func testStructuredAttentionAlertsOnceAndQuietReportsHaveNoAlert() throws {
+        var summary = reply("Decision: review the draft")
+        summary.notification = "summary"
+        XCTAssertEqual(ChatNotification(summary)?.kind, .summary)
+        XCTAssertNil(ChatNotification.finishedTurn(in: chat([summary]), botID: "bot", startedAt: start))
+        var urgent = reply("Urgent: a release is blocked")
+        urgent.notification = "urgent"
+        XCTAssertEqual(ChatNotification(urgent)?.kind, .urgent)
+        var quiet = reply("Routine check: no changes")
+        quiet.notification = "quiet"
+        XCTAssertNil(ChatNotification(quiet))
+        XCTAssertNil(ChatNotification.finishedTurn(in: chat([quiet, summary, urgent]), botID: "bot", startedAt: start))
+    }
+
+    func testAttentionSnapshotDecodesCoordinatorAndCanonicalSourceReferences() throws {
+        let json = #"{"items":[{"id":"attention-item","category":"review","title":"Review draft","summary":"Decide scope","next_action":"Approve scope","coordinator_bot_id":"bot","sources":[{"chat_id":"chat","task_id":"task-08a3fb26-3a14-4084-ae89-10f7d4028c47","review_id":"review-1"}],"reporters":["scout"],"urgent":false,"revision":{"counter":2,"device_id":"runner"}}],"briefs":[],"preferences":{"summaries":false,"urgent_direct":true,"default_coordinator_bot_id":"bot","coordinators":{}}}"#
+        let attention = try Wire.decoder.decode(AttentionView.self, from: Data(json.utf8))
+        XCTAssertEqual(attention.items.first?.sources.first?.reviewId, "review-1")
+        XCTAssertEqual(attention.items.first?.coordinatorBotId, "bot")
+        XCTAssertEqual(attention.items.first?.revision.deviceId, "runner")
+        XCTAssertFalse(attention.preferences.summaries)
+        XCTAssertTrue(attention.preferences.urgentDirect)
+    }
 }

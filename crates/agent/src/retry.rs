@@ -159,6 +159,8 @@ pub fn is_recoverable_length(message: &AssistantMessage, desired_max_output: u64
 #[derive(Debug)]
 pub enum RequestFailure {
     Aborted,
+    /// A host's admission hook refused another attempt. Never retried by the adapter.
+    Refused(String),
     /// No response: the transport failed.
     Transport(String),
     /// A response with a failing status; `body` is what the server said.
@@ -171,6 +173,7 @@ impl RequestFailure {
     pub fn message(&self) -> String {
         match self {
             RequestFailure::Aborted => "Request aborted".into(),
+            RequestFailure::Refused(reason) => reason.clone(),
             RequestFailure::Transport(error) => format!("Request failed: {error}"),
             RequestFailure::Status { status, body } => format!("{status}: {}", summarize_error_body(body)),
         }
@@ -228,19 +231,24 @@ pub async fn send_with_retry(
     max_retries: u32,
     max_delay_ms: u64,
     cancel: &CancellationToken,
+    options: &crate::request::RequestOptions,
 ) -> Result<reqwest::Response, RequestFailure> {
     let mut retries_left = max_retries;
     loop {
         if cancel.is_cancelled() {
             return Err(RequestFailure::Aborted);
         }
+        if let Some(hooks) = &options.hooks {
+            hooks.before_request(retries_left < max_retries, cancel).await.map_err(RequestFailure::Refused)?;
+        }
         let sent = tokio::select! {
             _ = cancel.cancelled() => return Err(RequestFailure::Aborted),
             sent = build().send() => sent,
         };
         let (failure, delay) = match sent {
-            Ok(response) if response.status().is_success() => return Ok(response),
+            Ok(response) if response.status().is_success() => { options.report(&response); return Ok(response); }
             Ok(response) => {
+                options.report(&response);
                 let retryable = retries_left > 0 && is_retryable_status(&response);
                 let delay = if retryable { retry_delay(&response, max_retries - retries_left, max_delay_ms) } else { Ok(Duration::ZERO) };
                 let status = response.status();
@@ -273,6 +281,38 @@ pub async fn send_with_retry(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn host_admission_refuses_a_retry_before_any_second_http_request() {
+        struct Guard(std::sync::atomic::AtomicUsize);
+        #[async_trait::async_trait]
+        impl crate::request::RequestHooks for Guard {
+            async fn before_request(&self, retry: bool, _: &CancellationToken) -> Result<(), String> {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if retry { Err("Budget exhausted: retry allowance is used.".into()) } else { Ok(()) }
+            }
+        }
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)); let count = hits.clone();
+        let server = tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            loop {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let mut buf = [0; 4096]; let _ = socket.read(&mut buf).await;
+                socket.write_all(b"HTTP/1.1 503 Service Unavailable\r\nRetry-After: 0\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();
+            }
+        });
+        let guard = std::sync::Arc::new(Guard(std::sync::atomic::AtomicUsize::new(0)));
+        let options = crate::request::RequestOptions::default().with_hooks(guard.clone());
+        let client = lorca_tls::client();
+        let error = send_with_retry(|| client.post(&url), 2, 5000, &CancellationToken::new(), &options).await.unwrap_err();
+        assert!(matches!(error, RequestFailure::Refused(_)));
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(guard.0.load(std::sync::atomic::Ordering::SeqCst), 2);
+        server.abort();
+    }
 
     #[test]
     fn classifies_transient_and_final_errors() {
@@ -329,12 +369,12 @@ mod tests {
         });
         let client = reqwest::Client::new();
         let url = format!("http://{address}/");
-        let response = send_with_retry(|| client.get(&url), 3, DEFAULT_MAX_RETRY_DELAY_MS, &CancellationToken::new()).await.unwrap();
+        let response = send_with_retry(|| client.get(&url), 3, DEFAULT_MAX_RETRY_DELAY_MS, &CancellationToken::new(), &crate::request::RequestOptions::default()).await.unwrap();
         assert_eq!(response.status(), 200);
         assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 3);
 
         // Out of retries: the failure carries the server's message.
-        let failing = send_with_retry(|| client.get(&url), 0, DEFAULT_MAX_RETRY_DELAY_MS, &CancellationToken::new()).await;
+        let failing = send_with_retry(|| client.get(&url), 0, DEFAULT_MAX_RETRY_DELAY_MS, &CancellationToken::new(), &crate::request::RequestOptions::default()).await;
         match failing {
             Ok(response) => assert_eq!(response.status(), 200, "the fourth hit succeeds"),
             Err(failure) => panic!("unexpected {}", failure.message()),

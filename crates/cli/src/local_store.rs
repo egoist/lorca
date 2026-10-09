@@ -12,7 +12,7 @@ use crate::app::{OutboxItem, SentJob, Slot, State};
 use crate::model::{Author, Body, LiveTurn, Message};
 
 pub struct LocalStore {
-    connection: Mutex<Connection>,
+    pub(crate) connection: Mutex<Connection>,
 }
 
 pub struct Upsert {
@@ -41,6 +41,10 @@ impl LocalStore {
              PRAGMA foreign_keys = ON;
              PRAGMA busy_timeout = 5000;
              PRAGMA journal_size_limit = 16777216;
+             CREATE TABLE IF NOT EXISTS runner_limits (
+                 purpose TEXT PRIMARY KEY NOT NULL,
+                 ciphertext BLOB NOT NULL
+             );
              CREATE TABLE IF NOT EXISTS metadata (
                  id                       INTEGER PRIMARY KEY CHECK (id = 1),
                  auto_review_json         TEXT NOT NULL,
@@ -52,6 +56,10 @@ impl LocalStore {
                  id       TEXT PRIMARY KEY NOT NULL,
                  position INTEGER NOT NULL,
                  json     TEXT NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS attention (
+                 id         TEXT PRIMARY KEY NOT NULL,
+                 ciphertext BLOB NOT NULL
              );
              CREATE TABLE IF NOT EXISTS bots (
                  id       TEXT PRIMARY KEY NOT NULL,
@@ -73,6 +81,17 @@ impl LocalStore {
                  position INTEGER NOT NULL,
                  json     TEXT NOT NULL
              );
+             CREATE TABLE IF NOT EXISTS event_subscriptions (
+                 id TEXT PRIMARY KEY NOT NULL,
+                 ciphertext BLOB NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS event_inbox (
+                 position INTEGER PRIMARY KEY AUTOINCREMENT,
+                 id TEXT UNIQUE NOT NULL,
+                 subscription_id TEXT NOT NULL,
+                 ciphertext BLOB NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS event_inbox_subscription ON event_inbox(subscription_id, position);
              CREATE TABLE IF NOT EXISTS group_deletes (
                  id       TEXT PRIMARY KEY NOT NULL,
                  position INTEGER NOT NULL
@@ -132,6 +151,12 @@ impl LocalStore {
                  json    TEXT NOT NULL,
                  PRIMARY KEY (chat_id, bot_id, key)
              );
+             CREATE TABLE IF NOT EXISTS project_entries (
+                 chat_id TEXT NOT NULL,
+                 id TEXT NOT NULL,
+                 ciphertext BLOB NOT NULL,
+                 PRIMARY KEY (chat_id, id)
+             );
              CREATE TABLE IF NOT EXISTS device_turns (
                  id   TEXT PRIMARY KEY NOT NULL,
                  json TEXT NOT NULL
@@ -144,8 +169,17 @@ impl LocalStore {
                  runner_id  TEXT NOT NULL,
                  sent_at    REAL NOT NULL
              );
+             CREATE TABLE IF NOT EXISTS handoffs (
+                 id         TEXT PRIMARY KEY NOT NULL,
+                 ciphertext BLOB NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS review_items (
+                 id         TEXT PRIMARY KEY NOT NULL,
+                 ciphertext BLOB NOT NULL
+             );
              PRAGMA user_version = 1;",
         )?;
+        crate::tasks::storage::initialize(&connection)?;
         crate::config::set_private(path)?;
         Ok(Self {
             connection: Mutex::new(connection),
@@ -214,6 +248,7 @@ impl LocalStore {
             tx.execute("DELETE FROM messages WHERE chat_id = ?1", [chat_id])?;
             tx.execute("DELETE FROM chat_history WHERE chat_id = ?1", [chat_id])?;
             tx.execute("DELETE FROM codemode_store WHERE chat_id = ?1", [chat_id])?;
+            tx.execute("DELETE FROM project_entries WHERE chat_id = ?1", [chat_id])?;
             tx.execute(
                 "DELETE FROM outbox WHERE group_name = ?1",
                 [crate::model::relay_name(chat_id)],
@@ -383,6 +418,19 @@ impl LocalStore {
         let mut statement = connection
             .prepare("SELECT message_json FROM messages WHERE chat_id = ?1 ORDER BY position")?;
         let rows = statement.query_map([chat_id], |row| row.get::<_, String>(0))?;
+        collect_messages(rows)
+    }
+
+    /// Immutable output-version rows, without materializing unrelated tool transcripts.
+    pub fn outputs(&self, chat_id: &str, task_id: Option<&str>) -> anyhow::Result<Vec<Message>> {
+        let connection = self.connection.lock().unwrap();
+        let mut statement = connection.prepare(
+            "SELECT message_json FROM messages WHERE chat_id = ?1
+             AND json_type(message_json, '$.output') = 'object'
+             AND (?2 IS NULL OR json_extract(message_json, '$.output.task_id') = ?2)
+             ORDER BY position",
+        )?;
+        let rows = statement.query_map(params![chat_id, task_id], |row| row.get::<_, String>(0))?;
         collect_messages(rows)
     }
 
@@ -863,6 +911,16 @@ impl LocalStore {
                 tx.execute("DELETE FROM codemode_store WHERE chat_id = ?1", [&chat_id])?;
             }
         }
+        let project_chats: Vec<String> = {
+            let mut statement = tx.prepare("SELECT DISTINCT chat_id FROM project_entries")?;
+            let rows = statement.query_map([], |row| row.get(0))?;
+            rows.collect::<rusqlite::Result<_>>()?
+        };
+        for chat_id in project_chats {
+            if !valid.contains(chat_id.as_str()) {
+                tx.execute("DELETE FROM project_entries WHERE chat_id = ?1", [&chat_id])?;
+            }
+        }
         let queued_groups: Vec<String> = {
             let mut statement =
                 tx.prepare("SELECT DISTINCT group_name FROM outbox WHERE group_name IS NOT NULL")?;
@@ -914,6 +972,36 @@ impl LocalStore {
     pub fn drop_outbox_group(&self, group: &str) -> anyhow::Result<()> {
         self.connection.lock().unwrap().execute("DELETE FROM outbox WHERE group_name = ?1", [group])?;
         Ok(())
+    }
+
+    /// Project payloads are already encrypted. A local revision and its upload commit together.
+    /// Existing ids are immutable, including across replay and remote echoes.
+    pub fn insert_project_entry(&self, chat_id: &str, id: &str, ciphertext: &[u8], upload: Option<&OutboxItem>) -> anyhow::Result<bool> {
+        let mut connection = self.connection.lock().unwrap();
+        let tx = connection.transaction()?;
+        let inserted = tx.execute(
+            "INSERT OR IGNORE INTO project_entries (chat_id, id, ciphertext) VALUES (?1, ?2, ?3)",
+            params![chat_id, id, ciphertext],
+        )? > 0;
+        if inserted {
+            if let Some(upload) = upload {
+                queue_outbox_tx(&tx, upload)?;
+            }
+        }
+        tx.commit()?;
+        Ok(inserted)
+    }
+
+    pub fn has_project_entries(&self) -> anyhow::Result<bool> {
+        let connection = self.connection.lock().unwrap();
+        Ok(connection.query_row("SELECT EXISTS(SELECT 1 FROM project_entries)", [], |row| row.get(0))?)
+    }
+
+    pub fn project_entries(&self, chat_id: &str) -> anyhow::Result<Vec<Vec<u8>>> {
+        let connection = self.connection.lock().unwrap();
+        let mut statement = connection.prepare("SELECT ciphertext FROM project_entries WHERE chat_id = ?1 ORDER BY id")?;
+        let rows = statement.query_map([chat_id], |row| row.get(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     pub fn remove_outbox_with_state(&self, id: &str, state: &State) -> anyhow::Result<()> {
@@ -1015,16 +1103,73 @@ impl LocalStore {
             .map_err(Into::into)
     }
 
+    /// Handoff contracts and reports stay encrypted even in the local database. Queue the
+    /// corresponding relay update and job in the same transaction as admission.
+    pub fn save_handoff(&self, id: &str, ciphertext: &[u8], outbox: &[OutboxItem]) -> anyhow::Result<()> {
+        let mut connection = self.connection.lock().unwrap();
+        let tx = connection.transaction()?;
+        tx.execute("INSERT INTO handoffs (id, ciphertext) VALUES (?1, ?2)
+                    ON CONFLICT(id) DO UPDATE SET ciphertext = excluded.ciphertext", params![id, ciphertext])?;
+        for item in outbox {
+            queue_outbox_tx(&tx, item)?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn handoff(&self, id: &str) -> anyhow::Result<Option<Vec<u8>>> {
+        self.connection.lock().unwrap().query_row("SELECT ciphertext FROM handoffs WHERE id = ?1", [id], |row| row.get(0)).optional().map_err(Into::into)
+    }
+
+    pub fn handoffs(&self) -> anyhow::Result<Vec<Vec<u8>>> {
+        let connection = self.connection.lock().unwrap();
+        let mut statement = connection.prepare("SELECT ciphertext FROM handoffs ORDER BY id")?;
+        let rows = statement.query_map([], |row| row.get(0))?;
+        rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
+    }
+
+    /// Review contents and state are encrypted. Comparing the previous ciphertext makes a
+    /// claim atomic even when another CLI process has opened the same database.
+    pub fn save_review(&self, id: &str, previous: Option<&[u8]>, ciphertext: &[u8], upload: Option<&OutboxItem>) -> anyhow::Result<()> {
+        let mut connection = self.connection.lock().unwrap();
+        let tx = connection.transaction()?;
+        let changed = match previous {
+            Some(previous) => tx.execute("UPDATE review_items SET ciphertext = ?1 WHERE id = ?2 AND ciphertext = ?3", params![ciphertext, id, previous])?,
+            None => tx.execute("INSERT OR IGNORE INTO review_items (id, ciphertext) VALUES (?1, ?2)", params![id, ciphertext])?,
+        };
+        anyhow::ensure!(changed == 1, "This changed on another Device. Review it again.");
+        if let Some(item) = upload {
+            queue_outbox_tx(&tx, item)?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn review(&self, id: &str) -> anyhow::Result<Option<Vec<u8>>> {
+        self.connection.lock().unwrap().query_row("SELECT ciphertext FROM review_items WHERE id = ?1", [id], |row| row.get(0)).optional().map_err(Into::into)
+    }
+
+    pub fn reviews(&self) -> anyhow::Result<Vec<Vec<u8>>> {
+        let connection = self.connection.lock().unwrap();
+        let mut statement = connection.prepare("SELECT ciphertext FROM review_items ORDER BY id")?;
+        let rows = statement.query_map([], |row| row.get(0))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    }
+
     pub fn clear(&self) -> anyhow::Result<()> {
         let mut connection = self.connection.lock().unwrap();
         let tx = connection.transaction()?;
         for table in [
+            "runner_limits",
             "metadata",
+            "attention",
             "devices",
             "bots",
             "chats",
             "routines",
             "shared_links",
+            "event_subscriptions",
+            "event_inbox",
             "group_deletes",
             "blob_deletes",
             "device_seen",
@@ -1034,6 +1179,12 @@ impl LocalStore {
             "outbox",
             "sent_jobs",
             "device_turns",
+            "handoffs",
+            "review_items",
+            "durable_tasks",
+            "task_receipts",
+            "task_runs",
+            "project_entries",
         ] {
             tx.execute(&format!("DELETE FROM {table}"), [])?;
         }
@@ -1041,9 +1192,56 @@ impl LocalStore {
         connection.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
         Ok(())
     }
+
+    /// Attention contents stay encrypted at rest, including resolutions and preferences.
+    pub fn attention_rows(&self) -> anyhow::Result<Vec<(String, Vec<u8>)>> {
+        let connection = self.connection.lock().unwrap();
+        let mut statement = connection.prepare("SELECT id, ciphertext FROM attention ORDER BY id")?;
+        let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?.collect::<Result<_, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn put_attention(&self, id: &str, ciphertext: &[u8]) -> anyhow::Result<()> {
+        self.connection.lock().unwrap().execute(
+            "INSERT INTO attention (id, ciphertext) VALUES (?1, ?2)
+             ON CONFLICT(id) DO UPDATE SET ciphertext = excluded.ciphertext",
+            params![id, ciphertext],
+        )?;
+        Ok(())
+    }
+
+    /// Local content and its encrypted relay write commit together, so a crash cannot leave
+    /// a successfully saved attention update without a durable upload.
+    pub fn queue_attention(&self, id: &str, ciphertext: &[u8], item: &OutboxItem) -> anyhow::Result<()> {
+        let mut connection = self.connection.lock().unwrap();
+        let tx = connection.transaction()?;
+        tx.execute(
+            "INSERT INTO attention (id, ciphertext) VALUES (?1, ?2)
+             ON CONFLICT(id) DO UPDATE SET ciphertext = excluded.ciphertext",
+            params![id, ciphertext],
+        )?;
+        queue_outbox_tx(&tx, item)?;
+        tx.commit()?;
+        Ok(())
+    }
+    /// Runner accounting/configuration is authenticated account ciphertext, including its
+    /// resumable Job payloads. The purpose is bound as AEAD associated data by the caller.
+    pub fn runner_limits(&self, purpose: &str) -> anyhow::Result<Option<Vec<u8>>> {
+        Ok(self.connection.lock().unwrap().query_row(
+            "SELECT ciphertext FROM runner_limits WHERE purpose = ?1", [purpose], |row| row.get(0),
+        ).optional()?)
+    }
+
+    pub fn set_runner_limits(&self, purpose: &str, ciphertext: &[u8]) -> anyhow::Result<()> {
+        self.connection.lock().unwrap().execute(
+            "INSERT INTO runner_limits (purpose, ciphertext) VALUES (?1, ?2) ON CONFLICT(purpose) DO UPDATE SET ciphertext = excluded.ciphertext",
+            params![purpose, ciphertext],
+        )?;
+        Ok(())
+    }
 }
 
-fn queue_outbox_tx(tx: &Transaction<'_>, item: &OutboxItem) -> anyhow::Result<()> {
+pub(crate) fn queue_outbox_tx(tx: &Transaction<'_>, item: &OutboxItem) -> anyhow::Result<()> {
     let waiting: Option<i64> = match item.slot.as_ref() {
         Some(slot) => tx
             .query_row(

@@ -4,8 +4,10 @@
 import { Button as MenuButton, Divider, HStack, Host, Image as MenuImage, Menu, Text as MenuText } from "@expo/ui/swift-ui";
 import { contentShape, font, foregroundStyle, frame, lineLimit, menuOrder, padding, shapes, tint, truncationMode } from "@expo/ui/swift-ui/modifiers";
 import { MenuView, type MenuAction, type MenuComponentRef } from "@expo/ui/community/menu";
+import { Checkbox, Host as ComposeHost, RadioButton, Switch as ComposeSwitch } from "@expo/ui/jetpack-compose";
 import { Children, isValidElement, useRef, type ReactNode } from "react";
-import { Platform, Pressable, StyleSheet, Switch, Text, TextInput, useWindowDimensions, View, type StyleProp, type TextInputProps, type ViewStyle } from "react-native";
+import { Platform, StyleSheet, Switch, Text, TextInput, useWindowDimensions, View, type StyleProp, type TextInputProps, type ViewStyle } from "react-native";
+import { Pressable } from "./Pressable";
 import { Symbol } from "./Symbol";
 import { Font, usePalette } from "./theme";
 
@@ -17,7 +19,8 @@ export function Section({ title, footer, children, style }: { title?: string; fo
   const rows = Children.toArray(children).filter(isValidElement);
   return (
     <View style={[styles.section, style]}>
-      {title ? <Text style={[styles.sectionTitle, { color: p.secondaryLabel }]}>{Platform.OS === "ios" ? title.toUpperCase() : title}</Text> : null}
+      {/* Material's list subheaders take the primary color; iOS's are secondary and uppercase. */}
+      {title ? <Text style={[styles.sectionTitle, { color: Platform.OS === "ios" ? p.secondaryLabel : p.tint }]}>{Platform.OS === "ios" ? title.toUpperCase() : title}</Text> : null}
       <View style={[styles.group, { backgroundColor: p.cell }]}>
         {rows.map((row, index) => (
           <View key={row.key}>
@@ -91,9 +94,10 @@ function MenuAccessory({ value, title, choices }: { value: string; title: string
 }
 
 /// An action row whose tap drops a native menu of choices, for an action that comes in kinds:
-/// the title in the tint color, as an action row's is. On iOS the row is the SwiftUI menu's
-/// label, drawn to match a `Row`; Android opens a Material dropdown from the row.
-export function MenuRow({ title, choices }: { title: string; choices: MenuChoice[] }) {
+/// the title in the tint color, after its symbol when it has one, as an action row's is. On iOS
+/// the row is the SwiftUI menu's label, drawn to match a `Row`; Android opens a Material dropdown
+/// from the row.
+export function MenuRow({ title, icon, choices }: { title: string; icon?: string; choices: MenuChoice[] }) {
   const p = usePalette();
   const menu = useRef<MenuComponentRef>(null);
   if (Platform.OS !== "ios") {
@@ -110,7 +114,7 @@ export function MenuRow({ title, choices }: { title: string; choices: MenuChoice
     );
     return (
       <MenuView ref={menu} title={title} actions={actions} shouldOpenOnLongPress onPressAction={({ nativeEvent }) => choices[Number(nativeEvent.event)]?.onPress()}>
-        <Row title={title} onPress={() => menu.current?.show()} />
+        <Row title={title} icon={icon} onPress={() => menu.current?.show()} />
       </MenuView>
     );
   }
@@ -119,7 +123,8 @@ export function MenuRow({ title, choices }: { title: string; choices: MenuChoice
       <Menu
         modifiers={[menuOrder("fixed"), tint(p.tint as any)]}
         label={
-          <HStack modifiers={[frame({ maxWidth: 10000, minHeight: 44, alignment: "leading" }), padding({ horizontal: 16 }), contentShape(shapes.rectangle())]}>
+          <HStack spacing={12} modifiers={[frame({ maxWidth: 10000, minHeight: 44, alignment: "leading" }), padding({ horizontal: 16 }), contentShape(shapes.rectangle())]}>
+            {icon ? <MenuImage systemName={icon as any} size={17} color={p.tint} modifiers={[frame({ width: 20 })]} /> : null}
             <MenuText modifiers={[font({ size: Font.body }), foregroundStyle(p.tint as any), lineLimit(1)]}>{title}</MenuText>
           </HStack>
         }
@@ -145,6 +150,8 @@ export function Row({
   subtitle,
   subtitleLines = 1,
   leading,
+  action,
+  onLongPress,
 }: {
   title: string;
   detail?: string;
@@ -158,11 +165,14 @@ export function Row({
   onPress?: () => void;
   destructive?: boolean;
   chevron?: boolean;
+  /// Draws the title in the tint color, as an action is; by default a row that only acts on a tap.
+  action?: boolean;
+  onLongPress?: () => void;
 }) {
   const p = usePalette();
-  const color = destructive ? p.red : onPress && !chevron && !accessory ? p.tint : p.label;
+  const color = destructive ? p.red : (action ?? (onPress && !chevron && !accessory)) ? p.tint : p.label;
   return (
-    <Pressable onPress={onPress} disabled={!onPress} style={({ pressed }) => [styles.row, pressed && { backgroundColor: p.fill }]}>
+    <Pressable onPress={onPress} onLongPress={onLongPress} disabled={!onPress && !onLongPress} style={({ pressed }) => [styles.row, pressed && { backgroundColor: p.fill }]}>
       {leading ?? (icon ? <Symbol name={icon} size={20} color={color} /> : null)}
       <View style={menu ? styles.rowTextWhole : styles.rowText}>
         <Text style={[styles.rowTitle, { color }]} numberOfLines={1}>
@@ -181,23 +191,31 @@ export function Row({
         </Text>
       ) : null}
       {accessory}
-      {chevron && <Symbol name="chevron.right" size={14} color={p.tertiaryLabel} weight="semibold" />}
+      {/* A disclosure chevron is iOS's; a Material list item that opens a screen has none. */}
+      {chevron && Platform.OS === "ios" && <Symbol name="chevron.right" size={14} color={p.tertiaryLabel} weight="semibold" />}
     </Pressable>
   );
 }
 
+/// A setting that is on or off: UIKit's switch on iOS; on Android Material 3's (Compose), with the
+/// whole row toggling it, as a Material list item with a switch does.
 export function ToggleRow({ title, value, onValueChange, icon }: { title: string; value: boolean; onValueChange: (value: boolean) => void; icon?: string }) {
   const p = usePalette();
+  if (Platform.OS === "android")
+    return (
+      <Pressable onPress={() => onValueChange(!value)} style={styles.row} accessibilityRole="switch" accessibilityState={{ checked: value }} accessibilityLabel={title}>
+        {icon ? <Symbol name={icon} size={20} color={p.label} /> : null}
+        <Text style={[styles.rowTitle, { color: p.label, flex: 1 }]}>{title}</Text>
+        <ComposeHost matchContents>
+          <ComposeSwitch value={value} onCheckedChange={onValueChange} />
+        </ComposeHost>
+      </Pressable>
+    );
   return (
     <View style={styles.row}>
       {icon ? <Symbol name={icon} size={20} color={p.label} /> : null}
       <Text style={[styles.rowTitle, { color: p.label, flex: 1 }]}>{title}</Text>
-      <Switch
-        value={value}
-        onValueChange={onValueChange}
-        trackColor={Platform.OS === "android" ? { false: p.fill, true: p.secondaryFill } : undefined}
-        thumbColor={Platform.OS === "android" ? p.tint : undefined}
-      />
+      <Switch value={value} onValueChange={onValueChange} />
     </View>
   );
 }
@@ -222,10 +240,19 @@ export function FieldRow({ label, multiline, style, ...props }: TextInputProps &
   );
 }
 
-export function CheckRow({ title, subtitle, checked, onPress, leading }: { title: string; subtitle?: string; checked: boolean; onPress: () => void; leading?: ReactNode }) {
+/// One choice of several: a checkmark after it on iOS, Material's radio button before it on
+/// Android, or its checkbox where several can be picked (`multiple`). A row that acts at once rather
+/// than marking a choice (`indicator={false}`) shows neither.
+export function CheckRow({ title, subtitle, checked, onPress, leading, multiple, indicator = true }: { title: string; subtitle?: string; checked: boolean; onPress: () => void; leading?: ReactNode; multiple?: boolean; indicator?: boolean }) {
   const p = usePalette();
+  const android = Platform.OS === "android";
   return (
-    <Pressable onPress={onPress} style={({ pressed }) => [styles.row, pressed && { backgroundColor: p.fill }]}>
+    <Pressable onPress={onPress} style={({ pressed }) => [styles.row, pressed && { backgroundColor: p.fill }]} accessibilityRole={multiple ? "checkbox" : "radio"} accessibilityState={{ checked }}>
+      {android && indicator ? (
+        <ComposeHost matchContents>
+          {multiple ? <Checkbox value={checked} onCheckedChange={onPress} /> : <RadioButton selected={checked} onClick={onPress} />}
+        </ComposeHost>
+      ) : null}
       {leading}
       <View style={styles.rowText}>
         <Text style={[styles.rowTitle, { color: p.label }]} numberOfLines={1}>
@@ -237,15 +264,15 @@ export function CheckRow({ title, subtitle, checked, onPress, leading }: { title
           </Text>
         ) : null}
       </View>
-      {checked ? <Symbol name="checkmark" size={16} color={p.tint} weight="semibold" /> : null}
+      {checked && !android ? <Symbol name="checkmark" size={16} color={p.tint} weight="semibold" /> : null}
     </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
   section: { paddingHorizontal: 16, paddingTop: Platform.OS === "android" ? 24 : 20 },
-  sectionTitle: { fontSize: Platform.OS === "android" ? 14 : 13, marginLeft: Platform.OS === "android" ? 0 : 16, marginBottom: 7, letterSpacing: Platform.OS === "android" ? 0 : 0.2, fontWeight: Platform.OS === "android" ? "600" : "400" },
-  footer: { fontSize: 13, marginLeft: Platform.OS === "android" ? 0 : 16, marginTop: 7, lineHeight: 18 },
+  sectionTitle: { fontSize: Platform.OS === "android" ? 14 : 13, marginLeft: 16, marginBottom: 7, letterSpacing: Platform.OS === "android" ? 0.1 : 0.2, fontWeight: Platform.OS === "android" ? "500" : "400" },
+  footer: { fontSize: 13, marginHorizontal: 16, marginTop: 7, lineHeight: 18 },
   group: { borderRadius: Platform.OS === "android" ? 16 : 12, overflow: "hidden" },
   separator: { height: StyleSheet.hairlineWidth, marginLeft: 16 },
   row: { flexDirection: "row", alignItems: "center", minHeight: Platform.OS === "android" ? 56 : 44, paddingHorizontal: 16, paddingVertical: 10, gap: 12 },

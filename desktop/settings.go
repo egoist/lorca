@@ -12,7 +12,7 @@ import (
 // the page title. General and Advanced also fill the small Settings window onboarding opens.
 
 // settingsPageState is the settings page's own state, kept by the main window: a search pick
-// being revealed, and the picked Runner's mcp.json.
+// being revealed, the picked Runner's mcp.json, and how its service stands.
 type settingsPageState struct {
 	// target is the row or section a search picked, until the pane builds it; picked is when, as
 	// rows that load later (an mcp.json's servers) get a second to come.
@@ -27,7 +27,8 @@ type settingsPageState struct {
 	// claimed is an element of this build having taken the reveal, so one element has it.
 	claimed bool
 
-	mcp settingsMcpState
+	mcp     settingsMcpState
+	service settingsServiceState
 }
 
 const (
@@ -102,6 +103,10 @@ func (m *mainWindow) settingsPage(c *ui.Context, pane model.SettingsPane) {
 	if pane != model.PanePlugins {
 		// The Plugins pane asks for the Runner's mcp.json again whenever it comes back.
 		m.settings.mcp.key = ""
+	}
+	if pane != model.PaneDevice {
+		// So does the Devices pane for the Runner's service.
+		m.settings.service.asked = ""
 	}
 	switch pane {
 	case model.PaneGeneral:

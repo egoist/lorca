@@ -482,6 +482,12 @@ final class RootSplitViewController: NSSplitViewController {
         presentAsSheet(sheet)
     }
 
+    /// A task for the chat on screen; there is nothing to add it to anywhere else.
+    func presentNewTask() {
+        guard case let .chat(chatID) = selection else { return }
+        presentAsSheet(DurableTaskViewController(chatID: chatID, task: nil))
+    }
+
     /// Every bot has a direct chat, so creating one lands in that chat right away.
     func presentNewBot() {
         let sheet = NewBotViewController { [weak self] botID in
@@ -543,6 +549,17 @@ final class RootSplitViewController: NSSplitViewController {
             self?.store.addBot(botID, to: chatID)
         }
         presentAsSheet(sheet)
+    }
+
+    /// A new skill for the bot in the DM on screen, or for the group.
+    @objc func newSkill(_ sender: Any?) {
+        guard case let .chat(chatID) = selection, let chat = store.chat(chatID),
+            let scope = InspectorViewController.skillScope(of: chat, members: store.bots(in: chat))
+        else {
+            NSSound.beep()
+            return
+        }
+        presentAsSheet(PlaybookViewController(scope: scope))
     }
 
     @objc func renameChat(_ sender: Any?) {
@@ -661,6 +678,10 @@ extension RootSplitViewController: NSMenuItemValidation {
         if menuItem.action == #selector(addBotToChat(_:)) {
             guard case let .chat(id) = selection, let chat = store.chat(id) else { return false }
             return !botsAvailableToAdd(to: chat).isEmpty
+        }
+        if menuItem.action == #selector(newSkill(_:)) {
+            guard case let .chat(id) = selection, let chat = store.chat(id) else { return false }
+            return InspectorViewController.skillScope(of: chat, members: store.bots(in: chat)) != nil
         }
         if menuItem.action == #selector(renameChat(_:)) {
             guard case let .chat(id) = selection, let chat = store.chat(id) else { return false }

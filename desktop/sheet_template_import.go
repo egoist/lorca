@@ -214,7 +214,7 @@ func (st *templateImportState) view(c *ui.Context, w *appWindow, s *sheet) {
 	p := colors(c)
 	const width = 480
 	// The pop-ups fill the row after the label, as wide as the sheet's content allows.
-	fill := float32(width - 40 - newBotLabelWidth - 10)
+	fill := float32(width - 40 - formLabelWidth - 10)
 	// A plugin added or signed in on the Runner meanwhile changes what the import needs.
 	if !st.importing && st.preview != nil && st.runnerPlugins() != st.previewed {
 		st.refresh(s)
@@ -226,7 +226,7 @@ func (st *templateImportState) view(c *ui.Context, w *appWindow, s *sheet) {
 		Confirm:         L("Create Bot"),
 		ConfirmDisabled: !st.canCreate(),
 	}, func() {
-		newBotRow(c, L("From"), false, func() {
+		formRow(c, L("From"), false, func() {
 			ui.Row(c).Grow(1).MinWidth(0).Gap(8).Children(func() {
 				field := textField(c.Key("template-from"), &st.from, fieldOptions{Placeholder: L("Paste a link to a shared bot"), Label: L("From"), Disabled: st.importing}).Grow(1).MinWidth(0)
 				field.OnChange(func() {
@@ -259,10 +259,10 @@ func (st *templateImportState) view(c *ui.Context, w *appWindow, s *sheet) {
 			}
 			return
 		}
-		newBotRow(c, L("Name"), false, func() {
+		formRow(c, L("Name"), false, func() {
 			textField(c.Key("template-name"), &st.name, fieldOptions{Placeholder: L("Name"), Label: L("Name"), Disabled: st.importing}).Grow(1).MinWidth(0).OnChange(func() { st.nameEdited = true })
 		})
-		newBotRow(c, L("Runner"), false, func() {
+		formRow(c, L("Runner"), false, func() {
 			var options []popUpOption
 			for _, device := range store.Runners() {
 				label := device.Name
@@ -277,7 +277,7 @@ func (st *templateImportState) view(c *ui.Context, w *appWindow, s *sheet) {
 				st.refresh(s)
 			}
 		})
-		newBotRow(c, L("Provider"), false, func() {
+		formRow(c, L("Provider"), false, func() {
 			kinds := store.ProviderKinds()
 			options := make([]popUpOption, 0, len(kinds))
 			for _, kind := range kinds {
@@ -290,7 +290,7 @@ func (st *templateImportState) view(c *ui.Context, w *appWindow, s *sheet) {
 		if st.preview != nil {
 			// A line per plugin: a pop-up of the Runner's connections for it, or that it has none.
 			for _, plugin := range st.preview.Requirements {
-				newBotRow(c.Key("plugin:"+plugin.ServiceID), plugin.Name, false, func() {
+				formRow(c.Key("plugin:"+plugin.ServiceID), plugin.Name, false, func() {
 					if len(plugin.Candidates) == 0 {
 						name := ""
 						if runner := st.runner(); runner != nil {

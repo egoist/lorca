@@ -1,73 +1,33 @@
-//! Content-only adapter for #77's public playbook API. Using the JSON boundary keeps this
-//! feature independently buildable and reuses the encrypted account store when available.
+//! A template's skills go through the playbook store: a bot's saved skills as `playbooks.export`
+//! gives them, and the new bot's saved through the same guarded `playbooks::save`. Only the
+//! content travels, never a skill's id, provenance, or history.
 
-use std::sync::Arc;
-
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use super::format::Skill;
 use crate::app::App;
+use crate::playbooks::{self as store, PlaybookContent, Provenance, Scope};
 
-pub const UNAVAILABLE: &str = "This template has skills. Update Lorca to import it.";
-
-pub async fn list(app: &Arc<App>, bot_id: &str) -> Result<Option<Vec<Value>>, String> {
-    match call(
-        app,
-        "playbooks.list",
-        json!({ "scope": scope(bot_id), "include_drafts": false }),
-    )
-    .await
-    {
-        Ok(value) => {
-            let items = value["items"]
-                .as_array()
-                .ok_or("Invalid playbook list response")?;
-            Ok(Some(
-                items
-                    .iter()
-                    .filter(|item| item["status"] == "saved")
-                    .cloned()
-                    .collect(),
-            ))
-        }
-        Err(error) if error == "unknown method playbooks.list" => Ok(None),
-        Err(error) => Err(error),
-    }
+/// The bot's saved skills, without their bodies.
+pub fn list(app: &App, bot_id: &str) -> Vec<Value> {
+    let scope = serde_json::to_value(Scope::bot(bot_id)).unwrap_or_default();
+    store::summaries(app).into_iter().filter(|skill| skill["scope"] == scope && skill["status"] == "saved").collect()
 }
 
-/// Whether this CLI has the playbook store, whatever a bot has in it.
-pub async fn available(app: &Arc<App>) -> bool {
-    !matches!(call(app, "playbooks.list", json!({ "scope": scope(""), "include_drafts": false })).await, Err(error) if error == "unknown method playbooks.list")
+/// A skill's content, scrubbed as the export scrubs it.
+pub fn export(app: &App, bot_id: &str, id: &str) -> Result<Skill, String> {
+    let exported = store::export(app, &Scope::bot(bot_id), id)?;
+    serde_json::from_value(exported["content"].clone()).map_err(|e| format!("Unsupported skill content: {e}"))
 }
 
-pub async fn export(app: &Arc<App>, bot_id: &str, id: &str) -> Result<Skill, String> {
-    let value = call(
-        app,
-        "playbooks.export",
-        json!({ "scope": scope(bot_id), "id": id }),
-    )
-    .await?;
-    serde_json::from_value(value["content"].clone())
-        .map_err(|e| format!("Unsupported reusable skill content: {e}"))
+/// Saves a template's skill as a new skill of the bot, and answers what `remove` takes back.
+pub fn save(app: &App, bot_id: &str, skill: &Skill) -> Result<Value, String> {
+    let content: PlaybookContent = serde_json::to_value(skill).and_then(serde_json::from_value).map_err(|e| e.to_string())?;
+    store::save(app, &Scope::bot(bot_id), None, content, 0, "", Provenance { kind: "template_import".into(), ..Default::default() })
 }
 
-pub async fn save(app: &Arc<App>, bot_id: &str, content: &Skill) -> Result<Value, String> {
-    call(app, "playbooks.save", json!({
-        "scope": scope(bot_id), "content": content, "expected_revision": 0, "expected_hash": "",
-        "provenance": { "kind": "template_import", "message_ids": [], "note": "Imported from a reviewed private bot template." }
-    })).await
-}
-
-pub async fn remove(app: &Arc<App>, bot_id: &str, receipt: &Value) -> Result<(), String> {
-    call(app, "playbooks.remove", json!({ "scope": scope(bot_id), "id": receipt["id"], "expected_revision": receipt["revision"], "expected_hash": receipt["hash"] })).await?;
-    Ok(())
-}
-
-fn scope(bot_id: &str) -> Value {
-    json!({ "kind": "bot", "id": bot_id })
-}
-
-async fn call(app: &Arc<App>, method: &str, params: Value) -> Result<Value, String> {
-    // Indirection breaks the dispatch -> templates -> playbooks -> dispatch future cycle.
-    Box::pin(crate::api::dispatch(app, method, params)).await
+pub fn remove(app: &App, bot_id: &str, saved: &Value) -> Result<(), String> {
+    let id = saved["id"].as_str().ok_or("Invalid skill id")?;
+    let revision = saved["revision"].as_u64().ok_or("Invalid skill revision")?;
+    store::remove(app, &Scope::bot(bot_id), id, revision, saved["hash"].as_str().unwrap_or_default()).map(|_| ())
 }

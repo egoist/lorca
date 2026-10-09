@@ -17,8 +17,9 @@ import (
 // The main window over a real CLI, drawn offscreen: it adds a custom provider through its sheet,
 // runs the first bot on it, and sends a message whose reply streams into the transcript.
 //
-// It needs a CLI with an identity on LORCA_E2E_PORT, and an OpenAI-compatible server on
-// LORCA_E2E_SERVER (a base URL ending in /v1) that lists a model and answers chat completions.
+// It needs a CLI with an identity on LORCA_E2E_PORT, LORCA_HOME naming its data directory (the
+// client reads the CLI's token there), and an OpenAI-compatible server on LORCA_E2E_SERVER (a
+// base URL ending in /v1) that lists a model and answers chat completions.
 func TestE2EAgainstCLI(t *testing.T) {
 	port, server := os.Getenv("LORCA_E2E_PORT"), os.Getenv("LORCA_E2E_SERVER")
 	if port == "" || server == "" {

@@ -133,6 +133,8 @@ function report(name: string, used: Map<string, string>, table: Table) {
 
 const macKeys = await keysIn(join(ROOT, "macos/Sources/Lorca"), "**/*.swift", /\bL\(\s*"((?:[^"\\]|\\.)*)"(?:,\s*context:\s*"((?:[^"\\]|\\.)*)")?/g, () => false)
 const phoneKeys = await keysIn(join(ROOT, "mobile"), "{app,src}/**/*.{ts,tsx}", /\bt\(\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)')/g, (path) => path.includes("i18n/") || path.endsWith(".test.ts"))
+// The phone's `tc("…", "…")` is the key `…|…`, as the desktop app's `Lc` is.
+for (const [key, path] of await keysIn(join(ROOT, "mobile"), "{app,src}/**/*.{ts,tsx}", /\btc\(\s*"((?:[^"\\]|\\.)*)",\s*"((?:[^"\\]|\\.)*)"/g, (path) => path.includes("i18n/") || path.endsWith(".test.ts"))) phoneKeys.set(key, path)
 const desktopKeys = await desktopKeysIn(join(ROOT, "desktop"))
 
 const mac = await readMacTable()

@@ -6,8 +6,10 @@ use std::time::Duration;
 use futures::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tokio::time::timeout;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
 struct Home(std::path::PathBuf);
 
@@ -69,9 +71,12 @@ async fn readiness_is_flushed_with_logs_disabled_and_the_websocket_is_ready() {
     assert!(port > 0);
     assert!(child.try_wait().unwrap().is_none());
 
+    let token = std::fs::read_to_string(home.0.join("serve-token")).unwrap();
+    let mut request = format!("ws://127.0.0.1:{port}/ws").into_client_request().unwrap();
+    request.headers_mut().insert("Authorization", format!("Bearer {token}").parse().unwrap());
     let (mut socket, _) = timeout(
         Duration::from_secs(2),
-        tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/ws")),
+        tokio_tungstenite::connect_async(request),
     )
     .await
     .unwrap()
@@ -98,6 +103,69 @@ async fn readiness_is_flushed_with_logs_disabled_and_the_websocket_is_ready() {
     .await
     .unwrap();
     assert_eq!(response["result"]["has_identity"], false);
+    child.kill().await.unwrap();
+}
+
+/// Starts `lorca serve` on a free port and answers the port once it is ready.
+async fn ready(home: &Home) -> (tokio::process::Child, u16) {
+    let mut child = home.serve(0).spawn().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut line = String::new();
+    timeout(Duration::from_secs(5), stdout.read_line(&mut line)).await.unwrap().unwrap();
+    let ready: Value = serde_json::from_str(&line).unwrap();
+    (child, ready["port"].as_u64().unwrap() as u16)
+}
+
+/// The status line's code for a websocket upgrade of `path` with these extra headers.
+async fn handshake(port: u16, path: &str, headers: &[(&str, String)]) -> u16 {
+    let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    let mut request = format!("GET {path} HTTP/1.1\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n");
+    if !headers.iter().any(|(name, _)| *name == "Host") {
+        request.push_str(&format!("Host: 127.0.0.1:{port}\r\n"));
+    }
+    for (name, value) in headers {
+        request.push_str(&format!("{name}: {value}\r\n"));
+    }
+    request.push_str("\r\n");
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let mut line = String::new();
+    timeout(Duration::from_secs(2), BufReader::new(stream).read_line(&mut line)).await.unwrap().unwrap();
+    line.split(' ').nth(1).unwrap().parse().unwrap()
+}
+
+#[tokio::test]
+async fn only_a_local_client_with_the_token_gets_the_websocket() {
+    let home = Home::new();
+    let (mut child, port) = ready(&home).await;
+    let path = home.0.join("serve-token");
+    let token = std::fs::read_to_string(&path).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+    }
+    let bearer = format!("Bearer {token}");
+    let authorized = ("Authorization", bearer.clone());
+
+    assert_eq!(handshake(port, "/ws", std::slice::from_ref(&authorized)).await, 101);
+    assert_eq!(handshake(port, "/ws", &[("Host", format!("localhost:{port}")), authorized.clone()]).await, 101);
+    assert_eq!(handshake(port, "/ws", &[]).await, 401, "no token");
+    assert_eq!(handshake(port, "/ws", &[("Authorization", "Bearer wrong".into())]).await, 401, "a wrong token");
+    assert_eq!(handshake(port, "/ws", &[("Authorization", token.clone())]).await, 401, "the token without its scheme");
+    assert_eq!(handshake(port, "/ws", &[authorized.clone(), ("Origin", "https://example.com".into())]).await, 403, "a web page");
+    assert_eq!(handshake(port, "/ws", &[authorized.clone(), ("Origin", "null".into())]).await, 403, "a sandboxed page");
+    assert_eq!(handshake(port, "/ws", &[("Host", format!("attacker.example:{port}")), authorized.clone()]).await, 403, "a DNS-rebound page");
+    assert_eq!(handshake(port, "/ws", &[("Host", "127.0.0.1".into()), authorized.clone()]).await, 403, "another port");
+    // The check that the port answers: open to local clients only, too.
+    assert_eq!(handshake(port, "/", &[]).await, 200);
+    assert_eq!(handshake(port, "/", &[("Host", format!("attacker.example:{port}"))]).await, 403);
+    assert_eq!(handshake(port, "/", &[("Origin", "https://example.com".into())]).await, 403);
+    child.kill().await.unwrap();
+
+    // A later start keeps the token, so a client that read it still connects.
+    let (mut child, port) = ready(&home).await;
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), token);
+    assert_eq!(handshake(port, "/ws", &[authorized]).await, 101);
     child.kill().await.unwrap();
 }
 

@@ -169,6 +169,24 @@ async fn machines_challenges_envelopes_and_revocation() {
 }
 
 #[tokio::test]
+async fn event_envelopes_wait_for_their_recipient_and_use_sealed_retention() {
+    assert!(KINDS.contains(&"event") && SEALED_KINDS.contains(&"event"));
+    for (store, _) in backends().await {
+        let (who, runner, gateway) = (name("identity"), name("runner"), name("gateway"));
+        ok!(store.register_identity(&who, "content", &runner, "box", "attestation"));
+        ok!(store.register_identity(&who, "content", &gateway, "box", "attestation"));
+        ok!(store.insert_blob(NewBlob { kind: "event".into(), recipient_machine_pubkey: Some(runner.clone()), ..blob(&who, "event", b"opaque sealed event") }, 0));
+        assert!(ids(&store, &who, &gateway, 0, i64::MAX).await.is_empty());
+        assert_eq!(ids(&store, &who, &runner, 0, i64::MAX).await, ["event"]);
+        assert_eq!(ok!(store.blob(&who, &runner, "event")).unwrap().ciphertext, b"opaque sealed event");
+        ok!(store.sweep(now() - 7 * 86_400, now() - 180 * 86_400));
+        assert_eq!(ids(&store, &who, &runner, 0, i64::MAX).await, ["event"], "fresh offline work stays");
+        ok!(store.delete_blob(&who, "event"));
+        assert!(ids(&store, &who, &runner, 0, i64::MAX).await.is_empty());
+    }
+}
+
+#[tokio::test]
 async fn a_paired_machine_attests_another() {
     for (store, _) in backends().await {
         let (who, mac, laptop, phone) = (name("identity"), name("mac"), name("laptop"), name("phone"));

@@ -1,8 +1,9 @@
 import AppKit
 
 /// Adds or edits a custom provider: any server that speaks OpenAI's Chat Completions or
-/// Responses API, or Anthropic's Messages API. The sheet loads the models the server lists as
-/// the user fills it in, and the user picks the ones bots can use, adding any the server does
+/// Responses API, or Anthropic's Messages API, or a decision API (System One, OpenAI's
+/// Decisions) whose models Auto-review can run. The sheet loads the models the server lists as
+/// the user fills it in, and the user picks the ones to offer, adding any the server does
 /// not list. The CLI checks the server again before saving, and the provider reaches every
 /// paired Device encrypted with the account key.
 final class CustomProviderViewController: SheetViewController {
@@ -22,6 +23,8 @@ final class CustomProviderViewController: SheetViewController {
     private let store = AppStore.shared
     /// The provider being edited; nil adds one.
     private let kind: ProviderCredential.Kind?
+    /// The protocols the API pop-up offers.
+    private let apis: [CustomAPI]
     /// Runs with the provider's kind once it is saved.
     private let onSave: (ProviderCredential.Kind) -> Void
 
@@ -64,8 +67,9 @@ final class CustomProviderViewController: SheetViewController {
 
     /// Opens an existing provider (its key fetched first, so the sheet opens populated), a
     /// preset, or an empty sheet. A kind the account no longer has opens the sheet to add one.
+    /// `forBots` leaves out the decision APIs, for a provider a bot will run with.
     static func present(
-        kind: ProviderCredential.Kind?, preset: CustomProviderPreset? = nil, from presenter: NSViewController,
+        kind: ProviderCredential.Kind?, preset: CustomProviderPreset? = nil, forBots: Bool = false, from presenter: NSViewController,
         onSave: @escaping (ProviderCredential.Kind) -> Void = { _ in }
     ) {
         Task { [weak presenter] in
@@ -77,7 +81,9 @@ final class CustomProviderViewController: SheetViewController {
                 guard let presenter, presenter.view.window != nil,
                     presenter.presentedViewControllers?.isEmpty != false else { return }
                 presenter.presentAsSheet(
-                    CustomProviderViewController(existing: existing, preset: existing == nil ? preset : nil, apiKey: apiKey, onSave: onSave))
+                    CustomProviderViewController(
+                        existing: existing, preset: existing == nil ? preset : nil, apiKey: apiKey,
+                        apis: CustomAPI.allCases.filter { !forBots || !$0.decides }, onSave: onSave))
             } catch {
                 guard let window = presenter?.view.window else { return }
                 await NSAlert(error: error).beginSheetModal(for: window)
@@ -85,21 +91,25 @@ final class CustomProviderViewController: SheetViewController {
         }
     }
 
-    private init(existing: ProviderCredential?, preset: CustomProviderPreset?, apiKey: String, onSave: @escaping (ProviderCredential.Kind) -> Void) {
+    private init(
+        existing: ProviderCredential?, preset: CustomProviderPreset?, apiKey: String, apis: [CustomAPI],
+        onSave: @escaping (ProviderCredential.Kind) -> Void
+    ) {
         kind = existing?.kind
+        self.apis = apis
         self.onSave = onSave
         models = existing?.models ?? []
         selected = Set(models.map(\.id))
         defaultID = models.first?.id
         super.init(
             title: existing?.name ?? preset.map { L("Add %@", $0.name) } ?? L("Add Custom Provider"),
-            subtitle: L("Any server that speaks OpenAI’s or Anthropic’s API, such as a gateway or a model server on your network. Encrypted and shared with your paired Devices."),
+            subtitle: L("Any server that speaks OpenAI’s or Anthropic’s API, such as a gateway or a model server on your network, or a decision API for Auto-review. Encrypted and shared with your paired Devices."),
             width: 520)
         nameField.stringValue = existing?.name ?? preset?.name ?? ""
         baseURLField.stringValue = existing?.baseURL ?? preset?.baseURL ?? ""
         let api = existing?.api ?? preset?.api ?? .chatCompletions
-        apiPopup.addItems(withTitles: CustomAPI.allCases.map(\.title))
-        apiPopup.selectItem(at: CustomAPI.allCases.firstIndex(of: api) ?? 0)
+        apiPopup.addItems(withTitles: apis.map(\.title))
+        apiPopup.selectItem(at: apis.firstIndex(of: api) ?? 0)
         keyField.stringValue = apiKey
         keyField.placeholderString = preset?.keyPlaceholder ?? L("Optional for a server on your network")
     }
@@ -108,7 +118,7 @@ final class CustomProviderViewController: SheetViewController {
     required init?(coder: NSCoder) { fatalError() }
 
     private var api: CustomAPI {
-        CustomAPI.allCases[max(0, apiPopup.indexOfSelectedItem)]
+        apis[max(0, apiPopup.indexOfSelectedItem)]
     }
 
     private var baseURL: String {
@@ -122,7 +132,7 @@ final class CustomProviderViewController: SheetViewController {
     }
 
     private var suggestedName: String? {
-        CustomProviderPreset.matching(baseURL)?.name ?? URL(string: baseURL)?.host
+        CustomProviderPreset.matching(baseURL, api: api)?.name ?? URL(string: baseURL)?.host
     }
 
     // MARK: - Layout
@@ -427,7 +437,7 @@ final class CustomProviderViewController: SheetViewController {
         endpointNote.stringValue = baseURL.isEmpty ? L("Lorca adds %@ to it.", api.path) : L("Requests go to %@.", api.endpoint(for: baseURL))
         nameField.placeholderString = suggestedName ?? "OpenRouter"
         if kind == nil, keyField.stringValue.isEmpty {
-            keyField.placeholderString = CustomProviderPreset.matching(baseURL)?.keyPlaceholder ?? L("Optional for a server on your network")
+            keyField.placeholderString = CustomProviderPreset.matching(baseURL, api: api)?.keyPlaceholder ?? L("Optional for a server on your network")
         }
         if view.window != nil { fitSheetToContent() }
     }

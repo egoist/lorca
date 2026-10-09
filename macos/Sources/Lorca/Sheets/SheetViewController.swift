@@ -10,6 +10,7 @@ class SheetViewController: NSViewController {
     private let buttonRow = Build.stack([], orientation: .horizontal, spacing: 10)
 
     private(set) var confirmButton = NSButton()
+    private(set) var cancelButton: NSButton?
     private var sheetWidth: CGFloat = 420
 
     init(title: String, subtitle: String, width: CGFloat = 420) {
@@ -59,7 +60,7 @@ class SheetViewController: NSViewController {
 
     /// `cancel: nil` leaves only the confirm button, which then answers Escape as well. Called
     /// again, it replaces the buttons, for a sheet that moves on to another step.
-    func setButtons(confirm: String, cancel: String? = L("Cancel"), leading: NSButton? = nil) {
+    func setButtons(confirm: String, cancel: String? = L("Cancel"), leading: NSView? = nil) {
         buttonRow.arrangedSubviews.forEach { $0.removeFromSuperview() }
         buttonRowLeading?.isActive = false
         buttonRowLeading = nil
@@ -79,6 +80,7 @@ class SheetViewController: NSViewController {
             cancelButton.bezelStyle = .rounded
             cancelButton.keyEquivalent = "\u{1b}"
             buttonRow.addArrangedSubview(cancelButton)
+            self.cancelButton = cancelButton
         }
         buttonRow.addArrangedSubview(confirmButton)
     }
@@ -87,8 +89,8 @@ class SheetViewController: NSViewController {
         dismissSheet()
     }
 
-    /// A form's line: the label in the labels' column, the control after it. A text field or a
-    /// pop-up fills the line.
+    /// A label in the labels' column and a control filling the rest of the line, as New Bot's
+    /// form lays them out. A control taller than a line keeps its label by its first line.
     func formRow(_ title: String, _ control: NSView, topAligned: Bool = false) -> NSView {
         let container = NSView()
         container.translatesAutoresizingMaskIntoConstraints = false
@@ -115,8 +117,12 @@ class SheetViewController: NSViewController {
     }
 
     /// A new title, for a sheet that now shows what it just added.
-    func setSheetTitle(_ title: String) {
+    func setSheetTitle(_ title: String, subtitle: String? = nil) {
         titleLabel.stringValue = title
+        if let subtitle {
+            subtitleLabel.stringValue = subtitle
+            subtitleLabel.isHidden = subtitle.isEmpty
+        }
     }
 
     func setSheetSubtitle(_ subtitle: String) {

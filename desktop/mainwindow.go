@@ -62,6 +62,7 @@ type mainWindow struct {
 	palette     *paletteState
 	inspector   inspectorState
 	tasks       runningTasksState
+	attention   attentionState
 	// focusComposer asks the chat on screen to put the keyboard in its composer.
 	focusComposer bool
 	// cmdHeldAt is when Cmd (Ctrl on Windows and Linux) went down alone, for the chats' shortcut
@@ -341,6 +342,8 @@ func (m *mainWindow) run(id string) {
 		}
 	case "newGroupChat":
 		m.newGroupChat()
+	case "newTask":
+		m.presentDurableTask(m.selection.ChatID, nil)
 	case "marketplace":
 		m.presentMarketplace("")
 	case "pairDevice":
@@ -353,6 +356,8 @@ func (m *mainWindow) run(id string) {
 		}
 	case "palette":
 		m.palette.toggle()
+	case "attention":
+		m.toggleAttention()
 	case "toggleSidebar":
 		m.toggleSidebar()
 	case "toggleInspector":
@@ -369,6 +374,8 @@ func (m *mainWindow) run(id string) {
 		if id := m.selection.ChatID; id != "" {
 			store.TogglePin(id)
 		}
+	case "newSkill":
+		m.newSkill()
 	case "stopResponding":
 		if id := m.selection.ChatID; id != "" {
 			store.StopResponding(id)
@@ -796,6 +803,7 @@ func (m *mainWindow) contentHeader(c *ui.Context, chatID, title, subtitle string
 			return
 		}
 		m.runningTasksButton(c, chatID)
+		m.attentionButton(c)
 		if rightmost {
 			m.inspectorToggle(c)
 		}

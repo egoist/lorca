@@ -237,6 +237,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         mainWindowController?.root.presentNewGroupChat()
     }
 
+    @objc func newTask(_ sender: Any?) {
+        showMainWindow()
+        mainWindowController?.root.presentNewTask()
+    }
+
     @objc func newBot(_ sender: Any?) {
         showMainWindow()
         mainWindowController?.root.presentNewBot()
@@ -383,6 +388,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             #selector(newBot(_:)), #selector(newGroupChat(_:)), #selector(importBotTemplate(_:)), #selector(showMarketplace(_:)), #selector(pairDevice(_:)),
             #selector(find(_:)), #selector(toggleCommandPalette(_:)),
         ]
+        if menuItem.action == #selector(newTask(_:)) {
+            guard case .chat = mainWindowController?.root.selection else { return false }
+            return onboardingWindowController == nil
+        }
         if let action = menuItem.action, opensMainWindow.contains(action) {
             return onboardingWindowController == nil
         }

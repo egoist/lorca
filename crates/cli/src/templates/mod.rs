@@ -88,15 +88,14 @@ fn runner_plugins(app: &App, runner_id: &str) -> Result<Vec<PluginStatus>, Strin
     }
 }
 
-/// Everything the bot has that a template can carry, redacted as the file would be. Skills are
-/// listed when this CLI has the playbook store; without it there are none to offer.
+/// Everything the bot has that a template can carry, redacted as the file would be.
 pub async fn contents(app: &Arc<App>, bot_id: &str) -> Result<Contents, String> {
     let mut bot = app.bot(bot_id).ok_or("Unknown bot")?;
     bot.normalize_description();
     let mut skills = vec![];
-    for item in playbooks::list(app, bot_id).await?.unwrap_or_default() {
+    for item in playbooks::list(app, bot_id) {
         let id = item["id"].as_str().ok_or("Invalid playbook id")?;
-        skills.push(item_of(id, playbooks::export(app, bot_id, id).await?));
+        skills.push(item_of(id, playbooks::export(app, bot_id, id)?));
     }
     let memories: Vec<Item<String>> = if app.this_device_id().as_deref() == Some(bot.runner_id.as_str()) {
         local_memories(app, bot_id)?
@@ -504,9 +503,6 @@ pub async fn import_preview(app: &Arc<App>, text: &str, params: &Value) -> Value
             issues.push(error);
         }
     }
-    if !template.skills.is_empty() && !playbooks::available(app).await {
-        issues.push(playbooks::UNAVAILABLE.into());
-    }
     if let Some(name) = params["name"].as_str() {
         if let Err(error) = bot_name(name) {
             issues.push(error);
@@ -582,6 +578,7 @@ pub async fn import_text(app: &Arc<App>, text: &str, params: &Value) -> Result<V
         thinking: None,
         legacy_instructions: String::new(),
         workdir: None,
+        permissions: None,
         created_at: 0.0,
     };
     let memory = template.memories.join("\n");
@@ -603,7 +600,7 @@ pub async fn import_text(app: &Arc<App>, text: &str, params: &Value) -> Result<V
     let mut skill_receipts = vec![];
     let result = async {
         for skill in &template.skills {
-            skill_receipts.push(playbooks::save(app, &bot.id, skill).await?);
+            skill_receipts.push(playbooks::save(app, &bot.id, skill)?);
         }
         for routine in &template.routines {
             routines::create_paused(app, &bot.id, routine).await?;
@@ -614,7 +611,7 @@ pub async fn import_text(app: &Arc<App>, text: &str, params: &Value) -> Result<V
     if result.is_err() {
         // A bot with incomplete setup must never be left behind as a successful import.
         for receipt in skill_receipts.iter().rev() {
-            if let Err(error) = playbooks::remove(app, &bot.id, receipt).await {
+            if let Err(error) = playbooks::remove(app, &bot.id, receipt) {
                 tracing::warn!(%error, "removing a skill from a failed template import");
             }
         }
@@ -927,7 +924,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn playbook_capability_is_checked_before_setup_and_content_uses_new_scope() {
+    async fn skills_are_saved_in_the_new_bots_scope() {
         let account = Account::new();
         let text = serde_json::to_string(&Template {
             skills: vec![Skill {
@@ -943,35 +940,20 @@ mod tests {
         .unwrap();
         let mut params = json!({ "name": "New", "runner_id": account.app.this_device_id() });
         let preview = import_preview(&account.app, &text, &params).await;
-        if playbooks::list(&account.app, &account.bot().id)
-            .await
-            .unwrap()
-            .is_none()
-        {
-            assert_eq!(preview["can_import"], false);
-            assert!(issues_text(&preview).contains("has skills"));
-        } else {
-            assert_eq!(preview["can_import"], true, "{}", issues_text(&preview));
-            params["expected_digest"] = preview["digest"].clone();
-            params["reviewed"] = json!(true);
-            let imported = import_text(&account.app, &text, &params).await.unwrap();
-            let bot_id = imported["bot"]["id"].as_str().unwrap();
-            let skills = playbooks::list(&account.app, bot_id)
-                .await
-                .unwrap()
-                .unwrap();
-            assert_eq!(skills.len(), 1);
-            let content =
-                playbooks::export(&account.app, bot_id, skills[0]["id"].as_str().unwrap())
-                    .await
-                    .unwrap();
-            assert_eq!(content.name, "review");
-            assert!(playbooks::list(&account.app, &account.bot().id)
-                .await
-                .unwrap()
-                .unwrap()
-                .is_empty());
-        }
+        assert_eq!(preview["can_import"], true, "{}", issues_text(&preview));
+        params["expected_digest"] = preview["digest"].clone();
+        params["reviewed"] = json!(true);
+        let imported = import_text(&account.app, &text, &params).await.unwrap();
+        let bot_id = imported["bot"]["id"].as_str().unwrap();
+        let skills = playbooks::list(&account.app, bot_id);
+        assert_eq!(skills.len(), 1);
+        let content = playbooks::export(&account.app, bot_id, skills[0]["id"].as_str().unwrap()).unwrap();
+        assert_eq!(content.name, "review");
+        assert!(playbooks::list(&account.app, &account.bot().id).is_empty());
+
+        // The skill comes back out of the bot it went into.
+        let contents = contents(&account.app, bot_id).await.unwrap();
+        assert_eq!(contents.skills.iter().map(|item| item.content.name.as_str()).collect::<Vec<_>>(), ["review"]);
     }
 
     #[tokio::test]
