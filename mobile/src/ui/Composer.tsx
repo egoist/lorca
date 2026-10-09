@@ -72,7 +72,9 @@ interface AttachSource {
 /// label that is only the glyph would leave an empty disc behind.
 function AttachMenu({ sources, tint, label }: { sources: AttachSource[]; tint: ColorValue; label: ColorValue }) {
   return (
-    <View style={styles.disc}>
+    // The tap is SwiftUI's; claiming it here keeps it from the pill around the composer, whose
+    // press focuses the field: that expands the pill and moves this disc, which closes the menu.
+    <View style={styles.disc} onStartShouldSetResponder={() => true}>
       {/* The hosted view would otherwise avoid the keyboard by itself: SwiftUI treats the keys as
           a safe-area inset and pushes the disc up out of its frame while the sticky composer
           already rides above them. */}
