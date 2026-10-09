@@ -322,7 +322,7 @@ func (api CustomAPI) Path() string {
 	case APIResponses:
 		return "/responses"
 	case APIMessages:
-		return "/v1/messages"
+		return "/messages"
 	case APISystemOne:
 		return "/systemone"
 	case APIDecisions:
@@ -332,14 +332,12 @@ func (api CustomAPI) Path() string {
 }
 
 func CustomBaseURLPlaceholder(api CustomAPI) string {
-	if api == APIMessages {
-		return "https://api.example.com"
-	}
 	return "https://api.example.com/v1"
 }
 
 // CustomEndpoint is the URL the CLI calls for a base URL as typed: a pasted endpoint is cut back
-// to its root first, as the CLI does, then the API's path goes on. A decision API's URL is its
+// to its root first, as the CLI does, then the API's path goes on, Messages' with the /v1 a root
+// without one lacks. A decision API's URL is its
 // endpoint, since vendors serve one at different paths: one that ends in a decision path stays as
 // it is.
 func CustomEndpoint(api CustomAPI, baseURL string) string {
@@ -350,15 +348,10 @@ func CustomEndpoint(api CustomAPI, baseURL string) string {
 		}
 		return root + api.Path()
 	}
-	pasted := []string{api.Path()}
-	if api == APIMessages {
-		pasted = []string{"/v1/messages", "/v1"}
-	}
-	for _, path := range pasted {
-		if strings.HasSuffix(root, path) {
-			root = strings.TrimSuffix(root, path)
-			break
-		}
+	root = strings.TrimSuffix(root, api.Path())
+	// Messages adds the /v1 a root without one lacks (Moonshot's …/anthropic).
+	if api == APIMessages && !strings.HasSuffix(root, "/v1") {
+		root += "/v1"
 	}
 	return root + api.Path()
 }

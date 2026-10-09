@@ -412,7 +412,7 @@ export function isCustomProvider(kind: string): boolean {
 export const CUSTOM_APIS: readonly { id: CustomAPI; title: string; path: string; placeholder: string }[] = [
   { id: "chat-completions", title: "OpenAI Chat Completions", path: "/chat/completions", placeholder: "https://api.example.com/v1" },
   { id: "responses", title: "OpenAI Responses", path: "/responses", placeholder: "https://api.example.com/v1" },
-  { id: "messages", title: "Anthropic Messages", path: "/v1/messages", placeholder: "https://api.example.com" },
+  { id: "messages", title: "Anthropic Messages", path: "/messages", placeholder: "https://api.example.com/v1" },
   { id: "system-one", title: "System One", path: "/systemone", placeholder: "https://api.example.com/v1" },
   { id: "decisions", title: "OpenAI Decisions", path: "/decisions", placeholder: "https://api.example.com/v1" },
 ];
@@ -437,9 +437,9 @@ export function customRequestURL(api: CustomAPI, baseURL: string): string {
   if (!root) return "";
   const { path } = customAPI(api);
   if (isDecisionAPI(api)) return /\/(systemone|decisions)$/.test(root) ? root : root + path;
-  const pasted = api === "messages" ? [path, "/v1"] : [path];
-  const endpoint = pasted.find((suffix) => root.endsWith(suffix));
-  if (endpoint) root = root.slice(0, -endpoint.length);
+  if (root.endsWith(path)) root = root.slice(0, -path.length);
+  // Messages adds the /v1 a root without one lacks (Moonshot's …/anthropic).
+  if (api === "messages" && !root.endsWith("/v1")) root += "/v1";
   return root + path;
 }
 

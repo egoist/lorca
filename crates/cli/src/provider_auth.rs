@@ -295,12 +295,18 @@ fn custom_root(api: CustomApi, base_url: &str) -> Result<String, String> {
     let endpoint: &[&str] = match api {
         CustomApi::ChatCompletions => &["/chat/completions"],
         CustomApi::Responses => &["/responses"],
-        CustomApi::Messages => &["/v1/messages", "/v1"],
+        CustomApi::Messages => &["/messages"],
         CustomApi::SystemOne | CustomApi::Decisions if url.ends_with("/systemone") || url.ends_with("/decisions") => return Ok(url),
         CustomApi::SystemOne => return Ok(format!("{url}/systemone")),
         CustomApi::Decisions => return Ok(format!("{url}/decisions")),
     };
     Ok(endpoint.iter().find_map(|path| url.strip_suffix(path)).unwrap_or(&url).to_string())
+}
+
+/// A Messages base URL without its `/v1`, which the Messages paths add, so `…/v1` and a root
+/// without one (`…/anthropic`) reach the same endpoints.
+pub(crate) fn messages_root(base_url: &str) -> &str {
+    base_url.strip_suffix("/v1").unwrap_or(base_url)
 }
 
 /// Where a decision endpoint's server lists its models: beside the endpoint. OpenRouter keeps
@@ -327,7 +333,7 @@ async fn list_models(app: &Arc<App>, name: &str, api: CustomApi, root: &str, api
             if api_key.is_empty() { request } else { request.bearer_auth(api_key) }
         }
         CustomApi::Messages => {
-            let request = app.http.get(format!("{root}/v1/models?limit=1000")).header("anthropic-version", ANTHROPIC_VERSION);
+            let request = app.http.get(format!("{}/v1/models?limit=1000", messages_root(root))).header("anthropic-version", ANTHROPIC_VERSION);
             if api_key.is_empty() { request } else { request.header("x-api-key", api_key) }
         }
     };
@@ -472,8 +478,12 @@ mod tests {
         assert_eq!(root(CustomApi::ChatCompletions, "https://openrouter.ai/api/v1/"), "https://openrouter.ai/api/v1");
         assert_eq!(root(CustomApi::ChatCompletions, "http://localhost:11434/v1/chat/completions"), "http://localhost:11434/v1");
         assert_eq!(root(CustomApi::Responses, "https://gateway.example/v1/responses"), "https://gateway.example/v1");
-        assert_eq!(root(CustomApi::Messages, "https://api.anthropic.com/v1/messages"), "https://api.anthropic.com");
+        assert_eq!(root(CustomApi::Messages, "https://api.anthropic.com/v1/messages"), "https://api.anthropic.com/v1");
+        assert_eq!(root(CustomApi::Messages, "https://api.anthropic.com/v1"), "https://api.anthropic.com/v1");
         assert_eq!(root(CustomApi::Messages, "https://api.moonshot.ai/anthropic"), "https://api.moonshot.ai/anthropic");
+        // Messages paths add the `/v1` a root without one lacks.
+        assert_eq!(messages_root("https://api.anthropic.com/v1"), "https://api.anthropic.com");
+        assert_eq!(messages_root("https://api.moonshot.ai/anthropic"), "https://api.moonshot.ai/anthropic");
         assert_eq!(custom_root(CustomApi::Messages, " ").unwrap_err(), "Enter the server's base URL");
     }
 
@@ -627,7 +637,7 @@ mod tests {
         assert!(request.starts_with("GET /v1/models?limit=1000 "), "{request}");
         assert!(request.contains("x-api-key: sk-proxy-1234"), "{request}");
         let provider = app.credentials.lock().unwrap().custom[&kind].clone();
-        assert_eq!(provider.base_url, root);
+        assert_eq!(provider.base_url, format!("{root}/v1"));
         assert_eq!(provider.models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["claude-sonnet-5", "claude-opus-5"]);
         assert_eq!(provider.models[1].name.as_deref(), Some("Claude Opus 5"));
 

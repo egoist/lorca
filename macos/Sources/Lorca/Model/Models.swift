@@ -189,20 +189,18 @@ enum CustomAPI: String, CaseIterable, Hashable {
         switch self {
         case .chatCompletions: "/chat/completions"
         case .responses: "/responses"
-        case .messages: "/v1/messages"
+        case .messages: "/messages"
         case .systemOne: "/systemone"
         case .decisions: "/decisions"
         }
     }
 
-    var baseURLPlaceholder: String {
-        self == .messages ? "https://api.example.com" : "https://api.example.com/v1"
-    }
+    var baseURLPlaceholder: String { "https://api.example.com/v1" }
 
     /// The URL the CLI calls for a base URL as typed: a pasted endpoint is cut back to its root
-    /// first, as the CLI does, then this protocol's path goes on. A decision API's URL is its
-    /// endpoint, since vendors serve one at different paths: one that ends in a decision path
-    /// stays as it is.
+    /// first, as the CLI does, then this protocol's path goes on, Messages' with the `/v1` a root
+    /// without one lacks (Moonshot's `…/anthropic`). A decision API's URL is its endpoint, since
+    /// vendors serve one at different paths: one that ends in a decision path stays as it is.
     func endpoint(for baseURL: String) -> String {
         var root = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         while root.hasSuffix("/") { root.removeLast() }
@@ -211,10 +209,11 @@ enum CustomAPI: String, CaseIterable, Hashable {
             switch self {
             case .chatCompletions: ["/chat/completions"]
             case .responses: ["/responses"]
-            case .messages: ["/v1/messages", "/v1"]
+            case .messages: ["/messages"]
             case .systemOne, .decisions: []
             }
         if let suffix = pasted.first(where: { root.hasSuffix($0) }) { root.removeLast(suffix.count) }
+        if self == .messages, !root.hasSuffix("/v1") { root += "/v1" }
         return root + path
     }
 }

@@ -36,7 +36,8 @@ pub enum CustomApi {
     ChatCompletions,
     /// OpenAI-compatible Responses, at `{base_url}/responses`.
     Responses,
-    /// Anthropic-compatible Messages, at `{base_url}/v1/messages`.
+    /// Anthropic-compatible Messages, at `{base_url}/messages`, or `{base_url}/v1/messages` for a
+    /// root without its `/v1` (Moonshot's `…/anthropic`).
     Messages,
     /// System One decisions (TypeSafe's, which OpenRouter and other gateways serve too), at
     /// `base_url` itself: a `state` and a map of typed questions.

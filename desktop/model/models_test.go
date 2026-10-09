@@ -82,9 +82,9 @@ func TestCustomEndpoint(t *testing.T) {
 		expect(t, CustomEndpoint(test.api, test.base), test.url)
 	}
 	expect(t, CustomEndpointNote(APIChatCompletions, ""), "Lorca adds /chat/completions to it.")
-	expect(t, CustomEndpointNote(APIMessages, "   "), "Lorca adds /v1/messages to it.")
+	expect(t, CustomEndpointNote(APIMessages, "   "), "Lorca adds /messages to it.")
 	expect(t, CustomEndpointNote(APIResponses, "https://openrouter.ai/api/v1/"), "Requests go to https://openrouter.ai/api/v1/responses.")
-	expect(t, CustomBaseURLPlaceholder(APIMessages), "https://api.example.com")
+	expect(t, CustomBaseURLPlaceholder(APIMessages), "https://api.example.com/v1")
 	expect(t, CustomBaseURLPlaceholder(APIResponses), "https://api.example.com/v1")
 	// A decision API's root, as the note says Lorca adds the path to it.
 	expect(t, CustomBaseURLPlaceholder(APISystemOne), "https://api.example.com/v1")

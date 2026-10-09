@@ -6,7 +6,7 @@ final class CustomProviderTests: XCTestCase {
         XCTAssertEqual(CustomAPI.chatCompletions.endpoint(for: " https://openrouter.ai/api/v1/ "), "https://openrouter.ai/api/v1/chat/completions")
         XCTAssertEqual(CustomAPI.chatCompletions.endpoint(for: "http://localhost:11434/v1/chat/completions"), "http://localhost:11434/v1/chat/completions")
         XCTAssertEqual(CustomAPI.responses.endpoint(for: "https://gateway.example/v1/responses/"), "https://gateway.example/v1/responses")
-        // Messages adds its own /v1, so a root given with one is cut back.
+        // Messages adds the /v1 a root without one lacks.
         XCTAssertEqual(CustomAPI.messages.endpoint(for: "https://api.anthropic.com/v1"), "https://api.anthropic.com/v1/messages")
         XCTAssertEqual(CustomAPI.messages.endpoint(for: "https://api.anthropic.com/v1/messages"), "https://api.anthropic.com/v1/messages")
         XCTAssertEqual(CustomAPI.messages.endpoint(for: "https://api.moonshot.ai/anthropic"), "https://api.moonshot.ai/anthropic/v1/messages")

@@ -243,7 +243,7 @@ describe("custom providers", () => {
   });
 
   test("protocols name their path and base URL example", () => {
-    expect(customAPI("messages")).toMatchObject({ title: "Anthropic Messages", path: "/v1/messages", placeholder: "https://api.example.com" });
+    expect(customAPI("messages")).toMatchObject({ title: "Anthropic Messages", path: "/messages", placeholder: "https://api.example.com/v1" });
     expect(customAPI("responses")).toMatchObject({ title: "OpenAI Responses", path: "/responses", placeholder: "https://api.example.com/v1" });
     // A protocol this build does not know reads as the first.
     expect(customAPI(undefined).id).toBe("chat-completions");

@@ -407,7 +407,8 @@ fn custom_provider(kind: &str, provider: &CustomProvider, model: &str, thinking:
             Arc::new(adapter)
         }
         CustomApi::Messages => {
-            let mut adapter = AnthropicProvider::new(kind, &provider.base_url, &provider.api_key, model).with_thinking(thinking);
+            let root = crate::provider_auth::messages_root(&provider.base_url);
+            let mut adapter = AnthropicProvider::new(kind, root, &provider.api_key, model).with_thinking(thinking);
             adapter.info = Some(info);
             adapter.supports_images = info.images;
             // Arguments streamed as they are generated are Anthropic's own extension.
@@ -719,13 +720,15 @@ mod tests {
             max_tokens: None,
             options: lorca_agent::RequestOptions::default().with_session_id("chat-1"),
         };
+        // A Messages root with its `/v1` and one without reach the same endpoint.
         let cases = [
             (CustomApi::ChatCompletions, "/v1", "data: [DONE]\n\n", "post /v1/chat/completions "),
             (CustomApi::Messages, "", "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n", "post /v1/messages "),
+            (CustomApi::Messages, "/v1", "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n", "post /v1/messages "),
         ];
-        for (api, path, body, line) in cases {
+        for (index, (api, path, body, line)) in cases.into_iter().enumerate() {
             let (root, server) = answer_once(body);
-            let kind = format!("custom:keyless-{}", path.len());
+            let kind = format!("custom:keyless-{index}");
             let provider = CustomProvider { name: "Keyless".into(), api, base_url: format!("{root}{path}"), api_key: String::new(), models: vec![model("m")], created_at: 1 };
             app.credentials.lock().unwrap().custom.insert(kind.clone(), provider);
             let mut stream = provider_for(app, &kind, None, None).unwrap().stream(request(), CancellationToken::new()).await;
