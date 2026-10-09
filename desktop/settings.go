@@ -115,6 +115,8 @@ func (m *mainWindow) settingsPage(c *ui.Context, pane model.SettingsPane) {
 		s.providers(c)
 	case model.PaneAutoReview:
 		s.autoReview(c)
+	case model.PaneSharedLinks:
+		s.sharedLinks(c)
 	case model.PanePlugins:
 		s.plugins(c, m)
 	case model.PaneBots:

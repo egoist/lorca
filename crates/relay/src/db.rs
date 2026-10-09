@@ -322,6 +322,16 @@ pub trait Store: Send + Sync {
     /// not an orphan: the file store may belong to another database.
     async fn orphans(&self, files: &[(String, String)]) -> ApiResult<Vec<(String, String)>>;
 
+    // Shared links: a bot template's ciphertext under a random id. Anyone reads one by its id;
+    // the key is in the link, never here. Only the identity that put it replaces or deletes it.
+
+    /// Stores `ciphertext` under `id` for the identity, replacing what the id held. `403` when
+    /// another identity holds the id, `409` when a new id would give the identity more than `max`.
+    async fn put_share(&self, identity_pubkey: &str, id: &str, ciphertext: &[u8], max: i64) -> ApiResult<()>;
+    async fn share(&self, id: &str) -> ApiResult<Option<Vec<u8>>>;
+    /// False when the identity holds nothing under `id`.
+    async fn delete_share(&self, identity_pubkey: &str, id: &str) -> ApiResult<bool>;
+
     // Push tokens
 
     async fn set_push_token(&self, identity_pubkey: &str, token: &PushToken) -> ApiResult<()>;

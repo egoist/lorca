@@ -334,6 +334,12 @@ func (m *mainWindow) run(id string) {
 	switch id {
 	case "newBot":
 		m.newBot()
+	case "importBotTemplate":
+		m.presentTemplateImport("", "", m.selectChat)
+	case "shareBotTemplate":
+		if bot := selectedDMBot(); bot != nil {
+			m.presentTemplateShare(bot.ID)
+		}
 	case "newGroupChat":
 		m.newGroupChat()
 	case "newTask":

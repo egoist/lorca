@@ -127,6 +127,28 @@ export const en = {
     faq: 'FAQ',
     download: 'Download',
   },
+  template: {
+    title: 'A bot shared with Lorca',
+    open: 'Open in Lorca',
+    noApp: "Don't have Lorca? <download>Get it for Mac, Windows, Linux, Android, or iPhone</download>, then open this link again.",
+    included: "What's included",
+    routines: 'Routines',
+    routinesNote: 'Routines start paused.',
+    plugins: 'Plugins',
+    pluginsNote: 'You connect your own accounts.',
+    memories: 'Memories',
+    more: 'And {{count}} more',
+    skills: 'Skills',
+    privacy: "Decrypted in your browser. Lorca's servers can't read this bot.",
+    home: 'Go to lorca.app',
+    error: {
+      noKey: { title: 'This link is incomplete.', body: 'The part after # is missing. Ask for the whole link.' },
+      notFound: { title: 'This link no longer works.', body: 'It was revoked, or it never existed.' },
+      badKey: { title: "This link doesn't open.", body: "Its key doesn't match. Check that you copied the whole link." },
+      notTemplate: { title: "This link doesn't hold a Lorca bot.", body: 'It may come from a newer version of Lorca.' },
+      unreachable: { title: "Couldn't load this bot.", body: "The relay that holds it didn't answer. Try again later." },
+    },
+  },
 }
 
 export type Messages = typeof en

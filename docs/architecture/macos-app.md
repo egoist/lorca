@@ -28,6 +28,8 @@ Sidebar: an `NSOutlineView` (`Sidebar/SidebarViewController.swift`) with one ite
 
 The Routines section, the routine sheet, and the Devices pane's Background service row are described in [Routines](routines.md#the-apps).
 
+File › Share as Template… (also a DM's context menu) and New Bot from Template… open the [template sheets](templates.md#in-the-apps) in `Sheets/Template*.swift`; Settings › Shared Links lists the account's links. Info.plist registers `lorca://` (`lorca-dev://` for Lorca Dev), and `application(_:open:)` keeps such a link until the account and CLI are up.
+
 A group's inspector lists its [project context](project-context.md#the-apps) under Group: a row per entry that opens it, and + to add one.
 
 A bot's message offers Give Feedback… beside Reply, and the DM inspector's Feedback section, shown once the bot has any, holds the changes it suggests and All feedback ([Workflow feedback](feedback.md#in-the-apps)). The inspector reads `feedback.list` with the bot's memory and again on `feedback.changed`.

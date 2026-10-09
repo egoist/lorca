@@ -117,7 +117,17 @@ const SCHEMA: &str = "
 /// version 1 is `SCHEMA`, version `n + 2` is `MIGRATIONS[n]`. A deploy runs the old process
 /// beside the new one, so a step only adds (a table, a nullable column, an index). Append;
 /// never edit a step that has shipped.
-const MIGRATIONS: &[&str] = &[];
+const MIGRATIONS: &[&str] = &[
+    // 2: shared links.
+    "CREATE TABLE IF NOT EXISTS shares (
+        id              TEXT PRIMARY KEY,
+        identity_pubkey TEXT NOT NULL,
+        ciphertext      BYTEA NOT NULL,
+        created_at      BIGINT NOT NULL,
+        updated_at      BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS shares_identity ON shares(identity_pubkey);",
+];
 
 /// Applies the steps this database has not had. DDL locks whole tables, and the process this
 /// one replaces is writing to them meanwhile, so a step runs once and not at every start, and
@@ -485,12 +495,46 @@ impl Store for Postgres {
             .await?;
         }
         tx.execute("DELETE FROM challenges WHERE machine_pubkey IN (SELECT machine_pubkey FROM machines WHERE identity_pubkey = $1)", &[&identity_pubkey]).await?;
-        for table in ["push_tokens", "pairings", "blobs", "deleted_groups", "sequences", "usage", "machines"] {
+        for table in ["push_tokens", "pairings", "blobs", "deleted_groups", "sequences", "usage", "shares", "machines"] {
             tx.execute(&format!("DELETE FROM {table} WHERE identity_pubkey = $1"), &[&identity_pubkey]).await?;
         }
         tx.execute("DELETE FROM identities WHERE pubkey = $1", &[&identity_pubkey]).await?;
         tx.commit().await?;
         Ok(DeletedIdentity { machines, files })
+    }
+
+    async fn put_share(&self, identity_pubkey: &str, id: &str, ciphertext: &[u8], max: i64) -> ApiResult<()> {
+        let mut client = self.client().await?;
+        let tx = client.transaction().await?;
+        lock_identity(&tx, identity_pubkey).await?;
+        let owner: Option<String> = tx.query_opt("SELECT identity_pubkey FROM shares WHERE id = $1 FOR UPDATE", &[&id]).await?.map(|row| row.get(0));
+        match owner {
+            Some(owner) if owner != identity_pubkey => return Err(ApiError::forbidden("Not your link")),
+            Some(_) => {
+                tx.execute("UPDATE shares SET ciphertext = $1, updated_at = $2 WHERE id = $3", &[&ciphertext, &now(), &id]).await?;
+            }
+            None => {
+                let count: i64 = tx.query_one("SELECT COUNT(*) FROM shares WHERE identity_pubkey = $1", &[&identity_pubkey]).await?.get(0);
+                if count >= max {
+                    return Err(ApiError::conflict("This account has as many shared links as the relay keeps"));
+                }
+                tx.execute(
+                    "INSERT INTO shares (id, identity_pubkey, ciphertext, created_at, updated_at) VALUES ($1, $2, $3, $4, $4)",
+                    &[&id, &identity_pubkey, &ciphertext, &now()],
+                )
+                .await?;
+            }
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn share(&self, id: &str) -> ApiResult<Option<Vec<u8>>> {
+        Ok(self.client().await?.query_opt("SELECT ciphertext FROM shares WHERE id = $1", &[&id]).await?.map(|row| row.get(0)))
+    }
+
+    async fn delete_share(&self, identity_pubkey: &str, id: &str) -> ApiResult<bool> {
+        Ok(self.client().await?.execute("DELETE FROM shares WHERE id = $1 AND identity_pubkey = $2", &[&id, &identity_pubkey]).await? > 0)
     }
 
     async fn inactive_identities(&self, before: i64) -> ApiResult<Vec<String>> {

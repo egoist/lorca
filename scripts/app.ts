@@ -96,6 +96,17 @@ function infoPlist(version: string, config: Config) {
 	<string>${name}</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>${bundleId(config)}</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>${config === "debug" ? "lorca-dev" : "lorca"}</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleShortVersionString</key>
 	<string>${version}</string>
 	<key>CFBundleVersion</key>

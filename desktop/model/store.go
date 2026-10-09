@@ -149,6 +149,8 @@ type Store struct {
 	AutoReview AutoReview
 	// Attention is what waits on the user across chats, kept by the bots (attention.changed).
 	Attention AttentionView
+	// SharedLinks are the bots the account shares as links, shared through the roster.
+	SharedLinks []SharedLink
 	// Providers are the account's provider credentials, the same on every Device.
 	Providers []ProviderCredential
 	// Models are what the CLI's catalog offers, for the Model and Thinking pickers.
@@ -490,6 +492,7 @@ func (s *Store) apply(snapshot WireSnapshot) {
 		copy := item.Clone()
 		s.Reviews = append(s.Reviews, &copy)
 	}
+	s.SharedLinks = snapshot.SharedLinks
 	s.Providers = ToProviders(snapshot.Providers)
 	s.Models = ToModels(snapshot.Models)
 	s.Playbooks = snapshot.Playbooks
@@ -588,6 +591,9 @@ func (s *Store) handle(name string, data json.RawMessage) {
 			for _, routine := range roster.Routines {
 				s.Routines = append(s.Routines, ToRoutine(routine))
 			}
+		}
+		if roster.SharedLinks != nil {
+			s.SharedLinks = roster.SharedLinks
 		}
 		if roster.AutoReview != nil {
 			s.AutoReview = ToAutoReview(roster.AutoReview)
@@ -2738,6 +2744,7 @@ func (s *Store) ResetMockData() {
 	s.Budgets = mockBudgets()
 	s.AutoReview = mockAutoReview()
 	s.Attention = DefaultAttention()
+	s.SharedLinks = mockSharedLinks()
 	s.Providers = mockProviders()
 	s.Models = mockModels()
 	s.sortChats()

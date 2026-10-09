@@ -310,6 +310,7 @@ type WireSnapshot struct {
 	Reviews             []ReviewItem      `json:"reviews"`
 	Tasks               []DurableTask     `json:"tasks"`
 	AutoReview          *WireAutoReview   `json:"auto_review"`
+	SharedLinks         []SharedLink      `json:"shared_links"`
 	Providers           []WireProvider    `json:"providers"`
 	Models              []WireModel       `json:"models"`
 	Playbooks           []PlaybookSummary `json:"playbooks"`
@@ -318,12 +319,13 @@ type WireSnapshot struct {
 }
 
 type WireRosterChanged struct {
-	Devices    []WireDevice    `json:"devices"`
-	Bots       []WireBot       `json:"bots"`
-	Chats      []WireChat      `json:"chats"`
-	Routines   []WireRoutine   `json:"routines"`
-	AutoReview *WireAutoReview `json:"auto_review"`
-	Providers  []WireProvider  `json:"providers"`
+	Devices     []WireDevice    `json:"devices"`
+	Bots        []WireBot       `json:"bots"`
+	Chats       []WireChat      `json:"chats"`
+	Routines    []WireRoutine   `json:"routines"`
+	AutoReview  *WireAutoReview `json:"auto_review"`
+	SharedLinks []SharedLink    `json:"shared_links"`
+	Providers   []WireProvider  `json:"providers"`
 	// Models are the catalog's models again, so a newer catalog the CLI installs reaches the pickers.
 	Models    []WireModel        `json:"models"`
 	Playbooks *[]PlaybookSummary `json:"playbooks"`

@@ -433,6 +433,8 @@ extension SidebarViewController: NSMenuDelegate {
         // Only groups take new members; a DM is fixed to its one bot.
         if chat?.isGroup == true {
             menu.addItem(item(L("Add Bot…"), #selector(RootSplitViewController.addBotToChat(_:))))
+        } else {
+            menu.addItem(item(L("Share as Template…"), #selector(RootSplitViewController.shareBotTemplate(_:))))
         }
         menu.addItem(.separator())
         menu.addItem(

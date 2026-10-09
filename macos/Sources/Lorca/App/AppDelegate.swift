@@ -29,9 +29,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             case .identityChanged:
                 self?.identityStateChanged()
                 self?.updateDockBadge()
+                self?.presentPendingTemplateLink()
             case .connectionChanged:
                 self?.showMainWindowIfDue()
-            case .snapshotReplaced, .chatsChanged:
+                self?.presentPendingTemplateLink()
+            case .snapshotReplaced:
+                self?.updateDockBadge()
+                self?.presentPendingTemplateLink()
+            case .chatsChanged:
                 self?.updateDockBadge()
             case .rosterChanged:
                 self?.relayStateChanged()
@@ -247,6 +252,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         mainWindowController?.root.select(.chat(chatID))
     }
 
+    @objc func importBotTemplate(_ sender: Any?) {
+        showMainWindow()
+        mainWindowController?.root.presentTemplateImport()
+    }
+
+    // MARK: - Shared links
+
+    /// A shared bot's link the app was opened with, kept until there is an account and a CLI
+    /// to read it: Open in Lorca on lorca.app may be what launched the app.
+    private var pendingTemplateLink: String?
+
+    /// `lorca://t/<id>#<key>` (`lorca-dev://` for Lorca Dev) from a shared bot's page, which the
+    /// sheet shows as the page's own address.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls where url.host == "t" {
+            guard var page = URLComponents(url: url, resolvingAgainstBaseURL: false) else { continue }
+            page.scheme = "https"
+            page.host = "lorca.app"
+            page.path = "/t" + page.path
+            pendingTemplateLink = page.string
+        }
+        presentPendingTemplateLink()
+    }
+
+    private func presentPendingTemplateLink() {
+        guard let link = pendingTemplateLink, store.hasIdentity == true, store.isConnected || store.isMock else { return }
+        pendingTemplateLink = nil
+        showMainWindow()
+        mainWindowController?.root.presentTemplateImport(link: link)
+    }
+
     @objc func showMarketplace(_ sender: Any?) {
         showMainWindow()
         mainWindowController?.root.presentMarketplace()
@@ -354,7 +390,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         // These open the main window, which stays away while onboarding is up.
         let opensMainWindow = [
-            #selector(newBot(_:)), #selector(newGroupChat(_:)), #selector(showMarketplace(_:)), #selector(pairDevice(_:)),
+            #selector(newBot(_:)), #selector(newGroupChat(_:)), #selector(importBotTemplate(_:)), #selector(showMarketplace(_:)), #selector(pairDevice(_:)),
             #selector(find(_:)), #selector(toggleCommandPalette(_:)),
         ]
         if menuItem.action == #selector(newTask(_:)) {

@@ -12,6 +12,7 @@ import { reviewEditParams } from "./reviewEdit";
 import { hostFacts } from "./host";
 import { orderProjectEntries, providerConnectMethod, withReviewModel, type PlaybookContent, type PlaybookRecord, type PlaybookScope, type ProjectContext, type ProjectEntry, type ProjectKind, type ProjectSource, type Attachment, type AutoReview, type Bot, type BrowserProfile, type BudgetLimits, type BudgetState, type CallLimits, type Chat, type ChatMeta, type ChatSearchResults, type ChatUsage, type CustomAPI, type CustomModel, type DurableTask, type Message, type ReviewItem, type PluginDetail, type PluginStatus, type ProviderKind, type ProviderStatus } from "./model";
 import { coreHome, loadPrefs, pathOf, wipePrefs } from "./prefs";
+import type { SharedLink, TemplateContents, TemplateImportPreview, TemplateSelection } from "./templates";
 import { clearPushes, installPushHandlers, registerForPushes } from "./push";
 import {
   acceptDurableTask,
@@ -402,6 +403,61 @@ class Engine {
   /// The skill as a portable file's JSON: its content and bundled files, nothing about the account.
   async exportPlaybook(scope: PlaybookScope, id: string): Promise<string> {
     return JSON.stringify(await core.request("playbooks.export", { scope, id }), null, 2);
+  }
+
+  // MARK: - Templates
+
+  /// What the bot has that a template can carry, redacted as the template holds it. A bot on a
+  /// Runner asks it for its memories.
+  async templateContents(botId: string): Promise<TemplateContents> {
+    return core.request<TemplateContents>("templates.contents", { bot_id: botId });
+  }
+
+  /// Builds the template first, so the core's objections come before anything leaves, and
+  /// answers what the share or the file must still hold.
+  private async templateDigest(botId: string, selection: TemplateSelection): Promise<string> {
+    const { digest } = await core.request<{ digest: string }>("templates.export.preview", { bot_id: botId, selection });
+    return digest;
+  }
+
+  /// Puts the template on the relay behind a new link, or behind `linkId`'s, which keeps its
+  /// address. The roster brings the link to every Device; this phone lists it at once.
+  async shareTemplate(botId: string, selection: TemplateSelection, linkId?: string): Promise<SharedLink> {
+    const digest = await this.templateDigest(botId, selection);
+    const { link } = await core.request<{ link: SharedLink }>("templates.share", { bot_id: botId, selection, expected_digest: digest, reviewed: true, ...(linkId ? { link_id: linkId } : {}) });
+    useStore.setState((s) => ({ shared_links: [...s.shared_links.filter((each) => each.id !== link.id), link] }));
+    return link;
+  }
+
+  /// Writes the template as a file at `path`, over what is there.
+  async saveTemplateFile(botId: string, selection: TemplateSelection, path: string): Promise<void> {
+    const digest = await this.templateDigest(botId, selection);
+    await core.request("templates.export", { bot_id: botId, selection, path, expected_digest: digest, reviewed: true, overwrite: true });
+  }
+
+  /// Takes the link down: whoever opens it sees that it no longer works.
+  async revokeLink(id: string): Promise<void> {
+    await core.request("templates.unshare", { link_id: id });
+    useStore.setState((s) => ({ shared_links: s.shared_links.filter((link) => link.id !== id) }));
+  }
+
+  /// What a link or a file sets up on the Runner picked, with `mappings` (service → connection)
+  /// for the plugins the user chose.
+  async previewTemplateImport(params: { link?: string; path?: string; runner_id?: string; mappings: Record<string, string> }): Promise<TemplateImportPreview> {
+    return core.request<TemplateImportPreview>("templates.import.preview", params);
+  }
+
+  /// Makes the bot the user reviewed on its Runner and answers its chat, which this phone shows
+  /// ahead of the roster that brings it from the Runner.
+  async importTemplate(params: { link?: string; path?: string; runner_id: string; name: string; provider: string; mappings: Record<string, string>; expected_digest: string }): Promise<string> {
+    const { bot, chat_id } = await core.request<{ bot: Bot; chat_id: string }>("templates.import", { ...params, reviewed: true });
+    useStore.setState((s) => ({
+      bots: s.bots.some((each) => each.id === bot.id) ? s.bots : [...s.bots, bot],
+      chats: s.chats.some((each) => each.id === chat_id)
+        ? s.chats
+        : [{ id: chat_id, kind: "dm", bot_ids: [bot.id], is_pinned: false, created_at: bot.created_at, messages: [], unread_count: 0 }, ...s.chats],
+    }));
+    return chat_id;
   }
 
   /// Every output version this phone has synced for the chat, for its details.

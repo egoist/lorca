@@ -51,6 +51,8 @@ type paletteRow struct {
 var paletteCommands = []struct{ id, symbol, keywords string }{
 	{"newBot", "plus.message", "create add"},
 	{"newGroupChat", "person.2", "create room"},
+	{"importBotTemplate", "square.and.arrow.down", "open file template"},
+	{"shareBotTemplate", "square.and.arrow.up", "export link file template"},
 	{"pairDevice", "qrcode", "phone link runner"},
 	{"addBot", "person.badge.plus", "invite member group"},
 	{"renameChat", "pencil", "title name"},

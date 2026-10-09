@@ -144,6 +144,7 @@ func (a *appDelegate) didFinishLaunching() {
 // storeChanged keeps what the app shows outside its windows in step with the store: the unread
 // badge and the tray's words.
 func (a *appDelegate) storeChanged(event model.Event) {
+	a.presentPendingTemplateLink()
 	switch event.Kind {
 	case model.EventIdentityChanged, model.EventSnapshotReplaced, model.EventChatsChanged:
 		count := 0

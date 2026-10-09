@@ -425,3 +425,23 @@ async fn a_group_pages_backwards_by_where_each_message_began() {
         assert!(none.is_empty() && !more);
     }
 }
+
+#[tokio::test]
+async fn a_shared_link_belongs_to_the_identity_that_put_it() {
+    for (store, _) in backends().await {
+        let (owner, other, id) = (name("owner"), name("other"), name("link"));
+        ok!(store.register_identity(&owner, "content", &name("machine"), "box", "attestation"));
+        ok!(store.register_identity(&other, "content", &name("machine"), "box", "attestation"));
+        ok!(store.put_share(&owner, &id, b"first", 2));
+        ok!(store.put_share(&owner, &id, b"second", 2));
+        assert_eq!(ok!(store.share(&id)).as_deref(), Some(&b"second"[..]));
+        assert_eq!(store.put_share(&other, &id, b"taken", 2).await.err().map(|e| axum::response::IntoResponse::into_response(e).status().as_u16()), Some(403));
+        assert!(!ok!(store.delete_share(&other, &id)));
+        ok!(store.put_share(&owner, &name("link"), b"two", 2));
+        assert_eq!(store.put_share(&owner, &name("link"), b"three", 2).await.err().map(|e| axum::response::IntoResponse::into_response(e).status().as_u16()), Some(409));
+        assert!(ok!(store.delete_share(&owner, &id)));
+        assert!(ok!(store.share(&id)).is_none());
+        ok!(store.delete_identity(&owner, false));
+        ok!(store.put_share(&other, &name("link"), b"room", 2));
+    }
+}

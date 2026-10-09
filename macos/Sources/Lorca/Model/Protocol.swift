@@ -37,6 +37,7 @@ enum Wire {
         var tasks: [DurableTask]?
         var playbooks: [PlaybookSummary]?
         var autoReview: AutoReview?
+        var sharedLinks: [SharedLink]?
         var providers: [Provider]?
         var models: [Model]?
         var runningChatIds: [String]
@@ -604,6 +605,7 @@ enum Wire {
         var routines: [Routine]?
         var playbooks: [PlaybookSummary]?
         var autoReview: AutoReview?
+        var sharedLinks: [SharedLink]?
         var providers: [Provider]?
         /// The catalog's models again, so a newer catalog the CLI installs reaches the pickers.
         var models: [Model]?

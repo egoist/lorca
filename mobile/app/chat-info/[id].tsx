@@ -26,6 +26,7 @@ import { loadFeedback, useFeedback } from "../../src/core/feedback";
 import { countsLine, isEmpty, targetName } from "../../src/ui/feedback";
 import { isStopped, limitsSummary, stoppedDetail, stoppedLabel } from "../../src/ui/limits";
 import { accentColor, Font } from "../../src/ui/theme";
+import { sharedLinkFor } from "../../src/core/templates";
 
 export default function ChatInfoScreen() {
   useLanguage();
@@ -62,6 +63,7 @@ export default function ChatInfoScreen() {
   const limits = useBudget("chat", chat?.id, bot?.runner_id);
   const stoppedTurn = useStoppedTurn(chat?.id, bot?.runner_id);
   const budgets = useStore((s) => s.budgets);
+  const sharedLink = useStore((s) => (bot ? sharedLinkFor(s.shared_links, bot.id) : undefined));
   // A turn or routine stopped at its limits is the user's to act on.
   const orange = Platform.OS === "ios" ? PlatformColor("systemOrange") : accentColor("orange", p.dark);
 
@@ -464,6 +466,13 @@ export default function ChatInfoScreen() {
               />
             )
           ))}
+        </Section>
+      )}
+
+      {/* The bot as a template others make their own bot from: a link, or a file. */}
+      {bot && (
+        <Section>
+          <Row title={t("Share as Template")} icon="square.and.arrow.up" detail={sharedLink ? t("Shared") : undefined} chevron onPress={() => router.push(`/chat-info/share/${bot.id}`)} />
         </Section>
       )}
 

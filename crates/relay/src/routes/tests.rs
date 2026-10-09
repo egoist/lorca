@@ -415,6 +415,50 @@ async fn attesting_a_machine_takes_a_bearer_and_keeps_keys_apart() {
 }
 
 #[tokio::test]
+async fn shared_links_are_read_by_anyone_and_changed_by_their_owner() {
+    let relay = Relay::start(0).await;
+    let put = |token: String, id: &str, bytes: &[u8]| {
+        let (client, url, id, bytes) = (&relay.client, relay.url.clone(), id.to_string(), bytes.to_vec());
+        async move { client.put_share(&url, &token, &id, bytes).await }
+    };
+    put(relay.token.clone(), "link-1", b"sealed").await.unwrap();
+
+    // A browser reads it with no token and no protocol, and may read the answer.
+    let read = reqwest::get(format!("{}/v1/shares/link-1", relay.url)).await.unwrap();
+    assert_eq!(read.status(), 200);
+    assert_eq!(read.headers()["access-control-allow-origin"], "*");
+    assert_eq!(read.bytes().await.unwrap().as_ref(), b"sealed");
+    let missing = reqwest::get(format!("{}/v1/shares/nothing", relay.url)).await.unwrap();
+    assert_eq!(missing.status(), 404);
+    assert_eq!(missing.headers()["access-control-allow-origin"], "*");
+    assert!(relay.client.get_share(&relay.url, "nothing").await.unwrap().is_none());
+
+    // The owner replaces it under the same id; another identity can neither replace nor delete it.
+    put(relay.token.clone(), "link-1", b"sealed again").await.unwrap();
+    assert_eq!(relay.client.get_share(&relay.url, "link-1").await.unwrap().unwrap(), b"sealed again");
+    relay.state.db.register_identity("other", "content-2", "machine-2", "box-2", "attestation").await.unwrap();
+    let other = issue_token(&relay.state.secret, "other", "machine-2").0;
+    assert_eq!(put(other.clone(), "link-1", b"taken").await.unwrap_err().status, Some(403));
+    assert_eq!(relay.client.delete_share(&relay.url, &other, "link-1").await.unwrap_err().status, Some(404));
+    assert_eq!(relay.client.get_share(&relay.url, "link-1").await.unwrap().unwrap(), b"sealed again");
+
+    // A template's size at most, and so many links per identity.
+    let too_large = vec![0u8; MAX_SHARE_BYTES + 1];
+    assert_eq!(put(relay.token.clone(), "link-big", &too_large).await.unwrap_err().status, Some(413));
+    for i in 1..MAX_SHARES {
+        put(relay.token.clone(), &format!("link-q{i}"), b"q").await.unwrap();
+    }
+    assert_eq!(put(relay.token.clone(), "link-over", b"q").await.unwrap_err().status, Some(409));
+    put(relay.token.clone(), "link-1", b"replacing is not another link").await.unwrap();
+
+    relay.client.delete_share(&relay.url, &relay.token, "link-1").await.unwrap();
+    assert!(relay.client.get_share(&relay.url, "link-1").await.unwrap().is_none());
+    // An identity that goes takes its links along.
+    relay.state.db.delete_identity("identity", false).await.unwrap();
+    assert!(relay.client.get_share(&relay.url, "link-q1").await.unwrap().is_none());
+}
+
+#[tokio::test]
 async fn attention_slots_round_trip_as_ciphertext_at_protocol_three() {
     assert_eq!(PROTOCOL, lorca::relay::PROTOCOL);
     let relay = Relay::start(1_000_000).await;

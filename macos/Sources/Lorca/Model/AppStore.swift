@@ -36,6 +36,7 @@ enum SettingsPane: String, CaseIterable {
     case general
     case providers
     case autoReview = "auto-review"
+    case sharedLinks = "shared-links"
     case plugins
     case bots
     case device
@@ -46,7 +47,7 @@ enum SettingsPane: String, CaseIterable {
     /// the provider credentials.
     var isDeviceScoped: Bool {
         switch self {
-        case .general, .providers, .autoReview, .advanced: false
+        case .general, .providers, .autoReview, .sharedLinks, .advanced: false
         case .bots, .plugins, .device: true
         }
     }
@@ -87,6 +88,8 @@ final class AppStore {
     private(set) var autoReview = AutoReview()
     /// What waits on the user across chats, kept by the bots (`attention.changed`).
     private(set) var attention = AttentionView()
+    /// The bots the account shares as links, shared through the roster.
+    private(set) var sharedLinks: [SharedLink] = []
     /// The account's provider credentials, the same on every Device.
     private(set) var providers: [ProviderCredential] = []
     /// The models the CLI's catalog offers, for the Model and Thinking pickers.
@@ -305,6 +308,7 @@ final class AppStore {
         playbooks = snapshot.playbooks ?? []
         autoReview = snapshot.autoReview?.toModel() ?? AutoReview()
         attention = snapshot.attention ?? AttentionView()
+        sharedLinks = snapshot.sharedLinks ?? []
         providers = (snapshot.providers ?? []).compactMap { $0.toModel() }
         catalog = (snapshot.models ?? []).compactMap { $0.toModel() }
         runningJobs = (snapshot.runningTurns ?? []).map { ($0.jobId, $0.chatId, $0.botId, $0.routineId) }
@@ -349,6 +353,7 @@ final class AppStore {
             if let incoming = roster.routines { routines = incoming.map { $0.toModel() } }
             if let incoming = roster.playbooks { playbooks = incoming }
             if let incoming = roster.autoReview { autoReview = incoming.toModel() }
+            if let incoming = roster.sharedLinks { sharedLinks = incoming }
             if let incoming = roster.providers { providers = incoming.compactMap { $0.toModel() } }
             if let incoming = roster.models { catalog = incoming.compactMap { $0.toModel() } }
             var merged: [Chat] = []
@@ -755,6 +760,25 @@ final class AppStore {
             accent: template.accent, runnerID: runnerID, provider: preferredProvider, templateID: template.id,
             greeting: L("Hi %@, introduce yourself.", template.name))
         return dm(with: botID)
+    }
+
+    /// The Runner returns its new independent bot. Keep that bot and DM visible while a remote
+    /// Runner's encrypted roster reaches this Device; subsequent roster events reconcile them.
+    func importTemplate(_ params: [String: Any]) async throws -> Chat.ID {
+        let reply = try await templateReply("templates.import", params)
+        guard let object = reply["bot"] as? [String: Any], let chatID = reply["chat_id"] as? String else {
+            throw CLIClient.RequestError(message: L("Couldn't read the imported bot."))
+        }
+        let data = try JSONSerialization.data(withJSONObject: object)
+        let bot = try Wire.decoder.decode(Wire.Bot.self, from: data).toModel()
+        if !bots.contains(where: { $0.id == bot.id }) { bots.append(bot) }
+        if !chats.contains(where: { $0.id == chatID }) {
+            chats.insert(Chat(id: chatID, kind: .dm, customTitle: nil, botIDs: [bot.id], messages: [],
+                unreadCount: 0, isPinned: false, createdAt: bot.createdAt), at: 0)
+        }
+        emit(.rosterChanged)
+        emit(.chatsChanged)
+        return chatID
     }
 
     /// The provider a bot made without asking runs with: the first one the account connected.
@@ -2197,6 +2221,7 @@ final class AppStore {
         reviews = MockData.reviews()
         mockPlaybooks = MockData.playbooks()
         autoReview = MockData.autoReview()
+        sharedLinks = MockData.sharedLinks()
         providers = MockData.providers()
         catalog = MockData.models()
         sortChats()

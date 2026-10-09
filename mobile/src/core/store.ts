@@ -9,6 +9,7 @@ import { groupOutputs, reviewIsOpen, runsInTerminal, taskOrder, type AutoReview,
 import { t } from "../i18n";
 import { savePrefs } from "./prefs";
 import { emptyAttention, type AttentionView } from "./attention";
+import type { SharedLink } from "./templates";
 
 export interface Running {
   chatId: string;
@@ -88,6 +89,11 @@ export interface StoreState {
   budgets: BudgetState[];
   /// Every bot's and group's skills and drafts, from the roster; a body is fetched when one opens.
   playbooks: PlaybookSummary[];
+  /// The bots the account shares as links, from the roster.
+  shared_links: SharedLink[];
+  /// A shared bot's link the app was opened with (Open in Lorca on lorca.app), kept until there
+  /// is an account to read it with.
+  pendingTemplateLink: string | null;
   dictation_lang?: string;
 }
 
@@ -123,6 +129,8 @@ function empty(): Omit<StoreState, "ready" | "dictation_lang" | "appActive" | "a
     reviews: [],
     budgets: [],
     playbooks: [],
+    shared_links: [],
+    pendingTemplateLink: null,
   };
 }
 
@@ -134,9 +142,10 @@ export function mutate(update: (s: StoreState) => Partial<StoreState>) {
   savePrefs({ dictation_lang: useStore.getState().dictation_lang });
 }
 
-/// Back to unpaired: everything the core told us goes; the phone's prefs stay.
+/// Back to unpaired: everything the core told us goes; the phone's prefs stay, and so does a
+/// link waiting for an account.
 export function resetStore() {
-  useStore.setState({ ...empty() });
+  useStore.setState((s) => ({ ...empty(), pendingTemplateLink: s.pendingTemplateLink }));
 }
 
 // MARK: - Lookup
@@ -181,6 +190,7 @@ export function replaceSnapshot(snapshot: {
   reviews?: ReviewItem[];
   budgets?: BudgetState[];
   playbooks?: PlaybookSummary[];
+  shared_links?: SharedLink[];
   auto_review?: AutoReview;
   attention?: AttentionView;
   providers?: ProviderStatus[];
@@ -217,6 +227,7 @@ export function replaceSnapshot(snapshot: {
     reviews: snapshot.reviews ?? [],
     budgets: snapshot.budgets ?? [],
     playbooks: snapshot.playbooks ?? [],
+    shared_links: snapshot.shared_links ?? [],
     auto_review: snapshot.auto_review ?? { is_enabled: true, rules: [] },
     attention: snapshot.attention ?? emptyAttention(),
     providers: snapshot.providers ?? [],
@@ -255,7 +266,7 @@ function seenOf(devices: Device[]): Record<string, number> {
 
 /// `roster.changed`: bots replace, chat metadata merges over kept messages, chats not named
 /// are gone.
-export function applyRoster(roster: { devices: Device[]; bots: Bot[]; chats: (ChatMeta & { unread_count: number; usage?: ChatUsage })[]; routines?: Routine[]; auto_review?: AutoReview; providers?: ProviderStatus[]; models?: ProviderModel[]; playbooks?: PlaybookSummary[] }): { removed: string[] } {
+export function applyRoster(roster: { devices: Device[]; bots: Bot[]; chats: (ChatMeta & { unread_count: number; usage?: ChatUsage })[]; routines?: Routine[]; auto_review?: AutoReview; providers?: ProviderStatus[]; models?: ProviderModel[]; playbooks?: PlaybookSummary[]; shared_links?: SharedLink[] }): { removed: string[] } {
   const removed: string[] = [];
   useStore.setState((s) => {
     const incoming = new Set(roster.chats.map((c) => c.id));
@@ -279,6 +290,7 @@ export function applyRoster(roster: { devices: Device[]; bots: Bot[]; chats: (Ch
       providers: same(s.providers, roster.providers ?? s.providers),
       models: same(s.models, roster.models ?? s.models),
       playbooks: same(s.playbooks, roster.playbooks ?? s.playbooks),
+      shared_links: same(s.shared_links, roster.shared_links ?? s.shared_links),
     };
   });
   return { removed };

@@ -625,6 +625,12 @@ enum MockData {
         ]
     }
 
+    static func sharedLinks() -> [SharedLink] {
+        [SharedLink(id: "mock-link", url: "https://lorca.app/t/mock-link#dGhpcyBpcyBub3QgYSByZWFsIGtleSwganVzdCBhIGRlbW8",
+            botId: "bot-quill", name: "Writer", selection: TemplateSelection(memoryIds: ["memory-voice"]),
+            updatedAt: minutesAgo(60 * 26).timeIntervalSince1970)]
+    }
+
     static func autoReview() -> AutoReview {
         AutoReview(
             isEnabled: true,

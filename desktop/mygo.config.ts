@@ -9,6 +9,9 @@ export default ({ command }: { command: string }) => ({
   version: "0.1.6",
   icon: command === "dev" ? "assets/icon-dev.png" : "assets/icon.png",
   out: "build",
+  // Open in Lorca on a shared bot's page (lorca.app/t/…). The installer registers the scheme on
+  // Windows, the desktop entry on Linux, and Info.plist on macOS; Lorca Dev answers its own.
+  urlSchemes: [command === "dev" ? "lorca-dev" : "lorca"],
   // Release builds update themselves from this repository's newest release tagged
   // desktop-v<version>, which MyGo finds through the GitHub API since the latest release is the
   // CLI's, and install only what the key of `mygo keygen` signed. `bun run release-desktop`

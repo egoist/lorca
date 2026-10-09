@@ -167,6 +167,8 @@ func entriesIn(pane model.SettingsPane, device *model.Device) []settingsEntry {
 		return out
 	case model.PaneAutoReview:
 		return []settingsEntry{autoReviewSwitchEntry(), autoReviewProviderEntry(), autoReviewRulesEntry()}
+	case model.PaneSharedLinks:
+		return nil
 	case model.PaneAdvanced:
 		out := []settingsEntry{relayURLEntry(), cliPortEntry(), onboardingEntry()}
 		if store.HasIdentity != nil && *store.HasIdentity {

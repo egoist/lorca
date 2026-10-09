@@ -54,6 +54,7 @@ export default function SettingsScreen() {
   const identity = useStore((s) => s.identityId);
   const autoReview = useStore((s) => s.auto_review);
   const providers = useStore((s) => s.providers);
+  const sharedLinks = useStore((s) => s.shared_links);
   const catalog = withCustomModels(useStore((s) => s.models), providers);
   const thisDevice = devices.find((d) => d.is_this_device);
   const [name, setName] = useState(thisDevice?.name ?? "");
@@ -361,6 +362,10 @@ export default function SettingsScreen() {
             })}
           </Section>
         )}
+
+        <Section>
+          <Row title={t("Shared Links")} detail={sharedLinks.length ? String(sharedLinks.length) : undefined} chevron onPress={() => router.push("/settings/shared-links")} />
+        </Section>
 
         <Section
           title={t("Devices")}

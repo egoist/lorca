@@ -80,8 +80,11 @@ enum MainMenu {
     private static func fileMenu() -> NSMenu {
         let menu = NSMenu()
         add(menu, L("New Bot…"), #selector(AppDelegate.newBot(_:)), "n")
+        add(menu, L("New Bot from Template…"), #selector(AppDelegate.importBotTemplate(_:)))
         add(menu, L("New Group Chat…"), #selector(AppDelegate.newGroupChat(_:)), "n", modifiers: [.command, .shift])
         add(menu, L("New Task…"), #selector(AppDelegate.newTask(_:)))
+        menu.addItem(.separator())
+        add(menu, L("Share as Template…"), #selector(RootSplitViewController.shareBotTemplate(_:)))
         menu.addItem(.separator())
         add(menu, L("Marketplace…"), #selector(AppDelegate.showMarketplace(_:)), "m", modifiers: [.command, .shift])
         menu.addItem(.separator())

@@ -222,6 +222,13 @@ func mockMarketplace() Marketplace {
 	return ToMarketplace(index)
 }
 
+// mockSharedLinks is Writer, shared as a link a day ago.
+func mockSharedLinks() []SharedLink {
+	return []SharedLink{{ID: "mock-link", URL: "https://lorca.app/t/mock-link#dGhpcyBpcyBub3QgYSByZWFsIGtleSwganVzdCBhIGRlbW8",
+		BotID: "bot-quill", Name: "Writer", Selection: TemplateSelection{Profile: true, MemoryIDs: []string{"memory-voice"}},
+		UpdatedAt: float64(minutesAgo(60 * 26).Unix())}}
+}
+
 func mockAutoReview() AutoReview {
 	return AutoReview{
 		IsEnabled: true,

@@ -440,6 +440,7 @@ final class RootSplitViewController: NSSplitViewController {
             switch pane {
             case .general: GeneralSettingsViewController()
             case .autoReview: AutoReviewSettingsViewController()
+            case .sharedLinks: SharedLinksSettingsViewController()
             case .advanced: AdvancedSettingsViewController()
             case .bots: BotsSettingsViewController()
             case .providers: ProvidersSettingsViewController()
@@ -498,6 +499,11 @@ final class RootSplitViewController: NSSplitViewController {
             self.open(self.store.dm(with: botID))
         }
         presentAsSheet(sheet)
+    }
+
+    /// New Bot from Template, on a shared bot's link when one opened the app.
+    func presentTemplateImport(link: String? = nil) {
+        presentAsSheet(TemplateImportViewController(source: link.map { .link($0) }) { [weak self] chatID in self?.open(chatID) })
     }
 
     func open(_ chatID: Chat.ID) {
@@ -593,6 +599,20 @@ final class RootSplitViewController: NSSplitViewController {
         sidebar.scrollSelectionToVisible()
     }
 
+    /// The bot of the direct chat that is showing, shared as a template.
+    @objc func shareBotTemplate(_ sender: Any?) {
+        guard let bot = selectedDMBot else {
+            NSSound.beep()
+            return
+        }
+        presentAsSheet(TemplateShareViewController(bot: bot))
+    }
+
+    private var selectedDMBot: Bot? {
+        guard case let .chat(chatID) = selection, let chat = store.chat(chatID), chat.isDM else { return nil }
+        return store.bots(in: chat).first
+    }
+
     @objc func togglePinChat(_ sender: Any?) {
         guard case let .chat(chatID) = selection else { return }
         store.togglePin(chatID)
@@ -670,6 +690,9 @@ extension RootSplitViewController: NSMenuItemValidation {
         if menuItem.action == #selector(renameChat(_:)) {
             guard case let .chat(id) = selection, let chat = store.chat(id) else { return false }
             return chat.isGroup
+        }
+        if menuItem.action == #selector(shareBotTemplate(_:)) {
+            return selectedDMBot != nil
         }
         if menuItem.action == #selector(goToChat(_:)) {
             return sidebar.chatSelection(forShortcut: menuItem.tag) != nil

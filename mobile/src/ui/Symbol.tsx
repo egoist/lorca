@@ -97,6 +97,8 @@ const ANDROID: Record<string, string> = {
   eye: "visibility",
   safari: "open_in_browser",
   "square.and.arrow.up": "share",
+  "square.and.arrow.down": "download",
+  "doc.on.doc": "content_copy",
   "arrow.clockwise": "refresh",
   "folder.fill": "folder",
   "xmark.circle.fill": "cancel",

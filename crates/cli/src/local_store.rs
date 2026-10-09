@@ -81,6 +81,11 @@ impl LocalStore {
                  position INTEGER NOT NULL,
                  json     TEXT NOT NULL
              );
+             CREATE TABLE IF NOT EXISTS shared_links (
+                 id       TEXT PRIMARY KEY NOT NULL,
+                 position INTEGER NOT NULL,
+                 json     TEXT NOT NULL
+             );
              CREATE TABLE IF NOT EXISTS event_subscriptions (
                  id TEXT PRIMARY KEY NOT NULL,
                  ciphertext BLOB NOT NULL
@@ -212,6 +217,7 @@ impl LocalStore {
             routines: load_json_table(&connection, "routines")?,
             workflows: load_json_table(&connection, "workflow_setups")?,
             auto_review,
+            shared_links: load_json_table(&connection, "shared_links")?,
             last_seq,
             group_deletes: load_ordered_ids(&connection, "group_deletes")?,
             blob_deletes: load_ordered_ids(&connection, "blob_deletes")?,
@@ -1168,6 +1174,7 @@ impl LocalStore {
             "chats",
             "routines",
             "workflow_setups",
+            "shared_links",
             "event_subscriptions",
             "event_inbox",
             "group_deletes",
@@ -1315,6 +1322,15 @@ fn save_state_tx(tx: &Transaction<'_>, state: &State) -> anyhow::Result<()> {
     sync_json_table(
         tx, "workflow_setups",
         state.workflows.iter().map(|setup| (setup.id.clone(), serde_json::to_string(setup))).collect::<Vec<_>>(),
+    )?;
+    sync_json_table(
+        tx,
+        "shared_links",
+        state
+            .shared_links
+            .iter()
+            .map(|link| (link.id.clone(), serde_json::to_string(link)))
+            .collect::<Vec<_>>(),
     )?;
     sync_ordered_ids(tx, "group_deletes", &state.group_deletes)?;
     sync_ordered_ids(tx, "blob_deletes", &state.blob_deletes)?;

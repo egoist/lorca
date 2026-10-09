@@ -56,14 +56,21 @@ class SheetViewController: NSViewController {
         view = container
     }
 
-    /// `cancel: nil` leaves only the confirm button, which then answers Escape as well.
+    private var buttonRowLeading: NSLayoutConstraint?
+
+    /// `cancel: nil` leaves only the confirm button, which then answers Escape as well. Called
+    /// again, it replaces the buttons, for a sheet that moves on to another step.
     func setButtons(confirm: String, cancel: String? = L("Cancel"), leading: NSView? = nil) {
+        buttonRow.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        buttonRowLeading?.isActive = false
+        buttonRowLeading = nil
         confirmButton = NSButton(title: confirm, target: self, action: #selector(confirmTapped))
         confirmButton.bezelStyle = .rounded
         confirmButton.keyEquivalent = "\r"
 
         if let leading {
-            buttonRow.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20).isActive = true
+            buttonRowLeading = buttonRow.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20)
+            buttonRowLeading?.isActive = true
             buttonRow.addArrangedSubview(leading)
             buttonRow.addArrangedSubview(NSView())
         }
@@ -82,7 +89,6 @@ class SheetViewController: NSViewController {
         dismissSheet()
     }
 
-    /// A new title, for a sheet that now shows what it just added.
     /// A label in the labels' column and a control filling the rest of the line, as New Bot's
     /// form lays them out. A control taller than a line keeps its label by its first line.
     func formRow(_ title: String, _ control: NSView, topAligned: Bool = false) -> NSView {
@@ -110,6 +116,7 @@ class SheetViewController: NSViewController {
         return container
     }
 
+    /// A new title, for a sheet that now shows what it just added.
     func setSheetTitle(_ title: String, subtitle: String? = nil) {
         titleLabel.stringValue = title
         if let subtitle {
@@ -125,10 +132,16 @@ class SheetViewController: NSViewController {
 
     /// AppKit sizes a presented sheet once and afterwards only lets it grow with its content.
     /// Hiding content leaves slack that the row stacks pour into their first row, so shrink the
-    /// sheet explicitly after showing or hiding anything.
+    /// sheet explicitly after showing or hiding anything. While the sheet is up its window holds
+    /// the view's fitting size at the current one, so the content stack says how much is slack.
     func fitSheetToContent() {
         view.layoutSubtreeIfNeeded()
-        preferredContentSize = view.fittingSize
+        guard view.window != nil else {
+            preferredContentSize = view.fittingSize
+            return
+        }
+        let slack = contentStack.frame.height - contentStack.fittingSize.height
+        preferredContentSize = NSSize(width: view.frame.width, height: view.frame.height - slack)
     }
 
     @objc func dismissSheet() {

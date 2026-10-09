@@ -41,6 +41,8 @@ A workflow adds the routines it needs paused, and `routines.set_enabled` keeps o
 
 ## Memory
 
+A bot made from a [template](templates.md#import) gets a DM, the template's memories as its `MEMORY.md`, and its routines paused, and runs no turn or routine check; the user turns routines on from the inspector.
+
 Reusable procedures live in [Playbooks](playbooks.md), with explicit bot or group-project scope, reviewed workflow capture and standing-instruction proposals, and encrypted revision history. The inspector lists a bot's skills under its memory; saved skills are discovered on later turns and read on demand.
 
 Groups also keep [shared project context](project-context.md): a current brief, goals, constraints, decisions, references, and assets with provenance and freshness. Every assigned member receives that group's bounded index and reads full entries with `project_context`. Corrections and source refreshes survive transcript compaction. Selection is the current group id and membership, while each bot retains its own memory below.

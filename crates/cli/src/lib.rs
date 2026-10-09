@@ -60,6 +60,7 @@ pub mod service;
 pub mod shell;
 pub mod sync;
 pub mod tasks;
+pub mod templates;
 pub mod local_store;
 #[cfg(feature = "runner")]
 pub mod turns;
