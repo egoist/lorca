@@ -1966,6 +1966,7 @@ dependencies = [
  "lorca-models",
  "lorca-provider-auth",
  "lorca-tls",
+ "process-wrap",
  "rand 0.8.8",
  "regex",
  "reqwest 0.12.28",
@@ -1977,6 +1978,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

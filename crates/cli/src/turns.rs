@@ -1539,7 +1539,8 @@ fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job, store: &Memo
          Markdown renders. Do not invent APIs, files, or results.\n",
     );
     prompt.push_str(&format!("\nTools on your Runner: {}", lorca_agent::tools::coding_tools_snippet()));
-    if cfg!(unix) {
+    let terminals = lorca_agent::tools::terminals();
+    if terminals {
         prompt.push_str(&format!(" {}", lorca_agent::tools::session_tools_snippet()));
     }
     prompt.push('\n');
@@ -1554,10 +1555,14 @@ fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job, store: &Memo
          commands with care and say what you ran.\n",
         workdir.display()
     ));
-    if cfg!(unix) {
+    if terminals {
+        prompt.push_str(if cfg!(windows) {
+            "Each command runs in a console of its own: ssh and `read` ask there"
+        } else {
+            "Each command runs in a terminal of its own, and /dev/tty is that terminal: sudo, ssh, and `read </dev/tty` ask there"
+        });
         prompt.push_str(
-            "Each command runs in a terminal of its own, and /dev/tty is that terminal: sudo, ssh, and `read </dev/tty` \
-             ask there, and what the user types into the command's card reaches them. A question a command prints into a \
+            ", and what the user types into the command's card reaches them. A question a command prints into a \
              pipe or a file (`| tail`, `> log`) never shows, so run scaffolders and installers with their non-interactive \
              options (--yes, --no-interactive). A command that stops for input \
              returns while it still runs, with a session id; answer what you know with bash_input. When it asks for \
@@ -3638,7 +3643,7 @@ mod tests {
 
     /// One call as `run_job` makes it: the row goes up as the call starts, and the result lands
     /// in it when the call returns. Returns the row as it is then.
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     async fn call_tool(turn: &mut TurnState, tool: &dyn Tool, call_id: &str, args: Value) -> (Message, Result<ToolResult, ToolError>) {
         turn.handle(AgentEvent::ToolExecutionStart { tool_call_id: call_id.into(), tool_name: tool.name().into(), args: args.clone() });
         let result = tool.execute(call_id, args, CancellationToken::new(), Arc::new(|_| {})).await;
@@ -3660,7 +3665,7 @@ mod tests {
     }
 
     /// The row once its session's state reached it: the watcher writes it when the command ends.
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     async fn row_when(app: &Arc<App>, message_id: &str, done: impl Fn(&CommandRun) -> bool) -> Message {
         tokio::time::timeout(Duration::from_secs(10), async {
             loop {
@@ -3897,14 +3902,15 @@ mod tests {
     /// A call's result and its command's card go up in one write, so no Device sees the call
     /// returned beside a card that still reads as running: the apps show a card after its call
     /// only while the command runs on.
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[tokio::test]
     async fn a_returned_call_goes_up_with_its_card() {
         use lorca_agent::tools::BashTool;
         let (scratch, chef) = chef_in_a_dm();
         let app = &scratch.0;
         let mut turn = turn_state(app, &chef, "dev");
-        // On pipes, as on Windows: no session follows the command, so the call ends its card.
+        // On pipes, as on a Windows without a pseudo console: no session follows the command, so the
+        // call ends its card.
         let bash = BashTool::new(scratch.1.clone());
         let mut events = app.events.subscribe();
         let (row, _) = call_tool(&mut turn, &bash, "call-1", json!({ "command": "echo hi", "description": "Say hi" })).await;
@@ -4123,7 +4129,7 @@ mod tests {
         assert_eq!(terminal(&there).state, "waiting", "another Runner's command is its own");
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[tokio::test]
     async fn stop_and_deleting_the_chat_end_what_waits_there() {
         use lorca_agent::tools::{BashSessions, BashTool, SessionEnd};
@@ -4233,7 +4239,7 @@ mod tests {
 
     /// Run in Background on a command the bot is waiting on: its call returns, and from then on
     /// it is a background command.
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[tokio::test]
     async fn the_user_sends_a_running_command_to_the_background() {
         use lorca_agent::tools::{BashSessions, BashTool};
