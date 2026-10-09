@@ -140,7 +140,7 @@ async fn prepare(
                 );
             }
             // The bot's shell Access is checked again when the command starts.
-            crate::permissions::guarded::tools(app, &bot, &item.origin.chat_id, vec![crate::shell::script_bash(app, &workdir)]).pop()
+            crate::permissions::guarded::tools(app, &bot, &item.origin.chat_id, vec![crate::shell::script_bash(app, &bot.id, &workdir)]).pop()
         }
         ReviewPayload::Plugin {
             plugin_id,

@@ -52,6 +52,8 @@ pub mod routine_health;
 pub mod runtime;
 pub mod schedule;
 #[cfg(feature = "runner")]
+pub mod secrets;
+#[cfg(feature = "runner")]
 pub mod scripts;
 pub mod served;
 #[cfg(feature = "cli")]

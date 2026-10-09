@@ -225,7 +225,7 @@ impl Sessions {
         let Some(mut message) = app.message(chat_id, message_id) else { return };
         let Body::Tool { run: Some(run), .. } = &mut message.body else { return };
         change(run);
-        app.upsert_message(message, true);
+        put_up(app, message);
     }
 
     /// Call `call_id` returned, and `finish` writes its result into row `message_id`. The result
@@ -263,7 +263,7 @@ impl Sessions {
                 None => {}
             }
         }
-        app.upsert_message(message, true);
+        put_up(app, message);
     }
 
     /// The turn ended before call `call_id` returned. A command already running goes on, and
@@ -347,7 +347,7 @@ impl Sessions {
         }
         follow(run, summary, session);
         run.handed_over = true;
-        app.upsert_message(message, true);
+        put_up(app, message);
     }
 
     /// Writes where session `id` stands to its card. False when no card shows it.
@@ -361,7 +361,7 @@ impl Sessions {
         let Some(mut message) = app.message(&chat_id, &message_id) else { return false };
         let Body::Tool { summary, run: Some(run), .. } = &mut message.body else { return false };
         follow(run, summary, &session);
-        app.upsert_message(message, true);
+        put_up(app, message);
         true
     }
 
@@ -390,6 +390,20 @@ pub(crate) fn wake_job(app: &App, sessions: &Sessions, id: &str) -> Option<crate
         (entry.chat_id.clone(), entry.bot_id.clone(), entry.message_id.clone()?)
     };
     Some(crate::runtime::command_job(app, &chat_id, &bot_id, &message_id))
+}
+
+/// Puts a command's card up, with what the command printed or asks cleared of the Runner's
+/// saved secrets: a command given one may print it, and the card goes to every Device.
+fn put_up(app: &App, mut message: Message) {
+    if let Body::Tool { run: Some(run), .. } = &mut message.body {
+        let redactions = crate::secrets::Redactions::load(app);
+        if !redactions.is_empty() {
+            redactions.option(&mut run.output);
+            redactions.option(&mut run.prompt);
+            redactions.option(&mut run.outcome);
+        }
+    }
+    app.upsert_message(message, true);
 }
 
 /// The last `count` lines of `text` with something on them.
@@ -621,8 +635,9 @@ pub fn bot_shell_extras(app: &App) -> lorca_agent::login_shell::Extras {
 /// and time (`BashTool::output_schema`), whatever the code. It keeps no session and has no
 /// card: Auto-review judges each command with the script, and one it holds asks in a
 /// `permission` message. Calls run one at a time, so a script's commands never ask at once.
-pub fn script_bash(app: &App, workdir: &std::path::Path) -> Arc<dyn Tool> {
-    Arc::new(ScriptBash(BashTool::new(workdir.to_path_buf()).with_extras(bot_shell_extras(app))))
+pub fn script_bash(app: &Arc<App>, bot_id: &str, workdir: &std::path::Path) -> Arc<dyn Tool> {
+    let secrets = Arc::new(crate::secrets::CommandSecrets { app: app.clone(), bot_id: bot_id.to_string() });
+    Arc::new(ScriptBash(BashTool::new(workdir.to_path_buf()).with_extras(bot_shell_extras(app)).with_secrets(secrets)))
 }
 
 struct ScriptBash(BashTool);

@@ -126,6 +126,8 @@ async fn answer(app: &Arc<App>, request: &Request) -> Result<Value, String> {
         #[cfg(feature = "runner")]
         verb if verb.starts_with("browser.") => crate::browser::serve(app, verb, body, true).await,
         #[cfg(feature = "runner")]
+        verb if verb.starts_with("secrets.") => crate::secrets::serve(app, verb, body),
+        #[cfg(feature = "runner")]
         "bash.stdin" | "bash.stop" | "bash.background" => crate::shell::serve(app, &request.verb, body).await,
         #[cfg(feature = "runner")]
         "playbooks.draft" => {

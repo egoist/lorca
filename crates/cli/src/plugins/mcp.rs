@@ -999,6 +999,7 @@ pub fn post_sign_in_card(app: &Arc<App>, chat_id: &str, bot_id: &str, plugin_id:
             command: None,
             link: None,
             code: None,
+            secret: None,
         },
     );
     app.upsert_message(message.clone(), true);
@@ -2389,6 +2390,14 @@ impl Tool for PluginTool {
         // A sign-in, connection or review may have awaited while the user revoked access.
         self.check_policy(&cancel).await?;
         let _permit = self.admit(&cancel).await?;
+        // A saved secret the call names goes in only now, past every review, and only into what
+        // Browser types on the secret's own site.
+        let page = async {
+            let tabs = server.browser_call("browser_tabs", json!({ "action": "list" })).await?;
+            let text = tabs.content.iter().filter_map(|block| match block { ContentBlock::Text(text) => Some(text.text.as_str()), _ => None }).collect::<Vec<_>>().join("\n");
+            crate::secrets::current_page(&text).ok_or_else(|| "Lorca could not tell which page the browser shows, so it typed nothing.".to_string())
+        };
+        let args = crate::secrets::fill_call(&self.app, self.policy_context.as_ref().map(|(bot, _)| bot), &self.plugin_id, &tool, args, page).await.map_err(ToolError)?;
         params.name = tool.clone().into();
         params.arguments = args.as_object().cloned();
         // A call the user stops, or one that runs out of time, is called off at the server too
@@ -2861,6 +2870,7 @@ pub async fn ask_with_rule(
             command: None,
             link: None,
             code: None,
+            secret: None,
         },
     );
     let decision = await_answer(app, chat_id, &message.id, always_rule, cancel, || {
@@ -3529,7 +3539,7 @@ for line in sys.stdin:
 
         let mut local: Vec<Arc<dyn Tool>> = lorca_agent::tools::coding_tools(scratch.1.clone()).into_iter().filter(|tool| tool.name() == "read").collect();
         // The scripts' own bash: one command at a time, resolving to its output and exit code.
-        let bash = crate::shell::script_bash(app, &scratch.1);
+        let bash = crate::shell::script_bash(app, "bot-test", &scratch.1);
         assert_eq!(bash.execution_mode(), Some(lorca_agent::agent_loop::ToolExecutionMode::Sequential));
         assert!(bash.output_schema().is_some() && !bash.description().contains("session id"), "{}", bash.description());
         local.push(bash);

@@ -7,8 +7,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use lorca_agent::agent_loop::{
-    run_agent_loop_continue, AgentContext, AgentLoopConfig, BeforeToolCallContext, BeforeToolCallResult, EventSink, LoopHooks,
-    PrepareNextTurnContext, ToolExecutionMode, TurnUpdate,
+    run_agent_loop_continue, AfterToolCallContext, AfterToolCallResult, AgentContext, AgentLoopConfig, BeforeToolCallContext, BeforeToolCallResult,
+    EventSink, LoopHooks, PrepareNextTurnContext, ToolExecutionMode, TurnUpdate,
 };
 use lorca_agent::codemode::{CodemodeOptions, CodemodeTool, HostFunction, CODEMODE_TOOL_NAME};
 use lorca_agent::compaction::{self, CompactionSettings};
@@ -199,6 +199,7 @@ async fn run_budgeted_job(app: &Arc<App>, job: &Job, cancel: CancellationToken) 
         Arc::new(SearchPlugins { app: app.clone() }),
         Arc::new(InstallPlugin { app: app.clone(), chat_id: chat.meta.id.clone(), bot: bot.clone(), unattended }),
         Arc::new(ConnectPlugin { app: app.clone(), chat_id: chat.meta.id.clone(), bot: bot.clone() }),
+        Arc::new(crate::secrets::RequestSecret { app: app.clone(), chat_id: chat.meta.id.clone(), bot: bot.clone(), unattended }),
     ];
     if job.kind == crate::workflows::SAMPLE_JOB {
         // A setup's sample cannot create teammates, hand off, install integrations, or arm schedules.
@@ -227,13 +228,14 @@ async fn run_budgeted_job(app: &Arc<App>, job: &Job, cancel: CancellationToken) 
     // Commands run in terminals of their own, kept on this Runner past the turn when they
     // wait for input.
     let sessions = Arc::new(crate::shell::TurnSessions::new(app, &chat.meta.id, &bot.id));
-    tools.extend(lorca_agent::tools::coding_tools_with_sessions(workdir.clone(), sessions, crate::shell::bot_shell_extras(app)));
+    let secrets = Arc::new(crate::secrets::CommandSecrets { app: app.clone(), bot_id: bot.id.clone() });
+    tools.extend(lorca_agent::tools::coding_tools_with_sessions(workdir.clone(), sessions, crate::shell::bot_shell_extras(app), Some(secrets)));
     let mut tools = crate::permissions::guarded::tools(app, &bot, &chat.meta.id, tools);
     // Plugin tools are called from codemode scripts, with the bot's own file and memory tools
     // and a bash of the scripts' own, on pipes. The tool list stays the same for the whole
     // turn, and so does its prompt cache.
     let mut scriptable: Vec<Arc<dyn Tool>> = tools.iter().filter(|tool| SCRIPTABLE_TOOLS.contains(&tool.name())).cloned().collect();
-    scriptable.extend(crate::permissions::guarded::tools(app, &bot, &chat.meta.id, vec![crate::shell::script_bash(app, &workdir)]));
+    scriptable.extend(crate::permissions::guarded::tools(app, &bot, &chat.meta.id, vec![crate::shell::script_bash(app, &bot.id, &workdir)]));
     let plugin_tools = crate::plugins::mcp::bot_catalog(app, &bot, &chat.meta.id, scriptable);
     let script_store = Arc::new(crate::scripts::ScriptStore { app: app.clone(), chat_id: chat.meta.id.clone(), bot_id: bot.id.clone() });
     let functions: Vec<Arc<dyn HostFunction>> =
@@ -731,6 +733,12 @@ impl LoopHooks for TurnHooks {
             return Some(refused);
         }
         decision
+    }
+
+    /// What a tool returns reaches the model, the chat, and a script only with this Runner's
+    /// saved secrets taken out.
+    async fn after_tool_call(&self, ctx: AfterToolCallContext<'_>) -> Option<AfterToolCallResult> {
+        crate::secrets::scrub_result(&self.app, ctx.result)
     }
 
     async fn prepare_next_turn(&self, ctx: PrepareNextTurnContext<'_>) -> Option<TurnUpdate> {
@@ -1680,6 +1688,7 @@ fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job, store: &Memo
         prompt.push_str(&format!("\nThis turn references durable task {id}. {}\n", if job.kind == "task" { "The explicit task run starts your work regardless of new group messages. You own its active run: perform its next action, record progress, and complete only with a result and supporting evidence, or record the blocker. A reply alone awaits review." } else { "This turn supports that task; it does not claim or complete the task's active run." }));
     }
     prompt.push_str(&plugins_prompt(app, bot, plugins));
+    prompt.push_str(&crate::secrets::prompt(app, &bot.id));
     prompt.push_str(&memory_prompt(store));
     prompt.push_str("\nPublish deliverables with publish_output so the user can retrieve them on paired Devices. Attach test results and, for visual changes, before/after screenshots as evidence. Report failures and what remains unverified; publishing evidence does not complete a task. Creating or uploading to an external service uses its reviewed tools.\n");
     prompt.push_str(&crate::project_context::prompt(app, &chat.meta.id, &bot.id));

@@ -109,6 +109,20 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             Ok(app.snapshot())
         }
         method if method.starts_with("browser.") => crate::browser::dispatch(app, method, params).await,
+        // A Runner's saved secrets: listed without their values, replaced, or deleted, there when
+        // this Device is the Runner, else sealed to it. A new value travels only sealed.
+        "secrets.list" | "secrets.set" | "secrets.delete" => {
+            let runner_id = string(&params, "runner_id")?;
+            let mut body = params.clone();
+            if let Some(fields) = body.as_object_mut() {
+                fields.remove("runner_id");
+            }
+            if app.this_device_id().as_deref() == Some(runner_id.as_str()) {
+                #[cfg(feature = "runner")]
+                return crate::secrets::serve(app, method, &body);
+            }
+            requests::ask(app, &runner_id, method, body).await
+        }
 
         "identity.create" => {
             let phrase = identity::create(app, opt_string(&params, "device_name")).map_err(|e| e.to_string())?;
@@ -795,7 +809,11 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             let message = app.message(&chat_id, &message_id).ok_or("Unknown message")?;
             let Author::Bot { bot_id } = &message.author else { return Err("Not a permission request".into()) };
             let bot = app.bot(bot_id).ok_or("Unknown bot")?;
-            let body = json!({ "chat_id": chat_id, "message_id": message_id, "decision": decision });
+            // A secret request's values go along, here or sealed to the Runner, and nowhere else.
+            let mut body = json!({ "chat_id": chat_id, "message_id": message_id, "decision": decision });
+            if let Some(values) = params.get("values").filter(|values| values.is_object()) {
+                body["values"] = values.clone();
+            }
             // Sign in on a card for a bot on another Runner: the sign-in page opens here.
             if let Body::Permission { tool, plugin_id, plugin_name, decision: current, .. } = &message.body {
                 let signs_in = tool == "connect" && current == "pending" && decision != "deny";

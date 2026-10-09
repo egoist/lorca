@@ -1034,6 +1034,17 @@ pub async fn serve_request(app: &Arc<App>, verb: &str, body: &Value, requested_b
             let message_id = body["message_id"].as_str().ok_or("missing message_id")?;
             let decision = body["decision"].as_str().and_then(mcp::Decision::parse).ok_or("decision is allow, always, or deny")?;
             let chat_id = body["chat_id"].as_str().ok_or("missing chat_id")?;
+            // A secret request: the values are kept here first, then the waiting call hears it.
+            if let Some(message) = app.message(chat_id, message_id).filter(|message| matches!(&message.body, crate::model::Body::Permission { tool, .. } if tool == "secret")) {
+                if decision != mcp::Decision::Denied {
+                    crate::secrets::answer(app, &message, body["values"].as_object())?;
+                }
+                let decision = if decision == mcp::Decision::Denied { decision } else { mcp::Decision::Allowed };
+                return match mcp::answer(app, message_id, decision) {
+                    true => Ok(json!({ "answered": true })),
+                    false => Err("This request is no longer waiting for an answer.".into()),
+                };
+            }
             // An access request is only ever dismissed: access changes in the bot's Access sheet.
             if let Some(mut message) = app.message(chat_id, message_id) {
                 if let crate::model::Body::Permission { tool, decision: current, .. } = &mut message.body {

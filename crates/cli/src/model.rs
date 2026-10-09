@@ -341,7 +341,30 @@ pub enum Body {
         link: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         code: Option<String>,
+        /// A secret request (`tool` = `secret`): the values the bot asks for and where they go.
+        /// The answer never comes back into the card: it is sealed to the bot's Runner.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        secret: Option<SecretAsk>,
     },
+}
+
+/// What a secret request asks for: one or more named values, and where the Runner uses them.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct SecretAsk {
+    /// `browser` (typed into a sign-in page of `site` in the bot's Browser), `command` (an
+    /// environment variable of the bot's commands), or `plugin` (a setting of the card's plugin).
+    #[serde(rename = "use")]
+    pub target: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub site: Option<String>,
+    pub fields: Vec<SecretField>,
+}
+
+/// One value a secret request asks for: the name the bot uses it by, and what the card calls it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct SecretField {
+    pub name: String,
+    pub label: String,
 }
 
 /// A message quoted by the user's reply: who wrote it and how it opens, kept with the reply, so
@@ -1179,7 +1202,7 @@ mod app_view_tests {
     fn permission_cards_drop_the_reviewed_payload() {
         let permission = Message::new("c", Author::Bot { bot_id: "b".into() }, Body::Permission {
             plugin_id: "computer".into(), plugin_name: "Mac".into(), tool: "bash".into(), summary: "Run a command".into(),
-            arguments: serde_json::json!({ "command": "secret" }), decision: "pending".into(), reason: None, rule: None, command: None, link: None, code: None,
+            arguments: serde_json::json!({ "command": "secret" }), decision: "pending".into(), reason: None, rule: None, command: None, link: None, code: None, secret: None,
         });
         let app = permission.for_app();
         let Body::Permission { arguments, summary, command, .. } = &app.body else { panic!() };
