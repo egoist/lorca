@@ -49,7 +49,9 @@ impl SharedLink {
         url.to_string()
     }
 
-    fn out(&self) -> Value {
+    /// What the apps see of a link, in the snapshot and the roster events: the whole address,
+    /// whose fragment is the key, and what it holds.
+    pub fn out(&self) -> Value {
         json!({ "id": self.id, "url": self.url(), "bot_id": self.bot_id, "name": self.name, "selection": self.selection,
             "created_at": self.created_at, "updated_at": self.updated_at })
     }
@@ -100,11 +102,6 @@ pub async fn fetch(app: &Arc<App>, link: &str) -> Result<String, String> {
         .ok_or("This link was revoked, or it never existed.")?;
     let text = crate::crypto::decrypt(&link.key, KIND, &ciphertext).map_err(|_| "This link's key doesn't open it. Ask for the whole link.".to_string())?;
     String::from_utf8(text).map_err(|_| "This link doesn't hold a bot template.".to_string())
-}
-
-pub fn list(app: &App) -> Value {
-    let links = app.state.lock().unwrap().shared_links.iter().map(SharedLink::out).collect::<Vec<_>>();
-    json!({ "links": links })
 }
 
 /// Uploads the reviewed template under a new link, or under `link_id`'s, which keeps its address.

@@ -395,7 +395,6 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: &Value) -> Result<Va
             Ok(json!({ "path": path }))
         }
         "templates.share" => links::share(app, params).await,
-        "templates.links" => Ok(links::list(app)),
         "templates.unshare" => links::revoke(app, required(params, "link_id")?).await,
         "templates.import.preview" | "templates.import" => {
             // A file this CLI reads, or a link whose template it fetches and opens.

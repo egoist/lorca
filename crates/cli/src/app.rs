@@ -1011,6 +1011,7 @@ impl App {
             chats: state.chats.iter().map(|c| ChatSummary { meta: c.meta.clone(), unread_count: c.unread_count, usage: c.usage.clone() }).collect(),
             routines: self.routines_out(&state),
             auto_review: state.auto_review.clone(),
+            shared_links: state.shared_links.iter().map(crate::templates::links::SharedLink::out).collect(),
             providers: self.credentials.lock().unwrap().statuses(),
             models: models_out(),
         }
@@ -1792,6 +1793,7 @@ impl App {
             "chats": state.chats.iter().map(|chat| self.chat_for_app(chat)).collect::<Vec<_>>(),
             "routines": self.routines_out(&state),
             "auto_review": state.auto_review,
+            "shared_links": state.shared_links.iter().map(crate::templates::links::SharedLink::out).collect::<Vec<_>>(),
             "providers": self.credentials.lock().unwrap().statuses(),
             "models": models_out(),
             "running_chat_ids": self.running_chat_ids(),
