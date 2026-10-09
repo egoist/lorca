@@ -37,7 +37,10 @@ export const Route = createRootRoute({
 const followAppearance = `{const m=matchMedia('(prefers-color-scheme: dark)'),a=()=>document.documentElement.classList.toggle('dark',m.matches);a();m.addEventListener('change',a)}`
 
 function RootDocument({ children }: { children: React.ReactNode }) {
-  const lng = languageOf(useLocation({ select: (location) => location.pathname }))
+  const pathname = useLocation({ select: (location) => location.pathname })
+  const lng = languageOf(pathname)
+  // A shared bot's page holds its key in the address, which the tracker would send.
+  const tracked = import.meta.env.PROD && !pathname.startsWith('/t/')
   return (
     // The script below adds a class to <html> before React hydrates it.
     <html lang={htmlLang[lng]} suppressHydrationWarning>
@@ -46,11 +49,13 @@ function RootDocument({ children }: { children: React.ReactNode }) {
         <HeadContent />
         {/* Analytics for production builds. The shell keeps this tag mounted, so it runs once per
             page load; a head() script is put back after a client-side navigation and runs again. */}
-        {import.meta.env.PROD && (
+        {tracked && (
           <script
             defer
             src="https://u.egoist.dev/script.js"
             data-website-id="645b6601-b372-48f5-905a-0bc5c0f0ddf7"
+            // Never a fragment, which is a shared bot's key, even after a navigation to one.
+            data-exclude-hash="true"
           />
         )}
       </head>

@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@fumadocs/language": "^0.2.5",
+    "@noble/ciphers": "^2.4.0",
     "@orama/tokenizers": "^3.1.18",
     "@tailwindcss/vite": "^4.1.18",
     "@tanstack/react-devtools": "latest",
