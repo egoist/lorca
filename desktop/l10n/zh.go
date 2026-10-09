@@ -1307,4 +1307,5 @@ var zh = map[string]string{
 	"Commands":                   "命令",
 	"Replace…":                   "替换…",
 	"%@ signs in to %@ with it.": "%@ 用它登录 %@。",
+	"Asks for %@":                "请求提供 %@",
 }

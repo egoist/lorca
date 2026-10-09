@@ -18,6 +18,7 @@ final class SecretRequestTests: XCTestCase {
         XCTAssertTrue(request.isSecret)
         XCTAssertEqual(request.secret, SecretAsk(use: .browser, site: "github.com", fields: [.init(name: "password", label: "GitHub password"), .init(name: "otp", label: "One-time code")]))
         XCTAssertEqual(request.verbPhrase, "needs a secret for github.com")
+        XCTAssertEqual(ChatNotification(message)?.body, "Asks for GitHub password, One-time code")
         var answered = request
         answered.decision = .allowed
         XCTAssertEqual(SecretCellView.caption(for: answered), "Saved · GitHub password, One-time code")

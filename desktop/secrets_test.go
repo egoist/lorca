@@ -18,7 +18,11 @@ func TestSecretRequestDecodes(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &wire); err != nil {
 		t.Fatal(err)
 	}
-	request := model.ToMessage(wire).Body.Request
+	message := model.ToMessage(wire)
+	request := message.Body.Request
+	if note := notificationFor(message); note == nil || note.body != "Asks for GitHub password" {
+		t.Errorf("notification %+v", note)
+	}
 	if !request.IsSecret() || request.Secret.Site != "github.com" || request.Secret.Fields[0] != (model.SecretField{Name: "password", Label: "GitHub password"}) {
 		t.Fatalf("not read as a secret request: %+v", request.Secret)
 	}
