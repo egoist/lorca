@@ -35,3 +35,6 @@ jsonschema = { version = "0.56", default-features = false }
 # Images as models take them: decoded, turned upright, scaled down, and written again (`images`).
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "tiff", "ico"] }
 rquickjs = { version = "0.14", optional = true }
+# `bash` on pipes: the shell and what it starts stop as one, a process group on Unix and a job
+# object on Windows.
+process-wrap = { version = "10", features = ["tokio1"] }
