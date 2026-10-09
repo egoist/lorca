@@ -10,7 +10,7 @@ import { t } from "../i18n";
 import { exactAnswer, ExactNumber, ExactObject, stringifyExact } from "./exactJson";
 import { reviewEditParams } from "./reviewEdit";
 import { hostFacts } from "./host";
-import { providerConnectMethod, withReviewModel, type Attachment, type AutoReview, type Bot, type Chat, type ChatMeta, type ChatSearchResults, type ChatUsage, type CustomAPI, type CustomModel, type DurableTask, type Message, type ReviewItem, type PluginDetail, type PluginStatus, type ProviderKind, type ProviderStatus } from "./model";
+import { providerConnectMethod, withReviewModel, type Attachment, type AutoReview, type Bot, type BrowserProfile, type Chat, type ChatMeta, type ChatSearchResults, type ChatUsage, type CustomAPI, type CustomModel, type DurableTask, type Message, type ReviewItem, type PluginDetail, type PluginStatus, type ProviderKind, type ProviderStatus } from "./model";
 import { coreHome, loadPrefs, pathOf, wipePrefs } from "./prefs";
 import { clearPushes, installPushHandlers, registerForPushes } from "./push";
 import {
@@ -589,6 +589,19 @@ class Engine {
   }
 
   /// A plugin on its Runner, with how each of its servers signs in; sealed to another Runner.
+  /// The bot's browser profiles, oldest first, from its Runner through the relay.
+  async browserProfiles(botId: string): Promise<BrowserProfile[]> {
+    const { sessions } = await core.request<{ sessions: BrowserProfile[] }>("browser.sessions", { bot_id: botId });
+    return sessions;
+  }
+
+  /// `browser.create` (`name`), `browser.takeover`, `browser.resume` (`revision`), `browser.stop`,
+  /// `browser.delete`, or `browser.screenshot` (`chat_id`) for one of the bot's profiles
+  /// (`session_id`), on its Runner. Windows open only there, so the phone never sends `browser.open`.
+  async browserAction(method: string, botId: string, params: Record<string, string | number>): Promise<void> {
+    await core.request(method, { ...params, bot_id: botId });
+  }
+
   pluginDetail(runnerId: string, pluginId: string): Promise<PluginDetail> {
     return core.request<PluginDetail>("plugins.detail", { runner_id: runnerId, plugin_id: pluginId });
   }

@@ -33,7 +33,7 @@ The three capabilities are separate grants: `write` does not take in `read`. The
 
 `TurnHooks::before_tool_call` checks a local tool before Auto-review's fast paths, saved rules, or model judgment; `mcp::review_call` does the same for a plugin call. Local tools are wrapped (`permissions::guarded`) to check again when they start, and a plugin tool bound to the bot (`mcp::bot_catalog`) checks again after its server connects and right before the request, so access taken away mid-turn stops the next call. A call already running finishes or is stopped through the usual cancellation. Codemode's nested calls go through the same hooks and wrappers one by one: allowing a script allows none of its calls. A refused call ends the script. A routine's check reads only, and only what the bot's Access allows (`mcp::authorize_catalog_tool`).
 
-A bot's turn leaves out the plugins its Access does not allow: the system prompt does not name them, and its catalog neither lists nor connects them, so a search or a call by name starts nothing. `connect_plugin` refuses such a plugin too.
+A bot's turn leaves out the plugins its Access does not allow: the system prompt does not name them, and its catalog neither lists nor connects them, so a search or a call by name starts nothing. `connect_plugin` refuses such a plugin too, and without Browser the bot has no `browser_session`: a bot's [browser profiles](browser-sessions.md) are part of that plugin, and the tool checks any grant to it (`permissions::check_plugin`) before each call.
 
 ## Requests to the user
 

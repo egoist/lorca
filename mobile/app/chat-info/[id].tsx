@@ -4,7 +4,7 @@ import { MenuView, type MenuComponentRef } from "@expo/ui/community/menu";
 import { Platform, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 import { Pressable } from "../../src/ui/Pressable";
 import { chatTitle, engine } from "../../src/core/engine";
-import { providerKinds, providerLabel, providerModels, PROVIDER_KINDS, taskSymbol, thinkingLabel, thinkingLevels, withCustomModels, type Bot, type Routine } from "../../src/core/model";
+import { BROWSER_PLUGIN_ID, providerKinds, providerLabel, providerModels, PROVIDER_KINDS, taskSymbol, thinkingLabel, thinkingLevels, withCustomModels, type Bot, type Routine } from "../../src/core/model";
 import { deviceIsOnline, useBotMap, useChat, useDurableTasks, useOpenReviews, useOutputs, useRoutines, useStore, useWorkingBotIds } from "../../src/core/store";
 import { t, useLanguage } from "../../src/i18n";
 import { AvatarCluster, BotAvatar } from "../../src/ui/Avatar";
@@ -313,6 +313,16 @@ export default function ChatInfoScreen() {
                 icon={plugin.icon || "puzzlepiece.extension"}
                 chevron
                 onPress={() => router.push({ pathname: "/chat-info/account/[id]", params: { id: plugin.id, runner: runner.id } })}
+              />
+            ) : plugin.id === BROWSER_PLUGIN_ID ? (
+              // Browser opens the bot's profiles: their sign-ins, takeover, and hand back.
+              <Row
+                key={plugin.id}
+                title={plugin.name}
+                subtitle={plugin.state === "ready" ? plugin.description : plugin.detail}
+                icon={plugin.icon || "puzzlepiece.extension"}
+                chevron
+                onPress={() => router.push({ pathname: "/chat-info/browser/[id]", params: { id: bot.id, chat: chat.id } })}
               />
             ) : (
               <Row
