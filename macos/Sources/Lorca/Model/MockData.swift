@@ -1154,8 +1154,24 @@ enum MockData {
                 body: .text("The website build passes. I've left the changes ready for review."),
                 createdAt: minutesAgo(27)
             ),
+            Message(author: .you, body: .text("Publish the CLI package to npm once the review is done."), createdAt: minutesAgo(6)),
+            Message(
+                author: .bot("bot-patch"),
+                body: .permission(PermissionRequest(
+                    pluginID: "computer", pluginName: "Studio", tool: "secret", summary: "npm token", decision: .pending,
+                    reason: "To publish the package to npm for you.",
+                    secret: SecretAsk(use: .command, site: nil, fields: [.init(name: "NPM_TOKEN", label: "npm token")]))),
+                createdAt: minutesAgo(5)
+            ),
         ]
     }
+
+    /// The secrets the demo Runners keep, with the Runner each is on.
+    static var secrets: [(runnerID: Device.ID, secret: SavedSecret)] = [
+        ("dev-studio", SavedSecret(id: "secret-github", botID: "bot-patch", name: "github_password", label: "GitHub password", use: .browser, site: "github.com", updatedAt: minutesAgo(60 * 26))),
+        ("dev-studio", SavedSecret(id: "secret-s2", botID: "bot-scout", name: "S2_API_KEY", label: "Semantic Scholar API key", use: .command, site: nil, updatedAt: minutesAgo(60 * 24 * 6))),
+        ("dev-workbench", SavedSecret(id: "secret-medium", botID: "bot-quill", name: "medium_password", label: "Medium password", use: .browser, site: "medium.com", updatedAt: minutesAgo(60 * 50))),
+    ]
 
     private static func researcherThread() -> [Message] {
         [

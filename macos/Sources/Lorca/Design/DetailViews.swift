@@ -394,12 +394,13 @@ final class BotRow: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
+    /// `title` names the row when it is about something of the bot's, beside its avatar.
     @discardableResult
-    func configure(bot: Bot, detailText: String, accessorySymbol: String? = nil, tooltip: String = "")
+    func configure(bot: Bot, title: String? = nil, detailText: String, accessorySymbol: String? = nil, tooltip: String = "")
         -> BotRow
     {
         avatar.content = AvatarView.content(for: bot)
-        name.stringValue = bot.name
+        name.stringValue = title ?? bot.name
         detail.stringValue = detailText
         if let accessorySymbol {
             accessory.image = NSImage(systemSymbolName: accessorySymbol, accessibilityDescription: tooltip)

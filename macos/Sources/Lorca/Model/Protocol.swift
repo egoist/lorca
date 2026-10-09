@@ -560,6 +560,38 @@ enum Wire {
         var command: String?
         var run: Run?
         var replyTo: ReplyTo?
+        var secret: SecretAsk?
+    }
+
+    struct SecretAsk: Decodable {
+        var use: String
+        var site: String?
+        var fields: [Field]
+
+        struct Field: Decodable {
+            var name: String
+            var label: String
+        }
+    }
+
+    struct SecretList: Decodable {
+        var secrets: [Secret]
+    }
+
+    struct Secret: Decodable {
+        var id: String
+        var botId: String
+        var name: String
+        var label: String
+        var use: String
+        var site: String?
+        var updatedAt: Double
+
+        func toModel() -> SavedSecret {
+            SavedSecret(
+                id: id, botID: botId, name: name, label: label, use: Lorca.SecretAsk.Use(rawValue: use) ?? .command, site: site,
+                updatedAt: Date(timeIntervalSince1970: updatedAt))
+        }
     }
 
     struct ReplyTo: Decodable {
@@ -769,7 +801,12 @@ extension Wire.Message {
                     pluginID: self.body.pluginId ?? "", pluginName: self.body.pluginName ?? "", tool: self.body.tool ?? "",
                     summary: self.body.summary ?? "", decision: PermissionRequest.Decision(rawValue: self.body.decision ?? "") ?? .pending,
                     link: self.body.link, code: self.body.code, reason: self.body.reason, rule: self.body.rule,
-                    command: self.body.command))
+                    command: self.body.command,
+                    secret: self.body.secret.map { ask in
+                        Lorca.SecretAsk(
+                            use: Lorca.SecretAsk.Use(rawValue: ask.use) ?? .command, site: ask.site,
+                            fields: ask.fields.map { Lorca.SecretAsk.Field(name: $0.name, label: $0.label) })
+                    }))
         default:
             body = .text(self.body.text ?? "")
         }

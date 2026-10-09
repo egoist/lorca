@@ -745,6 +745,9 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
             case .notice:
                 identifier = NoticeCellView.identifier
                 cell = dequeue(identifier) { NoticeCellView() }
+            case let .permission(request) where request.isSecret:
+                identifier = SecretCellView.identifier
+                cell = dequeue(identifier) { SecretCellView() }
             case .permission:
                 identifier = PermissionCellView.identifier
                 cell = dequeue(identifier) { PermissionCellView() }
@@ -859,6 +862,8 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
                 return HandoffCellView.spokenText(mode: marker.mode, reason: marker.reason)
             case let .notice(text):
                 return text
+            case let .permission(request) where request.isSecret:
+                return SecretCellView.spokenText(request: request, botName: botName(of: message))
             case let .permission(request):
                 return PermissionCellView.spokenText(request: request, botName: botName(of: message))
             }
@@ -959,6 +964,20 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
                     groupStart: groupStart,
                     metrics: layout.noticeMetrics(
                         for: message, tableWidth: max(tableView.bounds.width, 320)))
+
+            case let .permission(request) where request.isSecret:
+                let secretCell = cell as? SecretCellView
+                // The values stay on the bot's Runner.
+                let runnerName = message.author.botID.flatMap { store.bot($0) }.flatMap { store.device($0.runnerID) }?.name ?? L("its Runner")
+                secretCell?.configure(
+                    request: request, messageID: message.id, botName: botName(of: message), runnerName: runnerName,
+                    avatar: cardAvatar(for: message), groupStart: groupStart)
+                secretCell?.onSave = { [weak self] values in
+                    try await self?.store.answerSecret(chatID: chat.id, messageID: message.id, values: values)
+                }
+                secretCell?.onDecline = { [weak self] in
+                    self?.store.answerPermission(chatID: chat.id, messageID: message.id, decision: "deny")
+                }
 
             case let .permission(request):
                 let permissionCell = cell as? PermissionCellView

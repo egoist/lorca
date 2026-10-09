@@ -445,6 +445,7 @@ final class RootSplitViewController: NSSplitViewController {
             case .bots: BotsSettingsViewController()
             case .providers: ProvidersSettingsViewController()
             case .plugins: PluginsSettingsViewController()
+            case .secrets: SecretsSettingsViewController()
             case .device: AboutDeviceSettingsViewController()
             }
         if let controller = controller as? DevicePaneViewController {
