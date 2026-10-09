@@ -439,12 +439,12 @@ func (m *mainWindow) inspectorRoutines(c *ui.Context, bot *model.Bot) {
 			return
 		}
 		for _, routine := range routines {
-			symbolName, tint := "pause.circle", p.Label3
+			symbolName, tint := routine.Symbol(), p.Label3
 			switch {
 			case routine.IsRunning:
-				symbolName, tint = "arrow.triangle.2.circlepath", p.Accent
+				tint = p.Accent
 			case routine.IsEnabled:
-				symbolName, tint = "clock", p.Label2
+				tint = p.Label2
 			}
 			toggle := L("Pause %@", routine.Name)
 			if !routine.IsEnabled {

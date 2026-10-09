@@ -83,6 +83,58 @@ func Stamp(t time.Time) string {
 	return fmt.Sprintf("%d/%d/%02d", t.Month(), t.Day(), t.Year()%100)
 }
 
+// Once is a one-time routine's date and time on its own clock: "Once on Oct 12 at 9:00 AM", with
+// the year when it is not this one.
+func Once(at time.Time, timezone string) string {
+	if zone, err := time.LoadLocation(timezone); err == nil {
+		at = at.In(zone)
+	}
+	day := at.Format("Jan 2")
+	clock := at.Format("3:04 PM")
+	if l10n.IsChinese() {
+		day, clock = fmt.Sprintf("%d月%d日", at.Month(), at.Day()), at.Format("15:04")
+	}
+	if at.Year() != Now().Year() {
+		if l10n.IsChinese() {
+			day = fmt.Sprintf("%d年", at.Year()) + day
+		} else {
+			day += at.Format(", 2006")
+		}
+	}
+	return L("Once on %@ at %@", day, clock)
+}
+
+// AroundEvents is a time around calendar events: "15 minutes before each event", "When events
+// matching “Customer” end".
+func AroundEvents(minutes int, after bool, matching string) string {
+	span := L("%d minutes", minutes)
+	switch {
+	case minutes == 60:
+		span = L("1 hour")
+	case minutes > 60 && minutes%60 == 0:
+		span = L("%d hours", minutes/60)
+	case minutes == 1:
+		span = L("1 minute")
+	}
+	switch {
+	case matching == "" && minutes == 0 && !after:
+		return L("When each event starts")
+	case matching == "" && minutes == 0:
+		return L("When each event ends")
+	case matching == "" && !after:
+		return L("%@ before each event", span)
+	case matching == "":
+		return L("%@ after each event ends", span)
+	case minutes == 0 && !after:
+		return L("When events matching “%@” start", matching)
+	case minutes == 0:
+		return L("When events matching “%@” end", matching)
+	case !after:
+		return L("%@ before events matching “%@”", span, matching)
+	}
+	return L("%@ after events matching “%@” end", span, matching)
+}
+
 // DaySeparator is the separator before a cluster of messages: "Today 4:13 AM", "Yesterday
 // 9:55 AM", "Thu, Sep 10, 9:48 AM".
 func DaySeparator(t time.Time) string {

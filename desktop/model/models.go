@@ -1259,6 +1259,54 @@ type Routine struct {
 	Check     string
 	HasCheck  bool
 	CreatedAt time.Time
+	// OnceAt is when a one-time routine runs; its Runner removes it after that run.
+	OnceAt time.Time
+	// PullRequest is the pull request a watch reads at each due time, until it merges or closes.
+	PullRequest *RoutineWatch
+	// Calendar is the calendar events a routine around events runs before or after.
+	Calendar *RoutineCalendar
+}
+
+// RoutineWatch is the pull request a watch follows.
+type RoutineWatch struct {
+	Repo   string
+	Number int
+	Title  string
+	URL    string
+}
+
+// Label is "acme/project#42".
+func (w RoutineWatch) Label() string { return fmt.Sprintf("%s#%d", w.Repo, w.Number) }
+
+// RoutineCalendar is the calendar events a routine runs around: so many minutes before they
+// start, or after they end, of the events that match its words, on one Calendar account.
+type RoutineCalendar struct {
+	Account        string
+	Matching       string
+	Minutes        int
+	After          bool
+	NextEventTitle string
+}
+
+// LooksFirst is whether its Runner looks before it runs: a check, or a watch's read of its pull
+// request.
+func (r Routine) LooksFirst() bool { return r.HasCheck || r.PullRequest != nil }
+
+// Symbol is the symbol of its row: what places its runs, while it is on.
+func (r Routine) Symbol() string {
+	switch {
+	case r.IsRunning:
+		return "arrow.triangle.2.circlepath"
+	case !r.IsEnabled:
+		return "pause.circle"
+	case r.PullRequest != nil:
+		return "arrow.triangle.pull"
+	case r.Calendar != nil:
+		return "calendar"
+	case !r.OnceAt.IsZero():
+		return "alarm"
+	}
+	return "clock"
 }
 
 // Detail is the line under the name in the inspector: the schedule, then what is going on.
@@ -1277,7 +1325,7 @@ func (r Routine) Detail() string {
 	}
 	if !r.NextRunAt.IsZero() {
 		next := Upcoming(r.NextRunAt)
-		if !r.HasCheck {
+		if !r.LooksFirst() {
 			return L("%@ · Next %@", r.ScheduleText, next)
 		}
 		return L("%@ · Next check %@", r.ScheduleText, next)

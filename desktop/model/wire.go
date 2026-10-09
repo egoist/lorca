@@ -229,6 +229,23 @@ type WireRoutine struct {
 	MissedRunPolicy *string            `json:"missed_run_policy"`
 	State           *string            `json:"state"`
 	Health          *WireRoutineHealth `json:"health"`
+
+	OnceAt      *float64 `json:"once_at"`
+	PullRequest *struct {
+		Repo   string  `json:"repo"`
+		Number int     `json:"number"`
+		Title  *string `json:"title"`
+		URL    *string `json:"url"`
+	} `json:"pull_request"`
+	Calendar *struct {
+		Account   *string `json:"account"`
+		Matching  *string `json:"matching"`
+		Minutes   *int    `json:"minutes"`
+		After     *bool   `json:"after"`
+		NextEvent *struct {
+			Title *string `json:"title"`
+		} `json:"next_event"`
+	} `json:"calendar"`
 }
 
 type WireAutoReview struct {
@@ -863,6 +880,27 @@ func ToRoutine(wire WireRoutine) *Routine {
 	}
 	if wire.NextRunAt != nil {
 		routine.NextRunAt = seconds(*wire.NextRunAt)
+	}
+	// A one-time routine, a watch, and a routine around events are worded here, in the app's
+	// language, from what the CLI says of them.
+	switch {
+	case wire.PullRequest != nil:
+		routine.PullRequest = &RoutineWatch{Repo: wire.PullRequest.Repo, Number: wire.PullRequest.Number, Title: str(wire.PullRequest.Title), URL: str(wire.PullRequest.URL)}
+		routine.ScheduleText = L("Watches %@", routine.PullRequest.Label())
+	case wire.Calendar != nil:
+		events := &RoutineCalendar{Account: str(wire.Calendar.Account), Matching: str(wire.Calendar.Matching)}
+		if wire.Calendar.Minutes != nil {
+			events.Minutes = *wire.Calendar.Minutes
+		}
+		events.After = flag(wire.Calendar.After)
+		if wire.Calendar.NextEvent != nil {
+			events.NextEventTitle = str(wire.Calendar.NextEvent.Title)
+		}
+		routine.Calendar = events
+		routine.ScheduleText = AroundEvents(events.Minutes, events.After, events.Matching)
+	case wire.OnceAt != nil:
+		routine.OnceAt = seconds(*wire.OnceAt)
+		routine.ScheduleText = Once(routine.OnceAt, routine.Timezone)
 	}
 	return routine
 }
