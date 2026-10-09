@@ -46,10 +46,11 @@ enum Wire {
         var id: String
         var name: String
         var levels: [String]
+        var decides: Bool?
 
         func toModel() -> ProviderModel? {
             guard let kind = ProviderCredential.Kind(wireValue: provider) else { return nil }
-            return ProviderModel(provider: kind, id: id, label: name, levels: levels)
+            return ProviderModel(provider: kind, id: id, label: name, levels: levels, decides: decides ?? false)
         }
     }
 
@@ -67,9 +68,15 @@ enum Wire {
     struct AutoReview: Decodable {
         var isEnabled: Bool
         var rules: [AutoReviewRule]?
+        var provider: String?
+        var models: [String: String]?
 
         func toModel() -> Lorca.AutoReview {
-            Lorca.AutoReview(isEnabled: isEnabled, rules: (rules ?? []).map { $0.toModel() })
+            let models = (models ?? [:]).compactMap { kind, model in ProviderCredential.Kind(wireValue: kind).map { ($0, model) } }
+            return Lorca.AutoReview(
+                isEnabled: isEnabled, rules: (rules ?? []).map { $0.toModel() },
+                provider: provider.flatMap(ProviderCredential.Kind.init(wireValue:)),
+                models: Dictionary(models, uniquingKeysWith: { first, _ in first }))
         }
     }
 
@@ -81,6 +88,18 @@ enum Wire {
     }
 
     struct Routine: Decodable {
+        struct Health: Decodable {
+            struct Model: Decodable {
+                var status: String?
+                var authenticationFailures: Int?
+            }
+            var lastCheckAt: Double?
+            var lastSuccessAt: Double?
+            var status: String?
+            var connectionFailures: Int?
+            var authenticationFailures: Int?
+            var model: Model?
+        }
         var id: String
         var botId: String
         var name: String
@@ -95,14 +114,32 @@ enum Wire {
         var isRunning: Bool?
         var check: String?
         var createdAt: Double
+        var timezone: String?
+        var missedRunPolicy: String?
+        var state: String?
+        var health: Health?
 
         func toModel() -> Lorca.Routine {
             Lorca.Routine(
                 id: id, botID: botId, name: name, prompt: prompt, schedule: schedule, scheduleText: Format.schedule(scheduleText ?? schedule),
                 isEnabled: isEnabled, pausedReason: pausedReason, lastRunAt: lastRunAt.map { Date(timeIntervalSince1970: $0) },
                 lastOutcome: lastOutcome, nextRunAt: nextRunAt.map { Date(timeIntervalSince1970: $0) }, isRunning: isRunning ?? false,
-                createdAt: Date(timeIntervalSince1970: createdAt), check: check)
+                createdAt: Date(timeIntervalSince1970: createdAt), check: check,
+                timezone: timezone ?? TimeZone.current.identifier, missedRunPolicy: missedRunPolicy ?? "coalesce",
+                state: state ?? (isEnabled ? "on" : "paused"),
+                health: RoutineHealth(
+                    lastCheckAt: health?.lastCheckAt.map { Date(timeIntervalSince1970: $0) },
+                    lastSuccessAt: health?.lastSuccessAt.map { Date(timeIntervalSince1970: $0) },
+                    status: health?.status, connectionFailures: health?.connectionFailures ?? 0,
+                    authenticationFailures: health?.authenticationFailures ?? 0, modelStatus: health?.model?.status,
+                    modelAuthenticationFailures: health?.model?.authenticationFailures ?? 0))
         }
+    }
+
+    /// `device.service_status`: whether `lorca service` keeps the CLI running on that Device.
+    struct ServiceStatus: Decodable {
+        var installed: Bool
+        var running: Bool
     }
 
     struct RoutineChanged: Decodable {
@@ -123,12 +160,13 @@ enum Wire {
         var name: String?
         var api: String?
         var models: [StatusModel]?
+        var reviewModel: String?
 
         func toModel() -> ProviderCredential? {
             guard let kind = ProviderCredential.Kind(wireValue: kind) else { return nil }
             return ProviderCredential(
                 kind: kind, isConnected: isConnected, detail: detail, baseURL: baseUrl, name: name,
-                api: api.flatMap(CustomAPI.init(rawValue:)), models: (models ?? []).map { $0.toModel() })
+                api: api.flatMap(CustomAPI.init(rawValue:)), models: (models ?? []).map { $0.toModel() }, reviewModel: reviewModel)
         }
     }
 

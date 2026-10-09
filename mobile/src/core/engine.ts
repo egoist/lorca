@@ -8,7 +8,7 @@ import { AppState, Platform, type AppStateStatus } from "react-native";
 import * as core from "../../modules/lorca-core";
 import { t } from "../i18n";
 import { hostFacts } from "./host";
-import { providerConnectMethod, type Attachment, type AutoReview, type Bot, type Chat, type ChatMeta, type ChatSearchResults, type ChatUsage, type CustomAPI, type CustomModel, type Message, type ProviderKind, type ProviderStatus } from "./model";
+import { providerConnectMethod, withReviewModel, type Attachment, type AutoReview, type Bot, type Chat, type ChatMeta, type ChatSearchResults, type ChatUsage, type CustomAPI, type CustomModel, type Message, type ProviderKind, type ProviderStatus } from "./model";
 import { coreHome, loadPrefs, pathOf, wipePrefs } from "./prefs";
 import { clearPushes, installPushHandlers, registerForPushes } from "./push";
 import {
@@ -70,12 +70,20 @@ class Engine {
     const active = AppState.currentState === "active";
     useStore.setState({ dictation_lang: loadPrefs().dictation_lang, appActive: active, activeSince: active ? Date.now() : 0 });
     core.onEvent((frame) => this.receive(frame));
-    core.start(coreHome(), hostFacts());
-    AppState.addEventListener("change", (status) => this.onAppState(status));
-    // Read after every store update, including the roster's unread count that follows a
-    // message event, a backlog snapshot, and returning to a chat already mounted on screen.
-    useStore.subscribe(() => this.readVisibleChat());
-    await this.bootstrap();
+    // The core starts off the JS thread and emits as soon as it runs: what it says before the
+    // first snapshot waits for it, as during any snapshot.
+    this.bootstraps += 1;
+    try {
+      await core.start(coreHome(), hostFacts());
+      AppState.addEventListener("change", (status) => this.onAppState(status));
+      // Read after every store update, including the roster's unread count that follows a
+      // message event, a backlog snapshot, and returning to a chat already mounted on screen.
+      useStore.subscribe(() => this.readVisibleChat());
+      await this.bootstrap();
+    } finally {
+      this.bootstraps -= 1;
+      if (!this.bootstraps) this.applyHeld();
+    }
     installPushHandlers();
     if (useStore.getState().paired) void registerForPushes();
   }
@@ -360,6 +368,27 @@ class Engine {
   setAutoReview(value: AutoReview) {
     useStore.setState({ auto_review: value });
     void core.request("auto_review.set", { is_enabled: value.is_enabled, rules: value.rules });
+  }
+
+  /// Picks the provider whose review model Auto-review runs, or none for the bot's own. Only
+  /// `provider` goes, so the switch, the rules, and the review models stay.
+  setReviewProvider(provider: string | undefined) {
+    const held = useStore.getState().auto_review.provider;
+    useStore.setState((s) => ({ auto_review: { ...s.auto_review, provider } }));
+    core.request("auto_review.set", { provider: provider ?? null }).catch(() => {
+      // The provider disconnected meanwhile: the core kept what it had.
+      useStore.setState((s) => ({ auto_review: { ...s.auto_review, provider: held } }));
+    });
+  }
+
+  /// Picks the model Auto-review runs on a provider, or puts its default back (`undefined`). The
+  /// patch names this provider alone, so the others' review models stay.
+  setReviewModel(kind: string, model: string | undefined) {
+    const held = useStore.getState().auto_review.models?.[kind];
+    useStore.setState((s) => ({ auto_review: withReviewModel(s.auto_review, kind, model) }));
+    core.request("auto_review.set", { models: { [kind]: model ?? null } }).catch(() => {
+      useStore.setState((s) => ({ auto_review: withReviewModel(s.auto_review, kind, held) }));
+    });
   }
 
   // MARK: - Providers

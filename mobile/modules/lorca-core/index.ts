@@ -3,7 +3,7 @@
 import { requireNativeModule, type EventSubscription } from "expo-modules-core";
 
 interface Native {
-  start(home: string, name: string, os: string, osVersion: string, model: string): void;
+  start(home: string, name: string, os: string, osVersion: string, model: string): Promise<void>;
   request(method: string, params: string): Promise<string>;
   wake(): void;
   /// Android only.
@@ -29,8 +29,9 @@ export interface Frame {
   data: unknown;
 }
 
-export function start(home: string, facts: HostFacts) {
-  native.start(home, facts.name, facts.os, facts.os_version, facts.model);
+/// Opens and loads the account off the JS thread; requests wait for it.
+export function start(home: string, facts: HostFacts): Promise<void> {
+  return native.start(home, facts.name, facts.os, facts.os_version, facts.model);
 }
 
 /// One API call. Throws with the core's message when it answers with an error.

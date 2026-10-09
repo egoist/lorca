@@ -5,7 +5,8 @@
 import { FlashList } from "@shopify/flash-list";
 import { Stack } from "expo-router";
 import { useRef, useState } from "react";
-import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Platform, StyleSheet, Text, View } from "react-native";
+import { Pressable } from "../../src/ui/Pressable";
 import type { SearchBarCommands } from "react-native-screens";
 import { contextWindowLabel, filterModelRows, modelIdToAdd, modelLabel, modelListingNote, type ModelRow } from "../../src/core/model";
 import { t, useLanguage } from "../../src/i18n";

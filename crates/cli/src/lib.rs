@@ -9,6 +9,8 @@ pub mod catalog;
 pub mod config;
 pub mod credentials;
 pub mod crypto;
+#[cfg(feature = "runner")]
+pub mod decisions;
 pub mod events;
 pub mod files;
 pub mod identity;
@@ -29,6 +31,7 @@ pub mod push;
 pub mod relay;
 pub mod requests;
 pub mod routines;
+pub mod routine_health;
 pub mod runtime;
 pub mod schedule;
 #[cfg(feature = "runner")]

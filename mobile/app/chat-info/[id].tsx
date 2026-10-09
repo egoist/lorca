@@ -1,6 +1,8 @@
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
-import { useEffect, useState } from "react";
-import { Alert, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
+import { useEffect, useRef, useState } from "react";
+import { MenuView, type MenuComponentRef } from "@expo/ui/community/menu";
+import { Platform, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
+import { Pressable } from "../../src/ui/Pressable";
 import { chatTitle, engine } from "../../src/core/engine";
 import { providerKinds, providerLabel, providerModels, PROVIDER_KINDS, thinkingLabel, thinkingLevels, withCustomModels, type Bot, type Routine } from "../../src/core/model";
 import { deviceIsOnline, useBotMap, useChat, useRoutines, useStore, useWorkingBotIds } from "../../src/core/store";
@@ -11,7 +13,9 @@ import { lastRunSummary, lastSeen, routineDetail } from "../../src/ui/format";
 import { Symbol } from "../../src/ui/Symbol";
 import { usePalette } from "../../src/ui/theme";
 import { deviceSymbol } from "../../src/ui/devices";
-import { CloseToolbar } from "../../src/ui/navigation";
+import { AndroidIcons, CloseToolbar } from "../../src/ui/navigation";
+import { haptic } from "../../src/ui/haptics";
+import { alert } from "../../src/ui/alert";
 
 export default function ChatInfoScreen() {
   useLanguage();
@@ -41,13 +45,13 @@ export default function ChatInfoScreen() {
 
   /// A routine's actions, as a sheet: run it now, or delete it. The bot edits it on request.
   function showRoutine(routine: Routine) {
-    Alert.alert(routine.name, `${routineDetail(routine)}\n${t("Last run: {summary}", { summary: lastRunSummary(routine) })}\n\n${routine.prompt}`, [
+    alert(routine.name, `${routineDetail(routine)}\n${t("Last run: {summary}", { summary: lastRunSummary(routine) })}\n\n${routine.prompt}`, [
       { text: t("Run Now"), onPress: () => engine.runRoutine(routine.id) },
       {
         text: t("Delete"),
         style: "destructive",
         onPress: () =>
-          Alert.alert(t("Delete “{name}”?", { name: routine.name }), t("This deletes the routine and stops its future runs. This can't be undone."), [
+          alert(t("Delete “{name}”?", { name: routine.name }), t("This deletes the routine and stops its future runs. This can't be undone."), [
             { text: t("Cancel"), style: "cancel" },
             { text: t("Delete routine"), style: "destructive", onPress: () => engine.deleteRoutine(routine.id) },
           ]),
@@ -67,7 +71,8 @@ export default function ChatInfoScreen() {
     : defaultModel
       ? t("Default ({model})", { model: defaultModel })
       : t("Default");
-  // The built-ins, then the account's custom providers below a divider.
+  // The built-ins, then the account's custom providers below a divider; decision providers are
+  // Auto-review's alone.
   const kinds = providerKinds(providers);
   const candidates = allBots.filter((b) => !chat.bot_ids.includes(b.id));
 
@@ -85,12 +90,12 @@ export default function ChatInfoScreen() {
       setBotName(updated.name);
     } catch (error) {
       setBotName(bot.name);
-      Alert.alert(t("Could not update the bot"), error instanceof Error ? error.message : String(error));
+      alert(t("Could not update the bot"), error instanceof Error ? error.message : String(error));
     }
   }
 
   function confirmDelete() {
-    Alert.alert(t("Delete “{name}”?", { name: chatTitle(chat!) }), t("The chat and its messages are removed from every paired Device."), [
+    alert(t("Delete “{name}”?", { name: chatTitle(chat!) }), t("The chat and its messages are removed from every paired Device."), [
       { text: t("Cancel"), style: "cancel" },
       {
         text: t("Delete"),
@@ -110,7 +115,7 @@ export default function ChatInfoScreen() {
     <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={{ paddingBottom: 40 }} keyboardDismissMode="on-drag">
       <View style={styles.hero}>
         {bot ? (
-          <Pressable onPress={() => router.push(`/chat-info/look/${bot.id}`)} accessibilityLabel={t("Change {name}'s look", { name: bot.name })} accessibilityRole="button" hitSlop={8}>
+          <Pressable onPress={() => router.push(`/chat-info/look/${bot.id}`)} accessibilityLabel={t("Change {name}'s look", { name: bot.name })} accessibilityRole="button" hitSlop={8} ripple="borderless" rippleRadius={44}>
             <BotAvatar bot={bot} size={72} working={working.has(bot.id)} />
           </Pressable>
         ) : (
@@ -249,24 +254,38 @@ export default function ChatInfoScreen() {
 
       {isGroup && (
         <Section title={t("Members")} footer={chat.bot_ids.length >= 6 ? t("A group holds up to six bots.") : t("Bots in a group take turns answering; @mention one to hear from it first.")}>
-          {members.map((member) => (
-            <Row
-              key={member.id}
-              title={member.name}
-              subtitle={providerLabel(member.provider, providers)}
-              leading={<BotAvatar bot={member} size={36} working={working.has(member.id)} />}
-              accessory={
-                chat.owner_bot_id === member.id ? (
-                  <Text style={{ color: p.secondaryLabel, fontSize: 13 }}>{t("Owner")}</Text>
-                ) : members.length > 1 ? (
-                  <Pressable hitSlop={8} onPress={() => engine.removeBot(chat.id, member.id)} accessibilityLabel={t("Remove {name}", { name: member.name })}>
-                    <Symbol name="xmark" size={14} color={p.tertiaryLabel} weight="semibold" />
-                  </Pressable>
-                ) : null
-              }
-              onPress={() => engine.setOwner(chat.id, member.id)}
-            />
-          ))}
+          {members.map((member) => {
+            const removable = chat.owner_bot_id !== member.id && members.length > 1;
+            const remove = () => engine.removeBot(chat.id, member.id);
+            const label = t("Remove {name}", { name: member.name });
+            const row = (openMenu?: () => void) => (
+              <Row
+                title={member.name}
+                subtitle={providerLabel(member.provider, providers)}
+                leading={<BotAvatar bot={member} size={36} working={working.has(member.id)} />}
+                accessory={
+                  chat.owner_bot_id === member.id ? (
+                    <Text style={{ color: p.secondaryLabel, fontSize: 13 }}>{t("Owner")}</Text>
+                  ) : removable && Platform.OS === "ios" ? (
+                    <Pressable hitSlop={14} onPress={remove} accessibilityLabel={label}>
+                      <Symbol name="xmark" size={14} color={p.tertiaryLabel} weight="semibold" />
+                    </Pressable>
+                  ) : null
+                }
+                onPress={() => engine.setOwner(chat.id, member.id)}
+                onLongPress={openMenu}
+                action={false}
+              />
+            );
+            // On Android removing a member is the row's long-press menu, as a Material list's is.
+            return removable && Platform.OS === "android" ? (
+              <RemovableRow key={member.id} label={label} onRemove={remove}>
+                {row}
+              </RemovableRow>
+            ) : (
+              <View key={member.id}>{row()}</View>
+            );
+          })}
           {chat.bot_ids.length < 6 && candidates.length > 0 ? <Row title={adding ? t("Choose a bot") : t("Add Bot")} icon="plus" onPress={() => setAdding((a) => !a)} /> : null}
         </Section>
       )}
@@ -279,6 +298,7 @@ export default function ChatInfoScreen() {
               title={candidate.name}
               subtitle={providerLabel(candidate.provider, providers)}
               checked={false}
+              indicator={false}
               leading={<BotAvatar bot={candidate} size={36} />}
               onPress={() => {
                 engine.addBot(chat.id, candidate.id);
@@ -308,3 +328,26 @@ const styles = StyleSheet.create({
   deviceIcon: { width: 32, alignItems: "center" },
   deviceDot: { position: "absolute", right: 0, bottom: -2, width: 10, height: 10, borderRadius: 5, borderWidth: 2 },
 });
+
+/// A member row whose long press offers Remove (Android), as a Material list item's menu does.
+function RemovableRow({ label, onRemove, children }: { label: string; onRemove: () => void; children: (openMenu: () => void) => React.ReactNode }) {
+  const menu = useRef<MenuComponentRef>(null);
+  // The menu's host takes its size from what it is given; Android delivers no touch outside it.
+  const [width, setWidth] = useState(0);
+  return (
+    <View onLayout={(e) => setWidth(e.nativeEvent.layout.width)}>
+      <MenuView
+        ref={menu}
+        style={{ width }}
+        actions={[{ id: "remove", title: t("Remove"), image: AndroidIcons.delete, attributes: { destructive: true } }]}
+        shouldOpenOnLongPress
+        onOpenMenu={haptic.longPress}
+        onPressAction={({ nativeEvent }) => nativeEvent.event === "remove" && onRemove()}
+      >
+        <View style={{ width }} accessibilityActions={[{ name: "remove", label }]} onAccessibilityAction={(event) => event.nativeEvent.actionName === "remove" && onRemove()}>
+          {children(() => menu.current?.show())}
+        </View>
+      </MenuView>
+    </View>
+  );
+}

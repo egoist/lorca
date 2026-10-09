@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -1034,7 +1035,7 @@ func (s *Store) AddBotFromTemplate(template BotTemplate, runnerID string) string
 }
 
 // PreferredProvider is the provider a bot made without asking runs with: the first one the
-// account connected.
+// account connected that a bot can run with.
 func (s *Store) PreferredProvider() ProviderKind {
 	for _, kind := range s.ProviderKinds() {
 		if credential := s.Credential(kind); credential != nil && credential.IsConnected {
@@ -1044,11 +1045,24 @@ func (s *Store) PreferredProvider() ProviderKind {
 	return "deepseek"
 }
 
-// ProviderKinds is every provider a bot can run with: the built-in ones, then the ones the user added.
+// ProviderKinds is every provider a bot can run with: the built-in ones, then the ones the user
+// added, except those of decision models.
 func (s *Store) ProviderKinds() []ProviderKind {
 	out := slices.Clone(ProviderKinds)
 	for _, provider := range s.Providers {
-		if IsCustomKind(provider.Kind) {
+		if IsCustomKind(provider.Kind) && !provider.Decides() {
+			out = append(out, provider.Kind)
+		}
+	}
+	return out
+}
+
+// ReviewProviderKinds are the providers Auto-review can run a model of: every one the account has
+// connected, in the order the CLI lists them.
+func (s *Store) ReviewProviderKinds() []ProviderKind {
+	var out []ProviderKind
+	for _, provider := range s.Providers {
+		if provider.IsConnected {
 			out = append(out, provider.Kind)
 		}
 	}
@@ -1504,7 +1518,8 @@ func (s *Store) ParseMcpJSON(text string, done func([]ParsedServer, error)) {
 }
 
 // SetAutoReview replaces Auto-review (the switch and the rules); the change shows at once and the
-// CLI's roster event confirms it. A new rule gets its id from the CLI.
+// CLI's roster event confirms it. A new rule gets its id from the CLI. The model that reviews is
+// left out, so it stays as picked.
 func (s *Store) SetAutoReview(value AutoReview) {
 	s.AutoReview = value
 	s.emit(Event{Kind: EventRosterChanged})
@@ -1517,6 +1532,39 @@ func (s *Store) SetAutoReview(value AutoReview) {
 		rules = append(rules, entry)
 	}
 	s.perform("auto_review.set", map[string]any{"is_enabled": value.IsEnabled, "rules": rules})
+}
+
+// SetReviewProvider picks the provider Auto-review runs the review model of, or "" for the bot's
+// own.
+func (s *Store) SetReviewProvider(provider ProviderKind) {
+	s.AutoReview.Provider = provider
+	s.emit(Event{Kind: EventRosterChanged})
+	params := map[string]any{"provider": nil}
+	if provider != "" {
+		params["provider"] = provider
+	}
+	s.perform("auto_review.set", params)
+}
+
+// ReviewModel is the review model picked for a provider; empty for its default.
+func (s *Store) ReviewModel(kind ProviderKind) string { return s.AutoReview.Models[kind] }
+
+// SetReviewModel picks a provider's review model, or "" to put back its default. The other
+// providers' stay as they are.
+func (s *Store) SetReviewModel(model string, kind ProviderKind) {
+	models := maps.Clone(s.AutoReview.Models)
+	if models == nil {
+		models = map[ProviderKind]string{}
+	}
+	var value any
+	if model == "" {
+		delete(models, kind)
+	} else {
+		models[kind], value = model, model
+	}
+	s.AutoReview.Models = models
+	s.emit(Event{Kind: EventRosterChanged})
+	s.perform("auto_review.set", map[string]any{"models": map[string]any{kind: value}})
 }
 
 // AnswerPermission answers a question: a permission card's, or a command card's. `allow`,
@@ -1643,8 +1691,9 @@ func (s *Store) SetRoutineEnabled(id string, enabled bool) {
 		return
 	}
 	routine.IsEnabled, routine.PausedReason = enabled, ""
+	routine.State = "on"
 	if !enabled {
-		routine.NextRunAt = time.Time{}
+		routine.State, routine.NextRunAt = "paused", time.Time{}
 	}
 	s.emit(Event{Kind: EventRosterChanged})
 	s.perform("routines.update", map[string]any{"id": id, "enabled": enabled})
@@ -2378,9 +2427,9 @@ type ModelQuery struct {
 	APIKey  string
 }
 
-// ListCustomModels answers the chat models a custom provider's server lists, in its order
-// (`providers.list_models`), for the sheet to pick from. Listed is false when the server publishes
-// no list. Fails with why the server could not be asked.
+// ListCustomModels answers the models a custom provider's server lists that its protocol can run,
+// in its order (`providers.list_models`), for the sheet to pick from. Listed is false when the
+// server publishes no list. Fails with why the server could not be asked.
 func (s *Store) ListCustomModels(query ModelQuery, done func(models []CustomModel, listed bool, err error)) {
 	if s.IsMock {
 		s.later(300*time.Millisecond, func() {
@@ -2431,8 +2480,16 @@ func (s *Store) SaveCustomProvider(options CustomProvider, done func(ProviderKin
 			kind = "custom:" + strings.ReplaceAll(strings.ToLower(name), " ", "-")
 		}
 		saved := ProviderCredential{Kind: kind, IsConnected: true, Detail: baseURL, BaseURL: baseURL, Name: name, API: options.API}
+		if len(models) > 0 {
+			saved.ReviewModel = models[0]
+		}
 		for _, id := range models {
-			saved.Models = append(saved.Models, CustomModel{ID: id, Levels: []string{"low", "medium", "high"}})
+			// A decision model does not think out loud.
+			var levels []string
+			if !options.API.Decides() {
+				levels = []string{"low", "medium", "high"}
+			}
+			saved.Models = append(saved.Models, CustomModel{ID: id, Levels: levels})
 		}
 		if existing := s.Credential(kind); existing != nil {
 			*existing = saved

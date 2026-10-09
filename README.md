@@ -51,7 +51,12 @@ The landing page lives in `web/` (TanStack Start on a Cloudflare Worker, shadcn/
 
 ```bash
 bun run web          # dev server on http://localhost:3000
-bun run web:deploy   # build and wrangler deploy
+```
+
+The production Worker deploys from the `website` branch; Cloudflare builds it on every push there. To ship the site, push main to it:
+
+```bash
+git push origin main:website
 ```
 
 ## License

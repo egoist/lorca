@@ -5,7 +5,8 @@
 import { Image } from "expo-image";
 import { useRouter } from "expo-router";
 import { useEffect } from "react";
-import { Pressable, StyleSheet, Text, View, type ColorValue } from "react-native";
+import { StyleSheet, Text, View, type ColorValue } from "react-native";
+import { Pressable } from "./Pressable";
 import { engine } from "../core/engine";
 import { fileSize, isImage, type Attachment } from "../core/model";
 import { useStore } from "../core/store";

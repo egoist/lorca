@@ -10,6 +10,9 @@ pub struct ProviderStatus {
     pub kind: String,
     pub is_connected: bool,
     pub detail: String,
+    /// The model Auto-review runs on it unless the user picks another.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_model: Option<String>,
     /// A custom API base URL, when the credential has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
@@ -164,11 +167,19 @@ pub struct AutoReview {
     pub is_enabled: bool,
     #[serde(default)]
     pub rules: Vec<AutoReviewRule>,
+    /// The provider that reviews, any the account has connected; unset for the bot's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    /// Each provider's review model the user picked, by kind: a chat model or a decision model.
+    /// A provider without one reviews with its default
+    /// ([`Credentials::review_model`](crate::credentials::Credentials::review_model)).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub models: std::collections::BTreeMap<String, String>,
 }
 
 impl Default for AutoReview {
     fn default() -> Self {
-        AutoReview { is_enabled: true, rules: Vec::new() }
+        AutoReview { is_enabled: true, rules: Vec::new(), provider: None, models: Default::default() }
     }
 }
 
@@ -647,8 +658,21 @@ pub struct Routine {
     pub name: String,
     /// The task, written to the bot, handed to it on every run.
     pub prompt: String,
-    /// `every 30m`, `every 2h`, `every 1d`, or five cron fields in the Runner's local time.
+    /// `every 30m`, `every 2h`, `every 1d`, or five cron fields in `timezone`.
     pub schedule: String,
+    /// The IANA timezone a cron schedule reads in: the Runner's when the routine was made,
+    /// unless the bot named another.
+    #[serde(default = "crate::schedule::local_timezone")]
+    pub timezone: String,
+    /// What a Runner that was off at a due time does when it is back: one run, or none.
+    #[serde(default)]
+    pub missed_run_policy: crate::routine_health::MissedRunPolicy,
+    /// The last due time the Runner took or skipped, so a restart neither repeats nor drops it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_scheduled_at: Option<f64>,
+    /// How the routine's checks and runs have gone, as its Runner records them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health: Option<crate::routine_health::CheckHealth>,
     pub is_enabled: bool,
     /// When the schedule started counting: creation, or the last resume.
     pub enabled_at: f64,
@@ -657,7 +681,7 @@ pub struct Routine {
     /// How the last run ended: `sent`, `pass`, or `error`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_outcome: Option<String>,
-    /// Why Lorca paused it, when it did: `away`.
+    /// Why Lorca paused it, when it did: `away` or `authentication`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub paused_reason: Option<String>,
     /// JavaScript the Runner runs at each due time before the bot does, without a model: a
@@ -669,9 +693,14 @@ pub struct Routine {
 }
 
 impl Routine {
-    /// The time the next run counts from: the last run, else when the routine was armed.
+    /// The time the next run counts from: the last run, due time taken, or check, else when the
+    /// routine was armed.
     pub fn anchor(&self) -> i64 {
-        self.last_run_at.unwrap_or(0.0).max(self.enabled_at) as i64
+        self.last_run_at
+            .unwrap_or(0.0)
+            .max(self.last_scheduled_at.unwrap_or(0.0))
+            .max(self.health.as_ref().and_then(|health| health.last_check_at).unwrap_or(0.0))
+            .max(self.enabled_at) as i64
     }
 
     /// When the next run is due, or `None` when paused or the schedule is unreadable.
@@ -685,7 +714,10 @@ impl Routine {
         if !self.is_enabled {
             return None;
         }
-        crate::schedule::parse(&self.schedule).ok()?.next_after(since.max(self.anchor()))
+        let next = crate::schedule::parse(&self.schedule).ok()?.next_after(since.max(self.anchor()), &self.timezone)?;
+        // After a failure that backs off, no sooner than the retry.
+        let retry = self.health.as_ref().and_then(|health| health.retry_at()).unwrap_or(0.0);
+        Some(next.max(retry as i64))
     }
 }
 
