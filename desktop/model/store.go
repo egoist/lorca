@@ -1006,6 +1006,8 @@ func (s *Store) Preview(chat *Chat) string {
 	case BodyPermission:
 		who := s.botName(last.Author.BotID, L("A bot"))
 		body = who + " " + content.Request.VerbPhrase()
+	case BodyDraft:
+		body = content.Draft.Title(s.botName(last.Author.BotID, L("A bot")))
 	}
 	flattened := strings.TrimSpace(strings.NewReplacer("\n", " ", "**", "", "`", "").Replace(body))
 	if chat.IsGroup() && last.Author.Kind == AuthorBot && content.Kind == BodyText {

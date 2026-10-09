@@ -157,6 +157,13 @@ type WireBody struct {
 	Rule          *string          `json:"rule"`
 	Command       *string          `json:"command"`
 	Run           *WireRun         `json:"run"`
+	ReviewID      *string          `json:"review_id"`
+	Version       *uint64          `json:"version"`
+	State         *string          `json:"state"`
+	Account       *string          `json:"account"`
+	Draft         *DraftFields     `json:"draft"`
+	Note          *string          `json:"note"`
+	Direct        *bool            `json:"direct"`
 	ReplyTo       *struct {
 		MessageID string     `json:"message_id"`
 		Author    WireAuthor `json:"author"`
@@ -747,6 +754,19 @@ func ToMessage(wire WireMessage) *Message {
 			HasRule:    body.Rule != nil,
 			Command:    str(body.Command),
 		}}
+	case "draft":
+		card := &DraftCard{ReviewID: str(body.ReviewID), State: str(body.State), PluginID: str(body.PluginID),
+			Account: str(body.Account), Note: str(body.Note), Direct: flag(body.Direct)}
+		if card.State == "" {
+			card.State = "pending"
+		}
+		if body.Version != nil {
+			card.Version = *body.Version
+		}
+		if body.Draft != nil {
+			card.Fields = body.Draft.Clone()
+		}
+		message.Body = Body{Kind: BodyDraft, Draft: card}
 	default:
 		message.Body = Body{Kind: BodyText, Text: str(body.Text)}
 	}

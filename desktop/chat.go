@@ -263,6 +263,8 @@ func (m *mainWindow) chatRowView(c *ui.Context, chat *model.Chat, row chatRow, s
 			noticeCell(c, body.Text, row.groupStart)
 		case model.BodyPermission:
 			m.permissionCard(c, chat, message, cardAvatar, row.groupStart)
+		case model.BodyDraft:
+			m.draftCard(c, chat, message, cardAvatar, row.groupStart)
 		}
 	}
 }

@@ -1491,6 +1491,7 @@ const (
 	BodyHandoff
 	BodyNotice
 	BodyPermission
+	BodyDraft
 )
 
 type Handoff struct {
@@ -1507,6 +1508,88 @@ type Body struct {
 	Tool    *ToolInvocation
 	Handoff Handoff
 	Request *PermissionRequest
+	Draft   *DraftCard
+}
+
+// DraftFields are the parts of a message a bot wrote, as its draft card shows and edits them.
+type DraftFields struct {
+	// Kind is `email` or `slack`.
+	Kind        string      `json:"kind"`
+	To          []string    `json:"to"`
+	Cc          []string    `json:"cc"`
+	Bcc         []string    `json:"bcc"`
+	Subject     string      `json:"subject"`
+	Body        string      `json:"body"`
+	Attachments []DraftFile `json:"attachments"`
+	// Reply is what it answers: an email's id or a Slack thread.
+	Reply string `json:"reply,omitempty"`
+}
+
+type DraftFile struct {
+	Name string `json:"name"`
+	Size int64  `json:"size"`
+}
+
+func (f DraftFields) IsEmail() bool { return f.Kind == "email" }
+
+func (f DraftFields) Clone() DraftFields {
+	f.To, f.Cc, f.Bcc, f.Attachments = slices.Clone(f.To), slices.Clone(f.Cc), slices.Clone(f.Bcc), slices.Clone(f.Attachments)
+	return f
+}
+
+func (f DraftFields) Equal(g DraftFields) bool {
+	return f.Kind == g.Kind && slices.Equal(f.To, g.To) && slices.Equal(f.Cc, g.Cc) && slices.Equal(f.Bcc, g.Bcc) &&
+		f.Subject == g.Subject && f.Body == g.Body && slices.Equal(f.Attachments, g.Attachments) && f.Reply == g.Reply
+}
+
+// DraftCard is an email or Slack message a bot wrote in a chat, waiting for the user to send it:
+// the chat's view of the review item that holds the exact call. Send names the version the card
+// showed.
+type DraftCard struct {
+	ReviewID string
+	Version  uint64
+	// State is the review item's: pending, approved, executing, succeeded, failed, rejected,
+	// cancelled, or uncertain.
+	State    string
+	PluginID string
+	// Account is where it goes out from: "Gmail · Work".
+	Account string
+	Fields  DraftFields
+	// Note is why it was not sent, or why it needs another look.
+	Note string
+	// Direct is whether, with drafts off, the bot sends these itself (Slack); Gmail only keeps
+	// drafts.
+	Direct bool
+}
+
+func (d *DraftCard) IsPending() bool { return d.State == "pending" }
+
+// StateText is how it ended or where it stands, in a word or two; empty while it waits.
+func (d *DraftCard) StateText() string {
+	switch d.State {
+	case "approved", "executing":
+		return L("Sending…")
+	case "succeeded":
+		return L("Sent")
+	case "failed":
+		return L("Not sent")
+	case "rejected", "cancelled":
+		return L("Discarded")
+	case "uncertain":
+		return L("Not confirmed")
+	}
+	return ""
+}
+
+// Title is "Chef drafted an email", "a reply", or "a Slack message".
+func (d *DraftCard) Title(botName string) string {
+	switch {
+	case !d.Fields.IsEmail():
+		return L("%@ drafted a Slack message", botName)
+	case d.Fields.Reply != "":
+		return L("%@ drafted a reply", botName)
+	}
+	return L("%@ drafted an email", botName)
 }
 
 type StateKind int
@@ -1627,6 +1710,8 @@ func MessageText(m *Message) string {
 		return m.Body.Handoff.Reason
 	case BodyPermission:
 		return m.Body.Request.Summary
+	case BodyDraft:
+		return m.Body.Draft.Fields.Body
 	}
 	return ""
 }
