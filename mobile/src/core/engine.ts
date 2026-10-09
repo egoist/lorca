@@ -370,6 +370,19 @@ class Engine {
     void core.request("auto_review.set", { is_enabled: value.is_enabled, rules: value.rules });
   }
 
+  /// Picks the model Auto-review runs: one of a connected provider's, or, without a provider, a
+  /// small one of the bot's own. A provider alone starts on its review model, which the core
+  /// picks and its roster event brings. Only these fields go, so the switch and the rules stay.
+  setReviewModel(provider: string | undefined, model?: string) {
+    const held = useStore.getState().auto_review;
+    useStore.setState({ auto_review: { ...held, provider, model: provider ? model : undefined } });
+    const params = provider ? { provider, ...(model ? { model } : {}) } : { provider: null };
+    core.request("auto_review.set", params).catch(() => {
+      // A provider disconnected meanwhile: the core kept what it had.
+      useStore.setState((s) => ({ auto_review: { ...s.auto_review, provider: held.provider, model: held.model } }));
+    });
+  }
+
   // MARK: - Providers
 
   /// Checks and saves an API key, or runs a subscription sign-in in the phone's in-app

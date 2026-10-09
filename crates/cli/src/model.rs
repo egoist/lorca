@@ -160,11 +160,18 @@ pub struct AutoReview {
     pub is_enabled: bool,
     #[serde(default)]
     pub rules: Vec<AutoReviewRule>,
+    /// The provider whose model reviews, any the account has connected; unset for a small
+    /// model of the bot's own provider.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    /// That provider's model: a chat model or a decision model. Set with `provider`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 impl Default for AutoReview {
     fn default() -> Self {
-        AutoReview { is_enabled: true, rules: Vec::new() }
+        AutoReview { is_enabled: true, rules: Vec::new(), provider: None, model: None }
     }
 }
 

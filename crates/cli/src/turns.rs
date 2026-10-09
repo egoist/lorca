@@ -3416,7 +3416,7 @@ mod tests {
             state.bots.push(chef.clone());
             state.chats.push(chat("chat", "dm", None, &["b1"]));
         }
-        app.set_auto_review(AutoReview { is_enabled: false, rules: Vec::new() });
+        app.set_auto_review(AutoReview { is_enabled: false, ..AutoReview::default() });
         let catalog = linear_catalog(app);
         let assistant = AssistantMessage::empty("test", "test");
         let context = AgentContext { system_prompt: String::new(), messages: Vec::new(), tools: Vec::new(), cache_points: Vec::new() };

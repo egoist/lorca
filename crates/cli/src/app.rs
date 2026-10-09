@@ -1803,7 +1803,7 @@ impl App {
 fn models_out() -> Vec<Value> {
     lorca_models::models()
         .iter()
-        .map(|model| json!({ "provider": model.provider, "id": model.id, "name": model.name, "levels": model.levels }))
+        .map(|model| json!({ "provider": model.provider, "id": model.id, "name": model.name, "levels": model.levels, "decides": model.decides() }))
         .collect()
 }
 

@@ -44,6 +44,22 @@ func TestStatusesKeepCustomProviders(t *testing.T) {
 	expect(t, len(ToProviders(nil)), 0)
 }
 
+func TestAutoReviewKeepsItsModel(t *testing.T) {
+	picked := ToAutoReview(decodeJSON[*WireAutoReview](t, `{"is_enabled": true, "rules": [], "provider": "custom:typesafe", "model": "jev-1.13"}`))
+	expect(t, []string{picked.Provider, picked.Model}, []string{"custom:typesafe", "jev-1.13"})
+	// Absent, and a kind this build does not know, are the bot's own provider.
+	own := ToAutoReview(decodeJSON[*WireAutoReview](t, `{"is_enabled": false, "rules": []}`))
+	expect(t, []any{own.IsEnabled, own.Provider, own.Model}, []any{false, "", ""})
+	unknown := ToAutoReview(decodeJSON[*WireAutoReview](t, `{"is_enabled": true, "provider": "mistral", "model": "m"}`))
+	expect(t, []string{unknown.Provider, unknown.Model}, []string{"", ""})
+	// The catalog marks its decision models, and a decision provider keeps its API.
+	models := ToModels(decodeJSON[[]WireModel](t, `[{"provider": "opencode", "id": "jev-1.13", "name": "Jev 1.13", "levels": [], "decides": true},
+		{"provider": "opencode", "id": "kimi-k3", "name": "Kimi K3", "levels": ["max"]}]`))
+	expect(t, []bool{models[0].Decides, models[1].Decides}, []bool{true, false})
+	providers := ToProviders(decodeJSON[[]WireProvider](t, `[{"kind": "custom:typesafe", "is_connected": true, "detail": "", "name": "TypeSafe", "api": "system-one", "models": [{"id": "jev-1.13", "levels": []}]}]`))
+	expect(t, []any{providers[0].API, providers[0].Decides()}, []any{APISystemOne, true})
+}
+
 func TestListedModelKeepsWhatItsServerSaid(t *testing.T) {
 	yes := true
 	expect(t, ToCustomModel(decodeJSON[WireCustomModel](t, `{"id": "llava:13b", "name": null, "context_window": 4096, "max_output": null, "images": true}`)),

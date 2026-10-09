@@ -70,6 +70,10 @@ func autoReviewSwitchEntry() settingsEntry {
 	return entry(model.PaneAutoReview, L("Check actions before they run"), "", L("auto-review approve approval permission plugin ask"))
 }
 
+func autoReviewModelEntry() settingsEntry {
+	return entry(model.PaneAutoReview, L("Reviews with"), "", L("review model provider decision"))
+}
+
 func autoReviewRulesEntry() settingsEntry {
 	return entry(model.PaneAutoReview, L("Auto-review Rules"), "", L("rule allow automatically ask first always allow"))
 }
@@ -157,7 +161,7 @@ func entriesIn(pane model.SettingsPane, device *model.Device) []settingsEntry {
 		}
 		return out
 	case model.PaneAutoReview:
-		return []settingsEntry{autoReviewSwitchEntry(), autoReviewRulesEntry()}
+		return []settingsEntry{autoReviewSwitchEntry(), autoReviewModelEntry(), autoReviewRulesEntry()}
 	case model.PaneAdvanced:
 		out := []settingsEntry{relayURLEntry(), cliPortEntry(), onboardingEntry()}
 		if store.HasIdentity != nil && *store.HasIdentity {

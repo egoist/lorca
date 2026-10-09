@@ -46,10 +46,11 @@ enum Wire {
         var id: String
         var name: String
         var levels: [String]
+        var decides: Bool?
 
         func toModel() -> ProviderModel? {
             guard let kind = ProviderCredential.Kind(wireValue: provider) else { return nil }
-            return ProviderModel(provider: kind, id: id, label: name, levels: levels)
+            return ProviderModel(provider: kind, id: id, label: name, levels: levels, decides: decides ?? false)
         }
     }
 
@@ -67,9 +68,13 @@ enum Wire {
     struct AutoReview: Decodable {
         var isEnabled: Bool
         var rules: [AutoReviewRule]?
+        var provider: String?
+        var model: String?
 
         func toModel() -> Lorca.AutoReview {
-            Lorca.AutoReview(isEnabled: isEnabled, rules: (rules ?? []).map { $0.toModel() })
+            Lorca.AutoReview(
+                isEnabled: isEnabled, rules: (rules ?? []).map { $0.toModel() },
+                provider: provider.flatMap(ProviderCredential.Kind.init(wireValue:)), model: model)
         }
     }
 

@@ -154,6 +154,9 @@ struct ProviderCredential: Hashable, Identifiable {
     var name: String? = nil
     var api: CustomAPI? = nil
     var models: [CustomModel] = []
+
+    /// A custom provider of decision models, which Auto-review can run and no bot can.
+    var decides: Bool { api?.decides == true }
 }
 
 /// The wire protocol a custom provider's server speaks.
@@ -161,6 +164,8 @@ enum CustomAPI: String, CaseIterable, Hashable {
     case chatCompletions = "chat-completions"
     case responses
     case messages
+    case systemOne = "system-one"
+    case decisions
 
     /// Product names, the same in every language.
     var title: String {
@@ -168,8 +173,14 @@ enum CustomAPI: String, CaseIterable, Hashable {
         case .chatCompletions: "OpenAI Chat Completions"
         case .responses: "OpenAI Responses"
         case .messages: "Anthropic Messages"
+        case .systemOne: "System One"
+        case .decisions: "OpenAI Decisions"
         }
     }
+
+    /// A decision API, whose models answer typed questions instead of chatting: Auto-review can
+    /// run them, and no bot can.
+    var decides: Bool { self == .systemOne || self == .decisions }
 
     /// What the CLI adds to the base URL for a model call.
     var path: String {
@@ -177,23 +188,33 @@ enum CustomAPI: String, CaseIterable, Hashable {
         case .chatCompletions: "/chat/completions"
         case .responses: "/responses"
         case .messages: "/v1/messages"
+        case .systemOne: "/systemone"
+        case .decisions: "/decisions"
         }
     }
 
     var baseURLPlaceholder: String {
-        self == .messages ? "https://api.example.com" : "https://api.example.com/v1"
+        switch self {
+        case .messages: "https://api.example.com"
+        case .systemOne, .decisions: "https://api.example.com/v1" + path
+        case .chatCompletions, .responses: "https://api.example.com/v1"
+        }
     }
 
     /// The URL the CLI calls for a base URL as typed: a pasted endpoint is cut back to its root
-    /// first, as the CLI does, then this protocol's path goes on.
+    /// first, as the CLI does, then this protocol's path goes on. A decision API's URL is its
+    /// endpoint, since vendors serve one at different paths: one that ends in a decision path
+    /// stays as it is.
     func endpoint(for baseURL: String) -> String {
         var root = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         while root.hasSuffix("/") { root.removeLast() }
+        if decides, root.hasSuffix("/systemone") || root.hasSuffix("/decisions") { return root }
         let pasted: [String] =
             switch self {
             case .chatCompletions: ["/chat/completions"]
             case .responses: ["/responses"]
             case .messages: ["/v1/messages", "/v1"]
+            case .systemOne, .decisions: []
             }
         if let suffix = pasted.first(where: { root.hasSuffix($0) }) { root.removeLast(suffix.count) }
         return root + path
@@ -241,14 +262,30 @@ struct CustomProviderPreset: Hashable {
         ]
     }
 
-    /// The preset for a base URL as typed, by its host and port, so a URL pasted into an empty
-    /// sheet still finds the server's name and key hint.
-    static func matching(_ baseURL: String) -> CustomProviderPreset? {
+    /// The preset for a base URL as typed, by its host and port and, among a server's presets,
+    /// its API, so a URL pasted into an empty sheet still finds the server's name and key hint.
+    static func matching(_ baseURL: String, api: CustomAPI? = nil) -> CustomProviderPreset? {
         guard let url = URL(string: baseURL.trimmingCharacters(in: .whitespacesAndNewlines)), let host = url.host else { return nil }
-        return (cloud + local).first { preset in
+        let server = (cloud + local + decisions).filter { preset in
             let known = URL(string: preset.baseURL)
             return known?.host == host && known?.port == url.port
         }
+        return server.first { $0.api == api } ?? server.first
+    }
+
+    /// Decision APIs, whose models Auto-review can run.
+    static var decisions: [CustomProviderPreset] {
+        [
+            CustomProviderPreset(
+                name: "OpenRouter Decisions", api: .systemOne, baseURL: "https://openrouter.ai/api/alpha/decisions",
+                keyPlaceholder: L("sk-or-… from openrouter.ai/keys")),
+            CustomProviderPreset(
+                name: "OpenAI Decisions", api: .decisions, baseURL: "https://api.openai.com/v1/decisions",
+                keyPlaceholder: L("sk-… from platform.openai.com")),
+            CustomProviderPreset(
+                name: "TypeSafe", api: .systemOne, baseURL: "https://api.typesafe.ai/v1/systemone",
+                keyPlaceholder: L("Key from typesafe.ai")),
+        ]
     }
 
     /// Model servers that run on the user's own computers.
@@ -304,6 +341,8 @@ struct ProviderModel: Hashable {
     var id: String
     var label: String
     var levels: [String]
+    /// A decision model, which Auto-review can run and no bot can.
+    var decides = false
 
     /// Every thinking level, lowest first.
     private static let allThinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
@@ -447,10 +486,14 @@ struct AutoReviewRule: Hashable, Identifiable {
 }
 
 /// The check on effectful plugin actions and shell commands, shared by every Device through
-/// the roster: on, a small model on the bot's provider asks only when needed; off, each one asks.
+/// the roster: on, a model asks only when needed; off, each one asks. The model is the picked
+/// provider's, else a small one on the bot's provider.
 struct AutoReview: Hashable {
     var isEnabled: Bool = true
     var rules: [AutoReviewRule] = []
+    /// The provider whose model reviews; nil for the bot's own.
+    var provider: ProviderCredential.Kind? = nil
+    var model: String? = nil
 }
 
 // MARK: - Plugins

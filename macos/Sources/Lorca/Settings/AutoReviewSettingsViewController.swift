@@ -1,12 +1,20 @@
 import AppKit
 
-/// Settings → Auto-review, after Grok Bot's: the switch and the rules, shared by every Device
-/// through the roster. Add and Edit use sheets; a card's Always allow adds a rule here.
+/// Settings → Auto-review, after Grok Bot's: the switch, the model that reviews, and the rules,
+/// shared by every Device through the roster. Add and Edit use sheets; a card's Always allow
+/// adds a rule here.
 final class AutoReviewSettingsViewController: SettingsPaneViewController {
     private let store = AppStore.shared
     private let check = SectionView(title: L("Auto-review"))
+    private let reviewer = SectionView(title: SettingsEntry.autoReviewModel.row)
     private let rules = SectionView(title: SettingsEntry.autoReviewRules.row)
     private let toggle = NSSwitch()
+    private let providerPopUp = SettingsPopUpButton()
+    private let modelPopUp = SettingsPopUpButton()
+    private lazy var providerRow = AccessoryRow(key: L("Provider"), accessory: providerPopUp)
+    private lazy var modelRow = AccessoryRow(key: L("Model"), accessory: modelPopUp)
+    private lazy var decisionNote = NoteRow(
+        text: L("A decision model picks allow or what the action could harm, and writes no rule, so a card it pauses offers Allow once and Deny."))
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -18,9 +26,14 @@ final class AutoReviewSettingsViewController: SettingsPaneViewController {
             symbol: "plus", pointSize: 11, tooltip: L("Add rule"), target: self,
             action: #selector(showAddRule))
         rules.setHeaderAccessory(add)
+        providerPopUp.target = self
+        providerPopUp.action = #selector(providerPicked)
+        modelPopUp.target = self
+        modelPopUp.action = #selector(modelPicked)
         addSection(check)
+        addSection(reviewer)
         addSection(rules)
-        addFootnote(L("Read-only commands and commands inside Lorca's own folders run at once. Auto-review checks effectful plugin actions and every other shell command before they run: a small, fast model on the bot's provider applies your rules and latest request, so safe work normally runs automatically and risky work asks. Off, every such action asks. Write one short, natural-language rule for each action; \"Ask first\" takes priority if rules conflict. Built-in safety checks always apply."))
+        addFootnote(L("Read-only commands and commands inside Lorca's own folders run at once. Auto-review checks effectful plugin actions and every other shell command before they run: the model under Reviews with (a small, fast model on the bot's provider unless you pick another) applies your rules and latest request, so safe work normally runs automatically and risky work asks. Off, every such action asks. Write one short, natural-language rule for each action; \"Ask first\" takes priority if rules conflict. Built-in safety checks always apply."))
         store.observe(self) { [weak self] event in
             switch event {
             case .rosterChanged, .snapshotReplaced: self?.render()
@@ -36,6 +49,7 @@ final class AutoReviewSettingsViewController: SettingsPaneViewController {
         let description = NoteRow(text: L("Lorca checks each action before it runs and asks you first when needed. Add rules to customize what bots can do automatically."))
         let switchRow = AccessoryRow(key: SettingsEntry.autoReviewSwitch.row, accessory: toggle)
         check.setRows([switchRow, description])
+        renderReviewer(review)
 
         var ruleRows: [NSView] = review.rules.map { rule in
             let label = Build.label(rule.text, font: .systemFont(ofSize: 12), lines: 0)
@@ -49,6 +63,51 @@ final class AutoReviewSettingsViewController: SettingsPaneViewController {
             ruleRows.append(NoteRow(text: L("No rules yet. Always allow on a card adds one, or write one below.")))
         }
         rules.setRows(ruleRows)
+    }
+
+    /// The provider pop-up offers the bot's own provider and every connected one; the model
+    /// pop-up, the picked provider's models, decision models among them. A provider the account
+    /// no longer has reads as the bot's, as the CLI then reviews.
+    private func renderReviewer(_ review: AutoReview) {
+        let kinds = store.reviewProviderKinds
+        let picked = review.provider.flatMap { kinds.contains($0) ? $0 : nil }
+        providerPopUp.removeAllItems()
+        providerPopUp.addItem(withTitle: L("Bot's provider"))
+        providerPopUp.menu?.addItem(.separator())
+        for kind in kinds {
+            providerPopUp.addItem(withTitle: store.credential(for: kind)?.name ?? kind.name)
+            providerPopUp.lastItem?.representedObject = kind
+        }
+        providerPopUp.select(providerPopUp.itemArray.first { item in (item.representedObject as? ProviderCredential.Kind) == picked } ?? providerPopUp.item(at: 0))
+        guard let picked else {
+            reviewer.setRows([providerRow])
+            return
+        }
+        var models = store.reviewModels(for: picked)
+        if let model = review.model, !models.contains(where: { $0.id == model }) {
+            models.append(ProviderModel(provider: picked, id: model, label: model, levels: [], decides: store.credential(for: picked)?.decides == true))
+        }
+        modelPopUp.removeAllItems()
+        for model in models {
+            modelPopUp.addItem(withTitle: model.label)
+            modelPopUp.lastItem?.representedObject = model.id
+        }
+        if let item = modelPopUp.itemArray.first(where: { $0.representedObject as? String == review.model }) { modelPopUp.select(item) }
+        let decides = models.first { $0.id == (review.model ?? models.first?.id) }?.decides == true
+        reviewer.setRows(decides ? [providerRow, modelRow, decisionNote] : [providerRow, modelRow])
+    }
+
+    @objc private func providerPicked() {
+        let kind = providerPopUp.selectedItem?.representedObject as? ProviderCredential.Kind
+        guard kind != store.autoReview.provider else { return }
+        store.setReviewModel(provider: kind)
+    }
+
+    @objc private func modelPicked() {
+        guard let kind = store.autoReview.provider, let model = modelPopUp.selectedItem?.representedObject as? String,
+            model != store.autoReview.model
+        else { return }
+        store.setReviewModel(provider: kind, model: model)
     }
 
     @objc private func toggled() {

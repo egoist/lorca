@@ -70,12 +70,27 @@ enum MockData {
                 kind: .custom("custom:ollama"), isConnected: true, detail: "http://localhost:11434/v1",
                 baseURL: "http://localhost:11434/v1", name: "Ollama", api: .chatCompletions,
                 models: [CustomModel(id: "qwen3:8b", levels: ["low", "medium", "high"]), CustomModel(id: "llava", levels: ["low", "medium", "high"])]),
+            ProviderCredential(
+                kind: .custom("custom:openrouter-decisions"), isConnected: true, detail: "sk-or…9c0e · https://openrouter.ai/api/alpha/decisions",
+                baseURL: "https://openrouter.ai/api/alpha/decisions", name: "OpenRouter Decisions", api: .systemOne,
+                models: [
+                    CustomModel(id: "typesafe/jev-1.13", name: "TypeSafe: Jev 1.13"),
+                    CustomModel(id: "perplexity/pplx-decider-v1.1-27b", name: "Perplexity: Decider V1.1 27B"),
+                ]),
         ]
     }
 
     /// What a custom provider's server lists in mock mode: a gateway's catalog, a local
     /// server's few models, or no list at all.
     static func listedModels(baseURL: String) -> [CustomModel]? {
+        if baseURL.contains("openrouter.ai/api/alpha/decisions") {
+            return [
+                CustomModel(id: "typesafe/jev-1.13", name: "TypeSafe: Jev 1.13", contextWindow: 64_000),
+                CustomModel(id: "openai/gpt-6-luna-decisions", name: "OpenAI: GPT-6 Luna Decisions", contextWindow: 1_050_000, images: true),
+                CustomModel(id: "perplexity/pplx-decider-v1.1-27b", name: "Perplexity: Decider V1.1 27B", contextWindow: 262_144, images: true),
+                CustomModel(id: "cloudflare/clef-flash", name: "Cloudflare: Clef Flash", contextWindow: 65_536, images: true),
+            ]
+        }
         if baseURL.contains("openrouter") {
             return [
                 CustomModel(id: "anthropic/claude-sonnet-5", name: "Anthropic: Claude Sonnet 5", contextWindow: 1_000_000, images: true),
@@ -111,6 +126,8 @@ enum MockData {
             ProviderModel(provider: .opencode, id: "deepseek-v4.1-flash", label: "DeepSeek V4.1 Flash", levels: ["low", "high", "max"]),
             ProviderModel(provider: .opencode, id: "kimi-k3", label: "Kimi K3", levels: ["max"]),
             ProviderModel(provider: .opencode, id: "big-pickle", label: "Big Pickle", levels: []),
+            ProviderModel(provider: .opencode, id: "jev-1.13", label: "Jev 1.13", levels: [], decides: true),
+            ProviderModel(provider: .opencode, id: "jev-1.13-free", label: "Jev 1.13 Free", levels: [], decides: true),
             ProviderModel(provider: .opencodeGo, id: "glm-5.3-flash", label: "GLM-5.3 Flash", levels: ["low", "high", "max"]),
             ProviderModel(provider: .chatgpt, id: "gpt-6.1-sol", label: "GPT-6.1 Sol", levels: on),
             ProviderModel(provider: .chatgpt, id: "gpt-6-luna", label: "GPT-6 Luna", levels: on),
@@ -607,10 +624,13 @@ enum MockData {
     }
 
     static func autoReview() -> AutoReview {
-        AutoReview(isEnabled: true, rules: [
-            AutoReviewRule(id: "ar-1", text: "use GitHub create_issue", behavior: .allow, tool: "github/create_issue"),
-            AutoReviewRule(id: "ar-2", text: "comment on a pull request", behavior: .ask),
-        ])
+        AutoReview(
+            isEnabled: true,
+            rules: [
+                AutoReviewRule(id: "ar-1", text: "use GitHub create_issue", behavior: .allow, tool: "github/create_issue"),
+                AutoReviewRule(id: "ar-2", text: "comment on a pull request", behavior: .ask),
+            ],
+            provider: .custom("custom:openrouter-decisions"), model: "typesafe/jev-1.13")
     }
 
     static func routines() -> [Routine] {

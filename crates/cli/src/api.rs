@@ -640,11 +640,34 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             Box::pin(crate::plugins::mcp_json::on_runner(app, runner_id.as_deref(), method, params)).await
         }
         // Auto-review: the check on plugin and shell actions, shared through the roster.
-        // `rules` replaces the list; a rule without an id gets one.
+        // `rules` replaces the list; a rule without an id gets one. `provider` picks a
+        // connected provider's model to review with (empty or null for the bot's own), and
+        // `model` one of its models, else its review model.
         "auto_review.set" => {
             let mut auto_review = app.auto_review();
             if let Some(enabled) = params["is_enabled"].as_bool() {
                 auto_review.is_enabled = enabled;
+            }
+            if let Some(provider) = params.get("provider") {
+                let provider = provider.as_str().map(str::trim).filter(|kind| !kind.is_empty());
+                if let Some(kind) = provider {
+                    let credentials = app.credentials.lock().unwrap();
+                    if !credentials.connected_kinds().iter().any(|connected| connected == kind) {
+                        return Err(format!("{} is not connected", credentials.label(kind)));
+                    }
+                }
+                if provider != auto_review.provider.as_deref() {
+                    auto_review.model = None;
+                }
+                auto_review.provider = provider.map(str::to_string);
+            }
+            if let Some(model) = params.get("model") {
+                auto_review.model = model.as_str().map(str::trim).filter(|model| !model.is_empty()).map(str::to_string);
+            }
+            match &auto_review.provider {
+                Some(kind) if auto_review.model.is_none() => auto_review.model = app.credentials.lock().unwrap().review_model(kind),
+                None => auto_review.model = None,
+                _ => {}
             }
             if let Some(rules) = params["rules"].as_array() {
                 auto_review.rules = rules

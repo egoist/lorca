@@ -8,8 +8,8 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// autoReview is the switch and the rules, shared by every Device through the roster. Add and Edit
-// use a sheet; a card's Always allow adds a rule here.
+// autoReview is the switch, the model that reviews, and the rules, shared by every Device through
+// the roster. Add and Edit use a sheet; a card's Always allow adds a rule here.
 func (s settingsPane) autoReview(c *ui.Context) {
 	p := colors(c)
 	review := store.AutoReview
@@ -26,6 +26,7 @@ func (s settingsPane) autoReview(c *ui.Context) {
 			}), label)
 			noteRow(c, k, L("Lorca checks each action before it runs and asks you first when needed. Add rules to customize what bots can do automatically."), nil)
 		})
+		s.reviewsWith(c, review)
 		addRule := func() {
 			if hoverButton(c, hoverButtonOptions{Symbol: "plus", Size: 13, Tooltip: L("Add rule")}).Clicked() {
 				s.w.presentRuleEditor(nil)
@@ -62,7 +63,59 @@ func (s settingsPane) autoReview(c *ui.Context) {
 				store.SetAutoReview(next)
 			}
 		})
-		s.footnote(c, L("Read-only commands and commands inside Lorca's own folders run at once. Auto-review checks effectful plugin actions and every other shell command before they run: a small, fast model on the bot's provider applies your rules and latest request, so safe work normally runs automatically and risky work asks. Off, every such action asks. Write one short, natural-language rule for each action; \"Ask first\" takes priority if rules conflict. Built-in safety checks always apply."))
+		s.footnote(c, L("Read-only commands and commands inside Lorca's own folders run at once. Auto-review checks effectful plugin actions and every other shell command before they run: the model under Reviews with (a small, fast model on the bot's provider unless you pick another) applies your rules and latest request, so safe work normally runs automatically and risky work asks. Off, every such action asks. Write one short, natural-language rule for each action; \"Ask first\" takes priority if rules conflict. Built-in safety checks always apply."))
+	})
+}
+
+// reviewsWith is the model that reviews, as the inspector's Runs with picks a bot's: the bot's own
+// provider, or any connected one, decision providers included, and then any of its models. A
+// provider no longer connected reads as the bot's own, as the CLI falls back to it.
+func (s settingsPane) reviewsWith(c *ui.Context, review model.AutoReview) {
+	kinds := store.ReviewProviderKinds()
+	provider := review.Provider
+	if !slices.Contains(kinds, provider) {
+		provider = ""
+	}
+	s.section(c, autoReviewModelEntry().row, nil, func(k *card) {
+		providers := []popUpOption{{Value: "", Label: L("Bot's provider")}}
+		for i, kind := range kinds {
+			providers = append(providers, popUpOption{Value: kind, Label: model.ProviderName(kind, store.Providers), Separated: i == 0})
+		}
+		providerLabel := L("Provider")
+		accessoryRow(c, k, providerLabel, "", func() {
+			// A new provider starts on its review model, which the CLI picks.
+			if picked, changed, _ := popUpButton(c, popUp{Options: providers, Value: provider, Style: popUpSettings, Label: providerLabel}); changed {
+				store.SetReviewModel(picked, "")
+			}
+		})
+		if provider == "" {
+			return
+		}
+		// Every model of the provider, decision models too; a stored one it no longer lists still
+		// shows, by its id.
+		credential := store.Credential(provider)
+		decides := credential != nil && credential.Decides()
+		var options []popUpOption
+		listed := false
+		for _, each := range model.ReviewModels(model.WithCustomModels(store.Models, store.Providers), provider) {
+			options = append(options, popUpOption{Value: each.ID, Label: each.Label})
+			if each.ID == review.Model {
+				listed = true
+				decides = decides || each.Decides
+			}
+		}
+		if !listed && review.Model != "" {
+			options = append(options, popUpOption{Value: review.Model, Label: review.Model})
+		}
+		modelLabel := L("Model")
+		accessoryRow(c, k, modelLabel, "", func() {
+			if picked, changed, _ := popUpButton(c, popUp{Options: options, Value: review.Model, Style: popUpSettings, Label: modelLabel}); changed {
+				store.SetReviewModel(provider, picked)
+			}
+		})
+		if decides {
+			noteRow(c, k, L("A decision model picks allow or what the action could harm, and writes no rule, so a card it pauses offers Allow once and Deny."), nil)
+		}
 	})
 }
 

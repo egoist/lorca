@@ -225,6 +225,9 @@ type WireAutoReview struct {
 		Behavior string  `json:"behavior"`
 		Tool     *string `json:"tool"`
 	} `json:"rules"`
+	// Provider and Model are the model that reviews; absent for a small one on the bot's provider.
+	Provider *string `json:"provider"`
+	Model    *string `json:"model"`
 }
 
 type WireProvider struct {
@@ -248,8 +251,8 @@ type WireCustomModel struct {
 	Levels        []string `json:"levels"`
 }
 
-// WireModelList is `providers.list_models`: the chat models a server lists, in its order. Listed
-// is false when the server publishes no list.
+// WireModelList is `providers.list_models`: the models a server lists that its protocol can run,
+// in its order. Listed is false when the server publishes no list.
 type WireModelList struct {
 	Listed bool              `json:"listed"`
 	Models []WireCustomModel `json:"models"`
@@ -262,13 +265,14 @@ type WireRunningTurn struct {
 	RoutineID *string `json:"routine_id"`
 }
 
-// WireModel is a model the CLI's catalog offers, in the catalog's order: each provider's first is
-// its default.
+// WireModel is a model the CLI's catalog offers, in the catalog's order: each provider's first
+// that does not decide is its default.
 type WireModel struct {
 	Provider string   `json:"provider"`
 	ID       string   `json:"id"`
 	Name     string   `json:"name"`
 	Levels   []string `json:"levels"`
+	Decides  bool     `json:"decides"`
 }
 
 type WireSnapshot struct {
@@ -822,6 +826,9 @@ func ToAutoReview(wire *WireAutoReview) AutoReview {
 		return AutoReview{IsEnabled: true}
 	}
 	review := AutoReview{IsEnabled: wire.IsEnabled}
+	if provider := str(wire.Provider); IsProviderKind(provider) {
+		review.Provider, review.Model = provider, str(wire.Model)
+	}
 	for _, rule := range wire.Rules {
 		behavior := "allow"
 		if rule.Behavior == "ask" {
@@ -870,7 +877,7 @@ func ToCustomModel(wire WireCustomModel) CustomModel {
 func ToModels(wire []WireModel) []ProviderModel {
 	out := make([]ProviderModel, 0, len(wire))
 	for _, model := range wire {
-		out = append(out, ProviderModel{Provider: model.Provider, ID: model.ID, Label: model.Name, Levels: model.Levels})
+		out = append(out, ProviderModel{Provider: model.Provider, ID: model.ID, Label: model.Name, Levels: model.Levels, Decides: model.Decides})
 	}
 	return out
 }

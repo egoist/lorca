@@ -71,7 +71,8 @@ export default function ChatInfoScreen() {
     : defaultModel
       ? t("Default ({model})", { model: defaultModel })
       : t("Default");
-  // The built-ins, then the account's custom providers below a divider.
+  // The built-ins, then the account's custom providers below a divider; decision providers are
+  // Auto-review's alone.
   const kinds = providerKinds(providers);
   const candidates = allBots.filter((b) => !chat.bot_ids.includes(b.id));
 

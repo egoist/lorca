@@ -149,10 +149,11 @@ final class ProvidersSettingsViewController: SettingsPaneViewController {
         section.setRows(rows)
     }
 
-    /// The servers people often add, then any other. One the account has already opens it.
+    /// The servers people often add, the decision APIs Auto-review can use, then any other. One
+    /// the account has already opens it.
     private func addMenu() -> NSMenu {
         let menu = NSMenu()
-        for (index, presets) in [CustomProviderPreset.cloud, CustomProviderPreset.local].enumerated() {
+        for (index, presets) in [CustomProviderPreset.cloud, CustomProviderPreset.local, CustomProviderPreset.decisions].enumerated() {
             if index > 0 { menu.addItem(.separator()) }
             for preset in presets {
                 let item = NSMenuItem(title: preset.name, action: #selector(addPreset(_:)), keyEquivalent: "")

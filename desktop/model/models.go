@@ -169,11 +169,26 @@ type ProviderModel struct {
 	ID       string
 	Label    string
 	Levels   []string
+	// Decides is a decision model, which answers typed questions instead of chatting: Auto-review
+	// can run it, and no bot can.
+	Decides bool
 }
 
-// ProviderModels are the models a provider offers, in the catalog's order; the first is the
-// default the CLI uses.
+// ProviderModels are the models a bot of a provider can run, in the catalog's order; the first is
+// the default the CLI uses. Decision models are Auto-review's alone.
 func ProviderModels(models []ProviderModel, kind ProviderKind) []ProviderModel {
+	var out []ProviderModel
+	for _, model := range ReviewModels(models, kind) {
+		if !model.Decides {
+			out = append(out, model)
+		}
+	}
+	return out
+}
+
+// ReviewModels are every model of a provider Auto-review can run: the ones bots can, and
+// decision models.
+func ReviewModels(models []ProviderModel, kind ProviderKind) []ProviderModel {
 	var out []ProviderModel
 	for _, model := range models {
 		if model.Provider == kind {
@@ -238,7 +253,7 @@ func WithCustomModels(models []ProviderModel, providers []ProviderCredential) []
 			if label == "" {
 				label = model.ID
 			}
-			out = append(out, ProviderModel{Provider: provider.Kind, ID: model.ID, Label: label, Levels: model.Levels})
+			out = append(out, ProviderModel{Provider: provider.Kind, ID: model.ID, Label: label, Levels: model.Levels, Decides: provider.Decides()})
 		}
 	}
 	return out
@@ -258,6 +273,9 @@ type ProviderCredential struct {
 	Models []CustomModel
 }
 
+// Decides is a custom provider of decision models, which Auto-review can run and no bot can.
+func (p ProviderCredential) Decides() bool { return IsCustomKind(p.Kind) && p.API.Decides() }
+
 // CustomAPI is the wire protocol a custom provider's server speaks.
 type CustomAPI string
 
@@ -265,10 +283,12 @@ const (
 	APIChatCompletions CustomAPI = "chat-completions"
 	APIResponses       CustomAPI = "responses"
 	APIMessages        CustomAPI = "messages"
+	APISystemOne       CustomAPI = "system-one"
+	APIDecisions       CustomAPI = "decisions"
 )
 
 // CustomAPIs are every protocol, in the order the custom provider sheet offers them.
-var CustomAPIs = []CustomAPI{APIChatCompletions, APIResponses, APIMessages}
+var CustomAPIs = []CustomAPI{APIChatCompletions, APIResponses, APIMessages, APISystemOne, APIDecisions}
 
 func IsCustomAPI(value string) bool { return slices.Contains(CustomAPIs, CustomAPI(value)) }
 
@@ -281,9 +301,17 @@ func (api CustomAPI) Title() string {
 		return "OpenAI Responses"
 	case APIMessages:
 		return "Anthropic Messages"
+	case APISystemOne:
+		return "System One"
+	case APIDecisions:
+		return "OpenAI Decisions"
 	}
 	return string(api)
 }
+
+// Decides is a decision API, whose models answer typed questions instead of chatting: Auto-review
+// can run them, and no bot can.
+func (api CustomAPI) Decides() bool { return api == APISystemOne || api == APIDecisions }
 
 // Path is what the CLI adds to the base URL for a model call.
 func (api CustomAPI) Path() string {
@@ -292,21 +320,36 @@ func (api CustomAPI) Path() string {
 		return "/responses"
 	case APIMessages:
 		return "/v1/messages"
+	case APISystemOne:
+		return "/systemone"
+	case APIDecisions:
+		return "/decisions"
 	}
 	return "/chat/completions"
 }
 
 func CustomBaseURLPlaceholder(api CustomAPI) string {
-	if api == APIMessages {
+	switch {
+	case api == APIMessages:
 		return "https://api.example.com"
+	case api.Decides():
+		return "https://api.example.com/v1" + api.Path()
 	}
 	return "https://api.example.com/v1"
 }
 
 // CustomEndpoint is the URL the CLI calls for a base URL as typed: a pasted endpoint is cut back
-// to its root first, as the CLI does, then the API's path goes on.
+// to its root first, as the CLI does, then the API's path goes on. A decision API's URL is its
+// endpoint, since vendors serve one at different paths: one that ends in a decision path stays as
+// it is.
 func CustomEndpoint(api CustomAPI, baseURL string) string {
 	root := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if api.Decides() {
+		if strings.HasSuffix(root, "/systemone") || strings.HasSuffix(root, "/decisions") {
+			return root
+		}
+		return root + api.Path()
+	}
 	pasted := []string{api.Path()}
 	if api == APIMessages {
 		pasted = []string{"/v1/messages", "/v1"}
@@ -356,8 +399,8 @@ type CustomPreset struct {
 	KeyPlaceholder func() string
 }
 
-// CustomPresets are what Add Provider… offers, in its menu's order: hosted APIs, then servers on
-// the user's network.
+// CustomPresets are the chat servers Add Provider… offers, in its menu's order: hosted APIs, then
+// servers on the user's network. Onboarding offers them too.
 var CustomPresets = []CustomPreset{
 	{"OpenAI", APIResponses, "https://api.openai.com/v1", false, func() string { return L("sk-… from platform.openai.com") }},
 	{"OpenRouter", APIChatCompletions, "https://openrouter.ai/api/v1", false, func() string { return L("sk-or-… from openrouter.ai/keys") }},
@@ -368,25 +411,46 @@ var CustomPresets = []CustomPreset{
 	{"LM Studio", APIChatCompletions, "http://localhost:1234/v1", true, func() string { return L("Optional for a server on your network") }},
 }
 
-// MatchingPreset is the preset for a base URL as typed, by its host and port.
-func MatchingPreset(baseURL string) *CustomPreset {
+// DecisionPresets are decision APIs, whose models Auto-review can run: Add Provider… offers them
+// after the chat servers, and onboarding, which picks what the first bot runs on, does not.
+var DecisionPresets = []CustomPreset{
+	{"OpenRouter Decisions", APISystemOne, "https://openrouter.ai/api/alpha/decisions", false, func() string { return L("sk-or-… from openrouter.ai/keys") }},
+	{"OpenAI Decisions", APIDecisions, "https://api.openai.com/v1/decisions", false, func() string { return L("sk-… from platform.openai.com") }},
+	{"TypeSafe", APISystemOne, "https://api.typesafe.ai/v1/systemone", false, func() string { return L("Key from typesafe.ai") }},
+}
+
+// MatchingPreset is the preset for a base URL as typed, by its host and port and, among a
+// server's presets, its API ("" when none is known), so openrouter.ai with System One is
+// OpenRouter Decisions and with Chat Completions OpenRouter.
+func MatchingPreset(baseURL string, api CustomAPI) *CustomPreset {
 	u, err := url.Parse(strings.TrimSpace(baseURL))
 	if err != nil || u.Hostname() == "" {
 		return nil
 	}
-	for i := range CustomPresets {
-		known, _ := url.Parse(CustomPresets[i].BaseURL)
-		if known.Hostname() == u.Hostname() && known.Port() == u.Port() {
-			return &CustomPresets[i]
+	var server []*CustomPreset
+	for _, presets := range [][]CustomPreset{CustomPresets, DecisionPresets} {
+		for i := range presets {
+			known, _ := url.Parse(presets[i].BaseURL)
+			if known.Hostname() == u.Hostname() && known.Port() == u.Port() {
+				server = append(server, &presets[i])
+			}
 		}
+	}
+	for _, preset := range server {
+		if preset.API == api {
+			return preset
+		}
+	}
+	if len(server) > 0 {
+		return server[0]
 	}
 	return nil
 }
 
 // SuggestedProviderName is what a provider left unnamed is saved as: the known server's name,
 // else the base URL's host.
-func SuggestedProviderName(baseURL string) string {
-	if preset := MatchingPreset(baseURL); preset != nil {
+func SuggestedProviderName(baseURL string, api CustomAPI) string {
+	if preset := MatchingPreset(baseURL, api); preset != nil {
 		return preset.Name
 	}
 	return CustomHost(baseURL)
@@ -757,10 +821,15 @@ func BehaviorTitle(behavior string) string {
 }
 
 // AutoReview is the check on effectful plugin actions and shell commands, shared by every Device
-// through the roster.
+// through the roster: on, a model asks only when needed; off, each one asks. The model is the
+// picked provider's, else a small one on the bot's provider.
 type AutoReview struct {
 	IsEnabled bool
 	Rules     []AutoReviewRule
+	// Provider is the provider whose model reviews; empty for the bot's own.
+	Provider ProviderKind
+	// Model is that provider's model, set with Provider.
+	Model string
 }
 
 // MARK: - Plugins

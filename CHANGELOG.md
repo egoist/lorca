@@ -6,6 +6,9 @@ Sparkle shows it in the update window. The Windows and Linux app's are in
 
 ## [Unreleased]
 
+- Settings › Auto-review has Reviews with: Auto-review can run any connected provider's model instead of a small one on the bot's provider, including a decision model such as OpenCode Zen's Jev 1.13, which only allows an action or names what it could harm.
+- Add Provider… offers decision APIs for Auto-review: OpenRouter Decisions, OpenAI Decisions, and TypeSafe, and a custom provider can speak System One or OpenAI Decisions. Bots never run on them.
+
 ## [1.0.11]
 
 - A computer that runs the Lorca command line without the app keeps it up to date by itself: it installs each new release, signed by Lorca, and restarts into it once no bot is working there. Settings › Devices shows the version it runs, and Update when a newer one is out, so you can update it from this Mac. `lorca service install` keeps `lorca serve` running on such a computer, from login on.

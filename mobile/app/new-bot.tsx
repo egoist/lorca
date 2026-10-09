@@ -27,7 +27,8 @@ export default function NewBotScreen() {
   const [runnerId, setRunnerId] = useState<string>(() => runners.find((r) => deviceIsOnline(r.id))?.id ?? runners[0]?.id ?? "");
   const runner = runners.find((r) => r.id === runnerId);
   const statuses = useStore((s) => s.providers);
-  // The connected providers, custom ones after the built-ins, or every built-in while none is.
+  // The connected providers a bot can run with, custom ones after the built-ins, or every
+  // built-in while none is. Decision providers and models are Auto-review's alone.
   const connected = connectedProviders(statuses);
   const catalog = withCustomModels(useStore((s) => s.models), statuses);
   const providers: readonly string[] = connected.length ? connected : PROVIDER_KINDS;

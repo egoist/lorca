@@ -12,6 +12,29 @@ final class CustomProviderTests: XCTestCase {
         XCTAssertEqual(CustomAPI.messages.endpoint(for: "https://api.moonshot.ai/anthropic"), "https://api.moonshot.ai/anthropic/v1/messages")
     }
 
+    func testADecisionAPIKeepsTheEndpointItWasGiven() {
+        XCTAssertEqual(CustomAPI.systemOne.endpoint(for: "https://api.typesafe.ai/v1"), "https://api.typesafe.ai/v1/systemone")
+        XCTAssertEqual(CustomAPI.systemOne.endpoint(for: "https://openrouter.ai/api/alpha/decisions/"), "https://openrouter.ai/api/alpha/decisions")
+        XCTAssertEqual(CustomAPI.decisions.endpoint(for: "https://api.openai.com/v1"), "https://api.openai.com/v1/decisions")
+        XCTAssertEqual(CustomAPI.decisions.endpoint(for: "https://ai-gateway.vercel.sh/v1/decisions"), "https://ai-gateway.vercel.sh/v1/decisions")
+        XCTAssertTrue(CustomAPI.systemOne.decides && CustomAPI.decisions.decides)
+        XCTAssertFalse(CustomAPI.allCases.filter { !$0.decides }.contains { $0.decides })
+    }
+
+    func testAutoReviewDecodesTheModelItReviewsWith() throws {
+        let json = """
+            {"is_enabled": true, "rules": [], "provider": "custom:openrouter-decisions", "model": "typesafe/jev-1.13"}
+            """
+        let review = try Wire.decoder.decode(Wire.AutoReview.self, from: Data(json.utf8)).toModel()
+        XCTAssertEqual(review.provider, .custom("custom:openrouter-decisions"))
+        XCTAssertEqual(review.model, "typesafe/jev-1.13")
+        let bare = try Wire.decoder.decode(Wire.AutoReview.self, from: Data(#"{"is_enabled": false}"#.utf8)).toModel()
+        XCTAssertNil(bare.provider)
+        XCTAssertNil(bare.model)
+        let jev = try Wire.decoder.decode(Wire.Model.self, from: Data(#"{"provider": "opencode", "id": "jev-1.13", "name": "Jev 1.13", "levels": [], "decides": true}"#.utf8))
+        XCTAssertEqual(jev.toModel()?.decides, true)
+    }
+
     func testACustomKindTravelsAsItsWireValue() {
         let kind = ProviderCredential.Kind(wireValue: "custom:openrouter")
         XCTAssertEqual(kind, .custom("custom:openrouter"))
@@ -62,6 +85,10 @@ final class CustomProviderTests: XCTestCase {
         XCTAssertEqual(CustomProviderPreset.matching(" https://openrouter.ai/api/v1 ")?.name, "OpenRouter")
         XCTAssertNil(CustomProviderPreset.matching("http://localhost:8080/v1"), "another port is another server")
         XCTAssertNil(CustomProviderPreset.matching("not a url"))
+        // One server's decision API is a preset of its own.
+        XCTAssertEqual(CustomProviderPreset.matching("https://openrouter.ai/api/alpha/decisions", api: .systemOne)?.name, "OpenRouter Decisions")
+        XCTAssertEqual(CustomProviderPreset.matching("https://openrouter.ai/api/v1", api: .chatCompletions)?.name, "OpenRouter")
+        XCTAssertEqual(CustomProviderPreset.matching("https://api.openai.com/v1", api: .decisions)?.name, "OpenAI Decisions")
     }
 
     func testACustomStatusDecodesWithItsModels() throws {

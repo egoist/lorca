@@ -59,6 +59,19 @@ lorca provider add "Ollama" http://localhost:11434/v1
 lorca provider add "Claude proxy" https://proxy.example.com --api messages --model claude-opus-5 --api-key-stdin
 ```
 
+### Decision APIs
+
+A decision model answers typed questions with probabilities instead of writing text. [Auto-review](/docs/auto-review#the-review-model) can run one, and bots can't. Add one under **Add Provider…**: **OpenRouter Decisions**, **OpenAI Decisions**, and **TypeSafe** fill it in. Under **Other Server…**, pick the API:
+
+- **System One:** TypeSafe's API, which OpenRouter, OpenCode Zen, and LLM Gateway serve too.
+- **OpenAI Decisions:** OpenAI's Decisions API, also served by Vercel's AI Gateway.
+
+For these two, the URL is the endpoint itself, such as `https://openrouter.ai/api/alpha/decisions`. A URL without one gets the API's usual path (`/systemone` or `/decisions`). The model list shows the server's decision models. A decision provider doesn't appear in the bots' provider pickers. Pick its model in **Settings › Auto-review**.
+
+```bash
+lorca provider add "TypeSafe" https://api.typesafe.ai/v1/systemone --api system-one --api-key-stdin
+```
+
 ## Pick a model per bot
 
 Each bot chooses its provider, model, and thinking level in the New Bot sheet, under **Runs with** in the desktop-app inspector, or in the phone's bot Details. A bot with no model set uses the provider's default.

@@ -17,6 +17,7 @@ import {
   fileSize,
   filterModelRows,
   isCustomProvider,
+  isDecisionAPI,
   isHTTPURL,
   isLoopbackHost,
   isProviderKind,
@@ -26,6 +27,7 @@ import {
   modelLabel,
   modelListingNote,
   presetForURL,
+  presetGroup,
   providerConnectMethod,
   providerDefaultBaseURL,
   providerKinds,
@@ -33,6 +35,9 @@ import {
   providerModels,
   providerUsesAPIKey,
   PROVIDER_KINDS,
+  reviewModels,
+  reviewPicker,
+  reviewProviders,
   runsInForeground,
   runsInTerminal,
   savedModelRows,
@@ -251,8 +256,15 @@ describe("custom providers", () => {
       ["Together AI", "chat-completions", "https://api.together.xyz/v1"],
       ["Ollama", "chat-completions", "http://localhost:11434/v1"],
       ["LM Studio", "chat-completions", "http://localhost:1234/v1"],
+      ["OpenRouter Decisions", "system-one", "https://openrouter.ai/api/alpha/decisions"],
+      ["OpenAI Decisions", "decisions", "https://api.openai.com/v1/decisions"],
+      ["TypeSafe", "system-one", "https://api.typesafe.ai/v1/systemone"],
     ]);
     expect(CUSTOM_PRESETS.filter((preset) => preset.local).map((preset) => preset.name)).toEqual(["Ollama", "LM Studio"]);
+    // Add Custom Provider's groups, in the menu's order.
+    expect(CUSTOM_PRESETS.map(presetGroup)).toEqual(["cloud", "cloud", "cloud", "cloud", "cloud", "local", "local", "decisions", "decisions", "decisions"]);
+    expect(customPreset("TypeSafe")?.keyPlaceholder()).toBe("Key from typesafe.ai");
+    expect(customPreset("OpenRouter Decisions")?.keyPlaceholder()).toBe("sk-or-… from openrouter.ai/keys");
     expect(customPreset("together ai")?.keyPlaceholder()).toBe("Key from api.together.ai");
     expect(customPreset("Lab")).toBeUndefined();
     expect(customPreset(undefined)).toBeUndefined();
@@ -287,6 +299,18 @@ describe("custom providers", () => {
     expect(defaultProviderName("https://generativelanguage.googleapis.com/v1beta/openai")).toBe("Gemini");
     expect(defaultProviderName("http://192.168.1.20:11434/v1")).toBe("192.168.1.20:11434");
     expect(defaultProviderName("")).toBe("");
+  });
+
+  test("a server with several presets names the one of the API picked", () => {
+    expect(presetForURL("https://openrouter.ai/api/alpha/decisions", "system-one")?.name).toBe("OpenRouter Decisions");
+    expect(presetForURL("https://openrouter.ai/api/v1", "chat-completions")?.name).toBe("OpenRouter");
+    expect(presetForURL("https://api.openai.com/v1", "decisions")?.name).toBe("OpenAI Decisions");
+    expect(presetForURL("https://api.openai.com/v1", "responses")?.name).toBe("OpenAI");
+    // An API none of the server's presets has, or none at all, takes its first.
+    expect(presetForURL("https://openrouter.ai/api/v1", "responses")?.name).toBe("OpenRouter");
+    expect(presetForURL("https://api.openai.com/v1/decisions")?.name).toBe("OpenAI");
+    expect(defaultProviderName("https://api.typesafe.ai/v1", "system-one")).toBe("TypeSafe");
+    expect(defaultProviderName("https://openrouter.ai/api/alpha/decisions", "system-one")).toBe("OpenRouter Decisions");
   });
 
   test("context windows read the short way", () => {
@@ -380,6 +404,101 @@ describe("custom providers", () => {
     expect(modelListingNote({ state: "error", message: "Lab rejected that key" })).toBe("Lab rejected that key. You can still add model IDs in Models.");
     expect(modelListingNote({ state: "error", message: "Lab did not answer like an API at http://lab. Check the base URL." })).toBe("Lab did not answer like an API at http://lab. Check the base URL. You can still add model IDs in Models.");
     expect(modelListingNote({ state: "listed" })).toBeUndefined();
+  });
+});
+
+describe("decision providers", () => {
+  const typesafe: ProviderStatus = {
+    kind: "custom:typesafe",
+    is_connected: true,
+    detail: "https://api.typesafe.ai/v1/systemone",
+    base_url: "https://api.typesafe.ai/v1/systemone",
+    name: "TypeSafe",
+    api: "system-one",
+    models: [{ id: "jev-latest", name: "Jev", levels: [] }, { id: "jev-1.13", levels: [] }],
+  };
+  const lab: ProviderStatus = { kind: "custom:lab", is_connected: true, detail: "", base_url: "http://192.168.1.20:11434/v1", name: "Lab", api: "chat-completions", models: [{ id: "llama4", levels: ["low"] }] };
+  const statuses: ProviderStatus[] = [
+    ...PROVIDER_KINDS.map((kind) => ({ kind, is_connected: kind === "deepseek" || kind === "opencode", detail: "" })),
+    typesafe,
+    lab,
+  ];
+  // The core's catalog as the snapshot carries it, OpenCode Zen's decision model among the chat
+  // models, and the custom providers' after it.
+  const catalog = withCustomModels(
+    [
+      { provider: "deepseek", id: "deepseek-pro", name: "DeepSeek Pro", levels: ["off", "high"], decides: false },
+      { provider: "deepseek", id: "deepseek-flash", name: "DeepSeek Flash", levels: ["off", "high"], decides: false },
+      { provider: "opencode", id: "jev-1.13", name: "Jev 1.13", levels: [], decides: true },
+      { provider: "opencode", id: "kimi-k3", name: "Kimi K3", levels: ["max"], decides: false },
+    ],
+    statuses,
+  );
+
+  test("speak a decision API at its endpoint", () => {
+    expect(["system-one", "decisions"].map(isDecisionAPI)).toEqual([true, true]);
+    expect(["chat-completions", "responses", "messages", undefined].map(isDecisionAPI)).toEqual([false, false, false, false]);
+    expect(customAPI("system-one")).toMatchObject({ title: "System One", path: "/systemone", placeholder: "https://api.example.com/v1/systemone" });
+    expect(customAPI("decisions")).toMatchObject({ title: "OpenAI Decisions", path: "/decisions", placeholder: "https://api.example.com/v1/decisions" });
+    // A URL that ends in a decision path is the endpoint as typed; any other gets the API's path.
+    expect(customRequestURL("system-one", "https://openrouter.ai/api/alpha/decisions")).toBe("https://openrouter.ai/api/alpha/decisions");
+    expect(customRequestURL("system-one", " https://api.typesafe.ai/v1/systemone/ ")).toBe("https://api.typesafe.ai/v1/systemone");
+    expect(customRequestURL("system-one", "https://api.typesafe.ai/v1")).toBe("https://api.typesafe.ai/v1/systemone");
+    expect(customRequestURL("decisions", "https://api.openai.com/v1")).toBe("https://api.openai.com/v1/decisions");
+    expect(customRequestURL("decisions", "https://ai-gateway.vercel.sh/v1/decisions")).toBe("https://ai-gateway.vercel.sh/v1/decisions");
+    expect(customRequestURL("decisions", "https://x/v1/systemone")).toBe("https://x/v1/systemone");
+    expect(customRequestURL("decisions", "")).toBe("");
+  });
+
+  test("no bot picker offers a decision provider or model", () => {
+    expect(providerKinds(statuses)).toEqual([...PROVIDER_KINDS, "custom:lab"]);
+    // New Bot's first provider is one a bot can run.
+    expect(connectedProviders([typesafe, lab])).toEqual(["custom:lab"]);
+    expect(connectedProviders(statuses)).toEqual(["deepseek", "opencode", "custom:lab"]);
+    // The default is the first model that does not decide.
+    expect(providerModels(catalog, "opencode").map((model) => model.id)).toEqual(["kimi-k3"]);
+    expect(thinkingLevels(catalog, "opencode", undefined)).toEqual(["max"]);
+    expect(providerModels(catalog, "custom:typesafe")).toEqual([]);
+    expect(providerModels(catalog, "custom:lab").map((model) => model.id)).toEqual(["llama4"]);
+  });
+
+  test("Auto-review can run every connected provider's models, decision models among them", () => {
+    expect(reviewProviders(statuses)).toEqual(["deepseek", "opencode", "custom:typesafe", "custom:lab"]);
+    expect(reviewModels(catalog, "opencode").map((model) => [model.id, !!model.decides])).toEqual([
+      ["jev-1.13", true],
+      ["kimi-k3", false],
+    ]);
+    expect(reviewModels(catalog, "custom:typesafe").map((model) => [model.name, model.decides])).toEqual([
+      ["Jev", true],
+      ["jev-1.13", true],
+    ]);
+  });
+
+  test("Reviews with offers the bot's provider, then every connected one", () => {
+    const review = { is_enabled: true, rules: [] };
+    // The bot's own provider: no model to pick.
+    expect(reviewPicker(review, statuses, catalog)).toEqual({ providers: ["deepseek", "opencode", "custom:typesafe", "custom:lab"], models: [], decides: false });
+    // A built-in provider's catalog models, decision models among them; the note follows the model.
+    const zen = reviewPicker({ ...review, provider: "opencode", model: "jev-1.13" }, statuses, catalog);
+    expect([zen.provider, zen.model, zen.decides]).toEqual(["opencode", "jev-1.13", true]);
+    expect(zen.models.map((model) => model.id)).toEqual(["jev-1.13", "kimi-k3"]);
+    expect(reviewPicker({ ...review, provider: "opencode", model: "kimi-k3" }, statuses, catalog).decides).toBe(false);
+    // A stored model the list lacks is still shown, by its id.
+    const gone = reviewPicker({ ...review, provider: "deepseek", model: "deepseek-old" }, statuses, catalog);
+    expect(gone.models.map((model) => [model.id, model.name])).toEqual([
+      ["deepseek-pro", "DeepSeek Pro"],
+      ["deepseek-flash", "DeepSeek Flash"],
+      ["deepseek-old", "deepseek-old"],
+    ]);
+    expect([gone.model, gone.decides]).toEqual(["deepseek-old", false]);
+    // Every model of a decision provider decides, a stored one it no longer lists too.
+    expect(reviewPicker({ ...review, provider: "custom:typesafe", model: "jev-0.9" }, statuses, catalog).decides).toBe(true);
+    // Until the core's roster event brings the model a provider starts on, the first shows.
+    expect(reviewPicker({ ...review, provider: "custom:lab" }, statuses, catalog)).toMatchObject({ provider: "custom:lab", model: "llama4", decides: false });
+    // A provider the account no longer has reads as the bot's, as the core then reviews.
+    const disconnected = reviewPicker({ ...review, provider: "anthropic", model: "claude-haiku-4-5" }, statuses, catalog);
+    expect([disconnected.provider, disconnected.models, disconnected.decides]).toEqual([undefined, [], false]);
+    expect(reviewPicker({ ...review, provider: "custom:gone", model: "m" }, statuses, catalog).provider).toBeUndefined();
   });
 });
 

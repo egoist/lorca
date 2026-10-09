@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated": "2026-10-09T09:05:00Z",
+  "updated": "2026-10-09T09:50:00Z",
   "review": {
     "deepseek": "deepseek-flash",
     "anthropic": "claude-haiku-4-5",
@@ -407,6 +407,24 @@
       "thinking": "effort",
       "levels": [],
       "wire": "chat-completions"
+    },
+    {
+      "provider": "opencode",
+      "id": "jev-1.13",
+      "name": "Jev 1.13",
+      "context_window": 64000,
+      "max_output": 0,
+      "rates": { "input": 0.042, "output": 0.0, "cache_read": 0.0, "cache_write": 0.0 },
+      "wire": "system-one"
+    },
+    {
+      "provider": "opencode",
+      "id": "jev-1.13-free",
+      "name": "Jev 1.13 Free",
+      "context_window": 64000,
+      "max_output": 0,
+      "rates": { "input": 0.0, "output": 0.0, "cache_read": 0.0, "cache_write": 0.0 },
+      "wire": "system-one"
     },
     {
       "provider": "opencode-go",
