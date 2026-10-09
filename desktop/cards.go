@@ -506,7 +506,7 @@ func (m *mainWindow) draftCard(c *ui.Context, chat *model.Chat, message *model.M
 	// under the card; a longer message scrolls.
 	lines := 0
 	for _, paragraph := range strings.Split(card.Fields.Body, "\n") {
-		lines += max(1, (utf8.RuneCountInString(paragraph)+61)/62)
+		lines += max(1, (utf8.RuneCountInString(paragraph)+63)/64)
 	}
 	if pending {
 		lines = max(lines, 3)
@@ -546,8 +546,12 @@ func (m *mainWindow) draftCard(c *ui.Context, chat *model.Chat, message *model.M
 						})
 					}
 				})
-				textArea(c, &st.body, lines, fieldOptions{Plain: true, ReadOnly: !pending, Disabled: st.busy, Label: L("Message")}).
-					Margin(8, 0, 0, 0).Padding(0, 0)
+				if pending {
+					textArea(c, &st.body, lines, fieldOptions{Plain: true, Disabled: st.busy, Label: L("Message")}).Margin(8, 0, 0, 0).Padding(0, 0)
+				} else {
+					// As it went: the text at its own height.
+					ui.Text(c, card.Fields.Body).Margin(8, 0, 0, 0).FontSize(13).LineHeight(1.4).Selectable()
+				}
 				for i, file := range st.files {
 					ui.Row(c.Key(fmt.Sprintf("file-%d", i))).Height(20).Gap(6).AlignItems(ui.Center).Children(func() {
 						ui.Row(c).TextColor(p.Label2).Children(func() { symbol(c, "paperclip", 12, 1.75) })
