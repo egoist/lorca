@@ -24,7 +24,7 @@ Chrome: split view, vibrancy, bubbles, `@` mentions. The titlebar is AppKit's ow
 
 The chat transcript is a view-based `NSTableView` with cached Markdown layout, incremental rows and complete accessibility. See [macOS chat](macos-chat.md#transcript).
 
-Sidebar: an `NSOutlineView` (`Sidebar/SidebarViewController.swift`) with one item per chat, kept for as long as the chat is listed. Only the first rows come in with a reload. After that, a store event moves, inserts, or removes the rows whose place in the order changed (new activity moves a chat up in one move, without animation), and a cell is reconfigured only when what its row shows (`SidebarChatCell.Content`: avatars, working dot, title, preview, stamp, pin, unread count) changed. Cells come from `makeView(withIdentifier:)`, and a moved row keeps its row view, cell, and selection.
+Sidebar: an `NSOutlineView` (`Sidebar/SidebarViewController.swift`) with one item per chat, kept for as long as the chat is listed, under the group rows of its [sections, Chats, and Hidden](sidebar.md#in-the-apps). Only the first rows come in with a reload. After that, a store event moves, inserts, or removes the rows whose place in the order changed (new activity moves a chat up in one move, without animation), and a cell is reconfigured only when what its row shows (`SidebarChatCell.Content`: avatars, working dot, title, preview, stamp, pin, mute, unread count) changed. Cells come from `makeView(withIdentifier:)`, and a moved row keeps its row view, cell, and selection.
 
 The Routines section, the routine sheet, and the Devices pane's Background service row are described in [Routines](routines.md#the-apps).
 
