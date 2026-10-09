@@ -237,15 +237,16 @@ func (st *botAccessSheet) pluginRow(c *ui.Context, k *card, plugin model.AccessP
 				disclosure.Label(L("%@ tools", plugin.Name)).Children(func() { symbol(c, name, 12, 2) })
 			}
 			ui.Row(c).Width(18).Shrink(0).Justify(ui.Center).TextColor(p.Label2).Children(func() {
-				symbolName := "puzzlepiece.extension"
+				// A named account (Gmail · Work) has its service's mark.
+				symbolName, markID := "puzzlepiece.extension", plugin.ID
 				if st.runner != nil {
 					for _, installed := range st.runner.Plugins {
 						if installed.ID == plugin.ID {
-							symbolName = installed.Symbol()
+							symbolName, markID = installed.Symbol(), installed.MarketplaceID()
 						}
 					}
 				}
-				pluginTile(c, plugin.ID, symbolName, 18)
+				pluginTile(c, markID, symbolName, 18)
 			})
 			ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(1).Margin(0, 0, 0, 6).Children(func() {
 				ui.Text(c, plugin.Name).FontSize(12.5).FontWeight(500).SingleLine()
