@@ -1018,7 +1018,8 @@ mod tests {
             async move {
                 let kinds = query.get("kinds").cloned().unwrap_or_default();
                 let since: i64 = query["since"].parse().unwrap();
-                if kinds == "attention" && since == 0 { counted.fetch_add(1, Ordering::Relaxed); }
+                // The replay asks for the slot families an older build skipped, and nothing else.
+                if since == 0 && kinds.split(',').all(|kind| kind == "attention" || kind == "project_context") { counted.fetch_add(1, Ordering::Relaxed); }
                 let selected: Vec<_> = blobs.into_iter().filter(|blob| kinds.split(',').any(|kind| kind == "attention") && blob["seq"].as_i64().unwrap() > since).collect();
                 Json(serde_json::json!({"blobs":selected,"seq":101}))
             }
