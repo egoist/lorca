@@ -366,7 +366,7 @@ final class InspectorViewController: NSViewController {
     /// What the chat's bots left for the user to approve, oldest first, while any waits or runs;
     /// a row opens it. How each ended stays in the chat, so the section goes once none is open.
     private func showReviews(in chat: Chat) {
-        let items = store.reviews.filter { $0.origin.chatId == chat.id && $0.isOpen }.sorted { $0.createdAt < $1.createdAt }
+        let items = store.reviews.filter { $0.origin.chatId == chat.id && $0.isOpen && $0.isMessage != true }.sorted { $0.createdAt < $1.createdAt }
         let runner = items.first.flatMap { store.device($0.runnerId) }
         guard changed(reviews, to: [chat.id, items.map { "\($0.id):\($0.revision)" }, runner?.plugins]) else { return }
         if reviews.isHidden != items.isEmpty { reviews.isHidden = items.isEmpty }

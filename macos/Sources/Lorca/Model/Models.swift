@@ -665,6 +665,81 @@ struct PluginDetail {
     var skills: [(name: String, description: String)]
 }
 
+/// An email or Slack message a bot wrote in a chat, waiting for the user to send it: the chat's
+/// view of the review item that holds the exact call. Send names the version the card showed.
+struct DraftCard: Hashable {
+    /// The message's parts, as the card shows and edits them.
+    struct Fields: Hashable {
+        struct File: Hashable {
+            var name: String
+            var size: Int64
+        }
+
+        /// `email` or `slack`.
+        var kind: String
+        var to: [String]
+        var cc: [String] = []
+        var bcc: [String] = []
+        var subject = ""
+        var body: String
+        var attachments: [File] = []
+        /// What it answers: an email's id or a Slack thread.
+        var reply: String?
+
+        var isEmail: Bool { kind == "email" }
+
+        /// The wire shape `reviews.edit` takes as `message`.
+        var parameters: [String: Any] {
+            var fields: [String: Any] = ["kind": kind, "to": to, "cc": cc, "bcc": bcc, "subject": subject, "body": body,
+                "attachments": attachments.map { ["name": $0.name, "size": $0.size] }]
+            if let reply { fields["reply"] = reply }
+            return fields
+        }
+    }
+
+    var reviewID: String
+    var version: UInt64
+    /// The review item's state: pending, approved, executing, succeeded, failed, rejected,
+    /// cancelled, or uncertain.
+    var state: String
+    var pluginID: String
+    /// The account it goes out from: "Gmail · Work".
+    var account: String
+    var fields: Fields
+    /// Why it was not sent, or why it needs another look.
+    var note: String?
+    /// Whether, with drafts off, the bot sends these itself (Slack); Gmail only keeps drafts.
+    var direct: Bool
+    /// What the user changed on the card and has not sent; nothing leaves this Mac until Send.
+    var edited: Fields? = nil
+
+    /// The message as the card shows it: the user's changes, else the draft.
+    var shown: Fields { edited ?? fields }
+
+    var isPending: Bool { state == "pending" }
+
+    /// How it ended or where it stands, in a word or two; nil while it waits.
+    var stateText: String? {
+        switch state {
+        case "approved", "executing": L("Sending…")
+        case "succeeded": L("Sent")
+        case "failed": L("Not sent")
+        case "rejected", "cancelled": L("Discarded")
+        case "uncertain": L("Not confirmed")
+        default: nil
+        }
+    }
+
+    /// Whether the user has something to check: a send that failed or may not have gone out.
+    var needsAttention: Bool { state == "failed" || state == "uncertain" }
+
+    /// "Chef drafted an email", "a reply", or "a Slack message".
+    func title(botName: String) -> String {
+        if fields.isEmail { return fields.reply == nil ? L("%@ drafted an email", botName) : L("%@ drafted a reply", botName) }
+        return L("%@ drafted a Slack message", botName)
+    }
+}
+
 /// A bot asking before a plugin or shell action runs, or before a plugin is installed.
 struct PermissionRequest: Hashable {
     enum Decision: String, Hashable {
@@ -1211,6 +1286,7 @@ struct Message: Identifiable, Hashable {
         case handoff(from: Bot.ID, to: Bot.ID, reason: String)
         case notice(String)
         case permission(PermissionRequest)
+        case draft(DraftCard)
     }
 
     enum State: Hashable {
@@ -1281,6 +1357,7 @@ struct Message: Identifiable, Hashable {
         case let .handoff(_, _, reason): reason
         case let .notice(value): value
         case let .permission(request): request.summary
+        case let .draft(card): card.fields.body
         }
     }
 

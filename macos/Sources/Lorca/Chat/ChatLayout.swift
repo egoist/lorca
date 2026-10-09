@@ -412,6 +412,10 @@ final class ChatLayout {
 
             case let .permission(request):
                 return top + cardHeight(for: message, request: request, tableWidth: tableWidth, indent: indent)
+
+            // Its height changes as the user leaves out a file, so it is not cached.
+            case let .draft(card):
+                return top + DraftCellView.height(for: card, rowWidth: tableWidth, indent: indent)
             }
         }
     }

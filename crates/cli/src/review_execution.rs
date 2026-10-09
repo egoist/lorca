@@ -308,8 +308,10 @@ pub async fn mutate(
             history: Vec::new(),
             created_at: at,
             updated_at: at,
+            is_message: false,
         };
         apply_fields(app, &mut item, params)?;
+        item.is_message = crate::drafts::tool_of(app, &item.payload).is_some();
         let workdir = queue::local_bot(app, &item)?.working_directory(&app.config.home);
         std::fs::create_dir_all(&workdir).map_err(|error| error.to_string())?;
         item.preconditions = prepare(app, &item, &cancel).await?.preconditions;

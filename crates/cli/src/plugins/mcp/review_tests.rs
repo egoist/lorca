@@ -287,6 +287,7 @@ async fn a_message_in_a_chat_waits_as_a_draft_the_user_edits_and_sends() {
     assert!(staged.reason.as_deref().unwrap().contains("Slack message to C024BE91L is ready as a draft"), "{:?}", staged.reason);
     assert!(seen.lock().unwrap().is_empty() && app.pending_permissions.lock().unwrap().is_empty(), "nothing ran or asked");
     let item = queue::list(&app).unwrap().remove(0);
+    assert!(item.is_message);
     let card = || app.message(&chat_id, &item.message_id()).unwrap();
     assert_eq!(card().author, Author::Bot { bot_id: bot.id.clone() });
     let Body::Draft { state, version, draft, direct, account, .. } = card().body else { panic!("{:?}", card().body) };

@@ -138,6 +138,10 @@ pub struct ReviewItem {
     pub history: Vec<ReviewActivity>,
     pub created_at: f64,
     pub updated_at: f64,
+    /// Its call writes an email or Slack message: the chat shows it as a draft card, which the
+    /// apps leave out of Waiting for review.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_message: bool,
 }
 
 impl ReviewItem {

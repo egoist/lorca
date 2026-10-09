@@ -1206,6 +1206,24 @@ enum MockData {
                 body: .text("I can't open issues on GitHub: my Access only lets me read it and draft reviews. I left a request above if you want to allow it."),
                 createdAt: minutesAgo(11)
             ),
+            Message(author: .you, body: .text("Email Ana the launch note, and copy Bo."), createdAt: minutesAgo(6)),
+            Message(
+                id: "msg-mock-email-draft",
+                author: .bot("bot-quill"),
+                body: .draft(DraftCard(
+                    reviewID: "review-mock-email", version: 1, state: "pending", pluginID: "gmail-work", account: "Gmail · Work",
+                    fields: .init(
+                        kind: "email", to: ["ana@example.com"], cc: ["bo@example.com"], subject: "Lorca launches Friday",
+                        body: "Hi Ana,\n\nLorca goes out on Friday. The launch note is attached: it covers pairing, the phone app, and what runs on your own computers.\n\nThanks,\nQuill",
+                        attachments: [.init(name: "launch-note.pdf", size: 186_000)]),
+                    note: nil, direct: false)),
+                createdAt: minutesAgo(5)
+            ),
+            Message(
+                author: .bot("bot-quill"),
+                body: .text("The email to Ana is ready above. Send it when it reads right."),
+                createdAt: minutesAgo(5)
+            ),
         ]
     }
 
@@ -1225,6 +1243,16 @@ enum MockData {
                 author: .bot("bot-nova"),
                 body: .text("That covers the first session. The pairing guide follows it with a Mac-and-phone walkthrough."),
                 createdAt: minutesAgo(106)
+            ),
+            Message(author: .you, body: .text("@Project Manager tell #launch the guide is live."), createdAt: minutesAgo(20)),
+            Message(
+                id: "msg-mock-slack-draft",
+                author: .bot("bot-nova"),
+                body: .draft(DraftCard(
+                    reviewID: "review-mock-slack", version: 1, state: "pending", pluginID: "slack-team", account: "Slack · Team",
+                    fields: .init(kind: "slack", to: ["#launch"], body: "The setup guide is live, with the Mac-and-phone pairing walkthrough. Shout if anything reads wrong."),
+                    note: nil, direct: true)),
+                createdAt: minutesAgo(19)
             ),
         ]
     }
