@@ -103,7 +103,7 @@ async fn answer(app: &Arc<App>, request: &Request) -> Result<Value, String> {
             memory_write(app, body["bot_id"].as_str().ok_or("missing bot_id")?, text, body["expected_hash"].as_str())
         }
         #[cfg(feature = "runner")]
-        verb if verb.starts_with("plugins.") || verb == "permission.answer" => crate::plugins::serve_request(app, verb, body, Some(&request.requested_by)).await,
+        verb if verb.starts_with("plugins.") || verb == "permission.answer" || verb == "permissions.catalog" => crate::plugins::serve_request(app, verb, body, Some(&request.requested_by)).await,
         #[cfg(feature = "runner")]
         verb if verb.starts_with("mcp.") => crate::plugins::mcp_json::serve_request(app, verb, body).await,
         #[cfg(feature = "runner")]

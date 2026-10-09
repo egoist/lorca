@@ -667,6 +667,30 @@ enum MockData {
         ]
     }
 
+    /// What Workbench's plugins offered when they last connected, for the Access sheet.
+    static func accessCatalog() -> BotAccessCatalog {
+        typealias Tool = BotAccessCatalog.Plugin.Tool
+        let github: [Tool] = [
+            Tool(name: "search_issues", title: "Search issues", capability: "read"),
+            Tool(name: "get_pull_request", title: "Get a pull request", capability: "read"),
+            Tool(name: "create_pull_request_review", title: "Draft a review", capability: "draft"),
+            Tool(name: "create_issue", title: "Create an issue", capability: "write"),
+            Tool(name: "merge_pull_request", title: "Merge a pull request", capability: "write"),
+        ]
+        let linear: [Tool] = [
+            Tool(name: "list_issues", title: "List issues", capability: "read"),
+            Tool(name: "create_issue", title: "Create an issue", capability: "write"),
+        ]
+        let servers = mcpServers().filter(\.isEnabled).map { server in
+            BotAccessCatalog.Plugin(
+                id: server.id, name: server.name,
+                tools: (server.tools ?? []).map { Tool(name: $0.name, description: $0.about, capability: $0.isReadOnly ? "read" : "write") })
+        }
+        return BotAccessCatalog(connections: [
+            .init(id: "github", name: "GitHub", tools: github), .init(id: "linear", name: "Linear", tools: linear),
+        ] + servers)
+    }
+
     static func bots() -> [Bot] {
         [
             Bot(
@@ -707,6 +731,7 @@ enum MockData {
                 accent: .pink,
                 runnerID: "dev-workbench",
                 provider: .anthropic,
+                permissions: writerAccess(),
                 createdAt: minutesAgo(60 * 24 * 9)
             ),
             Bot(
@@ -720,6 +745,18 @@ enum MockData {
                 createdAt: minutesAgo(60 * 24 * 4)
             ),
         ]
+    }
+
+    /// The Writer reads GitHub and its notes folder, drafts reviews, and runs no commands.
+    static func writerAccess() -> BotPermissions {
+        var access = BotPermissions()
+        access.connections = [
+            "github": .init(capabilities: AccessLevel.draft.capabilities, tools: ["search_issues", "get_pull_request", "create_pull_request_review"]),
+            "filesystem": .init(capabilities: AccessLevel.write.capabilities),
+            "deepwiki": .init(capabilities: AccessLevel.read.capabilities),
+        ]
+        access.shell = false
+        return access
     }
 
     static func chats() -> [Chat] {
@@ -925,6 +962,18 @@ enum MockData {
                 author: .bot("bot-quill"),
                 body: .text("Create a team of bots for your everyday work. Give each one a role, bring them into a group chat, and pick up the conversation from your phone. Lorca runs the bots on your computers and encrypts your chats before they sync.\n\nDraft saved to `launch/announcement.md`."),
                 createdAt: minutesAgo(24)
+            ),
+            Message(author: .you, body: .text("File an issue for the pairing section of the docs."), createdAt: minutesAgo(12)),
+            // The Writer's Access lets it read GitHub and draft reviews, not open issues.
+            Message(
+                author: .bot("bot-quill"),
+                body: .permission(PermissionRequest(pluginID: "github", pluginName: "GitHub", tool: "access", summary: "GitHub · create_issue", decision: .pending)),
+                createdAt: minutesAgo(11)
+            ),
+            Message(
+                author: .bot("bot-quill"),
+                body: .text("I can't open issues on GitHub: my Access only lets me read it and draft reviews. I left a request above if you want to allow it."),
+                createdAt: minutesAgo(11)
             ),
         ]
     }

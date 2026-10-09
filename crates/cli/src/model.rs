@@ -137,6 +137,10 @@ pub struct Bot {
     /// `<LORCA_HOME>/workspaces/<bot id>`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workdir: Option<String>,
+    /// User-controlled capabilities, synced in the encrypted roster. Missing means full
+    /// existing access; an explicit policy can only be changed through the user's API.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permissions: Option<crate::permissions::BotPermissions>,
     pub created_at: f64,
 }
 

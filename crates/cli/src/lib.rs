@@ -21,6 +21,7 @@ pub mod marketplace;
 pub mod memory;
 pub mod model;
 pub mod pairing;
+pub mod permissions;
 pub mod plugins;
 #[cfg(feature = "provider-auth")]
 pub mod provider_auth;

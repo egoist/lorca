@@ -938,6 +938,10 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
                     groupStart: groupStart)
                 permissionCell?.onDecision = { [weak self] decision in
                     guard let self else { return }
+                    if decision == "access", case let .bot(botID) = message.author {
+                        self.presentAsSheet(BotAccessViewController(botID: botID))
+                        return
+                    }
                     self.store.answerPermission(chatID: chat.id, messageID: message.id, decision: decision)
                 }
                 permissionCell?.onShowCommand = { [weak self] in

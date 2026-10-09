@@ -20,6 +20,14 @@ fn opt_string(params: &Value, key: &str) -> Option<String> {
     params[key].as_str().map(str::to_string).filter(|s| !s.is_empty())
 }
 
+fn parse_permissions(params: &Value) -> Result<Option<crate::permissions::BotPermissions>, String> {
+    let Some(value) = params.get("permissions") else { return Ok(None) };
+    let policy: crate::permissions::BotPermissions = serde_json::from_value(value.clone())
+        .map_err(|error| format!("Invalid bot permissions: {error}. Use an explicit policy to change access."))?;
+    policy.validate()?;
+    Ok(Some(policy))
+}
+
 /// A Runner opens provider OAuth in its browser. A phone emits the URL to the Expo app,
 /// whose in-app browser keeps the core alive for the localhost callback.
 #[cfg(feature = "provider-auth")]
@@ -225,6 +233,7 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
                 // description, then clears this rolling-upgrade slot.
                 legacy_instructions: opt_string(&params, "instructions").unwrap_or_default(),
                 workdir: opt_string(&params, "workdir"),
+                permissions: parse_permissions(&params)?,
                 created_at: 0.0,
             };
             // Every bot has one direct chat; both land in a single roster change.
@@ -236,6 +245,8 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
         }
         "bots.update" => {
             let id = string(&params, "id")?;
+            let permissions = parse_permissions(&params)?;
+            let access_changed = permissions.is_some();
             // The image is copied and queued before the roster names it, so every Device can
             // fetch the blob by the time it reads the profile.
             let avatar = store_avatar(app, &params)?;
@@ -256,9 +267,17 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
                 if let Some(v) = params["thinking"].as_str() { bot.thinking = Some(v.trim().to_string()).filter(|t| !t.is_empty()); }
                 if let Some(v) = opt_string(&params, "runner_id") { bot.runner_id = v; }
                 if let Some(v) = params["workdir"].as_str() { bot.workdir = Some(v.to_string()).filter(|w| !w.trim().is_empty()); }
+                if let Some(v) = permissions { bot.permissions = Some(v); }
             })
             .map_err(|e| e.to_string())?;
+            if access_changed { crate::permissions::dismiss_requests(app, &id); }
             Ok(json!({ "bot": bot }))
+        }
+        // The plugins the bot's Runner has and their tools, for its Access sheet.
+        "bots.permissions" => {
+            let bot = app.bot(&string(&params, "id")?).ok_or("Unknown bot")?;
+            let catalog = crate::plugins::on_runner(app, &bot.runner_id, "permissions.catalog", json!({})).await?;
+            Ok(json!({ "connections": catalog }))
         }
         "bots.delete" => {
             app.delete_bot(&string(&params, "id")?).map_err(|e| e.to_string())?;

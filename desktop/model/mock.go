@@ -278,7 +278,7 @@ func mockBots() []*Bot {
 		{ID: "bot-nova", Name: "Project Manager", Description: "Plans the work and delegates it to the team. Breaks work down, hands it off with message_bot, and summarizes what came back.", SymbolName: "list.bullet.clipboard.fill", Accent: "indigo", RunnerID: "dev-workbench", Provider: "chatgpt", CreatedAt: minutesAgo(60 * 24 * 21)},
 		{ID: "bot-patch", Name: "Developer", Description: "Implements changes in small diffs, explains the tradeoff in one line, and never invents APIs.", SymbolName: "chevron.left.forwardslash.chevron.right", Accent: "blue", RunnerID: "dev-studio", Provider: "deepseek", CreatedAt: minutesAgo(60 * 24 * 18)},
 		{ID: "bot-scout", Name: "Researcher", Description: "Gathers context, reads the sources before answering, cites them, and says when it is unsure.", SymbolName: "magnifyingglass", Accent: "teal", RunnerID: "dev-studio", Provider: "deepseek", CreatedAt: minutesAgo(60 * 24 * 12)},
-		{ID: "bot-quill", Name: "Writer", Description: "Writes docs, copy, and release notes in plain language: short sentences, no filler, and no exclamation marks.", SymbolName: "pencil.and.scribble", Accent: "pink", RunnerID: "dev-workbench", Provider: "anthropic", CreatedAt: minutesAgo(60 * 24 * 9)},
+		{ID: "bot-quill", Name: "Writer", Description: "Writes docs, copy, and release notes in plain language: short sentences, no filler, and no exclamation marks.", SymbolName: "pencil.and.scribble", Accent: "pink", RunnerID: "dev-workbench", Provider: "anthropic", Permissions: mockWriterAccess(), CreatedAt: minutesAgo(60 * 24 * 9)},
 		{ID: "bot-ember", Name: "DevOps", Description: "Handles deploys and incident triage, watches the relay, and always states the blast radius first.", SymbolName: "server.rack", Accent: "orange", RunnerID: "dev-closet", Provider: "deepseek", CreatedAt: minutesAgo(60 * 24 * 4)},
 	}
 }
@@ -356,6 +356,10 @@ func writerThread() []*Message {
 	return []*Message{
 		mockMessage(BotAuthor("bot-nova"), Body{Kind: BodyHandoff, Handoff: Handoff{From: "bot-nova", To: "bot-quill", Reason: "Draft a short launch announcement that leads with what people can do."}}, minutesAgo(35)),
 		mockMessage(BotAuthor("bot-quill"), textBody("Create a team of bots for your everyday work. Give each one a role, bring them into a group chat, and pick up the conversation from your phone. Lorca runs the bots on your computers and encrypts your chats before they sync.\n\nDraft saved to `launch/announcement.md`."), minutesAgo(24)),
+		mockMessage(You, textBody("File an issue for the pairing section of the docs."), minutesAgo(12)),
+		// The Writer's Access lets it read GitHub and draft reviews, not open issues.
+		mockMessage(BotAuthor("bot-quill"), Body{Kind: BodyPermission, Request: &PermissionRequest{PluginID: "github", PluginName: "GitHub", Tool: "access", Summary: "GitHub · create_issue", Decision: DecisionPending}}, minutesAgo(11)),
+		mockMessage(BotAuthor("bot-quill"), textBody("I can't open issues on GitHub: my Access only lets me read it and draft reviews. I left a request above if you want to allow it."), minutesAgo(11)),
 	}
 }
 

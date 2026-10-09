@@ -706,6 +706,7 @@ mod tests {
             thinking: None,
             legacy_instructions: String::new(),
             workdir: None,
+            permissions: None,
             created_at: 0.0,
         }
     }

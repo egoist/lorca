@@ -1578,7 +1578,11 @@ func (s *Store) AnswerPermission(chatID, messageID, decision string) {
 			case "always":
 				request.Decision = DecisionAlways
 			case "deny":
+				// An access request is only ever dismissed.
 				request.Decision = DecisionDenied
+				if request.IsAccess() {
+					request.Decision = DecisionDismissed
+				}
 			default:
 				request.Decision = DecisionAllowed
 			}

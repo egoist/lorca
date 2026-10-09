@@ -838,7 +838,7 @@
 "The last run couldn’t sign in to the model provider. Reconnect it in Settings; after three failures in a row the routine pauses." = "上次运行无法登录服务商。请在设置中重新接入；连续失败三次后例行任务会暂停。";
 "The last check couldn’t sign in to a plugin. Sign in to it again on %@; after three failures in a row the routine pauses." = "上次检查无法登录插件。请在 %@ 上重新登录；连续失败三次后例行任务会暂停。";
 "The check stopped with an error. %@ got the error and can fix the check." = "检查出错停止了。%@ 已收到错误，可以修好这个检查。";
-"The check tried to change something, and checks only read. Ask %@ to fix it." = "检查尝试修改内容，但检查只能读取。请让 %@ 修好它。";
+"The check tried to change something, or to use something this bot's Access leaves out. Ask %@ to fix it." = "检查尝试修改内容，或使用此智能体的访问权限不允许的内容。请让 %@ 修好它。";
 "%@ (%@ time)" = "%1$@（%2$@ 时间）";
 "%@ · nothing new" = "%@ · 没有新内容";
 "%@ · found something" = "%@ · 有新发现";
@@ -852,3 +852,30 @@
 "Background service" = "后台服务";
 "Installed, not running" = "已安装，未运行";
 "Run lorca service install in Terminal on %@ to keep its bots running while Lorca is closed." = "在 %@ 的终端里运行 lorca service install，Lorca 关闭时它的智能体也会继续运行。";
+
+// Bot access
+"%@ tools" = "%@ 的工具";
+"%d of %d tools" = "%1$d/%2$d 个工具";
+"Access" = "访问权限";
+"Access for %@" = "%@ 的访问权限";
+"Access to %@" = "%@ 的访问权限";
+"All tools" = "所有工具";
+"Changes" = "更改";
+"Changing files" = "更改文件";
+"Couldn't get the tools from %@." = "无法从 %@ 获取工具列表。";
+"Dismiss" = "忽略";
+"Drafts" = "起草";
+"Edit Access…" = "编辑访问权限…";
+"Files" = "文件";
+"Full access" = "完全访问";
+"Limited" = "受限";
+"No access" = "无访问权限";
+"Not allowed in this bot's Access settings." = "此智能体的访问权限设置不允许。";
+"Read and draft" = "读取和起草";
+"Read and write" = "读取和写入";
+"Read only" = "仅读取";
+"Reading files" = "读取文件";
+"Reads" = "读取";
+"Shell commands" = "Shell 命令";
+"Shell commands run as you on %@ and can reach anything you can there." = "Shell 命令在 %@ 上以你的身份运行，能访问你在那里能访问的一切。";
+"needs more access" = "需要更多访问权限";

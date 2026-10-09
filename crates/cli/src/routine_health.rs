@@ -130,6 +130,7 @@ pub fn classify(error: &str) -> Failure {
     } else if [
         "can change things",
         "only looks",
+        "access refused",
         "blocked",
         "permission",
         "read-only",

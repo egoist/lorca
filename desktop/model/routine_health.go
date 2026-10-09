@@ -67,7 +67,8 @@ const (
 	ProblemSignInFailed
 	ProblemModelSignInFailed
 	ProblemCheckFailed
-	// ProblemCheckBlocked is a check that called something that could change things.
+	// ProblemCheckBlocked is a check that called something that could change things, or that the
+	// bot's Access leaves out.
 	ProblemCheckBlocked
 )
 
@@ -148,7 +149,7 @@ func (p RoutineProblem) Explanation(bot, runner string) string {
 	case ProblemCheckFailed:
 		return L("The check stopped with an error. %@ got the error and can fix the check.", bot)
 	case ProblemCheckBlocked:
-		return L("The check tried to change something, and checks only read. Ask %@ to fix it.", bot)
+		return L("The check tried to change something, or to use something this bot's Access leaves out. Ask %@ to fix it.", bot)
 	}
 	return ""
 }

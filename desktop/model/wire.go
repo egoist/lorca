@@ -110,6 +110,7 @@ type WireBot struct {
 	Model       *string         `json:"model"`
 	Thinking    *string         `json:"thinking"`
 	Avatar      *WireAttachment `json:"avatar"`
+	Permissions *BotPermissions `json:"permissions"`
 	CreatedAt   float64         `json:"created_at"`
 }
 
@@ -630,6 +631,7 @@ func ToBot(wire WireBot) *Bot {
 		Provider:    "deepseek",
 		Model:       str(wire.Model),
 		Thinking:    str(wire.Thinking),
+		Permissions: wire.Permissions.Clone(),
 		CreatedAt:   seconds(wire.CreatedAt),
 	}
 	if IsAccent(wire.Accent) {

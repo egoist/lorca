@@ -459,6 +459,7 @@ struct Bot: Identifiable, Hashable {
     /// A custom profile image, kept as a `file` blob like a message attachment. Shown in place
     /// of the symbol and accent once this computer has the bytes.
     var avatar: Attachment? = nil
+    var permissions: BotPermissions? = nil
     var createdAt: Date
 }
 
@@ -668,16 +669,34 @@ struct PermissionRequest: Hashable {
         command ?? (summary.hasPrefix("$ ") ? String(summary.dropFirst(2)) : summary)
     }
 
+    /// The line under the title: an access request names a plugin's tool as it is, or what the
+    /// bot wanted to do on its Runner in the CLI's English, which reads here in the app's language.
+    var shownSummary: String {
+        guard isAccess else { return summary }
+        switch summary {
+        case "Shell commands": return L("Shell commands")
+        case "Changing files": return L("Changing files")
+        case "Reading files": return L("Reading files")
+        default: return summary
+        }
+    }
+
+    /// Why the card asks: what Auto-review said, or for an access request, where it is turned on.
+    var shownReason: String? { isAccess ? L("Not allowed in this bot's Access settings.") : reason }
+
     var isPending: Bool { decision == .pending }
     var isInstall: Bool { tool == "install" }
+    /// The bot's Access refused a call: the card opens its Access sheet or is dismissed.
+    var isAccess: Bool { tool == "access" }
     /// A shell command on the bot's Runner.
-    var isShell: Bool { pluginID == "computer" }
+    var isShell: Bool { pluginID == "computer" && !isAccess }
     /// A sign-in card: Sign in starts the OAuth flow on the Runner.
     var isConnect: Bool { tool == "connect" }
 
     /// "wants to use GitHub" / "wants to install GitHub" / "needs a sign-in to GitHub" /
     /// "wants to run a command on Workbench"
     var verbPhrase: String {
+        if isAccess { return L("needs more access") }
         if isConnect { return L("needs a sign-in to %@", pluginName) }
         if isShell { return L("wants to run a command on %@", pluginName) }
         return isInstall ? L("wants to install %@", pluginName) : L("wants to use %@", pluginName)
@@ -699,6 +718,7 @@ struct PermissionRequest: Hashable {
     /// The buttons a pending card offers: (title, decision). A shell command offers Always
     /// allow only with a rule to add.
     var choices: [(String, String)] {
+        if isAccess { return [(L("Edit Access…"), "access"), (L("Dismiss"), "deny")] }
         if isConnect { return [(L("Sign in"), "allow"), (L("Not now"), "deny")] }
         if isInstall { return [(L("Allow"), "allow"), (L("Deny"), "deny")] }
         if isShell && rule == nil { return [(L("Allow once"), "allow"), (L("Deny"), "deny")] }
@@ -903,7 +923,7 @@ enum RoutineProblem: Hashable {
         case .checkFailed:
             return L("The check stopped with an error. %@ got the error and can fix the check.", bot)
         case .checkBlocked:
-            return L("The check tried to change something, and checks only read. Ask %@ to fix it.", bot)
+            return L("The check tried to change something, or to use something this bot's Access leaves out. Ask %@ to fix it.", bot)
         }
     }
 }

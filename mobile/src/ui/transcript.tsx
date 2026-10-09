@@ -377,8 +377,9 @@ export const NoticeRow = memo(function NoticeRow({ row }: { row: Extract<Row, { 
 /// it waits: the question, the call (a shell command in a code block that opens the whole
 /// command on tap), why Auto-review paused it, the answers, and under them the rule Always allow
 /// adds. A shell command offers Always allow only with a rule. Once answered, the answer and the
-/// call; an Always allow keeps its rule. In a group the card sits in the bubbles' column, the bot's
-/// avatar beside its bottom edge.
+/// call; an Always allow keeps its rule. A bot's Access refusing a call asks for more access,
+/// which is changed in the bot's Access on a computer, so here it is only dismissed. In a group
+/// the card sits in the bubbles' column, the bot's avatar beside its bottom edge.
 export const PermissionRow = memo(function PermissionRow({ row, isGroup, onDecide }: { row: Extract<Row, { type: "permission" }>; isGroup: boolean; onDecide: (message: Message, decision: "allow" | "always" | "deny") => void }) {
   useLanguage();
   const p = usePalette();
@@ -387,10 +388,13 @@ export const PermissionRow = memo(function PermissionRow({ row, isGroup, onDecid
   const showsAvatar = isGroup && row.message.author.kind === "bot";
   const pending = row.body.decision === "pending";
   const connect = row.body.tool === "connect";
-  const shell = row.body.plugin_id === "computer";
+  const access = row.body.tool === "access";
+  const shell = row.body.plugin_id === "computer" && !access;
   const who = row.bot?.name ?? t("The bot");
   const plugin = row.body.plugin_name;
-  const title = connect
+  const title = access
+    ? t("{who} needs more access", { who })
+    : connect
     ? t("{who} needs a sign-in to {plugin}", { who, plugin })
     : row.body.tool === "install"
       ? t("{who} wants to install {plugin}", { who, plugin })
@@ -398,6 +402,11 @@ export const PermissionRow = memo(function PermissionRow({ row, isGroup, onDecid
         ? t("{who} wants to run a command on {plugin}", { who, plugin })
         : t("{who} wants to use {plugin}", { who, plugin });
   const command = row.body.command ?? row.body.summary.replace(/^\$ /, "");
+  // What an access request names: a plugin's tool as it is, or what the bot wanted to do on its
+  // Runner in the CLI's English.
+  const local: Record<string, string> = { "Shell commands": t("Shell commands"), "Changing files": t("Changing files"), "Reading files": t("Reading files") };
+  const summary = access ? (local[row.body.summary] ?? row.body.summary) : row.body.summary;
+  const reason = access ? t("Not allowed in this bot's Access settings.") : row.body.reason;
   const ruleNote = !row.body.rule
     ? undefined
     : pending
@@ -408,7 +417,9 @@ export const PermissionRow = memo(function PermissionRow({ row, isGroup, onDecid
   const decided: Record<string, string> = connect
     ? { allowed: t("Signing in"), denied: t("Not now"), dismissed: t("Dismissed"), connected: t("Signed in"), failed: t("Sign-in failed") }
     : { allowed: t("Allowed once"), always: t("Always allowed"), denied: t("Denied"), expired: t("No answer in time"), dismissed: t("Dismissed") };
-  const choices: [string, "allow" | "always" | "deny"][] = connect
+  const choices: [string, "allow" | "always" | "deny"][] = access
+    ? [[t("Dismiss"), "deny"]]
+    : connect
     ? [[t("Sign in"), "allow"], [t("Not now"), "deny"]]
     : row.body.tool === "install"
       ? [[t("Allow"), "allow"], [t("Deny"), "deny"]]
@@ -447,11 +458,11 @@ export const PermissionRow = memo(function PermissionRow({ row, isGroup, onDecid
           </Pressable>
         ) : (
           <Text style={[styles.caption, { color: p.secondaryLabel }]} numberOfLines={3}>
-            {pending ? row.body.summary : `${decided[row.body.decision] ?? row.body.decision} · ${row.body.summary}`}
+            {pending ? summary : `${decided[row.body.decision] ?? row.body.decision} · ${summary}`}
           </Text>
         )}
-        {pending && row.body.reason ? (
-          <Text style={[styles.reasonText, { color: p.secondaryLabel }]}>{row.body.reason}</Text>
+        {pending && reason ? (
+          <Text style={[styles.reasonText, { color: p.secondaryLabel }]}>{reason}</Text>
         ) : null}
         {row.body.decision === "allowed" && row.body.code ? (
           <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginTop: 4 }}>

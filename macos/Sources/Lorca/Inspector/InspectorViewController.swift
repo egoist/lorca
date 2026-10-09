@@ -12,6 +12,7 @@ final class InspectorViewController: NSViewController {
     private let profile = SectionView(title: L("Profile"))
     private let nameRow = EditableRow(key: L("Name"), placeholder: L("Name"))
     private let descriptionRow = SummaryActionRow(key: L("Description"), value: "", actionTitle: L("Edit…"))
+    private let accessRow = DisclosureRow(key: L("Access"))
     private let runtime = SectionView(title: L("Runs with"))
     private let memory = SectionView(title: L("Memory"))
     private let routines = SectionView(title: L("Routines"))
@@ -78,7 +79,7 @@ final class InspectorViewController: NSViewController {
 
         nameRow.field.alignment = .right
         descriptionRow.onAction = { [weak self] in self?.editDescription() }
-        profile.setRows([nameRow, descriptionRow])
+        profile.setRows([nameRow, descriptionRow, accessRow])
         groupNameRow.field.alignment = .right
         groupDescriptionRow.onAction = { [weak self] in self?.editGroupDescription() }
         group.setRows([groupNameRow, groupDescriptionRow])
@@ -328,8 +329,10 @@ final class InspectorViewController: NSViewController {
     private func showProfile(of bot: Bot) {
         // The Name row keeps what the user is typing, and puts the name back after.
         nameRow.setValue(bot.name)
-        guard changed(profile, to: [bot.id, bot.description]) else { return }
+        guard changed(profile, to: [bot.id, bot.description, bot.permissions]) else { return }
         descriptionRow.setValue(bot.description)
+        accessRow.setValue((bot.permissions ?? BotPermissions()).summary)
+        accessRow.onClick = { [weak self] in self?.presentAsSheet(BotAccessViewController(botID: bot.id)) }
         nameRow.onCommit = { [weak self] in self?.commitProfile(of: bot.id) }
     }
 
@@ -547,20 +550,23 @@ final class InspectorViewController: NSViewController {
             })
     }
 
-    /// The plugins the bot's Runner has, which every bot there may use, and a way to the
-    /// marketplace. A plugin that needs setup says so; clicking opens it.
+    /// The plugins the bot's Runner has, and a way to the marketplace. A plugin that needs setup
+    /// says so, and one the bot's Access leaves out says it has none; clicking opens it.
     private func showPlugins(of bot: Bot) {
         let runner = store.device(bot.runnerID)
-        guard changed(plugins, to: [bot.id, bot.name, runner?.id, runner?.name, runner?.plugins]) else { return }
+        guard changed(plugins, to: [bot.id, bot.name, runner?.id, runner?.name, runner?.plugins, bot.permissions]) else { return }
         pluginBotID = bot.id
         var rows: [NSView] = (runner?.plugins ?? []).map { plugin in
-            let row: StatusRow = keptRow("plugin:\(plugin.id)") {
+            // A row keeps the vibrancy its state label had when it went in, so one with no
+            // access is a row of its own.
+            let off = bot.permissions?.level(of: plugin.id) == AccessLevel.none
+            let row: StatusRow = keptRow("plugin:\(plugin.id):\(off)") {
                 let row = StatusRow()
                 row.identifier = NSUserInterfaceItemIdentifier(plugin.id)
                 row.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(openPlugin(_:))))
                 return row
             }
-            row.configure(plugin: plugin)
+            row.configure(plugin: plugin, hasAccess: !off)
             row.toolTip = L("Open %@", plugin.name)
             return row
         }

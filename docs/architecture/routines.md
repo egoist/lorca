@@ -20,7 +20,7 @@ When the Runner takes a due time it saves it as `last_scheduled_at` before any w
 
 Health and the due time are fields of the routine, saved in SQLite with it and carried in the encrypted roster. To keep a quiet routine from uploading the roster on every check, the Runner saves a due time it took, and a check that leaves the routine as it stood (another quiet one), without uploading them; a check that changes how it stands (the first, a failure, a pass after one, a pause) goes up with the roster.
 
-The CLI gives each routine a `state` for the apps: `running`; `blocked`, paused after failed sign-ins or with a check that called something that is not read-only; `paused`; `waiting_for_runner` while the bot's Runner is offline, since no other Runner takes it over; `failed` while checks or runs fail to connect or sign in, or the last check failed; else `on`.
+The CLI gives each routine a `state` for the apps: `running`; `blocked`, paused after failed sign-ins or with a check that called something that is not read-only or that the bot's [Access](bot-permissions.md) leaves out; `paused`; `waiting_for_runner` while the bot's Runner is offline, since no other Runner takes it over; `failed` while checks or runs fail to connect or sign in, or the last check failed; else `on`.
 
 ## The apps
 

@@ -135,9 +135,12 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
     let window = provider.model_info().map(|i| i.context_window).unwrap_or(0);
     let settings = compaction_settings(window);
     let store = MemoryStore::for_bot(&app.config.home, &bot);
-    // The prompt names the installed plugins; their tools are in the codemode tool's description,
-    // and their servers stay dormant until a script calls them.
-    let plugin_briefs = crate::plugins::mcp::plugin_briefs(app);
+    // The prompt names the installed plugins the bot's Access lets it use; their tools are in the
+    // codemode tool's description, and their servers stay dormant until a script calls them.
+    let plugin_briefs: Vec<_> = crate::plugins::mcp::plugin_briefs(app)
+        .into_iter()
+        .filter(|brief| bot.permissions.as_ref().is_none_or(|policy| policy.allows_connection(&brief.id)))
+        .collect();
     let system_prompt = system_prompt(app, &chat, &bot, job, &store, routine.as_ref(), &plugin_briefs);
 
     let unattended = routine.is_some();
@@ -157,19 +160,21 @@ pub(crate) async fn run_job(app: &Arc<App>, job: &Job, cancel: CancellationToken
     // wait for input.
     let sessions = Arc::new(crate::shell::TurnSessions::new(app, &chat.meta.id, &bot.id));
     tools.extend(lorca_agent::tools::coding_tools_with_sessions(workdir.clone(), sessions, crate::shell::bot_shell_extras(app)));
+    let mut tools = crate::permissions::guarded::tools(app, &bot, &chat.meta.id, tools);
     // Plugin tools are called from codemode scripts, with the bot's own file and memory tools
     // and a bash of the scripts' own, on pipes. The tool list stays the same for the whole
     // turn, and so does its prompt cache.
     let mut scriptable: Vec<Arc<dyn Tool>> = tools.iter().filter(|tool| SCRIPTABLE_TOOLS.contains(&tool.name())).cloned().collect();
-    scriptable.push(crate::shell::script_bash(app, &workdir));
-    let plugin_tools = crate::plugins::mcp::turn_catalog(app, scriptable);
+    scriptable.extend(crate::permissions::guarded::tools(app, &bot, &chat.meta.id, vec![crate::shell::script_bash(app, &workdir)]));
+    let plugin_tools = crate::plugins::mcp::bot_catalog(app, &bot, &chat.meta.id, scriptable);
     let script_store = Arc::new(crate::scripts::ScriptStore { app: app.clone(), chat_id: chat.meta.id.clone(), bot_id: bot.id.clone() });
     let functions: Vec<Arc<dyn HostFunction>> =
         crate::scripts::ModelsAsk::new(app, &chat.meta.id, &bot.provider).map(|ask| Arc::new(ask) as Arc<dyn HostFunction>).into_iter().collect();
     // A routine's script has nobody to press Stop, so it gets less time.
     let timeout = std::time::Duration::from_secs(if unattended { 10 * 60 } else { 30 * 60 });
     let options = CodemodeOptions { mcp_types: !plugin_briefs.is_empty(), timeout, guidance: Some(SCRIPT_GUIDANCE.into()), ..CodemodeOptions::default() };
-    tools.push(Arc::new(CodemodeTool::new(plugin_tools.clone(), options).with_store(script_store).with_functions(functions)));
+    // Codemode itself also rechecks after any asynchronous review; its children have guards.
+    tools.extend(crate::permissions::guarded::tools(app, &bot, &chat.meta.id, vec![Arc::new(CodemodeTool::new(plugin_tools.clone(), options).with_store(script_store).with_functions(functions))]));
 
     // A transcript that no longer fits, or that has outgrown what a turn rebuilds, is
     // summarized before the turn starts, from the chat, so the model never sees the overflow
@@ -595,6 +600,11 @@ impl LoopHooks for TurnHooks {
     }
 
     async fn before_tool_call(&self, ctx: BeforeToolCallContext<'_>) -> Option<BeforeToolCallResult> {
+        if !self.plugin_tools.is_plugin_tool(&ctx.tool_call.name) {
+            if let Err(denied) = crate::permissions::check_tool(&self.app, &self.bot, &ctx.tool_call.name) {
+                return Some(crate::permissions::refuse(&self.app, &self.chat_id, &self.bot, denied));
+            }
+        }
         if let Some(refused) = crate::plugins::mcp::review_call(&self.app, &self.plugin_tools, &self.chat_id, &self.trigger, &self.bot, self.unattended, &ctx).await {
             return Some(refused);
         }
@@ -2465,6 +2475,7 @@ impl Tool for CreateBot {
     }
     async fn execute(&self, _id: &str, args: Value, _cancel: CancellationToken, _on_update: ToolUpdateFn) -> Result<ToolResult, ToolError> {
         let name = args["name"].as_str().unwrap_or("").trim().trim_start_matches('@').to_string();
+        if args.get("permissions").is_some() { return Err("Only the user can change bot access in its profile.".into()); }
         let description = args["description"].as_str().unwrap_or("").trim().to_string();
         if name.is_empty() || description.is_empty() {
             return Err("name and description are required".into());
@@ -2495,6 +2506,7 @@ impl Tool for CreateBot {
             thinking: runs.thinking,
             legacy_instructions: String::new(),
             workdir: args["workdir"].as_str().map(|w| w.trim().to_string()).filter(|w| !w.is_empty()),
+            permissions: self.app.bot(&self.bot.id).ok_or("The calling bot is gone")?.permissions,
             created_at: 0.0,
         };
         let (created, _dm) = self.app.create_bot_with_dm(bot, None).map_err(|e| ToolError(e.to_string()))?;
@@ -2568,6 +2580,7 @@ impl Tool for EditBot {
     }
     async fn execute(&self, _id: &str, args: Value, _cancel: CancellationToken, _on_update: ToolUpdateFn) -> Result<ToolResult, ToolError> {
         let bot_id = args["bot_id"].as_str().unwrap_or("").trim();
+        if args.get("permissions").is_some() { return Err("Only the user can change bot access in its profile.".into()); }
         if bot_id.is_empty() {
             return Err("bot_id is required".into());
         }
@@ -2977,6 +2990,9 @@ impl Tool for ConnectPlugin {
             .find(|p| p.id.to_lowercase() == wanted || p.name.to_lowercase() == wanted)
             .map(|p| p.id)
             .ok_or_else(|| ToolError(format!("No plugin {wanted:?} is installed here. Use search_plugins and install_plugin first.")))?;
+        if !self.app.bot(&self.bot.id).and_then(|bot| bot.permissions).is_none_or(|policy| policy.allows_connection(&id)) {
+            return Err(ToolError(format!("{wanted} is off for this bot in its Access settings, which only the user changes.")));
+        }
         let message = crate::plugins::mcp::post_sign_in_card(&self.app, &self.chat_id, &self.bot.id, &id).map_err(ToolError)?;
         let Body::Permission { plugin_name, .. } = &message.body else { unreachable!() };
         Ok(ToolResult::text(format!("A sign-in card for {plugin_name} is in the chat. Ask the user to tap Sign in on it, then to tell you when it is done."))
@@ -3198,6 +3214,28 @@ mod tests {
         ScratchApp(app, home)
     }
 
+    #[tokio::test]
+    async fn bot_permissions_cannot_be_granted_by_edit_or_teammate_creation() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        crate::identity::create(app, Some("Runner".into())).unwrap();
+        let caller = app.state.lock().unwrap().bots[0].clone();
+        let chat_id = app.dm_with(&caller.id, None).unwrap().meta.id;
+        let create = CreateBot { app: app.clone(), bot: caller.clone(), chat_id };
+        let policy = serde_json::from_value(json!({"connections":{},"shell":false,"filesystem":"none"})).unwrap();
+        app.update_bot(&caller.id, |bot| bot.permissions = Some(policy)).unwrap();
+        let update: ToolUpdateFn = Arc::new(|_| {});
+        create.execute("new", json!({"name":"Inbox", "description":"Read selected inbox"}), CancellationToken::new(), update.clone()).await.unwrap();
+        let created = app.state.lock().unwrap().bots.iter().find(|bot| bot.name == "Inbox").unwrap().clone();
+        assert_eq!(created.permissions, app.bot(&caller.id).unwrap().permissions, "inherit current policy, not the turn's snapshot");
+        let edit = EditBot { app: app.clone(), bot: caller.clone() };
+        let refused = edit.execute("grant", json!({"bot_id":caller.id,"permissions":{}}), CancellationToken::new(), update.clone()).await.unwrap_err();
+        assert!(refused.0.contains("Only the user"));
+        let refused = create.execute("grant", json!({"name":"Admin","description":"Use everything","permissions":{}}), CancellationToken::new(), update).await.unwrap_err();
+        assert!(refused.0.contains("Only the user"));
+        assert_eq!(app.state.lock().unwrap().bots.len(), 2);
+    }
+
     fn bot(id: &str, name: &str) -> Bot {
         Bot {
             id: id.into(),
@@ -3212,6 +3250,7 @@ mod tests {
             thinking: None,
             legacy_instructions: String::new(),
             workdir: None,
+            permissions: None,
             created_at: 0.0,
         }
     }

@@ -689,7 +689,7 @@ mod tests {
         });
         let bot = |id: &str, name: &str| Bot {
             id: id.into(), name: name.into(), description: String::new(), symbol_name: String::new(), accent: String::new(), avatar: None,
-            runner_id: "runner".into(), provider: "deepseek".into(), model: None, thinking: None, legacy_instructions: String::new(), workdir: None, created_at: 0.0,
+            runner_id: "runner".into(), provider: "deepseek".into(), model: None, thinking: None, legacy_instructions: String::new(), workdir: None, permissions: None, created_at: 0.0,
         };
         let (devops, dm) = app.create_bot_with_dm(bot("bot-devops", "DevOps"), None).unwrap();
         app.create_bot_with_dm(bot("bot-chef", "Chef"), None).unwrap();
